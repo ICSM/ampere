@@ -10,7 +10,7 @@ from astropy.io import fits #Only used by getGRAMSCgrid at the moment.
 
 #from general import ss_physconst as pc #what is this, and what functions do we need from your "general" module? Why can't it be done with astropy.constants? Oh, I see, it doesn't get called
 
-def synthphot(inlam, influx, filtlist='SPITZER_IRAC_36', fnu=True):
+def synthphot(inlam, influx, filtlist='SPITZER_IRAC_36', fnu=True, **kwargs):
     """
     Function to compute synthetic photometry using pyphot routines.  
     
@@ -29,7 +29,7 @@ def synthphot(inlam, influx, filtlist='SPITZER_IRAC_36', fnu=True):
         out = f.get_flux(1e4*inlam, influx)
     return out
 
-def getGRAMSCgrid():
+def getGRAMSCgrid(**kwargs):
     """
     Read in the carbon-star GRAMS grid. 
 
@@ -39,7 +39,7 @@ def getGRAMSCgrid():
     cgrid = hdulist[1].data; hdulist.close()
     return cgrid
 
-def dostuff():
+def dostuff(**kwargs):
     """
     Does some stuff (I think?)
     """
@@ -47,7 +47,7 @@ def dostuff():
     fphot = synthphot(cg['Lspec'], cg['Fspec'])
     return fphot
 
-def makemeanphot(invot,outfits):
+def makemeanphot(invot,outfits, **kwargs):
     """
 
     """

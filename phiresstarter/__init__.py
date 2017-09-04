@@ -22,4 +22,4 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>
 
 __license__ = "GNU Public License v3" #
 
-all=[] #Nothing to import just yet
+__all__=[] #Nothing to import just yet
