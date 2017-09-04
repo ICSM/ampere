@@ -23,3 +23,24 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>
 __license__ = "GNU Public License v3" #
 
 __all__=[] #Nothing to import just yet
+
+
+#input - data format(s)?
+      # n * photometry (filter name, mag/flux, err, limits, JD, grouping) & n * spectroscopy (lam, fnu, sigma_fnu, limits, JD, grouping) & dust properties (optional) & model details (choices, rt code, geometry etc) & classification () 
+
+# Dust library
+# Parameter search   - try to use existing methods
+# RT                 - interfaces ((MoDust, 2Dust, RadMC-3D, any more as necessary) & (pre-processors))
+# goodness of fit    - flexible likelihood function including construction of covariances
+
+#output - file format(s)?
+      # summary - parameters, range of parameters
+      # samples from search - parameters
+                            # spectrum
+                            # synthetic photometry
+                            # GOF
+
+
+#Stopping criteria?? 
+
+
