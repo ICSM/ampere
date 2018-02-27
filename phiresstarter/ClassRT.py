@@ -28,8 +28,10 @@ class RadTransWrap(object):
                 tempOpac = tempData[:, 1]
                 f = interpolate.interp1d(tempWl, tempOpac, assume_sorted = False)
                 opacity_array[:,j] = f(wavelengths)
-
+            self.wavelengths = wavelengths
+            self.opacity_array = opacity_array
+            self.nSpecies = nSpecies
         
-        def __call__(self, multiplicationFactor = 1, powerLawIndex = 2, relativeAbundances = np.ones(nSpecies)/nSpecies, **kwargs):
-            fModel = (np.matmul(opacity_array, relativeAbundances)+1)*wavelengths**powerLawIndex*multiplicationFactor
+        def __call__(self, multiplicationFactor = 1, powerLawIndex = 2, relativeAbundances = np.ones(self.nSpecies)/self.nSpecies, **kwargs):
+            fModel = (np.matmul(self.opacity_array, relativeAbundances)+1)*self.wavelengths**powerLawIndex*multiplicationFactor
             self.modelFlux = fModel
