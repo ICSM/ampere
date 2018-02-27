@@ -9,20 +9,29 @@ import numpy as np
 
 class RadTransWrap(object):
     '''Input: fit parameters (multiplicationFactor, powerLawIndex, relativeAbundances), 
-              opacities (opacity_matrix): q_ij where i = wavelength, j = species
+              opacities (opacity_array): q_ij where i = wavelength, j = species
               wavelength grid from data (wavelengths)
     Output: model fluxes (modelFlux)'''
 
-	def __init__(self, **kwargs):
-            import os#, os.path
+	def __init__(self, wavelengths, **kwargs):
+            import os
+            from scipy import interpolate
             opacityDirectory = './Opacities/'
             opacityFileList = os.listdir(opacityDirectory)
-            opacityFileList.sort()
-            nSpecies = opacityFileList.__len__() # Warning: need to check all files found are ordinary files (not directory or such). Look up os.path.isfile()
-            opacityData = np.loadtxt(opacityDirectory+'ss_Dorschneretal1995_Olivine_0.10.q', comments='#')
-            # To finish: Construct opacity_matrix
-           pass
+            opacityFileList = np.array(opacityFileList)[['.q' in zio for zio in opacityFileList]] # Only files ending in .q are valid (for now)
+            nSpecies = opacityFileList.__len__()
+            #wavelengths = np.logspace(np.log10(8), np.log10(35), 100) # For testing purposes
+            opacity_array = np.zeros((wavelengths.__len__(), nSpecies))
+            for j in range(nSpecies):
+                tempData = np.loadtxt(opacityDirectory + opacityFileList[j], comments = '#')
+                tempWl = tempData[:, 0]
+                tempOpac = tempData[:, 1]
+                f = interpolate.interp1d(tempWl, tempOpac, assume_sorted = False)
+                opacity_array[:,j] = f(wavelengths)
+            self.wavelengths = wavelengths
+            self.opacity_array = opacity_array
+            self.nSpecies = nSpecies
         
-        def __call__(self, multiplicationFactor = 1, powerLawIndex = 2, relativeAbundances = np.ones(nSpecies)/nSpecies, **kwargs):
-            fModel = (np.matmul(opacity_matrix, relativeAbundances)+1)*wavelengths**powerLawIndex*multiplicationFactor
+        def __call__(self, multiplicationFactor = 1, powerLawIndex = 2, relativeAbundances = np.ones(self.nSpecies)/self.nSpecies, **kwargs):
+            fModel = (np.matmul(self.opacity_array, relativeAbundances)+1)*self.wavelengths**powerLawIndex*multiplicationFactor
             self.modelFlux = fModel
