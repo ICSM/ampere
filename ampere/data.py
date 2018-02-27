@@ -21,7 +21,9 @@ class Data(object):
     def __repr__(self, **kwargs):
         raise NotImplementedError()
 
-
+    def lnlike(self, synWave, synFlux, **kwargs):
+        pass
+    
 #1. Should all the photometry be stored in one object
 
 class Photometry(Data):
@@ -48,6 +50,9 @@ class Photometry(Data):
 
     def synPhot(self, **kwargs):
         pass
+
+    #def lnlike(self, synWave, synFlux, **kwargs):
+    #    pass
 
 class Spectrum(Data):
 
