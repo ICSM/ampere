@@ -12,10 +12,10 @@ class BaseLikelihood(object):
         pass
 
     def __repr__(self, **kwargs):
-        return 'Shaddapayouface'
+        return "<BaseLikelihood object>"
 
     def __str__(self, **kwargs):
-        return 'What do you want?'
+        return ""
 
     def lnprior(self, theta, **kwargs):
         a = theta
