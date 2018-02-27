@@ -1,1 +1,24 @@
 A list of class requirements
+
+
+Data
+--------------------
+pyphot
+    all info required to compute synthetic data
+
+
+
+Parameter search
+---------------------
+requires a consistent way of passing parameters to models
+
+consistent way of extracting values or likelihoods from the data.
+
+
+
+Models
+---------------------
+
+wavelengths
+opacities
+names of opacities
