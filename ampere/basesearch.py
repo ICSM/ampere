@@ -35,3 +35,5 @@ class BaseSearch(object):
 
     def sampler(self, **kwargs):
         raise NotImplementedError()
+
+    
