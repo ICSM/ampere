@@ -6,8 +6,9 @@
 # Execution: calculate the model flux; return the result
 
 import numpy as np
+from models import AnalyticalModel
 
-class RadTransWrap(object):
+class RadTransWrap(AnalyticalModel):
     '''Input: fit parameters (multiplicationFactor, powerLawIndex, relativeAbundances), 
               opacities (opacity_array): q_ij where i = wavelength, j = species
               wavelength grid from data (wavelengths)
