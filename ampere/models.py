@@ -19,7 +19,8 @@ class Model(object):
     def __repr__(self, **kwargs):
         raise NotImplementedError()
 
-
+    def lnprior(self, **kwargs):
+        raise NotImplementedError()
 
 
 class AnalyticalModel(Model):

@@ -22,7 +22,8 @@ class BaseSearch(object):
         raise NotImplementedError()
 
     def lnprior(self, **kwargs):
-        raise NotImplementedError()
+        return self.model.prior()
+        #raise NotImplementedError()
 
     def lnlike(self, **kwargs):
         raise NotImplementedError()
