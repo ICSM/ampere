@@ -91,7 +91,7 @@ class Spectrum(Data):
     def lnlike(self, **kwargs):
         pass
 
-class Images(Data):
+class Image(Data):
 
     def __init__(**kwargs):
         pass

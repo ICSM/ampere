@@ -48,13 +48,13 @@ class EmceeSearch(BaseSearch):
         """
         return 0 
 
-    def lnlike(self, theta, **kwargs):
-        model = self.model(theta)
-        like = 0.
-        for data in self.dataSet:
-            """ do something for each bit of data """
-            deltaLike = something
-            like = like + deltaLike
-        return like #-0.5 * np.sum((((y - model)**2)/(yerr**2)))
+#    def lnlike(self, theta, **kwargs):
+#        model = self.model(theta)
+#        like = 0.
+#        for data in self.dataSet:
+#            """ do something for each bit of data """
+#            deltaLike = something
+#            like = like + deltaLike
+#        return like #-0.5 * np.sum((((y - model)**2)/(yerr**2)))
 
 

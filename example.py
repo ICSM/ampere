@@ -1,7 +1,7 @@
 import numpy as np
 from ampere.data import Spectrum, Photometry
 from ampere.emceesearch import EmceeSearch
-from ampere.ClassRT import RadTransWrap
+from ampere.PowerLawAGN import PowerLawAGN
 from ampere.extinction import CCMExtinctionLaw
 import corner
 import matplotlib.pyplot as plt
@@ -18,21 +18,22 @@ if __name__=="__main__":
     #If we have more than one dataset we need multiple data objects
 
     """ Define the model """
-    model = RadTransWrap(irs.wavelengths)
+    model = PowerLawAGN(irs.wavelengths) #We should probably define a wavelength grid separate from the data wavelengths for a number of reasons, primarily because the photometry needs an oversampled spectrum to compute synthetic photometry
+    
     """ and the extinction law (if necessary) (could be moved inside model as only some models will need this) """
     ext = CCMExtinctionLaw()
 
-    model.extinction = ext
+    model.extinction = ext #combination of multiple different models is something we need to consider how to implement. 
 
     """ Connect the dots: """
     """ Hook it up to an optimiser """
-    opt = EmceeSearch(model = model, data = irs)
+    opt = EmceeSearch(model = model, data = [irs]) #will need to either define some info about the parameters here or write some code to determine how the model works by introspection
 
     """ if you want, overload the default priors with a new function """
     def lnprior(self, inputs, **kwargs):
         return 0 #flat prior
     
-    opt.lnprior = lnprior
+    model.lnprior = lnprior
     
     """ Run it """
     pos = [

@@ -21,12 +21,18 @@ class BaseSearch(object):
     def __repr__(self, **kwargs):
         raise NotImplementedError()
 
-    def lnprior(self, **kwargs):
-        return self.model.prior()
+    def lnprior(self, theta,**kwargs):
+        return self.model.prior(theta)
         #raise NotImplementedError()
 
-    def lnlike(self, **kwargs):
-        raise NotImplementedError()
+    def lnlike(self, theta,**kwargs):
+        model = self.model(theta)
+        l=np.array([])
+        for data in self.datasets:
+            l = np.r_[l,np.sum(data.lnlike(model))]
+        return np.sum(l)
+            
+        #raise NotImplementedError()
 
     def lnprob(self, **kwargs):
         p = self.lnprior()
