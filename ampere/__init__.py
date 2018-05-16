@@ -1,10 +1,11 @@
 """
-Welcome to PhIReSSTARTer
+Welcome to AMPERE
 
 """
 
 __version__ = "0.0.0"
 __copyright__ = """ Copyright (C) 2017  P. Scicluna, F. Kemper, S. Srinivasan
+J.P. Marshall
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
