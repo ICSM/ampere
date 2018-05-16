@@ -2,6 +2,8 @@ from __future__ import print_function
 
 import numpy as np
 from astropy.table import Table
+import pyphot
+from astropy.io import fits
 
 class Data(object):
     """
@@ -65,7 +67,15 @@ class Photometry(Data):
     def synPhot(self, **kwargs):
         pass
 
-    def lnlike(self, synWave, synFlux, **kwargs):
+    def lnlike(self, modWave, modFlux, **kwargs):
+        ''' docstring goes here '''
+        
+        ''' First take the model values (passed in) and compute synthetic photometry '''
+        
+
+        ''' then update the covariance matrix for the parameters passed in '''
+
+        ''' then compute the likelihood for each photometric point in a vectorised statement '''
         pass
 
     def cov(self, **kwargs):
