@@ -51,9 +51,8 @@ class Photometry(Data):
 
     def __init__(self, filterName, value, uncertainty, **kwargs):
         self.filterName = filterName
-        self.value = value
-<<<<<<< HEAD
-        self.uncertainty = uncertainty #Error bars may be asymmetric!
+        
+#        self.uncertainty = uncertainty #Error bars may be asymmetric!
         self.fluxUnits = photUnits #May be different over wavelength; mag, Jy  
         self.bandUnits = bandUnits #Should be A or um if taken from pyPhot        
         self.type = 'Photometry'
@@ -72,11 +71,8 @@ class Photometry(Data):
         
         value[mjy] = 1000.*value[mjy]
         uncertainty[mjy] = 1000.*uncertainty[mjy]
-        
-=======
         self.uncertainty = uncertainty
->>>>>>> 7ca0a3dc0112d4c8509ad46351481e8f629efbc1
-        pass
+        self.value = value
 
     def __call__(self, **kwargs):
         raise NotImplementedError()
@@ -119,7 +115,6 @@ class Photometry(Data):
 
 class Spectrum(Data):
 
-<<<<<<< HEAD
     """
 
 
@@ -134,10 +129,6 @@ class Spectrum(Data):
         self.fluxUnits = specFluxUnits #lamFlam/nuFnu, Fnu, Flam, again always be same
         self.bandUnits = specBandUnits #wavelength, frequency (A -> GHz)
         self.type = 'Spectrum'
-=======
-    def __init__(**kwargs):
->>>>>>> 7ca0a3dc0112d4c8509ad46351481e8f629efbc1
-        pass
 
     def __call__(self, **kwargs):
         raise NotImplementedError()
