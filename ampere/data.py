@@ -49,7 +49,7 @@ class Photometry(Data):
 
     """
 
-    def __init__(self, filterName, value, uncertainty, **kwargs):
+    def __init__(self, filterName, value, uncertainty, photUnits, bandUnits, **kwargs):
         self.filterName = filterName
         
 #        self.uncertainty = uncertainty #Error bars may be asymmetric!
