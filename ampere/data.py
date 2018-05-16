@@ -110,6 +110,9 @@ class Photometry(Data):
         #pass
         probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(self.covMat, a) ) ) )
 
+        return probFlux
+        
+
     def cov(self, **kwargs):
         pass
 
