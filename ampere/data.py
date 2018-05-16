@@ -2,6 +2,8 @@ from __future__ import print_function
 
 import numpy as np
 from astropy.table import Table
+import pyphot
+from astropy.io import fits
 
 class Data(object):
     """
@@ -28,12 +30,6 @@ class Data(object):
         ''' 
         Routine to generate data object from a file containing said data
         '''
-        #JPM:
-        #Expecting a structure with something like the following:
-        #Filter name (or Wavelength/Frequency for spectra)
-        #Values (Flux,Magnitude)
-        #Uncertainty (Flux,Magnitude,Fractional? -- e.g. IRAS)
-        #Units (Either a separate column (phot) or as a header/keyword (spec)?)
         pass
 
     def fromTable(self, table, format, **kwargs):
@@ -54,11 +50,9 @@ class Photometry(Data):
     """
 
     def __init__(self, filterName, value, uncertainty, **kwargs):
-        self.filterName = filterName #For consistency get lam value from pyPhot
-        import pyphot
-        filters = filterLibrary.load_filters(filterName)
-        self.wavelength = filters.lpivot() #Pivot wavelengths from pyPhot        
+        self.filterName = filterName
         self.value = value
+<<<<<<< HEAD
         self.uncertainty = uncertainty #Error bars may be asymmetric!
         self.fluxUnits = photUnits #May be different over wavelength; mag, Jy  
         self.bandUnits = bandUnits #Should be A or um if taken from pyPhot        
@@ -79,6 +73,9 @@ class Photometry(Data):
         value[mjy] = 1000.*value[mjy]
         uncertainty[mjy] = 1000.*uncertainty[mjy]
         
+=======
+        self.uncertainty = uncertainty
+>>>>>>> 7ca0a3dc0112d4c8509ad46351481e8f629efbc1
         pass
 
     def __call__(self, **kwargs):
@@ -93,14 +90,36 @@ class Photometry(Data):
     def synPhot(self, **kwargs):
         pass
 
-    def lnlike(self, synWave, synFlux, **kwargs):
-        pass
+    def lnlike(self, modWave, modFlux, **kwargs):
+        ''' docstring goes here '''
+        
+        ''' First take the model values (passed in) and compute synthetic photometry '''
+        ''' I assume that the filter library etc is already setup '''
+        filts, modSed = pyphot.extractPhotometry(modWave,
+                                                 modFlux,
+                                                 self.filterName,
+                                                 Fnu = True,
+                                                 absFlux = False
+            )
+
+        ''' then update the covariance matrix for the parameters passed in '''
+        #skip this for now
+        self.covMat
+        
+        ''' then compute the likelihood for each photometric point in a vectorised statement '''
+        a = self.value - modSed
+
+        b = np.log(1./((2*np.pi)**(len(self.value)) * np.linalg.det(self.covMat)
+            ) 
+        #pass
+        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(self.covMat, a) ) ) )
 
     def cov(self, **kwargs):
         pass
 
 class Spectrum(Data):
 
+<<<<<<< HEAD
     """
 
 
@@ -115,6 +134,9 @@ class Spectrum(Data):
         self.fluxUnits = specFluxUnits #lamFlam/nuFnu, Fnu, Flam, again always be same
         self.bandUnits = specBandUnits #wavelength, frequency (A -> GHz)
         self.type = 'Spectrum'
+=======
+    def __init__(**kwargs):
+>>>>>>> 7ca0a3dc0112d4c8509ad46351481e8f629efbc1
         pass
 
     def __call__(self, **kwargs):

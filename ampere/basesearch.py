@@ -9,7 +9,10 @@ class BaseSearch(object):
     A base class for parameter search algorithms
     """
     
-    def __init__(self, **kwargs):
+    def __init__(self, model=None, data=None, **kwargs):
+        '''
+        Initialise the optimiser with a model and some data, then use introspection on both to establish a few important numbers 
+        '''
         raise NotImplementedError()
 
     def __call__(self, **kwargs):
