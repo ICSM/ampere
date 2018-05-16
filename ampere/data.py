@@ -81,12 +81,14 @@ class Photometry(Data):
 
         ''' then update the covariance matrix for the parameters passed in '''
         #skip this for now
+        self.covMat
         
         ''' then compute the likelihood for each photometric point in a vectorised statement '''
         a = self.value - modSed
         b = np.log(1./((2*np.pi)**
             )
-        pass
+        #pass
+        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(self.covMat, a) ) ) )
 
     def cov(self, **kwargs):
         pass
