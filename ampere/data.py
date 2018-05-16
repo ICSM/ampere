@@ -28,6 +28,12 @@ class Data(object):
         ''' 
         Routine to generate data object from a file containing said data
         '''
+        #JPM:
+        #Expecting a structure with something like the following:
+        #Filter name (or Wavelength/Frequency for spectra)
+        #Values (Flux,Magnitude)
+        #Uncertainty (Flux,Magnitude,Fractional? -- e.g. IRAS)
+        #Units (Either a separate column (phot) or as a header/keyword (spec)?)
         pass
 
     def fromTable(self, table, format, **kwargs):
@@ -48,9 +54,15 @@ class Photometry(Data):
     """
 
     def __init__(self, filterName, value, uncertainty, **kwargs):
-        self.filterName = filterName
+        self.filterName = filterName #For consistency get lam value from pyPhot
+        import pyphot
+        filters = filterLibrary.load_filters(filterName)
+        self.wavelength = filters.lpivot() #Pivot wavelengths from pyPhot        
         self.value = value
         self.uncertainty = uncertainty
+        self.fluxUnits = photUnits #May be different over wavelength; mag, Jy
+        self.bandUnits = bandUnits #Should be microns if taken from pyPhot
+        self.type = 'Photometry'
         pass
 
     def __call__(self, **kwargs):
@@ -73,7 +85,15 @@ class Photometry(Data):
 
 class Spectrum(Data):
 
-    def __init__(**kwargs):
+    def __init__(self, bandpass, value, uncertainty, **kwargs):
+        self.frequency = freqSpec #True/False? Wavelength or Frequency spectrum
+        self.filterName = filterName #Telescope/Instrument cf photometry
+        self.bandpass = bandpass #Will be the grid of wavelength/frequency
+        self.value = value #Should always be a flux unless someone is peverse
+        self.uncertainty = uncertainty #Ditto
+        self.fluxUnits = specFluxUnits #lamFlam/nuFnu, Fnu, Flam, again always be same
+        self.bandUnits = specBandUnits #wavelength, frequency (A -> GHz)
+        self.type = 'Spectrum'
         pass
 
     def __call__(self, **kwargs):
