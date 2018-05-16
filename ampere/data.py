@@ -84,8 +84,8 @@ class Photometry(Data):
         
         ''' then compute the likelihood for each photometric point in a vectorised statement '''
         a = self.value - modSed
-        b = np.log(1./((2*np.pi)**
-            )
+        b = np.log(1./((2*np.pi)**(len(self.value)) * np.linalg.det(self.covMat)
+            ) #should probably pull out the calculation of the determinant somewhere else?
         pass
 
     def cov(self, **kwargs):
