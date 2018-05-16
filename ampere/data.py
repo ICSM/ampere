@@ -5,6 +5,8 @@ from astropy.table import Table
 from astropy import constants as const
 import pyphot
 from astropy.io import fits
+# for reading VO table formats into a single table
+from astropy.io.votable import parse_single_table
 
 class Data(object):
     """
@@ -122,6 +124,44 @@ class Photometry(Data):
     def cov(self, **kwargs):
         pass
 
+    def fromFile(self, filename, format, **kwargs):
+        ''' 
+        Routine to generate photometry data object from a file containing said data
+        '''
+                # First type votable as take from vizier/sed http://vizier.u-strasbg.fr/vizier/sed/
+                # following the astropy docs: http://docs.astropy.org/en/stable/io/votable/index.html
+                   
+                   # of course in the more elaborate version this will be a case statement with file types
+
+                   #case
+                   #VO
+                   # this command reads a VOTable into a single table which is then converted in to astropy table format
+                   table = parse_single_table(filename).to_table()
+                   ## convert this table with standardised column names?
+
+                   #other formats
+
+                   #endcase
+
+                   
+                   ## pass control to fromTable to define the variables
+
+                   fromTable(table)
+ 
+                   pass
+
+    def fromTable(self, table, format, **kwargs):
+        ''' 
+        Routine to generate data object from an astropy Table object or a file containing data in a format that can be read in as an astropy Table
+        '''
+                   # extract the variables that we are intrested in from the table
+                   # for the moment we use the columns from the VO Table
+                   value = table['sed_flux'].data
+                   photUnits = table['sed_flux'].unit
+                   uncertainty = table['sed_eflux'].data
+                   filterName = table['sed_filter'].data
+                   pass
+                   
 class Spectrum(Data):
 
     """
