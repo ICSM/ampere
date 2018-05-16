@@ -56,7 +56,7 @@ class Photometry(Data):
         #Create wavelength array for photometry based on pivot wavelengths of
         #filters
         filters = filterLibrary.load_filters(filterName)
-        self.wavelength = filters.lpivot()
+        self.wavelength = filters.lpivot.magnitude
         
 #        self.uncertainty = uncertainty #Error bars may be asymmetric!
         self.fluxUnits = photUnits #May be different over wavelength; mag, Jy  
@@ -68,7 +68,7 @@ class Photometry(Data):
         
         mags = (photUnits == 'mag')
         
-        zeropoints = filters[mags].Vega_zero_Jy().magnitude
+        zeropoints = filters[mags].Vega_zero_Jy.magnitude
         value[mags] = zeropoints*10^(-0.4*value[mags])
         uncertainty[mags] = value[mags] - zeropoints*10^(-0.4*(value[mags]+uncertainty[mags]))
         
@@ -152,8 +152,12 @@ class Spectrum(Data):
         
         self.fluxUnits = specFluxUnits #lamFlam/nuFnu, Fnu, Flam, again always be same
 
-        if fluxUnits == '':
-            value = CONVERSION FROM WHATEVER INTO Jy
+        if fluxUnits == 'Fnu':
+            value = CONVERSIONS FROM WHATEVER INTO JANSKYS
+        if fluxUnits == 'lamFlam' or fluxUnits = 'nuFnu':
+            value = CONVERSIONS FROM WHATEVER INTO JANSKYS
+        if fluxUnits == 'Flam':
+            value = CONVERSIONS FROM WHATEVER INTO JANSKYS
 
         self.value = value #Should always be a flux unless someone is peverse
         self.uncertainty = uncertainty #Ditto
