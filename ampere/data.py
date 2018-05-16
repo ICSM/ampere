@@ -132,8 +132,7 @@ class Photometry(Data):
                 # following the astropy docs: http://docs.astropy.org/en/stable/io/votable/index.html
                    
                    # of course in the more elaborate version this will be a case statement with file types
-
-                   #case
+                   #switch
                    #VO
                    # this command reads a VOTable into a single table which is then converted in to astropy table format
                    table = parse_single_table(filename).to_table()
@@ -141,14 +140,9 @@ class Photometry(Data):
 
                    #other formats
 
-                   #endcase
-
-                   
+                   #endswitch
                    ## pass control to fromTable to define the variables
-
                    fromTable(table)
- 
-                   pass
 
     def fromTable(self, table, format, **kwargs):
         ''' 
@@ -160,7 +154,10 @@ class Photometry(Data):
                    photUnits = table['sed_flux'].unit
                    uncertainty = table['sed_eflux'].data
                    filterName = table['sed_filter'].data
-                   pass
+
+                   # We don't see a need for bandUnits because this info should be part of the filterName in pyphot
+                   # The SED VO table has frequency units in GHz.
+                   # How does this map on the needs of pyphot?
                    
 class Spectrum(Data):
 
@@ -238,6 +235,56 @@ class Image(Data):
     def lnlike(self, **kwargs):
         pass
 
+    def fromFile(self, filename, format, **kwargs):
+        ''' 
+        Routine to generate photometry data object from a file containing said data
+        '''
+                # First type votable as take from vizier/sed http://vizier.u-strasbg.fr/vizier/sed/
+                # following the astropy docs: http://docs.astropy.org/en/stable/io/votable/index.html
+                   
+                   # of course in the more elaborate version this will be a case statement with file types
+                   #switch
+                   #VO
+                   # this command reads a CASSIS fits file *yaaar*.fits
+
+                   filename = 'cassis_yaaar_spcfw_14203136t.fits' 
+                   hdul = fits.open(filename)
+                   hdu = hdul[0]
+                   header=hdu.header
+                   data = hdu.data
+                   table = Table(data,names=[header['COL01DEF'],header['COL02DEF'],header['COL03DEF'],header['COL04DEF'],header['COL05DEF'],header['COL06DEF'],header['COL07DEF'],header['COL08DEF'],header['COL09DEF'],header['COL10DEF'],header['COL11DEF'],header['COL12DEF'],header['COL13DEF'],header['COL14DEF'],header['COL15DEF'],'DUMMY'])
+                   table['wavelength'].unit='um'
+                   table['flux'].unit='Jy'
+                   table['error (RMS+SYS)'].unit='Jy'
+                   table['error (RMS)'].unit='Jy'
+                   table['error (SYS)'].unit='Jy'
+                   table['offset uncertainty (CAL)'].unit='Jy'
+                   table['sky'].unit='Jy'
+                   table['sky error'].unit='Jy'
+                   # note that there is a column called module. this has values 0.0 1.0 2.0 and 3.0 corresponding to SL1, SL2, LL1 and LL2 resp.
+                   # we may want consider the independent
+                   
+                   #other formats
+
+                   #endswitch
+                   ## pass control to fromTable to define the variables
+                   fromTable(table)
+
+    def fromTable(self, table, format, **kwargs):
+        ''' 
+        Routine to generate data object from an astropy Table object or a file containing data in a format that can be read in as an astropy Table
+        '''
+                   # extract the variables that we are intrested in from the table
+                   # for the moment we use the columns from the cassis
+                   value = table['flux'].data
+                   # we should read the paper to see which uncertainties to include
+                   photUnits = table['flux'].unit
+                   uncertainty = table['error (RMS+SYS)'].data
+
+                   ## here we assign the wavelength unit to the bandUnit. is this correct?
+                   bandUnits = table['wavelength'].unit
+
+                   ## what about the modules?
 
 class Interferometry(Data):
 
