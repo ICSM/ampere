@@ -59,10 +59,26 @@ class Photometry(Data):
         filters = filterLibrary.load_filters(filterName)
         self.wavelength = filters.lpivot() #Pivot wavelengths from pyPhot        
         self.value = value
-        self.uncertainty = uncertainty
-        self.fluxUnits = photUnits #May be different over wavelength; mag, Jy
-        self.bandUnits = bandUnits #Should be microns if taken from pyPhot
+        self.uncertainty = uncertainty #Error bars may be asymmetric!
+        self.fluxUnits = photUnits #May be different over wavelength; mag, Jy  
+        self.bandUnits = bandUnits #Should be A or um if taken from pyPhot        
         self.type = 'Photometry'
+        
+        #identify values in magnitudes, convert to Jy
+        np.array(photUnits)
+        
+        mags = (photUnits == 'mag')
+        
+        zeropoints = filters[mags].Vega_zero_Jy().magnitude
+        value[mags] = zeropoints*10^(-0.4*value[mags])
+        uncertainty[mags] = value[mags] - zeropoints*10^(-0.4*(value[mags]+uncertainty[mags]))
+        
+        #identify values in milliJansky, convert to Jy
+        mjy = (photUnits == 'mjy')
+        
+        value[mjy] = 1000.*value[mjy]
+        uncertainty[mjy] = 1000.*uncertainty[mjy]
+        
         pass
 
     def __call__(self, **kwargs):
@@ -84,6 +100,11 @@ class Photometry(Data):
         pass
 
 class Spectrum(Data):
+
+    """
+
+
+    """
 
     def __init__(self, bandpass, value, uncertainty, **kwargs):
         self.frequency = freqSpec #True/False? Wavelength or Frequency spectrum
@@ -112,7 +133,7 @@ class Spectrum(Data):
         pass
 
 class Image(Data):
-
+    #Need separate subclasses for images and radial profiles
     def __init__(**kwargs):
         pass
 
@@ -134,6 +155,27 @@ class Image(Data):
 
 class Interferometry(Data):
 
+    def __init__(**kwargs):
+        pass
+
+    def __call__(self, **kwargs):
+        raise NotImplementedError()
+    
+    def __str__(self, **kwargs):
+        raise NotImplementedError()
+
+    def __repr__(self, **kwargs):
+        raise NotImplementedError()
+    
+    def cov(self, **kwargs):
+        pass
+
+    def lnlike(self, **kwargs):
+        pass
+
+
+class Cube(Data):
+    #IFU or Channel Maps
     def __init__(**kwargs):
         pass
 
