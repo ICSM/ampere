@@ -53,6 +53,11 @@ class Photometry(Data):
     def __init__(self, filterName, value, uncertainty, photUnits, bandUnits, **kwargs):
         self.filterName = filterName
         
+        #Create wavelength array for photometry based on pivot wavelengths of
+        #filters
+        filters = filterLibrary.load_filters(filterName)
+        self.wavelength = filters.lpivot()
+        
 #        self.uncertainty = uncertainty #Error bars may be asymmetric!
         self.fluxUnits = photUnits #May be different over wavelength; mag, Jy  
         self.bandUnits = bandUnits #Should be A or um if taken from pyPhot        
@@ -131,8 +136,8 @@ class Spectrum(Data):
         #Wavelength conversion
         self.frequency = freqSpec #True/False? Wavelength or Frequency spectrum
         
-        if freqSpec == 'True': #Assume GHz, convert to microns
-            wavelength = 1.0e6*(const.c.value/wavelength)
+        if freqSpec == 'True': #Assume given in GHz if freq, convert to microns
+            wavelength = 1.0e6*(const.c.value/(wavelength*1.0e9))
         
         self.bandUnits = bandUnits
         
