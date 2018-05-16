@@ -2,6 +2,7 @@ from __future__ import print_function
 
 import numpy as np
 from astropy.table import Table
+from astropy import constants as const
 import pyphot
 from astropy.io import fits
 
@@ -45,7 +46,7 @@ class Data(object):
 class Photometry(Data):
 
     """
-
+    Routine to take input from Data(), convert all fluxes into Jy
 
     """
 
@@ -120,15 +121,35 @@ class Spectrum(Data):
 
     """
 
-    def __init__(self, bandpass, value, uncertainty, **kwargs):
-        self.frequency = freqSpec #True/False? Wavelength or Frequency spectrum
+    def __init__(self, wavelength, value, uncertainty, **kwargs):
         self.filterName = filterName #Telescope/Instrument cf photometry
-        self.bandpass = bandpass #Will be the grid of wavelength/frequency
+        self.type = 'Spectrum'
+
+        #Wavelength conversion
+        self.frequency = freqSpec #True/False? Wavelength or Frequency spectrum
+        
+        if freqSpec == 'True': #Assume GHz, convert to microns
+            wavelength = 1.0e6*(const.c.value/wavelength)
+        
+        self.bandUnits = bandUnits
+        
+        if bandUnits == 'A':
+            wavelength = 1.0e-4*wavelength
+        if bandUnits == 'nm' :
+            wavelength = 1.0e-3*wavelength
+        if bandUnits == 'um':
+            wavelength = wavelength
+        
+        self.wavelength = wavelength #Will be the grid of wavelength/frequency
+        
+        self.fluxUnits = specFluxUnits #lamFlam/nuFnu, Fnu, Flam, again always be same
+
+        if fluxUnits == '':
+            value = CONVERSION FROM WHATEVER INTO Jy
+
         self.value = value #Should always be a flux unless someone is peverse
         self.uncertainty = uncertainty #Ditto
-        self.fluxUnits = specFluxUnits #lamFlam/nuFnu, Fnu, Flam, again always be same
-        self.bandUnits = specBandUnits #wavelength, frequency (A -> GHz)
-        self.type = 'Spectrum'
+
 
     def __call__(self, **kwargs):
         raise NotImplementedError()
