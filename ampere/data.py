@@ -50,7 +50,7 @@ class Photometry(Data):
 
     """
 
-    def __init__(self, filterName, value, uncertainty, **kwargs):
+    def __init__(self, filterName, value, uncertainty, photUnits, bandUnits, **kwargs):
         self.filterName = filterName
         
 #        self.uncertainty = uncertainty #Error bars may be asymmetric!
@@ -110,6 +110,9 @@ class Photometry(Data):
             ) 
         #pass
         probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(self.covMat, a) ) ) )
+
+        return probFlux
+        
 
     def cov(self, **kwargs):
         pass
