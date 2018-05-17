@@ -7,6 +7,7 @@ import pyphot
 from astropy.io import fits
 # for reading VO table formats into a single table
 from astropy.io.votable import parse_single_table
+import astropy.units as u
 
 class Data(object):
     """
@@ -54,6 +55,9 @@ class Photometry(Data):
 
     def __init__(self, filterName, value, uncertainty, photUnits, bandUnits, **kwargs):
         self.filterName = filterName
+
+        ''' setup pyphot for this set of photometry '''
+        self.pyphotSetup()
         
         #Create wavelength array for photometry based on pivot wavelengths of
         #filters
@@ -82,14 +86,61 @@ class Photometry(Data):
         self.uncertainty = uncertainty
         self.value = value
 
+        ''' inititalise covariance matrix as a diagonal matrix '''
+        self.covMat = np.diag(uncertainty**2)#np.diag(np.ones(len(uncertainty)))
+
     def __call__(self, **kwargs):
         raise NotImplementedError()
     
     def __str__(self, **kwargs):
-        raise NotImplementedError()
+        ''' 
+        
+        '''
+        
+        return '\n'.join(self.pformat())
+        #raise NotImplementedError()
+
+    def pformat(self, **kwargs):
+        '''
+        Return the instances as a list of formatted strings
+        '''
+        
+        l=[] #define an empty list for the strings
+        #now we need to do a little pre-processing to determine the maximum length of each field
+        # not sure exactly how to do this yet, so here are some placeholders
+        nFilt=6
+        nWave=18
+        nFlux=4
+        nUnc=12
+        
+        ''' first comes header info '''
+
+
+        ''' then a table of data '''
+        ''' this consists of a few header rows '''
+        l.append(
+            '{} {} {} {} '.format(
+                'Filter','Pivot wavelength','Flux','Uncertainty'
+            )
+        )
+        l.append('{} {} {} {}'.format('-'*(nFilt),'-'*(nWave),'-'*(nVal),'-'*(nUnc)))
+
+        ''' then a table of values '''
+        for i in range(len(self.filters)):
+            l.append(
+                '{} {} {} {}'.format(
+                    self.filters[i],self.wavelength[i],self.value[i],self.uncertainty[i]
+                )
+            )
+
+        ''' finally we might want a way to output the coviariance matrix, although that might only be useful for plotting '''
 
     def __repr__(self, **kwargs):
         raise NotImplementedError()
+
+    def pyphotSetup(self, **kwargs):
+        ''' Given the data, read in the pyphot filter library and make sure we have the right list of filters in memory '''
+        pass
 
     def synPhot(self, **kwargs):
         pass
@@ -122,8 +173,12 @@ class Photometry(Data):
         
 
     def cov(self, **kwargs):
-        
-        pass
+        ''' 
+        This routine populates a covariance matrix given some methods to call and parameters for them.
+
+        For the moment, however, it does nothing.
+        '''
+        return self.covMat
 
     def fromFile(self, filename, format=None, **kwargs):
         ''' 
@@ -203,6 +258,8 @@ class Spectrum(Data):
         self.value = value #Should always be a flux unless someone is peverse
         self.uncertainty = uncertainty #Ditto
 
+        ''' inititalise covariance matrix as a diagonal matrix '''
+        self.covMat = np.diag(np.ones(len(uncertainty)))
 
     def __call__(self, **kwargs):
         raise NotImplementedError()
