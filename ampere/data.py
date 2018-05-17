@@ -462,7 +462,7 @@ class Image(Data):
                         #Take keywords here i.e. wavelength, pixel scale, etc.
                         images = np.append(images,hdul[i].data)
             except:
-                print('No HDU marked image found...)
+                print('No HDU marked image found...')
             
             
 
