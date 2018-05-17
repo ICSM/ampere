@@ -8,6 +8,7 @@ from astropy.io import fits
 # for reading VO table formats into a single table
 from astropy.io.votable import parse_single_table
 import astropy.units as u
+from spectres import spectres
 
 class Data(object):
     """
@@ -312,7 +313,24 @@ class Spectrum(Data):
         pass
 
     def lnlike(self, **kwargs):
-        pass
+        ''' docstring goes here '''
+        
+        ''' First take the model values (passed in) and compute synthetic Spectrum '''
+        modSpec = spectres(self.wavelength, modWave, modFlux)
+
+        ''' then update the covariance matrix for the parameters passed in '''
+        #skip this for now
+        self.covMat = self.cov()
+        
+        ''' then compute the likelihood for each photometric point in a vectorised statement '''
+        a = self.value - modSpec
+
+        b = np.log(1./((2*np.pi)**(len(self.value)) * np.linalg.det(self.covMat))
+            ) 
+        #pass
+        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(self.covMat, a) ) ) )
+
+        return probFlux 
 
     def fromFile(self, filename, format, **kwargs):
         ''' 
@@ -385,7 +403,27 @@ class Image(Data):
         pass
 
     def lnlike(self, **kwargs):
-        pass
+
+        ''' docstring goes here '''
+
+        raise NotImplementedError()
+        
+        ''' First take the model values (passed in) and compute synthetic Image '''
+        modImage = 1 #Needs to be added here. Take synthetic photometry on the image plane and convolve with the PSF. 
+
+        ''' then update the covariance matrix for the parameters passed in '''
+        #skip this for now
+        self.covMat = self.cov()
+        
+        ''' then compute the likelihood for each photometric point in a vectorised statement '''
+        a = self.value - modImage
+
+        b = np.log(1./((2*np.pi)**(len(self.value)) * np.linalg.det(self.covMat))
+            ) 
+        #pass
+        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(self.covMat, a) ) ) )
+
+        return probFlux
 
     
 
@@ -407,7 +445,27 @@ class Interferometry(Data):
         pass
 
     def lnlike(self, **kwargs):
-        pass
+
+        ''' docstring goes here '''
+
+        raise NotImplementedError()
+        
+        ''' First take the model values (passed in) and compute synthetic Interferometry image '''
+        modInterferImage = 1 #Needs to be added here. Take synthetic photometry on the Interferometry image plane.
+
+        ''' then update the covariance matrix for the parameters passed in '''
+        #skip this for now
+        self.covMat = self.cov()
+        
+        ''' then compute the likelihood for each photometric point in a vectorised statement '''
+        a = self.value - modInterferImage
+
+        b = np.log(1./((2*np.pi)**(len(self.value)) * np.linalg.det(self.covMat))
+            ) 
+        #pass
+        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(self.covMat, a) ) ) )
+
+        return probFlux
 
 
 class Cube(Data):
@@ -428,4 +486,24 @@ class Cube(Data):
         pass
 
     def lnlike(self, **kwargs):
-        pass
+
+        ''' docstring goes here '''
+
+        raise NotImplementedError()
+        
+        ''' First take the model values (passed in) and compute synthetic IFU data '''
+        modCube = 1 #Needs to be added here. Generate model IFU data.
+
+        ''' then update the covariance matrix for the parameters passed in '''
+        #skip this for now
+        self.covMat = self.cov()
+        
+        ''' then compute the likelihood for each photometric point in a vectorised statement '''
+        a = self.value - modCube
+
+        b = np.log(1./((2*np.pi)**(len(self.value)) * np.linalg.det(self.covMat))
+            ) 
+        #pass
+        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(self.covMat, a) ) ) )
+
+        return probFlux
