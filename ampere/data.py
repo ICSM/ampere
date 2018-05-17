@@ -66,7 +66,7 @@ class Photometry(Data):
         
 #        self.uncertainty = uncertainty #Error bars may be asymmetric!
         self.fluxUnits = photUnits #May be different over wavelength; mag, Jy  
-        self.bandUnits = bandUnits #Should be A or um if taken from pyPhot        
+        self.bandUnits = 'um' #Should be um if taken from pyPhot        
         self.type = 'Photometry'
         
         #identify values in magnitudes, convert to Jy
@@ -247,13 +247,30 @@ class Spectrum(Data):
         self.wavelength = wavelength #Will be the grid of wavelength/frequency
         
         self.fluxUnits = specFluxUnits #lamFlam/nuFnu, Fnu, Flam, again always be same
-
-        if fluxUnits == 'Fnu':
-            value = CONVERSIONS FROM WHATEVER INTO JANSKYS
-        if fluxUnits == 'lamFlam' or fluxUnits = 'nuFnu':
-            value = CONVERSIONS FROM WHATEVER INTO JANSKYS
-        if fluxUnits == 'Flam':
-            value = CONVERSIONS FROM WHATEVER INTO JANSKYS
+        
+        if fluxUnits == 'Jy':
+            value = value
+            uncertainty = uncertainty
+        elif fluxUnits == 'mJy':
+            value = 1.0E+3*value
+            uncertainty = 1.0E+3*uncertainty
+        elif fluxUnits == 'W/m^2/Hz':
+            value = 1.0E+26*value
+            uncertainty = 1.0E+26*uncertainty
+        elif fluxUnits == 'W/m^2/Angstrom':
+            value = 2.99792458E-12*value/(1.0.E+4*wavelength)^2
+            uncertainty = 2.99792458E-12*uncertainty/(1.0E+4*wavelength)^2
+        elif fluxUnits = 'W/cm^2/um':
+            value = 2.99792458E-16*value/wavelength^2
+            uncertainty = 2.99792458E-16*uncertainty/wavelength^2
+        elif fluxUnits = 'erg/cm^2/s/Hz':
+            value = 1.0E+23*value
+            uncertainty = 1.0E+23*uncertainty
+        elif fluxUnits = 'erg/cm^2/s/Angstrom':
+            value = 3.33564095E+04*value*(wavelength*1e4)^2
+            uncertainty = 3.33564095E+04*uncertainty*(wavelength*1e4)^2
+        else:
+            raise NotImplementedError()
 
         self.value = value #Should always be a flux unless someone is peverse
         self.uncertainty = uncertainty #Ditto
