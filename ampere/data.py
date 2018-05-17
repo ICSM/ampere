@@ -247,7 +247,7 @@ class Spectrum(Data):
 
     """
 
-    def __init__(self, wavelength, value, uncertainty, bandUnits,**kwargs):
+    def __init__(self, wavelength, value, uncertainty, bandUnits, fluxUnits,**kwargs):
         self.filterName = filterName #Telescope/Instrument cf photometry
         self.type = 'Spectrum'
 
@@ -385,7 +385,7 @@ class Spectrum(Data):
         
         ## what about the modules?
 
-        self.__init__(table['wavelength'].unit, value, uncertainty, bandUnits)
+        self.__init__(table['wavelength'].data, value, uncertainty, bandUnits, photUnits) #Also pass in flux units
 
 class Image(Data):
     #Need separate subclasses for images and radial profiles
