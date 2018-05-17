@@ -6,7 +6,26 @@
 # Execution: calculate the model flux; return the result
 
 import numpy as np
+from astropy import constants as const
+from astropy import units as u
+from astropy.analytic_functions import blackbody
 from models import AnalyticalModel
+
+class SingleModifiedBlackBody(AnalyticalModel):
+    def __init__(self, wavelengths, flatprior=True,
+                 normWave = 1., sigmaNormWave = 1.,
+                 dist = 1., **kwargs):
+        self.wavelengths = wavelengths #grid of wavelengths to calculate BB for
+        self.freq = const.c / wavelengths #unit conversions will be required...
+        self.flatprior = flatprior #whether to assume flat priors
+        self.normWave = normWave #wavelength at which opacity is normalised
+        self.sigmaNormWave = sigmaNormWave #value to which the opacity is normalised at wavelength normWave
+        self.dist = dist
+
+    def __call__(self, t = 1., scale = 1., index = 1., **kwargs):
+        
+        #return (blackbody.blackbody_nu(const.c.value*1e6/self.wavelengths,t).to(u.Jy / u.sr).value / (dist_lum.value)**2 * kappa230.value * ((wave/230.)**betaf) * massf) #*M_sun.cgs.value
+        pass
 
 class PowerLawAGN(AnalyticalModel):
     '''Input: fit parameters (multiplicationFactor, powerLawIndex, relativeAbundances), 
