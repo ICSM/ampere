@@ -260,13 +260,13 @@ class Spectrum(Data):
         elif fluxUnits == 'W/m^2/Angstrom':
             value = 2.99792458E-12*value/(1.0.E+4*wavelength)^2
             uncertainty = 2.99792458E-12*uncertainty/(1.0E+4*wavelength)^2
-        elif fluxUnits = 'W/cm^2/um':
+        elif fluxUnits == 'W/cm^2/um':
             value = 2.99792458E-16*value/wavelength^2
             uncertainty = 2.99792458E-16*uncertainty/wavelength^2
-        elif fluxUnits = 'erg/cm^2/s/Hz':
+        elif fluxUnits == 'erg/cm^2/s/Hz':
             value = 1.0E+23*value
             uncertainty = 1.0E+23*uncertainty
-        elif fluxUnits = 'erg/cm^2/s/Angstrom':
+        elif fluxUnits == 'erg/cm^2/s/Angstrom':
             value = 3.33564095E+04*value*(wavelength*1e4)^2
             uncertainty = 3.33564095E+04*uncertainty*(wavelength*1e4)^2
         else:
