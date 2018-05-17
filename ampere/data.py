@@ -60,16 +60,19 @@ class Photometry(Data):
         ''' setup pyphot for this set of photometry '''
         self.pyphotSetup()
         self.filterNamesToPyphot()
-        
+
+        self.filterName = filterName[self.filterMask]
         #Create wavelength array for photometry based on pivot wavelengths of
         #filters
-        filters = self.filterLibrary.load_filters(filterName)
+        filters = self.filterLibrary.load_filters(filterName[self.filterMask])
         self.wavelength = filters.lpivot.magnitude
         
 #        self.uncertainty = uncertainty #Error bars may be asymmetric!
-        self.fluxUnits = photUnits #May be different over wavelength; mag, Jy  
+        self.fluxUnits = photUnits[self.filterMask] #May be different over wavelength; mag, Jy  
         self.bandUnits = 'um' #Should be um if taken from pyPhot        
         self.type = 'Photometry'
+        value = value[self.filterMask]
+        uncertainty = uncertainty[self.filterMask]
         
         #identify values in magnitudes, convert to Jy
         np.array(photUnits)
@@ -110,10 +113,10 @@ class Photometry(Data):
         l=[] #define an empty list for the strings
         #now we need to do a little pre-processing to determine the maximum length of each field
         # not sure exactly how to do this yet, so here are some placeholders
-        nFilt=6
-        nWave=18
-        nFlux=4
-        nUnc=12
+        nFilt=max([len(max(np.array(self.filterName).astype(str), key=len)),6])#6
+        nWave=max([len(max(np.array(self.wavelength).astype(str), key=len)),18])
+        nVal=max([len(max(np.array(self.value).astype(str), key=len)),8])
+        nUnc=max([len(max(np.array(self.uncertainty).astype(str), key=len)),12])
         
         ''' first comes header info '''
 
@@ -121,8 +124,9 @@ class Photometry(Data):
         ''' then a table of data '''
         ''' this consists of a few header rows '''
         l.append(
-            '{} {} {} {} '.format(
-                'Filter','Pivot wavelength','Flux','Uncertainty'
+            '{:^{nFilt}} {:^{nWave}} {:^{nVal}} {:^{nUnc}} '.format(
+                'Filter','Pivot wavelength','Flux','Uncertainty',
+                nFilt = nFilt, nWave = nWave, nVal = nVal, nUnc = nUnc
             )
         )
         l.append('{} {} {} {}'.format('-'*(nFilt),'-'*(nWave),'-'*(nVal),'-'*(nUnc)))
@@ -130,8 +134,9 @@ class Photometry(Data):
         ''' then a table of values '''
         for i in range(len(self.filters)):
             l.append(
-                '{} {} {} {}'.format(
-                    self.filters[i],self.wavelength[i],self.value[i],self.uncertainty[i]
+                '{:<{nFilt}} {:>{nWave}.2e} {:>{nVal}.2e} {:>{nUnc}.2e}'.format(
+                    self.filterName[i],self.wavelength[i],self.value[i],self.uncertainty[i],
+                nFilt = nFilt, nWave = nWave, nVal = nVal, nUnc = nUnc
                 )
             )
 
@@ -151,6 +156,7 @@ class Photometry(Data):
 
     def filterNamesToPyphot(self, **kwargs):
         pyphotFilts = self.filterLibrary.get_library_content()
+        filtsOrig = self.filterName
         l = []
         for filt in self.filterName:
             l.append(filt in pyphotFilts)
@@ -161,9 +167,9 @@ class Photometry(Data):
             if l[i]:
                 self.filterName[i] = newTry[i]
         self.filterMask = l
-
-    def synPhot(self, **kwargs):
-        pass
+        if not np.all(l):
+            print("Some filters were not recognised by pyphot. The following filters will be ignored:")
+            print(filtsOrig[np.logical_not(np.array(l))])
 
     def lnlike(self, modWave, modFlux, **kwargs):
         ''' docstring goes here '''
@@ -268,7 +274,7 @@ class Spectrum(Data):
         
         self.wavelength = wavelength #Will be the grid of wavelength/frequency
         
-        self.fluxUnits = specFluxUnits #lamFlam/nuFnu, Fnu, Flam, again always be same
+        self.fluxUnits = specFluxUnits
         
         if fluxUnits == 'Jy':
             value = value
@@ -298,7 +304,7 @@ class Spectrum(Data):
         self.uncertainty = uncertainty #Ditto
 
         ''' inititalise covariance matrix as a diagonal matrix '''
-        self.covMat = np.diag(np.ones(len(uncertainty)))
+        self.covMat = np.diag(uncertainty**2)
 
     def __call__(self, **kwargs):
         raise NotImplementedError()
@@ -310,7 +316,12 @@ class Spectrum(Data):
         raise NotImplementedError()
     
     def cov(self, **kwargs):
-        pass
+        ''' 
+        This routine populates a covariance matrix given some methods to call and parameters for them.
+
+        For the moment, however, it does nothing.
+        '''
+        return self.covMat
 
     def lnlike(self, **kwargs):
         ''' docstring goes here '''
@@ -393,6 +404,7 @@ class Spectrum(Data):
         uncertainty = table['uncertainty'].data
         
         ## here we assign the wavelength unit to the bandUnit. is this correct?
+        ## Yes, that is correct.
         bandUnits = table['wavelength'].unit
         
         ## what about the modules?
@@ -439,7 +451,32 @@ class Image(Data):
 
         return probFlux
 
-    
+    @classmethod
+    def fromFile(cls, filename, format, **kwargs):
+        ''' 
+        Routine to generate image data object from a file containing said data
+        '''
+        # Assume that all image files are fits files in the first instance
+        # Further assume that we may be given either a list of images, or a
+        # multiple extension fits file.
+        self=cls.__new__(Image)
+        
+        for fname in filename:
+            #Look for 'image' extension name to identify image extensions
+            #Use hdu[1+].data as the image in the absence of other knowledge
+            hdul = fits.open(fname)
+            images = np.empty()
+            try:
+                for i in range(0,len(hdul)):
+                    hdutype = hdul[i]._summary()[0]
+                    if hdutype == 'image':
+                        header=hdul[i].header
+                        #Take keywords here i.e. wavelength, pixel scale, etc.
+                        images = np.append(images,hdul[i].data)
+            except:
+                print('No HDU marked image found...')
+            
+            
 
 class Interferometry(Data):
 
