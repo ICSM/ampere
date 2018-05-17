@@ -332,7 +332,8 @@ class Spectrum(Data):
 
         return probFlux 
 
-    def fromFile(self, filename, format, **kwargs):
+    @classmethod
+    def fromFile(cls, filename, format, **kwargs):
         ''' 
         Routine to generate photometry data object from a file containing said data
         '''
@@ -343,6 +344,7 @@ class Spectrum(Data):
         #switch
         #VO
         # this command reads a CASSIS fits file *yaaar*.fits
+        self=cls.__new__(Spectrum)
         
         filename = 'cassis_yaaar_spcfw_14203136t.fits' 
         hdul = fits.open(filename)
