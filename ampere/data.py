@@ -53,15 +53,16 @@ class Photometry(Data):
 
     """
 
-    def __init__(self, filterName, value, uncertainty, photUnits, bandUnits, **kwargs):
+    def __init__(self, filterName, value, uncertainty, photUnits, bandUnits=None, **kwargs):
         self.filterName = filterName
 
         ''' setup pyphot for this set of photometry '''
         self.pyphotSetup()
+        self.filterNamesToPyphot()
         
         #Create wavelength array for photometry based on pivot wavelengths of
         #filters
-        filters = filterLibrary.load_filters(filterName)
+        filters = self.filterLibrary.load_filters(filterName)
         self.wavelength = filters.lpivot.magnitude
         
 #        self.uncertainty = uncertainty #Error bars may be asymmetric!
@@ -139,8 +140,26 @@ class Photometry(Data):
         raise NotImplementedError()
 
     def pyphotSetup(self, **kwargs):
-        ''' Given the data, read in the pyphot filter library and make sure we have the right list of filters in memory '''
-        pass
+        ''' Given the data, read in the pyphot filter library and make sure we have the right list of filters in memory 
+        
+        Future work: go through multiple libraries from different (user-defined) locations and import htem all
+        '''
+        libDir = pyphot.__file__.strip('__init__.py')+'libs/'
+        libName = 'synphot_PhIReSSTARTer.hd5'
+        self.filterLibrary = pyphot.get_library(fname=libDir + libName)
+
+    def filterNamesToPyphot(self, **kwargs):
+        pyphotFilts = self.filterLibrary.get_library_content()
+        l = []
+        for filt in self.filterName:
+            l.append(filt in pyphotFilts)
+        #try replacing colons and / with _
+        newTry = [filt.replace(':','_').replace('/','_') for filt in self.filterName]
+        for i in range(len(l)):
+            l[i] = (newTry[i] in pyphotFilts)
+            if l[i]:
+                self.filterName[i] = newTry[i]
+        self.filterMask = l
 
     def synPhot(self, **kwargs):
         pass
@@ -180,10 +199,12 @@ class Photometry(Data):
         '''
         return self.covMat
 
-    def fromFile(self, filename, format=None, **kwargs):
+    @classmethod
+    def fromFile(cls, filename, format=None, **kwargs):
         ''' 
         Routine to generate photometry data object from a file containing said data
         '''
+        self=cls.__new__(Photometry)
         # First type votable as take from vizier/sed http://vizier.u-strasbg.fr/vizier/sed/
         # following the astropy docs: http://docs.astropy.org/en/stable/io/votable/index.html
                    
