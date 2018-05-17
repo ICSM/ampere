@@ -8,6 +8,7 @@ from astropy.io import fits
 # for reading VO table formats into a single table
 from astropy.io.votable import parse_single_table
 import astropy.units as u
+from spectres import spectres
 
 class Data(object):
     """
@@ -59,16 +60,19 @@ class Photometry(Data):
         ''' setup pyphot for this set of photometry '''
         self.pyphotSetup()
         self.filterNamesToPyphot()
-        
+
+        self.filterName = filterName[self.filterMask]
         #Create wavelength array for photometry based on pivot wavelengths of
         #filters
-        filters = self.filterLibrary.load_filters(filterName)
+        filters = self.filterLibrary.load_filters(filterName[self.filterMask])
         self.wavelength = filters.lpivot.magnitude
         
 #        self.uncertainty = uncertainty #Error bars may be asymmetric!
-        self.fluxUnits = photUnits #May be different over wavelength; mag, Jy  
+        self.fluxUnits = photUnits[self.filterMask] #May be different over wavelength; mag, Jy  
         self.bandUnits = 'um' #Should be um if taken from pyPhot        
         self.type = 'Photometry'
+        value = value[self.filterMask]
+        uncertainty = uncertainty[self.filterMask]
         
         #identify values in magnitudes, convert to Jy
         np.array(photUnits)
@@ -109,10 +113,10 @@ class Photometry(Data):
         l=[] #define an empty list for the strings
         #now we need to do a little pre-processing to determine the maximum length of each field
         # not sure exactly how to do this yet, so here are some placeholders
-        nFilt=6
-        nWave=18
-        nFlux=4
-        nUnc=12
+        nFilt=max([len(max(np.array(self.filterName).astype(str), key=len)),6])#6
+        nWave=max([len(max(np.array(self.wavelength).astype(str), key=len)),18])
+        nVal=max([len(max(np.array(self.value).astype(str), key=len)),8])
+        nUnc=max([len(max(np.array(self.uncertainty).astype(str), key=len)),12])
         
         ''' first comes header info '''
 
@@ -120,8 +124,9 @@ class Photometry(Data):
         ''' then a table of data '''
         ''' this consists of a few header rows '''
         l.append(
-            '{} {} {} {} '.format(
-                'Filter','Pivot wavelength','Flux','Uncertainty'
+            '{:^{nFilt}} {:^{nWave}} {:^{nVal}} {:^{nUnc}} '.format(
+                'Filter','Pivot wavelength','Flux','Uncertainty',
+                nFilt = nFilt, nWave = nWave, nVal = nVal, nUnc = nUnc
             )
         )
         l.append('{} {} {} {}'.format('-'*(nFilt),'-'*(nWave),'-'*(nVal),'-'*(nUnc)))
@@ -129,8 +134,9 @@ class Photometry(Data):
         ''' then a table of values '''
         for i in range(len(self.filters)):
             l.append(
-                '{} {} {} {}'.format(
-                    self.filters[i],self.wavelength[i],self.value[i],self.uncertainty[i]
+                '{:<{nFilt}} {:>{nWave}.2e} {:>{nVal}.2e} {:>{nUnc}.2e}'.format(
+                    self.filterName[i],self.wavelength[i],self.value[i],self.uncertainty[i],
+                nFilt = nFilt, nWave = nWave, nVal = nVal, nUnc = nUnc
                 )
             )
 
@@ -150,6 +156,7 @@ class Photometry(Data):
 
     def filterNamesToPyphot(self, **kwargs):
         pyphotFilts = self.filterLibrary.get_library_content()
+        filtsOrig = self.filterName
         l = []
         for filt in self.filterName:
             l.append(filt in pyphotFilts)
@@ -160,9 +167,9 @@ class Photometry(Data):
             if l[i]:
                 self.filterName[i] = newTry[i]
         self.filterMask = l
-
-    def synPhot(self, **kwargs):
-        pass
+        if not np.all(l):
+            print("Some filters were not recognised by pyphot. The following filters will be ignored:")
+            print(filtsOrig[np.logical_not(np.array(l))])
 
     def lnlike(self, modWave, modFlux, **kwargs):
         ''' docstring goes here '''
@@ -246,7 +253,7 @@ class Spectrum(Data):
 
     """
 
-    def __init__(self, wavelength, value, uncertainty, bandUnits,**kwargs):
+    def __init__(self, wavelength, value, uncertainty, bandUnits, fluxUnits,**kwargs):
         self.filterName = filterName #Telescope/Instrument cf photometry
         self.type = 'Spectrum'
 
@@ -297,7 +304,7 @@ class Spectrum(Data):
         self.uncertainty = uncertainty #Ditto
 
         ''' inititalise covariance matrix as a diagonal matrix '''
-        self.covMat = np.diag(np.ones(len(uncertainty)))
+        self.covMat = np.diag(uncertainty**2)
 
     def __call__(self, **kwargs):
         raise NotImplementedError()
@@ -309,10 +316,32 @@ class Spectrum(Data):
         raise NotImplementedError()
     
     def cov(self, **kwargs):
-        pass
+        ''' 
+        This routine populates a covariance matrix given some methods to call and parameters for them.
+
+        For the moment, however, it does nothing.
+        '''
+        return self.covMat
 
     def lnlike(self, **kwargs):
-        pass
+        ''' docstring goes here '''
+        
+        ''' First take the model values (passed in) and compute synthetic Spectrum '''
+        modSpec = spectres(self.wavelength, modWave, modFlux)
+
+        ''' then update the covariance matrix for the parameters passed in '''
+        #skip this for now
+        self.covMat = self.cov()
+        
+        ''' then compute the likelihood for each photometric point in a vectorised statement '''
+        a = self.value - modSpec
+
+        b = np.log(1./((2*np.pi)**(len(self.value)) * np.linalg.det(self.covMat))
+            ) 
+        #pass
+        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(self.covMat, a) ) ) )
+
+        return probFlux 
 
     @classmethod
     def fromFile(cls, filename, format, **kwargs):
@@ -368,7 +397,7 @@ class Spectrum(Data):
         
         ## what about the modules?
 
-        self.__init__(table['wavelength'].unit, value, uncertainty, bandUnits)
+        self.__init__(table['wavelength'].data, value, uncertainty, bandUnits, photUnits) #Also pass in flux units
 
 class Image(Data):
     #Need separate subclasses for images and radial profiles
@@ -388,7 +417,27 @@ class Image(Data):
         pass
 
     def lnlike(self, **kwargs):
-        pass
+
+        ''' docstring goes here '''
+
+        raise NotImplementedError()
+        
+        ''' First take the model values (passed in) and compute synthetic Image '''
+        modImage = 1 #Needs to be added here. Take synthetic photometry on the image plane and convolve with the PSF. 
+
+        ''' then update the covariance matrix for the parameters passed in '''
+        #skip this for now
+        self.covMat = self.cov()
+        
+        ''' then compute the likelihood for each photometric point in a vectorised statement '''
+        a = self.value - modImage
+
+        b = np.log(1./((2*np.pi)**(len(self.value)) * np.linalg.det(self.covMat))
+            ) 
+        #pass
+        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(self.covMat, a) ) ) )
+
+        return probFlux
 
     @classmethod
     def fromFile(cls, filename, format, **kwargs):
@@ -435,7 +484,27 @@ class Interferometry(Data):
         pass
 
     def lnlike(self, **kwargs):
-        pass
+
+        ''' docstring goes here '''
+
+        raise NotImplementedError()
+        
+        ''' First take the model values (passed in) and compute synthetic Interferometry image '''
+        modInterferImage = 1 #Needs to be added here. Take synthetic photometry on the Interferometry image plane.
+
+        ''' then update the covariance matrix for the parameters passed in '''
+        #skip this for now
+        self.covMat = self.cov()
+        
+        ''' then compute the likelihood for each photometric point in a vectorised statement '''
+        a = self.value - modInterferImage
+
+        b = np.log(1./((2*np.pi)**(len(self.value)) * np.linalg.det(self.covMat))
+            ) 
+        #pass
+        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(self.covMat, a) ) ) )
+
+        return probFlux
 
 
 class Cube(Data):
@@ -456,4 +525,24 @@ class Cube(Data):
         pass
 
     def lnlike(self, **kwargs):
-        pass
+
+        ''' docstring goes here '''
+
+        raise NotImplementedError()
+        
+        ''' First take the model values (passed in) and compute synthetic IFU data '''
+        modCube = 1 #Needs to be added here. Generate model IFU data.
+
+        ''' then update the covariance matrix for the parameters passed in '''
+        #skip this for now
+        self.covMat = self.cov()
+        
+        ''' then compute the likelihood for each photometric point in a vectorised statement '''
+        a = self.value - modCube
+
+        b = np.log(1./((2*np.pi)**(len(self.value)) * np.linalg.det(self.covMat))
+            ) 
+        #pass
+        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(self.covMat, a) ) ) )
+
+        return probFlux
