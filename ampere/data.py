@@ -60,16 +60,19 @@ class Photometry(Data):
         ''' setup pyphot for this set of photometry '''
         self.pyphotSetup()
         self.filterNamesToPyphot()
-        
+
+        self.filterName = filterName[self.filterMask]
         #Create wavelength array for photometry based on pivot wavelengths of
         #filters
-        filters = self.filterLibrary.load_filters(filterName)
+        filters = self.filterLibrary.load_filters(filterName[self.filterMask])
         self.wavelength = filters.lpivot.magnitude
         
 #        self.uncertainty = uncertainty #Error bars may be asymmetric!
-        self.fluxUnits = photUnits #May be different over wavelength; mag, Jy  
+        self.fluxUnits = photUnits[self.filterMask] #May be different over wavelength; mag, Jy  
         self.bandUnits = 'um' #Should be um if taken from pyPhot        
         self.type = 'Photometry'
+        value = value[self.filterMask]
+        uncertainty = uncertainty[self.filterMask]
         
         #identify values in magnitudes, convert to Jy
         np.array(photUnits)
@@ -151,6 +154,7 @@ class Photometry(Data):
 
     def filterNamesToPyphot(self, **kwargs):
         pyphotFilts = self.filterLibrary.get_library_content()
+        filtsOrig = self.filterName
         l = []
         for filt in self.filterName:
             l.append(filt in pyphotFilts)
@@ -161,6 +165,9 @@ class Photometry(Data):
             if l[i]:
                 self.filterName[i] = newTry[i]
         self.filterMask = l
+        if not np.all(l):
+            print("Some filters were not recognised by pyphot. The following filters will be ignored:")
+            print(filtsOrig[np.logical_not(np.array(l))])
 
     def lnlike(self, modWave, modFlux, **kwargs):
         ''' docstring goes here '''
