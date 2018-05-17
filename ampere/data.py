@@ -454,16 +454,33 @@ class Image(Data):
             #Use hdu[1+].data as the image in the absence of other knowledge
             hdul = fits.open(fname)
             images = np.empty()
+            wavelength = np.empty()
+            filterName = np.empty()
+            imageScale = np.empty() 
+            imageSize  = np.empty()
             try:
                 for i in range(0,len(hdul)):
                     hdutype = hdul[i]._summary()[0]
                     if hdutype == 'image':
                         header=hdul[i].header
                         #Take keywords here i.e. wavelength, pixel scale, etc.
+                        wavelength = np.append(hdul[i].header['WAVELENG'])
+                        fluxUnits  = np.append(hdul[i].header['BUNIT'])
+                        filterName = np.append(hdul[i].header['INSTRMNT'])
+                        imageScale = np.append(hdul[i].header['PIXSCALE'])
+                        imageSize  = np.append([hdul[i].header['NAXIS1'],
+                                           hdul[i].header['NAXIS2']])
                         images = np.append(images,hdul[i].data)
+                        #Get PSF from image extension or internal library?
             except:
-                print('No HDU marked image found...')
+                print('No HDU marked "image" found...')
             
+            self.wavelength = wavelength
+            self.fluxUnits  = fluxUnits
+            self.filterName = filterName
+            self.imageScale = imageScale
+            self.imageSize  = imageSize
+            self.images     = images
             
 
 class Interferometry(Data):
