@@ -267,7 +267,7 @@ class Spectrum(Data):
         
         self.wavelength = wavelength #Will be the grid of wavelength/frequency
         
-        self.fluxUnits = specFluxUnits #lamFlam/nuFnu, Fnu, Flam, again always be same
+        self.fluxUnits = specFluxUnits
         
         if fluxUnits == 'Jy':
             value = value
@@ -363,6 +363,7 @@ class Spectrum(Data):
         uncertainty = table['error (RMS+SYS)'].data
         
         ## here we assign the wavelength unit to the bandUnit. is this correct?
+        ## Yes, that is correct.
         bandUnits = table['wavelength'].unit
         
         ## what about the modules?
@@ -389,7 +390,32 @@ class Image(Data):
     def lnlike(self, **kwargs):
         pass
 
-    
+    @classmethod
+    def fromFile(cls, filename, format, **kwargs):
+        ''' 
+        Routine to generate image data object from a file containing said data
+        '''
+        # Assume that all image files are fits files in the first instance
+        # Further assume that we may be given either a list of images, or a
+        # multiple extension fits file.
+        self=cls.__new__(Image)
+        
+        for fname in filename:
+            #Look for 'image' extension name to identify image extensions
+            #Use hdu[1+].data as the image in the absence of other knowledge
+            hdul = fits.open(fname)
+            images = np.empty()
+            try:
+                for i in range(0,len(hdul)):
+                    hdutype = hdul[i]._summary()[0]
+                    if hdutype == 'image':
+                        header=hdul[i].header
+                        #Take keywords here i.e. wavelength, pixel scale, etc.
+                        images = np.append(images,hdul[i].data)
+            except:
+                print('No HDU marked image found...)
+            
+            
 
 class Interferometry(Data):
 
