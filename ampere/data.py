@@ -113,10 +113,10 @@ class Photometry(Data):
         l=[] #define an empty list for the strings
         #now we need to do a little pre-processing to determine the maximum length of each field
         # not sure exactly how to do this yet, so here are some placeholders
-        nFilt=6
-        nWave=18
-        nFlux=4
-        nUnc=12
+        nFilt=max([len(max(np.array(self.filterName).astype(str), key=len)),6])#6
+        nWave=max([len(max(np.array(self.wavelength).astype(str), key=len)),18])
+        nVal=max([len(max(np.array(self.value).astype(str), key=len)),8])
+        nUnc=max([len(max(np.array(self.uncertainty).astype(str), key=len)),12])
         
         ''' first comes header info '''
 
@@ -124,8 +124,9 @@ class Photometry(Data):
         ''' then a table of data '''
         ''' this consists of a few header rows '''
         l.append(
-            '{} {} {} {} '.format(
-                'Filter','Pivot wavelength','Flux','Uncertainty'
+            '{:^{nFilt}} {:^{nWave}} {:^{nVal}} {:^{nUnc}} '.format(
+                'Filter','Pivot wavelength','Flux','Uncertainty',
+                nFilt = nFilt, nWave = nWave, nVal = nVal, nUnc = nUnc
             )
         )
         l.append('{} {} {} {}'.format('-'*(nFilt),'-'*(nWave),'-'*(nVal),'-'*(nUnc)))
@@ -133,8 +134,9 @@ class Photometry(Data):
         ''' then a table of values '''
         for i in range(len(self.filters)):
             l.append(
-                '{} {} {} {}'.format(
-                    self.filters[i],self.wavelength[i],self.value[i],self.uncertainty[i]
+                '{:<{nFilt}} {:>{nWave}.2e} {:>{nVal}.2e} {:>{nUnc}.2e}'.format(
+                    self.filterName[i],self.wavelength[i],self.value[i],self.uncertainty[i],
+                nFilt = nFilt, nWave = nWave, nVal = nVal, nUnc = nUnc
                 )
             )
 
