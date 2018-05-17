@@ -162,9 +162,6 @@ class Photometry(Data):
                 self.filterName[i] = newTry[i]
         self.filterMask = l
 
-    def synPhot(self, **kwargs):
-        pass
-
     def lnlike(self, modWave, modFlux, **kwargs):
         ''' docstring goes here '''
         
@@ -298,7 +295,7 @@ class Spectrum(Data):
         self.uncertainty = uncertainty #Ditto
 
         ''' inititalise covariance matrix as a diagonal matrix '''
-        self.covMat = np.diag(np.ones(len(uncertainty)))
+        self.covMat = np.diag(uncertainty**2)
 
     def __call__(self, **kwargs):
         raise NotImplementedError()
@@ -310,7 +307,12 @@ class Spectrum(Data):
         raise NotImplementedError()
     
     def cov(self, **kwargs):
-        pass
+        ''' 
+        This routine populates a covariance matrix given some methods to call and parameters for them.
+
+        For the moment, however, it does nothing.
+        '''
+        return self.covMat
 
     def lnlike(self, **kwargs):
         ''' docstring goes here '''
