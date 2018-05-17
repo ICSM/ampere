@@ -108,12 +108,12 @@ class Photometry(Data):
 
         ''' then update the covariance matrix for the parameters passed in '''
         #skip this for now
-        self.covMat
+        self.covMat = self.cov()
         
         ''' then compute the likelihood for each photometric point in a vectorised statement '''
         a = self.value - modSed
 
-        b = np.log(1./((2*np.pi)**(len(self.value)) * np.linalg.det(self.covMat)
+        b = np.log(1./((2*np.pi)**(len(self.value)) * np.linalg.det(self.covMat))
             ) 
         #pass
         probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(self.covMat, a) ) ) )
@@ -122,42 +122,46 @@ class Photometry(Data):
         
 
     def cov(self, **kwargs):
+        
         pass
 
-    def fromFile(self, filename, format, **kwargs):
+    def fromFile(self, filename, format=None, **kwargs):
         ''' 
         Routine to generate photometry data object from a file containing said data
         '''
-                # First type votable as take from vizier/sed http://vizier.u-strasbg.fr/vizier/sed/
-                # following the astropy docs: http://docs.astropy.org/en/stable/io/votable/index.html
+        # First type votable as take from vizier/sed http://vizier.u-strasbg.fr/vizier/sed/
+        # following the astropy docs: http://docs.astropy.org/en/stable/io/votable/index.html
                    
-                   # of course in the more elaborate version this will be a case statement with file types
-                   #switch
-                   #VO
-                   # this command reads a VOTable into a single table which is then converted in to astropy table format
-                   table = parse_single_table(filename).to_table()
-                   ## convert this table with standardised column names?
+        # of course in the more elaborate version this will be a case statement with file types
+        #switch
+        #VO
+        # this command reads a VOTable into a single table which is then converted in to astropy table format
+        table = parse_single_table(filename).to_table()
+        ## convert this table with standardised column names?
 
-                   #other formats
+        #other formats
 
-                   #endswitch
-                   ## pass control to fromTable to define the variables
-                   fromTable(table)
+        #endswitch
+        ## pass control to fromTable to define the variables
+        self.fromTable(table)
 
-    def fromTable(self, table, format, **kwargs):
+    def fromTable(self, table, format=None, **kwargs):
         ''' 
         Routine to generate data object from an astropy Table object or a file containing data in a format that can be read in as an astropy Table
         '''
-                   # extract the variables that we are intrested in from the table
-                   # for the moment we use the columns from the VO Table
-                   value = table['sed_flux'].data
-                   photUnits = table['sed_flux'].unit
-                   uncertainty = table['sed_eflux'].data
-                   filterName = table['sed_filter'].data
+        # extract the variables that we are intrested in from the table
+        # for the moment we use the columns from the VO Table
+        value = table['sed_flux'].data
+        photUnits = table['sed_flux'].unit
+        uncertainty = table['sed_eflux'].data
+        filterName = table['sed_filter'].data
+        
+        # We don't see a need for bandUnits because this info should be part of the filterName in pyphot
+        # The SED VO table has frequency units in GHz.
+        # How does this map on the needs of pyphot?
 
-                   # We don't see a need for bandUnits because this info should be part of the filterName in pyphot
-                   # The SED VO table has frequency units in GHz.
-                   # How does this map on the needs of pyphot?
+                   
+        self.__init__(filterName, value, uncertainty, photUnits)
                    
 class Spectrum(Data):
 
@@ -166,7 +170,7 @@ class Spectrum(Data):
 
     """
 
-    def __init__(self, wavelength, value, uncertainty, **kwargs):
+    def __init__(self, wavelength, value, uncertainty, bandUnits,**kwargs):
         self.filterName = filterName #Telescope/Instrument cf photometry
         self.type = 'Spectrum'
 
@@ -215,6 +219,59 @@ class Spectrum(Data):
     def lnlike(self, **kwargs):
         pass
 
+    def fromFile(self, filename, format, **kwargs):
+        ''' 
+        Routine to generate photometry data object from a file containing said data
+        '''
+        # First type votable as take from vizier/sed http://vizier.u-strasbg.fr/vizier/sed/
+        # following the astropy docs: http://docs.astropy.org/en/stable/io/votable/index.html
+        
+        # of course in the more elaborate version this will be a case statement with file types
+        #switch
+        #VO
+        # this command reads a CASSIS fits file *yaaar*.fits
+        
+        filename = 'cassis_yaaar_spcfw_14203136t.fits' 
+        hdul = fits.open(filename)
+        hdu = hdul[0]
+        header=hdu.header
+        data = hdu.data
+        table = Table(data,names=[header['COL01DEF'],header['COL02DEF'],header['COL03DEF'],header['COL04DEF'],header['COL05DEF'],header['COL06DEF'],header['COL07DEF'],header['COL08DEF'],header['COL09DEF'],header['COL10DEF'],header['COL11DEF'],header['COL12DEF'],header['COL13DEF'],header['COL14DEF'],header['COL15DEF'],'DUMMY'])
+        table['wavelength'].unit='um'
+        table['flux'].unit='Jy'
+        table['error (RMS+SYS)'].unit='Jy'
+        table['error (RMS)'].unit='Jy'
+        table['error (SYS)'].unit='Jy'
+        table['offset uncertainty (CAL)'].unit='Jy'
+        table['sky'].unit='Jy'
+        table['sky error'].unit='Jy'
+        # note that there is a column called module. this has values 0.0 1.0 2.0 and 3.0 corresponding to SL1, SL2, LL1 and LL2 resp.
+        # we may want consider the independent
+        
+        #other formats
+        
+        #endswitch
+        ## pass control to fromTable to define the variables
+        self.fromTable(table)
+        
+    def fromTable(self, table, format, **kwargs):
+        ''' 
+            Routine to generate data object from an astropy Table object or a file containing data in a format that can be read in as an astropy Table
+        '''
+        # extract the variables that we are intrested in from the table
+        # for the moment we use the columns from the cassis
+        value = table['flux'].data
+        # we should read the paper to see which uncertainties to include
+        photUnits = table['flux'].unit
+        uncertainty = table['error (RMS+SYS)'].data
+        
+        ## here we assign the wavelength unit to the bandUnit. is this correct?
+        bandUnits = table['wavelength'].unit
+        
+        ## what about the modules?
+
+        self.__init__(table['wavelength'].unit, value, uncertainty, bandUnits)
+
 class Image(Data):
     #Need separate subclasses for images and radial profiles
     def __init__(**kwargs):
@@ -235,56 +292,7 @@ class Image(Data):
     def lnlike(self, **kwargs):
         pass
 
-    def fromFile(self, filename, format, **kwargs):
-        ''' 
-        Routine to generate photometry data object from a file containing said data
-        '''
-                # First type votable as take from vizier/sed http://vizier.u-strasbg.fr/vizier/sed/
-                # following the astropy docs: http://docs.astropy.org/en/stable/io/votable/index.html
-                   
-                   # of course in the more elaborate version this will be a case statement with file types
-                   #switch
-                   #VO
-                   # this command reads a CASSIS fits file *yaaar*.fits
-
-                   filename = 'cassis_yaaar_spcfw_14203136t.fits' 
-                   hdul = fits.open(filename)
-                   hdu = hdul[0]
-                   header=hdu.header
-                   data = hdu.data
-                   table = Table(data,names=[header['COL01DEF'],header['COL02DEF'],header['COL03DEF'],header['COL04DEF'],header['COL05DEF'],header['COL06DEF'],header['COL07DEF'],header['COL08DEF'],header['COL09DEF'],header['COL10DEF'],header['COL11DEF'],header['COL12DEF'],header['COL13DEF'],header['COL14DEF'],header['COL15DEF'],'DUMMY'])
-                   table['wavelength'].unit='um'
-                   table['flux'].unit='Jy'
-                   table['error (RMS+SYS)'].unit='Jy'
-                   table['error (RMS)'].unit='Jy'
-                   table['error (SYS)'].unit='Jy'
-                   table['offset uncertainty (CAL)'].unit='Jy'
-                   table['sky'].unit='Jy'
-                   table['sky error'].unit='Jy'
-                   # note that there is a column called module. this has values 0.0 1.0 2.0 and 3.0 corresponding to SL1, SL2, LL1 and LL2 resp.
-                   # we may want consider the independent
-                   
-                   #other formats
-
-                   #endswitch
-                   ## pass control to fromTable to define the variables
-                   fromTable(table)
-
-    def fromTable(self, table, format, **kwargs):
-        ''' 
-        Routine to generate data object from an astropy Table object or a file containing data in a format that can be read in as an astropy Table
-        '''
-                   # extract the variables that we are intrested in from the table
-                   # for the moment we use the columns from the cassis
-                   value = table['flux'].data
-                   # we should read the paper to see which uncertainties to include
-                   photUnits = table['flux'].unit
-                   uncertainty = table['error (RMS+SYS)'].data
-
-                   ## here we assign the wavelength unit to the bandUnit. is this correct?
-                   bandUnits = table['wavelength'].unit
-
-                   ## what about the modules?
+    
 
 class Interferometry(Data):
 
