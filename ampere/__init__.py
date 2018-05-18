@@ -23,14 +23,14 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>
 
 __license__ = "GNU Public License v3" #
 
-import models
-import extinction
-import basesearch
-import emceesampler
-import ClassRT
-import data
+from . import models
+#from . import extinction
+from . import basesearch
+from . import emceesearch
+from . import PowerLawAGN #ClassRT
+from . import data
 
-__all__=["models","extinction","emceesampler","ClassRT","data"] #Nothing to import just yet
+__all__=["models","extinction","emceesearch","PowerLawAGN","data"] #Nothing to import just yet
 
 
 #input - data format(s)?

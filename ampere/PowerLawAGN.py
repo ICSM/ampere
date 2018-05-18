@@ -9,7 +9,7 @@ import numpy as np
 from astropy import constants as const
 from astropy import units as u
 from astropy.modeling import blackbody
-from models import AnalyticalModel
+from .models import AnalyticalModel
 
 class SingleModifiedBlackBody(AnalyticalModel):
     def __init__(self, wavelengths, flatprior=True,

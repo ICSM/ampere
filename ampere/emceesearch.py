@@ -2,7 +2,7 @@ from __future__ import print_function
 
 import numpy as np
 import emcee
-from basesearch import BaseSearch
+from .basesearch import BaseSearch
 from inspect import signature
 
 

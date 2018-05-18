@@ -255,8 +255,8 @@ class Spectrum(Data):
 
     """
 
-    def __init__(self, wavelength, value, uncertainty, bandUnits, fluxUnits,**kwargs):
-        self.filterName = filterName #Telescope/Instrument cf photometry
+    def __init__(self, wavelength, value, uncertainty, bandUnits, fluxUnits, freqSpec = False,**kwargs):
+        #self.filterName = filterName #Telescope/Instrument cf photometry
         self.type = 'Spectrum'
 
         #Wavelength conversion
@@ -276,7 +276,7 @@ class Spectrum(Data):
         
         self.wavelength = wavelength #Will be the grid of wavelength/frequency
         
-        self.fluxUnits = specFluxUnits
+        self.fluxUnits = fluxUnits#specFluxUnits
         
         if fluxUnits == 'Jy':
             value = value
@@ -357,7 +357,7 @@ class Spectrum(Data):
         # note that the might want to normalise the names of the columns coming out
         # out of the different files here. 
         if format == 'SPITZER-YAAAR':
-            filename = 'Testdata/cassis_yaaar_spcfw_14203136t.fits' 
+            #filename = 'Testdata/cassis_yaaar_spcfw_14203136t.fits' 
             hdul = fits.open(filename)
             hdu = hdul[0]
             header=hdu.header
@@ -379,7 +379,7 @@ class Spectrum(Data):
             
         # ISO SWS AAR fits files
         if format == 'SWS-AAR':
-            filename = 'Testdata/sws_ngc6790.fits'
+            #filename = 'Testdata/sws_ngc6790.fits'
             hdul = fits.open(filename)
             # data is actually in extension 1
             hdu = hdul[1]
@@ -398,7 +398,7 @@ class Spectrum(Data):
         # the two orders of the spectrum are separated by a line with
         # -------------------
         if format == 'IRAS-LRS':
-            filename='Testdata/IRAS06266-0905_lrs.dat'
+            #filename='Testdata/IRAS06266-0905_lrs.dat'
             lookup='-------------------'
             with open(filename,'r') as f:
                 for (num, line) in enumerate(f):
@@ -460,9 +460,9 @@ class Spectrum(Data):
 
                 # We probably want to convert here to Jy, um
                 if keywords['waveUnit'] != 'um':
-                    CONVERT TO MICRONS HERE
+                    pass #CONVERT TO MICRONS HERE
                 if keywords['fluxUnit'] != 'Jy':
-                    CONVERT TO JANSKYS HERE
+                    pass #CONVERT TO JANSKYS HERE
                 # Also we have to define uncertainties
                 if keywords['uncsCol'] != '':
                     table.rename_column(keywords['uncsCol'],'uncertainty')
@@ -473,7 +473,7 @@ class Spectrum(Data):
         ## pass control to fromTable to define the variables
         self.fromTable(table)
         
-    def fromTable(self, table, format, **kwargs):
+    def fromTable(self, table, format=None, **kwargs):
         ''' 
             Routine to generate data object from an astropy Table object or a file containing data in a format that can be read in as an astropy Table
         '''
