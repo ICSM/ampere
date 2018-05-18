@@ -2,12 +2,14 @@ from __future__ import print_function
 
 import numpy as np
 from astropy.table import Table
+from astropy.table import vstack
 from astropy import constants as const
 import pyphot
 from astropy.io import fits
 # for reading VO table formats into a single table
 from astropy.io.votable import parse_single_table
 import astropy.units as u
+from astropy.io import ascii
 from spectres import spectres
 
 class Data(object):
@@ -346,37 +348,76 @@ class Spectrum(Data):
     @classmethod
     def fromFile(cls, filename, format, **kwargs):
         ''' 
-        Routine to generate photometry data object from a file containing said data
+        Routine to generate spectrum data object from a file containing said data
         '''
-        # First type votable as take from vizier/sed http://vizier.u-strasbg.fr/vizier/sed/
-        # following the astropy docs: http://docs.astropy.org/en/stable/io/votable/index.html
-        
-        # of course in the more elaborate version this will be a case statement with file types
-        #switch
-        #VO
         # this command reads a CASSIS fits file *yaaar*.fits
         self=cls.__new__(Spectrum)
-        
-        filename = 'cassis_yaaar_spcfw_14203136t.fits' 
-        hdul = fits.open(filename)
-        hdu = hdul[0]
-        header=hdu.header
-        data = hdu.data
-        table = Table(data,names=[header['COL01DEF'],header['COL02DEF'],header['COL03DEF'],header['COL04DEF'],header['COL05DEF'],header['COL06DEF'],header['COL07DEF'],header['COL08DEF'],header['COL09DEF'],header['COL10DEF'],header['COL11DEF'],header['COL12DEF'],header['COL13DEF'],header['COL14DEF'],header['COL15DEF'],'DUMMY'])
-        table['wavelength'].unit='um'
-        table['flux'].unit='Jy'
-        table['error (RMS+SYS)'].unit='Jy'
-        table['error (RMS)'].unit='Jy'
-        table['error (SYS)'].unit='Jy'
-        table['offset uncertainty (CAL)'].unit='Jy'
-        table['sky'].unit='Jy'
-        table['sky error'].unit='Jy'
-        # note that there is a column called module. this has values 0.0 1.0 2.0 and 3.0 corresponding to SL1, SL2, LL1 and LL2 resp.
-        # we may want consider the independent
-        
-        #other formats
-        
-        #endswitch
+
+        # we use the format argument to deal with different kind of inputs
+        # note that the might want to normalise the names of the columns coming out
+        # out of the different files here. 
+        if format == 'SPITZER-YAAAR':
+            filename = 'Testdata/cassis_yaaar_spcfw_14203136t.fits' 
+            hdul = fits.open(filename)
+            hdu = hdul[0]
+            header=hdu.header
+            data = hdu.data
+            table = Table(data,names=[header['COL01DEF'],header['COL02DEF'],header['COL03DEF'],header['COL04DEF'],header['COL05DEF'],header['COL06DEF'],header['COL07DEF'],header['COL08DEF'],header['COL09DEF'],header['COL10DEF'],header['COL11DEF'],header['COL12DEF'],header['COL13DEF'],header['COL14DEF'],header['COL15DEF'],'DUMMY'])
+            table['wavelength'].unit='um'
+            table['flux'].unit='Jy'
+            table['error (RMS+SYS)'].unit='Jy'
+            table['error (RMS)'].unit='Jy'
+            table['error (SYS)'].unit='Jy'
+            table['offset uncertainty (CAL)'].unit='Jy'
+            table['sky'].unit='Jy'
+            table['sky error'].unit='Jy'
+            # note that there is a column called module. this has values 0.0 1.0 2.0 and 3.0 corresponding to SL1, SL2, LL1 and LL2 resp.
+            # we may want consider them independent?
+
+            #normalise the column names (wavelength,flux,uncertainty)
+            table.rename_column('error (RMS+SYS)','uncertainty')
+            
+        # ISO SWS AAR fits files
+        if format == 'SWS-AAR':
+            filename = 'Testdata/sws_ngc6790.fits'
+            hdul = fits.open(filename)
+            # data is actually in extension 1
+            hdu = hdul[1]
+            header=hdu.header
+            data = hdu.data
+            table = Table(data,names=['wavelength','flux','uncertainty','integration count','detector number','time key','universal time key','rpid','spare','line number','scan direction','counts','status','flag'])
+            table['wavelength'].unit='um'
+            table['flux'].unit='Jy'
+            table['uncertainty'].unit='Jy'
+
+        # as found on http://isc83.astro.unc.edu/iraslrs/getlrs_test.html
+        # corrected raw text
+        # very basic files with the following columns
+        # 1 line header with name
+        # two columns with wavelength (um) and flux (lambda*Flambda in Watts/meter^2)
+        # the two orders of the spectrum are separated by a line with
+        # -------------------
+        if format == 'IRAS-LRS':
+            filename='Testdata/IRAS06266-0905_lrs.dat'
+            lookup='-------------------'
+            with open(filename,'r') as f:
+                for (num, line) in enumerate(f):
+                    if lookup in line:
+                        splitnum=num
+            table1=ascii.read(filename,data_start=1,data_end=splitnum,header_start=None)
+            table1['module']=1
+            table2=ascii.read(filename,data_start=splitnum+1,header_start=None)
+            table2['module']=2
+
+            table=vstack([table1,table2])
+
+            table.rename_column('col1','wavelength')
+            table.rename_column('col2','flux')
+            table['wavelength'].unit='um'
+            table['flux'].unit='W/m^2'
+            # We probably want to convert here to Jy
+            # Also we have to define uncertainties
+            
         ## pass control to fromTable to define the variables
         self.fromTable(table)
         
@@ -389,7 +430,7 @@ class Spectrum(Data):
         value = table['flux'].data
         # we should read the paper to see which uncertainties to include
         photUnits = table['flux'].unit
-        uncertainty = table['error (RMS+SYS)'].data
+        uncertainty = table['uncertainty'].data
         
         ## here we assign the wavelength unit to the bandUnit. is this correct?
         ## Yes, that is correct.
