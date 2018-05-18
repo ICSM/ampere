@@ -417,6 +417,44 @@ class Spectrum(Data):
             table['flux'].unit='W/m^2'
             # We probably want to convert here to Jy
             # Also we have to define uncertainties
+
+        #create a user-defined class where the relevant keywords and column
+        #names are provided to the read-in 
+        #user will need to provide:
+        #file type (fits/text)
+        #column names for flux,unc,wavelength
+        #keywords for units of flux+unc, wavelength if in header
+        #insist user input columns 0,1,2 as their wavelength,flux,uncertainty?
+        if format == 'User-Defined':
+            filename=filename
+            
+            if filetype == 'fits':
+                hdul = fits.open(filename)
+                hdu = hdul[1]
+                header=hdu.header
+                data = hdu.data
+                table = Table(data,names=columns_names_list)
+                table.rename_column(columns_names_list[0],'wavelength')
+                table.rename_column(columns_names_list[1],'flux')
+                table.rename_column(columns_names_list[2],'uncertainty')
+                table['wavelength'].unit=header[keywords['wavelength']]
+                table['flux'].unit=header[keywords['fluxUnit']]
+                table['uncertainty'].unit=header[keywords['fluxUnit']]
+                
+            if filetype == 'text':
+                
+                table1=ascii.read(filename,data_start=1)
+    
+                table=vstack([table1,table2])
+    
+                table.rename_column(columns_names_list[0],'wavelength')
+                table.rename_column(columns_names_list[1],'flux')
+                table.rename_column(columns_names_list[2],'uncertainty')
+                table['wavelength'].unit=keywords['wavelength']
+                table['flux'].unit=keywords['fluxUnit']
+                table['uncertainty'].unit=keywords['fluxUnit']
+                # We probably want to convert here to Jy
+                # Also we have to define uncertainties
             
         ## pass control to fromTable to define the variables
         self.fromTable(table)
