@@ -27,7 +27,7 @@ if __name__=="__main__":
 
     """ Connect the dots: """
     """ Hook it up to an optimiser """
-    opt = EmceeSearch(model = model, data = [irs]) #will need to either define some info about the parameters here or write some code to determine how the model works by introspection
+    opt = EmceeSearch(model = model, data = [irs], nwalkers = 100) #will need to either define some info about the parameters here or write some code to determine how the model works by introspection
 
     """ if you want, overload the default priors with a new function """
     def lnprior(self, inputs, **kwargs):
@@ -42,10 +42,10 @@ if __name__=="__main__":
            ]
            for j in range(nwalkers)
           ]
-    opt.optimise(nsamples = 10000, nwalkers = 100,burnin=1000,pos=pos)
+    opt.optimise(nsamples = 10000, burnin=1000,pos=pos)
 
     """save optimiser state for later """
-    opt.dump(filename="output_file",pickle=True) #Save as a python object
+    opt.save(filename="output_file",pickle=True) #Save as a python object
     
     """ Sort out the results """
     fig = corner.corner(opt.samples,labels=opt.labels)

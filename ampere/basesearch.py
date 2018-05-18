@@ -32,18 +32,25 @@ class BaseSearch(object):
         model = self.model(theta)
         l=np.array([])
         for data in self.datasets:
-            l = np.r_[l,np.sum(data.lnlike(model))]
+            l = np.r_[l,data.lnlike(model)]
         return np.sum(l)
             
         #raise NotImplementedError()
 
-    def lnprob(self, **kwargs):
-        p = self.lnprior()
+    def lnprob(self, theta **kwargs):
+        p = self.lnprior(theta)
         if p == -np.inf:
             return p
-        raise p + self.lnlike()
+        raise p + self.lnlike(theta)
 
     def sampler(self, **kwargs):
         raise NotImplementedError()
+
+    def save(self, filename, pickle=True,**kwargs):
+        ''' A method to save the object to a file. For the moment, this only supports pickling '''
+        if not pickle:
+            raise NotImplementedError('Only pickling is supported at this time')
+        with open(filename, 'wb') as f:
+            cPickle.dump(self.__dict__, f)
 
     

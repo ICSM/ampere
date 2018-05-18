@@ -14,18 +14,36 @@ from models import AnalyticalModel
 class SingleModifiedBlackBody(AnalyticalModel):
     def __init__(self, wavelengths, flatprior=True,
                  normWave = 1., sigmaNormWave = 1.,
-                 dist = 1., **kwargs):
-        self.wavelengths = wavelengths #grid of wavelengths to calculate BB for
-        self.freq = const.c / wavelengths #unit conversions will be required...
+                 redshift = False, **kwargs):
+        self.wavelengths = wavelengths #grid of observed wavelengths to calculate BB for
+        #self.freq = const.c.value / (wavelengths*1e-6) #unit conversions will be required...
         self.flatprior = flatprior #whether to assume flat priors
         self.normWave = normWave #wavelength at which opacity is normalised
         self.sigmaNormWave = sigmaNormWave #value to which the opacity is normalised at wavelength normWave
-        self.dist = dist
+        self.redshift = redshift
+        if redshift:
+            from astropy.cosmology import FlatLambdaCDM
+            self.cosmo=FlatLambdaCDM(H0=70, Om0=0.3)
 
-    def __call__(self, t = 1., scale = 1., index = 1., **kwargs):
-        
+    def __call__(self, t = 1., scale = 1., index = 1., dist=1., **kwargs):
+        if redshift:
+            z = dist
+            dist = cosmo.luminosity_distance(z).to(u.m)
+            freq = const.c.value / ((wavelengths/(1.+z))*1e-6)
+        else:
+            dist = dist*u.pc.to.(u.m)
+            freq = const.c.value / (wavelengths*1e-6)
+        bb = blackbody.blackbody_nu(freq,t).to(u.Jy / u.sr).value
+        bb = bb / dist.value**2
+        bb = bb * 10**(scale) * self.sigmaNormWave * ((self.wavelengths / self.normWave)**index)
+        self.modelFlux = bb
         #return (blackbody.blackbody_nu(const.c.value*1e6/self.wavelengths,t).to(u.Jy / u.sr).value / (dist_lum.value)**2 * kappa230.value * ((wave/230.)**betaf) * massf) #*M_sun.cgs.value
-        pass
+
+        def lnprior(self, theta, **kwargs):
+            if self.flatprior:
+                return 0
+            else:
+                raise NotImplementedError()
 
 class PowerLawAGN(AnalyticalModel):
     '''Input: fit parameters (multiplicationFactor, powerLawIndex, relativeAbundances), 
