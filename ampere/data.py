@@ -423,8 +423,14 @@ class Spectrum(Data):
         #user will need to provide:
         #file type (fits/text)
         #column names for flux,unc,wavelength
-        #keywords for units of flux+unc, wavelength if in header
-        #insist user input columns 0,1,2 as their wavelength,flux,uncertainty?
+        #keywords for units of flux+unc, wavelength if in header:
+        #waveCol = wavelength column name
+        #fluxCol = flux column name
+        #uncsCol = uncertainty column name
+        #waveUnit = wavelengths unit
+        #fluxUnit = flux/uncertainty unit
+        #filterName = instrument 
+        #
         if format == 'User-Defined':
             filename=filename
             
@@ -434,28 +440,36 @@ class Spectrum(Data):
                 header=hdu.header
                 data = hdu.data
                 table = Table(data,names=columns_names_list)
-                table.rename_column(columns_names_list[0],'wavelength')
-                table.rename_column(columns_names_list[1],'flux')
-                table.rename_column(columns_names_list[2],'uncertainty')
-                table['wavelength'].unit=header[keywords['wavelength']]
+                table.rename_column(keywords['waveCol'],'wavelength')
+                table.rename_column(keywords['fluxCol'],'flux')
+                table.rename_column(keywords['uncsCol'],'uncertainty')
+                table['wavelength'].unit=header[keywords['waveUnit']]
                 table['flux'].unit=header[keywords['fluxUnit']]
                 table['uncertainty'].unit=header[keywords['fluxUnit']]
-                
+                # We probably want to convert here to Jy, um
+                     
             if filetype == 'text':
                 
-                table1=ascii.read(filename,data_start=1)
+                table=ascii.read(filename,data_start=1)
     
-                table=vstack([table1,table2])
-    
-                table.rename_column(columns_names_list[0],'wavelength')
-                table.rename_column(columns_names_list[1],'flux')
-                table.rename_column(columns_names_list[2],'uncertainty')
-                table['wavelength'].unit=keywords['wavelength']
+                table.rename_column(keywords['waveCol'],'wavelength')
+                table.rename_column(keywords['fluxCol'],'flux')
+
+                table['wavelength'].unit=keywords['waveUnit']
                 table['flux'].unit=keywords['fluxUnit']
-                table['uncertainty'].unit=keywords['fluxUnit']
-                # We probably want to convert here to Jy
+
+                # We probably want to convert here to Jy, um
+                if keywords['waveUnit'] != 'um':
+                    CONVERT TO MICRONS HERE
+                if keywords['fluxUnit'] != 'Jy':
+                    CONVERT TO JANSKYS HERE
                 # Also we have to define uncertainties
-            
+                if keywords['uncsCol'] != '':
+                    table.rename_column(keywords['uncsCol'],'uncertainty')
+                    table['uncertainty'].unit=keywords['fluxUnit']  
+                else:
+                    table.add_column('uncertainty')
+                    table['uncertainty'].data[:] = 0.0
         ## pass control to fromTable to define the variables
         self.fromTable(table)
         
