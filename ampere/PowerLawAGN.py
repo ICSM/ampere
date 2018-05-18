@@ -33,6 +33,11 @@ class SingleModifiedBlackBody(AnalyticalModel):
         else:
             dist = dist*u.pc.to(u.m)
             freq = const.c.value / (wavelengths*1e-6)
+        #Simple bug catches for inputs to blackbody model
+        if scale <= 0.0:
+            print('Scale factor must be positive and non-zero.')
+        if t <= 0.0:
+            print('Temperature must be positive and in Kelvin.')
         bb = blackbody.blackbody_nu(freq,t).to(u.Jy / u.sr).value
         bb = bb / dist.value**2
         bb = bb * 10**(scale) * self.sigmaNormWave * ((self.wavelengths / self.normWave)**index)
