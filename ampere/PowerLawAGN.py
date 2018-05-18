@@ -39,11 +39,11 @@ class SingleModifiedBlackBody(AnalyticalModel):
         self.modelFlux = bb
         #return (blackbody.blackbody_nu(const.c.value*1e6/self.wavelengths,t).to(u.Jy / u.sr).value / (dist_lum.value)**2 * kappa230.value * ((wave/230.)**betaf) * massf) #*M_sun.cgs.value
 
-        def lnprior(self, theta, **kwargs):
-            if self.flatprior:
-                return 0
-            else:
-                raise NotImplementedError()
+    def lnprior(self, theta, **kwargs):
+        if self.flatprior:
+            return 0
+        else:
+            raise NotImplementedError()
 
 class PowerLawAGN(AnalyticalModel):
     '''Input: fit parameters (multiplicationFactor, powerLawIndex, relativeAbundances), 
