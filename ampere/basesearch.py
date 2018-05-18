@@ -24,11 +24,11 @@ class BaseSearch(object):
     def __repr__(self, **kwargs):
         raise NotImplementedError()
 
-    def lnprior(self, theta,**kwargs):
+    def lnprior(self, theta, **kwargs):
         return self.model.prior(theta)
         #raise NotImplementedError()
 
-    def lnlike(self, theta,**kwargs):
+    def lnlike(self, theta, **kwargs):
         model = self.model(theta)
         l=np.array([])
         for data in self.datasets:
@@ -37,7 +37,7 @@ class BaseSearch(object):
             
         #raise NotImplementedError()
 
-    def lnprob(self, theta **kwargs):
+    def lnprob(self, theta, **kwargs):
         p = self.lnprior(theta)
         if p == -np.inf:
             return p

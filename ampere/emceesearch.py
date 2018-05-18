@@ -3,6 +3,7 @@ from __future__ import print_function
 import numpy as np
 import emcee
 from basesearch import BaseSearch
+from inspect import signature
 
 
 class EmceeSearch(BaseSearch):
@@ -22,13 +23,17 @@ class EmceeSearch(BaseSearch):
         self.dataSet = data
         if lnprior is not None:
             self.lnprior = lnprior
-        ''' now do some introspectrion on the various bits of model to 
+        ''' now do some introspection on the various bits of model to 
         understand how many parameters there are for each compponent '''
+        sig = signature(model.__call__)
+        self.nparsMod = len(sig.parameters) - 2 #Always subtract self and **kwargs from the parameters
+        self.nparsData = np.zeros(len(self.dataSet))
         #self.npars = something # total number of parameters
         #self.nparsMod = something #number of parameters for the model
         #self.nparsData = [something for data in self.dataSet] #number of parameters to be passed into each set of data
+        self.npars = self.nparsMod + np.sum(self.nparsData)
         ''' then set up the sampler '''
-        self.sampler = emcee.EnsembleSampler(nwalkers, npars, self.lnprob, args=dataSet)
+        self.sampler = emcee.EnsembleSampler(self.nwalkers, self.npars, self.lnprob, args=dataSet)
 
  
         
