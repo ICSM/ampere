@@ -173,13 +173,13 @@ class Photometry(Data):
             print("Some filters were not recognised by pyphot. The following filters will be ignored:")
             print(filtsOrig[np.logical_not(np.array(l))])
 
-    def lnlike(self, modWave, modFlux, **kwargs):
+    def lnlike(self, model, **kwargs):
         ''' docstring goes here '''
         
         ''' First take the model values (passed in) and compute synthetic photometry '''
         ''' I assume that the filter library etc is already setup '''
-        filts, modSed = pyphot.extractPhotometry(modWave,
-                                                 modFlux,
+        filts, modSed = pyphot.extractPhotometry(model.wavelength,
+                                                 model.modelFlux,
                                                  self.filterName,
                                                  Fnu = True,
                                                  absFlux = False
@@ -325,11 +325,11 @@ class Spectrum(Data):
         '''
         return self.covMat
 
-    def lnlike(self, **kwargs):
+    def lnlike(self, model, **kwargs):
         ''' docstring goes here '''
         
         ''' First take the model values (passed in) and compute synthetic Spectrum '''
-        modSpec = spectres(self.wavelength, modWave, modFlux)
+        modSpec = spectres(self.wavelength, model.wavelength, model.modelFlux)
 
         ''' then update the covariance matrix for the parameters passed in '''
         #skip this for now

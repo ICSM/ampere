@@ -10,20 +10,27 @@ class EmceeSearch(BaseSearch):
     A class to use the emcee affine-invariant ensemble sampler
     """
 
-    def __init__(self, npars, nsamp,
-                 nwalkers, burnin, model,
-                 dataSet, lnprior,
+    def __init__(self, nwalkers = None, model = None,
+                 data = None, lnprior = None,
                  **kwargs):
 
-        self.npars=npars
-        self.nsamp=nsamp
+        #self.npars=npars
+        #self.nsamp=nsamp
         self.nwalker=nwalkers
-        self.burnin=burnin
+        #self.burnin=burnin
         self.model=model
-        self.dataSet = dataSet
+        self.dataSet = data
         if lnprior is not None:
             self.lnprior = lnprior
+        ''' now do some introspectrion on the various bits of model to 
+        understand how many parameters there are for each compponent '''
+        #self.npars = something # total number of parameters
+        #self.nparsMod = something #number of parameters for the model
+        #self.nparsData = [something for data in self.dataSet] #number of parameters to be passed into each set of data
+        ''' then set up the sampler '''
         self.sampler = emcee.EnsembleSampler(nwalkers, npars, self.lnprob, args=dataSet)
+
+ 
         
         #raise NotImplementedError()
 
@@ -46,7 +53,18 @@ class EmceeSearch(BaseSearch):
         """
         Simple uniform prior over all parameter space
         """
-        return 0 
+        return 0
+
+    def optimise(self, nsamples = None, burnin = None, guess = None, **kwargs):
+        if guess is None:
+            guess = [np.random.randn(npars) for i in range(self.nwalkers)]
+        self.nsamp = nsamples
+        self.burnin = burnin
+        self.sampler.run_mcmc(guess, nsamples)
+        self.allSamples = self.sampler.chain
+        self.samples = self.sampler.chain[:, self.burnin, :].reshape((-1, self.npars))
+        pass
+
 
 #    def lnlike(self, theta, **kwargs):
 #        model = self.model(theta)
