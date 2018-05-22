@@ -17,7 +17,7 @@ class EmceeSearch(BaseSearch):
 
         #self.npars=npars
         #self.nsamp=nsamp
-        self.nwalker=nwalkers
+        self.nwalkers=nwalkers
         #self.burnin=burnin
         self.model=model
         self.dataSet = data
@@ -26,14 +26,15 @@ class EmceeSearch(BaseSearch):
         ''' now do some introspection on the various bits of model to 
         understand how many parameters there are for each compponent '''
         sig = signature(model.__call__)
-        self.nparsMod = len(sig.parameters) - 2 #Always subtract self and **kwargs from the parameters
+        self.nparsMod = len(sig.parameters) - 1 #Always subtract **kwargs from the parameters, but don't need to worry about self once it is bound to an instance
+        print(self.nparsMod, len(sig.parameters), sig.parameters)
         self.nparsData = np.zeros(len(self.dataSet))
         #self.npars = something # total number of parameters
         #self.nparsMod = something #number of parameters for the model
         #self.nparsData = [something for data in self.dataSet] #number of parameters to be passed into each set of data
-        self.npars = self.nparsMod + np.sum(self.nparsData)
+        self.npars = np.int(self.nparsMod + np.sum(self.nparsData))
         ''' then set up the sampler '''
-        self.sampler = emcee.EnsembleSampler(self.nwalkers, self.npars, self.lnprob, args=dataSet)
+        self.sampler = emcee.EnsembleSampler(self.nwalkers, np.int(self.npars), self.lnprob)#, args=self.dataSet)
 
  
         
@@ -41,7 +42,7 @@ class EmceeSearch(BaseSearch):
 
     def __call__(self, guess=None, **kwargs):
         if guess is None:
-            guess = [np.random.randn(npars) for i in range(self.nwalkers)]
+            guess = [np.random.randn(np.int(self.npars)) for i in range(self.nwalkers)]
         self.sampler.run_mcmc(guess, self.nsamp)
         self.allSamples = self.sampler.chain
         self.samples = self.sampler.chain[:, self.burnin, :].reshape((-1, self.npars))
@@ -58,16 +59,16 @@ class EmceeSearch(BaseSearch):
         """
         Simple uniform prior over all parameter space
         """
-        return 0
+        return self.model.lnprior(theta)#return 0
 
     def optimise(self, nsamples = None, burnin = None, guess = None, **kwargs):
         if guess is None:
-            guess = [np.random.randn(npars) for i in range(self.nwalkers)]
+            guess = [np.random.randn(np.int(self.npars)) for i in range(self.nwalkers)]
         self.nsamp = nsamples
         self.burnin = burnin
         self.sampler.run_mcmc(guess, nsamples)
         self.allSamples = self.sampler.chain
-        self.samples = self.sampler.chain[:, self.burnin, :].reshape((-1, self.npars))
+        self.samples = self.sampler.chain[:, self.burnin:, :].reshape((-1, self.npars))
         pass
 
 

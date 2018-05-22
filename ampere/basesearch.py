@@ -31,17 +31,18 @@ class BaseSearch(object):
     def lnlike(self, theta, **kwargs):
         model = self.model(*theta[:self.nparsMod])
         l=np.array([])
-        for data in self.datasets:
-            l = np.r_[l,data.lnlike(model)]
+        for data in self.dataSet:
+            #print(data)
+            l = np.r_[l,data.lnlike(self.model)]
         return np.sum(l)
             
         #raise NotImplementedError()
 
-    def lnprob(self, theta, **kwargs):
+    def lnprob(self, theta):#, dataSet, **kwargs):
         p = self.lnprior(theta[:self.nparsMod])
         if p == -np.inf:
             return p
-        raise p + self.lnlike(theta)
+        return p + self.lnlike(theta)
 
     def sampler(self, **kwargs):
         raise NotImplementedError()

@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 
 from astropy import constants as const
 from astropy import units as u
+from spectres import spectres
 
 if __name__=="__main__":
     """
@@ -21,15 +22,25 @@ if __name__=="__main__":
     print(filename)
     irs = Spectrum.fromFile(filename,format='SPITZER-YAAAR')
     #If we have more than one dataset we need multiple data objects
+    #print(irs.wavelength)
     
     """ Define the model """
-    Tbb = 150.0
-    Area = (10.*u.au**2)#.value)^2
-    TestData = SingleModifiedBlackBody(irs.wavelength,flatprior=True,
+    #modwaves = np.linspace(1.,1.6, 10000)
+    #print(10**modwaves)
+    #exit()
+    Tbb = 250.0
+    area = (10.*u.au.to(u.m)**2)#.value)^2
+    print(Tbb, np.log10(area), 0., 3.)
+    #exit()
+    TestData = SingleModifiedBlackBody(irs.wavelength, #modwaves,flatprior=True,
                  normWave = 20., sigmaNormWave = 100.,redshift = False)
-    TestData(t = Tbb, scale = Area, index = 0., dist=3.)
-    irs['flux'].data = TestData.modelFlux
-    irs['uncertainty'].data = 0.11*irs['flux'].data
+    #TestData(250,23,0,3)
+    #print(TestData.modelFlux)
+    #exit()
+    TestData(t = Tbb, scale = np.log10(area), index = 0., dist=3.)
+    irs.value = TestData.modelFlux #spectres(irs.wavelength, modwaves, TestData.modelFlux) #['flux'].data = TestData.modelFlux
+    irs.uncertainty = 0.11*irs.value#['flux'].data
+    print(irs)
     
     #model = PowerLawAGN(irs.wavelengths) #We should probably define a wavelength grid separate from the data wavelengths for a number of reasons, primarily because the photometry needs an oversampled spectrum to compute synthetic photometry
 
@@ -43,28 +54,53 @@ if __name__=="__main__":
 
     """ Connect the dots: """
     """ Hook it up to an optimiser """
-    opt = EmceeSearch(model = model, data = [irs], nwalkers = 100) #will need to either define some info about the parameters here or write some code to determine how the model works by introspection
+    opt = EmceeSearch(model = model, data = [irs], nwalkers = 100) #introspection is used inside the optimiser to determine the number of parameters that each part of the model has
 
     """ if you want, overload the default priors with a new function """
     def lnprior(self, inputs, **kwargs):
         return 0 #flat prior
     
-    model.lnprior = lnprior
-    
+    #model.lnprior = lnprior
+
+    print(opt.npars,np.int(opt.npars))
     """ Run it """
     pos = [
            [
-               0 + np.random.randn() for i in range(model.npars)
+               300., 25., 0., 2.
+               #20 + np.random.randn() for i in range(np.int(opt.npars))
            ]
-           for j in range(nwalkers)
+           + np.random.randn(np.int(opt.npars)) for j in range(opt.nwalkers)
           ]
-    opt.optimise(nsamples = 1000, burnin=100,pos=pos)
+    print(pos[0])
+    print(np.max(pos, axis=0))
+    print(np.min(pos, axis=0))
+    opt.optimise(nsamples = 2000, burnin=1000,pos=pos)
 
     """save optimiser state for later """
     #opt.save(filename="output_file",pickle=True) #Save as a python object
     
     """ Sort out the results """
-    fig = corner.corner(opt.samples)#,labels=opt.labels)
+    """ First produce some terminal output for the numbers and confidence intervals """
+
+    """ Then produce a couple of plots """
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+    print(opt.samples.shape)
+    print(np.max(opt.samples, axis=0))
+    print(np.min(opt.samples, axis=0))
+    nneg=0
+    for i in range(0,opt.samples.shape[0],30):
+        #print(opt.samples[i,:])
+        if opt.samples[i,0] > 0.:
+            opt.model(opt.samples[i,0],opt.samples[i,1],opt.samples[i,2],opt.samples[i,3])
+            ax.plot(irs.wavelength,opt.model.modelFlux, '-', alpha=0.02)
+        else:
+            nneg += 1
+            
+    #    ax.plot(irs.wavelength, model(opt.samples[i,:]), '-', alpha = 0.1)
+    
+    ax.plot(irs.wavelength, irs.value, '-')
+    fig2 = corner.corner(opt.samples)#,labels=opt.labels)
     plt.show()
 
     """ Figure out what it all means """

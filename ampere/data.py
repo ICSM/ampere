@@ -143,7 +143,8 @@ class Photometry(Data):
             )
 
         ''' finally we might want a way to output the coviariance matrix, although that might only be useful for plotting '''
-
+        return l
+    
     def __repr__(self, **kwargs):
         raise NotImplementedError()
 
@@ -229,6 +230,8 @@ class Photometry(Data):
         #endswitch
         ## pass control to fromTable to define the variables
         self.fromTable(table)
+        #now return the instance so that it works as intended
+        return self
 
     def fromTable(self, table, format=None, **kwargs):
         ''' 
@@ -312,7 +315,53 @@ class Spectrum(Data):
         raise NotImplementedError()
     
     def __str__(self, **kwargs):
-        raise NotImplementedError()
+        ''' 
+        
+        '''
+        
+        return '\n'.join(self.pformat())
+        #raise NotImplementedError()
+
+    def pformat(self, **kwargs):
+        '''
+        Return the instances as a list of formatted strings
+        '''
+        
+        l=[] #define an empty list for the strings
+        #now we need to do a little pre-processing to determine the maximum length of each field
+        # not sure exactly how to do this yet, so here are some placeholders
+        #nFilt=max([len(max(np.array(self.filterName).astype(str), key=len)),6])#6
+        nWave=max([len(max(np.array(self.wavelength).astype(str), key=len)),18])
+        nVal=max([len(max(np.array(self.value).astype(str), key=len)),8])
+        nUnc=max([len(max(np.array(self.uncertainty).astype(str), key=len)),12])
+        
+        ''' first comes header info '''
+
+
+        ''' then a table of data '''
+        ''' this consists of a few header rows '''
+        l.append(
+            ' {:^{nWave}} {:^{nVal}} {:^{nUnc}} '.format(
+                'Wavelength','Flux','Uncertainty',
+                nWave = nWave, nVal = nVal, nUnc = nUnc
+            )
+        )
+        l.append('{} {} {}'.format('-'*(nWave),'-'*(nVal),'-'*(nUnc)))
+
+        ''' then a table of values '''
+        for i in range(len(self.wavelength)):
+            l.append(
+                '{:>{nWave}.2e} {:>{nVal}.2e} {:>{nUnc}.2e}'.format(
+                    self.wavelength[i],self.value[i],self.uncertainty[i],
+                 nWave = nWave, nVal = nVal, nUnc = nUnc
+                )
+            )
+
+        l.append("Number of wavelength points: "+str(len(self.wavelength)))
+        
+        ''' finally we might want a way to output the coviariance matrix, although that might only be useful for plotting '''
+        return l
+        #raise NotImplementedError()
 
     def __repr__(self, **kwargs):
         raise NotImplementedError()
@@ -329,20 +378,32 @@ class Spectrum(Data):
         ''' docstring goes here '''
         
         ''' First take the model values (passed in) and compute synthetic Spectrum '''
-        modSpec = spectres(self.wavelength, model.wavelength, model.modelFlux)
+        #print(self)
+        #wavelength = self.wavelength
+        modSpec = model.modelFlux #spectres(self.wavelength, model.wavelength, model.modelFlux) #For some reason spectres isn't cooperating :/
 
         ''' then update the covariance matrix for the parameters passed in '''
         #skip this for now
         self.covMat = self.cov()
+        #import matplotlib.pyplot as plt
+        #plt.imshow(self.covMat)
+        #plt.show()
         
         ''' then compute the likelihood for each photometric point in a vectorised statement '''
         a = self.value - modSpec
+        #if not np.all(np.isfinite(a)):
+        #    print(a)
+        #    print(modSpec)
 
-        b = np.log(1./((2*np.pi)**(len(self.value)) * np.linalg.det(self.covMat))
-            ) 
+        #make this a try: except OverflowError to protect against large spectra (which will be most astronomical ones...)?
+        b = 0#np.log10(1./((np.float128(2.)*np.pi)**(len(self.value)) * np.linalg.det(self.covMat))
+            #) 
         #pass
         probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(self.covMat, a) ) ) )
-
+        #print(((np.float128(2.)*np.pi)**(len(self.value))), np.linalg.det(self.covMat))
+        #print(((np.float128(2.)*np.pi)**(len(self.value)) * np.linalg.det(self.covMat)))
+        #print(b, probFlux)
+        #exit()
         return probFlux 
 
     @classmethod
@@ -363,6 +424,8 @@ class Spectrum(Data):
             header=hdu.header
             data = hdu.data
             table = Table(data,names=[header['COL01DEF'],header['COL02DEF'],header['COL03DEF'],header['COL04DEF'],header['COL05DEF'],header['COL06DEF'],header['COL07DEF'],header['COL08DEF'],header['COL09DEF'],header['COL10DEF'],header['COL11DEF'],header['COL12DEF'],header['COL13DEF'],header['COL14DEF'],header['COL15DEF'],'DUMMY'])
+            #table.pprint(max_lines = -1)
+            #exit()
             table['wavelength'].unit='um'
             table['flux'].unit='Jy'
             table['error (RMS+SYS)'].unit='Jy'
@@ -374,8 +437,21 @@ class Spectrum(Data):
             # note that there is a column called module. this has values 0.0 1.0 2.0 and 3.0 corresponding to SL1, SL2, LL1 and LL2 resp.
             # we may want consider them independent?
 
+            
+            
+
             #normalise the column names (wavelength,flux,uncertainty)
             table.rename_column('error (RMS+SYS)','uncertainty')
+            
+            #TEMPORARY HACK - just rearrange data into ascending order of wavelength
+            #In future we need to extract SL and LL into separate objects, then re-arrange the orders and stitch them together so we end up with one spectrum
+            ''' If I'm interpreting the CASSIS data correectly, Module(SL) = 0, 1; Module(LL) = 2, 3 '''
+            #a = table['module'] > 1.
+            #tablell = table[a]#.sort(keys='wavelength')
+            #tablell.sort(keys='wavelength')
+            #tablell.pprint()
+            #table = tablell
+            table.sort(keys='wavelength')
             
         # ISO SWS AAR fits files
         if format == 'SWS-AAR':
@@ -472,6 +548,7 @@ class Spectrum(Data):
                     table['uncertainty'].data[:] = 0.0
         ## pass control to fromTable to define the variables
         self.fromTable(table)
+        return self
         
     def fromTable(self, table, format=None, **kwargs):
         ''' 
@@ -574,6 +651,8 @@ class Image(Data):
             self.imageScale = imageScale
             self.imageSize  = imageSize
             self.images     = images
+        #now return the instance so that it works as intended
+        return self
             
 
 class Interferometry(Data):
