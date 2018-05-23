@@ -14,13 +14,16 @@ from .models import AnalyticalModel
 class SingleModifiedBlackBody(AnalyticalModel):
     def __init__(self, wavelengths, flatprior=True,
                  normWave = 1., sigmaNormWave = 1.,
-                 redshift = False, **kwargs):
+                 redshift = False, lims=np.array([[0,1e6],[-100,100],[-10,10],[0,np.inf]]),
+                 **kwargs):
         self.wavelength = wavelengths #grid of observed wavelengths to calculate BB for
         #self.freq = const.c.value / (wavelengths*1e-6) #unit conversions will be required...
         self.flatprior = flatprior #whether to assume flat priors
         self.normWave = normWave #wavelength at which opacity is normalised
         self.sigmaNormWave = sigmaNormWave #value to which the opacity is normalised at wavelength normWave
         self.redshift = redshift
+        self.lims = lims
+        print(self.lims)
         if redshift:
             from astropy.cosmology import FlatLambdaCDM
             self.cosmo=FlatLambdaCDM(H0=70, Om0=0.3)
@@ -46,7 +49,7 @@ class SingleModifiedBlackBody(AnalyticalModel):
 
     def lnprior(self, theta, **kwargs):
         if self.flatprior:
-            if 0 < theta[0] < 1e6 and -100. < theta[1] < 100. and -10. < theta[2] < 10. and theta [3] > 0: 
+            if (self.lims[0,0] < theta[0] < self.lims[0,1]) and (self.lims[1,0] < theta[1] < self.lims[1,1]) and (self.lims[2,0] < theta[2] < self.lims[2,1]) and (self.lims[3,0] < theta [3] < self.lims[3,1]): 
                 return 0
             else:
                 return -np.inf

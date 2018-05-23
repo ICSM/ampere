@@ -33,7 +33,8 @@ class BaseSearch(object):
         l=np.array([])
         for data in self.dataSet:
             #print(data)
-            l = np.r_[l,data.lnlike(self.model)]
+            lnew = data.lnlike(self.model)
+            l = np.r_[l,lnew]
         return np.sum(l)
             
         #raise NotImplementedError()

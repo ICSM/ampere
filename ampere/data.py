@@ -67,7 +67,7 @@ class Photometry(Data):
         #Create wavelength array for photometry based on pivot wavelengths of
         #filters
         filters = self.filterLibrary.load_filters(filterName[self.filterMask])
-        self.wavelength = filters.lpivot.magnitude
+        self.wavelength = np.array([filt.lpivot.magnitude for filt in filters])
         
 #        self.uncertainty = uncertainty #Error bars may be asymmetric!
         self.fluxUnits = photUnits[self.filterMask] #May be different over wavelength; mag, Jy  
@@ -154,7 +154,7 @@ class Photometry(Data):
         Future work: go through multiple libraries from different (user-defined) locations and import htem all
         '''
         libDir = pyphot.__file__.strip('__init__.py')+'libs/'
-        libName = 'synphot_PhIReSSTARTer.hd5'
+        libName = 'synphot_nonhst.hd5' #PhIReSSTARTer.hd5'
         self.filterLibrary = pyphot.get_library(fname=libDir + libName)
 
     def filterNamesToPyphot(self, **kwargs):
@@ -310,6 +310,8 @@ class Spectrum(Data):
 
         ''' inititalise covariance matrix as a diagonal matrix '''
         self.covMat = np.diag(uncertainty**2)
+        self.logDetCovMat = np.linalg.slogdet(self.covMat)[1] / np.log(10.)
+        print(self.logDetCovMat)
 
     def __call__(self, **kwargs):
         raise NotImplementedError()
@@ -372,6 +374,8 @@ class Spectrum(Data):
 
         For the moment, however, it does nothing.
         '''
+
+        self.logDetCovMat = np.linalg.slogdet(self.covMat)[1] / np.log(10.)
         return self.covMat
 
     def lnlike(self, model, **kwargs):
@@ -384,7 +388,7 @@ class Spectrum(Data):
 
         ''' then update the covariance matrix for the parameters passed in '''
         #skip this for now
-        self.covMat = self.cov()
+        #self.covMat = self.cov()
         #import matplotlib.pyplot as plt
         #plt.imshow(self.covMat)
         #plt.show()
@@ -397,7 +401,9 @@ class Spectrum(Data):
 
         #make this a try: except OverflowError to protect against large spectra (which will be most astronomical ones...)?
         b = 0#np.log10(1./((np.float128(2.)*np.pi)**(len(self.value)) * np.linalg.det(self.covMat))
-            #) 
+            #)
+
+        #b = -0.5*len(self.value) * np.log10(2*np.pi) - (0.5*self.logDetCovMat) #less computationally intensive version of above
         #pass
         probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(self.covMat, a) ) ) )
         #print(((np.float128(2.)*np.pi)**(len(self.value))), np.linalg.det(self.covMat))

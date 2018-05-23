@@ -33,7 +33,8 @@ if __name__=="__main__":
     print(Tbb, np.log10(area), 0., 3.)
     #exit()
     TestData = SingleModifiedBlackBody(irs.wavelength, #modwaves,flatprior=True,
-                 normWave = 20., sigmaNormWave = 100.,redshift = False)
+                                       normWave = 20., sigmaNormWave = 100.,
+                                       redshift = False)
     #TestData(250,23,0,3)
     #print(TestData.modelFlux)
     #exit()
@@ -45,7 +46,13 @@ if __name__=="__main__":
     #model = PowerLawAGN(irs.wavelengths) #We should probably define a wavelength grid separate from the data wavelengths for a number of reasons, primarily because the photometry needs an oversampled spectrum to compute synthetic photometry
 
     model = SingleModifiedBlackBody(irs.wavelength,flatprior=True,
-                 normWave = 20., sigmaNormWave = 100.,redshift = False)
+                                    normWave = 20., sigmaNormWave = 100.,
+                                    redshift = False, lims = np.array([[150.,400.],
+                                                                       [15.,35.],
+                                                                       [-2.,2.],
+                                                                       [1.,5.]]
+                                                                      )
+                                    )
     
     """ and the extinction law (if necessary) (could be moved inside model as only some models will need this) """
     #ext = CCMExtinctionLaw()
@@ -54,7 +61,7 @@ if __name__=="__main__":
 
     """ Connect the dots: """
     """ Hook it up to an optimiser """
-    opt = EmceeSearch(model = model, data = [irs], nwalkers = 100) #introspection is used inside the optimiser to determine the number of parameters that each part of the model has
+    opt = EmceeSearch(model = model, data = [irs], nwalkers = 300) #introspection is used inside the optimiser to determine the number of parameters that each part of the model has
 
     """ if you want, overload the default priors with a new function """
     def lnprior(self, inputs, **kwargs):
@@ -66,7 +73,7 @@ if __name__=="__main__":
     """ Run it """
     pos = [
            [
-               300., 25., 0., 2.
+               250., 23., 0., 3.
                #20 + np.random.randn() for i in range(np.int(opt.npars))
            ]
            + np.random.randn(np.int(opt.npars)) for j in range(opt.nwalkers)
@@ -74,7 +81,7 @@ if __name__=="__main__":
     print(pos[0])
     print(np.max(pos, axis=0))
     print(np.min(pos, axis=0))
-    opt.optimise(nsamples = 2000, burnin=1000,pos=pos)
+    opt.optimise(nsamples = 2000, burnin=1000,guess=pos)
 
     """save optimiser state for later """
     #opt.save(filename="output_file",pickle=True) #Save as a python object
@@ -89,7 +96,7 @@ if __name__=="__main__":
     print(np.max(opt.samples, axis=0))
     print(np.min(opt.samples, axis=0))
     nneg=0
-    for i in range(0,opt.samples.shape[0],30):
+    for i in range(0,opt.samples.shape[0],100):
         #print(opt.samples[i,:])
         if opt.samples[i,0] > 0.:
             opt.model(opt.samples[i,0],opt.samples[i,1],opt.samples[i,2],opt.samples[i,3])
@@ -98,7 +105,7 @@ if __name__=="__main__":
             nneg += 1
             
     #    ax.plot(irs.wavelength, model(opt.samples[i,:]), '-', alpha = 0.1)
-    
+    print(nneg)
     ax.plot(irs.wavelength, irs.value, '-')
     fig2 = corner.corner(opt.samples)#,labels=opt.labels)
     plt.show()

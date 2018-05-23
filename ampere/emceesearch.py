@@ -59,6 +59,7 @@ class EmceeSearch(BaseSearch):
         """
         Simple uniform prior over all parameter space
         """
+        #print(theta)
         return self.model.lnprior(theta)#return 0
 
     def optimise(self, nsamples = None, burnin = None, guess = None, **kwargs):
