@@ -21,31 +21,42 @@ if __name__=="__main__":
     filename = ampere.__file__.strip('__init__.py')+'Testdata/cassis_yaaar_spcfw_14203136t.fits'
     print(filename)
     irs = Spectrum.fromFile(filename,format='SPITZER-YAAAR')
+    #for s in irs:
+    #    print(s)
+    #exit()
     #If we have more than one dataset we need multiple data objects
     #print(irs.wavelength)
     
     """ Define the model """
-    #modwaves = np.linspace(1.,1.6, 10000)
+    modwaves = 10**np.linspace(0.5,1.7, 1000)
+    #print(modwaves)
     #print(10**modwaves)
     #exit()
     Tbb = 250.0
     area = (10.*u.au.to(u.m)**2)#.value)^2
     print(Tbb, np.log10(area), 0., 3.)
     #exit()
-    TestData = SingleModifiedBlackBody(irs.wavelength, #modwaves,flatprior=True,
+    TestData = SingleModifiedBlackBody(modwaves, # irs.wavelength, #modwaves,flatprior=True,
                                        normWave = 20., sigmaNormWave = 100.,
                                        redshift = False)
     #TestData(250,23,0,3)
     #print(TestData.modelFlux)
     #exit()
+    print(np.min(modwaves),np.max(modwaves))
     TestData(t = Tbb, scale = np.log10(area), index = 0., dist=3.)
-    irs.value = TestData.modelFlux #spectres(irs.wavelength, modwaves, TestData.modelFlux) #['flux'].data = TestData.modelFlux
-    irs.uncertainty = 0.11*irs.value#['flux'].data
-    print(irs)
-    
+    for i in irs:
+        #print(i)
+        i.value = spectres(i.wavelength, modwaves, TestData.modelFlux)
+        #print(i)
+        i.uncertainty = 0.11*i.value
+        #print(i)
+        #irs.value = TestData.modelFlux #spectres(irs.wavelength, modwaves, TestData.modelFlux) #['flux'].data = TestData.modelFlux
+    #irs.uncertainty = 0.11*irs.value#['flux'].data
+    #print(irs)
+    #exit()
     #model = PowerLawAGN(irs.wavelengths) #We should probably define a wavelength grid separate from the data wavelengths for a number of reasons, primarily because the photometry needs an oversampled spectrum to compute synthetic photometry
 
-    model = SingleModifiedBlackBody(irs.wavelength,flatprior=True,
+    model = SingleModifiedBlackBody(modwaves, #irs.wavelength,flatprior=True,
                                     normWave = 20., sigmaNormWave = 100.,
                                     redshift = False, lims = np.array([[150.,400.],
                                                                        [15.,35.],
@@ -61,7 +72,7 @@ if __name__=="__main__":
 
     """ Connect the dots: """
     """ Hook it up to an optimiser """
-    opt = EmceeSearch(model = model, data = [irs], nwalkers = 300) #introspection is used inside the optimiser to determine the number of parameters that each part of the model has
+    opt = EmceeSearch(model = model, data = irs, nwalkers = 30) #introspection is used inside the optimiser to determine the number of parameters that each part of the model has
 
     """ if you want, overload the default priors with a new function """
     def lnprior(self, inputs, **kwargs):
@@ -81,7 +92,7 @@ if __name__=="__main__":
     print(pos[0])
     print(np.max(pos, axis=0))
     print(np.min(pos, axis=0))
-    opt.optimise(nsamples = 2000, burnin=1000,guess=pos)
+    opt.optimise(nsamples = 1000, burnin=100,guess=pos)
 
     """save optimiser state for later """
     #opt.save(filename="output_file",pickle=True) #Save as a python object
@@ -100,13 +111,14 @@ if __name__=="__main__":
         #print(opt.samples[i,:])
         if opt.samples[i,0] > 0.:
             opt.model(opt.samples[i,0],opt.samples[i,1],opt.samples[i,2],opt.samples[i,3])
-            ax.plot(irs.wavelength,opt.model.modelFlux, '-', alpha=0.02)
+            ax.plot(modwaves,opt.model.modelFlux, '-', 'k', alpha=0.02) #irs.wavelength
         else:
             nneg += 1
             
     #    ax.plot(irs.wavelength, model(opt.samples[i,:]), '-', alpha = 0.1)
     print(nneg)
-    ax.plot(irs.wavelength, irs.value, '-')
+    for i in irs:
+        ax.plot(i.wavelength, i.value, '-','b')
     fig2 = corner.corner(opt.samples)#,labels=opt.labels)
     plt.show()
 

@@ -384,7 +384,8 @@ class Spectrum(Data):
         ''' First take the model values (passed in) and compute synthetic Spectrum '''
         #print(self)
         #wavelength = self.wavelength
-        modSpec = model.modelFlux #spectres(self.wavelength, model.wavelength, model.modelFlux) #For some reason spectres isn't cooperating :/
+        #modSpec = model.modelFlux #
+        modSpec = spectres(self.wavelength, model.wavelength, model.modelFlux) #For some reason spectres isn't cooperating :/ actually, looks like it was just a stupid mistake
 
         ''' then update the covariance matrix for the parameters passed in '''
         #skip this for now
@@ -418,7 +419,7 @@ class Spectrum(Data):
         Routine to generate spectrum data object from a file containing said data
         '''
         # this command reads a CASSIS fits file *yaaar*.fits
-        self=cls.__new__(Spectrum)
+        #self=cls.__new__(Spectrum)
 
         # we use the format argument to deal with different kind of inputs
         # note that the might want to normalise the names of the columns coming out
@@ -442,9 +443,13 @@ class Spectrum(Data):
             table['sky error'].unit='Jy'
             # note that there is a column called module. this has values 0.0 1.0 2.0 and 3.0 corresponding to SL1, SL2, LL1 and LL2 resp.
             # we may want consider them independent?
-
-            
-            
+            #print(np.unique(table['module']))
+            chunks = np.zeros_like(table['module'].data)
+            sl = np.logical_or(table['module'] == 0.0, table['module'] == 1.0) #SL
+            ll = np.logical_or(table['module'] == 2.0, table['module'] == 3.0) #LL
+            chunks[sl] = 1.
+            chunks[ll] = 2.
+            table['chunk'] = chunks
 
             #normalise the column names (wavelength,flux,uncertainty)
             table.rename_column('error (RMS+SYS)','uncertainty')
@@ -529,6 +534,7 @@ class Spectrum(Data):
                 table['flux'].unit=header[keywords['fluxUnit']]
                 table['uncertainty'].unit=header[keywords['fluxUnit']]
                 # We probably want to convert here to Jy, um
+                # Need to add optional columns for separate orders/modules
                      
             if filetype == 'text':
                 
@@ -539,6 +545,7 @@ class Spectrum(Data):
 
                 table['wavelength'].unit=keywords['waveUnit']
                 table['flux'].unit=keywords['fluxUnit']
+                # Need to add optional columns for separate orders/modules
 
                 # We probably want to convert here to Jy, um
                 if keywords['waveUnit'] != 'um':
@@ -553,10 +560,11 @@ class Spectrum(Data):
                     table.add_column('uncertainty')
                     table['uncertainty'].data[:] = 0.0
         ## pass control to fromTable to define the variables
-        self.fromTable(table)
-        return self
-        
-    def fromTable(self, table, format=None, **kwargs):
+        specList = cls.fromTable(table)
+        return specList#elf
+
+    @classmethod
+    def fromTable(cls, table, format=None, **kwargs):
         ''' 
             Routine to generate data object from an astropy Table object or a file containing data in a format that can be read in as an astropy Table
         '''
@@ -570,10 +578,15 @@ class Spectrum(Data):
         ## here we assign the wavelength unit to the bandUnit. is this correct?
         ## Yes, that is correct.
         bandUnits = table['wavelength'].unit
-        
+        specList = []
         ## what about the modules?
-
-        self.__init__(table['wavelength'].data, value, uncertainty, bandUnits, photUnits) #Also pass in flux units
+        # the loop below breaks the spectrum up into chunks based on a column in the table. We can decide whether to group SL and LL, or split all the orders separately
+        for chunk in np.unique(table['chunk'].data):
+            selection = table['chunk'] == chunk
+            self=cls.__new__(Spectrum)
+            self.__init__(table['wavelength'][selection].data, value[selection], uncertainty[selection], bandUnits, photUnits) #Also pass in flux units
+            specList.append(self)
+        return specList #self
 
 class Image(Data):
     #Need separate subclasses for images and radial profiles
