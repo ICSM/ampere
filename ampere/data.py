@@ -11,6 +11,7 @@ from astropy.io.votable import parse_single_table
 import astropy.units as u
 from astropy.io import ascii
 from spectres import spectres
+from scipy.stats import norm, halfnorm
 
 class Data(object):
     """
@@ -258,7 +259,7 @@ class Spectrum(Data):
 
     """
 
-    def __init__(self, wavelength, value, uncertainty, bandUnits, fluxUnits, freqSpec = False,**kwargs):
+    def __init__(self, wavelength, value, uncertainty, bandUnits, fluxUnits, freqSpec = False, calUnc = None, covarianceTruncation = 1e-3, **kwargs):
         #self.filterName = filterName #Telescope/Instrument cf photometry
         self.type = 'Spectrum'
 
@@ -309,9 +310,22 @@ class Spectrum(Data):
         self.uncertainty = uncertainty #Ditto
 
         ''' inititalise covariance matrix as a diagonal matrix '''
-        self.covMat = np.diag(uncertainty**2)
+        self.varMat = uncertainty * uncertainty[:,np.newaxis] #make a square array of sigma_i * sigma_j, i.e. variances
+        self.covMat = np.diag(np.ones_like(uncertainty))
+        a = self.covMat > 0
+        self.covMat[a] = self.covMat[a] * self.varMat[a]# = np.diag(uncertainty**2)
         self.logDetCovMat = np.linalg.slogdet(self.covMat)[1] / np.log(10.)
         print(self.logDetCovMat)
+
+        ''' Assume default of 10% calibration uncertainty unless otherwise specified by the user '''
+        if calUnc is None:
+            self.calUnc = 0.10 
+        else:
+            self.calUnc = calUnc
+
+        self.npars = 3 #this will have to change in future to 1 + number of parameters required by GPs for covMat
+
+        self.covarianceTruncation = covarianceTruncation
 
     def __call__(self, **kwargs):
         raise NotImplementedError()
@@ -368,20 +382,50 @@ class Spectrum(Data):
     def __repr__(self, **kwargs):
         raise NotImplementedError()
     
-    def cov(self, **kwargs):
+    def cov(self, theta, **kwargs):
         ''' 
         This routine populates a covariance matrix given some methods to call and parameters for them.
 
         For the moment, however, it does nothing.
         '''
+        ''' Gradually build this up - for the moment we will assume a single squared-exponential kernel + an uncorrelated component '''
 
+        ''' create a grid of positions/distances on which to build the matrix '''
+        #we might be able to offload this step to an instance variable, as it shouldn't change between iterations...
+        i, j = np.mgrid[:len(self.wavelength),:len(self.wavelength)]
+        d = i - j
+
+        ''' hardcode a squared-exponential kernel for the moment '''
+        m = np.exp(-d**2. / (2* theta[1]**2))
+        a = m < self.covarianceTruncation
+        m[np.logical_not(a)] = 0. #overwrite small values with 0 to speed up some of the algebra
+
+        covMat = (1-theta[0])*np.diag(np.ones_like(self.uncertainty)) + theta[0]*m
+        self.covMat = covMat * self.varMat
+        
         self.logDetCovMat = np.linalg.slogdet(self.covMat)[1] / np.log(10.)
-        return self.covMat
+        #return self.covMat
 
-    def lnlike(self, model, **kwargs):
+    def lnprior(self, theta, **kwargs):
+        try:
+            scaleFac = theta[0]
+        except IndexError: #Only possible if theta is scalar or can't be indexed
+            scaleFac = theta
+        if scaleFac > 0 and 0. < theta[1] < 1. and theta[2] > 0.:
+            #print(scalefac)
+            return norm.logpdf(np.log10(scaleFac), loc=0., scale = self.calUnc) + halfnorm.logpdf(theta[2], 0., 1.)
+        return -np.inf
+
+    def lnlike(self, theta, model, **kwargs):
         ''' docstring goes here '''
         
         ''' First take the model values (passed in) and compute synthetic Spectrum '''
+        
+        try:
+            scaleFac = theta[0]
+        except IndexError: #Only possible if theta is scalar or can't be indexed
+            scaleFac = theta
+            
         #print(self)
         #wavelength = self.wavelength
         #modSpec = model.modelFlux #
@@ -389,13 +433,14 @@ class Spectrum(Data):
 
         ''' then update the covariance matrix for the parameters passed in '''
         #skip this for now
-        #self.covMat = self.cov()
+        #self.covMat =
+        self.cov(theta[1:])
         #import matplotlib.pyplot as plt
         #plt.imshow(self.covMat)
         #plt.show()
         
         ''' then compute the likelihood for each photometric point in a vectorised statement '''
-        a = self.value - modSpec
+        a = scaleFac*self.value - modSpec
         #if not np.all(np.isfinite(a)):
         #    print(a)
         #    print(modSpec)
@@ -404,7 +449,7 @@ class Spectrum(Data):
         b = 0#np.log10(1./((np.float128(2.)*np.pi)**(len(self.value)) * np.linalg.det(self.covMat))
             #)
 
-        #b = -0.5*len(self.value) * np.log10(2*np.pi) - (0.5*self.logDetCovMat) #less computationally intensive version of above
+        b = -0.5*len(self.value) * np.log10(2*np.pi) - (0.5*self.logDetCovMat) #less computationally intensive version of above
         #pass
         probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(self.covMat, a) ) ) )
         #print(((np.float128(2.)*np.pi)**(len(self.value))), np.linalg.det(self.covMat))

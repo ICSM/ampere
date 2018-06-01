@@ -31,16 +31,18 @@ class BaseSearch(object):
     def lnlike(self, theta, **kwargs):
         model = self.model(*theta[:self.nparsMod])
         l=np.array([])
+        i = self.nparsMod
         for data in self.dataSet:
             #print(data)
-            lnew = data.lnlike(self.model)
+            lnew = data.lnlike(theta[i:i+data.npars],self.model)
+            i+=data.npars
             l = np.r_[l,lnew]
         return np.sum(l)
             
         #raise NotImplementedError()
 
     def lnprob(self, theta):#, dataSet, **kwargs):
-        p = self.lnprior(theta[:self.nparsMod])
+        p = self.lnprior(theta)#[:self.nparsMod])
         if p == -np.inf:
             return p
         return p + self.lnlike(theta)

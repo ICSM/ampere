@@ -27,12 +27,14 @@ class EmceeSearch(BaseSearch):
         understand how many parameters there are for each compponent '''
         sig = signature(model.__call__)
         self.nparsMod = len(sig.parameters) - 1 #Always subtract **kwargs from the parameters, but don't need to worry about self once it is bound to an instance
-        print(self.nparsMod, len(sig.parameters), sig.parameters)
-        self.nparsData = np.zeros(len(self.dataSet))
+        #print(self.nparsMod, len(sig.parameters), sig.parameters)
+        #self.nparsData = #np.zeros(len(self.dataSet))
         #self.npars = something # total number of parameters
         #self.nparsMod = something #number of parameters for the model
-        #self.nparsData = [something for data in self.dataSet] #number of parameters to be passed into each set of data
+        self.nparsData = [data.npars for data in self.dataSet] #number of parameters to be passed into each set of data
         self.npars = np.int(self.nparsMod + np.sum(self.nparsData))
+        print(self.npars)
+        #exit()
         ''' then set up the sampler '''
         self.sampler = emcee.EnsembleSampler(self.nwalkers, np.int(self.npars), self.lnprob)#, args=self.dataSet)
 
@@ -57,10 +59,17 @@ class EmceeSearch(BaseSearch):
 
     def lnprior(self, theta, **kwargs):
         """
-        Simple uniform prior over all parameter space
+        We delegate the priors to the models and the data
         """
         #print(theta)
-        return self.model.lnprior(theta)#return 0
+        lp = self.model.lnprior(theta[:self.nparsMod])
+        i = self.nparsMod
+        for data in self.dataSet:
+            #print(theta,theta[:i],theta[i:i+data.npars],i,data.npars)
+            lp+= data.lnprior(theta[i:i+data.npars])
+            i+=data.npars
+        #print(lp)
+        return lp #return 0
 
     def optimise(self, nsamples = None, burnin = None, guess = None, **kwargs):
         if guess is None:

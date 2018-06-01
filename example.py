@@ -72,7 +72,7 @@ if __name__=="__main__":
 
     """ Connect the dots: """
     """ Hook it up to an optimiser """
-    opt = EmceeSearch(model = model, data = irs, nwalkers = 30) #introspection is used inside the optimiser to determine the number of parameters that each part of the model has
+    opt = EmceeSearch(model = model, data = irs, nwalkers = 100) #introspection is used inside the optimiser to determine the number of parameters that each part of the model has
 
     """ if you want, overload the default priors with a new function """
     def lnprior(self, inputs, **kwargs):
@@ -84,7 +84,7 @@ if __name__=="__main__":
     """ Run it """
     pos = [
            [
-               250., 23., 0., 3.
+               250., 23., 0., 3., 1., 0.5, 1., 1., 0.5, 1.
                #20 + np.random.randn() for i in range(np.int(opt.npars))
            ]
            + np.random.randn(np.int(opt.npars)) for j in range(opt.nwalkers)
@@ -92,7 +92,7 @@ if __name__=="__main__":
     print(pos[0])
     print(np.max(pos, axis=0))
     print(np.min(pos, axis=0))
-    opt.optimise(nsamples = 1000, burnin=100,guess=pos)
+    opt.optimise(nsamples = 1000, burnin=500,guess=pos)
 
     """save optimiser state for later """
     #opt.save(filename="output_file",pickle=True) #Save as a python object
