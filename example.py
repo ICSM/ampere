@@ -6,10 +6,12 @@ from ampere.PowerLawAGN import PowerLawAGN, SingleModifiedBlackBody
 from ampere.extinction import CCMExtinctionLaw
 import corner
 import matplotlib.pyplot as plt
+import os
 
 from astropy import constants as const
 from astropy import units as u
 from spectres import spectres
+import pyphot
 
 if __name__=="__main__":
     """
@@ -28,7 +30,7 @@ if __name__=="__main__":
     #print(irs.wavelength)
     
     """ Define the model """
-    modwaves = 10**np.linspace(0.5,1.7, 1000)
+    modwaves = 10**np.linspace(0.,2., 2000)
     #print(modwaves)
     #print(10**modwaves)
     #exit()
@@ -53,6 +55,31 @@ if __name__=="__main__":
         #irs.value = TestData.modelFlux #spectres(irs.wavelength, modwaves, TestData.modelFlux) #['flux'].data = TestData.modelFlux
     #irs.uncertainty = 0.11*irs.value#['flux'].data
     #print(irs)
+    #exit()
+
+    ''' Now we create some synthetic photometry too '''
+    filters=[
+             #'SPITZER_IRAC_36',
+             'WISE_RSR_W1',
+             'WISE_RSR_W2',
+             'WISE_RSR_W3',
+             'WISE_RSR_W4',
+             'HERSCHEL_PACS_BLUE'
+             ]
+    libDir = os.getcwd() + '/ampere/'
+    libname = libDir + 'ampere_allfilters.hd5'
+    print(libname)
+    filterLib = pyphot.Library.from_hd5(libname)
+    filts = filterLib.load_filters(filters, interp=True, lamb = modwaves*pyphot.unit['micron'])
+    f, sed =  pyphot.extractPhotometry(modwaves, TestData.modelFlux, filts, Fnu = True, absFlux = False)
+    lamCen = np.array([b.magnitude for b in f])
+    print(lamCen, sed)
+
+    ''' now turn the numbers into a Photometry object '''
+    phot = Photometry(np.array(filters), np.array(sed), np.array(0.1*sed), np.array(['Jy', 'Jy','Jy','Jy','Jy']), bandUnits='um',libName = libname)
+    phot.reloadFilters(modwaves)
+    print(phot)
+    irs.append(phot)
     #exit()
     #model = PowerLawAGN(irs.wavelengths) #We should probably define a wavelength grid separate from the data wavelengths for a number of reasons, primarily because the photometry needs an oversampled spectrum to compute synthetic photometry
 

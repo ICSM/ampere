@@ -57,17 +57,21 @@ class Photometry(Data):
 
     """
 
-    def __init__(self, filterName, value, uncertainty, photUnits, bandUnits=None, **kwargs):
+    def __init__(self, filterName, value, uncertainty, photUnits, bandUnits=None, libName = None, **kwargs):
         self.filterName = filterName
 
         ''' setup pyphot for this set of photometry '''
-        self.pyphotSetup()
+        self.pyphotSetup(libName)
         self.filterNamesToPyphot()
 
-        self.filterName = filterName[self.filterMask]
+        #print(self.filterMask)
+        if np.all(self.filterMask):
+            self.filterName = filterName
+        else:
+            self.filterName = filterName[self.filterMask]
         #Create wavelength array for photometry based on pivot wavelengths of
         #filters
-        filters = self.filterLibrary.load_filters(filterName[self.filterMask])
+        filters = self.filterLibrary.load_filters(self.filterName)#[self.filterMask])
         self.wavelength = np.array([filt.lpivot.magnitude for filt in filters])
         
 #        self.uncertainty = uncertainty #Error bars may be asymmetric!
@@ -80,11 +84,15 @@ class Photometry(Data):
         #identify values in magnitudes, convert to Jy
         np.array(photUnits)
         
-        mags = (photUnits == 'mag')
-        
-        zeropoints = filters[mags].Vega_zero_Jy.magnitude
-        value[mags] = zeropoints*10^(-0.4*value[mags])
-        uncertainty[mags] = value[mags] - zeropoints*10^(-0.4*(value[mags]+uncertainty[mags]))
+        mags = photUnits == 'mag'
+        #print(mags.__repr__())
+        #pyphot returns a list of filters, this means this nice boolean masking doesn't work :(
+        zeropoints = np.zeros_like(value)
+        for i in range(len(mags)):
+            if mags[i]:
+                zeropoints[i] = filters[i].Vega_zero_Jy.magnitude
+                value[i] = zeropoints[i]*10^(-0.4*value[i])
+                uncertainty[i] = value[i] - zeropoints*10^(-0.4*(value[i]+uncertainty[i]))
         
         #identify values in milliJansky, convert to Jy
         mjy = (photUnits == 'mjy')
@@ -95,7 +103,15 @@ class Photometry(Data):
         self.value = value
 
         ''' inititalise covariance matrix as a diagonal matrix '''
-        self.covMat = np.diag(uncertainty**2)#np.diag(np.ones(len(uncertainty)))
+        #self.covMat = np.diag(uncertainty**2)#np.diag(np.ones(len(uncertainty)))
+        self.varMat = uncertainty * uncertainty[:,np.newaxis] #make a square array of sigma_i * sigma_j, i.e. variances
+        self.covMat = np.diag(np.ones_like(uncertainty))
+        a = self.covMat > 0
+        self.covMat[a] = self.covMat[a] * self.varMat[a]# = np.diag(uncertainty**2)
+        self.logDetCovMat = np.linalg.slogdet(self.covMat)[1] / np.log(10.)
+        print(self.logDetCovMat)
+
+        self.npars = 0
 
     def __call__(self, **kwargs):
         raise NotImplementedError()
@@ -135,7 +151,7 @@ class Photometry(Data):
         l.append('{} {} {} {}'.format('-'*(nFilt),'-'*(nWave),'-'*(nVal),'-'*(nUnc)))
 
         ''' then a table of values '''
-        for i in range(len(self.filters)):
+        for i in range(len(self.filterName)):
             l.append(
                 '{:<{nFilt}} {:>{nWave}.2e} {:>{nVal}.2e} {:>{nUnc}.2e}'.format(
                     self.filterName[i],self.wavelength[i],self.value[i],self.uncertainty[i],
@@ -149,42 +165,71 @@ class Photometry(Data):
     def __repr__(self, **kwargs):
         raise NotImplementedError()
 
-    def pyphotSetup(self, **kwargs):
+    def pyphotSetup(self, libName = None, **kwargs):
         ''' Given the data, read in the pyphot filter library and make sure we have the right list of filters in memory 
         
         Future work: go through multiple libraries from different (user-defined) locations and import htem all
         '''
-        libDir = pyphot.__file__.strip('__init__.py')+'libs/'
-        libName = 'synphot_nonhst.hd5' #PhIReSSTARTer.hd5'
-        self.filterLibrary = pyphot.get_library(fname=libDir + libName)
+        
+        if libName is None:
+            libDir = pyphot.__file__.strip('__init__.py')+'libs/'
+            libName = libDir + 'synphot_nonhst.hd5' #PhIReSSTARTer.hd5'
+        
+        self.filterLibrary = pyphot.get_library(fname=libName)
 
     def filterNamesToPyphot(self, **kwargs):
         pyphotFilts = self.filterLibrary.get_library_content()
+        #print(pyphotFilts)
         filtsOrig = self.filterName
         l = []
         for filt in self.filterName:
             l.append(filt in pyphotFilts)
         #try replacing colons and / with _
+        #print(l)
         newTry = [filt.replace(':','_').replace('/','_') for filt in self.filterName]
         for i in range(len(l)):
             l[i] = (newTry[i] in pyphotFilts)
             if l[i]:
                 self.filterName[i] = newTry[i]
-        self.filterMask = l
+        self.filterMask = np.array(l)
+        #print(l,self.filterMask.__repr__())
+        #print(np.logical_not(np.array(l)))
         if not np.all(l):
             print("Some filters were not recognised by pyphot. The following filters will be ignored:")
             print(filtsOrig[np.logical_not(np.array(l))])
 
-    def lnlike(self, model, **kwargs):
+    def reloadFilters(self, modwaves):
+        ''' Use this method to reload the filters after your model has got a defined wavelength grid. 
+
+        This method reloads the filters and interpolates their definitions onto the given 
+        wavelength grid. This should be used to make sure the filter definitions are ready 
+        to compute synthetic photometry in the likelihood calls.
+        '''
+        #Create wavelength array for photometry based on pivot wavelengths of
+        #filters
+        #if modwaves is not None:
+        #    pass
+        #else:
+        filters = self.filterLibrary.load_filters(self.filterName[self.filterMask],
+                                                  interp = True,
+                                                  lamb = modwaves*pyphot.unit['micron'])
+        self.wavelength = np.array([filt.lpivot.magnitude for filt in filters])
+        self.filters=filters
+
+    def lnprior(self, theta, **kwargs):
+        return 0
+
+    def lnlike(self, theta, model, **kwargs):
         ''' docstring goes here '''
         
         ''' First take the model values (passed in) and compute synthetic photometry '''
         ''' I assume that the filter library etc is already setup '''
         filts, modSed = pyphot.extractPhotometry(model.wavelength,
                                                  model.modelFlux,
-                                                 self.filterName,
+                                                 self.filters,
                                                  Fnu = True,
-                                                 absFlux = False
+                                                 absFlux = False,
+                                                 progress=False
             )
 
         ''' then update the covariance matrix for the parameters passed in '''
@@ -194,11 +239,10 @@ class Photometry(Data):
         ''' then compute the likelihood for each photometric point in a vectorised statement '''
         a = self.value - modSed
 
-        b = np.log(1./((2*np.pi)**(len(self.value)) * np.linalg.det(self.covMat))
-            ) 
-        #pass
+        b = -0.5*len(self.value) * np.log10(2*np.pi) - (0.5*self.logDetCovMat)
+            #np.log(1./((2*np.pi)**(len(self.value)) * np.linalg.det(self.covMat))
+            #) 
         probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(self.covMat, a) ) ) )
-
         return probFlux
         
 
