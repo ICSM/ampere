@@ -62,36 +62,53 @@ class PowerLawAGN(AnalyticalModel):
               wavelength grid from data (wavelengths)
     Output: model fluxes (modelFlux)'''
     
-    def __init__(self, wavelengths, flatprior=True, **kwargs):
+    def __init__(self, wavelengths, flatprior=True, redshift=None, **kwargs):
         import os
         from scipy import interpolate
         self.flatprior=flatprior
-        opacityDirectory = './Opacities/'
+        #print(os.path.dirname(__file__))
+        opacityDirectory = os.path.dirname(__file__)+'/Opacities/'
         opacityFileList = os.listdir(opacityDirectory)
         opacityFileList = np.array(opacityFileList)[['.q' in zio for zio in opacityFileList]] # Only files ending in .q are valid (for now)
         nSpecies = opacityFileList.__len__()
         #wavelengths = np.logspace(np.log10(8), np.log10(35), 100) # For testing purposes
         opacity_array = np.zeros((wavelengths.__len__(), nSpecies))
+        if redshift is not None:
+            self.restwaves = wavelengths / (1+redshift)
+        else:
+            self.restwaves = wavelengths
         for j in range(nSpecies):
             tempData = np.loadtxt(opacityDirectory + opacityFileList[j], comments = '#')
+            print(opacityFileList[j])
             tempWl = tempData[:, 0]
             tempOpac = tempData[:, 1]
             f = interpolate.interp1d(tempWl, tempOpac, assume_sorted = False)
-            opacity_array[:,j] = f(wavelengths)
+            opacity_array[:,j] = f(self.restwaves)#wavelengths)
         self.wavelength = wavelengths
         self.opacity_array = opacity_array
         self.nSpecies = nSpecies
+        self.redshift = redshift
+        self.npars = nSpecies - 1 + 2 #there are two parameters for the continuum, then we need n-1 abundances
         
     def __call__(self,
                  multiplicationFactor, # = 1,
                  powerLawIndex, # = 2,
-                 relativeAbundances, # = np.ones(self.nSpecies)/self.nSpecies,
+                 *args, # = np.ones(self.nSpecies)/self.nSpecies,
                  **kwargs):
-        fModel = (np.matmul(self.opacity_array, relativeAbundances)+1)*self.wavelength**powerLawIndex*multiplicationFactor
+        relativeAbundances = np.append(args,1.-np.sum(args))
+        if self.redshift is not None:
+            waves = self.restwaves
+        else:
+            waves = self.wavelengths
+        fModel = (np.matmul(self.opacity_array, relativeAbundances)+1)
+        fModel = fModel*(waves**powerLawIndex)*multiplicationFactor
         self.modelFlux = fModel
 
     def lnprior(self, theta, **kwargs):
         if self.flatprior:
-            return 0
+            if np.sum(theta[2:]) <= 1. and np.all(theta[2:] >= 0.) and theta[0] > 0.: #basic physical checks first
+                return 0
+            else:
+                return -np.inf
         else:
             raise NotImplementedError()

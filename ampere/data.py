@@ -74,8 +74,11 @@ class Photometry(Data):
         filters = self.filterLibrary.load_filters(self.filterName)#[self.filterMask])
         self.wavelength = np.array([filt.lpivot.magnitude for filt in filters])
         
-#        self.uncertainty = uncertainty #Error bars may be asymmetric!
-        self.fluxUnits = photUnits[self.filterMask] #May be different over wavelength; mag, Jy  
+        #        self.uncertainty = uncertainty #Error bars may be asymmetric!
+        try:
+            self.fluxUnits = photUnits[self.filterMask] #May be different over wavelength; mag, Jy
+        except:
+            self.fluxUnits = np.repeat(photUnits,len(filters))
         self.bandUnits = 'um' #Should be um if taken from pyPhot        
         self.type = 'Photometry'
         value = value[self.filterMask]
@@ -84,7 +87,7 @@ class Photometry(Data):
         #identify values in magnitudes, convert to Jy
         np.array(photUnits)
         
-        mags = photUnits == 'mag'
+        mags = self.fluxUnits == 'mag'
         #print(mags.__repr__())
         #pyphot returns a list of filters, this means this nice boolean masking doesn't work :(
         zeropoints = np.zeros_like(value)
@@ -110,6 +113,11 @@ class Photometry(Data):
         self.covMat[a] = self.covMat[a] * self.varMat[a]# = np.diag(uncertainty**2)
         self.logDetCovMat = np.linalg.slogdet(self.covMat)[1] / np.log(10.)
         print(self.logDetCovMat)
+        if self.logDetCovMat == -np.inf:
+            print("""The determinant of the covariance matrix for this dataset is 0.
+            Please check that the uncertainties are positive real numbers """)
+            print(self)
+            exit()
 
         self.npars = 0
 
@@ -172,6 +180,7 @@ class Photometry(Data):
         '''
         
         if libName is None:
+            print("No library given, using default pyphot filters")
             libDir = pyphot.__file__.strip('__init__.py')+'libs/'
             libName = libDir + 'synphot_nonhst.hd5' #PhIReSSTARTer.hd5'
         
@@ -186,7 +195,9 @@ class Photometry(Data):
             l.append(filt in pyphotFilts)
         #try replacing colons and / with _
         #print(l)
-        newTry = [filt.replace(':','_').replace('/','_') for filt in self.filterName]
+        newTry = [filt.replace(':','_').replace('/','_').replace('WISE','WISE_RSR').replace('Spitzer','SPITZER') for filt in self.filterName]
+        print(newTry)
+        #newTry = [filt.replace('WISE','WISE_RSR').replace( for filt in newTry]
         for i in range(len(l)):
             l[i] = (newTry[i] in pyphotFilts)
             if l[i]:
@@ -274,7 +285,7 @@ class Photometry(Data):
 
         #endswitch
         ## pass control to fromTable to define the variables
-        self.fromTable(table)
+        self.fromTable(table, **kwargs)
         #now return the instance so that it works as intended
         return self
 
@@ -292,9 +303,10 @@ class Photometry(Data):
         # We don't see a need for bandUnits because this info should be part of the filterName in pyphot
         # The SED VO table has frequency units in GHz.
         # How does this map on the needs of pyphot?
+        #print(photUnits)
 
                    
-        self.__init__(filterName, value, uncertainty, photUnits)
+        self.__init__(filterName, value, uncertainty, photUnits, **kwargs)
                    
 class Spectrum(Data):
 
