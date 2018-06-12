@@ -111,7 +111,7 @@ class Photometry(Data):
         self.covMat = np.diag(np.ones_like(uncertainty))
         a = self.covMat > 0
         self.covMat[a] = self.covMat[a] * self.varMat[a]# = np.diag(uncertainty**2)
-        self.logDetCovMat = np.linalg.slogdet(self.covMat)[1] / np.log(10.)
+        self.logDetCovMat = np.linalg.slogdet(self.covMat)[1]# / np.log(10.)
         print(self.logDetCovMat)
         if self.logDetCovMat == -np.inf:
             print("""The determinant of the covariance matrix for this dataset is 0.
@@ -250,7 +250,7 @@ class Photometry(Data):
         ''' then compute the likelihood for each photometric point in a vectorised statement '''
         a = self.value - modSed
 
-        b = -0.5*len(self.value) * np.log10(2*np.pi) - (0.5*self.logDetCovMat)
+        b = -0.5*len(self.value) * np.log(2*np.pi) - (0.5*self.logDetCovMat)
             #np.log(1./((2*np.pi)**(len(self.value)) * np.linalg.det(self.covMat))
             #) 
         probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(self.covMat, a) ) ) )
@@ -370,12 +370,12 @@ class Spectrum(Data):
         self.covMat = np.diag(np.ones_like(uncertainty))
         a = self.covMat > 0
         self.covMat[a] = self.covMat[a] * self.varMat[a]# = np.diag(uncertainty**2)
-        self.logDetCovMat = np.linalg.slogdet(self.covMat)[1] / np.log(10.)
+        self.logDetCovMat = np.linalg.slogdet(self.covMat)[1]# / np.log(10.)
         print(self.logDetCovMat)
 
         ''' Assume default of 10% calibration uncertainty unless otherwise specified by the user '''
         if calUnc is None:
-            self.calUnc = 0.10 
+            self.calUnc = 0.010 
         else:
             self.calUnc = calUnc
 
@@ -452,14 +452,14 @@ class Spectrum(Data):
         d = i - j
 
         ''' hardcode a squared-exponential kernel for the moment '''
-        m = np.exp(-d**2. / (2* theta[1]**2))
+        m = np.exp(-d**2. / (2.* theta[1]**2.))
         a = m < self.covarianceTruncation
         m[np.logical_not(a)] = 0. #overwrite small values with 0 to speed up some of the algebra
 
         covMat = (1-theta[0])*np.diag(np.ones_like(self.uncertainty)) + theta[0]*m
         self.covMat = covMat * self.varMat
         
-        self.logDetCovMat = np.linalg.slogdet(self.covMat)[1] / np.log(10.)
+        self.logDetCovMat = np.linalg.slogdet(self.covMat)[1]# / np.log(10.)
         #return self.covMat
 
     def lnprior(self, theta, **kwargs):
@@ -505,7 +505,7 @@ class Spectrum(Data):
         b = 0#np.log10(1./((np.float128(2.)*np.pi)**(len(self.value)) * np.linalg.det(self.covMat))
             #)
 
-        b = -0.5*len(self.value) * np.log10(2*np.pi) - (0.5*self.logDetCovMat) #less computationally intensive version of above
+        b = -0.5*len(self.value) * np.log(2*np.pi) - (0.5*self.logDetCovMat) #less computationally intensive version of above
         #pass
         probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(self.covMat, a) ) ) )
         #print(((np.float128(2.)*np.pi)**(len(self.value))), np.linalg.det(self.covMat))

@@ -95,18 +95,18 @@ class PowerLawAGN(AnalyticalModel):
                  powerLawIndex, # = 2,
                  *args, # = np.ones(self.nSpecies)/self.nSpecies,
                  **kwargs):
-        relativeAbundances = np.append(args,1.-np.sum(args))
+        relativeAbundances = np.append(10**np.array(args),1.-np.sum(10**np.array(args)))
         if self.redshift is not None:
             waves = self.restwaves
         else:
             waves = self.wavelengths
         fModel = (np.matmul(self.opacity_array, relativeAbundances)+1)
-        fModel = fModel*(waves**powerLawIndex)*multiplicationFactor
+        fModel = fModel*(waves**powerLawIndex)*(10**multiplicationFactor)
         self.modelFlux = fModel
 
     def lnprior(self, theta, **kwargs):
         if self.flatprior:
-            if np.sum(theta[2:]) <= 1. and np.all(theta[2:] >= 0.) and theta[0] > 0.: #basic physical checks first
+            if np.sum(10**theta[2:]) <= 1. and np.all(theta[2:] < 0.) and -10 < theta[0] < 10. and theta[1] > 0.: #basic physical checks first
                 return 0
             else:
                 return -np.inf
