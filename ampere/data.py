@@ -12,6 +12,7 @@ import astropy.units as u
 from astropy.io import ascii
 from spectres import spectres
 from scipy.stats import norm, halfnorm
+from scipy.linalg import inv
 
 class Data(object):
     """
@@ -253,7 +254,7 @@ class Photometry(Data):
         b = -0.5*len(self.value) * np.log(2*np.pi) - (0.5*self.logDetCovMat)
             #np.log(1./((2*np.pi)**(len(self.value)) * np.linalg.det(self.covMat))
             #) 
-        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(self.covMat, a) ) ) )
+        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(inv(self.covMat), a) ) ) )
         return probFlux
         
 
@@ -507,7 +508,7 @@ class Spectrum(Data):
 
         b = -0.5*len(self.value) * np.log(2*np.pi) - (0.5*self.logDetCovMat) #less computationally intensive version of above
         #pass
-        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(self.covMat, a) ) ) )
+        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(inv(self.covMat), a) ) ) )
         #print(((np.float128(2.)*np.pi)**(len(self.value))), np.linalg.det(self.covMat))
         #print(((np.float128(2.)*np.pi)**(len(self.value)) * np.linalg.det(self.covMat)))
         #print(b, probFlux)
@@ -725,7 +726,7 @@ class Image(Data):
         b = np.log(1./((2*np.pi)**(len(self.value)) * np.linalg.det(self.covMat))
             ) 
         #pass
-        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(self.covMat, a) ) ) )
+        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(inv(self.covMat), a) ) ) )
 
         return probFlux
 
@@ -811,7 +812,7 @@ class Interferometry(Data):
         b = np.log(1./((2*np.pi)**(len(self.value)) * np.linalg.det(self.covMat))
             ) 
         #pass
-        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(self.covMat, a) ) ) )
+        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(inv(self.covMat), a) ) ) )
 
         return probFlux
 
@@ -852,6 +853,6 @@ class Cube(Data):
         b = np.log(1./((2*np.pi)**(len(self.value)) * np.linalg.det(self.covMat))
             ) 
         #pass
-        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(self.covMat, a) ) ) )
+        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(inv(self.covMat), a) ) ) )
 
         return probFlux

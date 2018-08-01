@@ -3,9 +3,9 @@ Welcome to AMPERE
 
 """
 
-__version__ = "0.0.0"
+__version__ = "0.1.1"
 __copyright__ = """ Copyright (C) 2017  P. Scicluna, F. Kemper, S. Srinivasan
-J.P. Marshall
+J.P. Marshall, L. Fanciullo, T. Dharmawardena, A. Trejo, S. Hony
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
