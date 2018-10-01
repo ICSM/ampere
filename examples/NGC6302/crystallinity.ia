@@ -1,0 +1,274 @@
+sh_aar2ascii,oen,'~/Science/Carbonates/Koike1999_o_enst.q',/back
+sh_aar2ascii,cen,'~/Science/Carbonates/Koike1999_c_enst.q',/back
+sh_aar2ascii,oliv,'/home/ciska/Science/Carbonates/am_oliv.dat',/back
+sh_aar2ascii,qcoli,'/home/ciska/Science/Carbonates/forst_m.q',/back
+sh_aar2ascii,qcolij,'/home/ciska/Science/Carbonates/cr_oliv.dat',/back
+sh_aar2ascii,qcalcite,'/home/ciska/Science/OpticalProperties/carbonates/calcite_improved.dat',/back
+sh_aar2ascii,qice,'/home/ciska/Science/Carbonates/cr_ice.dat',/back
+sh_aar2ascii,qdiop,'/home/ciska/Science/Carbonates/Koike2000_diopside.q_a',/back
+sh_aar2ascii,dol,'/home/ciska/Science/OpticalProperties/carbonates/dolomite_wh.mac',/back
+sh_aar2ascii,fe,'/home/ciska/Science/Carbonates/fe.dat',/back
+sh_aar2ascii,amcde,'/home/ciska/Science/Carbonates/am_oliv_CDE.dat',/back
+sh_aar2ascii,crcde,'/home/ciska/Science/Carbonates/cr_oliv_CDE.dat',/back
+
+
+sh_aar2ascii,ngc100,'/home/ciska/ISO/NGC6302/NGC6302_100.tab',/back
+sh_aar2ascii,ngc,'/home/ciska/ISO/NGC6302/NGC6302_nolines.tab',/back
+
+
+;pl,ngc100,xra=[10,200],/xl
+
+modoliv = ck_modbb(oliv,tin=60.0,tout=30.0,index=0.5,n0=3.9e-2,r0=1e15,distance=910,grainsize=0.1,steps=10)
+modcoldf = ck_modbb(qcoli,tin=60.0,tout=30.0,index=0.5,n0=1.8e-3,r0=1e15,distance=910,grainsize=0.1,steps=10)
+modwf = ck_modbb(qcoli,tin=118.0,tout=100.0,index=0.5,n0=8e-6,r0=1e15,distance=910,grainsize=0.1,steps=10)
+modfe = ck_modbb(fe,tin=118.0,tout=100.0,index=0.5,n0=1.1e-3,r0=1e15,distance=910,grainsize=0.1,steps=10)
+modhot = ck_modbb(oliv,tin=118.0,tout=100.0,index=0.5,n0=1.2e-4,r0=1e15,distance=910,grainsize=0.1,steps=10)
+modcen = ck_modbb(cen,tin=60.0,tout=30.0,index=0.5,n0=0.6e-8,r0=1e15,distance=910,grainsize=0.1,steps=10)
+modcenh = ck_modbb(cen,tin=118.0,tout=100.0,index=0.5,n0=8e-11,r0=1e15,distance=910,grainsize=0.1,steps=10)
+moddol = ck_modbb(dol,tin=60.0,tout=30.0,index=0.5,n0=3.2e-9,r0=1e15,distance=910,grainsize=0.1,steps=10)
+moddiop = ck_modbb(qdiop,tin=60.0,tout=30.0,index=0.5,n0=2.5e-9,r0=1e15,distance=910,grainsize=0.1,steps=10)
+modice = ck_modbb(qice,tin=60.0,tout=30.0,index=0.5,n0=1.1e-3,r0=1e15,distance=910,grainsize=0.1,steps=10)
+modcalcite = ck_modbb(qcalcite,tin=60.0,tout=30.0,index=0.5,n0=5.2e-9,r0=1e15,distance=910,grainsize=0.1,steps=10)
+
+
+tot1 = sh_calcaar(modfe,add=modhot)
+tot2 = sh_calcaar(tot1,add=modoliv)
+tot3 = sh_calcaar(tot2,add=modcoldf)
+tot4 = sh_calcaar(tot3,add=modcen)
+tot5 = sh_calcaar(tot4,add=moddiop)
+tot6 = sh_calcaar(tot5,add=modice)
+tot7 = sh_calcaar(tot6,add=modwf)
+tot8 = sh_calcaar(tot7,add=moddol)
+tot9 = sh_calcaar(tot8,add=modcenh)
+tot10 = sh_calcaar(tot9,add=modcalcite)
+
+pl,ngc100,xra=[10,120],ps=-3,yra=[0,1100],/xl
+pl,tot1,/opl,ps=-3
+pl,tot2,/opl,ps=-3
+pl,tot3,/opl,ps=-3
+pl,tot4,/opl,ps=-3
+pl,tot5,/opl,ps=-3
+pl,tot6,/opl,ps=-3
+pl,tot7,/opl,ps=-3
+pl,tot8,/opl,ps=-3
+pl,tot9,/opl,ps=-3
+pl,tot10,/opl,ps=-3
+
+residu = sh_calcaar(ngc100,subt=tot9)   
+
+;sh_aar2ascii,residu,'ngc6302_subtr.dat'
+
+
+
+
+
+
+xt= '!7k(l!6m)'
+yt= '!6F!D!7m!N!6 (Jy)'
+
+
+;set_plot,'ps'
+;device,filename='~/Science/Carbonates/test_color.eps',xsize=18.5,ysize=13.875,/color
+
+loadct,39 
+
+;start_hardcopy,save='~/Science/Carbonates/test.ps'
+
+!p.multi=[0,1,2]
+!p.charsize = 0.9
+!x.thick=2
+!y.thick=2
+
+!p.position=[0.15,0.15,0.9,0.9]
+pl,ngc,xra=[10,150],yra=[-500,1200],xtitle=xt,ytitle=yt,/xl,color=0,thick=1,charsize=1.7
+pl,tot10,/opl,ps=-3,thick=4,color=220
+pl,modcalcite,/opl,ps=-3,thick=2,co=-20,color=150
+pl,moddiop,/opl,ps=-3,thick=2,co=-100,color=35
+pl,moddol,/opl,ps=-3,thick=2,co=-180,color=150
+pl,modice,/opl,ps=-3,thick=2,co=-260,color=0
+pl,modcen,/opl,ps=-3,thick=2,co=-340,color=35
+pl,modcoldf,/opl,ps=-3,thick=2,co=-420,color=35
+
+xyouts,12,-70,'calcite'
+xyouts,12,-150,'diopside'
+xyouts,12,-230,'dolomite'
+xyouts,12,-310,'water ice'
+xyouts,12,-390,'enstatite'
+xyouts,12,-470,'forsterite'
+
+
+!p.position=[0.18,0.7,0.4,0.87]
+pl,residu,xra=[60,120],xtitle=' ',ytitle=' ',yra=[-20,100],xtickname=['60',' ','80',' ','100',' ','120'],/ynozero,ytickname=[replicate(' ',7)],co=10,color=0,thick=1
+axis,yaxis=1,ytickname=[' ','0',' ','40',' ','80',' '],color=0
+pl,modcalcite,/opl,ps=-3,color=150,thick=4
+
+
+
+;mystopps
+
+;device,/close
+;set_plot,'x'
+
+
+sub1 = sh_calcaar(modfe,add=modhot)
+sub2 = sh_calcaar(sub1,add=modoliv)
+sub3 = sh_calcaar(sub2,add=modcoldf)
+sub4 = sh_calcaar(sub3,add=modcen)
+sub5 = sh_calcaar(sub4,add=modwf)
+sub6 = sh_calcaar(sub5,add=modcenh)
+sub7 = sh_calcaar(sub6,add=modcalcite)
+
+compl1 = sh_calcaar(modice,add=moddiop) 
+compl2 = sh_calcaar(compl1,add=moddol)
+
+residu60 = sh_calcaar(ngc100,subt=sub7)   
+
+xt= '!7k(l!6m)'
+yt= '!6F!D!7m!N!6 (Jy)'
+
+
+;set_plot,'ps'
+;device,filename='~/Science/Carbonates/ngc6302_60um.eps',xsize=18.5,ysize=13.875,/color
+ 
+loadct,39 
+
+;!p.multi=[0,1,2]
+!p.charsize = 1.7
+!x.thick=3
+!y.thick=3
+
+
+pl,residu60,xra=[40,80],xtitle=xt,ytitle=yt,yra=[-20,200],color=0,thick=1,co=10
+pl,moddol,/opl,ps=-3,color=0,thick=4
+pl,modice,/opl,ps=-3,color=0,thick=4
+pl,moddiop,/opl,ps=-3,color=0,thick=4
+pl,compl2,/opl,ps=-3,color=0,thick=4
+
+xyouts,63,5,'dol'
+xyouts,59,70,'ice'
+xyouts,63,90,'diop'
+
+
+;device,/close
+;set_plot,'x'
+
+
+ 
+w1 = sh_calcaar(modfe,add=modwf)
+w2 = sh_calcaar(w1,add=modhot)
+w3 = sh_calcaar(w2,add=modcenh)
+
+c1 = sh_calcaar(modcalcite,add=modcoldf)
+c2 = sh_calcaar(c1,add=modoliv)
+c3 = sh_calcaar(c2,add=moddol)
+c4 = sh_calcaar(c3,add=moddiop)
+c5 = sh_calcaar(c4,add=modice)
+c6 = sh_calcaar(c5,add=modcen)
+
+totje = sh_calcaar(w3,add=c6)
+
+
+
+xt= '!7k(l!6m)'
+yt= '!6F!D!7m!N!6 (Jy)'
+
+
+;set_plot,'ps'
+;device,filename='~/Science/Carbonates/ngc6302_cw.eps',xsize=18.5,ysize=13.875
+;device,filename='~/Science/Carbonates/test.eps',xsize=18.5,ysize=13.875
+ 
+loadct,39 
+
+!p.charsize = 1.7
+!p.charthick=2
+!x.thick=3
+!y.thick=3
+
+
+xas = indgen(1200)
+xasl = fltarr(1200)
+xasl = 10^(1+xas*0.001)
+
+w3r = interpol(w3.data.flux,w3.data.wave,xasl)
+c6r = interpol(c6.data.flux,c6.data.wave,xasl)
+
+pl,ngc,xra=[10,150],xtitle=xt,ytitle=yt,thick=2,/xl,yra=[0,1200]
+oplot,xasl(*),w3r(*),thick=4,line=2
+oplot,xasl(*),c6r(*),thick=4,line=1
+;pl,w3r,/opl,ps=-3,thick=4,line=1
+;pl,c6r,/opl,ps=-3,thick=4,line=2
+
+
+xyouts,50,650,'cold'
+xyouts,50,150,'warm'
+
+
+;device,/close
+;set_plot,'x'
+
+n119 = lezen('~/TIMMI2/filters/11.9_Roy.txt')
+q=lezen('~/TIMMI2/filters/Q.txt')
+sh_aar2ascii,atm,'~/TIMMI2/filters/atmosphere_6_32um.txt',/back
+
+atmw3 = sh_calcaar(w3,mult=atm)
+atmc6 = sh_calcaar(c6,mult=atm)
+
+wq = convolve(atmw3,q)
+cq = convolve(atmc6,q)
+wn = convolve(atmw3,n119)
+cn = convolve(atmc6,n119)
+
+print,cn/(cn+wn)
+;   0.00217706
+print,wn/(cn+wn)
+;     0.997823
+print,wq/(cq+wq)
+;     0.710624
+print,cq/(cq+wq)
+;     0.289376
+
+
+;start_hardcopy,save='~/Science/Carbonates/dolomite_l.ps',/color
+;loadct,39
+
+;pl,ngc100,xra=[10,120],/xl,yra=[0,1100],ps=-3,title='NGC 6302',color=0
+;pl,totaal,/opl,ps=-3,color=125
+;pl,modcalcite,/opl,ps=-3,color=220
+;pl,moddiop,/opl,ps=-3,color=35
+;pl,modcen,/opl,ps=-3,color=150
+;pl,modice,/opl,ps=-3,color=205
+;pl,modcoli,/opl,ps=-3,color=95
+;pl,moddol,/opl,ps=-3,color=180
+
+;legend,['NGC 6302','total fit','calcite','diopside','clino-enstatite','water ice','forsterite','dolomite'],line=[0,0,0,0,0,0,0,0],colors=[0,125,220,35,150,205,95,180]
+
+;mystopps
+
+
+
+
+
+
+;modoliv = ck_modbb(oliv,tin=60.0,tout=30.0,index=0.5,n0=4e-2,r0=1e15,distance=910,grainsize=0.1,steps=10)
+;modfe = ck_modbb(fe,tin=130.0,tout=120.0,index=0.5,n0=1.7e-3,r0=1e15,distance=910,grainsize=0.1,steps=10)
+;modhot = ck_modbb(oliv,tin=120.0,tout=110.0,index=0.5,n0=6.8e-5,r0=1e15,distance=910,grainsize=0.1,steps=10)
+;modcoli = ck_modbb(qcoli,tin=70.0,tout=40.0,index=0.5,n0=5.3e-9,r0=1e15,distance=910,grainsize=0.1,steps=10)
+;modcen = ck_modbb(cen,tin=80.0,tout=55.0,index=0.5,n0=2.6e-9,r0=1e15,distance=910,grainsize=0.1,steps=10)
+;moddol = ck_modbb(dol,tin=45.0,tout=30.0,index=0.5,n0=4.5e-8,r0=1e15,distance=910,grainsize=0.1,steps=10)
+;moddiop = ck_modbb(qdiop,tin=80.0,tout=45.0,index=0.5,n0=6.1e-10,r0=1e15,distance=910,grainsize=0.1,steps=10)
+;modice = ck_modbb(qice,tin=45.0,tout=25.0,index=0.5,n0=5.6e-3,r0=1e15,distance=910,grainsize=0.1,steps=10)
+;modcalcite = ck_modbb(qcalcite,tin=45.0,tout=30.0,index=0.5,n0=2.9e-8,r0=1e15,distance=910,grainsize=0.1,steps=10)
+  
+amorf80 = multiply(oliv,sh_bb(oliv,80,0))
+forstk80 = multiply(qcoli,sh_bb(qcoli,80,0))
+
+amorf = amorf80
+forstk = forstk80
+ 
+amorf.data.flux= amorf80.data.flux*1e-8
+forstk.data.flux = forstk80.data.flux*2.9e-10
+
+totje = sh_calcaar(amorf,add=forstk)
+
+pl,ngc100,xra=[25,45],ps=-3
+pl,totje,/opl,ps=-3
