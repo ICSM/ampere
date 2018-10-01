@@ -16,4 +16,23 @@ import pyphot
 
 
 if __name__=="__main__":
-    
+    """ Set up the inputs for the model """
+    """ wavelength grid """
+    wavelengths = 10**np.linspace(0.,1.9, 2000)
+
+    """ Choose some model parameters  """
+
+
+    """ Initialise the model  """
+
+
+    """ Get a test spectrum out of the model """
+
+
+    """ get synthetic photometry and spectra """
+
+
+    """ (optionally) add some noise """
+
+
+    """ now set up ampere to try and fit the same stuff """
