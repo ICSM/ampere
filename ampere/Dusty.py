@@ -1,9 +1,9 @@
 # I have started with version 4.2 of dusty (https://github.com/ivezic/dusty)
 
 # the model is called in the following way:
-# dusty model.inp (the name is actually flexible)
+# dusty model.inp (the name is actually flexible, the extension is not)
 
-# this generates a number of output in the current directory:
+# this generates a number of outputs in the current directory:
 # model.NNN = runtime messages for each model iteration
 # model.out = summery of the model inputs and its outputs (like A_V and dust temps)
 # model.rNNN = radial profiles for each model iteration
@@ -284,19 +284,30 @@ class DustySpectrum(AnalyticalModel):
         # upto 10 black_body functions (BLACK_BODY)
         # with
         #   Number of BB = N
-        #   Temperatures = T1, TN K
-        #   Luminosities = 
-        # engelkd_marengo
-        # power_law
-        # file_lambda_f_lambda
-        # file_f_lambda
-        # file_f_nu
-# 
-#       	        Spectral shape = black_body  
-#                 Number of BB = 1
-#                 Temperature = 5000 K 
+        #   Temperatures = T1 , ... , TN K
+        #   Luminosities = L1 , ... , LN  
+
+        # engelkd_marengo (ENGELKE_MARENGO)
+        # with
+        #    Temparature = T K
+        #    SiO absorption depth = ppp percents
         
-            
+        # broken power law (POWER_LAW)
+        # with
+        #   N = M
+        #   lambda = l0, ... lM
+        #   k = k0, ..., K(M-1)
+        # outside of the range (l0 ... lM)  = 0
+        # the slope is lambda^-kN between l(N-1) and l(N)
+
+        # FILE_LAMBDA_F_LAMBDA
+        # filename = ""
+
+        # FILE_F_LAMBDA
+        # filename = ""
+
+        # FILE_F_NU
+        # filename = ""
 
         bb = blackbody.blackbody_nu(freq,t).to(u.Jy / u.sr).value
         bb = bb / dist**2
