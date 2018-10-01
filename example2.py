@@ -25,35 +25,26 @@ if __name__=="__main__":
     """ Read in some data """
     
     """ Read in spectrum """
-
-    spec = Spectrum.fromFile(filename,format='SWS-AAR')
     filename = ampere.__file__.strip('__init__.py')+'Testdata/Ciskas ISO Spectrum from 15 years ago'
     print(filename)
-
-    """ Read in opacities """
-
-    opac = Spectrum.fromFile(filename,format='User-defined')
-	filename = ampere.__file__.strip('__init__.py')+'Testdata/Ciskas opacities from 15 years ago'
-    print(filename)
-
-    """ Resample opacities to model wavelength grid """
-
-    for i in spec:
-        #print(i)
-        i.value = spectres(i.wavelength, modwaves, opac.Qabs)
-        #print(i)
+    spec = Spectrum.fromFile(filename,format='SWS-AAR')
 
     """ Define the model """
 
-    modwaves = 10**np.linspace(2.,100., 2000) #2-100 um spectrum w/ 2000 data points
+    modwaves = 10**np.linspace(2.,200., 2000) #2-200 um spectrum w/ 2000 data points
     Tbb = 45.0 #cold component from Kemper et al. 2002 is 30-60K, warm component is 100-118K
     distance = 140.0*u.pc #assume 140pc distance
     area = (10.*u.au.to(u.m)**2)#.value)^2
 	
     """ Generate model """
     #modfied blackbody multiplied by sum of opacties
-    model = OpacitySpectrum(modwaves, #irs.wavelength,flatprior=True,
+    opacities = ['ss_Dorschneretal1995_Olivine_0.10.q',
+    			 'ss_Jaegeretal1998_Enstatite_0.10.q',
+    			 'ss_Jaegeretal1998_Forsterite_0.10.q'] # list of opacity spectra to be used in modelling
+    relativeAbundances=[0.01,0.01,0.01]#initial guess
+    model = OpacitySpectrum(modwaves,
                             normWave = 1., sigmaNormWave = 1.,
+                            opacityFileList=opacities,
                             redshift = False, lims = np.array([[100.,200.],
                                                                [30.,60.],
                                                                [-2.,2.],
@@ -108,7 +99,7 @@ if __name__=="__main__":
             
     #    ax.plot(irs.wavelength, model(opt.samples[i,:]), '-', alpha = 0.1)
     print(nneg)
-    for i in irs:
+    for i in spec:
         ax.plot(i.wavelength, i.value, '-','b')
     fig2 = corner.corner(opt.samples)#,labels=opt.labels)
     plt.show()
