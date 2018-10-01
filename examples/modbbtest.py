@@ -63,3 +63,45 @@ if __name__=="__main__":
 
 
     """ now set up ampere to try and fit the same stuff """
+    photometry = Photometry(filrerName=filterName, value=modSed, uncertainty=0.1*modSed, photUnits='Jy', libname=libname)
+    photometry.reloadFilters(wavelengths)
+    
+    optimizer = EmeceeSearch(model=model, data=[photometry], nwalkers=100)
+
+    optimzer.optimise(nsamples=10, burnin=0)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
