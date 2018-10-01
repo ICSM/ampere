@@ -25,9 +25,9 @@ if __name__=="__main__":
     """ Read in some data """
     
     """ Read in spectrum """
-    filename = ampere.__file__.strip('__init__.py')+'Testdata/Ciskas ISO Spectrum from 15 years ago'
+    filename = 'Users/jonty/Documents/GitHub/ampere/examples/NGC6302/NGC6302_100.tab'
     print(filename)
-    spec = Spectrum.fromFile(filename,format='SWS-AAR')
+    spec = Spectrum.fromFile(filename,format='User-defined')
 
     """ Define the model """
 
@@ -45,6 +45,7 @@ if __name__=="__main__":
     model = OpacitySpectrum(modwaves,
                             normWave = 1., sigmaNormWave = 1.,
                             opacityFileList=opacities,
+                            weights=relativeAbundances,
                             redshift = False, lims = np.array([[100.,200.],
                                                                [30.,60.],
                                                                [-2.,2.],

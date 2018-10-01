@@ -115,7 +115,7 @@ class PowerLawAGN(AnalyticalModel):
 
 class OpacitySpectrum(AnalyticalModel):
     def __init__(self, wavelengths, flatprior=True,
-                 normWave = 1., sigmaNormWave = 1.,opacityFileList=opacities,
+                 normWave = 1., sigmaNormWave = 1.,opacityFileList=None,weights=None,
                  redshift = False, lims=np.array([[0,1e6],[-100,100],[-10,10],[0,np.inf]]),
                  **kwargs):
         self.wavelength = wavelengths #grid of observed wavelengths to calculate BB for
@@ -141,6 +141,7 @@ class OpacitySpectrum(AnalyticalModel):
             f = interpolate.interp1d(tempWl, tempOpac, assume_sorted = False)
             opacity_array[:,j] = f(self.restwaves)#wavelengths)
         self.opacity_array = opacity_array
+        self.weights = weights
         self.nSpecies = nSpecies
         self.redshift = redshift
         if redshift:
@@ -158,7 +159,7 @@ class OpacitySpectrum(AnalyticalModel):
             dist = dist*u.pc.to(u.m)
             freq = const.c.value / (self.wavelength*1e-6)
         #Simple bug catches for inputs to opacity spectrum
-        if len(weights) != self.nSpecies :
+        if len(self.weights) != self.nSpecies :
             print('Number of weights must be same as number of species')
         #if scale <= 0.0:
         #    print('Scale factor must be positive and non-zero.') #not relevant - scale is a log
