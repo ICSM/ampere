@@ -1,7 +1,7 @@
 from __future__ import print_function
 
 import numpy as np
-import cPickle
+import pickle
 
 
 class BaseSearch(object):
@@ -50,11 +50,11 @@ class BaseSearch(object):
     def sampler(self, **kwargs):
         raise NotImplementedError()
 
-    def save(self, filename, pickle=True,**kwargs):
+    def save(self, filename, pickle_it=True,**kwargs):
         ''' A method to save the object to a file. For the moment, this only supports pickling '''
-        if not pickle:
+        if not pickle_it:
             raise NotImplementedError('Only pickling is supported at this time')
         with open(filename, 'wb') as f:
-            cPickle.dump(self.__dict__, f)
+            pickle.dump(self.__dict__, f)
 
     

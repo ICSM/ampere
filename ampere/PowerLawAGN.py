@@ -112,3 +112,78 @@ class PowerLawAGN(AnalyticalModel):
                 return -np.inf
         else:
             raise NotImplementedError()
+
+class OpacitySpectrum(AnalyticalModel):
+    def __init__(self, wavelengths, flatprior=True,
+                 normWave = 1., sigmaNormWave = 1.,opacityFileList=opacities,
+                 redshift = False, lims=np.array([[0,1e6],[-100,100],[-10,10],[0,np.inf]]),
+                 **kwargs):
+        self.wavelength = wavelengths #grid of observed wavelengths to calculate BB for
+        #self.freq = const.c.value / (wavelengths*1e-6) #unit conversions will be required...
+        self.flatprior = flatprior #whether to assume flat priors
+        self.normWave = normWave #wavelength at which opacity is normalised
+        self.sigmaNormWave = sigmaNormWave #value to which the opacity is normalised at wavelength normWave
+        self.lims = lims #in same order as inputs to __call__
+        print(self.lims)
+        #Define opacities for use in model calculation
+        import os
+        from scipy import interpolate
+        opacityDirectory = os.path.dirname(__file__)+'/Opacities/'
+        opacityFileList = opacities
+        #opacityFileList = np.array(opacityFileList)[['.q' in zio for zio in opacityFileList]] # Only files ending in .q are valid (for now)
+        nSpecies = opacities.__len__()
+        opacity_array = np.zeros((wavelengths.__len__(), nSpecies))
+        for j in range(nSpecies):
+            tempData = np.loadtxt(opacityDirectory + opacityFileList[j], comments = '#')
+            print(opacityFileList[j])
+            tempWl = tempData[:, 0]
+            tempOpac = tempData[:, 1]
+            f = interpolate.interp1d(tempWl, tempOpac, assume_sorted = False)
+            opacity_array[:,j] = f(self.restwaves)#wavelengths)
+        self.opacity_array = opacity_array
+        self.nSpecies = nSpecies
+        self.redshift = redshift
+        if redshift:
+            from astropy.cosmology import FlatLambdaCDM
+            self.cosmo=FlatLambdaCDM(H0=70, Om0=0.3)
+
+    def __call__(self, t = 1., scale = 1., index = 1., dist=1.,
+                 weights=np.array([0.]),
+                 **kwargs):
+        if self.redshift:
+            z = dist
+            dist = cosmo.luminosity_distance(z).to(u.m)
+            freq = const.c.value / ((self.wavelength/(1.+z))*1e-6)
+        else:
+            dist = dist*u.pc.to(u.m)
+            freq = const.c.value / (self.wavelength*1e-6)
+        #Simple bug catches for inputs to opacity spectrum
+        if len(weights) != self.nSpecies :
+            print('Number of weights must be same as number of species')
+        #if scale <= 0.0:
+        #    print('Scale factor must be positive and non-zero.') #not relevant - scale is a log
+        if t <= 0.0:
+            print('Temperature must be positive and in Kelvin.')
+        bb = blackbody.blackbody_nu(freq,t).to(u.Jy / u.sr).value
+        bb = bb / dist**2
+        bb = bb * 10**(scale) * self.sigmaNormWave * ((self.wavelength / self.normWave)**index)
+        #Subtract the sum of opacities from the blackbody continuum to calculate model spectrum
+        fModel = bb * (1.0 - (np.matmul(self.opacity_array, weights)))
+        self.modelFlux = fModel
+        #return (blackbody.blackbody_nu(const.c.value*1e6/self.wavelengths,t).to(u.Jy / u.sr).value / (dist_lum.value)**2 * kappa230.value * ((wave/230.)**betaf) * massf) #*M_sun.cgs.value
+
+    def lnprior(self, theta, **kwargs):
+        if self.flatprior:
+            if (self.lims[0,0] < theta[0] < self.lims[0,1]) and \
+               (self.lims[1,0] < theta[1] < self.lims[1,1]) and \
+               (self.lims[2,0] < theta[2] < self.lims[2,1]) and \
+               (self.lims[3,0] < theta[3] < self.lims[3,1]) and \
+                np.sum(10**theta[4:]) <= 1. and np.all(theta[4:] < 0.): 
+                return 0
+            else:
+                return -np.inf
+        else:
+            raise NotImplementedError()
+
+
+
