@@ -111,12 +111,15 @@ class EmceeSearch(BaseSearch):
         #print(lp)
         return lp #return 0
 
-    def optimise(self, nsamples = None, burnin = None, guess = None, **kwargs):
-        if guess is 'None':
+    def optimise(self, nsamples = None, burnin = None, guess = None, noguess=False, **kwargs):
+        if guess is 'None' and not noguess:
             guess = [np.random.randn(np.int(self.npars)) for i in range(self.nwalkers)]
         self.nsamp = nsamples
         self.burnin = burnin
-        self.sampler.run_mcmc(guess, nsamples)
+        if noguess:
+            self.sampler.run_mcmc(nsamples)
+        else:
+            self.sampler.run_mcmc(guess, nsamples)
         self.allSamples = self.sampler.chain
         self.samples = self.sampler.chain[:, self.burnin:, :].reshape((-1, self.npars))
         #pass
@@ -137,6 +140,7 @@ class EmceeSearch(BaseSearch):
             #                     *zip(np.percentile(self.samples[:,i], [16, 50, 84])))#,
                                                     #axis=0)))
             #      )
+            print("Median and confidence intervals for parameters in order:")
             print(res[i])
             
 
@@ -145,7 +149,7 @@ class EmceeSearch(BaseSearch):
         print(np.max(self.sampler.lnprobability))
         row_ind, col_ind = np.unravel_index(np.argmax(self.sampler.lnprobability.ravel), self.sampler.lnprobability.shape)
         bestPars = self.sampler.chain[row_ind, col_ind, :]
-        print(bestPars)
+        print("MAP Solution: ", bestPars)
         ''' Now produce some diagnostic plots '''
 
         ''' A plot of the walkers' sampling history '''
@@ -178,7 +182,7 @@ class EmceeSearch(BaseSearch):
         fig3.savefig("lnprob.png")
 
 
-        '''finally, we want to look at the correlation/covariance matrices for the spectra '''
+        '''finally, we want to look at the correlation/covariance matrices for the spectra, if any '''
         fig4,(ax0,ax1) = plt.subplots(1,2)
         #for d in self.dataSet[1:]:
         d=self.dataSet[1]

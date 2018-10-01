@@ -30,18 +30,35 @@ if __name__=="__main__":
     model = PowerLawAGN(modwaves, redshift=0.058)
     phot.reloadFilters(modwaves)
     dataSet = [phot]
-    for s in irs:
-        dataSet.append(s)
-    for s in dataSet:
-        print(s)
+    #for s in irs:
+    #    dataSet.append(s)
+    #for s in dataSet:
+    #    print(s)
 
     opt = EmceeSearch(model = model, data = dataSet, nwalkers = 200)
 
     print(opt.npars)
 
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+    for i in irs:
+        ax.plot(i.wavelength, i.value, '-',color='blue')
+    ax.plot(phot.wavelength, phot.value, 'o',color='blue')
+    ax.set_ylim(0., 1.5*np.max([np.max(i.value) for i in dataSet]))
+    fig.savefig("sed_test.png")
+
+    model(-2.00,0.50,-1.30,
+                    -9.99,-0.29,-0.39,
+                    -9.99)
+    modspec = model.modelFlux
+    print(modspec)
+    ax.plot(modwaves,modspec)
+    plt.show()
+    exit()
+    
     pos = [
            [
-               -2., 0.5, -1.3, -10., -0.289, -0.390, -10., 1., 0.5, 1., 1., 0.5, 1.
+               -2., 0.5, -1.3, -10., -0.289, -0.390, -10.#, 1., 0.5, 1., 1., 0.5, 1.
                #20 + np.random.randn() for i in range(np.int(opt.npars))
            ]
            + np.random.randn(np.int(opt.npars))/1e3 for j in range(opt.nwalkers)
@@ -100,7 +117,7 @@ if __name__=="__main__":
         #    repeat = False
     print("exiting loop, moving to production run with a = ",acrate)
     #exit()
-    opt.optimise(nsamples = 500, burnin=100) #burnin should discard all steps taken before exiting the loop
+    opt.optimise(nsamples = 500, burnin=100, guess = opt.sampler.chain[:, -1, :]) #burnin should discard all steps taken before exiting the loop
     
     a = 1. - np.sum(10**opt.samples[2:7],axis=0)
     b = np.percentile(a, [16, 50, 84])
@@ -116,11 +133,11 @@ if __name__=="__main__":
     opt.postProcess()
     for i in range(0,opt.samples.shape[0],1000):
         #print(opt.samples[i,:])
-        if opt.samples[i,0] > 0.:
-            opt.model(opt.samples[i,0],opt.samples[i,1],*opt.samples[i,2:7])
-            ax.plot(modwaves,opt.model.modelFlux, '-', color='black', alpha=0.05) #irs.wavelength
-        else:
-            nneg += 1
+        #if opt.samples[i,0] > 0.:
+        opt.model(opt.samples[i,0],opt.samples[i,1],*opt.samples[i,2:7])
+        ax.plot(modwaves,opt.model.modelFlux, '-', color='black', alpha=0.05) #irs.wavelength
+        #else:
+        #    nneg += 1
             
     #    ax.plot(irs.wavelength, model(opt.samples[i,:]), '-', alpha = 0.1)
     print(nneg)
