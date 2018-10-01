@@ -34,14 +34,30 @@ if __name__=="__main__":
 
 
     """ Get a test spectrum out of the model """
-    #model(t_in, scale_in, index_in, distance)
-    #model_flux = model.modelFlux
-    model_flux = model(t_in, scale_in, index_in, distance).modelFlux #Do the two lines above with just one line here. 
+    model(t_in, scale_in, index_in, distance)
+    model_flux = model.modelFlux
+    #model_flux = model(t_in, scale_in, index_in, distance).modelFlux #Do the two lines above with just one line here. 
 
 
     """ get synthetic photometry and spectra """
-    
+    filterName = ['WISE_RSR_W4', 'WISE_RSR_W3', 'WISE_RSR_W2', 'WISE_RSR_W1', 'SPITZER_MIPS_24', 'SPITZER_MIPS_70'] #
 
+    #libDir = pyphot.__file__.strip('__init__.py')+'libs/'
+    #libName = libDir + 'synphot_nonhst.hd5' #PhIReSSTARTer.hd5'
+
+    libDir = '/home/peter/pythonlibs/ampere/ampere/'
+    libname = libDir + 'ampere_allfilters.hd5'
+    filterLibrary = pyphot.get_library(fname=libname)
+    filters = filterLibrary.load_filters(filterName, interp=True, lamb = wavelengths*pyphot.unit['micron'])
+    filts, modSed = pyphot.extractPhotometry(wavelengths,
+                                             model_flux,
+                                             filters,
+                                             Fnu = True,
+                                             absFlux = False,
+                                             progress=False
+            )
+
+    print(filts,modSed)
 
     """ (optionally) add some noise """
 
