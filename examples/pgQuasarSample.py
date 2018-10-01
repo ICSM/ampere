@@ -100,7 +100,7 @@ if __name__=="__main__":
         #    repeat = False
     print("exiting loop, moving to production run with a = ",acrate)
     #exit()
-    opt.optimise(nsamples = 2000, burnin=1000) #burnin should discard all steps taken before exiting the loop
+    opt.optimise(nsamples = 500, burnin=100) #burnin should discard all steps taken before exiting the loop
     
     a = 1. - np.sum(10**opt.samples[2:7],axis=0)
     b = np.percentile(a, [16, 50, 84])
