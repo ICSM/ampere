@@ -150,6 +150,7 @@ class OpacitySpectrum(AnalyticalModel):
         opacityFileList = np.array(opacityFileList)
         #opacityFileList = np.array(opacityFileList)[['.q' in zio for zio in opacityFileList]] # Only files ending in .q are valid (for now)
         nSpecies = opacityFileList.__len__()
+        #print(opacityFileList,nSpecies)
         opacity_array = np.zeros((wavelengths.__len__(), nSpecies))
         for j in range(nSpecies):
             tempData = np.loadtxt(opacityDirectory + opacityFileList[j], comments = '#')
@@ -164,7 +165,9 @@ class OpacitySpectrum(AnalyticalModel):
     def __call__(self, t = 1., scale = 1., index = 1., dist=1.,
                  *args,
                  **kwargs):
-        self.weights = np.append(10**np.array(args),1.-np.sum(10**np.array(args)))
+        print(args)
+        relativeAbundances = np.append(np.array(args),1.-np.sum(np.array(args))) #np.append(10**np.array(args),1.-np.sum(10**np.array(args)))
+        #print(relativeAbundances)
         if self.redshift:
             z = dist
             dist = cosmo.luminosity_distance(z).to(u.m)
@@ -173,7 +176,7 @@ class OpacitySpectrum(AnalyticalModel):
             dist = dist*u.pc.to(u.m)
             freq = const.c.value / (self.wavelength*1e-6)
         #Simple bug catches for inputs to opacity spectrum
-        if len(self.weights) != self.nSpecies :
+        if len(relativeAbundances) != self.nSpecies :
             print('Number of weights must be same as number of species')
         #if scale <= 0.0:
         #    print('Scale factor must be positive and non-zero.') #not relevant - scale is a log
@@ -183,7 +186,7 @@ class OpacitySpectrum(AnalyticalModel):
         bb = bb / dist**2
         bb = bb * 10**(scale) * self.sigmaNormWave * ((self.wavelength / self.normWave)**index)
         #Subtract the sum of opacities from the blackbody continuum to calculate model spectrum
-        fModel = bb * (1.0 - (np.matmul(self.opacity_array, self.weights)))
+        fModel = bb * (1.0 - (np.matmul(self.opacity_array, relativeAbundances)))
         self.modelFlux = fModel
         #return (blackbody.blackbody_nu(const.c.value*1e6/self.wavelengths,t).to(u.Jy / u.sr).value / (dist_lum.value)**2 * kappa230.value * ((wave/230.)**betaf) * massf) #*M_sun.cgs.value
 
