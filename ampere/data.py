@@ -197,6 +197,7 @@ class Photometry(Data):
         #try replacing colons and / with _
         #print(l)
         newTry = [filt.replace(':','_').replace('/','_').replace('WISE','WISE_RSR').replace('Spitzer','SPITZER') for filt in self.filterName]
+        newTry = [filt.replace('RSR_RSR','RSR') for filt in newTry]
         print(newTry)
         #newTry = [filt.replace('WISE','WISE_RSR').replace( for filt in newTry]
         for i in range(len(l)):
@@ -204,7 +205,7 @@ class Photometry(Data):
             if l[i]:
                 self.filterName[i] = newTry[i]
         self.filterMask = np.array(l)
-        #print(l,self.filterMask.__repr__())
+        print(l,self.filterMask.__repr__())
         #print(np.logical_not(np.array(l)))
         if not np.all(l):
             print("Some filters were not recognised by pyphot. The following filters will be ignored:")

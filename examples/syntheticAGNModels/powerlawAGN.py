@@ -21,23 +21,15 @@ if __name__=="__main__":
     wavelengths = 10**np.linspace(0.,1.9, 2000)
 
     """ Choose some model parameters  """
-    t_in = 200. #units = K (or 300K)
-    scale_in = 1.
-    index_in = 0.
-    distance = 1.
-    lims_in=np.array([ [100., 300.], [0., 2.], [-5, 5], [0.9, 1.1]
-                  ])
+    redshift=None
+    multiplicationFactor=-2.#0.0
+    powerLawIndex=0.5 #1.0
+    relativeAbundances=[-1.30,-9.99,-0.29,-0.39,-9.99]#[-10.,-10.,-0.5,-0.16509,-10.]
 
-
-    """ Initialise the model  """
-    model = SingleModifiedBlackBody(wavelengths, lims=lims_in)
-
-
-    """ Get a test spectrum out of the model """
-    model(t_in, scale_in, index_in, distance)
+    model = PowerLawAGN(wavelengths,redshift=0.5)
+    #exit()
+    model(multiplicationFactor, powerLawIndex, *relativeAbundances)
     model_flux = model.modelFlux
-    #model_flux = model(t_in, scale_in, index_in, distance).modelFlux #Do the two lines above with just one line here. 
-
 
     """ get synthetic photometry and spectra """
     filterName = np.array(['WISE_RSR_W4', 'WISE_RSR_W3', 'WISE_RSR_W2', 'WISE_RSR_W1', 'SPITZER_MIPS_24', 'SPITZER_MIPS_70']) #
@@ -61,12 +53,12 @@ if __name__=="__main__":
 
     """ (optionally) add some noise """
     print(modSed)
-    modSed = modSed + np.random.randn(6) * 0.1 * modSed
-    print(modSed)
+    #modSed = modSed + np.random.randn(6) * 0.1 * modSed
+    #print(modSed)
     #exit()
 
     """ now we'll create a synthetic spectrum from the model"""
-    dataDir = os.getcwd() + '/PGQuasars/PG1011-040/'
+    dataDir = os.getcwd() + '/../PGQuasars/PG1011-040/'
     specFileExample = 'cassis_yaaar_spcfw_14191360t.fits'
     irsEx = Spectrum.fromFile(dataDir+specFileExample,format='SPITZER-YAAAR')
     spec0 = spectres(irsEx[0].wavelength,wavelengths,model_flux)
@@ -81,7 +73,7 @@ if __name__=="__main__":
     
     optimizer = EmceeSearch(model=model, data=[photometry,spec0,spec1], nwalkers=100)
 
-    optimizer.optimise(nsamples=1000, burnin=500, guess=[[200, 0.5, 0.5, 1.0, 1.0, 1.0, 1.0, 1.0 ,1.0, 1.0] + np.random.rand(10)*[10,1,1,0.1, 1,1,1,1,1,1] for i in range(optimizer.nwalkers)])
+    optimizer.optimise(nsamples=2000, burnin=1000, guess=[[0.0, 1.0, -10, -10, -0.5, -0.2, -10., 1.0, 1.0, 1.0, 1.0 ,1.0, 1.0] + np.random.rand(13)*[1,1,1,1,0.2,0.2, 1,1,1,1,1,1,1] for i in range(optimizer.nwalkers)])
 
     optimizer.postProcess()
 
@@ -92,54 +84,19 @@ if __name__=="__main__":
     print(np.max(optimizer.samples, axis=0))
     print(np.min(optimizer.samples, axis=0))
     nneg=0
-    optimizer.postProcess()
+    #optimizer.postProcess()
     for i in range(0,optimizer.samples.shape[0],1000):
         #print(opt.samples[i,:])
         #if opt.samples[i,0] > 0.:
         optimizer.model(optimizer.samples[i,0],optimizer.samples[i,1],*optimizer.samples[i,2:7])
-        ax.plot(modwaves,optimizer.model.modelFlux, '-', color='black', alpha=0.05) #irs.wavelength
+        ax.plot(wavelengths,optimizer.model.modelFlux, '-', color='black', alpha=0.05) #irs.wavelength
         #else:
         #    nneg += 1
             
     #    ax.plot(irs.wavelength, model(opt.samples[i,:]), '-', alpha = 0.1)
     print(nneg)
-    for i in data[1:]:
+    for i in [spec0,spec1]:
         ax.plot(i.wavelength, i.value, '-',color='blue')
     ax.plot(photometry.wavelength, photometry.value, 'o',color='blue')
-    ax.set_ylim(0., 1.5*np.max([np.max(i.value) for i in dataSet]))
+    ax.set_ylim(0., 1.5*np.max([np.max(i.value) for i in [photometry, spec0, spec1]]))
     fig.savefig("seds.png")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

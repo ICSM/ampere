@@ -31,9 +31,11 @@ if __name__=="__main__":
     print(filename)
     #spec = Spectrum.fromFile(filename,format='User-Defined',filetype='text')
     sws = ascii.read(filename,header_start=0,data_start=2)
-    unc = Column(0.05*sws['Flux'].data,name='Uncertainty')
+    unc = Column(0.05*np.abs(sws['Flux'].data),name='Uncertainty')
     sws.add_column(unc,index=2)
-    #print(spec)
+
+    spec = Spectrum(wavelength=sws['Wavelength'].data,value=sws['Flux'].data,uncertainty=sws['Uncertainty'].data,fluxUnits='Jy',bandUnits='um')
+    
     """ Define the model """
 
     modwaves = 10**np.linspace(0.3,2.3, 2000) #2-200 um spectrum w/ 2000 data points
@@ -46,7 +48,10 @@ if __name__=="__main__":
     opacities = ['ss_Dorschneretal1995_Olivine_0.10.q',
     			 'ss_Hofmeisteretal2003_Periclase_0.10.q',
     			 'ss_Jaegeretal1998_Forsterite_0.10.q'] # list of opacity spectra to be used in modelling
-    relativeAbundances=[0.01,0.01,0.01]#initial guess
+    relativeAbundances=np.array([0.01,0.01,0.00])#initial guess
+    nSpecies = len(relativeAbundances)
+    relativeAbundances[nSpecies-1] = 1.0 - np.sum(relativeAbundances[0:nSpecies-1])
+    print(relativeAbundances,relativeAbundances.shape)
     mdl = OpacitySpectrum(modwaves,
                             normWave = 1., sigmaNormWave = 1.,
                             opacityFileList=opacities,
@@ -60,8 +65,8 @@ if __name__=="__main__":
 
     """ Connect the dots: """
     """ Hook it up to an optimiser """
-    
-    opt = EmceeSearch(model = mdl, data = sws, nwalkers = 100) #introspection is used inside the optimiser to determine the number of parameters that each part of the model has
+
+    opt = EmceeSearch(model = mdl, data = [spec], nwalkers = 100) #introspection is used inside the optimiser to determine the number of parameters that each part of the model has
 
     """ if you want, overload the default priors with a new function """
     def lnprior(self, inputs, **kwargs):
@@ -73,7 +78,7 @@ if __name__=="__main__":
     """ Run it """
     pos = [
            [
-               150., 45., 0., 3., 1., 0.5, 1., 1., 0.5, 1.
+               45., 30., 0., 910., 1., 0.5, 1., 0.5, 1.
                #20 + np.random.randn() for i in range(np.int(opt.npars))
            ]
            + np.random.randn(np.int(opt.npars)) for j in range(opt.nwalkers)
@@ -96,6 +101,13 @@ if __name__=="__main__":
     print(np.max(opt.samples, axis=0))
     print(np.min(opt.samples, axis=0))
     nneg=0
+
+    ax.set_ylim(0.1,1000.0)
+    ax.set_yscale('log')
+    ax.set_ylabel('Flux (Jy)')
+    ax.set_xlim(2.0,200.0)
+    ax.set_xlabel('Wavelength (microns)')
+
     for i in range(0,opt.samples.shape[0],100):
         #print(opt.samples[i,:])
         if opt.samples[i,0] > 0.:
@@ -106,8 +118,8 @@ if __name__=="__main__":
             
     #    ax.plot(irs.wavelength, model(opt.samples[i,:]), '-', alpha = 0.1)
     print(nneg)
-    for i in spec:
-        ax.plot(i.wavelength, i.value, '-','b')
+    #for i in range(0,len(spec.value)):
+    ax.plot(spec.wavelength, spec.value, '-','b')
     fig2 = corner.corner(opt.samples)#,labels=opt.labels)
     plt.show()
 

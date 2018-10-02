@@ -82,12 +82,17 @@ class PowerLawAGN(AnalyticalModel):
             print(opacityFileList[j])
             tempWl = tempData[:, 0]
             tempOpac = tempData[:, 1]
+            #I think we need to put in the continuum subtraction here as well.
+            #Hopefully Sundar can help us out with this.
             f = interpolate.interp1d(tempWl, tempOpac, assume_sorted = False)
             opacity_array[:,j] = f(self.restwaves)#wavelengths)
         self.wavelength = wavelengths
         self.opacity_array = opacity_array
         self.nSpecies = nSpecies
         self.redshift = redshift
+        print(self.restwaves)
+        print(self.wavelength)
+        print(self.redshift)
         self.npars = nSpecies - 1 + 2 #there are two parameters for the continuum, then we need n-1 abundances
         
     def __call__(self,
@@ -99,14 +104,14 @@ class PowerLawAGN(AnalyticalModel):
         if self.redshift is not None:
             waves = self.restwaves
         else:
-            waves = self.wavelengths
+            waves = self.wavelength
         fModel = (np.matmul(self.opacity_array, relativeAbundances)+1)
         fModel = fModel*(waves**powerLawIndex)*(10**multiplicationFactor)
         self.modelFlux = fModel
 
     def lnprior(self, theta, **kwargs):
         if self.flatprior:
-            if np.sum(10**theta[2:]) <= 1. and np.all(theta[2:] < 0.) and -10 < theta[0] < 10. and theta[1] > 0.: #basic physical checks first
+            if np.sum(10**theta[2:]) <= 1. and np.all(theta[2:] < 0.) and -10 < theta[0] < 10. and 1.5 > theta[1] > 0.: #basic physical checks first
                 return 0
             else:
                 return -np.inf
@@ -120,7 +125,7 @@ class OpacitySpectrum(AnalyticalModel):
     Output: model fluxes (modelFlux)'''
 
     def __init__(self, wavelengths, flatprior=True,
-                 normWave = 1., sigmaNormWave = 1.,opacityFileList=None,weights=None,
+                 normWave = 1., sigmaNormWave = 1.,opacityFileList=None,
                  redshift = False, lims=np.array([[0,1e6],[-100,100],[-10,10],[0,np.inf]]),
                  **kwargs):
         #self.wavelength = wavelengths #grid of observed wavelengths to calculate BB for
@@ -153,13 +158,13 @@ class OpacitySpectrum(AnalyticalModel):
             f = interpolate.interp1d(tempWl, tempOpac, assume_sorted = False)
             opacity_array[:,j] = f(self.wavelength)
         self.opacity_array = opacity_array
-        self.weights = weights
         self.nSpecies = nSpecies
-        self.npars = nSpecies - 1 + 2
+        self.npars = nSpecies - 1 + 4
 
     def __call__(self, t = 1., scale = 1., index = 1., dist=1.,
-                 weights=np.array([0.]),
+                 *args,
                  **kwargs):
+        self.weights = np.append(10**np.array(args),1.-np.sum(10**np.array(args)))
         if self.redshift:
             z = dist
             dist = cosmo.luminosity_distance(z).to(u.m)
@@ -178,7 +183,7 @@ class OpacitySpectrum(AnalyticalModel):
         bb = bb / dist**2
         bb = bb * 10**(scale) * self.sigmaNormWave * ((self.wavelength / self.normWave)**index)
         #Subtract the sum of opacities from the blackbody continuum to calculate model spectrum
-        fModel = bb * (1.0 - (np.matmul(self.opacity_array, weights)))
+        fModel = bb * (1.0 - (np.matmul(self.opacity_array, self.weights)))
         self.modelFlux = fModel
         #return (blackbody.blackbody_nu(const.c.value*1e6/self.wavelengths,t).to(u.Jy / u.sr).value / (dist_lum.value)**2 * kappa230.value * ((wave/230.)**betaf) * massf) #*M_sun.cgs.value
 
