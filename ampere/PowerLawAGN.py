@@ -82,12 +82,17 @@ class PowerLawAGN(AnalyticalModel):
             print(opacityFileList[j])
             tempWl = tempData[:, 0]
             tempOpac = tempData[:, 1]
+            #I think we need to put in the continuum subtraction here as well.
+            #Hopefully Sundar can help us out with this.
             f = interpolate.interp1d(tempWl, tempOpac, assume_sorted = False)
             opacity_array[:,j] = f(self.restwaves)#wavelengths)
         self.wavelength = wavelengths
         self.opacity_array = opacity_array
         self.nSpecies = nSpecies
         self.redshift = redshift
+        print(self.restwaves)
+        print(self.wavelength)
+        print(self.redshift)
         self.npars = nSpecies - 1 + 2 #there are two parameters for the continuum, then we need n-1 abundances
         
     def __call__(self,
@@ -99,14 +104,14 @@ class PowerLawAGN(AnalyticalModel):
         if self.redshift is not None:
             waves = self.restwaves
         else:
-            waves = self.wavelengths
+            waves = self.wavelength
         fModel = (np.matmul(self.opacity_array, relativeAbundances)+1)
         fModel = fModel*(waves**powerLawIndex)*(10**multiplicationFactor)
         self.modelFlux = fModel
 
     def lnprior(self, theta, **kwargs):
         if self.flatprior:
-            if np.sum(10**theta[2:]) <= 1. and np.all(theta[2:] < 0.) and -10 < theta[0] < 10. and theta[1] > 0.: #basic physical checks first
+            if np.sum(10**theta[2:]) <= 1. and np.all(theta[2:] < 0.) and -10 < theta[0] < 10. and 1.5 > theta[1] > 0.: #basic physical checks first
                 return 0
             else:
                 return -np.inf
