@@ -160,10 +160,10 @@ class OpacitySpectrum(AnalyticalModel):
         self.opacity_array = opacity_array
         self.weights = weights
         self.nSpecies = nSpecies
-        self.npars = nSpecies - 1 + 2
+        self.npars = nSpecies - 1 + 4
 
     def __call__(self, t = 1., scale = 1., index = 1., dist=1.,
-                 weights=np.array([0.]),
+                 weights=None,
                  **kwargs):
         if self.redshift:
             z = dist
@@ -183,7 +183,7 @@ class OpacitySpectrum(AnalyticalModel):
         bb = bb / dist**2
         bb = bb * 10**(scale) * self.sigmaNormWave * ((self.wavelength / self.normWave)**index)
         #Subtract the sum of opacities from the blackbody continuum to calculate model spectrum
-        fModel = bb * (1.0 - (np.matmul(self.opacity_array, weights)))
+        fModel = bb * (1.0 - (np.matmul(self.opacity_array, self.weights)))
         self.modelFlux = fModel
         #return (blackbody.blackbody_nu(const.c.value*1e6/self.wavelengths,t).to(u.Jy / u.sr).value / (dist_lum.value)**2 * kappa230.value * ((wave/230.)**betaf) * massf) #*M_sun.cgs.value
 
