@@ -114,39 +114,48 @@ class PowerLawAGN(AnalyticalModel):
             raise NotImplementedError()
 
 class OpacitySpectrum(AnalyticalModel):
+    '''Input: fit parameters (multiplicationFactor, powerLawIndex, relativeAbundances), 
+              opacities (opacity_array): q_ij where i = wavelength, j = species
+              wavelength grid from data (wavelengths)
+    Output: model fluxes (modelFlux)'''
+
     def __init__(self, wavelengths, flatprior=True,
                  normWave = 1., sigmaNormWave = 1.,opacityFileList=None,weights=None,
                  redshift = False, lims=np.array([[0,1e6],[-100,100],[-10,10],[0,np.inf]]),
                  **kwargs):
-        self.wavelength = wavelengths #grid of observed wavelengths to calculate BB for
+        #self.wavelength = wavelengths #grid of observed wavelengths to calculate BB for
+        self.redshift = redshift
+        if redshift:
+            from astropy.cosmology import FlatLambdaCDM
+            self.cosmo=FlatLambdaCDM(H0=70, Om0=0.3)
+        if redshift is not None:
+            self.wavelength = wavelengths / (1+redshift)
+        else:
+            self.wavelength = wavelengths
         #self.freq = const.c.value / (wavelengths*1e-6) #unit conversions will be required...
         self.flatprior = flatprior #whether to assume flat priors
         self.normWave = normWave #wavelength at which opacity is normalised
         self.sigmaNormWave = sigmaNormWave #value to which the opacity is normalised at wavelength normWave
         self.lims = lims #in same order as inputs to __call__
-        print(self.lims)
+        #print(self.lims)
         #Define opacities for use in model calculation
         import os
         from scipy import interpolate
         opacityDirectory = os.path.dirname(__file__)+'/Opacities/'
-        opacityFileList = opacities
+        opacityFileList = np.array(opacityFileList)
         #opacityFileList = np.array(opacityFileList)[['.q' in zio for zio in opacityFileList]] # Only files ending in .q are valid (for now)
-        nSpecies = opacities.__len__()
+        nSpecies = opacityFileList.__len__()
         opacity_array = np.zeros((wavelengths.__len__(), nSpecies))
         for j in range(nSpecies):
             tempData = np.loadtxt(opacityDirectory + opacityFileList[j], comments = '#')
-            print(opacityFileList[j])
             tempWl = tempData[:, 0]
             tempOpac = tempData[:, 1]
             f = interpolate.interp1d(tempWl, tempOpac, assume_sorted = False)
-            opacity_array[:,j] = f(self.restwaves)#wavelengths)
+            opacity_array[:,j] = f(self.wavelength)
         self.opacity_array = opacity_array
         self.weights = weights
         self.nSpecies = nSpecies
-        self.redshift = redshift
-        if redshift:
-            from astropy.cosmology import FlatLambdaCDM
-            self.cosmo=FlatLambdaCDM(H0=70, Om0=0.3)
+        self.npars = nSpecies - 1 + 2
 
     def __call__(self, t = 1., scale = 1., index = 1., dist=1.,
                  weights=np.array([0.]),
@@ -185,6 +194,3 @@ class OpacitySpectrum(AnalyticalModel):
                 return -np.inf
         else:
             raise NotImplementedError()
-
-
-

@@ -14,6 +14,8 @@ import os
 
 from astropy import constants as const
 from astropy import units as u
+from astropy.io import ascii
+from astropy.table import Table, Column
 from spectres import spectres
 import pyphot
 
@@ -25,37 +27,41 @@ if __name__=="__main__":
     """ Read in some data """
     
     """ Read in spectrum """
-    filename = 'Users/jonty/Documents/GitHub/ampere/examples/NGC6302/NGC6302_100.tab'
+    filename = './NGC6302/NGC6302_nolines.tab'
     print(filename)
-    spec = Spectrum.fromFile(filename,format='User-defined')
-
+    #spec = Spectrum.fromFile(filename,format='User-Defined',filetype='text')
+    sws = ascii.read(filename,header_start=0,data_start=2)
+    unc = Column(0.05*sws['Flux'].data,name='Uncertainty')
+    sws.add_column(unc,index=2)
+    #print(spec)
     """ Define the model """
 
-    modwaves = 10**np.linspace(2.,200., 2000) #2-200 um spectrum w/ 2000 data points
+    modwaves = 10**np.linspace(0.3,2.3, 2000) #2-200 um spectrum w/ 2000 data points
     Tbb = 45.0 #cold component from Kemper et al. 2002 is 30-60K, warm component is 100-118K
-    distance = 140.0*u.pc #assume 140pc distance
+    distance = 910.0*u.pc #assume 900pc distance from Kemper et al. 2002
     area = (10.*u.au.to(u.m)**2)#.value)^2
 	
     """ Generate model """
     #modfied blackbody multiplied by sum of opacties
     opacities = ['ss_Dorschneretal1995_Olivine_0.10.q',
-    			 'ss_Jaegeretal1998_Enstatite_0.10.q',
+    			 'ss_Hofmeisteretal2003_Periclase_0.10.q',
     			 'ss_Jaegeretal1998_Forsterite_0.10.q'] # list of opacity spectra to be used in modelling
     relativeAbundances=[0.01,0.01,0.01]#initial guess
-    model = OpacitySpectrum(modwaves,
+    mdl = OpacitySpectrum(modwaves,
                             normWave = 1., sigmaNormWave = 1.,
                             opacityFileList=opacities,
                             weights=relativeAbundances,
-                            redshift = False, lims = np.array([[100.,200.],
-                                                               [30.,60.],
+                            redshift = False, lims = np.array([[30.,60.],
+                                                               [10.,40.],
                                                                [-2.,2.],
-                                                               [1.,5.]]
+                                                               [1.,1000.]]
                                                               )
                             )
 
     """ Connect the dots: """
     """ Hook it up to an optimiser """
-    opt = EmceeSearch(model = model, data = spec, nwalkers = 100) #introspection is used inside the optimiser to determine the number of parameters that each part of the model has
+    
+    opt = EmceeSearch(model = mdl, data = sws, nwalkers = 100) #introspection is used inside the optimiser to determine the number of parameters that each part of the model has
 
     """ if you want, overload the default priors with a new function """
     def lnprior(self, inputs, **kwargs):
