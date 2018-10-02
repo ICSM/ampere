@@ -125,7 +125,7 @@ class OpacitySpectrum(AnalyticalModel):
     Output: model fluxes (modelFlux)'''
 
     def __init__(self, wavelengths, flatprior=True,
-                 normWave = 1., sigmaNormWave = 1.,opacityFileList=None,weights=None,
+                 normWave = 1., sigmaNormWave = 1.,opacityFileList=None,
                  redshift = False, lims=np.array([[0,1e6],[-100,100],[-10,10],[0,np.inf]]),
                  **kwargs):
         #self.wavelength = wavelengths #grid of observed wavelengths to calculate BB for
@@ -158,13 +158,13 @@ class OpacitySpectrum(AnalyticalModel):
             f = interpolate.interp1d(tempWl, tempOpac, assume_sorted = False)
             opacity_array[:,j] = f(self.wavelength)
         self.opacity_array = opacity_array
-        self.weights = weights
         self.nSpecies = nSpecies
         self.npars = nSpecies - 1 + 4
 
     def __call__(self, t = 1., scale = 1., index = 1., dist=1.,
-                 weights=None,
+                 *args,
                  **kwargs):
+        self.weights = np.append(10**np.array(args),1.-np.sum(10**np.array(args)))
         if self.redshift:
             z = dist
             dist = cosmo.luminosity_distance(z).to(u.m)

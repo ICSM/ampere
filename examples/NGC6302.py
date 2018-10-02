@@ -78,7 +78,7 @@ if __name__=="__main__":
     """ Run it """
     pos = [
            [
-               150., 45., 0., 3., 1., 0.5, 1., 0.5, 1.
+               45., 30., 0., 910., 1., 0.5, 1., 0.5, 1.
                #20 + np.random.randn() for i in range(np.int(opt.npars))
            ]
            + np.random.randn(np.int(opt.npars)) for j in range(opt.nwalkers)
@@ -101,8 +101,13 @@ if __name__=="__main__":
     print(np.max(opt.samples, axis=0))
     print(np.min(opt.samples, axis=0))
     nneg=0
-    ax.ylim(1.0,10.0)
-    ax.xlim(2.0,200.0)
+
+    ax.set_ylim(0.1,1000.0)
+    ax.set_yscale('log')
+    ax.set_ylabel('Flux (Jy)')
+    ax.set_xlim(2.0,200.0)
+    ax.set_xlabel('Wavelength (microns)')
+
     for i in range(0,opt.samples.shape[0],100):
         #print(opt.samples[i,:])
         if opt.samples[i,0] > 0.:
