@@ -4,6 +4,7 @@ import numpy as np
 import emcee
 from .basesearch import BaseSearch
 from inspect import signature
+from .data import Photometry, Spectrum
 
 
 class EmceeSearch(BaseSearch):
@@ -112,7 +113,7 @@ class EmceeSearch(BaseSearch):
         return lp #return 0
 
     def optimise(self, nsamples = None, burnin = None, guess = None, noguess=False, **kwargs):
-        if guess is 'None' and not noguess:
+        if guess is 'None':# and not noguess:
             guess = [np.random.randn(np.int(self.npars)) for i in range(self.nwalkers)]
         self.nsamp = nsamples
         self.burnin = burnin
@@ -133,6 +134,7 @@ class EmceeSearch(BaseSearch):
 
         '''First find the median and 68% interval '''
         res=[]
+        print("Median and confidence intervals for parameters in order:")
         for i in range(self.npars):
             a = np.percentile(self.samples[:,i], [16, 50, 84])
             res.append([a[1], a[2]-a[1], a[1]-a[0]])
@@ -140,7 +142,6 @@ class EmceeSearch(BaseSearch):
             #                     *zip(np.percentile(self.samples[:,i], [16, 50, 84])))#,
                                                     #axis=0)))
             #      )
-            print("Median and confidence intervals for parameters in order:")
             print(res[i])
             
 
@@ -183,21 +184,30 @@ class EmceeSearch(BaseSearch):
 
 
         '''finally, we want to look at the correlation/covariance matrices for the spectra, if any '''
-        fig4,(ax0,ax1) = plt.subplots(1,2)
-        #for d in self.dataSet[1:]:
-        d=self.dataSet[1]
-        d.cov([res[8][0],res[9][0]])
-            #ax0.set_title('Covariance matrix')
-        im0 = ax0.imshow(np.log10(d.covMat))
+        #fig4,(ax0,ax1) = plt.subplots(1,2)
+        #ax=[ax0, ax1]
+        i=0
+        for d in self.dataSet:
+            if isinstance(d, Photometry):
+                continue
+            elif isinstance(d, Spectrum):
+                i+=1
+                fig, ax = plt.subplots(1,1)
+                #for d in self.dataSet[1:]:
+                #d=self.dataSet[1]
+                d.cov([res[8][0],res[9][0]])
+                #ax0.set_title('Covariance matrix')
+                im = ax.imshow(np.log10(d.covMat))
+                fig.savefig("covMat_"+str(i)+".png")
         #cax0 = divider4.append_axes("right", size="20%", pad=0.05)
         #cbar0 = plt.colorbar(im0, cax=cax0)
-        d=self.dataSet[2]
-        d.cov([res[11][0],res[12][0]])
+        #d=self.dataSet[2]
+        #d.cov([res[11][0],res[12][0]])
             #ax0.set_title('Covariance matrix')
-        im1 = ax1.imshow(np.log10(d.covMat))
+        #im1 = ax1.imshow(np.log10(d.covMat))
         #cax1 = divider4.append_axes("right", size="20%", pad=0.05)
         #cbar1 = plt.colorbar(im1, cax=cax1)
-        fig4.savefig("covMat.png")
+        #fig4.savefig("covMat.png")
         
         pass
 
