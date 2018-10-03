@@ -37,7 +37,7 @@ if __name__=="__main__":
     #libDir = pyphot.__file__.strip('__init__.py')+'libs/'
     #libName = libDir + 'synphot_nonhst.hd5' #PhIReSSTARTer.hd5'
 
-    libDir = '/home/peter/pythonlibs/ampere/ampere/'
+    libDir = '/home/lapofanciullo/Documents/Postdoc/Science/Python_stuff/ampere/ampere/'
     libname = libDir + 'ampere_allfilters.hd5'
     filterLibrary = pyphot.get_library(fname=libname)
     filters = filterLibrary.load_filters(filterName, interp=True, lamb = wavelengths*pyphot.unit['micron'])
