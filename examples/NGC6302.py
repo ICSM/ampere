@@ -101,8 +101,8 @@ if __name__=="__main__":
     print(np.max(opt.samples, axis=0))
     print(np.min(opt.samples, axis=0))
     nneg=0
-    ax.ylim(1.0,10.0)
-    ax.xlim(2.0,200.0)
+    ax.set_ylim(1.0,10.0)
+    ax.set_xlim(2.0,200.0)
     for i in range(0,opt.samples.shape[0],100):
         #print(opt.samples[i,:])
         if opt.samples[i,0] > 0.:
