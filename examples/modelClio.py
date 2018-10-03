@@ -5,10 +5,9 @@
 # An erratum was issued (Gielen et al. 2010, A&A 515, C2), but this seems to
 # be only for the code which contained a bug.
 #
-# The model emission is given by:
+# According to Gielen et al. (2008) the model emission is given by:
 #
-# F_lambda ~ ( sum_i alpha_i * kappa_i ) x ( sum_j beta_j B_lambda(T_j) )
-# Note: this formula as given in the paper is actually not exactly right, see description below!
+# $F_\lambda \propto ( \sum_i \alpha_i \kappa_i ) \times ( \sum_j \beta_j B_{\lambda}(T_j) )$
 #
 # with
 # kappa_i = mass absorption coefficient of dust component i
@@ -16,22 +15,31 @@
 # B_lambda (T_j) = the Planck function at temperature T_j
 # beta_j = the (mass?) fraction of dust at temperature T_j
 #
-# The temperature is assumed to be the independent of grain size and grain shape
+# but inspecting their code and the paper in detail reveals that the model
+# implemented actually reads:
+# $F_\lambda \propto \sum_{j=1}^{\{2,3\}} (( \sum_{i=1}^8 \alpha_i \kappa_i ) \times \beta_j B_{\lambda} (T_j)) + \sum_{k=1}^{\{2,3\}} \beta_k B_{\lambda}(T_k)$ 
+# with the left hand term giving rise to the features, and the right hand term
+# contributing to a continuum only. The temperatures of the two terms are not
+# the same, nor are the distribution over the two temperatures.
+# The mass fractions in each of the dust components is the same for each of the
+# 2 or 3 temperature components on the left hand side.
 #
 # Constraints on the parameters used by Gielen et al. 2008
 # Only two temperature components: j=1 and j=2, between 100 and 1000 K, with
-# their relative fractions
+# their scaling factors: 2 * 2 free parameters for the features and
+# 2 * 2 for the continuum term. 
 # Four silicate species (amorphous and crystalline olivine and pyroxene),
-# each with two dust sizes, and their relative fractions (7 free parameters)
-# Thus we get a total of 7 * 2 (cold and warm) + 1 (relative fraction
-# between cold and warm) = 15 free parameters. 
+# each with two dust sizes, and their relative fractions (7 free parameters).
+#
+# Thus, we arrive at a total of 2*2 * 2 +7 = 15 free parameters, as claimed
+# by Gielen et al. 2008. 
 
 
 import numpy as np
 import ampere
 from ampere.data import Spectrum, Photometry
 from ampere.emceesearch import EmceeSearch
-from ampere.PowerLawAGN import SingleModifiedBlackBody
+from ampere.PowerLawAGN import TripleBlackBodyDust
 from ampere.extinction import CCMExtinctionLaw
 import corner
 import matplotlib.pyplot as plt
@@ -94,7 +102,7 @@ if __name__=="__main__":
     #relativeAbundances=np.array([0.01,0.01])#initial guess
     #nSpecies = len(opacities)-1
 
-    t1comp = SingleModifiedBlackBody(modwaves,
+    mdl = TripleBlackBodyDust(modwaves,
                           normWave = 1., sigmaNormWave = 1.,
                           opacityFileList=opacities,
                           redshift = False, lims = np.array([[0,1e6],
@@ -102,17 +110,6 @@ if __name__=="__main__":
                                                              [-10,10],
                                                              [0,np.inf]])
                             )
-
-    t2comp = SingleModifiedBlackBody(modwaves,
-                          normWave = 1., sigmaNormWave = 1.,
-                          opacityFileList=opacities,
-                          redshift = False, lims = np.array([[0,1e6],
-                                                             [-100,100],
-                                                             [-10,10],
-                                                             [0,np.inf]])
-                            )
-
-  #  mdl = t1comp + t2comp
     
     """ Connect the dots: """
     """ Hook it up to an optimiser """
