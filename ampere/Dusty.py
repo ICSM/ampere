@@ -225,8 +225,7 @@ class DustySpectrum(AnalyticalModel):
             from astropy.cosmology import FlatLambdaCDM
             self.cosmo=FlatLambdaCDM(H0=70, Om0=0.3)
 
-    def __call__(self, t = 1., scale = 1., index = 1., dist=1.,
-                 weights=np.array([0.]),
+    def __call__(self, *arg,
                  **kwargs):
         if self.redshift:
             z = dist
