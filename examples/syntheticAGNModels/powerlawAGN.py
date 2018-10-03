@@ -37,7 +37,7 @@ if __name__=="__main__":
     #libDir = pyphot.__file__.strip('__init__.py')+'libs/'
     #libName = libDir + 'synphot_nonhst.hd5' #PhIReSSTARTer.hd5'
 
-    libDir = '/home/peter/pythonlibs/ampere/ampere/'
+    libDir = ampere.__file__.strip('__init__.py') # '/home/peter/pythonlibs/ampere/ampere/'
     libname = libDir + 'ampere_allfilters.hd5'
     filterLibrary = pyphot.get_library(fname=libname)
     filters = filterLibrary.load_filters(filterName, interp=True, lamb = wavelengths*pyphot.unit['micron'])
@@ -52,7 +52,7 @@ if __name__=="__main__":
     print(filts,modSed)
 
     """ (optionally) add some noise """
-    print(modSed)
+    #print(modSed)
     photunc = 0.1 * modSed
     modSed = modSed + np.random.randn(6) * photunc
     #print(modSed)
@@ -64,30 +64,30 @@ if __name__=="__main__":
     irsEx = Spectrum.fromFile(dataDir+specFileExample,format='SPITZER-YAAAR')
     spec0 = spectres(irsEx[0].wavelength,wavelengths,model_flux)
     spec1 = spectres(irsEx[1].wavelength,wavelengths,model_flux)
-    unc0 = 0.1*spec0
-    unc1 = 0.1*spec1
+    unc0 = 0.01*spec0
+    unc1 = 0.01*spec1
     spec0 = spec0 + np.random.randn(len(spec0))*unc0
     spec1 = spec1 + np.random.randn(len(spec1))*unc1
-    spec0 = Spectrum(irsEx[0].wavelength, spec0, unc0,"um", "Jy")
-    spec1 = Spectrum(irsEx[1].wavelength, spec1, unc1,"um", "Jy")
+    spec0 = Spectrum(irsEx[0].wavelength, spec0, unc0,"um", "Jy",calUnc=0.0025)
+    spec1 = Spectrum(irsEx[1].wavelength, spec1, unc1,"um", "Jy",calUnc=0.0025)
 
     """ now set up ampere to try and fit the same stuff """
     photometry = Photometry(filterName=filterName, value=modSed, uncertainty=photunc, photUnits='Jy', libName=libname)
-    print(photometry.filterMask)
+    #print(photometry.filterMask)
     photometry.reloadFilters(wavelengths)
     
     optimizer = EmceeSearch(model=model, data=[photometry,spec0,spec1], nwalkers=100)
 
-    optimizer.optimise(nsamples=2000, burnin=1000, guess=[[-2.5, .5, -1., -10, -0.5, -0.3, -10., 1.0, 1.0, 1.0, 1.0 ,1.0, 1.0] + np.random.rand(13)*[1,1,1,1,0.2,0.2, 1,1,1,1,1,1,1] for i in range(optimizer.nwalkers)])
+    optimizer.optimise(nsamples=12000, burnin=10000, guess=[[-2.5, .5, -1., -10, -0.5, -0.3, -10., 1.0, 1.0, 1.0, 1.0 ,1.0, 1.0] + np.random.rand(13)*[1,1,1,1,0.2,0.2, 1,1,1,1,1,1,1] for i in range(optimizer.nwalkers)])
 
     optimizer.postProcess()
 
     
     fig = plt.figure()
     ax = fig.add_subplot(111)
-    print(optimizer.samples.shape)
-    print(np.max(optimizer.samples, axis=0))
-    print(np.min(optimizer.samples, axis=0))
+    #print(optimizer.samples.shape)
+    #print(np.max(optimizer.samples, axis=0))
+    #print(np.min(optimizer.samples, axis=0))
     nneg=0
     #optimizer.postProcess()
     for i in range(0,optimizer.samples.shape[0],1000):
@@ -99,9 +99,13 @@ if __name__=="__main__":
         #    nneg += 1
             
     #    ax.plot(irs.wavelength, model(opt.samples[i,:]), '-', alpha = 0.1)
-    print(nneg)
+    #print(nneg)
     for i in [spec0,spec1]:
         ax.plot(i.wavelength, i.value, '-',color='blue')
     ax.plot(photometry.wavelength, photometry.value, 'o',color='blue')
     ax.set_ylim(0., 1.5*np.max([np.max(i.value) for i in [photometry, spec0, spec1]]))
     fig.savefig("seds.png")
+
+    print("Acceptance fractions: ",optimizer.sampler.acceptance_fraction)
+    print("Estimates of the autocorelation lengths: ",optimizer.sampler.acor)
+    
