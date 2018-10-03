@@ -82,10 +82,11 @@ if __name__=="__main__":
            ]
            + np.random.randn(np.int(opt.npars)) for j in range(opt.nwalkers)
           ]
-    print(pos[0])
-    print(np.max(pos, axis=0))
-    print(np.min(pos, axis=0))
+    #print(pos[0])
+    #print(np.max(pos, axis=0))
+    #print(np.min(pos, axis=0))
     opt.optimise(nsamples = 1000, burnin=500,guess=pos)
+    opt.postprocess()
 
     """save optimiser state for later """
     #opt.save(filename="output_file",pickle=True) #Save as a python object
@@ -116,10 +117,10 @@ if __name__=="__main__":
             nneg += 1
             
     #    ax.plot(irs.wavelength, model(opt.samples[i,:]), '-', alpha = 0.1)
-    print(nneg)
+    #print(nneg)
     #for i in range(0,len(spec.value)):
     ax.plot(spec.wavelength, spec.value, '-','b')
-    fig2 = corner.corner(opt.samples)#,labels=opt.labels)
-    plt.show()
+    #fig2 = corner.corner(opt.samples)#,labels=opt.labels)
+    #plt.show()
 
     """ Figure out what it all means """
