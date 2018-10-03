@@ -50,4 +50,3 @@ __all__=["models","extinction","emceesearch","PowerLawAGN","data"] #Nothing to i
 
 #Stopping criteria?? 
 
-
