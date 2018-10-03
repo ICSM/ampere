@@ -69,7 +69,7 @@ class PowerLawAGN(AnalyticalModel):
         #print(os.path.dirname(__file__))
         opacityDirectory = os.path.dirname(__file__)+'/Opacities/'
         opacityFileList = os.listdir(opacityDirectory)
-        opacityFileList = np.array(opacityFileList)[['.q' in zio for zio in opacityFileList]] # Only files ending in .q are valid (for now)
+        opacityFileList = np.array(opacityFileList)[['sub.q' in zio for zio in opacityFileList]] # Only files ending in .q are valid (for now)
         nSpecies = opacityFileList.__len__()
         #wavelengths = np.logspace(np.log10(8), np.log10(35), 100) # For testing purposes
         opacity_array = np.zeros((wavelengths.__len__(), nSpecies))
@@ -82,7 +82,7 @@ class PowerLawAGN(AnalyticalModel):
             print(opacityFileList[j])
             tempWl = tempData[:, 0]
             tempOpac = tempData[:, 1]
-            #I think we need to put in the continuum subtraction here as well.
+            #I think we need to put in the continuum subtraction here as well, in case the data isn't continuum subtracted already. These ones are though, so let's see how it goes.
             #Hopefully Sundar can help us out with this.
             f = interpolate.interp1d(tempWl, tempOpac, assume_sorted = False)
             opacity_array[:,j] = f(self.restwaves)#wavelengths)

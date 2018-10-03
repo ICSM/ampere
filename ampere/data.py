@@ -517,7 +517,7 @@ class Spectrum(Data):
         return probFlux 
 
     @classmethod
-    def fromFile(cls, filename, format, filetype, **kwargs):
+    def fromFile(cls, filename, format, filetype=None, **kwargs):
         ''' 
         Routine to generate spectrum data object from a file containing said data
         '''
