@@ -27,7 +27,7 @@ if __name__=="__main__":
     """ Read in some data """
     
     """ Read in spectrum """
-    filename = './NGC6302/NGC6302_nolines.tab'
+    filename = './NGC6302/NGC6302_100.tab'
     print(filename)
     #spec = Spectrum.fromFile(filename,format='User-Defined',filetype='text')
     sws = ascii.read(filename,header_start=0,data_start=2)
@@ -48,20 +48,19 @@ if __name__=="__main__":
     opacities = ['ss_Dorschneretal1995_Olivine_0.10.q',
     			 'ss_Hofmeisteretal2003_Periclase_0.10.q',
     			 'ss_Jaegeretal1998_Forsterite_0.10.q'] # list of opacity spectra to be used in modelling
-    relativeAbundances=np.array([0.01,0.01,0.00])#initial guess
-    nSpecies = len(relativeAbundances)
-    relativeAbundances[nSpecies-1] = 1.0 - np.sum(relativeAbundances[0:nSpecies-1])
-    print(relativeAbundances,relativeAbundances.shape)
+    #relativeAbundances=np.array([0.01,0.01])#initial guess
+    #nSpecies = len(opacities)-1
     mdl = OpacitySpectrum(modwaves,
-                            normWave = 1., sigmaNormWave = 1.,
-                            opacityFileList=opacities,
-                            weights=relativeAbundances,
-                            redshift = False, lims = np.array([[30.,60.],
-                                                               [10.,40.],
-                                                               [-2.,2.],
-                                                               [1.,1000.]]
-                                                              )
+                          normWave = 1., sigmaNormWave = 1.,
+                          opacityFileList=opacities,
+                          redshift = False, lims = np.array([[30.,60.],
+                                                             [-100.,100.],
+                                                             [-2.,2.],
+                                                             [800.,1000.]])
                             )
+
+    #mdl(1,2,3,4,0.1,0.5)
+    #exit()
 
     """ Connect the dots: """
     """ Hook it up to an optimiser """
@@ -78,15 +77,16 @@ if __name__=="__main__":
     """ Run it """
     pos = [
            [
-               150., 45., 0., 3., 1., 0.5, 1., 0.5, 1.
+               45., 25., 0., 910., 1., 0.5, 1., 0.5, 1.
                #20 + np.random.randn() for i in range(np.int(opt.npars))
            ]
            + np.random.randn(np.int(opt.npars)) for j in range(opt.nwalkers)
           ]
-    print(pos[0])
-    print(np.max(pos, axis=0))
-    print(np.min(pos, axis=0))
+    #print(pos[0])
+    #print(np.max(pos, axis=0))
+    #print(np.min(pos, axis=0))
     opt.optimise(nsamples = 1000, burnin=500,guess=pos)
+    opt.postprocess()
 
     """save optimiser state for later """
     #opt.save(filename="output_file",pickle=True) #Save as a python object
@@ -97,25 +97,30 @@ if __name__=="__main__":
     """ Then produce a couple of plots """
     fig = plt.figure()
     ax = fig.add_subplot(111)
-    print(opt.samples.shape)
-    print(np.max(opt.samples, axis=0))
-    print(np.min(opt.samples, axis=0))
+    #print(opt.samples.shape)
+    #print(np.max(opt.samples, axis=0))
+    #print(np.min(opt.samples, axis=0))
     nneg=0
-    ax.set_ylim(1.0,10.0)
+
+    ax.set_ylim(0.1,1000.0)
+    ax.set_yscale('log')
+    ax.set_ylabel('Flux (Jy)')
     ax.set_xlim(2.0,200.0)
+    ax.set_xlabel('Wavelength (microns)')
+
     for i in range(0,opt.samples.shape[0],100):
         #print(opt.samples[i,:])
         if opt.samples[i,0] > 0.:
-            opt.model(opt.samples[i,0],opt.samples[i,1],opt.samples[i,2],opt.samples[i,3])
+            opt.model(opt.samples[i,0],opt.samples[i,1],opt.samples[i,2],opt.samples[i,3],*opt.samples[i,4:6])
             ax.plot(modwaves,opt.model.modelFlux, '-', 'k', alpha=0.02) #irs.wavelength
         else:
             nneg += 1
             
     #    ax.plot(irs.wavelength, model(opt.samples[i,:]), '-', alpha = 0.1)
-    print(nneg)
+    #print(nneg)
     #for i in range(0,len(spec.value)):
     ax.plot(spec.wavelength, spec.value, '-','b')
-    fig2 = corner.corner(opt.samples)#,labels=opt.labels)
-    plt.show()
+    #fig2 = corner.corner(opt.samples)#,labels=opt.labels)
+    #plt.show()
 
     """ Figure out what it all means """
