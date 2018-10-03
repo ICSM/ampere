@@ -11,24 +11,49 @@ from astropy import units as u
 from astropy.modeling import blackbody
 from .models import AnalyticalModel
 
-class DualModifiedBlackBody(AnalyticalModel):
+class DualBlackBodyDust(AnalyticalModel):
     def __init__(self, wavelengths, flatprior=True,
                  normWave = 1., sigmaNormWave = 1.,
-                 redshift = False, lims=np.array([[0,1e6],[-100,100],[-10,10],[0,np.inf]]),
-                 **kwargs):
+                 lims=np.array([[100,1000],[0,np.inf],[100,1000],[0,np.inf],[100,1000],[0,np.inf],[100,1000],[0,np.inf]),
+                                                 **kwargs): #arguments are T1c, F1c, T2c, F2c, T1f, F1f, T2f, F2f; with c for continuum and f for features
         self.wavelength = wavelengths #grid of observed wavelengths to calculate BB for
         #self.freq = const.c.value / (wavelengths*1e-6) #unit conversions will be required...
         self.flatprior = flatprior #whether to assume flat priors
         self.normWave = normWave #wavelength at which opacity is normalised
         self.sigmaNormWave = sigmaNormWave #value to which the opacity is normalised at wavelength normWave
-        self.redshift = redshift
         self.lims = lims
-        print(self.lims)
-        if redshift:
-            from astropy.cosmology import FlatLambdaCDM
-            self.cosmo=FlatLambdaCDM(H0=70, Om0=0.3)
+                 
+        #Define opacities for use in model calculation
+        import os
+        from scipy import interpolate
+        opacityDirectory = os.path.dirname(__file__)+'/Opacities/'
+        opacityFileList = np.array(opacityFileList)
+        #opacityFileList = np.array(opacityFileList)[['.q' in zio for zio in opacityFileList]] # Only files ending in .q are valid (for now)
+        nSpecies = opacityFileList.__len__()
+        #print(opacityFileList,nSpecies)
+        opacity_array = np.zeros((wavelengths.__len__(), nSpecies))
+        for j in range(nSpecies):
+            tempData = np.loadtxt(opacityDirectory + opacityFileList[j], comments = '#')
+            tempWl = tempData[:, 0]
+            tempOpac = tempData[:, 1]
+            f = interpolate.interp1d(tempWl, tempOpac, assume_sorted = False)
+            opacity_array[:,j] = f(self.wavelength)
+        self.opacity_array = opacity_array
+        self.nSpecies = nSpecies
+        self.npars = nSpecies - 1 + 4
 
-    def __call__(self, t = 1., scale = 1., index = 1., dist=1., **kwargs):
+                 
+
+    def __call__(self, T1c = 200., F1c = 0.5, T2c = 800., F2c =0.5, T1f = 200., F1f = 0.5, T2f = 800., F2f = 0.5, *args, **kwargs): #default values for temperatures and fractions will most likely never be used. *args will be a list of (7) relative abundances of the dust species. 
+        relativeAbundances = np.append(10**np.array(args),1.-np.sum(10**np.array(args))) # The 8th abundance is 1 minus the sum of the other 7. We are doing the parameter space exploration in the log space to ensure proper sampling of small fractions.
+
+# hiero
+        fModel = (np.matmul(self.opacity_array, relativeAbundances))
+        fModel = fModel*(waves**powerLawIndex)*(10**multiplicationFactor)
+
+        self.modelFlux = fModel
+
+                 
         if self.redshift:
             z = dist
             dist = cosmo.luminosity_distance(z).to(u.m)
@@ -44,7 +69,9 @@ class DualModifiedBlackBody(AnalyticalModel):
         bb = blackbody.blackbody_nu(freq,t).to(u.Jy / u.sr).value
         bb = bb / dist**2
         bb = bb * 10**(scale) * self.sigmaNormWave * ((self.wavelength / self.normWave)**index)
-        self.modelFlux = bb
+
+        self.modelFlux = # result to be stored in self.modelFlux
+                 
         #return (blackbody.blackbody_nu(const.c.value*1e6/self.wavelengths,t).to(u.Jy / u.sr).value / (dist_lum.value)**2 * kappa230.value * ((wave/230.)**betaf) * massf) #*M_sun.cgs.value
 
     def lnprior(self, theta, **kwargs):
@@ -210,7 +237,7 @@ class OpacitySpectrum(AnalyticalModel):
     def __call__(self, t = 1., scale = 1., index = 1., dist=1.,
                  *args,
                  **kwargs):
-        #print(args)
+        print(args)
         relativeAbundances = np.append(np.array(args),1.-np.sum(np.array(args))) #np.append(10**np.array(args),1.-np.sum(10**np.array(args)))
         #print(relativeAbundances)
         if self.redshift:
@@ -231,7 +258,7 @@ class OpacitySpectrum(AnalyticalModel):
         bb = bb / dist**2
         bb = bb * 10**(scale) * self.sigmaNormWave * ((self.wavelength / self.normWave)**index)
         #Subtract the sum of opacities from the blackbody continuum to calculate model spectrum
-        fModel = bb * (1.0 + (np.matmul(self.opacity_array, relativeAbundances)))
+        fModel = bb * (1.0 - (np.matmul(self.opacity_array, relativeAbundances)))
         self.modelFlux = fModel
         #return (blackbody.blackbody_nu(const.c.value*1e6/self.wavelengths,t).to(u.Jy / u.sr).value / (dist_lum.value)**2 * kappa230.value * ((wave/230.)**betaf) * massf) #*M_sun.cgs.value
 

@@ -102,7 +102,7 @@ if __name__=="__main__":
     #relativeAbundances=np.array([0.01,0.01])#initial guess
     #nSpecies = len(opacities)-1
 
-    mdl = TripleBlackBodyDust(modwaves,
+    mdl = DualBlackBodyDust(modwaves,
                           normWave = 1., sigmaNormWave = 1.,
                           opacityFileList=opacities,
                           redshift = False, lims = np.array([[0,1e6],
