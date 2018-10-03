@@ -80,9 +80,26 @@ class HyperionRTModel(Model):
         m.write('HyperionRT_sed.rtin')
         print("Hyperion RT model created.")
 
-    def __call__(self, **kwargs):
+    def __call__(self, *args, **kwargs):
         m.run('HyperionRT_sed.rtout', mpi=True,n_processes=6,overwrite=True)
         print("Hyperion RT model executed.")
+
+        m = ModelOutput('HyperionRT_sed.rtout')
+
+        self.modelFlux = sed.value
+
+    def lnprior(self, theta, **kwargs):
+        if self.flatprior:
+            if (self.lims[0,0] < theta[0] < self.lims[0,1]) and \
+               (self.lims[1,0] < theta[1] < self.lims[1,1]) and \
+               (self.lims[2,0] < theta[2] < self.lims[2,1]) and \
+               (self.lims[3,0] < theta[3] < self.lims[3,1]) and \
+                np.sum(10**theta[4:]) <= 1. and np.all(theta[4:] < 0.): 
+                return 0
+            else:
+                return -np.inf
+        else:
+            raise NotImplementedError()
 
     def __str__(self, **kwargs):
         raise NotImplementedError()
