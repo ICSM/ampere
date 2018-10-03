@@ -14,8 +14,12 @@ from .models import AnalyticalModel
 class DualBlackBodyDust(AnalyticalModel):
     def __init__(self, wavelengths, flatprior=True,
                  normWave = 1., sigmaNormWave = 1.,
-                 lims=np.array([[100,1000],[0,np.inf],[100,1000],[0,np.inf],[100,1000],[0,np.inf],[100,1000],[0,np.inf]),
-                                                 **kwargs): #arguments are T1c, F1c, T2c, F2c, T1f, F1f, T2f, F2f; with c for continuum and f for features
+                 opacityFileList=opacities, 
+                 lims=np.array([[100,1000],[0,np.inf],
+                                [100,1000],[0,np.inf],
+                                [100,1000],[0,np.inf],
+                                [100,1000],[0,np.inf]),
+                               **kwargs): #arguments are T1c, F1c, T2c, F2c, T1f, F1f, T2f, F2f; with c for continuum and f for features
         self.wavelength = wavelengths #grid of observed wavelengths to calculate BB for
         #self.freq = const.c.value / (wavelengths*1e-6) #unit conversions will be required...
         self.flatprior = flatprior #whether to assume flat priors
@@ -40,39 +44,21 @@ class DualBlackBodyDust(AnalyticalModel):
             opacity_array[:,j] = f(self.wavelength)
         self.opacity_array = opacity_array
         self.nSpecies = nSpecies
-        self.npars = nSpecies - 1 + 4
+        self.npars = nSpecies - 1 + 8 # 8: two temperatures and scaling factors
+                 # for the continuum and features each. 
 
                  
 
     def __call__(self, T1c = 200., F1c = 0.5, T2c = 800., F2c =0.5, T1f = 200., F1f = 0.5, T2f = 800., F2f = 0.5, *args, **kwargs): #default values for temperatures and fractions will most likely never be used. *args will be a list of (7) relative abundances of the dust species. 
         relativeAbundances = np.append(10**np.array(args),1.-np.sum(10**np.array(args))) # The 8th abundance is 1 minus the sum of the other 7. We are doing the parameter space exploration in the log space to ensure proper sampling of small fractions.
 
-# hiero
+        freq = const.c.value / (self.wavelength*1e-6)
+        
         fModel = (np.matmul(self.opacity_array, relativeAbundances))
-        fModel = fModel*(waves**powerLawIndex)*(10**multiplicationFactor)
-
+        fModel = fModel*(F1f*blackbody.blackbody_nu(freq,T1f).to(u.Jy / u.sr).value + F2f*blackbody.blackbody_nu(freq,T2f).to(u.Jy / u.sr).value) + (F1c*blackbody.blackbody_nu(freq,T1c).to(u.Jy / u.sr).value + F2c*blackbody.blackbody_nu(freq,T2c).to(u.Jy / u.sr).value)           
         self.modelFlux = fModel
 
                  
-        if self.redshift:
-            z = dist
-            dist = cosmo.luminosity_distance(z).to(u.m)
-            freq = const.c.value / ((self.wavelength/(1.+z))*1e-6)
-        else:
-            dist = dist*u.pc.to(u.m)
-            freq = const.c.value / (self.wavelength*1e-6)
-        #Simple bug catches for inputs to blackbody model
-        #if scale <= 0.0:
-        #    print('Scale factor must be positive and non-zero.') #not relevant - scale is a log
-        if t <= 0.0:
-            print('Temperature must be positive and in Kelvin.')
-        bb = blackbody.blackbody_nu(freq,t).to(u.Jy / u.sr).value
-        bb = bb / dist**2
-        bb = bb * 10**(scale) * self.sigmaNormWave * ((self.wavelength / self.normWave)**index)
-
-        self.modelFlux = # result to be stored in self.modelFlux
-                 
-        #return (blackbody.blackbody_nu(const.c.value*1e6/self.wavelengths,t).to(u.Jy / u.sr).value / (dist_lum.value)**2 * kappa230.value * ((wave/230.)**betaf) * massf) #*M_sun.cgs.value
 
     def lnprior(self, theta, **kwargs):
         if self.flatprior:
