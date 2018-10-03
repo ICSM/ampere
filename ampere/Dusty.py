@@ -245,7 +245,8 @@ class DustySpectrum(AnalyticalModel):
 
         # we constuct a dusty input file piece by piece
         dusty_inp_file = open("dusty_model.inp","w")
-        
+
+        # geometry
         if self.geometry.lower() == "slab":
             dusty_inp_file.write("geometry = slab")
 
@@ -278,36 +279,85 @@ class DustySpectrum(AnalyticalModel):
                 dusty_inp_file.write("central = on")
                 dusty_inp_file.write("external = off")
 
+        # spectral shape
+        if self.spectralshape.lower() == "blackbody":
+            dusty_inp_file.write("spectral shape = BLACK_BODY")
+            dusty_inp_file.write("Number of BB = "+str(len(self.blackbody_temperatures)))
+            dusty_inp_file.write("Temperatures = "+', '.join(map(str, self.blackbody_temperatures))+' K')
+            dusty_inp_file.write("Luminosities = "+', '.join(map(str, self.blackbody_luminosities)))
+        elif self.spectralshape.lower() == "engelke":
+            dusty_inp_file.write("spectral shape = ENGELKE_MARENGO")
+            dusty_inp_file.write("Temperature = "+str(self.engelke_temperature)+' K')
+            dusty_inp_file.write("SiO absorption depth = "+str(self.engelke_sio_depth)+' percents')
+        elif self.spectralshape.lower() == "powerlaw":
+            dusty_inp_file.write("spectral shape = POWERLAW")
+            dusty_inp_file.write("N = "+str(len(self.powerlaw_lambda)-1))
+            dusty_inp_file.write("lambda = "+', '.join(map(str, self.powerlaw_lambda))+' micron')
+            dusty_inp_file.write("k = "+', '.join(map(str, self.powerlaw_k)))
+        elif self.spectralshape.lower() == "file_lambda_f_lambda":
+            dusty_inp_file.write("spectral shape = FILE_LAMBDA_F_LAMBDA")
+            dusty_inp_file.write("filename = "+self.spectralshape_filename)
+        elif self.spectralshape.lower() == "file_f_lambda":
+            dusty_inp_file.write("spectral shape = FILE_F_LAMBDA")
+            dusty_inp_file.write("filename = "+self.spectralshape_filename)
+        elif self.spectralshape.lower() == "file_f_nu":
+            dusty_inp_file.write("spectral shape = FILE_F_NU")
+            dusty_inp_file.write("filename = "+self.spectralshape_filename)
+        else:
+            raise ValueError('DustySpectrum: no valid spectral shape specfied.')
 
-        # spectral shape = 
-        # 6 options:
-        # upto 10 black_body functions (BLACK_BODY)
-        # with
-        #   Number of BB = N
-        #   Temperatures = T1 , ... , TN K
-        #   Luminosities = L1 , ... , LN  
+        # scale of the input spectrum (FLUX/LUM_R1/ENERGY_DEN/DILUTN_FAC/T1)
+        # note that the doc lists several combinations of shape,geometry and scaling that are either required or
+        # mutually exclusive. Best to catch those in __init__
+        if self.spectralscale.lower() == "flux":
+            dusty_inp_file.write("Scale: type of entry= FLUX")
+            dusty_inp_file.write("Fe = "+str(self.spectralscale_flux_entering)+" W/m^2")
+        elif self.spectralscale.lower() == "luminosity":
+            dusty_inp_file.write("Scale: type of entry= LUM_R1")
+            dusty_inp_file.write("L = "+str(self.spectralscale_luminosity)+" % in L_sun")
+            dusty_inp_file.write("d = "+str(self.spectralscale_distance)+" cm")
+        elif self.spectralscale.lower() == "energy-density":
+            dusty_inp_file.write("Scale: type of entry= ENERGY_DEN")
+            dusty_inp_file.write("J = "+str(self.spectralscale_energy_density)+" W/m^2")
+        elif self.spectralscale.lower() == "dilution-factor":
+            dusty_inp_file.write("Scale: type of entry= DILUTN_FAC")
+            dusty_inp_file.write("W = "+str(self.spectralscale_dilution_factor))
+        elif self.spectralscale.lower() == "inner-temperature":
+            dusty_inp_file.write("Scale: type of entry= T1")
+            dusty_inp_file.write("Td = "+str(self.spectralscale_inner_temperature)+" K")
+        else:
+            raise ValueError('DustySpectrum: no valid spectral scaling specfied.')
 
-        # engelkd_marengo (ENGELKE_MARENGO)
-        # with
-        #    Temparature = T K
-        #    SiO absorption depth = ppp percents
-        
-        # broken power law (POWER_LAW)
-        # with
-        #   N = M
-        #   lambda = l0, ... lM
-        #   k = k0, ..., K(M-1)
-        # outside of the range (l0 ... lM)  = 0
-        # the slope is lambda^-kN between l(N-1) and l(N)
 
-        # FILE_LAMBDA_F_LAMBDA
-        # filename = ""
+#      3.1 Chemical composition %(available options: common_grain_composite\common_and_addl_grain\tabulated)
+# 
+#                 optical properties index = common_grain_composite
+#      		Abundances for supported grain types:
+#                	Sil-Ow  Sil-Oc  Sil-DL  grf-DL  amC-Hn  SiC-Pg 
+#            x =  0.00    0.70    0.00    0.00    0.30    0.00
+# 	        SIZE DISTRIBUTION = MRN
+# 	        Tsub = 1500.
+# 	   
+#      4) Density Distribution %(available options: powd\expd\rdw\rdwa\usr_suppld)
+# 
+#          	 density type = POWD
+#         	 number of powers = 1                
+#         	 shell's relative thickness = 100.
+#         	 power = 0.
+# 
+# 
+#      5) Optical Depth: %(available options: linear\logarithmic\user_supplied)
+#    
+# 		 grid type = logarithmic % log grid
+#         	 lambda0 = 0.55 micron   % fiducial wavelength
+# 		 % minimum optical depth @ fiducial wavelength
+#         	 tau(min) = 10.0; 
+# 		 % maximum optical depth @ fiducial wavelength
+# 		 tau(max) = 100.0  
+#         	 number of models = 2
 
-        # FILE_F_LAMBDA
-        # filename = ""
 
-        # FILE_F_NU
-        # filename = ""
+
 
         bb = blackbody.blackbody_nu(freq,t).to(u.Jy / u.sr).value
         bb = bb / dist**2

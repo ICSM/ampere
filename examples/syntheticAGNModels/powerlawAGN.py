@@ -53,7 +53,8 @@ if __name__=="__main__":
 
     """ (optionally) add some noise """
     print(modSed)
-    #modSed = modSed + np.random.randn(6) * 0.1 * modSed
+    photunc = 0.1 * modSed
+    modSed = modSed + np.random.randn(6) * photunc
     #print(modSed)
     #exit()
 
@@ -63,17 +64,21 @@ if __name__=="__main__":
     irsEx = Spectrum.fromFile(dataDir+specFileExample,format='SPITZER-YAAAR')
     spec0 = spectres(irsEx[0].wavelength,wavelengths,model_flux)
     spec1 = spectres(irsEx[1].wavelength,wavelengths,model_flux)
-    spec0 = Spectrum(irsEx[0].wavelength, spec0, 0.1*spec0,"um", "Jy")
-    spec1 = Spectrum(irsEx[1].wavelength, spec1, 0.1*spec1,"um", "Jy")
+    unc0 = 0.1*spec0
+    unc1 = 0.1*spec1
+    spec0 = spec0 + np.random.randn(len(spec0))*unc0
+    spec1 = spec1 + np.random.randn(len(spec1))*unc1
+    spec0 = Spectrum(irsEx[0].wavelength, spec0, unc0,"um", "Jy")
+    spec1 = Spectrum(irsEx[1].wavelength, spec1, unc1,"um", "Jy")
 
     """ now set up ampere to try and fit the same stuff """
-    photometry = Photometry(filterName=filterName, value=modSed, uncertainty=0.1*modSed, photUnits='Jy', libName=libname)
+    photometry = Photometry(filterName=filterName, value=modSed, uncertainty=photunc, photUnits='Jy', libName=libname)
     print(photometry.filterMask)
     photometry.reloadFilters(wavelengths)
     
     optimizer = EmceeSearch(model=model, data=[photometry,spec0,spec1], nwalkers=100)
 
-    optimizer.optimise(nsamples=2000, burnin=1000, guess=[[0.0, 1.0, -10, -10, -0.5, -0.2, -10., 1.0, 1.0, 1.0, 1.0 ,1.0, 1.0] + np.random.rand(13)*[1,1,1,1,0.2,0.2, 1,1,1,1,1,1,1] for i in range(optimizer.nwalkers)])
+    optimizer.optimise(nsamples=2000, burnin=1000, guess=[[-2.5, .5, -1., -10, -0.5, -0.3, -10., 1.0, 1.0, 1.0, 1.0 ,1.0, 1.0] + np.random.rand(13)*[1,1,1,1,0.2,0.2, 1,1,1,1,1,1,1] for i in range(optimizer.nwalkers)])
 
     optimizer.postProcess()
 

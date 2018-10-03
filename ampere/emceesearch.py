@@ -179,7 +179,10 @@ class EmceeSearch(BaseSearch):
         try:
             axes3.set_ylim(np.min(self.sampler.lnprobability),np.max(self.sampler.lnprobability))
         except ValueError:
-            axes3.set_ylim(-2000.,np.max(self.sampler.lnprobability))
+            try:
+                axes3.set_ylim(-2000.,np.max(self.sampler.lnprobability))
+            except ValueError:
+                axes3.set_ylim(-2000.,2000)
         fig3.savefig("lnprob.png")
 
 
