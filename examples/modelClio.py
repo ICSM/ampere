@@ -54,7 +54,7 @@ import pyphot
 
 if __name__=="__main__":
     """
-    This script will take one blackbody and modify it by a wavelength dependent opacity.
+    This script applies the model from Gielen et al. (2008)
     """
 
     """ Read in some data """
