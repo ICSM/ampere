@@ -31,50 +31,56 @@ class HyperionRTModel(Model):
         # Initalize the model
         m = Model()
         
-        #Set star(s) position(s)
-        for i in range(0,nsrc-1):
-            m.add_spherical_source(luminosity = par['lsource'][i],
-                                   radius     = par['rsource'][i],
-                                   mass       = par['msource'][i],
-                                   temperature = par['tsource'][i],
-                                   position = par['position'][i,0:2]*u.au)
+        #Set central source position
+        m.add_spherical_source(luminosity  = par.get('lsource',1.0*lsun),
+                               radius      = par.get('rsource',1.0*rsun),
+                               mass        = par.get('msource',1.0*msun),
+                               temperature = par.get('tsource',5784.0),
+                               position    = par.get('position',(0.0,0.0,0.0))
         
         # Use raytracing to improve s/n of thermal/source emission
-        m.set_raytracing(True)
+        m.set_raytracing(par.get('raytracing',True))
         
         # Use the modified random walk
-        m.set_mrw(True, gamma=2.)
-        # Set up grid
-        x = np.linspace(-128*au, 128*au, 257)
-        y = np.linspace(-128*au, 128*au, 257)
-        z = np.linspace(-128*au, 128*au, 257)
+        m.set_mrw(par.get('modrndwlk',True), gamma=par.get('mrw_gamma',2))
+
+        # Set up spatial grid
+        x = np.linspace(-1.5*par.get('rmax',100.*u.au), 1.5*par.get('rmax',100.*u.au), par.get('ngrid',257))
+        y = np.linspace(-1.5*par.get('rmax',100.*u.au), 1.5*par.get('rmax',100.*u.au), par.get('ngrid',257))
+        z = np.linspace(-1.5*par.get('rmax',100.*u.au), 1.5*par.get('rmax',100.*u.au), par.get('ngrid',257))
         m.set_cartesian_grid(x,y,z)
+
+        print("Spatial grid set up.")
+
         #Set up density grid
-        rho0 = 1.5e-19
-        alpha_in = -5.
-        alpha_out = 5.
-        scaleheight= 0.1
-        rmin =  70. * au
-        rmax = 100. * au        
+        rho0 = par.get('rho0',1.5e-19)
+        alpha_in = par.get('alpha_in',-5.)
+        alpha_out = par.get('alpha_out',5.)
+        scaleheight= par.get('scaleheight',0.1)
+        rmin = par.get('rmin',70.*u.au)
+        rmax = par.get('rmax',100.*u.au)
         rmid = (rmax + rmin) / 2
         rr = np.sqrt(m.grid.gx ** 2 + m.grid.gy ** 2 + m.grid.gz ** 2)
-        density = np.zeros(m.grid.shape)
         
+        #define density grid
+        density = np.zeros(m.grid.shape)
         density = rho0 * ( (rr/rmid)**(2.*alpha_in) + (rr/rmid)**(2.*alpha_out) )**(-0.5) * np.exp(-((abs(m.grid.gz)/rr)**2/scaleheight**2)/2.0)
         m.add_density_grid(density, d)
+
+        print("Density grid set up.")
         
         # Set up SED for 10 viewing angles
-        sed = m.add_peeled_images(sed=True, image=False)
+        sed = m.add_peeled_images(sed=par.get('api_sed',False), image=par.get('api_img',False))
         sed.set_viewing_angles(np.linspace(0., 90., 10), np.repeat(45., 10))
-        sed.set_wavelength_range(150, 0.1, 1000.)
+        sed.set_wavelength_range(par.get('nl',101), par.get('lmin',0.1), par.get('lmax',1000.))
         sed.set_track_origin('basic')
         
         # Set number of photons
-        m.set_n_photons(initial=1e4, imaging=1e5,
-                        raytracing_sources=1e5, raytracing_dust=1e5)
+        m.set_n_photons(initial=par.get('nph_initial',1e4), imaging=par.get('nph_imging',1e5),
+                        raytracing_sources=par.get('nph_rtsrcs',1e5), raytracing_dust=par.get('nph_rtdust',1e5))
         
         # Set number of temperature iterations
-        m.set_n_initial_iterations(par['niter'])
+        m.set_n_initial_iterations(par.get('niter',5))
         
         # Write out file
         m.write('HyperionRT_sed.rtin')
@@ -109,6 +115,7 @@ class HyperionRTModel(Model):
 
     def inputFile(self, **kwargs):
         #Create a dictionary with which to setup and run Hyperion RT models
+        #Dust parameters
         par =   {'dust':'"astrosilicate"',
                  'format':2,
                  'size':0.5,
@@ -126,12 +133,29 @@ class HyperionRTModel(Model):
                  'rho0':1.5e-19,
                  'optconst':'"silicated03.lnk"',
                  'disttype':'power',
-                 'q':3.5
-                 'lsource': 1.0*u.lsun
-                 'rsource': 1.0*u.rsun
-                 'msource': 1.0*u.msun
-                 'tsource': 5780.
-                 'position':[0.0,0.0,0.0]}
+                 'q':3.5,
+                 #Source parameters
+                 'lsource': 1.0*u.lsun,
+                 'rsource': 1.0*u.rsun,
+                 'msource': 1.0*u.msun,
+                 'tsource': 5784.,
+                 'position':[0.0,0.0,0.0],
+                 #Disc parameters
+                 'rmin': 70.*u.au,
+                 'rmax': 100.*u.au,
+                 'alpha_in': -5.,
+                 'alpha_out': 5.,
+                 'scaleheight': 0.1,
+                 #RT parameters
+                 'niter':5,
+                 'nph_initial':1e4,
+                 'nph_imging':1e5,
+                 'nph_rtsrcs':1e5,
+                 'nph_rtdust':1e5,
+                 #Peel photons to get images
+                 'api_sed':False,
+                 'api_img':False,
+                 }
 #convenience function to plot the SED of the Hyperion RT output
     def plot_sed(par):
         #Set up figure
@@ -167,8 +191,8 @@ class HyperionRTModel(Model):
 
             ax.set_xlabel(r'$\lambda$ [$\mu$m]')
             ax.set_ylabel(r'Flux [Jy]')
-            ax.set_xlim(0.1, 1000.)
-            ax.set_ylim(1e-6,1e1)
+            ax.set_xlim(par.get('lmin',0.1), par.get('lmax',1000.))
+            ax.set_ylim(1e-6*np.max(sed.value),1.1*np.max(sed.value))
             fig.savefig('HyperionRT_sed_plot_components.png')
             plt.close(fig)
 
