@@ -70,7 +70,7 @@ class HyperionRTModel(Model):
         print("Density grid set up.")
         
         # Set up SED for 10 viewing angles
-        sed = m.add_peeled_images(sed=par.get('api_sed',False), image=par.get('api_img',False))
+        sed = m.add_peeled_images(sed=par.get('api_sed',True), image=par.get('api_img',False))
         sed.set_viewing_angles(np.linspace(0., 90., 10), np.repeat(45., 10))
         sed.set_wavelength_range(par.get('nl',101), par.get('lmin',0.1), par.get('lmax',1000.))
         sed.set_track_origin('basic')
@@ -131,7 +131,7 @@ class HyperionRTModel(Model):
                  'nl':101,
                  'massfrac':1.0,
                  'rho0':1.5e-19,
-                 'optconst':'"silicated03.lnk"',
+                 'optconst':'"silicate_d03.lnk"',
                  'disttype':'power',
                  'q':3.5,
                  #Source parameters
@@ -153,9 +153,12 @@ class HyperionRTModel(Model):
                  'nph_rtsrcs':1e5,
                  'nph_rtdust':1e5,
                  #Peel photons to get images
-                 'api_sed':False,
+                 'api_sed':True,
                  'api_img':False,
                  }
+
+        return par
+
 #convenience function to plot the SED of the Hyperion RT output
     def plot_sed(par):
         #Set up figure
@@ -199,9 +202,9 @@ class HyperionRTModel(Model):
         except IOError:
             print("No Hyperion RT output found, SED not plotted.")
 
-#convenience function to write dust parameter file 'BHDust.input' for Hyperion BHDust calculator (separate program)
+#convenience function to write dust parameter file '<dust>.params' for Hyperion BHDust calculator (separate program)
     def write_bhmie_file(par):
-        f=open('BHDust.input','w')
+        f=open(par.get('dust','astrosilicate')+'.params','w')
         f.write('"'+par['dust']+'_'+str(par['size'])+'"'+'\n')
         f.write(str(par['format'])+'\n')
         f.write(str(par['amin'])+'\n')
