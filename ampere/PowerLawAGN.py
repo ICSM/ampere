@@ -18,7 +18,7 @@ class DualBlackBodyDust(AnalyticalModel):
                  lims=np.array([[100,1000],[0,np.inf],
                                 [100,1000],[0,np.inf],
                                 [100,1000],[0,np.inf],
-                                [100,1000],[0,np.inf]),
+                                [100,1000],[0,np.inf]]),
                                **kwargs): #arguments are T1c, F1c, T2c, F2c, T1f, F1f, T2f, F2f; with c for continuum and f for features
         self.wavelength = wavelengths #grid of observed wavelengths to calculate BB for
         #self.freq = const.c.value / (wavelengths*1e-6) #unit conversions will be required...
@@ -72,7 +72,10 @@ class DualBlackBodyDust(AnalyticalModel):
 class SingleModifiedBlackBody(AnalyticalModel):
     def __init__(self, wavelengths, flatprior=True,
                  normWave = 1., sigmaNormWave = 1.,
-                 redshift = False, lims=np.array([[0,1e6],[-100,100],[-10,10],[0,np.inf]]),
+                 redshift = False, lims=np.array([[0,1e6],
+                                                  [-100,100],
+                                                  [-10,10],
+                                                  [0,np.inf]]),
                  **kwargs):
         self.wavelength = wavelengths #grid of observed wavelengths to calculate BB for
         #self.freq = const.c.value / (wavelengths*1e-6) #unit conversions will be required...
