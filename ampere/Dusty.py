@@ -157,29 +157,6 @@
 #  
  
 
-# in order to create a valid input file we will read a template input-file (dusty_inp.tmpl)
-# with $ values for those parameters we want to control.
-# use the following code to substitute them:
-
-# from string import Template
-# # dictionary of variables with values to be replaced
-# var_dict=dict( 'geometry'=this_geom, 'shape'=this_shape, ... )
-# dusty_inp = Template( open( 'dusty_inp.tmpl','r' ).read() )
-# #do the substitution
-# dusty_inp.substitute(var_dict)
-# dusty_inp_file = open('model.inp','w')
-# dusty_inp_file.write(dusty_inp)
-
-# We have to think a bit how to do this because the sub-options sometimes change depending on the top-level option.
-# for example a powerlaw density profile has different keywords than an exponential dependency
-# perhaps it is better to construct bit by bit the input file rather than with a global template
-
-
-
-
-
-
-
 # Input: wavelengths from obs., dust model (q_ij), parameters A, B, C_j
 # j = 0, nmaterial-1
 # Wavelengths need include both pivotal wavelengths for photometry and wavelengths for (multiple) spectra
@@ -191,6 +168,87 @@ from astropy import constants as const
 from astropy import units as u
 from astropy.modeling import blackbody
 from .models import AnalyticalModel
+
+# list of dusty input specific parameters that need to be initialised in __init__
+#
+# geometry
+
+# source_illumination_angle
+# source_angular_distribution
+
+# geometry_slab_right
+# source_right_angular_distribution
+# source_right_illumination_angle
+# right_blackbody_luminosities
+# right_blackbody_temperatures
+# right_engelke_sio_depth
+# right_engelke_temperature
+# right_powerlaw_k
+# right_powerlaw_lambda
+# right_spectralscale
+# right_spectralscale_dilution_factor
+# right_spectralscale_distance
+# right_spectralscale_energy_density
+# right_spectralscale_flux_entering
+# right_spectralscale_inner_temperature
+# right_spectralscale_luminosity
+# right_spectralshape
+# right_spectralshape_filename
+
+# source_central
+# source_external
+
+# spectralshape
+
+# blackbody_temperatures
+# blackbody_luminosities
+
+# powerlaw_lambda
+# powerlaw_k
+
+# engelke_temperature
+# engelke_sio_depth
+
+# spectralshape_filename
+
+# spectralscale
+# spectralscale_flux_entering
+
+# spectralscale_luminosity
+# spectralscale_distance
+
+# spectralscale_dilution_factor
+
+# spectralscale_energy_density
+
+# spectralscale_inner_temperature
+
+# density_distribution
+# density_falloff_rate
+# density_filename
+# density_outer_radius
+# density_powers
+# density_transition_radii
+
+# grain_composition
+# grain_fractional_abundances
+# grain_optical_properties_filename
+# grain_sublimation_temperature
+
+# grainsize_distribution
+# grainsize_amax
+# grainsize_amin
+# grainsize_q
+# grainsize_a0
+
+# tau_grid
+# tau_filename
+# tau_max
+# tau_min
+# tau_nmodels
+# tau_wavelength
+
+# flux_conservation_accuracy
 
 class DustySpectrum(AnalyticalModel):
     def __init__(self, wavelengths, flatprior=True,
@@ -243,6 +301,71 @@ class DustySpectrum(AnalyticalModel):
             print('Temperature must be positive and in Kelvin.')
 
 
+    def dusty_write_input_file_radiation_field(self,
+                                               spectralshape=spectralshape,
+                                               blackbody_temperatures=blackbody_temperatures,
+                                               blackbody_luminosities=blackbody_luminosities,
+                                               engelke_sio_depth=engelke_sio_depth,
+                                               engelke_temperature=engelke_temperature,
+                                               powerlaw_k=powerlaw_k,
+                                               powerlaw_lambda=powerlaw_lambda,
+                                               spectralscale=spectralscale,
+                                               spectralscale_dilution_factor=spectralscale_dilution_factor,
+                                               spectralscale_distance=spectralscale_distance,
+                                               spectralscale_energy_density=spectralscale_energy_density,
+                                               spectralscale_flux_entering=spectralscale_flux_entering,
+                                               spectralscale_inner_temperature=spectralscale_inner_temperature,
+                                               spectralscale_luminosity=spectralscale_luminosity,
+                                               spectralshape_filename=spectralshape_filename)
+
+        # spectral shape
+        if spectralshape.lower() == "blackbody":
+            dusty_inp_file.write("spectral shape = BLACK_BODY")
+            dusty_inp_file.write("Number of BB = "+str(len(blackbody_temperatures)))
+            dusty_inp_file.write("Temperatures = "+', '.join(map(str, blackbody_temperatures))+' K')
+            dusty_inp_file.write("Luminosities = "+', '.join(map(str, blackbody_luminosities)))
+        elif spectralshape.lower() == "engelke":
+            dusty_inp_file.write("spectral shape = ENGELKE_MARENGO")
+            dusty_inp_file.write("Temperature = "+str(engelke_temperature)+' K')
+            dusty_inp_file.write("SiO absorption depth = "+str(engelke_sio_depth)+' percents')
+        elif spectralshape.lower() == "powerlaw":
+            dusty_inp_file.write("spectral shape = POWERLAW")
+            dusty_inp_file.write("N = "+str(len(powerlaw_lambda)-1))
+            dusty_inp_file.write("lambda = "+', '.join(map(str, powerlaw_lambda))+' micron')
+            dusty_inp_file.write("k = "+', '.join(map(str, powerlaw_k)))
+        elif spectralshape.lower() == "file_lambda_f_lambda":
+            dusty_inp_file.write("spectral shape = FILE_LAMBDA_F_LAMBDA")
+            dusty_inp_file.write("filename = "+spectralshape_filename)
+        elif spectralshape.lower() == "file_f_lambda":
+            dusty_inp_file.write("spectral shape = FILE_F_LAMBDA")
+            dusty_inp_file.write("filename = "+spectralshape_filename)
+        elif spectralshape.lower() == "file_f_nu":
+            dusty_inp_file.write("spectral shape = FILE_F_NU")
+            dusty_inp_file.write("filename = "+spectralshape_filename)
+        else:
+            raise ValueError('DustySpectrum: no valid spectral shape specfied.')
+
+        # scale of the input spectrum (FLUX/LUM_R1/ENERGY_DEN/DILUTN_FAC/T1)
+        if spectralscale.lower() == "flux":
+            dusty_inp_file.write("Scale: type of entry = FLUX")
+            dusty_inp_file.write("Fe = "+str(spectralscale_flux_entering)+" W/m^2")
+        elif spectralscale.lower() == "luminosity":
+            dusty_inp_file.write("Scale: type of entry = LUM_R1")
+            dusty_inp_file.write("L = "+str(spectralscale_luminosity)+" % in L_sun")
+            dusty_inp_file.write("d = "+str(spectralscale_distance)+" cm")
+        elif spectralscale.lower() == "energy-density":
+            dusty_inp_file.write("Scale: type of entry = ENERGY_DEN")
+            dusty_inp_file.write("J = "+str(spectralscale_energy_density)+" W/m^2")
+        elif spectralscale.lower() == "dilution-factor":
+            dusty_inp_file.write("Scale: type of entry = DILUTN_FAC")
+            dusty_inp_file.write("W = "+str(spectralscale_dilution_factor))
+        elif spectralscale.lower() == "inner-temperature":
+            dusty_inp_file.write("Scale: type of entry = T1")
+            dusty_inp_file.write("Td = "+str(spectralscale_inner_temperature)+" K")
+        else:
+            raise ValueError('DustySpectrum: no valid spectral scaling specfied.')
+
+
     def dusty_write_input_file(self):
         # we constuct a dusty input file piece by piece
         dusty_inp_file = open("dusty_model.inp","w")
@@ -259,144 +382,104 @@ class DustySpectrum(AnalyticalModel):
                 dusty_inp_file.write("illumination angle = "+str(self.source_illumination_angle)+" degrees")
             else:
                 raise ValueError('DustySpectrum: no valid source angular distribution is specfied.')
-                
-        elif self.geometry.lower() == "sphere":
-            dusty_inp_file.write("geometry = sphere")
-            if self.source_central.lower() == "on" and self.source_external.lower() == "on":
-                raise ValueError('DustySpectrum: the spherical geometry does not allow external and central irradiation.')
-            if self.source_central.lower() == "off":
-                dusty_inp_file.write("central = off")
-                dusty_inp_file.write("external = on")
-            else:
-                dusty_inp_file.write("central = on")
-                dusty_inp_file.write("external = off")
 
-        elif  self.geometry.lower() == "sphere_matrix":
-            dusty_inp_file.write("geometry = sphere_matrix")
+            dusty_write_input_file_radiation_field(self,
+                                                   spectralshape=self.spectralshape,
+                                                   blackbody_temperatures=self.blackbody_temperatures,
+                                                   blackbody_luminosities=self.blackbody_luminosities,
+                                                   engelke_sio_depth=self.engelke_sio_depth,
+                                                   engelke_temperature=self.engelke_temperature,
+                                                   powerlaw_k=self.powerlaw_k,
+                                                   powerlaw_lambda=self.powerlaw_lambda,
+                                                   spectralscale=self.spectralscale,
+                                                   spectralscale_dilution_factor=self.spectralscale_dilution_factor,
+                                                   spectralscale_distance=self.spectralscale_distance,
+                                                   spectralscale_energy_density=self.spectralscale_energy_density,
+                                                   spectralscale_flux_entering=self.spectralscale_flux_entering,
+                                                   spectralscale_inner_temperature=self.spectralscale_inner_temperature,
+                                                   spectralscale_luminosity=self.spectralscale_luminosity,
+                                                   spectralshape_filename=self.spectralshape_filename)
+            
+            # repeat a section if slab geometry and right is on
+            # geometry
+            if (self.geometry.lower() == "slab") and (self.geometry_slab_right.lower() == "on"):
+                dusty_inp_file.write("right = ON")
+                
+                # slab needs also angular distribution = isotropic/directional
+                if self.source_right_angular_distribution.lower() == "isotropic":
+                    dusty_inp_file.write("anugular distribution = ISOTROPIC")
+                elif self.source_right_angular_distribution.lower() == "directional":
+                    dusty_inp_file.write("anugular distribution = DIRECTIONAL")
+                    dusty_inp_file.write("illumination angle = "+str(self.source_right_illumination_angle)+" degrees")
+                else:
+                    raise ValueError('DustySpectrum: no valid right source angular distribution is specfied.')
+                
+                dusty_write_input_file_radiation_field(self,
+                                                       spectralshape=self.right_spectralshape,
+                                                       blackbody_temperatures=self.right_blackbody_temperatures,
+                                                       blackbody_luminosities=self.right_blackbody_luminosities,
+                                                       engelke_sio_depth=self.right_engelke_sio_depth,
+                                                       engelke_temperature=self.right_engelke_temperature,
+                                                       powerlaw_k=self.right_powerlaw_k,
+                                                       powerlaw_lambda=self.right_powerlaw_lambda,
+                                                       spectralscale=self.right_spectralscale,
+                                                       spectralscale_dilution_factor=self.right_spectralscale_dilution_factor,
+                                                       spectralscale_distance=self.right_spectralscale_distance,
+                                                       spectralscale_energy_density=self.right_spectralscale_energy_density,
+                                                       spectralscale_flux_entering=self.right_spectralscale_flux_entering,
+                                                       spectralscale_inner_temperature=self.right_spectralscale_inner_temperature,
+                                                       spectralscale_luminosity=self.right_spectralscale_luminosity,
+                                                       spectralshape_filename=self.right_spectralshape_filename)
+            
+        elif self.geometry.lower() == "sphere" or self.geometry.lower() == "sphere_matrix":
+            if self.geometry.lower() == "sphere":
+                dusty_inp_file.write("geometry = SPHERE")
+            elif self.geometry.lower() == "sphere_matrix":
+                dusty_inp_file.write("geometry = SPHERE_MATRIX")
+
             if self.source_central.lower() == "on" and self.source_external.lower() == "on":
                 raise ValueError('DustySpectrum: the spherical geometry does not allow external and central irradiation.')
+
             if self.source_central.lower() == "off":
-                dusty_inp_file.write("central = off")
-                dusty_inp_file.write("external = on")
+                dusty_inp_file.write("central = OFF")
+                dusty_inp_file.write("external = ON")
+                dusty_write_input_file_radiation_field(self,
+                                                       spectralshape=self.spectralshape,
+                                                       blackbody_temperatures=self.blackbody_temperatures,
+                                                       blackbody_luminosities=self.blackbody_luminosities,
+                                                       engelke_sio_depth=self.engelke_sio_depth,
+                                                       engelke_temperature=self.engelke_temperature,
+                                                       powerlaw_k=self.powerlaw_k,
+                                                       powerlaw_lambda=self.powerlaw_lambda,
+                                                       spectralscale=self.spectralscale,
+                                                       spectralscale_dilution_factor=self.spectralscale_dilution_factor,
+                                                       spectralscale_distance=self.spectralscale_distance,
+                                                       spectralscale_energy_density=self.spectralscale_energy_density,
+                                                       spectralscale_flux_entering=self.spectralscale_flux_entering,
+                                                       spectralscale_inner_temperature=self.spectralscale_inner_temperature,
+                                                       spectralscale_luminosity=self.spectralscale_luminosity,
+                                                    spectralshape_filename=self.spectralshape_filename)
             else:
-                dusty_inp_file.write("central = on")
-                dusty_inp_file.write("external = off")
+                dusty_inp_file.write("central = ON")
+                dusty_write_input_file_radiation_field(self,
+                                                       spectralshape=self.spectralshape,
+                                                       blackbody_temperatures=self.blackbody_temperatures,
+                                                       blackbody_luminosities=self.blackbody_luminosities,
+                                                       engelke_sio_depth=self.engelke_sio_depth,
+                                                       engelke_temperature=self.engelke_temperature,
+                                                       powerlaw_k=self.powerlaw_k,
+                                                       powerlaw_lambda=self.powerlaw_lambda,
+                                                       spectralscale=self.spectralscale,
+                                                       spectralscale_dilution_factor=self.spectralscale_dilution_factor,
+                                                       spectralscale_distance=self.spectralscale_distance,
+                                                       spectralscale_energy_density=self.spectralscale_energy_density,
+                                                       spectralscale_flux_entering=self.spectralscale_flux_entering,
+                                                       spectralscale_inner_temperature=self.spectralscale_inner_temperature,
+                                                       spectralscale_luminosity=self.spectralscale_luminosity,
+                                                       spectralshape_filename=self.spectralshape_filename)
+                dusty_inp_file.write("external = OFF")
         else:
             raise ValueError('DustySpectrum: no valid geometry specfied.')
-            
-        # spectral shape
-        if self.spectralshape.lower() == "blackbody":
-            dusty_inp_file.write("spectral shape = BLACK_BODY")
-            dusty_inp_file.write("Number of BB = "+str(len(self.blackbody_temperatures)))
-            dusty_inp_file.write("Temperatures = "+', '.join(map(str, self.blackbody_temperatures))+' K')
-            dusty_inp_file.write("Luminosities = "+', '.join(map(str, self.blackbody_luminosities)))
-        elif self.spectralshape.lower() == "engelke":
-            dusty_inp_file.write("spectral shape = ENGELKE_MARENGO")
-            dusty_inp_file.write("Temperature = "+str(self.engelke_temperature)+' K')
-            dusty_inp_file.write("SiO absorption depth = "+str(self.engelke_sio_depth)+' percents')
-        elif self.spectralshape.lower() == "powerlaw":
-            dusty_inp_file.write("spectral shape = POWERLAW")
-            dusty_inp_file.write("N = "+str(len(self.powerlaw_lambda)-1))
-            dusty_inp_file.write("lambda = "+', '.join(map(str, self.powerlaw_lambda))+' micron')
-            dusty_inp_file.write("k = "+', '.join(map(str, self.powerlaw_k)))
-        elif self.spectralshape.lower() == "file_lambda_f_lambda":
-            dusty_inp_file.write("spectral shape = FILE_LAMBDA_F_LAMBDA")
-            dusty_inp_file.write("filename = "+self.spectralshape_filename)
-        elif self.spectralshape.lower() == "file_f_lambda":
-            dusty_inp_file.write("spectral shape = FILE_F_LAMBDA")
-            dusty_inp_file.write("filename = "+self.spectralshape_filename)
-        elif self.spectralshape.lower() == "file_f_nu":
-            dusty_inp_file.write("spectral shape = FILE_F_NU")
-            dusty_inp_file.write("filename = "+self.spectralshape_filename)
-        else:
-            raise ValueError('DustySpectrum: no valid spectral shape specfied.')
-
-        # scale of the input spectrum (FLUX/LUM_R1/ENERGY_DEN/DILUTN_FAC/T1)
-        # note that the doc lists several combinations of shape,geometry and scaling that are either required or
-        # mutually exclusive. Best to catch those in __init__
-        if self.spectralscale.lower() == "flux":
-            dusty_inp_file.write("Scale: type of entry = FLUX")
-            dusty_inp_file.write("Fe = "+str(self.spectralscale_flux_entering)+" W/m^2")
-        elif self.spectralscale.lower() == "luminosity":
-            dusty_inp_file.write("Scale: type of entry = LUM_R1")
-            dusty_inp_file.write("L = "+str(self.spectralscale_luminosity)+" % in L_sun")
-            dusty_inp_file.write("d = "+str(self.spectralscale_distance)+" cm")
-        elif self.spectralscale.lower() == "energy-density":
-            dusty_inp_file.write("Scale: type of entry = ENERGY_DEN")
-            dusty_inp_file.write("J = "+str(self.spectralscale_energy_density)+" W/m^2")
-        elif self.spectralscale.lower() == "dilution-factor":
-            dusty_inp_file.write("Scale: type of entry = DILUTN_FAC")
-            dusty_inp_file.write("W = "+str(self.spectralscale_dilution_factor))
-        elif self.spectralscale.lower() == "inner-temperature":
-            dusty_inp_file.write("Scale: type of entry = T1")
-            dusty_inp_file.write("Td = "+str(self.spectralscale_inner_temperature)+" K")
-        else:
-            raise ValueError('DustySpectrum: no valid spectral scaling specfied.')
-
-# repeat a section if slab geometry and right is on
-        # geometry
-        if (self.geometry.lower() == "slab") and (self.geometry_slab_right.lower() == "on"):
-            dusty_inp_file.write("right = ON")
-
-            # slab needs also angular distribution = isotropic/directional
-            if self.source_right_angular_distribution.lower() == "isotropic":
-                dusty_inp_file.write("anugular distribution = ISOTROPIC")
-            elif self.source_right_angular_distribution.lower() == "directional":
-                dusty_inp_file.write("anugular distribution = DIRECTIONAL")
-                dusty_inp_file.write("illumination angle = "+str(self.source_right_illumination_angle)+" degrees")
-            else:
-                raise ValueError('DustySpectrum: no valid right source angular distribution is specfied.')
-            
-            # spectral shape
-            if self.right_spectralshape.lower() == "blackbody":
-                dusty_inp_file.write("spectral shape = BLACK_BODY")
-                dusty_inp_file.write("Number of BB = "+str(len(self.right_blackbody_temperatures)))
-                dusty_inp_file.write("Temperatures = "+', '.join(map(str, self.right_blackbody_temperatures))+' K')
-                dusty_inp_file.write("Luminosities = "+', '.join(map(str, self.right_blackbody_luminosities)))
-            elif self.right_spectralshape.lower() == "engelke":
-                dusty_inp_file.write("spectral shape = ENGELKE_MARENGO")
-                dusty_inp_file.write("Temperature = "+str(self.right_engelke_temperature)+' K')
-                dusty_inp_file.write("SiO absorption depth = "+str(self.right_engelke_sio_depth)+' percents')
-            elif self.right_spectralshape.lower() == "powerlaw":
-                dusty_inp_file.write("spectral shape = POWERLAW")
-                dusty_inp_file.write("N = "+str(len(self.right_powerlaw_lambda)-1))
-                dusty_inp_file.write("lambda = "+', '.join(map(str, self.right_powerlaw_lambda))+' micron')
-                dusty_inp_file.write("k = "+', '.join(map(str, self.right_powerlaw_k)))
-            elif self.right_spectralshape.lower() == "file_lambda_f_lambda":
-                dusty_inp_file.write("spectral shape = FILE_LAMBDA_F_LAMBDA")
-                dusty_inp_file.write("filename = "+self.right_spectralshape_filename)
-            elif self.right_spectralshape.lower() == "file_f_lambda":
-                dusty_inp_file.write("spectral shape = FILE_F_LAMBDA")
-                dusty_inp_file.write("filename = "+self.right_spectralshape_filename)
-            elif self.right_spectralshape.lower() == "file_f_nu":
-                dusty_inp_file.write("spectral shape = FILE_F_NU")
-                dusty_inp_file.write("filename = "+self.right_spectralshape_filename)
-            else:
-                raise ValueError('DustySpectrum: no valid right spectral shape specfied.')
-
-            # scale of the input spectrum (FLUX/LUM_R1/ENERGY_DEN/DILUTN_FAC/T1)
-            # note that the doc lists several combinations of shape,geometry and scaling that are either required or
-            # mutually exclusive. Best to catch those in __init__
-            if self.right_spectralscale.lower() == "flux":
-                dusty_inp_file.write("Scale: type of entry = FLUX")
-                dusty_inp_file.write("Fe = "+str(self.right_spectralscale_flux_entering)+" W/m^2")
-            elif self.right_spectralscale.lower() == "luminosity":
-                dusty_inp_file.write("Scale: type of entry = LUM_R1")
-                dusty_inp_file.write("L = "+str(self.right_spectralscale_luminosity)+" % in L_sun")
-                dusty_inp_file.write("d = "+str(self.right_spectralscale_distance)+" cm")
-            elif self.right_spectralscale.lower() == "energy-density":
-                dusty_inp_file.write("Scale: type of entry = ENERGY_DEN")
-                dusty_inp_file.write("J = "+str(self.right_spectralscale_energy_density)+" W/m^2")
-            elif self.right_spectralscale.lower() == "dilution-factor":
-                dusty_inp_file.write("Scale: type of entry = DILUTN_FAC")
-                dusty_inp_file.write("W = "+str(self.right_spectralscale_dilution_factor))
-            elif self.right_spectralscale.lower() == "inner-temperature":
-                dusty_inp_file.write("Scale: type of entry = T1")
-                dusty_inp_file.write("Td = "+str(self.right_spectralscale_inner_temperature)+" K")
-            else:
-                raise ValueError('DustySpectrum: no valid right spectral scaling specfied.')
-
-
 
         
 #      3.1 Chemical composition %(available options: common_grain_composite\common_and_addl_grain\tabulated)
@@ -422,6 +505,8 @@ class DustySpectrum(AnalyticalModel):
         else:
             raise ValueError('DustySpectrum: no valid grain composition specfied.')
 
+        dusty_inp_file.write("Sublimation Temperature = "+self.grain_sublimation_temperature+" K")
+        
         if self.grainsize_distribution.lower() == "mrn":
             dusty_inp_file.write("Size distribution = MRN")
         elif self.grainsize_distribution.lower() == "modified mrn":
@@ -429,7 +514,7 @@ class DustySpectrum(AnalyticalModel):
             dusty_inp_file.write("q = "+str(self.grainsize_q))
             dusty_inp_file.write("a(min) = "+str(self.grainsize_amin)+" micron")
             dusty_inp_file.write("a(max) = "+str(self.grainsize_amax)+" micron")
-        elif self.grain_size_distribution.lower() == "kmh":
+        elif self.grainsize_distribution.lower() == "kmh":
             dusty_inp_file.write("Size distribution = KMH")
             dusty_inp_file.write("q = "+str(self.grainsize_q))
             dusty_inp_file.write("a(min) = "+str(self.grainsize_amin)+" micron")
@@ -440,23 +525,71 @@ class DustySpectrum(AnalyticalModel):
 # 	   
 #      4) Density Distribution %(available options: powd\expd\rdw\rdwa\usr_suppld)
 # 
-#          	 density type = POWD
-#         	 number of powers = 1                
-#         	 shell's relative thickness = 100.
-#         	 power = 0.
-# 
-# 
-#      5) Optical Depth: %(available options: linear\logarithmic\user_supplied)
-#    
-# 		 grid type = logarithmic % log grid
-#         	 lambda0 = 0.55 micron   % fiducial wavelength
-# 		 % minimum optical depth @ fiducial wavelength
-#         	 tau(min) = 10.0; 
-# 		 % maximum optical depth @ fiducial wavelength
-# 		 tau(max) = 100.0  
-#         	 number of models = 2
+        if self.density_distribution.lower() == "powerlaw":
+            dusty_inp_file.write("density type = POWD")
+            dusty_inp_file.write("N = "+str(len(self.density_transition_radii)))
+            dusty_inp_file.write("transition radii = "+', '.join(map(str, self.density_transition_radii)))
+            dusty_inp_file.write("power indices = "+', '.join(map(str, self.density_powers)))
+        elif self.density_distribution.lower() == "exponential":
+            dusty_inp_file.write("density type = EXPD")
+            dusty_inp_file.write("Y = "+str(self.density_outer_radius))
+            dusty_inp_file.write("sigma = "+str(self.density_falloff_rate))
+        elif self.density_distribution.lower() == "radiation driven wind":
+            dusty_inp_file.write("density type = RDW")
+            dusty_inp_file.write("Y = "+str(self.density_outer_radius))
+        elif self.density_distribution.lower() == "radiation driven wind analytic":
+            dusty_inp_file.write("density type = RDWA")
+            dusty_inp_file.write("Y = "+str(self.density_outer_radius))
+        elif self.density_distribution.lower() == "user supplied":
+            dusty_inp_file.write("density type = USR_SUPPLD")
+            dusty_inp_file.write("profile filename = "+self.density_filename)
+        else:
+            raise ValueError('DustySpectrum: no valid density distribution specfied.')
+
+        #      5) Optical Depth: %(available options: linear\logarithmic\user_supplied)
+        # (SH Oct  4 2018)
+        #      Some thought needs to go into this. Dusty can calculate many models that stop at different depths in the dust layer.
+        #      For the sampler it is simplest to calculate only one model. But in terms of overheads it might be interestin to calculate several
+
+        if self.tau_grid.lower() == "linear":
+            dusty_inp_file.write("grid type = LINEAR")
+            dusty_inp_file.write("lambda0 = "+str(self.tau_wavelength)+" micron")
+            dusty_inp_file.write("tau(min) = "+str(self.tau_min))
+            dusty_inp_file.write("tau(max) = "+str(self.tau_max))
+            dusty_inp_file.write("number of models = "+str(self.tau_nmodels))
+        elif self.tau_grid.lower() == "logarithmic":
+            dusty_inp_file.write("grid type = LOGARITHMIC")
+            dusty_inp_file.write("lambda0 = "+str(self.tau_wavelength)+" micron")
+            dusty_inp_file.write("tau(min) = "+str(self.tau_min))
+            dusty_inp_file.write("tau(max) = "+str(self.tau_max))
+            dusty_inp_file.write("number of models = "+str(self.tau_nmodels))
+        elif self.tau_grid.lower() == "user supplied":
+            dusty_inp_file.write("grid type = USER_SUPPLIED")
+            # not sure about the following
+            dusty_inp_file.write("tau values filename = "+self.tau_filename)
+        else:
+            raise ValueError('DustySpectrum: no valid tau grid type specfied.')
 
 
+        #   III. NUMERICS                                                           
+        #       
+        dusty_inp_file.write("accuracy for flux conservation = "+self.flux_conservation_accuracy)
+
+        #   IV. OUTPUT PARAMETERS                                                 
+#         FILE DESCRIPTION                               FLAG        
+#        ------------------------------------------------------------     
+#        - detailed spectra for each model;           fname.s### = 2
+#        - images at specified wavelengths;           fname.i### = 0
+#        - en.density at specified radii;             fname.j### = 0
+#        - radial profiles for each model;            fname.r### = 2
+#        - detailed run-time messages;                fname.m### = 2
+#        ------------------------------------------------------------- 
+        dusty_inp_file.write("- detailed spectra for each model;           fname.s### = 2")
+        dusty_inp_file.write("- images at specified wavelengths;           fname.i### = 0")
+        dusty_inp_file.write("- en.density at specified radii;             fname.j### = 0")
+        dusty_inp_file.write("- radial profiles for each model;            fname.r### = 0")
+        dusty_inp_file.write("- detailed run-time messages;                fname.m### = 0")
+        
 
 
         bb = blackbody.blackbody_nu(freq,t).to(u.Jy / u.sr).value
@@ -479,6 +612,7 @@ class DustySpectrum(AnalyticalModel):
                 return -np.inf
         else:
             raise NotImplementedError()
+
 
 
 
