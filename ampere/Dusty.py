@@ -243,32 +243,25 @@ class DustySpectrum(AnalyticalModel):
         if t <= 0.0:
             print('Temperature must be positive and in Kelvin.')
 
+
+    def dusty_write_input_file(self):
         # we constuct a dusty input file piece by piece
         dusty_inp_file = open("dusty_model.inp","w")
 
         # geometry
         if self.geometry.lower() == "slab":
-            dusty_inp_file.write("geometry = slab")
-
-            if self.source_central.lower() == "OFF":
-                dusty_inp_file.write("central = off")
-            else:
-                dusty_inp_file.write("central = on")
-                
-            if self.source_external.lower() == "OFF":
-                dusty_inp_file.write("external = off")
-            else:
-                dusty_inp_file.write("external = on")
+            dusty_inp_file.write("geometry = SLAB")
 
             # slab needs also angular distribution = isotropic/directional
-            # directional needs illumination angle = fff (fff<85)
-
-            # slab allows right = on
-            # if on repeat
-            # angular distribution = isotropic/directional
-            # directional needs illumination angle = fff (fff<85)
-            
-        else:
+            if self.source_angular_distribution.lower() == "isotropic":
+                dusty_inp_file.write("anugular distribution = ISOTROPIC")
+            elif self.source_angular_distribution.lower() == "directional":
+                dusty_inp_file.write("anugular distribution = DIRECTIONAL")
+                dusty_inp_file.write("illumination angle = "+str(self.source_illumination_angle)+" degrees")
+            else:
+                raise ValueError('DustySpectrum: no valid source angular distribution is specfied.')
+                
+        elif self.geometry.lower() == "sphere":
             dusty_inp_file.write("geometry = sphere")
             if self.source_central.lower() == "on" and self.source_external.lower() == "on":
                 raise ValueError('DustySpectrum: the spherical geometry does not allow external and central irradiation.')
@@ -279,6 +272,19 @@ class DustySpectrum(AnalyticalModel):
                 dusty_inp_file.write("central = on")
                 dusty_inp_file.write("external = off")
 
+        elif  self.geometry.lower() == "sphere_matrix":
+            dusty_inp_file.write("geometry = sphere_matrix")
+            if self.source_central.lower() == "on" and self.source_external.lower() == "on":
+                raise ValueError('DustySpectrum: the spherical geometry does not allow external and central irradiation.')
+            if self.source_central.lower() == "off":
+                dusty_inp_file.write("central = off")
+                dusty_inp_file.write("external = on")
+            else:
+                dusty_inp_file.write("central = on")
+                dusty_inp_file.write("external = off")
+        else:
+            raise ValueError('DustySpectrum: no valid geometry specfied.')
+            
         # spectral shape
         if self.spectralshape.lower() == "blackbody":
             dusty_inp_file.write("spectral shape = BLACK_BODY")
@@ -310,33 +316,128 @@ class DustySpectrum(AnalyticalModel):
         # note that the doc lists several combinations of shape,geometry and scaling that are either required or
         # mutually exclusive. Best to catch those in __init__
         if self.spectralscale.lower() == "flux":
-            dusty_inp_file.write("Scale: type of entry= FLUX")
+            dusty_inp_file.write("Scale: type of entry = FLUX")
             dusty_inp_file.write("Fe = "+str(self.spectralscale_flux_entering)+" W/m^2")
         elif self.spectralscale.lower() == "luminosity":
-            dusty_inp_file.write("Scale: type of entry= LUM_R1")
+            dusty_inp_file.write("Scale: type of entry = LUM_R1")
             dusty_inp_file.write("L = "+str(self.spectralscale_luminosity)+" % in L_sun")
             dusty_inp_file.write("d = "+str(self.spectralscale_distance)+" cm")
         elif self.spectralscale.lower() == "energy-density":
-            dusty_inp_file.write("Scale: type of entry= ENERGY_DEN")
+            dusty_inp_file.write("Scale: type of entry = ENERGY_DEN")
             dusty_inp_file.write("J = "+str(self.spectralscale_energy_density)+" W/m^2")
         elif self.spectralscale.lower() == "dilution-factor":
-            dusty_inp_file.write("Scale: type of entry= DILUTN_FAC")
+            dusty_inp_file.write("Scale: type of entry = DILUTN_FAC")
             dusty_inp_file.write("W = "+str(self.spectralscale_dilution_factor))
         elif self.spectralscale.lower() == "inner-temperature":
-            dusty_inp_file.write("Scale: type of entry= T1")
+            dusty_inp_file.write("Scale: type of entry = T1")
             dusty_inp_file.write("Td = "+str(self.spectralscale_inner_temperature)+" K")
         else:
             raise ValueError('DustySpectrum: no valid spectral scaling specfied.')
 
+# repeat a section if slab geometry and right is on
+        # geometry
+        if (self.geometry.lower() == "slab") and (self.geometry_slab_right.lower() == "on"):
+            dusty_inp_file.write("right = ON")
 
+            # slab needs also angular distribution = isotropic/directional
+            if self.source_right_angular_distribution.lower() == "isotropic":
+                dusty_inp_file.write("anugular distribution = ISOTROPIC")
+            elif self.source_right_angular_distribution.lower() == "directional":
+                dusty_inp_file.write("anugular distribution = DIRECTIONAL")
+                dusty_inp_file.write("illumination angle = "+str(self.source_right_illumination_angle)+" degrees")
+            else:
+                raise ValueError('DustySpectrum: no valid right source angular distribution is specfied.')
+            
+            # spectral shape
+            if self.right_spectralshape.lower() == "blackbody":
+                dusty_inp_file.write("spectral shape = BLACK_BODY")
+                dusty_inp_file.write("Number of BB = "+str(len(self.right_blackbody_temperatures)))
+                dusty_inp_file.write("Temperatures = "+', '.join(map(str, self.right_blackbody_temperatures))+' K')
+                dusty_inp_file.write("Luminosities = "+', '.join(map(str, self.right_blackbody_luminosities)))
+            elif self.right_spectralshape.lower() == "engelke":
+                dusty_inp_file.write("spectral shape = ENGELKE_MARENGO")
+                dusty_inp_file.write("Temperature = "+str(self.right_engelke_temperature)+' K')
+                dusty_inp_file.write("SiO absorption depth = "+str(self.right_engelke_sio_depth)+' percents')
+            elif self.right_spectralshape.lower() == "powerlaw":
+                dusty_inp_file.write("spectral shape = POWERLAW")
+                dusty_inp_file.write("N = "+str(len(self.right_powerlaw_lambda)-1))
+                dusty_inp_file.write("lambda = "+', '.join(map(str, self.right_powerlaw_lambda))+' micron')
+                dusty_inp_file.write("k = "+', '.join(map(str, self.right_powerlaw_k)))
+            elif self.right_spectralshape.lower() == "file_lambda_f_lambda":
+                dusty_inp_file.write("spectral shape = FILE_LAMBDA_F_LAMBDA")
+                dusty_inp_file.write("filename = "+self.right_spectralshape_filename)
+            elif self.right_spectralshape.lower() == "file_f_lambda":
+                dusty_inp_file.write("spectral shape = FILE_F_LAMBDA")
+                dusty_inp_file.write("filename = "+self.right_spectralshape_filename)
+            elif self.right_spectralshape.lower() == "file_f_nu":
+                dusty_inp_file.write("spectral shape = FILE_F_NU")
+                dusty_inp_file.write("filename = "+self.right_spectralshape_filename)
+            else:
+                raise ValueError('DustySpectrum: no valid right spectral shape specfied.')
+
+            # scale of the input spectrum (FLUX/LUM_R1/ENERGY_DEN/DILUTN_FAC/T1)
+            # note that the doc lists several combinations of shape,geometry and scaling that are either required or
+            # mutually exclusive. Best to catch those in __init__
+            if self.right_spectralscale.lower() == "flux":
+                dusty_inp_file.write("Scale: type of entry = FLUX")
+                dusty_inp_file.write("Fe = "+str(self.right_spectralscale_flux_entering)+" W/m^2")
+            elif self.right_spectralscale.lower() == "luminosity":
+                dusty_inp_file.write("Scale: type of entry = LUM_R1")
+                dusty_inp_file.write("L = "+str(self.right_spectralscale_luminosity)+" % in L_sun")
+                dusty_inp_file.write("d = "+str(self.right_spectralscale_distance)+" cm")
+            elif self.right_spectralscale.lower() == "energy-density":
+                dusty_inp_file.write("Scale: type of entry = ENERGY_DEN")
+                dusty_inp_file.write("J = "+str(self.right_spectralscale_energy_density)+" W/m^2")
+            elif self.right_spectralscale.lower() == "dilution-factor":
+                dusty_inp_file.write("Scale: type of entry = DILUTN_FAC")
+                dusty_inp_file.write("W = "+str(self.right_spectralscale_dilution_factor))
+            elif self.right_spectralscale.lower() == "inner-temperature":
+                dusty_inp_file.write("Scale: type of entry = T1")
+                dusty_inp_file.write("Td = "+str(self.right_spectralscale_inner_temperature)+" K")
+            else:
+                raise ValueError('DustySpectrum: no valid right spectral scaling specfied.')
+
+
+
+        
 #      3.1 Chemical composition %(available options: common_grain_composite\common_and_addl_grain\tabulated)
-# 
-#                 optical properties index = common_grain_composite
-#      		Abundances for supported grain types:
-#                	Sil-Ow  Sil-Oc  Sil-DL  grf-DL  amC-Hn  SiC-Pg 
-#            x =  0.00    0.70    0.00    0.00    0.30    0.00
-# 	        SIZE DISTRIBUTION = MRN
-# 	        Tsub = 1500.
+
+        if self.grain_composition.lower() == "common_grain_composite":
+            dusty_inp_file.write("optical properties index = COMMON_GRAIN_COMPOSITE")
+            dusty_inp_file.write("Abundances for supported grain types:")
+            dusty_inp_file.write("Sil-Ow  Sil-Oc  Sil-DL  grf-DL  amC-Hn  SiC-Pg")
+            dusty_inp_file.write("x = "+map(str, self.grain_fractional_abundances))
+        elif self.grain_composition.lower() == "common_and_addl_grain":
+            dusty_inp_file.write("optical properties index = COMMON_AND_ADDL_GRAIN")
+            dusty_inp_file.write("Abundances for supported grain types:")
+            dusty_inp_file.write("Sil-Ow  Sil-Oc  Sil-DL  grf-DL  amC-Hn  SiC-Pg")
+            dusty_inp_file.write("x = "+map(str, self.grain_fractional_abundances[0:6]))
+            dusty_inp_file.write("Number of additional components = 3, propperties listed in files")
+            dusty_inp_file.write("amC-zb1.nk")
+            dusty_inp_file.write("amC-zb2.nk")
+            dusty_inp_file.write("amC-zb3.nk")
+            dusty_inp_file.write("Abundances for these components = "+map(str, self.grain_fractional_abundances[6:9]))
+        elif self.grain_composition.lower() == "tabulated":
+            dusty_inp_file.write("optical properties index = TABULATED")
+            dusty_inp_file.write("X-sections input file = "+self.grain_optical_properties_filename)
+        else:
+            raise ValueError('DustySpectrum: no valid grain composition specfied.')
+
+        if self.grainsize_distribution.lower() == "mrn":
+            dusty_inp_file.write("Size distribution = MRN")
+        elif self.grainsize_distribution.lower() == "modified mrn":
+            dusty_inp_file.write("Size distribution = MODIFIED_MRN")
+            dusty_inp_file.write("q = "+str(self.grainsize_q))
+            dusty_inp_file.write("a(min) = "+str(self.grainsize_amin)+" micron")
+            dusty_inp_file.write("a(max) = "+str(self.grainsize_amax)+" micron")
+        elif self.grain_size_distribution.lower() == "kmh":
+            dusty_inp_file.write("Size distribution = KMH")
+            dusty_inp_file.write("q = "+str(self.grainsize_q))
+            dusty_inp_file.write("a(min) = "+str(self.grainsize_amin)+" micron")
+            dusty_inp_file.write("a0 = "+str(self.grainsize_a0)+" micron")
+        else:
+            raise ValueError('DustySpectrum: no valid grain size distribution specfied.')
+
 # 	   
 #      4) Density Distribution %(available options: powd\expd\rdw\rdwa\usr_suppld)
 # 
