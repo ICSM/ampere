@@ -86,7 +86,7 @@ if __name__=="__main__":
     #print(np.max(pos, axis=0))
     #print(np.min(pos, axis=0))
     opt.optimise(nsamples = 1000, burnin=500,guess=pos)
-    opt.postprocess()
+    opt.postProcess()
 
     """save optimiser state for later """
     #opt.save(filename="output_file",pickle=True) #Save as a python object

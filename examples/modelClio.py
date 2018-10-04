@@ -54,7 +54,7 @@ import pyphot
 
 if __name__=="__main__":
     """
-    This script will take one blackbody and modify it by a wavelength dependent opacity.
+    This script applies the model from Gielen et al. (2008)
     """
 
     """ Read in some data """
@@ -105,7 +105,7 @@ if __name__=="__main__":
     mdl = DualBlackBodyDust(modwaves,
                           normWave = 1., sigmaNormWave = 1.,
                           opacityFileList=opacities,
-                          redshift = False, lims = np.array([[0,1e6],
+                          lims = np.array([[0,1e6],
                                                              [-100,100],
                                                              [-10,10],
                                                              [0,np.inf]])
