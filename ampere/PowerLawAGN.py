@@ -14,7 +14,7 @@ from .models import AnalyticalModel
 class DualBlackBodyDust(AnalyticalModel):
     def __init__(self, wavelengths, flatprior=True,
                  normWave = 1., sigmaNormWave = 1.,
-                 opacityFileList=opacities, 
+                 opacityFileList=[], #opacities, #turning this into an empty list so the code will import correctly
                  lims=np.array([[100,1000],[0,np.inf],
                                 [100,1000],[0,np.inf],
                                 [100,1000],[0,np.inf],
