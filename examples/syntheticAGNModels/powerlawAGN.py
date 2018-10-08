@@ -78,7 +78,7 @@ if __name__=="__main__":
     
     optimizer = EmceeSearch(model=model, data=[photometry,spec0,spec1], nwalkers=100)
 
-    optimizer.optimise(nsamples=12000, burnin=10000, guess=[[-2.5, .5, -1., -10, -0.5, -0.3, -10., 1.0, 1.0, 1.0, 1.0 ,1.0, 1.0] + np.random.rand(13)*[1,1,1,1,0.2,0.2, 1,1,1,1,1,1,1] for i in range(optimizer.nwalkers)])
+    optimizer.optimise(nsamples=300000, burnin=290000, guess=[[-2.5, .5, -1., -10, -0.5, -0.3, -10., 1.0, 1.0, 1.0, 1.0 ,1.0, 1.0] + np.random.rand(13)*[1,1,1,1,0.2,0.2, 1,1,1,1,1,1,1] for i in range(optimizer.nwalkers)])
 
     optimizer.postProcess()
 
@@ -107,5 +107,10 @@ if __name__=="__main__":
     fig.savefig("seds.png")
 
     print("Acceptance fractions: ",optimizer.sampler.acceptance_fraction)
-    print("Estimates of the autocorelation lengths: ",optimizer.sampler.acor)
-    
+    try:
+        print("Estimates of the autocorelation lengths: ",optimizer.sampler.acor)
+    except Exception as e:
+        print(str(e))
+        print("Try using more samples")
+        print("Current settings - nwalkers = ",opt.nwalkers,",  nsamples = ",opt.nsamp)
+        
