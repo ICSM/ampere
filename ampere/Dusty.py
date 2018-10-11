@@ -175,14 +175,18 @@ class DustySpectrum(AnalyticalModel):
                  normWave = 1., sigmaNormWave = 1.,opacityFileList=opacities,
                  redshift = False, lims=np.array([[0,1e6],[-100,100],[-10,10],[0,np.inf]])
                  # these are all the possible input values. Some have defaults most are not set
-                 # the defaults are shown to have some kind of AGB star wind
+                 # the defaults are set to what I think might be a reasonable basic setup
+                 #
+                 # The checks below will complain about needed options that are set to None
+                 # If these are going to be variables set them to "variable"
+                 #
                  ,geometry="sphere"
                  ,geometry_illumination_angle=None
                  ,geometry_angular_distribution=None
                  ,geometry_central="on"
                  ,geometry_external ="off"
                  ,spectralshape="blackbody"
-                 ,spectralshape_blackbody_temperatures=3000.
+                 ,spectralshape_blackbody_temperatures=None
                  ,spectralshape_blackbody_luminosities=None
                  ,spectralshape_powerlaw_lambda=None
                  ,spectralshape_powerlaw_k=None
@@ -191,8 +195,8 @@ class DustySpectrum(AnalyticalModel):
                  ,spectralshape_filename=None
                  ,spectralscale="inner temperature"
                  ,spectralscale_flux_entering=None
-                 ,spectralscale_luminosity=1e4
-                 ,spectralscale_distance=1.4959787e+14 # 10 AU in cm
+                 ,spectralscale_luminosity=None
+                 ,spectralscale_distance=None
                  ,spectralscale_dilution_factor=None
                  ,spectralscale_energy_density=None
                  ,spectralscale_inner_temperature=None
@@ -217,11 +221,11 @@ class DustySpectrum(AnalyticalModel):
                  ,density_distribution=None
                  ,density_transition_radii=None
                  ,density_powers=None
-                 ,density_outer_radius=100
+                 ,density_outer_radius=None
                  ,density_falloff_rate=None
                  ,density_filename=None
                  ,grain_composition="common_grain_composite"
-                 ,grain_fractional_abundances=[0,0,1,0,0,0]
+                 ,grain_fractional_abundances=None
                  ,grain_optical_properties_filename=None
                  ,grain_sublimation_temperature=1500.
                  ,grainsize_distribution="mrn"
@@ -289,80 +293,257 @@ class DustySpectrum(AnalyticalModel):
 
         # engelke_marengo needs temperature and SiO depth
 
-        # 
-        if geometry.lower() == "slab":
+        # GEOMETRY BLOCK
+        if geometry.lower() == "sphere":
+            self.geometry="sphere"
+            spherical=True
+        elif geometry.lower() == "sphere_matrix":
+            self.geometry="sphere_matrix"
+            spherical=True
+        elif geometry.lower() == "slab":
             self.geometry="slab"
+            spherical=False
+        else:
+            raise ValueError('Dusty.__init__: geometry must be set (slab/sphere/sphere_matrix)')
+
+        if spherical:
+            if geometry_central.lower()=="on":
+                self.geometry_central=True
+            else:
+                self.geometry_central=False
+            if geometry_external.lower()=="on":
+                self.geometry_external=True
+            else:
+                self.geometry_external=False
+            if not self.geometry_external and not self.geometry_central:
+                raise ValueError('Dusty.__init__: spherical needs either geometry_central or geometry_external set to on')
+            if self.geometry_external and self.geometry_central:
+                raise ValueError('Dusty.__init__: spherical cannot handle central AND external radiation')
+        else:
             if geometry_angular_distribution.lower() == "isotropic":
                 self.geometry_angular_distribution="isotropic"
             elif geometry_angular_distribution.lower() == "directional":
                 self.geometry_angular_distribution="directional"
-                if 
+                if geometry_illumination_angle == None:
+                    raise ValueError('Dusty.__init__: slab with directional needs an illumination angle')
+                elif str(geometry_illumination_angle).lower() == "variable":
+                    #
+                elif geometry_illumination_angle > 85.0:
+                    raise ValueError('Dusty.__init__: slab directional: illumination angle needs to be smaller than 85')
+                else:
+                    self.geometry_illumination_angle = geometry_illumination_angle
             else:
                 raise ValueError('Dusty.__init__: slab geometry:specify angular distribution of the radiation (isotropic/directional)')
+                
+            if geometry_toggle_right.lower() == "on":
+                self.geometry_toggle_right=True
+                if geometry_right_angular_distribution.lower() == "isotropic":
+                    self.geometry_right_angular_distribution="isotropic"
+                elif geometry_right_angular_distribution.lower() == "directional":
+                    self.geometry_right_angular_distribution="directional"
+                    if geometry_right_illumination_angle == None:
+                        raise ValueError('Dusty.__init__: slab-right with directional needs an illumination angle')
+                    elif str(geometry_right_illumination_angle).lower() == "variable":
+                        #
+                    elif geometry_right_illumination_angle > 85.0:
+                        raise ValueError('Dusty.__init__: slab-right directional: illumination angle needs to be smaller than 85')
+                    else:
+                        self.geometry_right_illumination_angle = geometry_right_illumination_angle
+            else:
+                raise ValueError('Dusty.__init__: slab-right geometry:specify angular distribution of the radiation (isotropic/directional)')
+            elif geometry_toggle_right.lower() == None:
+                #
+            else:
+                raise ValueError('Dusty.__init__: value passed to geometry_toggle_right not understood')
+                    
             
-            ,
+        # SPECTRALSHAPE BLOCK
+        needfile=False
+        if spectralshape.lower() == "blackbody":
+            self.spectralshape="blackbody"
+            if spectralshape_blackbody_temperatures=None:
+                raise ValueError('Dusty.__init__: spectralshape blackbody needs temperature(s) in K')
+            elif str(spectralshape_blackbody_temperatures).lower()="variable":
+                #
+            else:
+                self.spectralshape_blackbody_temperatures = spectralshape_blackbody_temperatures
+                if len(spectralshape_blackbody_temperatures) == 1:
+                    spectralshape_blackbody_luminosities = 1.
+                else:
+                    if spectralshape_blackbody_luminosities=None:
+                        raise ValueError('Dusty.__init__: spectralshape multiple blackbody needs luminosities(s) in K')
+                    elif str(spectralshape_blackbody_luminosities).lower()="variable":
+                        #
+                    else:
+                        # in principle we should check that temperatures and luminosities are equal length
+                        self.spectralshape_blackbody_luminosities = spectralshape_blackbody_luminosities
+                
+        elif spectralshape.lower() == "engelke":
+            self.spectralshape="engelke"
+            if spectralshape_engleke_temperatures=None:
+                raise ValueError('Dusty.__init__: spectralshape engleke needs a temperature in K')
+            elif str(spectralshape_engelke_temperature).lower()="variable":
+                #
+            else:
+                self.spectralshape_engelke_temperature = spectralshape_engelke_temperature
+            if spectralshape_engelke_sio-depth=None:
+                raise ValueError('Dusty.__init__: spectralshape engelke needs an SiO depth')
+            elif str(spectralshape_engelke_sio_depth).lower()="variable":
+                #
+            else:
+                self.spectralshape_engelke_sio_depth = spectralshape_engelke_sio_depth
+
+        elif spectralshape.lower() == "powerlaw":
+            self.spectralshape="powerlaw"
+            if spectralshape_powerlaw_lambda=None:
+                raise ValueError('Dusty.__init__: spectralshape powerlaw needs wavelengths in microns')
+            elif str(spectralshape_powerlaw_lambda).lower()="variable":
+                #
+            else:
+                self.spectralshape_powerlaw_lambda = spectralshape_powerlaw_lambda
+            if spectralshape_powerlaw_k=None:
+                raise ValueError('Dusty.__init__: spectralshape multiple powerlaw needs k (spectral indices)')
+            elif str(spectralshape_powerlaw_k).lower()="variable":
+                #
+            else:
+                # in principle we should check that len(lambda) = len(k)+1
+                self.spectralshape_powerlaw_k = spectralshape_powerlaw_k
+                
+        elif spectralshape.lower() == "file_lambda_f_lambda":
+            self.spectralshape="file_lambda_f_lambda"
+            needfile=True
+        elif spectralshape.lower() == "file_f_lambda":
+            self.spectralshape="file_f_lambda"
+            needfile=True
+        elif spectralshape.lower() == "file_f_nu":
+            self.spectralshape="file_f_nu"
+            needfile=True
         else:
-            self.geometry="sphere"
+            raise ValueError('Dusty.__init__: spectralshape must be set (blackbody/engelke/powerlaw/file_lambda_f_lambda/file_f_lambda/file_f_nu)')
+
+        if needfile:
+            if spectralshape_filename=None:
+                raise ValueError('Dusty.__init__: spectralshape file_* needs a filename')
+            else:
+                # in principle we should check that the file exists
+                self.spectralshape_filename = spectralshape_filename
 
 
-            
-                 ,geometry_central = "on"
-                 ,geometry_external ="off"
-                 ,spectralshape = "blackbody"
-                 ,spectralshape_blackbody_temperatures = 3000.
-                 ,spectralshape_blackbody_luminosities = 1.0
-                 ,spectralshape_powerlaw_lambda
-                 ,spectralshape_powerlaw_k
-                 ,spectralshape_engelke_temperature
-                 ,spectralshape_engelke_sio_depth
-                 ,spectralshape_filename
-                 ,spectralscale = "inner temperature"
-                 ,spectralscale_flux_entering
-                 ,spectralscale_luminosity = 1e4
-                 ,spectralscale_distance = 1.4959787e+13 # 1 AU in cm
-                 ,spectralscale_dilution_factor
-                 ,spectralscale_energy_density
-                 ,spectralscale_inner_temperature
-                 ,geometry_toggle_right
-                 ,geometry_right_angular_distribution
-                 ,geometry_right_illumination_angle
-                 ,right_spectralshape
-                 ,right_spectralshape_blackbody_luminosities
-                 ,right_spectralshape_blackbody_temperatures
-                 ,right_spectralshape_engelke_sio_depth
-                 ,right_spectralshape_engelke_temperature
-                 ,right_spectralshape_powerlaw_k
-                 ,right_spectralshape_powerlaw_lambda
-                 ,right_spectralshape_filename
-                 ,right_spectralscale
-                 ,right_spectralscale_dilution_factor
-                 ,right_spectralscale_distance
-                 ,right_spectralscale_energy_density
-                 ,right_spectralscale_flux_entering
-                 ,right_spectralscale_inner_temperature
-                 ,right_spectralscale_luminosity
-                 ,density_distribution
-                 ,density_transition_radii
-                 ,density_powers
-                 ,density_outer_radius = 100
-                 ,density_falloff_rate
-                 ,density_filename
-                 ,grain_composition = "common_grain_composite"
-                 ,grain_fractional_abundances = [0,0,1,0,0,0]
-                 ,grain_optical_properties_filename
-                 ,grain_sublimation_temperature = 1500.
-                 ,grainsize_distribution = "mrn"
-                 ,grainsize_amax
-                 ,grainsize_amin
-                 ,grainsize_q
-                 ,grainsize_a0
-                 ,tau_grid
-                 ,tau_filename
-                 ,tau_max
-                 ,tau_min
-                 ,tau_nmodels = 1
-                 ,tau_wavelength = 0.55
-                 ,flux_conservation_accuracy = 0.10
+        # RIGHT_SPECTRALSHAPE BLOCK
+        if self.geometry_toggle_right:
+            needfile=False
+            if right_spectralshape.lower() == "blackbody":
+                self.right_spectralshape="blackbody"
+                if right_spectralshape_blackbody_temperatures=None:
+                    raise ValueError('Dusty.__init__: right_spectralshape blackbody needs temperature(s) in K')
+                elif str(right_spectralshape_blackbody_temperatures).lower()="variable":
+                    #
+                else:
+                    self.right_spectralshape_blackbody_temperatures = right_spectralshape_blackbody_temperatures
+                    if len(right_spectralshape_blackbody_temperatures) == 1:
+                        right_spectralshape_blackbody_luminosities = 1.
+                    else:
+                        if right_spectralshape_blackbody_luminosities=None:
+                            raise ValueError('Dusty.__init__: right_spectralshape multiple blackbody needs luminosities(s) in K')
+                        elif str(right_spectralshape_blackbody_luminosities).lower()="variable":
+                            #
+                        else:
+                            # in principle we should check that temperatures and luminosities are equal length
+                            self.right_spectralshape_blackbody_luminosities = right_spectralshape_blackbody_luminosities
+                                    
+            elif right_spectralshape.lower() == "engelke":
+                self.right_spectralshape="engelke"
+                if right_spectralshape_engleke_temperatures=None:
+                    raise ValueError('Dusty.__init__: right_spectralshape engleke needs a temperature in K')
+                elif str(right_spectralshape_engelke_temperature).lower()="variable":
+                    #
+                else:
+                    self.right_spectralshape_engelke_temperature = right_spectralshape_engelke_temperature
+                if right_spectralshape_engelke_sio-depth=None:
+                    raise ValueError('Dusty.__init__: right_spectralshape engelke needs an SiO depth')
+                elif str(right_spectralshape_engelke_sio_depth).lower()="variable":
+                    #
+                else:
+                    self.right_spectralshape_engelke_sio_depth = right_spectralshape_engelke_sio_depth
+                    
+            elif right_spectralshape.lower() == "powerlaw":
+                self.right_spectralshape="powerlaw"
+                if right_spectralshape_powerlaw_lambda=None:
+                    raise ValueError('Dusty.__init__: right_spectralshape powerlaw needs wavelengths in microns')
+                elif str(right_spectralshape_powerlaw_lambda).lower()="variable":
+                    #
+                else:
+                    self.right_spectralshape_powerlaw_lambda = right_spectralshape_powerlaw_lambda
+                if right_spectralshape_powerlaw_k=None:
+                    raise ValueError('Dusty.__init__: right_spectralshape multiple powerlaw needs k (spectral indices)')
+                elif str(right_spectralshape_powerlaw_k).lower()="variable":
+                    #
+                else:
+                    # in principle we should check that len(lambda) = len(k)+1
+                    self.right_spectralshape_powerlaw_k = right_spectralshape_powerlaw_k
+                
+            elif right_spectralshape.lower() == "file_lambda_f_lambda":
+                self.right_spectralshape="file_lambda_f_lambda"
+                needfile=True
+            elif right_spectralshape.lower() == "file_f_lambda":
+                self.right_spectralshape="file_f_lambda"
+                needfile=True
+            elif right_spectralshape.lower() == "file_f_nu":
+                self.right_spectralshape="file_f_nu"
+                needfile=True
+            else:
+                raise ValueError('Dusty.__init__: right_spectralshape must be set (blackbody/engelke/powerlaw/file_lambda_f_lambda/file_f_lambda/file_f_nu)')
+
+            if needfile:
+                if right_spectralshape_filename=None:
+                    raise ValueError('Dusty.__init__: right_spectralshape file_* needs a filename')
+                else:
+                    # in principle we should check that the file exists
+                    self.right_spectralshape_filename = right_spectralshape_filename
+
+
+        ,spectralscale = "inner temperature"
+        ,spectralscale_flux_entering
+        ,spectralscale_luminosity = 1e4
+        ,spectralscale_distance = 1.4959787e+13 # 1 AU in cm
+        ,spectralscale_dilution_factor
+        ,spectralscale_energy_density
+        ,spectralscale_inner_temperature
+
+        ,right_spectralscale
+        ,right_spectralscale_dilution_factor
+        ,right_spectralscale_distance
+        ,right_spectralscale_energy_density
+        ,right_spectralscale_flux_entering
+        ,right_spectralscale_inner_temperature
+        ,right_spectralscale_luminosity
+
+        ,density_distribution
+        ,density_transition_radii
+        ,density_powers
+        ,density_outer_radius = 100
+        ,density_falloff_rate
+        ,density_filename
+
+        ,grain_composition = "common_grain_composite"
+        ,grain_fractional_abundances = [0,0,1,0,0,0]
+        ,grain_optical_properties_filename
+        ,grain_sublimation_temperature = 1500.
+
+        ,grainsize_distribution = "mrn"
+        ,grainsize_amax
+        ,grainsize_amin
+        ,grainsize_q
+        ,grainsize_a0
+
+        ,tau_grid
+        ,tau_filename
+        ,tau_max
+        ,tau_min
+        ,tau_nmodels = 1
+        ,tau_wavelength = 0.55
+
+        ,flux_conservation_accuracy = 0.10
         
     def __call__(self, *arg,
                  **kwargs):
