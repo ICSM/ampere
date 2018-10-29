@@ -332,7 +332,7 @@ class DustySpectrum(AnalyticalModel):
                 if geometry_illumination_angle == None:
                     raise ValueError('Dusty.__init__: slab with directional needs an illumination angle')
                 elif str(geometry_illumination_angle).lower() == "variable":
-                    #
+                    pass
                 elif geometry_illumination_angle > 85.0:
                     raise ValueError('Dusty.__init__: slab directional: illumination angle needs to be smaller than 85')
                 else:
@@ -349,15 +349,15 @@ class DustySpectrum(AnalyticalModel):
                     if geometry_right_illumination_angle == None:
                         raise ValueError('Dusty.__init__: slab-right with directional needs an illumination angle')
                     elif str(geometry_right_illumination_angle).lower() == "variable":
-                        #
+                        pass
                     elif geometry_right_illumination_angle > 85.0:
                         raise ValueError('Dusty.__init__: slab-right directional: illumination angle needs to be smaller than 85')
                     else:
                         self.geometry_right_illumination_angle = geometry_right_illumination_angle
-            else:
-                raise ValueError('Dusty.__init__: slab-right geometry:specify angular distribution of the radiation (isotropic/directional)')
+                else:
+                    raise ValueError('Dusty.__init__: slab-right geometry:specify angular distribution of the radiation (isotropic/directional)')
             elif geometry_toggle_right.lower() == None:
-                #
+                pass
             else:
                 raise ValueError('Dusty.__init__: value passed to geometry_toggle_right not understood')
                     
@@ -367,50 +367,50 @@ class DustySpectrum(AnalyticalModel):
         if spectralshape.lower() in ["blackbody","black body","black-body","black_body","bb"]:
             self.spectralshape="blackbody"
 
-            if spectralshape_blackbody_temperatures=None:
+            if spectralshape_blackbody_temperatures==None:
                 raise ValueError('Dusty.__init__: spectralshape blackbody needs temperature(s) in K')
-            elif str(spectralshape_blackbody_temperatures).lower()="variable":
-                #
+            elif str(spectralshape_blackbody_temperatures).lower()=="variable":
+                pass
             else:
                 self.spectralshape_blackbody_temperatures = spectralshape_blackbody_temperatures
                 if len(spectralshape_blackbody_temperatures) == 1:
                     spectralshape_blackbody_luminosities = 1.
                 else:
-                    if spectralshape_blackbody_luminosities=None:
+                    if spectralshape_blackbody_luminosities==None:
                         raise ValueError('Dusty.__init__: spectralshape multiple blackbody needs luminosities(s)')
-                    elif str(spectralshape_blackbody_luminosities).lower()="variable":
-                        #
+                    elif str(spectralshape_blackbody_luminosities).lower()=="variable":
+                        pass
                     else:
                         # in principle we should check that temperatures and luminosities are equal length
                         self.spectralshape_blackbody_luminosities = spectralshape_blackbody_luminosities
                 
         elif spectralshape.lower() == "engelke":
             self.spectralshape="engelke"
-            if spectralshape_engleke_temperatures=None:
+            if spectralshape_engleke_temperatures==None:
                 raise ValueError('Dusty.__init__: spectralshape engleke needs a temperature in K')
-            elif str(spectralshape_engelke_temperature).lower()="variable":
-                #
+            elif str(spectralshape_engelke_temperature).lower()=="variable":
+                pass
             else:
                 self.spectralshape_engelke_temperature = spectralshape_engelke_temperature
-            if spectralshape_engelke_sio_depth=None:
+            if spectralshape_engelke_sio_depth==None:
                 raise ValueError('Dusty.__init__: spectralshape engelke needs an SiO depth')
-            elif str(spectralshape_engelke_sio_depth).lower()="variable":
-                #
+            elif str(spectralshape_engelke_sio_depth).lower()=="variable":
+                pass
             else:
                 self.spectralshape_engelke_sio_depth = spectralshape_engelke_sio_depth
 
         elif spectralshape.lower() in ["powerlaw","power-law"]:
             self.spectralshape="powerlaw"
-            if spectralshape_powerlaw_lambda=None:
+            if spectralshape_powerlaw_lambda==None:
                 raise ValueError('Dusty.__init__: spectralshape powerlaw needs wavelengths in microns')
-            elif str(spectralshape_powerlaw_lambda).lower()="variable":
-                #
+            elif str(spectralshape_powerlaw_lambda).lower()=="variable":
+                pass
             else:
                 self.spectralshape_powerlaw_lambda = spectralshape_powerlaw_lambda
-            if spectralshape_powerlaw_k=None:
+            if spectralshape_powerlaw_k==None:
                 raise ValueError('Dusty.__init__: spectralshape multiple powerlaw needs k (spectral indices)')
-            elif str(spectralshape_powerlaw_k).lower()="variable":
-                #
+            elif str(spectralshape_powerlaw_k).lower()=="variable":
+                pass
             else:
                 # in principle we should check that len(lambda) = len(k)+1
                 self.spectralshape_powerlaw_k = spectralshape_powerlaw_k
@@ -428,7 +428,7 @@ class DustySpectrum(AnalyticalModel):
             raise ValueError('Dusty.__init__: spectralshape must be set (blackbody/engelke/powerlaw/file_lambda_f_lambda/file_f_lambda/file_f_nu)')
 
         if needfile:
-            if spectralshape_filename=None:
+            if spectralshape_filename==None:
                 raise ValueError('Dusty.__init__: spectralshape file_* needs a filename')
             else:
                 # in principle we should check that the file exists
@@ -440,50 +440,50 @@ class DustySpectrum(AnalyticalModel):
             needfile=False
             if right_spectralshape.lower() in ["blackbody","black body","black-body","black_body","bb"]:
                 self.right_spectralshape="blackbody"
-                if right_spectralshape_blackbody_temperatures=None:
+                if right_spectralshape_blackbody_temperatures==None:
                     raise ValueError('Dusty.__init__: right_spectralshape blackbody needs temperature(s) in K')
-                elif str(right_spectralshape_blackbody_temperatures).lower()="variable":
-                    #
+                elif str(right_spectralshape_blackbody_temperatures).lower()=="variable":
+                    pass
                 else:
                     self.right_spectralshape_blackbody_temperatures = right_spectralshape_blackbody_temperatures
                     if len(right_spectralshape_blackbody_temperatures) == 1:
                         right_spectralshape_blackbody_luminosities = 1.
                     else:
-                        if right_spectralshape_blackbody_luminosities=None:
+                        if right_spectralshape_blackbody_luminosities==None:
                             raise ValueError('Dusty.__init__: right_spectralshape multiple blackbody needs luminosities(s) in K')
-                        elif str(right_spectralshape_blackbody_luminosities).lower()="variable":
-                            #
+                        elif str(right_spectralshape_blackbody_luminosities).lower()=="variable":
+                            pass
                         else:
                             # in principle we should check that temperatures and luminosities are equal length
                             self.right_spectralshape_blackbody_luminosities = right_spectralshape_blackbody_luminosities
                                     
             elif right_spectralshape.lower() == "engelke":
                 self.right_spectralshape="engelke"
-                if right_spectralshape_engleke_temperatures=None:
+                if right_spectralshape_engleke_temperatures==None:
                     raise ValueError('Dusty.__init__: right_spectralshape engleke needs a temperature in K')
-                elif str(right_spectralshape_engelke_temperature).lower()="variable":
-                    #
+                elif str(right_spectralshape_engelke_temperature).lower()=="variable":
+                    pass
                 else:
                     self.right_spectralshape_engelke_temperature = right_spectralshape_engelke_temperature
-                if right_spectralshape_engelke_sio_depth=None:
+                if right_spectralshape_engelke_sio_depth==None:
                     raise ValueError('Dusty.__init__: right_spectralshape engelke needs an SiO depth')
-                elif str(right_spectralshape_engelke_sio_depth).lower()="variable":
-                    #
+                elif str(right_spectralshape_engelke_sio_depth).lower()=="variable":
+                    pass
                 else:
                     self.right_spectralshape_engelke_sio_depth = right_spectralshape_engelke_sio_depth
                     
             elif right_spectralshape.lower() in ["powerlaw","power-law"]:
                 self.right_spectralshape="powerlaw"
-                if right_spectralshape_powerlaw_lambda=None:
+                if right_spectralshape_powerlaw_lambda==None:
                     raise ValueError('Dusty.__init__: right_spectralshape powerlaw needs wavelengths in microns')
-                elif str(right_spectralshape_powerlaw_lambda).lower()="variable":
-                    #
+                elif str(right_spectralshape_powerlaw_lambda).lower()=="variable":
+                    pass
                 else:
                     self.right_spectralshape_powerlaw_lambda = right_spectralshape_powerlaw_lambda
-                if right_spectralshape_powerlaw_k=None:
+                if right_spectralshape_powerlaw_k==None:
                     raise ValueError('Dusty.__init__: right_spectralshape multiple powerlaw needs k (spectral indices)')
-                elif str(right_spectralshape_powerlaw_k).lower()="variable":
-                    #
+                elif str(right_spectralshape_powerlaw_k).lower()=="variable":
+                    pass
                 else:
                     # in principle we should check that len(lambda) = len(k)+1
                     self.right_spectralshape_powerlaw_k = right_spectralshape_powerlaw_k
@@ -501,7 +501,7 @@ class DustySpectrum(AnalyticalModel):
                 raise ValueError('Dusty.__init__: right_spectralshape must be set (blackbody/engelke/powerlaw/file_lambda_f_lambda/file_f_lambda/file_f_nu)')
 
             if needfile:
-                if right_spectralshape_filename=None:
+                if right_spectralshape_filename==None:
                     raise ValueError('Dusty.__init__: right_spectralshape file_* needs a filename')
                 else:
                     # in principle we should check that the file exists
@@ -511,52 +511,52 @@ class DustySpectrum(AnalyticalModel):
         # SPECTRALSCALE BLOCK
         if spectralscale.lower() == "flux":
             self.spectralscale="flux"
-            if spectralscale_flux_entering=None:
+            if spectralscale_flux_entering==None:
                 raise ValueError('Dusty.__init__: spectralscale flux needs flux_entering in W/m^2')
-            elif str(spectralscale_flux_entering).lower()="variable":
-                #
+            elif str(spectralscale_flux_entering).lower()=="variable":
+                pass
             else:
                 self.spectralscale_flux_entering = spectralscale_flux_entering
                 
         elif spectralscale.lower() == "luminosity":
             self.spectralscale="luminosity"
-            if spectralscale_luminosity=None:
+            if spectralscale_luminosity==None:
                 raise ValueError('Dusty.__init__: spectralscale luminosity needs luminosity in Lsun')
-            elif str(spectralscale_luminosity).lower()="variable":
-                #
+            elif str(spectralscale_luminosity).lower()=="variable":
+                pass
             else:
                 self.spectralscale_luminosity = spectralscale_luminosity
-            if spectralscale_distance=None:
+            if spectralscale_distance==None:
                 raise ValueError('Dusty.__init__: spectralscale distance needs distance in Lsun')
-            elif str(spectralscale_distance).lower()="variable":
-                #
+            elif str(spectralscale_distance).lower()=="variable":
+                pass
             else:
                 self.spectralscale_distance = spectralscale_distance
 
         elif spectralscale.lower() in ["energy-density","energy density"]:
             self.spectralscale="energy-density"
-            if spectralscale_energy_density=None:
+            if spectralscale_energy_density==None:
                 raise ValueError('Dusty.__init__: spectralscale energy_density needs energy_density in W/m^2')
-            elif str(spectralscale_energy_density).lower()="variable":
-                #
+            elif str(spectralscale_energy_density).lower()=="variable":
+                pass
             else:
                 self.spectralscale_energy_density = spectralscale_energy_density
                 
         elif spectralscale.lower() in ["dilution_factor","dilution factor"]:
             self.spectralscale="dilution-factor"
-            if spectralscale_dilution_factor=None:
+            if spectralscale_dilution_factor==None:
                 raise ValueError('Dusty.__init__: spectralscale dilution_factor needs dilution_factor in W/m^2')
-            elif str(spectralscale_dilution_factor).lower()="variable":
-                #
+            elif str(spectralscale_dilution_factor).lower()=="variable":
+                pass
             else:
                 self.spectralscale_dilution_factor = spectralscale_dilution_factor
 
         elif spectralscale.lower() in ["inner-temperature","inner temperature","tin"]:
             self.spectralscale="inner-temperature"
-            if spectralscale_inner_temperature=None:
+            if spectralscale_inner_temperature==None:
                 raise ValueError('Dusty.__init__: spectralscale inner_temperature needs inner_temperature in W/m^2')
-            elif str(spectralscale_inner_temperature).lower()="variable":
-                #
+            elif str(spectralscale_inner_temperature).lower()=="variable":
+                pass
             else:
                 self.spectralscale_inner_temperature = spectralscale_inner_temperature
         else:
@@ -566,51 +566,51 @@ class DustySpectrum(AnalyticalModel):
         if self.geometry_toggle_right:
             if right_spectralscale.lower() == "flux":
                 self.right_spectralscale="flux"
-                if right_spectralscale_flux_entering=None:
+                if right_spectralscale_flux_entering==None:
                     raise ValueError('Dusty.__init__: right_spectralscale flux needs flux_entering in W/m^2')
-                elif str(right_spectralscale_flux_entering).lower()="variable":
-                    #
+                elif str(right_spectralscale_flux_entering).lower()=="variable":
+                    pass
                 else:
                     self.right_spectralscale_flux_entering = right_spectralscale_flux_entering
 
             elif right_spectralscale.lower() == "luminosity":
                 self.right_spectralscale="luminosity"
-                if right_spectralscale_luminosity=None:
+                if right_spectralscale_luminosity==None:
                     raise ValueError('Dusty.__init__: right_spectralscale luminosity needs luminosity in Lsun')
-                elif str(right_spectralscale_luminosity).lower()="variable":
-                    #
+                elif str(right_spectralscale_luminosity).lower()=="variable":
+                    pass
                 else:
                     self.right_spectralscale_luminosity = right_spectralscale_luminosity
-                if right_spectralscale_distance=None:
+                if right_spectralscale_distance==None:
                     raise ValueError('Dusty.__init__: right_spectralscale distance needs distance in Lsun')
-                elif str(right_spectralscale_distance).lower()="variable":
-                    #
+                elif str(right_spectralscale_distance).lower()=="variable":
+                    pass
                 else:
                     self.right_spectralscale_distance = right_spectralscale_distance
 
             elif right_spectralscale.lower() in ["energy-density","energy density"]:
                 self.right_spectralscale="energy-density"
-                if right_spectralscale_energy_density=None:
+                if right_spectralscale_energy_density==None:
                     raise ValueError('Dusty.__init__: right_spectralscale energy_density needs energy_density in W/m^2')
-                elif str(right_spectralscale_energy_density).lower()="variable":
-                    #
+                elif str(right_spectralscale_energy_density).lower()=="variable":
+                    pass
                 else:
                     self.right_spectralscale_energy_density = right_spectralscale_energy_density
 
             elif right_spectralscale.lower() in ["dilution_factor","dilution factor"]:
                 self.right_spectralscale="dilution-factor"
-                if right_spectralscale_dilution_factor=None:
+                if right_spectralscale_dilution_factor==None:
                     raise ValueError('Dusty.__init__: right_spectralscale dilution_factor needs dilution_factor in W/m^2')
-                elif str(right_spectralscale_dilution_factor).lower()="variable":
-                    #
+                elif str(right_spectralscale_dilution_factor).lower()=="variable":
+                    pass
                 else:
                     self.right_spectralscale_dilution_factor = right_spectralscale_dilution_factor
             elif right_spectralscale.lower()  in ["inner-temperature","inner temperature","tin"]:
                 self.right_spectralscale="inner-temperature"
-                if right_spectralscale_inner_temperature=None:
+                if right_spectralscale_inner_temperature==None:
                     raise ValueError('Dusty.__init__: right_spectralscale inner_temperature needs inner_temperature in W/m^2')
-                elif str(right_spectralscale_inner_temperature).lower()="variable":
-                    #
+                elif str(right_spectralscale_inner_temperature).lower()=="variable":
+                    pass
                 else:
                     self.right_spectralscale_inner_temperature = right_spectralscale_inner_temperature
             else:
@@ -619,57 +619,57 @@ class DustySpectrum(AnalyticalModel):
         # DENSITY BLOCK
         if density_distribution.lower() in ["powerlaw","power-law"]:
             self.density_distribution="powerlaw"
-            if density_transition_radii=None:
+            if density_transition_radii==None:
                 raise ValueError('Dusty.__init__: density distribution powerlaw  needs at least two transistion radii [in scaled to the innner radius]')
-            elif str(density_transition_radii).lower()="variable":
-                #
+            elif str(density_transition_radii).lower()=="variable":
+                pass
             else:
                 # should check for at least two values
                 self.density_transition_radii = density_transition_radii
-            if density_powers=None:
+            if density_powers==None:
                 raise ValueError('Dusty.__init__: density distribution powerlaw needs power value(s)')
-            elif str(density_powers).lower()="variable":
-                #
+            elif str(density_powers).lower()=="variable":
+                pass
             else:
                 # should check that len(powers) = len(transition_radii)-1
                 self.density_powers = density_powers
 
         elif density_distribution.lower() in ["exponential","exp"]:
             self.density="exponential"
-            if density_outer_radius=None:
+            if density_outer_radius==None:
                 raise ValueError('Dusty.__init__: density distribution exponential needs outer radius [scaled to inner radius]')
-            elif str(density_outer_radius).lower()="variable":
-                #
+            elif str(density_outer_radius).lower()=="variable":
+                pass
             else:
                 self.density_outer_radius = density_outer_radius
-            if density_falloff_rate=None:
+            if density_falloff_rate==None:
                 raise ValueError('Dusty.__init__: density dsitribution exponential needs falloff rate')
-            elif str(density_falloff_rate).lower()="variable":
-                #
+            elif str(density_falloff_rate).lower()=="variable":
+                pass
             else:
                 self.density_falloff_rate = density_falloff_rate
 
         elif density_distribution.lower() in ["radiation driven wind","rdw"]:
             self.density="radiation driven wind"
-            if density_outer_radius=None:
+            if density_outer_radius==None:
                 raise ValueError('Dusty.__init__: density distribution radiation driven wind needs outer radius [scaled to inner radius]')
-            elif str(density_outer_radius).lower()="variable":
-                #
+            elif str(density_outer_radius).lower()=="variable":
+                pass
             else:
                 self.density_outer_radius = density_outer_radius
 
         elif density_distribution.lower() in ["radiation driven wind analytic","rdwa"]:
             self.density="radiation driven wind analytic"
-            if density_outer_radius=None:
+            if density_outer_radius==None:
                 raise ValueError('Dusty.__init__: density distribution radiation driven wind analytic needs outer radius [scaled to inner radius]')
-            elif str(density_outer_radius).lower()="variable":
-                #
+            elif str(density_outer_radius).lower()=="variable":
+                pass
             else:
                 self.density_outer_radius = density_outer_radius
 
         elif density_distribution.lower() in ["user supplied","user-supplied"]:
             self.density="user supplied"
-            if density_filename=None:
+            if density_filename==None:
                 raise ValueError('Dusty.__init__: density distribution user supplied needs density_filename')
             else:
                 # should check that file exists
@@ -681,7 +681,7 @@ class DustySpectrum(AnalyticalModel):
         # GRAIN COMPOSITION BLOCK
         if grain_composition.lower() in ["common_grain_composite","common grain composite","common"]:
             self.grain_composition="common_grain_composite"
-            if grain_fractional_abundances=None:
+            if grain_fractional_abundances==None:
                 print("Species for which abundance values are required in order:")
                 print("Warm silicates (Ossenkopf+)")
                 print("Cold silicates (Ossenkopf+)")
@@ -690,15 +690,15 @@ class DustySpectrum(AnalyticalModel):
                 print("Amorphous Carbon (Hanner)")
                 print("Silicon Carbite (Pegourie)")
                 raise ValueError('Dusty.__init__: grain composition common needs grain_fractional_abundances (six values)')
-            elif str(grain_fractional_abundances).lower()="variable":
-                #
+            elif str(grain_fractional_abundances).lower()=="variable":
+                pass
             else:
                 # should check for six values
                 self.grain_fractional_abundances = grain_fractional_abundances
 
         elif grain_composition.lower() in ["common_and_addl_grain","common and addl grain","common and additional"]:
             self.grain_composition="common_and_addl_grain"
-            if grain_fractional_abundances=None:
+            if grain_fractional_abundances==None:
                 print("Species for which abundance values are required in order:")
                 print("Warm silicates (Ossenkopf+)")
                 print("Cold silicates (Ossenkopf+)")
@@ -710,15 +710,15 @@ class DustySpectrum(AnalyticalModel):
                 print("Amorphous Carbon type2 (Zubko+)")
                 print("Amorphous Carbon type3 (Zubko+)")
                 raise ValueError('Dusty.__init__: grain composition common+additional needs grain_fractional_abundances (nine values)')
-            elif str(grain_fractional_abundances).lower()="variable":
-                #
+            elif str(grain_fractional_abundances).lower()=="variable":
+                pass
             else:
                 # should check for nine values
                 self.grain_fractional_abundances = grain_fractional_abundances
 
         elif grain_composition.lower() == "tabulated":
             self.grain_composition="tabulated"
-            if grain_optical_properties_filename=None:
+            if grain_optical_properties_filename==None:
                 raise ValueError('Dusty.__init__: grain distribution tabulated needs grain_optical_properties_filename')
             else:
                 # should check that file exists
@@ -727,10 +727,10 @@ class DustySpectrum(AnalyticalModel):
         else:
             raise ValueError('Dusty.__init__: grain composition must be set (common_grain_composite/common_and_addl_grain/tabulated)')
 
-        if grain_sublimation_temperature=None:
+        if grain_sublimation_temperature==None:
             raise ValueError('Dusty.__init__: grain sublimation temperature needs to be specified [K])')
-        elif str(grain_sublimation_temperature).lower()="variable":
-            #
+        elif str(grain_sublimation_temperature).lower()=="variable":
+            pass
         else:
             # should check for six values
             self.grain_sublimation_temperature = grain_sublimation_temperature
@@ -742,52 +742,52 @@ class DustySpectrum(AnalyticalModel):
         elif grainsize_distribution.lower() in ["modified mrn","modified_mrn"]:
             self.grainsize_distribution="modified mrn"
 
-            if grainsize_q=None:
+            if grainsize_q==None:
                 raise ValueError('Dusty.__init__: grainsize modified MRN needs grainsize_q (power index)')
-            elif str(grainsize_q).lower()="variable":
-                #
+            elif str(grainsize_q).lower()=="variable":
+                pass
             else:
                 # should check for nine values
                 self.grainsize_q = grainsize_q
 
-            if grainsize_amin=None:
+            if grainsize_amin==None:
                 raise ValueError('Dusty.__init__: grainsize modified MRN needs amin [micron]')
-            elif str(grainsize_amin).lower()="variable":
-                #
+            elif str(grainsize_amin).lower()=="variable":
+                pass
             else:
                 # should check for nine values
                 self.grainsize_amin = grainsize_amin
 
-            if grainsize_amax=None:
+            if grainsize_amax==None:
                 raise ValueError('Dusty.__init__: grainsize modified MRN needs amax [micron]')
-            elif str(grainsize_amax).lower()="variable":
-                #
+            elif str(grainsize_amax).lower()=="variable":
+                pass
             else:
                 # should check for nine values
                 self.grainsize_amax = grainsize_amax
 
         elif grainsize_distribution.lower() == "kmh":
             self.grainsize_distribution="kmh"
-            if grainsize_q=None:
+            if grainsize_q==None:
                 raise ValueError('Dusty.__init__: grainsize modified MRN needs grainsize_q (power index)')
-            elif str(grainsize_q).lower()="variable":
-                #
+            elif str(grainsize_q).lower()=="variable":
+                pass
             else:
                 # should check for nine values
                 self.grainsize_q = grainsize_q
 
-            if grainsize_amin=None:
+            if grainsize_amin==None:
                 raise ValueError('Dusty.__init__: grainsize modified MRN needs amin [micron]')
-            elif str(grainsize_amin).lower()="variable":
-                #
+            elif str(grainsize_amin).lower()=="variable":
+                pass
             else:
                 # should check for nine values
                 self.grainsize_amin = grainsize_amin
 
-            if grainsize_a0=None:
+            if grainsize_a0==None:
                 raise ValueError('Dusty.__init__: grainsize modified MRN needs grainsize_a0 (characteristic size) [micron]')
-            elif str(grainsize_a0).lower()="variable":
-                #
+            elif str(grainsize_a0).lower()=="variable":
+                pass
             else:
                 self.grainsize_a0 = grainsize_a0
 
@@ -798,34 +798,34 @@ class DustySpectrum(AnalyticalModel):
         if tau_grid.lower() in ["linear","lin"]:
             self.tau_grid="linear"
 
-            if tau_wavelength=None:
+            if tau_wavelength==None:
                 raise ValueError('Dusty.__init__: tau needs reference wavelength (tau_wavelength) [micron]')
-            elif str(tau_wavelength).lower()="variable":
-                #
+            elif str(tau_wavelength).lower()=="variable":
+                pass
             else:
                 # should check for nine values
                 self.tau_wavelength = tau_wavelength
 
-            if tau_min=None:
+            if tau_min==None:
                 raise ValueError('Dusty.__init__: tau grid needs minimum tau value (tau_min)')
-            elif str(tau_min).lower()="variable":
-                #
+            elif str(tau_min).lower()=="variable":
+                pass
             else:
                 # should check for nine values
                 self.tau_min = tau_min
 
-            if tau_max=None:
+            if tau_max==None:
                 raise ValueError('Dusty.__init__: tau grid needs maximum tau value (tau_max)')
-            elif str(tau_max).lower()="variable":
-                #
+            elif str(tau_max).lower()=="variable":
+                pass
             else:
                 # should check for nine values
                 self.tau_max = tau_max
 
-            if tau_nmodels=None:
+            if tau_nmodels==None:
                 raise ValueError('Dusty.__init__: tau grid needs number of models (tau_nmodels)')
-            elif str(tau_nmodels).lower()="variable":
-                #
+            elif str(tau_nmodels).lower()=="variable":
+                pass
             else:
                 # should check for nine values
                 self.tau_nmodels = tau_nmodels
@@ -833,41 +833,41 @@ class DustySpectrum(AnalyticalModel):
         elif tau_grid.lower() in ["logarithmic","log"]:
             self.tau_grid="logarithmic"
 
-            if tau_wavelength=None:
+            if tau_wavelength==None:
                 raise ValueError('Dusty.__init__: tau needs reference wavelength (tau_wavelength) [micron]')
-            elif str(tau_wavelength).lower()="variable":
-                #
+            elif str(tau_wavelength).lower()=="variable":
+                pass
             else:
                 # should check for nine values
                 self.tau_wavelength = tau_wavelength
 
-            if tau_min=None:
+            if tau_min==None:
                 raise ValueError('Dusty.__init__: tau grid needs minimum tau value (tau_min)')
-            elif str(tau_min).lower()="variable":
-                #
+            elif str(tau_min).lower()=="variable":
+                pass
             else:
                 # should check for nine values
                 self.tau_min = tau_min
 
-            if tau_max=None:
+            if tau_max==None:
                 raise ValueError('Dusty.__init__: tau grid needs maximum tau value (tau_max)')
-            elif str(tau_max).lower()="variable":
-                #
+            elif str(tau_max).lower()=="variable":
+                pass
             else:
                 # should check for nine values
                 self.tau_max = tau_max
 
-            if tau_nmodels=None:
+            if tau_nmodels==None:
                 raise ValueError('Dusty.__init__: tau grid needs number of models (tau_nmodels)')
-            elif str(tau_nmodels).lower()="variable":
-                #
+            elif str(tau_nmodels).lower()=="variable":
+                pass
             else:
                 # should check for nine values
                 self.tau_nmodels = tau_nmodels
 
         elif tau_grid.lower() in ["user supplied","user-supplied","user_supplied"]:
             self.tau_grid="user supplied"
-            if tau_filename=None:
+            if tau_filename==None:
                 raise ValueError('Dusty.__init__: tau user supplied modified needs tau_filename')
             else:
                 self.tau_filename = tau_filenam
@@ -876,10 +876,10 @@ class DustySpectrum(AnalyticalModel):
             raise ValueError('Dusty.__init__: tau grid must be set (linear/logarithmic/user supplied)')
 
         # NUMERICS BLOCK
-        if flux_conservation_accuracytau_grid=None:
+        if flux_conservation_accuracytau_grid==None:
             raise ValueError('Dusty.__init__: flux_conservation_accuracytau_grid must be set [%]')
-        elif str(tau_wavelength).lower()="variable":
-            #
+        elif str(tau_wavelength).lower()=="variable":
+            pass
         else:
             # should check for nine values
             self.flux_conservation_accuracytau_grid = flux_conservation_accuracytau_grid
@@ -919,7 +919,7 @@ class DustySpectrum(AnalyticalModel):
                                                energy_density=energy_density,
                                                flux_entering=flux_entering,
                                                inner_temperature=inner_temperature,
-                                               luminosity=luminosity)
+                                               luminosity=luminosity):
 
         # spectral shape
         if spectralshape == "blackbody":
@@ -969,43 +969,43 @@ class DustySpectrum(AnalyticalModel):
             raise ValueError('DustySpectrum: no valid spectral scaling specfied.')
 
 
-    def dusty_write_input_file_radiation_field_left_right(self,side='left')
-    if side == left:
-        dusty_write_input_file_radiation_field(self,
-                                               spectralshape=self.spectralshape,
-                                               blackbody_temperatures=self.spectralshape_blackbody_temperatures,
-                                               blackbody_luminosities=self.spectralshape_blackbody_luminosities,
-                                               engelke_sio_depth=self.spectralshape_engelke_sio_depth,
-                                               engelke_temperature=self.spectralshape_engelke_temperature,
-                                               powerlaw_k=self.spectralshape_powerlaw_k,
-                                               powerlaw_lambda=self.spectralshape_powerlaw_lambda,
-                                               filename=self.spectralshape_filename,
-                                               spectralscale=self.spectralscale,
-                                               dilution_factor=self.spectralscale_dilution_factor,
-                                               distance=self.spectralscale_distance,
-                                               energy_density=self.spectralscale_energy_density,
-                                               flux_entering=self.spectralscale_flux_entering,
-                                               inner_temperature=self.spectralscale_inner_temperature,
-                                               luminosity=self.spectralscale_luminosity)
-    else:
-        dusty_write_input_file_radiation_field(self,
-                                               spectralshape=self.right_spectralshape,
-                                               blackbody_temperatures=self.right_spectralshape_blackbody_temperatures,
-                                               blackbody_luminosities=self.right_spectralshape_blackbody_luminosities,
-                                               engelke_sio_depth=self.right_spectralshape_engelke_sio_depth,
-                                               engelke_temperature=self.right_spectralshape_engelke_temperature,
-                                               powerlaw_k=self.right_spectralshape_powerlaw_k,
-                                               powerlaw_lambda=self.right_spectralshape_powerlaw_lambda,
-                                               filename=self.right_spectralshape_filename,
-                                               spectralscale=self.right_spectralscale,
-                                               dilution_factor=self.right_spectralscale_dilution_factor,
-                                               distance=self.right_spectralscale_distance,
-                                               energy_density=self.right_spectralscale_energy_density,
-                                               flux_entering=self.right_spectralscale_flux_entering,
-                                               inner_temperature=self.right_spectralscale_inner_temperature,
-                                               luminosity=self.right_spectralscale_luminosity)
+    def dusty_write_input_file_radiation_field_left_right(self,side='left'):
+        if side == left:
+            dusty_write_input_file_radiation_field(self,
+                                                   spectralshape=self.spectralshape,
+                                                   blackbody_temperatures=self.spectralshape_blackbody_temperatures,
+                                                   blackbody_luminosities=self.spectralshape_blackbody_luminosities,
+                                                   engelke_sio_depth=self.spectralshape_engelke_sio_depth,
+                                                   engelke_temperature=self.spectralshape_engelke_temperature,
+                                                   powerlaw_k=self.spectralshape_powerlaw_k,
+                                                   powerlaw_lambda=self.spectralshape_powerlaw_lambda,
+                                                   filename=self.spectralshape_filename,
+                                                   spectralscale=self.spectralscale,
+                                                   dilution_factor=self.spectralscale_dilution_factor,
+                                                   distance=self.spectralscale_distance,
+                                                   energy_density=self.spectralscale_energy_density,
+                                                   flux_entering=self.spectralscale_flux_entering,
+                                                   inner_temperature=self.spectralscale_inner_temperature,
+                                                   luminosity=self.spectralscale_luminosity)
+        else:
+            dusty_write_input_file_radiation_field(self,
+                                                   spectralshape=self.right_spectralshape,
+                                                   blackbody_temperatures=self.right_spectralshape_blackbody_temperatures,
+                                                   blackbody_luminosities=self.right_spectralshape_blackbody_luminosities,
+                                                   engelke_sio_depth=self.right_spectralshape_engelke_sio_depth,
+                                                   engelke_temperature=self.right_spectralshape_engelke_temperature,
+                                                   powerlaw_k=self.right_spectralshape_powerlaw_k,
+                                                   powerlaw_lambda=self.right_spectralshape_powerlaw_lambda,
+                                                   filename=self.right_spectralshape_filename,
+                                                   spectralscale=self.right_spectralscale,
+                                                   dilution_factor=self.right_spectralscale_dilution_factor,
+                                                   distance=self.right_spectralscale_distance,
+                                                   energy_density=self.right_spectralscale_energy_density,
+                                                   flux_entering=self.right_spectralscale_flux_entering,
+                                                   inner_temperature=self.right_spectralscale_inner_temperature,
+                                                   luminosity=self.right_spectralscale_luminosity)
 
-    def dusty_write_input_file_geometry(self)
+    def dusty_write_input_file_geometry(self):
         # geometry
         if self.geometry == "slab":
             self.dusty_inp_file.write("geometry = SLAB")
@@ -1058,7 +1058,7 @@ class DustySpectrum(AnalyticalModel):
             raise ValueError('DustySpectrum: no valid geometry specfied.')
 
         
-    def dusty_write_input_file_grain_composition(self)
+    def dusty_write_input_file_grain_composition(self):
         # Chemical composition %(available options: common_grain_composite\common_and_addl_grain\tabulated)
         if self.grain_composition == "common_grain_composite":
             self.dusty_inp_file.write("optical properties index = COMMON_GRAIN_COMPOSITE")
@@ -1083,7 +1083,7 @@ class DustySpectrum(AnalyticalModel):
 
         self.dusty_inp_file.write("Sublimation Temperature = "+self.grain_sublimation_temperature+" K")
         
-    def dusty_write_input_file_grainsize_distribution(self)
+    def dusty_write_input_file_grainsize_distribution(self):
         if self.grainsize_distribution == "mrn":
             self.dusty_inp_file.write("Size distribution = MRN")
         elif self.grainsize_distribution == "modified mrn":
@@ -1099,7 +1099,7 @@ class DustySpectrum(AnalyticalModel):
         else:
             raise ValueError('DustySpectrum: no valid grain size distribution specfied.')
 
-    def dusty_write_input_file_density_distribution(self)
+    def dusty_write_input_file_density_distribution(self):
         # Density Distribution %(available options: powd\expd\rdw\rdwa\usr_suppld)
         if self.density_distribution == "powerlaw":
             self.dusty_inp_file.write("density type = POWD")
@@ -1122,7 +1122,7 @@ class DustySpectrum(AnalyticalModel):
         else:
             raise ValueError('DustySpectrum: no valid density distribution specfied.')
 
-    def dusty_write_input_file_tau_grid(self)
+    def dusty_write_input_file_tau_grid(self):
         #      5) Optical Depth: %(available options: linear\logarithmic\user_supplied)
         # (SH Oct  4 2018)
         #      Some thought needs to go into this. Dusty can calculate many models that stop at different depths in the dust layer.
@@ -1205,7 +1205,7 @@ class DustySpectrum(AnalyticalModel):
         output_spectrum_table = ascii.read("dusty_model.s001",data_start=1)
 
         output_wavelength = output_spectrum_table["col1"] * units.micrometer
-        output_frequency = constants.c.to(units.micrometer/units.s) / output_wavelength #
+        output_frequency = constants.c.to(units.micrometer/units.s) / output_wavelength
         
         # the scale is in line0,col2 [W/m2]
         output_spectrum_scale_table = ascii.read("dusty_model.s001",data_start=0,data_end=1)
@@ -1231,7 +1231,3 @@ class DustySpectrum(AnalyticalModel):
                 return -np.inf
         else:
             raise NotImplementedError()
-
-
-
-
