@@ -167,12 +167,13 @@ import numpy as np
 from astropy import constants as const
 from astropy import units as u
 from astropy.modeling import blackbody
-from .models import AnalyticalModel
+from models import AnalyticalModel
 
 # is it better to use all these explicit keyword arguments or use the kwargs mechanism in python?
 class DustySpectrum(AnalyticalModel):
     def __init__(self, wavelengths, flatprior=True,
-                 normWave = 1., sigmaNormWave = 1.,opacityFileList=opacities,
+                 normWave = 1., sigmaNormWave = 1.,
+                 opacities=None,
                  redshift = False, lims=np.array([[0,1e6],[-100,100],[-10,10],[0,np.inf]])
                  # these are all the possible input values. Some have defaults most are not set
                  # the defaults are set to what I think might be a reasonable basic setup
@@ -185,7 +186,7 @@ class DustySpectrum(AnalyticalModel):
                  ,geometry_angular_distribution=None
                  ,geometry_central="on"
                  ,geometry_external ="off"
-                 ,spectralshape="blackbody"
+                 ,spectralshape=None
                  ,spectralshape_blackbody_temperatures=None
                  ,spectralshape_blackbody_luminosities=None
                  ,spectralshape_powerlaw_lambda=None
@@ -200,7 +201,7 @@ class DustySpectrum(AnalyticalModel):
                  ,spectralscale_dilution_factor=None
                  ,spectralscale_energy_density=None
                  ,spectralscale_inner_temperature=None
-                 ,geometry_toggle_right=None
+                 ,geometry_toggle_right=False
                  ,geometry_right_angular_distribution=None
                  ,geometry_right_illumination_angle=None
                  ,right_spectralshape=None
@@ -252,21 +253,21 @@ class DustySpectrum(AnalyticalModel):
         #Define opacities for use in model calculation
         import os
         from scipy import interpolate
-        opacityDirectory = os.path.dirname(__file__)+'/Opacities/'
-        opacityFileList = opacities
+        #opacityDirectory = os.path.dirname(__file__)+'/Opacities/'
+        #opacityFileList = opacities
         #opacityFileList = np.array(opacityFileList)[['.q' in zio for zio in opacityFileList]] # Only files ending in .q are valid (for now)
-        nSpecies = opacities.__len__()
-        opacity_array = np.zeros((wavelengths.__len__(), nSpecies))
-        for j in range(nSpecies):
-            tempData = np.loadtxt(opacityDirectory + opacityFileList[j], comments = '#')
-            print(opacityFileList[j])
-            tempWl = tempData[:, 0]
-            tempOpac = tempData[:, 1]
-            f = interpolate.interp1d(tempWl, tempOpac, assume_sorted = False)
-            opacity_array[:,j] = f(self.restwaves)#wavelengths)
-        self.opacity_array = opacity_array
-        self.nSpecies = nSpecies
-        self.redshift = redshift
+        #nSpecies = opacities.__len__()
+        #opacity_array = np.zeros((wavelengths.__len__(), nSpecies))
+        #for j in range(nSpecies):
+        #    tempData = np.loadtxt(opacityDirectory + opacityFileList[j], comments = '#')
+        #    print(opacityFileList[j])
+        #    tempWl = tempData[:, 0]
+        #    tempOpac = tempData[:, 1]
+        #    f = interpolate.interp1d(tempWl, tempOpac, assume_sorted = False)
+        #    opacity_array[:,j] = f(self.restwaves)#wavelengths)
+        #self.opacity_array = opacity_array
+        #self.nSpecies = nSpecies
+        #self.redshift = redshift
         if redshift:
             from astropy.cosmology import FlatLambdaCDM
             self.cosmo=FlatLambdaCDM(H0=70, Om0=0.3)
@@ -293,6 +294,83 @@ class DustySpectrum(AnalyticalModel):
 
         # engelke_marengo needs temperature and SiO depth
 
+        #make sure that the following variables are string as they are expected to be when checking for their values below
+        geometry=str(geometry)
+        geometry_central=str(geometry_central)
+        geometry_external=str(geometry_external)
+        geometry_angular_distribution=str(geometry_angular_distribution)
+        geometry_right_angular_distribution=str(geometry_right_angular_distribution)
+        density_distribution=str(density_distribution)
+        grain_composition=str(grain_composition)
+        grainsize_distribution=str(grainsize_distribution)
+        spectralscale=str(spectralscale)
+        spectralshape=str(spectralshape)
+        right_spectralscale=str(right_spectralscale)
+        right_spectralshape=str(right_spectralshape)
+        tau_grid=str(tau_grid)
+        
+        # set all self.XXX to the inputs so that we can concentrate on setting the ones we use
+        self.geometry=geometry
+        self.geometry_illumination_angle=geometry_illumination_angle
+        self.geometry_angular_distribution=geometry_angular_distribution
+        self.geometry_central=geometry_central
+        self.geometry_external=geometry_external
+        self.spectralshape=spectralshape
+        self.spectralshape_blackbody_temperatures=spectralshape_blackbody_temperatures
+        self.spectralshape_blackbody_luminosities=spectralshape_blackbody_luminosities
+        self.spectralshape_powerlaw_lambda=spectralshape_powerlaw_lambda
+        self.spectralshape_powerlaw_k=spectralshape_powerlaw_k
+        self.spectralshape_engelke_temperature=spectralshape_engelke_temperature
+        self.spectralshape_engelke_sio_depth=spectralshape_engelke_sio_depth
+        self.spectralshape_filename=spectralshape_filename
+        self.spectralscale=spectralscale
+        self.spectralscale_flux_entering=spectralscale_flux_entering
+        self.spectralscale_luminosity=spectralscale_luminosity
+        self.spectralscale_distance=spectralscale_distance
+        self.spectralscale_dilution_factor=spectralscale_dilution_factor
+        self.spectralscale_energy_density=spectralscale_energy_density
+        self.spectralscale_inner_temperature=spectralscale_inner_temperature
+        self.geometry_toggle_right=geometry_toggle_right
+        self.geometry_right_angular_distribution=geometry_right_angular_distribution
+        self.geometry_right_illumination_angle=geometry_right_illumination_angle
+        self.right_spectralshape=right_spectralshape
+        self.right_spectralshape_blackbody_luminosities=right_spectralshape_blackbody_luminosities
+        self.right_spectralshape_blackbody_temperatures=right_spectralshape_blackbody_temperatures
+        self.right_spectralshape_engelke_sio_depth=right_spectralshape_engelke_sio_depth
+        self.right_spectralshape_engelke_temperature=right_spectralshape_engelke_temperature
+        self.right_spectralshape_powerlaw_k=right_spectralshape_powerlaw_k
+        self.right_spectralshape_powerlaw_lambda=right_spectralshape_powerlaw_lambda
+        self.right_spectralshape_filename=right_spectralshape_filename
+        self.right_spectralscale=right_spectralscale
+        self.right_spectralscale_dilution_factor=right_spectralscale_dilution_factor
+        self.right_spectralscale_distance=right_spectralscale_distance
+        self.right_spectralscale_energy_density=right_spectralscale_energy_density
+        self.right_spectralscale_flux_entering=right_spectralscale_flux_entering
+        self.right_spectralscale_inner_temperature=right_spectralscale_inner_temperature
+        self.right_spectralscale_luminosity=right_spectralscale_luminosity
+        self.density_distribution=density_distribution
+        self.density_transition_radii=density_transition_radii
+        self.density_powers=density_powers
+        self.density_outer_radius=density_outer_radius
+        self.density_falloff_rate=density_falloff_rate
+        self.density_filename=density_filename
+        self.grain_composition=grain_composition
+        self.grain_fractional_abundances=grain_fractional_abundances
+        self.grain_optical_properties_filename=grain_optical_properties_filename
+        self.grain_sublimation_temperature=grain_sublimation_temperature
+        self.grainsize_distribution=grainsize_distribution
+        self.grainsize_amax=grainsize_amax
+        self.grainsize_amin=grainsize_amin
+        self.grainsize_q=grainsize_q
+        self.grainsize_a0=grainsize_a0
+        self.tau_grid=tau_grid
+        self.tau_filename=tau_filename
+        self.tau_max=tau_max
+        self.tau_min=tau_min
+        self.tau_nmodels=tau_nmodels
+        self.tau_wavelength=tau_wavelength
+        self.flux_conservation_accuracy=flux_conservation_accuracy
+        
         # GEOMETRY BLOCK
         if geometry.lower() in ["sphere","spherical"]:
             self.geometry="sphere"
@@ -307,7 +385,6 @@ class DustySpectrum(AnalyticalModel):
             raise ValueError('Dusty.__init__: geometry must be set (slab/sphere/sphere_matrix)')
 
         if spherical:
-
             if geometry_central.lower() in ["on","yes"]:
                 self.geometry_central=True
             else:
@@ -340,7 +417,7 @@ class DustySpectrum(AnalyticalModel):
             else:
                 raise ValueError('Dusty.__init__: slab geometry:specify angular distribution of the radiation (isotropic/directional)')
                 
-            if geometry_toggle_right.lower() in ["on","yes"]:
+            if geometry_toggle_right == True:
                 self.geometry_toggle_right=True
                 if geometry_right_angular_distribution.lower() == "isotropic":
                     self.geometry_right_angular_distribution="isotropic"
@@ -356,7 +433,8 @@ class DustySpectrum(AnalyticalModel):
                         self.geometry_right_illumination_angle = geometry_right_illumination_angle
                 else:
                     raise ValueError('Dusty.__init__: slab-right geometry:specify angular distribution of the radiation (isotropic/directional)')
-            elif geometry_toggle_right.lower() == None:
+            elif geometry_toggle_right == False:
+                self.geometry_toggle_right=False
                 pass
             else:
                 raise ValueError('Dusty.__init__: value passed to geometry_toggle_right not understood')
@@ -372,9 +450,10 @@ class DustySpectrum(AnalyticalModel):
             elif str(spectralshape_blackbody_temperatures).lower()=="variable":
                 pass
             else:
+                if not isinstance(spectralshape_blackbody_temperatures, list): spectralshape_blackbody_temperatures = [spectralshape_blackbody_temperatures]
                 self.spectralshape_blackbody_temperatures = spectralshape_blackbody_temperatures
                 if len(spectralshape_blackbody_temperatures) == 1:
-                    spectralshape_blackbody_luminosities = 1.
+                    spectralshape_blackbody_luminosities = [1.]
                 else:
                     if spectralshape_blackbody_luminosities==None:
                         raise ValueError('Dusty.__init__: spectralshape multiple blackbody needs luminosities(s)')
@@ -382,7 +461,8 @@ class DustySpectrum(AnalyticalModel):
                         pass
                     else:
                         # in principle we should check that temperatures and luminosities are equal length
-                        self.spectralshape_blackbody_luminosities = spectralshape_blackbody_luminosities
+                        if not isinstance(spectralshape_blackbody_luminosities, list): spectralshape_blackbody_luminosities = [spectralshape_blackbody_luminosities]
+                self.spectralshape_blackbody_luminosities = spectralshape_blackbody_luminosities
                 
         elif spectralshape.lower() == "engelke":
             self.spectralshape="engelke"
@@ -876,13 +956,13 @@ class DustySpectrum(AnalyticalModel):
             raise ValueError('Dusty.__init__: tau grid must be set (linear/logarithmic/user supplied)')
 
         # NUMERICS BLOCK
-        if flux_conservation_accuracytau_grid==None:
-            raise ValueError('Dusty.__init__: flux_conservation_accuracytau_grid must be set [%]')
+        if flux_conservation_accuracy==None:
+            raise ValueError('Dusty.__init__: flux_conservation_accuracy must be set [%]')
         elif str(tau_wavelength).lower()=="variable":
             pass
         else:
             # should check for nine values
-            self.flux_conservation_accuracytau_grid = flux_conservation_accuracytau_grid
+            self.flux_conservation_accuracy = flux_conservation_accuracy
 
 
     # How do we control the output wavelength grid?
@@ -905,21 +985,21 @@ class DustySpectrum(AnalyticalModel):
             print('Temperature must be positive and in Kelvin.')
 
     def dusty_write_input_file_radiation_field(self,
-                                               spectralshape=spectralshape,
-                                               blackbody_temperatures=blackbody_temperatures,
-                                               blackbody_luminosities=blackbody_luminosities,
-                                               engelke_sio_depth=engelke_sio_depth,
-                                               engelke_temperature=engelke_temperature,
-                                               powerlaw_k=powerlaw_k,
-                                               powerlaw_lambda=powerlaw_lambda,
-                                               filename=filename,
-                                               spectralscale=spectralscale,
-                                               dilution_factor=dilution_factor,
-                                               distance=distance,
-                                               energy_density=energy_density,
-                                               flux_entering=flux_entering,
-                                               inner_temperature=inner_temperature,
-                                               luminosity=luminosity):
+                                               spectralshape,
+                                               blackbody_temperatures,
+                                               blackbody_luminosities,
+                                               engelke_sio_depth,
+                                               engelke_temperature,
+                                               powerlaw_k,
+                                               powerlaw_lambda,
+                                               filename,
+                                               spectralscale,
+                                               dilution_factor,
+                                               distance,
+                                               energy_density,
+                                               flux_entering,
+                                               inner_temperature,
+                                               luminosity):
 
         # spectral shape
         if spectralshape == "blackbody":
@@ -970,8 +1050,8 @@ class DustySpectrum(AnalyticalModel):
 
 
     def dusty_write_input_file_radiation_field_left_right(self,side='left'):
-        if side == left:
-            dusty_write_input_file_radiation_field(self,
+        if side == 'left':
+            DustySpectrum.dusty_write_input_file_radiation_field(self,
                                                    spectralshape=self.spectralshape,
                                                    blackbody_temperatures=self.spectralshape_blackbody_temperatures,
                                                    blackbody_luminosities=self.spectralshape_blackbody_luminosities,
@@ -988,7 +1068,7 @@ class DustySpectrum(AnalyticalModel):
                                                    inner_temperature=self.spectralscale_inner_temperature,
                                                    luminosity=self.spectralscale_luminosity)
         else:
-            dusty_write_input_file_radiation_field(self,
+            DustySpectrum.dusty_write_input_file_radiation_field(self,
                                                    spectralshape=self.right_spectralshape,
                                                    blackbody_temperatures=self.right_spectralshape_blackbody_temperatures,
                                                    blackbody_luminosities=self.right_spectralshape_blackbody_luminosities,
@@ -1049,10 +1129,10 @@ class DustySpectrum(AnalyticalModel):
             if self.geometry_central == "off":
                 self.dusty_inp_file.write("central = OFF")
                 self.dusty_inp_file.write("external = ON")
-                dusty_write_input_file_radiation_field_left_right(self,'left')
+                DustySpectrum.dusty_write_input_file_radiation_field_left_right(self,'left')
             else:
                 self.dusty_inp_file.write("central = ON")
-                dusty_write_input_file_radiation_field_left_right(self,'left')
+                DustySpectrum.dusty_write_input_file_radiation_field_left_right(self,'left')
                 self.dusty_inp_file.write("external = OFF")
         else:
             raise ValueError('DustySpectrum: no valid geometry specfied.')
@@ -1149,11 +1229,11 @@ class DustySpectrum(AnalyticalModel):
     def dusty_write_input_file(self):
         # we constuct a dusty input file piece by piece
         self.dusty_inp_file = open("dusty_model.inp","w")
-        dusty_write_input_file_geometry(self)
-        dusty_write_input_file_grain_composition(self)
-        dusty_write_input_file_grainsize_distribution(self)
-        dusty_write_input_file_density_distribution(self)
-        dusty_write_input_file_tau_grid(self)
+        DustySpectrum.dusty_write_input_file_geometry(self)
+        DustySpectrum.dusty_write_input_file_grain_composition(self)
+        DustySpectrum.dusty_write_input_file_grainsize_distribution(self)
+        DustySpectrum.dusty_write_input_file_density_distribution(self)
+        DustySpectrum.dusty_write_input_file_tau_grid(self)
         # NUMERICS                                                           
         self.dusty_inp_file.write("accuracy for flux conservation = "+self.flux_conservation_accuracy)
 
@@ -1231,3 +1311,4 @@ class DustySpectrum(AnalyticalModel):
                 return -np.inf
         else:
             raise NotImplementedError()
+
