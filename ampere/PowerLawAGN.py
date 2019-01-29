@@ -116,6 +116,13 @@ class SingleModifiedBlackBody(AnalyticalModel):
                 return -np.inf
         else:
             raise NotImplementedError()
+        
+    def prior_transform(self, u, **kwargs):
+        if self.flatprior:
+            theta = np.zeros_like(u)
+            return (lims[:,1] - lims[:,0]) * u - lims[:,0]
+        else:
+            raise NotImplementedError()
 
 class PowerLawAGN(AnalyticalModel):
     '''Input: fit parameters (multiplicationFactor, powerLawIndex, relativeAbundances), 
@@ -178,6 +185,13 @@ class PowerLawAGN(AnalyticalModel):
                 return -np.inf
         else:
             raise NotImplementedError()
+
+    def prior_transform(self, u, **kwargs):
+        if self.flatprior:
+            theta = np.zeros_like(u)
+            theta[0] = 20. * u[0] - 10
+            theta[1] = 1.5 * u[1]
+        pass
 
 class OpacitySpectrum(AnalyticalModel):
     '''Input: fit parameters (multiplicationFactor, powerLawIndex, relativeAbundances), 
