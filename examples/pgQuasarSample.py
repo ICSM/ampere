@@ -21,7 +21,7 @@ if __name__=="__main__":
     specFile = 'cassis_yaaar_spcfw_14191360t.fits'
     photFile = 'vizier_votable_pruned_no2MASS.vot'
     irs = Spectrum.fromFile(dataDir+specFile,format='SPITZER-YAAAR')
-    libDir = '/home/peter/pythonlibs/ampere/ampere/'
+    libDir = '../ampere/'
     libname = libDir + 'ampere_allfilters.hd5'
     phot = Photometry.fromFile(dataDir+photFile, libName = libname)
 
@@ -54,7 +54,7 @@ if __name__=="__main__":
     print(modspec)
     ax.plot(modwaves,modspec)
     plt.show()
-    exit()
+    #exit()
     
     pos = [
            [
