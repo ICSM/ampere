@@ -196,7 +196,8 @@ class Photometry(Data):
             l.append(filt in pyphotFilts)
         #try replacing colons and / with _
         #print(l)
-        newTry = [filt.replace(':','_').replace('/','_').replace('WISE','WISE_RSR').replace('Spitzer','SPITZER') for filt in self.filterName]
+        newTry = [filt.astype(str).replace(':','_').replace('/','_').replace('WISE','WISE_RSR').replace('Spitzer','SPITZER') for filt in self.filterName]
+        #change type to str from byte for filt to make it run <CK>
         newTry = [filt.replace('RSR_RSR','RSR') for filt in newTry]
         print(newTry)
         #newTry = [filt.replace('WISE','WISE_RSR').replace( for filt in newTry]
