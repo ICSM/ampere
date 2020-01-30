@@ -439,7 +439,9 @@ class Spectrum(Data):
         #raise NotImplementedError()
 
     def __repr__(self, **kwargs):
-        raise NotImplementedError()
+        """ hacky short-term solution so that we get some sort of print out so people can inspect spectra """
+        return self.__str__()
+        #raise NotImplementedError()
     
     def cov(self, theta, **kwargs):
         ''' 
