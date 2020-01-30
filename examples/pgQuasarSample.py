@@ -21,10 +21,12 @@ if __name__=="__main__":
     specFile = 'cassis_yaaar_spcfw_14191360t.fits'
     photFile = 'vizier_votable_pruned_no2MASS.vot'
     irs = Spectrum.fromFile(dataDir+specFile,format='SPITZER-YAAAR')
+    
     libDir = '../ampere/'
     libname = libDir + 'ampere_allfilters.hd5'
     phot = Photometry.fromFile(dataDir+photFile, libName = libname)
-
+    print(phot)
+    
     modwaves = 10**np.linspace(0.,1.9, 2000)
 
     model = PowerLawAGN(modwaves, redshift=0.058)
