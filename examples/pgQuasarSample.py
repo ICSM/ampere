@@ -27,7 +27,7 @@ if __name__=="__main__":
     libname = libDir + 'ampere_allfilters.hd5'
     phot = Photometry.fromFile(dataDir+photFile, libName = libname)
     print(phot)
-    exit()
+    #exit()
     modwaves = 10**np.linspace(0.,1.9, 2000)
 
     model = PowerLawAGN(modwaves, redshift=0.058)
