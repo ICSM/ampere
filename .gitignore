@@ -65,3 +65,14 @@ target/
 
 #Mac files
 .DS_Store
+
+#Output files
+*.png
+irs-0.txt
+irs-1.txt
+irs-last.txt
+*.pkl
+
+#Ciska's personal directories
+notes/
+old/

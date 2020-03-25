@@ -21,8 +21,6 @@ if __name__=="__main__":
     specFile = 'cassis_yaaar_spcfw_14191360t.fits'
     photFile = 'vizier_votable_pruned_no2MASS.vot'
     irs = Spectrum.fromFile(dataDir+specFile,format='SPITZER-YAAAR')
-    print(irs)
-    #exit()
     libDir = '../ampere/'
     libname = libDir + 'ampere_allfilters.hd5'
     phot = Photometry.fromFile(dataDir+photFile, libName = libname)

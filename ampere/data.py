@@ -192,7 +192,7 @@ class Photometry(Data):
         #print(pyphotFilts)
         filtsOrig = self.filterName
         l = []
-        for filt in self.filterName:
+        for filt in self.filterName: ## Problem: filt is not defined at this point.
             l.append(filt in pyphotFilts)
         #try replacing colons and / with _
         #print(l)
