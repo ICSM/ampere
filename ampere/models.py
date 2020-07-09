@@ -38,7 +38,6 @@ class Model(object):
     def __add__(self, other): #This method will be called if x + y is invoked and x is a Model instance  (self + other)
         if isinstance(other, Model): #When we try to combine two models we need to identify it properly
             newModel = CompositeModel(self, other, '+')
-            pass
         else:
             return NotImplemented
 
@@ -49,7 +48,10 @@ class Model(object):
         return NotImplemented
 
     def __sub__(self, other): #This method is like __add__ but for x - y
-        return NotImplemented
+        if isinstance(other, Model): #When we try to combine two models we need to identify it properly
+            newModel = CompositeModel(self, other, '-')
+        else:
+            return NotImplemented
 
     def __rsub__(self, other): #This method is like __radd__ but for x - y
         return NotImplemented
@@ -58,7 +60,10 @@ class Model(object):
         return NotImplemented
     
     def __mul__(self, other): #This method is like __add__ but for x * y
-        return NotImplemented
+        if isinstance(other, Model): #When we try to combine two models we need to identify it properly
+            newModel = CompositeModel(self, other, '*')
+        else:
+            return NotImplemented
 
     def __rmul__(self, other): #This method is like __radd__ but for x * y
         return NotImplemented
@@ -67,7 +72,10 @@ class Model(object):
         return NotImplemented
 
     def __truediv__(self, other): #This method is like __add__ but for x / y
-        return NotImplemented
+        if isinstance(other, Model): #When we try to combine two models we need to identify it properly
+            newModel = CompositeModel(self, other, '/')
+        else:
+            return NotImplemented
 
     def __rtruediv__(self, other): #This method is like __radd__ but for x / y
         return NotImplemented
