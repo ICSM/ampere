@@ -1,10 +1,11 @@
 from __future__ import print_function
 
 import numpy as np
+from models import Model
+from extinction import apply as redden #This is the generic extinction package, which is Cython optimised and so should be faster. the dust_extinction package is astropy affiliated and can also be used in many cases but may be slower
+#from dust_exctinction import
 
-
-
-class BaseExtinctionLaws(object):
+class BaseExtinctionLaws(Model):
     """
 
     """
@@ -17,10 +18,96 @@ class BaseExtinctionLaws(object):
     
     def __repr__(self, **kwargs):
         raise NotImplementedError("")
+
+    def __call__(self, **kwargs):
+        raise NotImplementedError()
     
     def extinctionModel(self, **kwargs): 
         raise NotImplementedError("")
     
+
+class F99Extinction(BaseExtinctionLaws):
+    """
+
+    """
+    def __init__(self, wavelengths, av = None, rv = None,
+                 lims = np.array([[0,100],[0,10]]), #limits on av and rv respectively
+                 **kwargs):
+        from extinction import fitzpatrick99 as f99
+        self.f_ext = f99 #define the extinction function, this is more to provide convenience functions for when people want to evaluate the model themselves
+        self.wavelengths = wavelengths #Wavelengths are assumed to be in micron!!
+        self.invwaves = 1/wavelengths
+        self.npars = 2 #Up to two free parameters for this type of model
+        if rv is not None: #R_v will be fixed in the fitting
+            self.rv = rv
+            self.npars -= 1
+
+        if av is not None: #A_v will be fixed in the fitting
+            self.av = av
+            self.npars -= 1
+
+        #raise NotImplementedError("")
+    
+    def __str__(self, **kwargs):
+        raise NotImplementedError("")
+    
+    def __repr__(self, **kwargs):
+        raise NotImplementedError("")
+
+    def __call__(self, *args, **kwargs):
+        if self.npars == 2:
+            #both av and rv are free parameters
+            av = args[0]
+            rv = args[1]
+            self.modelFlux = redden(self.f_ext(1/self.wavelengths, av, rv, unit='invum'), np.ones_like(self.wavelengths)) #f99 gives the extinction in magnitudes for a set of wavelengths for given av, rv. We then redden a set of ones to get the multiplier for the fluxes (i.e. we get A = exp(-tau(lambda)))
+        elif self.npars == 1:
+            #one of av or rv is fixed
+            if self.rv is not None: #Rv is fixed
+                av = args[0]
+                rv = self.rv
+                self.modelFlux = redden(self.f_ext(1/self.wavelengths, av, rv, unit='invum'), np.ones_like(self.wavelengths))
+            elif self.av is not None:
+                av = self.av
+                rv = args[0]
+                self.modelFlux = redden(self.f_ext(1/self.wavelengths, av, rv, unit='invum'), np.ones_like(self.wavelengths))
+            pass
+        elif self.npars == 0:
+            #both av and rv are fixed, we just want to return extinction values
+            self.modelFlux = redden(self.f_ext(1/self.wavelengths, self.av, self.rv, unit='invum'), np.ones_like(self.wavelengths))
+            pass
+        #raise NotImplementedError()
+
+
+    def lnprior(self, theta, **kwargs):
+        if self.npars == 2:
+            #both av and rv are free parameters
+            if self.flatprior:
+                if (self.lims[0,0] <= theta[0] <= self.lims[0,1]) and (self.lims[1,0] <= theta[1] <= self.lims[1,1]):
+                    return 0
+                else:
+                    return -np.inf
+            pass
+        elif self.npars == 1:
+            #one of av or rv is fixed
+            if self.av is not None:
+                if (self.lims[0,0] <= theta[0] <= self.lims[0,1]):
+                    return 0
+                else:
+                    return -np.inf
+            elif self.rv is not None:
+                if (self.lims[1,0] <= theta[0] <= self.lims[1,1]):
+                    return 0
+                else:
+                    return -np.inf
+            pass
+        elif self.npars == 0:
+            #both av and rv are fixed, we just want to return a constant because the prior is meaningless
+            return 0
+        pass
+
+
+    def prior_transform(self, u, **kwargs):
+        pass
     
         
 class CCMExtinctionLaw(BaseExtinctionLaws):
