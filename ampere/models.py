@@ -35,46 +35,45 @@ class Model(object):
     def __mul__(self, other):
         pass
     """
-    def __add__(self, other):
+    def __add__(self, other): #This method will be called if x + y is invoked and x is a Model instance  (self + other)
         if isinstance(other, Model): #When we try to combine two models we need to identify it properly
             newModel = CompositeModel(self, other, '+')
             pass
         else:
             return NotImplemented
-        pass
 
-    def __radd__(self, other):
-        pass
+    def __radd__(self, other):  #This method will be called if x + y is invoked and x is not a Model instance and x.__add__ can't handle being given a Model instance (other + self)
+        return NotImplemented
 
-    def __iadd__(self, other_):
-        pass
+    def __iadd__(self, other): #This method will be called if x+=y is called and x is a Model instance (self += other)
+        return NotImplemented
 
-    def __sub__(self, other):
-        pass
+    def __sub__(self, other): #This method is like __add__ but for x - y
+        return NotImplemented
 
-    def __rsub__(self, other):
-        pass
+    def __rsub__(self, other): #This method is like __radd__ but for x - y
+        return NotImplemented
 
-    def __isub__(self, other):
-        pass
+    def __isub__(self, other): #This method is like __iadd__ but for x -= y
+        return NotImplemented
     
-    def __mul__(self, other):
-        pass
+    def __mul__(self, other): #This method is like __add__ but for x * y
+        return NotImplemented
 
-    def __rmul__(self, other):
-        pass
+    def __rmul__(self, other): #This method is like __radd__ but for x * y
+        return NotImplemented
 
-    def __imul__(self, other):
-        pass
+    def __imul__(self, other): #This method is like __iadd__ but for x *= y
+        return NotImplemented
 
-    def __truediv__(self, other):
-        pass
+    def __truediv__(self, other): #This method is like __add__ but for x / y
+        return NotImplemented
 
-    def __rtruediv__(self, other):
-        pass
+    def __rtruediv__(self, other): #This method is like __radd__ but for x / y
+        return NotImplemented
 
-    def __itruediv__(self, other):
-        pass
+    def __itruediv__(self, other): #This method is like __iadd__ but for x /= y
+        return NotImplemented
 
     def lnprior(self, **kwargs):
         raise NotImplementedError()
