@@ -1,6 +1,6 @@
 
 # Input: wavelengths from obs., dust model (q_ij), parameters A, B, C_j
-# j = 0, nmaterial-1
+# j = 0, nmaterial
 # Wavelengths need include both pivotal wavelengths for photometry and wavelengths for (multiple) spectra
 # Regrid the q values onto the wavelengths
 # Execution: calculate the model flux; return the result
@@ -161,21 +161,23 @@ class PowerLawAGN(AnalyticalModel):
         print(self.restwaves)
         print(self.wavelength)
         print(self.redshift)
-        self.npars = nSpecies - 1 + 2 #there are two parameters for the continuum, then we need n-1 abundances
+        #self.npars = nSpecies - 1 + 2 #there are two parameters for the continuum, then we need n-1 abundances
+        self.npars = nSpecies + 2 #there are two parameters for the continuum
         
     def __call__(self,
-                 multiplicationFactor, # = 1,
-                 powerLawIndex, # = 2,
-                 *args, # = np.ones(self.nSpecies)/self.nSpecies,
+                 multiplicationFactor, # = log(1),
+                 powerLawIndex, # = log(2),
+                 *args, # = (np.ones(self.nSpecies)/self.nSpecies),
                  **kwargs):
-        relativeAbundances = np.append(10**np.array(args),1.-np.sum(10**np.array(args)))
-        # CISKA: we should rewrite this function so that it handles absolute abundances not
-        # relative abundances, and see how that works out. 
+        #relativeAbundances = np.append(10**np.array(args),1.-np.sum(10**np.array(args)))
+        dustAbundances = 10**np.array(args)
+        #moved from using relative abundances to absolute abundances. # species/parameters had
+        #to be changed throughout the program too
         if self.redshift is not None:
             waves = self.restwaves
         else:
             waves = self.wavelength
-        fModel = (np.matmul(self.opacity_array, relativeAbundances)+1)
+        fModel = (np.matmul(self.opacity_array, dustAbundances)+1)
         fModel = fModel*(waves**powerLawIndex)*(10**multiplicationFactor)
         self.modelFlux = fModel
 
