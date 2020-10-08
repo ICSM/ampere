@@ -54,7 +54,7 @@ if __name__=="__main__":
     modspec = model.modelFlux
     print(modspec)
     ax.plot(modwaves,modspec)
-    plt.show()
+    plt.show() #this seems to be the plotting of a relatively random SED plot at the beginning of the program
     #exit()
     
     pos = [

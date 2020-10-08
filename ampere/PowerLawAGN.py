@@ -169,6 +169,8 @@ class PowerLawAGN(AnalyticalModel):
                  *args, # = np.ones(self.nSpecies)/self.nSpecies,
                  **kwargs):
         relativeAbundances = np.append(10**np.array(args),1.-np.sum(10**np.array(args)))
+        # CISKA: we should rewrite this function so that it handles absolute abundances not
+        # relative abundances, and see how that works out. 
         if self.redshift is not None:
             waves = self.restwaves
         else:
