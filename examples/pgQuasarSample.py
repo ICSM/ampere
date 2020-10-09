@@ -25,19 +25,23 @@ if __name__=="__main__":
     libname = libDir + 'ampere_allfilters.hd5'
     phot = Photometry.fromFile(dataDir+photFile, libName = libname)
     print(phot)
-    #exit()
     modwaves = 10**np.linspace(0.,1.9, 2000)
 
     model = PowerLawAGN(modwaves, redshift=0.058)
     phot.reloadFilters(modwaves)
     dataSet = [phot]
+    print(phot)
+    print(irs)
     #for s in irs:
-    #    dataSet.append(s)
+        #dataSet.append(s)
     #for s in dataSet:
     #    print(s)
 
+    # dataSet currently only contains the photometry. We need to figure
+    # out how to append the spectroscopy to the data
     opt = EmceeSearch(model = model, data = dataSet, nwalkers = 200)
 
+    
     print(opt.npars)
 
     fig = plt.figure()
