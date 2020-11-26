@@ -49,12 +49,13 @@ class DualBlackBodyDust(AnalyticalModel):
 
                  
 
-    def __call__(self, T1c = 200., F1c = 0.5, T2c = 800., F2c =0.5, T1f = 200., F1f = 0.5, T2f = 800., F2f = 0.5, *args, **kwargs): #default values for temperatures and fractions will most likely never be used. *args will be a list of (7) relative abundances of the dust species. 
-        relativeAbundances = np.append(10**np.array(args),1.-np.sum(10**np.array(args))) # The 8th abundance is 1 minus the sum of the other 7. We are doing the parameter space exploration in the log space to ensure proper sampling of small fractions.
+    def __call__(self, T1c = 200., F1c = 0.5, T2c = 800., F2c =0.5, T1f = 200., F1f = 0.5, T2f = 800., F2f = 0.5, *args, **kwargs): #default values for temperatures and fractions will most likely never be used. *args will be a list of (8) absolute abundances of the dust species. 
+        #relativeAbundances = np.append(10**np.array(args),1.-np.sum(10**np.array(args))) # The 8th abundance is 1 minus the sum of the other 7. We are doing the parameter space exploration in the log space to ensure proper sampling of small fractions.
+        dustAbundances = 10**np.array(args) #We are doing the parameter space exploration in the log space to ensure proper sampling of small fractions.
 
         freq = const.c.value / (self.wavelength*1e-6)
         
-        fModel = (np.matmul(self.opacity_array, relativeAbundances))
+        fModel = (np.matmul(self.opacity_array, dustAbundances))
         fModel = fModel*(F1f*blackbody.blackbody_nu(freq,T1f).to(u.Jy / u.sr).value + F2f*blackbody.blackbody_nu(freq,T2f).to(u.Jy / u.sr).value) + (F1c*blackbody.blackbody_nu(freq,T1c).to(u.Jy / u.sr).value + F2c*blackbody.blackbody_nu(freq,T2c).to(u.Jy / u.sr).value)           
         self.modelFlux = fModel
 
@@ -125,7 +126,7 @@ class SingleModifiedBlackBody(AnalyticalModel):
             raise NotImplementedError()
 
 class PowerLawAGN(AnalyticalModel):
-    '''Input: fit parameters (multiplicationFactor, powerLawIndex, relativeAbundances), 
+    '''Input: fit parameters (multiplicationFactor, powerLawIndex, dustAbundances), 
               opacities (opacity_array): q_ij where i = wavelength, j = species
               wavelength grid from data (wavelengths)
     Output: model fluxes (modelFlux)'''
