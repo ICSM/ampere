@@ -29,19 +29,20 @@ if __name__=="__main__":
 
     model = PowerLawAGN(modwaves, redshift=0.058)
     phot.reloadFilters(modwaves)
-    dataSet = [phot]
+    dataSet = [phot]          #comment in when using photometry
+    #dataSet = [s for s in irs] #comment out when using photometry
     print(phot)
     print(irs)
-    #for s in irs:
-        #dataSet.append(s)
-    #for s in dataSet:
-    #    print(s)
+    for s in irs:             #comment the next four lines in when appending spectroscopy to photometry
+        dataSet.append(s)
+    for s in dataSet:
+        print(s)
 
-    # dataSet currently only contains the photometry. We need to figure
-    # out how to append the spectroscopy to the data
+    # Srinivasan et al. (2017) have performed the fit over the observed 8-35 micron range, combined with the longer wavelength PACS or MIPS-70 photometry, if any.
+    # We thus need to constrain dataSet accordingly to compare
+
     opt = EmceeSearch(model = model, data = dataSet, nwalkers = 200)
 
-    
     print(opt.npars)
 
     fig = plt.figure()
@@ -58,12 +59,13 @@ if __name__=="__main__":
     modspec = model.modelFlux
     print(modspec)
     ax.plot(modwaves,modspec)
-    plt.show() #this seems to be the plotting of a relatively random SED plot at the beginning of the program
+    plt.show() #this plots the spectrum and photometry plus the shape of the model SED using the input parameters
     #exit()
     
     pos = [
            [
-               -2., 0.3, -0.78, -0.78, -0.78, -0.78, -0.78, -0.78 #, 1., 0.5, 1., 1., 0.5, 1.
+               -2., 0.3, -0.78, -0.78, -0.78, -0.78, -0.78, -0.78, 1., 0.5, 1., 1., 0.5, 1. #spectroscopy included
+               #-2., 0.3, -0.78, -0.78, -0.78, -0.78, -0.78, -0.78 # only photometry
                #20 + np.random.randn() for i in range(np.int(opt.npars))
            ]
            + np.random.randn(np.int(opt.npars))/1e3 for j in range(opt.nwalkers)
