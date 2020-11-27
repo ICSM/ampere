@@ -60,7 +60,7 @@ class Data(object):
             self.mask = np.logical_and(self.wavelength > low, self.wavelength <= up)
         elif interval == "right-open": #only the lower limit will be treated with less-than-or-equal-to
             self.mask = np.logical_and(self.wavelength >= low, self.wavelength < up)
-        elif interval == "open": #only the upper limit will be treated with less-than-or-equal-to
+        elif interval == "open": #neither limit will be treated with less-than-or-equal-to
             self.mask = np.logical_and(self.wavelength > low, self.wavelength < up)
         pass
 
