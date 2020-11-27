@@ -179,7 +179,7 @@ class PowerLawAGN(AnalyticalModel):
         else:
             waves = self.wavelength
         fModel = (np.matmul(self.opacity_array, dustAbundances)+1)
-        fModel = fModel*(waves**powerLawIndex)*(10**multiplicationFactor)
+        fModel = fModel*(waves**powerLawIndex) #*(10**multiplicationFactor) --> not needed when using absolute abundances
         self.modelFlux = fModel
 
     def lnprior(self, theta, **kwargs):
