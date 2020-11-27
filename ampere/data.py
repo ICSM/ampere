@@ -47,6 +47,23 @@ class Data(object):
         '''
         pass
 
+    def selectWaves(self, low = 0, up = np.inf, interval = "closed", **kwargs):
+        '''
+        Method to generate a mask for the data by wavelength. Uses interval terminology to determine how the limits are treated.
+        '''
+
+        if interval == "closed": #Both arguments will be treated with less/greater-than-or-equal-to
+
+            self.mask = np.logical_and(self.wavelength >= low, self.wavelength <= up)
+
+        elif interval == "left-open": #only the upper limit will be treated with less-than-or-equal-to
+            self.mask = np.logical_and(self.wavelength > low, self.wavelength <= up)
+        elif interval == "right-open": #only the lower limit will be treated with less-than-or-equal-to
+            self.mask = np.logical_and(self.wavelength >= low, self.wavelength < up)
+        elif interval == "open": #neither limit will be treated with less-than-or-equal-to
+            self.mask = np.logical_and(self.wavelength > low, self.wavelength < up)
+        pass
+
     
     
 #1. Should all the photometry be stored in one object
@@ -106,19 +123,9 @@ class Photometry(Data):
         self.uncertainty = uncertainty
         self.value = value
 
-        ''' inititalise covariance matrix as a diagonal matrix '''
-        #self.covMat = np.diag(uncertainty**2)#np.diag(np.ones(len(uncertainty)))
-        self.varMat = uncertainty * uncertainty[:,np.newaxis] #make a square array of sigma_i * sigma_j, i.e. variances
-        self.covMat = np.diag(np.ones_like(uncertainty))
-        a = self.covMat > 0
-        self.covMat[a] = self.covMat[a] * self.varMat[a]# = np.diag(uncertainty**2)
-        self.logDetCovMat = np.linalg.slogdet(self.covMat)[1]# / np.log(10.)
-        print(self.logDetCovMat)
-        if self.logDetCovMat == -np.inf:
-            print("""The determinant of the covariance matrix for this dataset is 0.
-            Please check that the uncertainties are positive real numbers """)
-            print(self)
-            exit()
+        self.selectWaves()
+
+        self.cov()
 
         self.npars = 0
 
@@ -254,9 +261,9 @@ class Photometry(Data):
         self.covMat = self.cov()
         
         ''' then compute the likelihood for each photometric point in a vectorised statement '''
-        a = self.value - modSed
+        a = self.value[self.mask] - modSed
 
-        b = -0.5*len(self.value) * np.log(2*np.pi) - (0.5*self.logDetCovMat)
+        b = -0.5*len(self.value[self.mask]) * np.log(2*np.pi) - (0.5*self.logDetCovMat)
             #np.log(1./((2*np.pi)**(len(self.value)) * np.linalg.det(self.covMat))
             #) 
         probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(inv(self.covMat), a) ) ) )
@@ -268,7 +275,22 @@ class Photometry(Data):
         This routine populates a covariance matrix given some methods to call and parameters for them.
 
         For the moment, however, it does nothing.
+
         '''
+
+        ''' inititalise covariance matrix as a diagonal matrix '''
+        #self.covMat = np.diag(uncertainty**2)#np.diag(np.ones(len(uncertainty)))
+        self.varMat = self.uncertainty[self.mask] * self.uncertainty[self.mask][:,np.newaxis] #make a square array of sigma_i * sigma_j, i.e. variances
+        self.covMat = np.diag(np.ones_like(self.uncertainty[self.mask]))
+        a = self.covMat > 0
+        self.covMat[a] = self.covMat[a] * self.varMat[a]# = np.diag(uncertainty**2)
+        self.logDetCovMat = np.linalg.slogdet(self.covMat)[1]# / np.log(10.)
+        print(self.logDetCovMat)
+        if self.logDetCovMat == -np.inf:
+            print("""The determinant of the covariance matrix for this dataset is 0.
+            Please check that the uncertainties are positive real numbers """)
+            print(self)
+            exit()
         return self.covMat
 
     @classmethod
@@ -389,6 +411,8 @@ class Spectrum(Data):
 
         self.covarianceTruncation = covarianceTruncation
 
+        self.selectWaves()
+
     def __call__(self, **kwargs):
         raise NotImplementedError()
     
@@ -456,7 +480,7 @@ class Spectrum(Data):
 
         ''' create a grid of positions/distances on which to build the matrix '''
         #we might be able to offload this step to an instance variable, as it shouldn't change between iterations...
-        i, j = np.mgrid[:len(self.wavelength),:len(self.wavelength)]
+        i, j = np.mgrid[:len(self.wavelength[self.mask]),:len(self.wavelength[self.mask])]
         d = i - j
 
         ''' hardcode a squared-exponential kernel for the moment '''
@@ -464,7 +488,8 @@ class Spectrum(Data):
         a = m < self.covarianceTruncation
         m[np.logical_not(a)] = 0. #overwrite small values with 0 to speed up some of the algebra
 
-        covMat = (1-theta[0])*np.diag(np.ones_like(self.uncertainty)) + theta[0]*m
+        self.varMat = uncertainty[self.mask] * uncertainty[self.mask][:,np.newaxis] #make a square array of sigma_i * sigma_j, i.e. variances
+        covMat = (1-theta[0])*np.diag(np.ones_like(self.uncertainty[self.mask])) + theta[0]*m
         self.covMat = covMat * self.varMat
         
         self.logDetCovMat = np.linalg.slogdet(self.covMat)[1]# / np.log(10.)
@@ -493,7 +518,7 @@ class Spectrum(Data):
         #print(self)
         #wavelength = self.wavelength
         #modSpec = model.modelFlux #
-        modSpec = spectres(self.wavelength, model.wavelength, model.modelFlux) #For some reason spectres isn't cooperating :/ actually, looks like it was just a stupid mistake
+        modSpec = spectres(self.wavelength[self.mask], model.wavelength, model.modelFlux) #For some reason spectres isn't cooperating :/ actually, looks like it was just a stupid mistake
 
         ''' then update the covariance matrix for the parameters passed in '''
         #skip this for now
@@ -504,7 +529,7 @@ class Spectrum(Data):
         #plt.show()
         
         ''' then compute the likelihood for each photometric point in a vectorised statement '''
-        a = scaleFac*self.value - modSpec
+        a = scaleFac*self.value[self.mask] - modSpec
         #if not np.all(np.isfinite(a)):
         #    print(a)
         #    print(modSpec)
@@ -513,7 +538,7 @@ class Spectrum(Data):
         b = 0#np.log10(1./((np.float128(2.)*np.pi)**(len(self.value)) * np.linalg.det(self.covMat))
             #)
 
-        b = -0.5*len(self.value) * np.log(2*np.pi) - (0.5*self.logDetCovMat) #less computationally intensive version of above
+        b = -0.5*len(self.value[self.mask]) * np.log(2*np.pi) - (0.5*self.logDetCovMat) #less computationally intensive version of above
         #pass
         probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(inv(self.covMat), a) ) ) )
         #print(((np.float128(2.)*np.pi)**(len(self.value))), np.linalg.det(self.covMat))
