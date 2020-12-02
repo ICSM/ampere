@@ -22,28 +22,24 @@ if __name__=="__main__":
     photFile = 'vizier_votable_pruned_no2MASS.vot'
     irs = Spectrum.fromFile(dataDir+specFile,format='SPITZER-YAAAR')
     #irs = [chunk.selectWaves(low = 8., up=35.) for chunk in irs] # alternative to next two lines, doesn't work
-    irs[0] = irs[0].selectWaves(low = 8., up = 35.) #following Srinivasan et al. 2017
-    irs[1] = irs[1].selectWaves(low = 8., up = 35.) #following Srinivasan et al. 2017
-    print("hello")
-    print(irs)
-    # irs is now a list of two empty things. This does not work.
-    libDir = '../ampere/'
-    libname = libDir + 'ampere_allfilters.hd5'
+    irs[0].selectWaves(low = 8., up = 35.) #following Srinivasan et al. 2017
+    irs[1].selectWaves(low = 8., up = 35.) #following Srinivasan et al. 2017
+
+    libDir = '../ampere/'    libname = libDir + 'ampere_allfilters.hd5'
     phot = Photometry.fromFile(dataDir+photFile, libName = libname)
-    phot = phot.selectWaves(low = 35., interval = "right-open") #using only MIPS-70 and PACS, following Srinivasan et al. 2017
-    print(phot)
+    phot.selectWaves(low = 35., interval = "right-open") #using only MIPS-70 and PACS, following Srinivasan et al. 2017
+    print(phot.mask)
+    print("hello")
     modwaves = 10**np.linspace(0.,1.9, 2000)
 
     model = PowerLawAGN(modwaves, redshift=0.058)
     phot.reloadFilters(modwaves)
     dataSet = [phot]          #use this line when using photometry
     #dataSet = [s for s in irs] #comment out when using photometry
-    print(type(phot))
-    print(type(irs))
-    for s in irs:             #include the next four lines when appending spectroscopy to photometry
+    for s in irs:             #include the next two lines when appending spectroscopy to photometry
         dataSet.append(s)
-    for s in dataSet:
-        print(s)
+#    for s in dataSet:
+#        print(s)
 
     opt = EmceeSearch(model = model, data = dataSet, nwalkers = 200)
 
