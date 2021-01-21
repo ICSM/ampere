@@ -62,6 +62,10 @@ class Data(object):
             self.mask = np.logical_and(self.wavelength >= low, self.wavelength < up)
         elif interval == "open": #neither limit will be treated with less-than-or-equal-to
             self.mask = np.logical_and(self.wavelength > low, self.wavelength < up)
+        #now we need to create a mask for the covariance matrix
+        #The outer product does what we want, producing a matrix which has elements such that cov_mask[i,j] = mask[i] * mask[j]
+        #This produces the right answer because boolean multiplication is treated as an AND operation in python
+        self.cov_mask = np.outer(self.mask, self.mask)
         pass
 
     
@@ -266,7 +270,7 @@ class Photometry(Data):
         b = -0.5*len(self.value[self.mask]) * np.log(2*np.pi) - (0.5*self.logDetCovMat)
             #np.log(1./((2*np.pi)**(len(self.value)) * np.linalg.det(self.covMat))
             #) 
-        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(inv(self.covMat), a) ) ) )
+        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(inv(self.covMat[self.cov_mask]), a) ) ) )
         return probFlux
         
 
@@ -280,11 +284,11 @@ class Photometry(Data):
 
         ''' inititalise covariance matrix as a diagonal matrix '''
         #self.covMat = np.diag(uncertainty**2)#np.diag(np.ones(len(uncertainty)))
-        self.varMat = self.uncertainty[self.mask] * self.uncertainty[self.mask][:,np.newaxis] #make a square array of sigma_i * sigma_j, i.e. variances
-        self.covMat = np.diag(np.ones_like(self.uncertainty[self.mask]))
+        self.varMat = np.outer(self.uncertainty, self.uncertainty) #self.uncertainty[self.mask] * self.uncertainty[self.mask][:,np.newaxis] #make a square array of sigma_i * sigma_j, i.e. variances
+        self.covMat = np.diag(np.ones_like(self.uncertainty))#[self.mask]))
         a = self.covMat > 0
         self.covMat[a] = self.covMat[a] * self.varMat[a]# = np.diag(uncertainty**2)
-        self.logDetCovMat = np.linalg.slogdet(self.covMat)[1]# / np.log(10.)
+        self.logDetCovMat = np.linalg.slogdet(self.covMat[self.cov_mask])[1]# / np.log(10.)
         print(self.logDetCovMat)
         if self.logDetCovMat == -np.inf:
             print("""The determinant of the covariance matrix for this dataset is 0.
@@ -480,7 +484,7 @@ class Spectrum(Data):
 
         ''' create a grid of positions/distances on which to build the matrix '''
         #we might be able to offload this step to an instance variable, as it shouldn't change between iterations...
-        i, j = np.mgrid[:len(self.wavelength[self.mask]),:len(self.wavelength[self.mask])]
+        i, j = np.mgrid[:len(self.wavelength),:len(self.wavelength)]# np.mgrid[:len(self.wavelength[self.mask]),:len(self.wavelength[self.mask])]
         d = i - j
 
         ''' hardcode a squared-exponential kernel for the moment '''
@@ -488,11 +492,13 @@ class Spectrum(Data):
         a = m < self.covarianceTruncation
         m[np.logical_not(a)] = 0. #overwrite small values with 0 to speed up some of the algebra
 
-        self.varMat = uncertainty[self.mask] * uncertainty[self.mask][:,np.newaxis] #make a square array of sigma_i * sigma_j, i.e. variances
-        covMat = (1-theta[0])*np.diag(np.ones_like(self.uncertainty[self.mask])) + theta[0]*m
+        #self.varMat = #uncertainty[self.mask] * uncertainty[self.mask][:,np.newaxis] #make a square array of sigma_i * sigma_j, i.e. variances
+        self.varMat = np.outer(self.uncertainty, self.uncertainty)
+        #covMat = (1-theta[0])*np.diag(np.ones_like(self.uncertainty[self.mask])) + theta[0]*m
+        covMat = (1-theta[0])*np.diag(np.ones_like(self.uncertainty)) + theta[0]*m
         self.covMat = covMat * self.varMat
         
-        self.logDetCovMat = np.linalg.slogdet(self.covMat)[1]# / np.log(10.)
+        self.logDetCovMat = np.linalg.slogdet(self.covMat[self.cov_mask])[1]# / np.log(10.)
         #return self.covMat
 
     def lnprior(self, theta, **kwargs):
@@ -540,7 +546,7 @@ class Spectrum(Data):
 
         b = -0.5*len(self.value[self.mask]) * np.log(2*np.pi) - (0.5*self.logDetCovMat) #less computationally intensive version of above
         #pass
-        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(inv(self.covMat), a) ) ) )
+        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(inv(self.covMat[self.cov_mask]), a) ) ) )
         #print(((np.float128(2.)*np.pi)**(len(self.value))), np.linalg.det(self.covMat))
         #print(((np.float128(2.)*np.pi)**(len(self.value)) * np.linalg.det(self.covMat)))
         #print(b, probFlux)
