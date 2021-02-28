@@ -15,9 +15,33 @@ from scipy.stats import norm, halfnorm
 from scipy.linalg import inv
 
 class Data(object):
-    """
+    """A base class to represent data objects and their properties
+
+    This is intended purely as a base class to define the interface. When creating 
+    your own Data types you must reimplement all methods except: 
+        selectWaves
+    which you only need to reimplement if your type of data needs to handle them 
+    differently. 
 
 
+    Parameters:
+    ----------
+    None
+
+    Attributes:
+    ----------
+    None
+
+    Notes:
+    -----
+    Data objects are intended to encapsulate both measurements and their covariances, 
+    and provide the means to calculate the likelihood of the encapsulated data given
+    some model. If the type of data has some nuisance parameters associated with it
+    (e.g. a normalisation term) it must also define the prior for those parameters.
+    
+    Examples:
+    --------
+    None, since this is the base class
     """
 
     def __init__(**kwargs):
@@ -73,10 +97,46 @@ class Data(object):
 #1. Should all the photometry be stored in one object
 
 class Photometry(Data):
+    """A class to represent photometric data objects and their properties
 
-    """
-    Routine to take input from Data(), convert all fluxes into Jy
+    This is intended purely as a base class to define the interface. When creating 
+    your own Data types you must reimplement all methods except: 
+        selectWaves
+    which you only need to reimplement if your type of data needs to handle them 
+    differently. 
 
+
+    Parameters:
+    ----------
+    filterName : string, array-like
+        The names of the filters that this object will hold
+    value : float, array-like
+        The fluxes or magnitudes corresponding to each filter. 
+        Fluxes and magnitudes can be mixed, see `photUnits`.
+    uncertainty : float, array-like
+        The uncertainty on the fluxes or magnitudes.
+    photUnits : {'Jy', 'mJy', 'mag'}, array-like
+        The units of the photometry. Should be an array-like of the same length as filterName.
+    bandUnits : optional, string, scalar or array-like
+        Currently assumes micron ('um') as pyphot converts internally. May be updated in future.
+    libName : string
+        the path to the pyphot library that holds the relevant filter curves.
+
+    Attributes:
+    ----------
+    None
+
+    Methods:
+    --------
+    lnlike : Calculate the likelihood of the data given the model
+
+    Notes:
+    -----
+    
+    
+    Examples:
+    --------
+    phot = Photometry(['2MASS_J', '2MASS_K'], [10., 5.], [0.2, 0.1], ['Jy', 'Jy'], libname='path/to/filter/library')
     """
 
     def __init__(self, filterName, value, uncertainty, photUnits, bandUnits=None, libName = None, **kwargs):
@@ -187,7 +247,13 @@ class Photometry(Data):
 
     def pyphotSetup(self, libName = None, **kwargs):
         ''' Given the data, read in the pyphot filter library and make sure we have the right list of filters in memory 
-        
+
+        Parameters:
+        ----------
+        libName : str, optional
+
+        Notes:
+        ------
         Future work: go through multiple libraries from different (user-defined) locations and import htem all
         '''
         
@@ -199,6 +265,7 @@ class Photometry(Data):
         self.filterLibrary = pyphot.get_library(fname=libName)
 
     def filterNamesToPyphot(self, **kwargs):
+        """Attempt to convert the set of filter names that the objects was instantiated with so that they match the contents of the pyphot library """
         pyphotFilts = self.filterLibrary.get_library_content()
         #print(pyphotFilts)
         filtsOrig = self.filterName
@@ -245,10 +312,28 @@ class Photometry(Data):
         self.filters=filters
 
     def lnprior(self, theta, **kwargs):
+        """Return the prior of any nuisance parameters. 
+
+        Since this implementation has no nuisance parameters, it does nothing."""
         return 0
 
     def lnlike(self, theta, model, **kwargs):
-        ''' docstring goes here '''
+        '''Compute the likelihood of the photometry given the model. 
+
+        The likelihood is computed as:
+        .. math:: \frac{1}{2} N \ln\left(2\pi\right) - \frac{1}{2}\ln\left(\mathrm{det}C\right) - \frac{1}{2} \left(F_\mathrm{obs} - F_\mathrm{mod})^T C^{-1} \left(F_\mathrm{obs} - F_\mathrm{mod}\right)
+        where N is the number of photometric points, C is the covariance matrix, and F_obs and F_mod are the observed and predicted photmetry, respectively.
+
+        Parameters:
+        -----------
+        theta: empty, included for compatibility reasons
+        model: an instance of Model or a subclass
+
+        Returns:
+        --------
+        probFlux: float
+            The natural logarithm of the likelihood of the data given the model
+        '''
         
         ''' First take the model values (passed in) and compute synthetic photometry '''
         ''' I assume that the filter library etc is already setup '''
@@ -275,11 +360,25 @@ class Photometry(Data):
         
 
     def cov(self, **kwargs):
-        ''' 
-        This routine populates a covariance matrix given some methods to call and parameters for them.
+        '''This routine populates a covariance matrix given some methods to call and parameters for them.
 
-        For the moment, however, it does nothing.
+        The likelihood is computed as:
+        .. math:: \frac{1}{2} N \ln\left(2\pi\right) - \frac{1}{2}\ln\left(\mathrm{det}C\right) - \frac{1}{2} \left(F_\mathrm{obs} - F_\mathrm{mod})^T C^{-1} \left(F_\mathrm{obs} - F_\mathrm{mod}\right)
+        where N is the number of photometric points, C is the covariance matrix, and F_obs and F_mod are the observed and predicted photmetry, respectively.
 
+        Parameters:
+        -----------
+        theta: empty, included for compatibility reasons
+        model: an instance of Model or a subclass
+
+        Returns:
+        --------
+        covMat: float, N times N array-like
+            The covariance matrix
+
+        Raises:
+        -------
+        Nothing yet!
         '''
 
         ''' inititalise covariance matrix as a diagonal matrix '''
@@ -290,7 +389,7 @@ class Photometry(Data):
         self.covMat[a] = self.covMat[a] * self.varMat[a]# = np.diag(uncertainty**2)
         self.logDetCovMat = np.linalg.slogdet(self.covMat[self.cov_mask])[1]# / np.log(10.)
         print(self.logDetCovMat)
-        if self.logDetCovMat == -np.inf:
+        if self.logDetCovMat == -np.inf: #This needs to be updated to raise an error!
             print("""The determinant of the covariance matrix for this dataset is 0.
             Please check that the uncertainties are positive real numbers """)
             print(self)
@@ -299,8 +398,19 @@ class Photometry(Data):
 
     @classmethod
     def fromFile(cls, filename, format=None, **kwargs):
-        ''' 
-        Routine to generate photometry data object from a file containing said data
+        '''Create Photometry object from a file containing data
+
+        Parameters:
+        -----------
+        filename: str
+            The name of the file to load photometry from
+        format: {'VO', }, optional, default 'VO'
+            The format of the file.
+
+        Returns:
+        --------
+        Photometry
+            A new Photometry instance
         '''
         self=cls.__new__(Photometry)
         # First type votable as take from vizier/sed http://vizier.u-strasbg.fr/vizier/sed/
@@ -322,6 +432,26 @@ class Photometry(Data):
         return self
 
     def fromTable(self, table, format=None, **kwargs):
+        '''Populates the photometry instance from an Astropy Table instance.
+
+        This is used to populate an existing Photometry instance from an astropy table, called from fromFile. 
+
+        Parameters:
+        -----------
+        table: astropy.table.Table
+            The table containing the photometry data
+
+
+        Notes:
+        ------
+        This routine is not intended to be used as a standalone routine to 
+        instantiate Photometry instances. If you wish to do so, you must first 
+        create the instance using p = Photometry.__new__(Photometry), then 
+        instantiate it with p.fromTable(table). Since this is basically what 
+        Photometry.fromFile() does,we recommend using that unless you have to 
+        build the table in memory. We hope to revise this in future.
+
+        '''
         ''' 
         Routine to generate data object from an astropy Table object or a file containing data in a format that can be read in as an astropy Table
         '''
