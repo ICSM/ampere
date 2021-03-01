@@ -136,7 +136,12 @@ class Photometry(Data):
     
     Examples:
     --------
-    phot = Photometry(['2MASS_J', '2MASS_K'], [10., 5.], [0.2, 0.1], ['Jy', 'Jy'], libname='path/to/filter/library')
+    create an instance by directly instantiating it
+
+    >>> phot = Photometry(['2MASS_J', '2MASS_K'], [10., 5.], [0.2, 0.1], ['Jy', 'Jy'], libname='path/to/filter/library')
+
+    Or create it from a file containing a table
+    >>> phot = Photometry.fromFile('filename.vot')
     """
 
     def __init__(self, filterName, value, uncertainty, photUnits, bandUnits=None, libName = None, **kwargs):
@@ -471,6 +476,49 @@ class Photometry(Data):
         self.__init__(filterName, value, uncertainty, photUnits, **kwargs)
                    
 class Spectrum(Data):
+    """A class to represent 1D spectra data objects and their properties
+
+    
+
+
+    Parameters:
+    ----------
+    wavelength : float, array-like
+        The wavelengths of the spectrum.
+    value : float, array-like
+        The fluxes of the spectrum.
+    uncertainty : float, array-like
+        The uncertainty on the fluxes.
+    fluxUnits : {'Jy', 'mJy', 'W/m^2/Hz', 'W/m^2/Angstrom', 'W/cm^2/um', 'erg/cm^2/s/Hz', 'erg/cm^2/s/Angstrom'}, scalar
+        The units of the fluxes..
+    bandUnits : {'um', 'A', 'nm'}, optional, string, scalar or array-like
+        The units of the wavelengths.
+    freqSpec : bool, default False
+        If the input is wavelength (False, default) of Frequncy (True). Currently only works for frequncies in GHz, otherwise input must be wavelength
+    calUnc : float, optional, default 0.01
+        Parameter controlling width of prior on the scale factor for absolute calibration uncertainty. Larger values imply larger calibration uncertainty. The default value corresponds to roughly 2.5% uncertainty. 
+    covarianceTruncation : float, optional, default 1e-3
+        Threshold below which the covariance matrix is truncated to zero.
+
+    Attributes:
+    ----------
+    None
+
+    Methods:
+    --------
+    lnlike : Calculate the likelihood of the data given the model
+
+    Notes:
+    -----
+    
+    
+    Examples:
+    --------
+    >>> spec = Spectrum(wavelength_array, flux_array, uncertainty_array, "um", "Jy")
+
+    or alternatively
+    >>> spec = Spectrum.fromFile('filename', 'SPITZER-YAAAR')
+    """
 
     """
 
@@ -605,10 +653,18 @@ class Spectrum(Data):
         #raise NotImplementedError()
     
     def cov(self, theta, **kwargs):
-        ''' 
-        This routine populates a covariance matrix given some methods to call and parameters for them.
+        '''This routine populates a covariance matrix given some methods to call and parameters for them.
 
-        For the moment, however, it does nothing.
+        It populates the covariance matrix assuming the noise consists of two 
+        components: 1) an uncorrelated component; and 2) a single squared-exponential
+        with two parameters.
+
+        Parameters:
+        -----------
+        theta : float, length-2 sequence
+            Theta contains the parameters for the covariance kernel. The first 
+            value is a scale factor, and the second is the scale length (in wavelength)
+            of the covariance kernel (the standard deviation of the gaussian).
         '''
         ''' Gradually build this up - for the moment we will assume a single squared-exponential kernel + an uncorrelated component '''
 
@@ -632,6 +688,15 @@ class Spectrum(Data):
         #return self.covMat
 
     def lnprior(self, theta, **kwargs):
+        """Return the prior of any nuisance parameters. 
+
+        This implementation has 3 nuisance parameters. These are 1) a scale factor, 
+        which multiplies the observed spectrum to include the uncertainty on 
+        absolute calibration, 2) the strength of the correlated component of the
+        covariances and 3) the scale length (standard deviation) of the Gaussian
+        kernel for the correlated component of the covariances. All three parameters
+        are passed in with a single sequence.
+        """
         try:
             scaleFac = theta[0]
         except IndexError: #Only possible if theta is scalar or can't be indexed
@@ -642,7 +707,22 @@ class Spectrum(Data):
         return -np.inf
 
     def lnlike(self, theta, model, **kwargs):
-        ''' docstring goes here '''
+        '''Compute the likelihood of the photometry given the model. 
+
+        The likelihood is computed as:
+        .. math:: \frac{1}{2} N \ln\left(2\pi\right) - \frac{1}{2}\ln\left(\mathrm{det}C\right) - \frac{1}{2} \left(\alpha F_\mathrm{obs} - F_\mathrm{mod})^T C^{-1} \left(\alpha F_\mathrm{obs} - F_\mathrm{mod}\right)
+        where N is the number of points in the spectrum, C is the covariance matrix, and F_obs and F_mod are the observed and predicted photmetry, respectively.
+
+        Parameters:
+        -----------
+        theta: empty, included for compatibility reasons
+        model: an instance of Model or a subclass
+
+        Returns:
+        --------
+        probFlux: float
+            The natural logarithm of the likelihood of the data given the model
+        '''
         
         ''' First take the model values (passed in) and compute synthetic Spectrum '''
         
@@ -685,8 +765,22 @@ class Spectrum(Data):
 
     @classmethod
     def fromFile(cls, filename, format, filetype=None, **kwargs):
-        ''' 
-        Routine to generate spectrum data object from a file containing said data
+        '''Create Spectrum object from a file containing data
+
+        Parameters:
+        -----------
+        filename: str
+            The name of the file to load photometry from
+        format: {'SPITZER-YAAAR', 'SWS-AAR', 'IRAS-LRS', 'User-Defined'}
+            The format of the file.
+        filetype: {'fits', 'text'}, required if format=="User-Defined" 
+            The type of file for user-defined data formats, required to ensure
+            that the correct routines are used to open the file.
+
+        Returns:
+        --------
+        Spectrum
+            A new Spectrum instance
         '''
         # this command reads a CASSIS fits file *yaaar*.fits
         #self=cls.__new__(Spectrum)
