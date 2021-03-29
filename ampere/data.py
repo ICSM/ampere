@@ -100,11 +100,11 @@ class Data(object):
 class Photometry(Data):
     """A class to represent photometric data objects and their properties
 
-    This is intended purely as a base class to define the interface. When creating 
-    your own Data types you must reimplement all methods except: 
-    selectWaves
-    which you only need to reimplement if your type of data needs to handle them 
-    differently. 
+    This is a class to hold photometric data points, and their covariances, 
+    along with details about the filters that they were observed in. Given the
+    covariances and a spectrum from a model, it computes the photometry that 
+    would be observed given the model, and computes the likelihood of the model.
+    It also contains routines to read information from a file ready to fit.
 
 
     Parameters
