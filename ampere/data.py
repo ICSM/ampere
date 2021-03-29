@@ -19,28 +19,32 @@ class Data(object):
 
     This is intended purely as a base class to define the interface. When creating 
     your own Data types you must reimplement all methods except: 
-        selectWaves
+    selectWaves
     which you only need to reimplement if your type of data needs to handle them 
     differently. 
 
 
-    Parameters:
+    Parameters
     ----------
+
     None
 
-    Attributes:
+    Attributes
     ----------
+
     None
 
-    Notes:
+    Notes
     -----
+
     Data objects are intended to encapsulate both measurements and their covariances, 
     and provide the means to calculate the likelihood of the encapsulated data given
     some model. If the type of data has some nuisance parameters associated with it
     (e.g. a normalisation term) it must also define the prior for those parameters.
     
-    Examples:
+    Examples
     --------
+
     None, since this is the base class
     """
 
@@ -60,20 +64,17 @@ class Data(object):
         pass
 
     def fromFile(self, filename, format, **kwargs):
-        ''' 
-        Routine to generate data object from a file containing said data
+        '''Routine to generate data object from a file containing said data
         '''
         pass
 
     def fromTable(self, table, format, **kwargs):
-        ''' 
-        Routine to generate data object from an astropy Table object or a file containing data in a format that can be read in as an astropy Table
+        '''Routine to generate data object from an astropy Table object or a file containing data in a format that can be read in as an astropy Table
         '''
         pass
 
     def selectWaves(self, low = 0, up = np.inf, interval = "closed", **kwargs):
-        '''
-        Method to generate a mask for the data by wavelength. Uses interval terminology to determine how the limits are treated.
+        '''Method to generate a mask for the data by wavelength. Uses interval terminology to determine how the limits are treated.
         '''
 
         if interval == "closed": #Both arguments will be treated with less/greater-than-or-equal-to
@@ -101,12 +102,12 @@ class Photometry(Data):
 
     This is intended purely as a base class to define the interface. When creating 
     your own Data types you must reimplement all methods except: 
-        selectWaves
+    selectWaves
     which you only need to reimplement if your type of data needs to handle them 
     differently. 
 
 
-    Parameters:
+    Parameters
     ----------
     filterName : string, array-like
         The names of the filters that this object will hold
@@ -122,26 +123,24 @@ class Photometry(Data):
     libName : string
         the path to the pyphot library that holds the relevant filter curves.
 
-    Attributes:
+    Attributes
     ----------
     None
 
-    Methods:
+    Methods
     --------
     lnlike : Calculate the likelihood of the data given the model
-
-    Notes:
-    -----
     
-    
-    Examples:
+    Examples
     --------
     create an instance by directly instantiating it
 
     >>> phot = Photometry(['2MASS_J', '2MASS_K'], [10., 5.], [0.2, 0.1], ['Jy', 'Jy'], libname='path/to/filter/library')
 
     Or create it from a file containing a table
+
     >>> phot = Photometry.fromFile('filename.vot')
+
     """
 
     def __init__(self, filterName, value, uncertainty, photUnits, bandUnits=None, libName = None, **kwargs):
@@ -253,11 +252,12 @@ class Photometry(Data):
     def pyphotSetup(self, libName = None, **kwargs):
         ''' Given the data, read in the pyphot filter library and make sure we have the right list of filters in memory 
 
-        Parameters:
+        Parameters
         ----------
         libName : str, optional
+            The name of the filter library to use
 
-        Notes:
+        Notes
         ------
         Future work: go through multiple libraries from different (user-defined) locations and import htem all
         '''
@@ -323,19 +323,24 @@ class Photometry(Data):
         return 0
 
     def lnlike(self, theta, model, **kwargs):
-        '''Compute the likelihood of the photometry given the model. 
+        r'''Compute the likelihood of the photometry given the model. 
 
-        The likelihood is computed as:
-        .. math:: \frac{1}{2} N \ln\left(2\pi\right) - \frac{1}{2}\ln\left(\mathrm{det}C\right) - \frac{1}{2} \left(F_\mathrm{obs} - F_\mathrm{mod})^T C^{-1} \left(F_\mathrm{obs} - F_\mathrm{mod}\right)
+        The likelihood is computed as 
+        .. math::
+        
+            \frac{1}{2} N \ln\left(2\pi\right) - \frac{1}{2}\ln\left(\mathrm{det}C\right) - \frac{1}{2} \left(F_\mathrm{obs} - F_\mathrm{mod})^T C^{-1} \left(F_\mathrm{obs} - F_\mathrm{mod}\right)  
+
         where N is the number of photometric points, C is the covariance matrix, and F_obs and F_mod are the observed and predicted photmetry, respectively.
 
-        Parameters:
-        -----------
-        theta: empty, included for compatibility reasons
-        model: an instance of Model or a subclass
+        Parameters
+        ----------
+        theta: None,
+            included for compatibility reasons
+        model: an instance of Model or a subclass,
+            The model for which the likelihood will be computed
 
-        Returns:
-        --------
+        Returns
+        -------
         probFlux: float
             The natural logarithm of the likelihood of the data given the model
         '''
@@ -367,22 +372,22 @@ class Photometry(Data):
     def cov(self, **kwargs):
         '''This routine populates a covariance matrix given some methods to call and parameters for them.
 
-        The likelihood is computed as:
-        .. math:: \frac{1}{2} N \ln\left(2\pi\right) - \frac{1}{2}\ln\left(\mathrm{det}C\right) - \frac{1}{2} \left(F_\mathrm{obs} - F_\mathrm{mod})^T C^{-1} \left(F_\mathrm{obs} - F_\mathrm{mod}\right)
-        where N is the number of photometric points, C is the covariance matrix, and F_obs and F_mod are the observed and predicted photmetry, respectively.
+        At present, photometric points are assumed to be uncorrelated, so this 
+        routine is provided to ensure consistency of the interface between 
+        different data types. The resulting covariance matrix is therefore
+        always diagonal.
 
-        Parameters:
-        -----------
-        theta: empty, included for compatibility reasons
-        model: an instance of Model or a subclass
+        Parameters
+        ----------
+        None
 
-        Returns:
-        --------
+        Returns
+        -------
         covMat: float, N times N array-like
             The covariance matrix
 
-        Raises:
-        -------
+        Raises
+        ------
         Nothing yet!
         '''
 
@@ -405,15 +410,15 @@ class Photometry(Data):
     def fromFile(cls, filename, format=None, **kwargs):
         '''Create Photometry object from a file containing data
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         filename: str
             The name of the file to load photometry from
         format: {'VO', }, optional, default 'VO'
             The format of the file.
 
-        Returns:
-        --------
+        Returns
+        -------
         Photometry
             A new Photometry instance
         '''
@@ -441,14 +446,14 @@ class Photometry(Data):
 
         This is used to populate an existing Photometry instance from an astropy table, called from fromFile. 
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         table: astropy.table.Table
             The table containing the photometry data
 
 
-        Notes:
-        ------
+        Notes
+        -----
         This routine is not intended to be used as a standalone routine to 
         instantiate Photometry instances. If you wish to do so, you must first 
         create the instance using p = Photometry.__new__(Photometry), then 
@@ -481,7 +486,7 @@ class Spectrum(Data):
     
 
 
-    Parameters:
+    Parameters
     ----------
     wavelength : float, array-like
         The wavelengths of the spectrum.
@@ -500,19 +505,19 @@ class Spectrum(Data):
     covarianceTruncation : float, optional, default 1e-3
         Threshold below which the covariance matrix is truncated to zero.
 
-    Attributes:
+    Attributes
     ----------
     None
 
-    Methods:
-    --------
+    Methods
+    -------
     lnlike : Calculate the likelihood of the data given the model
 
-    Notes:
+    Notes
     -----
     
     
-    Examples:
+    Examples
     --------
     >>> spec = Spectrum(wavelength_array, flux_array, uncertainty_array, "um", "Jy")
 
@@ -659,8 +664,8 @@ class Spectrum(Data):
         components: 1) an uncorrelated component; and 2) a single squared-exponential
         with two parameters.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         theta : float, length-2 sequence
             Theta contains the parameters for the covariance kernel. The first 
             value is a scale factor, and the second is the scale length (in wavelength)
@@ -713,13 +718,13 @@ class Spectrum(Data):
         .. math:: \frac{1}{2} N \ln\left(2\pi\right) - \frac{1}{2}\ln\left(\mathrm{det}C\right) - \frac{1}{2} \left(\alpha F_\mathrm{obs} - F_\mathrm{mod})^T C^{-1} \left(\alpha F_\mathrm{obs} - F_\mathrm{mod}\right)
         where N is the number of points in the spectrum, C is the covariance matrix, and F_obs and F_mod are the observed and predicted photmetry, respectively.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         theta: empty, included for compatibility reasons
         model: an instance of Model or a subclass
 
-        Returns:
-        --------
+        Returns
+        -------
         probFlux: float
             The natural logarithm of the likelihood of the data given the model
         '''
@@ -767,8 +772,8 @@ class Spectrum(Data):
     def fromFile(cls, filename, format, filetype=None, **kwargs):
         '''Create Spectrum object from a file containing data
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         filename: str
             The name of the file to load photometry from
         format: {'SPITZER-YAAAR', 'SWS-AAR', 'IRAS-LRS', 'User-Defined'}
@@ -777,8 +782,8 @@ class Spectrum(Data):
             The type of file for user-defined data formats, required to ensure
             that the correct routines are used to open the file.
 
-        Returns:
-        --------
+        Returns
+        -------
         Spectrum
             A new Spectrum instance
         '''
