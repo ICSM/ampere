@@ -30,7 +30,7 @@ class Data(object):
         raise NotImplementedError()
 
     def __repr__(self, **kwargs):
-        raise NotImplementedError()
+       raise NotImplementedError()  # switched off by sascha 19/04/2021
 
     def lnlike(self, synWave, synFlux, **kwargs):
         pass
@@ -65,7 +65,8 @@ class Data(object):
         #now we need to create a mask for the covariance matrix
         #The outer product does what we want, producing a matrix which has elements such that cov_mask[i,j] = mask[i] * mask[j]
         #This produces the right answer because boolean multiplication is treated as an AND operation in python
-        self.cov_mask = np.outer(self.mask, self.mask)
+        self.cov_mask = np.outer(self.mask, self.mask)[0]
+        #print(self.cov_mask)
         pass
 
     
@@ -84,6 +85,8 @@ class Photometry(Data):
 
         ''' setup pyphot for this set of photometry '''
         self.pyphotSetup(libName)
+        print(self.filterName.astype('str'))
+        #newTry = [str(filt).replace(':','_').replace('/','_').replace('WISE','WISE_RSR').replace('Spitzer','SPITZER') for filt in self.filterName]
         self.filterNamesToPyphot()
 
         #print(self.filterMask)
@@ -183,7 +186,12 @@ class Photometry(Data):
         return l
     
     def __repr__(self, **kwargs):
-        raise NotImplementedError()
+    #    raise NotImplementedError()   modified on 19/04/2021 by sascha
+        return self.__str__()
+        
+    
+    def geef_data(self, **kwargs):
+        return(self.filterName,self.wavelength,self.value, self.uncertainty)
 
     def pyphotSetup(self, libName = None, **kwargs):
         ''' Given the data, read in the pyphot filter library and make sure we have the right list of filters in memory 
@@ -208,7 +216,7 @@ class Photometry(Data):
         #try replacing colons and / with _
         #print(l)
         try:
-            newTry = [filt.astype(str).replace(':','_').replace('/','_').replace('WISE','WISE_RSR').replace('Spitzer','SPITZER') for filt in self.filterName]
+            newTry = [filt.decode("utf-8").replace(':','_').replace('/','_').replace('WISE','WISE_RSR').replace('Spitzer','SPITZER') for filt in self.filterName]
         except AttributeError:
             newTry = [filt.replace(':','_').replace('/','_').replace('WISE','WISE_RSR').replace('Spitzer','SPITZER') for filt in self.filterName]
         #change type to str from byte for filt to make it run <CK>
@@ -402,6 +410,7 @@ class Spectrum(Data):
         self.covMat = np.diag(np.ones_like(uncertainty))
         a = self.covMat > 0
         self.covMat[a] = self.covMat[a] * self.varMat[a]# = np.diag(uncertainty**2)
+        
         self.logDetCovMat = np.linalg.slogdet(self.covMat)[1]# / np.log(10.)
         print(self.logDetCovMat)
 

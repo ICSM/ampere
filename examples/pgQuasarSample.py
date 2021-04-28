@@ -1,4 +1,6 @@
 import numpy as np
+import sys
+sys.path.insert(1, '/home/zeegers/git_ampere/ampere/')
 import ampere
 from ampere.data import Spectrum, Photometry
 from ampere.emceesearch import EmceeSearch
@@ -25,7 +27,8 @@ if __name__=="__main__":
     irs[0].selectWaves(low = 8., up = 35.) #following Srinivasan et al. 2017
     irs[1].selectWaves(low = 8., up = 35.) #following Srinivasan et al. 2017
 
-    libDir = '../ampere/'    libname = libDir + 'ampere_allfilters.hd5'
+    #libDir = '../ampere/'    libname = libDir + 'ampere_allfilters.hd5'
+    libname = '/home/zeegers/ampere/ampere/ampere_allfilters.hd5'
     phot = Photometry.fromFile(dataDir+photFile, libName = libname)
     phot.selectWaves(low = 35., interval = "right-open") #using only MIPS-70 and PACS, following Srinivasan et al. 2017
     print(phot.mask)
@@ -35,11 +38,15 @@ if __name__=="__main__":
     model = PowerLawAGN(modwaves, redshift=0.058)
     phot.reloadFilters(modwaves)
     dataSet = [phot]          #use this line when using photometry
+    print(dataSet)
+    #import pdb;pdb.set_trace()
     #dataSet = [s for s in irs] #comment out when using photometry
     for s in irs:             #include the next two lines when appending spectroscopy to photometry
         dataSet.append(s)
 #    for s in dataSet:
 #        print(s)
+    #exit()
+    
 
     opt = EmceeSearch(model = model, data = dataSet, nwalkers = 200)
 
@@ -50,22 +57,23 @@ if __name__=="__main__":
     for i in irs:
         ax.plot(i.wavelength, i.value, '-',color='blue')
     ax.plot(phot.wavelength, phot.value, 'o',color='blue')
-    ax.set_ylim(0., 1.5*np.max([np.max(i.value) for i in dataSet]))
-    fig.savefig("sed_test.png")
+    #ax.set_ylim(0., 1.5*np.max([np.max(i.value) for i in dataSet]))
+    #fig.savefig("sed_test.png")
 
     model(-2.,0.3,-0.5,
                     -0.5,-0.5,-0.5,
                     -0.5,-0.5)
     modspec = model.modelFlux
     print(modspec)
-    ax.plot(modwaves,modspec)
+    ax.plot(modwaves,modspec,color='red')
     plt.show() #this plots the spectrum and photometry plus the shape of the model SED using the input parameters
     #exit()
+    #import pdb; pdb.set_trace()
     
     pos = [
            [
-               -2., 0.3, -0.78, -0.78, -0.78, -0.78, -0.78, -0.78, 1., 0.5, 1., 1., 0.5, 1. #spectroscopy included
-               #-2., 0.3, -0.78, -0.78, -0.78, -0.78, -0.78, -0.78 # only photometry
+               #-2., 0.3, -0.78, -0.78, -0.78, -0.78, -0.78, -0.78, 1., 0.5, 1., 1., 0.5, 1. #spectroscopy included
+               -2., 0.3, -0.78, -0.78, -0.78, -0.78, -0.78, -0.78 # only photometry
                #20 + np.random.randn() for i in range(np.int(opt.npars))
            ]
            + np.random.randn(np.int(opt.npars))/1e3 for j in range(opt.nwalkers)
