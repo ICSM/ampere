@@ -76,3 +76,4 @@ irs-last.txt
 #Ciska's personal directories
 notes/
 old/
+*.tar.gz
