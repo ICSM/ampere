@@ -79,32 +79,56 @@ class Data(object):
 
         if interval == "closed": #Both arguments will be treated with less/greater-than-or-equal-to
 
-            self.mask = np.logical_and(self.wavelength >= low, self.wavelength <= up)
+            mask = np.logical_and(self.wavelength >= low, self.wavelength <= up)
 
         elif interval == "left-open": #only the upper limit will be treated with less-than-or-equal-to
-            self.mask = np.logical_and(self.wavelength > low, self.wavelength <= up)
+            mask = np.logical_and(self.wavelength > low, self.wavelength <= up)
         elif interval == "right-open": #only the lower limit will be treated with less-than-or-equal-to
-            self.mask = np.logical_and(self.wavelength >= low, self.wavelength < up)
+            mask = np.logical_and(self.wavelength >= low, self.wavelength < up)
         elif interval == "open": #neither limit will be treated with less-than-or-equal-to
-            self.mask = np.logical_and(self.wavelength > low, self.wavelength < up)
+            mask = np.logical_and(self.wavelength > low, self.wavelength < up)
+            
+        #Now we add check to make sure that if masks have previously been defined we don't overwrite them, and only accept values 
+        #that pass both masks. Otherwise, we define a mask.
+        try:
+            self.mask = np.logical_and(mask, self.mask)
+        except NameError:
+            self.mask = mask
+            
         #now we need to create a mask for the covariance matrix
         #The outer product does what we want, producing a matrix which has elements such that cov_mask[i,j] = mask[i] * mask[j]
         #This produces the right answer because boolean multiplication is treated as an AND operation in python
         self.cov_mask = np.outer(self.mask, self.mask)
-        pass
 
     def maskNaNs(self, **kwargs):
         '''Method to generate a mask which blocks NaNs in the data.
         '''
 
-        self.mask = np.logical_and(np.isfinite(self.value), np.isfinite(self.uncertainty))
+        mask = np.logical_and(np.isfinite(self.value), np.isfinite(self.uncertainty))
         
+        #Now we add check to make sure that if masks have previously been defined we don't overwrite them, and only accept values 
+        #that pass both masks. Otherwise, we define a mask.
+        try:
+            self.mask = np.logical_and(mask, self.mask)
+        except NameError:
+            self.mask = mask
         
         #now we need to create a mask for the covariance matrix
         #The outer product does what we want, producing a matrix which has elements such that cov_mask[i,j] = mask[i] * mask[j]
         #This produces the right answer because boolean multiplication is treated as an AND operation in python
         self.cov_mask = np.outer(self.mask, self.mask)
-        pass
+        
+    def unmask(self, **kwargs):
+        '''A method to overwrite previous masks with True in case something goes wrong
+        
+        '''
+        try:
+            mask = np.ones_like(self.mask, dtype=np.bool)
+        except NameError:
+            mask = np.ones_like(self.value, dtype=np.bool)
+            
+        self.mask = mask
+        self.cov_mask = np.outer(self.mask, self.mask)
 
     
     
