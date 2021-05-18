@@ -823,9 +823,8 @@ class Spectrum(Data):
             table['offset uncertainty (CAL)'].unit='Jy'
             table['sky'].unit='Jy'
             table['sky error'].unit='Jy'
-            # note that there is a column called module. this has values 0.0 1.0 2.0 and 3.0 corresponding to SL1, SL2, LL1 and LL2 resp.
-            # we may want consider them independent?
-            #print(np.unique(table['module']))
+            mask = np.logical_and.reduce([np.isfinite(c) for c in table.columns.values()]) #require the elements to be non-NaNs
+            table = table[mask]
             chunks = np.zeros_like(table['module'].data)
             sl = np.logical_or(table['module'] == 0.0, table['module'] == 1.0) #SL
             ll = np.logical_or(table['module'] == 2.0, table['module'] == 3.0) #LL
@@ -838,7 +837,7 @@ class Spectrum(Data):
             
             #TEMPORARY HACK - just rearrange data into ascending order of wavelength
             #In future we need to extract SL and LL into separate objects, then re-arrange the orders and stitch them together so we end up with one spectrum
-            ''' If I'm interpreting the CASSIS data correectly, Module(SL) = 0, 1; Module(LL) = 2, 3 '''
+            ''' If I'm interpreting the CASSIS data correctly, Module(SL) = 0, 1; Module(LL) = 2, 3 '''
             #a = table['module'] > 1.
             #tablell = table[a]#.sort(keys='wavelength')
             #tablell.sort(keys='wavelength')

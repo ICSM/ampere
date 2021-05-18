@@ -22,9 +22,10 @@ if __name__=="__main__":
     specFile = 'cassis_yaaar_spcfw_20838656t.fits'
     irs = Spectrum.fromFile(dataDir+specFile,format='SPITZER-YAAAR')
     
-    #irs = [chunk.selectWaves(low = 8., up=35.) for chunk in irs] # alternative to next two lines, doesn't work
-    #irs[0].selectWaves(low = 8., up = 35.) #following Srinivasan et al. 2017
-    #irs[1].selectWaves(low = 8., up = 35.) #following Srinivasan et al. 2017
+    #irs = [chunk.maskNaNs() for chunk in irs] # mask NaNs in data
+    
+    irs[0].maskNaNs() #following Srinivasan et al. 2017
+    irs[1].maskNaNs() #following Srinivasan et al. 2017
 
     #libDir = '../ampere/'
     #libname = libDir + 'ampere_allfilters.hd5'
