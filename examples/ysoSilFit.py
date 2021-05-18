@@ -3,25 +3,24 @@ import ampere
 from ampere.data import Spectrum, Photometry
 from ampere.emceesearch import EmceeSearch
 from ampere.starScreen import PolynomialScreen
-import corner
+#import corner
 import matplotlib as mpl
 #mpl.use("Agg")
 import matplotlib.pyplot as plt
 import os
-from astropy import constants as const
-from astropy import units as u
-from spectres import spectres
-import pyphot
+#from astropy import constants as const
+#from astropy import units as u
+#from spectres import spectres
+#import pyphot
 
 
 if __name__=="__main__":
     
-# S140 is an example of an SWS spectrum
 # HOPS-68 is an example of a Spitzer spectrum
     dataDir = os.getcwd() + '/YSOsils/'
-    hops68Data = 'cassis_yaaar_spcfw_20838656t.fits'
-    s140Dats = '06401081_sws.fit'
-    hops68irs = Spectrum.fromFile(dataDir+specFile,format='SPITZER-YAAAR')
+    specFile = 'cassis_yaaar_spcfw_20838656t.fits'
+    #specFile = '06401081_sws.fit'
+    irs = Spectrum.fromFile(dataDir+specFile,format='SPITZER-YAAAR')
     #irs = [chunk.selectWaves(low = 8., up=35.) for chunk in irs] # alternative to next two lines, doesn't work
     #irs[0].selectWaves(low = 8., up = 35.) #following Srinivasan et al. 2017
     #irs[1].selectWaves(low = 8., up = 35.) #following Srinivasan et al. 2017
@@ -47,6 +46,7 @@ if __name__=="__main__":
 
     print(opt.npars)
 
+    
     fig = plt.figure()
     ax = fig.add_subplot(111)
     for i in irs:
