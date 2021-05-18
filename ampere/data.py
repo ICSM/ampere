@@ -93,6 +93,19 @@ class Data(object):
         self.cov_mask = np.outer(self.mask, self.mask)
         pass
 
+    def maskNaNs(self, **kwargs):
+        '''Method to generate a mask which blocks NaNs in the data.
+        '''
+
+        self.mask = np.logical_and(np.isfinite(self.value), np.isfinite(self.uncertainty))
+        
+        
+        #now we need to create a mask for the covariance matrix
+        #The outer product does what we want, producing a matrix which has elements such that cov_mask[i,j] = mask[i] * mask[j]
+        #This produces the right answer because boolean multiplication is treated as an AND operation in python
+        self.cov_mask = np.outer(self.mask, self.mask)
+        pass
+
     
     
 #1. Should all the photometry be stored in one object

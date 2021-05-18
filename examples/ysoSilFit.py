@@ -2,7 +2,7 @@ import numpy as np
 import ampere
 from ampere.data import Spectrum, Photometry
 from ampere.emceesearch import EmceeSearch
-from ampere.starScreen import PolynomialScreen
+from ampere.starScreen import PolynomialSource
 #import corner
 import matplotlib as mpl
 #mpl.use("Agg")
@@ -16,11 +16,12 @@ import os
 
 if __name__=="__main__":
     
-# HOPS-68 is an example of a Spitzer spectrum
+# Let's first do this for HOPS-68, as an example of a Spitzer spectrum.
+# HOPS-68 corresponds to aor 20838656
     dataDir = os.getcwd() + '/YSOsils/'
     specFile = 'cassis_yaaar_spcfw_20838656t.fits'
-    #specFile = '06401081_sws.fit'
     irs = Spectrum.fromFile(dataDir+specFile,format='SPITZER-YAAAR')
+    
     #irs = [chunk.selectWaves(low = 8., up=35.) for chunk in irs] # alternative to next two lines, doesn't work
     #irs[0].selectWaves(low = 8., up = 35.) #following Srinivasan et al. 2017
     #irs[1].selectWaves(low = 8., up = 35.) #following Srinivasan et al. 2017
