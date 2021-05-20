@@ -21,30 +21,16 @@ if __name__=="__main__":
     dataDir = os.getcwd() + '/YSOsils/'
     specFile = 'cassis_yaaar_spcfw_20838656t.fits'
     irs = Spectrum.fromFile(dataDir+specFile,format='SPITZER-YAAAR')
-    
-    #libDir = '../ampere/'
-    #libname = libDir + 'ampere_allfilters.hd5'
-    #phot = Photometry.fromFile(dataDir+photFile, libName = libname)
-    #phot.selectWaves(low = 35., interval = "right-open") #using only MIPS-70 and PACS, following Srinivasan et al. 2017
 
-
-    modwaves = 10**np.linspace(0.6,1.6, 1000)
+    modwaves = 10**np.linspace(0.7,1.6, 1000) #setting up a wavelength grid from 5.25 to 37.4 um. 
 
     model = PolynomialSource(modwaves)
-#    phot.reloadFilters(modwaves)
-#    dataSet = [phot]          #use this line when using photometry
-    dataSet = [s for s in irs] #comment out when using photometry
-    for s in irs:             #include the next two lines when appending spectroscopy to photometry
-        dataSet.append(s)
-#    for s in dataSet:
-#        print(s)
+    dataSet = [s for s in irs] 
 
-#hiero. I don't understand what is happening in line 39 of emceesearch.py
     opt = EmceeSearch(model = model, data = dataSet, nwalkers = 200)
 
-    print(opt.npars)
-
-    
+#    print(opt.npars)
+   
     fig = plt.figure()
     ax = fig.add_subplot(111)
     for i in irs:
@@ -62,7 +48,7 @@ if __name__=="__main__":
     
     pos = [
            [
-               -2., 0.3, -0.78, -0.78, -0.78, -0.78, -0.78, -0.78, 1., 0.5, 1., 1., 0.5, 1.,  #spectroscopy included
+               0., 0.1, 0.1, -0.78, -0.78, -0.78, -0.78, -0.78, -0.78, 1., 0.5, 1., 1., 0.5, 1.,  #spectroscopy included
                #-2., 0.3, -0.78, -0.78, -0.78, -0.78, -0.78, -0.78 # only photometry
                #20 + np.random.randn() for i in range(np.int(opt.npars))
            ]
