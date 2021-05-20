@@ -17,21 +17,17 @@ class PolynomialSource(AnalyticalModel):
               wavelength grid from data (wavelengths)
     Output: model fluxes (modelFlux)'''
     
-    def __init__(self, wavelengths, flatprior=True, redshift=None, **kwargs):
+    def __init__(self, wavelengths, flatprior=True, **kwargs):
         import os
         from scipy import interpolate
         self.flatprior=flatprior
-        #print(os.path.dirname(__file__))
         opacityDirectory = os.path.dirname(__file__)+'/Opacities/'
         opacityFileList = os.listdir(opacityDirectory)
-        opacityFileList = np.array(opacityFileList)[['sub.q' in zio for zio in opacityFileList]] # Only files ending in .q are valid (for now)
+        opacityFileList = np.array(opacityFileList)[['sub.q' in zio for zio in opacityFileList]] # Only files ending in sub.q are valid (for now). At the moment there are 6 files that meet this criteria
         nSpecies = opacityFileList.__len__()
         #wavelengths = np.logspace(np.log10(8), np.log10(35), 100) # For testing purposes
         opacity_array = np.zeros((wavelengths.__len__(), nSpecies))
-        if redshift is not None:
-            self.restwaves = wavelengths / (1+redshift)
-        else:
-            self.restwaves = wavelengths
+        
         for j in range(nSpecies):
             tempData = np.loadtxt(opacityDirectory + opacityFileList[j], comments = '#')
             print(opacityFileList[j])
@@ -40,32 +36,25 @@ class PolynomialSource(AnalyticalModel):
             #I think we need to put in the continuum subtraction here as well, in case the data isn't continuum subtracted already. These ones are though, so let's see how it goes.
             #Hopefully Sundar can help us out with this.
             f = interpolate.interp1d(tempWl, tempOpac, assume_sorted = False)
-            opacity_array[:,j] = f(self.restwaves)#wavelengths)
+            opacity_array[:,j] = f(wavelengths)#wavelengths)
         self.wavelength = wavelengths
         self.opacity_array = opacity_array
         self.nSpecies = nSpecies
-        self.redshift = redshift
-        print(self.restwaves)
-        print(self.wavelength)
-        print(self.redshift)
+#        print(self.wavelength)
         #self.npars = nSpecies - 1 + 2 #there are two parameters for the continuum, then we need n-1 abundances
-        self.npars = nSpecies + 2 #there are two parameters for the continuum
+        self.npars = nSpecies + 3 #there are three parameters for the continuum, as it is a second order polynomial
         
     def __call__(self,
-                 multiplicationFactor, # = log(1),
-                 powerLawIndex, # = log(2),
+                 secondOrderConstant, # a in a x^2
+                 firstOrderConstant, # b in b x
+                 constant, # c
                  *args, # = (np.ones(self.nSpecies)/self.nSpecies),
                  **kwargs):
-        #relativeAbundances = np.append(10**np.array(args),1.-np.sum(10**np.array(args)))
+
         dustAbundances = 10**np.array(args)
-        #moved from using relative abundances to absolute abundances. # species/parameters had
-        #to be changed throughout the program too
-        if self.redshift is not None:
-            waves = self.restwaves
-        else:
-            waves = self.wavelength
+        waves = self.wavelength
         fModel = (np.matmul(self.opacity_array, dustAbundances)+1)
-        fModel = fModel*(waves**powerLawIndex) #*(10**multiplicationFactor) --> not needed when using absolute abundances
+        fModel = fModel*(secondOrderConstant*waves**2 + firstOrderConstant*waves**1 + constant) # This line needs to be updated still. 
         self.modelFlux = fModel
 
     def lnprior(self, theta, **kwargs):

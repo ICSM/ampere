@@ -5,7 +5,7 @@ from ampere.emceesearch import EmceeSearch
 from ampere.starScreen import PolynomialSource
 #import corner
 import matplotlib as mpl
-#mpl.use("Agg")
+#mpl.use('tkagg')
 import matplotlib.pyplot as plt
 import os
 #from astropy import constants as const
@@ -28,17 +28,18 @@ if __name__=="__main__":
     #phot.selectWaves(low = 35., interval = "right-open") #using only MIPS-70 and PACS, following Srinivasan et al. 2017
 
 
-    modwaves = 10**np.linspace(0.,1.9, 2000)
+    modwaves = 10**np.linspace(0.6,1.6, 1000)
 
-    model = PolynomialScreen(modwaves)
+    model = PolynomialSource(modwaves)
 #    phot.reloadFilters(modwaves)
 #    dataSet = [phot]          #use this line when using photometry
     dataSet = [s for s in irs] #comment out when using photometry
     for s in irs:             #include the next two lines when appending spectroscopy to photometry
         dataSet.append(s)
-    for s in dataSet:
-        print(s)
+#    for s in dataSet:
+#        print(s)
 
+#hiero. I don't understand what is happening in line 39 of emceesearch.py
     opt = EmceeSearch(model = model, data = dataSet, nwalkers = 200)
 
     print(opt.npars)
@@ -48,26 +49,24 @@ if __name__=="__main__":
     ax = fig.add_subplot(111)
     for i in irs:
         ax.plot(i.wavelength, i.value, '-',color='blue')
-    ax.plot(phot.wavelength, phot.value, 'o',color='blue')
+#    ax.plot(phot.wavelength, phot.value, 'o',color='blue')
     ax.set_ylim(0., 1.5*np.max([np.max(i.value) for i in dataSet]))
     fig.savefig("sed_test.png")
 
-    model(-2.,0.3,-0.5,
-                    -0.5,-0.5,-0.5,
-                    -0.5,-0.5)
+    model(0.,0.1,0.1,-0.5,-0.5,-0.5,-0.5,-0.5,-0.5)
     modspec = model.modelFlux
-    print(modspec)
+ #   print(modspec)
     ax.plot(modwaves,modspec)
     plt.show() #this plots the spectrum and photometry plus the shape of the model SED using the input parameters
     #exit()
     
     pos = [
            [
-               -2., 0.3, -0.78, -0.78, -0.78, -0.78, -0.78, -0.78, 1., 0.5, 1., 1., 0.5, 1. #spectroscopy included
+               -2., 0.3, -0.78, -0.78, -0.78, -0.78, -0.78, -0.78, 1., 0.5, 1., 1., 0.5, 1.,  #spectroscopy included
                #-2., 0.3, -0.78, -0.78, -0.78, -0.78, -0.78, -0.78 # only photometry
                #20 + np.random.randn() for i in range(np.int(opt.npars))
            ]
-           + np.random.randn(np.int(opt.npars))/1e3 for j in range(opt.nwalkers)
+           + np.random.randn(int(opt.npars))/1e3 for j in range(opt.nwalkers)
           ]
     #for i in range(len(pos)):
         #pos[i][0] = pos[i][0] / 1000.
