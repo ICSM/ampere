@@ -22,17 +22,12 @@ if __name__=="__main__":
     specFile = 'cassis_yaaar_spcfw_20838656t.fits'
     irs = Spectrum.fromFile(dataDir+specFile,format='SPITZER-YAAAR')
     
-    #irs = [chunk.maskNaNs() for chunk in irs] # mask NaNs in data
-    
-    irs[0].maskNaNs() #following Srinivasan et al. 2017
-    irs[1].maskNaNs() #following Srinivasan et al. 2017
-
     #libDir = '../ampere/'
     #libname = libDir + 'ampere_allfilters.hd5'
     #phot = Photometry.fromFile(dataDir+photFile, libName = libname)
     #phot.selectWaves(low = 35., interval = "right-open") #using only MIPS-70 and PACS, following Srinivasan et al. 2017
-    #print(phot.mask)
-    #print("hello")
+
+
     modwaves = 10**np.linspace(0.,1.9, 2000)
 
     model = PolynomialScreen(modwaves)

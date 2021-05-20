@@ -79,44 +79,45 @@ class Data(object):
 
         if interval == "closed": #Both arguments will be treated with less/greater-than-or-equal-to
 
-            mask = np.logical_and(self.wavelength >= low, self.wavelength <= up)
+            self.mask = np.logical_and(self.wavelength >= low, self.wavelength <= up)
 
         elif interval == "left-open": #only the upper limit will be treated with less-than-or-equal-to
-            mask = np.logical_and(self.wavelength > low, self.wavelength <= up)
+            self.mask = np.logical_and(self.wavelength > low, self.wavelength <= up)
         elif interval == "right-open": #only the lower limit will be treated with less-than-or-equal-to
-            mask = np.logical_and(self.wavelength >= low, self.wavelength < up)
+            self.mask = np.logical_and(self.wavelength >= low, self.wavelength < up)
         elif interval == "open": #neither limit will be treated with less-than-or-equal-to
-            mask = np.logical_and(self.wavelength > low, self.wavelength < up)
+            self.mask = np.logical_and(self.wavelength > low, self.wavelength < up)
             
         #Now we add check to make sure that if masks have previously been defined we don't overwrite them, and only accept values 
         #that pass both masks. Otherwise, we define a mask.
-        try:
-            self.mask = np.logical_and(mask, self.mask)
-        except NameError:
-            self.mask = mask
+#        try:
+#            self.mask = np.logical_and(mask, self.mask)
+#        except NameError:
+#            self.mask = mask
             
         #now we need to create a mask for the covariance matrix
         #The outer product does what we want, producing a matrix which has elements such that cov_mask[i,j] = mask[i] * mask[j]
         #This produces the right answer because boolean multiplication is treated as an AND operation in python
         self.cov_mask = np.outer(self.mask, self.mask)
+        pass
 
-    def maskNaNs(self, **kwargs):
-        '''Method to generate a mask which blocks NaNs in the data.
-        '''
-
-        mask = np.logical_and(np.isfinite(self.value), np.isfinite(self.uncertainty))
+#    def maskNaNs(self, **kwargs):
+#        '''Method to generate a mask which blocks NaNs in the data.
+#        '''
+#
+#        mask = np.logical_and(np.isfinite(self.value), np.isfinite(self.uncertainty))
         
         #Now we add check to make sure that if masks have previously been defined we don't overwrite them, and only accept values 
         #that pass both masks. Otherwise, we define a mask.
-        try:
-            self.mask = np.logical_and(mask, self.mask)
-        except NameError:
-            self.mask = mask
+#        try:
+#            self.mask = np.logical_and(mask, self.mask)
+#        except NameError:
+#            self.mask = mask
         
         #now we need to create a mask for the covariance matrix
         #The outer product does what we want, producing a matrix which has elements such that cov_mask[i,j] = mask[i] * mask[j]
         #This produces the right answer because boolean multiplication is treated as an AND operation in python
-        self.cov_mask = np.outer(self.mask, self.mask)
+#        self.cov_mask = np.outer(self.mask, self.mask)
         
     def unmask(self, **kwargs):
         '''A method to overwrite previous masks with True in case something goes wrong
@@ -831,14 +832,12 @@ class Spectrum(Data):
         # note that the might want to normalise the names of the columns coming out
         # out of the different files here. 
         if format == 'SPITZER-YAAAR':
-            #filename = 'Testdata/cassis_yaaar_spcfw_14203136t.fits' 
+            #filename = 'Testdata/cassis_yaaar_spcfw_14203136t.fits'
             hdul = fits.open(filename)
             hdu = hdul[0]
             header=hdu.header
             data = hdu.data
             table = Table(data,names=[header['COL01DEF'],header['COL02DEF'],header['COL03DEF'],header['COL04DEF'],header['COL05DEF'],header['COL06DEF'],header['COL07DEF'],header['COL08DEF'],header['COL09DEF'],header['COL10DEF'],header['COL11DEF'],header['COL12DEF'],header['COL13DEF'],header['COL14DEF'],header['COL15DEF'],'DUMMY'])
-            #table.pprint(max_lines = -1)
-            #exit()
             table['wavelength'].unit='um'
             table['flux'].unit='Jy'
             table['error (RMS+SYS)'].unit='Jy'
@@ -852,6 +851,7 @@ class Spectrum(Data):
             chunks = np.zeros_like(table['module'].data)
             sl = np.logical_or(table['module'] == 0.0, table['module'] == 1.0) #SL
             ll = np.logical_or(table['module'] == 2.0, table['module'] == 3.0) #LL
+            #should we divide this in four chunks: module 0 = SL2, module 1 = SL1, module 2 = LL2, module 3 is LL1?
             chunks[sl] = 1.
             chunks[ll] = 2.
             table['chunk'] = chunks
@@ -859,8 +859,6 @@ class Spectrum(Data):
             #normalise the column names (wavelength,flux,uncertainty)
             table.rename_column('error (RMS+SYS)','uncertainty')
             
-            #TEMPORARY HACK - just rearrange data into ascending order of wavelength
-            #In future we need to extract SL and LL into separate objects, then re-arrange the orders and stitch them together so we end up with one spectrum
             ''' If I'm interpreting the CASSIS data correctly, Module(SL) = 0, 1; Module(LL) = 2, 3 '''
             #a = table['module'] > 1.
             #tablell = table[a]#.sort(keys='wavelength')
