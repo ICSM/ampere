@@ -48,9 +48,7 @@ if __name__=="__main__":
     
     pos = [
            [
-               0., 0.1, 0.1, -0.78, -0.78, -0.78, -0.78, -0.78, -0.78, 1., 0.5, 1., 1., 0.5, 1.,  #spectroscopy included
-               #-2., 0.3, -0.78, -0.78, -0.78, -0.78, -0.78, -0.78 # only photometry
-               #20 + np.random.randn() for i in range(np.int(opt.npars))
+               0.1, 0.1, -0.5, -0.5, -0.5, -0.5, -0.5, -0.5, -0.5, 1., 0.5, 1., 1., 0.5, 1.,  # the last six parameters represent the three parameters for the noise model, for the two chunks in the data set.
            ]
            + np.random.randn(int(opt.npars))/1e3 for j in range(opt.nwalkers)
           ]

@@ -5,6 +5,7 @@
 # Regrid the q values onto the wavelengths
 # Execution: calculate the model flux; return the result
 
+
 import numpy as np
 from astropy import constants as const
 from astropy import units as u
@@ -53,8 +54,8 @@ class PolynomialSource(AnalyticalModel):
 
         dustAbundances = 10**np.array(args)
         waves = self.wavelength
-        fModel = (np.matmul(self.opacity_array, dustAbundances)+1)
-        fModel = fModel*(secondOrderConstant*waves**2 + firstOrderConstant*waves**1 + constant) # This line needs to be updated still. 
+        fModel = (np.matmul(self.opacity_array, dustAbundances))
+        fModel = (secondOrderConstant*waves**2 + firstOrderConstant*waves**1 + constant)*np.exp(-fModel) # This line needs to be updated still. 
         self.modelFlux = fModel
 
     def lnprior(self, theta, **kwargs):
