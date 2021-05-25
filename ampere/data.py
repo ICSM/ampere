@@ -435,7 +435,8 @@ class Photometry(Data):
         self.covMat = np.diag(np.ones_like(self.uncertainty))#[self.mask]))
         a = self.covMat > 0
         self.covMat[a] = self.covMat[a] * self.varMat[a]# = np.diag(uncertainty**2)
-        self.logDetCovMat = np.linalg.slogdet(self.covMat[self.cov_mask])[1]# / np.log(10.)
+        self.logDetCovMat = np.linalg.slogdet(self.covMat)# / np.log(10.)
+#        self.logDetCovMat = np.linalg.slogdet(self.covMat[self.cov_mask])[1]# / np.log(10.)
         print(self.logDetCovMat)
         if self.logDetCovMat == -np.inf: #This needs to be updated to raise an error!
             print("""The determinant of the covariance matrix for this dataset is 0.

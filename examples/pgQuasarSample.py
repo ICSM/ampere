@@ -25,7 +25,8 @@ if __name__=="__main__":
     irs[0].selectWaves(low = 8., up = 35.) #following Srinivasan et al. 2017
     irs[1].selectWaves(low = 8., up = 35.) #following Srinivasan et al. 2017
 
-    libDir = '../ampere/'    libname = libDir + 'ampere_allfilters.hd5'
+    libDir = '../ampere/'
+    libname = libDir + 'ampere_allfilters.hd5'
     phot = Photometry.fromFile(dataDir+photFile, libName = libname)
     phot.selectWaves(low = 35., interval = "right-open") #using only MIPS-70 and PACS, following Srinivasan et al. 2017
     print(phot.mask)
