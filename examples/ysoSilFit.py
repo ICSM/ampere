@@ -1,17 +1,18 @@
 import numpy as np
 import ampere
-from ampere.data import Spectrum, Photometry
+import pprint
+from ampere.data import Spectrum
 from ampere.emceesearch import EmceeSearch
 from ampere.starScreen import PolynomialSource
-#import corner
+import corner
 import matplotlib as mpl
 #mpl.use('tkagg')
 import matplotlib.pyplot as plt
 import os
-#from astropy import constants as const
-#from astropy import units as u
-#from spectres import spectres
-#import pyphot
+from astropy import constants as const
+from astropy import units as u
+from spectres import spectres
+import pyphot
 
 
 if __name__=="__main__":
@@ -27,7 +28,7 @@ if __name__=="__main__":
     model = PolynomialSource(modwaves)
     dataSet = [s for s in irs] 
 
-    opt = EmceeSearch(model = model, data = dataSet, nwalkers = 200)
+    opt = EmceeSearch(model = model, data = dataSet, nwalkers = 30)
 
 #    print(opt.npars)
    
@@ -39,7 +40,7 @@ if __name__=="__main__":
     ax.set_ylim(0., 1.5*np.max([np.max(i.value) for i in dataSet]))
     fig.savefig("sed_test.png")
 
-    model(0.,0.1,0.1,-0.5,-0.5,-0.5,-0.5,-0.5,-0.5)
+    model(0.0,0.1,0.1,0.3,0.3,0.3,0.3,0.3,0.3)
     modspec = model.modelFlux
  #   print(modspec)
     ax.plot(modwaves,modspec)
@@ -48,25 +49,30 @@ if __name__=="__main__":
     
     pos = [
            [
-               0.1, 0.1, -0.5, -0.5, -0.5, -0.5, -0.5, -0.5, -0.5, 1., 0.5, 1., 1., 0.5, 1.,  # the last six parameters represent the three parameters for the noise model, for the two chunks in the data set.
+               0.0, 0.1, 0.1, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 1., 0.5, 1., 1., 0.5, 1.,  # the last six parameters represent the three parameters for the noise model, for the two chunks in the data set.
            ]
-           + np.random.randn(int(opt.npars))/1e3 for j in range(opt.nwalkers)
+           + np.random.randn(int(opt.npars))/100 for j in range(opt.nwalkers)
           ]
+    print("opt.npars =", opt.npars)
+    print("opt.nwalkers = ", opt.nwalkers)
     #for i in range(len(pos)):
         #pos[i][0] = pos[i][0] / 1000.
         #pos[i][1] = pos[i][1] / 3. + 1.
         #pos[i][2:7] = pos[i][2:7] / 30. + 0.1
-    print(pos[0])
-    print(np.max(pos, axis=0))
-    print(np.min(pos, axis=0))
-    #print(np.min(newGuess,axis=0))
-    #print(np.max(newGuess, axis=0))
+    print("Pos[0] = ",pos[0])
+    print("np.max(pos, axis=0) = ", np.max(pos, axis=0))
+    print("np.min(pos, axis=0) = ", np.min(pos, axis=0))
     '''Probability space seems to be very complicated, so we're going to try a bit of a trick'''
     ''' First, we do a very short run with the initial guess that we specified before '''
-    opt.optimise(nsamples = 20, burnin=0,guess=pos)
+    opt.optimise(nsamples = 400, burnin=0, guess=pos)
+    plt.hist(opt.samples[np.isfinite(opt.samples)].flatten(), bins =100)
+    plt.show()
+        
+
     repeat = True
     acrate=2.0
     lnprob = opt.sampler.lnprobability
+    print(np.max(lnprob), np.min(lnprob))
     ''' Now we extract the best 200 samples from the chain based on their lnprob, and use those as initial guesses for another short run '''
     ''' After this, we check the acceptance fraction, and if it's at least 0.2, we go to a production run, if not, we loop back to extracting the best 200 samples and repeat the process '''
     i=0
@@ -77,8 +83,14 @@ if __name__=="__main__":
         print(lnprob.shape)
         n = opt.nwalkers
         flat_indices = np.argpartition(lnprob.ravel(), -n-1)[-n:]
+        print(np.max(lnprob), np.min(lnprob))
+        plt.hist(lnprob[np.isfinite(lnprob)].flatten(), bins =100)
+        plt.show()
+        
         row_indices, col_indices = np.unravel_index(flat_indices, lnprob.shape)
         ''' put these into new short run as initial guess'''
+        print('k = ',row_indices)
+        print('iterations = ', col_indices)
         newGuess = opt.sampler.chain[row_indices, col_indices, :].reshape((-1, opt.npars))
         print(newGuess.shape)
         #print(newGuess)
@@ -87,6 +99,7 @@ if __name__=="__main__":
         #opt.sampler.reset()
         if i > 1:
             opt.rebuildSampler(acceptRate=acrate)
+        print(newGuess)
         opt.optimise(nsamples = 50, burnin=0,guess=newGuess)
         lnprob = opt.sampler.lnprobability
         #b += 50

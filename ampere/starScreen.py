@@ -34,8 +34,6 @@ class PolynomialSource(AnalyticalModel):
             print(opacityFileList[j])
             tempWl = tempData[:, 0]
             tempOpac = tempData[:, 1]
-            #I think we need to put in the continuum subtraction here as well, in case the data isn't continuum subtracted already. These ones are though, so let's see how it goes.
-            #Hopefully Sundar can help us out with this.
             f = interpolate.interp1d(tempWl, tempOpac, assume_sorted = False)
             opacity_array[:,j] = f(wavelengths)#wavelengths)
         self.wavelength = wavelengths
@@ -52,7 +50,7 @@ class PolynomialSource(AnalyticalModel):
                  *args, # = (np.ones(self.nSpecies)/self.nSpecies),
                  **kwargs):
 
-        dustAbundances = 10**np.array(args)
+        dustAbundances = np.array(args) # instead of 10**np.array(args)
         waves = self.wavelength
         fModel = (np.matmul(self.opacity_array, dustAbundances))
         fModel = (secondOrderConstant*waves**2 + firstOrderConstant*waves**1 + constant)*np.exp(-fModel) # This line needs to be updated still. 

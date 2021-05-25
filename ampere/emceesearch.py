@@ -113,8 +113,11 @@ class EmceeSearch(BaseSearch):
         return lp #return 0
 
     def optimise(self, nsamples = None, burnin = None, guess = None, noguess=False, **kwargs):
-        if guess is 'None':# and not noguess:
+        if guess == 'None': # and not noguess:
             guess = [np.random.randn(np.int(self.npars)) for i in range(self.nwalkers)]
+        print('guess = ', guess)
+        print('nsamples = ', nsamples)
+        print('burnin = ', burnin)
         self.nsamp = nsamples
         self.burnin = burnin
         if noguess:
@@ -122,7 +125,9 @@ class EmceeSearch(BaseSearch):
         else:
             self.sampler.run_mcmc(guess, nsamples)
         self.allSamples = self.sampler.chain
+        print(np.max(self.allSamples), np.min(self.allSamples))
         self.samples = self.sampler.chain[:, self.burnin:, :].reshape((-1, self.npars))
+        print(np.max(self.samples), np.min(self.samples))
         #pass
 
 
