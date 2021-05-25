@@ -5,6 +5,7 @@ import ampere
 from ampere.data import Spectrum, Photometry
 from ampere.emceesearch import EmceeSearch
 from ampere.PowerLawAGN import PowerLawAGN, SingleModifiedBlackBody
+from ampere.PowerLawAGN import PowerLawAGN, PowerLawAGN
 #from extinction import CCMExtinctionLaw
 #from extinction import apply, fitzpatrick99
 import corner
@@ -21,7 +22,7 @@ import pdb
 
 if __name__=="__main__":
     """
-    This script is a demonstration of how ampere (should) work(s). 
+    This script should contain
     """
     #ardila_2008=readfits('/home/zeegers/small_silicates_crystal/small_silicates/infrared_spectra/cygob2_12/cassis_yaaar_spcfw_27570176t.fits',ardila_header) 
     #evans_2004_HR=readfits('/home/zeegers/small_silicates_crystal/small_silicates/infrared_spectra/cygob2_12/cassis_yaaar_optdiff_9834496.fits',evans_header) 
@@ -109,21 +110,13 @@ if __name__=="__main__":
 
     #model = PowerLawAGN(irs.wavelengths) #We should probably define a wavelength grid separate from the data wavelengths for a number of reasons, primarily because the photometry needs an oversampled spectrum to compute synthetic photometry
 
-    model = SingleModifiedBlackBody(modwaves, #irs.wavelength,flatprior=True,
-                                    normWave = 10., sigmaNormWave = 100.,
-                                    redshift = False, lims = np.array([[500.,10000.], # temp
-                                                                       [10.,35.], # scaling factor
-                                                                       [-2.,2.], # powerlaw exp
-                                                                       [1.,5.]] # distance in pc?
-                                                                      )
-                                    )
+    model = PowerLawAGN(modwaves, flatprior=True, redshift=None)
+                                    
                                                                         
     print(model.npars)                                
     
     """ and the extinction law (if necessary) (could be moved inside model as only some models will need this) """
     #ext = CCMExtinctionLaw()
-    
-    #ext = ()
 
     #model.extinction = ext #combination of multiple different models is something we need to consider how to implement. 
 
@@ -143,7 +136,10 @@ if __name__=="__main__":
     #ax.set_ylim(0., 1.5*np.max([np.max(i.value) for i in dataSet]))
     #fig.savefig("sed_test.png")
 
-    model(1000.,17.,-1.0,2.0)
+    model(-2.,-0.5,
+                    -0.5,-0.5,-0.5,
+                    -0.5,-0.5)
+    
     modspec = model.modelFlux
     print(modspec)
     ax.plot(modwaves,modspec, color="red")
@@ -163,8 +159,8 @@ if __name__=="__main__":
     """ Run it """
     pos = [
            [
-               
-               1000., 17., -1.0, 2., 1., 0.5, 1., 1., 0.5, 1., 1., 0.5, 1.
+               -2., -0.78, -0.78, -0.78, -0.78, -0.78, -0.78, 1., 0.5, 1., 1., 0.5, 1., 1., 0.5, 1.
+               #1000., 17., -1.0, 2., 1., 0.5, 1., 1., 0.5, 1., 1., 0.5, 1.
                #1000., 17., -1.0, 2., 0., 0.,  0., 0., 0., 0.
                #100. + np.random.randn() for i in range(np.int(opt.npars))
            ]
@@ -195,14 +191,14 @@ if __name__=="__main__":
         #print(opt.samples[i,:])
         if opt.samples[i,0] > 0.:
             opt.model(opt.samples[i,0],opt.samples[i,1],opt.samples[i,2],opt.samples[i,3])
-            ax.plot(modwaves,opt.model.modelFlux, '.', color='k', alpha=0.02) #irs.wavelength
+            ax.plot(modwaves,opt.model.modelFlux, '.', 'k', alpha=0.02) #irs.wavelength
         else:
             nneg += 1
             
     #    ax.plot(irs.wavelength, model(opt.samples[i,:]), '-', alpha = 0.1)
     print(nneg)
     for i in irs:
-        ax.plot(i.wavelength, i.value, '.',color='b')
+        ax.plot(i.wavelength, i.value, '.','b')
         ax.plot(phot.wavelength, phot.value, 'o',color='b') 
     for i in irs2:
         ax.plot(i.wavelength, i.value, '.','b')
@@ -210,4 +206,3 @@ if __name__=="__main__":
     plt.show()
 
     """ Figure out what it all means """
-    
