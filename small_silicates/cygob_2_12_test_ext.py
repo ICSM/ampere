@@ -6,6 +6,7 @@ from ampere.data import Spectrum, Photometry
 from ampere.emceesearch import EmceeSearch
 from ampere.PowerLawAGN import PowerLawAGN, SingleModifiedBlackBody
 from ampere.PowerLawAGN import PowerLawAGN, PowerLawAGN
+from ampere.starScreen import PolynomialSource
 #from extinction import CCMExtinctionLaw
 #from extinction import apply, fitzpatrick99
 import corner
@@ -48,7 +49,9 @@ if __name__=="__main__":
     photFile = ampere.__file__.strip('__init__.py')+'Testdata/vizier_votable_cygob212_time.vot'
     
     """ Define the model """
-    modwaves = 10**np.linspace(0.,2., 2000)
+    #modwaves = 10**np.linspace(0.,2., 2000)  # so there's something wrong with modwaves which is not allowed to start at 0. 
+    modwaves = 10**np.linspace(0.7,1.6, 1000) #setting up a wavelength grid from 5.25 to 37.4 um. 
+
     #print(modwaves)
     #print(10**modwaves)
     #exit()
@@ -110,7 +113,7 @@ if __name__=="__main__":
 
     #model = PowerLawAGN(irs.wavelengths) #We should probably define a wavelength grid separate from the data wavelengths for a number of reasons, primarily because the photometry needs an oversampled spectrum to compute synthetic photometry
 
-    model = PowerLawAGN(modwaves, flatprior=True, redshift=None)
+    model = PolynomialSource(modwaves)
                                     
                                                                         
     print(model.npars)                                
@@ -136,9 +139,7 @@ if __name__=="__main__":
     #ax.set_ylim(0., 1.5*np.max([np.max(i.value) for i in dataSet]))
     #fig.savefig("sed_test.png")
 
-    model(-2.,-0.5,
-                    -0.5,-0.5,-0.5,
-                    -0.5,-0.5)
+    model(0.0,-1.2,2.1,-0.1,-0.1,-0.1,-0.1,-0.1,-0.1)
     
     modspec = model.modelFlux
     print(modspec)
@@ -154,18 +155,27 @@ if __name__=="__main__":
     
     #20 + np.random.randn() for i in range(np.int(opt.npars))
     
-    pdb.set_trace()
+    #pdb.set_trace()
     print(opt.npars,np.int(opt.npars))
+    print("hier ben ik geweest")
     """ Run it """
+    #pos = [
+           #[
+               #-2., -0.78, -0.78, -0.78, -0.78, -0.78, -0.78, 1., 0.5, 1., 1., 0.5, 1., 1., 0.5, 1.
+               ##1000., 17., -1.0, 2., 1., 0.5, 1., 1., 0.5, 1., 1., 0.5, 1.
+               ##1000., 17., -1.0, 2., 0., 0.,  0., 0., 0., 0.
+               ##100. + np.random.randn() for i in range(np.int(opt.npars))
+           #]
+           #+ np.random.randn(np.int(opt.npars)) for j in range(opt.nwalkers)
+          #]
+          
     pos = [
            [
-               -2., -0.78, -0.78, -0.78, -0.78, -0.78, -0.78, 1., 0.5, 1., 1., 0.5, 1., 1., 0.5, 1.
-               #1000., 17., -1.0, 2., 1., 0.5, 1., 1., 0.5, 1., 1., 0.5, 1.
-               #1000., 17., -1.0, 2., 0., 0.,  0., 0., 0., 0.
-               #100. + np.random.randn() for i in range(np.int(opt.npars))
+               0.0, -1.2, 2.1, -0.1, -0.1, -0.1, -0.1, -0.1, -0.1, 1., 0.5, 1., 1., 0.5, 1., 1., 0.5, 1. # the last six parameters represent the three parameters for the noise model, for the two chunks in the data set.
            ]
-           + np.random.randn(np.int(opt.npars)) for j in range(opt.nwalkers)
+           + np.random.randn(int(opt.npars))/100 for j in range(opt.nwalkers)
           ]
+           
     print(pos[0])
     print(np.max(pos, axis=0))
     print(np.min(pos, axis=0))
@@ -187,21 +197,22 @@ if __name__=="__main__":
     print(np.max(opt.samples, axis=0))
     print(np.min(opt.samples, axis=0))
     nneg=0
+    print("hier ben ik geweest #2")
     for i in range(0,opt.samples.shape[0],100):
         #print(opt.samples[i,:])
         if opt.samples[i,0] > 0.:
-            opt.model(opt.samples[i,0],opt.samples[i,1],opt.samples[i,2],opt.samples[i,3])
-            ax.plot(modwaves,opt.model.modelFlux, '.', 'k', alpha=0.02) #irs.wavelength
+            opt.model(opt.samples[i,0],opt.samples[i,1],opt.samples[i,2],opt.samples[i,3:9])
+            ax.plot(modwaves,opt.model.modelFlux, '.', color='k', alpha=0.02) #irs.wavelength
         else:
             nneg += 1
             
     #    ax.plot(irs.wavelength, model(opt.samples[i,:]), '-', alpha = 0.1)
     print(nneg)
     for i in irs:
-        ax.plot(i.wavelength, i.value, '.','b')
+        ax.plot(i.wavelength, i.value, '.',color='b')
         ax.plot(phot.wavelength, phot.value, 'o',color='b') 
     for i in irs2:
-        ax.plot(i.wavelength, i.value, '.','b')
+        ax.plot(i.wavelength, i.value, '.',color='b')
     fig2 = corner.corner(opt.samples)#,labels=opt.labels)
     plt.show()
 
