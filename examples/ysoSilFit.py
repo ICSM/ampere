@@ -40,7 +40,7 @@ if __name__=="__main__":
     ax.set_ylim(0., 1.5*np.max([np.max(i.value) for i in dataSet]))
     fig.savefig("sed_test.png")
 
-    model(0.0,0.1,0.1,0.3,0.3,0.3,0.3,0.3,0.3)
+    model(0.0, 0.1, 0.1, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0)
     modspec = model.modelFlux
  #   print(modspec)
     ax.plot(modwaves,modspec)
@@ -49,7 +49,7 @@ if __name__=="__main__":
     
     pos = [
            [
-               0.0, 0.1, 0.1, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 1., 0.5, 1., 1., 0.5, 1.,  # the last six parameters represent the three parameters for the noise model, for the two chunks in the data set.
+               0.0, 0.1, 0.1, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 1., 0.5, 1., 1., 0.5, 1.,  # the last six parameters represent the three parameters for the noise model, for the two chunks in the data set.
            ]
            + np.random.randn(int(opt.npars))/100 for j in range(opt.nwalkers)
           ]
@@ -59,7 +59,7 @@ if __name__=="__main__":
         #pos[i][0] = pos[i][0] / 1000.
         #pos[i][1] = pos[i][1] / 3. + 1.
         #pos[i][2:7] = pos[i][2:7] / 30. + 0.1
-    print("Pos[0] = ",pos[0])
+    print("Dimensions of Pos = ", np.shape(pos))
     print("np.max(pos, axis=0) = ", np.max(pos, axis=0))
     print("np.min(pos, axis=0) = ", np.min(pos, axis=0))
     '''Probability space seems to be very complicated, so we're going to try a bit of a trick'''

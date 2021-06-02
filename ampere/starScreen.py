@@ -11,6 +11,7 @@ from astropy import constants as const
 from astropy import units as u
 from astropy.modeling import blackbody
 from .models import AnalyticalModel
+import matplotlib.pyplot as plt
 
 class PolynomialSource(AnalyticalModel):
     '''Input: fit parameters (multiplicationFactor, powerLawIndex, dustAbundances), 
@@ -51,14 +52,32 @@ class PolynomialSource(AnalyticalModel):
                  **kwargs):
 
         dustAbundances = np.array(args) # instead of 10**np.array(args)
+        print('dustAbundances = ',dustAbundances)
+        print('constants a, b, c = ', secondOrderConstant, firstOrderConstant, constant)
         waves = self.wavelength
+        #print('opacity_array[0] = ', self.opacity_array[:,0])
         fModel = (np.matmul(self.opacity_array, dustAbundances))
-        fModel = (secondOrderConstant*waves**2 + firstOrderConstant*waves**1 + constant)*np.exp(-fModel) # This line needs to be updated still. 
+        #plt.plot(self.opacity_array[:,0], label = "0")
+        #plt.plot(self.opacity_array[:,1], label = "1")
+        #plt.plot(self.opacity_array[:,2], label = "2")
+        #plt.plot(self.opacity_array[:,3], label = "3")
+        #plt.plot(self.opacity_array[:,4], label = "4")
+        #plt.plot(self.opacity_array[:,5], label = "5")
+        #plt.plot(fModel, label = "opacities")
+        #plt.legend()
+        #plt.show()
+
+        #print('fModel.shape = ',fModel.shape)
+        fModel = (secondOrderConstant*waves**2 + firstOrderConstant*waves**1 + constant)*np.exp(-fModel) 
+        #plt.plot(fModel, label = "fModel")
+        #plt.legend()
+        #plt.show()
+
         self.modelFlux = fModel
 
     def lnprior(self, theta, **kwargs):
         if self.flatprior:
-            if np.sum(10**theta[2:]) <= 1. and np.all(theta[2:] < 0.) and -10 < theta[0] < 10. and 1.5 > theta[1] > 0.: #basic physical checks first
+            if np.all(theta[3:] > 0.) and -1.0 < theta[0] < 1. and -2.0 < theta[1] < 2.0 and -1.0 < theta[2] < 1.0: #basic physical checks first
                 return 0
             else:
                 return -np.inf
