@@ -55,7 +55,6 @@ class BaseSearch(object):
         l=np.array([])
         i = self.nparsMod
         for data in self.dataSet:
-            #print(data)
             lnew = data.lnlike(theta[i:i+data.npars],self.model)
             i+=data.npars
             l = np.r_[l,lnew]
@@ -69,6 +68,7 @@ class BaseSearch(object):
         This just calls the prior, followed by the likelihood, and returns the 
         sum of the two.
         """
+        
         p = self.lnprior(theta)#[:self.nparsMod])
         if p == -np.inf:
             return p

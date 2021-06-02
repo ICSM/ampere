@@ -361,7 +361,7 @@ class Photometry(Data):
         return 0
 
     def lnlike(self, theta, model, **kwargs):
-        r'''Compute the likelihood of the photometry given the model. 
+        '''Compute the likelihood of the photometry given the model. 
 
         The likelihood is computed as 
         .. math::
@@ -437,7 +437,7 @@ class Photometry(Data):
         self.covMat[a] = self.covMat[a] * self.varMat[a]# = np.diag(uncertainty**2)
         self.logDetCovMat = np.linalg.slogdet(self.covMat)# / np.log(10.)
 #        self.logDetCovMat = np.linalg.slogdet(self.covMat[self.cov_mask])[1]# / np.log(10.)
-        print(self.logDetCovMat)
+        #print(self.logDetCovMat)
         if self.logDetCovMat == -np.inf: #This needs to be updated to raise an error!
             print("""The determinant of the covariance matrix for this dataset is 0.
             Please check that the uncertainties are positive real numbers """)
@@ -625,7 +625,7 @@ class Spectrum(Data):
         a = self.covMat > 0
         self.covMat[a] = self.covMat[a] * self.varMat[a]# = np.diag(uncertainty**2)
         self.logDetCovMat = np.linalg.slogdet(self.covMat)[1]# / np.log(10.)
-        print(self.logDetCovMat)
+        #print(self.logDetCovMat)
 
         ''' Assume default of 10% calibration uncertainty unless otherwise specified by the user '''
         if calUnc is None:
@@ -727,8 +727,13 @@ class Spectrum(Data):
         #covMat = (1-theta[0])*np.diag(np.ones_like(self.uncertainty[self.mask])) + theta[0]*m
         covMat = (1-theta[0])*np.diag(np.ones_like(self.uncertainty)) + theta[0]*m
         self.covMat = covMat * self.varMat
+
         
-        self.logDetCovMat = np.linalg.slogdet(self.covMat[self.cov_mask])[1]# / np.log(10.)
+        covMatmask = np.reshape(self.covMat[self.cov_mask], np.shape(self.covMat))
+        
+        self.logDetCovMat = np.linalg.slogdet(covMatmask)[1]# / np.log(10.)
+        #print(self.logDetCovMat)
+        #self.logDetCovMat = np.linalg.slogdet(self.covMat)[1]# / np.log(10.)
         #return self.covMat
 
     def lnprior(self, theta, **kwargs):
@@ -774,12 +779,12 @@ class Spectrum(Data):
             scaleFac = theta[0]
         except IndexError: #Only possible if theta is scalar or can't be indexed
             scaleFac = theta
-            
+
         #print(self)
         #wavelength = self.wavelength
         #modSpec = model.modelFlux #
+        #print(model.wavelength)
         modSpec = spectres(self.wavelength[self.mask], model.wavelength, model.modelFlux) #For some reason spectres isn't cooperating :/ actually, looks like it was just a stupid mistake
-
         ''' then update the covariance matrix for the parameters passed in '''
         #skip this for now
         #self.covMat =
@@ -800,7 +805,8 @@ class Spectrum(Data):
 
         b = -0.5*len(self.value[self.mask]) * np.log(2*np.pi) - (0.5*self.logDetCovMat) #less computationally intensive version of above
         #pass
-        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(inv(self.covMat[self.cov_mask]), a) ) ) )
+        covMatmask = np.reshape(self.covMat[self.cov_mask], np.shape(self.covMat))
+        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(inv(covMatmask), a) ) ) )
         #print(((np.float128(2.)*np.pi)**(len(self.value))), np.linalg.det(self.covMat))
         #print(((np.float128(2.)*np.pi)**(len(self.value)) * np.linalg.det(self.covMat)))
         #print(b, probFlux)

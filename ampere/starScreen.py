@@ -52,8 +52,8 @@ class PolynomialSource(AnalyticalModel):
                  **kwargs):
 
         dustAbundances = np.array(args) # instead of 10**np.array(args)
-        print('dustAbundances = ',dustAbundances)
-        print('constants a, b, c = ', secondOrderConstant, firstOrderConstant, constant)
+        #print('dustAbundances = ',dustAbundances)
+        #print('constants a, b, c = ', secondOrderConstant, firstOrderConstant, constant)
         waves = self.wavelength
         #print('opacity_array[0] = ', self.opacity_array[:,0])
         fModel = (np.matmul(self.opacity_array, dustAbundances))
