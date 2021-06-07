@@ -38,7 +38,7 @@ class EmceeSearch(BaseSearch):
         #self.nparsMod = something #number of parameters for the model
         self.nparsData = [data.npars for data in self.dataSet] #number of parameters to be passed into each set of data
         self.npars = np.int(self.nparsMod + np.sum(self.nparsData))
-        print(self.npars, self.nparsMod, self.nparsData)
+        #print(self.npars, self.nparsMod, self.nparsData)
         #exit()
         ''' then set up the sampler '''
         self.sampler = emcee.EnsembleSampler(self.nwalkers, np.int(self.npars), self.lnprob, a = acceptRate)#, args=self.dataSet)
@@ -85,7 +85,7 @@ class EmceeSearch(BaseSearch):
         
         if lnprior is not None:
             self.lnprior = lnprior
-        print(self.npars, self.nparsMod, self.nparsData)
+        #print(self.npars, self.nparsMod, self.nparsData)
         if nwalkers is not None:
                 self.nwalkers=nwalkers
         ''' then set up the sampler '''
@@ -115,11 +115,11 @@ class EmceeSearch(BaseSearch):
     def optimise(self, nsamples = None, burnin = None, guess = None, noguess=False, **kwargs):
         if guess == 'None': # and not noguess:
             guess = [np.random.randn(np.int(self.npars)) for i in range(self.nwalkers)]
-        print('dimensions of guess = ', np.shape(guess))
-        print('nsamples = ', nsamples)
-        print('burnin = ', burnin)
-        print("np.max(guess, axis=0) = ", np.max(guess, axis=0))
-        print("np.min(guess, axis=0) = ", np.min(guess, axis=0))
+        #print('dimensions of guess = ', np.shape(guess))
+        #print('nsamples = ', nsamples)
+        #print('burnin = ', burnin)
+        #print("np.max(guess, axis=0) = ", np.max(guess, axis=0))
+        #print("np.min(guess, axis=0) = ", np.min(guess, axis=0))
         self.nsamp = nsamples
         self.burnin = burnin
         if noguess:
@@ -127,9 +127,9 @@ class EmceeSearch(BaseSearch):
         else:
             self.sampler.run_mcmc(guess, nsamples)
         self.allSamples = self.sampler.chain
-        print('do we get here (no): ',np.max(self.allSamples), np.min(self.allSamples))
+        #print('do we get here (no): ',np.max(self.allSamples), np.min(self.allSamples))
         self.samples = self.sampler.chain[:, self.burnin:, :].reshape((-1, self.npars))
-        print(np.max(self.samples), np.min(self.samples))
+        #print(np.max(self.samples), np.min(self.samples))
         #pass
 
 

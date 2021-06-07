@@ -402,8 +402,9 @@ class Photometry(Data):
 
         b = -0.5*len(self.value[self.mask]) * np.log(2*np.pi) - (0.5*self.logDetCovMat)
             #np.log(1./((2*np.pi)**(len(self.value)) * np.linalg.det(self.covMat))
-            #) 
-        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(inv(self.covMat[self.cov_mask]), a) ) ) )
+            #)
+        covMatmask = np.reshape(self.covMat[self.cov_mask], np.shape(self.covMat))
+        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(inv(covMatmask), a) ) ) )
         return probFlux
         
 
@@ -435,7 +436,8 @@ class Photometry(Data):
         self.covMat = np.diag(np.ones_like(self.uncertainty))#[self.mask]))
         a = self.covMat > 0
         self.covMat[a] = self.covMat[a] * self.varMat[a]# = np.diag(uncertainty**2)
-        self.logDetCovMat = np.linalg.slogdet(self.covMat)# / np.log(10.)
+        covMatmask = np.reshape(self.covMat[self.cov_mask], np.shape(self.covMat))
+        self.logDetCovMat = np.linalg.slogdet(self.covMatmask)# / np.log(10.)
 #        self.logDetCovMat = np.linalg.slogdet(self.covMat[self.cov_mask])[1]# / np.log(10.)
         #print(self.logDetCovMat)
         if self.logDetCovMat == -np.inf: #This needs to be updated to raise an error!
