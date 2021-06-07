@@ -1,6 +1,7 @@
 from __future__ import print_function
 
 import numpy as np
+from numpy import ma
 from astropy.table import Table
 from astropy.table import vstack
 from astropy import constants as const
@@ -12,7 +13,8 @@ import astropy.units as u
 from astropy.io import ascii
 from spectres import spectres
 from scipy.stats import norm, halfnorm
-from scipy.linalg import inv
+#from scipy.linalg import inv
+from numpy.linalg import inv
 
 class Data(object):
     """A base class to represent data objects and their properties
@@ -591,6 +593,8 @@ class Spectrum(Data):
             wavelength = wavelength
         
         self.wavelength = wavelength #Will be the grid of wavelength/frequency
+                                     #using numpy.ma.asarray()? to make it a MaskedArray so that we can easily
+                                     #mask out unwanted parts of the spectrum along with its covariances
         
         self.fluxUnits = fluxUnits#specFluxUnits
         
@@ -618,26 +622,28 @@ class Spectrum(Data):
         else:
             raise NotImplementedError()
 
-        self.value = value #Should always be a flux unless someone is peverse
-        self.uncertainty = uncertainty #Ditto
+        self.value = value #Should always be a flux unless someone is peverse, as with wavelengths using MaskedArrays?
+        self.uncertainty = uncertainty #Ditto #ma.asarray()?
 
         ''' inititalise covariance matrix as a diagonal matrix '''
         self.varMat = uncertainty * uncertainty[:,np.newaxis] #make a square array of sigma_i * sigma_j, i.e. variances
-        self.covMat = np.diag(np.ones_like(uncertainty))
+        self.covMat = np.diag(np.ones_like(uncertainty)) #ma.asarray()
+        #self.covMat.mask = np.logical_not(self.covMat > 0) #The mask for a MaskedArray is backwards compared to boolean indexing!
+        #                                                   #By applying this mask we minimise the operations that need to be done, but this might really be overkill
         a = self.covMat > 0
-        self.covMat[a] = self.covMat[a] * self.varMat[a]# = np.diag(uncertainty**2)
+        self.covMat = self.covMat * self.varMat # = np.diag(uncertainty**2)
         self.logDetCovMat = np.linalg.slogdet(self.covMat)[1]# / np.log(10.)
         #print(self.logDetCovMat)
 
         ''' Assume default of 10% calibration uncertainty unless otherwise specified by the user '''
         if calUnc is None:
-            self.calUnc = 0.010 
+            self.calUnc = 0.010 #beware! This is a variance!
         else:
             self.calUnc = calUnc
 
         self.npars = 3 #this will have to change in future to 1 + number of parameters required by GPs for covMat
 
-        self.covarianceTruncation = covarianceTruncation
+        self.covarianceTruncation = covarianceTruncation #if defined, covariance matrices will be truncated when their values are less than this number, to minimise the number of operation
 
         self.selectWaves()
 
