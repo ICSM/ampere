@@ -48,7 +48,7 @@ class EmceeSearch(BaseSearch):
         #raise NotImplementedError()
 
     def __call__(self, guess=None, **kwargs):
-        if guess is None:
+        if guess == None:
             guess = [np.random.randn(np.int(self.npars)) for i in range(self.nwalkers)]
         self.sampler.run_mcmc(guess, self.nsamp)
         self.allSamples = self.sampler.chain

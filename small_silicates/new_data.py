@@ -15,9 +15,28 @@ from scipy.stats import norm, halfnorm
 from scipy.linalg import inv
 
 class Data(object):
-    """
-
-
+    """A base class to represent data objects and their properties
+    This is intended purely as a base class to define the interface. When creating 
+    your own Data types you must reimplement all methods except: 
+    selectWaves
+    which you only need to reimplement if your type of data needs to handle them 
+    differently. 
+    Parameters
+    ----------
+    None
+    Attributes
+    ----------
+    None
+    Notes
+    -----
+    Data objects are intended to encapsulate both measurements and their covariances, 
+    and provide the means to calculate the likelihood of the encapsulated data given
+    some model. If the type of data has some nuisance parameters associated with it
+    (e.g. a normalisation term) it must also define the prior for those parameters.
+    
+    Examples
+    --------
+    None, since this is the base class
     """
 
     def __init__(**kwargs):
@@ -30,26 +49,23 @@ class Data(object):
         raise NotImplementedError()
 
     def __repr__(self, **kwargs):
-       raise NotImplementedError()  # switched off by sascha 19/04/2021
+        raise NotImplementedError()
 
     def lnlike(self, synWave, synFlux, **kwargs):
         pass
 
     def fromFile(self, filename, format, **kwargs):
-        ''' 
-        Routine to generate data object from a file containing said data
+        '''Routine to generate data object from a file containing said data
         '''
         pass
 
     def fromTable(self, table, format, **kwargs):
-        ''' 
-        Routine to generate data object from an astropy Table object or a file containing data in a format that can be read in as an astropy Table
+        '''Routine to generate data object from an astropy Table object or a file containing data in a format that can be read in as an astropy Table
         '''
         pass
 
     def selectWaves(self, low = 0, up = np.inf, interval = "closed", **kwargs):
-        '''
-        Method to generate a mask for the data by wavelength. Uses interval terminology to determine how the limits are treated.
+        '''Method to generate a mask for the data by wavelength. Uses interval terminology to determine how the limits are treated.
         '''
 
         if interval == "closed": #Both arguments will be treated with less/greater-than-or-equal-to
@@ -65,9 +81,7 @@ class Data(object):
         #now we need to create a mask for the covariance matrix
         #The outer product does what we want, producing a matrix which has elements such that cov_mask[i,j] = mask[i] * mask[j]
         #This produces the right answer because boolean multiplication is treated as an AND operation in python
-        #self.cov_mask = np.outer(self.mask, self.mask)[0]
-        self.cov_mask = np.outer(self.mask, self.mask)        
-        #print(self.cov_mask)
+        self.cov_mask = np.outer(self.mask, self.mask)
         pass
 
     
@@ -75,10 +89,40 @@ class Data(object):
 #1. Should all the photometry be stored in one object
 
 class Photometry(Data):
-
-    """
-    Routine to take input from Data(), convert all fluxes into Jy
-
+    """A class to represent photometric data objects and their properties
+    This is a class to hold photometric data points, and their covariances, 
+    along with details about the filters that they were observed in. Given the
+    covariances and a spectrum from a model, it computes the photometry that 
+    would be observed given the model, and computes the likelihood of the model.
+    It also contains routines to read information from a file ready to fit.
+    Parameters
+    ----------
+    filterName : string, array-like
+        The names of the filters that this object will hold
+    value : float, array-like
+        The fluxes or magnitudes corresponding to each filter. 
+        Fluxes and magnitudes can be mixed, see `photUnits`.
+    uncertainty : float, array-like
+        The uncertainty on the fluxes or magnitudes.
+    photUnits : {'Jy', 'mJy', 'mag'}, array-like
+        The units of the photometry. Should be an array-like of the same length as filterName.
+    bandUnits : optional, string, scalar or array-like
+        Currently assumes micron ('um') as pyphot converts internally. May be updated in future.
+    libName : string
+        the path to the pyphot library that holds the relevant filter curves.
+    Attributes
+    ----------
+    None
+    Methods
+    --------
+    lnlike : Calculate the likelihood of the data given the model
+    
+    Examples
+    --------
+    create an instance by directly instantiating it
+    >>> phot = Photometry(['2MASS_J', '2MASS_K'], [10., 5.], [0.2, 0.1], ['Jy', 'Jy'], libname='path/to/filter/library')
+    Or create it from a file containing a table
+    >>> phot = Photometry.fromFile('filename.vot')
     """
 
     def __init__(self, filterName, value, uncertainty, photUnits, bandUnits=None, libName = None, **kwargs):
@@ -86,8 +130,6 @@ class Photometry(Data):
 
         ''' setup pyphot for this set of photometry '''
         self.pyphotSetup(libName)
-        print(self.filterName.astype('str'))
-        #newTry = [str(filt).replace(':','_').replace('/','_').replace('WISE','WISE_RSR').replace('Spitzer','SPITZER') for filt in self.filterName]
         self.filterNamesToPyphot()
 
         #print(self.filterMask)
@@ -187,16 +229,16 @@ class Photometry(Data):
         return l
     
     def __repr__(self, **kwargs):
-    #    raise NotImplementedError()   modified on 19/04/2021 by sascha
-        return self.__str__()
-        
-    
-    def geef_data(self, **kwargs):
-        return(self.filterName,self.wavelength,self.value, self.uncertainty)
+        raise NotImplementedError()
 
     def pyphotSetup(self, libName = None, **kwargs):
         ''' Given the data, read in the pyphot filter library and make sure we have the right list of filters in memory 
-        
+        Parameters
+        ----------
+        libName : str, optional
+            The name of the filter library to use
+        Notes
+        ------
         Future work: go through multiple libraries from different (user-defined) locations and import htem all
         '''
         
@@ -208,6 +250,7 @@ class Photometry(Data):
         self.filterLibrary = pyphot.get_library(fname=libName)
 
     def filterNamesToPyphot(self, **kwargs):
+        """Attempt to convert the set of filter names that the objects was instantiated with so that they match the contents of the pyphot library """
         pyphotFilts = self.filterLibrary.get_library_content()
         #print(pyphotFilts)
         filtsOrig = self.filterName
@@ -217,7 +260,7 @@ class Photometry(Data):
         #try replacing colons and / with _
         #print(l)
         try:
-            newTry = [filt.decode("utf-8").replace(':','_').replace('/','_').replace('WISE','WISE_RSR').replace('Spitzer','SPITZER') for filt in self.filterName]
+            newTry = [filt.astype(str).replace(':','_').replace('/','_').replace('WISE','WISE_RSR').replace('Spitzer','SPITZER') for filt in self.filterName]
         except AttributeError:
             newTry = [filt.replace(':','_').replace('/','_').replace('WISE','WISE_RSR').replace('Spitzer','SPITZER') for filt in self.filterName]
         #change type to str from byte for filt to make it run <CK>
@@ -237,7 +280,6 @@ class Photometry(Data):
 
     def reloadFilters(self, modwaves):
         ''' Use this method to reload the filters after your model has got a defined wavelength grid. 
-
         This method reloads the filters and interpolates their definitions onto the given 
         wavelength grid. This should be used to make sure the filter definitions are ready 
         to compute synthetic photometry in the likelihood calls.
@@ -254,10 +296,28 @@ class Photometry(Data):
         self.filters=filters
 
     def lnprior(self, theta, **kwargs):
+        """Return the prior of any nuisance parameters. 
+        Since this implementation has no nuisance parameters, it does nothing."""
         return 0
 
     def lnlike(self, theta, model, **kwargs):
-        ''' docstring goes here '''
+        r'''Compute the likelihood of the photometry given the model. 
+        The likelihood is computed as 
+        .. math::
+        
+            \frac{1}{2} N \ln\left(2\pi\right) - \frac{1}{2}\ln\left(\mathrm{det}C\right) - \frac{1}{2} \left(F_\mathrm{obs} - F_\mathrm{mod})^T C^{-1} \left(F_\mathrm{obs} - F_\mathrm{mod}\right)  
+        where N is the number of photometric points, C is the covariance matrix, and F_obs and F_mod are the observed and predicted photmetry, respectively.
+        Parameters
+        ----------
+        theta: None,
+            included for compatibility reasons
+        model: an instance of Model or a subclass,
+            The model for which the likelihood will be computed
+        Returns
+        -------
+        probFlux: float
+            The natural logarithm of the likelihood of the data given the model
+        '''
         
         ''' First take the model values (passed in) and compute synthetic photometry '''
         ''' I assume that the filter library etc is already setup '''
@@ -279,17 +339,26 @@ class Photometry(Data):
         b = -0.5*len(self.value[self.mask]) * np.log(2*np.pi) - (0.5*self.logDetCovMat)
             #np.log(1./((2*np.pi)**(len(self.value)) * np.linalg.det(self.covMat))
             #) 
-        covMatmask = np.reshape(self.covMat[self.cov_mask], np.shape(self.covMat))
-        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(inv(covMatmask), a) ) ) )
+        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(inv(self.covMat[self.cov_mask]), a) ) ) )
         return probFlux
         
 
     def cov(self, **kwargs):
-        ''' 
-        This routine populates a covariance matrix given some methods to call and parameters for them.
-
-        For the moment, however, it does nothing.
-
+        '''This routine populates a covariance matrix given some methods to call and parameters for them.
+        At present, photometric points are assumed to be uncorrelated, so this 
+        routine is provided to ensure consistency of the interface between 
+        different data types. The resulting covariance matrix is therefore
+        always diagonal.
+        Parameters
+        ----------
+        None
+        Returns
+        -------
+        covMat: float, N times N array-like
+            The covariance matrix
+        Raises
+        ------
+        Nothing yet!
         '''
 
         ''' inititalise covariance matrix as a diagonal matrix '''
@@ -298,11 +367,9 @@ class Photometry(Data):
         self.covMat = np.diag(np.ones_like(self.uncertainty))#[self.mask]))
         a = self.covMat > 0
         self.covMat[a] = self.covMat[a] * self.varMat[a]# = np.diag(uncertainty**2)
-        covMatmask = np.reshape(self.covMat[self.cov_mask], np.shape(self.covMat))
-        self.logDetCovMat = np.linalg.slogdet(covMatmask)[1]# / np.log(10.)
-        
+        self.logDetCovMat = np.linalg.slogdet(self.covMat[self.cov_mask])[1]# / np.log(10.)
         print(self.logDetCovMat)
-        if self.logDetCovMat == -np.inf:
+        if self.logDetCovMat == -np.inf: #This needs to be updated to raise an error!
             print("""The determinant of the covariance matrix for this dataset is 0.
             Please check that the uncertainties are positive real numbers """)
             print(self)
@@ -311,8 +378,17 @@ class Photometry(Data):
 
     @classmethod
     def fromFile(cls, filename, format=None, **kwargs):
-        ''' 
-        Routine to generate photometry data object from a file containing said data
+        '''Create Photometry object from a file containing data
+        Parameters
+        ----------
+        filename: str
+            The name of the file to load photometry from
+        format: {'VO', }, optional, default 'VO'
+            The format of the file.
+        Returns
+        -------
+        Photometry
+            A new Photometry instance
         '''
         self=cls.__new__(Photometry)
         # First type votable as take from vizier/sed http://vizier.u-strasbg.fr/vizier/sed/
@@ -334,6 +410,21 @@ class Photometry(Data):
         return self
 
     def fromTable(self, table, format=None, **kwargs):
+        '''Populates the photometry instance from an Astropy Table instance.
+        This is used to populate an existing Photometry instance from an astropy table, called from fromFile. 
+        Parameters
+        ----------
+        table: astropy.table.Table
+            The table containing the photometry data
+        Notes
+        -----
+        This routine is not intended to be used as a standalone routine to 
+        instantiate Photometry instances. If you wish to do so, you must first 
+        create the instance using p = Photometry.__new__(Photometry), then 
+        instantiate it with p.fromTable(table). Since this is basically what 
+        Photometry.fromFile() does,we recommend using that unless you have to 
+        build the table in memory. We hope to revise this in future.
+        '''
         ''' 
         Routine to generate data object from an astropy Table object or a file containing data in a format that can be read in as an astropy Table
         '''
@@ -353,10 +444,44 @@ class Photometry(Data):
         self.__init__(filterName, value, uncertainty, photUnits, **kwargs)
                    
 class Spectrum(Data):
-
+    """A class to represent 1D spectra data objects and their properties
+    
+    Parameters
+    ----------
+    wavelength : float, array-like
+        The wavelengths of the spectrum.
+    value : float, array-like
+        The fluxes of the spectrum.
+    uncertainty : float, array-like
+        The uncertainty on the fluxes.
+    fluxUnits : {'Jy', 'mJy', 'W/m^2/Hz', 'W/m^2/Angstrom', 'W/cm^2/um', 'erg/cm^2/s/Hz', 'erg/cm^2/s/Angstrom'}, scalar
+        The units of the fluxes..
+    bandUnits : {'um', 'A', 'nm'}, optional, string, scalar or array-like
+        The units of the wavelengths.
+    freqSpec : bool, default False
+        If the input is wavelength (False, default) of Frequncy (True). Currently only works for frequncies in GHz, otherwise input must be wavelength
+    calUnc : float, optional, default 0.01
+        Parameter controlling width of prior on the scale factor for absolute calibration uncertainty. Larger values imply larger calibration uncertainty. The default value corresponds to roughly 2.5% uncertainty. 
+    covarianceTruncation : float, optional, default 1e-3
+        Threshold below which the covariance matrix is truncated to zero.
+    Attributes
+    ----------
+    None
+    Methods
+    -------
+    lnlike : Calculate the likelihood of the data given the model
+    Notes
+    -----
+    
+    
+    Examples
+    --------
+    >>> spec = Spectrum(wavelength_array, flux_array, uncertainty_array, "um", "Jy")
+    or alternatively
+    >>> spec = Spectrum.fromFile('filename', 'SPITZER-YAAAR')
     """
 
-
+    """
     """
 
     def __init__(self, wavelength, value, uncertainty, bandUnits, fluxUnits, freqSpec = False, calUnc = None, covarianceTruncation = 1e-3, **kwargs):
@@ -414,8 +539,7 @@ class Spectrum(Data):
         self.covMat = np.diag(np.ones_like(uncertainty))
         a = self.covMat > 0
         self.covMat[a] = self.covMat[a] * self.varMat[a]# = np.diag(uncertainty**2)
-        self.logDetCovMat = np.linalg.slogdet(self.covMat)# / np.log(10.)
-        #self.logDetCovMat = np.linalg.slogdet(self.covMat)[1]# / np.log(10.)
+        self.logDetCovMat = np.linalg.slogdet(self.covMat)[1]# / np.log(10.)
         print(self.logDetCovMat)
 
         ''' Assume default of 10% calibration uncertainty unless otherwise specified by the user '''
@@ -488,10 +612,16 @@ class Spectrum(Data):
         #raise NotImplementedError()
     
     def cov(self, theta, **kwargs):
-        ''' 
-        This routine populates a covariance matrix given some methods to call and parameters for them.
-
-        For the moment, however, it does nothing.
+        '''This routine populates a covariance matrix given some methods to call and parameters for them.
+        It populates the covariance matrix assuming the noise consists of two 
+        components: 1) an uncorrelated component; and 2) a single squared-exponential
+        with two parameters.
+        Parameters
+        ----------
+        theta : float, length-2 sequence
+            Theta contains the parameters for the covariance kernel. The first 
+            value is a scale factor, and the second is the scale length (in wavelength)
+            of the covariance kernel (the standard deviation of the gaussian).
         '''
         ''' Gradually build this up - for the moment we will assume a single squared-exponential kernel + an uncorrelated component '''
 
@@ -510,11 +640,19 @@ class Spectrum(Data):
         #covMat = (1-theta[0])*np.diag(np.ones_like(self.uncertainty[self.mask])) + theta[0]*m
         covMat = (1-theta[0])*np.diag(np.ones_like(self.uncertainty)) + theta[0]*m
         self.covMat = covMat * self.varMat
-        covMatmask = np.reshape(self.covMat[self.cov_mask], np.shape(self.covMat))
-        self.logDetCovMat = np.linalg.slogdet(covMatmask)[1]# / np.log(10.)
+        
+        self.logDetCovMat = np.linalg.slogdet(self.covMat[self.cov_mask])[1]# / np.log(10.)
         #return self.covMat
 
     def lnprior(self, theta, **kwargs):
+        """Return the prior of any nuisance parameters. 
+        This implementation has 3 nuisance parameters. These are 1) a scale factor, 
+        which multiplies the observed spectrum to include the uncertainty on 
+        absolute calibration, 2) the strength of the correlated component of the
+        covariances and 3) the scale length (standard deviation) of the Gaussian
+        kernel for the correlated component of the covariances. All three parameters
+        are passed in with a single sequence.
+        """
         try:
             scaleFac = theta[0]
         except IndexError: #Only possible if theta is scalar or can't be indexed
@@ -525,7 +663,19 @@ class Spectrum(Data):
         return -np.inf
 
     def lnlike(self, theta, model, **kwargs):
-        ''' docstring goes here '''
+        '''Compute the likelihood of the photometry given the model. 
+        The likelihood is computed as:
+        .. math:: \frac{1}{2} N \ln\left(2\pi\right) - \frac{1}{2}\ln\left(\mathrm{det}C\right) - \frac{1}{2} \left(\alpha F_\mathrm{obs} - F_\mathrm{mod})^T C^{-1} \left(\alpha F_\mathrm{obs} - F_\mathrm{mod}\right)
+        where N is the number of points in the spectrum, C is the covariance matrix, and F_obs and F_mod are the observed and predicted photmetry, respectively.
+        Parameters
+        ----------
+        theta: empty, included for compatibility reasons
+        model: an instance of Model or a subclass
+        Returns
+        -------
+        probFlux: float
+            The natural logarithm of the likelihood of the data given the model
+        '''
         
         ''' First take the model values (passed in) and compute synthetic Spectrum '''
         
@@ -568,8 +718,20 @@ class Spectrum(Data):
 
     @classmethod
     def fromFile(cls, filename, format, filetype=None, **kwargs):
-        ''' 
-        Routine to generate spectrum data object from a file containing said data
+        '''Create Spectrum object from a file containing data
+        Parameters
+        ----------
+        filename: str
+            The name of the file to load photometry from
+        format: {'SPITZER-YAAAR', 'SWS-AAR', 'IRAS-LRS', 'User-Defined'}
+            The format of the file.
+        filetype: {'fits', 'text'}, required if format=="User-Defined" 
+            The type of file for user-defined data formats, required to ensure
+            that the correct routines are used to open the file.
+        Returns
+        -------
+        Spectrum
+            A new Spectrum instance
         '''
         # this command reads a CASSIS fits file *yaaar*.fits
         #self=cls.__new__(Spectrum)
@@ -594,12 +756,12 @@ class Spectrum(Data):
             table['offset uncertainty (CAL)'].unit='Jy'
             table['sky'].unit='Jy'
             table['sky error'].unit='Jy'
-            mask = np.logical_and.reduce([np.isfinite(c) for c in table.columns.values()]) #require the elements to be non-NaNs
-            table = table[mask]            
+            # note that there is a column called module. this has values 0.0 1.0 2.0 and 3.0 corresponding to SL1, SL2, LL1 and LL2 resp.
+            # we may want consider them independent?
+            #print(np.unique(table['module']))
             chunks = np.zeros_like(table['module'].data)
             sl = np.logical_or(table['module'] == 0.0, table['module'] == 1.0) #SL
             ll = np.logical_or(table['module'] == 2.0, table['module'] == 3.0) #LL
-            #should we divide this in four chunks: module 0 = SL2, module 1 = SL1, module 2 = LL2, module 3 is LL1?
             chunks[sl] = 1.
             chunks[ll] = 2.
             table['chunk'] = chunks

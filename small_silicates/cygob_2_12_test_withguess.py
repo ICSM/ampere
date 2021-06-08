@@ -125,7 +125,7 @@ if __name__=="__main__":
 
     """ Connect the dots: """
     """ Hook it up to an optimiser """
-    opt = EmceeSearch(model = model, data = dataSet, nwalkers = 100) #introspection is used inside the optimiser to determine the number of parameters that each part of the model has
+    opt = EmceeSearch(model = model, data = dataSet, nwalkers = 50) #introspection is used inside the optimiser to determine the number of parameters that each part of the model has
     
     print(opt.npars)
     
@@ -162,7 +162,7 @@ if __name__=="__main__":
           
     pos = [
            [
-               0.0, -1.2, 2.1, -0.1, -0.1, -0.1, -0.1, -0.1, -0.1, 1., 0.5, 1., 1., 0.5, 1., 1., 0.5, 1. # the last six parameters represent the three parameters for the noise model, for the two chunks in the data set.
+               1.0, -1.2, 2.0, 0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 1., 0.5, 1., 1., 0.5, 1., 1., 0.5, 1. # the last six parameters represent the three parameters for the noise model, for the two chunks in the data set.
            ]
            + np.random.randn(int(opt.npars))/100 for j in range(opt.nwalkers)
           ]
@@ -172,11 +172,73 @@ if __name__=="__main__":
     print(np.min(pos, axis=0))
     #pdb.set_trace()
     
-    opt.optimise(nsamples = 1000, burnin=200,guess=pos)
-    lnprob = opt.sampler.lnprobability
+ #**************************************************************************************************8   
     
-    """save optimiser state for later """
-    #opt.save(filename="output_file",pickle=True) #Save as a python object
+    '''Probability space seems to be very complicated, so we're going to try a bit of a trick'''
+    ''' First, we do a very short run with the initial guess that we specified before '''
+    opt.optimise(nsamples = 60, burnin=0, guess=pos)
+    plt.hist(opt.samples[np.isfinite(opt.samples)].flatten(), bins =100)
+    plt.show()
+    
+    repeat = True
+    acrate=2.0
+    lnprob = opt.sampler.lnprobability
+    print(np.max(lnprob), np.min(lnprob))
+    ''' Now we extract the best 200 samples from the chain based on their lnprob, and use those as initial guesses for another short run '''
+    ''' After this, we check the acceptance fraction, and if it's at least 0.2, we go to a production run, if not, we loop back to extracting the best 200 samples and repeat the process '''
+    i=0
+    while repeat:
+        ''' Find 200 best samples from previous run'''
+        i+=1
+        print("starting loop iteration ", i, "with a = ",acrate)
+        print(lnprob.shape)
+        n = opt.nwalkers
+        flat_indices = np.argpartition(lnprob.ravel(), -n-1)[-n:]
+        print(np.max(lnprob), np.min(lnprob))
+        plt.hist(lnprob[np.isfinite(lnprob)].flatten(), bins =100)
+        plt.show()
+        
+        row_indices, col_indices = np.unravel_index(flat_indices, lnprob.shape)
+        ''' put these into new short run as initial guess'''
+        print('k = ',row_indices)
+        print('iterations = ', col_indices)
+        newGuess = opt.sampler.chain[row_indices, col_indices, :].reshape((-1, opt.npars))
+        print(newGuess.shape)
+        #print(newGuess)
+        print(np.min(newGuess,axis=0))
+        print(np.max(newGuess, axis=0))
+        #opt.sampler.reset()
+        if i > 1:
+            opt.rebuildSampler(acceptRate=acrate)
+        print(newGuess)
+        opt.optimise(nsamples = 30, burnin=0,guess=newGuess)
+        lnprob = opt.sampler.lnprobability
+        #b += 50
+        
+        ''' Check acceptance '''
+        acceptanceFraction = opt.sampler.acceptance_fraction
+        acmin = np.min(acceptanceFraction)
+        acmax = np.max(acceptanceFraction)
+        print(acmin, acmax)
+        #acmid = np.median(acceptanceFraction)
+
+        if  acmin > 0.10: # and acmax < 0.40:
+            repeat = False
+        else:
+            acrate *= 1.05
+        #if afrac > 0.2:
+        #    repeat = False
+    print("exiting loop, moving to production run with a = ",acrate)
+    #exit()
+    opt.optimise(nsamples = 500, burnin=100, guess = opt.sampler.chain[:, -1, :]) #burnin should discard all steps taken before exiting the loop
+    
+    a = 1. - np.sum(10**opt.samples[2:8],axis=0)
+    b = np.percentile(a, [16, 50, 84])
+    print(a.shape)
+    print(b[1], b[2]-b[1], b[1]-b[0])
+
+#***********************************************************
+
     
     """ Sort out the results """
     """ First produce some terminal output for the numbers and confidence intervals """

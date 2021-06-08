@@ -61,7 +61,7 @@ class PolynomialSource(AnalyticalModel):
 
     def lnprior(self, theta, **kwargs):
         if self.flatprior:
-            if np.sum(10**theta[3:]) <= 1. and np.all(theta[3:] < 0.) and -2 < theta[0] < 2. and 2 > theta[1] > -2. and -2. < theta[2] < 2.: #basic physical checks first
+            if np.sum(10**theta[3:]) <= 1. and np.all(theta[3:] < 0.) and -100 < theta[0] < 100. and 100 > theta[1] > -100.0 and -100 < theta[2] < 100.0: #basic physical checks first
                 return 0
             else:
                 return -np.inf
