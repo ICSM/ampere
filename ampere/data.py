@@ -50,6 +50,8 @@ class Data(object):
     None, since this is the base class
     """
 
+    self._ismasked = False
+
     def __init__(**kwargs):
         pass
 
@@ -81,17 +83,22 @@ class Data(object):
 
         if interval == "closed": #Both arguments will be treated with less/greater-than-or-equal-to
 
-            self.mask = np.logical_and(self.wavelength >= low, self.wavelength <= up)
+            mask = np.logical_and(self.wavelength >= low, self.wavelength <= up)
 
         elif interval == "left-open": #only the upper limit will be treated with less-than-or-equal-to
-            self.mask = np.logical_and(self.wavelength > low, self.wavelength <= up)
+            mask = np.logical_and(self.wavelength > low, self.wavelength <= up)
         elif interval == "right-open": #only the lower limit will be treated with less-than-or-equal-to
-            self.mask = np.logical_and(self.wavelength >= low, self.wavelength < up)
+            mask = np.logical_and(self.wavelength >= low, self.wavelength < up)
         elif interval == "open": #neither limit will be treated with less-than-or-equal-to
-            self.mask = np.logical_and(self.wavelength > low, self.wavelength < up)
+            mask = np.logical_and(self.wavelength > low, self.wavelength < up)
             
         #Now we add check to make sure that if masks have previously been defined we don't overwrite them, and only accept values 
         #that pass both masks. Otherwise, we define a mask.
+        if self._ismasked:
+            self.mask = np.logical_and(mask, self.mask)
+        else:
+            self.mask = mask
+            self._ismasked = True
 #        try:
 #            self.mask = np.logical_and(mask, self.mask)
 #        except NameError:
@@ -101,6 +108,10 @@ class Data(object):
         #The outer product does what we want, producing a matrix which has elements such that cov_mask[i,j] = mask[i] * mask[j]
         #This produces the right answer because boolean multiplication is treated as an AND operation in python
         self.cov_mask = np.outer(self.mask, self.mask)
+
+        #now we need to update the covariance matrix by extracting the unmasked elements from the original one.
+        #However, it has to be reshaped because numpy always returns 1D arrays when using boolean masks
+        self.covMat = self.covMat_orig[self.cov_mask].reshape((np.sum(mask), np.sum(mask)))
         pass
 
 #    def maskNaNs(self, **kwargs):
@@ -109,7 +120,7 @@ class Data(object):
 #
 #        mask = np.logical_and(np.isfinite(self.value), np.isfinite(self.uncertainty))
         
-        #Now we add check to make sure that if masks have previously been defined we don't overwrite them, and only accept values 
+        #Now we add check to make sure that if masks have previously been defined we don't overwrite th\em, and only accept values 
         #that pass both masks. Otherwise, we define a mask.
 #        try:
 #            self.mask = np.logical_and(mask, self.mask)
@@ -434,12 +445,12 @@ class Photometry(Data):
 
         ''' inititalise covariance matrix as a diagonal matrix '''
         #self.covMat = np.diag(uncertainty**2)#np.diag(np.ones(len(uncertainty)))
-        self.varMat = np.outer(self.uncertainty, self.uncertainty) #self.uncertainty[self.mask] * self.uncertainty[self.mask][:,np.newaxis] #make a square array of sigma_i * sigma_j, i.e. variances
+        self.varMat = np.outer(self.uncertainty[self.mask], self.uncertainty[self.mask]) #self.uncertainty[self.mask] * self.uncertainty[self.mask][:,np.newaxis] #make a square array of sigma_i * sigma_j, i.e. variances
         self.covMat = np.diag(np.ones_like(self.uncertainty))#[self.mask]))
         a = self.covMat > 0
         self.covMat[a] = self.covMat[a] * self.varMat[a]# = np.diag(uncertainty**2)
         covMatmask = np.reshape(self.covMat[self.cov_mask], np.shape(self.covMat))
-        self.logDetCovMat = np.linalg.slogdet(self.covMatmask)# / np.log(10.)
+        self.logDetCovMat = np.linalg.slogdet(self.covMatmask)[1]# / np.log(10.)
 #        self.logDetCovMat = np.linalg.slogdet(self.covMat[self.cov_mask])[1]# / np.log(10.)
         #print(self.logDetCovMat)
         if self.logDetCovMat == -np.inf: #This needs to be updated to raise an error!
