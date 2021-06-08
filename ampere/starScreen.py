@@ -11,6 +11,8 @@ from astropy import constants as const
 from astropy import units as u
 from astropy.modeling import blackbody
 from .models import AnalyticalModel
+import matplotlib.pyplot as plt
+
 
 class PolynomialSource(AnalyticalModel):
     '''Input: fit parameters (multiplicationFactor, powerLawIndex, dustAbundances), 
@@ -34,8 +36,7 @@ class PolynomialSource(AnalyticalModel):
             print(opacityFileList[j])
             tempWl = tempData[:, 0]
             tempOpac = tempData[:, 1]
-            #I think we need to put in the continuum subtraction here as well, in case the data isn't continuum subtracted already. These ones are though, so let's see how it goes.
-            #Hopefully Sundar can help us out with this.
+
             f = interpolate.interp1d(tempWl, tempOpac, assume_sorted = False)
             opacity_array[:,j] = f(wavelengths)#wavelengths)
         self.wavelength = wavelengths
@@ -52,16 +53,33 @@ class PolynomialSource(AnalyticalModel):
                  *args, # = (np.ones(self.nSpecies)/self.nSpecies),
                  **kwargs):
 
-        dustAbundances = np.ravel(10**np.array(args))
+        dustAbundances = np.array(args) # instead of 10**np.array(args)
+        #print('dustAbundances = ',dustAbundances)
+        #print('constants a, b, c = ', secondOrderConstant, firstOrderConstant, constant)
         waves = self.wavelength
-        print(self.opacity_array.shape,dustAbundances.shape)
+        #print('opacity_array[0] = ', self.opacity_array[:,0])
         fModel = (np.matmul(self.opacity_array, dustAbundances))
-        fModel = 10**(secondOrderConstant*np.log10(waves)**2 + firstOrderConstant*np.log10(waves)**1 + constant*np.exp(-fModel)) # This line needs to be updated still. 
+        #plt.plot(self.opacity_array[:,0], label = "0")
+        #plt.plot(self.opacity_array[:,1], label = "1")
+        #plt.plot(self.opacity_array[:,2], label = "2")
+        #plt.plot(self.opacity_array[:,3], label = "3")
+        #plt.plot(self.opacity_array[:,4], label = "4")
+        #plt.plot(self.opacity_array[:,5], label = "5")
+        #plt.plot(fModel, label = "opacities")
+        #plt.legend()
+        #plt.show()
+
+        #print('fModel.shape = ',fModel.shape)
+        fModel = (secondOrderConstant*waves**2 + firstOrderConstant*waves**1 + constant)*np.exp(-fModel) 
+        #plt.plot(fModel, label = "fModel")
+        #plt.legend()
+        #plt.show()
+
         self.modelFlux = fModel
 
     def lnprior(self, theta, **kwargs):
         if self.flatprior:
-            if np.sum(10**theta[3:]) <= 1. and np.all(theta[3:] < 0.) and -2 < theta[0] < 2. and 2 > theta[1] > -2. and -2. < theta[2] < 2.: #basic physical checks first
+            if np.all(theta[3:] > 0.) and -1.0 < theta[0] < 1. and -2.0 < theta[1] < 2.0 and -1.0 < theta[2] < 1.0: #basic physical checks first
                 return 0
             else:
                 return -np.inf
@@ -72,7 +90,8 @@ class PolynomialSource(AnalyticalModel):
         if self.flatprior:
             theta = np.zeros_like(u)
             theta[0] = 20. * u[0] - 10
-            theta[1] = 10. * u[1] - 5
-            theta[2] = 5. * u[2] - 5 
+            theta[1] = 1.5 * u[1]
         pass
+
+
 
