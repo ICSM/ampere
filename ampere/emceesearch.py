@@ -207,7 +207,8 @@ class EmceeSearch(BaseSearch):
                 #d=self.dataSet[1]
                 d.cov([res[8][0],res[9][0]])
                 #ax0.set_title('Covariance matrix')
-                im = ax.imshow(np.log10(d.covMat))
+                covMatnegremoved = np.reshape(d.covMat[d.cov_mask], np.shape(d.covMat))
+                im = ax.imshow(np.log10(covMatnegremoved))
                 fig.savefig("covMat_"+str(i)+".png")
         #cax0 = divider4.append_axes("right", size="20%", pad=0.05)
         #cbar0 = plt.colorbar(im0, cax=cax0)
