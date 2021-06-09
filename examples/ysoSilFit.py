@@ -28,7 +28,7 @@ if __name__=="__main__":
     model = PolynomialSource(modwaves)
     dataSet = [s for s in irs] 
 
-    opt = EmceeSearch(model = model, data = dataSet, nwalkers = 60) #nwalkers needs to be a bit more than twice the number of free parameters in this case as we otherwise run the risk of non-independent walkers later on.  (# of free parameters = 9+ 6 here)
+    opt = EmceeSearch(model = model, data = dataSet, nwalkers = 100) #nwalkers needs to be a bit more than twice the number of free parameters in this case as we otherwise run the risk of non-independent walkers later on.  (# of free parameters = 9+ 6 here)
 
 #    print(opt.npars)
    
@@ -51,7 +51,7 @@ if __name__=="__main__":
            [
                0.0, 0.1, 0.1, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 1., 0.5, 1., 1., 0.5, 1.,  # the last six parameters represent the three parameters for the noise model, for the two chunks in the data set.
            ]
-           + np.random.randn(int(opt.npars))/30 for j in range(opt.nwalkers)
+           + np.random.randn(int(opt.npars))/50 for j in range(opt.nwalkers)
           ]
     print("opt.npars =", opt.npars)
     print("opt.nwalkers = ", opt.nwalkers)
