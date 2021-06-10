@@ -50,7 +50,7 @@ class Data(object):
     None, since this is the base class
     """
 
-    self._ismasked = False
+    _ismasked = False
 
     def __init__(**kwargs):
         pass
@@ -107,11 +107,12 @@ class Data(object):
         #now we need to create a mask for the covariance matrix
         #The outer product does what we want, producing a matrix which has elements such that cov_mask[i,j] = mask[i] * mask[j]
         #This produces the right answer because boolean multiplication is treated as an AND operation in python
-        self.cov_mask = np.outer(self.mask, self.mask)
+        #self.cov_mask = np.outer(self.mask, self.mask)
 
         #now we need to update the covariance matrix by extracting the unmasked elements from the original one.
         #However, it has to be reshaped because numpy always returns 1D arrays when using boolean masks
-        self.covMat = self.covMat_orig[self.cov_mask].reshape((np.sum(mask), np.sum(mask)))
+        #self.covMat = self.covMat_orig[self.cov_mask].reshape((np.sum(mask), np.sum(mask)))
+        self.cov(None)
         pass
 
 #    def maskNaNs(self, **kwargs):
@@ -136,13 +137,15 @@ class Data(object):
         '''A method to overwrite previous masks with True in case something goes wrong
         
         '''
-        try:
+        if self._ismasked:
             mask = np.ones_like(self.mask, dtype=np.bool)
-        except NameError:
+        else:
             mask = np.ones_like(self.value, dtype=np.bool)
             
         self.mask = mask
         self.cov_mask = np.outer(self.mask, self.mask)
+
+        self.cov()
 
     
     
@@ -286,10 +289,10 @@ class Photometry(Data):
         l.append('{} {} {} {}'.format('-'*(nFilt),'-'*(nWave),'-'*(nVal),'-'*(nUnc)))
 
         ''' then a table of values '''
-        for i in range(len(self.filterName)):
+        for i in range(len(self.filterName[self.mask])):
             l.append(
                 '{:<{nFilt}} {:>{nWave}.2e} {:>{nVal}.2e} {:>{nUnc}.2e}'.format(
-                    self.filterName[i],self.wavelength[i],self.value[i],self.uncertainty[i],
+                    self.filterName[self.mask][i],self.wavelength[self.mask][i],self.value[self.mask][i],self.uncertainty[self.mask][i],
                 nFilt = nFilt, nWave = nWave, nVal = nVal, nUnc = nUnc
                 )
             )
@@ -409,19 +412,33 @@ class Photometry(Data):
         ''' then update the covariance matrix for the parameters passed in '''
         #skip this for now
         self.covMat = self.cov()
+        if self.logDetCovMat == -np.inf or self.signDetCovMat < 0:
+            return -np.inf
         
         ''' then compute the likelihood for each photometric point in a vectorised statement '''
-        a = self.value[self.mask] - modSed
+        a = self.value[self.mask] - modSed[self.mask] 
 
         b = -0.5*len(self.value[self.mask]) * np.log(2*np.pi) - (0.5*self.logDetCovMat)
             #np.log(1./((2*np.pi)**(len(self.value)) * np.linalg.det(self.covMat))
             #)
-        covMatmask = np.reshape(self.covMat[self.cov_mask], np.shape(self.covMat))
-        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(inv(covMatmask), a) ) ) )
+        #covMatmask = np.reshape(self.covMat[self.cov_mask], np.shape(self.covMat))
+        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(inv(self.covMat), a) ) ) )
+
+        if np.isnan(probFlux):
+            print("NaN probability")
+            print(theta)
+            print(b)
+            print(inv(self.covMat))
+            print(self.value[self.mask])
+            print(modSed[self.mask])
+            print(a)
+            print(np.matmul(inv(self.covMat), a))
+            print(np.matmul ( a.T, np.matmul(inv(self.covMat), a) ) )
+            return -np.inf #hack for now so we can see how often this occurs and hopefully troubleshoot it!
         return probFlux
         
 
-    def cov(self, **kwargs):
+    def cov(self, *args, **kwargs):
         '''This routine populates a covariance matrix given some methods to call and parameters for them.
 
         At present, photometric points are assumed to be uncorrelated, so this 
@@ -446,15 +463,20 @@ class Photometry(Data):
         ''' inititalise covariance matrix as a diagonal matrix '''
         #self.covMat = np.diag(uncertainty**2)#np.diag(np.ones(len(uncertainty)))
         self.varMat = np.outer(self.uncertainty[self.mask], self.uncertainty[self.mask]) #self.uncertainty[self.mask] * self.uncertainty[self.mask][:,np.newaxis] #make a square array of sigma_i * sigma_j, i.e. variances
-        self.covMat = np.diag(np.ones_like(self.uncertainty))#[self.mask]))
+        self.covMat = np.diag(np.ones_like(self.uncertainty[self.mask]))
         a = self.covMat > 0
         self.covMat[a] = self.covMat[a] * self.varMat[a]# = np.diag(uncertainty**2)
-        covMatmask = np.reshape(self.covMat[self.cov_mask], np.shape(self.covMat))
-        self.logDetCovMat = np.linalg.slogdet(self.covMatmask)[1]# / np.log(10.)
+        #self.covMat = np.reshape(#self.covMat[self.cov_mask], np.shape(self.covMat))
+        self.signDetCovMat, self.logDetCovMat = np.linalg.slogdet(self.covMat)# / np.log(10.)
 #        self.logDetCovMat = np.linalg.slogdet(self.covMat[self.cov_mask])[1]# / np.log(10.)
         #print(self.logDetCovMat)
         if self.logDetCovMat == -np.inf: #This needs to be updated to raise an error!
             print("""The determinant of the covariance matrix for this dataset is 0.
+            Please check that the uncertainties are positive real numbers """)
+            print(self)
+            exit()
+        elif self.signDetCovMat < 0:
+            print("""The determinant of the covariance matrix for this dataset is negative.
             Please check that the uncertainties are positive real numbers """)
             print(self)
             exit()
@@ -656,6 +678,8 @@ class Spectrum(Data):
 
         self.covarianceTruncation = covarianceTruncation #if defined, covariance matrices will be truncated when their values are less than this number, to minimise the number of operation
 
+        self.theta_last = [0.,1.] #Set some default theta values that correspond to uncorrelated noise so that selectWaves() will work without unwanted side effects
+
         self.selectWaves()
 
     def __call__(self, **kwargs):
@@ -696,10 +720,10 @@ class Spectrum(Data):
         l.append('{} {} {}'.format('-'*(nWave),'-'*(nVal),'-'*(nUnc)))
 
         ''' then a table of values '''
-        for i in range(len(self.wavelength)):
+        for i in range(len(self.wavelength[self.mask])):
             l.append(
                 '{:>{nWave}.2e} {:>{nVal}.2e} {:>{nUnc}.2e}'.format(
-                    self.wavelength[i],self.value[i],self.uncertainty[i],
+                    self.wavelength[self.mask][i],self.value[self.mask][i],self.uncertainty[self.mask][i],
                  nWave = nWave, nVal = nVal, nUnc = nUnc
                 )
             )
@@ -732,27 +756,53 @@ class Spectrum(Data):
         ''' Gradually build this up - for the moment we will assume a single squared-exponential kernel + an uncorrelated component '''
 
         ''' create a grid of positions/distances on which to build the matrix '''
+
+        if theta is None:
+            theta = self.theta_last
         #we might be able to offload this step to an instance variable, as it shouldn't change between iterations...
         i, j = np.mgrid[:len(self.wavelength),:len(self.wavelength)]# np.mgrid[:len(self.wavelength[self.mask]),:len(self.wavelength[self.mask])]
-        d = i - j
+
+        i, j = np.meshgrid(self.wavelength[self.mask], self.wavelength[self.mask]) #Now it's wavelengths, not pixels!
+        d = i - j #These lines need to be switched to *wavelength* space, not *pixel* space
+
+
 
         ''' hardcode a squared-exponential kernel for the moment '''
-        m = np.exp(-d**2. / (2.* theta[1]**2.))
+        m = np.exp(-(d**2.) / (2.* theta[1]**2.)) 
+        #m = m / np.max(m) #at this point we have a correlation matrix, which should always have ones on the diagonal unless something strange is going on
         a = m < self.covarianceTruncation
-        m[np.logical_not(a)] = 0. #overwrite small values with 0 to speed up some of the algebra
+        m[a] = 0.#[np.logical_not(a)] = 0. #overwrite small values with 0 to speed up some of the algebra
 
         #self.varMat = #uncertainty[self.mask] * uncertainty[self.mask][:,np.newaxis] #make a square array of sigma_i * sigma_j, i.e. variances
-        self.varMat = np.outer(self.uncertainty, self.uncertainty)
+        self.varMat = np.outer(self.uncertainty[self.mask], self.uncertainty[self.mask])
         #covMat = (1-theta[0])*np.diag(np.ones_like(self.uncertainty[self.mask])) + theta[0]*m
-        covMat = (1-theta[0])*np.diag(np.ones_like(self.uncertainty)) + theta[0]*m
+        covMat = (1-theta[0])*np.diag(np.ones_like(self.uncertainty[self.mask])) + theta[0]*m
         self.covMat = covMat * self.varMat
 
         
-        covMatmask = np.reshape(self.covMat[self.cov_mask], np.shape(self.covMat))
-        
-        self.logDetCovMat = np.linalg.slogdet(covMatmask)[1]# / np.log(10.)
-        #print(self.logDetCovMat)
-        #self.logDetCovMat = np.linalg.slogdet(self.covMat)[1]# / np.log(10.)
+        #covMatmask = np.reshape(self.covMat[self.cov_mask], (self.value[mask].shape[0], self.value[mask].shape[0]))
+
+        self.signDetCovMat, self.logDetCovMat = np.linalg.slogdet(self.covMat)
+        if self.logDetCovMat == -np.inf: #This needs to be updated to raise an error! Or at least force the likelihood to be zero
+            print("""The determinant of the covariance matrix for this dataset is 0.
+            Please check that the uncertainties are positive real numbers """)
+            print(self)
+            print(theta)
+            print(self.signDetCovMat,self.logDetCovMat)
+            print(self.covMat)
+            exit()
+        #elif self.signDetCovMat < 0:
+        #    print("""The determinant of the covariance matrix for this dataset is negative.
+        #    Please check that the uncertainties are positive real numbers """)
+        #    print(self)
+        #    print(theta)
+        #    print(self.signDetCovMat,self.logDetCovMat)
+        #    print(self.covMat)
+        #    print(d)
+        #    print(m)
+        #    print(covMat)
+        #    exit()
+        self.theta_last = theta
         #return self.covMat
 
     def lnprior(self, theta, **kwargs):
@@ -769,7 +819,7 @@ class Spectrum(Data):
             scaleFac = theta[0]
         except IndexError: #Only possible if theta is scalar or can't be indexed
             scaleFac = theta
-        if scaleFac > 0 and 0. < theta[1] < 1. and theta[2] > 0.:
+        if scaleFac > 0 and 0. <= theta[1] <= 1. and theta[2] > 0.:
             #print(scalefac)
             return norm.logpdf(np.log10(scaleFac), loc=0., scale = self.calUnc) + halfnorm.logpdf(theta[2], 0., 1.)
         return -np.inf
@@ -803,11 +853,15 @@ class Spectrum(Data):
         #wavelength = self.wavelength
         #modSpec = model.modelFlux #
         #print(model.wavelength)
-        modSpec = spectres(self.wavelength[self.mask], model.wavelength, model.modelFlux) #For some reason spectres isn't cooperating :/ actually, looks like it was just a stupid mistake
+        modSpec = spectres(self.wavelength, model.wavelength, model.modelFlux)[self.mask] #For some reason spectres isn't cooperating :/ actually, looks like it was just a stupid mistake
         ''' then update the covariance matrix for the parameters passed in '''
         #skip this for now
         #self.covMat =
         self.cov(theta[1:])
+        #if self.logDetCovMat == -np.inf:
+        #    return -np.inf
+        if self.signDetCovMat < 0: #Hyperparameters for covariance matrix result in a negative determinant
+            return -np.inf         #Therefore this isn't a valid covariance matrix and we can't use this parameter combination
         #import matplotlib.pyplot as plt
         #plt.imshow(self.covMat)
         #plt.show()
@@ -824,8 +878,20 @@ class Spectrum(Data):
 
         b = -0.5*len(self.value[self.mask]) * np.log(2*np.pi) - (0.5*self.logDetCovMat) #less computationally intensive version of above
         #pass
-        covMatmask = np.reshape(self.covMat[self.cov_mask], np.shape(self.covMat))
-        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(inv(covMatmask), a) ) ) )
+        #covMatmask = np.reshape(self.covMat[self.cov_mask], np.shape(self.covMat))
+        probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(inv(self.covMat), a) ) ) )
+        if np.isnan(probFlux):
+            print("NaN probability")
+            print(theta)
+            print(b)
+            print(inv(self.covMat))
+            print(self.value[self.mask])
+            print(modSpec)
+            print(model.modelFlux)
+            print(a)
+            print(np.matmul(inv(self.covMat), a))
+            print(np.matmul ( a.T, np.matmul(inv(self.covMat), a) ) )
+            return -np.inf #hack for now so we can see how often this occurs and hopefully troubleshoot it!
         #print(((np.float128(2.)*np.pi)**(len(self.value))), np.linalg.det(self.covMat))
         #print(((np.float128(2.)*np.pi)**(len(self.value)) * np.linalg.det(self.covMat)))
         #print(b, probFlux)

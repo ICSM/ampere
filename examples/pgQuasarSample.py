@@ -3,6 +3,7 @@ import ampere
 from ampere.data import Spectrum, Photometry
 from ampere.emceesearch import EmceeSearch
 from ampere.PowerLawAGN import PowerLawAGN
+from ampere.PowerLawAGN import PowerLawAGNRelativeAbundances
 import corner
 import matplotlib as mpl
 #mpl.use("Agg")
@@ -33,7 +34,8 @@ if __name__=="__main__":
     print("hello")
     modwaves = 10**np.linspace(0.,1.9, 2000)
 
-    model = PowerLawAGN(modwaves, redshift=0.058)
+    #model = PowerLawAGN(modwaves, redshift=0.058)
+    model = PowerLawAGNRelativeAbundances(modwaves, redshift=0.058)
     phot.reloadFilters(modwaves)
     dataSet = [phot]          #use this line when using photometry
     #dataSet = [s for s in irs] #comment out when using photometry
@@ -54,9 +56,9 @@ if __name__=="__main__":
     ax.set_ylim(0., 1.5*np.max([np.max(i.value) for i in dataSet]))
     fig.savefig("sed_test.png")
 
-    model(-2.,0.3,-0.5,
-                    -0.5,-0.5,-0.5,
-                    -0.5,-0.5)
+    model(-2.,0.3,-1.5,
+                    -1.5,-1.5,-1.5,
+                    -1.5)#,-0.5)
     modspec = model.modelFlux
     print(modspec)
     ax.plot(modwaves,modspec)
@@ -65,7 +67,8 @@ if __name__=="__main__":
     
     pos = [
            [
-               -2., 0.3, -0.78, -0.78, -0.78, -0.78, -0.78, -0.78, 1., 0.5, 1., 1., 0.5, 1. #spectroscopy included
+               -2., 0.3, -0.78, -0.78, -0.78, -0.78, -0.78,# -0.78, #Relative abundances again
+               1., 0.5, 1., 1., 0.5, 1. #spectroscopy included
                #-2., 0.3, -0.78, -0.78, -0.78, -0.78, -0.78, -0.78 # only photometry
                #20 + np.random.randn() for i in range(np.int(opt.npars))
            ]
@@ -142,7 +145,7 @@ if __name__=="__main__":
     for i in range(0,opt.samples.shape[0],1000):
         #print(opt.samples[i,:])
         #if opt.samples[i,0] > 0.:
-        opt.model(opt.samples[i,0],opt.samples[i,1],*opt.samples[i,2:8])
+        opt.model(opt.samples[i,0],opt.samples[i,1],*opt.samples[i,2:7])
         ax.plot(modwaves,opt.model.modelFlux, '-', color='black', alpha=0.05) #irs.wavelength
         #else:
         #    nneg += 1
