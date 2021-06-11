@@ -12,7 +12,7 @@ from astropy.io.votable import parse_single_table
 import astropy.units as u
 from astropy.io import ascii
 from spectres import spectres
-from scipy.stats import norm, halfnorm
+from scipy.stats import rv_continuous, norm, halfnorm
 #from scipy.linalg import inv
 from numpy.linalg import inv
 
@@ -370,6 +370,13 @@ class Photometry(Data):
         self.wavelength = np.array([filt.lpivot.magnitude for filt in filters])
         self.filters=filters
 
+    def prior_transform(self, u, **kwargs):
+        """Transform from uniform RVs to the prior of any nuisance parameters. 
+
+        Since this implementation has no nuisance parameters, it does nothing."""
+        return None
+        
+            
     def lnprior(self, theta, **kwargs):
         """Return the prior of any nuisance parameters. 
 
@@ -606,7 +613,10 @@ class Spectrum(Data):
 
     """
 
-    def __init__(self, wavelength, value, uncertainty, bandUnits, fluxUnits, freqSpec = False, calUnc = None, covarianceTruncation = 1e-3, **kwargs):
+    def __init__(self, wavelength, value, uncertainty, bandUnits, fluxUnits,
+                 freqSpec = False, calUnc = None, covarianceTruncation = 1e-3,
+                 scaleLengthPrior = None, scaleFacPrior = None,
+                 **kwargs):
         #self.filterName = filterName #Telescope/Instrument cf photometry
         self.type = 'Spectrum'
 
@@ -675,6 +685,36 @@ class Spectrum(Data):
             self.calUnc = calUnc
 
         self.npars = 3 #this will have to change in future to 1 + number of parameters required by GPs for covMat
+
+
+
+        #Set up the objects for some of the priors:
+        if isinstance(scaleFacPrior, rv_continuous):
+            #The user has provided a prior, use it!
+            self.scaleFacPrior = scaleFacPrior
+        elif isinstance(scaleFacPrior, float) and calUnc is None:
+            #The user has provided the calibration uncertainty here rather than in calUnc
+            self.scaleFacPrior = norm(loc=0., scale = scaleFacPrior)
+        elif isinstance(scaleFacPrior, float):
+            #The user has provided a float here as well as a number of calUnc, we'll assume this is the logarithm of the bias on the scale factor
+            self.scaleFacPrior = norm(loc=scaleFacPrior, scale = self.calUnc)
+        elif isinstance(scaleFacPrior, (list, tuple, np.ndarray)) and len(scaleFacPrior) == 2: #Consider changing the first condition to isinstance(scaleFacPrior, (collections.Sequence, np.ndarray)) ?
+            #Two numbers, they should be the loc and scale parameters
+            self.scaleFacPrior = norm(loc=scaleFacPrior[0], scale = scaleFacPrior[1])
+        else:
+            self.scaleFacPrior = norm(loc=0., scale = self.calUnc)
+
+        #Now the scale length of the noise model
+        if isinstance(scaleLengthPrior, rv_continuous):
+            #The user has provided a prior, use it!
+            self.scaleLengthPrior = scaleLengthPrior
+        elif isinstance(scaleLengthPrior, float):
+            #The user has provided the width of the prior
+            self.scaleLengthPrior = halfnorm(loc=0., scale = scaleLengthPrior)
+        else:
+            self.scaleLengthPrior = halfnorm(loc=0., scale = 1)
+        
+        #self.scaleLengthPrior = halfnorm(loc = 0, scale= 1.) #.logpdf(theta[2], 0., 1.)
 
         self.covarianceTruncation = covarianceTruncation #if defined, covariance matrices will be truncated when their values are less than this number, to minimise the number of operation
 
@@ -804,7 +844,24 @@ class Spectrum(Data):
         #    exit()
         self.theta_last = theta
         #return self.covMat
+        
+    def prior_transform(self, u, **kwargs):
+        """Transform from uniform RVs to the prior of any nuisance parameters. 
 
+        This implementation has 3 nuisance parameters. These are 1) a scale factor, 
+        which multiplies the observed spectrum to include the uncertainty on 
+        absolute calibration, 2) the strength of the correlated component of the
+        covariances and 3) the scale length (standard deviation) of the Gaussian
+        kernel for the correlated component of the covariances. All three parameters
+        are passed in with a single sequence.
+        """
+
+        theta = np.zeros_like(u)
+        theta[0] = self.scaleFacPrior.ppf(u[0])
+        theta[1] = u[1]
+        theta[2] = self.scaleLengthPrior.ppf(u[2])
+        return theta
+    
     def lnprior(self, theta, **kwargs):
         """Return the prior of any nuisance parameters. 
 
@@ -821,7 +878,7 @@ class Spectrum(Data):
             scaleFac = theta
         if scaleFac > 0 and 0. <= theta[1] <= 1. and theta[2] > 0.:
             #print(scalefac)
-            return norm.logpdf(np.log10(scaleFac), loc=0., scale = self.calUnc) + halfnorm.logpdf(theta[2], 0., 1.)
+            return self.scaleFacPrior.logpdf(np.log10(scaleFac)) + self.scaleLengthPrior.logpdf(theta[2])#norm.logpdf(np.log10(scaleFac), loc=0., scale = self.calUnc) + halfnorm.logpdf(theta[2], 0., 1.)
         return -np.inf
 
     def lnlike(self, theta, model, **kwargs):

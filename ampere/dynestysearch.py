@@ -15,9 +15,9 @@ class DynestySearch(BaseSearch):
     A class to use Dynesty to explore parameters space with nested sampling
     """
 
-    def __init__(self,
+    def __init__(self, #Many of the NestedSampler options are exposed here
                  prior_transform = None,
-                 nlive = 250,
+                 nlive = 1500,
                  bound = 'multi',
                  sample = 'auto',
                  dataset = None,
@@ -28,16 +28,19 @@ class DynestySearch(BaseSearch):
                  vol_check=2.0, walks=25, facc=0.5, slices=5, **kwargs
                  ):
         self.model=model
-        self.dataSet = data
-        if lnprior is not None:
-            self.lnprior = lnprior
+        self.dataSet = dataset
+        if prior_transform is not None: #This should probably be removed! We don't want the user change the ptform at this point, but by changing it for the Model or Data individually
+            self.prior_transform = prior_transform
         ''' now do some introspection on the various bits of model to 
         understand how many parameters there are for each compponent '''
-        try:
-            self.nparsMod = self.model.npars
-        except:
-            sig = signature(model.__call__)
-            self.nparsMod = len(sig.parameters) - 1 #Always subtract **kwargs from the parameters, but don't need to worry about self once it is bound to an instance
+        try: #First we try to see if the number of parameters is documented specifically for methods which use a prior transform
+            self.nparsMod = self.model.npars_ptform
+        except AttributeError:
+            try: #If not, we assume that the number of parameters
+                self.nparsMod = self.model.npars
+            except AttributeError:
+                sig = signature(model.__call__)
+                self.nparsMod = len(sig.parameters) - 1 #Always subtract **kwargs from the parameters, but don't need to worry about self once it is bound to an instance
         #print(self.nparsMod, len(sig.parameters), sig.parameters)
         #self.nparsData = #np.zeros(len(self.dataSet))
         #self.npars = something # total number of parameters
@@ -72,17 +75,18 @@ class DynestySearch(BaseSearch):
         i = self.nparsMod
         for data in self.dataSet:
             theta[i:i+data.npars] = data.prior_transform(u[i:i+data.npars])
+            i+=data.npars
         return theta
 
-    def optimise(self, maxiter=None, maxcall=None,
-                 dlogz=None, logl_max=inf, add_live=True,
+    def optimise(self, dlogz=None, maxiter=None, maxcall=None,
+                 logl_max=inf, add_live=True,
                  print_progress=True, print_func=None,
                  save_bounds=True **kwargs
                  ):
-        self.sampler.run_nested(maxiter=None, maxcall=None,
-                 dlogz=None, logl_max=inf, add_live=True,
-                 print_progress=True, print_func=None,
-                 save_bounds=True **kwargs)
+        self.sampler.run_nested(maxiter=maxiter, maxcall=maxcall,
+                 dlogz=dlogz, logl_max=logl_max, add_live=add_live,
+                 print_progress=print_progress, print_func=print_func,
+                 save_bounds=save_bounds **kwargs)
         self.results = self.sampler.results
 
     def postProcess(self, maxiter=None, maxcall = None, dlogz = None, **kwargs):
@@ -113,7 +117,7 @@ class DynestySearch(BaseSearch):
         
         pass
 
-class DynestyDynamicSearch(DynestySearch):
+class DynestyDynamicSearch(DynestySearch): #I think this can inheret almost everything except __init__ from the Static sampler
     """
     A class to use Dynesty to explore parameters space with dynamic nested sampling
     """
