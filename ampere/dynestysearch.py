@@ -20,7 +20,7 @@ class DynestySearch(BaseSearch):
                  nlive = 1500,
                  bound = 'multi',
                  sample = 'auto',
-                 dataset = None,
+                 data = None,
                  model = None,
                  update_interval=None, first_update=None,
                  queue_size=None, pool=None, use_pool=None,
@@ -28,7 +28,7 @@ class DynestySearch(BaseSearch):
                  vol_check=2.0, walks=25, facc=0.5, slices=5, **kwargs
                  ):
         self.model=model
-        self.dataSet = dataset
+        self.dataSet = data
         if prior_transform is not None: #This should probably be removed! We don't want the user change the ptform at this point, but by changing it for the Model or Data individually
             self.prior_transform = prior_transform
         ''' now do some introspection on the various bits of model to 
@@ -50,7 +50,7 @@ class DynestySearch(BaseSearch):
         print(self.npars, self.nparsMod, self.nparsData)
         self.sampler = NestedSampler(self.lnlike, self.prior_transform, self.npars,
                                      nlive=nlive, bound=bound, sample=sample,
-                                     update_interval = update_intervale,
+                                     update_interval = update_interval,
                                      first_update = first_update, queue_size = queue_size,
                                      pool = pool, use_pool = use_pool, enlarge = enlarge,
                                      bootstrap = bootstrap, vol_dec = vol_dec,
@@ -79,14 +79,15 @@ class DynestySearch(BaseSearch):
         return theta
 
     def optimise(self, dlogz=None, maxiter=None, maxcall=None,
-                 logl_max=inf, add_live=True,
+                 logl_max=np.inf, add_live=True,
                  print_progress=True, print_func=None,
-                 save_bounds=True **kwargs
+                 save_bounds=True, **kwargs
                  ):
         self.sampler.run_nested(maxiter=maxiter, maxcall=maxcall,
-                 dlogz=dlogz, logl_max=logl_max, add_live=add_live,
-                 print_progress=print_progress, print_func=print_func,
-                 save_bounds=save_bounds **kwargs)
+                                dlogz=dlogz, logl_max=logl_max,
+                                add_live=add_live,print_progress=print_progress,
+                                print_func=print_func,
+                                save_bounds=save_bounds, **kwargs)
         self.results = self.sampler.results
 
     def postProcess(self, maxiter=None, maxcall = None, dlogz = None, **kwargs):
