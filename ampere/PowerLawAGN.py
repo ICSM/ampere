@@ -279,7 +279,7 @@ class PowerLawAGNRelativeAbundances(AnalyticalModel):
             #if 1.5 > theta[0] > 0. and np.all(theta[1:]) > -20. and np.all(theta[1:]) < 20.: #basic physical checks first
                 try:
                     return dirichlet((1.,)*self.nSpecies).logpdf(10**theta[2:]) #When you have a set of random variates whose sum = 1 by definition, the correct prior is a dirichlet distribution (which is a generalisation of the beta distribution).
-                    #The above line returns the log of the probability of getting those n-1 numbers from an n-dimensional dirichlet distribution
+                    #The above line returns the log of the probability of getting those n-1 numbers from an n-dimensional dirichlet distribution, so that we can correctly get the last value by taking the sum of the n-1 variates and subtract it from 1.
                 except ValueError: #something went wrong with the checks above and the abundances are not within the simplex
                     #print("ValueError!")
                     return -np.inf

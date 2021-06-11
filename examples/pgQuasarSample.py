@@ -41,8 +41,10 @@ if __name__=="__main__":
     #dataSet = [s for s in irs] #comment out when using photometry
     for s in irs:             #include the next two lines when appending spectroscopy to photometry
         dataSet.append(s)
-#    for s in dataSet:
-#        print(s)
+    for s in dataSet:
+        print(s)
+
+    #exit()
 
     opt = EmceeSearch(model = model, data = dataSet, nwalkers = 200)
 
