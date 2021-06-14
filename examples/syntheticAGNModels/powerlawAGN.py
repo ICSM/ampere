@@ -2,7 +2,7 @@ import numpy as np
 import ampere
 from ampere.data import Spectrum, Photometry
 from ampere.emceesearch import EmceeSearch
-from ampere.PowerLawAGN import SingleModifiedBlackBody, PowerLawAGN
+from ampere.PowerLawAGN import SingleModifiedBlackBody, PowerLawAGN, PowerLawAGNRelativeAbundances
 import corner
 import matplotlib as mpl
 #mpl.use("Agg")
@@ -25,10 +25,13 @@ if __name__=="__main__":
     multiplicationFactor=-2.#0.0
     powerLawIndex=0.5 #1.0
     relativeAbundances=[-1.30,-9.99,-0.29,-0.39,-9.99]#[-10.,-10.,-0.5,-0.16509,-10.]
+    #abundances=[-1.30,-9.99,-0.29,-0.39,-9.99,-9.99]#[-10.,-10.,-0.5,-0.16509,-10.]
 
-    model = PowerLawAGN(wavelengths,redshift=0.5)
+    #model = PowerLawAGN(wavelengths,redshift=0.5)
+    model = PowerLawAGNRelativeAbundances(wavelengths,redshift=0.5)
     #exit()
     model(multiplicationFactor, powerLawIndex, *relativeAbundances)
+    #model(powerLawIndex, *abundances)
     model_flux = model.modelFlux
 
     """ get synthetic photometry and spectra """
@@ -78,7 +81,11 @@ if __name__=="__main__":
     
     optimizer = EmceeSearch(model=model, data=[photometry,spec0,spec1], nwalkers=100)
 
-    optimizer.optimise(nsamples=3000, burnin=2900, guess=[[-2.5, .5, -1., -10, -0.5, -0.3, -10., 1.0, 1.0, 1.0, 1.0 ,1.0, 1.0] + np.random.rand(13)*[1,1,1,1,0.2,0.2, 1,1,1,1,1,1,1] for i in range(optimizer.nwalkers)])
+    optimizer.optimise(nsamples=3000, burnin=2900, guess=[
+        #[0.5, -1, -10, -0.5, -0.3, -10.,-10. , 1.0, 1.0, 0.1, 1.0 ,1.0, 0.1]
+        [-2.5, .5, -1.5, -10, -0.5, -0.5, -10., 1.0, 1.0, 0.1, 1.0 ,1.0, 0.1]
+        + np.random.rand(13)*[1,1,0.1,0.1,0.2,0.2,0.5,1,1,1,1,1,1]
+        for i in range(optimizer.nwalkers)])
 
     optimizer.postProcess()
 

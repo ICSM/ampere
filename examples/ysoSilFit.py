@@ -138,11 +138,13 @@ if __name__=="__main__":
     print(np.max(opt.samples, axis=0))
     print(np.min(opt.samples, axis=0))
     nneg=0
+
+    #exit()
     opt.postProcess()
     for i in range(0,opt.samples.shape[0],1000):
         #print(opt.samples[i,:])
         #if opt.samples[i,0] > 0.:
-        opt.model(opt.samples[i,0],opt.samples[i,1],*opt.samples[i,2:8])
+        opt.model(opt.samples[i,0],opt.samples[i,1],opt.samples[i,2],*opt.samples[i,3:9])
         ax.plot(modwaves,opt.model.modelFlux, '-', color='black', alpha=0.05) #irs.wavelength
         #else:
         #    nneg += 1
@@ -151,7 +153,7 @@ if __name__=="__main__":
     print(nneg)
     for i in irs:
         ax.plot(i.wavelength, i.value, '-',color='blue')
-    ax.plot(phot.wavelength, phot.value, 'o',color='blue')
+    #ax.plot(phot.wavelength, phot.value, 'o',color='blue')
     ax.set_ylim(0., 1.5*np.max([np.max(i.value) for i in dataSet]))
     fig.savefig("seds.png")
     #fig2 = corner.corner(opt.samples)#,labels=opt.labels)
