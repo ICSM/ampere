@@ -46,72 +46,14 @@ if __name__=="__main__":
     
     irs2 = Spectrum.fromFile(filename2,format='SPITZER-YAAAR')
     
-    photFile = ampere.__file__.strip('__init__.py')+'Testdata/vizier_votable_cygob212_time.vot'
-    
-    """ Define the model """
-    #modwaves = 10**np.linspace(0.,2., 2000)  # so there's something wrong with modwaves which is not allowed to start at 0. 
     modwaves = 10**np.linspace(0.7,1.6, 1000) #setting up a wavelength grid from 5.25 to 37.4 um. 
 
-    #print(modwaves)
-    #print(10**modwaves)
-    #exit()
-
+    model = PolynomialSource(modwaves)
+    dataSet = [s for s in irs] 
     
-    ''' Now we get the photometry too *** look for the SED information of Schulte 12 ''' 
-    #filters=[
-             ##'SPITZER_IRAC_36',
-             #'WISE_RSR_W1',
-             #'WISE_RSR_W2',
-             #'WISE_RSR_W3',
-             #'WISE_RSR_W4',
-             #'HERSCHEL_PACS_BLUE'
-             #]
-    #libDir = os.getcwd() + '/ampere/'
-#    libname = libDir + 'ampere_allfilters.hd5'
-    libname = '/home/zeegers/ampere/ampere/ampere_allfilters.hd5'
-
-    table = parse_single_table(photFile)
-    
-    table = table.to_table()    
-    #data = table.array
-    
-    # https://numpy.org/doc/stable/reference/generated/numpy.allclose.html
-    # Sascha: read in real photometry data ....
-    desired_filters=[b'2MASS:J', b'2MASS:H', b'2MASS:Ks', b'Spitzer/MIPS:24'] #these are the filters we're after
-    mask = np.isin(table['sed_filter'], desired_filters) #np.isin() is true for each element of table['filter'] that matches one of the elements of desired_filters
-    phot_new = table[mask] #now we make a new table which is just the rows that have the filters we want
-    desired_filters_again=[b'II/328/allwise']
-    mask_again = np.isin(phot_new['_tabname'], desired_filters_again)
-    #phot_table = table([phot])
-    phot_again = phot_new[mask_again]
-    
-    #table.write('new_table.vot', format='votable')
-    phot_again.write('new_table.vot', format='votable', overwrite=True)
-    
-    
-    
-    
-    phot = Photometry.fromFile('new_table.vot', libName = libname) # gaat hier nog steeds iets niet goed
-    phot.selectWaves(low = 35., interval = "right-open") #using only MIPS-70 and PACS, following Srinivasan et al. 2017
-
-    print('did we get here?')
-
-    phot.reloadFilters(modwaves)
-    dataSet = [phot]          #use this line when using photometry
-    print(phot)
-
-    for s in irs:             #include the next two lines when appending spectroscopy to photometry
-        dataSet.append(s)
-
     for s in irs2:             #include the next two lines when appending spectroscopy to photometry
         dataSet.append(s)
-
-    ''' now turn the numbers into a Photometry object '''
-#    phot = Photometry(np.array(filters), np.array(sed), np.array(0.1*sed), np.array(['Jy', 'Jy','Jy','Jy','Jy']), bandUnits='um',libName = libname)
-
-
-
-    #model = PowerLawAGN(irs.wavelengths) #We should probably define a wavelength grid separate from the data wavelengths for a number of reasons, primarily because the photometry needs an oversampled spectrum to compute synthetic photometry
+    
 
     model = PolynomialSource(modwaves)
                                     
@@ -135,7 +77,6 @@ if __name__=="__main__":
         ax.loglog(i.wavelength, i.value, '-',color='blue')
     for j in irs2:
         ax.loglog(j.wavelength, j.value, '-',color='blue')        
-    ax.loglog(phot.wavelength, phot.value, 'o',color='blue')
     #ax.set_ylim(0., 1.5*np.max([np.max(i.value) for i in dataSet]))
     #fig.savefig("sed_test.png")
 
@@ -263,7 +204,6 @@ if __name__=="__main__":
     print(nneg)
     for i in irs:
         ax.plot(i.wavelength, i.value, '.',color='b')
-        ax.plot(phot.wavelength, phot.value, 'o',color='b') 
     for i in irs2:
         ax.plot(i.wavelength, i.value, '.',color='b')
     fig2 = corner.corner(opt.samples)#,labels=opt.labels)
