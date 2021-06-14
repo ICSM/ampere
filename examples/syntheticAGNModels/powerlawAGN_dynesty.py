@@ -72,8 +72,8 @@ if __name__=="__main__":
     unc1 = 0.01*spec1
     spec0 = spec0 + np.random.randn(len(spec0))*unc0
     spec1 = spec1 + np.random.randn(len(spec1))*unc1
-    spec0 = Spectrum(irsEx[0].wavelength, spec0, unc0,"um", "Jy",calUnc=0.0025)
-    spec1 = Spectrum(irsEx[1].wavelength, spec1, unc1,"um", "Jy",calUnc=0.0025)
+    spec0 = Spectrum(irsEx[0].wavelength, spec0, unc0,"um", "Jy",calUnc=0.0025, scaleLengthPrior = 0.01)
+    spec1 = Spectrum(irsEx[1].wavelength, spec1, unc1,"um", "Jy",calUnc=0.0025, scaleLengthPrior = 0.01)
 
     """ now set up ampere to try and fit the same stuff """
     photometry = Photometry(filterName=filterName, value=modSed, uncertainty=photunc, photUnits='Jy', libName=libname)
@@ -83,7 +83,7 @@ if __name__=="__main__":
     #optimizer = EmceeSearch(model=model, data=[photometry,spec0,spec1], nwalkers=100)
     optimizer = DynestySearch(model=model, data=[photometry,spec0,spec1], nlive=500)
 
-    optimizer.optimise(dlogz = 100.) #nsamples=3000, burnin=2900, guess=[
+    optimizer.optimise(dlogz = 50.) #nsamples=3000, burnin=2900, guess=[
         ##[0.5, -1, -10, -0.5, -0.3, -10.,-10. , 1.0, 1.0, 0.1, 1.0 ,1.0, 0.1]
         #[-2.5, .5, -1.5, -10, -0.5, -0.5, -10., 1.0, 1.0, 0.1, 1.0 ,1.0, 0.1]
         #+ np.random.rand(13)*[1,1,0.1,0.1,0.2,0.2,0.5,1,1,1,1,1,1]

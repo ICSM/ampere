@@ -90,31 +90,73 @@ class DynestySearch(BaseSearch):
                                 save_bounds=save_bounds, **kwargs)
         self.results = self.sampler.results
 
-    def postProcess(self, maxiter=None, maxcall = None, dlogz = None, **kwargs):
-        """ Some simple post-processing and plotting """
-
-        """ first, a summary plot """
+    def plot_summary(self, plotfile="summary.png"):
         fig, axes = dyplot.runplot(self.results) #Summary plot
-        fig.savefig("summary.png")
+        fig.savefig(plotfile)
 
-
+    def plot_corner(self, plotfile="corner.png"):
         """ next, a corner plot """
         fg, ax = dyplot.cornerplot(self.results, color='red', #truths=np.zeros(ndim), truth_color='black',
                                    show_titles=True,
                                    quantiles=None, max_n_ticks=5)
-        fg.savefig("corner.png")
+        fg.savefig(plotfile)
 
-        """ Finally, the trace plot """
+    def plot_trace(self, plotfile="trace.png"):
         fig, axes = dyplot.traceplot(self.results, #truths=np.zeros(ndim),
                                      show_titles=True,
                                      trace_cmap='viridis', connect=True,
                                      connect_highlight=range(5))
-        fig.savefig("trace.png")
+        fig.savefig(plotfile)
+
+
+    def plot_posteriorpredictive(self, plotfile="posteriorpredictive.png"):
+        ''' Generate the posterior-predictive plots so that the suitability of the model for the data can be inspected. 
+        '''
+
+        #This will probably require some small modifications to Data objects to make this as easy as possible.
+        #It should include plotting multiple realisations of the data given the noise model (if appropriate)
+        #as well as realisations from the model and the raw data
+        #Must be plotted in reverse order: Model realisations first (i.e. lowest zorder), then data realisations, then data (use zorder keyword to get things in the right place, lowest first as highest end up on top)
+        pass
+
+    def postProcess(self, maxiter=None, maxcall = None, dlogz = None, **kwargs):
+        """ Some simple post-processing and plotting """
+
+        """ first, a summary plot """
+        try:
+            self.plot_summary()
+            #fig, axes = dyplot.runplot(self.results) #Summary plot
+            #fig.savefig("summary.png")
+        except ValueError as e:
+            print("summary failed with error",e)
+            print("skipping summary plot and moving on to corner plot")
+
+
+        """ next, a corner plot """
+        self.plot_corner()
+        #fg, ax = dyplot.cornerplot(self.results, color='red', #truths=np.zeros(ndim), truth_color='black',
+        #                           show_titles=True,
+        #                           quantiles=None, max_n_ticks=5)
+        #fg.savefig("corner.png")
+
+        """ Finally, the trace plot """
+        self.plot_trace()
+        #fig, axes = dyplot.traceplot(self.results, #truths=np.zeros(ndim),
+        #                             show_titles=True,
+        #                             trace_cmap='viridis', connect=True,
+        #                             connect_highlight=range(5))
+        #fig.savefig("trace.png")
         """ with the plotting completed, we now compute estimates of the posterior """
+        #This should also be extracted to a standalone method which we can call from here
         samples, weights = self.results.samples, np.exp(self.results.logwt - self.results.logz[-1])
         self.mean, self.cov = dyfunc.mean_and_cov(samples, weights)
-        print(self.mean)
-        print(self.cov)
+        print("Posterior means of the parameters: ",self.mean)
+        print("1-sigma confidence intervals of the parameters marginalising over all other parameters:")
+        print(np.sqrt(np.diag(self.cov)))
+        print("Posterior covariances of the parameters: ", self.cov)
+
+
+        self.plot_posteriorpredictive()
         
         pass
 

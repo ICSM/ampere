@@ -710,7 +710,7 @@ class Spectrum(Data):
             self.scaleLengthPrior = scaleLengthPrior
         elif isinstance(scaleLengthPrior, float):
             #The user has provided the width of the prior
-            self.scaleLengthPrior = halfnorm(loc=0., scale = scaleLengthPrior)
+            self.scaleLengthPrior = halfnorm(loc=0., scale = scaleLengthPrior) #Using the half normal results in infinite bounds on the length scale, and hence there is always room to improve the likelihood by increasing the length scale. It may be necessary to alter this to a truncated normal distribution.
         else:
             self.scaleLengthPrior = halfnorm(loc=0., scale = 1)
         
@@ -857,7 +857,7 @@ class Spectrum(Data):
         """
 
         theta = np.zeros_like(u)
-        theta[0] = self.scaleFacPrior.ppf(u[0])
+        theta[0] = 10**self.scaleFacPrior.ppf(u[0])
         theta[1] = u[1]
         theta[2] = self.scaleLengthPrior.ppf(u[2])
         return theta
@@ -1112,7 +1112,7 @@ class Spectrum(Data):
                     table.add_column('uncertainty')
                     table['uncertainty'].data[:] = 0.0
         ## pass control to fromTable to define the variables
-        specList = cls.fromTable(table)
+        specList = cls.fromTable(table, **kwargs)
         return specList#elf
 
     @classmethod
@@ -1136,7 +1136,7 @@ class Spectrum(Data):
         for chunk in np.unique(table['chunk'].data):
             selection = table['chunk'] == chunk
             self=cls.__new__(Spectrum)
-            self.__init__(table['wavelength'][selection].data, value[selection], uncertainty[selection], bandUnits, photUnits) #Also pass in flux units
+            self.__init__(table['wavelength'][selection].data, value[selection], uncertainty[selection], bandUnits, photUnits, **kwargs) #Also pass in flux units
             specList.append(self)
         return specList #self
 
