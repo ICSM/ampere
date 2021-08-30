@@ -207,7 +207,10 @@ class EmceeSearch(BaseSearch):
                 #d=self.dataSet[1]
                 d.cov([res[8][0],res[9][0]])
                 #ax0.set_title('Covariance matrix')
-                im = ax.imshow(np.log10(d.covMat))
+                print('Size of d.covMat', len(d.covMat)^2)
+                print('Number of elements with value 0 in d.covMat:', np.sum(np.equal(d.covMat,np.zeros_like(d.covMat))))
+                #print('Number of elements with nan in d.covMat:', np.sum(np.isnan(d.covMat)))
+                im = ax.imshow(d.covMat) #many values in d.covMat are 0.
                 fig.savefig("covMat_"+str(i)+".png")
         #cax0 = divider4.append_axes("right", size="20%", pad=0.05)
         #cbar0 = plt.colorbar(im0, cax=cax0)

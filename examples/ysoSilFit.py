@@ -28,7 +28,7 @@ if __name__=="__main__":
     model = PolynomialSource(modwaves)
     dataSet = [s for s in irs] 
 
-    opt = EmceeSearch(model = model, data = dataSet, nwalkers = 60) #nwalkers needs to be a bit more than twice the number of free parameters in this case as we otherwise run the risk of non-independent walkers later on.  (# of free parameters = 9+ 6 here)
+    opt = EmceeSearch(model = model, data = dataSet, nwalkers = 100) #nwalkers needs to be a bit more than twice the number of free parameters in this case as we otherwise run the risk of non-independent walkers later on.  (# of free parameters = 9+ 6 here)
 
 #    print(opt.npars)
    
@@ -39,9 +39,6 @@ if __name__=="__main__":
 #    ax.plot(phot.wavelength, phot.value, 'o',color='blue')
     ax.set_ylim(0., 1.5*np.max([np.max(i.value) for i in dataSet]))
  
-#    model(0.00358,-0.0668,0.5577,0.0734,1.74749,2.03368,2.861457,3.458161,2.55238)
-
-
     model(0.0, 0.1, 0.1, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0)
     modspec = model.modelFlux
  #   print(modspec)
@@ -54,7 +51,7 @@ if __name__=="__main__":
            [
                0.0, 0.1, 0.1, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 1., 0.5, 1., 1., 0.5, 1.,  # the last six parameters represent the three parameters for the noise model, for the two chunks in the data set.
            ]
-           + np.random.randn(int(opt.npars))/100 for j in range(opt.nwalkers)
+           + np.random.randn(int(opt.npars))/50 for j in range(opt.nwalkers)
           ]
     print("opt.npars =", opt.npars)
     print("opt.nwalkers = ", opt.nwalkers)
@@ -87,8 +84,8 @@ if __name__=="__main__":
         n = opt.nwalkers
         flat_indices = np.argpartition(lnprob.ravel(), -n-1)[-n:]
         print(np.max(lnprob), np.min(lnprob))
-        plt.hist(lnprob[np.isfinite(lnprob)].flatten(), bins =100)
-        plt.show()
+        #plt.hist(lnprob[np.isfinite(lnprob)].flatten(), bins =100)
+        #plt.show()
         
         row_indices, col_indices = np.unravel_index(flat_indices, lnprob.shape)
         ''' put these into new short run as initial guess'''
@@ -123,7 +120,7 @@ if __name__=="__main__":
         #    repeat = False
     print("exiting loop, moving to production run with a = ",acrate)
     #exit()
-    opt.optimise(nsamples = 500, burnin=100, guess = opt.sampler.chain[:, -1, :]) #burnin should discard all steps taken before exiting the loop
+    opt.optimise(nsamples = 5000, burnin=100, guess = opt.sampler.chain[:, -1, :]) #burnin should discard all steps taken before exiting the loop
     
     a = 1. - np.sum(10**opt.samples[2:8],axis=0)
     b = np.percentile(a, [16, 50, 84])
@@ -136,8 +133,7 @@ if __name__=="__main__":
     print(np.max(opt.samples, axis=0))
     print(np.min(opt.samples, axis=0))
     nneg=0
-
-    #exit()
+    print("Starting pastProcess")
     opt.postProcess()
     for i in range(0,opt.samples.shape[0],1000):
         #print(opt.samples[i,:])
@@ -148,10 +144,11 @@ if __name__=="__main__":
         #    nneg += 1
             
     #    ax.plot(irs.wavelength, model(opt.samples[i,:]), '-', alpha = 0.1)
-    print(nneg)
+    print("nneg = ", nneg)
+    print("Preparing to plot the result")
     for i in irs:
         ax.plot(i.wavelength, i.value, '-',color='blue')
-    #ax.plot(phot.wavelength, phot.value, 'o',color='blue')
+#    ax.plot(phot.wavelength, phot.value, 'o',color='blue')
     ax.set_ylim(0., 1.5*np.max([np.max(i.value) for i in dataSet]))
     fig.savefig("seds.png")
     #fig2 = corner.corner(opt.samples)#,labels=opt.labels)
