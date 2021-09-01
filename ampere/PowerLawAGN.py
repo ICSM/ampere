@@ -310,7 +310,8 @@ class PowerLawAGNRelativeAbundances(AnalyticalModel):
 class OpacitySpectrum(AnalyticalModel):
     '''Input: fit parameters (multiplicationFactor, powerLawIndex, relativeAbundances), 
               opacities (opacity_array): q_ij where i = wavelength, j = species
-              wavelength grid from data (wavelengths)
+              wavelength grid from data (wavelengths),
+              Tcold1, Tcold2, Twarm1, Twarm2
     Output: model fluxes (modelFlux)'''
 
     def __init__(self, wavelengths, flatprior=True,
