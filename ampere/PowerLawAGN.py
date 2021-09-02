@@ -308,39 +308,32 @@ class PowerLawAGNRelativeAbundances(AnalyticalModel):
         return theta
 
 class OpacitySpectrum(AnalyticalModel):
-    '''Input: fit parameters (multiplicationFactor, powerLawIndex, relativeAbundances), 
-              opacities (opacity_array): q_ij where i = wavelength, j = species
-              wavelength grid from data (wavelengths),
-              Tcold1, Tcold2, Twarm1, Twarm2
-    Output: model fluxes (modelFlux)'''
+    '''This model fits a modfied blackbody multiplied by sum of opacties, consisting of a warm and cold component, not necessarily of the same composition, over two temperature ranges, following Kemper et al. 2002.
+We use the following parameters:
+       wavelengths : the array of wavelengths considered
+       opacityFileList
+       acold : (relative) abundances for the cold component
+       awarm : (relative) abundances for the warm component
+       Tcold : temperature range of the cold component
+       Twarm : temperature range of the warm component
+       indexp : index p of the density distribution
+       indexq : index q of the temperature distribution
+       multfact : multiplication factor that the sum of the modified black bodies has to be multiplied with to fit the spectrum
+       Output is an array of model fluxes (fluxes), to match wavelengths'''
 
     def __init__(self, wavelengths, flatprior=True,
-                 normWave = 1., sigmaNormWave = 1.,opacityFileList=None,
-                 redshift = False, lims=np.array([[0,1e6],[-100,100],[-10,10],[0,np.inf]]),
+                 opacityFileList=None),
                  **kwargs):
-        #self.wavelength = wavelengths #grid of observed wavelengths to calculate BB for
-        self.redshift = redshift
-        if redshift:
-            from astropy.cosmology import FlatLambdaCDM
-            self.cosmo=FlatLambdaCDM(H0=70, Om0=0.3)
-        if redshift is not None:
-            self.wavelength = wavelengths / (1+redshift)
-        else:
-            self.wavelength = wavelengths
-        #self.freq = const.c.value / (wavelengths*1e-6) #unit conversions will be required...
+        self.wavelength = wavelengths #grid of observed wavelengths to calculate BB for
+
+        self.freq = const.c.value / (wavelengths*1e-6) #unit conversions will be required...
         self.flatprior = flatprior #whether to assume flat priors
-        self.normWave = normWave #wavelength at which opacity is normalised
-        self.sigmaNormWave = sigmaNormWave #value to which the opacity is normalised at wavelength normWave
-        self.lims = lims #in same order as inputs to __call__
-        #print(self.lims)
-        #Define opacities for use in model calculation
+
         import os
         from scipy import interpolate
         opacityDirectory = os.path.dirname(__file__)+'/Opacities/'
         opacityFileList = np.array(opacityFileList)
-        #opacityFileList = np.array(opacityFileList)[['.q' in zio for zio in opacityFileList]] # Only files ending in .q are valid (for now)
         nSpecies = opacityFileList.__len__()
-        #print(opacityFileList,nSpecies)
         opacity_array = np.zeros((wavelengths.__len__(), nSpecies))
         for j in range(nSpecies):
             tempData = np.loadtxt(opacityDirectory + opacityFileList[j], comments = '#')
@@ -350,21 +343,24 @@ class OpacitySpectrum(AnalyticalModel):
             opacity_array[:,j] = f(self.wavelength)
         self.opacity_array = opacity_array
         self.nSpecies = nSpecies
-        self.npars = nSpecies - 1 + 4
+        self.npars = nSpecies + 7
 
-    def __call__(self, t = 1., scale = 1., index = 1., dist=1.,
+    def __call__(self,
+                 #t = 1., scale = 1., index = 1., dist=1., #not sure if we need all these
                  *args,
                  **kwargs):
+        # print out *args
         print(args)
+        # print out **kwargs
+        for key, value in kwargs.items():
+            print(key + " : " + value)
+
+        #hiero. Write this according to crystallinity.ia and ck_modbb.pro
+                        
         relativeAbundances = np.append(np.array(args),1.-np.sum(np.array(args))) #np.append(10**np.array(args),1.-np.sum(10**np.array(args)))
         #print(relativeAbundances)
-        if self.redshift:
-            z = dist
-            dist = cosmo.luminosity_distance(z).to(u.m)
-            freq = const.c.value / ((self.wavelength/(1.+z))*1e-6)
-        else:
-            dist = dist*u.pc.to(u.m)
-            freq = const.c.value / (self.wavelength*1e-6)
+        dist = dist*u.pc.to(u.m)
+        freq = const.c.value / (self.wavelength*1e-6)
         #Simple bug catches for inputs to opacity spectrum
         if len(relativeAbundances) != self.nSpecies :
             print('Number of weights must be same as number of species')

@@ -44,24 +44,35 @@ if __name__=="__main__":
     area = (10.*u.au.to(u.m)**2)#.value)^2
 	
     """ Generate model """
-    #modfied blackbody multiplied by sum of opacties
-    opacities = ['ss_Dorschneretal1995_Olivine_0.10.q',
-    			 'ss_Hofmeisteretal2003_Periclase_0.10.q',
-    			 'ss_Jaegeretal1998_Forsterite_0.10.q'] # list of opacity spectra to be used in modelling
-    #relativeAbundances=np.array([0.01,0.01])#initial guess
-    #nSpecies = len(opacities)-1
-    mdl = OpacitySpectrum(modwaves,
-                          normWave = 1., sigmaNormWave = 1.,
-                          opacityFileList=opacities,
-                          redshift = False, lims = np.array([[30.,60.],
-                                                             [-100.,100.],
-                                                             [-2.,2.],
-                                                             [800.,1000.]])
-                            )
+    #modfied blackbody multiplied by sum of opacties, consisting of a warm and cold component, not necessarily of the same composition, over two temperature ranges.
+    opacities = ['am_oliv.dat', #amorphous olivine
+    		 'forst_m.q', #forsterite
+    		 'fe.dat', #metallic iron
+                 'Koike1999_c_enst.q', #enstatite
+                 'dolomite_wh.mac', #dolomite
+                 'Koike2000_c_diop.q', #diopside
+                 'cr_ice.dat', #crystalline water ice
+                 'calcite_improved.dat'] #calcite
+    nSpecies = len(opacities)
 
-    #mdl(1,2,3,4,0.1,0.5)
-    #exit()
+    #below are initial guesses for the model parameters
+    relativeAbundancescold=np.repeat(0.01,nSpecies)
+    relativeAbundanceswarm=np.repeat(0.01,nSpecies)
+    Tcold = np.array([30,60]) #from Kemper et al. 2002
+    Twarm = np.array([100,118]) #from Kemper et al. 2002
+    indexp = 0.5 #from Kemper et al. 2002
+    indexq = 0.5 #from Kemper et al. 2002
 
+    mdl = OpacitySpectrum(modwaves, 
+                          opacityFileList = opacities,
+                          acold = relativeAbundancescold,
+                          awarm = relativeAbundanceswarm,
+                          Tcold = Tcold,
+                          Twarm = Twarm,
+                          indexp = indexp,
+                          indexq = indexq)
+
+                            
     """ Connect the dots: """
     """ Hook it up to an optimiser """
 
