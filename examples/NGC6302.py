@@ -56,17 +56,15 @@ if __name__=="__main__":
     nSpecies = len(opacities)
 
     #below are initial guesses for the model parameters
-    relativeAbundancescold=np.repeat(0.01,nSpecies)
-    relativeAbundanceswarm=np.repeat(0.01,nSpecies)
-    Tcold = np.array([30,60]) #from Kemper et al. 2002
-    Twarm = np.array([100,118]) #from Kemper et al. 2002
+    abundances = np.ones((2, nSpecies))
+    Tcold = np.array([60,30]) #from Kemper et al. 2002
+    Twarm = np.array([118,100]) #from Kemper et al. 2002
     indexp = 0.5 #from Kemper et al. 2002
-    indexq = 0.5 #from Kemper et al. 2002
+    indexq = 0.5 #from Kemper et al. 2002 #dummy for now
 
     mdl = OpacitySpectrum(modwaves, 
                           opacityFileList = opacities,
-                          acold = relativeAbundancescold,
-                          awarm = relativeAbundanceswarm,
+                          abundances = abundances,
                           Tcold = Tcold,
                           Twarm = Twarm,
                           indexp = indexp,
@@ -80,6 +78,9 @@ if __name__=="__main__":
 
     """ if you want, overload the default priors with a new function """
     def lnprior(self, inputs, **kwargs):
+        #abundances all >= 0.
+        #Twarm[0] > Twarm [1] > Tcold[0] > Tcold[1]
+        #indexp = 0.5 (not fitting, keep constant)
         return 0 #flat prior
     
     #model.lnprior = lnprior
@@ -88,7 +89,7 @@ if __name__=="__main__":
     """ Run it """
     pos = [
            [
-               45., 25., 0., 910., 1., 0.5, 1., 0.5, 1.
+               abundances, Tcold, Twarm, indexp, 1., 0.5, 1. #20 free parameters, 16 abundances and 4 temperatures
                #20 + np.random.randn() for i in range(np.int(opt.npars))
            ]
            + np.random.randn(np.int(opt.npars)) for j in range(opt.nwalkers)

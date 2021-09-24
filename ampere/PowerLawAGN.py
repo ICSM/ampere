@@ -326,7 +326,7 @@ We use the following parameters:
                  **kwargs):
         self.wavelength = wavelengths #grid of observed wavelengths to calculate BB for
 
-        self.freq = const.c.value / (wavelengths*1e-6) #unit conversions will be required...
+        #self.freq = const.c.value / (wavelengths*1e-6) #unit conversions will be required...
         self.flatprior = flatprior #whether to assume flat priors
 
         import os
@@ -346,7 +346,6 @@ We use the following parameters:
         self.npars = nSpecies + 7
 
     def __call__(self,
-                 #t = 1., scale = 1., index = 1., dist=1., #not sure if we need all these
                  *args,
                  **kwargs):
         # print out *args
@@ -366,33 +365,37 @@ We use the following parameters:
         #ckmodbb and shbb are now written. Now I just need to figure out how to do the
         #fit over 8 dust species and 2 temperature ranges.
 
-        
-        relativeAbundances = np.append(np.array(args),1.-np.sum(np.array(args))) #np.append(10**np.array(args),1.-np.sum(10**np.array(args)))
-        #print(relativeAbundances)
-        dist = dist*u.pc.to(u.m)
-        freq = const.c.value / (self.wavelength*1e-6)
-        #Simple bug catches for inputs to opacity spectrum
-        if len(relativeAbundances) != self.nSpecies :
-            print('Number of weights must be same as number of species')
-        #if scale <= 0.0:
-        #    print('Scale factor must be positive and non-zero.') #not relevant - scale is a log
-        if t <= 0.0:
-            print('Temperature must be positive and in Kelvin.')
-        bb = blackbody.blackbody_nu(freq,t).to(u.Jy / u.sr).value
-        bb = bb / dist**2
-        bb = bb * 10**(scale) * self.sigmaNormWave * ((self.wavelength / self.normWave)**index)
-        #Subtract the sum of opacities from the blackbody continuum to calculate model spectrum
-        fModel = bb * (1.0 - (np.matmul(self.opacity_array, relativeAbundances)))
-        self.modelFlux = fModel
-        #return (blackbody.blackbody_nu(const.c.value*1e6/self.wavelengths,t).to(u.Jy / u.sr).value / (dist_lum.value)**2 * kappa230.value * ((wave/230.)**betaf) * massf) #*M_sun.cgs.value
+        #let's first do this over fixed temperature ranges, instead of allowing them to be free
+        #the temperature ranges are 118-100 K and 60-30 K, following Kemper et al. 2002
+
+        coldcomponent = np.zeros((2, wavelengths.__len__()))
+        coldcomponent[0,:] = self.wavelengths
+        warmcomponent = np.zeros((2, wavelengths.__len__()))
+        warmcomponent[0,:] = self.wavelengths
+
+        counter = 0
+        for ac in abundances[0,:]
+            onespeciescold = ckmodbb(opacity_array[:,counter], tin = Tcold[0], tout = Tcold[1], index = indexp, n0 = abundances[0,counter])
+            coldcomponent[1,:] = coldcomponent[1,:] + onespeciescold
+            counter = counter + 1
+
+        counter = 0
+        for aw in abundances[0,:]
+            onespecieswarm = ckmodbb(opacity_array[:,counter], tin = Twarm[0], tout = Twarm[1], index = indexp, n0 = abundances[0,counter])
+            warmcomponent[1,:] = warmcomponent[1,:] + onespecieswarm
+            counter = counter + 1
+
+        fModel = np.like(coldcomponent)
+        fModel[1,:] = fModel[1,:] + warmcomponent[1,:]
+
+        return fModel[1,:]
 
     def ckmodbb(self, q, tin, tout, index = 0.5, n0, r0 = 1e15, distance = 910., grainsize = 0.1, steps = 10)
         d = distance * 3.0857e18 #convert distance from pc to cm
         a = grainsize * 1e-4 #convert grainsize from micron to cm
  
-        #fnu should look the same as q. Both are numpy arrays
-        fnu = np.zeros_like(q)
-        fnu[:,] = q[:,]
+        fnu = np.zeros((2, wavelengths.__len__()))
+        fnu[1,] = self.wavelengths
 
         for i in range(steps - 1):
             t = tin - i * (tin-tout)/steps
