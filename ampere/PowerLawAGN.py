@@ -356,7 +356,17 @@ We use the following parameters:
             print(key + " : " + value)
 
         #hiero. Write this according to crystallinity.ia and ck_modbb.pro
-                        
+
+        #number of dust species in opacityDirectory are all going to be fitted
+        #for each we will consider a hot and a cold component. We will allow only 2
+        #temperature ranges, the same for all dust species.
+
+        #the module translated from ck_modbb calculates the flux for each component at a single temperature
+
+        #ckmodbb and shbb are now written. Now I just need to figure out how to do the
+        #fit over 8 dust species and 2 temperature ranges.
+
+        
         relativeAbundances = np.append(np.array(args),1.-np.sum(np.array(args))) #np.append(10**np.array(args),1.-np.sum(10**np.array(args)))
         #print(relativeAbundances)
         dist = dist*u.pc.to(u.m)
@@ -375,6 +385,32 @@ We use the following parameters:
         fModel = bb * (1.0 - (np.matmul(self.opacity_array, relativeAbundances)))
         self.modelFlux = fModel
         #return (blackbody.blackbody_nu(const.c.value*1e6/self.wavelengths,t).to(u.Jy / u.sr).value / (dist_lum.value)**2 * kappa230.value * ((wave/230.)**betaf) * massf) #*M_sun.cgs.value
+
+    def ckmodbb(self, q, tin, tout, index = 0.5, n0, r0 = 1e15, distance = 910., grainsize = 0.1, steps = 10)
+        d = distance * 3.0857e18 #convert distance from pc to cm
+        a = grainsize * 1e-4 #convert grainsize from micron to cm
+ 
+        #fnu should look the same as q. Both are numpy arrays
+        fnu = np.zeros_like(q)
+        fnu[:,] = q[:,]
+
+        for i in range(steps - 1):
+            t = tin - i * (tin-tout)/steps
+            power = (t/tin)^(2*index - 6)
+            bb = shbb(fnu[:,], t, 0.) 
+            fnu[,:] = fnu[,:] + q[,:]*bb[,:]*power*((tin-tout)/steps)
+        extra = r0/d
+        factor = 4 * math.pi * a * a * r0 * n0 * extra * extra / (3-index)
+        fnu[,:] = fnu[,:] * factor
+        return, fnu
+
+    def shbb(self, aar, temp, pinda):
+        a1 = 3.97296e19
+        a2 = 1.43875e4
+        mbb = np.copy(aar)                                 
+        bbflux = a1/(mbb[:,]^3)/(exp(a2/(mbb[:,]*temp))-1)
+        mbb[,:] = bbflux *[mbb:,]^pinda
+        return mbb                                 
 
     def lnprior(self, theta, **kwargs):
         if self.flatprior:
