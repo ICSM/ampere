@@ -577,31 +577,31 @@ class Photometry(Data):
 
         print("Setting plotting parameters for photometry data set.")
 
-        self.pht_label = "Photometry"
+        self.label = "Photometry"
         try:
-            self.pht_marker = marker
+            self.marker = marker
         except:
-            self.pht_marker = "o"
+            self.marker = "o"
 
         try:
-            self.pht_mec = mec
+            self.mec = mec
         except:
-            self.pht_mec = "orange"
+            self.mec = "orange"
         
         try:
-            self.pht_mfc = mfc
+            self.mfc = mfc
         except:
-            self.pht_mfc = "yellow"
+            self.mfc = "yellow"
         
         try:
-            self.pht_linestyle = linestyle
+            self.linestyle = linestyle
         except:
-            self.pht_linestyle = ""
+            self.linestyle = ""
         
         try:
-            self.pht_alpha = alpha
+            self.alpha = alpha
         except:
-            self.pht_alpha = 1.0
+            self.alpha = 1.0
         
         if doPlot == True:
             import matplotlib.pyplot as plt
@@ -610,8 +610,8 @@ class Photometry(Data):
             ax.set_xtitle(r"Wavelength ($\mu$m)")
             ax.set_ytitle(r"Flux density (mJy)")
             ax.errorbar(self.wavelength,self.value,xerr=None,yerr=self.uncertainty,\
-                        linestyle=self.pht_linestyle,marker=self.pht_marker,mec=self.pht_mec,mfc=self.pht_mfc,\
-                        color=self.pht_mec,ecolor=self.pht_mec,alpha=self.pht_alpha,legend=self.pht_label)
+                        linestyle=self.linestyle,marker=self.marker,mec=self.mec,mfc=self.mfc,\
+                        color=self.mec,ecolor=self.mec,alpha=self.alpha,legend=self.label)
             plt.legend("lower right",fontsize="small")
             plt.tight_layout()
 
@@ -1207,31 +1207,32 @@ class Spectrum(Data):
 
         print("Setting plotting parameters for spectroscopy data set.")
 
-        self.spc_label = "Spectroscopy"
-        try:
-            self.spc_marker = marker
-        except:
-            self.spc_marker = "."
+        self.label = "Spectroscopy"
 
         try:
-            self.spc_mec = mec
+            self.marker = marker
         except:
-            self.spc_mec = "blue"
+            self.marker = "."
+
+        try:
+            self.mec = mec
+        except:
+            self.mec = "blue"
         
         try:
-            self.spc_mfc = mfc
+            self.mfc = mfc
         except:
-            self.spc_mfc = "dodgerblue"
+            self.mfc = "dodgerblue"
         
         try:
-            self.spc_linestyle = linestyle
+            self.linestyle = linestyle
         except:
-            self.spc_linestyle = "-"
+            self.linestyle = "-"
         
         try:
-            self.spc_alpha = alpha
+            self.alpha = alpha
         except:
-            self.spc_alpha = 0.1
+            self.alpha = 0.1
         
         if doPlot == True:
             import matplotlib.pyplot as plt
@@ -1244,8 +1245,8 @@ class Spectrum(Data):
             k = 1
             for spec in self.specList:
                 ax.errorbar(spec.wavelength,spec.value,xerr=None,yerr=spec.uncertainty,\
-                            linestyle=self.spc_linestyle,marker=self.spc_marker,mec=self.spc_mec,mfc=self.spc_mfc,\
-                            color=self.spc_mec,ecolor=self.spc_mec,alpha=self.spc_alpha,legend=self.spc_label+"_"+k)
+                            linestyle=self.linestyle,marker=self.marker,mec=self.mec,mfc=self.mfc,\
+                            color=self.mec,ecolor=self.mec,alpha=self.alpha,legend=self.label+"_chunk_"+k)
                 k += 1
             plt.legend("lower left",fontsize="small")
             plt.tight_layout()

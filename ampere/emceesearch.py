@@ -285,4 +285,37 @@ class EmceeSearch(BaseSearch):
 #            like = like + deltaLike
 #        return like #-0.5 * np.sum((((y - model)**2)/(yerr**2)))
 
+    def plot_results(self):
+        '''
+        Function to plot up the observations and samples drawn from the models.
+        '''
+        fig,axes = plt.subplots(1,1,figsize=(8,6))
+        axes.set_xlabel(r"Wavelength ($\mu$m)")
+        axes.set_ylabel(r"Flux density (mJy)")
 
+        #observations
+        for d in self.dataSet:
+        
+            if dataset.label == "Photometry":
+                axes.errorbar(d.wavelength,d.value,xerr=None,yerr=d.uncertainty,\
+                              linestyle=d.linestyle,marker=d.marker,mec=d.mec,mfc=d.mfc,alpha=d.alpha,\
+                              color=d.mec,ecolor=d.mec,label=d.label)
+
+            if dataset.label == "Spectroscopy":
+                axes.errorbar(d.wavelength,d.value,xerr=None,yerr=d.uncertainty,\
+                              linestyle=d.linestyle,marker=d.marker,color=d.mec,\
+                              ecolor=d.mfc,alpha=d.alpha,legend=d.label)
+        #model
+        for s in self.samples[np.random.randint(len(samples), size=0.1*nwalkers)]:
+            optimizer.model(s)
+            ax.plot(optimizer.model.wavelengths,optimizer.model.modelFlux, '-', color='k', alpha=alpha,legend='Samples')
+
+        #best fit model
+        optimizer.model(bestPars)
+        ax.plot(optimizer.model.wavelengths,optimizer.model.modelFlux, '-', color='k', alpha=1.0,legend='Best')        
+
+        plt.legend()
+        plt.tight_layout()
+        fig.savefig("observations_and_model.png",dpi=200)
+        plt.close()
+        plt.clr()

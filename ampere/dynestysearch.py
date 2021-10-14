@@ -126,13 +126,13 @@ class DynestySearch(BaseSearch):
         #Reweight the samples
         samples = self.results.samples.T
         weights = np.exp(self.results.logwt - self.results.logz[-1])
-        samples_unif = resample_equal samples.T, weights)
+        samples_unif = resample_equal(samples.T, weights)
 
         #First set up the plot
         fig = plt.figure()
         ax = fig.add_subplot(111)
 
-        for s in samples_unif[np.random.randint(len(csamples_unif), size=n_post_samples)]:
+        for s in samples_unif[np.random.randint(len(samples_unif), size=n_post_samples)]:
             optimizer.model(s)
             ax.plot(optimizer.model.wavelengths,optimizer.model.modelFlux, '-', color='k', alpha=alpha)
 
