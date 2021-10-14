@@ -139,6 +139,10 @@ class EmceeSearch(BaseSearch):
         A method to post-process the sampler results 
         '''
 
+        #Compute things like autocorrelation time.
+        #ESS?
+        #Acceptance fraction?
+
         '''First find the median and 68% interval '''
         res=[]
         print("Median and confidence intervals for parameters in order:")
@@ -201,6 +205,7 @@ class EmceeSearch(BaseSearch):
         
         pass
     def plot_walkers(self):
+        #MUST USE autocorrelation time and burnin info on plots!
         fig, axes = plt.subplots(self.npars, 1, sharex=True, figsize=(8, 9))
         for i in range(self.npars):
             axes[i].plot(self.sampler.chain[:, :, i].T, color="k", alpha=0.4)
@@ -218,6 +223,7 @@ class EmceeSearch(BaseSearch):
         fig2.savefig("corner.png")
 
     def plot_lnprob(self):
+        #USE autocorrelation time and burnin info on plots?
         fig3 = plt.figure()
         axes3 = fig3.add_subplot(111) #plt.subplots(1, 1, sharex=True, figsize=(6, 8))
         for i in range(self.nwalkers):

@@ -118,7 +118,10 @@ class DynestySearch(BaseSearch):
         #This will probably require some small modifications to Data objects to make this as easy as possible.
         #It should include plotting multiple realisations of the data given the noise model (if appropriate)
         #as well as realisations from the model and the raw data
+        #Plot MAP solution model?
+        #And model with the median of marginal posterior parameters
         #Must be plotted in reverse order: Model realisations first (i.e. lowest zorder), then data realisations, then data (use zorder keyword to get things in the right place, lowest first as highest end up on top)
+        #Also produce individual posterior predictive plots for each Data object.
 
         #Reweight the samples
         samples = self.results.samples.T

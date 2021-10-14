@@ -77,6 +77,9 @@ class Data(object):
         '''
         pass
 
+    def plot(self):
+        pass
+
     def selectWaves(self, low = 0, up = np.inf, interval = "closed", **kwargs):
         '''Method to generate a mask for the data by wavelength. Uses interval terminology to determine how the limits are treated.
         '''
