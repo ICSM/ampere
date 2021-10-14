@@ -77,6 +77,9 @@ class Data(object):
         '''
         pass
 
+    def setPlotParameters(self):
+        pass
+
     def plot(self):
         pass
 
@@ -565,7 +568,60 @@ class Photometry(Data):
 
                    
         self.__init__(filterName, value, uncertainty, photUnits, **kwargs)
-                   
+
+    def setPlotParameters(self,doPlot=False,savePlot=False,showPlot=True,**kwargs):
+        '''
+            Routine to set up the plotting parameters for any photometry data set, and optionally plot (and show and/or save) the data. 
+            A limited set of keywords can be set by passing **kwargs to the function.
+        '''
+
+        print("Setting plotting parameters for photometry data set.")
+
+        self.pht_label = "Photometry"
+        try:
+            self.pht_marker = marker
+        except:
+            self.pht_marker = "o"
+
+        try:
+            self.pht_mec = mec
+        except:
+            self.pht_mec = "orange"
+        
+        try:
+            self.pht_mfc = mfc
+        except:
+            self.pht_mfc = "yellow"
+        
+        try:
+            self.pht_linestyle = linestyle
+        except:
+            self.pht_linestyle = ""
+        
+        try:
+            self.pht_alpha = alpha
+        except:
+            self.pht_alpha = 1.0
+        
+        if doPlot == True:
+            import matplotlib.pyplot as plt
+            
+            fig, ax = plt.subplots(1,1,figsize=(6, 8))
+            ax.set_xtitle(r"Wavelength ($\mu$m)")
+            ax.set_ytitle(r"Flux density (mJy)")
+            ax.errorbar(self.wavelength,self.value,xerr=None,yerr=self.uncertainty,\
+                        linestyle=self.pht_linestyle,marker=self.pht_marker,mec=self.pht_mec,mfc=self.pht_mfc,\
+                        color=self.pht_mec,ecolor=self.pht_mec,alpha=self.pht_alpha,legend=self.pht_label)
+            plt.legend("lower right",fontsize="small")
+            plt.tight_layout()
+
+            if showPlot == True:
+                plt.show()
+            if savePlot == True: 
+                fig.savefig("dataset.png",dpi=200,overwrite=True)
+            plt.close()
+            plt.clf()
+
 class Spectrum(Data):
     """A class to represent 1D spectra data objects and their properties
 
@@ -1142,6 +1198,64 @@ class Spectrum(Data):
             self.__init__(table['wavelength'][selection].data, value[selection], uncertainty[selection], bandUnits, photUnits, **kwargs) #Also pass in flux units
             specList.append(self)
         return specList #self
+
+    def setPlotParameters(self,doPlot=False,savePlot=False,showPlot=True,**kwargs):
+        '''
+            Routine to set up the plotting parameters for any spectroscopy data set, and optionally plot (and show and/or save) the data. 
+            A limited set of keywords can be set by passing **kwargs to the function.
+        '''
+
+        print("Setting plotting parameters for spectroscopy data set.")
+
+        self.spc_label = "Spectroscopy"
+        try:
+            self.spc_marker = marker
+        except:
+            self.spc_marker = "."
+
+        try:
+            self.spc_mec = mec
+        except:
+            self.spc_mec = "blue"
+        
+        try:
+            self.spc_mfc = mfc
+        except:
+            self.spc_mfc = "dodgerblue"
+        
+        try:
+            self.spc_linestyle = linestyle
+        except:
+            self.spc_linestyle = "-"
+        
+        try:
+            self.spc_alpha = alpha
+        except:
+            self.spc_alpha = 0.1
+        
+        if doPlot == True:
+            import matplotlib.pyplot as plt
+            
+            fig, ax = plt.subplots(1,1,figsize=(6, 8))
+            ax.set_xtitle(r"Wavelength ($\mu$m)")
+            ax.set_ytitle(r"Flux density (mJy)")
+
+            nk = len(self.specList)
+            k = 1
+            for spec in self.specList:
+                ax.errorbar(spec.wavelength,spec.value,xerr=None,yerr=spec.uncertainty,\
+                            linestyle=self.spc_linestyle,marker=self.spc_marker,mec=self.spc_mec,mfc=self.spc_mfc,\
+                            color=self.spc_mec,ecolor=self.spc_mec,alpha=self.spc_alpha,legend=self.spc_label+"_"+k)
+                k += 1
+            plt.legend("lower left",fontsize="small")
+            plt.tight_layout()
+
+            if showPlot == True:
+                plt.show()
+            if savePlot == True: 
+                fig.savefig("dataset.png",dpi=200,overwrite=True)
+            plt.close()
+            plt.clf()
 
 class Image(Data):
     #Need separate subclasses for images and radial profiles
