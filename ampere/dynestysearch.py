@@ -132,19 +132,30 @@ class DynestySearch(BaseSearch):
         fig = plt.figure()
         ax = fig.add_subplot(111)
 
-        for s in samples_unif[np.random.randint(len(samples_unif), size=n_post_samples)]:
-            optimizer.model(s)
-            ax.plot(optimizer.model.wavelengths,optimizer.model.modelFlux, '-', color='k', alpha=alpha)
-
+        #observations
         for d in self.dataSet:
-            #We need to create some properties in each Data class that contain some plotting info
-            #e.g. use plot for spectra with fill_between for uncertainties
-            #use errorbar for photometry with circles
-            #for now make bad plots with lines everywhere
-            ax.plot(d.wavelength, d.value, '-',color='blue')
-        
+            #Use each data object's self-knowledge to plot stuff
+            d.plot(ax = axes)
+
+        for s in samples_unif[np.random.randint(len(samples_unif), size=n_post_samples)]:
+            optimizer.model(*s[self.nparsMod])
+            ax.plot(optimizer.model.wavelengths,optimizer.model.modelFlux, '-', color='k', alpha=alpha, legend='Samples', zorder=0)
+
+            i = self.nparsMod
+            for d in self.dataSet:
+                if d._hasNoiseModel:
+                    d.plotRealisation(s[i:i+d.npars], ax=axes)
+                i+= d.npars
+
+        #best fit model - not sure how to get MAP/ML model out of dynesty yet
+        #optimizer.model(*self.bestPars[:self.nparsMod])
+        #ax.plot(optimizer.model.wavelengths,optimizer.model.modelFlux, '-', color='k', alpha=1.0,legend='MAP', zorder=8)
+
+        plt.legend()
+        plt.tight_layout()
         fig.savefig(plotfile)
-        pass
+        plt.close()
+        plt.clr()
 
     def postProcess(self, maxiter=None, maxcall = None, dlogz = None, **kwargs):
         """ Some simple post-processing and plotting """
