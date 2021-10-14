@@ -273,12 +273,8 @@ class EmceeSearch(BaseSearch):
                 fig.savefig("covMat_"+str(i)+".png")
 
     def plot_posteriorpredictive(self, **kwargs):
-        #
-        pass
-
-    def plot_results(self):
         '''
-        Function to plot up the observations and samples drawn from the models.
+        Function to plot the data and samples drawn from the posterior of the models and data.
         '''
         fig,axes = plt.subplots(1,1,figsize=(8,6))
         axes.set_xlabel(r"Wavelength ($\mu$m)")
@@ -304,15 +300,20 @@ class EmceeSearch(BaseSearch):
             #                  ecolor=d.mfc,alpha=d.alpha,legend=d.label)
         #model
         for s in self.samples[np.random.randint(len(samples), size=nsamples)]:
-            optimizer.model(s)
-            ax.plot(optimizer.model.wavelengths,optimizer.model.modelFlux, '-', color='k', alpha=alpha,legend='Samples', zorder = 0)
+            optimizer.model(*s[:self.nparsMod])
+            axes.plot(optimizer.model.wavelengths,optimizer.model.modelFlux, '-', color='k', alpha=alpha,legend='Samples', zorder = 0)
+            i = self.nparsMod
+            for d in self.dataSet:
+                if d._hasNoiseModel:
+                    d.plotRealisation(s[i:i+d.npars], ax=axes)
+                i+= d.npars
 
         #best fit model
-        optimizer.model(bestPars)
-        ax.plot(optimizer.model.wavelengths,optimizer.model.modelFlux, '-', color='k', alpha=1.0,legend='MAP')        
+        optimizer.model(*bestPars[:self.nparsMod])
+        ax.plot(optimizer.model.wavelengths,optimizer.model.modelFlux, '-', color='k', alpha=1.0,legend='MAP', zorder=8)        
 
         plt.legend()
         plt.tight_layout()
-        fig.savefig("observations_and_model.png",dpi=200)
+        fig.savefig("posteriorpredictive.png",dpi=200)
         plt.close()
         plt.clr()

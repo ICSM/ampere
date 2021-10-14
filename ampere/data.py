@@ -719,7 +719,11 @@ class Spectrum(Data):
                      "linewidth":1.5,
                      "marker": '',
                      "markersize": 2.,
-                     "zorder": 9
+                     "zorder": 9,
+                     "sample color": "cyan",
+                     "sample alpha": 0.6,
+                     "sample linewidth": 1.,
+                     "sample zorder": 5
         }
 
     self._hasNoiseModel = True
@@ -1364,11 +1368,11 @@ class Spectrum(Data):
                 ax.fill_between(self.wavelength[self.mask],
                                 self.value[self.mask] - self.uncertainty[self.mask],
                                 self.value[self.mask] + self.uncertainty[self.mask],
-                                alpha = self.plotParams["zorder"]/2,
+                                alpha = self.plotParams["alpha"]/2,
                                 label = self.plotParams["label"]+" 68\% confidence band",
                                 step = s,
                                 zorder = self.plotParams["zorder"] - 1
-                                **{k:v for k,v in self.plotParams.items() if k not in ["drawstyle", "zorder", "alpha"]},
+                                **{k:v for k,v in self.plotParams.items() if k not in ["drawstyle", "zorder", "alpha", "label"]},
                                 **kwargs)
             else:
                 if fig is not None:
@@ -1385,11 +1389,11 @@ class Spectrum(Data):
                     ax.fill_between(self.wavelength[self.mask],
                                 self.value[self.mask] - self.uncertainty[self.mask],
                                 self.value[self.mask] + self.uncertainty[self.mask],
-                                alpha = self.plotParams["zorder"]/2,
+                                alpha = self.plotParams["alpha"]/2,
                                 label = self.plotParams["label"]+" 68\% confidence band",
                                 step = s,
                                 zorder = self.plotParams["zorder"] - 1
-                                **{k:v for k,v in self.plotParams.items() if k not in ["drawstyle", "zorder", "alpha"]},
+                                **{k:v for k,v in self.plotParams.items() if k not in ["drawstyle", "zorder", "alpha", "label"]},
                                 **kwargs)
                 else: #no axis or figure, let's create everything
                     import matplotlib.pyplot as plt
@@ -1402,11 +1406,11 @@ class Spectrum(Data):
                     ax.fill_between(self.wavelength[self.mask],
                                 self.value[self.mask] - self.uncertainty[self.mask],
                                 self.value[self.mask] + self.uncertainty[self.mask],
-                                alpha = self.plotParams["zorder"]/2,
+                                alpha = self.plotParams["alpha"]/2,
                                 label = self.plotParams["label"]+" 68\% confidence band",
                                 step = s,
                                 zorder = self.plotParams["zorder"] - 1
-                                **{k:v for k,v in self.plotParams.items() if k not in ["drawstyle", "zorder", "alpha"]},
+                                **{k:v for k,v in self.plotParams.items() if k not in ["drawstyle", "zorder", "alpha", "label"]},
                                 **kwargs)
                     plt.legend("lower right",fontsize="small")
                     plt.tight_layout()
@@ -1414,6 +1418,20 @@ class Spectrum(Data):
                     fig.savefig(self.label+"plot.png", dpi = 200, overwrite=True)
                 if showPlot:
                     plt.show()
+
+    def plotRealisation(s, ax=None, **kwargs):
+
+        plotParams = {k:v for k,v in self.plotParams.items() if k not in ["color", "linewidth", "zorder", "alpha", "label"]}
+        waves = self.wavelength[self.mask]
+        values = s[0]*self.values[self.mask] #only update for scaling, not sure how to include covariance info or if it's even worth it.
+        ax.plot(waves, values,
+                #yerr=self.uncertainty[self.mask],
+                linewidth = self.plotParams["sample linewidth"],
+                zorder = self.plotParams["sample zorder"],
+                label = self.plotParams["label"]+" posterior samples",
+                color = self.plotParams["sample color"],
+                alpha = self.plotParams["sample alpha"],
+                **plotParams, **kwargs)
 
 class Image(Data):
     #Need separate subclasses for images and radial profiles
