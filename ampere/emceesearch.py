@@ -145,24 +145,24 @@ class EmceeSearch(BaseSearch):
         #Acceptance fraction?
 
         '''First find the median and 68% interval '''
-        res=[]
+        self.res=[]
         print("Median and confidence intervals for parameters in order:")
         for i in range(self.npars):
             a = np.percentile(self.samples[:,i], [16, 50, 84])
-            res.append([a[1], a[2]-a[1], a[1]-a[0]])
+            self.res.append([a[1], a[2]-a[1], a[1]-a[0]])
             #res.append((lambda v: (v[1], v[2]-v[1], v[1]-v[0]),
             #                     *zip(np.percentile(self.samples[:,i], [16, 50, 84])))#,
                                                     #axis=0)))
             #      )
-            print(res[i])
+            print(self.res[i])
             
 
         ''' Then check what the "best fit" was '''
         print(np.min(self.sampler.lnprobability))
         print(np.max(self.sampler.lnprobability))
         row_ind, col_ind = np.unravel_index(np.argmax(self.sampler.lnprobability.ravel), self.sampler.lnprobability.shape)
-        bestPars = self.sampler.chain[row_ind, col_ind, :]
-        print("MAP Solution: ", bestPars)
+        self.bestPars = self.sampler.chain[row_ind, col_ind, :]
+        print("MAP Solution: ", self.bestPars)
         ''' Now produce some diagnostic plots '''
 
         ''' A plot of the walkers' sampling history '''
@@ -177,6 +177,9 @@ class EmceeSearch(BaseSearch):
 
         '''finally, we want to look at the correlation/covariance matrices for the spectra, if any '''
         self.plot_covmats()
+
+
+        self.plot_posteriorpredictive()
         #fig4,(ax0,ax1) = plt.subplots(1,2)
         #ax=[ax0, ax1]
         #i=0
@@ -309,7 +312,7 @@ class EmceeSearch(BaseSearch):
                 i+= d.npars
 
         #best fit model
-        optimizer.model(*bestPars[:self.nparsMod])
+        optimizer.model(*self.bestPars[:self.nparsMod])
         ax.plot(optimizer.model.wavelengths,optimizer.model.modelFlux, '-', color='k', alpha=1.0,legend='MAP', zorder=8)        
 
         plt.legend()
