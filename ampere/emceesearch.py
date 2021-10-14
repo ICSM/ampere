@@ -6,6 +6,7 @@ from .basesearch import BaseSearch
 from inspect import signature
 from .data import Photometry, Spectrum
 import matplotlib.pyplot as plt
+from matplotlib.patches import Polygon
 
 class EmceeSearch(BaseSearch):
     """
@@ -206,9 +207,22 @@ class EmceeSearch(BaseSearch):
         pass
     def plot_walkers(self):
         #MUST USE autocorrelation time and burnin info on plots!
+        #Should probably have quiet set 'False' to pick up too short emcee runs
+        tauto = self.sampler.get_autocorr_time()
+
         fig, axes = plt.subplots(self.npars, 1, sharex=True, figsize=(8, 9))
         for i in range(self.npars):
-            axes[i].plot(self.sampler.chain[:, :, i].T, color="k", alpha=0.4)
+            axes[i].plot(self.sampler.chain[:, :, i].T, color="k", alpha=0.4,legend=r"Samples")
+            axes[i].plot([10*tauto[i],10*tauto[i]],[-np.inf,np.inf],color="red",marker="",linestyle="-",legend=r"10$\times t_{\rm autocorr}$")
+            ylims = axes[i].get_ylim()
+            xlims = axes[i].get_xlim()
+            axes[i].add_patch(Polygon([[xlims[0], ylims[0]], [xlims[0], ylims[1]], [self.burnin, ylims[1]], [self.burnin, ylims[0]]], closed=True,
+                      fill=True, color='darkgrey'))
+            axes[i].label_outer()
+
+        plt.legend(fontsize="small")
+        plt.tight_layout()
+
             #    axes[0].yaxis.set_major_locator(MaxNLocator(5))
             #axes[0].axhline(m_true, color="#888888", lw=2)
             #axes[i].set_ylabel("$m$")
@@ -224,6 +238,8 @@ class EmceeSearch(BaseSearch):
 
     def plot_lnprob(self):
         #USE autocorrelation time and burnin info on plots?
+        tauto = self.sampler.get_autocorr_time()
+
         fig3 = plt.figure()
         axes3 = fig3.add_subplot(111) #plt.subplots(1, 1, sharex=True, figsize=(6, 8))
         for i in range(self.nwalkers):
@@ -235,6 +251,12 @@ class EmceeSearch(BaseSearch):
                 axes3.set_ylim(-2000.,np.max(self.sampler.lnprobability))
             except ValueError:
                 axes3.set_ylim(-2000.,2000)
+
+        ylims = axes[i].get_ylim()
+        xlims = axes[i].get_xlim()
+        axes3.add_patch(Polygon([[xlims[0], ylims[0]], [xlims[0], ylims[1]], [self.burnin, ylims[1]], [self.burnin, ylims[0]]], closed=True,
+                      fill=True, color='grey'))
+        axes3.plot([10*tauto,10*tauto,[ylims[0],ylims[1]],color="red",marker="",linestyle="-",legend=r"10$\times t_{\rm autocorr}$")
         fig3.savefig("lnprob.png")        
         
     def plot_covmats(self):
