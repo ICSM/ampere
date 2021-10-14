@@ -256,7 +256,7 @@ class EmceeSearch(BaseSearch):
         xlims = axes[i].get_xlim()
         axes3.add_patch(Polygon([[xlims[0], ylims[0]], [xlims[0], ylims[1]], [self.burnin, ylims[1]], [self.burnin, ylims[0]]], closed=True,
                       fill=True, color='grey'))
-        axes3.plot([10*tauto,10*tauto,[ylims[0],ylims[1]],color="red",marker="",linestyle="-",legend=r"10$\times t_{\rm autocorr}$")
+        axes3.plot([10*tauto,10*tauto],[ylims[0],ylims[1]],color="red",marker="",linestyle="-",legend=r"10$\times t_{\rm autocorr}$")
         fig3.savefig("lnprob.png")        
         
     def plot_covmats(self):
@@ -272,18 +272,9 @@ class EmceeSearch(BaseSearch):
                 im = ax.imshow(np.log10(d.covMat))
                 fig.savefig("covMat_"+str(i)+".png")
 
-    def plot_posteriorpredictive(self):
+    def plot_posteriorpredictive(self, **kwargs):
         #
         pass
-
-#    def lnlike(self, theta, **kwargs):
-#        model = self.model(theta)
-#        like = 0.
-#        for data in self.dataSet:
-#            """ do something for each bit of data """
-#            deltaLike = something
-#            like = like + deltaLike
-#        return like #-0.5 * np.sum((((y - model)**2)/(yerr**2)))
 
     def plot_results(self):
         '''
@@ -293,26 +284,32 @@ class EmceeSearch(BaseSearch):
         axes.set_xlabel(r"Wavelength ($\mu$m)")
         axes.set_ylabel(r"Flux density (mJy)")
 
+        nsamples = self.nwalkers
+
         #observations
         for d in self.dataSet:
-        
-            if dataset.label == "Photometry":
-                axes.errorbar(d.wavelength,d.value,xerr=None,yerr=d.uncertainty,\
-                              linestyle=d.linestyle,marker=d.marker,mec=d.mec,mfc=d.mfc,alpha=d.alpha,\
-                              color=d.mec,ecolor=d.mec,label=d.label)
+            d.plot(ax = axes)
 
-            if dataset.label == "Spectroscopy":
-                axes.errorbar(d.wavelength,d.value,xerr=None,yerr=d.uncertainty,\
-                              linestyle=d.linestyle,marker=d.marker,color=d.mec,\
-                              ecolor=d.mfc,alpha=d.alpha,legend=d.label)
+                #in this case, we need to plot some realisations of the data since this type of data has a noise model
+                
+        
+            #if dataset.label == "Photometry":
+            #    axes.errorbar(d.wavelength,d.value,xerr=None,yerr=d.uncertainty,
+            #                  linestyle=d.linestyle,marker=d.marker,mec=d.mec,mfc=d.mfc,alpha=d.alpha,
+            #                  color=d.mec,ecolor=d.mec,label=d.label)
+
+            #if dataset.label == "Spectroscopy":
+            #    axes.errorbar(d.wavelength,d.value,xerr=None,yerr=d.uncertainty,
+            #                  linestyle=d.linestyle,marker=d.marker,color=d.mec,
+            #                  ecolor=d.mfc,alpha=d.alpha,legend=d.label)
         #model
-        for s in self.samples[np.random.randint(len(samples), size=0.1*nwalkers)]:
+        for s in self.samples[np.random.randint(len(samples), size=nsamples)]:
             optimizer.model(s)
-            ax.plot(optimizer.model.wavelengths,optimizer.model.modelFlux, '-', color='k', alpha=alpha,legend='Samples')
+            ax.plot(optimizer.model.wavelengths,optimizer.model.modelFlux, '-', color='k', alpha=alpha,legend='Samples', zorder = 0)
 
         #best fit model
         optimizer.model(bestPars)
-        ax.plot(optimizer.model.wavelengths,optimizer.model.modelFlux, '-', color='k', alpha=1.0,legend='Best')        
+        ax.plot(optimizer.model.wavelengths,optimizer.model.modelFlux, '-', color='k', alpha=1.0,legend='MAP')        
 
         plt.legend()
         plt.tight_layout()
