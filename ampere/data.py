@@ -203,12 +203,29 @@ class Photometry(Data):
 
     """
 
-    def __init__(self, filterName, value, uncertainty, photUnits, bandUnits=None, libName = None, **kwargs):
+    #Create a dictionary of default plotting parameters for Photometry objects
+    self.plotParams={"alpha": 1.0,
+                     "label": "Photometry",
+                     "linestyle":'None',
+                     "marker": 'o',
+                     "markeredgecolor": 'black',
+                     "markerfacecolor": 'orange',
+                     "markersize": 2.,
+                     "zorder": 10
+        }
+
+    self._hasNoiseModel = False
+
+    def __init__(self, filterName, value, uncertainty, photUnits,
+                 bandUnits=None, libName = None, label = "Photometry", **kwargs):
         self.filterName = filterName
 
         ''' setup pyphot for this set of photometry '''
         self.pyphotSetup(libName)
         self.filterNamesToPyphot()
+
+        self.label = label
+        self.plotParams["label"] = label
 
         #print(self.filterMask)
         if np.all(self.filterMask):
@@ -569,7 +586,8 @@ class Photometry(Data):
                    
         self.__init__(filterName, value, uncertainty, photUnits, **kwargs)
 
-    def setPlotParameters(self,doPlot=False,savePlot=False,showPlot=True,**kwargs):
+
+    def setPlotParameters(self,**kwargs):
         '''
             Routine to set up the plotting parameters for any photometry data set, and optionally plot (and show and/or save) the data. 
             A limited set of keywords can be set by passing **kwargs to the function.
@@ -577,50 +595,71 @@ class Photometry(Data):
 
         print("Setting plotting parameters for photometry data set.")
 
-        self.label = "Photometry"
-        try:
-            self.marker = marker
-        except:
-            self.marker = "o"
+        #update plotParams with any keywords passed via **kwargs
+        #This only changes things that were passed in, so anything else will retain its default
+        for key, value in kwargs.items():
+            self.plotParams[key] = value
+        
+        #if doPlot == True:
+        #    import matplotlib.pyplot as plt
+        #    
+        #    fig, ax = plt.subplots(1,1,figsize=(6, 8))
+        #    ax.set_xtitle(r"Wavelength ($\mu$m)")
+        #    ax.set_ytitle(r"Flux density (mJy)")
+        #    ax.errorbar(self.wavelength,self.value,xerr=None,yerr=self.uncertainty,\
+        #                linestyle=self.linestyle,marker=self.marker,mec=self.mec,mfc=self.mfc,\
+        #                color=self.mec,ecolor=self.mec,alpha=self.alpha,legend=self.label)
+        #    plt.legend("lower right",fontsize="small")
+        #    plt.tight_layout()
 
-        try:
-            self.mec = mec
-        except:
-            self.mec = "orange"
-        
-        try:
-            self.mfc = mfc
-        except:
-            self.mfc = "yellow"
-        
-        try:
-            self.linestyle = linestyle
-        except:
-            self.linestyle = ""
-        
-        try:
-            self.alpha = alpha
-        except:
-            self.alpha = 1.0
-        
-        if doPlot == True:
-            import matplotlib.pyplot as plt
-            
-            fig, ax = plt.subplots(1,1,figsize=(6, 8))
-            ax.set_xtitle(r"Wavelength ($\mu$m)")
-            ax.set_ytitle(r"Flux density (mJy)")
-            ax.errorbar(self.wavelength,self.value,xerr=None,yerr=self.uncertainty,\
-                        linestyle=self.linestyle,marker=self.marker,mec=self.mec,mfc=self.mfc,\
-                        color=self.mec,ecolor=self.mec,alpha=self.alpha,legend=self.label)
-            plt.legend("lower right",fontsize="small")
-            plt.tight_layout()
+        #    if showPlot == True:
+        #        plt.show()
+        #    if savePlot == True: 
+        #        fig.savefig("dataset.png",dpi=200,overwrite=True)
+        #    plt.close()
+        #    plt.clf()
 
-            if showPlot == True:
-                plt.show()
-            if savePlot == True: 
-                fig.savefig("dataset.png",dpi=200,overwrite=True)
-            plt.close()
-            plt.clf()
+
+    def plot(self, fig = None, ax = None, unmask=False,
+             doPlot=True,savePlot=False,showPlot=False, **kwargs):
+        
+        self.setPlotParams(**kwargs)
+
+        if doPlot:
+        
+            if ax is not None:
+                #Easiest case, we just have to use ax.errorbar to plot onto existing axes
+                ax.errorbar(self.wavelength[self.mask], self.value[self.mask],
+                            yerr=self.uncertainty[self.mask],
+                            **self.plotParams, **kwargs)
+            else:
+                if fig is not None:
+                    #Now we have a figure but no axes.
+                    #Therefore we will add some new axes to the figure and proceed
+                    if len(fig.get_axes()) == 0:
+                        ax = fig.add_subplot(111)
+                    else:
+                        #For now, assume that this is supposed to be added to the last axes if some exist
+                        ax = fig.get_axes()[-1]
+                        ax.errorbar(self.wavelength[self.mask], self.value[self.mask],
+                                    yerr=self.uncertainty[self.mask],
+                                    **self.plotParams, **kwargs)
+                else: #no axis or figure, let's create everything
+                    import matplotlib.pyplot as plt
+                    fig, ax = plt.subplots(1,1,figsize=(6, 8))
+                    ax.set_xtitle(r"Wavelength ($\mu$m)")
+                    ax.set_ytitle(r"Flux density (mJy)")
+                    ax.errorbar(self.wavelength[self.mask],self.value[self.mask],
+                                yerr=self.uncertainty[self.mask],
+                                **self.plotParams, **kwargs)
+                    plt.legend("lower right",fontsize="small")
+                    plt.tight_layout()
+                if savePlot:
+                    fig.savefig(self.label+"plot.png", dpi = 200, overwrite=True)
+                if showPlot:
+                    plt.show()
+        pass
+                   
 
 class Spectrum(Data):
     """A class to represent 1D spectra data objects and their properties
