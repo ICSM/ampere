@@ -78,7 +78,7 @@ class DynestySearch(BaseSearch):
             i+=data.npars
         return theta
 
-    def optimise(self, dlogz=None, maxiter=None, maxcall=None,
+    def optimise(self, dlogz=50., maxiter=None, maxcall=None,
                  logl_max=np.inf, add_live=True,
                  print_progress=True, print_func=None,
                  save_bounds=True, **kwargs
@@ -109,14 +109,38 @@ class DynestySearch(BaseSearch):
         fig.savefig(plotfile)
 
 
-    def plot_posteriorpredictive(self, plotfile="posteriorpredictive.png"):
+    def plot_posteriorpredictive(self, n_samples = 1000, plotfile="posteriorpredictive.png", logx = False, logy = False, alpha = 0.05):
         ''' Generate the posterior-predictive plots so that the suitability of the model for the data can be inspected. 
         '''
+
+        #This function needs to get vastly more complex in future, somehow. For now, it assumes we want to plot SEDs/spectra
 
         #This will probably require some small modifications to Data objects to make this as easy as possible.
         #It should include plotting multiple realisations of the data given the noise model (if appropriate)
         #as well as realisations from the model and the raw data
         #Must be plotted in reverse order: Model realisations first (i.e. lowest zorder), then data realisations, then data (use zorder keyword to get things in the right place, lowest first as highest end up on top)
+
+        #Reweight the samples
+        samples = self.results.samples.T
+        weights = np.exp(self.results.logwt - self.results.logz[-1])
+        samples_unif = resample_equal samples.T, weights)
+
+        #First set up the plot
+        fig = plt.figure()
+        ax = fig.add_subplot(111)
+
+        for s in samples_unif[np.random.randint(len(csamples_unif), size=n_post_samples)]:
+            optimizer.model(s)
+            ax.plot(optimizer.model.wavelengths,optimizer.model.modelFlux, '-', color='k', alpha=alpha)
+
+        for d in self.dataSet:
+            #We need to create some properties in each Data class that contain some plotting info
+            #e.g. use plot for spectra with fill_between for uncertainties
+            #use errorbar for photometry with circles
+            #for now make bad plots with lines everywhere
+            ax.plot(d.wavelength, d.value, '-',color='blue')
+        
+        fig.savefig(plotfile)
         pass
 
     def postProcess(self, maxiter=None, maxcall = None, dlogz = None, **kwargs):

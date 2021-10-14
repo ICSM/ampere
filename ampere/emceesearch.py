@@ -5,7 +5,7 @@ import emcee
 from .basesearch import BaseSearch
 from inspect import signature
 from .data import Photometry, Spectrum
-
+import matplotlib.pyplot as plt
 
 class EmceeSearch(BaseSearch):
     """
@@ -161,54 +161,34 @@ class EmceeSearch(BaseSearch):
         ''' Now produce some diagnostic plots '''
 
         ''' A plot of the walkers' sampling history '''
-        import matplotlib.pyplot as plt
-        fig, axes = plt.subplots(self.npars, 1, sharex=True, figsize=(8, 9))
-        for i in range(self.npars):
-            axes[i].plot(self.sampler.chain[:, :, i].T, color="k", alpha=0.4)
-            #    axes[0].yaxis.set_major_locator(MaxNLocator(5))
-            #axes[0].axhline(m_true, color="#888888", lw=2)
-            #axes[i].set_ylabel("$m$")
+        self.plot_walkers()
         
-    
-        #fig.tight_layout(h_pad=0.0)
-        fig.savefig("walkers.png")
         #plt.close(fig)
         ''' And a corner plot of the post-burnin results '''
-        import corner
-        fig2 = corner.corner(self.samples)#,labels=opt.labels)
-        fig2.savefig("corner.png")
+        self.plot_corner()
 
         ''' plot the evolution of the likelihood function '''
-        fig3 = plt.figure()
-        axes3 = fig3.add_subplot(111) #plt.subplots(1, 1, sharex=True, figsize=(6, 8))
-        for i in range(self.nwalkers):
-            axes3.plot(self.sampler.lnprobability[i,:])
-        try:
-            axes3.set_ylim(np.min(self.sampler.lnprobability),np.max(self.sampler.lnprobability))
-        except ValueError:
-            try:
-                axes3.set_ylim(-2000.,np.max(self.sampler.lnprobability))
-            except ValueError:
-                axes3.set_ylim(-2000.,2000)
-        fig3.savefig("lnprob.png")
-
+        self.plot_lnprob()
 
         '''finally, we want to look at the correlation/covariance matrices for the spectra, if any '''
+        self.plot_covmats()
         #fig4,(ax0,ax1) = plt.subplots(1,2)
         #ax=[ax0, ax1]
-        i=0
-        for d in self.dataSet:
-            if isinstance(d, Photometry):
-                continue
-            elif isinstance(d, Spectrum):
-                i+=1
-                fig, ax = plt.subplots(1,1)
-                #for d in self.dataSet[1:]:
-                #d=self.dataSet[1]
-                d.cov([res[8][0],res[9][0]])
-                #ax0.set_title('Covariance matrix')
-                im = ax.imshow(np.log10(d.covMat))
-                fig.savefig("covMat_"+str(i)+".png")
+        #i=0
+        #for d in self.dataSet:
+        #    if isinstance(d, Photometry):
+        #        continue
+        #    elif isinstance(d, Spectrum):
+        #        i+=1
+        #        fig, ax = plt.subplots(1,1)
+        #        #for d in self.dataSet[1:]:
+        #        #d=self.dataSet[1]
+        #        d.cov([res[8][0],res[9][0]])
+        #        #ax0.set_title('Covariance matrix')
+        #        im = ax.imshow(np.log10(d.covMat))
+        #        fig.savefig("covMat_"+str(i)+".png")
+
+        
         #cax0 = divider4.append_axes("right", size="20%", pad=0.05)
         #cbar0 = plt.colorbar(im0, cax=cax0)
         #d=self.dataSet[2]
@@ -220,7 +200,52 @@ class EmceeSearch(BaseSearch):
         #fig4.savefig("covMat.png")
         
         pass
+    def plot_walkers(self):
+        fig, axes = plt.subplots(self.npars, 1, sharex=True, figsize=(8, 9))
+        for i in range(self.npars):
+            axes[i].plot(self.sampler.chain[:, :, i].T, color="k", alpha=0.4)
+            #    axes[0].yaxis.set_major_locator(MaxNLocator(5))
+            #axes[0].axhline(m_true, color="#888888", lw=2)
+            #axes[i].set_ylabel("$m$")
+        
+    
+        #fig.tight_layout(h_pad=0.0)
+        fig.savefig("walkers.png")
+    
+    def plot_corner(self):
+        import corner
+        fig2 = corner.corner(self.samples)#,labels=opt.labels)
+        fig2.savefig("corner.png")
 
+    def plot_lnprob(self):
+        fig3 = plt.figure()
+        axes3 = fig3.add_subplot(111) #plt.subplots(1, 1, sharex=True, figsize=(6, 8))
+        for i in range(self.nwalkers):
+            axes3.plot(self.sampler.lnprobability[i,:])
+        try:
+            axes3.set_ylim(np.min(self.sampler.lnprobability),np.max(self.sampler.lnprobability))
+        except ValueError:
+            try:
+                axes3.set_ylim(-2000.,np.max(self.sampler.lnprobability))
+            except ValueError:
+                axes3.set_ylim(-2000.,2000)
+        fig3.savefig("lnprob.png")        
+        
+    def plot_covmats(self):
+        for i, d in enumerate(self.dataSet):
+            if isinstance(d, Photometry):
+                continue
+            elif isinstance(d, Spectrum):
+                fig, ax = plt.subplots(1,1)
+                #for d in self.dataSet[1:]:
+                #d=self.dataSet[1]
+                d.cov([res[8][0],res[9][0]])
+                #ax0.set_title('Covariance matrix')
+                im = ax.imshow(np.log10(d.covMat))
+                fig.savefig("covMat_"+str(i)+".png")
+
+    def plot_posteriorpredictive(self):
+        pass
 
 #    def lnlike(self, theta, **kwargs):
 #        model = self.model(theta)
