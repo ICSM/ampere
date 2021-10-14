@@ -251,6 +251,7 @@ class EmceeSearch(BaseSearch):
                 fig.savefig("covMat_"+str(i)+".png")
 
     def plot_posteriorpredictive(self):
+        #
         pass
 
 #    def lnlike(self, theta, **kwargs):
