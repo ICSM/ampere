@@ -39,6 +39,9 @@ class EmceeSearch(BaseSearch):
         #self.nparsMod = something #number of parameters for the model
         self.nparsData = [data.npars for data in self.dataSet] #number of parameters to be passed into each set of data
         self.npars = np.int(self.nparsMod + np.sum(self.nparsData))
+
+        self.parLabels = None #Parameter for parameter names (labels) to associate with output in post processing - emcee does this internally with parameter_names, but we want a universal system across all the search methods. Called parLabels to distinguish it from Data Class labels.
+        
         #print(self.npars, self.nparsMod, self.nparsData)
         #exit()
         ''' then set up the sampler '''
@@ -143,26 +146,29 @@ class EmceeSearch(BaseSearch):
         #Compute things like autocorrelation time.
         #ESS?
         #Acceptance fraction?
-
-        '''First find the median and 68% interval '''
-        self.res=[]
-        print("Median and confidence intervals for parameters in order:")
-        for i in range(self.npars):
-            a = np.percentile(self.samples[:,i], [16, 50, 84])
-            self.res.append([a[1], a[2]-a[1], a[1]-a[0]])
-            #res.append((lambda v: (v[1], v[2]-v[1], v[1]-v[0]),
-            #                     *zip(np.percentile(self.samples[:,i], [16, 50, 84])))#,
-                                                    #axis=0)))
-            #      )
-            print(self.res[i])
+        self.print_summary()
+        # '''First find the median and 68% interval '''
+        # self.res=[]
+        # print("Median and confidence intervals for parameters in order:")
+        # for i in range(self.npars):
+        #     a = np.percentile(self.samples[:,i], [16, 50, 84])
+        #     self.res.append([a[1], a[2]-a[1], a[1]-a[0]])
+        #     #res.append((lambda v: (v[1], v[2]-v[1], v[1]-v[0]),
+        #     #                     *zip(np.percentile(self.samples[:,i], [16, 50, 84])))#,
+        #                                             #axis=0)))
+        #     #      )
+        #     print("{0}  = {1[0]} + {1[1]} - {1[2]}".format(self.parLabels[i],self.res[i])) #make this look prettier
             
 
-        ''' Then check what the "best fit" was '''
-        print(np.min(self.sampler.lnprobability))
-        print(np.max(self.sampler.lnprobability))
-        row_ind, col_ind = np.unravel_index(np.argmax(self.sampler.lnprobability.ravel), self.sampler.lnprobability.shape)
-        self.bestPars = self.sampler.chain[row_ind, col_ind, :]
-        print("MAP Solution: ", self.bestPars)
+        # ''' Then check what the "best fit" was '''
+        # print(np.min(self.sampler.lnprobability))
+        # print(np.max(self.sampler.lnprobability))
+        # row_ind, col_ind = np.unravel_index(np.argmax(self.sampler.lnprobability.ravel), self.sampler.lnprobability.shape)
+        # self.bestPars = self.sampler.chain[row_ind, col_ind, :]
+        # print("MAP Solution: ")
+        # for i in range(self.npars):
+        #     print("{0}  = {1}".format(self.parLabels[i],self.bestPars[i])) #
+
         ''' Now produce some diagnostic plots '''
 
         ''' A plot of the walkers' sampling history '''
@@ -215,12 +221,14 @@ class EmceeSearch(BaseSearch):
 
         fig, axes = plt.subplots(self.npars, 1, sharex=True, figsize=(8, 9))
         for i in range(self.npars):
-            axes[i].plot(self.sampler.chain[:, :, i].T, color="k", alpha=0.4,legend=r"Samples")
-            axes[i].plot([10*tauto[i],10*tauto[i]],[-np.inf,np.inf],color="red",marker="",linestyle="-",legend=r"10$\times t_{\rm autocorr}$")
+            axes[i].plot(self.sampler.chain[:, :, i].T, color="k", alpha=0.4,legend=self.parLabels[i])
             ylims = axes[i].get_ylim()
             xlims = axes[i].get_xlim()
+            axes[i].plot([10*tauto[i],10*tauto[i]],[ylims[0],ylims[1]],color="red",marker="",linestyle="-",legend=r"10$\times t_{\rm autocorr}$")
             axes[i].add_patch(Polygon([[xlims[0], ylims[0]], [xlims[0], ylims[1]], [self.burnin, ylims[1]], [self.burnin, ylims[0]]], closed=True,
                       fill=True, color='darkgrey'))
+            axes[i].set_xlabel("Steps")
+            axes[i].set_ylabel(self.parLabels[i])
             axes[i].label_outer()
 
         plt.legend(fontsize="small")
@@ -236,7 +244,7 @@ class EmceeSearch(BaseSearch):
     
     def plot_corner(self):
         import corner
-        fig2 = corner.corner(self.samples)#,labels=opt.labels)
+        fig2 = corner.corner(self.samples),labels=self.parLabels)
         fig2.savefig("corner.png")
 
     def plot_lnprob(self):
@@ -287,7 +295,8 @@ class EmceeSearch(BaseSearch):
 
         #observations
         for d in self.dataSet:
-            d.plot(ax = axes)
+            if isinstance(d,(Photometry,Spectroscopy)):
+                d.plot(ax = axes)
 
                 #in this case, we need to plot some realisations of the data since this type of data has a noise model
                 
@@ -302,14 +311,15 @@ class EmceeSearch(BaseSearch):
             #                  linestyle=d.linestyle,marker=d.marker,color=d.mec,
             #                  ecolor=d.mfc,alpha=d.alpha,legend=d.label)
         #model
-        for s in self.samples[np.random.randint(len(samples), size=nsamples)]:
-            optimizer.model(*s[:self.nparsMod])
-            axes.plot(optimizer.model.wavelengths,optimizer.model.modelFlux, '-', color='k', alpha=alpha,legend='Samples', zorder = 0)
-            i = self.nparsMod
-            for d in self.dataSet:
-                if d._hasNoiseModel:
-                    d.plotRealisation(s[i:i+d.npars], ax=axes)
-                i+= d.npars
+            for s in self.samples[np.random.randint(len(samples), size=nsamples)]:
+                optimizer.model(*s[:self.nparsMod])
+                axes.plot(optimizer.model.wavelengths,optimizer.model.modelFlux, '-', color='k', alpha=alpha,legend='Samples', zorder = 0)
+                i = self.nparsMod
+                for d in self.dataSet:
+                    if isinstance(d,(Photometry,Spectroscopy)):
+                        if d._hasNoiseModel:
+                            d.plotRealisation(s[i:i+d.npars], ax=axes)
+                        i+= d.npars
 
         #best fit model
         optimizer.model(*self.bestPars[:self.nparsMod])
@@ -320,3 +330,41 @@ class EmceeSearch(BaseSearch):
         fig.savefig("posteriorpredictive.png",dpi=200)
         plt.close()
         plt.clr()
+
+    def print_summary(self):
+
+        ''' First calculate some diagnostic information, like the autocorrelation time and acceptance fraction '''
+        
+        print("Mean Acceptance Fraction : {0:.5f}",np.mean(sampler.acceptance_fraction()))
+        print("Mean Autocorrelation Time: {0:.5f}",np.mean(sampler.get_autocorr_time()))
+
+        print("Autocorrelation times for each parameter:")
+        tauto = self.sampler.get_autocorr_time()
+        for i in range(len(self.npars)):
+            print("{0}  = {1:.0f} steps".format(self.parLabels[i],tauto[i]))
+
+        #Compute things like autocorrelation time.
+        #ESS?
+        #Acceptance fraction?
+
+        '''Now find the median and 68% interval '''
+        self.res=[]
+        print("Median and confidence intervals for parameters in order:")
+        for i in range(self.npars):
+            a = np.percentile(self.samples[:,i], [16, 50, 84])
+            self.res.append([a[1], a[2]-a[1], a[1]-a[0]])
+            #res.append((lambda v: (v[1], v[2]-v[1], v[1]-v[0]),
+            #                     *zip(np.percentile(self.samples[:,i], [16, 50, 84])))#,
+                                                    #axis=0)))
+            #      )
+            print("{0}  = {1[0]:.5f} + {1[1]:.5f} - {1[2]:.5f}".format(self.parLabels[i],self.res[i])) #make this look prettier
+            
+
+        ''' Then check what the "best fit" was '''
+        print("Range of lnprob values in model from sampler: {0:.5f} to {1:.5f}",np.min(self.sampler.lnprobability),np.max(self.sampler.lnprobability))
+        row_ind, col_ind = np.unravel_index(np.argmax(self.sampler.lnprobability.ravel), self.sampler.lnprobability.shape)
+        self.bestPars = self.sampler.chain[row_ind, col_ind, :]
+
+        print("MAP Solution: ")
+        for i in range(self.npars):
+            print("{0}  = {1:.5f}".format(self.parLabels[i],self.bestPars[i])) #

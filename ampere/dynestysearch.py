@@ -46,6 +46,7 @@ class DynestySearch(BaseSearch):
         #self.npars = something # total number of parameters
         #self.nparsMod = something #number of parameters for the model
         self.nparsData = [data.npars for data in self.dataSet] #number of parameters to be passed into each set of data
+        self.parLabels = None #Parameter for parameter names (labels) to associate with output in post processing
         self.npars = np.int(self.nparsMod + np.sum(self.nparsData))
         print(self.npars, self.nparsMod, self.nparsData)
         self.sampler = NestedSampler(self.lnlike, self.prior_transform, self.npars,
@@ -186,17 +187,27 @@ class DynestySearch(BaseSearch):
         #fig.savefig("trace.png")
         """ with the plotting completed, we now compute estimates of the posterior """
         #This should also be extracted to a standalone method which we can call from here
-        samples, weights = self.results.samples, np.exp(self.results.logwt - self.results.logz[-1])
-        self.mean, self.cov = dyfunc.mean_and_cov(samples, weights)
-        print("Posterior means of the parameters: ",self.mean)
-        print("1-sigma confidence intervals of the parameters marginalising over all other parameters:")
-        print(np.sqrt(np.diag(self.cov)))
-        print("Posterior covariances of the parameters: ", self.cov)
-
+        self.print_summary()
 
         self.plot_posteriorpredictive()
         
         pass
+
+
+    def print_summary(self):
+        ''' Standalone method to compute and present estimates of the posterior.
+        '''
+        
+        #Calculate
+        samples, weights = self.results.samples, np.exp(self.results.logwt - self.results.logz[-1])
+        self.mean, self.cov = dyfunc.mean_and_cov(samples, weights)
+        
+        #Present
+        print("Posterior means and 1-sigma confidence intervals of the parameters marginalising over all other parameters: ")
+        for i in range(len(self.npars)):
+            print("{0}  = {1:.5f} +/- {2:.5f}".format(self.parLabels[i],self.mean[i],np.sqrt(np.diag(self.cov[i])))
+        #print(np.sqrt(np.diag(self.cov))
+        #print("Posterior covariances of the parameters: ", self.cov)
 
 class DynestyDynamicSearch(DynestySearch): #I think this can inheret almost everything except __init__ from the Static sampler
     """
