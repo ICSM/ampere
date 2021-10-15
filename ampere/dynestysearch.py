@@ -194,7 +194,7 @@ class DynestySearch(BaseSearch):
         pass
 
 
-    def print_summary(self):
+    def print_summary(self,writeOut=False):
         ''' Standalone method to compute and present estimates of the posterior.
         '''
         
@@ -208,7 +208,7 @@ class DynestySearch(BaseSearch):
             print("{0}  = {1:.5f} +/- {2:.5f}".format(self.parLabels[i],self.mean[i],np.sqrt(np.diag(self.cov[i])))
         #print(np.sqrt(np.diag(self.cov))
         #print("Posterior covariances of the parameters: ", self.cov)
-
+        
 class DynestyDynamicSearch(DynestySearch): #I think this can inheret almost everything except __init__ from the Static sampler
     """
     A class to use Dynesty to explore parameters space with dynamic nested sampling
