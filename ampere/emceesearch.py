@@ -283,7 +283,7 @@ class EmceeSearch(BaseSearch):
                 im = ax.imshow(np.log10(d.covMat))
                 fig.savefig("covMat_"+str(i)+".png")
 
-    def plot_posteriorpredictive(self, **kwargs):
+    def plot_posteriorpredictive(self, n_post_samples = 1000,**kwargs):
         '''
         Function to plot the data and samples drawn from the posterior of the models and data.
         '''
@@ -291,35 +291,20 @@ class EmceeSearch(BaseSearch):
         axes.set_xlabel(r"Wavelength ($\mu$m)")
         axes.set_ylabel(r"Flux density (mJy)")
 
-        nsamples = self.nwalkers
-
         #observations
         for d in self.dataSet:
             if isinstance(d,(Photometry,Spectroscopy)):
                 d.plot(ax = axes)
+        for s in self.samples[np.random.randint(len(samples), size=n_post_samples)]:
+            optimizer.model(*s[:self.nparsMod])
+            axes.plot(optimizer.model.wavelengths,optimizer.model.modelFlux, '-', color='k', alpha=alpha,legend='Samples', zorder = 0)
+            i = self.nparsMod
+            for d in self.dataSet:
+                if isinstance(d,(Photometry,Spectroscopy)):
+                    if d._hasNoiseModel:
+                        d.plotRealisation(s[i:i+d.npars], ax=axes)
+                    i+= d.npars
 
-                #in this case, we need to plot some realisations of the data since this type of data has a noise model
-                
-        
-            #if dataset.label == "Photometry":
-            #    axes.errorbar(d.wavelength,d.value,xerr=None,yerr=d.uncertainty,
-            #                  linestyle=d.linestyle,marker=d.marker,mec=d.mec,mfc=d.mfc,alpha=d.alpha,
-            #                  color=d.mec,ecolor=d.mec,label=d.label)
-
-            #if dataset.label == "Spectroscopy":
-            #    axes.errorbar(d.wavelength,d.value,xerr=None,yerr=d.uncertainty,
-            #                  linestyle=d.linestyle,marker=d.marker,color=d.mec,
-            #                  ecolor=d.mfc,alpha=d.alpha,legend=d.label)
-        #model
-            for s in self.samples[np.random.randint(len(samples), size=nsamples)]:
-                optimizer.model(*s[:self.nparsMod])
-                axes.plot(optimizer.model.wavelengths,optimizer.model.modelFlux, '-', color='k', alpha=alpha,legend='Samples', zorder = 0)
-                i = self.nparsMod
-                for d in self.dataSet:
-                    if isinstance(d,(Photometry,Spectroscopy)):
-                        if d._hasNoiseModel:
-                            d.plotRealisation(s[i:i+d.npars], ax=axes)
-                        i+= d.npars
 
         #best fit model
         optimizer.model(*self.bestPars[:self.nparsMod])

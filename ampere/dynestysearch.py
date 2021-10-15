@@ -110,7 +110,7 @@ class DynestySearch(BaseSearch):
         fig.savefig(plotfile)
 
 
-    def plot_posteriorpredictive(self, n_samples = 1000, plotfile="posteriorpredictive.png", logx = False, logy = False, alpha = 0.05):
+    def plot_posteriorpredictive(self, n_post_samples = 1000, plotfile="posteriorpredictive.png", logx = False, logy = False, **kwargs):
         ''' Generate the posterior-predictive plots so that the suitability of the model for the data can be inspected. 
         '''
 
