@@ -187,7 +187,7 @@ class DynestySearch(BaseSearch):
         plt.close(fig)
         plt.clf()
 
-    def postProcess(self, maxiter=None, maxcall = None, dlogz = None, **kwargs):
+    def postProcess(self, maxiter=None, maxcall = None, dlogz = None, testfile=None **kwargs):
         """ Some simple post-processing and plotting """
 
         """ first, a summary plot """
@@ -216,7 +216,7 @@ class DynestySearch(BaseSearch):
         #fig.savefig("trace.png")
         """ with the plotting completed, we now compute estimates of the posterior """
         #This should also be extracted to a standalone method which we can call from here
-        self.print_summary()
+        self.print_summary(outfile=textfile)
 
         self.plot_covmats()
 
@@ -225,7 +225,7 @@ class DynestySearch(BaseSearch):
         pass
 
 
-    def print_summary(self,writeOut=False):
+    def print_summary(self,outfile=None):
         ''' Standalone method to compute and present estimates of the posterior.
         '''
         
@@ -248,8 +248,8 @@ class DynestySearch(BaseSearch):
         print("MAP Solution: ")
         for i in range(self.npars):
             print("{0}  = {1:.5f}".format(self.parLabels[i],self.bestPars[i])) #
-        print("with Posterior probability ln(P*) = ",self.results.logwt[-1])
-        print("and likelihood ln(L*) = ",self.results.logl[-1])
+        print("with Posterior probability ln(P*) = {0:.5f}".format(self.results.logwt[-1]))
+        print("and likelihood ln(L*) = {0:.5f}".format(self.results.logl[-1]))
 
 
 
@@ -257,8 +257,24 @@ class DynestySearch(BaseSearch):
         #help(self.results)
 
         #Then print out evidence, uncertainty, and estimate of remaining evidence
-        print("Model evidence ln(Z) = ",self.results.logz[-1]," +/- ", self.results.logzerr[-1])
+        print("Model evidence ln(Z) = {0:.5f} +/- {1:.5f}".format(self.results.logz[-1], self.results.logzerr[-1]))
         #print("Estimated remaining evidence dln(Z) = ",
+
+        if outfile is not None:
+            with open(outfile, 'w') as f:
+                f.write("Posterior means and 1-sigma confidence intervals of the parameters marginalising over all other parameters: \n ")
+                for i in range(self.npars):
+                    f.write("{0}  = {1:.5f} +/- {2:.5f} \n".format(
+                        self.parLabels[i],self.mean[i],np.sqrt(np.diag(self.cov)[i]))
+                    )
+
+                f.write("\n")
+                f.write("MAP Solution: \n")
+                for i in range(self.npars):
+                    f.write("{0}  = {1:.5f} \n".format(self.parLabels[i],self.bestPars[i])) #
+                    f.write("with Posterior probability ln(P*) = {0:.5f}\n".format(self.results.logwt[-1]))
+                    f.write("and likelihood ln(L*) = {0:.5f}\n".format(self.results.logl[-1]))
+                
         
 class DynestyDynamicSearch(DynestySearch): #I think this can inheret almost everything except __init__ from the Static sampler
     """

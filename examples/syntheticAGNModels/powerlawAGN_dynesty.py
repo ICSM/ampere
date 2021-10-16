@@ -83,7 +83,7 @@ if __name__=="__main__":
     #optimizer = EmceeSearch(model=model, data=[photometry,spec0,spec1], nwalkers=100)
     optimizer = DynestySearch(model=model, data=[photometry,spec0,spec1], nlive=500)
 
-    optimizer.optimise(dlogz = 500000000.) #nsamples=3000, burnin=2900, guess=[
+    optimizer.optimise(dlogz = 500.) #nsamples=3000, burnin=2900, guess=[
         ##[0.5, -1, -10, -0.5, -0.3, -10.,-10. , 1.0, 1.0, 0.1, 1.0 ,1.0, 0.1]
         #[-2.5, .5, -1.5, -10, -0.5, -0.5, -10., 1.0, 1.0, 0.1, 1.0 ,1.0, 0.1]
         #+ np.random.rand(13)*[1,1,0.1,0.1,0.2,0.2,0.5,1,1,1,1,1,1]

@@ -139,7 +139,7 @@ class EmceeSearch(BaseSearch):
 
 
 
-    def postProcess(self, show=False, **kwargs):
+    def postProcess(self, show=False, textfile=None**kwargs):
         ''' 
         A method to post-process the sampler results 
         '''
@@ -147,7 +147,7 @@ class EmceeSearch(BaseSearch):
         #Compute things like autocorrelation time.
         #ESS?
         #Acceptance fraction?
-        self.print_summary()
+        self.print_summary(outfile=textfile)
         # '''First find the median and 68% interval '''
         # self.res=[]
         # print("Median and confidence intervals for parameters in order:")
@@ -335,7 +335,7 @@ class EmceeSearch(BaseSearch):
         plt.close(fig)
         plt.clf()
 
-    def print_summary(self):
+    def print_summary(self, outfile=None):
 
         ''' First calculate some diagnostic information, like the autocorrelation time and acceptance fraction '''
         
@@ -378,3 +378,17 @@ class EmceeSearch(BaseSearch):
         print("MAP Solution: ")
         for i in range(self.npars):
             print("{0}  = {1:.5f}".format(self.parLabels[i],self.bestPars[i])) #
+
+        if outfile is not None:
+            with open(outfile, 'w') as f:
+                f.write("Posterior means and 1-sigma confidence intervals of the parameters marginalising over all other parameters: \n ")
+                for i in range(self.npars):
+                    f.write("{0}  = {1[0]:.5f} + {1[1]:.5f} - {1[2]:.5f}".format(self.parLabels[i],self.res[i])
+                    )
+
+                f.write("\n")
+                f.write("MAP Solution: \n")
+                for i in range(self.npars):
+                    f.write("{0}  = {1:.5f}".format(self.parLabels[i],self.bestPars[i])) #
+                    #f.write("with Posterior probability ln(P*) = {0:.5f}\n".format(self.results.logwt[-1]))
+                    #f.write("and likelihood ln(L*) = {0:.5f}\n".format(self.results.logl[-1]))
