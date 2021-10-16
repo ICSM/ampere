@@ -204,7 +204,7 @@ class Photometry(Data):
     """
 
     #Create a dictionary of default plotting parameters for Photometry objects
-    self.plotParams={"alpha": 1.0,
+    plotParams={"alpha": 1.0,
                      "label": "Photometry",
                      "linestyle":'None',
                      "marker": 'o',
@@ -214,7 +214,7 @@ class Photometry(Data):
                      "zorder": 10
         }
 
-    self._hasNoiseModel = False
+    _hasNoiseModel = False
 
     def __init__(self, filterName, value, uncertainty, photUnits,
                  bandUnits=None, libName = None, label = "Photometry", **kwargs):
@@ -587,7 +587,7 @@ class Photometry(Data):
         self.__init__(filterName, value, uncertainty, photUnits, **kwargs)
 
 
-    def setPlotParameters(self,**kwargs):
+    def setPlotParams(self,**kwargs):
         '''
             Routine to set up the plotting parameters for any photometry data set, and optionally plot (and show and/or save) the data. 
             A limited set of keywords can be set by passing **kwargs to the function.
@@ -711,26 +711,25 @@ class Spectrum(Data):
 
     """
 
-    self.plotParams={"alpha": 1.0,
+    plotParams={"alpha": 1.0,
                      "color": "blue",
-                     "drawstyle":"steps-mid"
+                     "drawstyle":"steps-mid",
                      "label": "Spectrum",
                      "linestyle":'-',
                      "linewidth":1.5,
-                     "marker": '',
-                     "markersize": 2.,
                      "zorder": 9,
-                     "sample color": "cyan",
+                }
+    plotParamsSample={"sample color": "cyan",
                      "sample alpha": 0.6,
                      "sample linewidth": 1.,
                      "sample zorder": 5
         }
 
-    self._hasNoiseModel = True
+    _hasNoiseModel = True
 
     def __init__(self, wavelength, value, uncertainty, bandUnits, fluxUnits,
                  freqSpec = False, calUnc = None, covarianceTruncation = 1e-3,
-                 scaleLengthPrior = None, scaleFacPrior = None, label="Spectrum"
+                 scaleLengthPrior = None, scaleFacPrior = None, label="Spectrum",
                  **kwargs):
         #self.filterName = filterName #Telescope/Instrument cf photometry
         self.type = 'Spectrum'
@@ -1317,7 +1316,7 @@ class Spectrum(Data):
     #        plt.clf()
 
 
-    def setPlotParameters(self,**kwargs):
+    def setPlotParams(self,**kwargs):
         '''
             Routine to set up the plotting parameters for any photometry data set, and optionally plot (and show and/or save) the data. 
             A limited set of keywords can be set by passing **kwargs to the function.
@@ -1371,7 +1370,7 @@ class Spectrum(Data):
                                 alpha = self.plotParams["alpha"]/2,
                                 label = self.plotParams["label"]+" 68\% confidence band",
                                 step = s,
-                                zorder = self.plotParams["zorder"] - 1
+                                zorder = self.plotParams["zorder"] - 1,
                                 **{k:v for k,v in self.plotParams.items() if k not in ["drawstyle", "zorder", "alpha", "label"]},
                                 **kwargs)
             else:
@@ -1387,14 +1386,14 @@ class Spectrum(Data):
                             #yerr=self.uncertainty[self.mask],
                             **self.plotParams, **kwargs)
                     ax.fill_between(self.wavelength[self.mask],
-                                self.value[self.mask] - self.uncertainty[self.mask],
-                                self.value[self.mask] + self.uncertainty[self.mask],
-                                alpha = self.plotParams["alpha"]/2,
-                                label = self.plotParams["label"]+" 68\% confidence band",
-                                step = s,
-                                zorder = self.plotParams["zorder"] - 1
-                                **{k:v for k,v in self.plotParams.items() if k not in ["drawstyle", "zorder", "alpha", "label"]},
-                                **kwargs)
+                                    self.value[self.mask] - self.uncertainty[self.mask],
+                                    self.value[self.mask] + self.uncertainty[self.mask],
+                                    alpha = self.plotParams["alpha"]/2,
+                                    label = self.plotParams["label"]+" 68\% confidence band",
+                                    step = s,
+                                    zorder = self.plotParams["zorder"] - 1,
+                                    **{k:v for k,v in self.plotParams.items() if k not in ["drawstyle", "zorder", "alpha", "label"]},
+                                    **kwargs)
                 else: #no axis or figure, let's create everything
                     import matplotlib.pyplot as plt
                     fig, ax = plt.subplots(1,1,figsize=(6, 8))
@@ -1404,14 +1403,14 @@ class Spectrum(Data):
                             #yerr=self.uncertainty[self.mask],
                             **self.plotParams, **kwargs)
                     ax.fill_between(self.wavelength[self.mask],
-                                self.value[self.mask] - self.uncertainty[self.mask],
-                                self.value[self.mask] + self.uncertainty[self.mask],
-                                alpha = self.plotParams["alpha"]/2,
-                                label = self.plotParams["label"]+" 68\% confidence band",
-                                step = s,
-                                zorder = self.plotParams["zorder"] - 1
-                                **{k:v for k,v in self.plotParams.items() if k not in ["drawstyle", "zorder", "alpha", "label"]},
-                                **kwargs)
+                                    self.value[self.mask] - self.uncertainty[self.mask],
+                                    self.value[self.mask] + self.uncertainty[self.mask],
+                                    alpha = self.plotParams["alpha"]/2,
+                                    label = self.plotParams["label"]+" 68\% confidence band",
+                                    step = s,
+                                    zorder = self.plotParams["zorder"] - 1,
+                                    **{k:v for k,v in self.plotParams.items() if k not in ["drawstyle", "zorder", "alpha", "label"]},
+                                    **kwargs)
                     plt.legend("lower right",fontsize="small")
                     plt.tight_layout()
                 if savePlot:
@@ -1419,19 +1418,19 @@ class Spectrum(Data):
                 if showPlot:
                     plt.show()
 
-    def plotRealisation(s, ax=None, **kwargs):
+    def plotRealisation(self, s, ax=None, **kwargs):
 
-        plotParams = {k:v for k,v in self.plotParams.items() if k not in ["color", "linewidth", "zorder", "alpha", "label"]}
+        localplotParams = {k:v for k,v in self.plotParams.items() if k not in ["color", "linewidth", "zorder", "alpha", "label"]}
         waves = self.wavelength[self.mask]
-        values = s[0]*self.values[self.mask] #only update for scaling, not sure how to include covariance info or if it's even worth it.
+        values = s[0]*self.value[self.mask] #only update for scaling, not sure how to include covariance info or if it's even worth it.
         ax.plot(waves, values,
                 #yerr=self.uncertainty[self.mask],
-                linewidth = self.plotParams["sample linewidth"],
-                zorder = self.plotParams["sample zorder"],
+                linewidth = self.plotParamsSample["sample linewidth"],
+                zorder = self.plotParamsSample["sample zorder"],
                 label = self.plotParams["label"]+" posterior samples",
-                color = self.plotParams["sample color"],
-                alpha = self.plotParams["sample alpha"],
-                **plotParams, **kwargs)
+                color = self.plotParamsSample["sample color"],
+                alpha = self.plotParamsSample["sample alpha"],
+                **localplotParams, **kwargs)
 
 class Image(Data):
     #Need separate subclasses for images and radial profiles

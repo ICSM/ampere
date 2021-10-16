@@ -15,7 +15,7 @@ class EmceeSearch(BaseSearch):
 
     def __init__(self, nwalkers = None, model = None,
                  data = None, lnprior = None,
-                 labels = None, acceptRate = 2.0,
+                 labels = None, acceptRate = 2.0, moves=None,
                  **kwargs):
 
         #self.npars=npars
@@ -40,12 +40,12 @@ class EmceeSearch(BaseSearch):
         self.nparsData = [data.npars for data in self.dataSet] #number of parameters to be passed into each set of data
         self.npars = np.int(self.nparsMod + np.sum(self.nparsData))
 
-        self.parLabels = None #Parameter for parameter names (labels) to associate with output in post processing - emcee does this internally with parameter_names, but we want a universal system across all the search methods. Called parLabels to distinguish it from Data Class labels.
+        self.parLabels = ['x'+str(i) for i in range(self.npars)] #Parameter for parameter names (labels) to associate with output in post processing - emcee does this internally with parameter_names, but we want a universal system across all the search methods. Called parLabels to distinguish it from Data Class labels.
         
         #print(self.npars, self.nparsMod, self.nparsData)
         #exit()
         ''' then set up the sampler '''
-        self.sampler = emcee.EnsembleSampler(self.nwalkers, np.int(self.npars), self.lnprob, a = acceptRate)#, args=self.dataSet)
+        self.sampler = emcee.EnsembleSampler(self.nwalkers, np.int(self.npars), self.lnprob, a = acceptRate, moves=moves)#, args=self.dataSet)
 
  
         
@@ -69,6 +69,7 @@ class EmceeSearch(BaseSearch):
     def rebuildSampler(self, nwalkers = None, model = None,
                        data = None, lnprior = None,
                        labels = None, acceptRate = None,
+                       moves=None,
                        **kwargs):
         ''' This method will replace parts of the optimiser object if it is passed them. It can 
         be used to update the model, data, sampler setup, or prior part-way through a run '''
@@ -99,7 +100,7 @@ class EmceeSearch(BaseSearch):
             ''' first destroy the sampler '''
             self.sampler=None
             ''' now rebuild it '''
-            self.sampler = emcee.EnsembleSampler(self.nwalkers, np.int(self.npars), self.lnprob, a = acceptRate)
+            self.sampler = emcee.EnsembleSampler(self.nwalkers, np.int(self.npars), self.lnprob, a = acceptRate, moves=moves)
 
     def lnprior(self, theta, **kwargs):
         """
@@ -217,21 +218,23 @@ class EmceeSearch(BaseSearch):
     def plot_walkers(self):
         #MUST USE autocorrelation time and burnin info on plots!
         #Should probably have quiet set 'False' to pick up too short emcee runs
-        tauto = self.sampler.get_autocorr_time()
+        tauto = self.sampler.get_autocorr_time(quiet=True)
 
         fig, axes = plt.subplots(self.npars, 1, sharex=True, figsize=(8, 9))
         for i in range(self.npars):
-            axes[i].plot(self.sampler.chain[:, :, i].T, color="k", alpha=0.4,legend=self.parLabels[i])
+            axes[i].plot(self.sampler.chain[:, :, i].T, color="k", alpha=0.4) #,label=self.parLabels[i])
+            axes[i].set_xlim(0, self.nsamp)
             ylims = axes[i].get_ylim()
             xlims = axes[i].get_xlim()
-            axes[i].plot([10*tauto[i],10*tauto[i]],[ylims[0],ylims[1]],color="red",marker="",linestyle="-",legend=r"10$\times t_{\rm autocorr}$")
+            axes[i].plot([10*tauto[i],10*tauto[i]],[ylims[0],ylims[1]],color="red",marker="",linestyle="-")#,label=r"10$\times t_{\rm autocorr}$")
             axes[i].add_patch(Polygon([[xlims[0], ylims[0]], [xlims[0], ylims[1]], [self.burnin, ylims[1]], [self.burnin, ylims[0]]], closed=True,
                       fill=True, color='darkgrey'))
             axes[i].set_xlabel("Steps")
             axes[i].set_ylabel(self.parLabels[i])
             axes[i].label_outer()
+            axes[i].set_xlim(0, self.nsamp)
 
-        plt.legend(fontsize="small")
+        #plt.legend(fontsize="small")
         plt.tight_layout()
 
             #    axes[0].yaxis.set_major_locator(MaxNLocator(5))
@@ -244,33 +247,34 @@ class EmceeSearch(BaseSearch):
     
     def plot_corner(self):
         import corner
-        fig2 = corner.corner(self.samples),labels=self.parLabels)
+        fig2 = corner.corner(self.samples,labels=self.parLabels)
         fig2.savefig("corner.png")
 
     def plot_lnprob(self):
         #USE autocorrelation time and burnin info on plots?
-        tauto = self.sampler.get_autocorr_time()
+        tauto = self.sampler.get_autocorr_time(quiet=True)
 
-        fig3 = plt.figure()
-        axes3 = fig3.add_subplot(111) #plt.subplots(1, 1, sharex=True, figsize=(6, 8))
+        fig = plt.figure()
+        axes = fig.add_subplot(111) #plt.subplots(1, 1, sharex=True, figsize=(6, 8))
         for i in range(self.nwalkers):
-            axes3.plot(self.sampler.lnprobability[i,:])
+            axes.plot(self.sampler.lnprobability[i,:])
         try:
-            axes3.set_ylim(np.min(self.sampler.lnprobability),np.max(self.sampler.lnprobability))
+            axes.set_ylim(np.min(self.sampler.lnprobability),np.max(self.sampler.lnprobability))
         except ValueError:
             try:
-                axes3.set_ylim(-2000.,np.max(self.sampler.lnprobability))
+                axes.set_ylim(-2000.,np.max(self.sampler.lnprobability))
             except ValueError:
-                axes3.set_ylim(-2000.,2000)
+                axes.set_ylim(-2000.,2000)
 
-        ylims = axes[i].get_ylim()
-        xlims = axes[i].get_xlim()
-        axes3.add_patch(Polygon([[xlims[0], ylims[0]], [xlims[0], ylims[1]], [self.burnin, ylims[1]], [self.burnin, ylims[0]]], closed=True,
+        ylims = axes.get_ylim()
+        xlims = axes.get_xlim()
+        axes.add_patch(Polygon([[xlims[0], ylims[0]], [xlims[0], ylims[1]], [self.burnin, ylims[1]], [self.burnin, ylims[0]]], closed=True,
                       fill=True, color='grey'))
-        axes3.plot([10*tauto,10*tauto],[ylims[0],ylims[1]],color="red",marker="",linestyle="-",legend=r"10$\times t_{\rm autocorr}$")
-        fig3.savefig("lnprob.png")        
+        axes.plot([10*tauto,10*tauto],[ylims[0],ylims[1]],color="red",marker="",linestyle="-",label=r"10$\times t_{\rm autocorr}$")
+        fig.savefig("lnprob.png")        
         
     def plot_covmats(self):
+        istart = self.nparsMod
         for i, d in enumerate(self.dataSet):
             if isinstance(d, Photometry):
                 continue
@@ -278,12 +282,15 @@ class EmceeSearch(BaseSearch):
                 fig, ax = plt.subplots(1,1)
                 #for d in self.dataSet[1:]:
                 #d=self.dataSet[1]
-                d.cov([res[8][0],res[9][0]])
+                #print("Using these parameters for the covariance matrix:")
+                #print(self.parLabels[istart+1], self.parLabels[istart+2])
+                d.cov([self.res[istart+1][0],self.res[istart+2][0]])
                 #ax0.set_title('Covariance matrix')
                 im = ax.imshow(np.log10(d.covMat))
+                istart+=d.npars
                 fig.savefig("covMat_"+str(i)+".png")
 
-    def plot_posteriorpredictive(self, n_post_samples = 1000,**kwargs):
+    def plot_posteriorpredictive(self, n_post_samples = 1000,plotfile="posteriorpredictive.png", logx = False, logy = False, alpha = 0.1,**kwargs):
         '''
         Function to plot the data and samples drawn from the posterior of the models and data.
         '''
@@ -293,40 +300,58 @@ class EmceeSearch(BaseSearch):
 
         #observations
         for d in self.dataSet:
-            if isinstance(d,(Photometry,Spectroscopy)):
+            if isinstance(d,(Photometry,Spectrum)):
                 d.plot(ax = axes)
-        for s in self.samples[np.random.randint(len(samples), size=n_post_samples)]:
-            optimizer.model(*s[:self.nparsMod])
-            axes.plot(optimizer.model.wavelengths,optimizer.model.modelFlux, '-', color='k', alpha=alpha,legend='Samples', zorder = 0)
+        for s in self.samples[np.random.randint(len(self.samples), size=n_post_samples)]:
+            try:
+                self.model(*s[:self.nparsMod])
+                axes.plot(self.model.wavelength,self.model.modelFlux, '-', color='k', alpha=alpha,label='Samples', zorder = 0)
+            except ValueError:
+                pass
             i = self.nparsMod
             for d in self.dataSet:
-                if isinstance(d,(Photometry,Spectroscopy)):
+                if isinstance(d,(Photometry,Spectrum)):
                     if d._hasNoiseModel:
                         d.plotRealisation(s[i:i+d.npars], ax=axes)
                     i+= d.npars
 
 
         #best fit model
-        optimizer.model(*self.bestPars[:self.nparsMod])
-        ax.plot(optimizer.model.wavelengths,optimizer.model.modelFlux, '-', color='k', alpha=1.0,legend='MAP', zorder=8)        
+        try:
+            self.model(*self.bestPars[:self.nparsMod])
+            axes.plot(self.model.wavelength,self.model.modelFlux, '-', color='k', alpha=1.0,label='MAP', zorder=8)
+        except ValueError:
+            print("Error in MAP solution - relative abundances do not make sense. \n Skipping MAP in plot")
 
-        plt.legend()
+        #These plots end up with too many labels for the legend, so we clobber the label information so that only one of each one is plotted
+        handles, labels = plt.gca().get_legend_handles_labels()
+        # labels will be the keys of the dict, handles will be values
+        temp = {k:v for k,v in zip(labels, handles)}
+        plt.legend(temp.values(), temp.keys(), loc='best')
+
+        #plt.legend()
         plt.tight_layout()
-        fig.savefig("posteriorpredictive.png",dpi=200)
-        plt.close()
-        plt.clr()
+        fig.savefig(plotfile,dpi=200)
+        plt.close(fig)
+        plt.clf()
 
     def print_summary(self):
 
         ''' First calculate some diagnostic information, like the autocorrelation time and acceptance fraction '''
         
-        print("Mean Acceptance Fraction : {0:.5f}",np.mean(sampler.acceptance_fraction()))
-        print("Mean Autocorrelation Time: {0:.5f}",np.mean(sampler.get_autocorr_time()))
-
+        print("Mean Acceptance Fraction : {0:.5f}",np.mean(self.sampler.acceptance_fraction))
+        #try:
+        tauto = self.sampler.get_autocorr_time(quiet=True)
+        print("Mean Autocorrelation Time: {0:.5f}",np.mean(tauto))
+        
         print("Autocorrelation times for each parameter:")
-        tauto = self.sampler.get_autocorr_time()
-        for i in range(len(self.npars)):
+        #tauto = self.sampler.get_autocorr_time()
+        for i in range(self.npars):
             print("{0}  = {1:.0f} steps".format(self.parLabels[i],tauto[i]))
+        #except emcee.autocorr.AutocorrError as e:
+        #    print(repr(e))
+        #    print("Skipping autocorrelation time")
+            
 
         #Compute things like autocorrelation time.
         #ESS?

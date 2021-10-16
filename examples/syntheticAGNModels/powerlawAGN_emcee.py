@@ -14,6 +14,9 @@ from astropy import units as u
 from spectres import spectres
 import pyphot
 
+#Test using moves:
+from emcee import moves
+
 
 
 if __name__=="__main__":
@@ -79,11 +82,21 @@ if __name__=="__main__":
     photometry = Photometry(filterName=filterName, value=modSed, uncertainty=photunc, photUnits='Jy', libName=libname)
     #print(photometry.filterMask)
     photometry.reloadFilters(wavelengths)
-    
-    #optimizer = EmceeSearch(model=model, data=[photometry,spec0,spec1], nwalkers=100)
-    optimizer = DynestySearch(model=model, data=[photometry,spec0,spec1], nlive=500)
 
-    optimizer.optimise(dlogz = 500.) #nsamples=3000, burnin=2900, guess=[
+    #Trying to change the move for possible multimodality
+    m = [(moves.DEMove(), 0.8),
+        (moves.DESnookerMove(), 0.2),
+         ]
+    optimizer = EmceeSearch(model=model, data=[photometry,spec0,spec1], nwalkers=100, moves=m)
+    #optimizer = DynestySearch(model=model, data=[photometry,spec0,spec1], nlive=500)
+
+    optimizer.optimise(nsamples = 3000, burnin=2900, guess=[
+        ##[0.5, -1, -10, -0.5, -0.3, -10.,-10. , 1.0, 1.0, 0.1, 1.0 ,1.0, 0.1]
+        [-2.5, .5, -1.5, -10, -0.3, -0.5, -10., 1.0, 1.0, 0.1, 1.0 ,1.0, 0.1]
+        + np.random.rand(13)*[1,1,0.1,0.1,0.2,0.2,0.5,1,1,1,1,1,1]
+        for i in range(optimizer.nwalkers)])
+
+    #optimizer.optimise(dlogz = 500.) #nsamples=3000, burnin=2900, guess=[
         ##[0.5, -1, -10, -0.5, -0.3, -10.,-10. , 1.0, 1.0, 0.1, 1.0 ,1.0, 0.1]
         #[-2.5, .5, -1.5, -10, -0.5, -0.5, -10., 1.0, 1.0, 0.1, 1.0 ,1.0, 0.1]
         #+ np.random.rand(13)*[1,1,0.1,0.1,0.2,0.2,0.5,1,1,1,1,1,1]
