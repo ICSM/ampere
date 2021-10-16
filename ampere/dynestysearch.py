@@ -4,10 +4,11 @@ import numpy as np
 #import dynesty
 from .basesearch import BaseSearch
 from inspect import signature
-#from .data import Photometry, Spectrum
+from .data import Photometry, Spectrum
 from dynesty import NestedSampler, DynamicNestedSampler
 from dynesty import plotting as dyplot
 from dynesty import utils as dyfunc
+import matplotlib.pyplot as plt
 
 
 class DynestySearch(BaseSearch):
@@ -46,9 +47,9 @@ class DynestySearch(BaseSearch):
         #self.npars = something # total number of parameters
         #self.nparsMod = something #number of parameters for the model
         self.nparsData = [data.npars for data in self.dataSet] #number of parameters to be passed into each set of data
-        self.parLabels = None #Parameter for parameter names (labels) to associate with output in post processing
         self.npars = np.int(self.nparsMod + np.sum(self.nparsData))
         print(self.npars, self.nparsMod, self.nparsData)
+        self.parLabels = ['x'+str(i) for i in range(self.npars)] #Parameter for parameter names (labels) to associate with output in post processing
         self.sampler = NestedSampler(self.lnlike, self.prior_transform, self.npars,
                                      nlive=nlive, bound=bound, sample=sample,
                                      update_interval = update_interval,
@@ -97,9 +98,11 @@ class DynestySearch(BaseSearch):
 
     def plot_corner(self, plotfile="corner.png"):
         """ next, a corner plot """
-        fg, ax = dyplot.cornerplot(self.results, color='red', #truths=np.zeros(ndim), truth_color='black',
-                                   show_titles=True,
-                                   quantiles=None, max_n_ticks=5)
+        fg, ax = dyplot.cornerpoints(self.results,
+                                     max_n_ticks=5, cmap="plasma", kde=True)
+        #fg, ax = dyplot.cornerplot(self.results)#, color='red', #truths=np.zeros(ndim), truth_color='black',
+                                   #show_titles=True,
+                                   #quantiles=None, max_n_ticks=5)
         fg.savefig(plotfile)
 
     def plot_trace(self, plotfile="trace.png"):
@@ -108,6 +111,23 @@ class DynestySearch(BaseSearch):
                                      trace_cmap='viridis', connect=True,
                                      connect_highlight=range(5))
         fig.savefig(plotfile)
+
+    def plot_covmats(self):
+        istart = self.nparsMod
+        for i, d in enumerate(self.dataSet):
+            if isinstance(d, Photometry):
+                continue
+            elif isinstance(d, Spectrum):
+                fig, ax = plt.subplots(1,1)
+                #for d in self.dataSet[1:]:
+                #d=self.dataSet[1]
+                #print("Using these parameters for the covariance matrix:")
+                #print(self.parLabels[istart+1], self.parLabels[istart+2])
+                d.cov([self.res[istart+1][0],self.res[istart+2][0]])
+                #ax0.set_title('Covariance matrix')
+                im = ax.imshow(np.log10(d.covMat))
+                istart+=d.npars
+                fig.savefig("covMat_"+str(i)+".png")
 
 
     def plot_posteriorpredictive(self, n_post_samples = 1000, plotfile="posteriorpredictive.png", logx = False, logy = False, alpha = 0.1, **kwargs):
@@ -127,11 +147,11 @@ class DynestySearch(BaseSearch):
         #Reweight the samples
         samples = self.results.samples.T
         weights = np.exp(self.results.logwt - self.results.logz[-1])
-        samples_unif = resample_equal(samples.T, weights)
+        samples_unif = dyfunc.resample_equal(samples.T, weights)
 
         #First set up the plot
         fig = plt.figure()
-        ax = fig.add_subplot(111)
+        axes = fig.add_subplot(111)
 
         #observations
         for d in self.dataSet:
@@ -139,8 +159,8 @@ class DynestySearch(BaseSearch):
             d.plot(ax = axes)
 
         for s in samples_unif[np.random.randint(len(samples_unif), size=n_post_samples)]:
-            optimizer.model(*s[self.nparsMod])
-            ax.plot(self.model.wavelength,self.model.modelFlux, '-', color='k', alpha=alpha, legend='Samples', zorder=0)
+            self.model(*s[:self.nparsMod])
+            axes.plot(self.model.wavelength,self.model.modelFlux, '-', color='k', alpha=alpha, label='Samples', zorder=0)
 
             i = self.nparsMod
             for d in self.dataSet:
@@ -148,11 +168,20 @@ class DynestySearch(BaseSearch):
                     d.plotRealisation(s[i:i+d.npars], ax=axes)
                 i+= d.npars
 
-        #best fit model - not sure how to get MAP/ML model out of dynesty yet
-        #optimizer.model(*self.bestPars[:self.nparsMod])
-        #ax.plot(optimizer.model.wavelengths,optimizer.model.modelFlux, '-', color='k', alpha=1.0,legend='MAP', zorder=8)
+        #best fit model
+        try:
+            self.model(*self.bestPars[:self.nparsMod])
+            axes.plot(self.model.wavelength,self.model.modelFlux, '-', color='k', alpha=1.0,label='MAP', zorder=8)
+        except ValueError:
+            print("Error in MAP solution \n Skipping MAP in plot")
 
-        plt.legend()
+
+        #These plots end up with too many labels for the legend, so we clobber the label information so that only one of each one is plotted
+        handles, labels = plt.gca().get_legend_handles_labels()
+        # labels will be the keys of the dict, handles will be values
+        temp = {k:v for k,v in zip(labels, handles)}
+        plt.legend(temp.values(), temp.keys(), loc='best')
+
         plt.tight_layout()
         fig.savefig(plotfile)
         plt.close(fig)
@@ -189,6 +218,8 @@ class DynestySearch(BaseSearch):
         #This should also be extracted to a standalone method which we can call from here
         self.print_summary()
 
+        self.plot_covmats()
+
         self.plot_posteriorpredictive()
         
         pass
@@ -201,15 +232,33 @@ class DynestySearch(BaseSearch):
         #Calculate
         samples, weights = self.results.samples, np.exp(self.results.logwt - self.results.logz[-1])
         self.mean, self.cov = dyfunc.mean_and_cov(samples, weights)
+        self.res = np.array([[self.mean[i], self.cov[i]] for i in range(self.npars)])
         
         #Present
         print("Posterior means and 1-sigma confidence intervals of the parameters marginalising over all other parameters: ")
-        for i in range(len(self.npars)):
+        for i in range(self.npars):
             print("{0}  = {1:.5f} +/- {2:.5f}".format(
-                self.parLabels[i],self.mean[i],np.sqrt(np.diag(self.cov[i])))
+                self.parLabels[i],self.mean[i],np.sqrt(np.diag(self.cov)[i]))
                   )
         #print(np.sqrt(np.diag(self.cov))
         #print("Posterior covariances of the parameters: ", self.cov)
+
+        #Now produce ML and MAP solution
+        self.bestPars = self.results.samples[-1]
+        print("MAP Solution: ")
+        for i in range(self.npars):
+            print("{0}  = {1:.5f}".format(self.parLabels[i],self.bestPars[i])) #
+        print("with Posterior probability ln(P*) = ",self.results.logwt[-1])
+        print("and likelihood ln(L*) = ",self.results.logl[-1])
+
+
+
+        #print(self.results)
+        #help(self.results)
+
+        #Then print out evidence, uncertainty, and estimate of remaining evidence
+        print("Model evidence ln(Z) = ",self.results.logz[-1]," +/- ", self.results.logzerr[-1])
+        #print("Estimated remaining evidence dln(Z) = ",
         
 class DynestyDynamicSearch(DynestySearch): #I think this can inheret almost everything except __init__ from the Static sampler
     """

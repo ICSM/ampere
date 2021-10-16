@@ -321,7 +321,7 @@ class EmceeSearch(BaseSearch):
             self.model(*self.bestPars[:self.nparsMod])
             axes.plot(self.model.wavelength,self.model.modelFlux, '-', color='k', alpha=1.0,label='MAP', zorder=8)
         except ValueError:
-            print("Error in MAP solution - relative abundances do not make sense. \n Skipping MAP in plot")
+            print("Error in MAP solution \n Skipping MAP in plot")
 
         #These plots end up with too many labels for the legend, so we clobber the label information so that only one of each one is plotted
         handles, labels = plt.gca().get_legend_handles_labels()
