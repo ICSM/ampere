@@ -187,7 +187,7 @@ class DynestySearch(BaseSearch):
         plt.close(fig)
         plt.clf()
 
-    def postProcess(self, maxiter=None, maxcall = None, dlogz = None, testfile=None **kwargs):
+    def postProcess(self, maxiter=None, maxcall = None, dlogz = None, testfile=None, **kwargs):
         """ Some simple post-processing and plotting """
 
         """ first, a summary plot """
