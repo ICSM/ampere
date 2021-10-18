@@ -322,7 +322,7 @@ We use the following parameters:
        Output is an array of model fluxes (fluxes), to match wavelengths'''
 
     def __init__(self, wavelengths, flatprior=True,
-                 opacityFileList=None),
+                 opacityFileList=None,
                  **kwargs):
         self.wavelength = wavelengths #grid of observed wavelengths to calculate BB for
 
@@ -353,8 +353,6 @@ We use the following parameters:
         # print out **kwargs
         for key, value in kwargs.items():
             print(key + " : " + value)
-
-        #hiero. Write this according to crystallinity.ia and ck_modbb.pro
 
         #number of dust species in opacityDirectory are all going to be fitted
         #for each we will consider a hot and a cold component. We will allow only 2
