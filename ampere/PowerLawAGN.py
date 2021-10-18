@@ -384,29 +384,31 @@ We use the following parameters:
 
         return fModel[1,:]
 
+#hiero, I am getting all my indices of fnu etc. wrong. Check all this below    
     def ckmodbb(self, q, tin, tout, n0, index = 0.5, r0 = 1e15, distance = 910., grainsize = 0.1, steps = 10):
         d = distance * 3.0857e18 #convert distance from pc to cm
         a = grainsize * 1e-4 #convert grainsize from micron to cm
  
         fnu = np.zeros((2, wavelengths.__len__()))
-        fnu[1,] = self.wavelengths
+        fnu[0,:] = self.wavelengths
 
         for i in range(steps - 1):
             t = tin - i * (tin-tout)/steps
             power = (t/tin)^(2*index - 6)
-            bb = shbb(fnu[:,], t, 0.) 
-            fnu[,:] = fnu[,:] + q[,:]*bb[,:]*power*((tin-tout)/steps)
+            bb = shbb(fnu, t, 0.) 
+            fnu[1,:] = np.add(fnu[1,:],np.multiply(q[1,:],bb[1,:])*(power*((tin-tout)/steps)))
+
         extra = r0/d
         factor = 4 * math.pi * a * a * r0 * n0 * extra * extra / (3-index)
-        fnu[,:] = fnu[,:] * factor
-        return, fnu
+        fnu[1,:] = fnu[1,:] * factor
+        return fnu
 
     def shbb(self, aar, temp, pinda):
         a1 = 3.97296e19
         a2 = 1.43875e4
         mbb = np.copy(aar)                                 
-        bbflux = a1/(mbb[:,]^3)/(exp(a2/(mbb[:,]*temp))-1)
-        mbb[,:] = bbflux *[mbb:,]^pinda
+        bbflux = a1/(mbb[0,:]^3)/(exp(a2/(mbb[0,:]*temp))-1)
+        mbb[1,:] = bbflux * mbb[0,:]^pinda
         return mbb                                 
 
     def lnprior(self, theta, **kwargs):
