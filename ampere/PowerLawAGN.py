@@ -384,7 +384,7 @@ We use the following parameters:
 
         return fModel[1,:]
 
-#hiero, I am getting all my indices of fnu etc. wrong. Check all this below    
+#hiero, I am getting all my indices of fnu etc. wrong. Check all this below, especially whether I am using wavelength and flux in the correct place    
     def ckmodbb(self, q, tin, tout, n0, index = 0.5, r0 = 1e15, distance = 910., grainsize = 0.1, steps = 10):
         d = distance * 3.0857e18 #convert distance from pc to cm
         a = grainsize * 1e-4 #convert grainsize from micron to cm
