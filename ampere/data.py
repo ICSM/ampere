@@ -12,7 +12,7 @@ from astropy.io.votable import parse_single_table
 import astropy.units as u
 from astropy.io import ascii
 from spectres import spectres
-from scipy.stats import norm, halfnorm
+from scipy.stats import rv_continuous, norm, halfnorm
 #from scipy.linalg import inv
 from numpy.linalg import inv
 
@@ -75,6 +75,12 @@ class Data(object):
     def fromTable(self, table, format, **kwargs):
         '''Routine to generate data object from an astropy Table object or a file containing data in a format that can be read in as an astropy Table
         '''
+        pass
+
+    def setPlotParameters(self):
+        pass
+
+    def plot(self):
         pass
 
     def selectWaves(self, low = 0, up = np.inf, interval = "closed", **kwargs):
@@ -197,12 +203,29 @@ class Photometry(Data):
 
     """
 
-    def __init__(self, filterName, value, uncertainty, photUnits, bandUnits=None, libName = None, **kwargs):
+    #Create a dictionary of default plotting parameters for Photometry objects
+    plotParams={"alpha": 1.0,
+                     "label": "Photometry",
+                     "linestyle":'None',
+                     "marker": 'o',
+                     "markeredgecolor": 'black',
+                     "markerfacecolor": 'orange',
+                     "markersize": 2.,
+                     "zorder": 10
+        }
+
+    _hasNoiseModel = False
+
+    def __init__(self, filterName, value, uncertainty, photUnits,
+                 bandUnits=None, libName = None, label = "Photometry", **kwargs):
         self.filterName = filterName
 
         ''' setup pyphot for this set of photometry '''
         self.pyphotSetup(libName)
         self.filterNamesToPyphot()
+
+        self.label = label
+        self.plotParams["label"] = label
 
         #print(self.filterMask)
         if np.all(self.filterMask):
@@ -370,6 +393,13 @@ class Photometry(Data):
         self.wavelength = np.array([filt.lpivot.magnitude for filt in filters])
         self.filters=filters
 
+    def prior_transform(self, u, **kwargs):
+        """Transform from uniform RVs to the prior of any nuisance parameters. 
+
+        Since this implementation has no nuisance parameters, it does nothing."""
+        return None
+        
+            
     def lnprior(self, theta, **kwargs):
         """Return the prior of any nuisance parameters. 
 
@@ -555,7 +585,82 @@ class Photometry(Data):
 
                    
         self.__init__(filterName, value, uncertainty, photUnits, **kwargs)
+
+
+    def setPlotParams(self,**kwargs):
+        '''
+            Routine to set up the plotting parameters for any photometry data set, and optionally plot (and show and/or save) the data. 
+            A limited set of keywords can be set by passing **kwargs to the function.
+        '''
+
+        print("Setting plotting parameters for photometry data set.")
+
+        #update plotParams with any keywords passed via **kwargs
+        #This only changes things that were passed in, so anything else will retain its default
+        for key, value in kwargs.items():
+            self.plotParams[key] = value
+        
+        #if doPlot == True:
+        #    import matplotlib.pyplot as plt
+        #    
+        #    fig, ax = plt.subplots(1,1,figsize=(6, 8))
+        #    ax.set_xtitle(r"Wavelength ($\mu$m)")
+        #    ax.set_ytitle(r"Flux density (mJy)")
+        #    ax.errorbar(self.wavelength,self.value,xerr=None,yerr=self.uncertainty,\
+        #                linestyle=self.linestyle,marker=self.marker,mec=self.mec,mfc=self.mfc,\
+        #                color=self.mec,ecolor=self.mec,alpha=self.alpha,legend=self.label)
+        #    plt.legend("lower right",fontsize="small")
+        #    plt.tight_layout()
+
+        #    if showPlot == True:
+        #        plt.show()
+        #    if savePlot == True: 
+        #        fig.savefig("dataset.png",dpi=200,overwrite=True)
+        #    plt.close()
+        #    plt.clf()
+
+
+    def plot(self, fig = None, ax = None, unmask=False,
+             doPlot=True,savePlot=False,showPlot=False, **kwargs):
+        
+        self.setPlotParams(**kwargs)
+
+        if doPlot:
+        
+            if ax is not None:
+                #Easiest case, we just have to use ax.errorbar to plot onto existing axes
+                ax.errorbar(self.wavelength[self.mask], self.value[self.mask],
+                            yerr=self.uncertainty[self.mask],
+                            **self.plotParams, **kwargs)
+            else:
+                if fig is not None:
+                    #Now we have a figure but no axes.
+                    #Therefore we will add some new axes to the figure and proceed
+                    if len(fig.get_axes()) == 0:
+                        ax = fig.add_subplot(111)
+                    else:
+                        #For now, assume that this is supposed to be added to the last axes if some exist
+                        ax = fig.get_axes()[-1]
+                    ax.errorbar(self.wavelength[self.mask], self.value[self.mask],
+                                yerr=self.uncertainty[self.mask],
+                                **self.plotParams, **kwargs)
+                else: #no axis or figure, let's create everything
+                    import matplotlib.pyplot as plt
+                    fig, ax = plt.subplots(1,1,figsize=(6, 8))
+                    ax.set_xtitle(r"Wavelength ($\mu$m)")
+                    ax.set_ytitle(r"Flux density (mJy)")
+                    ax.errorbar(self.wavelength[self.mask],self.value[self.mask],
+                                yerr=self.uncertainty[self.mask],
+                                **self.plotParams, **kwargs)
+                    plt.legend("lower right",fontsize="small")
+                    plt.tight_layout()
+                if savePlot:
+                    fig.savefig(self.label+"plot.png", dpi = 200, overwrite=True)
+                if showPlot:
+                    plt.show()
+        pass
                    
+
 class Spectrum(Data):
     """A class to represent 1D spectra data objects and their properties
 
@@ -606,9 +711,30 @@ class Spectrum(Data):
 
     """
 
-    def __init__(self, wavelength, value, uncertainty, bandUnits, fluxUnits, freqSpec = False, calUnc = None, covarianceTruncation = 1e-3, **kwargs):
+    plotParams={"alpha": 1.0,
+                     "color": "blue",
+                     "drawstyle":"steps-mid",
+                     "label": "Spectrum",
+                     "linestyle":'-',
+                     "linewidth":1.5,
+                     "zorder": 9,
+                }
+    plotParamsSample={"sample color": "cyan",
+                     "sample alpha": 0.6,
+                     "sample linewidth": 1.,
+                     "sample zorder": 5
+        }
+
+    _hasNoiseModel = True
+
+    def __init__(self, wavelength, value, uncertainty, bandUnits, fluxUnits,
+                 freqSpec = False, calUnc = None, covarianceTruncation = 1e-3,
+                 scaleLengthPrior = None, scaleFacPrior = None, label="Spectrum",
+                 **kwargs):
         #self.filterName = filterName #Telescope/Instrument cf photometry
         self.type = 'Spectrum'
+        self.label = label
+        self.plotParams["label"] = label
 
         #Wavelength conversion
         self.frequency = freqSpec #True/False? Wavelength or Frequency spectrum
@@ -675,6 +801,36 @@ class Spectrum(Data):
             self.calUnc = calUnc
 
         self.npars = 3 #this will have to change in future to 1 + number of parameters required by GPs for covMat
+
+
+
+        #Set up the objects for some of the priors:
+        if isinstance(scaleFacPrior, rv_continuous):
+            #The user has provided a prior, use it!
+            self.scaleFacPrior = scaleFacPrior
+        elif isinstance(scaleFacPrior, float) and calUnc is None:
+            #The user has provided the calibration uncertainty here rather than in calUnc
+            self.scaleFacPrior = norm(loc=0., scale = scaleFacPrior)
+        elif isinstance(scaleFacPrior, float):
+            #The user has provided a float here as well as a number of calUnc, we'll assume this is the logarithm of the bias on the scale factor
+            self.scaleFacPrior = norm(loc=scaleFacPrior, scale = self.calUnc)
+        elif isinstance(scaleFacPrior, (list, tuple, np.ndarray)) and len(scaleFacPrior) == 2: #Consider changing the first condition to isinstance(scaleFacPrior, (collections.Sequence, np.ndarray)) ?
+            #Two numbers, they should be the loc and scale parameters
+            self.scaleFacPrior = norm(loc=scaleFacPrior[0], scale = scaleFacPrior[1])
+        else:
+            self.scaleFacPrior = norm(loc=0., scale = self.calUnc)
+
+        #Now the scale length of the noise model
+        if isinstance(scaleLengthPrior, rv_continuous):
+            #The user has provided a prior, use it!
+            self.scaleLengthPrior = scaleLengthPrior
+        elif isinstance(scaleLengthPrior, float):
+            #The user has provided the width of the prior
+            self.scaleLengthPrior = halfnorm(loc=0., scale = scaleLengthPrior) #Using the half normal results in infinite bounds on the length scale, and hence there is always room to improve the likelihood by increasing the length scale. It may be necessary to alter this to a truncated normal distribution.
+        else:
+            self.scaleLengthPrior = halfnorm(loc=0., scale = 1)
+        
+        #self.scaleLengthPrior = halfnorm(loc = 0, scale= 1.) #.logpdf(theta[2], 0., 1.)
 
         self.covarianceTruncation = covarianceTruncation #if defined, covariance matrices will be truncated when their values are less than this number, to minimise the number of operation
 
@@ -804,7 +960,24 @@ class Spectrum(Data):
         #    exit()
         self.theta_last = theta
         #return self.covMat
+        
+    def prior_transform(self, u, **kwargs):
+        """Transform from uniform RVs to the prior of any nuisance parameters. 
 
+        This implementation has 3 nuisance parameters. These are 1) a scale factor, 
+        which multiplies the observed spectrum to include the uncertainty on 
+        absolute calibration, 2) the strength of the correlated component of the
+        covariances and 3) the scale length (standard deviation) of the Gaussian
+        kernel for the correlated component of the covariances. All three parameters
+        are passed in with a single sequence.
+        """
+
+        theta = np.zeros_like(u)
+        theta[0] = 10**self.scaleFacPrior.ppf(u[0])
+        theta[1] = u[1]
+        theta[2] = self.scaleLengthPrior.ppf(u[2])
+        return theta
+    
     def lnprior(self, theta, **kwargs):
         """Return the prior of any nuisance parameters. 
 
@@ -821,7 +994,7 @@ class Spectrum(Data):
             scaleFac = theta
         if scaleFac > 0 and 0. <= theta[1] <= 1. and theta[2] > 0.:
             #print(scalefac)
-            return norm.logpdf(np.log10(scaleFac), loc=0., scale = self.calUnc) + halfnorm.logpdf(theta[2], 0., 1.)
+            return self.scaleFacPrior.logpdf(np.log10(scaleFac)) + self.scaleLengthPrior.logpdf(theta[2])#norm.logpdf(np.log10(scaleFac), loc=0., scale = self.calUnc) + halfnorm.logpdf(theta[2], 0., 1.)
         return -np.inf
 
     def lnlike(self, theta, model, **kwargs):
@@ -1055,7 +1228,7 @@ class Spectrum(Data):
                     table.add_column('uncertainty')
                     table['uncertainty'].data[:] = 0.0
         ## pass control to fromTable to define the variables
-        specList = cls.fromTable(table)
+        specList = cls.fromTable(table, **kwargs)
         return specList#elf
 
     @classmethod
@@ -1079,9 +1252,185 @@ class Spectrum(Data):
         for chunk in np.unique(table['chunk'].data):
             selection = table['chunk'] == chunk
             self=cls.__new__(Spectrum)
-            self.__init__(table['wavelength'][selection].data, value[selection], uncertainty[selection], bandUnits, photUnits) #Also pass in flux units
+            self.__init__(table['wavelength'][selection].data, value[selection], uncertainty[selection], bandUnits, photUnits, **kwargs) #Also pass in flux units
             specList.append(self)
         return specList #self
+
+    #def setPlotParameters(self,doPlot=False,savePlot=False,showPlot=True,**kwargs):
+    #    '''
+    #        Routine to set up the plotting parameters for any spectroscopy data set, and optionally plot (and show and/or save) the data. 
+    #        A limited set of keywords can be set by passing **kwargs to the function.
+    #    '''
+
+    #    print("Setting plotting parameters for spectroscopy data set.")
+
+    #    self.label = "Spectroscopy"
+
+    #    try:
+    #        self.marker = marker
+    #    except:
+    #        self.marker = "."
+
+    #    try:
+    #        self.mec = mec
+    #    except:
+    #        self.mec = "blue"
+        
+    #    try:
+    #        self.mfc = mfc
+    #    except:
+    #        self.mfc = "dodgerblue"
+        
+    #    try:
+    #        self.linestyle = linestyle
+    #    except:
+    #        self.linestyle = "-"
+        
+    #    try:
+    #        self.alpha = alpha
+    #    except:
+    #        self.alpha = 0.1
+        
+    #    if doPlot == True:
+    #        import matplotlib.pyplot as plt
+            
+    #        fig, ax = plt.subplots(1,1,figsize=(6, 8))
+    #        ax.set_xtitle(r"Wavelength ($\mu$m)")
+    #        ax.set_ytitle(r"Flux density (mJy)")
+
+    #        nk = len(self.specList)
+    #        k = 1
+    #        for spec in self.specList:
+    #            ax.errorbar(spec.wavelength,spec.value,xerr=None,yerr=spec.uncertainty,\
+    #                        linestyle=self.linestyle,marker=self.marker,mec=self.mec,mfc=self.mfc,\
+    #                        color=self.mec,ecolor=self.mec,alpha=self.alpha,legend=self.label+"_chunk_"+k)
+    #            k += 1
+    #        plt.legend("lower left",fontsize="small")
+    #        plt.tight_layout()
+
+    #        if showPlot == True:
+    #            plt.show()
+    #        if savePlot == True: 
+    #            fig.savefig("dataset.png",dpi=200,overwrite=True)
+    #        plt.close()
+    #        plt.clf()
+
+
+    def setPlotParams(self,**kwargs):
+        '''
+            Routine to set up the plotting parameters for any photometry data set, and optionally plot (and show and/or save) the data. 
+            A limited set of keywords can be set by passing **kwargs to the function.
+        '''
+
+        print("Setting plotting parameters for photometry data set.")
+
+        #update plotParams with any keywords passed via **kwargs
+        #This only changes things that were passed in, so anything else will retain its default
+        for key, value in kwargs.items():
+            self.plotParams[key] = value
+        
+        #if doPlot == True:
+        #    import matplotlib.pyplot as plt
+        #    
+        #    fig, ax = plt.subplots(1,1,figsize=(6, 8))
+        #    ax.set_xtitle(r"Wavelength ($\mu$m)")
+        #    ax.set_ytitle(r"Flux density (mJy)")
+        #    ax.errorbar(self.wavelength,self.value,xerr=None,yerr=self.uncertainty,\
+        #                linestyle=self.linestyle,marker=self.marker,mec=self.mec,mfc=self.mfc,\
+        #                color=self.mec,ecolor=self.mec,alpha=self.alpha,legend=self.label)
+        #    plt.legend("lower right",fontsize="small")
+        #    plt.tight_layout()
+
+        #    if showPlot == True:
+        #        plt.show()
+        #    if savePlot == True: 
+        #        fig.savefig("dataset.png",dpi=200,overwrite=True)
+        #    plt.close()
+        #    plt.clf()
+
+
+    def plot(self, fig = None, ax = None, unmask=False,
+             doPlot=True,savePlot=False,showPlot=False,
+             **kwargs):
+        
+        self.setPlotParams(**kwargs)
+        if "steps-" in self.plotParams["drawstyle"]:
+            s = self.plotParams["drawstyle"].replace("steps-","")
+
+        if doPlot:
+        
+            if ax is not None:
+                #Easiest case, we just have to use ax.errorbar to plot onto existing axes
+                ax.plot(self.wavelength[self.mask], self.value[self.mask],
+                        #yerr=self.uncertainty[self.mask],
+                        **self.plotParams, **kwargs)
+                ax.fill_between(self.wavelength[self.mask],
+                                self.value[self.mask] - self.uncertainty[self.mask],
+                                self.value[self.mask] + self.uncertainty[self.mask],
+                                alpha = self.plotParams["alpha"]/2,
+                                label = self.plotParams["label"]+" 68\% confidence band",
+                                step = s,
+                                zorder = self.plotParams["zorder"] - 1,
+                                **{k:v for k,v in self.plotParams.items() if k not in ["drawstyle", "zorder", "alpha", "label"]},
+                                **kwargs)
+            else:
+                if fig is not None:
+                    #Now we have a figure but no axes.
+                    #Therefore we will add some new axes to the figure and proceed
+                    if len(fig.get_axes()) == 0:
+                        ax = fig.add_subplot(111)
+                    else:
+                        #For now, assume that this is supposed to be added to the last axes if some exist
+                        ax = fig.get_axes()[-1]
+                    ax.plot(self.wavelength[self.mask], self.value[self.mask],
+                            #yerr=self.uncertainty[self.mask],
+                            **self.plotParams, **kwargs)
+                    ax.fill_between(self.wavelength[self.mask],
+                                    self.value[self.mask] - self.uncertainty[self.mask],
+                                    self.value[self.mask] + self.uncertainty[self.mask],
+                                    alpha = self.plotParams["alpha"]/2,
+                                    label = self.plotParams["label"]+" 68\% confidence band",
+                                    step = s,
+                                    zorder = self.plotParams["zorder"] - 1,
+                                    **{k:v for k,v in self.plotParams.items() if k not in ["drawstyle", "zorder", "alpha", "label"]},
+                                    **kwargs)
+                else: #no axis or figure, let's create everything
+                    import matplotlib.pyplot as plt
+                    fig, ax = plt.subplots(1,1,figsize=(6, 8))
+                    ax.set_xtitle(r"Wavelength ($\mu$m)")
+                    ax.set_ytitle(r"Flux density (mJy)")
+                    ax.plot(self.wavelength[self.mask],self.value[self.mask],
+                            #yerr=self.uncertainty[self.mask],
+                            **self.plotParams, **kwargs)
+                    ax.fill_between(self.wavelength[self.mask],
+                                    self.value[self.mask] - self.uncertainty[self.mask],
+                                    self.value[self.mask] + self.uncertainty[self.mask],
+                                    alpha = self.plotParams["alpha"]/2,
+                                    label = self.plotParams["label"]+" 68\% confidence band",
+                                    step = s,
+                                    zorder = self.plotParams["zorder"] - 1,
+                                    **{k:v for k,v in self.plotParams.items() if k not in ["drawstyle", "zorder", "alpha", "label"]},
+                                    **kwargs)
+                    plt.legend("lower right",fontsize="small")
+                    plt.tight_layout()
+                if savePlot:
+                    fig.savefig(self.label+"plot.png", dpi = 200, overwrite=True)
+                if showPlot:
+                    plt.show()
+
+    def plotRealisation(self, s, ax=None, **kwargs):
+
+        localplotParams = {k:v for k,v in self.plotParams.items() if k not in ["color", "linewidth", "zorder", "alpha", "label"]}
+        waves = self.wavelength[self.mask]
+        values = s[0]*self.value[self.mask] #only update for scaling, not sure how to include covariance info or if it's even worth it.
+        ax.plot(waves, values,
+                #yerr=self.uncertainty[self.mask],
+                linewidth = self.plotParamsSample["sample linewidth"],
+                zorder = self.plotParamsSample["sample zorder"],
+                label = self.plotParams["label"]+" posterior samples",
+                color = self.plotParamsSample["sample color"],
+                alpha = self.plotParamsSample["sample alpha"],
+                **localplotParams, **kwargs)
 
 class Image(Data):
     #Need separate subclasses for images and radial profiles
