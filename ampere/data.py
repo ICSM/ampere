@@ -913,7 +913,7 @@ class Spectrum(Data):
         return probFlux 
 
     @classmethod
-    def fromFile(cls, filename, format, filetype=None, **kwargs):
+    def fromFile(cls, filename, format, filetype=None, keywords=None, **kwargs):
         '''Create Spectrum object from a file containing data
 
         Parameters

@@ -33,7 +33,7 @@ if __name__=="__main__":
     filename = ampere.__file__.strip('__init__.py')+'Testdata/cassis_yaaar_spcfw_27570176t.fits' # path to data of cyg ob 2 12
     print(filename)
     irs = Spectrum.fromFile(filename,format='SPITZER-YAAAR')
-    #irs[0].selectWaves(low = 5.4, up = 22.) #following Srinivasan et al. 2017, check if limits are ok
+    irs[0].selectWaves(low = 5.4, up = 22.) #following Srinivasan et al. 2017, check if limits are ok
     #irs[1].selectWaves(low = 5.4, up = 22.) #following Srinivasan et al. 2017, check if limiets are ok
     
     #for s in irs:
