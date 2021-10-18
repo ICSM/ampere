@@ -370,25 +370,21 @@ We use the following parameters:
         coldcomponent[0,:] = self.wavelengths
         warmcomponent = np.zeros((2, wavelengths.__len__()))
         warmcomponent[0,:] = self.wavelengths
-
-        counter = 0
-        for ac in abundances[0,:]
-            onespeciescold = ckmodbb(opacity_array[:,counter], tin = Tcold[0], tout = Tcold[1], index = indexp, n0 = abundances[0,counter])
+    
+        for i, ac in enumerate(abundances[0,:]):
+            onespeciescold = ckmodbb(opacity_array[:,i], tin = Tcold[0], tout = Tcold[1], n0 = abundances[0,i], index = indexp)
             coldcomponent[1,:] = coldcomponent[1,:] + onespeciescold
-            counter = counter + 1
-
-        counter = 0
-        for aw in abundances[0,:]
-            onespecieswarm = ckmodbb(opacity_array[:,counter], tin = Twarm[0], tout = Twarm[1], index = indexp, n0 = abundances[0,counter])
+    
+        for i, aw in enumerate(abundances[0,:]):
+            onespecieswarm = ckmodbb(opacity_array[:,i], tin = Twarm[0], tout = Twarm[1], n0 = abundances[0,i], index = indexp)
             warmcomponent[1,:] = warmcomponent[1,:] + onespecieswarm
-            counter = counter + 1
 
         fModel = np.like(coldcomponent)
         fModel[1,:] = fModel[1,:] + warmcomponent[1,:]
 
         return fModel[1,:]
 
-    def ckmodbb(self, q, tin, tout, index = 0.5, n0, r0 = 1e15, distance = 910., grainsize = 0.1, steps = 10)
+    def ckmodbb(self, q, tin, tout, n0, index = 0.5, r0 = 1e15, distance = 910., grainsize = 0.1, steps = 10):
         d = distance * 3.0857e18 #convert distance from pc to cm
         a = grainsize * 1e-4 #convert grainsize from micron to cm
  
