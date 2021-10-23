@@ -121,9 +121,15 @@ if __name__ == "__main__":
     unc1 = input_noise_spec*spec1
     spec0 = spec0 + np.random.randn(len(spec0))*unc0
     spec1 = spec1 + np.random.randn(len(spec1))*unc1
-    spec0 = Spectrum(irsEx[0].wavelength, spec0, unc0,"um", "Jy",calUnc=0.0025, scaleLengthPrior = 0.01)
-    spec1 = Spectrum(irsEx[1].wavelength, spec1, unc1,"um", "Jy",calUnc=0.0025, scaleLengthPrior = 0.01)
+    
+    spec0 = Spectrum(irsEx[0].wavelength, spec0, unc0,"um", "Jy",calUnc=0.0025, scaleLengthPrior = 0.01) #, resampleMethod=resmethod)
+    spec1 = Spectrum(irsEx[1].wavelength, spec1, unc1,"um", "Jy",calUnc=0.0025, scaleLengthPrior = 0.01) #, resampleMethod=resmethod)
 
+    #Now let's try changing the resampling method so it's faster
+    #This model is very simple so exact flux conservation is not important
+    resmethod = "fast" #"exact"#"fast"#
+    spec0.setResampler(resampleMethod=resmethod)
+    spec1.setResampler(resampleMethod=resmethod)
 
     """ now set up ampere to try and fit the same stuff """
     photometry = Photometry(filterName=filterName, value=modSed, uncertainty=photunc, photUnits='Jy', libName=libname)
