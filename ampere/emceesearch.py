@@ -135,8 +135,6 @@ class EmceeSearch(BaseSearch):
             print("Setting initial guess randomly")
             try: #Attempting to use the ptform
                 print("No guess specified, attempting to draw from prior transform")
-                #DO NOT USE! NOT WORKING YET!
-                raise AttributeError()
                 rng = np.random.default_rng() #.uniform(-1,0,1000)
                 guess = [self.prior_transform(rng.uniform(size=self.npars)) for i in range(self.nwalkers)]
                 print(guess)

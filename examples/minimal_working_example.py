@@ -68,7 +68,7 @@ class ASimpleModel(Model):
         '''
         if self.flatprior:
             theta = np.zeros_like(u)
-            return (self.lims[:,1] - self.lims[:,0]) * u - self.lims[:,0]
+            return (self.lims[:,1] - self.lims[:,0]) * u + self.lims[:,0]
         else:
             raise NotImplementedError()
 
@@ -149,9 +149,7 @@ if __name__ == "__main__":
 
     #Now we set up the optimizer object:
     optimizer = EmceeSearch(model=model, data=dataset, nwalkers=100, moves=m)
-
-    #Then we tell it to explore the parameter space
-    optimizer.optimise(nsamples = 1500, burnin=1000, guess=[
+    guess = [
         [1, 1, #The parameters of the model
          #1.0, 0.1, 0.1, #Each Spectrum object contains a noise model with three free parameters
          #The first one is a calibration factor which the observed spectrum will be multiplied by
@@ -164,6 +162,11 @@ if __name__ == "__main__":
                                            1,1,1
                                            ]
         for i in range(optimizer.nwalkers)]
+
+    #guess = "None"
+
+    #Then we tell it to explore the parameter space
+    optimizer.optimise(nsamples = 1500, burnin=1000, guess=guess
                        )
 
 
