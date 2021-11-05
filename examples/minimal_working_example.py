@@ -17,8 +17,8 @@ class ASimpleModel(Model):
 
     '''
     def __init__(self, wavelenghts, flatprior=True,
-                 lims=np.array([[-100, 100],
-                                [-100, 100]])):
+                 lims=np.array([[-10, 10],
+                                [-10, 10]])):
         '''The model constructor, which will set everything up
 
         This method does essential setup actions, primarily things that 
@@ -68,7 +68,7 @@ class ASimpleModel(Model):
         '''
         if self.flatprior:
             theta = np.zeros_like(u)
-            return (lims[:,1] - lims[:,0]) * u - lims[:,0]
+            return (self.lims[:,1] - self.lims[:,0]) * u - self.lims[:,0]
         else:
             raise NotImplementedError()
 
@@ -158,11 +158,13 @@ if __name__ == "__main__":
          #The second is the fraction of correlated noise assumed
          #And the third is the scale length (in microns) of the correlated component of the noise
          1.0 ,0.1, 0.1
-        ] #
+       ] #
         + np.random.rand(optimizer.npars)*[1,1,
                                            #1,1,1,
                                            1,1,1
                                            ]
-        for i in range(optimizer.nwalkers)])
+        for i in range(optimizer.nwalkers)]
+                       )
+
 
     optimizer.postProcess() #now we call the postprocessing to produce some figures

@@ -34,6 +34,19 @@ class BaseSearch(object):
     def __repr__(self, **kwargs):
         raise NotImplementedError()
 
+    def prior_transform(self, u, **kwargs):
+        """
+        We delegate the prior transforms to the models and the data
+        """
+        #print(u)
+        theta = np.zeros_like(u)
+        theta[:self.nparsMod] = self.model.prior_transform(u[:self.nparsMod])
+        i = self.nparsMod
+        for data in self.dataSet:
+            theta[i:i+data.npars] = data.prior_transform(u[i:i+data.npars])
+            i+=data.npars
+        return theta
+    
     def lnprior(self, theta, **kwargs):
         """ Calculate the probability of the model (the prior)
         
