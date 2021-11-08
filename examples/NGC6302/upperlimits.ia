@@ -1,0 +1,61 @@
+sh_aar2ascii,oen,'~/Science/Carbonates/Koike1999_o_enst.q',/back
+sh_aar2ascii,cen,'~/Science/Carbonates/Koike1999_c_enst.q',/back
+sh_aar2ascii,oliv,'/home/ciska/Science/Carbonates/am_oliv.dat',/back
+sh_aar2ascii,qcoli,'/home/ciska/Science/Carbonates/forst_m.q',/back
+sh_aar2ascii,qcolij,'/home/ciska/Science/Carbonates/cr_oliv.dat',/back
+sh_aar2ascii,qcalcite,'/home/ciska/Science/Carbonates/calcite_wh.dat',/back
+sh_aar2ascii,qice,'/home/ciska/Science/Carbonates/cr_ice.dat',/back
+sh_aar2ascii,qdiop,'/home/ciska/Science/Carbonates/Koike2000_diopside.q_a',/back
+sh_aar2ascii,dol,'/home/ciska/Science/OpticalProperties/dolomite_wh.mac',/back
+sh_aar2ascii,fe,'/home/ciska/Science/Carbonates/fe.dat',/back
+sh_aar2ascii,amcde,'/home/ciska/Science/Carbonates/am_oliv_CDE.dat',/back
+sh_aar2ascii,crcde,'/home/ciska/Science/Carbonates/cr_oliv_CDE.dat',/back
+
+
+sh_aar2ascii,ngc100,'/home/ciska/ISO/NGC6302/NGC6302_100.tab',/back
+sh_aar2ascii,ngc,'/home/ciska/ISO/NGC6302/NGC6302_nolines.tab',/back
+
+
+;pl,ngc100,xra=[10,200],/xl
+
+modoliv = ck_modbb(oliv,tin=60.0,tout=30.0,index=0.5,n0=3.9e-2,r0=1e15,distance=910,grainsize=0.1,steps=10)
+modcoldf = ck_modbb(qcoli,tin=60.0,tout=30.0,index=0.5,n0=1.8e-3,r0=1e15,distance=910,grainsize=0.1,steps=10)
+modwf = ck_modbb(qcoli,tin=118.0,tout=100.0,index=0.5,n0=8e-6,r0=1e15,distance=910,grainsize=0.1,steps=10)
+modfe = ck_modbb(fe,tin=118.0,tout=100.0,index=0.5,n0=1.1e-3,r0=1e15,distance=910,grainsize=0.1,steps=10)
+modhot = ck_modbb(oliv,tin=118.0,tout=100.0,index=0.5,n0=1.2e-4,r0=1e15,distance=910,grainsize=0.1,steps=10)
+modcen = ck_modbb(cen,tin=60.0,tout=30.0,index=0.5,n0=0.6e-8,r0=1e15,distance=910,grainsize=0.1,steps=10)
+modcenh = ck_modbb(cen,tin=118.0,tout=100.0,index=0.5,n0=8e-11,r0=1e15,distance=910,grainsize=0.1,steps=10)
+moddol = ck_modbb(dol,tin=60.0,tout=30.0,index=0.5,n0=3.2e-9,r0=1e15,distance=910,grainsize=0.1,steps=10)
+moddiop = ck_modbb(qdiop,tin=60.0,tout=30.0,index=0.5,n0=2.5e-9,r0=1e15,distance=910,grainsize=0.1,steps=10)
+modice = ck_modbb(qice,tin=60.0,tout=30.0,index=0.5,n0=1.1e-3,r0=1e15,distance=910,grainsize=0.1,steps=10)
+modcalcite = ck_modbb(qcalcite,tin=60.0,tout=30.0,index=0.5,n0=5.2e-9,r0=1e15,distance=910,grainsize=0.1,steps=10)
+
+
+
+
+tot1 = sh_calcaar(modfe,add=modhot)
+tot2 = sh_calcaar(tot1,add=modoliv)
+tot3 = sh_calcaar(tot2,add=modcoldf)
+tot4 = sh_calcaar(tot3,add=modcen)
+tot5 = sh_calcaar(tot4,add=moddiop)
+tot6 = sh_calcaar(tot5,add=modice)
+tot7 = sh_calcaar(tot6,add=modwf)
+tot8 = sh_calcaar(tot7,add=moddol)
+tot9 = sh_calcaar(tot8,add=modcenh)
+tot10 = sh_calcaar(tot9,add=modcalcite)
+
+residu = sh_calcaar(ngc100,subt=tot10)
+
+pl,residu
+
+modhotcalc = ck_modbb(qcalcite,tin=118.0,tout=100.0,index=0.5,n0=1e-10,r0=1e15,distance=910,grainsize=0.1,steps=10)
+modhotdol = ck_modbb(dol,tin=118.0,tout=100.0,index=0.5,n0=0.3e-10,r0=1e15,distance=910,grainsize=0.1,steps=10)
+modhotice = ck_modbb(qice,tin=118.0,tout=100.0,index=0.5,n0=1.1e-6,r0=1e15,distance=910,grainsize=0.1,steps=10)
+modhotdiop = ck_modbb(qdiop,tin=118.0,tout=100.0,index=0.5,n0=2.5e-11,r0=1e15,distance=910,grainsize=0.1,steps=10)
+
+;last two lines: hot component that maximally can be added.
+
+
+;tot11 = sh_calcaar(tot10,add=modhotcalc)
+;tot12 = sh_calcaar(tot11,add=modhotdol)
+

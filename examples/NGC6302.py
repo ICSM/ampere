@@ -44,24 +44,33 @@ if __name__=="__main__":
     area = (10.*u.au.to(u.m)**2)#.value)^2
 	
     """ Generate model """
-    #modfied blackbody multiplied by sum of opacties
-    opacities = ['ss_Dorschneretal1995_Olivine_0.10.q',
-    			 'ss_Hofmeisteretal2003_Periclase_0.10.q',
-    			 'ss_Jaegeretal1998_Forsterite_0.10.q'] # list of opacity spectra to be used in modelling
-    #relativeAbundances=np.array([0.01,0.01])#initial guess
-    #nSpecies = len(opacities)-1
-    mdl = OpacitySpectrum(modwaves,
-                          normWave = 1., sigmaNormWave = 1.,
-                          opacityFileList=opacities,
-                          redshift = False, lims = np.array([[30.,60.],
-                                                             [-100.,100.],
-                                                             [-2.,2.],
-                                                             [800.,1000.]])
-                            )
+    #modfied blackbody multiplied by sum of opacties, consisting of a warm and cold component, not necessarily of the same composition, over two temperature ranges.
+    opacities = ['am_oliv.dat', #amorphous olivine
+    		 'forst_m.q', #forsterite
+    		 'fe.dat', #metallic iron
+                 'Koike1999_c_enst.q', #enstatite
+                 'dolomite_wh.mac', #dolomite
+                 'Koike2000_c_diop.q', #diopside
+                 'cr_ice.dat', #crystalline water ice
+                 'calcite_improved.dat'] #calcite
+    nSpecies = len(opacities)
 
-    #mdl(1,2,3,4,0.1,0.5)
-    #exit()
+    #below are initial guesses for the model parameters
+    abundances = np.ones((2, nSpecies))
+    Tcold = np.array([60,30]) #from Kemper et al. 2002
+    Twarm = np.array([118,100]) #from Kemper et al. 2002
+    indexp = 0.5 #from Kemper et al. 2002
+    indexq = 0.5 #from Kemper et al. 2002 #dummy for now
 
+    mdl = OpacitySpectrum(modwaves, 
+                          opacityFileList = opacities,
+                          abundances = abundances,
+                          Tcold = Tcold,
+                          Twarm = Twarm,
+                          indexp = indexp,
+                          indexq = indexq)
+
+                            
     """ Connect the dots: """
     """ Hook it up to an optimiser """
 
@@ -69,6 +78,9 @@ if __name__=="__main__":
 
     """ if you want, overload the default priors with a new function """
     def lnprior(self, inputs, **kwargs):
+        #abundances all >= 0.
+        #Twarm[0] > Twarm [1] > Tcold[0] > Tcold[1]
+        #indexp = 0.5 (not fitting, keep constant)
         return 0 #flat prior
     
     #model.lnprior = lnprior
@@ -77,7 +89,7 @@ if __name__=="__main__":
     """ Run it """
     pos = [
            [
-               45., 25., 0., 910., 1., 0.5, 1., 0.5, 1.
+               abundances, Tcold, Twarm, indexp, 1., 0.5, 1. #20 free parameters, 16 abundances and 4 temperatures
                #20 + np.random.randn() for i in range(np.int(opt.npars))
            ]
            + np.random.randn(np.int(opt.npars)) for j in range(opt.nwalkers)
