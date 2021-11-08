@@ -148,7 +148,7 @@ if __name__=="__main__":
     print("Preparing to plot the result")
     for i in irs:
         ax.plot(i.wavelength, i.value, '-',color='blue')
-#    ax.plot(phot.wavelength, phot.value, 'o',color='blue')
+    #ax.plot(phot.wavelength, phot.value, 'o',color='blue')
     ax.set_ylim(0., 1.5*np.max([np.max(i.value) for i in dataSet]))
     fig.savefig("seds.png")
     #fig2 = corner.corner(opt.samples)#,labels=opt.labels)

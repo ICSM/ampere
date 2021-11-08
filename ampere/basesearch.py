@@ -34,6 +34,19 @@ class BaseSearch(object):
     def __repr__(self, **kwargs):
         raise NotImplementedError()
 
+    def prior_transform(self, u, **kwargs):
+        """
+        We delegate the prior transforms to the models and the data
+        """
+        #print(u)
+        theta = np.zeros_like(u)
+        theta[:self.nparsMod] = self.model.prior_transform(u[:self.nparsMod])
+        i = self.nparsMod
+        for data in self.dataSet:
+            theta[i:i+data.npars] = data.prior_transform(u[i:i+data.npars])
+            i+=data.npars
+        return theta
+    
     def lnprior(self, theta, **kwargs):
         """ Calculate the probability of the model (the prior)
         
@@ -74,6 +87,31 @@ class BaseSearch(object):
             return p
         return p + self.lnlike(theta)
 
+    def lnprob_vector(self, theta, pool):
+        ''' This method is a drop-in replacement for the above method but where theta is a vector of arguments. 
+
+        It assumes you want to parallelise execution of models across a pool
+        '''
+
+        lnprobs = pool.map(lnprob_pool, theta, worker_init=self.init_workers)
+        return lnprobs
+        
+        pass
+
+    def mpire_setup(self):
+        ''' Do some setup steps to initialise the WorkerPool and have it ready for parallel processing. 
+        '''
+        from mpire import WorkerPool
+        
+        pool = WorkerPool(njobs = self.njobs,
+                          use_worker_state=True,
+                          keep_alive=True,
+                          use_dill=self.use_dill
+        )
+
+        self.init_workers = create_worker_init(self)
+        return pool
+
     def sampler(self, **kwargs):
         raise NotImplementedError()
 
@@ -83,5 +121,18 @@ class BaseSearch(object):
             raise NotImplementedError('Only pickling is supported at this time')
         with open(filename, 'wb') as f:
             pickle.dump(self.__dict__, f)
+
+def create_worker_init(searcher):    
+    def init_workers(worker_state):
+        worker_state['searcher'] = searcher
+    return init_workers
+
+
+def lnlike_pool(worker_state, theta):
+    return worker_state['searcher'].lnlike(theta)
+
+def lnprob_pool(worker_state, theta):
+    return worker_state['searcher'].lnprob(theta)
+
 
     

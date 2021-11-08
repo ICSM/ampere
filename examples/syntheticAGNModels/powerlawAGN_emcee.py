@@ -2,6 +2,7 @@ import numpy as np
 import ampere
 from ampere.data import Spectrum, Photometry
 from ampere.emceesearch import EmceeSearch
+from ampere.dynestysearch import DynestySearch
 from ampere.PowerLawAGN import SingleModifiedBlackBody, PowerLawAGN, PowerLawAGNRelativeAbundances
 import corner
 import matplotlib as mpl
@@ -12,6 +13,9 @@ from astropy import constants as const
 from astropy import units as u
 from spectres import spectres
 import pyphot
+
+#Test using moves:
+from emcee import moves
 
 
 
@@ -71,23 +75,37 @@ if __name__=="__main__":
     unc1 = 0.01*spec1
     spec0 = spec0 + np.random.randn(len(spec0))*unc0
     spec1 = spec1 + np.random.randn(len(spec1))*unc1
-    spec0 = Spectrum(irsEx[0].wavelength, spec0, unc0,"um", "Jy",calUnc=0.0025)
-    spec1 = Spectrum(irsEx[1].wavelength, spec1, unc1,"um", "Jy",calUnc=0.0025)
+    spec0 = Spectrum(irsEx[0].wavelength, spec0, unc0,"um", "Jy",calUnc=0.0025, scaleLengthPrior = 0.01)
+    spec1 = Spectrum(irsEx[1].wavelength, spec1, unc1,"um", "Jy",calUnc=0.0025, scaleLengthPrior = 0.01)
 
     """ now set up ampere to try and fit the same stuff """
     photometry = Photometry(filterName=filterName, value=modSed, uncertainty=photunc, photUnits='Jy', libName=libname)
     #print(photometry.filterMask)
     photometry.reloadFilters(wavelengths)
-    
-    optimizer = EmceeSearch(model=model, data=[photometry,spec0,spec1], nwalkers=100)
 
-    optimizer.optimise(nsamples=3000, burnin=2900, guess=[
-        #[0.5, -1, -10, -0.5, -0.3, -10.,-10. , 1.0, 1.0, 0.1, 1.0 ,1.0, 0.1]
-        [-2.5, .5, -1.5, -10, -0.5, -0.5, -10., 1.0, 1.0, 0.1, 1.0 ,1.0, 0.1]
+    #Trying to change the move for possible multimodality
+    m = [(moves.DEMove(), 0.8),
+        (moves.DESnookerMove(), 0.2),
+         ]
+    optimizer = EmceeSearch(model=model, data=[photometry,spec0,spec1], nwalkers=100, moves=m)
+    #optimizer = DynestySearch(model=model, data=[photometry,spec0,spec1], nlive=500)
+
+    optimizer.optimise(nsamples = 3000, burnin=2900, guess=[
+        ##[0.5, -1, -10, -0.5, -0.3, -10.,-10. , 1.0, 1.0, 0.1, 1.0 ,1.0, 0.1]
+        [-2.5, .5, -1.5, -10, -0.3, -0.5, -10., 1.0, 1.0, 0.1, 1.0 ,1.0, 0.1]
         + np.random.rand(13)*[1,1,0.1,0.1,0.2,0.2,0.5,1,1,1,1,1,1]
         for i in range(optimizer.nwalkers)])
 
+    #optimizer.optimise(dlogz = 500.) #nsamples=3000, burnin=2900, guess=[
+        ##[0.5, -1, -10, -0.5, -0.3, -10.,-10. , 1.0, 1.0, 0.1, 1.0 ,1.0, 0.1]
+        #[-2.5, .5, -1.5, -10, -0.5, -0.5, -10., 1.0, 1.0, 0.1, 1.0 ,1.0, 0.1]
+        #+ np.random.rand(13)*[1,1,0.1,0.1,0.2,0.2,0.5,1,1,1,1,1,1]
+        #for i in range(optimizer.nwalkers)])
+
+
     optimizer.postProcess()
+
+    exit()
 
     
     fig = plt.figure()
