@@ -737,8 +737,8 @@ class Spectrum(Data):
         #Wavelength conversion
         self.frequency = freqSpec #True/False? Wavelength or Frequency spectrum
         
-        if freqSpec == 'True': #Assume given in GHz if freq, convert to microns
-            wavelength = 1.0e6*(const.c.value/(wavelength*1.0e9))
+        if freqSpec == 'True': #If freq, convert to wavelength in micron
+            wavelength = (const.c / wavelength).to('um')
         
         self.bandUnits = bandUnits
         
