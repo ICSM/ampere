@@ -677,7 +677,7 @@ class Spectrum(Data):
         The uncertainty on the fluxes.
     fluxUnits : {'Jy', 'mJy', 'W/m^2/Hz', 'W/m^2/Angstrom', 'W/cm^2/um', 'erg/cm^2/s/Hz', 'erg/cm^2/s/Angstrom'}, scalar
         The units of the fluxes..
-    bandUnits : {'um', 'A', 'nm'}, optional, string, scalar or array-like
+    bandUnits : {'um', 'AA', 'nm'}, optional, string, scalar or array-like
         The units of the wavelengths.
     freqSpec : bool, default False
         If the input is wavelength (False, default) of Frequncy (True). Currently only works for frequncies in GHz, otherwise input must be wavelength
@@ -745,7 +745,7 @@ class Spectrum(Data):
         
         self.bandUnits = bandUnits
         
-        if bandUnits == 'A':
+        if bandUnits == 'AA':
             wavelength = 1.0e-4*wavelength
         if bandUnits == 'nm' :
             wavelength = 1.0e-3*wavelength
