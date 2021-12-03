@@ -261,12 +261,9 @@ class Photometry(Data):
                 uncertainty[i] = value[i] - zeropoints*10^(-0.4*(value[i]+uncertainty[i]))
         
         #identify values in milliJansky, convert to Jy
-        mjy = (photUnits == 'mjy')
-        
-        value[mjy] = 1000.*value[mjy]
-        uncertainty[mjy] = 1000.*uncertainty[mjy]
-        self.uncertainty = uncertainty
-        self.value = value
+        uconv = np.array([u.Jy.to(pU) for pU in photUnits])
+        self.uncertainty = uncertainty / uconv
+        self.value = value / uconv
 
         self.selectWaves()
 
@@ -745,40 +742,34 @@ class Spectrum(Data):
         
         self.bandUnits = bandUnits
         
-        if bandUnits == 'AA':
-            wavelength = 1.0e-4*wavelength
-        if bandUnits == 'nm' :
-            wavelength = 1.0e-3*wavelength
-        if bandUnits == 'um':
-            wavelength = wavelength
+        # as long as bandUnits has the dimensions of length, the wavelength
+        # is computed in um.
+        if u.m.is_equivalent(bandUnits):
+            wavelength = wavelength / u.um.to(bandUnits)
+        else:
+            mesg = """The value for bandUnits must have dimensions of length!
+            Allowed values: 'AA', 'um', 'nm', etc."""
+            raise ValueError(mesg)
         
         self.wavelength = wavelength #Will be the grid of wavelength/frequency
                                      #using numpy.ma.asarray()? to make it a MaskedArray so that we can easily
                                      #mask out unwanted parts of the spectrum along with its covariances
         
         self.fluxUnits = fluxUnits#specFluxUnits
-        
-        if fluxUnits == 'Jy':
-            value = value
-            uncertainty = uncertainty
-        elif fluxUnits == 'mJy':
-            value = 1.0E+3*value
-            uncertainty = 1.0E+3*uncertainty
-        elif fluxUnits == 'W/m^2/Hz':
-            value = 1.0E+26*value
-            uncertainty = 1.0E+26*uncertainty
-        elif fluxUnits == 'W/m^2/Angstrom':
-            value = 2.99792458E-12*value/(1.0.E+4*wavelength)^2
-            uncertainty = 2.99792458E-12*uncertainty/(1.0E+4*wavelength)^2
-        elif fluxUnits == 'W/cm^2/um':
-            value = 2.99792458E-16*value/wavelength^2
-            uncertainty = 2.99792458E-16*uncertainty/wavelength^2
-        elif fluxUnits == 'erg/cm^2/s/Hz':
-            value = 1.0E+23*value
-            uncertainty = 1.0E+23*uncertainty
-        elif fluxUnits == 'erg/cm^2/s/Angstrom':
-            value = 3.33564095E+04*value*(wavelength*1e4)^2
-            uncertainty = 3.33564095E+04*uncertainty*(wavelength*1e4)^2
+
+        if u.Jy.is_equivalent(fluxUnits):
+            uconv = u.Jy.to(fluxUnits)
+            value = value / uconv
+            uncertainty = uncertainty / uconv
+        elif (u.W / u.m**3).is_equivalent(fluxUnits):
+            # first convert flux and uncertainty to W/m^3
+            uconv = (u.W / u.m**3).to(fluxUnits)
+            value = value / uconv
+            uncertainty = uncertainty / uconv
+            # now convert flux and uncertainty to Jy
+            conv_fac = (wavelength * u.um)**2 / const.c
+            value = (value * conv_fac).to('Jy')
+            uncertainty = (uncertainty * conv_fac).to('Jy')
         else:
             raise NotImplementedError()
 
