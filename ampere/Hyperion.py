@@ -25,37 +25,9 @@ class HyperionRTModel(Model):
 
     '''
 
-    def __init__(self,flatprior=True,opacityFileList=None,parameters=par,**kwargs):
-
-        self.components = components #number of sub-models to run to generate complete model
-        self.distribution = distribution #dust density distribution + its properties, somehow?
-        #maybe have standard models in here - power law shell = 3 parameters (S0, Rin, alpha_out), 
-        #                                     power law disc = 5 parameters (S0, Rin, Rout, h, alpha_out),
-        #                                     2 power law disc = 5 parameters (S0, R0, h, alpha_in, alpha_out), 
-        #                                     Gaussian annulus = 4 parameters (S0, R0, dR, h)
-        self.npars += distribution.nParameters
+    def __init__(self,flatprior=True,opacityFileList=None,**kwargs):
 
         self.flatprior = flatprior
-        #Define opacities for use in model calculation - probably only going to be a single species in most cases, but
-        #should make it general for multiple species per component, and multiple components (see above)
-        import os
-        from scipy import interpolate
-        opacityDirectory = os.path.dirname(__file__)+'/Opacities/'
-        opacityFileList = np.array(opacityFileList)
-        #opacityFileList = np.array(opacityFileList)[['.q' in zio for zio in opacityFileList]] # Only files ending in .q are valid (for now)
-        nSpecies = opacityFileList.__len__()
-        #print(opacityFileList,nSpecies)
-        opacity_array = np.zeros((wavelengths.__len__(), nSpecies))
-        for j in range(nSpecies):
-            tempData = np.loadtxt(opacityDirectory + opacityFileList[j], comments = '#')
-            tempWl = tempData[:, 0]
-            tempOpac = tempData[:, 1]
-            f = interpolate.interp1d(tempWl, tempOpac, assume_sorted = False)
-            opacity_array[:,j] = f(self.wavelength)
-        self.opacity_array = opacity_array
-        self.nSpecies = nSpecies
-        self.npars += nSpecies - 1 + 4       
-    
         self.model = Model()
 
     def __call__(self,dust="astrosilicate",fileformat=2,amin=0.5,amax=1000.,na=101,
@@ -93,6 +65,35 @@ class HyperionRTModel(Model):
                         useMPI=True,
                         nproc=1,
                         **kwargs):
+        
+        self.components = len(massfrac) #number of sub-models to run to generate complete model
+        self.distribution = distribution #dust density distribution + its properties, somehow?
+        #maybe have standard models in here - power law shell = 3 parameters (S0, Rin, alpha_out), 
+        #                                     power law disc = 5 parameters (S0, Rin, Rout, h, alpha_out),
+        #                                     2 power law disc = 5 parameters (S0, R0, h, alpha_in, alpha_out), 
+        #                                     Gaussian annulus = 4 parameters (S0, R0, dR, h)
+        self.npars += len(distribution) - 1
+
+        #Define opacities for use in model calculation - probably only going to be a single species in most cases, but
+        #should make it general for multiple species per component, and multiple components (see above)    
+        #Read in opacities
+        import os
+        from scipy import interpolate
+        opacityDirectory = os.path.dirname(__file__)+'/Opacities/'
+        opacityFileList = np.array(opacityFileList)
+        #opacityFileList = np.array(opacityFileList)[['.q' in zio for zio in opacityFileList]] # Only files ending in .q are valid (for now)
+        nSpecies = opacityFileList.__len__()
+        #print(opacityFileList,nSpecies)
+        opacity_array = np.zeros((wavelengths.__len__(), nSpecies))
+        for j in range(0,nchem):
+            tempData = np.loadtxt(opacityDirectory + opacityFileList[j], comments = '#')
+            tempWl = tempData[:, 0]
+            tempOpac = tempData[:, 1]
+            f = interpolate.interp1d(tempWl, tempOpac, assume_sorted = False)
+            opacity_array[:,j] = f(self.wavelength)
+        self.opacity_array = opacity_array
+        self.nSpecies = nchem
+        self.npars += nSpecies - 1 + 4       
 
         #Convenience function to write dust parameter file '<dust>.params' for Hyperion BHDust calculator (separate program)
         f=open(str(dust)+'.params','w')
@@ -140,15 +141,17 @@ class HyperionRTModel(Model):
             self.model.set_cartesian_grid(self.x,self.y,self.z)
         #Set up density grid
             self.rr = np.sqrt(self.model.grid.gx**2 + self.model.grid.gy**2 + self.model.grid.gz**2)
-            print("Spatial grid set up.")
         if gridtype == 'polar':
             print("Not implemented.")
         if gridtype == 'spherical':
             print("Not implemented")
 
+        print("Spatial grid set up.")
+
         #define density grid
         self.density = eval(self.distribution[0] + "()")
         self.model.add_density_grid(self.density, self.d)
+
         print("Density grid set up.")
 
         #Set central source position, add source(s) to the grid
