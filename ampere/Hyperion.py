@@ -25,11 +25,14 @@ class HyperionRTModel(Model):
 
     '''
 
-    def __init__(self,flatprior=True,opacityFileList=None,**kwargs):
+    def __init__(self,flatprior=True,**kwargs):
 
         self.flatprior = flatprior
         self.model = Model()
 
+        #self.dictionary of fixed parameters that are needed for modelling in __call__
+
+    #Only give __call__ the numbers that emcee is going to change.
     def __call__(self,dust="astrosilicate",fileformat=2,amin=0.5,amax=1000.,na=101,
                         nang=91,nanx=11,
                         nchem=1,gtd=0,
@@ -46,7 +49,7 @@ class HyperionRTModel(Model):
                         gridtype='cartesian',
                         rmax= 100.,
                         ngrid= 251,
-                 #RT parameters
+                 #RT parameters - use in __init__ and store as self.XXX
                         niter=5,
                         nph_initial=1e4,
                         nph_imging=1e5,
@@ -56,12 +59,12 @@ class HyperionRTModel(Model):
                         raytracing=True,
                         modrndwlk=True,
                         mrw_gamma=2,
-                 #Peel photons to get images
+                 #Peel photons to get images - use in __init__ and store as self.XXX
                         api_sed=True,
                         api_img=False,
                         view_angles=np.linspace(0., 90., 10),
                         view_repeats=np.repeat(45., 10),
-                 #Parallel processing
+                 #Parallel processing - use in __init__ and store as self.XXX
                         useMPI=True,
                         nproc=1,
                         **kwargs):
@@ -76,7 +79,7 @@ class HyperionRTModel(Model):
 
         #Define opacities for use in model calculation - probably only going to be a single species in most cases, but
         #should make it general for multiple species per component, and multiple components (see above)    
-        #Read in opacities
+        #Read in opacities - do this in __init__, check they exist during __call__
         import os
         from scipy import interpolate
         opacityDirectory = os.path.dirname(__file__)+'/Opacities/'
@@ -95,6 +98,7 @@ class HyperionRTModel(Model):
         self.nSpecies = nchem
         self.npars += nSpecies - 1 + 4       
 
+        #Generating the dust optical constants can be part of __init__, too
         #Convenience function to write dust parameter file '<dust>.params' for Hyperion BHDust calculator (separate program)
         f=open(str(dust)+'.params','w')
         f.write(str(dust)+'_'+str(size)+'\n')
@@ -217,6 +221,11 @@ class HyperionRTModel(Model):
 
         self.result = ModelOutput('HyperionRT_sed.rtout')
 
+        #Extract fluxes and wavelengths into objects that can be passed to fitting or plotting
+        self.HyperionRTWave = somethingelse
+        self.HyperionRTFlux = something
+
+
     def lnprior(self, theta, **kwargs):
         if self.flatprior:
             if (self.lims[0,0] < theta[0] < self.lims[0,1]) and \
@@ -230,13 +239,14 @@ class HyperionRTModel(Model):
         else:
             raise NotImplementedError()
 
+    
     def __str__(self, **kwargs):
         raise NotImplementedError()
-
+    #This will provide a summary of the properties of the model
     def __repr__(self, **kwargs):
         raise NotImplementedError()
 
-    def example(self):
+    def  example(self):
         density = np.zeros(self.rr)
         density = rho0 * (self.rr/self.distribution[1])**self.distribution[3] #* np.exp(-((abs(self.model.grid.gz)/self.rr)**2/scaleheight**2)/2.0)
         density[np.where(self.rr <= self.distribution[1])] = 0.0
