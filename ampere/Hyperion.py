@@ -103,7 +103,7 @@ class HyperionRTModel(Model):
                  #Source parameters
                         sources=[['spherical',1.0,1.0,1.0,5784,[0.0,0.0,0.0]]], #(type,lstar,rstar,mstar,tstar,position[x,y,z],spectrum file)
                  #Disc parameters
-                        distribution=[['example',30,70,-1]], #type,rin,rout,alpha
+                        distribution=[['power_law_shell',30,70,-1]], #type,rin,rout,alpha
                         gridtype='cartesian',
                         rmax= 100.,
                         rho0= 1.5e-19,
@@ -329,7 +329,7 @@ class HyperionRTModel(Model):
     def __repr__(self, **kwargs):
         raise NotImplementedError()
 
-    def example(self):
+    def power_law_shell(self):
         density = np.zeros(self.rr)
         density = self.rho0 * (self.rr/self.distribution[1])**self.distribution[3] #* np.exp(-((abs(self.model.grid.gz)/self.rr)**2/scaleheight**2)/2.0)
         density[np.where(self.rr <= self.distribution[1])] = 0.0
