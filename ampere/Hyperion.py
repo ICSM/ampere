@@ -36,6 +36,7 @@ class HyperionRTModel(Model):
                         raytracing=True,
                         modrndwlk=True,
                         mrw_gamma=2,
+                        lmin=0.1,lmax=1000.0,nl=101,
                  #Peel photons to get images - use in __init__ and store as self.XXX
                         api_sed=True,
                         api_img=False,
@@ -63,8 +64,12 @@ class HyperionRTModel(Model):
         self.view_repeats = view_repeats
         self.useMPI = useMPI
         self.nproc = nproc
-
+        self.lmin=lmin
+        self.lmax=lmax
+        self.nl=nl
+        
         self.flatprior = flatprior
+        
         self.model = Model()
         
         #Use raytracing to improve s/n of thermal/source emission
@@ -93,7 +98,6 @@ class HyperionRTModel(Model):
     def __call__(self,dust="astrosilicate",fileformat=2,amin=[0.5],amax=[1000.],na=[101],
                         nang=91,nanx=11,
                         nchem=1,gtd=0,
-                        lmin=0.1,lmax=1000.0,nl=101,
                         tmin=2.7,tmax=1000.0,nt=101,
                         massfrac=[1.0],
                         density=[3.3],
@@ -123,9 +127,6 @@ class HyperionRTModel(Model):
         self.nanx=nanx
         self.nchem=nchem
         self.gtd=gtd
-        self.lmin=lmin
-        self.lmax=lmax
-        self.nl=nl
         self.tmin=tmin
         self.tmax=tmax
         self.nt=nt
@@ -168,8 +169,8 @@ class HyperionRTModel(Model):
         f.write(str(nanx)+'\n')
         f.write(str(nchem)+'\n')
         f.write(str(gtd)+'\n')
-        f.write(str(lmin)+' '+str(lmax)+' '+str(nl)+'\n')
-        f.write(str(nproc)+'\n') #parallel processing version of BHMie
+        f.write(str(self.lmin)+' '+str(self.lmax)+' '+str(self.nl)+'\n')
+        f.write(str(self.nproc)+'\n') #parallel processing version of BHMie
         for i in range(0,len(self.optconst)):
             f.write(''+'\n')
             f.write(str(massfrac[i])+'\n')
