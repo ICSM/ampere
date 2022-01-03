@@ -49,20 +49,25 @@ class OpacitySpectrum(Model):
             tempData = np.loadtxt(opacityDirectory + opacityFileList[j],
                                   comments='#')
             tempWl = tempData[:, 0]
-            Tempopac = Tempdata[:, 1]
-            f = interpolate.interp1d(tempWl, tempOpac, assume_sorted = False)
-            opacity_array[:,j] = f(self.wavelength)
+            tempOpac = tempData[:, 1]
+            f = interpolate.interp1d(tempWl, tempOpac, assume_sorted=False)
+            opacity_array[:, j] = f(self.wavelength)
         self.opacity_array = opacity_array
         self.nSpecies = nSpecies
         self.npars = nSpecies + 7
-        # 7 is the number of free parameters for the model (__call__()). For some models this can be determined through introspection, but it is still strongly recommended to define this explicitly here. Introspection will only be attempted if self.npars is not defined.
+        # 7 is the number of free parameters for the model (__call__()). For
+        # some models this can be determined through introspection, but it is
+        # still strongly recommended to define this explicitly here.
+        # Introspection will only be attempted if self.npars is not defined.
         self.npars_ptform = 2
-        # Sometimes the number of free parameters is different when using the prior transform instead of the prior. In that case, self.npars_ptform should also be defined.
+        # Sometimes the number of free parameters is different when using the
+        # prior transform instead of the prior. In that case, self.npars_ptform
+        # should also be defined.
         # You can do any other set up you need in this method.
         # For example, we could define some cases to set up different priors
         # But that's for a slightly more complex example.
         # Here we'll just use a simple flat prior
-        self.lims = lims #This one is still to be defined based on npars
+        self.lims = lims  # This one is still to be defined based on npars
         self.flatprior = flatprior
 
     def __call__(self, *args, **kwargs):
@@ -79,35 +84,32 @@ class OpacitySpectrum(Model):
             print(key + " : " + value)
 
         # number of dust species in opacityDirectory are all going to be fitted
-        # for each we will consider a hot and a cold component. We will allow only 2
-        # temperature ranges, the same for all dust species.
-
-        # the module translated from ck_modbb calculates the flux for each component at a single temperature
-
-        # ckmodbb and shbb are now written. Now I just need to figure out how to do the
-        # fit over 8 dust species and 2 temperature ranges.
-
-        # let's first do this over fixed temperature ranges, instead of allowing them to be free
-        # the temperature ranges are 118-100 K and 60-30 K, following Kemper et al. 2002
+        # for each we will consider a hot and a cold component. We will allow
+        # only 2 temperature ranges, the same for all dust species.
+        # the module translated from ck_modbb calculates the flux for each
+        # component at a single temperature
+        # ckmodbb and shbb are now written. Now I just need to figure out how
+        # to do the fit over 8 dust species and 2 temperature ranges.
+        # let's first do this over fixed temperature ranges, instead of
+        # allowing them to be free the temperature ranges are 118-100 K and
+        # 60-30 K, following Kemper et al. 2002
 
         coldcomponent = np.zeros((2, wavelengths.__len__()))
-        coldcomponent[0,:] = self.wavelengths
+        coldcomponent[0, :] = self.wavelengths
         warmcomponent = np.zeros((2, wavelengths.__len__()))
-        warmcomponent[0,:] = self.wavelengths
-    
+        warmcomponent[0, :] = self.wavelengths
         for i, ac in enumerate(abundances[0,:]):
-            onespeciescold = ckmodbb(opacity_array[:,i], tin = Tcold[0], tout = Tcold[1], n0 = abundances[0,i], index = indexp)
-            coldcomponent[1,:] = coldcomponent[1,:] + onespeciescold
-    
+            onespeciescold = ckmodbb(opacity_array[:,i], tin = Tcold[0], tout = Tcold[1], n0 = abundances[0, i], index = indexp)
+            coldcomponent[1, :] = coldcomponent[1,:] + onespeciescold
         for i, aw in enumerate(abundances[0,:]):
             onespecieswarm = ckmodbb(opacity_array[:,i], tin = Twarm[0], tout = Twarm[1], n0 = abundances[0,i], index = indexp)
             warmcomponent[1,:] = warmcomponent[1,:] + onespecieswarm
-
         fModel = np.like(coldcomponent)
         fModel[1,:] = fModel[1,:] + warmcomponent[1,:]
         self.modelFlux = fModel[1,:]
 
-#hiero, I am getting all my indices of fnu etc. wrong. Check the functions below, especially whether I am using wavelength and flux in the correct place    
+# hiero, I am getting all my indices of fnu etc. wrong. Check the functions
+# below, especially whether I am using wavelength and flux in the correct place    
     def ckmodbb(self, q, tin, tout, n0, index = 0.5, r0 = 1e15, distance = 910., grainsize = 0.1, steps = 10):
         d = distance * 3.0857e18 #convert distance from pc to cm
         a = grainsize * 1e-4 #convert grainsize from micron to cm
@@ -134,7 +136,6 @@ class OpacitySpectrum(Model):
         mbb[1,:] = bbflux * mbb[0,:]^pinda
         return mbb                                 
 
-        
     def lnprior(self, theta, **kwargs): #hiero: too be done still
         slope = theta[0]
         intercept = theta[1]
@@ -150,7 +151,6 @@ class OpacitySpectrum(Model):
         else:
             raise NotImplementedError()
         
-
     def prior_transform(self, u, **kwargs):
         '''The prior transform, which takes samples from the Uniform(0,1) distribution to the desired distribution.
 
