@@ -8,11 +8,14 @@ from spectres import spectres
 import pyphot
 from emcee import moves
 
-#First we will define a rather simple model
+# First we will define a rather simple model
+
 
 class OpacitySpectrum(Model):
-    '''This model fits a modfied blackbody multiplied by sum of opacties, consisting of a warm and cold component, not necessarily of the same composition, over two temperature ranges, following Kemper et al. 2002.
-We use the following parameters:
+    '''This model fits a modfied blackbody multiplied by sum of opacties,
+        consisting of a warm and cold component, not necessarily of the same
+        composition, over two temperature ranges, following Kemper et al. 2002.
+        We use the following parameters:
        wavelengths : the array of wavelengths considered
        opacityFileList
        acold : (relative) abundances for the cold component
@@ -21,15 +24,16 @@ We use the following parameters:
        Twarm : temperature range of the warm component
        indexp : index p of the density distribution
        indexq : index q of the temperature distribution
-       multfact : multiplication factor that the sum of the modified black bodies has to be multiplied with to fit the spectrum
+       multfact : multiplication factor that the sum of the modified black
+                  bodies has to be multiplied with to fit the spectrum
        Output is an array of model fluxes (fluxes), to match wavelengths
     '''
     def __init__(self, wavelengths, flatprior=True,
                  opacityFileList=None):
         '''The model constructor, which will set everything up
 
-        This method does essential setup actions, primarily things that 
-        may change from one fit to another, but will stay constant throughout 
+        This method does essential setup actions, primarily things that
+        may change from one fit to another, but will stay constant throughout
         the fit. This may be things like the grid of wavelengths to calculate
         the model output on, or establishing the dust opacities if involved.
         There are also several important variables it *MUST* define here
@@ -42,26 +46,29 @@ We use the following parameters:
         nSpecies = opacityFileList.__len__()
         opacity_array = np.zeros((wavelengths.__len__(), nSpecies))
         for j in range(nSpecies):
-            tempData = np.loadtxt(opacityDirectory + opacityFileList[j], comments = '#')
+            tempData = np.loadtxt(opacityDirectory + opacityFileList[j],
+                                  comments='#')
             tempWl = tempData[:, 0]
-            tempOpac = tempData[:, 1]
+            Tempopac = Tempdata[:, 1]
             f = interpolate.interp1d(tempWl, tempOpac, assume_sorted = False)
             opacity_array[:,j] = f(self.wavelength)
         self.opacity_array = opacity_array
         self.nSpecies = nSpecies
-        self.npars = nSpecies + 7 #Number of free parameters for the model (__call__()). For some models this can be determined through introspection, but it is still strongly recommended to define this explicitly here. Introspection will only be attempted if self.npars is not defined.
-        self.npars_ptform = 2 #Sometimes the number of free parameters is different when using the prior transform instead of the prior. In that case, self.npars_ptform should also be defined.
-        #You can do any other set up you need in this method.
-        #For example, we could define some cases to set up different priors
-        #But that's for a slightly more complex example.
-        #Here we'll just use a simple flat prior
-        self.lims = lims #this one is still to be defined based on npars
+        self.npars = nSpecies + 7
+        # 7 is the number of free parameters for the model (__call__()). For some models this can be determined through introspection, but it is still strongly recommended to define this explicitly here. Introspection will only be attempted if self.npars is not defined.
+        self.npars_ptform = 2
+        # Sometimes the number of free parameters is different when using the prior transform instead of the prior. In that case, self.npars_ptform should also be defined.
+        # You can do any other set up you need in this method.
+        # For example, we could define some cases to set up different priors
+        # But that's for a slightly more complex example.
+        # Here we'll just use a simple flat prior
+        self.lims = lims #This one is still to be defined based on npars
         self.flatprior = flatprior
 
     def __call__(self, *args, **kwargs):
         '''The model itself, using the callable class functionality of python.
 
-        This is an essential method. It should do any steps required to 
+        This is an essential method. It should do any steps required to
         calculate the output fluxes. Once done, it should stop the output fluxes
         in self.modelFlux.
         '''
@@ -71,17 +78,17 @@ We use the following parameters:
         for key, value in kwargs.items():
             print(key + " : " + value)
 
-        #number of dust species in opacityDirectory are all going to be fitted
-        #for each we will consider a hot and a cold component. We will allow only 2
-        #temperature ranges, the same for all dust species.
+        # number of dust species in opacityDirectory are all going to be fitted
+        # for each we will consider a hot and a cold component. We will allow only 2
+        # temperature ranges, the same for all dust species.
 
-        #the module translated from ck_modbb calculates the flux for each component at a single temperature
+        # the module translated from ck_modbb calculates the flux for each component at a single temperature
 
-        #ckmodbb and shbb are now written. Now I just need to figure out how to do the
-        #fit over 8 dust species and 2 temperature ranges.
+        # ckmodbb and shbb are now written. Now I just need to figure out how to do the
+        # fit over 8 dust species and 2 temperature ranges.
 
-        #let's first do this over fixed temperature ranges, instead of allowing them to be free
-        #the temperature ranges are 118-100 K and 60-30 K, following Kemper et al. 2002
+        # let's first do this over fixed temperature ranges, instead of allowing them to be free
+        # the temperature ranges are 118-100 K and 60-30 K, following Kemper et al. 2002
 
         coldcomponent = np.zeros((2, wavelengths.__len__()))
         coldcomponent[0,:] = self.wavelengths
