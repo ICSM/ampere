@@ -102,14 +102,21 @@ class BaseSearch(object):
         ''' Do some setup steps to initialise the WorkerPool and have it ready for parallel processing. 
         '''
         from mpire import WorkerPool
+
+        #We need to make sure that external libraries using OpenMP won't thread
+        #their code and cause confusion, only the pool should be triggering
+        #parallel execution
+        import os
+        os.environ["OMP_NUM_THREADS"] = "1"
         
-        pool = WorkerPool(njobs = self.njobs,
-                          use_worker_state=True,
+        pool = WorkerPool(n_jobs = self.njobs,
+                          shared_objects=self, #use_worker_state=True,
                           keep_alive=True,
-                          use_dill=self.use_dill
+                          #use_dill=self.use_dill
         )
 
-        self.init_workers = create_worker_init(self)
+        #self.init_workers = create_worker_init(self)
+        #self.pool = pool
         return pool
 
     def sampler(self, **kwargs):

@@ -16,6 +16,7 @@ class EmceeSearch(BaseSearch):
     def __init__(self, nwalkers = None, model = None,
                  data = None, lnprior = None,
                  labels = None, acceptRate = 2.0, moves=None,
+                 parallel = None, pool = None,
                  **kwargs):
 
         #self.npars=npars
@@ -44,8 +45,21 @@ class EmceeSearch(BaseSearch):
         
         #print(self.npars, self.nparsMod, self.nparsData)
         #exit()
+        #if parallel is not None:
+        #    self.parallel = True #variable to track whether parallel computing is active
+        #    if parallel > 0:
+        #        self.njobs = parallel
+        #    elif parallel == -1:
+        #        self.njobs = None #MPIRE uses this to indicate use of all cores.
+        #    from multiprocessing import Pool
+        #    self.pool = Pool(processes = self.njobs) #self.mpire_setup()
+        #else:
+        #    self.parallel = False
+        #    self.pool = None
+        #    self.njobs = 1
+            
         ''' then set up the sampler '''
-        self.sampler = emcee.EnsembleSampler(self.nwalkers, np.int(self.npars), self.lnprob, a = acceptRate, moves=moves)#, args=self.dataSet)
+        self.sampler = emcee.EnsembleSampler(self.nwalkers, np.int(self.npars), self.lnprob, a = acceptRate, moves=moves, pool = pool)#, args=self.dataSet)
 
  
         
@@ -69,7 +83,7 @@ class EmceeSearch(BaseSearch):
     def rebuildSampler(self, nwalkers = None, model = None,
                        data = None, lnprior = None,
                        labels = None, acceptRate = None,
-                       moves=None,
+                       moves=None, pool = None,
                        **kwargs):
         ''' This method will replace parts of the optimiser object if it is passed them. It can 
         be used to update the model, data, sampler setup, or prior part-way through a run '''
@@ -95,12 +109,17 @@ class EmceeSearch(BaseSearch):
                 self.nwalkers=nwalkers
         ''' then set up the sampler '''
         
-        if np.any([nwalkers, acceptRate, data, model, lnprior, labels]):
+        if np.any([nwalkers, acceptRate, data, model, lnprior, labels, moves, pool]):
             ''' if anything has been changed, update the sampler and re-intialise it '''
             ''' first destroy the sampler '''
             self.sampler=None
             ''' now rebuild it '''
-            self.sampler = emcee.EnsembleSampler(self.nwalkers, np.int(self.npars), self.lnprob, a = acceptRate, moves=moves)
+            if nwalkers is not None:
+                self.nwalkers = nwalkers
+            if labels is not None:
+                self.labels = labels
+            
+            self.sampler = emcee.EnsembleSampler(self.nwalkers, np.int(self.npars), self.lnprob, a = acceptRate, moves=moves, pool = pool)
 
     def lnprior(self, theta, **kwargs):
         """
@@ -359,7 +378,7 @@ class EmceeSearch(BaseSearch):
         #best fit model
         try:
             self.model(*self.bestPars[:self.nparsMod])
-            axes.plot(self.model.wavelength,self.model.modelFlux, '-', color='k', alpha=1.0,label='MAP', zorder=8)
+            axes.plot(self.model.wavelength,self.model.modelFlux, '-', color='red', alpha=1.0,label='MAP', zorder=8)
         except ValueError:
             print("Error in MAP solution \n Skipping MAP in plot")
 

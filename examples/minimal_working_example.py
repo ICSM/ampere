@@ -147,27 +147,45 @@ if __name__ == "__main__":
         (moves.DESnookerMove(), 0.2),
          ]
 
-    #Now we set up the optimizer object:
-    optimizer = EmceeSearch(model=model, data=dataset, nwalkers=100, moves=m)
-    guess = [
-        [1, 1, #The parameters of the model
-         #1.0, 0.1, 0.1, #Each Spectrum object contains a noise model with three free parameters
-         #The first one is a calibration factor which the observed spectrum will be multiplied by
-         #The second is the fraction of correlated noise assumed
-         #And the third is the scale length (in microns) of the correlated component of the noise
-         1.0 ,0.1, 0.1
-       ] #
-        + np.random.rand(optimizer.npars)*[1,1,
-                                           #1,1,1,
-                                           1,1,1
-                                           ]
-        for i in range(optimizer.nwalkers)]
+    from mpire import WorkerPool
 
-    #guess = "None"
+    #We need to make sure that external libraries using OpenMP won't thread
+    #their code and cause confusion, only the pool should be triggering
+    #parallel execution
+    import os
+    os.environ["OMP_NUM_THREADS"] = "1"
+    optimizer = EmceeSearch(model=model, data=dataset, nwalkers=100, moves=m)#, pool = pool)
+    
+    #with WorkerPool(n_jobs = 1,
+    #                shared_objects=optimizer, #use_worker_state=True,
+    #                keep_alive=True,
+    #                #use_dill=self.use_dill
+    from multiprocessing import Pool
+    with Pool(processes=8
+                    ) as pool:
+        
+        #Now we set up the optimizer object:
+        #optimizer = EmceeSearch(model=model, data=dataset, nwalkers=100, moves=m)#, pool = pool)
+        optimizer.rebuildSampler(pool=pool)
+        guess = [
+            [1, 1, #The parameters of the model
+             #1.0, 0.1, 0.1, #Each Spectrum object contains a noise model with three free parameters
+             #The first one is a calibration factor which the observed spectrum will be multiplied by
+             #The second is the fraction of correlated noise assumed
+             #And the third is the scale length (in microns) of the correlated component of the noise
+             1.0 ,0.1, 0.1
+             ] #
+            + np.random.rand(optimizer.npars)*[1,1,
+                                               #1,1,1,
+                                               1,1,1
+                                               ]
+            for i in range(optimizer.nwalkers)]
 
-    #Then we tell it to explore the parameter space
-    optimizer.optimise(nsamples = 1500, burnin=1000, guess=guess
-                       )
+        #guess = "None"
+        
+        #Then we tell it to explore the parameter space
+        optimizer.optimise(nsamples = 1500, burnin=1000, guess=guess
+                           )
 
 
     optimizer.postProcess() #now we call the postprocessing to produce some figures
