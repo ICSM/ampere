@@ -68,7 +68,19 @@ class SpectrumNGC6302(Model):
         # But that's for a slightly more complex example.
         # Here we'll just use a simple flat prior
         if lims is None:
-            self.lims = something  #to be defined
+            self.lims = np.zeros((self.npars,2))  # #CK to be defined
+            # acold = theta[0:11] 0, np.inf
+            # awarm = theta[11:22] 0, np.inf
+            # Tcold = theta[22:24] 10, 80; 10, 80 
+            # Twarm = theta[24:26] 80, 200; 80, 200
+            # indexp = theta[26] 0, 3;
+            # multfact = theta[27] 0, np.inf
+            self.lims[1, :] = np.inf
+            self.lims[0, 22:24] = 10.
+            self.lims[1, 22:24] = 80.
+            self.lims[0, 24:26] = 80.
+            self.lims[1, 24:26] = 200.
+            self.lims[1, 26] = 3.
         else:            
             self.lims = lims  
         self.flatprior = flatprior
@@ -80,12 +92,6 @@ class SpectrumNGC6302(Model):
         calculate the output fluxes. Once done, it should stop the output
         fluxes in self.modelFlux.
         '''
-        # print out *args
-        print(args)
-        # print out **kwargs
-        for key, value in kwargs.items():
-            print(key + " : " + value)
-
         # number of dust species in opacityDirectory are all going to be fitted
         # for each we will consider a hot and a cold component. We will allow
         # only 2 temperature ranges, the same for all dust species.
@@ -115,13 +121,11 @@ class SpectrumNGC6302(Model):
         fModel[1, :] = fModel[1, :] + warmcomponent[1, :]
         self.modelFlux = fModel[1, :]
 
-# hiero, I am getting all my indices of fnu etc. wrong. Check the functions
-# below, especially whether I am using wavelength and flux in the correct place 
     def ckmodbb(self, q, tin, tout, n0, index=0.5, r0=1e15, distance=910.,
                 grainsize=0.1, steps=10):
         d = distance * 3.0857e18  # convert distance from pc to cm
         a = grainsize * 1e-4  # convert grainsize from micron to cm
-        fnu = np.zeros((2, wavelengths.__len__()))
+        fnu = np.zeros((2, self.wavelengths.__len__()))
         fnu[0, :] = self.wavelengths
 
         for i in range(steps - 1):
@@ -144,24 +148,52 @@ class SpectrumNGC6302(Model):
         mbb[1, :] = bbflux * mbb[0, :]**pinda
         return mbb
 
-    def lnprior(self, theta, **kwargs):  # hiero: too be done still
-        slope = theta[0]
-        intercept = theta[1]
+    def lnprior(self, theta, **kwargs): 
+        # acold = theta[0:11]
+        # awarm = theta[11:22]
+        # Tcold = theta[22:24]; theta[23] > theta[22]
+        # Twarm = theta[24:26]; theta[25] > theta[24]
+        # indexp = theta[26]
+        # multfact = theta[27]
         if self.flatprior:
             if (self.lims[0,0] < theta[0] < self.lims[0,1]) and \
                (self.lims[1,0] < theta[1] < self.lims[1,1]) and \
                (self.lims[2,0] < theta[2] < self.lims[2,1]) and \
                (self.lims[3,0] < theta[3] < self.lims[3,1]) and \
-                np.sum(10**theta[4:]) <= 1. and np.all(theta[4:] < 0.):
+               (self.lims[4,0] < theta[4] < self.lims[4,1]) and \
+               (self.lims[5,0] < theta[5] < self.lims[5,1]) and \
+               (self.lims[6,0] < theta[6] < self.lims[6,1]) and \
+               (self.lims[7,0] < theta[7] < self.lims[7,1]) and \
+               (self.lims[8,0] < theta[8] < self.lims[8,1]) and \
+               (self.lims[9,0] < theta[9] < self.lims[9,1]) and \
+               (self.lims[10,0] < theta[10] < self.lims[10,1]) and \
+               (self.lims[11,0] < theta[11] < self.lims[11,1]) and \
+               (self.lims[12,0] < theta[12] < self.lims[12,1]) and \
+               (self.lims[13,0] < theta[13] < self.lims[13,1]) and \
+               (self.lims[14,0] < theta[14] < self.lims[14,1]) and \
+               (self.lims[15,0] < theta[15] < self.lims[15,1]) and \
+               (self.lims[16,0] < theta[16] < self.lims[16,1]) and \
+               (self.lims[17,0] < theta[17] < self.lims[17,1]) and \
+               (self.lims[18,0] < theta[18] < self.lims[18,1]) and \
+               (self.lims[19,0] < theta[19] < self.lims[19,1]) and \
+               (self.lims[20,0] < theta[20] < self.lims[20,1]) and \
+               (self.lims[21,0] < theta[21] < self.lims[21,1]) and \
+               (self.lims[22,0] < theta[22] < self.lims[22,1]) and \
+               (self.lims[23,0] < theta[23] < self.lims[23,1]) and \
+               (self.lims[24,0] < theta[24] < self.lims[24,1]) and \
+               (self.lims[25,0] < theta[25] < self.lims[25,1]) and \
+               (self.lims[26,0] < theta[26] < self.lims[26,1]) and \
+               (self.lims[27,0] < theta[27] < self.lims[27,1]) and \
+               (theta[23] > theta[22]) and (theta[25] > theta[24]):
                 return 0
             else:
                 return -np.inf
         else:
             raise NotImplementedError()
-        
-    def prior_transform(self, u, **kwargs):
-        '''The prior transform, which takes samples from the Uniform(0,1) distribution to the desired distribution.
 
+    def prior_transform(self, u, **kwargs):  # hiero: too be done still
+        '''The prior transform, which takes samples from the Uniform(0,1)
+        distribution to the desired distribution.
         This is only included for completeness and to demonstrate how a prior 
         transform function should look. This example only uses emcee for 
         fitting, which uses the lnprior function instead. Prior transforms are 
