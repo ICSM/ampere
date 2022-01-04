@@ -1,5 +1,6 @@
 import numpy as np
 import os
+import math
 import ampere
 from ampere.data import Spectrum, Photometry
 from ampere.emceesearch import EmceeSearch
@@ -29,9 +30,15 @@ class OpacitySpectrum(Model):
        Output is an array of model fluxes (fluxes), to match wavelengths
     '''
     def __init__(self, wavelengths, flatprior=True,
-                 opacityFileList=None):
+                 opacityFileList=None, lims=np.array([[0.,np.inf],
+                                                      [0.,np.inf],
+                                                      [10.,80.],
+                                                      [80.,200.],
+                                                      [1e-3,3.],
+                                                      [1e-3,3.]])):
+        # I need to check lims, as Tcold and Twarm are arrays, not single
+        # parameters
         '''The model constructor, which will set everything up
-
         This method does essential setup actions, primarily things that
         may change from one fit to another, but will stay constant throughout
         the fit. This may be things like the grid of wavelengths to calculate
@@ -67,15 +74,15 @@ class OpacitySpectrum(Model):
         # For example, we could define some cases to set up different priors
         # But that's for a slightly more complex example.
         # Here we'll just use a simple flat prior
-        self.lims = lims  # This one is still to be defined based on npars
+        self.lims = lims  
         self.flatprior = flatprior
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, acold, awarm, Tcold, Twarm, indexp, indexq, multfact,
+                 *args, **kwargs):
         '''The model itself, using the callable class functionality of python.
-
         This is an essential method. It should do any steps required to
-        calculate the output fluxes. Once done, it should stop the output fluxes
-        in self.modelFlux.
+        calculate the output fluxes. Once done, it should stop the output
+        fluxes in self.modelFlux.
         '''
         # print out *args
         print(args)
@@ -98,45 +105,50 @@ class OpacitySpectrum(Model):
         coldcomponent[0, :] = self.wavelengths
         warmcomponent = np.zeros((2, wavelengths.__len__()))
         warmcomponent[0, :] = self.wavelengths
-        for i, ac in enumerate(abundances[0,:]):
-            onespeciescold = ckmodbb(opacity_array[:,i], tin = Tcold[0], tout = Tcold[1], n0 = abundances[0, i], index = indexp)
-            coldcomponent[1, :] = coldcomponent[1,:] + onespeciescold
-        for i, aw in enumerate(abundances[0,:]):
-            onespecieswarm = ckmodbb(opacity_array[:,i], tin = Twarm[0], tout = Twarm[1], n0 = abundances[0,i], index = indexp)
-            warmcomponent[1,:] = warmcomponent[1,:] + onespecieswarm
+        for i in enumerate(acold):
+            onespeciescold = self.ckmodbb(self.opacity_array[:, i],
+                                          tin=Tcold[0], tout=Tcold[1],
+                                          n0=acold[i], index=indexp)
+            coldcomponent[1, :] = coldcomponent[1, :] + onespeciescold
+        for i in enumerate(awarm):
+            onespecieswarm = self.ckmodbb(self.opacity_array[:, i],
+                                          tin=Twarm[0], tout=Twarm[1],
+                                          n0=awarm[i], index=indexp)
+            warmcomponent[1, :] = warmcomponent[1, :] + onespecieswarm
         fModel = np.like(coldcomponent)
-        fModel[1,:] = fModel[1,:] + warmcomponent[1,:]
-        self.modelFlux = fModel[1,:]
+        fModel[1, :] = fModel[1, :] + warmcomponent[1, :]
+        self.modelFlux = fModel[1, :]
 
 # hiero, I am getting all my indices of fnu etc. wrong. Check the functions
-# below, especially whether I am using wavelength and flux in the correct place    
-    def ckmodbb(self, q, tin, tout, n0, index = 0.5, r0 = 1e15, distance = 910., grainsize = 0.1, steps = 10):
-        d = distance * 3.0857e18 #convert distance from pc to cm
-        a = grainsize * 1e-4 #convert grainsize from micron to cm
- 
+# below, especially whether I am using wavelength and flux in the correct place 
+    def ckmodbb(self, q, tin, tout, n0, index=0.5, r0=1e15, distance=910.,
+                grainsize=0.1, steps=10):
+        d = distance * 3.0857e18  # convert distance from pc to cm
+        a = grainsize * 1e-4  # convert grainsize from micron to cm
         fnu = np.zeros((2, wavelengths.__len__()))
-        fnu[0,:] = self.wavelengths
+        fnu[0, :] = self.wavelengths
 
         for i in range(steps - 1):
             t = tin - i * (tin-tout)/steps
-            power = (t/tin)^(2*index - 6)
-            bb = shbb(fnu, t, 0.) 
-            fnu[1,:] = np.add(fnu[1,:],np.multiply(q[1,:],bb[1,:])*(power*((tin-tout)/steps)))
-
+            power = (t/tin)**(2*index - 6)
+            bb = self.shbb(fnu, t, 0.)
+            fnu[1, :] = np.add(fnu[1, :],
+                               np.multiply(q[1, :],
+                                           bb[1, :])*(power*((tin-tout)/steps)))
         extra = r0/d
         factor = 4 * math.pi * a * a * r0 * n0 * extra * extra / (3-index)
-        fnu[1,:] = fnu[1,:] * factor
+        fnu[1, :] = fnu[1, :] * factor
         return fnu
 
     def shbb(self, aar, temp, pinda):
         a1 = 3.97296e19
         a2 = 1.43875e4
-        mbb = np.copy(aar)                                 
-        bbflux = a1/(mbb[0,:]^3)/(exp(a2/(mbb[0,:]*temp))-1)
-        mbb[1,:] = bbflux * mbb[0,:]^pinda
-        return mbb                                 
+        mbb = np.copy(aar)
+        bbflux = a1/(mbb[0, :]**3)/(math.exp(a2/(mbb[0, :]*temp))-1)
+        mbb[1, :] = bbflux * mbb[0, :]**pinda
+        return mbb
 
-    def lnprior(self, theta, **kwargs): #hiero: too be done still
+    def lnprior(self, theta, **kwargs):  # hiero: too be done still
         slope = theta[0]
         intercept = theta[1]
         if self.flatprior:

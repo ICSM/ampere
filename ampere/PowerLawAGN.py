@@ -8,7 +8,7 @@
 import numpy as np
 from astropy import constants as const
 from astropy import units as u
-from astropy.modeling import blackbody
+from astropy.modeling import models
 from .models import AnalyticalModel
 from scipy.stats import dirichlet
 
