@@ -12,32 +12,25 @@ from emcee import moves
 # First we will define a rather simple model
 
 
-class OpacitySpectrum(Model):
+class SpectrumNGC6302(Model):
     '''This model fits a modfied blackbody multiplied by sum of opacties,
         consisting of a warm and cold component, not necessarily of the same
         composition, over two temperature ranges, following Kemper et al. 2002.
         We use the following parameters:
        wavelengths : the array of wavelengths considered
        opacityFileList
-       acold : (relative) abundances for the cold component
+       acold : (relative) abundances for the cold component 
        awarm : (relative) abundances for the warm component
-       Tcold : temperature range of the cold component
-       Twarm : temperature range of the warm component
-       indexp : index p of the density distribution
+       Tcold : temperature range of the cold component (low, high)
+       Twarm : temperature range of the warm component (low, high)
+       indexp : index p of the density distribution 
        indexq : index q of the temperature distribution
        multfact : multiplication factor that the sum of the modified black
                   bodies has to be multiplied with to fit the spectrum
        Output is an array of model fluxes (fluxes), to match wavelengths
     '''
     def __init__(self, wavelengths, flatprior=True,
-                 opacityFileList=None, lims=np.array([[0.,np.inf],
-                                                      [0.,np.inf],
-                                                      [10.,80.],
-                                                      [80.,200.],
-                                                      [1e-3,3.],
-                                                      [1e-3,3.]])):
-        # I need to check lims, as Tcold and Twarm are arrays, not single
-        # parameters
+                 opacityFileList='NGC6302-opacities.txt', lims=None):
         '''The model constructor, which will set everything up
         This method does essential setup actions, primarily things that
         may change from one fit to another, but will stay constant throughout
@@ -48,9 +41,9 @@ class OpacitySpectrum(Model):
         self.wavelength = wavelengths
         import os
         from scipy import interpolate
-        opacityDirectory = os.path.dirname(__file__)+'/Opacities/'
+        opacityDirectory = os.path.dirname(__file__)+'/NGC6302/'
         opacityFileList = np.array(opacityFileList)
-        nSpecies = opacityFileList.__len__()
+        nSpecies = opacityFileList.__len__()  # 11 for the 2002 study
         opacity_array = np.zeros((wavelengths.__len__(), nSpecies))
         for j in range(nSpecies):
             tempData = np.loadtxt(opacityDirectory + opacityFileList[j],
@@ -61,8 +54,8 @@ class OpacitySpectrum(Model):
             opacity_array[:, j] = f(self.wavelength)
         self.opacity_array = opacity_array
         self.nSpecies = nSpecies
-        self.npars = nSpecies + 7
-        # 7 is the number of free parameters for the model (__call__()). For
+        self.npars = 2*nSpecies + 6
+        # the number of free parameters for the model (__call__()). For
         # some models this can be determined through introspection, but it is
         # still strongly recommended to define this explicitly here.
         # Introspection will only be attempted if self.npars is not defined.
@@ -74,10 +67,13 @@ class OpacitySpectrum(Model):
         # For example, we could define some cases to set up different priors
         # But that's for a slightly more complex example.
         # Here we'll just use a simple flat prior
-        self.lims = lims  
+        if lims is None:
+            self.lims = something  #to be defined
+        else:            
+            self.lims = lims  
         self.flatprior = flatprior
 
-    def __call__(self, acold, awarm, Tcold, Twarm, indexp, indexq, multfact,
+    def __call__(self, acold, awarm, Tcold, Twarm, indexp, multfact,
                  *args, **kwargs):
         '''The model itself, using the callable class functionality of python.
         This is an essential method. It should do any steps required to
