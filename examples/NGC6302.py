@@ -155,36 +155,11 @@ class SpectrumNGC6302(Model):
         # Twarm = theta[24:26]; theta[25] > theta[24]
         # indexp = theta[26]
         # multfact = theta[27]
+        
         if self.flatprior:
-            if (self.lims[0,0] < theta[0] < self.lims[0,1]) and \
-               (self.lims[1,0] < theta[1] < self.lims[1,1]) and \
-               (self.lims[2,0] < theta[2] < self.lims[2,1]) and \
-               (self.lims[3,0] < theta[3] < self.lims[3,1]) and \
-               (self.lims[4,0] < theta[4] < self.lims[4,1]) and \
-               (self.lims[5,0] < theta[5] < self.lims[5,1]) and \
-               (self.lims[6,0] < theta[6] < self.lims[6,1]) and \
-               (self.lims[7,0] < theta[7] < self.lims[7,1]) and \
-               (self.lims[8,0] < theta[8] < self.lims[8,1]) and \
-               (self.lims[9,0] < theta[9] < self.lims[9,1]) and \
-               (self.lims[10,0] < theta[10] < self.lims[10,1]) and \
-               (self.lims[11,0] < theta[11] < self.lims[11,1]) and \
-               (self.lims[12,0] < theta[12] < self.lims[12,1]) and \
-               (self.lims[13,0] < theta[13] < self.lims[13,1]) and \
-               (self.lims[14,0] < theta[14] < self.lims[14,1]) and \
-               (self.lims[15,0] < theta[15] < self.lims[15,1]) and \
-               (self.lims[16,0] < theta[16] < self.lims[16,1]) and \
-               (self.lims[17,0] < theta[17] < self.lims[17,1]) and \
-               (self.lims[18,0] < theta[18] < self.lims[18,1]) and \
-               (self.lims[19,0] < theta[19] < self.lims[19,1]) and \
-               (self.lims[20,0] < theta[20] < self.lims[20,1]) and \
-               (self.lims[21,0] < theta[21] < self.lims[21,1]) and \
-               (self.lims[22,0] < theta[22] < self.lims[22,1]) and \
-               (self.lims[23,0] < theta[23] < self.lims[23,1]) and \
-               (self.lims[24,0] < theta[24] < self.lims[24,1]) and \
-               (self.lims[25,0] < theta[25] < self.lims[25,1]) and \
-               (self.lims[26,0] < theta[26] < self.lims[26,1]) and \
-               (self.lims[27,0] < theta[27] < self.lims[27,1]) and \
-               (theta[23] > theta[22]) and (theta[25] > theta[24]):
+            if np.all(self.lims[i,0] < theta[i] < self.lims[i,1] for i in
+                      range(len(self.lims[:,0])) and (theta[23] > theta[22])
+                      and (theta[25] > theta[24]):
                 return 0
             else:
                 return -np.inf
