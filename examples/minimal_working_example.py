@@ -1,3 +1,5 @@
+import sys
+sys.path.insert(1, '/home/zeegers/git_ampere/ampere/')
 import numpy as np
 import os
 import ampere
@@ -48,6 +50,7 @@ class ASimpleModel(Model):
 
     def lnprior(self, theta, **kwargs):
         slope = theta[0]
+        print(slope)
         intercept = theta[1]
         if self.flatprior:
             if (self.lims[0,0] < theta[0] < self.lims[0,1]) and (self.lims[1,0] < theta[1] < self.lims[1,1]):

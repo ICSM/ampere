@@ -17,16 +17,15 @@ rsol = 696340e3 # m
 
 
 #Define stellar spectrum: blackbody, star with 10 solar radii and at 1 kpc 
-R = 3.9. *rsol
+R = 3.9*rsol
 r = 2000.*pc
 
-bb = BlackBody(temperature=1850*u.K)
-wav = np.arange(1000,1000000,10) * u.AA     # wavelength from 0.1 to 100 micron
+bb = BlackBody(temperature=15000*u.K)
+wav = np.arange(100,1000000,10) * u.AA     # wavelength from 0.1 to 100 micron
 flux = bb(wav)
 
 # transform flux to mJy
-flux_mjy = flux.to(u.mJy / u.sr)*4.*(np.pi*R/r)**2.
-
+flux_mjy = flux.to(u.mJy / u.sr)*(R/r)**2.
 
 
 #
@@ -37,26 +36,6 @@ flux_mjy = flux.to(u.mJy / u.sr)*4.*(np.pi*R/r)**2.
 #B9V T = 10600 K, log g = 4, Rstar = 2.7 Rsol
 #B2V T = 20600 K, log g = 4, Rstar = 3.85 Rsol
 #O8V T = 35000 K, log g = 4, Rstar = 8.75 Rsol
-    
-
-def read_stellar_spectrum(dstar=1000,spectrum='./stellar_spectra/BT-NEXTGEN_Photosphere_Teff_15000_logg_4.0_Rstar_3.9.spec'):
-    spec_trim = spectrum[:-5]
-    spec_split = spec_trim.split('_')
-    #print(spec_split)
-    tstar = float(spec_split[4])
-    logg  = float(spec_split[6])
-    rstar = float(spec_split[8])
-    
-    data = ascii.read(spectrum,comment='#',names=['Wave','Flux'])
-
-    wavelengths =  data['Wave'].data #Angstroms
-    model_spect =  data['Flux'].data #Ergs/cm**2/s/A
-
-    wav_um = wavelengths / 1e4
-    flx_mjy = model_spect *  1e3 * wavelengths**2  * 3.33564095E+04 * ((rstar*rsol)**2 / (dstar*pc)**2) #coversion to mJy
-
-    return wav_um,flx_mjy
-
 
 
 
@@ -64,15 +43,13 @@ def read_stellar_spectrum(dstar=1000,spectrum='./stellar_spectra/BT-NEXTGEN_Phot
 
 # print list of filenames
 
-spec = "./stellar_spectra/BT-NEXTGEN_Photosphere_Teff_21000_logg_4.0_Rstar_3.9.spec"
-
 dstar = 2000. # pc
 
 # read in stellar spectrum
-wav_um, flx_mjy = read_stellar_spectrum(dstar,spec)
-wav_aa = wav_um*1e4 # wavelengths in angstroms for the extinction calculation
 
-bb = models.BlackBody(temperature=20000.*u.K)
+wav_aa = wav
+wav_um = wav/1e4
+
 
 spectrum_total_int = 0
 
@@ -193,7 +170,7 @@ for i in range(len(dust_split_fraction)):
 #Avs = [1.0,3.0,5.0,6.5,8.0,10.0,15.0] # in mags
 #Avs = [4.0,5.5,7.0] # in mags
 Avs = [7.0] # in mags
-
+Av = 7.0
 
 Rv = 3.1 # for MW
 
@@ -204,215 +181,209 @@ for i in range(len(Avs)):
 
 #filename_array=["extinction_enstatite_av1_1kpc.txt","extinction_enstatite_av3_1kpc.txt","extinction_enstatite_av5_1kpc.txt","extinction_enstatite_av8_1kpc.txt","extinction_enstatite_av10_1kpc.txt","extinction_enstatite_av15_1kpc.txt"]
 
-#Apply extinction models
-for i in range(len(Avs)):
-    Av = Avs[i]
-    spectrum = apply(fitzpatrick99(wav_aa,Av,Rv),flx_mjy)
-    spectrum_bb = bb(wav_aa)
+spectrum = flux_mjy
     
-    fig = plt.figure(figsize=(8,6))
-    ax = fig.add_subplot(1, 1, 1)
-    ax.set_xlabel(r'Wavelength [$\mu$m]',fontsize=16)
-    ax.set_ylabel(r'Flux density [Jy]',fontsize=16)
-    ax.set_ylim(1e-5,1e3)
-    ax.set_xlim(1e-2,1e3)
-    ax.loglog(wav_um,spectrum,color='blue')
-    ax.loglog(wav_um,flx_mjy,color='red')
-    plt.show()
-    plt.close()
-    print(np.min(wav_um),np.max(wav_um))
-    # wavelength for interpolation
-    wavelength_int=np.arange(0.1,40.0,0.001)
-    interpfunc_spectrum=interpolate.interp1d(wav_um,spectrum)
-    spectrum3_int=interpfunc_spectrum(wavelength_int)
+fig = plt.figure(figsize=(8,6))
+ax = fig.add_subplot(1, 1, 1)
+ax.set_xlabel(r'Wavelength [$\mu$m]',fontsize=16)
+ax.set_ylabel(r'Flux density [Jy]',fontsize=16)
+ax.set_ylim(1e-5,1e3)
+ax.set_xlim(1e-2,1e3)
+ax.loglog(wav_um,spectrum,color='blue')
+ax.loglog(wav_um,flux_mjy,color='red')
+plt.show()
+plt.close()
 
-    interpfunc_model=interpolate.interp1d(wav_um,flx_mjy)
-    model_int=interpfunc_model(wavelength_int)
+print(np.min(wav_um),np.max(wav_um))
+# wavelength for interpolation
+wavelength_int=np.arange(0.1,40.0,0.001)
+interpfunc_spectrum=interpolate.interp1d(wav_um,spectrum)
+spectrum3_int=interpfunc_spectrum(wavelength_int)
 
-    # optical depth array
+interpfunc_model=interpolate.interp1d(wav_um,flux_mjy)
+model_int=interpfunc_model(wavelength_int)
+# optical depth array
 
-    tau_cont=np.log(spectrum3_int/model_int)*-1.
-    wavelength_int_q=np.arange(2,40.0,0.001)
-    tau_int_func=interpolate.interp1d(wavelength_int,tau_cont)
-    tau_int=tau_int_func(wavelength_int_q)    
-    model_int2=interpfunc_model(wavelength_int_q)
+tau_cont=np.log(spectrum3_int/model_int)*-1.
+wavelength_int_q=np.arange(2,40.0,0.001)
+tau_int_func=interpolate.interp1d(wavelength_int,tau_cont)
+tau_int=tau_int_func(wavelength_int_q)    
+model_int2=interpfunc_model(wavelength_int_q)
     
-    tau_lab=np.empty([len(species),len(wavelength_int_q)])
+tau_lab=np.empty([len(species),len(wavelength_int_q)])
 
-    teller=0
+teller=0
 
-    for specie in species:
+for specie in species:
         
-            #def read_dust_qext(species='mg05fe05sio3_am_cde01.q'): 
-        ## read in the Q values 
-        #data_dust=np.loadtxt(species)
+        #def read_dust_qext(species='mg05fe05sio3_am_cde01.q'): 
+     ## read in the Q values 
+    #data_dust=np.loadtxt(species)
 
-        #wavelengths_q=data_dust[:,0]
-        #Qext=data_dust[:,1]
+    #wavelengths_q=data_dust[:,0]
+    #Qext=data_dust[:,1]
 
-        #return wavelengths_q, Qext
+    #return wavelengths_q, Qext
+    wavelengths_q, Qext = read_dust_qext(specie)
+       
+    rho, molmass = read_dust_prop(specie)
+    rho=float(rho)
+    molmass=float(molmass)
+    # interpolating lab data
+    interpfunc_Qext=interpolate.interp1d(wavelengths_q,Qext)
+    Qext_int=interpfunc_Qext(wavelength_int_q)
 
+    # How many dust particles do we have along the line of sight for a certain Av value?
+    #Nd = calculate_Nd(Av)
+    Nd=calculate_Nd(Av, rho, molmass, fraction, depletion_si)
+       
+    # Now we need the lab spectrum part of the intensity
+    tau_lab[teller,:]=Qext_int*math.pi*(0.1*1e-4)**2*Nd*fraction[teller]
 
-        wavelengths_q, Qext = read_dust_qext(specie)
-        
-        rho, molmass = read_dust_prop(specie)
-        rho=float(rho)
-        molmass=float(molmass)
-        # interpolating lab data
-        interpfunc_Qext=interpolate.interp1d(wavelengths_q,Qext)
-        Qext_int=interpfunc_Qext(wavelength_int_q)
-
-        # How many dust particles do we have along the line of sight for a certain Av value?
-        #Nd = calculate_Nd(Av)
-        Nd=calculate_Nd(Av, rho, molmass, fraction, depletion_si)
-        
-        # Now we need the lab spectrum part of the intensity
-        tau_lab[teller,:]=Qext_int*math.pi*(0.1*1e-4)**2*Nd*fraction[teller]
-
-        teller=teller+1
+    teller=teller+1
     
-    tau_lab=np.sum(tau_lab, axis=0)
+tau_lab=np.sum(tau_lab, axis=0)
 
     # interpolating lab data
     
 # now we need to bring back the original stellar spectrum      
-    tau=tau_int+tau_lab
-    intensity=model_int2*np.exp(-1*(tau))
-    wavelength_int_where=np.where(wavelength_int<2) 
-    wavelength_int_again=wavelength_int[wavelength_int_where]
-    spectrum_again=spectrum3_int[wavelength_int_where]
+tau=tau_int+tau_lab
+intensity=model_int2*np.exp(-1*(tau))
+wavelength_int_where=np.where(wavelength_int<2) 
+wavelength_int_again=wavelength_int[wavelength_int_where]
+spectrum_again=spectrum3_int[wavelength_int_where]
 
-    spectrum_total=np.concatenate((spectrum_again,intensity))
-    wavelength_total=np.concatenate((wavelength_int_again,wavelength_int_q))
+spectrum_total=np.concatenate((spectrum_again,intensity))
+wavelength_total=np.concatenate((wavelength_int_again,wavelength_int_q))
 
-    spectrum_total_func=interpolate.interp1d(wavelength_total,spectrum_total,fill_value="extrapolate")
-    spectrum_total_int = spectrum_total_func(wavelength_int)
-    # Adding noise to the spectrum
-    noise = spec_noise(spectrum_total_int,noise_para=None,noise_type='Poisson') #Noise = sqrt(Signal)
-    #noise = spec_noise(spectrum_total_int,noise_para=[0.0,0.10],noise_type='Gaussian') #Noise = 10% Gaussian uncertainty
+spectrum_total_func=interpolate.interp1d(wavelength_total,spectrum_total,fill_value="extrapolate")
+spectrum_total_int = spectrum_total_func(wavelength_int)
+# Adding noise to the spectrum
+noise = spec_noise(spectrum_total_int,noise_para=None,noise_type='Poisson') #Noise = sqrt(Signal)
+#noise = spec_noise(spectrum_total_int,noise_para=[0.0,0.10],noise_type='Gaussian') #Noise = 10% Gaussian uncertainty
     
-    spectrum_total_int_noisy = spectrum_total_int + noise
+spectrum_total_int_noisy = spectrum_total_int + noise
     
 
-    # we now also need to consider binning and the 
-    # rebinning the spectrum
-    #JWST MIRSPEC resolutions by filter: 
-    #https://jwst-docs.stsci.edu/mid-infrared-instrument/miri-observing-modes/miri-medium-resolution-spectroscopy#MIRIMediumResolutionSpectroscopy-wavelengthMRSwavelengthcoverage
-    
-    ##lam_min, lam_max, avg. spec. resln.
-    #spectral_resolution = {'nirspec_prism' :[0.6,5.0,100],
-                           #'nirspec_lores' :[0.6,5.0,1000],
-                           #'nirspec_hires' :[0.6,5.0,2700],
-                           #'mirispec_ch1_s':[4.88,5.75,3515],
-                           #'mirispec_ch1_m':[5.63,6.63,3470],
-                           #'mirispec_ch1_l':[6.41,7.52,3355],
-                           #'mirispec_ch2_s':[7.48,8.76,3050],
-                           #'mirispec_ch2_m':[8.71 ,10.23,2960],
-                           #'mirispec_ch2_l':[10.02,11.75,3080],
-                           #'mirispec_ch3_s':[11.52,13.49,2705],
-                           #'mirispec_ch3_m':[13.36,15.65,2215],
-                           #'mirispec_ch3_l':[15.43,18.08,2385],
-                           #'mirispec_ch4_s':[17.65,20.94,1695],
-                           #'mirispec_ch4_m':[20.41,24.22,1725],
-                           #'mirispec_ch4_l':[23.88,28.34,1495]}
+# we now also need to consider binning and the 
+# rebinning the spectrum
+#JWST MIRSPEC resolutions by filter: 
+#https://jwst-docs.stsci.edu/mid-infrared-instrument/miri-observing-modes/miri-medium-resolution-spectroscopy#MIRIMediumResolutionSpectroscopy-wavelengthMRSwavelengthcoverage
+ 
+##lam_min, lam_max, avg. spec. resln.
+#spectral_resolution = {'nirspec_prism' :[0.6,5.0,100],
+                       #'nirspec_lores' :[0.6,5.0,1000],
+                       #'nirspec_hires' :[0.6,5.0,2700],
+                       #'mirispec_ch1_s':[4.88,5.75,3515],
+                       #'mirispec_ch1_m':[5.63,6.63,3470],
+                       #'mirispec_ch1_l':[6.41,7.52,3355],
+                       #'mirispec_ch2_s':[7.48,8.76,3050],
+                       #'mirispec_ch2_m':[8.71 ,10.23,2960],
+                       #'mirispec_ch2_l':[10.02,11.75,3080],
+                       #'mirispec_ch3_s':[11.52,13.49,2705],
+                       #'mirispec_ch3_m':[13.36,15.65,2215],
+                       #'mirispec_ch3_l':[15.43,18.08,2385],
+                       #'mirispec_ch4_s':[17.65,20.94,1695],
+                       #'mirispec_ch4_m':[20.41,24.22,1725],
+                       #'mirispec_ch4_l':[23.88,28.34,1495]}
 # mock JWST spectral data    
     
-    spectral_resolution = {'nirspec_hires' :[0.6,4.87,270],
-                           'mirispec_ch1_s':[4.88,5.63,352],
-                           'mirispec_ch1_m':[5.63,6.40,347],
-                           'mirispec_ch1_l':[6.41,7.47,336],
-                           'mirispec_ch2_s':[7.48,8.76,305],
-                           'mirispec_ch2_m':[8.77 ,10.23,296],
-                           'mirispec_ch2_l':[10.25,11.75,308],
-                           'mirispec_ch3_s':[11.76,13.49,271],
-                           'mirispec_ch3_m':[13.50,15.65,222],
-                           'mirispec_ch3_l':[15.66,18.08,239],
-                           'mirispec_ch4_s':[18.09,20.94,170],
-                           'mirispec_ch4_m':[20.95,24.22,173],
-                           'mirispec_ch4_l':[24.23,28.34,150]}
-        
+spectral_resolution = {'nirspec_hires' :[0.6,4.87,270],
+                       'mirispec_ch1_s':[4.88,5.63,352],
+                       'mirispec_ch1_m':[5.63,6.40,347],
+                       'mirispec_ch1_l':[6.41,7.47,336],
+                       'mirispec_ch2_s':[7.48,8.76,305],
+                       'mirispec_ch2_m':[8.77 ,10.23,296],
+                       'mirispec_ch2_l':[10.25,11.75,308],
+                       'mirispec_ch3_s':[11.76,13.49,271],
+                       'mirispec_ch3_m':[13.50,15.65,222],
+                       'mirispec_ch3_l':[15.66,18.08,239],
+                       'mirispec_ch4_s':[18.09,20.94,170],
+                       'mirispec_ch4_m':[20.95,24.22,173],
+                       'mirispec_ch4_l':[24.23,28.34,150]}
+     
     
-    #empty arrays for the final spectrum
-    jwst_spec_wave = np.asarray([])
-    jwst_spec_flux = np.asarray([])
-    
-    for key in spectral_resolution:
-        channel = spectral_resolution[key]
+#empty arrays for the final spectrum
+jwst_spec_wave = np.asarray([])
+jwst_spec_flux = np.asarray([])
+ 
+for key in spectral_resolution:
+    channel = spectral_resolution[key]
+     
+    new_waves = np.arange(channel[0],channel[1],
+                           (channel[1]-0.5*(channel[1]-channel[0]))/channel[2])
+    new_waves = np.append(new_waves,channel[1])
+    new_fluxs = spectres(new_waves,wavelength_int,spectrum_total_int_noisy)
+      
+    jwst_spec_wave = np.append(jwst_spec_wave,new_waves)
+    jwst_spec_flux = np.append(jwst_spec_flux,new_fluxs)
         
-        new_waves = np.arange(channel[0],channel[1],
-                                (channel[1]-0.5*(channel[1]-channel[0]))/channel[2])
-        new_waves = np.append(new_waves,channel[1])
-        new_fluxs = spectres(new_waves,wavelength_int,spectrum_total_int_noisy)
-        
-        jwst_spec_wave = np.append(jwst_spec_wave,new_waves)
-        jwst_spec_flux = np.append(jwst_spec_flux,new_fluxs)
-        
-    jwst_spex_error = spec_noise(jwst_spec_flux,noise_para=None,noise_type='Poisson') #Noise = sqrt(Signal)
-    jwst_spex_error2 = np.sqrt(jwst_spex_error**2)
+jwst_spex_error = spec_noise(jwst_spec_flux,noise_para=None,noise_type='Poisson') #Noise = sqrt(Signal)
+jwst_spex_error2 = np.sqrt(jwst_spex_error**2)
     
     #plot figures
     
     # writing data to ascii text file, which 
     
-    fig = plt.figure(figsize=(8,6))
-    ax = fig.add_subplot(1, 1, 1)
-    ax.set_xlabel(r'Wavelength [$\mu$m]',fontsize=16)
-    ax.set_ylabel(r'Flux density [mJy]',fontsize=16)
-    ax.set_ylim(1e-1,1e3)
-    ax.set_xlim(1,40)
-    ax.loglog(wavelength_int,spectrum_total_int,color='blue')
-    ax.loglog(wav_um,flx_mjy,color='red')
-    ax.text(20,5e2,r'$A_{V}$ = '+str(Av),fontsize=16)
+fig = plt.figure(figsize=(8,6))
+ax = fig.add_subplot(1, 1, 1)
+ax.set_xlabel(r'Wavelength [$\mu$m]',fontsize=16)
+ax.set_ylabel(r'Flux density [mJy]',fontsize=16)
+ax.set_ylim(1e-1,1e3)
+ax.set_xlim(1,40)
+ax.loglog(wavelength_int,spectrum_total_int,color='blue')
+ax.loglog(wav_um,flux_mjy,color='red')
+ax.text(20,5e2,r'$A_{V}$ = '+str(Av),fontsize=16)
 
-    fig = plt.figure(figsize=(8,6))
-    ax = fig.add_subplot(1, 1, 1)
-    ax.set_xlabel(r'Wavelength [$\mu$m]',fontsize=16)
-    ax.set_ylabel(r'Relative intenstity (compared to photosphere)',fontsize=16)
-    ax.set_ylim(1e-1,1.1e0)
-    ax.set_xlim(1,40) 
-    ax.loglog(wavelength_int,spectrum_total_int_noisy/spectrum3_int,color='green')
-    ax.loglog(wavelength_int,spectrum_total_int/spectrum3_int,color='blue')
-    ax.loglog(wavelength_int,model_int/model_int,color='red')
-    ax.text(20,0.7,r'$A_{V}$ = '+str(Av),fontsize=16)
-    plt.show()
-    plt.close()
+fig = plt.figure(figsize=(8,6))
+ax = fig.add_subplot(1, 1, 1)
+ax.set_xlabel(r'Wavelength [$\mu$m]',fontsize=16)
+ax.set_ylabel(r'Relative intenstity (compared to photosphere)',fontsize=16)
+ax.set_ylim(1e-1,1.1e0)
+ax.set_xlim(1,40) 
+ax.loglog(wavelength_int,spectrum_total_int_noisy/spectrum3_int,color='green')
+ax.loglog(wavelength_int,spectrum_total_int/spectrum3_int,color='blue')
+ax.loglog(wavelength_int,model_int/model_int,color='red')
+ax.text(20,0.7,r'$A_{V}$ = '+str(Av),fontsize=16)
+plt.show()
+plt.close()
     
-    fig = plt.figure(figsize=(8,6))
-    ax = fig.add_subplot(1, 1, 1)
-    ax.set_xlabel(r'Wavelength [$\mu$m]',fontsize=16)
-    ax.set_ylabel(r'Flux density [mJy]',fontsize=16)
-    ax.set_ylim(1e-1,1e3)
-    ax.set_xlim(1,40)
-    ax.set_xscale('log')
-    ax.set_yscale('log')
-    ax.loglog(wavelength_int,spectrum3_int,color='black')
-    cval = np.arange(0,1,1/len(spectral_resolution))
-    nk = 0
-    for keys in spectral_resolution:
-        #cval = (nk+1)/len(spectral_resolution)
-        lam_lo = spectral_resolution[keys][0]
-        lam_hi = spectral_resolution[keys][1]
-        filt = np.where((jwst_spec_wave >= lam_lo) & (jwst_spec_wave <= lam_hi))
-        ax.scatter(jwst_spec_wave[filt],jwst_spec_flux[filt], cmap='rainbow',linestyle='-',marker='.',linewidth=0.5)
-        nk += 1
-    ax.text(20,5e2,r'$A_{V}$ = '+str(Av),fontsize=16)
+fig = plt.figure(figsize=(8,6))
+ax = fig.add_subplot(1, 1, 1)
+ax.set_xlabel(r'Wavelength [$\mu$m]',fontsize=16)
+ax.set_ylabel(r'Flux density [mJy]',fontsize=16)
+ax.set_ylim(1e-1,1e3)
+ax.set_xlim(1,40)
+ax.set_xscale('log')
+ax.set_yscale('log')
+ax.loglog(wavelength_int,spectrum3_int,color='black')
+cval = np.arange(0,1,1/len(spectral_resolution))
+nk = 0
+for keys in spectral_resolution:
+    #cval = (nk+1)/len(spectral_resolution)
+    lam_lo = spectral_resolution[keys][0]
+    lam_hi = spectral_resolution[keys][1]
+    filt = np.where((jwst_spec_wave >= lam_lo) & (jwst_spec_wave <= lam_hi))
+    ax.scatter(jwst_spec_wave[filt],jwst_spec_flux[filt], cmap='rainbow',linestyle='-',marker='.',linewidth=0.5)
+    nk += 1
+ax.text(20,5e2,r'$A_{V}$ = '+str(Av),fontsize=16)
 
-    plt.show()
-    
-    fig = plt.figure(figsize=(8,6))    
-    ax = fig.add_subplot(1, 1, 1)
-    ax.set_xlabel(r'Wavelength [$\mu$m]',fontsize=16)
-    ax.set_ylabel(r'Flux density [mJy]',fontsize=16)
-    ax.set_ylim(1e-1,1e3)
-    ax.set_xlim(1,40)
-    ax.set_xscale('log')
-    ax.set_yscale('log')
-    ax.loglog(wavelength_int,spectrum3_int,color='black')    
-    ax.errorbar(jwst_spec_wave, jwst_spec_flux, yerr=jwst_spex_error2,fmt='-o')
-    plt.show()
-    plt.close()
-    
-    zeroes=np.zeros(len(jwst_spec_flux))
-    
-    #np.savetxt(filename_array[i], np.c_[jwst_spec_wave, jwst_spec_flux, jwst_spex_error2, zeroes], delimiter=' ')
+plt.show()
+   
+fig = plt.figure(figsize=(8,6))    
+ax = fig.add_subplot(1, 1, 1)
+ax.set_xlabel(r'Wavelength [$\mu$m]',fontsize=16)
+ax.set_ylabel(r'Flux density [mJy]',fontsize=16)
+ax.set_ylim(1e-1,1e3)
+ax.set_xlim(1,40)
+ax.set_xscale('log')
+ax.set_yscale('log')
+ax.loglog(wavelength_int,spectrum3_int,color='black')    
+ax.errorbar(jwst_spec_wave, jwst_spec_flux, yerr=jwst_spex_error2,fmt='-o')
+plt.show()
+plt.close()
+ 
+zeroes=np.zeros(len(jwst_spec_flux))
+
+np.savetxt(filename_array[i], np.c_[jwst_spec_wave, jwst_spec_flux, jwst_spex_error2, zeroes], delimiter=' ')
 
