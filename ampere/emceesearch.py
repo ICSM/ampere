@@ -186,7 +186,7 @@ class EmceeSearch(BaseSearch):
         self.plot_covmats()
 
 
-        self.plot_posteriorpredictive()
+        self.plot_posteriorpredictive(logy=True)
         #fig4,(ax0,ax1) = plt.subplots(1,2)
         #ax=[ax0, ax1]
         #i=0
@@ -306,6 +306,10 @@ class EmceeSearch(BaseSearch):
             try:
                 self.model(*s[:self.nparsMod])
                 axes.plot(self.model.wavelength,self.model.modelFlux, '-', color='k', alpha=alpha,label='Samples', zorder = 0)
+                if logy:
+                    axes.set_yscale('log')
+                if logx:
+                    axes.set_xscale('log')
             except ValueError:
                 pass
             i = self.nparsMod

@@ -22,8 +22,28 @@ class Blackbody_dust(Model):
     '''This is a blackbody model based on the very simple model from Peter 
 
     We will first try to fit a blackbody model to a dataset with dust 
+    
+    
 
     '''
+    #def read_stellar_spectrum(dstar=1000,spectrum='./stellar_spectra/BT-NEXTGEN_Photosphere_Teff_15000_logg_4.0_Rstar_3.9.spec'):
+        #spec_trim = spectrum[:-5]
+        #spec_split = spec_trim.split('_')
+        ##print(spec_split)
+        #tstar = float(spec_split[4])
+        #logg  = float(spec_split[6])
+        #rstar = float(spec_split[8])
+        
+        #data = ascii.read(spectrum,comment='#',names=['Wave','Flux'])
+
+        #wavelengths =  data['Wave'].data #Angstroms
+        #model_spect =  data['Flux'].data #Ergs/cm**2/s/A
+
+        #wav_um = wavelengths / 1e4
+        #flx_mjy = model_spect *  1e3 * wavelengths**2  * 3.33564095E+04 * ((rstar*rsol)**2 / (dstar*pc)**2) #coversion to mJy
+
+        #return wav_um,flx_mjy    
+    
     def __init__(self, wavelengths, flatprior=True,
                  lims=np.array([[10., 300000.],
                                 [1.,6.]])):
@@ -56,6 +76,10 @@ class Blackbody_dust(Model):
 
             f = interpolate.interp1d(tempWl, tempOpac, assume_sorted = False)
             opacity_array[:,j] = f(wavelengths)#wavelengths)
+            
+        opacityDirectory = os.path.dirname(os.path.realpath('__file__'))+'/Opacities/'
+        
+        
             
         self.opacity_array = opacity_array
         self.nSpecies = nSpecies
@@ -145,8 +169,8 @@ if __name__ == "__main__":
     rsol = 696340e3 # m
 
     """ Choose some model parameters """
-    temp = 15000.#Keep it super simple for now
-    radius_sol = 4.0
+    temp = 18000.#Keep it super simple for now
+    radius_sol = 5.0
     distance_pc = 1100. # perhaps you should fix the distance!!
 
     #Now init the model:
@@ -164,7 +188,7 @@ if __name__ == "__main__":
                 'uncsCol': 'uncertainty'}    
     
     dataDir = os.getcwd()
-    specFile = 'blackbody_jwst.txt'
+    specFile = 'no_slope_ext_jwst5.txt'
     #photFile = 'vizier_votable_pruned_no2MASS.vot'
     irs = Spectrum.fromFile(dataDir+'/'+specFile,format='User-Defined', filetype='text', keywords=keywords)
     #irs = [irs.selectWaves(low = 1., up=18.) for wavelength in irs] # alternative to next two lines, doesn't work
@@ -193,8 +217,8 @@ if __name__ == "__main__":
     #Now we set up the optimizer object:
     optimizer = EmceeSearch(model=model, data=dataSet, nwalkers=100, moves=m)
     
-    optimizer.optimise(nsamples = 3000, burnin=2000, guess=[
-        [20000., 4.0, 1.0, 0.1, 0.01, 0.01, 0.01, 0.01, #The parameters of the model
+    optimizer.optimise(nsamples = 2000, burnin=1500, guess=[
+        [20000., 5.0, 1.0, 0.1, 0.01, 0.01, 0.01, 0.01, #The parameters of the model
          #1.0, 0.1, 0.1, #Each Spectrum object contains a noise model with three free parameters
          #The first one is a calibration factor which the observed spectrum will be multiplied by
          #The second is the fraction of correlated noise assumed

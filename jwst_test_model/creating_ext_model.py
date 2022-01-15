@@ -265,7 +265,7 @@ for i in range(len(Avs)):
     # interpolating lab data
     
 # now we need to bring back the original stellar spectrum      
-    tau=tau_int+tau_lab
+    tau=tau_lab
     intensity=model_int2*np.exp(-1*(tau))
     wavelength_int_where=np.where(wavelength_int<2) 
     wavelength_int_again=wavelength_int[wavelength_int_where]
@@ -288,22 +288,6 @@ for i in range(len(Avs)):
     #JWST MIRSPEC resolutions by filter: 
     #https://jwst-docs.stsci.edu/mid-infrared-instrument/miri-observing-modes/miri-medium-resolution-spectroscopy#MIRIMediumResolutionSpectroscopy-wavelengthMRSwavelengthcoverage
     
-    ##lam_min, lam_max, avg. spec. resln.
-    #spectral_resolution = {'nirspec_prism' :[0.6,5.0,100],
-                           #'nirspec_lores' :[0.6,5.0,1000],
-                           #'nirspec_hires' :[0.6,5.0,2700],
-                           #'mirispec_ch1_s':[4.88,5.75,3515],
-                           #'mirispec_ch1_m':[5.63,6.63,3470],
-                           #'mirispec_ch1_l':[6.41,7.52,3355],
-                           #'mirispec_ch2_s':[7.48,8.76,3050],
-                           #'mirispec_ch2_m':[8.71 ,10.23,2960],
-                           #'mirispec_ch2_l':[10.02,11.75,3080],
-                           #'mirispec_ch3_s':[11.52,13.49,2705],
-                           #'mirispec_ch3_m':[13.36,15.65,2215],
-                           #'mirispec_ch3_l':[15.43,18.08,2385],
-                           #'mirispec_ch4_s':[17.65,20.94,1695],
-                           #'mirispec_ch4_m':[20.41,24.22,1725],
-                           #'mirispec_ch4_l':[23.88,28.34,1495]}
 # mock JWST spectral data    
     
     spectral_resolution = {'nirspec_hires' :[0.6,4.87,270],
