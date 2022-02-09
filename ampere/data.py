@@ -265,12 +265,9 @@ class Photometry(Data):
                 uncertainty[i] = value[i] - zeropoints*10^(-0.4*(value[i]+uncertainty[i]))
         
         #identify values in milliJansky, convert to Jy
-        mjy = (photUnits == 'mjy')
-        
-        value[mjy] = 1000.*value[mjy]
-        uncertainty[mjy] = 1000.*uncertainty[mjy]
-        self.uncertainty = uncertainty
-        self.value = value
+        uconv = np.array([u.Jy.to(pU) for pU in photUnits])
+        self.uncertainty = uncertainty / uconv
+        self.value = value / uconv
 
         self.selectWaves()
 
@@ -690,7 +687,7 @@ class Spectrum(Data):
         The uncertainty on the fluxes.
     fluxUnits : {'Jy', 'mJy', 'W/m^2/Hz', 'W/m^2/Angstrom', 'W/cm^2/um', 'erg/cm^2/s/Hz', 'erg/cm^2/s/Angstrom'}, scalar
         The units of the fluxes..
-    bandUnits : {'um', 'A', 'nm'}, optional, string, scalar or array-like
+    bandUnits : {'um', 'AA', 'nm'}, optional, string, scalar or array-like
         The units of the wavelengths.
     freqSpec : bool, default False
         If the input is wavelength (False, default) of Frequncy (True). Currently only works for frequncies in GHz, otherwise input must be wavelength
@@ -743,6 +740,7 @@ class Spectrum(Data):
     def __init__(self, wavelength, value, uncertainty, bandUnits, fluxUnits,
                  freqSpec = False, calUnc = None, covarianceTruncation = 1e-3,
                  scaleLengthPrior = None, scaleFacPrior = None, label="Spectrum",
+                 resampleMethod="exact",
                  **kwargs):
         #self.filterName = filterName #Telescope/Instrument cf photometry
         self.type = 'Spectrum'
@@ -752,45 +750,39 @@ class Spectrum(Data):
         #Wavelength conversion
         self.frequency = freqSpec #True/False? Wavelength or Frequency spectrum
         
-        if freqSpec == 'True': #Assume given in GHz if freq, convert to microns
-            wavelength = 1.0e6*(const.c.value/(wavelength*1.0e9))
+        if freqSpec == 'True': #If freq, convert to wavelength in micron
+            wavelength = (const.c / wavelength).to('um')
         
         self.bandUnits = bandUnits
         
-        if bandUnits == 'A':
-            wavelength = 1.0e-4*wavelength
-        if bandUnits == 'nm' :
-            wavelength = 1.0e-3*wavelength
-        if bandUnits == 'um':
-            wavelength = wavelength
+        # as long as bandUnits has the dimensions of length, the wavelength
+        # is computed in um.
+        if u.m.is_equivalent(bandUnits):
+            wavelength = wavelength / u.um.to(bandUnits)
+        else:
+            mesg = """The value for bandUnits must have dimensions of length!
+            Allowed values: 'AA', 'um', 'nm', etc."""
+            raise ValueError(mesg)
         
         self.wavelength = wavelength #Will be the grid of wavelength/frequency
                                      #using numpy.ma.asarray()? to make it a MaskedArray so that we can easily
                                      #mask out unwanted parts of the spectrum along with its covariances
         
         self.fluxUnits = fluxUnits#specFluxUnits
-        
-        if fluxUnits == 'Jy':
-            value = value
-            uncertainty = uncertainty
-        elif fluxUnits == 'mJy':
-            value = 1.0E+3*value
-            uncertainty = 1.0E+3*uncertainty
-        elif fluxUnits == 'W/m^2/Hz':
-            value = 1.0E+26*value
-            uncertainty = 1.0E+26*uncertainty
-        elif fluxUnits == 'W/m^2/Angstrom':
-            value = 2.99792458E-12*value/(1.0.E+4*wavelength)^2
-            uncertainty = 2.99792458E-12*uncertainty/(1.0E+4*wavelength)^2
-        elif fluxUnits == 'W/cm^2/um':
-            value = 2.99792458E-16*value/wavelength^2
-            uncertainty = 2.99792458E-16*uncertainty/wavelength^2
-        elif fluxUnits == 'erg/cm^2/s/Hz':
-            value = 1.0E+23*value
-            uncertainty = 1.0E+23*uncertainty
-        elif fluxUnits == 'erg/cm^2/s/Angstrom':
-            value = 3.33564095E+04*value*(wavelength*1e4)^2
-            uncertainty = 3.33564095E+04*uncertainty*(wavelength*1e4)^2
+
+        if u.Jy.is_equivalent(fluxUnits):
+            uconv = u.Jy.to(fluxUnits)
+            value = value / uconv
+            uncertainty = uncertainty / uconv
+        elif (u.W / u.m**3).is_equivalent(fluxUnits):
+            # first convert flux and uncertainty to W/m^3
+            uconv = (u.W / u.m**3).to(fluxUnits)
+            value = value / uconv
+            uncertainty = uncertainty / uconv
+            # now convert flux and uncertainty to Jy
+            conv_fac = (wavelength * u.um)**2 / const.c
+            value = (value * conv_fac).to('Jy')
+            uncertainty = (uncertainty * conv_fac).to('Jy')
         else:
             raise NotImplementedError()
 
@@ -817,7 +809,10 @@ class Spectrum(Data):
 
         self.npars = 3 #this will have to change in future to 1 + number of parameters required by GPs for covMat
 
-
+        if resampleMethod == "exact":
+            self.resampler = spectres
+        elif resampleMethod=="fast":
+            self.resampler = np.interp
 
         #Set up the objects for some of the priors:
         if isinstance(scaleFacPrior, rv_continuous):
@@ -855,6 +850,63 @@ class Spectrum(Data):
 
     def __call__(self, **kwargs):
         raise NotImplementedError()
+
+    def setResampler(self, resampleMethod = "exact", **kwargs):
+        """Change the method used to resample the model spectra to the observed wavelengths
+
+        Parameters
+        ----------
+        resampleMethod : {'exact', 'fast', callable}, str or callable
+
+        Notes
+        -----
+        'exact' uses spectres for exact, flux-conserving resampling. This is 
+        important if your model contains features that are unresolved at the 
+        sampling of the observed data, so that the flux is correct. As a result, 
+        this is the default method, although it is relatively slow. We are 
+        working on making an optimised version available which uses numba for 
+        just-in-time compilation.
+
+        When all features in the model are resolved in the observations, however, 
+        this is overkill. For those cases, interpolation of the model to the 
+        observed wavelengths is usualy sufficient, and so the much faster 
+        numpy.interp can be used by selecting the "fast" method.
+
+        As we are sure this will not cover all potential use cases, we provide 
+        the option for a user-supplied callable. This must have inputs in the 
+        same format as spectres and numpy.interp, so it must be called as
+        new_fluxes = f(observed_wavelengths, model_wavelengths, model_fluxes)
+    
+    
+        Examples
+        --------
+        To switch on fast resampling, simply call
+        >>> spec = Spectrum(wavelength_array, flux_array, uncertainty_array, "um", "Jy")
+        >>> spec.setResampler(resampleMethod = "fast")
+
+        and to switch back to exact
+        >>> spec.setResampler(resampleMethod = "exact")
+        
+        if you have a specific function you want to use pass it as
+        >>> from package import resampler
+        >>> spec.setResampler(resampleMethod = resampler)
+        
+        """
+
+        if resampleMethod == "exact":
+            self.resampler = spectres
+            print("Using exact resampling")
+        elif resampleMethod=="fast":
+            self.resampler = np.interp
+            print("Using fast resampling")
+        elif callable(resampleMethod):
+            self.resampler = resampleMethod
+            print("Using user-specified resampling")
+        #elif resampleMethod=="exactcompiled":
+        #    #Raise a warning here, this is going to be experimental when it's implemented
+        #    self.resampler = spectres_numba
+        else:
+            raise ValueError("resampleMethod must be a callable or one of \"exact\" or \"fast\", but \"{0}\" was used".format(resampleMethod))
     
     def __str__(self, **kwargs):
         ''' 
@@ -1040,7 +1092,7 @@ class Spectrum(Data):
         #wavelength = self.wavelength
         #modSpec = model.modelFlux #
         #print(model.wavelength)
-        modSpec = spectres(self.wavelength, model.wavelength, model.modelFlux)[self.mask] #For some reason spectres isn't cooperating :/ actually, looks like it was just a stupid mistake
+        modSpec = self.resampler(self.wavelength, model.wavelength, model.modelFlux)[self.mask] #For some reason spectres isn't cooperating :/ actually, looks like it was just a stupid mistake
         ''' then update the covariance matrix for the parameters passed in '''
         #skip this for now
         #self.covMat =

@@ -19,8 +19,8 @@ class ASimpleModel(Model):
 
     '''
     def __init__(self, wavelenghts, flatprior=True,
-                 lims=np.array([[-100, 100],
-                                [-100, 100]])):
+                 lims=np.array([[-10, 10],
+                                [-10, 10]])):
         '''The model constructor, which will set everything up
 
         This method does essential setup actions, primarily things that 
@@ -71,7 +71,7 @@ class ASimpleModel(Model):
         '''
         if self.flatprior:
             theta = np.zeros_like(u)
-            return (lims[:,1] - lims[:,0]) * u - lims[:,0]
+            return (self.lims[:,1] - self.lims[:,0]) * u + self.lims[:,0]
         else:
             raise NotImplementedError()
 
@@ -124,9 +124,15 @@ if __name__ == "__main__":
     unc1 = input_noise_spec*spec1
     spec0 = spec0 + np.random.randn(len(spec0))*unc0
     spec1 = spec1 + np.random.randn(len(spec1))*unc1
-    spec0 = Spectrum(irsEx[0].wavelength, spec0, unc0,"um", "Jy",calUnc=0.0025, scaleLengthPrior = 0.01)
-    spec1 = Spectrum(irsEx[1].wavelength, spec1, unc1,"um", "Jy",calUnc=0.0025, scaleLengthPrior = 0.01)
+    
+    spec0 = Spectrum(irsEx[0].wavelength, spec0, unc0,"um", "Jy",calUnc=0.0025, scaleLengthPrior = 0.01) #, resampleMethod=resmethod)
+    spec1 = Spectrum(irsEx[1].wavelength, spec1, unc1,"um", "Jy",calUnc=0.0025, scaleLengthPrior = 0.01) #, resampleMethod=resmethod)
 
+    #Now let's try changing the resampling method so it's faster
+    #This model is very simple so exact flux conservation is not important
+    resmethod = "fast" #"exact"#"fast"#
+    spec0.setResampler(resampleMethod=resmethod)
+    spec1.setResampler(resampleMethod=resmethod)
 
     """ now set up ampere to try and fit the same stuff """
     photometry = Photometry(filterName=filterName, value=modSed, uncertainty=photunc, photUnits='Jy', libName=libname)
@@ -146,20 +152,25 @@ if __name__ == "__main__":
 
     #Now we set up the optimizer object:
     optimizer = EmceeSearch(model=model, data=dataset, nwalkers=100, moves=m)
-
-    #Then we tell it to explore the parameter space
-    optimizer.optimise(nsamples = 1500, burnin=1000, guess=[
+    guess = [
         [1, 1, #The parameters of the model
          #1.0, 0.1, 0.1, #Each Spectrum object contains a noise model with three free parameters
          #The first one is a calibration factor which the observed spectrum will be multiplied by
          #The second is the fraction of correlated noise assumed
          #And the third is the scale length (in microns) of the correlated component of the noise
          1.0 ,0.1, 0.1
-        ] #
+       ] #
         + np.random.rand(optimizer.npars)*[1,1,
                                            #1,1,1,
                                            1,1,1
                                            ]
-        for i in range(optimizer.nwalkers)])
+        for i in range(optimizer.nwalkers)]
+
+    #guess = "None"
+
+    #Then we tell it to explore the parameter space
+    optimizer.optimise(nsamples = 1500, burnin=1000, guess=guess
+                       )
+
 
     optimizer.postProcess() #now we call the postprocessing to produce some figures
