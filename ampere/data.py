@@ -1147,6 +1147,43 @@ class Spectrum(Data):
             #table = tablell
             table.sort(keys='wavelength')
             
+        if format == 'SPITZER-YAAAR_OPTDIFFHR':
+            #filename = 'Testdata/cassis_yaaar_spcfw_14203136t.fits'
+            hdul = fits.open(filename)
+            hdu = hdul[0]
+            header=hdu.header
+            data = hdu.data
+            table = Table(data,names=[header['COL01DEF'],header['COL02DEF'],header['COL03DEF'],header['COL04DEF'],header['COL05DEF'],header['COL06DEF'],header['COL07DEF'],header['COL08DEF']])
+            table['wavelength'].unit='um'
+            table['flux'].unit='Jy'
+            table['flux_error'].unit='Jy'
+            #table['error (RMS)'].unit='Jy'
+            #table['error (SYS)'].unit='Jy'
+            #table['offset uncertainty (CAL)'].unit='Jy'
+            #table['sky'].unit='Jy'
+            #table['sky error'].unit='Jy'
+            mask = np.logical_and.reduce([np.isfinite(c) for c in table.columns.values()]) #require the elements to be non-NaNs
+
+            table = table[mask]
+            chunks = np.zeros_like(table['module'].data)
+            sh = np.logical_or(table['module'] == 0.0, table['module'] == 1.0) #SH
+            lh = np.logical_or(table['module'] == 2.0, table['module'] == 3.0) #LH
+            #should we divide this in four chunks: module 0 = SL2, module 1 = SL1, module 2 = LL2, module 3 is LL1?
+            chunks[sh] = 1.
+            chunks[lh] = 2.
+            table['chunk'] = chunks
+
+            #normalise the column names (wavelength,flux,uncertainty)
+            table.rename_column('flux_error','uncertainty')
+            
+            ''' If I'm interpreting the CASSIS data correctly, Module(SL) = 0, 1; Module(LL) = 2, 3 '''
+            #a = table['module'] > 1.
+            #tablell = table[a]#.sort(keys='wavelength')
+            #tablell.sort(keys='wavelength')
+            #tablell.pprint()
+            #table = tablell
+            table.sort(keys='wavelength')            
+            
         # ISO SWS AAR fits files
         if format == 'SWS-AAR':
             #filename = 'Testdata/sws_ngc6790.fits'
