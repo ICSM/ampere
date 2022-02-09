@@ -117,14 +117,54 @@ class EmceeSearch(BaseSearch):
         #print(lp)
         return lp #return 0
 
-    def optimise(self, nsamples = None, burnin = None, guess = None, noguess=False, **kwargs):
+    def preopt(self, start, **kwargs):
+        neglnprob = lambda *args: -self.lnprob(*args)
+        from scipy.optimize import minimize
+        print("Using scipy.minimize to find approximate MAP solution")
+        print("starting from position: ",start)
+        solution = minimize(neglnprob, start)
+        guess = [p for p in solution.x]
+        print("Minimization complete, final position: ",guess)
+        return guess
+        
+
+    def optimise(self, nsamples = None, burnin = None, guess = None,
+                 preopt = True, guessscale = 1e-3, noguess=False, **kwargs):
+        from collections.abc import Sequence, Iterable
         if guess == 'None': # and not noguess:
-            guess = [np.random.randn(np.int(self.npars)) for i in range(self.nwalkers)]
+            print("Setting initial guess randomly")
+            try: #Attempting to use the ptform
+                print("No guess specified, attempting to draw from prior transform")
+                rng = np.random.default_rng() #.uniform(-1,0,1000)
+                guess = [self.prior_transform(rng.uniform(size=self.npars)) for i in range(self.nwalkers)]
+                print(guess)
+            except AttributeError: #not all components have a ptform, so we'll do this the simple way
+                print("Drawing from prior transform failed, drawing randomly")
+                guess = [np.random.randn(np.int(self.npars)) for i in range(self.nwalkers)]
         #print('dimensions of guess = ', np.shape(guess))
         #print('nsamples = ', nsamples)
         #print('burnin = ', burnin)
         #print("np.max(guess, axis=0) = ", np.max(guess, axis=0))
         #print("np.min(guess, axis=0) = ", np.min(guess, axis=0))
+
+        if preopt:
+            print("Selecting start point for scipy.minimize")
+            if isinstance(guess, Sequence):
+                if not isinstance(guess[0], (Sequence, Iterable)):#Only a single entry
+                    print("Only one entry in guess")
+                    print(guess[0])
+                    start = guess
+                else: #guess contains many entries, randomly select one
+                    print("Multiple entries in guess, selecting at random!")
+                    rng = np.random.default_rng()
+                    i = rng.integers(0, len(guess))
+                    start = guess[i]
+            else:
+                #Guess is not appropriate, need to do something here!
+                raise ValueError("guess does not conform to expectations")
+            newguess = self.preopt(start)
+            guess = [newguess + guessscale*np.random.randn(np.int(self.npars)) for i in range(self.nwalkers)]
+            
         self.nsamp = nsamples
         self.burnin = burnin
         if noguess:
