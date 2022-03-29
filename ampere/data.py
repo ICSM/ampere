@@ -246,10 +246,7 @@ class Photometry(Data):
         self.type = 'Photometry'
         value = value[self.filterMask]
         uncertainty = uncertainty[self.filterMask]
-        
-        #identify values in magnitudes, convert to Jy
-        np.array(photUnits)
-        
+                
         mags = self.fluxUnits == 'mag'
         #print(mags.__repr__())
         #pyphot returns a list of filters, this means this nice boolean masking doesn't work :(
@@ -260,6 +257,16 @@ class Photometry(Data):
                 value[i] = zeropoints[i]*10^(-0.4*value[i])
                 uncertainty[i] = value[i] - zeropoints*10^(-0.4*(value[i]+uncertainty[i]))
         
+        try:
+            assert len(photUnits) == len(value)
+        except AssertionError: #We have more than one unit entry, but not one per flux entry, raise an error and force the user to do something about it:
+            if isinstance(photUnits, str):
+                photUnits = [photUnits] * len(value)
+            else:
+                raise RunTimeError("The wrong number of unit entries appear to have been provided. Please check this and try again. You provided {0} units, but {1} fluxes. \n The fluxes are \n {2} \nand the units are \n {3}".format(len(photUnits), len(value), photunits, values))
+        except TypeError: #only one unit was provided, let's forcibly turn it into an iterable
+            photUnits = len(value) * (photUnits,)
+                       
         #identify values in milliJansky, convert to Jy
         uconv = np.array([u.Jy.to(pU) for pU in photUnits])
         self.uncertainty = uncertainty / uconv
