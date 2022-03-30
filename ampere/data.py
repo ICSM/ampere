@@ -1209,6 +1209,7 @@ class Spectrum(Data):
             table['wavelength'].unit='um'
             table['flux'].unit='Jy'
             table['flux_error'].unit='Jy'
+            
             #table['error (RMS)'].unit='Jy'
             #table['error (SYS)'].unit='Jy'
             #table['offset uncertainty (CAL)'].unit='Jy'
@@ -1217,12 +1218,18 @@ class Spectrum(Data):
             mask = np.logical_and.reduce([np.isfinite(c) for c in table.columns.values()]) #require the elements to be non-NaNs
 
             table = table[mask]
+            wavelengths = np.array(table['wavelength'].data)
+            orders = np.array(table['IRS_order'].data)
             chunks = np.zeros_like(table['module'].data)
-            sh = np.logical_or(table['module'] == 0.0, table['module'] == 1.0) #SH
-            lh = np.logical_or(table['module'] == 2.0, table['module'] == 3.0) #LH
-            #should we divide this in four chunks: module 0 = SL2, module 1 = SL1, module 2 = LL2, module 3 is LL1?
-            chunks[sh] = 1.
-            chunks[lh] = 2.
+            order_array=np.arange(11,21,1)
+            
+            for i_order,order in enumerate(order_array):
+                wl_sel=wavelengths[order==orders]
+                nums=np.where(order==orders)[0]
+                breaknum=np.where(np.diff(wl_sel)>5)[0][0]+1
+                chunks[nums[0:breaknum]]=1 #sh
+                chunks[nums[breaknum::]]=2 #lh
+
             table['chunk'] = chunks
 
             #normalise the column names (wavelength,flux,uncertainty)

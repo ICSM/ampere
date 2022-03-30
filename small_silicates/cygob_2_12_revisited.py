@@ -15,6 +15,7 @@ from astropy.modeling.models import BlackBody
 import matplotlib.pyplot as plt
 from scipy import interpolate
 from astropy.constants import c
+from astropy.io.votable import parse_single_table
 
 #First we will define a rather simple model
 
@@ -173,11 +174,71 @@ if __name__ == "__main__":
     
     specFile3 = 'cassis_yaaar_optdiff_9834496.fits'
     irsEx_3 = Spectrum.fromFile(dataDir+specFile3,format='SPITZER-YAAAR_OPTDIFFHR')
+
+#***********************************************************************************************************************    
+    ''' Now we get the photometry too *** look for the SED information of Schulte 12 ''' 
+    #filters=[
+             ##'SPITZER_IRAC_36',
+             #'WISE_RSR_W1',
+             #'WISE_RSR_W2',
+             #'WISE_RSR_W3',
+             #'WISE_RSR_W4',
+             #'HERSCHEL_PACS_BLUE'
+             #]
+    #libDir = os.getcwd() + '/ampere/'
+#    libname = libDir + 'ampere_allfilters.hd5'
+    libname = '/home/zeegers/ampere/ampere/ampere_allfilters.hd5'
+
+    photFile = ampere.__file__.strip('__init__.py')+'Testdata/vizier_votable_cygob212_time_again.vot'
+    table1 = parse_single_table(photFile)
     
-    dataSet = irsEx_1
+    table1 = table1.to_table()    
+    #data = table.array
     
-    for s in irsEx_2:             #include the next two lines when appending spectroscopy to photometry
-        dataSet.append(s)
+    # https://numpy.org/doc/stable/reference/generated/numpy.allclose.html
+    # Sascha: read in real photometry data ....
+    desired_filters=['2MASS:J', '2MASS:H', '2MASS:Ks', 'Spitzer/MIPS:24'] #these are the filters we're after
+    mask = np.isin(table1[u'sed_filter'], desired_filters) #np.isin() is true for each element of table['filter'] that matches one of the elements of desired_filters
+    phot_new = table1[mask] #now we make a new table which is just the rows that have the filters we want
+    desired_filters_again=['II/328/allwise']
+    mask_again = np.isin(phot_new['_tabname'], desired_filters_again)
+    #phot_table = table([phot])
+    phot_again = phot_new[mask_again]
+    
+    #table.write('new_table.vot', format='votable')
+    phot_again.write('new_table.vot', format='votable', overwrite=True)
+    
+    # ideally new_table.vot would be good enough to read in, but that's not working right now because of issues with data.py and the input (3/30/2022). 
+    # This will be fixed, but in the meantime we can store the data like this: 
+    # phot = Photometry(['2MASS_J', '2MASS_K'], [10., 5.], [0.2, 0.1], ['Jy', 'Jy'], libname='path/to/filter/library')
+    # or photometry = Photometry(filterName=filterName, value=modSed, uncertainty=photunc, photUnits='Jy', libName=libname)
+    
+    flux_value = phot_again['sed_flux'].data
+    photunits=range(len(flux_value))
+    photunits=["Jy" for i in photunits]
+    photUnits = phot_again['sed_flux'].unit
+    photunc = phot_again['sed_eflux'].data
+    filternames = phot_again['sed_filter'].data
+    
+    
+    phot = Photometry(filterName=filternames, value=flux_value, uncertainty=photunc, photUnits=photunits, libName = libname) 
+    phot.selectWaves(low = 35., interval = "right-open") #using only MIPS-70 and PACS, following Srinivasan et al. 2017
+    
+#*************************************************************************************************************************    
+    
+    
+    #dataSet = phot
+    
+    dataSet = [phot,
+               irsEx_1,
+               irsEx_2
+               ]
+    
+ #   for s in irsEx_1:             #include the next two lines when appending spectroscopy to photometry
+ #       dataSet.append(s)    
+    
+ #   for s in irsEx_2:             #include the next two lines when appending spectroscopy to photometry
+ #       dataSet.append(s)
 
 #    for s in irsEx_3:             #include the next two lines when appending spectroscopy to photometry
 #        dataSet.append(s)
@@ -205,9 +266,9 @@ if __name__ == "__main__":
          ]
 
     #Now we set up the optimizer object:
-    optimizer = EmceeSearch(model=model, data=dataSet, nwalkers=100, moves=m)
+    optimizer = EmceeSearch(model=model, data=dataSet, nwalkers=50, moves=m)
             
-    optimizer.optimise(nsamples = 10, burnin=2, guess=[
+    optimizer.optimise(nsamples = 3000, burnin=1000, guess=[
         [12000., 2.9, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, #The parameters of the model
          #1.0, 0.1, 0.1, #Each Spectrum object contains a noise model with three free parameters
          #The first one is a calibration factor which the observed spectrum will be multiplied by
