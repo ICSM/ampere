@@ -226,7 +226,7 @@ class EmceeSearch(BaseSearch):
         self.plot_covmats()
 
 
-        self.plot_posteriorpredictive()
+        self.plot_posteriorpredictive(**kwargs)
         #fig4,(ax0,ax1) = plt.subplots(1,2)
         #ax=[ax0, ax1]
         #i=0
