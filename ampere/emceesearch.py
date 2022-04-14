@@ -412,7 +412,7 @@ class EmceeSearch(BaseSearch):
 
         ''' Then check what the "best fit" was '''
         print("Range of lnprob values in model from sampler: {0:.5f} to {1:.5f}",np.min(self.sampler.lnprobability),np.max(self.sampler.lnprobability))
-        row_ind, col_ind = np.unravel_index(np.argmax(self.sampler.lnprobability.ravel), self.sampler.lnprobability.shape)
+        row_ind, col_ind = np.unravel_index(np.argmax(self.sampler.lnprobability), self.sampler.lnprobability.shape)
         self.bestPars = self.sampler.chain[row_ind, col_ind, :]
 
         print("MAP Solution: ")
