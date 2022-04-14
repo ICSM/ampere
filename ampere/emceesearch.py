@@ -129,7 +129,7 @@ class EmceeSearch(BaseSearch):
         
 
     def optimise(self, nsamples = None, burnin = None, guess = None,
-                 preopt = True, guessscale = 1e-3, noguess=False, **kwargs):
+                 preopt = True, guessscale = 1e-3, noguess=False, progress=True, **kwargs):
         from collections.abc import Sequence, Iterable
         if guess == 'None': # and not noguess:
             print("Setting initial guess randomly")
@@ -168,9 +168,9 @@ class EmceeSearch(BaseSearch):
         self.nsamp = nsamples
         self.burnin = burnin
         if noguess:
-            self.sampler.run_mcmc(nsamples)
+            self.sampler.run_mcmc(nsamples, progress=progress)
         else:
-            self.sampler.run_mcmc(guess, nsamples)
+            self.sampler.run_mcmc(guess, nsamples, progress=progress)
         self.allSamples = self.sampler.chain
         #print('do we get here (no): ',np.max(self.allSamples), np.min(self.allSamples))
         self.samples = self.sampler.chain[:, self.burnin:, :].reshape((-1, self.npars))
