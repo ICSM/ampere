@@ -274,7 +274,7 @@ if __name__ == "__main__":
     #Now we set up the optimizer object:
     optimizer = EmceeSearch(model=model, data=dataSet, nwalkers=50, moves=m)
             
-    optimizer.optimise(nsamples = 3000, burnin=1000, guess=[
+    optimizer.optimise(nsamples = 6000, burnin=2000, guess=[
         [12000., 2.9, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, #The parameters of the model
          #1.0, 0.1, 0.1, #Each Spectrum object contains a noise model with three free parameters
          #The first one is a calibration factor which the observed spectrum will be multiplied by
@@ -291,7 +291,7 @@ if __name__ == "__main__":
 
 	# call the plot parameters, all matplotlib keywords 	
     
-    optimizer.postProcess() #now we call the postprocessing to produce some figures
+    optimizer.postProcess(logy=True) #now we call the postprocessing to produce some figures
     
     
     
