@@ -19,6 +19,11 @@ from astropy.modeling.models import BlackBody
 import matplotlib.pyplot as plt
 from scipy import interpolate
 from astropy.constants import c
+<<<<<<< HEAD
+=======
+from astropy.io.votable import parse_single_table
+import pdb
+>>>>>>> 5f483144ccb800232b5cdb582505b9c7a6535d21
 
 #First we will define a rather simple model
 
@@ -44,10 +49,18 @@ class Blackbody_dust(Model):
         
         # Getting the opacities from the folder 
         #opacityDirectory = os.path.dirname(__file__)+'/Opacities/'
+<<<<<<< HEAD
         opacityDirectory = os.path.dirname(os.path.realpath('__file__'))+'/Opacities/'
         print("Directory:", opacityDirectory)
         opacityFileList = os.listdir(opacityDirectory)
         opacityFileList = np.array(opacityFileList)[['sub.q' in zio for zio in opacityFileList]] # Only files ending in sub.q are valid (for now). At the moment there are 6 files that meet this criteria
+=======
+        opacityDirectory = os.path.dirname(os.path.realpath('__file__'))+'/optical_const_bulk/'
+        print("Directory:", opacityDirectory)
+        opacityFileList = os.listdir(opacityDirectory)
+        opacityFileList = np.array(opacityFileList)[['.q' in zio for zio in opacityFileList]] # Only files ending in sub.q are valid (for now). At the moment there are 6 files that meet this criteria
+        print(opacityFileList)
+>>>>>>> 5f483144ccb800232b5cdb582505b9c7a6535d21
         nSpecies = opacityFileList.__len__()
         opacity_array = np.zeros((wavelengths.__len__(), nSpecies))
         
@@ -56,7 +69,11 @@ class Blackbody_dust(Model):
             tempData = np.loadtxt(opacityDirectory + opacityFileList[j], comments = '#')
             print(opacityFileList[j])
             tempWl = tempData[:, 0]
+<<<<<<< HEAD
             tempOpac = tempData[:, 2]            
+=======
+            tempOpac = tempData[:, 1]            
+>>>>>>> 5f483144ccb800232b5cdb582505b9c7a6535d21
             
 
             f = interpolate.interp1d(tempWl, tempOpac, assume_sorted = False)
@@ -146,7 +163,11 @@ if __name__ == "__main__":
     """ wavelength grid """
     
     # here should be the model input
+<<<<<<< HEAD
     wavelengths = np.linspace(5.0,38, 1000)
+=======
+    wavelengths = np.linspace(1.0,38, 1000)
+>>>>>>> 5f483144ccb800232b5cdb582505b9c7a6535d21
     
     # constants and definition of R factor
     pc  = 3.086e16 # m
@@ -161,13 +182,18 @@ if __name__ == "__main__":
     #Now init the model:
     model = Blackbody_dust(wavelengths)
     #And call it to produce the fluxes for our chosen parameters
+<<<<<<< HEAD
     model(temp, radius_sol, scaling, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
+=======
+    model(temp, radius_sol, scaling, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
+>>>>>>> 5f483144ccb800232b5cdb582505b9c7a6535d21
     model_flux = model.modelFlux
     
     # Here starts the data part 
     
 
     #now we'll create a synthetic spectrum from the model fluxes, using a Spitzer IRS observation to get the wavelength sampling
+<<<<<<< HEAD
     dataDir = '/asiaa/home/szeegers/git_ampere/ampere/ampere/Testdata/'
     specFile1 = 'cassis_yaaar_spcfw_27570176t.fits'
     irsEx_1 = Spectrum.fromFile(dataDir+specFile1,format='SPITZER-YAAAR')
@@ -179,6 +205,80 @@ if __name__ == "__main__":
     irsEx_2[0].selectWaves(low = 5.0, up = 35.)
     
     dataSet = irsEx_1
+=======
+    dataDir = ampere.__file__.strip('__init__.py') + 'Testdata/'
+    specFile1 = 'cassis_yaaar_spcfw_27570176t.fits'
+    irsEx_1 = Spectrum.fromFile(dataDir+specFile1,format='SPITZER-YAAAR')
+    
+    specFile2 = 'cassis_yaaar_spcfw_9834496t.fits'
+    irsEx_2 = Spectrum.fromFile(dataDir+specFile2,format='SPITZER-YAAAR')
+    
+    specFile3 = 'cassis_yaaar_optdiff_9834496.fits'
+    irsEx_3 = Spectrum.fromFile(dataDir+specFile3,format='SPITZER-YAAAR_OPTDIFFHR')
+
+#***********************************************************************************************************************    
+    ''' Now we get the photometry too *** look for the SED information of Schulte 12 ''' 
+    #filters=[
+             ##'SPITZER_IRAC_36',
+             #'WISE_RSR_W1',
+             #'WISE_RSR_W2',
+             #'WISE_RSR_W3',
+             #'WISE_RSR_W4',
+             #'HERSCHEL_PACS_BLUE'
+             #]
+    #libDir = os.getcwd() + '/ampere/'
+#    libname = libDir + 'ampere_allfilters.hd5'
+    libname = '/home/zeegers/ampere/ampere/ampere_allfilters.hd5'
+
+    photFile = ampere.__file__.strip('__init__.py')+'Testdata/vizier_votable_cygob212_time_again.vot'
+    table1 = parse_single_table(photFile)
+    
+    table1 = table1.to_table()    
+    #data = table.array
+    
+    # https://numpy.org/doc/stable/reference/generated/numpy.allclose.html
+    # Sascha: read in real photometry data ....
+    desired_filters=['2MASS:J', '2MASS:H', '2MASS:Ks', 'Spitzer/MIPS:24', 'WISE:W4','WISE:W3'] #these are the filters we're after
+    mask = np.isin(table1[u'sed_filter'], desired_filters) #np.isin() is true for each element of table['filter'] that matches one of the elements of desired_filters
+    phot_new = table1[mask] #now we make a new table which is just the rows that have the filters we want
+    desired_filters_again=['II/328/allwise','I/ApJS/191/301/table1']
+    mask_again = np.isin(phot_new['_tabname'], desired_filters_again)
+    #phot_table = table([phot])
+    phot_again = phot_new[mask_again]
+    
+    #table.write('new_table.vot', format='votable')
+    phot_again.write('new_table.vot', format='votable', overwrite=True)
+    
+    # ideally new_table.vot would be good enough to read in, but that's not working right now because of issues with data.py and the input (3/30/2022). 
+    # This will be fixed, but in the meantime we can store the data like this: 
+    # phot = Photometry(['2MASS_J', '2MASS_K'], [10., 5.], [0.2, 0.1], ['Jy', 'Jy'], libname='path/to/filter/library')
+    # or photometry = Photometry(filterName=filterName, value=modSed, uncertainty=photunc, photUnits='Jy', libName=libname)
+    
+    #flux_value = phot_again['sed_flux'].data
+    #photunits=range(len(flux_value))
+    #photunits=["Jy" for i in photunits]
+    #photUnits = phot_again['sed_flux'].unit
+    #photunc = phot_again['sed_eflux'].data
+    #filternames = phot_again['sed_filter'].data
+    
+    
+    #phot = Photometry(filterName=filternames, value=flux_value, uncertainty=photunc, photUnits=photunits, libName = libname)
+    phot = Photometry.fromFile('new_table.vot', libName = libname) # gaat hier nog steeds iets niet goed
+    
+#*************************************************************************************************************************    
+    
+    phot.reloadFilters(wavelengths)
+    
+    dataSet = [phot]
+    
+#    dataSet = [phot,
+#               irsEx_1,
+#               irsEx_2
+#               ]
+    
+    for s in irsEx_1:             #include the next two lines when appending spectroscopy to photometry
+        dataSet.append(s)    
+>>>>>>> 5f483144ccb800232b5cdb582505b9c7a6535d21
     
     for s in irsEx_2:             #include the next two lines when appending spectroscopy to photometry
         dataSet.append(s)
@@ -196,6 +296,7 @@ if __name__ == "__main__":
         ax.plot(irsEx_1[0].wavelength, irsEx_1[0].value, '-',color='red')
         ax.plot(irsEx_1[1].wavelength, irsEx_1[1].value, '-',color='red')        
         ax.plot(irsEx_2[0].wavelength, irsEx_2[0].value, '-',color='red')
+<<<<<<< HEAD
         #ax.plot(irsEx_3[0].wavelength, irsEx_3[0].value, '-',color='blue')
         #ax.plot(irsEx_3[1].wavelength, irsEx_3[1].value, '-',color='blue')
     
@@ -203,30 +304,59 @@ if __name__ == "__main__":
 
     plt.show()
     
+=======
+        ax.plot(irsEx_3[0].wavelength, irsEx_3[0].value, '-',color='blue')
+        #ax.plot(irsEx_3[1].wavelength, irsEx_3[1].value, '-',color='blue')
+    
+    ax.plot(wavelengths, model_flux)
+    ax.plot(phot.wavelength, phot.value, 'o',color='green')
+
+    plt.show()
+    
+    #pdb.set_trace()
+    
+>>>>>>> 5f483144ccb800232b5cdb582505b9c7a6535d21
     #Ampere exposes acces to emcee's moves interface. This can be useful if the posterior turns out to not be well behaved - the default move only deals well with posteriors that are monomodal and approximately Gaussian. Here's an example that usually deals a bit better with posteriors that don't meet these criteria:
     m = [(moves.DEMove(), 0.8),
         (moves.DESnookerMove(), 0.2),
          ]
 
     #Now we set up the optimizer object:
+<<<<<<< HEAD
     optimizer = EmceeSearch(model=model, data=dataSet, nwalkers=100, moves=m)
             
     optimizer.optimise(nsamples = 10000, burnin=2000, guess=[
         [12000., 2.9, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, #The parameters of the model
+=======
+    optimizer = EmceeSearch(model=model, data=dataSet, nwalkers=50, moves=m)
+            
+    optimizer.optimise(nsamples = 6000, burnin=2000, guess=[
+        [12000., 2.9, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, #The parameters of the model
+>>>>>>> 5f483144ccb800232b5cdb582505b9c7a6535d21
          #1.0, 0.1, 0.1, #Each Spectrum object contains a noise model with three free parameters
          #The first one is a calibration factor which the observed spectrum will be multiplied by
          #The second is the fraction of correlated noise assumed
          #And the third is the scale length (in microns) of the correlated component of the noise
          1.0 ,0.1, 0.1,1.0 ,0.1, 0.1,1.0 ,0.1, 0.1
         ] #
+<<<<<<< HEAD
         + np.random.rand(optimizer.npars)*[1000.,1,1,1,1,1,1,1,1,
+=======
+        + np.random.rand(optimizer.npars)*[1000.,1,1,1,1,1,1,1,1,1,
+>>>>>>> 5f483144ccb800232b5cdb582505b9c7a6535d21
                                            1,1,1,
                                            1,1,1,
                                            1,1,1
                                            ]
         for i in range(optimizer.nwalkers)])
 
+<<<<<<< HEAD
     optimizer.postProcess() #now we call the postprocessing to produce some figures
+=======
+	# call the plot parameters, all matplotlib keywords 	
+    
+    optimizer.postProcess(logy=True) #now we call the postprocessing to produce some figures
+>>>>>>> 5f483144ccb800232b5cdb582505b9c7a6535d21
     
     
     

@@ -250,10 +250,7 @@ class Photometry(Data):
         self.type = 'Photometry'
         value = value[self.filterMask]
         uncertainty = uncertainty[self.filterMask]
-        
-        #identify values in magnitudes, convert to Jy
-        np.array(photUnits)
-        
+                
         mags = self.fluxUnits == 'mag'
         #print(mags.__repr__())
         #pyphot returns a list of filters, this means this nice boolean masking doesn't work :(
@@ -264,6 +261,16 @@ class Photometry(Data):
                 value[i] = zeropoints[i]*10^(-0.4*value[i])
                 uncertainty[i] = value[i] - zeropoints*10^(-0.4*(value[i]+uncertainty[i]))
         
+        try:
+            assert len(photUnits) == len(value)
+        except AssertionError: #We have more than one unit entry, but not one per flux entry, raise an error and force the user to do something about it:
+            if isinstance(photUnits, str):
+                photUnits = [photUnits] * len(value)
+            else:
+                raise RunTimeError("The wrong number of unit entries appear to have been provided. Please check this and try again. You provided {0} units, but {1} fluxes. \n The fluxes are \n {2} \nand the units are \n {3}".format(len(photUnits), len(value), photunits, values))
+        except TypeError: #only one unit was provided, let's forcibly turn it into an iterable
+            photUnits = len(value) * (photUnits,)
+                       
         #identify values in milliJansky, convert to Jy
         uconv = np.array([u.Jy.to(pU) for pU in photUnits])
         self.uncertainty = uncertainty / uconv
@@ -1198,6 +1205,50 @@ class Spectrum(Data):
             #tablell.pprint()
             #table = tablell
             table.sort(keys='wavelength')
+            
+        if format == 'SPITZER-YAAAR_OPTDIFFHR':
+            #filename = 'Testdata/cassis_yaaar_spcfw_14203136t.fits'
+            hdul = fits.open(filename)
+            hdu = hdul[0]
+            header=hdu.header
+            data = hdu.data
+            table = Table(data,names=[header['COL01DEF'],header['COL02DEF'],header['COL03DEF'],header['COL04DEF'],header['COL05DEF'],header['COL06DEF'],header['COL07DEF'],header['COL08DEF']])
+            table['wavelength'].unit='um'
+            table['flux'].unit='Jy'
+            table['flux_error'].unit='Jy'
+            
+            #table['error (RMS)'].unit='Jy'
+            #table['error (SYS)'].unit='Jy'
+            #table['offset uncertainty (CAL)'].unit='Jy'
+            #table['sky'].unit='Jy'
+            #table['sky error'].unit='Jy'
+            mask = np.logical_and.reduce([np.isfinite(c) for c in table.columns.values()]) #require the elements to be non-NaNs
+
+            table = table[mask]
+            wavelengths = np.array(table['wavelength'].data)
+            orders = np.array(table['IRS_order'].data)
+            chunks = np.zeros_like(table['module'].data)
+            order_array=np.arange(11,21,1)
+            
+            for i_order,order in enumerate(order_array):
+                wl_sel=wavelengths[order==orders]
+                nums=np.where(order==orders)[0]
+                breaknum=np.where(np.diff(wl_sel)>5)[0][0]+1
+                chunks[nums[0:breaknum]]=1 #sh
+                chunks[nums[breaknum::]]=2 #lh
+
+            table['chunk'] = chunks
+
+            #normalise the column names (wavelength,flux,uncertainty)
+            table.rename_column('flux_error','uncertainty')
+            
+            ''' If I'm interpreting the CASSIS data correctly, Module(SL) = 0, 1; Module(LL) = 2, 3 '''
+            #a = table['module'] > 1.
+            #tablell = table[a]#.sort(keys='wavelength')
+            #tablell.sort(keys='wavelength')
+            #tablell.pprint()
+            #table = tablell
+            table.sort(keys='wavelength')            
             
         # ISO SWS AAR fits files
         if format == 'SWS-AAR':

@@ -129,7 +129,7 @@ class EmceeSearch(BaseSearch):
         
 
     def optimise(self, nsamples = None, burnin = None, guess = None,
-                 preopt = True, guessscale = 1e-3, noguess=False, **kwargs):
+                 preopt = True, guessscale = 1e-3, noguess=False, progress=True, **kwargs):
         from collections.abc import Sequence, Iterable
         if guess == 'None': # and not noguess:
             print("Setting initial guess randomly")
@@ -168,9 +168,9 @@ class EmceeSearch(BaseSearch):
         self.nsamp = nsamples
         self.burnin = burnin
         if noguess:
-            self.sampler.run_mcmc(nsamples)
+            self.sampler.run_mcmc(nsamples, progress=progress)
         else:
-            self.sampler.run_mcmc(guess, nsamples)
+            self.sampler.run_mcmc(guess, nsamples, progress=progress)
         self.allSamples = self.sampler.chain
         #print('do we get here (no): ',np.max(self.allSamples), np.min(self.allSamples))
         self.samples = self.sampler.chain[:, self.burnin:, :].reshape((-1, self.npars))
@@ -226,7 +226,8 @@ class EmceeSearch(BaseSearch):
         self.plot_covmats()
 
 
-        self.plot_posteriorpredictive(logy=True)
+        self.plot_posteriorpredictive(**kwargs)
+
         #fig4,(ax0,ax1) = plt.subplots(1,2)
         #ax=[ax0, ax1]
         #i=0
@@ -416,7 +417,7 @@ class EmceeSearch(BaseSearch):
 
         ''' Then check what the "best fit" was '''
         print("Range of lnprob values in model from sampler: {0:.5f} to {1:.5f}",np.min(self.sampler.lnprobability),np.max(self.sampler.lnprobability))
-        row_ind, col_ind = np.unravel_index(np.argmax(self.sampler.lnprobability.ravel), self.sampler.lnprobability.shape)
+        row_ind, col_ind = np.unravel_index(np.argmax(self.sampler.lnprobability), self.sampler.lnprobability.shape)
         self.bestPars = self.sampler.chain[row_ind, col_ind, :]
 
         print("MAP Solution: ")
