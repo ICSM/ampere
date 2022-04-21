@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 from scipy import interpolate
 from astropy.constants import c
 from astropy.io.votable import parse_single_table
+import pdb
 
 #First we will define a rather simple model
 
@@ -41,10 +42,11 @@ class Blackbody_dust(Model):
         
         # Getting the opacities from the folder 
         #opacityDirectory = os.path.dirname(__file__)+'/Opacities/'
-        opacityDirectory = os.path.dirname(os.path.realpath('__file__'))+'/Opacities/'
+        opacityDirectory = os.path.dirname(os.path.realpath('__file__'))+'/optical_const_bulk/'
         print("Directory:", opacityDirectory)
         opacityFileList = os.listdir(opacityDirectory)
-        opacityFileList = np.array(opacityFileList)[['sub.q' in zio for zio in opacityFileList]] # Only files ending in sub.q are valid (for now). At the moment there are 6 files that meet this criteria
+        opacityFileList = np.array(opacityFileList)[['.q' in zio for zio in opacityFileList]] # Only files ending in sub.q are valid (for now). At the moment there are 6 files that meet this criteria
+        print(opacityFileList)
         nSpecies = opacityFileList.__len__()
         opacity_array = np.zeros((wavelengths.__len__(), nSpecies))
         
@@ -53,7 +55,7 @@ class Blackbody_dust(Model):
             tempData = np.loadtxt(opacityDirectory + opacityFileList[j], comments = '#')
             print(opacityFileList[j])
             tempWl = tempData[:, 0]
-            tempOpac = tempData[:, 2]            
+            tempOpac = tempData[:, 1]            
             
 
             f = interpolate.interp1d(tempWl, tempOpac, assume_sorted = False)
@@ -143,7 +145,7 @@ if __name__ == "__main__":
     """ wavelength grid """
     
     # here should be the model input
-    wavelengths = np.linspace(5.0,38, 1000)
+    wavelengths = np.linspace(1.0,38, 1000)
     
     # constants and definition of R factor
     pc  = 3.086e16 # m
@@ -158,7 +160,7 @@ if __name__ == "__main__":
     #Now init the model:
     model = Blackbody_dust(wavelengths)
     #And call it to produce the fluxes for our chosen parameters
-    model(temp, radius_sol, scaling, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
+    model(temp, radius_sol, scaling, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
     model_flux = model.modelFlux
     
     # Here starts the data part 
@@ -197,10 +199,10 @@ if __name__ == "__main__":
     
     # https://numpy.org/doc/stable/reference/generated/numpy.allclose.html
     # Sascha: read in real photometry data ....
-    desired_filters=['2MASS:J', '2MASS:H', '2MASS:Ks', 'Spitzer/MIPS:24'] #these are the filters we're after
+    desired_filters=['2MASS:J', '2MASS:H', '2MASS:Ks', 'Spitzer/MIPS:24', 'WISE:W4','WISE:W3'] #these are the filters we're after
     mask = np.isin(table1[u'sed_filter'], desired_filters) #np.isin() is true for each element of table['filter'] that matches one of the elements of desired_filters
     phot_new = table1[mask] #now we make a new table which is just the rows that have the filters we want
-    desired_filters_again=['II/328/allwise']
+    desired_filters_again=['II/328/allwise','I/ApJS/191/301/table1']
     mask_again = np.isin(phot_new['_tabname'], desired_filters_again)
     #phot_table = table([phot])
     phot_again = phot_new[mask_again]
@@ -213,32 +215,33 @@ if __name__ == "__main__":
     # phot = Photometry(['2MASS_J', '2MASS_K'], [10., 5.], [0.2, 0.1], ['Jy', 'Jy'], libname='path/to/filter/library')
     # or photometry = Photometry(filterName=filterName, value=modSed, uncertainty=photunc, photUnits='Jy', libName=libname)
     
-    flux_value = phot_again['sed_flux'].data
-    photunits=range(len(flux_value))
-    photunits=["Jy" for i in photunits]
-    photUnits = phot_again['sed_flux'].unit
-    photunc = phot_again['sed_eflux'].data
-    filternames = phot_again['sed_filter'].data
+    #flux_value = phot_again['sed_flux'].data
+    #photunits=range(len(flux_value))
+    #photunits=["Jy" for i in photunits]
+    #photUnits = phot_again['sed_flux'].unit
+    #photunc = phot_again['sed_eflux'].data
+    #filternames = phot_again['sed_filter'].data
     
     
-    phot = Photometry(filterName=filternames, value=flux_value, uncertainty=photunc, photUnits=photunits, libName = libname) 
-    phot.selectWaves(low = 35., interval = "right-open") #using only MIPS-70 and PACS, following Srinivasan et al. 2017
+    #phot = Photometry(filterName=filternames, value=flux_value, uncertainty=photunc, photUnits=photunits, libName = libname)
+    phot = Photometry.fromFile('new_table.vot', libName = libname) # gaat hier nog steeds iets niet goed
     
 #*************************************************************************************************************************    
     
+    phot.reloadFilters(wavelengths)
     
-    #dataSet = phot
+    dataSet = [phot]
     
-    dataSet = [phot,
-               irsEx_1,
-               irsEx_2
-               ]
+#    dataSet = [phot,
+#               irsEx_1,
+#               irsEx_2
+#               ]
     
- #   for s in irsEx_1:             #include the next two lines when appending spectroscopy to photometry
- #       dataSet.append(s)    
+    for s in irsEx_1:             #include the next two lines when appending spectroscopy to photometry
+        dataSet.append(s)    
     
- #   for s in irsEx_2:             #include the next two lines when appending spectroscopy to photometry
- #       dataSet.append(s)
+    for s in irsEx_2:             #include the next two lines when appending spectroscopy to photometry
+        dataSet.append(s)
 
 #    for s in irsEx_3:             #include the next two lines when appending spectroscopy to photometry
 #        dataSet.append(s)
@@ -257,8 +260,11 @@ if __name__ == "__main__":
         #ax.plot(irsEx_3[1].wavelength, irsEx_3[1].value, '-',color='blue')
     
     ax.plot(wavelengths, model_flux)
+    ax.plot(phot.wavelength, phot.value, 'o',color='green')
 
     plt.show()
+    
+    #pdb.set_trace()
     
     #Ampere exposes acces to emcee's moves interface. This can be useful if the posterior turns out to not be well behaved - the default move only deals well with posteriors that are monomodal and approximately Gaussian. Here's an example that usually deals a bit better with posteriors that don't meet these criteria:
     m = [(moves.DEMove(), 0.8),
@@ -269,20 +275,22 @@ if __name__ == "__main__":
     optimizer = EmceeSearch(model=model, data=dataSet, nwalkers=50, moves=m)
             
     optimizer.optimise(nsamples = 3000, burnin=1000, guess=[
-        [12000., 2.9, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, #The parameters of the model
+        [12000., 2.9, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, #The parameters of the model
          #1.0, 0.1, 0.1, #Each Spectrum object contains a noise model with three free parameters
          #The first one is a calibration factor which the observed spectrum will be multiplied by
          #The second is the fraction of correlated noise assumed
          #And the third is the scale length (in microns) of the correlated component of the noise
          1.0 ,0.1, 0.1,1.0 ,0.1, 0.1,1.0 ,0.1, 0.1
         ] #
-        + np.random.rand(optimizer.npars)*[1000.,1,1,1,1,1,1,1,1,
+        + np.random.rand(optimizer.npars)*[1000.,1,1,1,1,1,1,1,1,1,
                                            1,1,1,
                                            1,1,1,
                                            1,1,1
                                            ]
         for i in range(optimizer.nwalkers)])
 
+	# call the plot parameters, all matplotlib keywords 	
+    
     optimizer.postProcess() #now we call the postprocessing to produce some figures
     
     
