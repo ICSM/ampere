@@ -1,10 +1,6 @@
 import sys
 sys.path.insert(1, '/home/zeegers/git_ampere/ampere/')
-import matplotlib.pyplot as plt
-import matplotlib
-matplotlib.use("Agg")
 import numpy as np
-
 import os
 import ampere
 from ampere.data import Spectrum, Photometry
@@ -19,11 +15,8 @@ from astropy.modeling.models import BlackBody
 import matplotlib.pyplot as plt
 from scipy import interpolate
 from astropy.constants import c
-<<<<<<< HEAD
-=======
 from astropy.io.votable import parse_single_table
 import pdb
->>>>>>> 5f483144ccb800232b5cdb582505b9c7a6535d21
 
 #First we will define a rather simple model
 
@@ -49,18 +42,11 @@ class Blackbody_dust(Model):
         
         # Getting the opacities from the folder 
         #opacityDirectory = os.path.dirname(__file__)+'/Opacities/'
-<<<<<<< HEAD
-        opacityDirectory = os.path.dirname(os.path.realpath('__file__'))+'/Opacities/'
-        print("Directory:", opacityDirectory)
-        opacityFileList = os.listdir(opacityDirectory)
-        opacityFileList = np.array(opacityFileList)[['sub.q' in zio for zio in opacityFileList]] # Only files ending in sub.q are valid (for now). At the moment there are 6 files that meet this criteria
-=======
         opacityDirectory = os.path.dirname(os.path.realpath('__file__'))+'/optical_const_bulk/'
         print("Directory:", opacityDirectory)
         opacityFileList = os.listdir(opacityDirectory)
         opacityFileList = np.array(opacityFileList)[['.q' in zio for zio in opacityFileList]] # Only files ending in sub.q are valid (for now). At the moment there are 6 files that meet this criteria
         print(opacityFileList)
->>>>>>> 5f483144ccb800232b5cdb582505b9c7a6535d21
         nSpecies = opacityFileList.__len__()
         opacity_array = np.zeros((wavelengths.__len__(), nSpecies))
         
@@ -69,11 +55,7 @@ class Blackbody_dust(Model):
             tempData = np.loadtxt(opacityDirectory + opacityFileList[j], comments = '#')
             print(opacityFileList[j])
             tempWl = tempData[:, 0]
-<<<<<<< HEAD
-            tempOpac = tempData[:, 2]            
-=======
             tempOpac = tempData[:, 1]            
->>>>>>> 5f483144ccb800232b5cdb582505b9c7a6535d21
             
 
             f = interpolate.interp1d(tempWl, tempOpac, assume_sorted = False)
@@ -163,11 +145,7 @@ if __name__ == "__main__":
     """ wavelength grid """
     
     # here should be the model input
-<<<<<<< HEAD
-    wavelengths = np.linspace(5.0,38, 1000)
-=======
     wavelengths = np.linspace(1.0,38, 1000)
->>>>>>> 5f483144ccb800232b5cdb582505b9c7a6535d21
     
     # constants and definition of R factor
     pc  = 3.086e16 # m
@@ -182,30 +160,13 @@ if __name__ == "__main__":
     #Now init the model:
     model = Blackbody_dust(wavelengths)
     #And call it to produce the fluxes for our chosen parameters
-<<<<<<< HEAD
-    model(temp, radius_sol, scaling, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
-=======
     model(temp, radius_sol, scaling, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
->>>>>>> 5f483144ccb800232b5cdb582505b9c7a6535d21
     model_flux = model.modelFlux
     
     # Here starts the data part 
     
 
     #now we'll create a synthetic spectrum from the model fluxes, using a Spitzer IRS observation to get the wavelength sampling
-<<<<<<< HEAD
-    dataDir = '/asiaa/home/szeegers/git_ampere/ampere/ampere/Testdata/'
-    specFile1 = 'cassis_yaaar_spcfw_27570176t.fits'
-    irsEx_1 = Spectrum.fromFile(dataDir+specFile1,format='SPITZER-YAAAR')
-    irsEx_1[0].selectWaves(low = 5.0, up = 35.)
-    irsEx_1[0].selectWaves(low = 5.0, up = 35.)
-    
-    specFile2 = 'cassis_yaaar_spcfw_9834496t.fits'
-    irsEx_2 = Spectrum.fromFile(dataDir+specFile2,format='SPITZER-YAAAR')
-    irsEx_2[0].selectWaves(low = 5.0, up = 35.)
-    
-    dataSet = irsEx_1
-=======
     dataDir = ampere.__file__.strip('__init__.py') + 'Testdata/'
     specFile1 = 'cassis_yaaar_spcfw_27570176t.fits'
     irsEx_1 = Spectrum.fromFile(dataDir+specFile1,format='SPITZER-YAAAR')
@@ -278,7 +239,6 @@ if __name__ == "__main__":
     
     for s in irsEx_1:             #include the next two lines when appending spectroscopy to photometry
         dataSet.append(s)    
->>>>>>> 5f483144ccb800232b5cdb582505b9c7a6535d21
     
     for s in irsEx_2:             #include the next two lines when appending spectroscopy to photometry
         dataSet.append(s)
@@ -296,15 +256,6 @@ if __name__ == "__main__":
         ax.plot(irsEx_1[0].wavelength, irsEx_1[0].value, '-',color='red')
         ax.plot(irsEx_1[1].wavelength, irsEx_1[1].value, '-',color='red')        
         ax.plot(irsEx_2[0].wavelength, irsEx_2[0].value, '-',color='red')
-<<<<<<< HEAD
-        #ax.plot(irsEx_3[0].wavelength, irsEx_3[0].value, '-',color='blue')
-        #ax.plot(irsEx_3[1].wavelength, irsEx_3[1].value, '-',color='blue')
-    
-    ax.plot(wavelengths, model_flux)
-
-    plt.show()
-    
-=======
         ax.plot(irsEx_3[0].wavelength, irsEx_3[0].value, '-',color='blue')
         #ax.plot(irsEx_3[1].wavelength, irsEx_3[1].value, '-',color='blue')
     
@@ -315,48 +266,32 @@ if __name__ == "__main__":
     
     #pdb.set_trace()
     
->>>>>>> 5f483144ccb800232b5cdb582505b9c7a6535d21
     #Ampere exposes acces to emcee's moves interface. This can be useful if the posterior turns out to not be well behaved - the default move only deals well with posteriors that are monomodal and approximately Gaussian. Here's an example that usually deals a bit better with posteriors that don't meet these criteria:
     m = [(moves.DEMove(), 0.8),
         (moves.DESnookerMove(), 0.2),
          ]
 
     #Now we set up the optimizer object:
-<<<<<<< HEAD
-    optimizer = EmceeSearch(model=model, data=dataSet, nwalkers=100, moves=m)
-            
-    optimizer.optimise(nsamples = 10000, burnin=2000, guess=[
-        [12000., 2.9, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, #The parameters of the model
-=======
     optimizer = EmceeSearch(model=model, data=dataSet, nwalkers=50, moves=m)
             
     optimizer.optimise(nsamples = 6000, burnin=2000, guess=[
         [12000., 2.9, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, #The parameters of the model
->>>>>>> 5f483144ccb800232b5cdb582505b9c7a6535d21
          #1.0, 0.1, 0.1, #Each Spectrum object contains a noise model with three free parameters
          #The first one is a calibration factor which the observed spectrum will be multiplied by
          #The second is the fraction of correlated noise assumed
          #And the third is the scale length (in microns) of the correlated component of the noise
          1.0 ,0.1, 0.1,1.0 ,0.1, 0.1,1.0 ,0.1, 0.1
         ] #
-<<<<<<< HEAD
-        + np.random.rand(optimizer.npars)*[1000.,1,1,1,1,1,1,1,1,
-=======
         + np.random.rand(optimizer.npars)*[1000.,1,1,1,1,1,1,1,1,1,
->>>>>>> 5f483144ccb800232b5cdb582505b9c7a6535d21
                                            1,1,1,
                                            1,1,1,
                                            1,1,1
                                            ]
         for i in range(optimizer.nwalkers)])
 
-<<<<<<< HEAD
-    optimizer.postProcess() #now we call the postprocessing to produce some figures
-=======
 	# call the plot parameters, all matplotlib keywords 	
     
     optimizer.postProcess(logy=True) #now we call the postprocessing to produce some figures
->>>>>>> 5f483144ccb800232b5cdb582505b9c7a6535d21
     
     
     
