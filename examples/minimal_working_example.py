@@ -2,7 +2,7 @@ import numpy as np
 import os
 import ampere
 from ampere.data import Spectrum, Photometry
-from ampere.emceesearch import EmceeSearch
+from ampere.infer.emceesearch import EmceeSearch
 from ampere.models import Model
 from spectres import spectres
 import pyphot

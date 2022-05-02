@@ -5,7 +5,7 @@ from inspect import signature
 from .basesearch import BaseSearch
 
 
-class MCMCSampler(Basesearch):
+class MCMCSampler(BaseSearch):
 
     def __init__(self, model = None, data= None, verbose = False,
                  parameter_labels = None,
@@ -66,3 +66,29 @@ class EnsembleSampler(MCMCSampler):
                          parameter_labels = parameter_labels, **kwargs)
 
         self.nwalkers = nwalkers
+
+    def rebuildSampler(self, nwalkers = None, model = None,
+                       data = None, lnprior = None,
+                       labels = None, 
+                       **kwargs):
+
+
+        if np.any([model, data]):
+            if model is not None:
+                self.model=model
+                try:
+                    self.nparsMod = self.model.npars
+                except:
+                    sig = signature(model.__call__)
+                    self.nparsMod = len(sig.parameters) - 1 #Always subtract **kwargs from the parameters, but don't need to worry about self once it is bound to an instance
+            if data is not None:
+                self.dataSet = data
+                self.nparsData = [data.npars for data in self.dataSet] #number of parameters to be passed into each set of data
+
+            self.npars = np.int(self.nparsMod + np.sum(self.nparsData))
+        
+        if lnprior is not None:
+            self.lnprior = lnprior
+        #print(self.npars, self.nparsMod, self.nparsData)
+        if nwalkers is not None:
+                self.nwalkers=nwalkers

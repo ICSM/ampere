@@ -5,7 +5,7 @@ import emcee
 from .basesearch import BaseSearch
 from .mcmcsearch import EnsembleSampler
 from inspect import signature
-from .data import Photometry, Spectrum
+from ..data import Photometry, Spectrum
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
 
@@ -14,46 +14,19 @@ class EmceeSearch(EnsembleSampler):
     A class to use the emcee affine-invariant ensemble sampler
     """
 
-    def __init__(self, nwalkers = None, model = None,
+    def __init__(self, nwalkers = None, model = None, verbose = False,
                  data = None, lnprior = None,
                  parameter_labels = None, acceptRate = 2.0, moves=None,
                  **kwargs):
 
-        ##self.npars=npars
-        ##self.nsamp=nsamp
-        #self.nwalkers=nwalkers
-        ##self.burnin=burnin
-        #self.model=model
-        #self.dataSet = data
-        #if lnprior is not None:
-        #    self.lnprior = lnprior
-        #''' now do some introspection on the various bits of model to 
-        #understand how many parameters there are for each compponent '''
-        #try:
-        #    self.nparsMod = self.model.npars
-        #except:
-        #    sig = signature(model.__call__)
-        #    self.nparsMod = len(sig.parameters) - 1 #Always subtract **kwargs from the parameters, but don't need to worry about self once it is bound to an instance
-        ##print(self.nparsMod, len(sig.parameters), sig.parameters)
-        ##self.nparsData = #np.zeros(len(self.dataSet))
-        ##self.npars = something # total number of parameters
-        ##self.nparsMod = something #number of parameters for the model
-        #self.nparsData = [data.npars for data in self.dataSet] #number of parameters to be passed into each set of data
-        #self.npars = np.int(self.nparsMod + np.sum(self.nparsData))
-
-        #self.parLabels = ['x'+str(i) for i in range(self.npars)] #Parameter for parameter names (labels) to associate with output in post processing - emcee does this internally with parameter_names, but we want a universal system across all the search methods. Called parLabels to distinguish it from Data Class labels.
-        
-        ##print(self.npars, self.nparsMod, self.nparsData)
-        ##exit()
         #Call super with everything required:
         super().__init__(nwalkers = nwalkers, model = model, data= data, verbose = verbose,
                          parameter_labels = parameter_labels, **kwargs)
+        self.moves = moves
+        self.acceptRate = acceptRate
         ''' then set up the sampler '''
-        self.sampler = emcee.EnsembleSampler(self.nwalkers, np.int(self.npars), self.lnprob, a = acceptRate, moves=moves)#, args=self.dataSet)
+        self.sampler = emcee.EnsembleSampler(self.nwalkers, np.int(self.npars), self.lnprob, a = self.acceptRate, moves=self.moves)#, args=self.dataSet)
 
- 
-        
-        #raise NotImplementedError()
 
     def __call__(self, guess=None, **kwargs):
         if guess is None:
@@ -78,33 +51,40 @@ class EmceeSearch(EnsembleSampler):
         ''' This method will replace parts of the optimiser object if it is passed them. It can 
         be used to update the model, data, sampler setup, or prior part-way through a run '''
 
-        if np.any([model, data]):
-            if model is not None:
-                self.model=model
-                try:
-                    self.nparsMod = self.model.npars
-                except:
-                    sig = signature(model.__call__)
-                    self.nparsMod = len(sig.parameters) - 1 #Always subtract **kwargs from the parameters, but don't need to worry about self once it is bound to an instance
-            if data is not None:
-                self.dataSet = data
-                self.nparsData = [data.npars for data in self.dataSet] #number of parameters to be passed into each set of data
+        #if np.any([model, data]):
+        #    if model is not None:
+        #        self.model=model
+        #        try:
+        #            self.nparsMod = self.model.npars
+        #        except:
+        #            sig = signature(model.__call__)
+        #            self.nparsMod = len(sig.parameters) - 1 #Always subtract **kwargs from the parameters, but don't need to worry about self once it is bound to an instance
+        #    if data is not None:
+        #        self.dataSet = data
+        #        self.nparsData = [data.npars for data in self.dataSet] #number of parameters to be passed into each set of data
 
-            self.npars = np.int(self.nparsMod + np.sum(self.nparsData))
+        #    self.npars = np.int(self.nparsMod + np.sum(self.nparsData))
         
-        if lnprior is not None:
-            self.lnprior = lnprior
-        #print(self.npars, self.nparsMod, self.nparsData)
-        if nwalkers is not None:
-                self.nwalkers=nwalkers
+        #if lnprior is not None: 
+       #    self.lnprior = lnprior
+        ##print(self.npars, self.nparsMod, self.nparsData)
+        #if nwalkers is not None:
+        #        self.nwalkers=nwalkers
         ''' then set up the sampler '''
         
-        if np.any([nwalkers, acceptRate, data, model, lnprior, labels]):
+        if np.any([nwalkers, acceptRate, data, model, lnprior, labels, moves, kwargs]):
+            super().rebuildSampler(nwalkers = nwalkers, model = model, data = data, lnprior = lnprior, labels = labels, **kwargs)
+            if moves:
+                self.moves = moves
+            if acceptRate:
+                self.acceptRate = acceptRate
             ''' if anything has been changed, update the sampler and re-intialise it '''
             ''' first destroy the sampler '''
             self.sampler=None
             ''' now rebuild it '''
-            self.sampler = emcee.EnsembleSampler(self.nwalkers, np.int(self.npars), self.lnprob, a = acceptRate, moves=moves)
+            self.sampler = emcee.EnsembleSampler(self.nwalkers, np.int(self.npars), self.lnprob, a = self.acceptRate, moves=self.moves, **kwargs)
+        else:
+            print("No arguments passed, proceeding with sampler as is")
 
     def lnprior(self, theta, **kwargs):
         """

@@ -227,6 +227,9 @@ class Photometry(Data):
         self.label = label
         self.plotParams["label"] = label
 
+        print(photUnits)
+        print(type(photUnits))
+
         #print(self.filterMask)
         if np.all(self.filterMask):
             self.filterName = filterName
@@ -256,16 +259,30 @@ class Photometry(Data):
                 zeropoints[i] = filters[i].Vega_zero_Jy.magnitude
                 value[i] = zeropoints[i]*10^(-0.4*value[i])
                 uncertainty[i] = value[i] - zeropoints*10^(-0.4*(value[i]+uncertainty[i]))
-        
+
+        print(len(photUnits))
+        print(len(value))
         try:
             assert len(photUnits) == len(value)
         except AssertionError: #We have more than one unit entry, but not one per flux entry, raise an error and force the user to do something about it:
             if isinstance(photUnits, str):
+                print("photUnits is a string")
                 photUnits = [photUnits] * len(value)
             else:
+                print("photUnits is weird")
                 raise RunTimeError("The wrong number of unit entries appear to have been provided. Please check this and try again. You provided {0} units, but {1} fluxes. \n The fluxes are \n {2} \nand the units are \n {3}".format(len(photUnits), len(value), photunits, values))
         except TypeError: #only one unit was provided, let's forcibly turn it into an iterable
+            print("photunits is not iterable")
             photUnits = len(value) * (photUnits,)
+        else:
+            if isinstance(photUnits, str):
+                print("photUnits is a string")
+                photUnits = [photUnits] * len(value)
+            else:
+                print("photUnits is very weird")
+
+        print(photUnits)
+        print(type(photUnits))
                        
         #identify values in milliJansky, convert to Jy
         uconv = np.array([u.Jy.to(pU) for pU in photUnits])
