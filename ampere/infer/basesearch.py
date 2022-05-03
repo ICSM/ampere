@@ -90,15 +90,73 @@ class BaseSearch(object):
             return p
         return p + self.lnlike(theta)
 
-    def lnprob_vector(self, theta, pool):
+    def lnprob_vector(self, thetas):
+        ''' This method is a drop-in replacement for the above method but where theta is a vector of arguments. 
+
+        It assumes no parallelisation, and that the vectorisation is just being used to cut down on function calls
+        '''
+
+        #print(theta)
+        ##lnprobs = pool.map(lnprob_pool, theta, worker_init=self.init_workers)
+        if len(thetas.shape) > 2:
+            raise TypeError("Input parameters have too many indices: expected 2, got {}".format(len(theta.shape)))
+        lps = self.lnprior_vector(thetas)
+        mask = np.isfinite(lps)
+        lps[mask] += self.lnlike_vector(thetas[mask])
+        #lls = self.lnlike_vector(thetas)
+        return lps#+lls
+        #n_samples = thetas.shape[0]
+        #lps = np.zeros(n_samples)
+        #lps = self.lnprior_vector(thetas)
+        #for i, theta in enumerate(thetas):
+        #    lps[i] = self.lnprob(theta)
+        #return lps
+
+        #n_samples = thetas.shape[0]
+        #lps = np.zeros(n_samples)
+        #lps = self.lnprior_vector(thetas)
+        #for i, theta in enumerate(thetas):
+        #    lps[i] += self.lnlike(theta)
+        #return lps
+        
+
+    def lnprior_vector(self, thetas):
+        n_samples = thetas.shape[0]
+        lps = np.zeros(n_samples)
+        for j, theta in enumerate(thetas):
+            lp = self.model.lnprior(theta[:self.nparsMod])
+            i = self.nparsMod
+            for data in self.dataSet:
+                lp+= data.lnprior(theta[i:i+data.npars])
+                i+=data.npars
+            lps[j] = lp
+        return lps
+
+    def lnlike_vector(self, thetas):
+        n_samples = thetas.shape[0]
+        #print(thetas.shape)
+        lps = np.zeros(n_samples)
+        for j, theta in enumerate(thetas):
+            #print(theta)
+            model = self.model(*theta[:self.nparsMod])
+            l=np.array([])
+            i = self.nparsMod
+            for data in self.dataSet:
+                lnew = data.lnlike(theta[i:i+data.npars],self.model)
+                i+=data.npars
+                l = np.r_[l,lnew]
+            lps[j] = np.sum(l)
+        return lps
+            
+
+    def lnprob_vector_pool(self, theta, pool):
         ''' This method is a drop-in replacement for the above method but where theta is a vector of arguments. 
 
         It assumes you want to parallelise execution of models across a pool
         '''
-
-        lnprobs = pool.map(lnprob_pool, theta, worker_init=self.init_workers)
-        return lnprobs
+        pass
         
+    def lnprob_vector_dask(self, theta, **kwargs):
         pass
 
     def mpire_setup(self):

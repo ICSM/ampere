@@ -67,6 +67,7 @@ class DynestySearch(BaseSearch):
     def __repr__(self, **kwargs):
         raise NotImplementedError()
 
+    #This method is now defined in Basesearch
     def prior_transform(self, u, **kwargs):
         """
         We delegate the prior transforms to the models and the data

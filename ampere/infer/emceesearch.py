@@ -8,14 +8,17 @@ from inspect import signature
 from ..data import Photometry, Spectrum
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
+from .mixins import SimpleMCMCPostProcessor, ScipyMinMixin
 
-class EmceeSearch(EnsembleSampler):
+class EmceeSearch(EnsembleSampler,
+                  SimpleMCMCPostProcessor):#,
+                  #ScipyMinMixin):
     """
     A class to use the emcee affine-invariant ensemble sampler
     """
 
     def __init__(self, nwalkers = None, model = None, verbose = False,
-                 data = None, lnprior = None,
+                 data = None, lnprior = None, vectorize = True, 
                  parameter_labels = None, acceptRate = 2.0, moves=None,
                  **kwargs):
 
@@ -25,7 +28,12 @@ class EmceeSearch(EnsembleSampler):
         self.moves = moves
         self.acceptRate = acceptRate
         ''' then set up the sampler '''
-        self.sampler = emcee.EnsembleSampler(self.nwalkers, np.int(self.npars), self.lnprob, a = self.acceptRate, moves=self.moves)#, args=self.dataSet)
+        if vectorize:
+            print("Using vectorised posterior")
+            #self.lnprob = self.lnprob_vector
+            self.sampler = emcee.EnsembleSampler(self.nwalkers, np.int(self.npars), self.lnprob_vector, a = self.acceptRate, moves=self.moves, vectorize=True)#, args=self.dataSet)
+        else:
+            self.sampler = emcee.EnsembleSampler(self.nwalkers, np.int(self.npars), self.lnprob, a = self.acceptRate, moves=self.moves)#, args=self.dataSet)
 
 
     def __call__(self, guess=None, **kwargs):
@@ -101,6 +109,7 @@ class EmceeSearch(EnsembleSampler):
         #print(lp)
         return lp #return 0
 
+    #functionality moved to mixins.ScipyMinMixin.minimize()
     def preopt(self, start, **kwargs):
         neglnprob = lambda *args: -self.lnprob(*args)
         from scipy.optimize import minimize
@@ -172,34 +181,12 @@ class EmceeSearch(EnsembleSampler):
         #ESS?
         #Acceptance fraction?
         self.print_summary(outfile=textfile)
-        # '''First find the median and 68% interval '''
-        # self.res=[]
-        # print("Median and confidence intervals for parameters in order:")
-        # for i in range(self.npars):
-        #     a = np.percentile(self.samples[:,i], [16, 50, 84])
-        #     self.res.append([a[1], a[2]-a[1], a[1]-a[0]])
-        #     #res.append((lambda v: (v[1], v[2]-v[1], v[1]-v[0]),
-        #     #                     *zip(np.percentile(self.samples[:,i], [16, 50, 84])))#,
-        #                                             #axis=0)))
-        #     #      )
-        #     print("{0}  = {1[0]} + {1[1]} - {1[2]}".format(self.parLabels[i],self.res[i])) #make this look prettier
-            
-
-        # ''' Then check what the "best fit" was '''
-        # print(np.min(self.sampler.lnprobability))
-        # print(np.max(self.sampler.lnprobability))
-        # row_ind, col_ind = np.unravel_index(np.argmax(self.sampler.lnprobability.ravel), self.sampler.lnprobability.shape)
-        # self.bestPars = self.sampler.chain[row_ind, col_ind, :]
-        # print("MAP Solution: ")
-        # for i in range(self.npars):
-        #     print("{0}  = {1}".format(self.parLabels[i],self.bestPars[i])) #
 
         ''' Now produce some diagnostic plots '''
 
         ''' A plot of the walkers' sampling history '''
         self.plot_walkers()
         
-        #plt.close(fig)
         ''' And a corner plot of the post-burnin results '''
         self.plot_corner()
 
@@ -211,34 +198,7 @@ class EmceeSearch(EnsembleSampler):
 
 
         self.plot_posteriorpredictive(**kwargs)
-        #fig4,(ax0,ax1) = plt.subplots(1,2)
-        #ax=[ax0, ax1]
-        #i=0
-        #for d in self.dataSet:
-        #    if isinstance(d, Photometry):
-        #        continue
-        #    elif isinstance(d, Spectrum):
-        #        i+=1
-        #        fig, ax = plt.subplots(1,1)
-        #        #for d in self.dataSet[1:]:
-        #        #d=self.dataSet[1]
-        #        d.cov([res[8][0],res[9][0]])
-        #        #ax0.set_title('Covariance matrix')
-        #        im = ax.imshow(np.log10(d.covMat))
-        #        fig.savefig("covMat_"+str(i)+".png")
-
         
-        #cax0 = divider4.append_axes("right", size="20%", pad=0.05)
-        #cbar0 = plt.colorbar(im0, cax=cax0)
-        #d=self.dataSet[2]
-        #d.cov([res[11][0],res[12][0]])
-            #ax0.set_title('Covariance matrix')
-        #im1 = ax1.imshow(np.log10(d.covMat))
-        #cax1 = divider4.append_axes("right", size="20%", pad=0.05)
-        #cbar1 = plt.colorbar(im1, cax=cax1)
-        #fig4.savefig("covMat.png")
-        
-        pass
     def plot_walkers(self):
         #MUST USE autocorrelation time and burnin info on plots!
         #Should probably have quiet set 'False' to pick up too short emcee runs
@@ -358,6 +318,10 @@ class EmceeSearch(EnsembleSampler):
         fig.savefig(plotfile,dpi=200)
         plt.close(fig)
         plt.clf()
+
+    def summary(self):
+        super().summary()
+        self.maf = self.sampler.acceptance_fraction
 
     def print_summary(self, outfile=None):
 

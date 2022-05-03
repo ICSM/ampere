@@ -148,7 +148,7 @@ if __name__ == "__main__":
          ]
 
     #Now we set up the optimizer object:
-    optimizer = EmceeSearch(model=model, data=dataset, nwalkers=100, moves=m)
+    optimizer = EmceeSearch(model=model, data=dataset, nwalkers=100, moves=m, vectorize = False)
     guess = [
         [1, 1, #The parameters of the model
          #1.0, 0.1, 0.1, #Each Spectrum object contains a noise model with three free parameters

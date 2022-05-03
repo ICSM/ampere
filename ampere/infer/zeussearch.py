@@ -8,7 +8,7 @@ from inspect import signature
 from ..data import Photometry, Spectrum
 
 
-class ZeusSearch(EnsembleSearch):
+class ZeusSearch(EnsembleSampler):
     """
     A class to use the Zeus ensemble slice sampler
     """
