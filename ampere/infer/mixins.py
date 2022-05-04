@@ -28,7 +28,7 @@ class ScipyMinMixin(object):
     """
     A simple mixin for including Scipy's minimiser in a class
 
-    
+    The idea with this is to provide an interface for simple MAP inference. 
     """
     def minimize(self, start, **kwargs):
         neglnprob = lambda *args: -self.lnprob(*args)
@@ -44,6 +44,14 @@ class ScipyMinMixin(object):
 class SimpleMCMCPostProcessor(object):
     """
     A mixin for post-processing MCMC results
+
+    This mixin provides functions for computing diagnostic statistics and creating 
+    plots to explore the output. This includes e.g. the autocorrelation time of the
+    chains, or producing corner plots. This assumes structure similar to that of 
+    emcee. The get_ methods are intended to be extended or overloaded by classes 
+    that inheret from this mixin if necessary.
+
+    
     """
     def plot_trace(self, **kwargs):
         tauto = self.autocorr()
@@ -64,11 +72,35 @@ class SimpleMCMCPostProcessor(object):
         plt.tight_layout()
         fig.savefig("walkers.png")
 
+    # Geweke convergence test threshold
+    geweke_max = 2.0
+    
     def get_geweke(self, chain = None, **kwargs):
         """
-        Placeholder for the Geweke statistic
+        Measure the Geweke statistic
+
+        The Geweke statistics is a useful criterion for convergence, based on 
+        the drift in the mean of the chains. It takes the first 25% of the 
+        burned-in chain, and the last 25%, computes the mean of each parameter 
+        for those two sections, and computes the difference between the means 
+        divided by the sqrt of the sum of the variances. If this is greater 
+        than a threshold (default: 2.0) then the drift is significant and the 
+        chain has not converged.
+
+        It is important to note that just because G < 2, it doesn't mean that 
+        the chain *HAS* converged.
         """
-        pass
+        self.converged = True
+        if chain is None:
+            chain = self.allSamples 
+        a = chain.reshape((-1, self.npars))[:self.nsamp//4, :] #sampler.get_chain(flat=True)[:num_steps // 4, i]
+        b = chain.reshape((-1, self.npars))[-self.nsamp//4:, :] #sampler.get_chain(flat=True)[-num_steps // 4:, i]
+        geweke_z = (a.mean(axis=0) - b.mean(axis=0)) / (np.var(a, axis=0) + np.var(b, axis=0))**0.5
+        for i, p in enumerate(self.parLabels):
+            if geweke_z[i] > self.geweke_max:
+                print("geweke drift (z={0:.2f}) detected for parameter '{1}'" % (geweke_z, p))
+                self.converged = False
+        return geweke_z
 
     def get_autocorr(self, chain = None, quiet=True, **kwargs):
         """
@@ -124,7 +156,6 @@ class SimpleMCMCPostProcessor(object):
         self.rhat = self.get_rhat()
         self.res = self.get_credible_interval(interval)
         self.bestPars = self.get_map()
-        pass
 
     def print_summary(self, outfile=None, **kwargs):
         """
@@ -162,8 +193,10 @@ class SimpleMCMCPostProcessor(object):
                 file_output['tau']+="{0}  = {1:.0f} steps\n".format(self.parLabels[i],self.tauto[i])
 
 
-    def plot_corner():
-        pass
+    def plot_corner(self, **kwargs):
+        import corner
+        fig2 = corner.corner(self.samples,labels=self.parLabels, **kwargs)
+        fig2.savefig("corner.png")
 
     def plot_covmats():
         pass
@@ -175,7 +208,7 @@ class SimpleMCMCPostProcessor(object):
 class ArvizPostProcessor(object):
     """
     A mixin for post-processing MCMC results that uses ArViz instead of rolling 
-    it's own
+    its own
     """
     pass
 

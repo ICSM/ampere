@@ -7,6 +7,7 @@ from inspect import signature
 from .data import Photometry, Spectrum
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
+from warnings import FutureWarning
 
 class EmceeSearch(BaseSearch):
     """
@@ -17,6 +18,8 @@ class EmceeSearch(BaseSearch):
                  data = None, lnprior = None,
                  labels = None, acceptRate = 2.0, moves=None,
                  **kwargs):
+
+        raise FutureWarning("This class is deprecated. Please use classes from ampere.infer in future.")
 
         #self.npars=npars
         #self.nsamp=nsamp
