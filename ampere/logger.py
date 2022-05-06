@@ -29,19 +29,20 @@ def handle_exception(exc_type, exc_value, exc_traceback):
 
 
 class Logger(object):
-    def setup_logging(self, verbose=False, logfile="ampere", logPath = '.'):
+    def setup_logging(self, verbose=False, to_file=True, to_terminal = True logfile="ampere", logPath = '.'):
         level = logging.INFO
         if verbose:
             level = logging.DEBUG
 
         
-
-        fileHandler = logging.FileHandler("{0}/{1}.log".format(logPath, logfile))
-        fileHandler.setFormatter(logFormatter)
-        logger.addHandler(fileHandler)
-        handler = logging.StreamHandler(stream=sys.stdout)
-        handler.setFormatter(logFormatter)
-        logger.addHandler(handler)
+        if to_file:
+            fileHandler = logging.FileHandler("{0}/{1}.log".format(logPath, logfile))
+            fileHandler.setFormatter(logFormatter)
+            logger.addHandler(fileHandler)
+        if to_terminal:
+            handler = logging.StreamHandler(stream=sys.stdout)
+            handler.setFormatter(logFormatter)
+            logger.addHandler(handler)
         
         sys.excepthook = handle_exception
 
