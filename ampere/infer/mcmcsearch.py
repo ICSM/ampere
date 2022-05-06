@@ -1,17 +1,23 @@
 from __future__ import print_function
 
+import logging
 import numpy as np
 from inspect import signature
 from .basesearch import BaseSearch
+from ..logger import Logger
 
-
-class MCMCSampler(BaseSearch):
+class MCMCSampler(BaseSearch, Logger):
 
     def __init__(self, model = None, data= None, verbose = False,
                  parameter_labels = None,
                  **kwargs):
         self.model = model
         self.dataSet = data
+
+        self.setup_logging(verbose=verbose) #For now we will exclusively use default logging settings, this will be modified once logging is tested.
+        logging.info("Welcome to ampere")
+        logging.info("Setting up your inference problem:")
+        logging.info("You have %s items in your dataset", str(len(data)))
 
         ''' now do some introspection on the various bits of model to 
         understand how many parameters there are for each compponent '''
@@ -42,13 +48,13 @@ class MCMCSampler(BaseSearch):
         #self.parLabels = ['x'+str(i) for i in range(self.npars)] #Parameter for parameter names (labels) to associate with output in post processing - emcee does this internally with parameter_names, but we want a universal system across all the search methods. Called parLabels to distinguish it from Data Class labels.
 
         self.verbose = verbose
-        if self.verbose:
-            print("This model has ", self.nparsMod," parameters.")
-            print("There are also ", self.npars - self.nparsMod, " parameters for the noise model")
-            print("Hence, there are a total of ", self.npars, " parameters to sample")
-            print("The parameter names are:")
-            for l in self.parLabels:
-                print(l)
+        #if self.verbose:
+        logging.info("This model has %s parameters.", str(self.nparsMod))
+        logging.info("There are also %s parameters for the noise model", str(self.npars - self.nparsMod))
+        logging.info("Hence, there are a total of %s parameters to sample", str(self.npars))
+        logging.info("The parameter names are:")
+        #for l in self.parLabels:
+        logging.info(str(l))
             
 
 

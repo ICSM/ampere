@@ -2,7 +2,7 @@ from __future__ import print_function
 
 import numpy as np
 import pickle
-
+from ..logger import Logger
 
 class BaseSearch(object):
     """ A base class for parameter search algorithms.

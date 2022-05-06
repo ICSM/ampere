@@ -29,12 +29,18 @@ def handle_exception(exc_type, exc_value, exc_traceback):
 
 
 class Logger(object):
+    """
+    A basic class to control logging. 
+
+    Can be used as a mixin or attribute of another class, or called standalone.
+    Should define methods to set up, modify, or terminal logging behaviour.
+    """
     def setup_logging(self, verbose=False, to_file=True, to_terminal = True logfile="ampere", logPath = '.'):
         level = logging.INFO
         if verbose:
             level = logging.DEBUG
 
-        
+        logger.setLevel(level)
         if to_file:
             fileHandler = logging.FileHandler("{0}/{1}.log".format(logPath, logfile))
             fileHandler.setFormatter(logFormatter)
