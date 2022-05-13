@@ -53,8 +53,8 @@ class MCMCSampler(BaseSearch, Logger):
         logging.info("There are also %s parameters for the noise model", str(self.npars - self.nparsMod))
         logging.info("Hence, there are a total of %s parameters to sample", str(self.npars))
         logging.info("The parameter names are:")
-        #for l in self.parLabels:
-        logging.info(str(l))
+        for l in self.parLabels:
+            logging.info(str(l))
             
 
 
@@ -72,15 +72,17 @@ class EnsembleSampler(MCMCSampler):
                          parameter_labels = parameter_labels, **kwargs)
 
         self.nwalkers = nwalkers
+        logging.info("This problem will be sampled with %s walkers", str(self.nwalkers))
 
     def rebuildSampler(self, nwalkers = None, model = None,
                        data = None, lnprior = None,
                        labels = None, 
                        **kwargs):
 
-
+        logging.info("Rebuilding your sampler")
         if np.any([model, data]):
             if model is not None:
+                logging.info("Your model is being updated")
                 self.model=model
                 try:
                     self.nparsMod = self.model.npars
@@ -89,6 +91,7 @@ class EnsembleSampler(MCMCSampler):
                     self.nparsMod = len(sig.parameters) - 1 #Always subtract **kwargs from the parameters, but don't need to worry about self once it is bound to an instance
             if data is not None:
                 self.dataSet = data
+                logging.info("Your data is being updated")
                 self.nparsData = [data.npars for data in self.dataSet] #number of parameters to be passed into each set of data
 
             self.npars = np.int(self.nparsMod + np.sum(self.nparsData))
@@ -98,3 +101,4 @@ class EnsembleSampler(MCMCSampler):
         #print(self.npars, self.nparsMod, self.nparsData)
         if nwalkers is not None:
                 self.nwalkers=nwalkers
+                logging.info("The number of walkers is now %s", str(self.nwalkers))

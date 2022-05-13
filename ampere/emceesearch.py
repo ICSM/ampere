@@ -7,7 +7,7 @@ from inspect import signature
 from .data import Photometry, Spectrum
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
-from warnings import FutureWarning
+#from warnings import FutureWarning
 
 class EmceeSearch(BaseSearch):
     """

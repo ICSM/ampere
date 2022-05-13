@@ -35,7 +35,7 @@ class Logger(object):
     Can be used as a mixin or attribute of another class, or called standalone.
     Should define methods to set up, modify, or terminal logging behaviour.
     """
-    def setup_logging(self, verbose=False, to_file=True, to_terminal = True logfile="ampere", logPath = '.'):
+    def setup_logging(self, verbose=False, to_file=True, to_terminal = True, logfile="ampere", logPath = '.'):
         level = logging.INFO
         if verbose:
             level = logging.DEBUG

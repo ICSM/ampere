@@ -2,6 +2,7 @@ from __future__ import print_function
 
 import numpy as np
 import emcee
+import logging
 from .basesearch import BaseSearch
 from .mcmcsearch import EnsembleSampler
 from inspect import signature
@@ -29,7 +30,7 @@ class EmceeSearch(EnsembleSampler,
         self.acceptRate = acceptRate
         ''' then set up the sampler '''
         if vectorize:
-            print("Using vectorised posterior")
+            logging.info("Using vectorised posterior")
             #self.lnprob = self.lnprob_vector
             self.sampler = emcee.EnsembleSampler(self.nwalkers, np.int(self.npars), self.lnprob_vector, a = self.acceptRate, moves=self.moves, vectorize=True)#, args=self.dataSet)
         else:
@@ -92,7 +93,7 @@ class EmceeSearch(EnsembleSampler,
             ''' now rebuild it '''
             self.sampler = emcee.EnsembleSampler(self.nwalkers, np.int(self.npars), self.lnprob, a = self.acceptRate, moves=self.moves, **kwargs)
         else:
-            print("No arguments passed, proceeding with sampler as is")
+            logging.info("No arguments passed, proceeding with sampler as is")
 
     def lnprior(self, theta, **kwargs):
         """
@@ -113,26 +114,27 @@ class EmceeSearch(EnsembleSampler,
     def preopt(self, start, **kwargs):
         neglnprob = lambda *args: -self.lnprob(*args)
         from scipy.optimize import minimize
-        print("Using scipy.minimize to find approximate MAP solution")
-        print("starting from position: ",start)
+        logging.info("Using scipy.minimize to find approximate MAP solution")
+        logging.info("starting from position: ",start)
         solution = minimize(neglnprob, start)
         guess = [p for p in solution.x]
-        print("Minimization complete, final position: ",guess)
+        logging.info("Minimization complete, final position: ",guess)
         return guess
         
 
     def optimise(self, nsamples = None, burnin = None, guess = None,
                  preopt = True, guessscale = 1e-3, noguess=False, progress=True, **kwargs):
         from collections.abc import Sequence, Iterable
+        logging.info("Preparing to sample")
         if guess == 'None': # and not noguess:
-            print("Setting initial guess randomly")
+            logging.info("Setting initial guess randomly")
             try: #Attempting to use the ptform
-                print("No guess specified, attempting to draw from prior transform")
+                logging.info("No guess specified, attempting to draw from prior transform")
                 rng = np.random.default_rng() #.uniform(-1,0,1000)
                 guess = [self.prior_transform(rng.uniform(size=self.npars)) for i in range(self.nwalkers)]
                 print(guess)
             except AttributeError: #not all components have a ptform, so we'll do this the simple way
-                print("Drawing from prior transform failed, drawing randomly")
+                logging.info("Drawing from prior transform failed, drawing randomly")
                 guess = [np.random.randn(np.int(self.npars)) for i in range(self.nwalkers)]
         #print('dimensions of guess = ', np.shape(guess))
         #print('nsamples = ', nsamples)
@@ -141,14 +143,15 @@ class EmceeSearch(EnsembleSampler,
         #print("np.min(guess, axis=0) = ", np.min(guess, axis=0))
 
         if preopt:
-            print("Selecting start point for scipy.minimize")
+            logging.info("Searching for approximate MAP solution as starting point for MCMC")
+            logging.info("Selecting start point for scipy.minimize")
             if isinstance(guess, Sequence):
                 if not isinstance(guess[0], (Sequence, Iterable)):#Only a single entry
-                    print("Only one entry in guess")
-                    print(guess[0])
+                    logging.debug("Only one entry in guess")
+                    logging.debug(guess[0])
                     start = guess
                 else: #guess contains many entries, randomly select one
-                    print("Multiple entries in guess, selecting at random!")
+                    logging.debug("Multiple entries in guess, selecting at random!")
                     rng = np.random.default_rng()
                     i = rng.integers(0, len(guess))
                     start = guess[i]
@@ -160,6 +163,8 @@ class EmceeSearch(EnsembleSampler,
             
         self.nsamp = nsamples
         self.burnin = burnin
+        logging.info("Starting to sample: ")
+        logging.info("Each walker will produce %d samples, of which the first %d will be discarded as burn-in", self.nsamp, self.burnin)
         if noguess:
             self.sampler.run_mcmc(nsamples, progress=progress)
         else:
