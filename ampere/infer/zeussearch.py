@@ -2,20 +2,25 @@ from __future__ import print_function
 
 import numpy as np
 import zeus
+import logging
+import matplotlib.pyplot as plt
+from matplotlib.patches import Polygon
 from .basesearch import BaseSearch
 from .mcmcsearch import EnsembleSampler
 from inspect import signature
 from ..data import Photometry, Spectrum
+from .mixins import SimpleMCMCPostProcessor, ScipyMinMixin
 
-
-class ZeusSearch(EnsembleSampler):
+class ZeusSearch(EnsembleSampler,
+                  SimpleMCMCPostProcessor, #):#,
+                  ScipyMinMixin):
     """
     A class to use the Zeus ensemble slice sampler
     """
 
     def __init__(self, nwalkers = None, model = None, verbose = False,
-                 data = None, lnprior = None,
-                 labels = None, moves = None,
+                 data = None, lnprior = None, vectorize = True,
+                 parameter_labels = None, moves = None,
                  **kwargs):
 
         super().__init__(nwalkers = nwalkers, model = model, data= data,
@@ -23,7 +28,13 @@ class ZeusSearch(EnsembleSampler):
                          parameter_labels = parameter_labels, **kwargs)
         ''' then set up the sampler '''
         self.moves = moves
-        self.sampler = zeus.EnsembleSampler(self.nwalkers, np.int(self.npars), self.lnprob, moves = self.moves)#, a = acceptRate)#, args=self.dataSet)
+        ''' then set up the sampler '''
+        if vectorize:
+            logging.info("Using vectorised posterior")
+            #self.lnprob = self.lnprob_vector
+            self.sampler = zeus.EnsembleSampler(self.nwalkers, np.int(self.npars), self.lnprob_vector, moves=self.moves, vectorize=True)#, args=self.dataSet)
+        else:
+            self.sampler = zeus.EnsembleSampler(self.nwalkers, np.int(self.npars), self.lnprob, moves=self.moves)#, args=self.dataSet)
 
 
     def __call__(self, guess=None, **kwargs):
@@ -51,6 +62,8 @@ class ZeusSearch(EnsembleSampler):
         if np.any([nwalkers, data, model, lnprior, labels, moves, kwargs]):
             ''' if anything has been changed, update the sampler and re-intialise it '''
             super().rebuildSampler(nwalkers = nwalkers, model = model, data = data, lnprior = lnprior, labels = labels, **kwargs)
+            if moves:
+                self.moves = moves
             ''' first destroy the sampler '''
             self.sampler=None
             ''' now rebuild it '''
@@ -71,19 +84,50 @@ class ZeusSearch(EnsembleSampler):
         #print(lp)
         return lp #return 0
 
-    def optimise(self, nsamples = None, burnin = None, guess = None, noguess=False, **kwargs):
-        if guess is 'None':# and not noguess:
-            guess = [np.random.randn(np.int(self.npars)) for i in range(self.nwalkers)]
+    def optimise(self, nsamples = None, burnin = None, guess = None,
+                 preopt = True, guessscale = 1e-3, noguess=False, progress=True, **kwargs):
+        from collections.abc import Sequence, Iterable
+        logging.info("Preparing to sample")
+        if guess == 'None': # and not noguess:
+            logging.info("Setting initial guess randomly")
+            try: #Attempting to use the ptform
+                logging.info("No guess specified, attempting to draw from prior transform")
+                rng = np.random.default_rng() #.uniform(-1,0,1000)
+                guess = [self.prior_transform(rng.uniform(size=self.npars)) for i in range(self.nwalkers)]
+                print(guess)
+            except AttributeError: #not all components have a ptform, so we'll do this the simple way
+                logging.info("Drawing from prior transform failed, drawing randomly")
+                guess = [np.random.randn(np.int(self.npars)) for i in range(self.nwalkers)]
+
+        if preopt:
+            logging.info("Searching for approximate MAP solution as starting point for MCMC")
+            logging.info("Selecting start point for scipy.minimize")
+            if isinstance(guess, Sequence):
+                if not isinstance(guess[0], (Sequence, Iterable)):#Only a single entry
+                    logging.debug("Only one entry in guess")
+                    logging.debug(guess[0])
+                    start = guess
+                else: #guess contains many entries, randomly select one
+                    logging.debug("Multiple entries in guess, selecting at random!")
+                    rng = np.random.default_rng()
+                    i = rng.integers(0, len(guess))
+                    start = guess[i]
+            else:
+                #Guess is not appropriate, need to do something here!
+                raise ValueError("guess does not conform to expectations")
+            newguess = self.preopt(start)
+            guess = [newguess + guessscale*np.random.randn(np.int(self.npars)) for i in range(self.nwalkers)]
+            
         self.nsamp = nsamples
         self.burnin = burnin
+        logging.info("Starting to sample: ")
+        logging.info("Each walker will produce %d samples, of which the first %d will be discarded as burn-in", self.nsamp, self.burnin)
         if noguess:
-            self.sampler.run_mcmc(nsamples)
+            self.sampler.run_mcmc(nsamples, progress=progress)
         else:
-            self.sampler.run_mcmc(guess, nsamples)
+            self.sampler.run_mcmc(guess, nsamples, progress=progress)
         self.allSamples = self.sampler.chain
-        self.samples = self.sampler.chain[:, self.burnin:, :].reshape((-1, self.npars))
-        #pass
-
+        self.samples = self.sampler.chain[self.burnin:, :,  :].reshape((-1, self.npars))
 
 
     def postProcess(self, show=False, **kwargs):
@@ -92,95 +136,79 @@ class ZeusSearch(EnsembleSampler):
         '''
 
         '''First find the median and 68% interval '''
-        res=[]
-        print("Median and confidence intervals for parameters in order:")
-        for i in range(self.npars):
-            a = np.percentile(self.samples[:,i], [16, 50, 84])
-            res.append([a[1], a[2]-a[1], a[1]-a[0]])
-            #res.append((lambda v: (v[1], v[2]-v[1], v[1]-v[0]),
-            #                     *zip(np.percentile(self.samples[:,i], [16, 50, 84])))#,
-                                                    #axis=0)))
-            #      )
-            print(res[i])
-            
+        self.print_summary() #outfile=textfile)
 
-        ''' Then check what the "best fit" was '''
-        print(np.min(self.sampler.lnprobability))
-        print(np.max(self.sampler.lnprobability))
-        row_ind, col_ind = np.unravel_index(np.argmax(self.sampler.lnprobability.ravel), self.sampler.lnprobability.shape)
-        bestPars = self.sampler.chain[row_ind, col_ind, :]
-        print("MAP Solution: ", bestPars)
         ''' Now produce some diagnostic plots '''
 
         ''' A plot of the walkers' sampling history '''
-        import matplotlib.pyplot as plt
-        fig, axes = plt.subplots(self.npars, 1, sharex=True, figsize=(8, 9))
-        for i in range(self.npars):
-            axes[i].plot(self.sampler.chain[:, :, i].T, color="k", alpha=0.4)
-            #    axes[0].yaxis.set_major_locator(MaxNLocator(5))
-            #axes[0].axhline(m_true, color="#888888", lw=2)
-            #axes[i].set_ylabel("$m$")
+        self.plot_trace()
         
-    
-        #fig.tight_layout(h_pad=0.0)
-        fig.savefig("walkers.png")
-        #plt.close(fig)
         ''' And a corner plot of the post-burnin results '''
-        import corner
-        fig2 = corner.corner(self.samples)#,labels=opt.labels)
-        fig2.savefig("corner.png")
+        self.plot_corner()
 
         ''' plot the evolution of the likelihood function '''
-        fig3 = plt.figure()
-        axes3 = fig3.add_subplot(111) #plt.subplots(1, 1, sharex=True, figsize=(6, 8))
-        for i in range(self.nwalkers):
-            axes3.plot(self.sampler.lnprobability[i,:])
-        try:
-            axes3.set_ylim(np.min(self.sampler.lnprobability),np.max(self.sampler.lnprobability))
-        except ValueError:
-            try:
-                axes3.set_ylim(-2000.,np.max(self.sampler.lnprobability))
-            except ValueError:
-                axes3.set_ylim(-2000.,2000)
-        fig3.savefig("lnprob.png")
-
+        self.plot_lnprob()
 
         '''finally, we want to look at the correlation/covariance matrices for the spectra, if any '''
-        #fig4,(ax0,ax1) = plt.subplots(1,2)
-        #ax=[ax0, ax1]
-        i=0
-        for d in self.dataSet:
-            if isinstance(d, Photometry):
-                continue
-            elif isinstance(d, Spectrum):
-                i+=1
-                fig, ax = plt.subplots(1,1)
-                #for d in self.dataSet[1:]:
-                #d=self.dataSet[1]
-                d.cov([res[8][0],res[9][0]])
-                #ax0.set_title('Covariance matrix')
-                im = ax.imshow(np.log10(d.covMat))
-                fig.savefig("covMat_"+str(i)+".png")
-        #cax0 = divider4.append_axes("right", size="20%", pad=0.05)
-        #cbar0 = plt.colorbar(im0, cax=cax0)
-        #d=self.dataSet[2]
-        #d.cov([res[11][0],res[12][0]])
-            #ax0.set_title('Covariance matrix')
-        #im1 = ax1.imshow(np.log10(d.covMat))
-        #cax1 = divider4.append_axes("right", size="20%", pad=0.05)
-        #cbar1 = plt.colorbar(im1, cax=cax1)
-        #fig4.savefig("covMat.png")
+        self.plot_covmats()
+
+
+        self.plot_posteriorpredictive(**kwargs)
         
-        pass
+    #Now we need to overload some of the SimpleMCMCPostProcessor methods
+    def get_map(self, **kwargs):
+        self.lnprobability = self.sampler.get_log_prob()
+        row_ind, col_ind = np.unravel_index(np.argmax(self.lnprobability), self.lnprobability.shape)
+        self.bestPars = self.sampler.chain[row_ind, col_ind, :]
+        return self.bestPars
 
+    def get_autocorr(self, chain = None, quiet=True, **kwargs):
+        self.tauto = self.sampler.act
+        return self.tauto
 
-#    def lnlike(self, theta, **kwargs):
-#        model = self.model(theta)
-#        like = 0.
-#        for data in self.dataSet:
-#            """ do something for each bit of data """
-#            deltaLike = something
-#            like = like + deltaLike
-#        return like #-0.5 * np.sum((((y - model)**2)/(yerr**2)))
+    def plot_trace(self, **kwargs):
+        try:
+            tauto = self.tauto
+        except AttributeError:
+            tauto = self.get_autocorr()
+        fig, axes = plt.subplots(self.npars, 1, sharex=True, figsize=(8, 9))
+        for i in range(self.npars):
+            axes[i].plot(self.sampler.chain[:, :, i], color="k", alpha=0.4) #No need to transpose the chain here, because zeus has steps in the first axis, not second (like emcee)
+            axes[i].set_xlim(0, self.nsamp)
+            ylims = axes[i].get_ylim()
+            xlims = axes[i].get_xlim()
+            axes[i].plot([10*tauto[i],10*tauto[i]],[ylims[0],ylims[1]],color="red",marker="",linestyle="-")#,label=r"10$\times t_{\rm autocorr}$")
+            axes[i].add_patch(Polygon([[xlims[0], ylims[0]], [xlims[0], ylims[1]], [self.burnin, ylims[1]], [self.burnin, ylims[0]]], closed=True,
+                      fill=True, color='darkgrey'))
+            axes[i].set_xlabel("Steps")
+            axes[i].set_ylabel(self.parLabels[i])
+            axes[i].label_outer()
+            axes[i].set_xlim(0, self.nsamp)
+
+        plt.tight_layout()
+        fig.savefig("walkers.png")
+
+    def plot_lnprob(self):
+        #USE autocorrelation time and burnin info on plots?
+        tauto = self.tauto #self.sampler.get_autocorr_time(quiet=True)
+
+        fig = plt.figure()
+        axes = fig.add_subplot(111) #plt.subplots(1, 1, sharex=True, figsize=(6, 8))
+        for i in range(self.nwalkers):
+            axes.plot(self.lnprobability[:, i])
+        try:
+            axes.set_ylim(np.min(self.lnprobability),np.max(self.lnprobability))
+        except ValueError:
+            try:
+                axes.set_ylim(-2000.,np.max(self.lnprobability))
+            except ValueError:
+                axes.set_ylim(-2000.,2000)
+
+        ylims = axes.get_ylim()
+        xlims = axes.get_xlim()
+        axes.add_patch(Polygon([[xlims[0], ylims[0]], [xlims[0], ylims[1]], [self.burnin, ylims[1]], [self.burnin, ylims[0]]], closed=True,
+                      fill=True, color='grey'))
+        axes.plot([10*tauto,10*tauto],[ylims[0],ylims[1]],color="red",marker="",linestyle="-",label=r"10$\times t_{\rm autocorr}$")
+        fig.savefig("lnprob.png")     
 
 

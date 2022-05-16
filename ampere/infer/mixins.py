@@ -24,6 +24,11 @@ from __future__ import print_function
 
 import numpy as np
 import logging
+import matplotlib.pyplot as plt
+from matplotlib.patches import Polygon
+
+
+from ..data import Photometry, Spectrum
 
 class ScipyMinMixin(object):
     """
@@ -31,14 +36,14 @@ class ScipyMinMixin(object):
 
     The idea with this is to provide an interface for simple MAP inference. 
     """
-    def minimize(self, start, **kwargs):
+    def preopt(self, start, **kwargs):
         neglnprob = lambda *args: -self.lnprob(*args)
         from scipy.optimize import minimize
-        print("Using scipy.minimize to find approximate MAP solution")
-        print("starting from position: ",start)
+        logging.info("Using scipy.minimize to find approximate MAP solution")
+        logging.info("starting from position: %s",start)
         solution = minimize(neglnprob, start)
         solution = [p for p in solution.x]
-        print("Minimization complete, final position: ",solution)
+        logging.info("Minimization complete, final position: %s ",solution)
         return solution
 
 
@@ -54,8 +59,14 @@ class SimpleMCMCPostProcessor(object):
 
     
     """
+
+    
+    
     def plot_trace(self, **kwargs):
-        tauto = self.autocorr()
+        try:
+            tauto = self.tauto
+        except AttributeError:
+            tauto = self.get_autocorr()
         fig, axes = plt.subplots(self.npars, 1, sharex=True, figsize=(8, 9))
         for i in range(self.npars):
             axes[i].plot(self.sampler.chain[:, :, i].T, color="k", alpha=0.4) #,label=self.parLabels[i])
@@ -99,7 +110,7 @@ class SimpleMCMCPostProcessor(object):
         geweke_z = (a.mean(axis=0) - b.mean(axis=0)) / (np.var(a, axis=0) + np.var(b, axis=0))**0.5
         for i, p in enumerate(self.parLabels):
             if geweke_z[i] > self.geweke_max:
-                logging.warning("geweke drift (z=%.3f) detected for parameter '%.2f'", geweke_z, p)
+                logging.warning("geweke drift (z=%.3f) detected for parameter '%s'", geweke_z[i], p)
                 self.converged = False
         return geweke_z
 
@@ -120,7 +131,7 @@ class SimpleMCMCPostProcessor(object):
         """
         Placeholder for Effective Sample Size computation
         """
-        self.ess = self.nwalkers * self.nsamples / np.mean(self.tauto)
+        self.ess = self.nwalkers * self.nsamp / np.mean(self.tauto)
         return self.ess
 
     def get_rhat(self, chain = None, n_splits = 2, threshold = 0.05, discard = None, **kwargs):
@@ -138,29 +149,35 @@ class SimpleMCMCPostProcessor(object):
         #Then split the samples into n_splits chunks
         ndim = chain.shape[-1]
         chunks = np.array_split(chain, n_splits)
+        #print(chunks)
 
         means = []
         var = []
-        N = []
+        length = []
         
         #Then compute the mean, variance and length of each chunk
         for chunk in chunks:
-            mean.append(np.mean(chunk.reshape(-1, ndim), axis = 0))
+            means.append(np.mean(chunk.reshape(-1, ndim), axis = 0))
             var.append(np.var(chunk.reshape(-1, ndim), axis = 0))
-            N.append(len(chunk.reshape(-1, ndim), axis = 0))
+            length= len(chunk.reshape(-1, ndim))
+
+
         
         #Then we get on with the RHat bit
 
         #First we need the variance between chains:
         B = length * np.var(means, ddof=1, axis = 0)
+        
 
         #And the variance within chains
         W = np.mean(var)
+        
 
         #Now computed a weighted variances
         weighted_var = (1 - 1/length) * W + B/length
+        
 
-        self.rhat = np.sqrt(weighted_var / W)
+        self.rhat = np.mean(np.sqrt(weighted_var / W))
         if self.rhat - 1 > threshold:
             logging.warning("Rhat = %.3f > %.3f. Chain is not converged! \n You should run a longer chain. ", self.rhat, 1+threshold)
             self.converged = False
@@ -209,29 +226,27 @@ class SimpleMCMCPostProcessor(object):
         file_output = {}
         #Now start printing things
         #with open(outfile, 'w') as f:
-        if self.bestPars:
-            logging.info("\n MAP solution:")
+        if self.bestPars is not None:
+            logging.info("MAP solution:")
             #print("MAP Solution: ")
             for i in range(self.npars):
                 logging.info("%s  = %.5f", self.parLabels[i],self.bestPars[i]) #
                 #file_ouput['MAP']+="{0}  = {1:.5f}\n".format(self.parLabels[i],self.bestPars[i])
 
-        if self.res:
-            file_output['CI'] = ""
+        if self.res is not None:
+            logging.info("Median and confidence intervals for parameters in order:")
             for i in range(self.npars):
-                print("{0}  = {1[0]:.5f} + {1[1]:.5f} - {1[2]:.5f}".format(self.parLabels[i],self.res[i]))
-                file_output['CI']+="{0}  = {1[0]:.5f} + {1[1]:.5f} - {1[2]:.5f}\n".format(self.parLabels[i],self.res[i])
-        if self.tauto:
-            file_output['tau'] = ""
-            print("Mean Autocorrelation Time: {0:.5f}",np.mean(self.tauto))
-            file_output['tau']+="Mean Autocorrelation Time: {0:.5f}\n",np.mean(self.tauto)
-            print("Autocorrelation times for each parameter:")
-            file_output['tau']+="Autocorrelation times for each parameter:\m"
+                logging.info("%s  = %.5f + %.5f - %.5f", self.parLabels[i],self.res[i][0],self.res[i][1],self.res[i][2])
+                #file_output['CI']+="{0}  = {1[0]:.5f} + {1[1]:.5f} - {1[2]:.5f}\n".format(self.parLabels[i],self.res[i])
+        if self.tauto is not None:
+            logging.info("Mean Autocorrelation Time: %.5f",np.mean(self.tauto))
+            logging.info("Autocorrelation times for each parameter:")
             #tauto = self.sampler.get_autocorr_time()
             for i in range(self.npars):
-                print("{0}  = {1:.0f} steps".format(self.parLabels[i],self.tauto[i]))
-                file_output['tau']+="{0}  = {1:.0f} steps\n".format(self.parLabels[i],self.tauto[i])
+                logging.info("%s  = %.0f steps",self.parLabels[i],self.tauto[i])
 
+        if self.ess is not None:
+            logging.info("Effective sample size: %.3f", self.ess)
 
     def plot_corner(self, **kwargs):
         import corner

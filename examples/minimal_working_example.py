@@ -3,6 +3,7 @@ import os
 import ampere
 from ampere.data import Spectrum, Photometry
 from ampere.infer.emceesearch import EmceeSearch
+from ampere.infer.zeussearch import ZeusSearch
 from ampere.models import Model
 from spectres import spectres
 import pyphot
@@ -148,7 +149,8 @@ if __name__ == "__main__":
          ]
 
     #Now we set up the optimizer object:
-    optimizer = EmceeSearch(model=model, data=dataset, nwalkers=100, moves=m, vectorize = False)
+    #optimizer = EmceeSearch(model=model, data=dataset, nwalkers=100, moves=m, vectorize = False)
+    optimizer = ZeusSearch(model=model, data=dataset, nwalkers=100, vectorize = False)
     guess = [
         [1, 1, #The parameters of the model
          #1.0, 0.1, 0.1, #Each Spectrum object contains a noise model with three free parameters
@@ -166,7 +168,7 @@ if __name__ == "__main__":
     #guess = "None"
 
     #Then we tell it to explore the parameter space
-    optimizer.optimise(nsamples = 1500, burnin=1000, guess=guess
+    optimizer.optimise(nsamples = 150, burnin=100, guess=guess
                        )
 
 

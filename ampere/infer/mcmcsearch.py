@@ -49,12 +49,12 @@ class MCMCSampler(BaseSearch, Logger):
 
         self.verbose = verbose
         #if self.verbose:
-        logging.info("This model has %s parameters.", str(self.nparsMod))
-        logging.info("There are also %s parameters for the noise model", str(self.npars - self.nparsMod))
-        logging.info("Hence, there are a total of %s parameters to sample", str(self.npars))
+        logging.info("This model has %d parameters.", self.nparsMod)
+        logging.info("There are also %d parameters for the noise model", self.npars - self.nparsMod)
+        logging.info("Hence, there are a total of %d parameters to sample", self.npars)
         logging.info("The parameter names are:")
         for l in self.parLabels:
-            logging.info(str(l))
+            logging.info("%s", l)
             
 
 
@@ -72,7 +72,7 @@ class EnsembleSampler(MCMCSampler):
                          parameter_labels = parameter_labels, **kwargs)
 
         self.nwalkers = nwalkers
-        logging.info("This problem will be sampled with %s walkers", str(self.nwalkers))
+        logging.info("This problem will be sampled with %d walkers", self.nwalkers)
 
     def rebuildSampler(self, nwalkers = None, model = None,
                        data = None, lnprior = None,
@@ -101,4 +101,4 @@ class EnsembleSampler(MCMCSampler):
         #print(self.npars, self.nparsMod, self.nparsData)
         if nwalkers is not None:
                 self.nwalkers=nwalkers
-                logging.info("The number of walkers is now %s", str(self.nwalkers))
+                logging.info("The number of walkers is now %d", self.nwalkers)
