@@ -4,18 +4,20 @@ import numpy as np
 #import dynesty
 from .basesearch import BaseSearch
 from inspect import signature
-from .data import Photometry, Spectrum
+from ..data import Photometry, Spectrum
+from .nestedsearch import BaseNestedSampler
 from dynesty import NestedSampler, DynamicNestedSampler
 from dynesty import plotting as dyplot
 from dynesty import utils as dyfunc
 import matplotlib.pyplot as plt
 
 
-class DynestySearch(BaseSearch):
+class DynestyNestedSampler(BaseNestedSampler):
     """
     A class to use Dynesty to explore parameters space with nested sampling
     """
 
+    _inference_method = "Nested Sampling with Dynesty"
     def __init__(self, #Many of the NestedSampler options are exposed here
                  prior_transform = None,
                  nlive = 1500,
@@ -28,28 +30,30 @@ class DynestySearch(BaseSearch):
                  enlarge=None, bootstrap=0, vol_dec=0.5,
                  vol_check=2.0, walks=25, facc=0.5, slices=5, **kwargs
                  ):
-        self.model=model
-        self.dataSet = data
-        if prior_transform is not None: #This should probably be removed! We don't want the user change the ptform at this point, but by changing it for the Model or Data individually
-            self.prior_transform = prior_transform
-        ''' now do some introspection on the various bits of model to 
-        understand how many parameters there are for each compponent '''
-        try: #First we try to see if the number of parameters is documented specifically for methods which use a prior transform
-            self.nparsMod = self.model.npars_ptform
-        except AttributeError:
-            try: #If not, we assume that the number of parameters
-                self.nparsMod = self.model.npars
-            except AttributeError:
-                sig = signature(model.__call__)
-                self.nparsMod = len(sig.parameters) - 1 #Always subtract **kwargs from the parameters, but don't need to worry about self once it is bound to an instance
-        #print(self.nparsMod, len(sig.parameters), sig.parameters)
-        #self.nparsData = #np.zeros(len(self.dataSet))
-        #self.npars = something # total number of parameters
-        #self.nparsMod = something #number of parameters for the model
-        self.nparsData = [data.npars for data in self.dataSet] #number of parameters to be passed into each set of data
-        self.npars = np.int(self.nparsMod + np.sum(self.nparsData))
-        print(self.npars, self.nparsMod, self.nparsData)
-        self.parLabels = ['x'+str(i) for i in range(self.npars)] #Parameter for parameter names (labels) to associate with output in post processing
+
+        super().__init__(model = model, data = data, **kwargs)
+        #self.model=model
+        #self.dataSet = data
+        #if prior_transform is not None: #This should probably be removed! We don't want the user change the ptform at this point, but by changing it for the Model or Data individually
+        #    self.prior_transform = prior_transform
+        #''' now do some introspection on the various bits of model to 
+        #understand how many parameters there are for each compponent '''
+        #try: #First we try to see if the number of parameters is documented specifically for methods which use a prior transform
+        #    self.nparsMod = self.model.npars_ptform
+        #except AttributeError:
+        #    try: #If not, we assume that the number of parameters
+        #        self.nparsMod = self.model.npars
+        #    except AttributeError:
+        #        sig = signature(model.__call__)
+        #        self.nparsMod = len(sig.parameters) - 1 #Always subtract **kwargs from the parameters, but don't need to worry about self once it is bound to an instance
+        ##print(self.nparsMod, len(sig.parameters), sig.parameters)
+        ##self.nparsData = #np.zeros(len(self.dataSet))
+        ##self.npars = something # total number of parameters
+        ##self.nparsMod = something #number of parameters for the model
+        #self.nparsData = [data.npars for data in self.dataSet] #number of parameters to be passed into each set of data
+        #self.npars = np.int(self.nparsMod + np.sum(self.nparsData))
+        #print(self.npars, self.nparsMod, self.nparsData)
+        #self.parLabels = ['x'+str(i) for i in range(self.npars)] #Parameter for parameter names (labels) to associate with output in post processing
         self.sampler = NestedSampler(self.lnlike, self.prior_transform, self.npars,
                                      nlive=nlive, bound=bound, sample=sample,
                                      update_interval = update_interval,
@@ -277,7 +281,7 @@ class DynestySearch(BaseSearch):
                     f.write("and likelihood ln(L*) = {0:.5f}\n".format(self.results.logl[-1]))
                 
         
-class DynestyDynamicSearch(DynestySearch): #I think this can inheret almost everything except __init__ from the Static sampler
+class DynestyDynamicNestedSampler(DynestySearch): #I think this can inheret almost everything except __init__ from the Static sampler
     """
     A class to use Dynesty to explore parameters space with dynamic nested sampling
     """
