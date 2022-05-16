@@ -1,0 +1,11 @@
+calcite_improved.dat
+dolomite_wh.mac
+am_oliv_CDE.dat
+am_oliv.dat
+cr_ice.dat
+cr_oliv_CDE.dat
+fe.dat
+forst_m.q
+Koike1999_c_enst.q
+Koike1999_o_enst.q
+Koike2000_diopside.q_a
