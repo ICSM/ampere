@@ -37,6 +37,7 @@ class ASimpleModel(Model):
         #Here we'll just use a simple flat prior
         self.lims = lims
         self.flatprior = flatprior
+        self.parLabels = ["slope", "intercept"]
 
     def __call__(self, slope, intercept, **kwargs):
         '''The model itself, using the callable class functionality of python.
