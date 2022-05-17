@@ -16,7 +16,7 @@ class ASimpleModel(Model):
     This model shows you the basics of writing a model for ampere
 
     '''
-    def __init__(self, wavelenghts, flatprior=True,
+    def __init__(self, wavelengths, flatprior=True,
                  lims=np.array([[-10, 10],
                                 [-10, 10]])):
         '''The model constructor, which will set everything up

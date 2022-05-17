@@ -159,14 +159,14 @@ class SpectrumNGC6302(Model):
         if self.flatprior:
             if np.all(self.lims[i,0] < theta[i] < self.lims[i,1] for i in
                       range(len(self.lims[:,0])) and (theta[23] > theta[22])
-                      and (theta[25] > theta[24]):
+                      and (theta[25] > theta[24])):
                 return 0
             else:
                 return -np.inf
         else:
             raise NotImplementedError()
 
-    def prior_transform(self, u, **kwargs):  # hiero: too be done still
+    def prior_transform(self, u, **kwargs):  
         '''The prior transform, which takes samples from the Uniform(0,1)
         distribution to the desired distribution.
         This is only included for completeness and to demonstrate how a prior 
@@ -190,7 +190,7 @@ if __name__ == "__main__": #hiero: too be done still, check all below
     intercept = 1.
 
     #Now init the model:
-    model = ASimpleModel(wavelengths)
+    model = SpectrumNGC6302(wavelengths)
     #And call it to produce the fluxes for our chosen parameters
     model(slope, intercept)
     model_flux = model.modelFlux
