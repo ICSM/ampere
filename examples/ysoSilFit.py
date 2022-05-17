@@ -1,6 +1,5 @@
 import numpy as np
 import sys
-sys.path.insert(1, '/home/zeegers/git_ampere/ampere/')
 import ampere
 import pprint
 from ampere.data import Spectrum
