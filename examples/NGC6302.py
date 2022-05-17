@@ -8,6 +8,7 @@ from ampere.models import Model
 from spectres import spectres
 import pyphot
 from emcee import moves
+import matplotlib.pyplot as plt
 
 # First we will define a rather simple model
 
@@ -30,7 +31,7 @@ class SpectrumNGC6302(Model):
        Output is an array of model fluxes (fluxes), to match wavelengths
     '''
     def __init__(self, wavelengths, flatprior=True,
-                 opacityFileList='NGC6302-opacities.txt', lims=None):
+                 opacityFileName='NGC6302-opacities.txt', lims=None):
         '''The model constructor, which will set everything up
         This method does essential setup actions, primarily things that
         may change from one fit to another, but will stay constant throughout
@@ -41,17 +42,26 @@ class SpectrumNGC6302(Model):
         self.wavelength = wavelengths
         import os
         from scipy import interpolate
-        opacityDirectory = os.path.dirname(__file__)+'/NGC6302/'
-        opacityFileList = np.array(opacityFileList)
-        nSpecies = opacityFileList.__len__()  # 11 for the 2002 study
+        opacityDirectory = os.getcwd()+'/NGC6302/'
+        opacityFileList = np.loadtxt(opacityFileName, dtype='str')
+        nSpecies = opacityFileList.__len__() 
         opacity_array = np.zeros((wavelengths.__len__(), nSpecies))
         for j in range(nSpecies):
             tempData = np.loadtxt(opacityDirectory + opacityFileList[j],
                                   comments='#')
             tempWl = tempData[:, 0]
             tempOpac = tempData[:, 1]
-            f = interpolate.interp1d(tempWl, tempOpac, assume_sorted=False)
-            opacity_array[:, j] = f(self.wavelength)
+            f = interpolate.interp1d(tempWl, np.log10(tempOpac), assume_sorted=False, fill_value = "extrapolate") 
+            opacity_array[:, j] = np.power(np.full(self.wavelength.shape,10),f(self.wavelength))
+            #extrapolate is needed because some opacities don't cover the
+            #entire ISO SWS-LWS range, from 2.4 to 198 micron
+            #the extrapolation is done in log space for the opacities for
+            #better results. 
+            plt.xscale('log')
+            plt.plot(self.wavelength, opacity_array[:,j])
+            plt.plot(tempWl,tempOpac)
+            plt.title(opacityFileList[j])
+            plt.show()
         self.opacity_array = opacity_array
         self.nSpecies = nSpecies
         self.npars = 2*nSpecies + 6
@@ -183,7 +193,10 @@ class SpectrumNGC6302(Model):
 if __name__ == "__main__": #hiero: too be done still, check all below
     """ Set up the inputs for the model """
     """ wavelength grid """
-    wavelengths = 10**np.linspace(0.,1.9, 2000)
+    wavelengths = np.linspace(2.4,198.,1956)
+    print("Wavelengths")
+    print(wavelengths)
+    input("Please press the Enter key to proceed")
 
     """ Choose some model parameters """
     slope = 1. #Keep it super simple for now
