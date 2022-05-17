@@ -2,20 +2,24 @@ from __future__ import print_function
 
 import numpy as np
 from inspect import signature
+import logging
+from ..logger import Logger
 from .basesearch import BaseSearch
 
 
-class BaseNestedSampler(Basesearch):
+class BaseNestedSampler(BaseSearch, Logger):
     _inference_method = "Nested Sampling"
     
-    def __init__(self, model = None, data= None, **kwargs):
+    def __init__(self, model = None, data= None, verbose = False,
+                 parameter_labels = None,
+                 **kwargs):
         self.model = model
         self.dataSet = data
 
         self.setup_logging(verbose=verbose) #For now we will exclusively use default logging settings, this will be modified once logging is tested.
         logging.info("Welcome to ampere")
         logging.info("Setting up your inference problem:")
-        logging.info("You are using MCMC with %s", self._inference_method)
+        logging.info("You are using %s", self._inference_method)
         logging.info("You have %s items in your dataset", str(len(data)))
 
         ''' now do some introspection on the various bits of model to 
@@ -56,3 +60,18 @@ class BaseNestedSampler(Basesearch):
         logging.info("The parameter names are:")
         for l in self.parLabels:
             logging.info("%s", l)
+
+
+    #This method is now defined in Basesearch
+    def prior_transform(self, u, **kwargs):
+        """
+        We delegate the prior transforms to the models and the data
+        """
+        #print(u)
+        theta = np.zeros_like(u)
+        theta[:self.nparsMod] = self.model.prior_transform(u[:self.nparsMod])
+        i = self.nparsMod
+        for data in self.dataSet:
+            theta[i:i+data.npars] = data.prior_transform(u[i:i+data.npars])
+            i+=data.npars
+        return theta

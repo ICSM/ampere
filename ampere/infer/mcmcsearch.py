@@ -19,7 +19,7 @@ class MCMCSampler(BaseSearch, Logger):
         self.setup_logging(verbose=verbose) #For now we will exclusively use default logging settings, this will be modified once logging is tested.
         logging.info("Welcome to ampere")
         logging.info("Setting up your inference problem:")
-        logging.info("You are using MCMC with %s", self._inference_method)
+        logging.info("You are using %s", self._inference_method)
         logging.info("You have %s items in your dataset", str(len(data)))
 
         ''' now do some introspection on the various bits of model to 
@@ -65,6 +65,8 @@ class EnsembleSampler(MCMCSampler):
     """ A base-class for emcee-like samplers (e.g. emcee, zeus, ptemcee)
 
     """
+
+    _inference_method = "Ensemble MCMC"
 
     def __init__(self, model = None, data= None, verbose = False,
                  parameter_labels = None,

@@ -18,6 +18,8 @@ class ZeusSearch(EnsembleSampler,
     A class to use the Zeus ensemble slice sampler
     """
 
+    _inference_method = "Ensemble slice-sampling MCMC with Zeus"
+
     def __init__(self, nwalkers = None, model = None, verbose = False,
                  data = None, lnprior = None, vectorize = True,
                  parameter_labels = None, moves = None,

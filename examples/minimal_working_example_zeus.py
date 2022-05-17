@@ -2,11 +2,11 @@ import numpy as np
 import os
 import ampere
 from ampere.data import Spectrum, Photometry
-from ampere.infer.emceesearch import EmceeSearch
+from ampere.infer.zeussearch import ZeusSearch
 from ampere.models import Model
 from spectres import spectres
 import pyphot
-from emcee import moves
+from zeus import moves
 
 #First we will define a rather simple model
 
@@ -143,13 +143,14 @@ if __name__ == "__main__":
                ]
 
 
-    #Ampere exposes acces to emcee's moves interface. This can be useful if the posterior turns out to not be well behaved - the default move only deals well with posteriors that are monomodal and approximately Gaussian. Here's an example that usually deals a bit better with posteriors that don't meet these criteria:
-    m = [(moves.DEMove(), 0.8),
-        (moves.DESnookerMove(), 0.2),
+    #Ampere exposes acces to Zeus' moves interface. This can be useful if the posterior turns out to not be well behaved. This shows you how to define moves, but doesn't actually use them in the inference
+    m = [(moves.GlobalMove(), 0.8),
+        (moves.DifferentialMove(), 0.2),
          ]
+    #For example, You might want to burn in your sampler, then re-build it with new moves if the posterior is very multimodal
 
     #Now we set up the optimizer object:
-    optimizer = EmceeSearch(model=model, data=dataset, nwalkers=100, moves=m, vectorize = False)
+    optimizer = ZeusSearch(model=model, data=dataset, nwalkers=100, vectorize = False)
     guess = [
         [1, 1, #The parameters of the model
          #1.0, 0.1, 0.1, #Each Spectrum object contains a noise model with three free parameters
@@ -169,7 +170,6 @@ if __name__ == "__main__":
     #Then we tell it to explore the parameter space
     optimizer.optimise(nsamples = 150, burnin=100, guess=guess
                        )
-    
 
 
     optimizer.postProcess() #now we call the postprocessing to produce some figures

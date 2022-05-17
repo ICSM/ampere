@@ -1,6 +1,7 @@
 from __future__ import print_function
 
 import numpy as np
+import logging
 #import dynesty
 from .basesearch import BaseSearch
 from inspect import signature
@@ -25,13 +26,15 @@ class DynestyNestedSampler(BaseNestedSampler):
                  sample = 'auto',
                  data = None,
                  model = None,
+                 verbose = False, vectorize = False,
                  update_interval=None, first_update=None,
                  queue_size=None, pool=None, use_pool=None,
                  enlarge=None, bootstrap=0, vol_dec=0.5,
-                 vol_check=2.0, walks=25, facc=0.5, slices=5, **kwargs
+                 vol_check=2.0, walks=25, facc=0.5, slices=5,
+                 **kwargs
                  ):
 
-        super().__init__(model = model, data = data, **kwargs)
+        super().__init__(model = model, data = data, verbose = verbose, **kwargs)
         #self.model=model
         #self.dataSet = data
         #if prior_transform is not None: #This should probably be removed! We don't want the user change the ptform at this point, but by changing it for the Model or Data individually
@@ -71,25 +74,13 @@ class DynestyNestedSampler(BaseNestedSampler):
     def __repr__(self, **kwargs):
         raise NotImplementedError()
 
-    #This method is now defined in Basesearch
-    def prior_transform(self, u, **kwargs):
-        """
-        We delegate the prior transforms to the models and the data
-        """
-        #print(u)
-        theta = np.zeros_like(u)
-        theta[:self.nparsMod] = self.model.prior_transform(u[:self.nparsMod])
-        i = self.nparsMod
-        for data in self.dataSet:
-            theta[i:i+data.npars] = data.prior_transform(u[i:i+data.npars])
-            i+=data.npars
-        return theta
-
     def optimise(self, dlogz=50., maxiter=None, maxcall=None,
                  logl_max=np.inf, add_live=True,
                  print_progress=True, print_func=None,
                  save_bounds=True, **kwargs
                  ):
+        logging.info("Starting to sample.")
+        logging.info("Sampling will continue until the remaining ln evidence is approximately: %.2f", dlogz)
         self.sampler.run_nested(maxiter=maxiter, maxcall=maxcall,
                                 dlogz=dlogz, logl_max=logl_max,
                                 add_live=add_live,print_progress=print_progress,
@@ -177,8 +168,8 @@ class DynestyNestedSampler(BaseNestedSampler):
         try:
             self.model(*self.bestPars[:self.nparsMod])
             axes.plot(self.model.wavelength,self.model.modelFlux, '-', color='k', alpha=1.0,label='MAP', zorder=8)
-        except ValueError:
-            print("Error in MAP solution \n Skipping MAP in plot")
+        except ValueError as e:
+            logging.error("Error in MAP solution \n Skipping MAP in plot")
 
 
         #These plots end up with too many labels for the legend, so we clobber the label information so that only one of each one is plotted
@@ -192,7 +183,7 @@ class DynestyNestedSampler(BaseNestedSampler):
         plt.close(fig)
         plt.clf()
 
-    def postProcess(self, maxiter=None, maxcall = None, dlogz = None, testfile=None, **kwargs):
+    def postProcess(self, maxiter=None, maxcall = None, dlogz = None, **kwargs):
         """ Some simple post-processing and plotting """
 
         """ first, a summary plot """
@@ -201,8 +192,8 @@ class DynestyNestedSampler(BaseNestedSampler):
             #fig, axes = dyplot.runplot(self.results) #Summary plot
             #fig.savefig("summary.png")
         except ValueError as e:
-            print("summary failed with error",e)
-            print("skipping summary plot and moving on to corner plot")
+            logging.error("summary failed with error %s",e)
+            logging.warning("skipping summary plot and moving on to corner plot")
 
 
         """ next, a corner plot """
@@ -221,7 +212,7 @@ class DynestyNestedSampler(BaseNestedSampler):
         #fig.savefig("trace.png")
         """ with the plotting completed, we now compute estimates of the posterior """
         #This should also be extracted to a standalone method which we can call from here
-        self.print_summary(outfile=textfile)
+        self.print_summary()
 
         self.plot_covmats()
 
@@ -230,7 +221,7 @@ class DynestyNestedSampler(BaseNestedSampler):
         pass
 
 
-    def print_summary(self,outfile=None):
+    def print_summary(self,**kwargs):
         ''' Standalone method to compute and present estimates of the posterior.
         '''
         
@@ -240,21 +231,21 @@ class DynestyNestedSampler(BaseNestedSampler):
         self.res = np.array([[self.mean[i], self.cov[i]] for i in range(self.npars)])
         
         #Present
-        print("Posterior means and 1-sigma confidence intervals of the parameters marginalising over all other parameters: ")
+        logging.info("Posterior means and 1-sigma confidence intervals of the parameters marginalising over all other parameters: ")
         for i in range(self.npars):
-            print("{0}  = {1:.5f} +/- {2:.5f}".format(
-                self.parLabels[i],self.mean[i],np.sqrt(np.diag(self.cov)[i]))
+            logging.info("%s  = %.5f +/- %.5f",
+                self.parLabels[i],self.mean[i],np.sqrt(np.diag(self.cov)[i])
                   )
         #print(np.sqrt(np.diag(self.cov))
         #print("Posterior covariances of the parameters: ", self.cov)
 
         #Now produce ML and MAP solution
         self.bestPars = self.results.samples[-1]
-        print("MAP Solution: ")
+        logging.info("MAP Solution: ")
         for i in range(self.npars):
-            print("{0}  = {1:.5f}".format(self.parLabels[i],self.bestPars[i])) #
-        print("with Posterior probability ln(P*) = {0:.5f}".format(self.results.logwt[-1]))
-        print("and likelihood ln(L*) = {0:.5f}".format(self.results.logl[-1]))
+            logging.info("%s  = %.5f",self.parLabels[i],self.bestPars[i]) #
+        logging.info("with Posterior probability ln(P*) = %.5f}",self.results.logwt[-1])
+        logging.info("and likelihood ln(L*) = %.5f",self.results.logl[-1])
 
 
 
@@ -262,26 +253,26 @@ class DynestyNestedSampler(BaseNestedSampler):
         #help(self.results)
 
         #Then print out evidence, uncertainty, and estimate of remaining evidence
-        print("Model evidence ln(Z) = {0:.5f} +/- {1:.5f}".format(self.results.logz[-1], self.results.logzerr[-1]))
+        logging.info("Model evidence ln(Z) = %.5f +/- %.5f",self.results.logz[-1], self.results.logzerr[-1])
         #print("Estimated remaining evidence dln(Z) = ",
 
-        if outfile is not None:
-            with open(outfile, 'w') as f:
-                f.write("Posterior means and 1-sigma confidence intervals of the parameters marginalising over all other parameters: \n ")
-                for i in range(self.npars):
-                    f.write("{0}  = {1:.5f} +/- {2:.5f} \n".format(
-                        self.parLabels[i],self.mean[i],np.sqrt(np.diag(self.cov)[i]))
-                    )
+        #if outfile is not None:
+        #    with open(outfile, 'w') as f:
+        #        f.write("Posterior means and 1-sigma confidence intervals of the parameters marginalising over all other parameters: \n ")
+        #        for i in range(self.npars):
+        #            f.write("{0}  = {1:.5f} +/- {2:.5f} \n".format(
+        #                self.parLabels[i],self.mean[i],np.sqrt(np.diag(self.cov)[i]))
+        #            )
 
-                f.write("\n")
-                f.write("MAP Solution: \n")
-                for i in range(self.npars):
-                    f.write("{0}  = {1:.5f} \n".format(self.parLabels[i],self.bestPars[i])) #
-                    f.write("with Posterior probability ln(P*) = {0:.5f}\n".format(self.results.logwt[-1]))
-                    f.write("and likelihood ln(L*) = {0:.5f}\n".format(self.results.logl[-1]))
+        #        f.write("\n")
+        #        f.write("MAP Solution: \n")
+        #        for i in range(self.npars):
+        #            f.write("{0}  = {1:.5f} \n".format(self.parLabels[i],self.bestPars[i])) #
+        #            f.write("with Posterior probability ln(P*) = {0:.5f}\n".format(self.results.logwt[-1]))
+        #            f.write("and likelihood ln(L*) = {0:.5f}\n".format(self.results.logl[-1]))
                 
         
-class DynestyDynamicNestedSampler(DynestySearch): #I think this can inheret almost everything except __init__ from the Static sampler
+class DynestyDynamicNestedSampler(DynestyNestedSampler): #I think this can inheret almost everything except __init__ from the Static sampler
     """
     A class to use Dynesty to explore parameters space with dynamic nested sampling
     """

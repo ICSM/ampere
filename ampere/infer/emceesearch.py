@@ -17,6 +17,7 @@ class EmceeSearch(EnsembleSampler,
     """
     A class to use the emcee affine-invariant ensemble sampler
     """
+    _inference_method = "Affine-invariance ensemble MCMC with emcee"
 
     def __init__(self, nwalkers = None, model = None, verbose = False,
                  data = None, lnprior = None, vectorize = True, 
