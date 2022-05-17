@@ -116,17 +116,17 @@ class SpectrumNGC6302(Model):
         coldcomponent[0, :] = self.wavelength
         warmcomponent = np.zeros((2, wavelengths.__len__()))
         warmcomponent[0, :] = self.wavelength
-        for i in enumerate(acold):
+        for i, a in enumerate(acold):
             onespeciescold = self.ckmodbb(self.opacity_array[:, i],
                                           tin=Tcold[0], tout=Tcold[1],
-                                          n0=acold[i], index=indexp)
-            coldcomponent[1, :] = coldcomponent[1, :] + onespeciescold
-        for i in enumerate(awarm):
+                                          n0=a, index=indexp)
+            coldcomponent[1, :] = coldcomponent[1, :] + onespeciescold[1, :]
+        for i, a in enumerate(awarm):
             onespecieswarm = self.ckmodbb(self.opacity_array[:, i],
                                           tin=Twarm[0], tout=Twarm[1],
-                                          n0=awarm[i], index=indexp)
-            warmcomponent[1, :] = warmcomponent[1, :] + onespecieswarm
-        fModel = np.like(coldcomponent)
+                                          n0=a, index=indexp)
+            warmcomponent[1, :] = warmcomponent[1, :] + onespecieswarm[1, :]
+        fModel = np.full_like(coldcomponent, 1.)
         fModel[1, :] = fModel[1, :] + warmcomponent[1, :]
         self.modelFlux = fModel[1, :]
 
@@ -134,15 +134,16 @@ class SpectrumNGC6302(Model):
                 grainsize=0.1, steps=10):
         d = distance * 3.0857e18  # convert distance from pc to cm
         a = grainsize * 1e-4  # convert grainsize from micron to cm
-        fnu = np.zeros((2, self.wavelengths.__len__()))
-        fnu[0, :] = self.wavelengths
+        fnu = np.zeros((2, self.wavelength.__len__()))
+        fnu[0, :] = self.wavelength  #TODO: make fnu (and therefore onespecies)
+                                     #an array with just 1 column, remove wl
 
         for i in range(steps - 1):
             t = tin - i * (tin-tout)/steps
             power = (t/tin)**(2*index - 6)
             bb = self.shbb(fnu, t, 0.)
             fnu[1, :] = np.add(fnu[1, :],
-                               np.multiply(q[1, :],
+                               np.multiply(q,
                                            bb[1, :])*(power*((tin-tout)/steps)))
         extra = r0/d
         factor = 4 * math.pi * a * a * r0 * n0 * extra * extra / (3-index)
@@ -153,7 +154,7 @@ class SpectrumNGC6302(Model):
         a1 = 3.97296e19
         a2 = 1.43875e4
         mbb = np.copy(aar)
-        bbflux = a1/(mbb[0, :]**3)/(math.exp(a2/(mbb[0, :]*temp))-1)
+        bbflux = a1/(mbb[0, :]**3)/(np.exp(a2/(mbb[0, :]*temp))-1)
         mbb[1, :] = bbflux * mbb[0, :]**pinda
         return mbb
 
