@@ -10,8 +10,6 @@ import pyphot
 from emcee import moves
 import matplotlib.pyplot as plt
 
-# First we will define a rather simple model
-
 
 class SpectrumNGC6302(Model):
     '''This model fits a modfied blackbody multiplied by sum of opacties,
@@ -57,11 +55,12 @@ class SpectrumNGC6302(Model):
             #entire ISO SWS-LWS range, from 2.4 to 198 micron
             #the extrapolation is done in log space for the opacities for
             #better results. 
-            plt.xscale('log')
-            plt.plot(self.wavelength, opacity_array[:,j])
-            plt.plot(tempWl,tempOpac)
-            plt.title(opacityFileList[j])
-            plt.show()
+            #plt.xscale('log')
+            #plt.plot(self.wavelength, opacity_array[:,j])
+            #plt.plot(tempWl,tempOpac)
+            #plt.title(opacityFileList[j])
+            #plt.show()
+            print("Reading in species: ", j, " : ", opacityFileList[j])
         self.opacity_array = opacity_array
         self.nSpecies = nSpecies
         self.npars = 2*nSpecies + 6
@@ -85,12 +84,12 @@ class SpectrumNGC6302(Model):
             # Twarm = theta[24:26] 80, 200; 80, 200
             # indexp = theta[26] 0, 3;
             # multfact = theta[27] 0, np.inf
-            self.lims[1, :] = np.inf
-            self.lims[0, 22:24] = 10.
-            self.lims[1, 22:24] = 80.
-            self.lims[0, 24:26] = 80.
-            self.lims[1, 24:26] = 200.
-            self.lims[1, 26] = 3.
+            self.lims[:, 1] = np.inf
+            self.lims[22:24, 0] = 10.
+            self.lims[22:24, 1] = 80.
+            self.lims[24:26, 0] = 80.
+            self.lims[24:26, 1] = 200.
+            self.lims[26, 1] = 3.       
         else:            
             self.lims = lims  
         self.flatprior = flatprior
@@ -114,9 +113,9 @@ class SpectrumNGC6302(Model):
         # 60-30 K, following Kemper et al. 2002
 
         coldcomponent = np.zeros((2, wavelengths.__len__()))
-        coldcomponent[0, :] = self.wavelengths
+        coldcomponent[0, :] = self.wavelength
         warmcomponent = np.zeros((2, wavelengths.__len__()))
-        warmcomponent[0, :] = self.wavelengths
+        warmcomponent[0, :] = self.wavelength
         for i in enumerate(acold):
             onespeciescold = self.ckmodbb(self.opacity_array[:, i],
                                           tin=Tcold[0], tout=Tcold[1],
@@ -194,18 +193,23 @@ if __name__ == "__main__": #hiero: too be done still, check all below
     """ Set up the inputs for the model """
     """ wavelength grid """
     wavelengths = np.linspace(2.4,198.,1956)
-    print("Wavelengths")
-    print(wavelengths)
-    input("Please press the Enter key to proceed")
+    #print("Wavelengths")
+    #print(wavelengths)
+    #input("Please press the Enter key to proceed")
 
     """ Choose some model parameters """
-    slope = 1. #Keep it super simple for now
-    intercept = 1.
+    acold = np.zeros(11)
+    awarm = np.zeros(11)
+    Tcold = [20, 70]
+    Twarm = [100, 150]
+    indexp = 1.5
+    multfact = 1.
+
 
     #Now init the model:
     model = SpectrumNGC6302(wavelengths)
     #And call it to produce the fluxes for our chosen parameters
-    model(slope, intercept)
+    model(acold, awarm, Tcold=Tcold, Twarm=Twarm, indexp=indexp, multfact=multfact)
     model_flux = model.modelFlux
 
     #Now we create synthetic data:
