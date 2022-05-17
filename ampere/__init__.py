@@ -26,7 +26,7 @@ from . import models
 #from . import extinction
 from . import basesearch
 from . import emceesearch
-from . import PowerLawAGN #ClassRT
+#from . import PowerLawAGN #ClassRT
 from . import data
 
 __all__=["models","extinction","emceesearch","PowerLawAGN","data"] #Nothing to import just yet

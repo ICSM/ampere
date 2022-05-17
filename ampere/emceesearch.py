@@ -7,6 +7,7 @@ from inspect import signature
 from .data import Photometry, Spectrum
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
+#from warnings import FutureWarning
 
 class EmceeSearch(BaseSearch):
     """
@@ -17,6 +18,8 @@ class EmceeSearch(BaseSearch):
                  data = None, lnprior = None,
                  labels = None, acceptRate = 2.0, moves=None,
                  **kwargs):
+
+        raise FutureWarning("This class is deprecated. Please use classes from ampere.infer in future.")
 
         #self.npars=npars
         #self.nsamp=nsamp
@@ -52,7 +55,7 @@ class EmceeSearch(BaseSearch):
         #raise NotImplementedError()
 
     def __call__(self, guess=None, **kwargs):
-        if guess is None:
+        if guess == None:
             guess = [np.random.randn(np.int(self.npars)) for i in range(self.nwalkers)]
         self.sampler.run_mcmc(guess, self.nsamp)
         self.allSamples = self.sampler.chain
@@ -227,6 +230,7 @@ class EmceeSearch(BaseSearch):
 
 
         self.plot_posteriorpredictive(**kwargs)
+
         #fig4,(ax0,ax1) = plt.subplots(1,2)
         #ax=[ax0, ax1]
         #i=0
@@ -346,6 +350,10 @@ class EmceeSearch(BaseSearch):
             try:
                 self.model(*s[:self.nparsMod])
                 axes.plot(self.model.wavelength,self.model.modelFlux, '-', color='k', alpha=alpha,label='Samples', zorder = 0)
+                if logy:
+                    axes.set_yscale('log')
+                if logx:
+                    axes.set_xscale('log')
             except ValueError:
                 pass
             i = self.nparsMod

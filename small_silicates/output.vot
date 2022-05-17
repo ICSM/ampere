@@ -1,0 +1,213 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Produced with astropy.io.votable version 4.0.1.post1
+     http://www.astropy.org/ -->
+<VOTABLE version="1.4" xmlns="http://www.ivoa.net/xml/VOTable/v1.4" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.ivoa.net/xml/VOTable/v1.4">
+ <RESOURCE type="results">
+  <TABLE ID="II_328_allwise" name="II/328/allwise">
+   <DESCRIPTION>
+    *the AllWISE data release (among 747,634,026 sources) (updated
+    version, 16-Feb-2021)
+   </DESCRIPTION>
+   <FIELD ID="AllWISE" arraysize="19" datatype="char" name="AllWISE" ucd="ID_MAIN">
+    <DESCRIPTION>
+     WISE All-Sky Release Catalog name, based on J2000 position,
+     &lt;WISEA JHHMMSS.ss+DDMMSS.s&gt; (designation)
+    </DESCRIPTION>
+   </FIELD>
+   <FIELD ID="RAJ2000" datatype="double" name="RAJ2000" precision="7" ucd="POS_EQ_RA_MAIN" unit="deg" width="11">
+    <DESCRIPTION>
+     Right ascension (J2000)
+    </DESCRIPTION>
+   </FIELD>
+   <FIELD ID="DEJ2000" datatype="double" name="DEJ2000" precision="7" ucd="POS_EQ_DEC_MAIN" unit="deg" width="11">
+    <DESCRIPTION>
+     Declination (J2000)
+    </DESCRIPTION>
+   </FIELD>
+   <FIELD ID="Im" arraysize="2" datatype="char" name="Im" ucd="DATA_LINK">
+    <DESCRIPTION>
+     Image of the 4 bands from the IRSA server (IPAC)
+    </DESCRIPTION>
+   </FIELD>
+   <FIELD ID="W1mag" datatype="float" name="W1mag" precision="3" ucd="PHOT_IR_3.4" unit="mag" width="6">
+    <DESCRIPTION>
+     ? W1 magnitude (3.35um)
+    </DESCRIPTION>
+    <VALUES null="nan"/>
+   </FIELD>
+   <FIELD ID="e_W1mag" datatype="float" name="e_W1mag" precision="3" ucd="ERROR" unit="mag" width="6">
+    <DESCRIPTION>
+     ? Mean error on W1 magnitude
+    </DESCRIPTION>
+    <VALUES null="nan"/>
+   </FIELD>
+   <FIELD ID="W2mag" datatype="float" name="W2mag" precision="3" ucd="PHOT_IR_4.2" unit="mag" width="6">
+    <DESCRIPTION>
+     ? W2 magnitude (4.6um)
+    </DESCRIPTION>
+    <VALUES null="nan"/>
+   </FIELD>
+   <FIELD ID="e_W2mag" datatype="float" name="e_W2mag" precision="3" ucd="ERROR" unit="mag" width="6">
+    <DESCRIPTION>
+     ? Mean error on W2 magnitude
+    </DESCRIPTION>
+    <VALUES null="nan"/>
+   </FIELD>
+   <FIELD ID="W3mag" datatype="float" name="W3mag" precision="3" ucd="PHOT_FLUX_IR_12" unit="mag" width="6">
+    <DESCRIPTION>
+     ? W3 magnitude (11.6um)
+    </DESCRIPTION>
+    <VALUES null="nan"/>
+   </FIELD>
+   <FIELD ID="e_W3mag" datatype="float" name="e_W3mag" precision="3" ucd="ERROR" unit="mag" width="6">
+    <DESCRIPTION>
+     ? Mean error on W3 magnitude
+    </DESCRIPTION>
+    <VALUES null="nan"/>
+   </FIELD>
+   <FIELD ID="W4mag" datatype="float" name="W4mag" precision="3" ucd="PHOT_FLUX_IR_25" unit="mag" width="6">
+    <DESCRIPTION>
+     ? W4 magnitude (22.1um)
+    </DESCRIPTION>
+    <VALUES null="nan"/>
+   </FIELD>
+   <FIELD ID="e_W4mag" datatype="float" name="e_W4mag" precision="3" ucd="ERROR" unit="mag" width="6">
+    <DESCRIPTION>
+     ? Mean error on W4 magnitude
+    </DESCRIPTION>
+    <VALUES null="nan"/>
+   </FIELD>
+   <FIELD ID="Jmag" datatype="float" name="Jmag" precision="3" ucd="PHOT_JHN_J" unit="mag" width="6">
+    <DESCRIPTION>
+     ? 2MASS J magnitude (1.25um)
+    </DESCRIPTION>
+    <VALUES null="nan"/>
+   </FIELD>
+   <FIELD ID="e_Jmag" datatype="float" name="e_Jmag" precision="3" ucd="ERROR" unit="mag" width="6">
+    <DESCRIPTION>
+     ? Mean error on J magnitude
+    </DESCRIPTION>
+    <VALUES null="nan"/>
+   </FIELD>
+   <FIELD ID="Hmag" datatype="float" name="Hmag" precision="3" ucd="PHOT_JHN_H" unit="mag" width="6">
+    <DESCRIPTION>
+     ? 2MASS H magnitude (1.65um)
+    </DESCRIPTION>
+    <VALUES null="nan"/>
+   </FIELD>
+   <FIELD ID="e_Hmag" datatype="float" name="e_Hmag" precision="3" ucd="ERROR" unit="mag" width="6">
+    <DESCRIPTION>
+     ? Mean error on H magnitude
+    </DESCRIPTION>
+    <VALUES null="nan"/>
+   </FIELD>
+   <FIELD ID="Kmag" datatype="float" name="Kmag" precision="3" ucd="PHOT_JHN_K" unit="mag" width="6">
+    <DESCRIPTION>
+     ? 2MASS Ks magnitude (2.17um)
+    </DESCRIPTION>
+    <VALUES null="nan"/>
+   </FIELD>
+   <FIELD ID="e_Kmag" datatype="float" name="e_Kmag" precision="3" ucd="ERROR" unit="mag" width="6">
+    <DESCRIPTION>
+     ? Mean error on Ks magnitude
+    </DESCRIPTION>
+    <VALUES null="nan"/>
+   </FIELD>
+   <FIELD ID="ccf" arraysize="4" datatype="char" name="ccf" ucd="CODE_MISC">
+    <DESCRIPTION>
+     [0DHOPdhop] Contamination and confusion flag, one per band
+     (cc_flags) (2)
+    </DESCRIPTION>
+   </FIELD>
+   <FIELD ID="ex" datatype="unsignedByte" name="ex" ucd="CODE_MISC" width="1">
+    <DESCRIPTION>
+     [0-5] Extended source flag (ext_flg) (3)
+    </DESCRIPTION>
+   </FIELD>
+   <FIELD ID="var" arraysize="4" datatype="char" name="var" ucd="CODE_VARIAB">
+    <DESCRIPTION>
+     Variability flag, one per band (var_flg) (4)
+    </DESCRIPTION>
+   </FIELD>
+   <FIELD ID="pmRA" datatype="int" name="pmRA" ucd="POS_PM_NON-EQ" unit="mas.yr-1" width="7">
+    <DESCRIPTION>
+     ? Apparent motion in RA (9) [NULL integer written as an empty
+     string]
+    </DESCRIPTION>
+    <VALUES null="-2147483648"/>
+   </FIELD>
+   <FIELD ID="e_pmRA" datatype="int" name="e_pmRA" ucd="ERROR" unit="mas.yr-1" width="7">
+    <DESCRIPTION>
+     ? Mean error on pmRA (9) [NULL integer written as an empty
+     string]
+    </DESCRIPTION>
+    <VALUES null="-2147483648"/>
+   </FIELD>
+   <FIELD ID="pmDE" datatype="int" name="pmDE" ucd="POS_PM_NON-EQ" unit="mas.yr-1" width="7">
+    <DESCRIPTION>
+     ? Apparent motion in DE (9) [NULL integer written as an empty
+     string]
+    </DESCRIPTION>
+    <VALUES null="-2147483648"/>
+   </FIELD>
+   <FIELD ID="e_pmDE" datatype="int" name="e_pmDE" ucd="ERROR" unit="mas.yr-1" width="7">
+    <DESCRIPTION>
+     ? Mean error on pmDE (9) [NULL integer written as an empty
+     string]
+    </DESCRIPTION>
+    <VALUES null="-2147483648"/>
+   </FIELD>
+   <FIELD ID="qph" arraysize="4" datatype="char" name="qph" ucd="CODE_QUALITY">
+    <DESCRIPTION>
+     [ABCUXZ] Photometric quality flag (8)
+    </DESCRIPTION>
+   </FIELD>
+   <FIELD ID="d2M" datatype="float" name="d2M" precision="3" ucd="POS_OFFSET" unit="arcsec" width="6">
+    <DESCRIPTION>
+     ? Distance separating the positions of the WISE source and
+     associated 2MASS PSC source
+    </DESCRIPTION>
+    <VALUES null="nan"/>
+   </FIELD>
+   <FIELD ID="_2M" arraysize="2" datatype="char" name="_2M" ucd="DATA_LINK">
+    <DESCRIPTION>
+     Display the 2MASS data (Cutri et al. 2003, Cat. II/246)
+    </DESCRIPTION>
+   </FIELD>
+   <DATA>
+    <TABLEDATA>
+     <TR>
+      <TD>J203240.95+411429.2</TD>
+      <TD>308.1706312</TD>
+      <TD> 41.2414625</TD>
+      <TD>Im</TD>
+      <TD> 0.931</TD>
+      <TD/>
+      <TD> 0.663</TD>
+      <TD/>
+      <TD> 2.176</TD>
+      <TD> 0.024</TD>
+      <TD> 1.769</TD>
+      <TD> 0.018</TD>
+      <TD> 4.667</TD>
+      <TD> 0.324</TD>
+      <TD> 3.512</TD>
+      <TD> 0.260</TD>
+      <TD> 2.704</TD>
+      <TD> 0.364</TD>
+      <TD>0000</TD>
+      <TD>0</TD>
+      <TD>nn10</TD>
+      <TD>-165</TD>
+      <TD>39</TD>
+      <TD>-458</TD>
+      <TD>40</TD>
+      <TD>UUAA</TD>
+      <TD> 0.162</TD>
+      <TD>2M</TD>
+     </TR>
+    </TABLEDATA>
+   </DATA>
+  </TABLE>
+ </RESOURCE>
+</VOTABLE>

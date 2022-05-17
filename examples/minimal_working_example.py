@@ -1,8 +1,9 @@
+import sys
 import numpy as np
 import os
 import ampere
 from ampere.data import Spectrum, Photometry
-from ampere.emceesearch import EmceeSearch
+from ampere.infer.emceesearch import EmceeSearch
 from ampere.models import Model
 from spectres import spectres
 import pyphot
@@ -36,6 +37,7 @@ class ASimpleModel(Model):
         #Here we'll just use a simple flat prior
         self.lims = lims
         self.flatprior = flatprior
+        self.parLabels = ["slope", "intercept"]
 
     def __call__(self, slope, intercept, **kwargs):
         '''The model itself, using the callable class functionality of python.
@@ -48,6 +50,7 @@ class ASimpleModel(Model):
 
     def lnprior(self, theta, **kwargs):
         slope = theta[0]
+        print(slope)
         intercept = theta[1]
         if self.flatprior:
             if (self.lims[0,0] < theta[0] < self.lims[0,1]) and (self.lims[1,0] < theta[1] < self.lims[1,1]):
@@ -148,7 +151,7 @@ if __name__ == "__main__":
          ]
 
     #Now we set up the optimizer object:
-    optimizer = EmceeSearch(model=model, data=dataset, nwalkers=100, moves=m)
+    optimizer = EmceeSearch(model=model, data=dataset, nwalkers=100, moves=m, vectorize = False)
     guess = [
         [1, 1, #The parameters of the model
          #1.0, 0.1, 0.1, #Each Spectrum object contains a noise model with three free parameters
@@ -166,8 +169,9 @@ if __name__ == "__main__":
     #guess = "None"
 
     #Then we tell it to explore the parameter space
-    optimizer.optimise(nsamples = 1500, burnin=1000, guess=guess
+    optimizer.optimise(nsamples = 150, burnin=100, guess=guess
                        )
+    
 
 
     optimizer.postProcess() #now we call the postprocessing to produce some figures

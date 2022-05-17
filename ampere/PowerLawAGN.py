@@ -86,6 +86,7 @@ class SingleModifiedBlackBody(AnalyticalModel):
         self.sigmaNormWave = sigmaNormWave #value to which the opacity is normalised at wavelength normWave
         self.redshift = redshift
         self.lims = lims
+        self.npars = 4 #there are two parameters for the continuum        
         print(self.lims)
         if redshift:
             from astropy.cosmology import FlatLambdaCDM

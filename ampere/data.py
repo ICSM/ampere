@@ -62,7 +62,7 @@ class Data(object):
         raise NotImplementedError()
 
     def __repr__(self, **kwargs):
-        raise NotImplementedError()
+       raise NotImplementedError()  # switched off by sascha 19/04/2021
 
     def lnlike(self, synWave, synFlux, **kwargs):
         pass
@@ -113,12 +113,14 @@ class Data(object):
         #now we need to create a mask for the covariance matrix
         #The outer product does what we want, producing a matrix which has elements such that cov_mask[i,j] = mask[i] * mask[j]
         #This produces the right answer because boolean multiplication is treated as an AND operation in python
+
         #self.cov_mask = np.outer(self.mask, self.mask)
 
         #now we need to update the covariance matrix by extracting the unmasked elements from the original one.
         #However, it has to be reshaped because numpy always returns 1D arrays when using boolean masks
         #self.covMat = self.covMat_orig[self.cov_mask].reshape((np.sum(mask), np.sum(mask)))
         self.cov(None)
+
         pass
 
 #    def maskNaNs(self, **kwargs):
@@ -222,10 +224,15 @@ class Photometry(Data):
 
         ''' setup pyphot for this set of photometry '''
         self.pyphotSetup(libName)
+        print(self.filterName.astype('str'))
+        #newTry = [str(filt).replace(':','_').replace('/','_').replace('WISE','WISE_RSR').replace('Spitzer','SPITZER') for filt in self.filterName]
         self.filterNamesToPyphot()
 
         self.label = label
         self.plotParams["label"] = label
+
+        print(photUnits)
+        print(type(photUnits))
 
         #print(self.filterMask)
         if np.all(self.filterMask):
@@ -256,16 +263,30 @@ class Photometry(Data):
                 zeropoints[i] = filters[i].Vega_zero_Jy.magnitude
                 value[i] = zeropoints[i]*10^(-0.4*value[i])
                 uncertainty[i] = value[i] - zeropoints*10^(-0.4*(value[i]+uncertainty[i]))
-        
+
+        print(len(photUnits))
+        print(len(value))
         try:
             assert len(photUnits) == len(value)
         except AssertionError: #We have more than one unit entry, but not one per flux entry, raise an error and force the user to do something about it:
             if isinstance(photUnits, str):
+                print("photUnits is a string")
                 photUnits = [photUnits] * len(value)
             else:
+                print("photUnits is weird")
                 raise RunTimeError("The wrong number of unit entries appear to have been provided. Please check this and try again. You provided {0} units, but {1} fluxes. \n The fluxes are \n {2} \nand the units are \n {3}".format(len(photUnits), len(value), photunits, values))
         except TypeError: #only one unit was provided, let's forcibly turn it into an iterable
+            print("photunits is not iterable")
             photUnits = len(value) * (photUnits,)
+        else:
+            if isinstance(photUnits, str):
+                print("photUnits is a string")
+                photUnits = [photUnits] * len(value)
+            else:
+                print("photUnits is very weird")
+
+        print(photUnits)
+        print(type(photUnits))
                        
         #identify values in milliJansky, convert to Jy
         uconv = np.array([u.Jy.to(pU) for pU in photUnits])
@@ -328,7 +349,12 @@ class Photometry(Data):
         return l
     
     def __repr__(self, **kwargs):
-        raise NotImplementedError()
+    #    raise NotImplementedError()   modified on 19/04/2021 by sascha
+        return self.__str__()
+        
+    
+    def geef_data(self, **kwargs):
+        return(self.filterName,self.wavelength,self.value, self.uncertainty)
 
     def pyphotSetup(self, libName = None, **kwargs):
         ''' Given the data, read in the pyphot filter library and make sure we have the right list of filters in memory 
@@ -361,7 +387,7 @@ class Photometry(Data):
         #try replacing colons and / with _
         #print(l)
         try:
-            newTry = [filt.astype(str).replace(':','_').replace('/','_').replace('WISE','WISE_RSR').replace('Spitzer','SPITZER') for filt in self.filterName]
+            newTry = [filt.decode("utf-8").replace(':','_').replace('/','_').replace('WISE','WISE_RSR').replace('Spitzer','SPITZER') for filt in self.filterName]
         except AttributeError:
             newTry = [filt.replace(':','_').replace('/','_').replace('WISE','WISE_RSR').replace('Spitzer','SPITZER') for filt in self.filterName]
         #change type to str from byte for filt to make it run <CK>
@@ -454,7 +480,9 @@ class Photometry(Data):
 
         b = -0.5*len(self.value[self.mask]) * np.log(2*np.pi) - (0.5*self.logDetCovMat)
             #np.log(1./((2*np.pi)**(len(self.value)) * np.linalg.det(self.covMat))
+
             #)
+
         #covMatmask = np.reshape(self.covMat[self.cov_mask], np.shape(self.covMat))
         probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(inv(self.covMat), a) ) ) )
 
@@ -469,6 +497,7 @@ class Photometry(Data):
             print(np.matmul(inv(self.covMat), a))
             print(np.matmul ( a.T, np.matmul(inv(self.covMat), a) ) )
             return -np.inf #hack for now so we can see how often this occurs and hopefully troubleshoot it!
+
         return probFlux
         
 
@@ -505,6 +534,7 @@ class Photometry(Data):
 #        self.logDetCovMat = np.linalg.slogdet(self.covMat[self.cov_mask])[1]# / np.log(10.)
         #print(self.logDetCovMat)
         if self.logDetCovMat == -np.inf: #This needs to be updated to raise an error!
+
             print("""The determinant of the covariance matrix for this dataset is 0.
             Please check that the uncertainties are positive real numbers """)
             print(self)
@@ -789,9 +819,11 @@ class Spectrum(Data):
         #self.covMat.mask = np.logical_not(self.covMat > 0) #The mask for a MaskedArray is backwards compared to boolean indexing!
         #                                                   #By applying this mask we minimise the operations that need to be done, but this might really be overkill
         a = self.covMat > 0
+
         self.covMat = self.covMat * self.varMat # = np.diag(uncertainty**2)
         self.logDetCovMat = np.linalg.slogdet(self.covMat)[1]# / np.log(10.)
         #print(self.logDetCovMat)
+
 
         ''' Assume default of 10% calibration uncertainty unless otherwise specified by the user '''
         if calUnc is None:
@@ -994,7 +1026,6 @@ class Spectrum(Data):
         covMat = (1-theta[0])*np.diag(np.ones_like(self.uncertainty[self.mask])) + theta[0]*m
         self.covMat = covMat * self.varMat
 
-        
         #covMatmask = np.reshape(self.covMat[self.cov_mask], (self.value[mask].shape[0], self.value[mask].shape[0]))
 
         self.signDetCovMat, self.logDetCovMat = np.linalg.slogdet(self.covMat)
@@ -1131,7 +1162,7 @@ class Spectrum(Data):
         return probFlux 
 
     @classmethod
-    def fromFile(cls, filename, format, filetype=None, **kwargs):
+    def fromFile(cls, filename, format, filetype=None, keywords=None, **kwargs):
         '''Create Spectrum object from a file containing data
 
         Parameters
@@ -1171,6 +1202,7 @@ class Spectrum(Data):
             table['sky'].unit='Jy'
             table['sky error'].unit='Jy'
             mask = np.logical_and.reduce([np.isfinite(c) for c in table.columns.values()]) #require the elements to be non-NaNs
+
             table = table[mask]
             chunks = np.zeros_like(table['module'].data)
             sl = np.logical_or(table['module'] == 0.0, table['module'] == 1.0) #SL
@@ -1190,6 +1222,50 @@ class Spectrum(Data):
             #tablell.pprint()
             #table = tablell
             table.sort(keys='wavelength')
+            
+        if format == 'SPITZER-YAAAR_OPTDIFFHR':
+            #filename = 'Testdata/cassis_yaaar_spcfw_14203136t.fits'
+            hdul = fits.open(filename)
+            hdu = hdul[0]
+            header=hdu.header
+            data = hdu.data
+            table = Table(data,names=[header['COL01DEF'],header['COL02DEF'],header['COL03DEF'],header['COL04DEF'],header['COL05DEF'],header['COL06DEF'],header['COL07DEF'],header['COL08DEF']])
+            table['wavelength'].unit='um'
+            table['flux'].unit='Jy'
+            table['flux_error'].unit='Jy'
+            
+            #table['error (RMS)'].unit='Jy'
+            #table['error (SYS)'].unit='Jy'
+            #table['offset uncertainty (CAL)'].unit='Jy'
+            #table['sky'].unit='Jy'
+            #table['sky error'].unit='Jy'
+            mask = np.logical_and.reduce([np.isfinite(c) for c in table.columns.values()]) #require the elements to be non-NaNs
+
+            table = table[mask]
+            wavelengths = np.array(table['wavelength'].data)
+            orders = np.array(table['IRS_order'].data)
+            chunks = np.zeros_like(table['module'].data)
+            order_array=np.arange(11,21,1)
+            
+            for i_order,order in enumerate(order_array):
+                wl_sel=wavelengths[order==orders]
+                nums=np.where(order==orders)[0]
+                breaknum=np.where(np.diff(wl_sel)>5)[0][0]+1
+                chunks[nums[0:breaknum]]=1 #sh
+                chunks[nums[breaknum::]]=2 #lh
+
+            table['chunk'] = chunks
+
+            #normalise the column names (wavelength,flux,uncertainty)
+            table.rename_column('flux_error','uncertainty')
+            
+            ''' If I'm interpreting the CASSIS data correctly, Module(SL) = 0, 1; Module(LL) = 2, 3 '''
+            #a = table['module'] > 1.
+            #tablell = table[a]#.sort(keys='wavelength')
+            #tablell.sort(keys='wavelength')
+            #tablell.pprint()
+            #table = tablell
+            table.sort(keys='wavelength')            
             
         # ISO SWS AAR fits files
         if format == 'SWS-AAR':
