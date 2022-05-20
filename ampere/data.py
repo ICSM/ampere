@@ -1033,12 +1033,12 @@ class Spectrum(Data):
 
         self.signDetCovMat, self.logDetCovMat = np.linalg.slogdet(self.covMat)
         if self.logDetCovMat == -np.inf: #This needs to be updated to raise an error! Or at least force the likelihood to be zero
-            print("""The determinant of the covariance matrix for this dataset is 0.
+            logging.info("""The determinant of the covariance matrix for this dataset is 0.
             Please check that the uncertainties are positive real numbers """)
-            print(self)
-            print(theta)
-            print(self.signDetCovMat,self.logDetCovMat)
-            print(self.covMat)
+            logging.info("Input:",self)
+            logging.info("Theta:",theta)
+            logging.info("Determinant Covariance Matrix and its log:",self.signDetCovMat,self.logDetCovMat)
+            logging.info("Covariance matrix:",self.covMat)
             exit()
         #elif self.signDetCovMat < 0:
         #    print("""The determinant of the covariance matrix for this dataset is negative.
@@ -1084,6 +1084,7 @@ class Spectrum(Data):
         try:
             scaleFac = theta[0]
         except IndexError: #Only possible if theta is scalar or can't be indexed
+            logging.info("theta is scalar or cannot be indexed")
             scaleFac = theta
         if scaleFac > 0 and 0. <= theta[1] <= 1. and theta[2] > 0.:
             #print(scalefac)
@@ -1113,6 +1114,7 @@ class Spectrum(Data):
         try:
             scaleFac = theta[0]
         except IndexError: #Only possible if theta is scalar or can't be indexed
+            logging.info("theta is scalar or cannot be indexed")
             scaleFac = theta
 
         #print(self)
@@ -1147,16 +1149,16 @@ class Spectrum(Data):
         #covMatmask = np.reshape(self.covMat[self.cov_mask], np.shape(self.covMat))
         probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(inv(self.covMat), a) ) ) )
         if np.isnan(probFlux):
-            print("NaN probability")
-            print(theta)
-            print(b)
-            print(inv(self.covMat))
-            print(self.value[self.mask])
-            print(modSpec)
-            print(model.modelFlux)
-            print(a)
-            print(np.matmul(inv(self.covMat), a))
-            print(np.matmul ( a.T, np.matmul(inv(self.covMat), a) ) )
+            logging.info("NaN probability")
+            logging.info("Theta:", theta)
+            logging.info("b:",b)
+            logging.info("inverse covariance matrix:",inv(self.covMat))
+            logging.info("mask:",self.value[self.mask])
+            logging.info("modSpec:",modSpec)
+            logging.info("modelFlux:",model.modelFlux)
+            logging.info("a:",a)
+            logging.info(np.matmul(inv(self.covMat), a))
+            logging.info(np.matmul ( a.T, np.matmul(inv(self.covMat), a) ) )
             return -np.inf #hack for now so we can see how often this occurs and hopefully troubleshoot it!
         #print(((np.float128(2.)*np.pi)**(len(self.value))), np.linalg.det(self.covMat))
         #print(((np.float128(2.)*np.pi)**(len(self.value)) * np.linalg.det(self.covMat)))
@@ -1643,8 +1645,10 @@ class Image(Data):
                                            hdul[i].header['NAXIS2']])
                         images = np.append(images,hdul[i].data)
                         #Get PSF from image extension or internal library?
+                        #Some images the PSF FWHM comes as keywords BMAJ/BMIN/PA
+                        #We could add those and reconstruct a (Gaussian) PSF in ampere
             except:
-                print('No HDU marked "image" found...')
+                logging.info('No HDU marked "image" found...')
             
             self.wavelength = wavelength
             self.fluxUnits  = fluxUnits
