@@ -1,6 +1,5 @@
 import numpy as np
 import sys
-sys.path.insert(1, '/home/zeegers/git_ampere/ampere/')
 import ampere
 from ampere.data import Spectrum, Photometry
 from ampere.emceesearch import EmceeSearch
@@ -24,9 +23,9 @@ if __name__=="__main__":
     specFile = 'cassis_yaaar_spcfw_14191360t.fits'
     photFile = 'vizier_votable_pruned_no2MASS.vot'
     irs = Spectrum.fromFile(dataDir+specFile,format='SPITZER-YAAAR')
-    #irs = [chunk.selectWaves(low = 8., up=35.) for chunk in irs] # alternative to next two lines, doesn't work
     irs[0].selectWaves(low = 8., up = 35.) #following Srinivasan et al. 2017
     irs[1].selectWaves(low = 8., up = 35.) #following Srinivasan et al. 2017
+    
 
 
     libDir = '../ampere/'

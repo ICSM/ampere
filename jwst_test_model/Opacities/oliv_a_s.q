@@ -1,1 +1,0 @@
-ss_Dorschneretal1995_Olivine_0.10.q

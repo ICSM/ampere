@@ -53,7 +53,9 @@ def makeFilterSet(infile = 'filters.csv', outfile = 'filters.hd5'):
             g = pyp.Filter(np.array(temp['Wavelength']), np.array(temp['Transmission']), \
                            name = t['filtername'].replace('/','_'), unit = temp['Wavelength'].unit.name, \
                            dtype = det_type)
+            logging.info("Generated filter %s from Spanish Virtual Observatory"%(t))
         except:
+            logging.info("Generating filter %s from Spanish Virtual Observatory failed, searching for local file"%(t))
             #Look for the filter on the local machine
             header = np.loadtxt(t['filtername'] + '.csv', max_rows = 2, delimiter = ',', dtype = 'str')
             data = np.loadtxt(t['filtername'] + '.csv', skiprows = 2, delimiter = ',')
