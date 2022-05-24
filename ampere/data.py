@@ -266,7 +266,6 @@ class Photometry(Data):
                 value[i] = zeropoints[i]*10^(-0.4*value[i])
                 uncertainty[i] = value[i] - zeropoints*10^(-0.4*(value[i]+uncertainty[i]))
 
-        logging.info("Length of filter units: ",len(photUnits))
         logging.info("Length of zero point values: ",len(value))
         try:
             assert len(photUnits) == len(value)
@@ -287,8 +286,9 @@ class Photometry(Data):
             else:
                 logging.info("photUnits is very weird, you should look into this")
 
-        print(photUnits)
-        print(type(photUnits))
+        logging.info("Length of filter units: ",len(photUnits))
+        logging.info("Photunits: ",photUnits)
+        logging.info("Type photunits:",type(photUnits))
                        
         #identify values in milliJansky, convert to Jy
         uconv = np.array([u.Jy.to(pU) for pU in photUnits])
