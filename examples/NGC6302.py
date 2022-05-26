@@ -3,7 +3,7 @@ import os
 import math
 import ampere
 from ampere.data import Spectrum, Photometry
-from ampere.emceesearch import EmceeSearch
+from ampere.infer.emceesearch import EmceeSearch
 from ampere.models import Model
 from spectres import spectres
 import pyphot
@@ -94,7 +94,11 @@ class SpectrumNGC6302(Model):
             self.lims = lims  
         self.flatprior = flatprior
 
-    def __call__(self, acold, awarm, Tcold, Twarm, indexp, multfact,
+    def __call__(self, acold0, acold1, acold2, acold3, acold4, acold5,
+                 acold6, acold7, acold8, acold9, acold10,
+                 awarm0, awarm1, awarm2, awarm3, awarm4, awarm5,
+                 awarm6, awarm7, awarm8, awarm9, awarm10,
+                 Tcold0, Tcold1, Twarm0, Twarm1, indexp, multfact,
                  *args, **kwargs):
         '''The model itself, using the callable class functionality of python.
         This is an essential method. It should do any steps required to
@@ -116,6 +120,8 @@ class SpectrumNGC6302(Model):
         coldcomponent[0, :] = self.wavelength
         warmcomponent = np.zeros((2, wavelengths.__len__()))
         warmcomponent[0, :] = self.wavelength
+        acold = [acold0, acold1, acold2, acold3, acold4, acold5, acold6,
+                 acold7, acold8, acold9, acold10]
         for i, a in enumerate(acold):
             onespeciescold = self.ckmodbb(self.opacity_array[:, i],
                                           tin=Tcold[0], tout=Tcold[1],
@@ -167,8 +173,8 @@ class SpectrumNGC6302(Model):
         # multfact = theta[27]
         
         if self.flatprior:
-            if np.all(self.lims[i,0] < theta[i] < self.lims[i,1] for i in
-                      range(len(self.lims[:,0])) and (theta[23] > theta[22])
+            if np.all([self.lims[i,0] < theta[i] < self.lims[i,1] for i in
+                      range(len(self.lims[:,0]))] and (theta[23] > theta[22])
                       and (theta[25] > theta[24])):
                 return 0
             else:
@@ -210,7 +216,12 @@ if __name__ == "__main__": #hiero: too be done still, check all below
     #Now init the model:
     model = SpectrumNGC6302(wavelengths)
     #And call it to produce the fluxes for our chosen parameters
-    model(acold, awarm, Tcold=Tcold, Twarm=Twarm, indexp=indexp, multfact=multfact)
+    model(acold[0], acold[1], acold[2], acold[3], acold[4], acold[5],
+                 acold[6], acold[7], acold[8], acold[9], acold[10],
+                 awarm[0], awarm[1], awarm[2], awarm[3], awarm[4], awarm[5],
+                 awarm[6], awarm[7], awarm[8], awarm[9], awarm[10],
+          Tcold[0], Tcold[1], Twarm[0], Twarm[1],
+          indexp=indexp, multfact=multfact)
     model_flux = model.modelFlux
 
     #Now we create synthetic data:
@@ -276,15 +287,17 @@ if __name__ == "__main__": #hiero: too be done still, check all below
     #Now we set up the optimizer object:
     optimizer = EmceeSearch(model=model, data=dataset, nwalkers=100, moves=m)
     guess = [
-        [1, 1, #The parameters of the model
-         #1.0, 0.1, 0.1, #Each Spectrum object contains a noise model with three free parameters
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, #The parameters of the model
+         35, 65, 100, 150, 1.5, 1,#1.0, 0.1, 0.1, #Each Spectrum object contains a noise model with three free parameters
          #The first one is a calibration factor which the observed spectrum will be multiplied by
          #The second is the fraction of correlated noise assumed
          #And the third is the scale length (in microns) of the correlated component of the noise
          1.0 ,0.1, 0.1
        ] #
-        + np.random.rand(optimizer.npars)*[1,1,
-                                           #1,1,1,
+        + np.random.rand(optimizer.npars)*[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+                                           1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+                                            1, 1, 1, 1, 1, 1,
                                            1,1,1
                                            ]
         for i in range(optimizer.nwalkers)]
