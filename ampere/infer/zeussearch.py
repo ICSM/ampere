@@ -96,7 +96,7 @@ class ZeusSearch(EnsembleSampler,
                 logging.info("No guess specified, attempting to draw from prior transform")
                 rng = np.random.default_rng() #.uniform(-1,0,1000)
                 guess = [self.prior_transform(rng.uniform(size=self.npars)) for i in range(self.nwalkers)]
-                print(guess)
+                logging.info("Initial guess = ",guess)
             except AttributeError: #not all components have a ptform, so we'll do this the simple way
                 logging.info("Drawing from prior transform failed, drawing randomly")
                 guess = [np.random.randn(np.int(self.npars)) for i in range(self.nwalkers)]

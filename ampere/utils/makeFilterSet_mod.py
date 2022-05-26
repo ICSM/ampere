@@ -29,7 +29,7 @@ def makeFilterSet(infile = 'filters.csv', outfile = 'filters.hd5'):
             try:
                 g, fname = get_filter_file(filt)
             except OSError:
-                print("Filter ",filt," could not be found on the SVO or in the local directory. \n Please check where to find this filter. \n Continuing to the next filter ")
+                logging.info("Filter %s could not be found on the SVO or in the local directory. \n Please check where to find this filter. \n Continuing to the next filter "%(filt))
                 continue
         filters.append(g)
         fnames.append(fname)
@@ -57,7 +57,7 @@ def getFilterList(filterList, outfile='filters.hd5'):
             try:
                 g, fname = get_filter_file(filt)
             except OSError:
-                print("Filter ",filt," could not be found on the SVO or in the local directory. \nPlease check where to find this filter. \nContinuing to the next filter ")
+                print("Filter %s could not be found on the SVO or in the local directory. \nPlease check where to find this filter. \nContinuing to the next filter "%(filt))
                 continue
         filters.append(g)
         fnames.append(fname)
