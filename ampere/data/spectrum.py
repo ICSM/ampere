@@ -147,6 +147,8 @@ class Spectrum(Data):
         self.logDetCovMat = np.linalg.slogdet(self.covMat)[1]# / np.log(10.)
         #print(self.logDetCovMat)
 
+        self.parLabels = ["calVar", "cov scale factor", "cov scale length"]
+
 
         ''' Assume default of 10% calibration uncertainty unless otherwise specified by the user '''
         if calUnc is None:
