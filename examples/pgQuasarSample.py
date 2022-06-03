@@ -2,9 +2,9 @@ import numpy as np
 import sys
 import ampere
 from ampere.data import Spectrum, Photometry
-from ampere.emceesearch import EmceeSearch
+from ampere.infer.emceesearch import EmceeSearch
 from ampere.PowerLawAGN import PowerLawAGN
-from ampere.PowerLawAGN import PowerLawAGNRelativeAbundances
+from ampere.models import PowerLawContinuumRelativeAbundances as PLCRA
 import corner
 import matplotlib as mpl
 #mpl.use("Agg")
@@ -38,7 +38,7 @@ if __name__=="__main__":
     modwaves = 10**np.linspace(0.,1.9, 2000)
 
     #model = PowerLawAGN(modwaves, redshift=0.058)
-    model = PowerLawAGNRelativeAbundances(modwaves, redshift=0.058)
+    model = PLCRA(modwaves, redshift=0.058)
     phot.reloadFilters(modwaves)
     dataSet = [phot]          #use this line when using photometry
     print(dataSet)

@@ -555,3 +555,9 @@ class Photometry(Data):
                 if showPlot:
                     plt.show()
         pass
+
+class LineStrengths(Photometry):
+    """A class for the special case of line strengths (e.g. EWs or integrated intensities)
+
+    At present, this is a placeholder.
+    """

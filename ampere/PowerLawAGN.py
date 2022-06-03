@@ -21,6 +21,8 @@ class DualBlackBodyDust(AnalyticalModel):
                                 [100,1000],[0,np.inf],
                                 [100,1000],[0,np.inf]]),
                                **kwargs): #arguments are T1c, F1c, T2c, F2c, T1f, F1f, T2f, F2f; with c for continuum and f for features
+
+        raise FutureWarning("This class is deprecated. Please use classes from ampere.models in future, or define your own model inline.")
         self.wavelength = wavelengths #grid of observed wavelengths to calculate BB for
         #self.freq = const.c.value / (wavelengths*1e-6) #unit conversions will be required...
         self.flatprior = flatprior #whether to assume flat priors
@@ -79,6 +81,8 @@ class SingleModifiedBlackBody(AnalyticalModel):
                                                   [-10,10],
                                                   [0,np.inf]]),
                  **kwargs):
+
+        raise FutureWarning("This class is deprecated. Please use classes from ampere.models in future, or define your own model inline.")
         self.wavelength = wavelengths #grid of observed wavelengths to calculate BB for
         #self.freq = const.c.value / (wavelengths*1e-6) #unit conversions will be required...
         self.flatprior = flatprior #whether to assume flat priors
@@ -134,6 +138,7 @@ class PowerLawAGN(AnalyticalModel):
     Output: model fluxes (modelFlux)'''
     
     def __init__(self, wavelengths, flatprior=True, redshift=None, **kwargs):
+        raise FutureWarning("This class is deprecated. Please use classes from ampere.models in future, or define your own model inline.")
         import os
         from scipy import interpolate
         self.flatprior=flatprior
@@ -210,6 +215,7 @@ class PowerLawAGNRelativeAbundances(AnalyticalModel):
     Output: model fluxes (modelFlux)'''
     
     def __init__(self, wavelengths, flatprior=True, redshift=None, **kwargs):
+        raise FutureWarning("This class is deprecated. Please use classes from ampere.models in future, or define your own model inline.")
         import os
         from scipy import interpolate
         self.flatprior=flatprior
