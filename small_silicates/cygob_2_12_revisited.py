@@ -4,7 +4,7 @@ import numpy as np
 import os
 import ampere
 from ampere.data import Spectrum, Photometry
-from ampere.emceesearch import EmceeSearch
+from ampere.infer.emceesearch import EmceeSearch
 from ampere.models import Model
 from spectres import spectres
 import pyphot
@@ -72,6 +72,10 @@ class Blackbody_dust(Model):
         #Here we'll just use a simple flat prior
         self.lims = lims
         self.flatprior = flatprior
+        labels = ["Temperature", "radius star", "Scaling parameter"]
+        labels2 = labels+opacityFileList.tolist()
+        print("Labels:", labels2)
+        self.parLabels = labels2
 
     def __call__(self, temp, radius_sol, scaling, *args, **kwargs):
         '''The model itself, using the callable class functionality of python.

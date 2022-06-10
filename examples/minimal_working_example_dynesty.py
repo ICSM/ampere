@@ -1,9 +1,10 @@
 import sys
+sys.path.insert(1, '/home/zeegers/git_ampere/ampere/')
 import numpy as np
 import os
 import ampere
 from ampere.data import Spectrum, Photometry
-from ampere.infer.emceesearch import EmceeSearch
+from ampere.infer.dynestysearch import DynestyNestedSampler
 from ampere.models import Model
 from spectres import spectres
 import pyphot
@@ -17,7 +18,7 @@ class ASimpleModel(Model):
     This model shows you the basics of writing a model for ampere
 
     '''
-    def __init__(self, wavelengths, flatprior=True,
+    def __init__(self, wavelenghts, flatprior=True,
                  lims=np.array([[-10, 10],
                                 [-10, 10]])):
         '''The model constructor, which will set everything up
@@ -50,7 +51,6 @@ class ASimpleModel(Model):
 
     def lnprior(self, theta, **kwargs):
         slope = theta[0]
-        print(slope)
         intercept = theta[1]
         if self.flatprior:
             if (self.lims[0,0] < theta[0] < self.lims[0,1]) and (self.lims[1,0] < theta[1] < self.lims[1,1]):
@@ -144,34 +144,11 @@ if __name__ == "__main__":
                spec1   #As a result, we're leaving some of them out
                ]
 
-
-    #Ampere exposes acces to emcee's moves interface. This can be useful if the posterior turns out to not be well behaved - the default move only deals well with posteriors that are monomodal and approximately Gaussian. Here's an example that usually deals a bit better with posteriors that don't meet these criteria:
-    m = [(moves.DEMove(), 0.8),
-        (moves.DESnookerMove(), 0.2),
-         ]
-
     #Now we set up the optimizer object:
-    optimizer = EmceeSearch(model=model, data=dataset, nwalkers=100, moves=m, vectorize = False)
-    guess = [
-        [1, 1, #The parameters of the model
-         #1.0, 0.1, 0.1, #Each Spectrum object contains a noise model with three free parameters
-         #The first one is a calibration factor which the observed spectrum will be multiplied by
-         #The second is the fraction of correlated noise assumed
-         #And the third is the scale length (in microns) of the correlated component of the noise
-         1.0 ,0.1, 0.1
-       ] #
-        + np.random.rand(optimizer.npars)*[1,1,
-                                           #1,1,1,
-                                           1,1,1
-                                           ]
-        for i in range(optimizer.nwalkers)]
-
-    #guess = "None"
+    optimizer = DynestyNestedSampler(model=model, data=dataset)
 
     #Then we tell it to explore the parameter space
-    optimizer.optimise(nsamples = 150, burnin=100, guess=guess
-                       )
-    
+    optimizer.optimise(dlogz = 5.)
 
 
     optimizer.postProcess() #now we call the postprocessing to produce some figures
