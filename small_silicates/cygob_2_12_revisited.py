@@ -1,5 +1,5 @@
 import sys
-sys.path.insert(1, '/home/zeegers/git_ampere/ampere/')
+sys.path.insert(1, '/asiaa/home/szeegers/git_ampere/ampere/')
 import numpy as np
 import os
 import ampere
@@ -189,7 +189,7 @@ if __name__ == "__main__":
              #]
     #libDir = os.getcwd() + '/ampere/'
 #    libname = libDir + 'ampere_allfilters.hd5'
-    libname = '/home/zeegers/ampere/ampere/ampere_allfilters.hd5'
+    libname = '/asiaa/home/szeegers/git_ampere/ampere/ampere/ampere_allfilters.hd5'
 
     photFile = ampere.__file__.strip('__init__.py')+'Testdata/vizier_votable_cygob212_time_again.vot'
     table1 = parse_single_table(photFile)
@@ -199,10 +199,10 @@ if __name__ == "__main__":
     
     # https://numpy.org/doc/stable/reference/generated/numpy.allclose.html
     # Sascha: read in real photometry data ....
-    desired_filters=['2MASS:J', '2MASS:H', '2MASS:Ks', 'Spitzer/MIPS:24', 'WISE:W4','WISE:W3'] #these are the filters we're after
-    mask = np.isin(table1[u'sed_filter'], desired_filters) #np.isin() is true for each element of table['filter'] that matches one of the elements of desired_filters
+    desired_filters=[b'2MASS:J', b'2MASS:H', b'2MASS:Ks', b'Spitzer/MIPS:24', b'WISE:W4',b'WISE:W3'] #these are the filters we're after
+    mask = np.isin(table1['sed_filter'], desired_filters) #np.isin() is true for each element of table['filter'] that matches one of the elements of desired_filters
     phot_new = table1[mask] #now we make a new table which is just the rows that have the filters we want
-    desired_filters_again=['II/328/allwise','I/ApJS/191/301/table1']
+    desired_filters_again=[b'II/328/allwise',b'I/ApJS/191/301/table1']
     mask_again = np.isin(phot_new['_tabname'], desired_filters_again)
     #phot_table = table([phot])
     phot_again = phot_new[mask_again]
@@ -274,7 +274,7 @@ if __name__ == "__main__":
     #Now we set up the optimizer object:
     optimizer = EmceeSearch(model=model, data=dataSet, nwalkers=50, moves=m)
             
-    optimizer.optimise(nsamples = 6000, burnin=2000, guess=[
+    optimizer.optimise(nsamples = 10000, burnin=4000, guess=[
         [12000., 2.9, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, #The parameters of the model
          #1.0, 0.1, 0.1, #Each Spectrum object contains a noise model with three free parameters
          #The first one is a calibration factor which the observed spectrum will be multiplied by
