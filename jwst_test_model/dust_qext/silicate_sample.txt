@@ -1,0 +1,17 @@
+./dust_qext/fe2sio4_cr_cde01.q              4.39               203.78
+./dust_qext/Koike1999_forsterite01_ext.q    3.27               140.69
+./dust_qext/Mg06Fe04SiO3_Dorschner.q        3.20               113.006
+./dust_qext/Mg07Fe03SiO3_Dorschner.q        3.01               109.852                      
+./dust_qext/Mg08Fe02SiO3_Dorschner.q        2.90               106.698     
+./dust_qext/Mg095Fe005SiO3_Dorschner.q      2.74               101.967     
+./dust_qext/Mg2SiO4_Henning.q               3.20               140.69
+./dust_qext/Mg60Fe40_2_SiO4_Henning.q       3.59               165.922      
+./dust_qext/Mg60Fe40SiO3_Henning.q          3.42               113.006
+./dust_qext/Mg70Fe30_2_SiO4_Henning.q       3.49               159.614      
+./dust_qext/Mg70Fe30SiO3_Henning.q          3.40               109.852
+./dust_qext/MgSiO3_Dorschner.q              2.71               100.0    
+./dust_qext/MgSiO3_Henning.q                3.01               100.0
+./dust_qext/mg2sio4_jena_cr_av_50k_cde.q    3.33               140.69            
+./dust_qext/mg2sio4_cr_jena2_cde.q          3.33               140.69
+./dust_qext/mgsio3_cr_cde01.q               2.8                100.0
+./dust_qext/water_silicate_100K_cde01.q     2.9                118.01  

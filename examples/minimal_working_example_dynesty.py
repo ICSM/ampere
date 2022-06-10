@@ -1,3 +1,5 @@
+import sys
+sys.path.insert(1, '/home/zeegers/git_ampere/ampere/')
 import numpy as np
 import os
 import ampere
