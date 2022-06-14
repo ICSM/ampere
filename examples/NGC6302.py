@@ -9,6 +9,7 @@ from spectres import spectres
 import pyphot
 from emcee import moves
 import matplotlib.pyplot as plt
+from astropy.io import ascii
 
 
 class SpectrumNGC6302(Model):
@@ -196,13 +197,10 @@ class SpectrumNGC6302(Model):
         else:
             raise NotImplementedError()
 
-if __name__ == "__main__": #hiero: too be done still, check all below
+if __name__ == "__main__": 
     """ Set up the inputs for the model """
     """ wavelength grid """
     wavelengths = np.linspace(2.4,198.,1956)
-    #print("Wavelengths")
-    #print(wavelengths)
-    #input("Please press the Enter key to proceed")
 
     """ Choose some model parameters """
     acold = np.zeros(11)
@@ -245,12 +243,16 @@ if __name__ == "__main__": #hiero: too be done still, check all below
     modSed = modSed + np.random.randn(len(filterName)) * photunc #Now perturb data by drawing from a Gaussian distribution
 
     
-    #now we'll create a synthetic spectrum from the model fluxes, using a Spitzer IRS observation to get the wavelength sampling
-    dataDir = os.getcwd() + '/PGQuasars/PG1011-040/'
-    specFileExample = 'cassis_yaaar_spcfw_14191360t.fits'
-    irsEx = Spectrum.fromFile(dataDir+specFileExample,format='SPITZER-YAAAR')
-    spec0 = spectres(irsEx[0].wavelength,wavelengths,model_flux)
-    spec1 = spectres(irsEx[1].wavelength,wavelengths,model_flux)
+    #now we'll create a synthetic spectrum from the model fluxes, using the to be fitted spectrum to get the wavelength sampling
+    dataDir = os.getcwd() + '/NGC6302/'
+    specFileExample = 'NGC6302_100.tab'
+    specdata = ascii.read(dataDir+specFileExample,data_start=2) #hiero,
+    #I need to implement the non SPITZER-YAAAR way of reading in a spectrum
+    #I also need to estimate an error bar as these went missing. I may have
+    #used a blanket 5% or other percentage, but I should check. 
+    #irsEx = Spectrum.fromFile(dataDir+specFileExample,format='SPITZER-YAAAR')
+    #spec0 = spectres(irsEx[0].wavelength,wavelengths,model_flux)
+    #spec1 = spectres(irsEx[1].wavelength,wavelengths,model_flux)
 
     #And again, add some noise to it
     input_noise_spec = 0.1
