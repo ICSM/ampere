@@ -246,38 +246,34 @@ if __name__ == "__main__":
     #now we'll create a synthetic spectrum from the model fluxes, using the to be fitted spectrum to get the wavelength sampling
     dataDir = os.getcwd() + '/NGC6302/'
     specFileExample = 'NGC6302_100.tab'
-    specdata = ascii.read(dataDir+specFileExample,data_start=2) #hiero,
-    #I need to implement the non SPITZER-YAAAR way of reading in a spectrum
-    #I also need to estimate an error bar as these went missing. I may have
-    #used a blanket 5% or other percentage, but I should check. 
-    #irsEx = Spectrum.fromFile(dataDir+specFileExample,format='SPITZER-YAAAR')
-    #spec0 = spectres(irsEx[0].wavelength,wavelengths,model_flux)
-    #spec1 = spectres(irsEx[1].wavelength,wavelengths,model_flux)
+    specdata = ascii.read(dataDir+specFileExample,data_start=2)
+    spec = Spectrum(specdata[0][:],specdata[1][:],specdata[1][:]*0.05,"um","Jy")
+    #assume a 5% error on the flux measurements. check with what I did in 2002
 
     #And again, add some noise to it
-    input_noise_spec = 0.1
-    unc0 = input_noise_spec*spec0
-    unc1 = input_noise_spec*spec1
-    spec0 = spec0 + np.random.randn(len(spec0))*unc0
-    spec1 = spec1 + np.random.randn(len(spec1))*unc1
+#    input_noise_spec = 0.1
+#    unc0 = input_noise_spec*spec0
+#    unc1 = input_noise_spec*spec1
+#    spec0 = spec0 + np.random.randn(len(spec0))*unc0
+#    spec1 = spec1 + np.random.randn(len(spec1))*unc1
     
-    spec0 = Spectrum(irsEx[0].wavelength, spec0, unc0,"um", "Jy",calUnc=0.0025, scaleLengthPrior = 0.01) #, resampleMethod=resmethod)
-    spec1 = Spectrum(irsEx[1].wavelength, spec1, unc1,"um", "Jy",calUnc=0.0025, scaleLengthPrior = 0.01) #, resampleMethod=resmethod)
+#    spec0 = Spectrum(irsEx[0].wavelength, spec0, unc0,"um", "Jy",calUnc=0.0025, scaleLengthPrior = 0.01) #, resampleMethod=resmethod)
+#    spec1 = Spectrum(irsEx[1].wavelength, spec1, unc1,"um", "Jy",calUnc=0.0025, scaleLengthPrior = 0.01) #, resampleMethod=resmethod)
 
     #Now let's try changing the resampling method so it's faster
     #This model is very simple so exact flux conservation is not important
     resmethod = "fast" #"exact"#"fast"#
-    spec0.setResampler(resampleMethod=resmethod)
-    spec1.setResampler(resampleMethod=resmethod)
+    spec.setResampler(resampleMethod=resmethod)
+#    spec1.setResampler(resampleMethod=resmethod)
 
     """ now set up ampere to try and fit the same stuff """
-    photometry = Photometry(filterName=filterName, value=modSed, uncertainty=photunc, photUnits='Jy', libName=libname)
+#    photometry = Photometry(filterName=filterName, value=modSed, uncertainty=photunc, photUnits='Jy', libName=libname)
     #print(photometry.filterMask)
-    photometry.reloadFilters(wavelengths)
+#    photometry.reloadFilters(wavelengths)
 
-    dataset = [photometry,
+    dataset = [#photometry,
                #spec0, #Fitting spectra is slow because it needs to do a lot of resampling
-               spec1   #As a result, we're leaving some of them out
+               spec   #As a result, we're leaving some of them out
                ]
 
 
