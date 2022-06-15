@@ -3,7 +3,7 @@ Welcome to AMPERE
 
 """
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 __copyright__ = """ Copyright (C) 2017  P. Scicluna, F. Kemper, S. Srinivasan
 J.P. Marshall, L. Fanciullo, T. Dharmawardena, A. Trejo, S. Hony
 
@@ -26,7 +26,7 @@ from . import models
 #from . import extinction
 from . import basesearch
 from . import emceesearch
-from . import PowerLawAGN #ClassRT
+#from . import PowerLawAGN #ClassRT
 from . import data
 
 __all__=["models","extinction","emceesearch","PowerLawAGN","data"] #Nothing to import just yet

@@ -7,6 +7,7 @@ from inspect import signature
 from .data import Photometry, Spectrum
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
+#from warnings import FutureWarning
 
 class EmceeSearch(BaseSearch):
     """
@@ -17,6 +18,8 @@ class EmceeSearch(BaseSearch):
                  data = None, lnprior = None,
                  labels = None, acceptRate = 2.0, moves=None,
                  **kwargs):
+
+        raise FutureWarning("This class is deprecated. Please use classes from ampere.infer in future.")
 
         #self.npars=npars
         #self.nsamp=nsamp
@@ -52,7 +55,7 @@ class EmceeSearch(BaseSearch):
         #raise NotImplementedError()
 
     def __call__(self, guess=None, **kwargs):
-        if guess is None:
+        if guess == None:
             guess = [np.random.randn(np.int(self.npars)) for i in range(self.nwalkers)]
         self.sampler.run_mcmc(guess, self.nsamp)
         self.allSamples = self.sampler.chain
@@ -117,20 +120,60 @@ class EmceeSearch(BaseSearch):
         #print(lp)
         return lp #return 0
 
-    def optimise(self, nsamples = None, burnin = None, guess = None, noguess=False, **kwargs):
+    def preopt(self, start, **kwargs):
+        neglnprob = lambda *args: -self.lnprob(*args)
+        from scipy.optimize import minimize
+        print("Using scipy.minimize to find approximate MAP solution")
+        print("starting from position: ",start)
+        solution = minimize(neglnprob, start)
+        guess = [p for p in solution.x]
+        print("Minimization complete, final position: ",guess)
+        return guess
+        
+
+    def optimise(self, nsamples = None, burnin = None, guess = None,
+                 preopt = True, guessscale = 1e-3, noguess=False, progress=True, **kwargs):
+        from collections.abc import Sequence, Iterable
         if guess == 'None': # and not noguess:
-            guess = [np.random.randn(np.int(self.npars)) for i in range(self.nwalkers)]
+            print("Setting initial guess randomly")
+            try: #Attempting to use the ptform
+                print("No guess specified, attempting to draw from prior transform")
+                rng = np.random.default_rng() #.uniform(-1,0,1000)
+                guess = [self.prior_transform(rng.uniform(size=self.npars)) for i in range(self.nwalkers)]
+                print(guess)
+            except AttributeError: #not all components have a ptform, so we'll do this the simple way
+                print("Drawing from prior transform failed, drawing randomly")
+                guess = [np.random.randn(np.int(self.npars)) for i in range(self.nwalkers)]
         #print('dimensions of guess = ', np.shape(guess))
         #print('nsamples = ', nsamples)
         #print('burnin = ', burnin)
         #print("np.max(guess, axis=0) = ", np.max(guess, axis=0))
         #print("np.min(guess, axis=0) = ", np.min(guess, axis=0))
+
+        if preopt:
+            print("Selecting start point for scipy.minimize")
+            if isinstance(guess, Sequence):
+                if not isinstance(guess[0], (Sequence, Iterable)):#Only a single entry
+                    print("Only one entry in guess")
+                    print(guess[0])
+                    start = guess
+                else: #guess contains many entries, randomly select one
+                    print("Multiple entries in guess, selecting at random!")
+                    rng = np.random.default_rng()
+                    i = rng.integers(0, len(guess))
+                    start = guess[i]
+            else:
+                #Guess is not appropriate, need to do something here!
+                raise ValueError("guess does not conform to expectations")
+            newguess = self.preopt(start)
+            guess = [newguess + guessscale*np.random.randn(np.int(self.npars)) for i in range(self.nwalkers)]
+            
         self.nsamp = nsamples
         self.burnin = burnin
         if noguess:
-            self.sampler.run_mcmc(nsamples)
+            self.sampler.run_mcmc(nsamples, progress=progress)
         else:
-            self.sampler.run_mcmc(guess, nsamples)
+            self.sampler.run_mcmc(guess, nsamples, progress=progress)
         self.allSamples = self.sampler.chain
         #print('do we get here (no): ',np.max(self.allSamples), np.min(self.allSamples))
         self.samples = self.sampler.chain[:, self.burnin:, :].reshape((-1, self.npars))
@@ -138,8 +181,7 @@ class EmceeSearch(BaseSearch):
         #pass
 
 
-
-    def postProcess(self, show=False, textfile=None,**kwargs):
+    def postProcess(self, show=False, textfile=None, **kwargs):
         ''' 
         A method to post-process the sampler results 
         '''
@@ -186,7 +228,8 @@ class EmceeSearch(BaseSearch):
         self.plot_covmats()
 
 
-        self.plot_posteriorpredictive()
+        self.plot_posteriorpredictive(**kwargs)
+
         #fig4,(ax0,ax1) = plt.subplots(1,2)
         #ax=[ax0, ax1]
         #i=0
@@ -306,6 +349,10 @@ class EmceeSearch(BaseSearch):
             try:
                 self.model(*s[:self.nparsMod])
                 axes.plot(self.model.wavelength,self.model.modelFlux, '-', color='k', alpha=alpha,label='Samples', zorder = 0)
+                if logy:
+                    axes.set_yscale('log')
+                if logx:
+                    axes.set_xscale('log')
             except ValueError:
                 pass
             i = self.nparsMod
@@ -372,7 +419,7 @@ class EmceeSearch(BaseSearch):
 
         ''' Then check what the "best fit" was '''
         print("Range of lnprob values in model from sampler: {0:.5f} to {1:.5f}",np.min(self.sampler.lnprobability),np.max(self.sampler.lnprobability))
-        row_ind, col_ind = np.unravel_index(np.argmax(self.sampler.lnprobability.ravel), self.sampler.lnprobability.shape)
+        row_ind, col_ind = np.unravel_index(np.argmax(self.sampler.lnprobability), self.sampler.lnprobability.shape)
         self.bestPars = self.sampler.chain[row_ind, col_ind, :]
 
         print("MAP Solution: ")

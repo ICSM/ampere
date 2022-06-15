@@ -8,7 +8,7 @@
 import numpy as np
 from astropy import constants as const
 from astropy import units as u
-from astropy.modeling import blackbody
+from astropy.modeling import models
 from .models import AnalyticalModel
 from scipy.stats import dirichlet
 
@@ -21,6 +21,8 @@ class DualBlackBodyDust(AnalyticalModel):
                                 [100,1000],[0,np.inf],
                                 [100,1000],[0,np.inf]]),
                                **kwargs): #arguments are T1c, F1c, T2c, F2c, T1f, F1f, T2f, F2f; with c for continuum and f for features
+
+        raise FutureWarning("This class is deprecated. Please use classes from ampere.models in future, or define your own model inline.")
         self.wavelength = wavelengths #grid of observed wavelengths to calculate BB for
         #self.freq = const.c.value / (wavelengths*1e-6) #unit conversions will be required...
         self.flatprior = flatprior #whether to assume flat priors
@@ -79,6 +81,8 @@ class SingleModifiedBlackBody(AnalyticalModel):
                                                   [-10,10],
                                                   [0,np.inf]]),
                  **kwargs):
+
+        raise FutureWarning("This class is deprecated. Please use classes from ampere.models in future, or define your own model inline.")
         self.wavelength = wavelengths #grid of observed wavelengths to calculate BB for
         #self.freq = const.c.value / (wavelengths*1e-6) #unit conversions will be required...
         self.flatprior = flatprior #whether to assume flat priors
@@ -86,6 +90,7 @@ class SingleModifiedBlackBody(AnalyticalModel):
         self.sigmaNormWave = sigmaNormWave #value to which the opacity is normalised at wavelength normWave
         self.redshift = redshift
         self.lims = lims
+        self.npars = 4 #there are two parameters for the continuum        
         print(self.lims)
         if redshift:
             from astropy.cosmology import FlatLambdaCDM
@@ -133,6 +138,7 @@ class PowerLawAGN(AnalyticalModel):
     Output: model fluxes (modelFlux)'''
     
     def __init__(self, wavelengths, flatprior=True, redshift=None, **kwargs):
+        raise FutureWarning("This class is deprecated. Please use classes from ampere.models in future, or define your own model inline.")
         import os
         from scipy import interpolate
         self.flatprior=flatprior
@@ -209,6 +215,7 @@ class PowerLawAGNRelativeAbundances(AnalyticalModel):
     Output: model fluxes (modelFlux)'''
     
     def __init__(self, wavelengths, flatprior=True, redshift=None, **kwargs):
+        raise FutureWarning("This class is deprecated. Please use classes from ampere.models in future, or define your own model inline.")
         import os
         from scipy import interpolate
         self.flatprior=flatprior
@@ -308,38 +315,32 @@ class PowerLawAGNRelativeAbundances(AnalyticalModel):
         return theta
 
 class OpacitySpectrum(AnalyticalModel):
-    '''Input: fit parameters (multiplicationFactor, powerLawIndex, relativeAbundances), 
-              opacities (opacity_array): q_ij where i = wavelength, j = species
-              wavelength grid from data (wavelengths)
-    Output: model fluxes (modelFlux)'''
+    '''This model fits a modfied blackbody multiplied by sum of opacties, consisting of a warm and cold component, not necessarily of the same composition, over two temperature ranges, following Kemper et al. 2002.
+We use the following parameters:
+       wavelengths : the array of wavelengths considered
+       opacityFileList
+       acold : (relative) abundances for the cold component
+       awarm : (relative) abundances for the warm component
+       Tcold : temperature range of the cold component
+       Twarm : temperature range of the warm component
+       indexp : index p of the density distribution
+       indexq : index q of the temperature distribution
+       multfact : multiplication factor that the sum of the modified black bodies has to be multiplied with to fit the spectrum
+       Output is an array of model fluxes (fluxes), to match wavelengths'''
 
     def __init__(self, wavelengths, flatprior=True,
-                 normWave = 1., sigmaNormWave = 1.,opacityFileList=None,
-                 redshift = False, lims=np.array([[0,1e6],[-100,100],[-10,10],[0,np.inf]]),
+                 opacityFileList=None,
                  **kwargs):
-        #self.wavelength = wavelengths #grid of observed wavelengths to calculate BB for
-        self.redshift = redshift
-        if redshift:
-            from astropy.cosmology import FlatLambdaCDM
-            self.cosmo=FlatLambdaCDM(H0=70, Om0=0.3)
-        if redshift is not None:
-            self.wavelength = wavelengths / (1+redshift)
-        else:
-            self.wavelength = wavelengths
+        self.wavelength = wavelengths #grid of observed wavelengths to calculate BB for
+
         #self.freq = const.c.value / (wavelengths*1e-6) #unit conversions will be required...
         self.flatprior = flatprior #whether to assume flat priors
-        self.normWave = normWave #wavelength at which opacity is normalised
-        self.sigmaNormWave = sigmaNormWave #value to which the opacity is normalised at wavelength normWave
-        self.lims = lims #in same order as inputs to __call__
-        #print(self.lims)
-        #Define opacities for use in model calculation
+
         import os
         from scipy import interpolate
         opacityDirectory = os.path.dirname(__file__)+'/Opacities/'
         opacityFileList = np.array(opacityFileList)
-        #opacityFileList = np.array(opacityFileList)[['.q' in zio for zio in opacityFileList]] # Only files ending in .q are valid (for now)
         nSpecies = opacityFileList.__len__()
-        #print(opacityFileList,nSpecies)
         opacity_array = np.zeros((wavelengths.__len__(), nSpecies))
         for j in range(nSpecies):
             tempData = np.loadtxt(opacityDirectory + opacityFileList[j], comments = '#')
@@ -349,35 +350,73 @@ class OpacitySpectrum(AnalyticalModel):
             opacity_array[:,j] = f(self.wavelength)
         self.opacity_array = opacity_array
         self.nSpecies = nSpecies
-        self.npars = nSpecies - 1 + 4
+        self.npars = nSpecies + 7
 
-    def __call__(self, t = 1., scale = 1., index = 1., dist=1.,
+    def __call__(self,
                  *args,
                  **kwargs):
+        # print out *args
         print(args)
-        relativeAbundances = np.append(np.array(args),1.-np.sum(np.array(args))) #np.append(10**np.array(args),1.-np.sum(10**np.array(args)))
-        #print(relativeAbundances)
-        if self.redshift:
-            z = dist
-            dist = cosmo.luminosity_distance(z).to(u.m)
-            freq = const.c.value / ((self.wavelength/(1.+z))*1e-6)
-        else:
-            dist = dist*u.pc.to(u.m)
-            freq = const.c.value / (self.wavelength*1e-6)
-        #Simple bug catches for inputs to opacity spectrum
-        if len(relativeAbundances) != self.nSpecies :
-            print('Number of weights must be same as number of species')
-        #if scale <= 0.0:
-        #    print('Scale factor must be positive and non-zero.') #not relevant - scale is a log
-        if t <= 0.0:
-            print('Temperature must be positive and in Kelvin.')
-        bb = blackbody.blackbody_nu(freq,t).to(u.Jy / u.sr).value
-        bb = bb / dist**2
-        bb = bb * 10**(scale) * self.sigmaNormWave * ((self.wavelength / self.normWave)**index)
-        #Subtract the sum of opacities from the blackbody continuum to calculate model spectrum
-        fModel = bb * (1.0 - (np.matmul(self.opacity_array, relativeAbundances)))
-        self.modelFlux = fModel
-        #return (blackbody.blackbody_nu(const.c.value*1e6/self.wavelengths,t).to(u.Jy / u.sr).value / (dist_lum.value)**2 * kappa230.value * ((wave/230.)**betaf) * massf) #*M_sun.cgs.value
+        # print out **kwargs
+        for key, value in kwargs.items():
+            print(key + " : " + value)
+
+        #number of dust species in opacityDirectory are all going to be fitted
+        #for each we will consider a hot and a cold component. We will allow only 2
+        #temperature ranges, the same for all dust species.
+
+        #the module translated from ck_modbb calculates the flux for each component at a single temperature
+
+        #ckmodbb and shbb are now written. Now I just need to figure out how to do the
+        #fit over 8 dust species and 2 temperature ranges.
+
+        #let's first do this over fixed temperature ranges, instead of allowing them to be free
+        #the temperature ranges are 118-100 K and 60-30 K, following Kemper et al. 2002
+
+        coldcomponent = np.zeros((2, wavelengths.__len__()))
+        coldcomponent[0,:] = self.wavelengths
+        warmcomponent = np.zeros((2, wavelengths.__len__()))
+        warmcomponent[0,:] = self.wavelengths
+    
+        for i, ac in enumerate(abundances[0,:]):
+            onespeciescold = ckmodbb(opacity_array[:,i], tin = Tcold[0], tout = Tcold[1], n0 = abundances[0,i], index = indexp)
+            coldcomponent[1,:] = coldcomponent[1,:] + onespeciescold
+    
+        for i, aw in enumerate(abundances[0,:]):
+            onespecieswarm = ckmodbb(opacity_array[:,i], tin = Twarm[0], tout = Twarm[1], n0 = abundances[0,i], index = indexp)
+            warmcomponent[1,:] = warmcomponent[1,:] + onespecieswarm
+
+        fModel = np.like(coldcomponent)
+        fModel[1,:] = fModel[1,:] + warmcomponent[1,:]
+
+        return fModel[1,:]
+
+#hiero, I am getting all my indices of fnu etc. wrong. Check all this below, especially whether I am using wavelength and flux in the correct place    
+    def ckmodbb(self, q, tin, tout, n0, index = 0.5, r0 = 1e15, distance = 910., grainsize = 0.1, steps = 10):
+        d = distance * 3.0857e18 #convert distance from pc to cm
+        a = grainsize * 1e-4 #convert grainsize from micron to cm
+ 
+        fnu = np.zeros((2, wavelengths.__len__()))
+        fnu[0,:] = self.wavelengths
+
+        for i in range(steps - 1):
+            t = tin - i * (tin-tout)/steps
+            power = (t/tin)^(2*index - 6)
+            bb = shbb(fnu, t, 0.) 
+            fnu[1,:] = np.add(fnu[1,:],np.multiply(q[1,:],bb[1,:])*(power*((tin-tout)/steps)))
+
+        extra = r0/d
+        factor = 4 * math.pi * a * a * r0 * n0 * extra * extra / (3-index)
+        fnu[1,:] = fnu[1,:] * factor
+        return fnu
+
+    def shbb(self, aar, temp, pinda):
+        a1 = 3.97296e19
+        a2 = 1.43875e4
+        mbb = np.copy(aar)                                 
+        bbflux = a1/(mbb[0,:]^3)/(exp(a2/(mbb[0,:]*temp))-1)
+        mbb[1,:] = bbflux * mbb[0,:]^pinda
+        return mbb                                 
 
     def lnprior(self, theta, **kwargs):
         if self.flatprior:
