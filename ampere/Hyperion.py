@@ -35,7 +35,7 @@ class HyperionRTModel(Model):
                         nph_imging=1e5,
                         nph_rtsrcs=1e5,
                         nph_rtdust=1e5,
-                        track_mode='origin',
+                        track_mode='detailed', #one of no/basic/detailed/scatterings
                         raytracing=True,
                         modrndwlk=True,
                         mrw_gamma=2,
@@ -48,6 +48,7 @@ class HyperionRTModel(Model):
                  #Parallel processing - use in __init__ and store as self.XXX
                         useMPI=True,
                         nproc=1,
+                        npars=0,
                         **kwargs):
         
         #Assign keyword variables to the object
@@ -92,11 +93,13 @@ class HyperionRTModel(Model):
         self.model.set_mrw(self.modrndwlk, gamma=self.mrw_gamma)
         
         #Set up SED for 10 viewing angles
-        self.model.add_peeled_images(sed=self.api_sed, image=self.api_img)
-        self.model.set_viewing_angles(self.view_angles,self.view_repeats)
-        self.model.set_wavelength_range(nl, lmin, lmax)
-        self.model.set_track_origin(self.track_mode)
-        
+        sed = self.model.add_peeled_images(sed=self.api_sed, image=self.api_img)
+        sed.set_viewing_angles(self.view_angles,self.view_repeats)
+        sed.set_wavelength_range(nl, lmin, lmax)
+        sed.set_track_origin(self.track_mode)
+
+        self.sed = sed
+
         #Set number of photons
         self.model.set_n_photons(initial=self.nph_initial, imaging=self.nph_imging,
                         raytracing_sources=self.nph_rtsrcs, raytracing_dust=self.nph_rtdust)
@@ -179,6 +182,7 @@ class HyperionRTModel(Model):
         #Convenience function to write dust parameter file '<dust>.params' for Hyperion BHDust calculator (separate program)
         
         f=open(str(dust)+'.params','w')
+        self.param_file = str(dust)+'.params'
         f.write(str(dust)+'_'+str(amin)+'\n')
         f.write(str(int(fileformat))+'\n')
         f.write(str(np.min(amin))+'\n')
@@ -208,7 +212,7 @@ class HyperionRTModel(Model):
 
         print("BHMie dust output file created")
         #need a way to iteratively add dust models to the Model object so that they can be called later by name
-        self.d = BHDust(const+'_'+str(amin))
+        self.d = BHDust(str(dust)+'_'+str(amin))
         self.d.optical_properties.extrapolate_nu(5e7, 5e16)
         self.d.set_lte_emissivities(n_temp=self.nt,temp_min=self.tmin,temp_max=self.tmax)
 
