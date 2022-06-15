@@ -47,28 +47,38 @@ class HyperionRTModel(Model):
                         nproc=1,
                         **kwargs):
         
-        #Assign keyword variables to the object - there has to be a better way
-        #to do this!
-        self.niter = niter
-        self.nph_initial = nph_initial
-        self.nph_imging = nph_imging
-        self.nph_rtsrcs = nph_rtsrcs
-        self.nph_rtdust = nph_rtdust
-        self.track_mode = track_mode
-        self.raytracing = raytracing
-        self.modrndwlk = modrndwlk
-        self.mrw_gamma = mrw_gamma
-        self.api_sed = api_sed
-        self.api_img = api_img
-        self.view_angles = view_angles
-        self.view_repeats = view_repeats
-        self.useMPI = useMPI
-        self.nproc = nproc
-        self.lmin=lmin
-        self.lmax=lmax
-        self.nl=nl
+        #Assign keyword variables to the object
+        #Assign all the inputs to __init__ to instance variables with the same name as above
+        #this is equivalent to many lines of self.niter = niter etc
+        l = locals()
+        for key, value in l.items():
+            if key == "self": #skip self to avoid possible recursion
+                continue
+            setattr(self, key, value) #builtin that assigns to an attribute with name = key of self with a value of value
+            
         
-        self.flatprior = flatprior
+        ##Assign keyword variables to the object - there has to be a better way
+        ##to do this!
+        #self.niter = niter
+        #self.nph_initial = nph_initial
+        #self.nph_imging = nph_imging
+        #self.nph_rtsrcs = nph_rtsrcs
+        #self.nph_rtdust = nph_rtdust
+        #self.track_mode = track_mode
+        #self.raytracing = raytracing
+        #self.modrndwlk = modrndwlk
+        #self.mrw_gamma = mrw_gamma
+        #self.api_sed = api_sed
+        #self.api_img = api_img
+        #self.view_angles = view_angles
+        #self.view_repeats = view_repeats
+        #self.useMPI = useMPI
+        #self.nproc = nproc
+        #self.lmin=lmin
+        #self.lmax=lmax
+        #self.nl=nl
+        
+        #self.flatprior = flatprior
         
         self.model = Model()
         
@@ -115,35 +125,41 @@ class HyperionRTModel(Model):
                 #output to be added in SED
                         components = ['total'],
                         **kwargs):
+        #Same as in __init__!
+        l = locals()
+        for key, value in l.items():
+            if key == "self": #skip self to avoid possible recursion
+                continue
+            setattr(self, key, value)
         
-        #Assign keyword variables to the object - there has to be a better way
-        #to do this!
-        self.dust=dust
-        self.fileformat=fileformat
-        self.amin=amin
-        self.amax=amax
-        self.na=na
-        self.nang=nang
-        self.nanx=nanx
-        self.nchem=nchem
-        self.gtd=gtd
-        self.tmin=tmin
-        self.tmax=tmax
-        self.nt=nt
-        self.massfrac=massfrac
-        self.density=density
-        self.optconst=optconst
-        self.disttype=disttype
-        self.q=q
+        ##Assign keyword variables to the object - there has to be a better way
+        ##to do this!
+        #self.dust=dust
+        #self.fileformat=fileformat
+        #self.amin=amin
+        #self.amax=amax
+        #self.na=na
+        #self.nang=nang
+        #self.nanx=nanx
+        #self.nchem=nchem
+        #self.gtd=gtd
+        #self.tmin=tmin
+        #self.tmax=tmax
+        #self.nt=nt
+        #self.massfrac=massfrac
+        #self.density=density
+        #self.optconst=optconst
+        #self.disttype=disttype
+        #self.q=q
 #Source parameters
-        self.sources=sources #(type,lstar,rstar,mstar,tstar,position[x,y,z],spectrum file)
+        #self.sources=sources #(type,lstar,rstar,mstar,tstar,position[x,y,z],spectrum file)
 #Disc parameters
-        self.distribution=distribution #type,rin,rout,alpha
-        self.gridtype=gridtype
-        self.rmax=rmax
-        self.rho0=rho0
-        self.ngrid=ngrid
-        self.components = components
+        #self.distribution=distribution #type,rin,rout,alpha
+        #self.gridtype=gridtype
+        #self.rmax=rmax
+        #self.rho0=rho0
+        #self.ngrid=ngrid
+        #self.components = components
         
         if nchem != len(massfrac):
             print("Number of chemical components does not equal mass fractions")
