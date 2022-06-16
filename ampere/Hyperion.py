@@ -657,9 +657,10 @@ class HyperionCStarRTModel(Model):
         #else:
         #    raise NotImplementedError()
         
-    def prior_transform(self, u, **kwargs): #In this case, u will have nSpecies entries, rather than nSpecies-1 as above
+    def prior_transform(self, u, **kwargs): #In this case, u will contain nSpecies entries, rather than nSpecies-1 as above
         gamma_quantiles = -np.log(u)
-        theta[2:] = gamma_quantiles/gamma_quantiles.sum()
+        theta = gamma_quantiles/gamma_quantiles.sum()
+        return theta
 
     
     def __str__(self, **kwargs):
