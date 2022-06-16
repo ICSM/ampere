@@ -11,6 +11,8 @@ except ImportError:
     from astropy.modeling.physical_models import BlackBody
 from .models import AnalyticalModel
 
+from scipy.stats import dirichlet
+
 # 
 # Hyperion Stuff
 # 
