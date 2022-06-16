@@ -407,19 +407,19 @@ class HyperionCStarRTModel(Model):
                         q=[3.5, 3.5],
                  #Source parameters #(type,lstar,rstar,mstar,tstar,position[x,y,z],spectrum file)
                         stellar_spectrum = 'photosphere_model.csv',
-                        stellar_luminosity = 3000 * units.solLum,
+                        stellar_luminosity = 6.165950E+03 * units.solLum,
                         stellar_temperature = 3000 * units.K,
-                        stellar_radius = 1 * units.au,
-                        stellar_mass = 1 * units.solMass,
+                        stellar_radius = 2.056479E+13 * units.cm,
+                        stellar_mass = 2 * units.solMass,
                         stellar_distance = 50.0 * units.kpc,
                         # sources=[['spherical',1.0,1.0,1.0,5784,[0.0,0.0,0.0],'photosphere_model.csv']],
                  #Disc parameters
                         envelope_mass = 6.985718e-6 * units.solMass,
-                        envelope_rin = 4.4859,
-                        envelope_rout = 1000.0,
-                        envelope_r0 = 4.4859,
+                        envelope_rin = 4.4859, # in stellar radii
+                        envelope_rout = 1000.0, # in inner radii
+                        envelope_r0 = 4.4859, # in stellar radii
                         envelope_power = -2,
-                        envelope_rho0 = 1.5e-19 * units.g / units.cm**3, # only required if mass not given. Write code to compute one given the other
+                        envelope_rho0 = 1.41e-18 * units.g / units.cm**3, # only required if mass not given. Write code to compute one given the other
                         envelope_velocity = 10 * units.km / units.s,
                         envelope_ngrid = 251,
                         envelope_gridtype = 'spherical',
