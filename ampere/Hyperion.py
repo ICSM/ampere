@@ -598,73 +598,73 @@ class HyperionCStarRTModel(Model):
         #     print("Density grid set up.")
 
         #Set central source position, add source(s) to the grid
-        for source in sources: #source with temperature -> blackbody
-            if source[0] == 'spherical':
-                if type(source[-1] == 'list'):
-                    self.model.add_spherical_source(luminosity  = source[1] * units.lsun,
-                                                    radius      = source[2] * units.rsun,
-                                                    mass        = source[3] * units.msun,
-                                                    temperature = source[4] * units.K,
-                                                    position    = source[5])
-                elif type(source[-1] == 'str'):
-                    data = np.loadtxt(source[6], dtype=[('wav', float), ('fnu', float)])
-        
-                    # Convert to nu, fnu from erg/cm2/A/s
-                    freq = const.c / (np.array(data['wav'].data[1:])*1e-8)
-                    angs = np.array(data['wav'].data[1:])
-                    flux = np.array(data['fnu'].data[1:])
-                    flux = flux*3.33564095E+04*angs**2
-                    nu = []
-                    fnu = []
-                    for i in range(0,len(freq)-1):
-                        if freq[i] != freq[i-1]:
-                            nu.append(freq[i])
-                            fnu.append(flux[i])
-                    
-                    nu  = np.array(nu)
-                    fnu = np.array(fnu)
-        
-                    # Set up the source
-                    self.model.add_point_source(luminosity  = source[1] * units.lsun,
-                                                mass        = source[3] * units.msun,
-                                                temperature = source[4] * units.K,
-                                                position    = source[5])
-                    self.source.luminosity = source[1] * units.lsun # [ergs/s]
-                    self.source.spectrum = (nu, fnu)
-            
-            elif source[0] == 'point':
-                if type(source[-1]) == 'list':
-                    self.model.add_spherical_source(luminosity  = source[1] * units.lsun,
-                                                    radius      = source[2] * units.rsun,
-                                                    mass        = source[3] * units.msun,
-                                                    temperature = source[4] * units.K,
-                                                    position    = source[5])
-                elif type(source[-1]) == 'str':
-                    #The source spectrum files need to be passed from the data class
-                    data = np.loadtxt(source[6], dtype=[('wav', float), ('fnu', float)])
-        
-                    # Convert to nu, fnu from erg/cm2/A/s
-                    freq = const.c / (np.array(data['wav'].data[1:])*1e-8)
-                    angs = np.array(data['wav'].data[1:])
-                    flux = np.array(data['fnu'].data[1:])
-                    nu = []
-                    fnu = []
-                    for i in range(0,len(freq)-1):
-                        if freq[i] != freq[i-1]:
-                            nu.append(freq[i])
-                            fnu.append(flux[i])
-                    
-                    nu  = np.array(nu)
-                    fnu = np.array(fnu)
-        
-                    # Set up the source
-                    self.source = self.model.add_point_source(position = source[4])
-                    self.source.luminosity = source[1] * units.lsun # [ergs/s]
-                    self.source.spectrum = (nu, fnu)
-            else:
-                print("Source must be point or spherical.")
+        #for source in sources: #source with temperature -> blackbody
+        #    if source[0] == 'spherical':
+        #        if type(source[-1] == 'list'):
+        #            self.model.add_spherical_source(luminosity  = source[1] * units.lsun,
+        #                                            radius      = source[2] * units.rsun,
+        #                                            mass        = source[3] * units.msun,
+        #                                            temperature = source[4] * units.K,
+        #                                            position    = source[5])
+        #        elif type(source[-1] == 'str'):
+        #            data = np.loadtxt(source[6], dtype=[('wav', float), ('fnu', float)])
+        # 
+        #            # Convert to nu, fnu from erg/cm2/A/s
+        #            freq = const.c / (np.array(data['wav'].data[1:])*1e-8)
+        #            angs = np.array(data['wav'].data[1:])
+        #            flux = np.array(data['fnu'].data[1:])
+        #            flux = flux*3.33564095E+04*angs**2
+        #            nu = []
+        #            fnu = []
+        #            for i in range(0,len(freq)-1):
+        #                if freq[i] != freq[i-1]:
+        #                    nu.append(freq[i])
+        #                    fnu.append(flux[i])
+        #            
+        #            nu  = np.array(nu)
+        #            fnu = np.array(fnu)
+        # 
+        #            # Set up the source
+        #            self.model.add_point_source(luminosity  = source[1] * units.lsun,
+        #                                        mass        = source[3] * units.msun,
+        #                                        temperature = source[4] * units.K,
+        #                                        position    = source[5])
+        #            self.source.luminosity = source[1] * units.lsun # [ergs/s]
+        #            self.source.spectrum = (nu, fnu)
+        #    
+        #    elif source[0] == 'point':
+        #        if type(source[-1]) == 'list':
+        #            self.model.add_spherical_source(luminosity  = source[1] * units.lsun,
+        #                                            radius      = source[2] * units.rsun,
+        #                                            mass        = source[3] * units.msun,
+        #                                            temperature = source[4] * units.K,
+        #                                            position    = source[5])
+        #        elif type(source[-1]) == 'str':
+        #            #The source spectrum files need to be passed from the data class
+        #            data = np.loadtxt(source[6], dtype=[('wav', float), ('fnu', float)])
+        # 
+        #            # Convert to nu, fnu from erg/cm2/A/s
+        #            freq = const.c / (np.array(data['wav'].data[1:])*1e-8)
+        #            angs = np.array(data['wav'].data[1:])
+        #            flux = np.array(data['fnu'].data[1:])
+        #            nu = []
+        #            fnu = []
+        #            for i in range(0,len(freq)-1):
+        #                if freq[i] != freq[i-1]:
+        #                    nu.append(freq[i])
+        #                    fnu.append(flux[i])
+        #            
+        #            nu  = np.array(nu)
+        #            fnu = np.array(fnu)
+        # 
+        #            # Set up the source
+        #            self.source = self.model.add_point_source(position = source[4])
+        #            self.source.luminosity = source[1] * units.lsun # [ergs/s]
+        #            self.source.spectrum = (nu, fnu)
+        #    else:
+        #        print("Source must be point or spherical.")
                 
-        print("Source(s) set up.")
+        #print("Source(s) set up.")
 
         self.model.write('HyperionRT_sed.rtin')
         print("Hyperion RT model created.")
