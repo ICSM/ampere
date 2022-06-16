@@ -565,7 +565,8 @@ class HyperionCStarRTModel(Model):
         # self.d.optical_properties.extrapolate_nu(5e7, 5e16)
         self.d.set_lte_emissivities(n_temp=self.nt,temp_min=self.tmin,temp_max=self.tmax)
 
-        print("Read in optical constants.")            
+        print("Read in optical constants.")   
+        self.envelope_shell.dust = self.d
                
         #Add the grid(s) to the model - can specify multiple density grids for different species, physical components
         #Set up spatial grid
