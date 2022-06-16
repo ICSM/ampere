@@ -82,6 +82,8 @@ class HyperionRTModel(Model):
         #self.lmax=lmax
         #self.nl=nl
         
+        self.nSpecies = nchem
+        
         #self.flatprior = flatprior
         
         self.model = Model()
@@ -459,6 +461,11 @@ class HyperionCStarRTModel(Model):
             if key == "self": #skip self to avoid possible recursion
                 continue
             setattr(self, key, value)
+            
+        if len(args) == self.nSpecies-1: #emcee-like codes need to end up in this pathway
+            args = np.append(10**np.array(args),1.-np.sum(10**np.array(args)))
+        elif len(args) == self.nSpecies: #codes which use a prior transform need to end up in this branch
+            args = args
         
         if nchem != len(args):
             print("Number of chemical components does not equal mass fractions")
@@ -627,18 +634,30 @@ class HyperionCStarRTModel(Model):
         self.wave = self.HyperionRTSED.wav
         self.flux = self.HyperionRTSED.val
 
-    def lnprior(self, theta, **kwargs):
-        if self.flatprior:
-            if (self.lims[0,0] < theta[0] < self.lims[0,1]) and \
-               (self.lims[1,0] < theta[1] < self.lims[1,1]) and \
-               (self.lims[2,0] < theta[2] < self.lims[2,1]) and \
-               (self.lims[3,0] < theta[3] < self.lims[3,1]) and \
-                np.sum(10**theta[4:]) <= 1. and np.all(theta[4:] < 0.): 
-                return 0
-            else:
+    def lnprior(self, theta, **kwargs): #theta will only have nSpecies-1 entries for this case
+        
+        if theta > 0. and theta < 1.:
+            try:
+                return dirichlet((1.,)*self.nSpecies).logpdf(10**theta) #When you have a set of random variates whose sum = 1 by definition, the correct prior is a dirichlet distribution (which is a generalisation of the beta distribution).
+            except ValueError:
                 return -np.inf
         else:
-            raise NotImplementedError()
+            return -np.inf
+        #if self.flatprior:
+        #    if (self.lims[0,0] < theta[0] < self.lims[0,1]) and \
+        #       (self.lims[1,0] < theta[1] < self.lims[1,1]) and \
+        #       (self.lims[2,0] < theta[2] < self.lims[2,1]) and \
+        #       (self.lims[3,0] < theta[3] < self.lims[3,1]) and \
+        #        np.sum(10**theta[4:]) <= 1. and np.all(theta[4:] < 0.): 
+        #        return 0
+        #    else:
+        #        return -np.inf
+        #else:
+        #    raise NotImplementedError()
+        
+    def prior_transform(self, u, **kwargs): #In this case, u will have nSpecies entries, rather than nSpecies-1 as above
+        gamma_quantiles = -np.log(u)
+        theta[2:] = gamma_quantiles/gamma_quantiles.sum()
 
     
     def __str__(self, **kwargs):
