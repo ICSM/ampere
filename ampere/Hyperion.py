@@ -374,7 +374,7 @@ class HyperionCStarRTModel(Model):
     spherically-symmetric RT model for a carbon star.
     '''
 
-    def __init__(self,wavelengths, #This is a grid of wavelengths onto which we will interpolate the RT output. 
+    def __init__(self,wavelength, #This is a grid of wavelengths onto which we will interpolate the RT output. 
                                    #This is kinda dangerous, but necessary at least for now.
                  flatprior=True,                 
                  #RT parameters - use in __init__ and store as self.XXX
@@ -686,7 +686,7 @@ class HyperionCStarRTModel(Model):
         
         
         #Interpolate model fluxes onto fixed wavelength grid
-        self.modelFlux = np.interp(self.wavelengths, self.wave, self.flux)
+        self.modelFlux = np.interp(self.wavelength, self.wave, self.flux)
 
     def lnprior(self, theta, **kwargs): #theta will only have nSpecies-1 entries for this case
         
