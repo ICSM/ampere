@@ -18,7 +18,7 @@ from scipy.stats import dirichlet
 # 
 
 import hyperion
-from hyperion.model import Model
+from hyperion.model import Model, AnalyticalYSOModel
 from hyperion.model import ModelOutput
 from hyperion.dust import BHDust
 #from hyperion.util.constants import lsun, rsun, au, msun, sigma, pc, pi #get these from astropy units 
@@ -402,8 +402,13 @@ class HyperionCStarRTModel(Model):
                         disttype=['power', 'power'],
                         optconst=["zubko96_ac_acar.optc", "SiC_Pegourie1988.dat"],
                         q=[3.5, 3.5],
-                 #Source parameters
-                        sources=[['spherical',1.0,1.0,1.0,5784,[0.0,0.0,0.0]]], #(type,lstar,rstar,mstar,tstar,position[x,y,z],spectrum file)
+                 #Source parameters #(type,lstar,rstar,mstar,tstar,position[x,y,z],spectrum file)
+                        stellar_spectrum = 'photosphere_model.csv',
+                        stellar_luminosity = 3000 * units.solLum,
+                        stellar_temperature = 3000 * units.K,
+                        stellar_radius = 1 * units.au,
+                        stellar_mass = 1 * units.solMass,
+                        # sources=[['spherical',1.0,1.0,1.0,5784,[0.0,0.0,0.0],'photosphere_model.csv']],
                  #Disc parameters
                         distribution=[['power_law_shell',3.0,1000.0,-2]], #type,rin,rout,alpha # define radii in terms of the stellar radius
                         gridtype='spherical',
@@ -423,7 +428,16 @@ class HyperionCStarRTModel(Model):
                 continue
             setattr(self, key, value) #builtin that assigns to an attribute with name = key of self with a value of value
         
-        self.model = Model()
+        self.model = AnalyticalYSOModel()
+        
+        # Set up stellar parameters
+        nu, fnu = np.loadtxt(stellar_spectrum, delimiter = ',', skiprows = 1, unpack = True)
+        self.model.star.spectrum = (nu, fnu)
+        self.model.star.luminosity = stellar_luminosity.value
+        self.model.star.mass = stellar_mass.value
+        self.model.star.effective_temperature = stellar_temperature.value
+        self.model.star.radius = stellar_radius.value
+        
         self.nSpecies = nchem
         
         #Use raytracing to improve s/n of thermal/source emission
