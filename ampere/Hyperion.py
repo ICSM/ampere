@@ -409,6 +409,7 @@ class HyperionCStarRTModel(Model):
                         stellar_temperature = 3000 * units.K,
                         stellar_radius = 1 * units.au,
                         stellar_mass = 1 * units.solMass,
+                        stellar_distance = 50.0 * units.kpc,
                         # sources=[['spherical',1.0,1.0,1.0,5784,[0.0,0.0,0.0],'photosphere_model.csv']],
                  #Disc parameters
                         envelope_mass = 6.985718e-6 * units.solMass,
@@ -451,6 +452,7 @@ class HyperionCStarRTModel(Model):
         self.model.star.luminosity = stellar_luminosity.to(units.erg / units.s).value
         self.model.star.mass = stellar_mass.to('g').value
         self.model.star.radius = stellar_radius.to('cm').value
+        self.dstar = stellar_distance
         
         # Set up envelope parameters
         self.envelope_shell = self.model.add_power_law_envelope()
@@ -675,7 +677,7 @@ class HyperionCStarRTModel(Model):
 
         self.result = ModelOutput('HyperionRT_sed.rtout')
         #forcing code to return total (scattered + emitted) component here - might want to avoid this if self-scattering is not desired, for example
-        self.HyperionRTSED = self.result.get_sed(inclination=0, aperture=-1, distance=self.dstar * units.pc,component='total',units='Jy')
+        self.HyperionRTSED = self.result.get_sed(inclination=0, aperture=-1, distance=self.dstar.to('pc'),component='total',units='Jy')
         
         self.wave = self.HyperionRTSED.wav
         self.flux = self.HyperionRTSED.val
