@@ -631,7 +631,7 @@ class HyperionCStarRTModel(Model):
 
         self.result = ModelOutput('HyperionRT_sed.rtout')
         #forcing code to return total (scattered + emitted) component here - might want to avoid this if self-scattering is not desired, for example
-        self.HyperionRTSED = self.result.get_sed(inclination=0, aperture=-1, distance=self.dstar * units.pc,component='total',units='mJy')
+        self.HyperionRTSED = self.result.get_sed(inclination=0, aperture=-1, distance=self.dstar * units.pc,component='total',units='Jy')
         
         self.wave = self.HyperionRTSED.wav
         self.flux = self.HyperionRTSED.val
