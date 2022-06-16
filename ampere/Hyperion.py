@@ -465,7 +465,7 @@ class HyperionCStarRTModel(Model):
             setattr(self, key, value)
             
         if len(args) == self.nSpecies-1: #emcee-like codes need to end up in this pathway
-            args = np.append(10**np.array(args),1.-np.sum(10**np.array(args)))
+            args = np.append(np.array(args),1.-np.sum(np.array(args)))
         elif len(args) == self.nSpecies: #codes which use a prior transform need to end up in this branch
             args = args
         
