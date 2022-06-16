@@ -410,11 +410,20 @@ class HyperionCStarRTModel(Model):
                         stellar_mass = 1 * units.solMass,
                         # sources=[['spherical',1.0,1.0,1.0,5784,[0.0,0.0,0.0],'photosphere_model.csv']],
                  #Disc parameters
-                        distribution=[['power_law_shell',3.0,1000.0,-2]], #type,rin,rout,alpha # define radii in terms of the stellar radius
-                        gridtype='spherical',
-                        rmax= 2000., # we need this grid to be logarithmic
-                        rho0= 1.5e-19,
-                        ngrid= 251,
+                        envelope_mass = 6.985718e-6 * units.solMass,
+                        envelope_rin = 4.4859,
+                        envelope_rout = 1000.0,
+                        envelope_r0 = 4.4859,
+                        envelope_power = -2,
+                        envelope_rho0 = 1.5e-19 * units.g / units.cm**3, # only required if mass not given. Write code to compute one given the other
+                        envelope_velocity = 10 * units.km / units.s,
+                        envelope_ngrid = 251,
+                        envelope_gridtype = 'spherical',
+                        # distribution=[['power_law_shell',3.0,1000.0,-2]], #type,rin,rout,alpha # define radii in terms of the stellar radius
+                        # gridtype='spherical',
+                        # rmax= 2000.0, # we need this grid to be logarithmic
+                        # rho0= 1.5e-19,
+                        # ngrid= 251,
                 #output to be added in SED
                         components = ['total'],
                         **kwargs):
@@ -433,10 +442,22 @@ class HyperionCStarRTModel(Model):
         # Set up stellar parameters
         nu, fnu = np.loadtxt(stellar_spectrum, delimiter = ',', skiprows = 1, unpack = True)
         self.model.star.spectrum = (nu, fnu)
-        self.model.star.luminosity = stellar_luminosity.value
-        self.model.star.mass = stellar_mass.value
+        self.model.star.luminosity = stellar_luminosity.to(units.erg / units.s).value
+        self.model.star.mass = stellar_mass.to('g').value
         self.model.star.effective_temperature = stellar_temperature.value
-        self.model.star.radius = stellar_radius.value
+        self.model.star.radius = stellar_radius.to('cm').value
+        
+        # Set up envelope parameters
+        self.envelope_shell = self.model.add_power_law_envelope()
+        # Convert to appropriate units and then feed in the magnitudes
+        self.envelope_shell.mass = envelope_mass.to('g').value
+        self.envelope_shell.rmin = (envelope_rin * self.model.star.radius).value
+        self.envelope_shell.rmax = envelope_rout * self.envelope_shell.rmin
+        self.envelope_shell.r_0 = envelope_r0 * self.envelope_shell.rmin
+        self.envelope_shell.power = envelope_power
+        # self.envelope_shell.dust This should be done by Hyperion (see Jonty's code)
+        # self.envelope_shell.ngrid = envelope_ngrid # where is this used?
+        # self.envelope_shell.gridtype = envelope_gridtype # where is this used?
         
         self.nSpecies = nchem
         
