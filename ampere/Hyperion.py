@@ -445,7 +445,7 @@ class HyperionCStarRTModel(Model):
         self.model.star.spectrum = (nu, fnu)
         self.model.star.luminosity = stellar_luminosity.to(units.erg / units.s).value
         self.model.star.mass = stellar_mass.to('g').value
-        self.model.star.effective_temperature = stellar_temperature.value
+        self.model.star.temperature = stellar_temperature.value
         self.model.star.radius = stellar_radius.to('cm').value
         
         # Set up envelope parameters
