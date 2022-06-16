@@ -595,8 +595,6 @@ class HyperionCStarRTModel(Model):
                     freq = const.c / (np.array(data['wav'].data[1:])*1e-8)
                     angs = np.array(data['wav'].data[1:])
                     flux = np.array(data['fnu'].data[1:])
-                    # equivalencies!!                    
-                    flux = flux*3.33564095E+04*angs**2
                     nu = []
                     fnu = []
                     for i in range(0,len(freq)-1):
