@@ -412,7 +412,7 @@ class HyperionCStarRTModel(Model):
         #Set up SED for 10 viewing angles
         sed = self.model.add_peeled_images(sed=self.api_sed, image=False)
         sed.set_viewing_angles(self.view_angles,self.view_repeats)
-        sed.set_uncertainties(uncertainties = True)
+        sed.set_uncertainties(uncertainties = True) #This is currently ignored by ampere
         sed.set_wavelength_range(nl, lmin, lmax)
         sed.set_track_origin(self.track_mode)
 
@@ -430,10 +430,10 @@ class HyperionCStarRTModel(Model):
         #self.dictionary of fixed parameters that are needed for modelling in __call__
 
     #Only give __call__ the numbers that emcee is going to change.
-    def __call__(self,dust=["AmC", "SiC"],fileformat=2,amin=[0.5, 0.5],amax=[1000.,1000.],na=[101,101],
+    def __call__(self,dust="AmC_plus_SiC",fileformat=2,amin=[0.5,0.5],amax=[1000.,1000.],na=[101,101],
                         nang=91,nanx=11,
-                        nchem=1,gtd=0,
-                        tmin=2.7,tmax=1000.0,nt=101,
+                        nchem=2,gtd=0,
+                        tmin=2.7,tmax=2000.0,nt=101,
                         massfrac=[0.9, 0.1],
                         density=[1.80, 3.22],
                         disttype=['power', 'power'],
@@ -442,9 +442,9 @@ class HyperionCStarRTModel(Model):
                  #Source parameters
                         sources=[['spherical',1.0,1.0,1.0,5784,[0.0,0.0,0.0]]], #(type,lstar,rstar,mstar,tstar,position[x,y,z],spectrum file)
                  #Disc parameters
-                        distribution=[['power_law_shell',30,70,-1]], #type,rin,rout,alpha
-                        gridtype='cartesian',
-                        rmax= 100.,
+                        distribution=[['power_law_shell',3.0,1000.0,-2]], #type,rin,rout,alpha # define radii in terms of the stellar radius
+                        gridtype='spherical',
+                        rmax= 2000., # we need this grid to be logarithmic
                         rho0= 1.5e-19,
                         ngrid= 251,
                 #output to be added in SED
@@ -502,7 +502,9 @@ class HyperionCStarRTModel(Model):
 
         print("BHMie dust output file created")
         #need a way to iteratively add dust models to the Model object so that they can be called later by name
-        self.d = BHDust(str(dust)+'_'+str(amin))
+        self.d = BHDust(str(dust)+'_'+str(amin[0]))
+        ##### TBD: use self.sed.<???> to get lmin and lmax, convert that to frequency, add margin
+        ##### self.d.optical_properties.extrapolate_wav(0.95*lmin, 1.05*lmax)
         self.d.optical_properties.extrapolate_nu(5e7, 5e16)
         self.d.set_lte_emissivities(n_temp=self.nt,temp_min=self.tmin,temp_max=self.tmax)
 
