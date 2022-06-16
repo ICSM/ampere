@@ -84,7 +84,6 @@ class HyperionRTModel(Model):
         #self.lmax=lmax
         #self.nl=nl
         
-        self.nSpecies = nchem
         
         #self.flatprior = flatprior
         
@@ -424,6 +423,7 @@ class HyperionCStarRTModel(Model):
             setattr(self, key, value) #builtin that assigns to an attribute with name = key of self with a value of value
         
         self.model = Model()
+        self.nSpecies = nchem
         
         #Use raytracing to improve s/n of thermal/source emission
         self.model.set_raytracing(self.raytracing)
