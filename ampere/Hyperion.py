@@ -385,7 +385,7 @@ class HyperionCStarRTModel(Model):
                         raytracing=True,
                         modrndwlk=True,
                         mrw_gamma=2,
-                        lmin=0.1,lmax=1000.0,nl=101,
+                        lmin=0.1,lmax=200.0,nl=101,
                  #Peel photons to get images - use in __init__ and store as self.XXX
                         api_sed=True,
                         api_img=False,
