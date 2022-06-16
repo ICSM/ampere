@@ -527,29 +527,29 @@ class HyperionCStarRTModel(Model):
         #Generating the dust optical constants can be part of __init__, too
         #Convenience function to write dust parameter file '<dust>.params' for Hyperion BHDust calculator (separate program)
         
-        f=open(str(self.dust)+'.params','w')
-        self.param_file = str(self.dust)+'.params'
-        f.write(str(self.dust)+'_'+str(self.amin[0])+'\n')
-        f.write(str(int(self.fileformat))+'\n')
-        f.write(str(np.min(self.amin))+'\n')
-        f.write(str(np.max(self.amax))+'\n')
-        f.write(str(np.max(self.na))+'\n')
-        f.write(str(self.nang)+'\n')
-        f.write(str(self.nanx)+'\n')
-        f.write(str(self.nchem)+'\n')
-        f.write(str(self.gtd)+'\n')
-        f.write(str(self.lmin)+' '+str(self.lmax)+' '+str(self.nl)+'\n')
-        f.write(str(self.nproc)+'\n') #parallel processing version of BHMie
-        for i in range(0,len(self.optconst)):
-            f.write(''+'\n')
-            f.write(str(args[i])+'\n')
-            f.write(str(self.density[i])+'\n')
-            f.write(str(self.optconst[i])+'\n')
-            f.write(str(self.disttype[i])+'\n')
-            f.write(str(self.amin[i])+' '+str(self.amax[i])+' '+str(self.q[i])+'\n')
-            f.close()
+        with open(str(self.dust)+'.params','w') as f:
+            self.param_file = str(self.dust)+'.params'
+            f.write(str(self.dust)+'_'+str(self.amin[0])+'\n')
+            f.write(str(int(self.fileformat))+'\n')
+            f.write(str(np.min(self.amin))+'\n')
+            f.write(str(np.max(self.amax))+'\n')
+            f.write(str(np.max(self.na))+'\n')
+            f.write(str(self.nang)+'\n')
+            f.write(str(self.nanx)+'\n')
+            f.write(str(self.nchem)+'\n')
+            f.write(str(self.gtd)+'\n')
+            f.write(str(self.lmin)+' '+str(self.lmax)+' '+str(self.nl)+'\n')
+            f.write(str(self.nproc)+'\n') #parallel processing version of BHMie
+            for i in range(0,len(self.optconst)):
+                f.write(''+'\n')
+                f.write(str(args[i])+'\n')
+                f.write(str(self.density[i])+'\n')
+                f.write(str(self.optconst[i])+'\n')
+                f.write(str(self.disttype[i])+'\n')
+                f.write(str(self.amin[i])+' '+str(self.amax[i])+' '+str(self.q[i])+'\n')
+            #f.close()
             
-            self.npars += 5 #3 for size distribution, 1 for material, 1 for mass fraction
+            #self.npars += 5 #3 for size distribution, 1 for material, 1 for mass fraction
             
         print("BHMie dust input file created.")
     
