@@ -390,6 +390,24 @@ class HyperionCStarRTModel(Model):
                         useMPI=True,
                         nproc=1,
                         npars=0,
+                 #Dust parameters that remain fixed
+                        dust="AmC_plus_SiC",fileformat=2,amin=[0.5,0.5],amax=[1000.,1000.],na=[101,101],
+                        nang=91,nanx=11,
+                        nchem=2,gtd=0,
+                        tmin=2.7,tmax=2000.0,nt=101, density=[1.80, 3.22],
+                        disttype=['power', 'power'],
+                        optconst=["zubko96_ac_acar.optc", "SiC_Pegourie1988.dat"],
+                        q=[3.5, 3.5],
+                 #Source parameters
+                        sources=[['spherical',1.0,1.0,1.0,5784,[0.0,0.0,0.0]]], #(type,lstar,rstar,mstar,tstar,position[x,y,z],spectrum file)
+                 #Disc parameters
+                        distribution=[['power_law_shell',3.0,1000.0,-2]], #type,rin,rout,alpha # define radii in terms of the stellar radius
+                        gridtype='spherical',
+                        rmax= 2000., # we need this grid to be logarithmic
+                        rho0= 1.5e-19,
+                        ngrid= 251,
+                #output to be added in SED
+                        components = ['total'],
                         **kwargs):
         
         #Assign keyword variables to the object
@@ -430,26 +448,7 @@ class HyperionCStarRTModel(Model):
         #self.dictionary of fixed parameters that are needed for modelling in __call__
 
     #Only give __call__ the numbers that emcee is going to change.
-    def __call__(self,dust="AmC_plus_SiC",fileformat=2,amin=[0.5,0.5],amax=[1000.,1000.],na=[101,101],
-                        nang=91,nanx=11,
-                        nchem=2,gtd=0,
-                        tmin=2.7,tmax=2000.0,nt=101,
-                        massfrac=[0.9, 0.1],
-                        density=[1.80, 3.22],
-                        disttype=['power', 'power'],
-                        optconst=["zubko96_ac_acar.optc", "SiC_Pegourie1988.dat"],
-                        q=[3.5, 3.5],
-                 #Source parameters
-                        sources=[['spherical',1.0,1.0,1.0,5784,[0.0,0.0,0.0]]], #(type,lstar,rstar,mstar,tstar,position[x,y,z],spectrum file)
-                 #Disc parameters
-                        distribution=[['power_law_shell',3.0,1000.0,-2]], #type,rin,rout,alpha # define radii in terms of the stellar radius
-                        gridtype='spherical',
-                        rmax= 2000., # we need this grid to be logarithmic
-                        rho0= 1.5e-19,
-                        ngrid= 251,
-                #output to be added in SED
-                        components = ['total'],
-                        **kwargs):
+    def __call__(self, massfrac=[0.9, 0.1], **kwargs):
         #Same as in __init__!
         l = locals()
         for key, value in l.items():
