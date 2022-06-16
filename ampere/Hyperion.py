@@ -561,7 +561,7 @@ class HyperionCStarRTModel(Model):
         print("BHMie dust output file created")
         #need a way to iteratively add dust models to the Model object so that they can be called later by name
         self.d = BHDust(str(self.dust)+'_'+str(self.amin[0]))
-        self.d.optical_properties.extrapolate_wav(0.95*self.lmin, 1.05*self.lmax)
+        self.d.optical_properties.extrapolate_wav(0.05, 1200)#0.95*self.lmin, 1.05*self.lmax)
         # self.d.optical_properties.extrapolate_nu(5e7, 5e16)
         self.d.set_lte_emissivities(n_temp=self.nt,temp_min=self.tmin,temp_max=self.tmax)
 
