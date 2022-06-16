@@ -474,26 +474,26 @@ class HyperionCStarRTModel(Model):
         #Generating the dust optical constants can be part of __init__, too
         #Convenience function to write dust parameter file '<dust>.params' for Hyperion BHDust calculator (separate program)
         
-        f=open(str(dust)+'.params','w')
-        self.param_file = str(dust)+'.params'
-        f.write(str(dust)+'_'+str(amin)+'\n')
-        f.write(str(int(fileformat))+'\n')
-        f.write(str(np.min(amin))+'\n')
-        f.write(str(np.max(amax))+'\n')
-        f.write(str(np.max(na))+'\n')
-        f.write(str(nang)+'\n')
-        f.write(str(nanx)+'\n')
-        f.write(str(nchem)+'\n')
-        f.write(str(gtd)+'\n')
+        f=open(str(self.dust)+'.params','w')
+        self.param_file = str(self.dust)+'.params'
+        f.write(str(self.dust)+'_'+str(self.amin)+'\n')
+        f.write(str(int(self.fileformat))+'\n')
+        f.write(str(np.min(self.amin))+'\n')
+        f.write(str(np.max(self.amax))+'\n')
+        f.write(str(np.max(self.na))+'\n')
+        f.write(str(self.nang)+'\n')
+        f.write(str(self.nanx)+'\n')
+        f.write(str(self.nchem)+'\n')
+        f.write(str(self.gtd)+'\n')
         f.write(str(self.lmin)+' '+str(self.lmax)+' '+str(self.nl)+'\n')
         f.write(str(self.nproc)+'\n') #parallel processing version of BHMie
         for i in range(0,len(self.optconst)):
             f.write(''+'\n')
             f.write(str(args[i])+'\n')
-            f.write(str(density[i])+'\n')
-            f.write(str(optconst[i])+'\n')
-            f.write(str(disttype[i])+'\n')
-            f.write(str(amin[i])+' '+str(amax[i])+' '+str(q[i])+'\n')
+            f.write(str(self.density[i])+'\n')
+            f.write(str(self.optconst[i])+'\n')
+            f.write(str(self.disttype[i])+'\n')
+            f.write(str(self.amin[i])+' '+str(self.amax[i])+' '+str(self.q[i])+'\n')
             f.close()
             
             self.npars += 5 #3 for size distribution, 1 for material, 1 for mass fraction
@@ -505,7 +505,7 @@ class HyperionCStarRTModel(Model):
 
         print("BHMie dust output file created")
         #need a way to iteratively add dust models to the Model object so that they can be called later by name
-        self.d = BHDust(str(dust)+'_'+str(amin[0]))
+        self.d = BHDust(str(self.dust)+'_'+str(self.amin[0]))
         ##### TBD: use self.sed.<???> to get lmin and lmax, convert that to frequency, add margin
         ##### self.d.optical_properties.extrapolate_wav(0.95*lmin, 1.05*lmax)
         self.d.optical_properties.extrapolate_nu(5e7, 5e16)
@@ -526,9 +526,9 @@ class HyperionCStarRTModel(Model):
         for distro in self.distribution:
         
             if gridtype == 'cartesian':
-                self.x = np.linspace(-1.*self.rmax*u.au, self.rmax*u.au, ngrid)
-                self.y = np.linspace(-1.*self.rmax*u.au, self.rmax*u.au, ngrid)
-                self.z = np.linspace(-1.*self.rmax*u.au, self.rmax*u.au, ngrid)
+                self.x = np.linspace(-1.*self.rmax*u.au, self.rmax*u.au, self.ngrid)
+                self.y = np.linspace(-1.*self.rmax*u.au, self.rmax*u.au, self.ngrid)
+                self.z = np.linspace(-1.*self.rmax*u.au, self.rmax*u.au, self.ngrid)
                 self.model.set_cartesian_grid(self.x,self.y,self.z)
             #Set up density grid
                 self.rr = np.sqrt(self.model.grid.gx**2 + self.model.grid.gy**2 + self.model.grid.gz**2)
@@ -595,6 +595,7 @@ class HyperionCStarRTModel(Model):
                     freq = const.c / (np.array(data['wav'].data[1:])*1e-8)
                     angs = np.array(data['wav'].data[1:])
                     flux = np.array(data['fnu'].data[1:])
+                    # equivalencies!!                    
                     flux = flux*3.33564095E+04*angs**2
                     nu = []
                     fnu = []
