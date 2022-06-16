@@ -51,7 +51,7 @@ class HyperionRTModel(Model):
                         view_repeats=np.repeat(45., 10),
                  #Parallel processing - use in __init__ and store as self.XXX
                         useMPI=True,
-                        nproc=1,
+                        nproc=24,
                         npars=0,
                         **kwargs):
         
