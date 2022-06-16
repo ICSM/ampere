@@ -216,7 +216,8 @@ class HyperionRTModel(Model):
         print("BHMie dust output file created")
         #need a way to iteratively add dust models to the Model object so that they can be called later by name
         self.d = BHDust(str(dust)+'_'+str(amin))
-        self.d.optical_properties.extrapolate_nu(5e7, 5e16)
+        # self.d.optical_properties.extrapolate_nu(5e7, 5e16)
+        self.d.optical_properties.extrapolate_wav(0.95*self.lmin, 1.05*self.lmax)
         self.d.set_lte_emissivities(n_temp=self.nt,temp_min=self.tmin,temp_max=self.tmax)
 
         print("Read in optical constants.")            
@@ -515,9 +516,8 @@ class HyperionCStarRTModel(Model):
         print("BHMie dust output file created")
         #need a way to iteratively add dust models to the Model object so that they can be called later by name
         self.d = BHDust(str(self.dust)+'_'+str(self.amin[0]))
-        ##### TBD: use self.sed.<???> to get lmin and lmax, convert that to frequency, add margin
-        ##### self.d.optical_properties.extrapolate_wav(0.95*lmin, 1.05*lmax)
-        self.d.optical_properties.extrapolate_nu(5e7, 5e16)
+        self.d.optical_properties.extrapolate_wav(0.95*self.lmin, 1.05*self.lmax)
+        # self.d.optical_properties.extrapolate_nu(5e7, 5e16)
         self.d.set_lte_emissivities(n_temp=self.nt,temp_min=self.tmin,temp_max=self.tmax)
 
         print("Read in optical constants.")            
