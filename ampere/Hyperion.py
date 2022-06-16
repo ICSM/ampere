@@ -513,7 +513,7 @@ class HyperionCStarRTModel(Model):
         elif len(args) == self.nSpecies: #codes which use a prior transform need to end up in this branch
             args = args
         
-        if nchem != len(args):
+        if self.nchem != len(args):
             print("Number of chemical components does not equal mass fractions")
         
         if np.sum(args) != 1.0:
