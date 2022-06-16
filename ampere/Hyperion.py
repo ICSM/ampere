@@ -441,11 +441,15 @@ class HyperionCStarRTModel(Model):
         self.model = AnalyticalYSOModel()
         
         # Set up stellar parameters
-        nu, fnu = np.loadtxt(stellar_spectrum, delimiter = ',', skiprows = 1, unpack = True)
-        self.model.star.spectrum = (nu, fnu)
+        if stellar_spectrum is not None:
+            nu, fnu = np.loadtxt(stellar_spectrum, delimiter = ',', skiprows = 1, unpack = True)
+            self.model.star.spectrum = (nu, fnu)
+        elif temperature is not None:
+            self.model.star.temperature = stellar_temperature.value
+        else: 
+            raise ValueError("Either the stellar temperature must be specified or a template spectrum must be specified")
         self.model.star.luminosity = stellar_luminosity.to(units.erg / units.s).value
         self.model.star.mass = stellar_mass.to('g').value
-        self.model.star.temperature = stellar_temperature.value
         self.model.star.radius = stellar_radius.to('cm').value
         
         # Set up envelope parameters
