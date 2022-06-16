@@ -188,7 +188,7 @@ class HyperionRTModel(Model):
         
         f=open(str(dust)+'.params','w')
         self.param_file = str(dust)+'.params'
-        f.write(str(dust)+'_'+str(amin)+'\n')
+        f.write(str(dust)+'_'+str(amin[0])+'\n')
         f.write(str(int(fileformat))+'\n')
         f.write(str(np.min(amin))+'\n')
         f.write(str(np.max(amax))+'\n')
@@ -525,7 +525,7 @@ class HyperionCStarRTModel(Model):
         
         f=open(str(self.dust)+'.params','w')
         self.param_file = str(self.dust)+'.params'
-        f.write(str(self.dust)+'_'+str(self.amin)+'\n')
+        f.write(str(self.dust)+'_'+str(self.amin[0])+'\n')
         f.write(str(int(self.fileformat))+'\n')
         f.write(str(np.min(self.amin))+'\n')
         f.write(str(np.max(self.amax))+'\n')
