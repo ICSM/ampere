@@ -448,7 +448,11 @@ class HyperionCStarRTModel(Model):
         #self.dictionary of fixed parameters that are needed for modelling in __call__
 
     #Only give __call__ the numbers that emcee is going to change.
-    def __call__(self, massfrac=[0.9, 0.1], **kwargs):
+    def __call__(self, *args, **kwargs):
+        """
+        The only parameters passed to *args at the moment are the two
+        mass fractions.
+        """
         #Same as in __init__!
         l = locals()
         for key, value in l.items():
@@ -456,10 +460,10 @@ class HyperionCStarRTModel(Model):
                 continue
             setattr(self, key, value)
         
-        if nchem != len(massfrac):
+        if nchem != len(args):
             print("Number of chemical components does not equal mass fractions")
         
-        if np.sum(massfrac) != 1.0:
+        if np.sum(args) != 1.0:
             print("Total mass fraction of all chemical components must equal 1")
         
 
@@ -485,7 +489,7 @@ class HyperionCStarRTModel(Model):
         f.write(str(self.nproc)+'\n') #parallel processing version of BHMie
         for i in range(0,len(self.optconst)):
             f.write(''+'\n')
-            f.write(str(massfrac[i])+'\n')
+            f.write(str(args[i])+'\n')
             f.write(str(density[i])+'\n')
             f.write(str(optconst[i])+'\n')
             f.write(str(disttype[i])+'\n')
