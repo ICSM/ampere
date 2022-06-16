@@ -384,8 +384,8 @@ class HyperionCStarRTModel(Model):
                  #Peel photons to get images - use in __init__ and store as self.XXX
                         api_sed=True,
                         api_img=False,
-                        view_angles=np.linspace(0., 90., 10),
-                        view_repeats=np.repeat(45., 10),
+                        view_angles=[45],
+                        view_repeats=[45],
                  #Parallel processing - use in __init__ and store as self.XXX
                         useMPI=True,
                         nproc=1,
