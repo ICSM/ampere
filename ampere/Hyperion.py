@@ -4,7 +4,7 @@
 
 import numpy as np
 from astropy import constants as const
-from astropy import units as u
+from astropy import units
 try:
     from astropy.modeling import blackbody
 except ImportError:
@@ -234,9 +234,9 @@ class HyperionRTModel(Model):
         for distro in self.distribution:
         
             if gridtype == 'cartesian':
-                self.x = np.linspace(-1.*self.rmax*u.au, self.rmax*u.au, ngrid)
-                self.y = np.linspace(-1.*self.rmax*u.au, self.rmax*u.au, ngrid)
-                self.z = np.linspace(-1.*self.rmax*u.au, self.rmax*u.au, ngrid)
+                self.x = np.linspace(-1.*self.rmax*units.au, self.rmax*units.au, ngrid)
+                self.y = np.linspace(-1.*self.rmax*units.au, self.rmax*units.au, ngrid)
+                self.z = np.linspace(-1.*self.rmax*units.au, self.rmax*units.au, ngrid)
                 self.model.set_cartesian_grid(self.x,self.y,self.z)
             #Set up density grid
                 self.rr = np.sqrt(self.model.grid.gx**2 + self.model.grid.gy**2 + self.model.grid.gz**2)
@@ -257,10 +257,10 @@ class HyperionRTModel(Model):
         for source in sources: #source with temperature -> blackbody
             if source[0] == 'spherical':
                 if type(source[-1] == 'list'):
-                    self.model.add_spherical_source(luminosity  = source[1] * u.lsun,
-                                                    radius      = source[2] * u.rsun,
-                                                    mass        = source[3] * u.msun,
-                                                    temperature = source[4] * u.K,
+                    self.model.add_spherical_source(luminosity  = source[1] * units.lsun,
+                                                    radius      = source[2] * units.rsun,
+                                                    mass        = source[3] * units.msun,
+                                                    temperature = source[4] * units.K,
                                                     position    = source[5])
                 elif type(source[-1] == 'str'):
                     data = np.loadtxt(source[6], dtype=[('wav', float), ('fnu', float)])
@@ -281,19 +281,19 @@ class HyperionRTModel(Model):
                     fnu = np.array(fnu)
         
                     # Set up the source
-                    self.model.add_point_source(luminosity  = source[1] * u.lsun,
-                                                mass        = source[3] * u.msun,
-                                                temperature = source[4] * u.K,
+                    self.model.add_point_source(luminosity  = source[1] * units.lsun,
+                                                mass        = source[3] * units.msun,
+                                                temperature = source[4] * units.K,
                                                 position    = source[5])
-                    self.source.luminosity = source[1] * u.lsun # [ergs/s]
+                    self.source.luminosity = source[1] * units.lsun # [ergs/s]
                     self.source.spectrum = (nu, fnu)
             
             elif source[0] == 'point':
                 if type(source[-1]) == 'list':
-                    self.model.add_spherical_source(luminosity  = source[1] * u.lsun,
-                                                    radius      = source[2] * u.rsun,
-                                                    mass        = source[3] * u.msun,
-                                                    temperature = source[4] * u.K,
+                    self.model.add_spherical_source(luminosity  = source[1] * units.lsun,
+                                                    radius      = source[2] * units.rsun,
+                                                    mass        = source[3] * units.msun,
+                                                    temperature = source[4] * units.K,
                                                     position    = source[5])
                 elif type(source[-1]) == 'str':
                     #The source spectrum files need to be passed from the data class
@@ -316,7 +316,7 @@ class HyperionRTModel(Model):
         
                     # Set up the source
                     self.source = self.model.add_point_source(position = source[4])
-                    self.source.luminosity = source[1] * u.lsun # [ergs/s]
+                    self.source.luminosity = source[1] * units.lsun # [ergs/s]
                     self.source.spectrum = (nu, fnu)
             else:
                 print("Source must be point or spherical.")
@@ -331,7 +331,7 @@ class HyperionRTModel(Model):
 
         self.result = ModelOutput('HyperionRT_sed.rtout')
         #forcing code to return total (scattered + emitted) component here - might want to avoid this if self-scattering is not desired, for example
-        self.HyperionRTSED = self.result.get_sed(inclination=0, aperture=-1, distance=self.dstar * u.pc,component='total',units='mJy')
+        self.HyperionRTSED = self.result.get_sed(inclination=0, aperture=-1, distance=self.dstar * units.pc,component='total',units='mJy')
         
         self.wave = self.HyperionRTSED.wav
         self.flux = self.HyperionRTSED.val
@@ -535,9 +535,9 @@ class HyperionCStarRTModel(Model):
         for distro in self.distribution:
         
             if gridtype == 'cartesian':
-                self.x = np.linspace(-1.*self.rmax*u.au, self.rmax*u.au, self.ngrid)
-                self.y = np.linspace(-1.*self.rmax*u.au, self.rmax*u.au, self.ngrid)
-                self.z = np.linspace(-1.*self.rmax*u.au, self.rmax*u.au, self.ngrid)
+                self.x = np.linspace(-1.*self.rmax*units.au, self.rmax*units.au, self.ngrid)
+                self.y = np.linspace(-1.*self.rmax*units.au, self.rmax*units.au, self.ngrid)
+                self.z = np.linspace(-1.*self.rmax*units.au, self.rmax*units.au, self.ngrid)
                 self.model.set_cartesian_grid(self.x,self.y,self.z)
             #Set up density grid
                 self.rr = np.sqrt(self.model.grid.gx**2 + self.model.grid.gy**2 + self.model.grid.gz**2)
@@ -558,10 +558,10 @@ class HyperionCStarRTModel(Model):
         for source in sources: #source with temperature -> blackbody
             if source[0] == 'spherical':
                 if type(source[-1] == 'list'):
-                    self.model.add_spherical_source(luminosity  = source[1] * u.lsun,
-                                                    radius      = source[2] * u.rsun,
-                                                    mass        = source[3] * u.msun,
-                                                    temperature = source[4] * u.K,
+                    self.model.add_spherical_source(luminosity  = source[1] * units.lsun,
+                                                    radius      = source[2] * units.rsun,
+                                                    mass        = source[3] * units.msun,
+                                                    temperature = source[4] * units.K,
                                                     position    = source[5])
                 elif type(source[-1] == 'str'):
                     data = np.loadtxt(source[6], dtype=[('wav', float), ('fnu', float)])
@@ -582,19 +582,19 @@ class HyperionCStarRTModel(Model):
                     fnu = np.array(fnu)
         
                     # Set up the source
-                    self.model.add_point_source(luminosity  = source[1] * u.lsun,
-                                                mass        = source[3] * u.msun,
-                                                temperature = source[4] * u.K,
+                    self.model.add_point_source(luminosity  = source[1] * units.lsun,
+                                                mass        = source[3] * units.msun,
+                                                temperature = source[4] * units.K,
                                                 position    = source[5])
-                    self.source.luminosity = source[1] * u.lsun # [ergs/s]
+                    self.source.luminosity = source[1] * units.lsun # [ergs/s]
                     self.source.spectrum = (nu, fnu)
             
             elif source[0] == 'point':
                 if type(source[-1]) == 'list':
-                    self.model.add_spherical_source(luminosity  = source[1] * u.lsun,
-                                                    radius      = source[2] * u.rsun,
-                                                    mass        = source[3] * u.msun,
-                                                    temperature = source[4] * u.K,
+                    self.model.add_spherical_source(luminosity  = source[1] * units.lsun,
+                                                    radius      = source[2] * units.rsun,
+                                                    mass        = source[3] * units.msun,
+                                                    temperature = source[4] * units.K,
                                                     position    = source[5])
                 elif type(source[-1]) == 'str':
                     #The source spectrum files need to be passed from the data class
@@ -616,7 +616,7 @@ class HyperionCStarRTModel(Model):
         
                     # Set up the source
                     self.source = self.model.add_point_source(position = source[4])
-                    self.source.luminosity = source[1] * u.lsun # [ergs/s]
+                    self.source.luminosity = source[1] * units.lsun # [ergs/s]
                     self.source.spectrum = (nu, fnu)
             else:
                 print("Source must be point or spherical.")
@@ -631,7 +631,7 @@ class HyperionCStarRTModel(Model):
 
         self.result = ModelOutput('HyperionRT_sed.rtout')
         #forcing code to return total (scattered + emitted) component here - might want to avoid this if self-scattering is not desired, for example
-        self.HyperionRTSED = self.result.get_sed(inclination=0, aperture=-1, distance=self.dstar * u.pc,component='total',units='mJy')
+        self.HyperionRTSED = self.result.get_sed(inclination=0, aperture=-1, distance=self.dstar * units.pc,component='total',units='mJy')
         
         self.wave = self.HyperionRTSED.wav
         self.flux = self.HyperionRTSED.val
