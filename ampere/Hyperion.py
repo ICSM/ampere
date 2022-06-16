@@ -456,7 +456,7 @@ class HyperionCStarRTModel(Model):
         self.envelope_shell = self.model.add_power_law_envelope()
         # Convert to appropriate units and then feed in the magnitudes
         self.envelope_shell.mass = envelope_mass.to('g').value
-        self.envelope_shell.rmin = (envelope_rin * self.model.star.radius).value
+        self.envelope_shell.rmin = (envelope_rin * self.model.star.radius)
         self.envelope_shell.rmax = envelope_rout * self.envelope_shell.rmin
         self.envelope_shell.r_0 = envelope_r0 * self.envelope_shell.rmin
         self.envelope_shell.power = envelope_power
