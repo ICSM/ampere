@@ -494,6 +494,9 @@ class HyperionCStarRTModel(Model):
 
         print("Hyperion RT Model setup for carbon star complete.")
         #self.dictionary of fixed parameters that are needed for modelling in __call__
+        
+        self.npar = 1
+        self.npars_ptform = 2
 
     #Only give __call__ the numbers that emcee is going to change.
     def __call__(self, *args, **kwargs):
@@ -572,7 +575,7 @@ class HyperionCStarRTModel(Model):
         #                                     power law disc = 5 parameters (S0, Rin, Rout, h, alpha_out),
         #                                     2 power law disc = 5 parameters (S0, R0, h, alpha_in, alpha_out), 
         #                                     Gaussian annulus = 4 parameters (S0, R0, dR, h)
-        self.npars += len(self.distribution) - 1
+        #self.npars += len(self.distribution) - 1
         
         # for distro in self.distribution:
         # 
