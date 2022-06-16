@@ -499,7 +499,7 @@ class HyperionCStarRTModel(Model):
         print("Hyperion RT Model setup for carbon star complete.")
         #self.dictionary of fixed parameters that are needed for modelling in __call__
         
-        self.npar = 1
+        self.npars = 1
         self.npars_ptform = 2
 
     #Only give __call__ the numbers that emcee is going to change.
