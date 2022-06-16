@@ -638,7 +638,7 @@ class HyperionCStarRTModel(Model):
         
         if theta > 0. and theta < 1.:
             try:
-                return dirichlet((1.,)*self.nSpecies).logpdf(10**theta) #When you have a set of random variates whose sum = 1 by definition, the correct prior is a dirichlet distribution (which is a generalisation of the beta distribution).
+                return dirichlet((1.,)*self.nSpecies).logpdf(theta) #When you have a set of random variates whose sum = 1 by definition, the correct prior is a dirichlet distribution (which is a generalisation of the beta distribution).
             except ValueError:
                 return -np.inf
         else:
