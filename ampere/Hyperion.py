@@ -23,6 +23,8 @@ from hyperion.model import ModelOutput
 from hyperion.dust import BHDust
 #from hyperion.util.constants import lsun, rsun, au, msun, sigma, pc, pi #get these from astropy units 
 
+import subprocess
+
 # Silly string to link Ampere and Hyperion together
 class HyperionRTModel(Model):
     '''
@@ -210,7 +212,6 @@ class HyperionRTModel(Model):
             
         print("BHMie dust input file created.")
     
-        import subprocess
         subprocess.run(['bhmie',self.param_file])
 
         print("BHMie dust output file created")
@@ -459,6 +460,9 @@ class HyperionCStarRTModel(Model):
         # self.envelope_shell.ngrid = envelope_ngrid # where is this used?
         # self.envelope_shell.gridtype = envelope_gridtype # where is this used?
         
+        # A spherical grid with sampling along r but not along theta or phi
+        self.model.set_spherical_polar_grid_auto(envelope_ngrid, 1, 1)
+        
         self.nSpecies = nchem
         
         #Use raytracing to improve s/n of thermal/source emission
@@ -545,7 +549,6 @@ class HyperionCStarRTModel(Model):
             
         print("BHMie dust input file created.")
     
-        import subprocess
         subprocess.run(['bhmie',self.param_file])
 
         print("BHMie dust output file created")
