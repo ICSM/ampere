@@ -532,27 +532,25 @@ class HyperionCStarRTModel(Model):
         #                                     Gaussian annulus = 4 parameters (S0, R0, dR, h)
         self.npars += len(self.distribution) - 1
         
-        for distro in self.distribution:
-        
-            if gridtype == 'cartesian':
-                self.x = np.linspace(-1.*self.rmax*units.au, self.rmax*units.au, self.ngrid)
-                self.y = np.linspace(-1.*self.rmax*units.au, self.rmax*units.au, self.ngrid)
-                self.z = np.linspace(-1.*self.rmax*units.au, self.rmax*units.au, self.ngrid)
-                self.model.set_cartesian_grid(self.x,self.y,self.z)
-            #Set up density grid
-                self.rr = np.sqrt(self.model.grid.gx**2 + self.model.grid.gy**2 + self.model.grid.gz**2)
-            if gridtype == 'polar':
-                print("Not implemented.")
-            if gridtype == 'spherical':
-                print("Not implemented")
+        # for distro in self.distribution:
+        # 
+        #     if gridtype == 'cartesian':
+        #         self.x = np.linspace(-1.*self.rmax*units.au, self.rmax*units.au, self.ngrid)
+        #         self.y = np.linspace(-1.*self.rmax*units.au, self.rmax*units.au, self.ngrid)
+        #         self.z = np.linspace(-1.*self.rmax*units.au, self.rmax*units.au, self.ngrid)
+        #         self.model.set_cartesian_grid(self.x,self.y,self.z)
+        #     #Set up density grid
+        #         self.rr = np.sqrt(self.model.grid.gx**2 + self.model.grid.gy**2 + self.model.grid.gz**2)
+        #     if gridtype == 'polar':
+        #         print("Not implemented.")
+        #     if gridtype == 'spherical':
+        #         print("Not implemented")
+        #     print("Spatial grid set up.")
 
-            print("Spatial grid set up.")
-
-        #define density grid
-            self.density = eval(distro[0] + "()")
-            self.model.add_density_grid(self.density, self.d)
-
-            print("Density grid set up.")
+        # #define density grid
+        #     self.density = eval(distro[0] + "()")
+        #     self.model.add_density_grid(self.density, self.d)
+        #     print("Density grid set up.")
 
         #Set central source position, add source(s) to the grid
         for source in sources: #source with temperature -> blackbody
@@ -669,10 +667,9 @@ class HyperionCStarRTModel(Model):
     def __repr__(self, **kwargs):
         raise NotImplementedError()
 
-    def power_law_shell(self):
-        density = np.zeros(self.rr)
-        density = self.rho0 * (self.rr/self.distribution[1])**self.distribution[3] #* np.exp(-((abs(self.model.grid.gz)/self.rr)**2/scaleheight**2)/2.0)
-        density[np.where(self.rr <= self.distribution[1])] = 0.0
-        density[np.where(self.rr >= self.distribution[2])] = 0.0
-
-        return density
+    # def power_law_shell(self):
+    #     density = np.zeros(self.rr)
+    #     density = self.rho0 * (self.rr/self.distribution[1])**self.distribution[3] #* np.exp(-((abs(self.model.grid.gz)/self.rr)**2/scaleheight**2)/2.0)
+    #     density[np.where(self.rr <= self.distribution[1])] = 0.0
+    #     density[np.where(self.rr >= self.distribution[2])] = 0.0
+    #     return density
