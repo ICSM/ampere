@@ -11,7 +11,7 @@ users.
 import sys
 import logging
 
-logger = logging.getLogger()
+logger = logging.getLogger("ampere logger")
 logFormatter = logging.Formatter("%(asctime)s [%(threadName)-12.12s] [%(levelname)-8.8s]  %(message)s")
 
 def handle_exception(exc_type, exc_value, exc_traceback):

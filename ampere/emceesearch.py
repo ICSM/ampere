@@ -181,7 +181,6 @@ class EmceeSearch(BaseSearch):
         #pass
 
 
-
     def postProcess(self, show=False, textfile=None, **kwargs):
         ''' 
         A method to post-process the sampler results 
