@@ -166,7 +166,7 @@ class PowerLawContinuumRelativeAbundances(AnalyticalModel):
         from scipy import interpolate
         self.flatprior=flatprior
         #print(os.path.dirname(__file__))
-        opacityDirectory = os.path.dirname(__file__)+'/Opacities/'
+        opacityDirectory = os.path.dirname(__file__)+'/../Opacities/'
         opacityFileList = os.listdir(opacityDirectory)
         opacityFileList = np.array(opacityFileList)[['sub.q' in zio for zio in opacityFileList]] # Only files ending in .q are valid (for now)
         nSpecies = opacityFileList.__len__()
