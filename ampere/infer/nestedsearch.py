@@ -61,6 +61,12 @@ class BaseNestedSampler(BaseSearch, Logger):
         for l in self.parLabels:
             logging.info("%s", l)
 
+        #Now we should check whether the number of parameters matches with the parameter labels!
+        if len(self.parLabels) != self.npars:
+            logging.critical("You have %d free parameters but %d parameter labels", self.npars, len(self.parLabels))
+            logging.critical("Please check the number of parameters and labels")
+            raise ValueError("Mismatch between number of parameters and labels")
+
 
     #This method is now defined in Basesearch
     def prior_transform(self, u, **kwargs):
