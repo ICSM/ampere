@@ -362,7 +362,7 @@ class Photometry(Data):
 
         return probFlux
         
-
+    #This should be updated to only get recalculated if anything ever changes
     def cov(self, *args, **kwargs):
         '''This routine populates a covariance matrix given some methods to call and parameters for them.
 
@@ -407,6 +407,25 @@ class Photometry(Data):
             print(self)
             exit()
         return self.covMat
+
+    def simulate(self, theta, model, **kwargs):
+        """ Simulate photometry, given a model result"""
+
+        #First, we compute the model photometry
+        filts, modSed = pyphot.extractPhotometry(model.spectrum["wavelength"],
+                                                 model.spectrum["modelFlux"],
+                                                 self.filters,
+                                                 Fnu = True,
+                                                 absFlux = False,
+                                                 progress=False
+            )
+
+        #Then, we add some noise
+        rng = np.random.default_rng() #Optimise this, no need to re-create object each time, plus need seed to be stored so it can be saved
+        simulated_data = rng.multivariate_normal(modSed[self.mask], self.covMat) #We draw one sample from the multivariate normal distribution with mean = model photometry and covariance = data covariances
+        
+        #now we can return the simulated data
+        return simulated_data
 
     @classmethod
     def fromFile(cls, filename, format=None, **kwargs):

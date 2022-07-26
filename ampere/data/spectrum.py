@@ -484,7 +484,32 @@ class Spectrum(Data):
         #print(((np.float128(2.)*np.pi)**(len(self.value)) * np.linalg.det(self.covMat)))
         #print(b, probFlux)
         #exit()
-        return probFlux 
+        return probFlux
+
+    def simulate(self, theta, model, **kwargs):
+        """ Simulate a spectrum, given a model result"""
+
+         try:
+            scaleFac = theta[0]
+        except IndexError: #Only possible if theta is scalar or can't be indexed
+            scaleFac = theta
+        #First we resample the spectrum
+        modSpec = self.resampler(self.wavelength, model.spectrum["wavelength"], model.spectrum["modelFlux"])[self.mask]
+
+        #now we rescale it with the scale factor
+        #For the likelihood, we multiply the data by the scale factor
+        #To maintain the same logic for the simulation system, we have to *divide* the simulated data by the scale factor
+        modSpec = modSpec/scaleFac
+        
+
+        #Then, we add some noise - first we need an RNG
+        rng = np.random.default_rng() #Optimise this, no need to re-create object each time, plus need seed to be stored so it can be saved
+        #Now we update the covariance matrix
+        self.cov(theta[1:])
+        simulated_data = rng.multivariate_normal(modSpec[self.mask], self.covMat) #We draw one sample from the multivariate normal distribution with mean = model photometry and covariance = data covariances
+        
+        #now we can return the simulated data
+        return simulated_data
 
     @classmethod
     def fromFile(cls, filename, format, filetype=None, keywords=None, **kwargs):

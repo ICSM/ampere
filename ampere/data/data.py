@@ -67,6 +67,9 @@ class Data(object):
     def lnlike(self, synWave, synFlux, **kwargs):
         pass
 
+    def simulate(self, results, **kwargs):
+        pass
+
     def fromFile(self, filename, format, **kwargs):
         '''Routine to generate data object from a file containing said data
         '''
