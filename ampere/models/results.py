@@ -4,7 +4,7 @@ from functools import cached_property
 import logging
 
 
-def ModelResults(object):
+class ModelResults(object):
     """
     A class for holding, processing and passing the results of an Ampere Model
 
@@ -17,13 +17,13 @@ def ModelResults(object):
         elif spectrum is not None:
             logging.warn("Invalid model output, spectrum not used.")
 
-        pass
+        #pass
 
 
-    @cachedproperty
-    def spectrum(self):
-        #This method will automatically compute the spectrum from other results if they exist, but only when asked for
-        pass
+    #@cachedproperty
+    #def spectrum(self):
+    #    #This method will automatically compute the spectrum from other results if they exist, but only when asked for
+    #    pass
 
     
 #####

@@ -80,6 +80,8 @@ class Photometry(Data):
 
     _hasNoiseModel = False
 
+    
+
     def __init__(self, filterName, value, uncertainty, photUnits,
                  bandUnits=None, libName = None, label = "Photometry", **kwargs):
         self.filterName = filterName
@@ -426,6 +428,9 @@ class Photometry(Data):
         
         #now we can return the simulated data
         return simulated_data
+
+    #@property
+    #def 
 
     @classmethod
     def fromFile(cls, filename, format=None, **kwargs):

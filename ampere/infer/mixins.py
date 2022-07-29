@@ -47,6 +47,70 @@ class ScipyMinMixin(object):
         return solution
 
 
+class SBIPostProcessor(object):
+    """
+    A mixin for post-processing SBI results
+
+    This mixin provides functions for computing diagnostic statistics and creating 
+    plots to explore the output. This includes e.g. producing corner plots. This 
+    assumes structure similar to that of emcee. The get_ methods are intended to be 
+    extended or overloaded by classes that inheret from this mixin if necessary.
+    """
+
+    def get_credible_interval(self, percentiles, chain = None, **kwargs):
+        """
+        Compute a credible interval given an iterable of percentiless by the user
+        """
+        if chain is None:
+            chain = self.samples
+        self.res = []
+        for i in range(self.npars):
+            a = np.percentile(self.samples[:,i], [16, 50, 84])
+            self.res.append([a[1], a[2]-a[1], a[1]-a[0]])
+        return self.res
+
+    def get_map(self, **kwargs):
+        self.bestPars = self.posterior.map()
+        return self.bestPars
+
+    def plot_corner(self, **kwargs):
+        import corner
+        fig2 = corner.corner(self.samples,labels=self.parLabels, **kwargs)
+        fig2.savefig("corner.png")
+
+    def summary(self, interval = [16, 50, 84], **kwargs):
+        """
+        Generate the required summary statistics
+        """
+        
+        self.res = self.get_credible_interval(interval)
+        self.bestPars = self.get_map()
+
+    def print_summary(self, outfile=None, **kwargs):
+        """
+        Generate a summary of the run
+
+        This is currently overly complicated. In future, this functionality should end up being handled and written
+        by a custom logger - summary() should handle this logging
+        """
+        #First generate the summary statistics
+        self.summary()
+        file_output = {}
+        #Now start printing things
+        #with open(outfile, 'w') as f:
+        if self.bestPars is not None:
+            logging.info("MAP solution:")
+            #print("MAP Solution: ")
+            for i in range(self.npars):
+                logging.info("%s  = %.5f", self.parLabels[i],self.bestPars[i]) #
+
+
+        if self.res is not None:
+            logging.info("Median and confidence intervals for parameters in order:")
+            for i in range(self.npars):
+                logging.info("%s  = %.5f + %.5f - %.5f", self.parLabels[i],self.res[i][0],self.res[i][1],self.res[i][2])
+
+
 class SimpleMCMCPostProcessor(object):
     """
     A mixin for post-processing MCMC results
