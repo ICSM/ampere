@@ -9,6 +9,7 @@ import numpy as np
 import torch
 import pickle
 import logging
+from tqdm import tqdm
 from .basesearch import BaseSearch
 from .mixins import SBIPostProcessor
 from ..logger import Logger
@@ -39,10 +40,10 @@ class LFIBase(BaseSearch, Logger):
         self.dataSet = data
 
         self.setup_logging(verbose=verbose) #For now we will exclusively use default logging settings, this will be modified once logging is tested.
-        logging.info("Welcome to ampere")
-        logging.info("Setting up your inference problem:")
-        logging.info("You are using %s", self._inference_method)
-        logging.info("You have %s items in your dataset", str(len(data)))
+        self.logger.info("Welcome to ampere")
+        self.logger.info("Setting up your inference problem:")
+        self.logger.info("You are using %s", self._inference_method)
+        self.logger.info("You have %s items in your dataset", str(len(data)))
 
         ''' now do some introspection on the various bits of model to 
         understand how many parameters there are for each compponent '''
@@ -74,17 +75,17 @@ class LFIBase(BaseSearch, Logger):
 
         self.verbose = verbose
         #if self.verbose:
-        logging.info("This model has %d parameters.", self.nparsMod)
-        logging.info("There are also %d parameters for the noise model", self.npars - self.nparsMod)
-        logging.info("Hence, there are a total of %d parameters to sample", self.npars)
-        logging.info("The parameter names are:")
+        self.logger.info("This model has %d parameters.", self.nparsMod)
+        self.logger.info("There are also %d parameters for the noise model", self.npars - self.nparsMod)
+        self.logger.info("Hence, there are a total of %d parameters to sample", self.npars)
+        self.logger.info("The parameter names are:")
         for l in self.parLabels:
-            logging.info("%s", l)
+            self.logger.info("%s", l)
 
         #Now we should check whether the number of parameters matches with the parameter labels!
         if len(self.parLabels) != self.npars:
-            logging.critical("You have %d free parameters but %d parameter labels", self.npars, len(self.parLabels))
-            logging.critical("Please check the number of parameters and labels")
+            self.logger.critical("You have %d free parameters but %d parameter labels", self.npars, len(self.parLabels))
+            self.logger.critical("Please check the number of parameters and labels")
             raise ValueError("Mismatch between number of parameters and labels")
 
     def simulate(self, theta): #, theta_noise):
@@ -110,7 +111,7 @@ class LFIBase(BaseSearch, Logger):
         """ A method to compute a batch of simulations """
         #This method takes the same approach as simulate(), but iterates over many thetas instead.
         n_sims = thetas.shape[0]
-        for j, theta in enumerate(thetas):
+        for j, theta in enumerate(tqdm(thetas)):
             #print(theta)
             #print(theta[:self.nparsMod])
             #First we call the model
@@ -145,7 +146,7 @@ class SBI_SNPE(LFIBase,SBIPostProcessor):
                          parameter_labels = parameter_labels, **kwargs)
 
         if check_prior_normalisation:
-            logging.debug("Checking prior normalisation")
+            self.logger.info("Checking prior normalisation")
             #Now we need to jump through a few hoops to get the prior into a format that SBI understands
             #We need to check if lnprior is normalised
             #We will do this with MC integration
@@ -153,20 +154,23 @@ class SBI_SNPE(LFIBase,SBIPostProcessor):
             #However, since the prior may have infinite support in some or all variables, we restrict ourselves to
             #a volume 0.5**npars so that we are computing a *fixed* and *known* fraction of the integral
             #which should have a value of 1 * (0.5**npars) if the distribution is normalised
+            self.logger.info("Drawing prior samples to test normalisation")
             u = np.random.default_rng().uniform(low = 0.25, high=0.75, size=(n_prior_norm_samples, self.npars))
             samples = np.zeros_like(u)
             #Now we call the prior transform. For safety, we will manually iterate over the batch dimension
-            for i in range(n_prior_norm_samples):
+
+            for i in tqdm(range(n_prior_norm_samples)):
                 samples[i] = self.prior_transform(u[i,:])
             lp = self.lnprior_vector(samples)
             from scipy.special import logsumexp
             ranges = np.max(samples, axis=0) - np.min(samples, axis=0)
             log_int_est = logsumexp(lp) - np.log(n_prior_norm_samples) + np.sum(np.log(ranges))
             if log_int_est - self.npars*np.log(0.5) < prior_norm_thres: #We can consider this "close enough", since it corresponds to just over 1% for the default input
+                self.logger.debug("Prior is normalised")
                 self._prior_is_normalised = True
             else:
                 #If the deviation is more than 1%, we're going to assume the prior is actually not normalised,
-                logging.warning("Prior does not appear to be normalised! Inference will proceed with an approximate normalisation, but it would be better to ensure it is normalised in future. To prevent this warning in future, pass ``check_prior_normalisation = False'' to the inference object")
+                self.logger.warning("Prior does not appear to be normalised! Inference will proceed with an approximate normalisation, but it would be better to ensure it is normalised in future. To prevent this warning in future, pass ``check_prior_normalisation = False'' to the inference object")
                 self._prior_is_normalised = True
                 self.logprior_norm = log_int_est
         
@@ -180,13 +184,13 @@ class SBI_SNPE(LFIBase,SBIPostProcessor):
     def optimise(self, nsamples = None, nsamples_post = None,
                  **kwargs):
 
-        logging.info("Preparing to sample")
+        self.logger.info("Preparing to sample")
 
         #first we draw a batch of samples from the prior
-        logging.info("Generating samples from the prior")
+        self.logger.info("Generating samples from the prior")
         thetas = self.sample(nsamples)
         #Now we simulate models for all of these samples
-        logging.info("Simulating all prior samples")
+        self.logger.info("Simulating all prior samples")
         sims = self.simulate_vector(thetas)
 
         #now that we have simulations and parameter values, we're going to make sure they're torch Tensors
@@ -196,7 +200,7 @@ class SBI_SNPE(LFIBase,SBIPostProcessor):
         #now we give the sampler the simulations ...
         self.inference = self.sampler.append_simulations(thetas, sims)
         #...and start doing inference
-        logging.info("Training posterior")
+        self.logger.info("Training posterior")
         self.density_estimator = self.inference.train()
         self.posterior = self.inference.build_posterior(self.density_estimator)
 
@@ -204,12 +208,12 @@ class SBI_SNPE(LFIBase,SBIPostProcessor):
         #first we need to check how many observations we're dealing with
         obs = []
         for d in self.dataSet:
-            print(d.value[d.mask])
+            #print(d.value[d.mask])
             obs.extend(d.value[d.mask]) #for now, we'll do this the ugly way, and improve it later.
-        print(obs)
-        print(sims[-1])
+        #print(obs)
+        #print(sims[-1])
         obs = torch.Tensor(obs)
-        logging.info("Sampling trained posterior")
+        self.logger.info("Sampling trained posterior")
         self.posterior.set_default_x(obs)
         #self.samples = self.posterior.sample((nsamples_post,), x = obs)
         self.samples = self.posterior.sample((nsamples_post,))

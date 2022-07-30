@@ -17,10 +17,10 @@ class MCMCSampler(BaseSearch, Logger):
         self.dataSet = data
 
         self.setup_logging(verbose=verbose) #For now we will exclusively use default logging settings, this will be modified once logging is tested.
-        logging.info("Welcome to ampere")
-        logging.info("Setting up your inference problem:")
-        logging.info("You are using %s", self._inference_method)
-        logging.info("You have %s items in your dataset", str(len(data)))
+        self.logger.info("Welcome to ampere")
+        self.logger.info("Setting up your inference problem:")
+        self.logger.info("You are using %s", self._inference_method)
+        self.logger.info("You have %s items in your dataset", str(len(data)))
 
         ''' now do some introspection on the various bits of model to 
         understand how many parameters there are for each compponent '''
@@ -55,17 +55,17 @@ class MCMCSampler(BaseSearch, Logger):
 
         self.verbose = verbose
         #if self.verbose:
-        logging.info("This model has %d parameters.", self.nparsMod)
-        logging.info("There are also %d parameters for the noise model", self.npars - self.nparsMod)
-        logging.info("Hence, there are a total of %d parameters to sample", self.npars)
-        logging.info("The parameter names are:")
+        self.logger.info("This model has %d parameters.", self.nparsMod)
+        self.logger.info("There are also %d parameters for the noise model", self.npars - self.nparsMod)
+        self.logger.info("Hence, there are a total of %d parameters to sample", self.npars)
+        self.logger.info("The parameter names are:")
         for l in self.parLabels:
-            logging.info("%s", l)
+            self.logger.info("%s", l)
 
         #Now we should check whether the number of parameters matches with the parameter labels!
         if len(self.parLabels) != self.npars:
-            logging.critical("You have %d free parameters but %d parameter labels", self.npars, len(self.parLabels))
-            logging.critical("Please check the number of parameters and labels")
+            self.logger.critical("You have %d free parameters but %d parameter labels", self.npars, len(self.parLabels))
+            self.logger.critical("Please check the number of parameters and labels")
             raise ValueError("Mismatch between number of parameters and labels")
             
 
@@ -86,17 +86,17 @@ class EnsembleSampler(MCMCSampler):
                          parameter_labels = parameter_labels, **kwargs)
 
         self.nwalkers = nwalkers
-        logging.info("This problem will be sampled with %d walkers", self.nwalkers)
+        self.logger.info("This problem will be sampled with %d walkers", self.nwalkers)
 
     def rebuildSampler(self, nwalkers = None, model = None,
                        data = None, lnprior = None,
                        labels = None, 
                        **kwargs):
 
-        logging.info("Rebuilding your sampler")
+        self.logger.info("Rebuilding your sampler")
         if np.any([model, data]):
             if model is not None:
-                logging.info("Your model is being updated")
+                self.logger.info("Your model is being updated")
                 self.model=model
                 try:
                     self.nparsMod = self.model.npars
@@ -105,7 +105,7 @@ class EnsembleSampler(MCMCSampler):
                     self.nparsMod = len(sig.parameters) - 1 #Always subtract **kwargs from the parameters, but don't need to worry about self once it is bound to an instance
             if data is not None:
                 self.dataSet = data
-                logging.info("Your data is being updated")
+                self.logger.info("Your data is being updated")
                 self.nparsData = [data.npars for data in self.dataSet] #number of parameters to be passed into each set of data
 
             self.npars = np.int(self.nparsMod + np.sum(self.nparsData))
@@ -115,4 +115,4 @@ class EnsembleSampler(MCMCSampler):
         #print(self.npars, self.nparsMod, self.nparsData)
         if nwalkers is not None:
                 self.nwalkers=nwalkers
-                logging.info("The number of walkers is now %d", self.nwalkers)
+                self.logger.info("The number of walkers is now %d", self.nwalkers)

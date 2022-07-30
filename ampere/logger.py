@@ -23,7 +23,7 @@ def handle_exception(exc_type, exc_value, exc_traceback):
     if issubclass(exc_type, KeyboardInterrupt):
         sys.__excepthook__(exc_type, exc_value, exc_traceback)
         return
-
+    logger = logging.getLogger("ampere logger")
     logger.critical("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
 
 
@@ -37,18 +37,21 @@ class Logger(object):
     """
     def setup_logging(self, verbose=False, to_file=True, to_terminal = True, logfile="ampere", logPath = '.'):
         level = logging.INFO
+        logger = logging.getLogger("ampere logger")
+        logFormatter = logging.Formatter("%(asctime)s [%(threadName)-12.12s] [%(levelname)-8.8s]  %(message)s")
+        self.logger = logger
         if verbose:
             level = logging.DEBUG
 
-        logger.setLevel(level)
+        self.logger.setLevel(level)
         if to_file:
             fileHandler = logging.FileHandler("{0}/{1}.log".format(logPath, logfile))
             fileHandler.setFormatter(logFormatter)
-            logger.addHandler(fileHandler)
+            self.logger.addHandler(fileHandler)
         if to_terminal:
             handler = logging.StreamHandler(stream=sys.stdout)
             handler.setFormatter(logFormatter)
-            logger.addHandler(handler)
+            self.logger.addHandler(handler)
         
         sys.excepthook = handle_exception
 

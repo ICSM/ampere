@@ -39,11 +39,11 @@ class ScipyMinMixin(object):
     def preopt(self, start, **kwargs):
         neglnprob = lambda *args: -self.lnprob(*args)
         from scipy.optimize import minimize
-        logging.info("Using scipy.minimize to find approximate MAP solution")
-        logging.info("starting from position: %s",start)
+        self.logger.info("Using scipy.minimize to find approximate MAP solution")
+        self.logger.info("starting from position: %s",start)
         solution = minimize(neglnprob, start)
         solution = [p for p in solution.x]
-        logging.info("Minimization complete, final position: %s ",solution)
+        self.logger.info("Minimization complete, final position: %s ",solution)
         return solution
 
 
@@ -70,6 +70,7 @@ class SBIPostProcessor(object):
         return self.res
 
     def get_map(self, **kwargs):
+        self.logger.info("Estimating MAP parameters")
         self.bestPars = self.posterior.map()
         return self.bestPars
 
@@ -102,16 +103,16 @@ class SBIPostProcessor(object):
         #Now start printing things
         #with open(outfile, 'w') as f:
         if self.bestPars is not None:
-            logging.info("MAP solution:")
+            self.logger.info("MAP solution:")
             #print("MAP Solution: ")
             for i in range(self.npars):
-                logging.info("%s  = %.5f", self.parLabels[i],self.bestPars[i]) #
+                self.logger.info("%s  = %.5f", self.parLabels[i],self.bestPars[i]) #
 
 
         if self.res is not None:
-            logging.info("Median and confidence intervals for parameters in order:")
+            self.logger.info("Median and confidence intervals for parameters in order:")
             for i in range(self.npars):
-                logging.info("%s  = %.5f + %.5f - %.5f", self.parLabels[i],self.res[i][0],self.res[i][1],self.res[i][2])
+                self.logger.info("%s  = %.5f + %.5f - %.5f", self.parLabels[i],self.res[i][0],self.res[i][1],self.res[i][2])
 
 
 class SimpleMCMCPostProcessor(object):
@@ -177,7 +178,7 @@ class SimpleMCMCPostProcessor(object):
         geweke_z = (a.mean(axis=0) - b.mean(axis=0)) / (np.var(a, axis=0) + np.var(b, axis=0))**0.5
         for i, p in enumerate(self.parLabels):
             if geweke_z[i] > self.geweke_max:
-                logging.warning("geweke drift (z=%.3f) detected for parameter '%s'", geweke_z[i], p)
+                self.logger.warning("geweke drift (z=%.3f) detected for parameter '%s'", geweke_z[i], p)
                 self.converged = False
         return geweke_z
 
@@ -246,10 +247,10 @@ class SimpleMCMCPostProcessor(object):
 
         self.rhat = np.mean(np.sqrt(weighted_var / W))
         if self.rhat - 1 > threshold:
-            logging.warning("Rhat = %.3f > %.3f. Chain is not converged! \n You should run a longer chain. ", self.rhat, 1+threshold)
+            self.logger.warning("Rhat = %.3f > %.3f. Chain is not converged! \n You should run a longer chain. ", self.rhat, 1+threshold)
             self.converged = False
         else:
-            logging.info("Rhat = %.3f <= %.3f ", self.rhat, 1+threshold)
+            self.logger.info("Rhat = %.3f <= %.3f ", self.rhat, 1+threshold)
             self.converged = True
         return self.rhat
 
@@ -294,26 +295,26 @@ class SimpleMCMCPostProcessor(object):
         #Now start printing things
         #with open(outfile, 'w') as f:
         if self.bestPars is not None:
-            logging.info("MAP solution:")
+            self.logger.info("MAP solution:")
             #print("MAP Solution: ")
             for i in range(self.npars):
-                logging.info("%s  = %.5f", self.parLabels[i],self.bestPars[i]) #
+                self.logger.info("%s  = %.5f", self.parLabels[i],self.bestPars[i]) #
                 #file_ouput['MAP']+="{0}  = {1:.5f}\n".format(self.parLabels[i],self.bestPars[i])
 
         if self.res is not None:
-            logging.info("Median and confidence intervals for parameters in order:")
+            self.logger.info("Median and confidence intervals for parameters in order:")
             for i in range(self.npars):
-                logging.info("%s  = %.5f + %.5f - %.5f", self.parLabels[i],self.res[i][0],self.res[i][1],self.res[i][2])
+                self.logger.info("%s  = %.5f + %.5f - %.5f", self.parLabels[i],self.res[i][0],self.res[i][1],self.res[i][2])
                 #file_output['CI']+="{0}  = {1[0]:.5f} + {1[1]:.5f} - {1[2]:.5f}\n".format(self.parLabels[i],self.res[i])
         if self.tauto is not None:
-            logging.info("Mean Autocorrelation Time: %.5f",np.mean(self.tauto))
-            logging.info("Autocorrelation times for each parameter:")
+            self.logger.info("Mean Autocorrelation Time: %.5f",np.mean(self.tauto))
+            self.logger.info("Autocorrelation times for each parameter:")
             #tauto = self.sampler.get_autocorr_time()
             for i in range(self.npars):
-                logging.info("%s  = %.0f steps",self.parLabels[i],self.tauto[i])
+                self.logger.info("%s  = %.0f steps",self.parLabels[i],self.tauto[i])
 
         if self.ess is not None:
-            logging.info("Effective sample size: %.3f", self.ess)
+            self.logger.info("Effective sample size: %.3f", self.ess)
 
     def plot_corner(self, **kwargs):
         import corner
