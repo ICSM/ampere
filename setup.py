@@ -39,12 +39,20 @@ setup(
     install_requires=['numpy',
                       'astropy>=4.0.0',
                       'scipy',
+                      'matplotlib',
                       'spectres',
+                      'tqdm',
                       'pyphot',
                       'emcee',
-                      'dynesty'
+                      'dynesty',
+                      'corner',
                       ],
-    python_requires=">=3.7", 
+    python_requires=">=3.7",
+    extras_require{
+        "sbi":["torch", "sbi"],
+        "zeus":["zeus-mcmc"],
+        "arviz":["arviz"],
+        }
 
     classifiers=[
         'Development Status :: 3 - Alpha',
