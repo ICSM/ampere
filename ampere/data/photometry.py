@@ -415,7 +415,7 @@ class Photometry(Data):
 
         #First, we compute the model photometry
         filts, modSed = pyphot.extractPhotometry(model.spectrum["wavelength"],
-                                                 model.spectrum["modelFlux"],
+                                                 model.spectrum["flux"],
                                                  self.filters,
                                                  Fnu = True,
                                                  absFlux = False,

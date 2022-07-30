@@ -125,8 +125,8 @@ class LFIBase(BaseSearch, Logger):
                 sims.extend(sim)
                 i+=data.npars
             if j == 0: #first time though we need to create the array for the results
-                all_sims = np.zeros((n_sims, len(sim)))
-            all_sims[j,:] = sim
+                all_sims = np.zeros((n_sims, len(sims)))
+            all_sims[j,:] = sims
 
         return all_sims
 
@@ -194,7 +194,7 @@ class SBI_SNPE(LFIBase,SBIPostProcessor):
         sims = torch.Tensor(sims)#, dtype=torch.float32)
 
         #now we give the sampler the simulations ...
-        self.inference = self.sampler.append_simulations(theta, sims)
+        self.inference = self.sampler.append_simulations(thetas, sims)
         #...and start doing inference
         logging.info("Training posterior")
         self.density_estimator = self.inference.train()
@@ -204,7 +204,10 @@ class SBI_SNPE(LFIBase,SBIPostProcessor):
         #first we need to check how many observations we're dealing with
         obs = []
         for d in self.dataSet:
+            print(d.value[d.mask])
             obs.extend(d.value[d.mask]) #for now, we'll do this the ugly way, and improve it later.
+        print(obs)
+        print(sims[-1])
         obs = torch.Tensor(obs)
         logging.info("Sampling trained posterior")
         self.posterior.set_default_x(obs)

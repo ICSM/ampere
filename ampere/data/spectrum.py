@@ -494,7 +494,7 @@ class Spectrum(Data):
         except IndexError: #Only possible if theta is scalar or can't be indexed
             scaleFac = theta
         #First we resample the spectrum
-        modSpec = self.resampler(self.wavelength, model.spectrum["wavelength"], model.spectrum["modelFlux"])[self.mask]
+        modSpec = self.resampler(self.wavelength, model.spectrum["wavelength"], model.spectrum["flux"])[self.mask]
 
         #now we rescale it with the scale factor
         #For the likelihood, we multiply the data by the scale factor

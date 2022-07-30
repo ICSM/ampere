@@ -75,7 +75,10 @@ class SBIPostProcessor(object):
 
     def plot_corner(self, **kwargs):
         import corner
-        fig2 = corner.corner(self.samples,labels=self.parLabels, **kwargs)
+        try:
+            fig2 = corner.corner(self.samples,labels=self.parLabels, **kwargs)
+        except ImportError:
+            fig2 = corner.corner(self.samples.numpy(),labels=self.parLabels, **kwargs)
         fig2.savefig("corner.png")
 
     def summary(self, interval = [16, 50, 84], **kwargs):
