@@ -156,7 +156,7 @@ if __name__ == "__main__":
     optimizer = SBI_SNPE(model=model, data=dataset)
 
     #Then we tell it to explore the parameter space
-    optimizer.optimise(nsamples = 1000, nsamples_post = 10000
+    optimizer.optimise(nsamples = 10000, nsamples_post = 10000
                        )
     
 

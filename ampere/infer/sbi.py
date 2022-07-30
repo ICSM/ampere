@@ -161,6 +161,7 @@ class SBI_SNPE(LFIBase,SBIPostProcessor):
 
             for i in tqdm(range(n_prior_norm_samples)):
                 samples[i] = self.prior_transform(u[i,:])
+            self.logger.info("Computing integral")
             lp = self.lnprior_vector(samples)
             from scipy.special import logsumexp
             ranges = np.max(samples, axis=0) - np.min(samples, axis=0)
