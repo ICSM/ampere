@@ -128,8 +128,18 @@ class Photometry(Data):
                 value[i] = zeropoints[i]*10^(-0.4*value[i])
                 uncertainty[i] = value[i] - zeropoints*10^(-0.4*(value[i]+uncertainty[i]))
 
-        print(len(photUnits))
-        print(len(value))
+        try:
+            print(len(photUnits))
+        except TypeError:
+            print(photUnits)
+        try:
+            print(len(value))
+        except TypeError:
+            print(value)
+        
+
+        #print(len(photUnits))
+        #print(len(value))
         try:
             assert len(photUnits) == len(value)
         except AssertionError: #We have more than one unit entry, but not one per flux entry, raise an error and force the user to do something about it:

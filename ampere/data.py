@@ -15,6 +15,8 @@ from spectres import spectres
 from scipy.stats import rv_continuous, norm, halfnorm
 #from scipy.linalg import inv
 from numpy.linalg import inv
+#for logging
+import logging
 
 class Data(object):
     """A base class to represent data objects and their properties
@@ -224,15 +226,15 @@ class Photometry(Data):
 
         ''' setup pyphot for this set of photometry '''
         self.pyphotSetup(libName)
-        print(self.filterName.astype('str'))
+        logging.info(self.filterName.astype('str'))
         #newTry = [str(filt).replace(':','_').replace('/','_').replace('WISE','WISE_RSR').replace('Spitzer','SPITZER') for filt in self.filterName]
         self.filterNamesToPyphot()
 
         self.label = label
         self.plotParams["label"] = label
 
-        print(photUnits)
-        print(type(photUnits))
+        logging.info(photUnits)
+        logging.info(type(photUnits))
 
         #print(self.filterMask)
         if np.all(self.filterMask):
@@ -264,29 +266,29 @@ class Photometry(Data):
                 value[i] = zeropoints[i]*10^(-0.4*value[i])
                 uncertainty[i] = value[i] - zeropoints*10^(-0.4*(value[i]+uncertainty[i]))
 
-        print(len(photUnits))
-        print(len(value))
+        logging.info("Length of zero point values: ",len(value))
         try:
             assert len(photUnits) == len(value)
         except AssertionError: #We have more than one unit entry, but not one per flux entry, raise an error and force the user to do something about it:
             if isinstance(photUnits, str):
-                print("photUnits is a string")
+                logging.info("photUnits is a string")
                 photUnits = [photUnits] * len(value)
             else:
-                print("photUnits is weird")
+                logging.info("photUnits is weird")
                 raise RunTimeError("The wrong number of unit entries appear to have been provided. Please check this and try again. You provided {0} units, but {1} fluxes. \n The fluxes are \n {2} \nand the units are \n {3}".format(len(photUnits), len(value), photunits, values))
         except TypeError: #only one unit was provided, let's forcibly turn it into an iterable
-            print("photunits is not iterable")
+            logging.info("photunits is not iterable, forcing it to be iterable")
             photUnits = len(value) * (photUnits,)
         else:
             if isinstance(photUnits, str):
-                print("photUnits is a string")
+                logging.info("photUnits is a string")
                 photUnits = [photUnits] * len(value)
             else:
-                print("photUnits is very weird")
+                logging.info("photUnits is very weird, you should look into this")
 
-        print(photUnits)
-        print(type(photUnits))
+        logging.info("Length of filter units: ",len(photUnits))
+        logging.info("Photunits: ",photUnits)
+        logging.info("Type photunits:",type(photUnits))
                        
         #identify values in milliJansky, convert to Jy
         uconv = np.array([u.Jy.to(pU) for pU in photUnits])
@@ -370,7 +372,7 @@ class Photometry(Data):
         '''
         
         if libName is None:
-            print("No library given, using default pyphot filters")
+            logging.info("No library given, using default pyphot filters")
             libDir = pyphot.__file__.strip('__init__.py')+'libs/'
             libName = libDir + 'synphot_nonhst.hd5' #PhIReSSTARTer.hd5'
         
@@ -487,15 +489,15 @@ class Photometry(Data):
         probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(inv(self.covMat), a) ) ) )
 
         if np.isnan(probFlux):
-            print("NaN probability")
-            print(theta)
-            print(b)
-            print(inv(self.covMat))
-            print(self.value[self.mask])
-            print(modSed[self.mask])
-            print(a)
-            print(np.matmul(inv(self.covMat), a))
-            print(np.matmul ( a.T, np.matmul(inv(self.covMat), a) ) )
+            logging.info("NaN probability")
+            logging.info("theta: ",theta)
+            logging.info("b: ",b)
+            logging.info("Inverse covariance matrix: ",inv(self.covMat))
+            logging.info("Mask array: ",self.value[self.mask])
+            logging.info("modSed masked array: ", modSed[self.mask])
+            logging.info("a: ",a)
+            logging.info(np.matmul(inv(self.covMat), a))
+            logging.info(np.matmul ( a.T, np.matmul(inv(self.covMat), a) ) )
             return -np.inf #hack for now so we can see how often this occurs and hopefully troubleshoot it!
 
         return probFlux
@@ -535,14 +537,14 @@ class Photometry(Data):
         #print(self.logDetCovMat)
         if self.logDetCovMat == -np.inf: #This needs to be updated to raise an error!
 
-            print("""The determinant of the covariance matrix for this dataset is 0.
+            logging.info("""The determinant of the covariance matrix for this dataset is 0.
             Please check that the uncertainties are positive real numbers """)
-            print(self)
+            logging.info(self)
             exit()
         elif self.signDetCovMat < 0:
-            print("""The determinant of the covariance matrix for this dataset is negative.
+            logging.info("""The determinant of the covariance matrix for this dataset is negative.
             Please check that the uncertainties are positive real numbers """)
-            print(self)
+            logging.info(self)
             exit()
         return self.covMat
 
@@ -627,7 +629,7 @@ class Photometry(Data):
             A limited set of keywords can be set by passing **kwargs to the function.
         '''
 
-        print("Setting plotting parameters for photometry data set.")
+        logging.info("Setting plotting parameters for photometry data set.")
 
         #update plotParams with any keywords passed via **kwargs
         #This only changes things that were passed in, so anything else will retain its default
@@ -827,6 +829,7 @@ class Spectrum(Data):
 
         ''' Assume default of 10% calibration uncertainty unless otherwise specified by the user '''
         if calUnc is None:
+            logging.info("No calibration uncertainty provided, assuming 10%.")
             self.calUnc = 0.010 #beware! This is a variance!
         else:
             self.calUnc = calUnc
@@ -919,13 +922,13 @@ class Spectrum(Data):
 
         if resampleMethod == "exact":
             self.resampler = spectres
-            print("Using exact resampling")
+            logging.info("Using exact resampling")
         elif resampleMethod=="fast":
             self.resampler = np.interp
-            print("Using fast resampling")
+            logging.info("Using fast resampling")
         elif callable(resampleMethod):
             self.resampler = resampleMethod
-            print("Using user-specified resampling")
+            logging.info("Using user-specified resampling")
         #elif resampleMethod=="exactcompiled":
         #    #Raise a warning here, this is going to be experimental when it's implemented
         #    self.resampler = spectres_numba
@@ -1030,12 +1033,12 @@ class Spectrum(Data):
 
         self.signDetCovMat, self.logDetCovMat = np.linalg.slogdet(self.covMat)
         if self.logDetCovMat == -np.inf: #This needs to be updated to raise an error! Or at least force the likelihood to be zero
-            print("""The determinant of the covariance matrix for this dataset is 0.
+            logging.info("""The determinant of the covariance matrix for this dataset is 0.
             Please check that the uncertainties are positive real numbers """)
-            print(self)
-            print(theta)
-            print(self.signDetCovMat,self.logDetCovMat)
-            print(self.covMat)
+            logging.info("Input:",self)
+            logging.info("Theta:",theta)
+            logging.info("Determinant Covariance Matrix and its log:",self.signDetCovMat,self.logDetCovMat)
+            logging.info("Covariance matrix:",self.covMat)
             exit()
         #elif self.signDetCovMat < 0:
         #    print("""The determinant of the covariance matrix for this dataset is negative.
@@ -1081,6 +1084,7 @@ class Spectrum(Data):
         try:
             scaleFac = theta[0]
         except IndexError: #Only possible if theta is scalar or can't be indexed
+            logging.info("theta is scalar or cannot be indexed")
             scaleFac = theta
         if scaleFac > 0 and 0. <= theta[1] <= 1. and theta[2] > 0.:
             #print(scalefac)
@@ -1110,6 +1114,7 @@ class Spectrum(Data):
         try:
             scaleFac = theta[0]
         except IndexError: #Only possible if theta is scalar or can't be indexed
+            logging.info("theta is scalar or cannot be indexed")
             scaleFac = theta
 
         #print(self)
@@ -1144,16 +1149,16 @@ class Spectrum(Data):
         #covMatmask = np.reshape(self.covMat[self.cov_mask], np.shape(self.covMat))
         probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(inv(self.covMat), a) ) ) )
         if np.isnan(probFlux):
-            print("NaN probability")
-            print(theta)
-            print(b)
-            print(inv(self.covMat))
-            print(self.value[self.mask])
-            print(modSpec)
-            print(model.modelFlux)
-            print(a)
-            print(np.matmul(inv(self.covMat), a))
-            print(np.matmul ( a.T, np.matmul(inv(self.covMat), a) ) )
+            logging.info("NaN probability")
+            logging.info("Theta:", theta)
+            logging.info("b:",b)
+            logging.info("inverse covariance matrix:",inv(self.covMat))
+            logging.info("mask:",self.value[self.mask])
+            logging.info("modSpec:",modSpec)
+            logging.info("modelFlux:",model.modelFlux)
+            logging.info("a:",a)
+            logging.info(np.matmul(inv(self.covMat), a))
+            logging.info(np.matmul ( a.T, np.matmul(inv(self.covMat), a) ) )
             return -np.inf #hack for now so we can see how often this occurs and hopefully troubleshoot it!
         #print(((np.float128(2.)*np.pi)**(len(self.value))), np.linalg.det(self.covMat))
         #print(((np.float128(2.)*np.pi)**(len(self.value)) * np.linalg.det(self.covMat)))
@@ -1640,8 +1645,10 @@ class Image(Data):
                                            hdul[i].header['NAXIS2']])
                         images = np.append(images,hdul[i].data)
                         #Get PSF from image extension or internal library?
+                        #Some images the PSF FWHM comes as keywords BMAJ/BMIN/PA
+                        #We could add those and reconstruct a (Gaussian) PSF in ampere
             except:
-                print('No HDU marked "image" found...')
+                logging.info('No HDU marked "image" found...')
             
             self.wavelength = wavelength
             self.fluxUnits  = fluxUnits

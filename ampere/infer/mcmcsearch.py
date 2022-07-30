@@ -50,6 +50,9 @@ class MCMCSampler(BaseSearch, Logger):
             self.parLabels = parameter_labels
         #self.parLabels = ['x'+str(i) for i in range(self.npars)] #Parameter for parameter names (labels) to associate with output in post processing - emcee does this internally with parameter_names, but we want a universal system across all the search methods. Called parLabels to distinguish it from Data Class labels.
 
+
+        
+
         self.verbose = verbose
         #if self.verbose:
         logging.info("This model has %d parameters.", self.nparsMod)
@@ -58,6 +61,12 @@ class MCMCSampler(BaseSearch, Logger):
         logging.info("The parameter names are:")
         for l in self.parLabels:
             logging.info("%s", l)
+
+        #Now we should check whether the number of parameters matches with the parameter labels!
+        if len(self.parLabels) != self.npars:
+            logging.critical("You have %d free parameters but %d parameter labels", self.npars, len(self.parLabels))
+            logging.critical("Please check the number of parameters and labels")
+            raise ValueError("Mismatch between number of parameters and labels")
             
 
 
