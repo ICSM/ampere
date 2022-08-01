@@ -49,6 +49,12 @@ class ASimpleModel(Model):
         self.modelFlux = slope*self.wavelength + intercept
 
     def lnprior(self, theta, **kwargs):
+        """The model prior probability distribution
+        
+        The prior is essential to most types of inference with ampere. The prior
+        describes the relative weights (or probabilities if normalised) of different
+        parameter combinations. 
+        """
         slope = theta[0]
         print(slope)
         intercept = theta[1]

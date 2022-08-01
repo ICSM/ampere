@@ -48,6 +48,12 @@ class ASimpleModel(Model):
         self.modelFlux = slope*self.wavelength + intercept
 
     def lnprior(self, theta, **kwargs):
+        """The model prior probability distribution
+        
+        This is only included for completeness and to demonstrate how a prior 
+        function should look. As we are using dynesty, the prior itself is not required,
+        only the prior transform.
+        """
         slope = theta[0]
         intercept = theta[1]
         if self.flatprior:
@@ -62,10 +68,9 @@ class ASimpleModel(Model):
     def prior_transform(self, u, **kwargs):
         '''The prior transform, which takes samples from the Uniform(0,1) distribution to the desired distribution.
 
-        This is only included for completeness and to demonstrate how a prior 
-        transform function should look. This example only uses emcee for 
-        fitting, which uses the lnprior function instead. Prior transforms are 
-        required by nested-sampling codes and similar approaches.
+        Prior transforms are essential for nested sampling. This is because most nested-sampling codes 
+        need to sample from the prior volume to correctly estimate the evidence (since it is the
+        expectation of the likelihood).
         '''
         if self.flatprior:
             theta = np.zeros_like(u)

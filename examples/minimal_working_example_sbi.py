@@ -51,6 +51,14 @@ class ASimpleModel(Model):
         return {"spectrum":{"wavelength":self.wavelength, "flux": self.modelFlux}}
 
     def lnprior(self, theta, **kwargs):
+        """The model prior probability distribution
+        
+        The prior is essential to most types of inference with ampere. The prior
+        describes the relative weights (or probabilities if normalised) of different
+        parameter combinations. Using a normalised prior with SNPE is strongly 
+        recommended, otherwise ampere will attempt approximate normalisation using
+        Monte Carlo integration.
+        """
         slope = theta[0]
         #print(slope)
         intercept = theta[1]
@@ -66,10 +74,9 @@ class ASimpleModel(Model):
     def prior_transform(self, u, **kwargs):
         '''The prior transform, which takes samples from the Uniform(0,1) distribution to the desired distribution.
 
-        This is only included for completeness and to demonstrate how a prior 
-        transform function should look. This example only uses emcee for 
-        fitting, which uses the lnprior function instead. Prior transforms are 
-        required by nested-sampling codes and similar approaches.
+        Prior transforms are essential for SNPE. SNPE needs to be able to generate samples from the prior, and this
+        method is integral to doing so. Therefore, unlike other inference methods, if you want to use SNPE (or other
+        SBI approaches) you need to define *both* lnprior and prior_transform.
         '''
         if self.flatprior:
             theta = np.zeros_like(u)
@@ -153,6 +160,7 @@ if __name__ == "__main__":
          ]
 
     #Now we set up the optimizer object:
+    #In this version of the example, we are using ``Sequential Neural Posterior Estimation'' (SNPE) from the package sbi
     optimizer = SBI_SNPE(model=model, data=dataset)
 
     #Then we tell it to explore the parameter space
