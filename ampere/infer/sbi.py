@@ -34,10 +34,13 @@ class LFIBase(BaseSearch, Logger):
 
 
     def __init__(self, model=None, data=None, verbose = False,
-                 parameter_labels = None,
+                 parameter_labels = None, cache_models = True
                  **kwargs):
         self.model = model
         self.dataSet = data
+        self.cache_models = cache_models
+        if cache_models:
+            self.cache = {}
 
         self.setup_logging(verbose=verbose) #For now we will exclusively use default logging settings, this will be modified once logging is tested.
         self.logger.info("Welcome to ampere")
@@ -92,9 +95,18 @@ class LFIBase(BaseSearch, Logger):
         """A method to simulate an observation """
 
         #First we call the model
-        result = self.model(*theta[:self.nparsMod])
+        if self.cache_results: #There should be a better way of updating the cache than this, but for now this is fine...
+            if (key := tuple(theta[:self.nparsMod])) in self.cache:
+                result = self.cache[key]
+            else:
+                result = self.model(*theta[:self.nparsMod])
+        else:
+            result = self.model(*theta[:self.nparsMod])
         if not isinstance(result, ModelResults):
             result = ModelResults(**result) #Try unpacking the results here if the user didn't already define their model with it
+        #Cache the result
+        if self.cache_models:
+            self.cache[tuple(theta[:self.nparsMod])] = result
 
         #Then we make each Data object produce a sample synthetic observation
         sims = []
@@ -112,12 +124,22 @@ class LFIBase(BaseSearch, Logger):
         #This method takes the same approach as simulate(), but iterates over many thetas instead.
         n_sims = thetas.shape[0]
         for j, theta in enumerate(tqdm(thetas)):
+
+            if self.cache_results:
+                if (key := tuple(theta[:self.nparsMod])) in self.cache:
+                    result = self.cache[key]
+                else:
+                    result = self.model(*theta[:self.nparsMod])
             #print(theta)
             #print(theta[:self.nparsMod])
             #First we call the model
-            result = self.model(*theta[:self.nparsMod])
+            else:
+                result = self.model(*theta[:self.nparsMod])
             if not isinstance(result, ModelResults):
                 result = ModelResults(**result) #Try unpacking the results here if the user didn't already define their model with it
+            #Cache the result
+            if self.cache_models:
+                self.cache[tuple(theta[:self.nparsMod])] = result
             #Then we make each Data object produce a sample synthetic observation
             sims = []
             i=self.nparsMod
@@ -131,6 +153,9 @@ class LFIBase(BaseSearch, Logger):
 
         return all_sims
 
+    def simulate_from_cached_models(self, thetas):
+        pass
+
             
     
 class SBI_SNPE(LFIBase,SBIPostProcessor):
@@ -141,9 +166,10 @@ class SBI_SNPE(LFIBase,SBIPostProcessor):
                  check_prior_normalisation = True,
                  n_prior_norm_samples = 100000,
                  prior_norm_thres = 0.01,
+                 cache_models = True,
                  **kwargs):
         super().__init__(model = model, data= data, verbose = verbose,
-                         parameter_labels = parameter_labels, **kwargs)
+                         parameter_labels = parameter_labels, cache_models = cache_models, **kwargs)
 
         if check_prior_normalisation:
             self.logger.info("Checking prior normalisation")
