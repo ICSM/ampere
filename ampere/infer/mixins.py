@@ -26,7 +26,7 @@ import numpy as np
 import logging
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
-
+from scipy.special import logsumexp
 
 from ..data import Photometry, Spectrum
 
@@ -74,6 +74,82 @@ class SBIPostProcessor(object):
         self.bestPars = self.posterior.map()
         return self.bestPars
 
+    def plot_covmats(self):
+        istart = self.nparsMod
+        for i, d in enumerate(self.dataSet):
+            if isinstance(d, Photometry):
+                continue
+            elif isinstance(d, Spectrum):
+                fig, ax = plt.subplots(1,1)
+                d.cov([self.res[istart+1][0],self.res[istart+2][0]])
+                #ax0.set_title('Covariance matrix')
+                im = ax.imshow(np.log10(d.covMat))
+                istart+=d.npars
+                fig.savefig("covMat_"+str(i)+".png")
+
+    def plot_posteriorpredictive(self, n_post_samples = 100,plotfile="posteriorpredictive.png", logx = False, logy = False, alpha = 0.1,**kwargs):
+        '''
+        Function to plot the data and samples drawn from the posterior of the models and data.
+        '''
+        fig,axes = plt.subplots(1,1,figsize=(8,6))
+        axes.set_xlabel(r"Wavelength ($\mu$m)")
+        axes.set_ylabel(r"Flux density (mJy)")
+
+        #observations
+        for d in self.dataSet:
+            if isinstance(d,(Photometry,Spectrum)):
+                d.plot(ax = axes)
+
+        #For SBI, we will plot cached models if we can, because the model is probably too slow to generate new ones
+        if self.cache_models:
+            #First, we have to calculate the *posterior* logprob of each *prior* sample
+            post_probs = 10**self.posterior.log_prob(self.thetas)
+            print(self.thetas.size())
+            post_probs = post_probs/ post_probs.sum() #divide by log(sum(probabilites) to normalise them
+            print(np.sum(post_probs.numpy()))
+            #next we need to sample from these, with the most-probable models being most likely to be selected
+            rng = np.random.default_rng()
+            chosen_thetas = rng.choice(self.thetas[post_probs.numpy() > 0], size = n_post_samples, p = post_probs.numpy()[post_probs.numpy() > 0], axis = 0) #, replace=False)
+            for i, t in enumerate(chosen_thetas):
+                key = tuple(t[:self.nparsMod])
+                r = self.cache[key]
+                axes.plot(r.spectrum["wavelength"], r.spectrum["flux"], '-', color='k', alpha = alpha, label = 'Samples', zorder=0)
+            pass
+        else:
+            for s in self.samples[np.random.randint(len(self.samples), size=n_post_samples)]:
+                try:
+                    self.model(*s[:self.nparsMod])
+                    axes.plot(self.model.wavelength,self.model.modelFlux, '-', color='k', alpha=alpha,label='Samples', zorder = 0)
+                except ValueError:
+                    pass
+                i = self.nparsMod
+                for d in self.dataSet:
+                    if isinstance(d,(Photometry,Spectrum)):
+                        if d._hasNoiseModel:
+                            d.plotRealisation(s[i:i+d.npars], ax=axes)
+                        i+= d.npars
+
+
+        #We won't try plotting the MAP in this case, because it almost certainly hasn't been generated a priori
+        #best fit model
+        #try:
+        #    self.model(*self.bestPars[:self.nparsMod])
+        #    axes.plot(self.model.wavelength,self.model.modelFlux, '-', color='k', alpha=1.0,label='MAP', zorder=8)
+        #except ValueError:
+        #    print("Error in MAP solution \n Skipping MAP in plot")
+
+        #These plots end up with too many labels for the legend, so we clobber the label information so that only one of each one is plotted
+        handles, labels = plt.gca().get_legend_handles_labels()
+        # labels will be the keys of the dict, handles will be values
+        temp = {k:v for k,v in zip(labels, handles)}
+        plt.legend(temp.values(), temp.keys(), loc='best')
+
+        #plt.legend()
+        plt.tight_layout()
+        fig.savefig(plotfile,dpi=200)
+        plt.close(fig)
+        plt.clf()
+
     def plot_corner(self, **kwargs):
         import corner
         try:
@@ -113,6 +189,8 @@ class SBIPostProcessor(object):
             self.logger.info("Median and confidence intervals for parameters in order:")
             for i in range(self.npars):
                 self.logger.info("%s  = %.5f + %.5f - %.5f", self.parLabels[i],self.res[i][0],self.res[i][1],self.res[i][2])
+
+
 
 
 class SimpleMCMCPostProcessor(object):

@@ -34,7 +34,7 @@ class LFIBase(BaseSearch, Logger):
 
 
     def __init__(self, model=None, data=None, verbose = False,
-                 parameter_labels = None, cache_models = True
+                 parameter_labels = None, cache_models = True,
                  **kwargs):
         self.model = model
         self.dataSet = data
@@ -95,7 +95,7 @@ class LFIBase(BaseSearch, Logger):
         """A method to simulate an observation """
 
         #First we call the model
-        if self.cache_results: #There should be a better way of updating the cache than this, but for now this is fine...
+        if self.cache_models: #There should be a better way of updating the cache than this, but for now this is fine...
             if (key := tuple(theta[:self.nparsMod])) in self.cache:
                 result = self.cache[key]
             else:
@@ -106,7 +106,7 @@ class LFIBase(BaseSearch, Logger):
             result = ModelResults(**result) #Try unpacking the results here if the user didn't already define their model with it
         #Cache the result
         if self.cache_models:
-            self.cache[tuple(theta[:self.nparsMod])] = result
+            self.cache[tuple(theta[:self.nparsMod])] = result #There's some overhead here, because it will overwrite the cache if it's already cached...
 
         #Then we make each Data object produce a sample synthetic observation
         sims = []
@@ -125,7 +125,7 @@ class LFIBase(BaseSearch, Logger):
         n_sims = thetas.shape[0]
         for j, theta in enumerate(tqdm(thetas)):
 
-            if self.cache_results:
+            if self.cache_models:
                 if (key := tuple(theta[:self.nparsMod])) in self.cache:
                     result = self.cache[key]
                 else:
@@ -139,7 +139,7 @@ class LFIBase(BaseSearch, Logger):
                 result = ModelResults(**result) #Try unpacking the results here if the user didn't already define their model with it
             #Cache the result
             if self.cache_models:
-                self.cache[tuple(theta[:self.nparsMod])] = result
+                self.cache[tuple(theta[:self.nparsMod])] = result #There's some overhead here, because it will overwrite the cache if it's already cached...
             #Then we make each Data object produce a sample synthetic observation
             sims = []
             i=self.nparsMod
@@ -154,6 +154,22 @@ class LFIBase(BaseSearch, Logger):
         return all_sims
 
     def simulate_from_cached_models(self, thetas):
+        pass
+
+    def save_cached_models(self, format="pickle"):
+        #first we're going to get all the keys for the models so we know what we're outputting
+        keys = self.cache.keys()
+
+        #Then we have to open output files in the requested formats
+        #For now we're implementing pickling, but we should also offer:
+        #Dill
+        #HDF5
+        #JSON
+        #NetCDF?
+        pass
+
+
+    def load_cached_models(self):
         pass
 
             
@@ -244,6 +260,14 @@ class SBI_SNPE(LFIBase,SBIPostProcessor):
         self.posterior.set_default_x(obs)
         #self.samples = self.posterior.sample((nsamples_post,), x = obs)
         self.samples = self.posterior.sample((nsamples_post,))
+        #for posterity (and post-processing) we're going to save the parameter values for the prior samples
+        self.thetas = thetas
+        check_cache=False#True
+        if check_cache:
+            self.logger.info("Checking model cache")
+            self.logger.info("%s models were cached in this run", len(self.cache))
+            self.logger.info("The keys are:")
+            self.logger.info("%s", self.cache.keys())
         pass
 
     def postProcess(self, show=False, textfile=None, **kwargs):
@@ -254,6 +278,8 @@ class SBI_SNPE(LFIBase,SBIPostProcessor):
         self.print_summary()
 
         self.plot_corner()
+
+        self.plot_posteriorpredictive()
 
 
     def sample(self, nsamples = 1, **kwargs):
@@ -274,7 +300,7 @@ class SBI_SNPE(LFIBase,SBIPostProcessor):
             nsamples = nsamples[0]
             
         #First, we generate nsamples samples of self.npars uniform random variates
-        u = np.random.default_rng().uniform(size=(nsamples, self.npars))
+        u = np.single(np.random.default_rng().uniform(size=(nsamples, self.npars)))
         samples = np.zeros((nsamples, self.npars))
 
         #Now we call the prior transform. For safety, we will manually iterate over the batch dimension
