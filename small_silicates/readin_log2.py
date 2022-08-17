@@ -59,15 +59,35 @@ class Blackbody_dust(Model):
             tempWl = tempData[:, 0]
             tempOpac = tempData[:, 1]            
             
-
             f = interpolate.interp1d(tempWl, tempOpac, assume_sorted = False)
             opacity_array[:,j] = f(wavelengths)#wavelengths)
             
         self.opacity_array = opacity_array
         self.nSpecies = nSpecies
+
+        # Here we will read in the set of lines ... 
+        lineDirectory = os.path.dirname(os.path.realpath('__file__'))+'/lines/'
+        lineFile = 'lines_cygob2.txt'
+        line_wavelength,eq_widths_angstrom,fwhm_array = np.loadtxt(lineDirectory + lineFile, comments = '#',unpack=1)
         
-        self.npars = nSpecies + 3 #Number of free parameters for the model (__call__()). For some models this can be determined through introspection, but it is still strongly recommended to define this explicitly here. Introspection will only be attempted if self.npars is not defined.
-        self.npars_ptform = nSpecies + 3 #Sometimes the number of free parameters is different when using the prior transform instead of the prior. In that case, self.npars_ptform should also be defined.
+        stddev_array  = fwhm_array*1./(2.*np.sqrt(2.*np.log(2)))
+        self.stddev_array = stddev_array
+        amplitude_array = 1. / (stddev_array * np.sqrt(2. * np.pi))
+        self.amplitude_array = amplitude_array
+
+        self.line_wavelength = line_wavelength
+        
+        gaussians = 0
+        
+        for i in range(len(stddev_array)):
+            gaussian=models.Gaussian1D(amplitude=amplitude_array[i], stddev=stddev_array[i], mean=line_wavelength[i])
+            print(len(gaussian(wavelengths)))
+            gaussians+=gaussian(wavelengths)
+        
+        self.gaussians = gaussians
+        
+        self.npars = nSpecies + 4 #Number of free parameters for the model (__call__()). For some models this can be determined through introspection, but it is still strongly recommended to define this explicitly here. Introspection will only be attempted if self.npars is not defined.
+        self.npars_ptform = nSpecies + 4 #Sometimes the number of free parameters is different when using the prior transform instead of the prior. In that case, self.npars_ptform should also be defined.
         #You can do any other set up you need in this method.
         #For example, we could define some cases to set up different priors
         #But that's for a slightly more complex example.
@@ -79,7 +99,7 @@ class Blackbody_dust(Model):
         print("Labels:", labels2)
         self.parLabels = labels2
 
-    def __call__(self, temp, radius_sol, scaling, *args, **kwargs):
+    def __call__(self, temp, radius_sol, scaling, line_scaling, *args, **kwargs):
         '''The model itself, using the callable class functionality of python.
 
         This is an essential method. It should do any steps required to 
@@ -114,6 +134,8 @@ class Blackbody_dust(Model):
         flux_mjy = (flux.to(u.mJy / u.sr).value*(Rstar/r)**2.+scaling*1.e-7*flux_freefree)*fModel2
         # here we need to put dust models ...
         dustAbundances = np.array(args) # instead of 10**np.array(args)
+        
+        flux_mjy = flux_mjy + self.gaussians*line_scaling
         
         self.modelFlux = flux_mjy #slope*self.wavelength + intercept 
         
@@ -191,7 +213,7 @@ irsEx_3 = Spectrum.fromFile(dataDir+specFile3,format='SPITZER-YAAAR_OPTDIFFHR')
 
 # Photometry 
 
-libname = '/home/zeegers/ampere/ampere/ampere_allfilters.hd5'
+libname = '/asiaa/home/szeegers/git_ampere/ampere/ampere/ampere_allfilters.hd5'
 
 photFile = ampere.__file__.strip('__init__.py')+'Testdata/vizier_votable_cygob212_time_again.vot'
 table1 = parse_single_table(photFile)
@@ -199,10 +221,10 @@ table1 = parse_single_table(photFile)
 table1 = table1.to_table()    
 
     # Sascha: read in real photometry data ....
-desired_filters=['2MASS:J', '2MASS:H', '2MASS:Ks', 'Spitzer/MIPS:24', 'WISE:W4','WISE:W3'] #these are the filters we're after
-mask = np.isin(table1[u'sed_filter'], desired_filters) #np.isin() is true for each element of table['filter'] that matches one of the elements of desired_filters
+desired_filters=[b'2MASS:J', b'2MASS:H', b'2MASS:Ks', b'Spitzer/MIPS:24', b'WISE:W4',b'WISE:W3'] #these are the filters we're after
+mask = np.isin(table1['sed_filter'], desired_filters) #np.isin() is true for each element of table['filter'] that matches one of the elements of desired_filters
 phot_new = table1[mask] #now we make a new table which is just the rows that have the filters we want
-desired_filters_again=['II/328/allwise','I/ApJS/191/301/table1']
+desired_filters_again=[b'II/328/allwise',b'I/ApJS/191/301/table1']
 mask_again = np.isin(phot_new['_tabname'], desired_filters_again)
 phot_again = phot_new[mask_again]
     
@@ -270,7 +292,7 @@ file_again.close()
 
 model = Blackbody_dust(wavelengths)
 
-model(parameter_array[0], parameter_array[1], parameter_array[2], parameter_array[3], parameter_array[4], parameter_array[5], parameter_array[6], parameter_array[7], parameter_array[8], parameter_array[9])
+model(parameter_array[0], parameter_array[1], parameter_array[2], parameter_array[3], parameter_array[4], parameter_array[5], parameter_array[6], parameter_array[7], parameter_array[8], parameter_array[9], parameter_array[10])
 
 model_flux = model.modelFlux
 

@@ -1,3 +1,9 @@
+# same program as cyg_ob_2_12_revisited, but now we include a model with a set of lines to fit the emission lines in the spectrum
+# We first write down part of the lines program. We will read in the line data from a file 
+# we fitted gaussians before, where we varied the amplitude, standard deviation and mean
+# FWHM is determined by the telescope
+# We will first try to fit the lines in one go
+
 import sys
 sys.path.insert(1, '/asiaa/home/szeegers/git_ampere/ampere/')
 import numpy as np
@@ -18,7 +24,6 @@ from astropy.constants import c
 from astropy.io.votable import parse_single_table
 import pdb
 
-#First we will define a rather simple model
 
 class Blackbody_dust(Model):
     '''This is a blackbody model based on the very simple model from Peter 
@@ -29,7 +34,8 @@ class Blackbody_dust(Model):
     def __init__(self, wavelengths, flatprior=True,
                  lims=np.array([[10., 300000.],
                                 [1.,6.],
-                                [0.001,10.]])):
+                                [0.001,10.],
+                                [0.001,1.]])):
         '''The model constructor, which will set everything up
 
         This method does essential setup actions, primarily things that 
@@ -64,20 +70,42 @@ class Blackbody_dust(Model):
         self.opacity_array = opacity_array
         self.nSpecies = nSpecies
         
-        self.npars = nSpecies + 3 #Number of free parameters for the model (__call__()). For some models this can be determined through introspection, but it is still strongly recommended to define this explicitly here. Introspection will only be attempted if self.npars is not defined.
-        self.npars_ptform = nSpecies + 3 #Sometimes the number of free parameters is different when using the prior transform instead of the prior. In that case, self.npars_ptform should also be defined.
+        # Here we will read in the set of lines ... 
+        lineDirectory = os.path.dirname(os.path.realpath('__file__'))+'/lines/'
+        lineFile = 'lines_cygob2.txt'
+        line_wavelength,eq_widths_angstrom,fwhm_array = np.loadtxt(lineDirectory + lineFile, comments = '#',unpack=1)
+        
+        stddev_array  = fwhm_array*1./(2.*np.sqrt(2.*np.log(2)))
+        self.stddev_array = stddev_array
+        amplitude_array = 1. / (stddev_array * np.sqrt(2. * np.pi))
+        self.amplitude_array = amplitude_array
+
+        self.line_wavelength = line_wavelength
+        
+        gaussians = 0
+        
+        for i in range(len(stddev_array)):
+            gaussian=models.Gaussian1D(amplitude=amplitude_array[i], stddev=stddev_array[i], mean=line_wavelength[i])
+            print(len(gaussian(wavelengths)))
+            gaussians+=gaussian(wavelengths)
+        
+        self.gaussians = gaussians
+        
+        
+        self.npars = nSpecies + 4 #Number of free parameters for the model (__call__()). For some models this can be determined through introspection, but it is still strongly recommended to define this explicitly here. Introspection will only be attempted if self.npars is not defined.
+        self.npars_ptform = nSpecies + 4 #Sometimes the number of free parameters is different when using the prior transform instead of the prior. In that case, self.npars_ptform should also be defined.
         #You can do any other set up you need in this method.
         #For example, we could define some cases to set up different priors
         #But that's for a slightly more complex example.
         #Here we'll just use a simple flat prior
         self.lims = lims
         self.flatprior = flatprior
-        labels = ["Temperature", "radius star", "Scaling parameter"]
+        labels = ["Temperature", "radius star", "Scaling parameter", "Lines scaling parameter"]
         labels2 = labels+opacityFileList.tolist()
         print("Labels:", labels2)
         self.parLabels = labels2
 
-    def __call__(self, temp, radius_sol, scaling, *args, **kwargs):
+    def __call__(self, temp, radius_sol, scaling, line_scaling, *args, **kwargs):
         '''The model itself, using the callable class functionality of python.
 
         This is an essential method. It should do any steps required to 
@@ -113,6 +141,8 @@ class Blackbody_dust(Model):
         # here we need to put dust models ...
         dustAbundances = np.array(args) # instead of 10**np.array(args)
         
+        flux_mjy = flux_mjy + self.gaussians*line_scaling
+        
         self.modelFlux = flux_mjy #slope*self.wavelength + intercept        
 
     def lnprior(self, theta, **kwargs):
@@ -120,8 +150,9 @@ class Blackbody_dust(Model):
         #distance_pc  = theta[1]
         radius_sol= theta[1]
         scaling = theta[2]
+        line_scaling = theta[3]
         if self.flatprior:
-            if np.all(theta[3:] > 0.) and (self.lims[0,0] < theta[0] < self.lims[0,1]) and (self.lims[1,0] < theta[1] < self.lims[1,1])and (self.lims[2,0] < theta[2] < self.lims[2,1]):
+            if np.all(theta[4:] > 0.) and (self.lims[0,0] < theta[0] < self.lims[0,1]) and (self.lims[1,0] < theta[1] < self.lims[1,1]) and (self.lims[2,0] < theta[2] < self.lims[2,1]) and (self.lims[3,0] < theta[3] < self.lims[3,1]):
                 return 0
             else:
                 return -np.inf
@@ -143,13 +174,12 @@ class Blackbody_dust(Model):
         else:
             raise NotImplementedError()
 
-
 if __name__ == "__main__":
     """ Set up the inputs for the model """
     """ wavelength grid """
     
     # here should be the model input
-    wavelengths = np.linspace(1.0,38, 1000)
+    wavelengths = np.linspace(1.0,38, 3000)
     
     # constants and definition of R factor
     pc  = 3.086e16 # m
@@ -160,11 +190,12 @@ if __name__ == "__main__":
     radius_sol = 2.9
     distance_pc = 1100. # perhaps you should fix the distance!!
     scaling=1.0
+    line_scaling=0.1
 
     #Now init the model:
     model = Blackbody_dust(wavelengths)
     #And call it to produce the fluxes for our chosen parameters
-    model(temp, radius_sol, scaling, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
+    model(temp, radius_sol, scaling, line_scaling, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
     model_flux = model.modelFlux
     
     # Here starts the data part 
@@ -203,7 +234,7 @@ if __name__ == "__main__":
     
     # https://numpy.org/doc/stable/reference/generated/numpy.allclose.html
     # Sascha: read in real photometry data ....
-    desired_filters=[b'2MASS:J', b'2MASS:H', b'2MASS:Ks', b'Spitzer/MIPS:24', b'WISE:W4',b'WISE:W3'] #these are the filters we're after
+    desired_filters=[b'2MASS:J', b'2MASS:H',b'2MASS:Ks', b'Spitzer/MIPS:24', b'WISE:W4',b'WISE:W3'] #these are the filters we're after
     mask = np.isin(table1['sed_filter'], desired_filters) #np.isin() is true for each element of table['filter'] that matches one of the elements of desired_filters
     phot_new = table1[mask] #now we make a new table which is just the rows that have the filters we want
     desired_filters_again=[b'II/328/allwise',b'I/ApJS/191/301/table1']
@@ -247,8 +278,8 @@ if __name__ == "__main__":
     for s in irsEx_2:             #include the next two lines when appending spectroscopy to photometry
         dataSet.append(s)
 
-#    for s in irsEx_3:             #include the next two lines when appending spectroscopy to photometry
-#        dataSet.append(s)
+    for s in irsEx_3:             #include the next two lines when appending spectroscopy to photometry
+        dataSet.append(s)
                 
    # print(dataSet[0])   
         
@@ -261,7 +292,7 @@ if __name__ == "__main__":
         ax.plot(irsEx_1[1].wavelength, irsEx_1[1].value, '-',color='red')        
         ax.plot(irsEx_2[0].wavelength, irsEx_2[0].value, '-',color='red')
         ax.plot(irsEx_3[0].wavelength, irsEx_3[0].value, '-',color='blue')
-        #ax.plot(irsEx_3[1].wavelength, irsEx_3[1].value, '-',color='blue')
+        ax.plot(irsEx_3[1].wavelength, irsEx_3[1].value, '-',color='blue')
     
     ax.plot(wavelengths, model_flux)
     ax.plot(phot.wavelength, phot.value, 'o',color='green')
@@ -276,17 +307,19 @@ if __name__ == "__main__":
          ]
 
     #Now we set up the optimizer object:
-    optimizer = EmceeSearch(model=model, data=dataSet, nwalkers=50, moves=m)
+    optimizer = EmceeSearch(model=model, data=dataSet, nwalkers=150, moves=m)
             
-    optimizer.optimise(nsamples = 12000, burnin=5000, guess=[
-        [12000., 2.9, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, #The parameters of the model
+    optimizer.optimise(nsamples = 20000, burnin=8000, guess=[
+        [12000., 2.9, 1.0, 0.1, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, #The parameters of the model
          #1.0, 0.1, 0.1, #Each Spectrum object contains a noise model with three free parameters
          #The first one is a calibration factor which the observed spectrum will be multiplied by
          #The second is the fraction of correlated noise assumed
          #And the third is the scale length (in microns) of the correlated component of the noise
-         1.0 ,0.1, 0.1,1.0 ,0.1, 0.1,1.0 ,0.1, 0.1
+         1.0 ,0.1, 0.1,1.0 ,0.1, 0.1,1.0 ,0.1, 0.1,1.0 ,0.1, 0.1,1.0 ,0.1, 0.1
         ] #
-        + np.random.rand(optimizer.npars)*[1000.,1,1,1,1,1,1,1,1,1,
+        + np.random.rand(optimizer.npars)*[1000.,1,1,1,1,1,1,1,1,1,1,
+                                           1,1,1,
+                                           1,1,1,
                                            1,1,1,
                                            1,1,1,
                                            1,1,1
@@ -300,3 +333,4 @@ if __name__ == "__main__":
     
     
         
+
