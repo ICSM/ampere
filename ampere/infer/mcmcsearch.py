@@ -3,6 +3,7 @@ from __future__ import print_function
 import logging
 import numpy as np
 from inspect import signature
+from datetime import datetime
 from .basesearch import BaseSearch
 from ..logger import Logger
 
@@ -11,10 +12,25 @@ class MCMCSampler(BaseSearch, Logger):
     _inference_method = "MCMC"
 
     def __init__(self, model = None, data= None, verbose = False,
-                 parameter_labels = None,
+                 parameter_labels = None, name='', namestyle="full",
                  **kwargs):
         self.model = model
         self.dataSet = data
+
+        try:
+            modelname = model.name
+        except AttributeError:
+            modelname = model.__class__.__name__
+        if namestyle=='full':
+            self.name = "ampere_"+str(datetime.now()).replace(' ','_').replace(":","-")[:-7] + "_" + modelname + "_" + name
+        elif namestyle=="short":
+            self.name = name
+        elif namestyle=="stamp":
+            self.name = "ampere_"+str(datetime.now()).replace(' ','_').replace(":","-")[:-7] + "_" + name
+        elif namestyle=="model":
+            self.name = "ampere_"+modelname + "_" + name
+        
+        
 
         self.setup_logging(verbose=verbose) #For now we will exclusively use default logging settings, this will be modified once logging is tested.
         self.logger.info("Welcome to ampere")
@@ -78,12 +94,13 @@ class EnsembleSampler(MCMCSampler):
     _inference_method = "Ensemble MCMC"
 
     def __init__(self, model = None, data= None, verbose = False,
-                 parameter_labels = None,
+                 parameter_labels = None, name='', namestyle="full",
                  nwalkers = None, 
                  **kwargs):
 
         super().__init__(model = model, data= data, verbose = verbose,
-                         parameter_labels = parameter_labels, **kwargs)
+                         parameter_labels = parameter_labels, name = name,
+                         namestyle=namestyle, **kwargs)
 
         self.nwalkers = nwalkers
         self.logger.info("This problem will be sampled with %d walkers", self.nwalkers)

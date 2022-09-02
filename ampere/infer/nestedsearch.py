@@ -6,15 +6,29 @@ import logging
 from ..logger import Logger
 from .basesearch import BaseSearch
 
+from datetime import datetime
 
 class BaseNestedSampler(BaseSearch, Logger):
     _inference_method = "Nested Sampling"
     
     def __init__(self, model = None, data= None, verbose = False,
-                 parameter_labels = None,
+                 parameter_labels = None, name='', namestyle="full",
                  **kwargs):
         self.model = model
         self.dataSet = data
+
+        try:
+            modelname = model.name
+        except AttributeError:
+            modelname = model.__class__.__name__
+        if namestyle=='full':
+            self.name = "ampere_"+str(datetime.now()).replace(' ','_').replace(":","-")[:-7] + "_" + modelname + "_" + name
+        elif namestyle=="short":
+            self.name = name
+        elif namestyle=="stamp":
+            self.name = "ampere_"+str(datetime.now()).replace(' ','_').replace(":","-")[:-7] + "_" + name
+        elif namestyle=="model":
+            self.name = "ampere_"+modelname + "_" + name
 
         self.setup_logging(verbose=verbose) #For now we will exclusively use default logging settings, this will be modified once logging is tested.
         self.logger.info("Welcome to ampere")

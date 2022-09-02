@@ -23,11 +23,13 @@ class ZeusSearch(EnsembleSampler,
     def __init__(self, nwalkers = None, model = None, verbose = False,
                  data = None, lnprior = None, vectorize = True,
                  parameter_labels = None, moves = None,
+                 name='', namestyle="full",
                  **kwargs):
 
         super().__init__(nwalkers = nwalkers, model = model, data= data,
                          verbose = verbose,
-                         parameter_labels = parameter_labels, **kwargs)
+                         parameter_labels = parameter_labels, name = name,
+                         namestyle=namestyle, **kwargs)
         ''' then set up the sampler '''
         self.moves = moves
         ''' then set up the sampler '''
@@ -188,7 +190,7 @@ class ZeusSearch(EnsembleSampler,
             axes[i].set_xlim(0, self.nsamp)
 
         plt.tight_layout()
-        fig.savefig("walkers.png")
+        fig.savefig(self.name+"_"+"walkers.png")
 
     def plot_lnprob(self):
         #USE autocorrelation time and burnin info on plots?
@@ -211,6 +213,6 @@ class ZeusSearch(EnsembleSampler,
         axes.add_patch(Polygon([[xlims[0], ylims[0]], [xlims[0], ylims[1]], [self.burnin, ylims[1]], [self.burnin, ylims[0]]], closed=True,
                       fill=True, color='grey'))
         axes.plot([10*tauto,10*tauto],[ylims[0],ylims[1]],color="red",marker="",linestyle="-",label=r"10$\times t_{\rm autocorr}$")
-        fig.savefig("lnprob.png")     
+        fig.savefig(self.name+"_"+"lnprob.png")     
 
 

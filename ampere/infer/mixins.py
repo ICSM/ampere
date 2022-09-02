@@ -85,12 +85,14 @@ class SBIPostProcessor(object):
                 #ax0.set_title('Covariance matrix')
                 im = ax.imshow(np.log10(d.covMat))
                 istart+=d.npars
-                fig.savefig("covMat_"+str(i)+".png")
+                fig.savefig(self.name+"_"+"covMat_"+str(i)+".png")
 
-    def plot_posteriorpredictive(self, n_post_samples = 100,plotfile="posteriorpredictive.png", logx = False, logy = False, alpha = 0.1,**kwargs):
+    def plot_posteriorpredictive(self, n_post_samples = 100,plotfile=None, logx = False, logy = False, alpha = 0.1,**kwargs):
         '''
         Function to plot the data and samples drawn from the posterior of the models and data.
         '''
+        if plotfile is None:
+            plotfile = self.name+"_"+"posteriorpredictive.png"
         fig,axes = plt.subplots(1,1,figsize=(8,6))
         axes.set_xlabel(r"Wavelength ($\mu$m)")
         axes.set_ylabel(r"Flux density (mJy)")
@@ -156,7 +158,7 @@ class SBIPostProcessor(object):
             fig2 = corner.corner(self.samples,labels=self.parLabels, **kwargs)
         except ImportError:
             fig2 = corner.corner(self.samples.numpy(),labels=self.parLabels, **kwargs)
-        fig2.savefig("corner.png")
+        fig2.savefig(self.name+"_"+"corner.png")
 
     def summary(self, interval = [16, 50, 84], **kwargs):
         """
@@ -228,7 +230,7 @@ class SimpleMCMCPostProcessor(object):
             axes[i].set_xlim(0, self.nsamp)
 
         plt.tight_layout()
-        fig.savefig("walkers.png")
+        fig.savefig(self.name+"_walkers.png")
 
     # Geweke convergence test threshold
     geweke_max = 2.0
@@ -267,10 +269,13 @@ class SimpleMCMCPostProcessor(object):
         This relies on importing the integrated_time function from emcee. Other 
         samplers which define their own methods should be used to overload this.
         """
-        from emcee.autocorr import integrated_time
-        if chain is None:
-            chain = self.allSamples
-        self.tauto = integrated_time(chain, quiet=True)
+        try:
+            self.tauto = self.sampler.get_autocorr_time(quiet=True)
+        except AttributeError:
+            from emcee.autocorr import integrated_time
+            if chain is None:
+                chain = self.allSamples
+            self.tauto = integrated_time(chain, quiet=True)
         return self.tauto
 
     def get_ess(self, chain = None, **kwargs):
@@ -397,7 +402,7 @@ class SimpleMCMCPostProcessor(object):
     def plot_corner(self, **kwargs):
         import corner
         fig2 = corner.corner(self.samples,labels=self.parLabels, **kwargs)
-        fig2.savefig("corner.png")
+        fig2.savefig(self.name+"_corner.png")
 
     def plot_covmats(self):
         istart = self.nparsMod
@@ -410,12 +415,16 @@ class SimpleMCMCPostProcessor(object):
                 #ax0.set_title('Covariance matrix')
                 im = ax.imshow(np.log10(d.covMat))
                 istart+=d.npars
-                fig.savefig("covMat_"+str(i)+".png")
+                fig.savefig(self.name+"_covMat_"+str(i)+".png")
 
-    def plot_posteriorpredictive(self, n_post_samples = 1000,plotfile="posteriorpredictive.png", logx = False, logy = False, alpha = 0.1,**kwargs):
+    def plot_posteriorpredictive(self, n_post_samples = 1000,plotfile=None, logx = False, logy = False, alpha = 0.1,**kwargs):
         '''
         Function to plot the data and samples drawn from the posterior of the models and data.
         '''
+
+        if plotfile is None:
+            plotfile = self.name+"_"+"posteriorpredictive.png"
+            
         fig,axes = plt.subplots(1,1,figsize=(8,6))
         axes.set_xlabel(r"Wavelength ($\mu$m)")
         axes.set_ylabel(r"Flux density (mJy)")

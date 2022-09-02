@@ -22,11 +22,13 @@ class EmceeSearch(EnsembleSampler,
     def __init__(self, nwalkers = None, model = None, verbose = False,
                  data = None, lnprior = None, vectorize = True, 
                  parameter_labels = None, acceptRate = 2.0, moves=None,
+                 name='', namestyle="full",
                  **kwargs):
 
         #Call super with everything required:
         super().__init__(nwalkers = nwalkers, model = model, data= data, verbose = verbose,
-                         parameter_labels = parameter_labels, **kwargs)
+                         parameter_labels = parameter_labels, name = name,
+                         namestyle=namestyle, **kwargs)
         self.moves = moves
         self.acceptRate = acceptRate
         ''' then set up the sampler '''
@@ -261,7 +263,7 @@ class EmceeSearch(EnsembleSampler,
         axes.add_patch(Polygon([[xlims[0], ylims[0]], [xlims[0], ylims[1]], [self.burnin, ylims[1]], [self.burnin, ylims[0]]], closed=True,
                       fill=True, color='grey'))
         axes.plot([10*tauto,10*tauto],[ylims[0],ylims[1]],color="red",marker="",linestyle="-",label=r"10$\times t_{\rm autocorr}$")
-        fig.savefig("lnprob.png")        
+        fig.savefig(self.name+"_lnprob.png")        
         
     #def plot_covmats(self):
     #    istart = self.nparsMod
