@@ -13,7 +13,7 @@ Dependencies
 ------------
 AMPERE has a number of dependencies. Hopefully pip will take care of these for you!
 If not, you can run AMPERE on python 3.7+, but we recommend the most recent versions as they provide better performance.
-You also need:
+You also need::
 
     numpy
     scipy
@@ -26,7 +26,7 @@ You also need:
     corner
     dynesty
 
-If you want to use Neural Posterior Estimation you will also need:
+If you want to use Neural Posterior Estimation you will also need::
 
     torch
     sbi
@@ -46,11 +46,11 @@ for the core dependencies. To instead install all optional dependencies, use
 From source
 -----------
 
-You can clone the latest version of AMPERE from Github, for all the latest bugs but increased risk of features:
+You can clone the latest version of AMPERE from Github, for all the latest bugs but increased risk of features::
 
     $ git clone git://github.com/ICSM/ampere.git
 
-and then you can install it
+and then you can install it::
     $ cd ampere
     $ pip install .
 
