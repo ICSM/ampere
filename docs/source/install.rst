@@ -35,11 +35,11 @@ which pip will install with the `[sbi]` optional extra. To use zeus for ensemble
 
 From pypi
 -----------------
+AMPERE can be installed with pip::
 
     $ pip install ampere
 
-for the core dependencies. To instead install all optional dependencies, use
-
+for the core dependencies. To instead install all optional dependencies, use::
 
     $ pip install ampere[all]
 
@@ -51,10 +51,12 @@ You can clone the latest version of AMPERE from Github, for all the latest bugs 
     $ git clone git://github.com/ICSM/ampere.git
 
 and then you can install it::
+  
     $ cd ampere
     $ pip install .
 
 
-If you want to contribute to AMPERE and develop new features, you might want an _editable_ install:
+If you want to contribute to AMPERE and develop new features, you might want an *editable* install::
+
     $ pip install -e .
 this way you can test how things change as you go along
