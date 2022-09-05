@@ -31,7 +31,7 @@ class ModifiedBlackBody(Model):
     def __call__(self, t, logm, beta, d, **kwargs):
         modelFlux = BlackBody().evaluate(self.freq, t, 1*u.Jy/u.sr)
         modelFlux = modelFlux/(d*u.pc.to(u.cm))**2
-        modelFlux = modelFlux * 10**(logm) * (self.kappa) * (self.wavelength/self.kappawave)**beta
+        modelFlux = modelFlux * (10**(logm))*u.Msun.to(u.g) * (self.kappa) * (self.wavelength/self.kappawave)**beta
         self.modelFlux = modelFlux
         return {"spectrum":{"wavelength":self.wavelength, "flux": modelFlux}}
 
@@ -103,7 +103,7 @@ if __name__=="__main__":
          ]
 
     optimizer = EmceeSearch(model=model, data=dataset, nwalkers=100, moves=m, vectorize = False, name = "MBB_test_emcee", namestyle="short")
-    optimizer.optimise(nsamples = 150, burnin=100, guess='None'
+    optimizer.optimise(nsamples = 1000, burnin=900, guess='None'
                        )
     optimizer.postProcess()
 
@@ -121,13 +121,13 @@ if __name__=="__main__":
 
     from ampere.infer.dynestysearch import DynestyNestedSampler
     optimizer = DynestyNestedSampler(model=model, data=dataset, name = "MBB_test_dynesty", namestyle="short")
-    optimizer.optimise(dlogz = 5.)
+    optimizer.optimise(dlogz = 1.)
     optimizer.postProcess()
 
 
     from ampere.infer.sbi import SBI_SNPE
     optimizer = SBI_SNPE(model=model, data=dataset, name = "MBB_test_sbi", namestyle="short")
-    optimizer.optimise(nsamples = 10000, nsamples_post = 10000
+    optimizer.optimise(nsamples = 50000, nsamples_post = 10000
                        )
 
     optimizer.postProcess()
