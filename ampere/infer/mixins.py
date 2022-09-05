@@ -53,7 +53,7 @@ class SBIPostProcessor(object):
 
     This mixin provides functions for computing diagnostic statistics and creating 
     plots to explore the output. This includes e.g. producing corner plots. This 
-    assumes structure similar to that of emcee. The get_ methods are intended to be 
+    assumes structure similar to that of emcee. The `get_` methods are intended to be 
     extended or overloaded by classes that inheret from this mixin if necessary.
     """
 
@@ -153,6 +153,9 @@ class SBIPostProcessor(object):
         plt.clf()
 
     def plot_corner(self, **kwargs):
+        """
+        Generate a corner plot
+        """
         import corner
         try:
             fig2 = corner.corner(self.samples,labels=self.parLabels, **kwargs)
@@ -202,7 +205,7 @@ class SimpleMCMCPostProcessor(object):
     This mixin provides functions for computing diagnostic statistics and creating 
     plots to explore the output. This includes e.g. the autocorrelation time of the
     chains, or producing corner plots. This assumes structure similar to that of 
-    emcee. The get_ methods are intended to be extended or overloaded by classes 
+    emcee. The `get_` methods are intended to be extended or overloaded by classes 
     that inheret from this mixin if necessary.
 
     

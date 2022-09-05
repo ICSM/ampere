@@ -187,6 +187,7 @@ class Photometry(Data):
     def pformat(self, **kwargs):
         '''
         Return the instances as a list of formatted strings
+        
         '''
         
         l=[] #define an empty list for the strings
@@ -241,6 +242,7 @@ class Photometry(Data):
         Notes
         ------
         Future work: go through multiple libraries from different (user-defined) locations and import htem all
+        
         '''
         
         if libName is None:
@@ -284,7 +286,8 @@ class Photometry(Data):
 
         This method reloads the filters and interpolates their definitions onto the given 
         wavelength grid. This should be used to make sure the filter definitions are ready 
-        to compute synthetic photometry in the likelihood calls.
+        to compute synthetic photometry in the likelihood calls
+        
         '''
         #Create wavelength array for photometry based on pivot wavelengths of
         #filters
@@ -314,11 +317,11 @@ class Photometry(Data):
         '''Compute the likelihood of the photometry given the model. 
 
         The likelihood is computed as 
-        .. math::
         
-            \frac{1}{2} N \ln\left(2\pi\right) - \frac{1}{2}\ln\left(\mathrm{det}C\right) - \frac{1}{2} \left(F_\mathrm{obs} - F_\mathrm{mod})^T C^{-1} \left(F_\mathrm{obs} - F_\mathrm{mod}\right)  
+        .. math::
+            \\frac{1}{2} N \\ln\\left(2\\pi\\right) - \\frac{1}{2}\\ln\\left(\\mathrm{det}C\\right) - \\frac{1}{2} \\left(F_\\mathrm{obs} - F_\\mathrm{mod}\\right)^T C^{-1} \\left(F_\\mathrm{obs} - F_\\mathrm{mod}\\right) 
 
-        where N is the number of photometric points, C is the covariance matrix, and F_obs and F_mod are the observed and predicted photmetry, respectively.
+        where :math:`N` is the number of photometric points, :math:`C` is the covariance matrix, and :math:`F_{obs}` and :math:`F_{mod}` are the observed and predicted photometry, respectively.
 
         Parameters
         ----------
@@ -331,6 +334,7 @@ class Photometry(Data):
         -------
         probFlux: float
             The natural logarithm of the likelihood of the data given the model
+        
         '''
         
         ''' First take the model values (passed in) and compute synthetic photometry '''
@@ -395,6 +399,7 @@ class Photometry(Data):
         Raises
         ------
         Nothing yet!
+        
         '''
 
         ''' inititalise covariance matrix as a diagonal matrix '''
@@ -457,6 +462,7 @@ class Photometry(Data):
         -------
         Photometry
             A new Photometry instance
+        
         '''
         self=cls.__new__(Photometry)
         # First type votable as take from vizier/sed http://vizier.u-strasbg.fr/vizier/sed/
@@ -492,9 +498,9 @@ class Photometry(Data):
         -----
         This routine is not intended to be used as a standalone routine to 
         instantiate Photometry instances. If you wish to do so, you must first 
-        create the instance using p = Photometry.__new__(Photometry), then 
-        instantiate it with p.fromTable(table). Since this is basically what 
-        Photometry.fromFile() does,we recommend using that unless you have to 
+        create the instance using `p = Photometry.__new__(Photometry)`, then 
+        instantiate it with `p.fromTable(table)`. Since this is basically what 
+        `Photometry.fromFile()` does,we recommend using that unless you have to 
         build the table in memory. We hope to revise this in future.
 
         '''
@@ -520,7 +526,8 @@ class Photometry(Data):
     def setPlotParams(self,**kwargs):
         '''
             Routine to set up the plotting parameters for any photometry data set, and optionally plot (and show and/or save) the data. 
-            A limited set of keywords can be set by passing **kwargs to the function.
+            A limited set of keywords can be set by passing `**kwargs` to the function.
+        
         '''
 
         print("Setting plotting parameters for photometry data set.")
@@ -594,4 +601,5 @@ class LineStrengths(Photometry):
     """A class for the special case of line strengths (e.g. EWs or integrated intensities)
 
     At present, this is a placeholder.
+    
     """

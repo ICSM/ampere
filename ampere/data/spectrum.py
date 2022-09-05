@@ -415,9 +415,12 @@ class Spectrum(Data):
     def lnlike(self, theta, model, **kwargs):
         '''Compute the likelihood of the photometry given the model. 
 
-        The likelihood is computed as:
-        .. math:: \frac{1}{2} N \ln\left(2\pi\right) - \frac{1}{2}\ln\left(\mathrm{det}C\right) - \frac{1}{2} \left(\alpha F_\mathrm{obs} - F_\mathrm{mod})^T C^{-1} \left(\alpha F_\mathrm{obs} - F_\mathrm{mod}\right)
-        where N is the number of points in the spectrum, C is the covariance matrix, and F_obs and F_mod are the observed and predicted photmetry, respectively.
+        The likelihood is computed as
+        
+        .. math:: 
+            \\frac{1}{2} N \\ln\\left(2\\pi\\right) - \\frac{1}{2}\\ln\\left(\\mathrm{det}C\\right) - \\frac{1}{2} \\left(\\alpha F_\\mathrm{obs} - F_\\mathrm{mod}\\right)^T C^{-1} \\left(\\alpha F_\\mathrm{obs} - F_\\mathrm{mod}\\right)
+        
+        where :math:`N` is the number of points in the spectrum, :math:`C` is the covariance matrix, :math:`\\alpha` is a free parameter to rescale the spectrum, and :math:`F_\\mathrm{obs}` and :math:`F_\\mathrm{mod}` are the observed and predicted spectrum, respectively.
 
         Parameters
         ----------
@@ -428,6 +431,7 @@ class Spectrum(Data):
         -------
         probFlux: float
             The natural logarithm of the likelihood of the data given the model
+        
         '''
         
         ''' First take the model values (passed in) and compute synthetic Spectrum '''

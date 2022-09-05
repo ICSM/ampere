@@ -14,11 +14,12 @@
 # import sys
 # sys.path.insert(0, os.path.abspath('.'))
 
+from datetime import date
 
 # -- Project information -----------------------------------------------------
 
 project = 'AMPERE'
-copyright = '2021, Peter Scicluna, Francisca Kemper, Sundar Srinivasan, Jonathan Marshall, Sacha Hony, Sascha Zeegers, Lapo Fanciullo'
+copyright = f'{date.today().year}, Peter Scicluna, Francisca Kemper, Sundar Srinivasan, Jonathan Marshall, Sacha Hony, Sascha Zeegers, Lapo Fanciullo'
 author = 'Peter Scicluna, Francisca Kemper, Sundar Srinivasan, Jonathan Marshall, Sacha Hony, Sascha Zeegers, Lapo Fanciullo'
 
 
@@ -27,7 +28,7 @@ author = 'Peter Scicluna, Francisca Kemper, Sundar Srinivasan, Jonathan Marshall
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
-extensions = ['sphinx.ext.autodoc', 'sphinx.ext.napoleon', 'sphinx.ext.imgmath'
+extensions = ['sphinx.ext.autodoc', 'sphinx.ext.napoleon', 'sphinx.ext.mathjax'#'sphinx.ext.imgmath'
 ]
 
 # Add any paths that contain templates here, relative to this directory.
@@ -36,7 +37,7 @@ templates_path = ['_templates']
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This pattern also affects html_static_path and html_extra_path.
-exclude_patterns = ['pyphot*', 'test*']
+exclude_patterns = ['pyphot*', 'test*', "old*"]
 
 
 # -- Options for HTML output -------------------------------------------------
@@ -53,3 +54,5 @@ html_static_path = ['_static']
 
 
 autodoc_mock_imports = ['bs4', 'requests', 'astropy', 'emcee']
+
+#imgmath_latex = "latex"
