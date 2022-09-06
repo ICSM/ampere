@@ -321,7 +321,7 @@ class Photometry(Data):
         .. math::
             \\frac{1}{2} N \\ln\\left(2\\pi\\right) - \\frac{1}{2}\\ln\\left(\\mathrm{det}C\\right) - \\frac{1}{2} \\left(F_\\mathrm{obs} - F_\\mathrm{mod}\\right)^T C^{-1} \\left(F_\\mathrm{obs} - F_\\mathrm{mod}\\right) 
 
-        where :math:`N` is the number of photometric points, :math:`C` is the covariance matrix, and :math:`F_{obs}` and :math:`F_{mod}` are the observed and predicted photometry, respectively.
+        where :math:`N` is the number of photometric points, :math:`C` is the covariance matrix, and :math:`F_\\mathrm{obs}` and :math:`F_\\mathrm{mod}` are the observed and predicted photometry, respectively.
 
         Parameters
         ----------
