@@ -9,7 +9,7 @@ import pyphot
 from astropy.io import fits
 # for reading VO table formats into a single table
 from astropy.io.votable import parse_single_table
-import astropy.units as u
+from astropy import units
 from astropy.io import ascii
 from spectres import spectres
 from scipy.stats import rv_continuous, norm, halfnorm
@@ -105,8 +105,8 @@ class Photometry(Data):
             self.filterName = filterName[self.filterMask]
         #Create wavelength array for photometry based on pivot wavelengths of
         #filters
-        filters = self.filterLibrary.load_filters(self.filterName)#[self.filterMask])
-        self.wavelength = np.array([filt.lpivot.magnitude for filt in filters])
+        filters = self.filterLibrary.load_filters(self.filterName, interp=False)#[self.filterMask])
+        self.wavelength = np.array([filt.lpivot.to(u.micron).value for filt in filters])#*u.micron
         
         #        self.uncertainty = uncertainty #Error bars may be asymmetric!
         try:
@@ -123,10 +123,10 @@ class Photometry(Data):
         #pyphot returns a list of filters, this means this nice boolean masking doesn't work :(
         zeropoints = np.zeros_like(value)
         for i in range(len(mags)):
-            if mags[i]:
+            if mags[i]: #this also needs to accomodate AB (and luptitudes?)
                 zeropoints[i] = filters[i].Vega_zero_Jy.magnitude
-                value[i] = zeropoints[i]*10^(-0.4*value[i])
-                uncertainty[i] = value[i] - zeropoints*10^(-0.4*(value[i]+uncertainty[i]))
+                value[i] = zeropoints[i]*10**(-(100**(-1/5))*value[i])
+                uncertainty[i] = value[i] - zeropoints*10**(-(100**(-1/5))*(value[i]+uncertainty[i]))
 
         try:
             print(len(photUnits))
@@ -163,9 +163,21 @@ class Photometry(Data):
         print(type(photUnits))
                        
         #identify values in milliJansky, convert to Jy
-        uconv = np.array([u.Jy.to(pU) for pU in photUnits])
+        uconv = np.array([units.Jy.to(pU) for pU in photUnits])
         self.uncertainty = uncertainty / uconv
         self.value = value / uconv
+
+        if isinstance(value, units.Quantity):
+            self.value = value.to(units.Jy, equivalencies = units.spectral_density(self.wavelength*u.micron))
+        else:
+            logging.warning("No flux units specified, assuming Jy")
+            self.value = value
+
+        if isinstance(uncertainty, units.Quantitty):
+            self.uncertainty = uncertainty.to(units.Jy, equivalencies = units.spectral_density(self.wavelength*u.micron))
+        else:
+            logging.warning("No flux uncertainty units specified, assuming Jy")
+            self.uncertainty = uncertainty
 
         self.selectWaves()
 
@@ -248,7 +260,7 @@ class Photometry(Data):
         if libName is None:
             print("No library given, using default pyphot filters")
             libDir = pyphot.__file__.strip('__init__.py')+'libs/'
-            libName = libDir + 'synphot_nonhst.hd5' #PhIReSSTARTer.hd5'
+            libName = libDir + 'synphot_nonhst.hd5' 
         
         self.filterLibrary = pyphot.get_library(fname=libName)
 
@@ -296,8 +308,8 @@ class Photometry(Data):
         #else:
         filters = self.filterLibrary.load_filters(self.filterName[self.filterMask],
                                                   interp = True,
-                                                  lamb = modwaves*pyphot.unit['micron'])
-        self.wavelength = np.array([filt.lpivot.magnitude for filt in filters])
+                                                  lamb = modwaves* units.micron ) #*pyphot.unit['micron'])
+        self.wavelength = np.array([filt.lpivot.to(u.micron).value for filt in filters])
         self.filters=filters
 
     def prior_transform(self, u, **kwargs):
@@ -339,13 +351,19 @@ class Photometry(Data):
         
         ''' First take the model values (passed in) and compute synthetic photometry '''
         ''' I assume that the filter library etc is already setup '''
-        filts, modSed = pyphot.extractPhotometry(model.wavelength,
-                                                 model.modelFlux,
-                                                 self.filters,
-                                                 Fnu = True,
-                                                 absFlux = False,
-                                                 progress=False
-            )
+        #filts, modSed = pyphot.extractPhotometry(model.wavelength,
+        #                                         model.modelFlux,
+        #                                         self.filters,
+        #                                         Fnu = True,
+        #                                         absFlux = False,
+        #                                         progress=False
+        #    )
+
+        flam = model.spectrum["flux"] / model.spectrum["wavelength"]**2 #(modflux*units.Jy).to('W m**-3', equivalencies = units.spectral_density(model.spectrum["wavelength"]*units.micron))
+        fp = []
+        for f, lp in zip(filters, lpivots):
+            fphot = f.get_flux(model.spectrum["wavelength"], flam, axis = -1)
+            fp.append(fphot*lp**2) #.to(spectrum.flux.unit, equivalencies = units.spectral_density(lp)).value)
 
         ''' then update the covariance matrix for the parameters passed in '''
         #skip this for now
@@ -428,14 +446,23 @@ class Photometry(Data):
     def simulate(self, theta, model, **kwargs):
         """ Simulate photometry, given a model result"""
 
+        #modflux = model.spectrum["flux"]
+
+        #flam is proportional to F_lambda in arbitrary units, it is converted back to F_nu in the correct units (Jy)
+        flam = model.spectrum["flux"] / model.spectrum["wavelength"]**2 #(modflux*units.Jy).to('W m**-3', equivalencies = units.spectral_density(model.spectrum["wavelength"]*units.micron))
+        fp = []
+        for f, lp in zip(filters, lpivots):
+            fphot = f.get_flux(model.spectrum["wavelength"], flam, axis = -1)
+            fp.append(fphot*lp**2) #.to(spectrum.flux.unit, equivalencies = units.spectral_density(lp)).value)
+
         #First, we compute the model photometry
-        filts, modSed = pyphot.extractPhotometry(model.spectrum["wavelength"],
-                                                 model.spectrum["flux"],
-                                                 self.filters,
-                                                 Fnu = True,
-                                                 absFlux = False,
-                                                 progress=False
-            )
+        #filts, modSed = pyphot.extractPhotometry(model.spectrum["wavelength"],
+        #                                         model.spectrum["flux"],
+        #                                         self.filters,
+        #                                         Fnu = True,
+        #                                         absFlux = False,
+        #                                         progress=False
+        #    )
 
         #Then, we add some noise
         rng = np.random.default_rng() #Optimise this, no need to re-create object each time, plus need seed to be stored so it can be saved

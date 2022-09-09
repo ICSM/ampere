@@ -3,6 +3,7 @@ from __future__ import print_function
 import numpy as np
 import pickle
 from ..logger import Logger
+from ..models.results import ModelResults
 
 class BaseSearch(object):
     """ A base class for parameter search algorithms.
@@ -68,6 +69,9 @@ class BaseSearch(object):
 
         """
         model = self.model(*theta[:self.nparsMod])
+
+        if not isinstance(result, ModelResults):
+            result = ModelResults(**result) #Try unpacking the results here if the user didn't already define their model with it
         l=np.array([])
         i = self.nparsMod
         for data in self.dataSet:
@@ -139,6 +143,8 @@ class BaseSearch(object):
         for j, theta in enumerate(thetas):
             #print(theta)
             model = self.model(*theta[:self.nparsMod])
+            if not isinstance(result, ModelResults):
+                result = ModelResults(**result) #Try unpacking the results here if the user didn't already define their model with it
             l=np.array([])
             i = self.nparsMod
             for data in self.dataSet:
