@@ -15,6 +15,7 @@ from spectres import spectres
 from scipy.stats import rv_continuous, norm, halfnorm
 #from scipy.linalg import inv
 from numpy.linalg import inv
+import logging
 
 from .data import Data
 
@@ -35,12 +36,12 @@ class Photometry(Data):
     ----------
     filterName : string, array-like
         The names of the filters that this object will hold
-    value : float, array-like
+    value : float, array-like or quantity
         The fluxes or magnitudes corresponding to each filter. 
         Fluxes and magnitudes can be mixed, see `photUnits`.
-    uncertainty : float, array-like
+    uncertainty : float, array-like or quantity
         The uncertainty on the fluxes or magnitudes.
-    photUnits : {'Jy', 'mJy', 'mag'}, array-like
+    photUnits : {'Jy', 'mJy', 'mag'}, array-like or quantity
         The units of the photometry. Should be an array-like of the same length as filterName.
     bandUnits : optional, string, scalar or array-like
         Currently assumes micron ('um') as pyphot converts internally. May be updated in future.
@@ -82,9 +83,10 @@ class Photometry(Data):
 
     
 
-    def __init__(self, filterName, value, uncertainty, photUnits,
+    def __init__(self, filterName, value, uncertainty, photunits,
                  bandUnits=None, libName = None, label = "Photometry", **kwargs):
         self.filterName = filterName
+
 
         ''' setup pyphot for this set of photometry '''
         self.pyphotSetup(libName)
@@ -95,8 +97,8 @@ class Photometry(Data):
         self.label = label
         self.plotParams["label"] = label
 
-        print(photUnits)
-        print(type(photUnits))
+        print(photunits)
+        print(type(photunits))
 
         #print(self.filterMask)
         if np.all(self.filterMask):
@@ -106,8 +108,88 @@ class Photometry(Data):
         #Create wavelength array for photometry based on pivot wavelengths of
         #filters
         filters = self.filterLibrary.load_filters(self.filterName, interp=False)#[self.filterMask])
-        self.wavelength = np.array([filt.lpivot.to(u.micron).value for filt in filters])#*u.micron
-        
+        self.wavelength = np.array([filt.lpivot.to("micron").value for filt in filters])#*u.micron
+
+        #now we truncate the values and uncertainties to only include the filters that were recovered by ampere
+        value = value[self.filterMask]
+        uncertainty = uncertainty[self.filterMask]
+
+        #Now let's do some type checking on the photometry
+        #normally I would prefer to do this first, but we need the pivot wavelengths of the filters to do these conversions!
+        if isinstance(value, units.Quantity) and isinstance(uncertainty, units.Quantity):
+            #This is the best case. We don't need to worry about photUnits, because everything is already in the same units and we just have to convert them with astropy, then strip the units.
+            if value.unit == units.mag:
+                zeropoints = np.array([f.Vega_zero_Jy.magnitude for f in filters])
+                value = zeropoints*10**(-(100**(-1/5))*value.value)
+                uncertainty = value.value - zeropoints*10**(-(100**(-1/5))*(value.value+uncertainty.value))
+            else:
+                self.value = value.to(units.Jy, equivalencies = units.spectral_density(self.wavelength*units.micron)).value
+                self.uncertainty = uncertainty.to(units.Jy, equivalencies = units.spectral_density(self.wavelength*units.micron)).value
+        elif isinstance(photunits, units.core.Unit):
+            #next best case - value and uncertainty are dimensionless (or possibly a list/tuple of quantities) and we have a single unit for the inputs. We just have to convert from these to Jy
+            if photunits == units.mag:
+                zeropoints = np.array([f.Vega_zero_Jy.magnitude for f in filters])
+                try:
+                    value = zeropoints*10**(-(100**(-1/5))*value)
+                    uncertainty = value - zeropoints*10**(-(100**(-1/5))*(value+uncertainty))
+                except TypeError: #If value and uncertainty are lists instead of arrays this branch will trigger
+                    value = np.array([zeropoints*10**(-(100**(-1/5))*v) for v in value])
+                    uncertainty = np.array([value[i] - zeropoints*10**(-(100**(-1/5))*(value[i]+uncertainty[i])) for i in range(len(value))])
+            elif np.ndim(value) > 0:
+                if isinstance(value, (list, tuple)): # and isinstance(uncertainty, list | tuple):
+                    self.value = (np.array(value) * photunits).to(units.Jy, equivalencies = units.spectral_density(self.wavelength*units.micron)).value
+                    self.uncertainty = (np.array(uncertainty)*photunits).to(units.Jy, equivalencies = units.spectral_density(self.wavelength*units.micron)).value
+                else:
+                    #it must be something array-like
+                    self.value = (value*photunits).to(units.Jy, equivalencies = units.spectral_density(self.wavelength*units.micron)).value
+                    self.uncertainty = (uncertainty*photunits).to(units.Jy, equivalencies = units.spectral_density(self.wavelength*units.micron)).value
+            else:
+                #this is probably not something we can handle?
+                pass
+            pass
+        elif np.ndim(photunits) > 0: #array-like, list or tuple! #isinstance(photunits, np.array | list | tuple):
+            #photunits is an array-like, list or tuple of units
+            #We're only doing this once, so we're going to just loop over all the units for clarity in what happens
+            for i, pu in enumerate(photunits):
+                if pu == "mag" or pu == units.mag:
+                    #convert from magnitudes to Jy
+                    zp = filters[i].Vega_zero_Jy.magnitude
+                    value[i] = zp*10**(-(100**(-1/5))*value[i])
+                    uncertainty[i] = value[i] - zp*10**(-(100**(-1/5))*(value[i]+uncertainty[i]))
+                elif isinstance(pu, units.code.Unit):
+                    value[i] = (value[i]*pu).to(units.Jy, equivalencies = units.spectral_density(self.wavelength*units.micron)).value
+                    uncertainty[i] = (uncertainty[i]*pu).to(units.Jy, equivalencies = units.spectral_density(self.wavelength*units.micron)).value
+                elif isinstance(pu, str):
+                    logging.warning("An element of photunits was passed as string. AMPERE will assume it is astropy-compatible!")
+                    pu = units.Unit(pu)
+                    value[i] = (value[i]*pu).to(units.Jy, equivalencies = units.spectral_density(self.wavelength*units.micron)).value
+                    uncertainty[i] = (uncertainty[i]*pu).to(units.Jy, equivalencies = units.spectral_density(self.wavelength*units.micron)).value
+
+            self.value = np.array(value)
+            self.uncertainty = np.array(uncertainty)
+        elif isinstance(photunits, str):
+            #photunits is a single string with a unit in it (I hope!)
+            logging.warning("photunits was passed as string. AMPERE will assume it is astropy-compatible!")
+            photunits = units.Unit(photunits) #converting to an astropy unit
+            print(photunits)
+            if np.ndim(value) > 0:
+                if isinstance(value, (list, tuple)): # and isinstance(uncertainty, list | tuple):
+                    self.value = (np.array(value) * photunits).to(units.Jy, equivalencies = units.spectral_density(self.wavelength*units.micron)).value
+                    self.uncertainty = (np.array(uncertainty)*photunits).to(units.Jy, equivalencies = units.spectral_density(self.wavelength*units.micron)).value
+                else:
+                    #it must be something array-like
+                    self.value = (value*photunits)
+                    self.value = self.value.to(units.Jy, equivalencies = units.spectral_density(self.wavelength*units.micron)).value
+                    self.uncertainty = (uncertainty*photunits).to(units.Jy, equivalencies = units.spectral_density(self.wavelength*units.micron)).value
+            elif np.isscalar(value):
+                self.value = (value*photunits).to(units.Jy, equivalencies = units.spectral_density(self.wavelength*units.micron)).value
+                self.uncertainty = (uncertainty*photunits).to(units.Jy, equivalencies = units.spectral_density(self.wavelength*units.micron)).value
+
+        else:
+            logging.warning("There was a problem in converting the input data to Jy. Please check that the input types are consistent")
+        #End of type checking and unit conversion of units, values and uncertainties
+
+        """ #Temporarily turning this into a single long string so the above code can be tested before removing it
         #        self.uncertainty = uncertainty #Error bars may be asymmetric!
         try:
             self.fluxUnits = photUnits[self.filterMask] #May be different over wavelength; mag, Jy
@@ -126,7 +208,7 @@ class Photometry(Data):
             if mags[i]: #this also needs to accomodate AB (and luptitudes?)
                 zeropoints[i] = filters[i].Vega_zero_Jy.magnitude
                 value[i] = zeropoints[i]*10**(-(100**(-1/5))*value[i])
-                uncertainty[i] = value[i] - zeropoints*10**(-(100**(-1/5))*(value[i]+uncertainty[i]))
+                uncertainty[i] = value[i] - zeropoints[i]*10**(-(100**(-1/5))*(value[i]+uncertainty[i]))
 
         try:
             print(len(photUnits))
@@ -178,6 +260,8 @@ class Photometry(Data):
         else:
             logging.warning("No flux uncertainty units specified, assuming Jy")
             self.uncertainty = uncertainty
+
+        """
 
         self.selectWaves()
 
@@ -280,18 +364,19 @@ class Photometry(Data):
             newTry = [filt.replace(':','_').replace('/','_').replace('WISE','WISE_RSR').replace('Spitzer','SPITZER') for filt in self.filterName]
         #change type to str from byte for filt to make it run <CK>
         newTry = [filt.replace('RSR_RSR','RSR') for filt in newTry]
-        print(newTry)
+        #print(newTry)
         #newTry = [filt.replace('WISE','WISE_RSR').replace( for filt in newTry]
         for i in range(len(l)):
             l[i] = (newTry[i] in pyphotFilts)
             if l[i]:
                 self.filterName[i] = newTry[i]
         self.filterMask = np.array(l)
-        print(l,self.filterMask.__repr__())
+        #print(l,self.filterMask.__repr__())
         #print(np.logical_not(np.array(l)))
         if not np.all(l):
-            print("Some filters were not recognised by pyphot. The following filters will be ignored:")
-            print(filtsOrig[np.logical_not(np.array(l))])
+            logging.warning("Some filters were not recognised by pyphot. The following filters will be ignored:")
+            for f in filtsOrig[np.logical_not(np.array(l))]:
+                logging.warning(f)
 
     def reloadFilters(self, modwaves):
         ''' Use this method to reload the filters after your model has got a defined wavelength grid. 
@@ -309,7 +394,8 @@ class Photometry(Data):
         filters = self.filterLibrary.load_filters(self.filterName[self.filterMask],
                                                   interp = True,
                                                   lamb = modwaves* units.micron ) #*pyphot.unit['micron'])
-        self.wavelength = np.array([filt.lpivot.to(u.micron).value for filt in filters])
+        self.wavelength = np.array([filt.lpivot.to(pyphot.unit['micron'] #units.micron
+                                                   ).value for filt in filters])
         self.filters=filters
 
     def prior_transform(self, u, **kwargs):
@@ -360,10 +446,10 @@ class Photometry(Data):
         #    )
 
         flam = model.spectrum["flux"] / model.spectrum["wavelength"]**2 #(modflux*units.Jy).to('W m**-3', equivalencies = units.spectral_density(model.spectrum["wavelength"]*units.micron))
-        fp = []
-        for f, lp in zip(filters, lpivots):
-            fphot = f.get_flux(model.spectrum["wavelength"], flam, axis = -1)
-            fp.append(fphot*lp**2) #.to(spectrum.flux.unit, equivalencies = units.spectral_density(lp)).value)
+        modSed = np.zeros_like(self.wavelength)
+        for i, (f, lp) in enumerate(zip(self.filters, self.wavelength)):
+            fphot = f.get_flux(model.spectrum["wavelength"]*pyphot.unit['micron'], flam*pyphot.unit['flam'], axis = -1).value
+            modSed[i] = (fphot*lp**2) #.to(spectrum.flux.unit, equivalencies = units.spectral_density(lp)).value)
 
         ''' then update the covariance matrix for the parameters passed in '''
         #skip this for now
@@ -450,10 +536,11 @@ class Photometry(Data):
 
         #flam is proportional to F_lambda in arbitrary units, it is converted back to F_nu in the correct units (Jy)
         flam = model.spectrum["flux"] / model.spectrum["wavelength"]**2 #(modflux*units.Jy).to('W m**-3', equivalencies = units.spectral_density(model.spectrum["wavelength"]*units.micron))
-        fp = []
-        for f, lp in zip(filters, lpivots):
-            fphot = f.get_flux(model.spectrum["wavelength"], flam, axis = -1)
-            fp.append(fphot*lp**2) #.to(spectrum.flux.unit, equivalencies = units.spectral_density(lp)).value)
+        #modSed = []
+        modSed = np.zeros_like(self.wavelength)
+        for i, (f, lp) in enumerate(zip(self.filters, self.wavelength)):
+            fphot = f.get_flux(model.spectrum["wavelength"]*pyphot.unit['micron'], flam*pyphot.unit['flam'], axis = -1).value
+            modSed[i] = (fphot*lp**2) #.to(spectrum.flux.unit, equivalencies = units.spectral_density(lp)).value)
 
         #First, we compute the model photometry
         #filts, modSed = pyphot.extractPhotometry(model.spectrum["wavelength"],

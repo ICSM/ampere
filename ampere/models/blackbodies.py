@@ -82,6 +82,7 @@ class SingleModifiedBlackBody(AnalyticalModel):
         bb = bb / dist**2
         bb = bb * 10**(scale) * self.sigmaNormWave * ((self.wavelength / self.normWave)**index)
         self.modelFlux = bb
+        return {"spectrum":{"wavelength":self.wavelength, "flux": self.modelFlux}}
         #return (blackbody.blackbody_nu(const.c.value*1e6/self.wavelengths,t).to(u.Jy / u.sr).value / (dist_lum.value)**2 * kappa230.value * ((wave/230.)**betaf) * massf) #*M_sun.cgs.value
 
     def lnprior(self, theta, **kwargs):
@@ -184,6 +185,7 @@ class DualBlackBodyDust(AnalyticalModel):
         fModel = (np.matmul(self.opacity_array, dustAbundances))
         fModel = fModel*(F1f*blackbody.blackbody_nu(freq,T1f).to(u.Jy / u.sr).value + F2f*blackbody.blackbody_nu(freq,T2f).to(u.Jy / u.sr).value) + (F1c*blackbody.blackbody_nu(freq,T1c).to(u.Jy / u.sr).value + F2c*blackbody.blackbody_nu(freq,T2c).to(u.Jy / u.sr).value)           
         self.modelFlux = fModel
+        return {"spectrum":{"wavelength":self.wavelength, "flux": self.modelFlux}}
 
                  
 

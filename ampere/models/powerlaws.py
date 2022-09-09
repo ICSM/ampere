@@ -101,6 +101,7 @@ class PowerLawContinuumAbsoluteAbundances(AnalyticalModel):
         fModel = (np.matmul(self.opacity_array, dustAbundances)+1)
         fModel = fModel*(waves**powerLawIndex) #*(10**multiplicationFactor) --> not needed when using absolute abundances
         self.modelFlux = fModel
+        return {"spectrum":{"wavelength":self.wavelength, "flux": self.modelFlux}}
 
     def lnprior(self, theta, **kwargs):
         if self.flatprior:
@@ -225,6 +226,7 @@ class PowerLawContinuumRelativeAbundances(AnalyticalModel):
         fModel = (np.matmul(self.opacity_array, relativeAbundances)+1)
         fModel = fModel*(waves**powerLawIndex)*(10**multiplicationFactor) #--> not needed when using absolute abundances
         self.modelFlux = fModel
+        return {"spectrum":{"wavelength":self.wavelength, "flux": self.modelFlux}}
 
     def lnprior(self, theta, **kwargs):
         if self.flatprior:

@@ -68,14 +68,14 @@ class BaseSearch(object):
         all items in the dataset and calculates their likelihoods.
 
         """
-        model = self.model(*theta[:self.nparsMod])
+        result = self.model(*theta[:self.nparsMod])
 
         if not isinstance(result, ModelResults):
             result = ModelResults(**result) #Try unpacking the results here if the user didn't already define their model with it
         l=np.array([])
         i = self.nparsMod
         for data in self.dataSet:
-            lnew = data.lnlike(theta[i:i+data.npars],self.model)
+            lnew = data.lnlike(theta[i:i+data.npars],result)
             i+=data.npars
             l = np.r_[l,lnew]
         return np.sum(l)
@@ -142,13 +142,13 @@ class BaseSearch(object):
         lps = np.zeros(n_samples)
         for j, theta in enumerate(thetas):
             #print(theta)
-            model = self.model(*theta[:self.nparsMod])
+            result = self.model(*theta[:self.nparsMod])
             if not isinstance(result, ModelResults):
                 result = ModelResults(**result) #Try unpacking the results here if the user didn't already define their model with it
             l=np.array([])
             i = self.nparsMod
             for data in self.dataSet:
-                lnew = data.lnlike(theta[i:i+data.npars],self.model)
+                lnew = data.lnlike(theta[i:i+data.npars],result)
                 i+=data.npars
                 l = np.r_[l,lnew]
             lps[j] = np.sum(l)

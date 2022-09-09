@@ -46,6 +46,7 @@ class ASimpleModel(Model):
         in self.modelFlux.
         '''
         self.modelFlux = slope*self.wavelength + intercept
+        return {"spectrum":{"wavelength":self.wavelength, "flux": self.modelFlux}}
 
     def lnprior(self, theta, **kwargs):
         slope = theta[0]
@@ -96,13 +97,17 @@ if __name__ == "__main__":
     libname = libDir + 'ampere_allfilters.hd5'
     filterLibrary = pyphot.get_library(fname=libname)
     filters = filterLibrary.load_filters(filterName, interp=True, lamb = wavelengths*pyphot.unit['micron'])
-    filts, modSed = pyphot.extractPhotometry(wavelengths,
-                                             model_flux,
-                                             filters,
-                                             Fnu = True,
-                                             absFlux = False,
-                                             progress=False
-            )
+    #Now we need to extract the photometry with pyphot
+    #first we need to convert the flux from Fnu to Flambda
+    flam = model_flux / wavelengths**2
+    modSed = []
+    for i, f in enumerate(filters):
+        lp = f.lpivot.to("micron").value
+        fphot = f.get_flux(wavelengths*pyphot.unit['micron'], flam*pyphot.unit['flam'], axis=-1).value
+        print(fphot)
+        modSed.append(fphot*lp**2)
+
+    modSed = np.array(modSed)
 
     input_noise_phot = 0.1 #Fractional uncertainty
     photunc = input_noise_phot * modSed #Absolute uncertainty
@@ -133,7 +138,7 @@ if __name__ == "__main__":
     spec1.setResampler(resampleMethod=resmethod)
 
     """ now set up ampere to try and fit the same stuff """
-    photometry = Photometry(filterName=filterName, value=modSed, uncertainty=photunc, photUnits='Jy', libName=libname)
+    photometry = Photometry(filterName=filterName, value=modSed, uncertainty=photunc, photunits='Jy', libName=libname)
     #print(photometry.filterMask)
     photometry.reloadFilters(wavelengths)
 

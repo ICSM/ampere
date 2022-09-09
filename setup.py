@@ -48,12 +48,11 @@ setup(
                       'corner',
                       ],
     python_requires=">=3.7",
-    extras_require{
+    extras_require={
         "sbi":["torch", "sbi"],
         "zeus":["zeus-mcmc"],
         "arviz":["arviz"],
-        }
-
+        },
     classifiers=[
         'Development Status :: 3 - Alpha',
         'Intended Audience :: Science/Research',

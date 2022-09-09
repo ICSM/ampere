@@ -109,10 +109,12 @@ class CompositeModel(Model):
         raise NotImplementedError()
 
     def __call__(self, *args, **kwargs): #This method should invoke the __call__ routines of the two underlying Model instances and combine their ModelFluxes with the specified operator
-        self.model1(args[:self.part1])
-        self.model2(args[self.part1:])
-        self.modelFlux = eval("self.model1.modelFlux"+self.operator+"self.model1.modelFlux") #this needs to be generalised to models that have more complex predictions than just a spectrum
+        res1 = self.model1(args[:self.part1])
+        res2 = self.model2(args[self.part1:])
+        #self.modelFlux = eval("self.model1.modelFlux"+self.operator+"self.model1.modelFlux") #this needs to be generalised to models that have more complex predictions than just a spectrum - probably by defining the 
         #raise NotImplementedError()
+        #return {"spectrum":{"wavelength":self.wavelength, "flux": self.modelFlux}}
+        return eval("res1"+self.operator+"res2") #this line depends on all the arithmetic operators being implemented for ModelResults objects!
     
     def __str__(self, **kwargs):
         raise NotImplementedError()

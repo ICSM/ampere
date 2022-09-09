@@ -445,7 +445,7 @@ class Spectrum(Data):
         #wavelength = self.wavelength
         #modSpec = model.modelFlux #
         #print(model.wavelength)
-        modSpec = self.resampler(self.wavelength, model.wavelength, model.modelFlux)[self.mask] #For some reason spectres isn't cooperating :/ actually, looks like it was just a stupid mistake
+        modSpec = self.resampler(self.wavelength, model.spectrum["wavelength"], model.spectrum["flux"])[self.mask] #For some reason spectres isn't cooperating :/ actually, looks like it was just a stupid mistake
         ''' then update the covariance matrix for the parameters passed in '''
         #skip this for now
         #self.covMat =
