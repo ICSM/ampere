@@ -27,40 +27,48 @@ class Spectrum(Data):
     Parameters
     ----------
     wavelength : float, array-like
-        The wavelengths of the spectrum.
-    value : float, array-like
-        The fluxes of the spectrum.
+        The wavelengths of the spectrum. Required if value is *not* a Spectrum1D
+    value : float, array-like or specutils.Spectrum1D
+        The fluxes of the spectrum. If it is a Spectrum1D, it is assumed to contain the spectral axis and uncertainties along with their units
     uncertainty : float, array-like
-        The uncertainty on the fluxes.
-    fluxUnits : {'Jy', 'mJy', 'W/m^2/Hz', 'W/m^2/Angstrom', 'W/cm^2/um', 'erg/cm^2/s/Hz', 'erg/cm^2/s/Angstrom'}, scalar
-        The units of the fluxes..
-    bandUnits : {'um', 'AA', 'nm'}, optional, string, scalar or array-like
-        The units of the wavelengths.
+        The uncertainty on the fluxes. Required if value is *not* a Spectrum1D
+    fluxUnits : string or astropy.units.core.Unit, scalar
+        The units of the fluxes. If a string is passed, it will be interpreted with astropy.units.Unit. Required if either value is not a Spectrum1D and either value or uncertainty are not a Quantity
+    bandUnits : string or astropy.units.core.Unit, scalar
+        The units of the wavelengths. If a string is passed, it will be interpreted with astropy.units.Unit. Required if value is not a Spectrum1D and if wavelength is not a Quantity
     freqSpec : bool, default False
-        If the input is wavelength (False, default) of Frequncy (True). Currently only works for frequncies in GHz, otherwise input must be wavelength
+        If the input is wavelength (False, default) of Frequncy (True). Currently only works for frequncies in GHz, otherwise input must be wavelength (deprecated)
     calUnc : float, optional, default 0.01
         Parameter controlling width of prior on the scale factor for absolute calibration uncertainty. Larger values imply larger calibration uncertainty. The default value corresponds to roughly 2.5% uncertainty. 
     covarianceTruncation : float, optional, default 1e-3
         Threshold below which the covariance matrix is truncated to zero.
-
+    
+    
     Attributes
     ----------
     None
-
+    
+    
     Methods
     -------
     lnlike : Calculate the likelihood of the data given the model
-
+    
+    
     Notes
     -----
     
     
     Examples
     --------
+    create an instance by directly instantiating it
+    
     >>> spec = Spectrum(wavelength_array, flux_array, uncertainty_array, "um", "Jy")
 
     or alternatively
+    
     >>> spec = Spectrum.fromFile('filename', 'SPITZER-YAAAR')
+    
+    creates an instance from a Spitzer spectrum downloaded from the CASSIS database.
     """
 
     """
@@ -84,7 +92,8 @@ class Spectrum(Data):
 
     _hasNoiseModel = True
 
-    def __init__(self, wavelength, value, uncertainty, bandUnits, fluxUnits,
+    def __init__(self, wavelength=None, value=None, uncertainty=None,
+                 bandUnits=None, fluxUnits=None,
                  freqSpec = False, calUnc = None, covarianceTruncation = 1e-3,
                  scaleLengthPrior = None, scaleFacPrior = None, label="Spectrum",
                  resampleMethod="exact",
@@ -94,6 +103,57 @@ class Spectrum(Data):
         self.label = label
         self.plotParams["label"] = label
 
+        if value is None:
+            raise ValueError("Value is a required input!")
+        elif "Spectrum1D" in [t.__name__ for t in type(value).__mro__]:
+            #this checks if it is (or inherets from) Spectrum1D without us having to have specutils as a dependence!
+            #Having the input as a Spectrum1D object is nice, because they support all sorts of automatic transformations between different systems and units
+            self.wavelength = value.wavelength.to(units.micron, equivalencies = units.spectral()).value
+            self.value = value.flux.to(units.Jy,
+                                      equivalencies = units.spectral_density(self.wavelength*units.micron)).value
+            self.uncertainty = value.uncertainty.to(units.Jy,
+                                      equivalencies = units.spectral_density(self.wavelength*units.micron)).value
+        else:
+            #It's not a Spectrum1D, so we have to unpack flux, uncertainty and wavelengths separately
+            #wavelength must come first, since it is required to unpack the equivalencies for value and uncertainty
+            if isinstance(wavelength, units.Quantity):
+                self.wavelength = wavelength.to(units.micron, equivalencies = units.spectral()).value #this only works if things are defined in absolute units, not doppler (i.e. velocity). This should be accomodated somehow.
+            elif isinstance(bandUnits, units.Quantity) and np.ndim(wavelength) > 0:
+                self.wavelength = (wavelength*bandUnits).to(units.micron, equivalencies = units.spectral()).value
+            elif isinstance(bandUnits, str) and np.ndim(wavelength) > 0:
+                bandUnits = units.Unit(bandUnits)
+                self.wavelength = (wavelength*bandUnits).to(units.micron, equivalencies = units.spectral()).value
+            else:
+                raise TypeError("If wavelength is not a Quantity, bandUnits must be either a Quantity or a unit string")
+            
+            if isinstance(value, units.Quantity):
+                self.value = value.to(units.Jy,
+                                      equivalencies = units.spectral_density(self.wavelength*units.micron)).value
+            elif isinstance(fluxUnits, units.core.Unit) and np.ndim(value) > 0:
+                self.value = (value*fluxUnits).to(units.Jy,
+                                                  equivalencies = units.spectral_density(self.wavelength*units.micron)).value
+            elif isinstance(fluxUnits, str) and np.ndim(value) > 0:
+                fluxUnits = units.Unit(fluxUnits)
+                self.value = (value*fluxUnits).to(units.Jy,
+                                                  equivalencies = units.spectral_density(self.wavelength*units.micron)).value
+            else:
+                raise TypeError("If value is not a Quantity, fluxUnits must be either a Quantity or a unit string")
+
+            if isinstance(uncertainty, units.Quantity):
+                self.uncertainty = uncertainty.to(units.Jy,
+                                                  equivalencies = units.spectral_density(self.wavelength*units.micron)).value
+            elif isinstance(fluxUnits, units.core.Unit) and np.ndim(uncertainty) > 0:
+                self.uncertainty = (np.array(uncertainty)*fluxUnits).to(units.Jy,
+                                                              equivalencies = units.spectral_density(self.wavelength*units.micron)).value
+            elif isinstance(fluxUnits, str) and np.ndim(uncertainty) > 0:
+                fluxUnits = units.Unit(fluxUnits)
+                self.uncertainty = (uncertainty*fluxUnits).to(units.Jy,
+                                                              equivalencies = units.spectral_density(self.wavelength*units.micron)).value
+            else:
+                raise TypeError("If uncertainty is not a Quantity, fluxUnits must be either a Quantity or a unit string")
+
+            
+        """ Commenting this segment out, as above unit conversions should now take care of everything.
         #Wavelength conversion
         self.frequency = freqSpec #True/False? Wavelength or Frequency spectrum
         
@@ -107,8 +167,8 @@ class Spectrum(Data):
         if u.m.is_equivalent(bandUnits):
             wavelength = wavelength / u.um.to(bandUnits)
         else:
-            mesg = """The value for bandUnits must have dimensions of length!
-            Allowed values: 'AA', 'um', 'nm', etc."""
+            mesg = \"""The value for bandUnits must have dimensions of length!
+            Allowed values: 'AA', 'um', 'nm', etc.""\"
             raise ValueError(mesg)
         
         self.wavelength = wavelength #Will be the grid of wavelength/frequency
@@ -135,6 +195,7 @@ class Spectrum(Data):
 
         self.value = value #Should always be a flux unless someone is peverse, as with wavelengths using MaskedArrays?
         self.uncertainty = uncertainty #Ditto #ma.asarray()?
+        """
 
         ''' inititalise covariance matrix as a diagonal matrix '''
         self.varMat = uncertainty * uncertainty[:,np.newaxis] #make a square array of sigma_i * sigma_j, i.e. variances

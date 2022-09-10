@@ -158,7 +158,9 @@ class BaseSearch(object):
     def lnprob_vector_pool(self, theta, pool):
         ''' This method is a drop-in replacement for the above method but where theta is a vector of arguments. 
 
-        It assumes you want to parallelise execution of models across a pool
+        It assumes you want to parallelise execution of models across a pool.
+
+        This method is not yet implemented.
         '''
         pass
         

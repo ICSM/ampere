@@ -37,12 +37,20 @@ class Photometry(Data):
     filterName : string, array-like
         The names of the filters that this object will hold
     value : float, array-like or quantity
-        The fluxes or magnitudes corresponding to each filter. 
-        Fluxes and magnitudes can be mixed, see `photUnits`.
+        The fluxes or magnitudes corresponding to each filter, with the same length as filterName. 
+        Fluxes (in varying units) and magnitudes can be mixed, see `photUnits`.
+        However, if different systems are mixed, value (and uncertainty) must 
+        *not* be quantities.
     uncertainty : float, array-like or quantity
-        The uncertainty on the fluxes or magnitudes.
-    photUnits : {'Jy', 'mJy', 'mag'}, array-like or quantity
-        The units of the photometry. Should be an array-like of the same length as filterName.
+        The uncertainty on the fluxes or magnitudes, with the same length as filterName.
+    photunits : astropy.units.Unit or string, array-like or scalar
+        The units of the photometry. This can be passed in several different ways:
+        
+            1. a single entry from astropy.units
+            2. a single string that astropy.units can convert to a Unit instance
+            3. a list, tuple or array-like of the two above options, with the same length as filterName.  If you wish to mix different units or systems, this is the only approach supported 
+
+        At present, only Vega magnitudes are supported. Other systems (e.g. AB, ST, luptitudes) may be supported in future releases.
     bandUnits : optional, string, scalar or array-like
         Currently assumes micron ('um') as pyphot converts internally. May be updated in future.
     libName : string
