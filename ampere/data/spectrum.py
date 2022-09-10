@@ -9,7 +9,7 @@ import pyphot
 from astropy.io import fits
 # for reading VO table formats into a single table
 from astropy.io.votable import parse_single_table
-import astropy.units as u
+from astropy import units
 from astropy.io import ascii
 from spectres import spectres
 from scipy.stats import rv_continuous, norm, halfnorm
@@ -26,11 +26,11 @@ class Spectrum(Data):
 
     Parameters
     ----------
-    wavelength : float, array-like
+    wavelength : float, array-like or Quantity
         The wavelengths of the spectrum. Required if value is *not* a Spectrum1D
-    value : float, array-like or specutils.Spectrum1D
+    value : float, array-like, Quantity or specutils.Spectrum1D
         The fluxes of the spectrum. If it is a Spectrum1D, it is assumed to contain the spectral axis and uncertainties along with their units
-    uncertainty : float, array-like
+    uncertainty : float, array-like or Quantity
         The uncertainty on the fluxes. Required if value is *not* a Spectrum1D
     fluxUnits : string or astropy.units.core.Unit, scalar
         The units of the fluxes. If a string is passed, it will be interpreted with astropy.units.Unit. Required if either value is not a Spectrum1D and either value or uncertainty are not a Quantity
@@ -118,13 +118,13 @@ class Spectrum(Data):
             #wavelength must come first, since it is required to unpack the equivalencies for value and uncertainty
             if isinstance(wavelength, units.Quantity):
                 self.wavelength = wavelength.to(units.micron, equivalencies = units.spectral()).value #this only works if things are defined in absolute units, not doppler (i.e. velocity). This should be accomodated somehow.
-            elif isinstance(bandUnits, units.Quantity) and np.ndim(wavelength) > 0:
+            elif isinstance(bandUnits, units.core.Unit) and np.ndim(wavelength) > 0:
                 self.wavelength = (wavelength*bandUnits).to(units.micron, equivalencies = units.spectral()).value
             elif isinstance(bandUnits, str) and np.ndim(wavelength) > 0:
                 bandUnits = units.Unit(bandUnits)
                 self.wavelength = (wavelength*bandUnits).to(units.micron, equivalencies = units.spectral()).value
             else:
-                raise TypeError("If wavelength is not a Quantity, bandUnits must be either a Quantity or a unit string")
+                raise TypeError("If wavelength is not a Quantity, bandUnits must be either a Unit or a unit string. \n However, wavelength is {0} and bandUnits is {1}".format(type(wavelength), type(bandUnits)))
             
             if isinstance(value, units.Quantity):
                 self.value = value.to(units.Jy,
@@ -137,7 +137,7 @@ class Spectrum(Data):
                 self.value = (value*fluxUnits).to(units.Jy,
                                                   equivalencies = units.spectral_density(self.wavelength*units.micron)).value
             else:
-                raise TypeError("If value is not a Quantity, fluxUnits must be either a Quantity or a unit string")
+                raise TypeError("If value is not a Quantity, fluxUnits must be either a Unit or a unit string\n However, wavelength is {0} and bandUnits is {1}".format(type(value), type(fluxUnits)))
 
             if isinstance(uncertainty, units.Quantity):
                 self.uncertainty = uncertainty.to(units.Jy,
@@ -150,7 +150,7 @@ class Spectrum(Data):
                 self.uncertainty = (uncertainty*fluxUnits).to(units.Jy,
                                                               equivalencies = units.spectral_density(self.wavelength*units.micron)).value
             else:
-                raise TypeError("If uncertainty is not a Quantity, fluxUnits must be either a Quantity or a unit string")
+                raise TypeError("If uncertainty is not a Quantity, fluxUnits must be either a Quantity or a unit string\n However, wavelength is {0} and bandUnits is {1}".format(type(uncertainty), type(fluxUnits)))
 
             
         """ Commenting this segment out, as above unit conversions should now take care of everything.
@@ -164,8 +164,8 @@ class Spectrum(Data):
         
         # as long as bandUnits has the dimensions of length, the wavelength
         # is computed in um.
-        if u.m.is_equivalent(bandUnits):
-            wavelength = wavelength / u.um.to(bandUnits)
+        if units.m.is_equivalent(bandUnits):
+            wavelength = wavelength / units.um.to(bandUnits)
         else:
             mesg = \"""The value for bandUnits must have dimensions of length!
             Allowed values: 'AA', 'um', 'nm', etc.""\"
@@ -177,17 +177,17 @@ class Spectrum(Data):
         
         self.fluxUnits = fluxUnits#specFluxUnits
 
-        if u.Jy.is_equivalent(fluxUnits):
-            uconv = u.Jy.to(fluxUnits)
+        if units.Jy.is_equivalent(fluxUnits):
+            uconv = units.Jy.to(fluxUnits)
             value = value / uconv
             uncertainty = uncertainty / uconv
-        elif (u.W / u.m**3).is_equivalent(fluxUnits):
+        elif (units.W / units.m**3).is_equivalent(fluxUnits):
             # first convert flux and uncertainty to W/m^3
-            uconv = (u.W / u.m**3).to(fluxUnits)
+            uconv = (units.W / units.m**3).to(fluxUnits)
             value = value / uconv
             uncertainty = uncertainty / uconv
             # now convert flux and uncertainty to Jy
-            conv_fac = (wavelength * u.um)**2 / const.c
+            conv_fac = (wavelength * units.um)**2 / const.c
             value = (value * conv_fac).to('Jy')
             uncertainty = (uncertainty * conv_fac).to('Jy')
         else:

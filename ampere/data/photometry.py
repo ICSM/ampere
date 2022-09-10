@@ -36,12 +36,12 @@ class Photometry(Data):
     ----------
     filterName : string, array-like
         The names of the filters that this object will hold
-    value : float, array-like or quantity
+    value : float, array-like or Quantity
         The fluxes or magnitudes corresponding to each filter, with the same length as filterName. 
         Fluxes (in varying units) and magnitudes can be mixed, see `photUnits`.
         However, if different systems are mixed, value (and uncertainty) must 
         *not* be quantities.
-    uncertainty : float, array-like or quantity
+    uncertainty : float, array-like or Quantity
         The uncertainty on the fluxes or magnitudes, with the same length as filterName.
     photunits : astropy.units.Unit or string, array-like or scalar
         The units of the photometry. This can be passed in several different ways:
