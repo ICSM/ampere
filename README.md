@@ -8,3 +8,10 @@ This approach was chosen because, typically, deficiencies in the model result in
 This effectively downweights parts of the data which the model doesn't represent well without having to manually identify these regions.
 
 At present, ampere is in the alpha testing phase, but we anticipate a beta release in the near future. If you are interested, please get in touch with us!
+
+
+## Installation
+
+git clone repository into a direction
+
+> pip install -e .
