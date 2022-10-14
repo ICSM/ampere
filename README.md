@@ -21,6 +21,6 @@ git clone repository and install with pip (ideally in a new conda environment):
 ```
 
 This will install the minimal package, but leave out some extra features. For all features, instead do
-```
+```bash
 > pip install -e .[all]
 ```
