@@ -692,7 +692,7 @@ class HyperionCStarRTModel(Model):
 
     def lnprior(self, theta, **kwargs): #theta will only have nSpecies-1 entries for this case
         
-        if theta > 0. and theta < 1.:
+        if theta.all() > 0. and theta.all() < 1.:
             try:
                 return dirichlet((1.,)*self.nSpecies).logpdf(theta) #When you have a set of random variates whose sum = 1 by definition, the correct prior is a dirichlet distribution (which is a generalisation of the beta distribution).
             except ValueError:
