@@ -230,10 +230,11 @@ if __name__ == "__main__":
     libname = libDir + 'ampere_allfilters.hd5'
     filterLibrary = pyphot.get_library(fname=libname)
     filters = filterLibrary.load_filters(filterName, interp=True, lamb = wavelengths*pyphot.unit['micron'])
+##TODO Check how pyphot is used with Fnu
     filts, modSed = pyphot.extractPhotometry(wavelengths,
                                              model_flux,
                                              filters,
-                                             Fnu = True,
+                                            # Fnu = True,
                                              absFlux = False,
                                              progress=False
             )
