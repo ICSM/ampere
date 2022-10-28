@@ -6,21 +6,35 @@ import logging
 from ..logger import Logger
 from .basesearch import BaseSearch
 
+from datetime import datetime
 
 class BaseNestedSampler(BaseSearch, Logger):
     _inference_method = "Nested Sampling"
     
     def __init__(self, model = None, data= None, verbose = False,
-                 parameter_labels = None,
+                 parameter_labels = None, name='', namestyle="full",
                  **kwargs):
         self.model = model
         self.dataSet = data
 
+        try:
+            modelname = model.name
+        except AttributeError:
+            modelname = model.__class__.__name__
+        if namestyle=='full':
+            self.name = "ampere_"+str(datetime.now()).replace(' ','_').replace(":","-")[:-7] + "_" + modelname + "_" + name
+        elif namestyle=="short":
+            self.name = name
+        elif namestyle=="stamp":
+            self.name = "ampere_"+str(datetime.now()).replace(' ','_').replace(":","-")[:-7] + "_" + name
+        elif namestyle=="model":
+            self.name = "ampere_"+modelname + "_" + name
+
         self.setup_logging(verbose=verbose) #For now we will exclusively use default logging settings, this will be modified once logging is tested.
-        logging.info("Welcome to ampere")
-        logging.info("Setting up your inference problem:")
-        logging.info("You are using %s", self._inference_method)
-        logging.info("You have %s items in your dataset", str(len(data)))
+        self.logger.info("Welcome to ampere")
+        self.logger.info("Setting up your inference problem:")
+        self.logger.info("You are using %s", self._inference_method)
+        self.logger.info("You have %s items in your dataset", str(len(data)))
 
         ''' now do some introspection on the various bits of model to 
         understand how many parameters there are for each compponent '''
@@ -54,12 +68,18 @@ class BaseNestedSampler(BaseSearch, Logger):
 
         self.verbose = verbose
         #if self.verbose:
-        logging.info("This model has %d parameters.", self.nparsMod)
-        logging.info("There are also %d parameters for the noise model", self.npars - self.nparsMod)
-        logging.info("Hence, there are a total of %d parameters to sample", self.npars)
-        logging.info("The parameter names are:")
+        self.logger.info("This model has %d parameters.", self.nparsMod)
+        self.logger.info("There are also %d parameters for the noise model", self.npars - self.nparsMod)
+        self.logger.info("Hence, there are a total of %d parameters to sample", self.npars)
+        self.logger.info("The parameter names are:")
         for l in self.parLabels:
-            logging.info("%s", l)
+            self.logger.info("%s", l)
+
+        #Now we should check whether the number of parameters matches with the parameter labels!
+        if len(self.parLabels) != self.npars:
+            self.logger.critical("You have %d free parameters but %d parameter labels", self.npars, len(self.parLabels))
+            self.logger.critical("Please check the number of parameters and labels")
+            raise ValueError("Mismatch between number of parameters and labels")
 
 
     #This method is now defined in Basesearch

@@ -1,12 +1,15 @@
+import sys
 import numpy as np
 import os
 import ampere
+from astropy import units
 from ampere.data import Spectrum, Photometry
-from ampere.infer.zeussearch import ZeusSearch
+from ampere.infer.emceesearch import EmceeSearch
+from ampere.infer.sbi import SBI_SNPE
 from ampere.models import Model
 from spectres import spectres
 import pyphot
-from zeus import moves
+from emcee import moves
 
 #First we will define a rather simple model
 
@@ -16,7 +19,7 @@ class ASimpleModel(Model):
     This model shows you the basics of writing a model for ampere
 
     '''
-    def __init__(self, wavelenghts, flatprior=True,
+    def __init__(self, wavelengths, flatprior=True,
                  lims=np.array([[-10, 10],
                                 [-10, 10]])):
         '''The model constructor, which will set everything up
@@ -49,7 +52,16 @@ class ASimpleModel(Model):
         return {"spectrum":{"wavelength":self.wavelength, "flux": self.modelFlux}}
 
     def lnprior(self, theta, **kwargs):
+        """The model prior probability distribution
+        
+        The prior is essential to most types of inference with ampere. The prior
+        describes the relative weights (or probabilities if normalised) of different
+        parameter combinations. Using a normalised prior with SNPE is strongly 
+        recommended, otherwise ampere will attempt approximate normalisation using
+        Monte Carlo integration.
+        """
         slope = theta[0]
+        #print(slope)
         intercept = theta[1]
         if self.flatprior:
             if (self.lims[0,0] < theta[0] < self.lims[0,1]) and (self.lims[1,0] < theta[1] < self.lims[1,1]):
@@ -63,10 +75,9 @@ class ASimpleModel(Model):
     def prior_transform(self, u, **kwargs):
         '''The prior transform, which takes samples from the Uniform(0,1) distribution to the desired distribution.
 
-        This is only included for completeness and to demonstrate how a prior 
-        transform function should look. This example only uses emcee for 
-        fitting, which uses the lnprior function instead. Prior transforms are 
-        required by nested-sampling codes and similar approaches.
+        Prior transforms are essential for SNPE. SNPE needs to be able to generate samples from the prior, and this
+        method is integral to doing so. Therefore, unlike other inference methods, if you want to use SNPE (or other
+        SBI approaches) you need to define *both* lnprior and prior_transform.
         '''
         if self.flatprior:
             theta = np.zeros_like(u)
@@ -106,8 +117,14 @@ if __name__ == "__main__":
         fphot = f.get_flux(wavelengths*pyphot.unit['micron'], flam*pyphot.unit['flam'], axis=-1).value
         print(fphot)
         modSed.append(fphot*lp**2)
-
+    print(modSed)
     modSed = np.array(modSed)
+    print(modSed)
+    print(units.Quantity(modSed, 'Jy'))
+    print(modSed*units.Jy)
+    print(modSed*units.Unit('Jy'))
+
+    #exit()
 
     input_noise_phot = 0.1 #Fractional uncertainty
     photunc = input_noise_phot * modSed #Absolute uncertainty
@@ -138,7 +155,7 @@ if __name__ == "__main__":
     spec1.setResampler(resampleMethod=resmethod)
 
     """ now set up ampere to try and fit the same stuff """
-    photometry = Photometry(filterName=filterName, value=modSed, uncertainty=photunc, photunits='Jy', libName=libname)
+    photometry = Photometry(filterName=filterName, value=modSed, uncertainty=photunc, photunits="Jy", libName=libname)
     #print(photometry.filterMask)
     photometry.reloadFilters(wavelengths)
 
@@ -148,33 +165,19 @@ if __name__ == "__main__":
                ]
 
 
-    #Ampere exposes acces to Zeus' moves interface. This can be useful if the posterior turns out to not be well behaved. This shows you how to define moves, but doesn't actually use them in the inference
-    m = [(moves.GlobalMove(), 0.8),
-        (moves.DifferentialMove(), 0.2),
+    #Ampere exposes acces to emcee's moves interface. This can be useful if the posterior turns out to not be well behaved - the default move only deals well with posteriors that are monomodal and approximately Gaussian. Here's an example that usually deals a bit better with posteriors that don't meet these criteria:
+    m = [(moves.DEMove(), 0.8),
+        (moves.DESnookerMove(), 0.2),
          ]
-    #For example, You might want to burn in your sampler, then re-build it with new moves if the posterior is very multimodal
 
     #Now we set up the optimizer object:
-    optimizer = ZeusSearch(model=model, data=dataset, nwalkers=100, vectorize = False)
-    guess = [
-        [1, 1, #The parameters of the model
-         #1.0, 0.1, 0.1, #Each Spectrum object contains a noise model with three free parameters
-         #The first one is a calibration factor which the observed spectrum will be multiplied by
-         #The second is the fraction of correlated noise assumed
-         #And the third is the scale length (in microns) of the correlated component of the noise
-         1.0 ,0.1, 0.1
-       ] #
-        + np.random.rand(optimizer.npars)*[1,1,
-                                           #1,1,1,
-                                           1,1,1
-                                           ]
-        for i in range(optimizer.nwalkers)]
-
-    #guess = "None"
+    #In this version of the example, we are using ``Sequential Neural Posterior Estimation'' (SNPE) from the package sbi
+    optimizer = SBI_SNPE(model=model, data=dataset)
 
     #Then we tell it to explore the parameter space
-    optimizer.optimise(nsamples = 150, burnin=100, guess=guess
+    optimizer.optimise(nsamples = 10000, nsamples_post = 10000
                        )
+    
 
 
     optimizer.postProcess() #now we call the postprocessing to produce some figures

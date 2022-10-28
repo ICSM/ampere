@@ -31,10 +31,12 @@ class DynestyNestedSampler(BaseNestedSampler):
                  queue_size=None, pool=None, use_pool=None,
                  enlarge=None, bootstrap=0, vol_dec=0.5,
                  vol_check=2.0, walks=25, facc=0.5, slices=5,
+                 name='', namestyle="full",
                  **kwargs
                  ):
 
-        super().__init__(model = model, data = data, verbose = verbose, **kwargs)
+        super().__init__(model = model, data = data, verbose = verbose,
+                         name = name, namestyle=namestyle, **kwargs)
         #self.model=model
         #self.dataSet = data
         #if prior_transform is not None: #This should probably be removed! We don't want the user change the ptform at this point, but by changing it for the Model or Data individually
@@ -79,8 +81,8 @@ class DynestyNestedSampler(BaseNestedSampler):
                  print_progress=True, print_func=None,
                  save_bounds=True, **kwargs
                  ):
-        logging.info("Starting to sample.")
-        logging.info("Sampling will continue until the remaining ln evidence is approximately: %.2f", dlogz)
+        self.logger.info("Starting to sample.")
+        self.logger.info("Sampling will continue until the remaining ln evidence is approximately: %.2f", dlogz)
         self.sampler.run_nested(maxiter=maxiter, maxcall=maxcall,
                                 dlogz=dlogz, logl_max=logl_max,
                                 add_live=add_live,print_progress=print_progress,
@@ -88,12 +90,16 @@ class DynestyNestedSampler(BaseNestedSampler):
                                 save_bounds=save_bounds, **kwargs)
         self.results = self.sampler.results
 
-    def plot_summary(self, plotfile="summary.png"):
+    def plot_summary(self, plotfile=None):
+        if plotfile is None:
+            plotfile = self.name+"_"+"summary.png"
         fig, axes = dyplot.runplot(self.results) #Summary plot
         fig.savefig(plotfile)
 
-    def plot_corner(self, plotfile="corner.png"):
+    def plot_corner(self, plotfile=None):
         """ next, a corner plot """
+        if plotfile is None:
+            plotfile = self.name+"_"+"corner.png"
         fg, ax = dyplot.cornerpoints(self.results,
                                      max_n_ticks=5, cmap="plasma", kde=True)
         #fg, ax = dyplot.cornerplot(self.results)#, color='red', #truths=np.zeros(ndim), truth_color='black',
@@ -101,7 +107,9 @@ class DynestyNestedSampler(BaseNestedSampler):
                                    #quantiles=None, max_n_ticks=5)
         fg.savefig(plotfile)
 
-    def plot_trace(self, plotfile="trace.png"):
+    def plot_trace(self, plotfile=None):
+        if plotfile is None:
+            plotfile = self.name+"_"+"trace.png"
         fig, axes = dyplot.traceplot(self.results, #truths=np.zeros(ndim),
                                      show_titles=True,
                                      trace_cmap='viridis', connect=True,
@@ -123,10 +131,10 @@ class DynestyNestedSampler(BaseNestedSampler):
                 #ax0.set_title('Covariance matrix')
                 im = ax.imshow(np.log10(d.covMat))
                 istart+=d.npars
-                fig.savefig("covMat_"+str(i)+".png")
+                fig.savefig(self.name+"_"+"covMat_"+str(i)+".png")
 
 
-    def plot_posteriorpredictive(self, n_post_samples = 1000, plotfile="posteriorpredictive.png", logx = False, logy = False, alpha = 0.1, **kwargs):
+    def plot_posteriorpredictive(self, n_post_samples = 1000, plotfile=None, logx = False, logy = False, alpha = 0.1, **kwargs):
         ''' Generate the posterior-predictive plots so that the suitability of the model for the data can be inspected. 
         '''
 
@@ -139,6 +147,8 @@ class DynestyNestedSampler(BaseNestedSampler):
         #And model with the median of marginal posterior parameters
         #Must be plotted in reverse order: Model realisations first (i.e. lowest zorder), then data realisations, then data (use zorder keyword to get things in the right place, lowest first as highest end up on top)
         #Also produce individual posterior predictive plots for each Data object.
+        if plotfile is None:
+            plotfile = self.name+"_"+"posteriorpredictive.png"
 
         #Reweight the samples
         samples = self.results.samples.T
@@ -169,7 +179,7 @@ class DynestyNestedSampler(BaseNestedSampler):
             self.model(*self.bestPars[:self.nparsMod])
             axes.plot(self.model.wavelength,self.model.modelFlux, '-', color='k', alpha=1.0,label='MAP', zorder=8)
         except ValueError as e:
-            logging.error("Error in MAP solution \n Skipping MAP in plot")
+            self.logger.error("Error in MAP solution \n Skipping MAP in plot")
 
 
         #These plots end up with too many labels for the legend, so we clobber the label information so that only one of each one is plotted
@@ -192,8 +202,8 @@ class DynestyNestedSampler(BaseNestedSampler):
             #fig, axes = dyplot.runplot(self.results) #Summary plot
             #fig.savefig("summary.png")
         except ValueError as e:
-            logging.error("summary failed with error %s",e)
-            logging.warning("skipping summary plot and moving on to corner plot")
+            self.logger.error("summary failed with error %s",e)
+            self.logger.warning("skipping summary plot and moving on to corner plot")
 
 
         """ next, a corner plot """
@@ -231,9 +241,9 @@ class DynestyNestedSampler(BaseNestedSampler):
         self.res = np.array([[self.mean[i], self.cov[i]] for i in range(self.npars)])
         
         #Present
-        logging.info("Posterior means and 1-sigma confidence intervals of the parameters marginalising over all other parameters: ")
+        self.logger.info("Posterior means and 1-sigma confidence intervals of the parameters marginalising over all other parameters: ")
         for i in range(self.npars):
-            logging.info("%s  = %.5f +/- %.5f",
+            self.logger.info("%s  = %.5f +/- %.5f",
                 self.parLabels[i],self.mean[i],np.sqrt(np.diag(self.cov)[i])
                   )
         #print(np.sqrt(np.diag(self.cov))
@@ -241,11 +251,11 @@ class DynestyNestedSampler(BaseNestedSampler):
 
         #Now produce ML and MAP solution
         self.bestPars = self.results.samples[-1]
-        logging.info("MAP Solution: ")
+        self.logger.info("MAP Solution: ")
         for i in range(self.npars):
-            logging.info("%s  = %.5f",self.parLabels[i],self.bestPars[i]) #
-        logging.info("with Posterior probability ln(P*) = %.5f}",self.results.logwt[-1])
-        logging.info("and likelihood ln(L*) = %.5f",self.results.logl[-1])
+            self.logger.info("%s  = %.5f",self.parLabels[i],self.bestPars[i]) #
+        self.logger.info("with Posterior probability ln(P*) = %.5f}",self.results.logwt[-1])
+        self.logger.info("and likelihood ln(L*) = %.5f",self.results.logl[-1])
 
 
 
@@ -253,7 +263,7 @@ class DynestyNestedSampler(BaseNestedSampler):
         #help(self.results)
 
         #Then print out evidence, uncertainty, and estimate of remaining evidence
-        logging.info("Model evidence ln(Z) = %.5f +/- %.5f",self.results.logz[-1], self.results.logzerr[-1])
+        self.logger.info("Model evidence ln(Z) = %.5f +/- %.5f",self.results.logz[-1], self.results.logzerr[-1])
         #print("Estimated remaining evidence dln(Z) = ",
 
         #if outfile is not None:

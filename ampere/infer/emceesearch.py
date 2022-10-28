@@ -22,16 +22,18 @@ class EmceeSearch(EnsembleSampler,
     def __init__(self, nwalkers = None, model = None, verbose = False,
                  data = None, lnprior = None, vectorize = True, 
                  parameter_labels = None, acceptRate = 2.0, moves=None,
+                 name='', namestyle="full",
                  **kwargs):
 
         #Call super with everything required:
         super().__init__(nwalkers = nwalkers, model = model, data= data, verbose = verbose,
-                         parameter_labels = parameter_labels, **kwargs)
+                         parameter_labels = parameter_labels, name = name,
+                         namestyle=namestyle, **kwargs)
         self.moves = moves
         self.acceptRate = acceptRate
         ''' then set up the sampler '''
         if vectorize:
-            logging.info("Using vectorised posterior")
+            self.logger.info("Using vectorised posterior")
             #self.lnprob = self.lnprob_vector
             self.sampler = emcee.EnsembleSampler(self.nwalkers, np.int(self.npars), self.lnprob_vector, a = self.acceptRate, moves=self.moves, vectorize=True)#, args=self.dataSet)
         else:
@@ -94,7 +96,7 @@ class EmceeSearch(EnsembleSampler,
             ''' now rebuild it '''
             self.sampler = emcee.EnsembleSampler(self.nwalkers, np.int(self.npars), self.lnprob, a = self.acceptRate, moves=self.moves, **kwargs)
         else:
-            logging.info("No arguments passed, proceeding with sampler as is")
+            self.logger.info("No arguments passed, proceeding with sampler as is")
 
     def lnprior(self, theta, **kwargs):
         """
@@ -115,27 +117,27 @@ class EmceeSearch(EnsembleSampler,
     #def preopt(self, start, **kwargs):
     #    neglnprob = lambda *args: -self.lnprob(*args)
     #    from scipy.optimize import minimize
-    #    logging.info("Using scipy.minimize to find approximate MAP solution")
-    #    logging.info("starting from position: %s",start)
+    #    self.logger.info("Using scipy.minimize to find approximate MAP solution")
+    #    self.logger.info("starting from position: %s",start)
     #    solution = minimize(neglnprob, start)
     #    guess = [p for p in solution.x]
-    #    logging.info("Minimization complete, final position: %s ",guess)
+    #    self.logger.info("Minimization complete, final position: %s ",guess)
     #    return guess
         
 
     def optimise(self, nsamples = None, burnin = None, guess = None,
                  preopt = True, guessscale = 1e-3, noguess=False, progress=True, **kwargs):
         from collections.abc import Sequence, Iterable
-        logging.info("Preparing to sample")
+        self.logger.info("Preparing to sample")
         if guess == 'None': # and not noguess:
-            logging.info("Setting initial guess randomly")
+            self.logger.info("Setting initial guess randomly")
             try: #Attempting to use the ptform
-                logging.info("No guess specified, attempting to draw from prior transform")
+                self.logger.info("No guess specified, attempting to draw from prior transform")
                 rng = np.random.default_rng() #.uniform(-1,0,1000)
                 guess = [self.prior_transform(rng.uniform(size=self.npars)) for i in range(self.nwalkers)]
-                print(guess)
+                #print(guess)
             except AttributeError: #not all components have a ptform, so we'll do this the simple way
-                logging.info("Drawing from prior transform failed, drawing randomly")
+                self.logger.info("Drawing from prior transform failed, drawing randomly")
                 guess = [np.random.randn(np.int(self.npars)) for i in range(self.nwalkers)]
         #print('dimensions of guess = ', np.shape(guess))
         #print('nsamples = ', nsamples)
@@ -144,15 +146,15 @@ class EmceeSearch(EnsembleSampler,
         #print("np.min(guess, axis=0) = ", np.min(guess, axis=0))
 
         if preopt:
-            logging.info("Searching for approximate MAP solution as starting point for MCMC")
-            logging.info("Selecting start point for scipy.minimize")
+            self.logger.info("Searching for approximate MAP solution as starting point for MCMC")
+            self.logger.info("Selecting start point for scipy.minimize")
             if isinstance(guess, Sequence):
                 if not isinstance(guess[0], (Sequence, Iterable)):#Only a single entry
-                    logging.debug("Only one entry in guess")
-                    logging.debug(guess[0])
+                    self.logger.debug("Only one entry in guess")
+                    self.logger.debug(guess[0])
                     start = guess
                 else: #guess contains many entries, randomly select one
-                    logging.debug("Multiple entries in guess, selecting at random!")
+                    self.logger.debug("Multiple entries in guess, selecting at random!")
                     rng = np.random.default_rng()
                     i = rng.integers(0, len(guess))
                     start = guess[i]
@@ -164,8 +166,8 @@ class EmceeSearch(EnsembleSampler,
             
         self.nsamp = nsamples
         self.burnin = burnin
-        logging.info("Starting to sample: ")
-        logging.info("Each walker will produce %d samples, of which the first %d will be discarded as burn-in", self.nsamp, self.burnin)
+        self.logger.info("Starting to sample: ")
+        self.logger.info("Each walker will produce %d samples, of which the first %d will be discarded as burn-in", self.nsamp, self.burnin)
         if noguess:
             self.sampler.run_mcmc(nsamples, progress=progress)
         else:
@@ -261,7 +263,7 @@ class EmceeSearch(EnsembleSampler,
         axes.add_patch(Polygon([[xlims[0], ylims[0]], [xlims[0], ylims[1]], [self.burnin, ylims[1]], [self.burnin, ylims[0]]], closed=True,
                       fill=True, color='grey'))
         axes.plot([10*tauto,10*tauto],[ylims[0],ylims[1]],color="red",marker="",linestyle="-",label=r"10$\times t_{\rm autocorr}$")
-        fig.savefig("lnprob.png")        
+        fig.savefig(self.name+"_lnprob.png")        
         
     #def plot_covmats(self):
     #    istart = self.nparsMod
@@ -334,7 +336,7 @@ class EmceeSearch(EnsembleSampler,
         ''' First calculate some diagnostic information, like the autocorrelation time and acceptance fraction '''
 
         super().print_summary()
-        logging.info("Mean Acceptance Fraction : %.5f", self.maf)
+        self.logger.info("Mean Acceptance Fraction : %.5f", self.maf)
         
        # print("Mean Acceptance Fraction : {0:.5f}",np.mean(self.sampler.acceptance_fraction))
        # #try:

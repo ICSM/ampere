@@ -2,9 +2,9 @@ import numpy as np
 import sys
 import ampere
 from ampere.data import Spectrum, Photometry
-from ampere.emceesearch import EmceeSearch
-from ampere.PowerLawAGN import PowerLawAGN
-from ampere.PowerLawAGN import PowerLawAGNRelativeAbundances
+from ampere.infer.emceesearch import EmceeSearch
+#from ampere.PowerLawAGN import PowerLawAGN
+from ampere.models import PowerLawContinuumRelativeAbundances as PLCRA
 import corner
 import matplotlib as mpl
 #mpl.use("Agg")
@@ -38,13 +38,14 @@ if __name__=="__main__":
     modwaves = 10**np.linspace(0.,1.9, 2000)
 
     #model = PowerLawAGN(modwaves, redshift=0.058)
-    model = PowerLawAGNRelativeAbundances(modwaves, redshift=0.058)
+    model = PLCRA(modwaves, redshift=0.058)
     phot.reloadFilters(modwaves)
     dataSet = [phot]          #use this line when using photometry
     print(dataSet)
     #import pdb;pdb.set_trace()
     #dataSet = [s for s in irs] #comment out when using photometry
     for s in irs:             #include the next two lines when appending spectroscopy to photometry
+        s.setResampler(resampleMethod="fast")
         dataSet.append(s)
 
     for s in dataSet:
@@ -83,6 +84,13 @@ if __name__=="__main__":
            ]
            + np.random.randn(np.int(opt.npars))/1e3 for j in range(opt.nwalkers)
           ]
+
+    opt.optimise(nsamples = 2000, burnin=1500,guess=pos)
+
+    opt.postProcess()
+
+    
+    exit()
     #for i in range(len(pos)):
         #pos[i][0] = pos[i][0] / 1000.
         #pos[i][1] = pos[i][1] / 3. + 1.

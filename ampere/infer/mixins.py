@@ -26,7 +26,7 @@ import numpy as np
 import logging
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
-
+from scipy.special import logsumexp
 
 from ..data import Photometry, Spectrum
 
@@ -39,12 +39,163 @@ class ScipyMinMixin(object):
     def preopt(self, start, **kwargs):
         neglnprob = lambda *args: -self.lnprob(*args)
         from scipy.optimize import minimize
-        logging.info("Using scipy.minimize to find approximate MAP solution")
-        logging.info("starting from position: %s",start)
+        self.logger.info("Using scipy.minimize to find approximate MAP solution")
+        self.logger.info("starting from position: %s",start)
         solution = minimize(neglnprob, start)
         solution = [p for p in solution.x]
-        logging.info("Minimization complete, final position: %s ",solution)
+        self.logger.info("Minimization complete, final position: %s ",solution)
         return solution
+
+
+class SBIPostProcessor(object):
+    """
+    A mixin for post-processing SBI results
+
+    This mixin provides functions for computing diagnostic statistics and creating 
+    plots to explore the output. This includes e.g. producing corner plots. This 
+    assumes structure similar to that of emcee. The `get_` methods are intended to be 
+    extended or overloaded by classes that inheret from this mixin if necessary.
+    """
+
+    def get_credible_interval(self, percentiles, chain = None, **kwargs):
+        """
+        Compute a credible interval given an iterable of percentiless by the user
+        """
+        if chain is None:
+            chain = self.samples
+        self.res = []
+        for i in range(self.npars):
+            a = np.percentile(self.samples[:,i], [16, 50, 84])
+            self.res.append([a[1], a[2]-a[1], a[1]-a[0]])
+        return self.res
+
+    def get_map(self, **kwargs):
+        self.logger.info("Estimating MAP parameters")
+        self.bestPars = self.posterior.map()
+        return self.bestPars
+
+    def plot_covmats(self):
+        istart = self.nparsMod
+        for i, d in enumerate(self.dataSet):
+            if isinstance(d, Photometry):
+                continue
+            elif isinstance(d, Spectrum):
+                fig, ax = plt.subplots(1,1)
+                d.cov([self.res[istart+1][0],self.res[istart+2][0]])
+                #ax0.set_title('Covariance matrix')
+                im = ax.imshow(np.log10(d.covMat))
+                istart+=d.npars
+                fig.savefig(self.name+"_"+"covMat_"+str(i)+".png")
+
+    def plot_posteriorpredictive(self, n_post_samples = 100,plotfile=None, logx = False, logy = False, alpha = 0.1,**kwargs):
+        '''
+        Function to plot the data and samples drawn from the posterior of the models and data.
+        '''
+        if plotfile is None:
+            plotfile = self.name+"_"+"posteriorpredictive.png"
+        fig,axes = plt.subplots(1,1,figsize=(8,6))
+        axes.set_xlabel(r"Wavelength ($\mu$m)")
+        axes.set_ylabel(r"Flux density (mJy)")
+
+        #observations
+        for d in self.dataSet:
+            if isinstance(d,(Photometry,Spectrum)):
+                d.plot(ax = axes)
+
+        #For SBI, we will plot cached models if we can, because the model is probably too slow to generate new ones
+        if self.cache_models:
+            #First, we have to calculate the *posterior* logprob of each *prior* sample
+            post_probs = 10**self.posterior.log_prob(self.thetas)
+            print(self.thetas.size())
+            post_probs = post_probs/ post_probs.sum() #divide by log(sum(probabilites) to normalise them
+            print(np.sum(post_probs.numpy()))
+            #next we need to sample from these, with the most-probable models being most likely to be selected
+            rng = np.random.default_rng()
+            chosen_thetas = rng.choice(self.thetas[post_probs.numpy() > 0], size = n_post_samples, p = post_probs.numpy()[post_probs.numpy() > 0], axis = 0) #, replace=False)
+            for i, t in enumerate(chosen_thetas):
+                key = tuple(t[:self.nparsMod])
+                r = self.cache[key]
+                axes.plot(r.spectrum["wavelength"], r.spectrum["flux"], '-', color='k', alpha = alpha, label = 'Samples', zorder=0)
+            pass
+        else:
+            for s in self.samples[np.random.randint(len(self.samples), size=n_post_samples)]:
+                try:
+                    self.model(*s[:self.nparsMod])
+                    axes.plot(self.model.wavelength,self.model.modelFlux, '-', color='k', alpha=alpha,label='Samples', zorder = 0)
+                except ValueError:
+                    pass
+                i = self.nparsMod
+                for d in self.dataSet:
+                    if isinstance(d,(Photometry,Spectrum)):
+                        if d._hasNoiseModel:
+                            d.plotRealisation(s[i:i+d.npars], ax=axes)
+                        i+= d.npars
+
+
+        #We won't try plotting the MAP in this case, because it almost certainly hasn't been generated a priori
+        #best fit model
+        #try:
+        #    self.model(*self.bestPars[:self.nparsMod])
+        #    axes.plot(self.model.wavelength,self.model.modelFlux, '-', color='k', alpha=1.0,label='MAP', zorder=8)
+        #except ValueError:
+        #    print("Error in MAP solution \n Skipping MAP in plot")
+
+        #These plots end up with too many labels for the legend, so we clobber the label information so that only one of each one is plotted
+        handles, labels = plt.gca().get_legend_handles_labels()
+        # labels will be the keys of the dict, handles will be values
+        temp = {k:v for k,v in zip(labels, handles)}
+        plt.legend(temp.values(), temp.keys(), loc='best')
+
+        #plt.legend()
+        plt.tight_layout()
+        fig.savefig(plotfile,dpi=200)
+        plt.close(fig)
+        plt.clf()
+
+    def plot_corner(self, **kwargs):
+        """
+        Generate a corner plot
+        """
+        import corner
+        try:
+            fig2 = corner.corner(self.samples,labels=self.parLabels, **kwargs)
+        except ImportError:
+            fig2 = corner.corner(self.samples.numpy(),labels=self.parLabels, **kwargs)
+        fig2.savefig(self.name+"_"+"corner.png")
+
+    def summary(self, interval = [16, 50, 84], **kwargs):
+        """
+        Generate the required summary statistics
+        """
+        
+        self.res = self.get_credible_interval(interval)
+        self.bestPars = self.get_map()
+
+    def print_summary(self, outfile=None, **kwargs):
+        """
+        Generate a summary of the run
+
+        This is currently overly complicated. In future, this functionality should end up being handled and written
+        by a custom logger - summary() should handle this logging
+        """
+        #First generate the summary statistics
+        self.summary()
+        file_output = {}
+        #Now start printing things
+        #with open(outfile, 'w') as f:
+        if self.bestPars is not None:
+            self.logger.info("MAP solution:")
+            #print("MAP Solution: ")
+            for i in range(self.npars):
+                self.logger.info("%s  = %.5f", self.parLabels[i],self.bestPars[i]) #
+
+
+        if self.res is not None:
+            self.logger.info("Median and confidence intervals for parameters in order:")
+            for i in range(self.npars):
+                self.logger.info("%s  = %.5f + %.5f - %.5f", self.parLabels[i],self.res[i][0],self.res[i][1],self.res[i][2])
+
+
 
 
 class SimpleMCMCPostProcessor(object):
@@ -54,7 +205,7 @@ class SimpleMCMCPostProcessor(object):
     This mixin provides functions for computing diagnostic statistics and creating 
     plots to explore the output. This includes e.g. the autocorrelation time of the
     chains, or producing corner plots. This assumes structure similar to that of 
-    emcee. The get_ methods are intended to be extended or overloaded by classes 
+    emcee. The `get_` methods are intended to be extended or overloaded by classes 
     that inheret from this mixin if necessary.
 
     
@@ -82,7 +233,7 @@ class SimpleMCMCPostProcessor(object):
             axes[i].set_xlim(0, self.nsamp)
 
         plt.tight_layout()
-        fig.savefig("walkers.png")
+        fig.savefig(self.name+"_walkers.png")
 
     # Geweke convergence test threshold
     geweke_max = 2.0
@@ -110,7 +261,7 @@ class SimpleMCMCPostProcessor(object):
         geweke_z = (a.mean(axis=0) - b.mean(axis=0)) / (np.var(a, axis=0) + np.var(b, axis=0))**0.5
         for i, p in enumerate(self.parLabels):
             if geweke_z[i] > self.geweke_max:
-                logging.warning("geweke drift (z=%.3f) detected for parameter '%s'", geweke_z[i], p)
+                self.logger.warning("geweke drift (z=%.3f) detected for parameter '%s'", geweke_z[i], p)
                 self.converged = False
         return geweke_z
 
@@ -121,10 +272,13 @@ class SimpleMCMCPostProcessor(object):
         This relies on importing the integrated_time function from emcee. Other 
         samplers which define their own methods should be used to overload this.
         """
-        from emcee.autocorr import integrated_time
-        if chain is None:
-            chain = self.allSamples
-        self.tauto = integrated_time(chain, quiet=True)
+        try:
+            self.tauto = self.sampler.get_autocorr_time(quiet=True)
+        except AttributeError:
+            from emcee.autocorr import integrated_time
+            if chain is None:
+                chain = self.allSamples
+            self.tauto = integrated_time(chain, quiet=True)
         return self.tauto
 
     def get_ess(self, chain = None, **kwargs):
@@ -179,10 +333,10 @@ class SimpleMCMCPostProcessor(object):
 
         self.rhat = np.mean(np.sqrt(weighted_var / W))
         if self.rhat - 1 > threshold:
-            logging.warning("Rhat = %.3f > %.3f. Chain is not converged! \n You should run a longer chain. ", self.rhat, 1+threshold)
+            self.logger.warning("Rhat = %.3f > %.3f. Chain is not converged! \n You should run a longer chain. ", self.rhat, 1+threshold)
             self.converged = False
         else:
-            logging.info("Rhat = %.3f <= %.3f ", self.rhat, 1+threshold)
+            self.logger.info("Rhat = %.3f <= %.3f ", self.rhat, 1+threshold)
             self.converged = True
         return self.rhat
 
@@ -227,31 +381,31 @@ class SimpleMCMCPostProcessor(object):
         #Now start printing things
         #with open(outfile, 'w') as f:
         if self.bestPars is not None:
-            logging.info("MAP solution:")
+            self.logger.info("MAP solution:")
             #print("MAP Solution: ")
             for i in range(self.npars):
-                logging.info("%s  = %.5f", self.parLabels[i],self.bestPars[i]) #
+                self.logger.info("%s  = %.5f", self.parLabels[i],self.bestPars[i]) #
                 #file_ouput['MAP']+="{0}  = {1:.5f}\n".format(self.parLabels[i],self.bestPars[i])
 
         if self.res is not None:
-            logging.info("Median and confidence intervals for parameters in order:")
+            self.logger.info("Median and confidence intervals for parameters in order:")
             for i in range(self.npars):
-                logging.info("%s  = %.5f + %.5f - %.5f", self.parLabels[i],self.res[i][0],self.res[i][1],self.res[i][2])
+                self.logger.info("%s  = %.5f + %.5f - %.5f", self.parLabels[i],self.res[i][0],self.res[i][1],self.res[i][2])
                 #file_output['CI']+="{0}  = {1[0]:.5f} + {1[1]:.5f} - {1[2]:.5f}\n".format(self.parLabels[i],self.res[i])
         if self.tauto is not None:
-            logging.info("Mean Autocorrelation Time: %.5f",np.mean(self.tauto))
-            logging.info("Autocorrelation times for each parameter:")
+            self.logger.info("Mean Autocorrelation Time: %.5f",np.mean(self.tauto))
+            self.logger.info("Autocorrelation times for each parameter:")
             #tauto = self.sampler.get_autocorr_time()
             for i in range(self.npars):
-                logging.info("%s  = %.0f steps",self.parLabels[i],self.tauto[i])
+                self.logger.info("%s  = %.0f steps",self.parLabels[i],self.tauto[i])
 
         if self.ess is not None:
-            logging.info("Effective sample size: %.3f", self.ess)
+            self.logger.info("Effective sample size: %.3f", self.ess)
 
     def plot_corner(self, **kwargs):
         import corner
         fig2 = corner.corner(self.samples,labels=self.parLabels, **kwargs)
-        fig2.savefig("corner.png")
+        fig2.savefig(self.name+"_corner.png")
 
     def plot_covmats(self):
         istart = self.nparsMod
@@ -264,12 +418,16 @@ class SimpleMCMCPostProcessor(object):
                 #ax0.set_title('Covariance matrix')
                 im = ax.imshow(np.log10(d.covMat))
                 istart+=d.npars
-                fig.savefig("covMat_"+str(i)+".png")
+                fig.savefig(self.name+"_covMat_"+str(i)+".png")
 
-    def plot_posteriorpredictive(self, n_post_samples = 1000,plotfile="posteriorpredictive.png", logx = False, logy = False, alpha = 0.1,**kwargs):
+    def plot_posteriorpredictive(self, n_post_samples = 1000,plotfile=None, logx = False, logy = False, alpha = 0.1,**kwargs):
         '''
         Function to plot the data and samples drawn from the posterior of the models and data.
         '''
+
+        if plotfile is None:
+            plotfile = self.name+"_"+"posteriorpredictive.png"
+            
         fig,axes = plt.subplots(1,1,figsize=(8,6))
         axes.set_xlabel(r"Wavelength ($\mu$m)")
         axes.set_ylabel(r"Flux density (mJy)")
