@@ -681,16 +681,18 @@ class HyperionCStarRTModel(Model):
         #forcing code to return total (scattered + emitted) component here - might want to avoid this if self-scattering is not desired, for example
         self.HyperionRTSED = self.result.get_sed(inclination=0, aperture=-1, distance=self.dstar,component='total',units='Jy')
         
-        self.wave = self.HyperionRTSED.wav
-        self.flux = self.HyperionRTSED.val
+        self.wave = self.HyperionRTSED.wav.value
+        self.flux = self.HyperionRTSED.val.value
         
         
         #Interpolate model fluxes onto fixed wavelength grid
         self.modelFlux = np.interp(self.wavelength, self.wave, self.flux)
+        
+        return {"spectrum":{"wavelength":self.wavelength, "flux": self.modelFlux}}
 
     def lnprior(self, theta, **kwargs): #theta will only have nSpecies-1 entries for this case
         
-        if theta > 0. and theta < 1.:
+        if theta.all() > 0. and theta.all() < 1.:
             try:
                 return dirichlet((1.,)*self.nSpecies).logpdf(theta) #When you have a set of random variates whose sum = 1 by definition, the correct prior is a dirichlet distribution (which is a generalisation of the beta distribution).
             except ValueError:
