@@ -297,7 +297,7 @@ class SBI_SNPE(LFIBase,SBIPostProcessor):
 
         self.plot_corner()
 
-        self.plot_posteriorpredictive()
+        self.plot_posteriorpredictive(**kwargs)
 
 
     def sample(self, nsamples = 1, **kwargs):

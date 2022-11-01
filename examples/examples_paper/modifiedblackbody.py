@@ -76,20 +76,20 @@ if __name__=="__main__":
     libname = libDir + 'ampere_allfilters.hd5'
     filterLibrary = pyphot.get_library(fname=libname)
     filters = filterLibrary.load_filters(filterName, interp=True, lamb = wavelengths*pyphot.unit['micron'])
-    filts, modSed = pyphot.extractPhotometry(wavelengths,
-                                             f_true,
-                                             filters,
-                                             Fnu = True,
-                                             absFlux = False,
-                                             progress=False
-                                             )
+    fwaves = np.array([filt.lpivot.to("micron").value for filt in filters])#*u.micron
+    modSed = np.zeros_like(filters)
+    flam = res["spectrum"]["flux"] / res["spectrum"]["wavelength"]**2
+    for i, (f, lp) in enumerate(zip(filters, fwaves)):
+        fphot = f.get_flux(wavelengths*pyphot.unit['micron'],
+                           flam*pyphot.unit['flam'], axis=-1).value
+        modSed[i] = (fphot*lp**2)
 
     input_noise_phot = 0.1 #Fractional uncertainty
     photunc = input_noise_phot * modSed #Absolute uncertainty
     modSed = modSed + np.random.randn(len(filterName)) * photunc #Now perturb data by drawing from a Gaussian distribution
 
     from ampere.data import Photometry
-    photometry = Photometry(filterName=filterName, value=modSed, uncertainty=photunc, photUnits='Jy', libName=libname)
+    photometry = Photometry(filterName=filterName, value=modSed, uncertainty=photunc, photunits='Jy', libName=libname)
     #print(photometry.filterMask)
     photometry.reloadFilters(wavelengths)
     print(photometry)

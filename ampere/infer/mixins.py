@@ -97,6 +97,11 @@ class SBIPostProcessor(object):
         axes.set_xlabel(r"Wavelength ($\mu$m)")
         axes.set_ylabel(r"Flux density (mJy)")
 
+        if logx:
+            axes.set_xscale("log")
+        if logy:
+            axes.set_yscale("log")
+
         #observations
         for d in self.dataSet:
             if isinstance(d,(Photometry,Spectrum)):
