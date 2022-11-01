@@ -164,7 +164,7 @@ class SBIPostProcessor(object):
         import corner
         try:
             fig2 = corner.corner(self.samples,labels=self.parLabels, **kwargs)
-        except ImportError:
+        except (ImportError, ValueError:
             fig2 = corner.corner(self.samples.numpy(),labels=self.parLabels, **kwargs)
         fig2.savefig(self.name+"_"+"corner.png")
 
