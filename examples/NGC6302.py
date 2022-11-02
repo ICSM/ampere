@@ -117,29 +117,36 @@ class SpectrumNGC6302(Model):
         # allowing them to be free the temperature ranges are 118-100 K and
         # 60-30 K, following Kemper et al. 2002
 
+#        print(acold0, acold1, acold2, acold3, acold4, acold5,
+#                 acold6, acold7, acold8, acold9, acold10,
+#                 awarm0, awarm1, awarm2, awarm3, awarm4, awarm5,
+#                 awarm6, awarm7, awarm8, awarm9, awarm10,
+#                 Tcold0, Tcold1, Twarm0, Twarm1, indexp, multfact)
+
         coldcomponent = np.zeros((2, wavelengths.__len__()))
         coldcomponent[0, :] = self.wavelength
         warmcomponent = np.zeros((2, wavelengths.__len__()))
         warmcomponent[0, :] = self.wavelength
         acold = [acold0, acold1, acold2, acold3, acold4, acold5, acold6,
                  acold7, acold8, acold9, acold10]
-        print("acold: ",acold)
+        awarm = [awarm0, awarm1, awarm2, awarm3, awarm4, awarm5, awarm6,
+                 awarm7, awarm8, awarm9, awarm10]
+ 
+#        print("acold: ",acold)
         for i, a in enumerate(acold):
-            print("i: ",i, " a: ",a)
             onespeciescold = self.ckmodbb(self.opacity_array[:, i],
-                                          tin=Tcold[0], tout=Tcold[1],
+                                          tin=Tcold[1], tout=Tcold[0],
                                           n0=a, index=indexp)
-            print("one: ", onespeciescold)
             coldcomponent[1, :] = coldcomponent[1, :] + onespeciescold[1, :]
-        print(coldcomponent[1,:])
         for i, a in enumerate(awarm):
             onespecieswarm = self.ckmodbb(self.opacity_array[:, i],
-                                          tin=Twarm[0], tout=Twarm[1],
+                                          tin=Twarm[1], tout=Twarm[0],
                                           n0=a, index=indexp)
             warmcomponent[1, :] = warmcomponent[1, :] + onespecieswarm[1, :]
         fModel = np.full_like(coldcomponent, 1.)
         fModel[1, :] = fModel[1, :] + warmcomponent[1, :]
         self.modelFlux = fModel[1, :]
+#        print(max(self.modelFlux), min(self.modelFlux))
         return {"spectrum":{"wavelength":self.wavelength, "flux": self.modelFlux}}
 
     def ckmodbb(self, q, tin, tout, n0, index=0.5, r0=1e15, distance=910.,
@@ -150,16 +157,27 @@ class SpectrumNGC6302(Model):
         fnu[0, :] = self.wavelength  #TODO: make fnu (and therefore onespecies)
                                      #an array with just 1 column, remove wl
 
-        for i in range(steps - 1):
-            t = tin - i * (tin-tout)/steps
+        for j in range(steps - 1):
+            t = tin - j * (tin-tout)/steps
             power = (t/tin)**(2*index - 6)
             bb = self.shbb(fnu, t, 0.)
-            fnu[1, :] = np.add(fnu[1, :],
+          #  print(min(bb[1,:]), max(bb[1,:]))
+          #  print(power*((tin-tout)/steps))
+            fnu[1, :] = np.add(fnu[1, :], 
                                np.multiply(q,
                                            bb[1, :])*(power*((tin-tout)/steps)))
         extra = r0/d
         factor = 4 * math.pi * a * a * r0 * n0 * extra * extra / (3-index)
+      #  print("pi: ", math.pi)
+      #  print("a: ", a)
+      #  print("r0: ", r0)
+      #  print("n0: ", n0)
+      #  print("extra: ", extra)
+      #  print("index: ", index)
+#        print("factor: ", factor)
+
         fnu[1, :] = fnu[1, :] * factor
+        
         return fnu
 
     def shbb(self, aar, temp, pinda):
@@ -208,8 +226,8 @@ if __name__ == "__main__":
     wavelengths = np.linspace(2.4,198.,1956)
 
     """ Choose some model parameters """
-    acold = np.zeros(11)
-    awarm = np.zeros(11)
+    acold = np.ones(11)
+    awarm = np.ones(11)
     Tcold = [20, 70]
     Twarm = [100, 150]
     indexp = 1.5
