@@ -123,11 +123,15 @@ class SpectrumNGC6302(Model):
         warmcomponent[0, :] = self.wavelength
         acold = [acold0, acold1, acold2, acold3, acold4, acold5, acold6,
                  acold7, acold8, acold9, acold10]
+        print("acold: ",acold)
         for i, a in enumerate(acold):
+            print("i: ",i, " a: ",a)
             onespeciescold = self.ckmodbb(self.opacity_array[:, i],
                                           tin=Tcold[0], tout=Tcold[1],
                                           n0=a, index=indexp)
+            print("one: ", onespeciescold)
             coldcomponent[1, :] = coldcomponent[1, :] + onespeciescold[1, :]
+        print(coldcomponent[1,:])
         for i, a in enumerate(awarm):
             onespecieswarm = self.ckmodbb(self.opacity_array[:, i],
                                           tin=Twarm[0], tout=Twarm[1],
@@ -136,6 +140,7 @@ class SpectrumNGC6302(Model):
         fModel = np.full_like(coldcomponent, 1.)
         fModel[1, :] = fModel[1, :] + warmcomponent[1, :]
         self.modelFlux = fModel[1, :]
+        return {"spectrum":{"wavelength":self.wavelength, "flux": self.modelFlux}}
 
     def ckmodbb(self, q, tin, tout, n0, index=0.5, r0=1e15, distance=910.,
                 grainsize=0.1, steps=10):
@@ -209,6 +214,7 @@ if __name__ == "__main__":
     Twarm = [100, 150]
     indexp = 1.5
     multfact = 1.
+  
 
 
     #Now init the model:
@@ -304,6 +310,8 @@ if __name__ == "__main__":
     #guess = "None"
 
     #Then we tell it to explore the parameter space
+    print("Number of parameters: ", len(guess))
+
     optimizer.optimise(nsamples = 1500, burnin=1000, guess=guess
                        )
 
