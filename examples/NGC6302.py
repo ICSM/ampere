@@ -248,25 +248,30 @@ if __name__ == "__main__":
 
     #Now we create synthetic data:
     #First photometry
+
     filterName = np.array(['WISE_RSR_W1', 'SPITZER_MIPS_70']) #This is minimal, so we'll just have two bands well separated
 
     libDir = ampere.__file__.strip('__init__.py') # '/home/peter/pythonlibs/ampere/ampere/'
     libname = libDir + 'ampere_allfilters.hd5'
     filterLibrary = pyphot.get_library(fname=libname)
     filters = filterLibrary.load_filters(filterName, interp=True, lamb = wavelengths*pyphot.unit['micron'])
-##TODO Check how pyphot is used with Fnu
-    filts, modSed = pyphot.extractPhotometry(wavelengths,
-                                             model_flux,
-                                             filters,
-                                            # Fnu = True,
-                                             absFlux = False,
-                                             progress=False
-            )
+    #Now we need to extract the photometry with pyphot
+    #first we need to convert the flux from Fnu to Flambda
+    flam = model_flux / wavelengths**2
+    modSed = []
+    for i, f in enumerate(filters):
+        lp = f.lpivot.to("micron").value
+        fphot = f.get_flux(wavelengths*pyphot.unit['micron'], flam*pyphot.unit['flam'], axis=-1).value
+        print(fphot)
+        modSed.append(fphot*lp**2)
+
+    modSed = np.array(modSed)
 
     input_noise_phot = 0.1 #Fractional uncertainty
     photunc = input_noise_phot * modSed #Absolute uncertainty
     modSed = modSed + np.random.randn(len(filterName)) * photunc #Now perturb data by drawing from a Gaussian distribution
 
+    
     
     #now we'll create a synthetic spectrum from the model fluxes, using the to be fitted spectrum to get the wavelength sampling
     dataDir = os.getcwd() + '/NGC6302/'
