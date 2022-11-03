@@ -62,6 +62,8 @@ class SpectrumNGC6302(Model):
             #plt.title(opacityFileList[j])
             #plt.show()
             print("Reading in species: ", j, " : ", opacityFileList[j])
+
+ 
         self.opacity_array = opacity_array
         self.nSpecies = nSpecies
         self.npars = 2*nSpecies + 6
@@ -92,8 +94,9 @@ class SpectrumNGC6302(Model):
             self.lims[24:26, 1] = 200.
             self.lims[26, 1] = 3.       
         else:            
-            self.lims = lims  
+            self.lims = lims
         self.flatprior = flatprior
+
 
     def __call__(self, acold0, acold1, acold2, acold3, acold4, acold5,
                  acold6, acold7, acold8, acold9, acold10,
@@ -123,6 +126,7 @@ class SpectrumNGC6302(Model):
 #                 awarm6, awarm7, awarm8, awarm9, awarm10,
 #                 Tcold0, Tcold1, Twarm0, Twarm1, indexp, multfact)
 
+        
         coldcomponent = np.zeros((2, wavelengths.__len__()))
         coldcomponent[0, :] = self.wavelength
         warmcomponent = np.zeros((2, wavelengths.__len__()))
@@ -245,41 +249,42 @@ if __name__ == "__main__":
           Tcold[0], Tcold[1], Twarm[0], Twarm[1],
           indexp=indexp, multfact=multfact)
     model_flux = model.modelFlux
-
     #Now we create synthetic data:
+
     #First photometry
 
-    filterName = np.array(['WISE_RSR_W1', 'SPITZER_MIPS_70']) #This is minimal, so we'll just have two bands well separated
+##    filterName = np.array(['WISE_RSR_W1', 'SPITZER_MIPS_70']) #This is minimal, so we'll just have two bands well separated
 
-    libDir = ampere.__file__.strip('__init__.py') # '/home/peter/pythonlibs/ampere/ampere/'
-    libname = libDir + 'ampere_allfilters.hd5'
-    filterLibrary = pyphot.get_library(fname=libname)
-    filters = filterLibrary.load_filters(filterName, interp=True, lamb = wavelengths*pyphot.unit['micron'])
+##    libDir = ampere.__file__.strip('__init__.py') # '/home/peter/pythonlibs/ampere/ampere/'
+##    libname = libDir + 'ampere_allfilters.hd5'
+##    filterLibrary = pyphot.get_library(fname=libname)
+##    filters = filterLibrary.load_filters(filterName, interp=True, lamb = wavelengths*pyphot.unit['micron'])
     #Now we need to extract the photometry with pyphot
     #first we need to convert the flux from Fnu to Flambda
-    flam = model_flux / wavelengths**2
-    modSed = []
-    for i, f in enumerate(filters):
-        lp = f.lpivot.to("micron").value
-        fphot = f.get_flux(wavelengths*pyphot.unit['micron'], flam*pyphot.unit['flam'], axis=-1).value
-        print(fphot)
-        modSed.append(fphot*lp**2)
+##    flam = model_flux / wavelengths**2
+##    modSed = []
+##    for i, f in enumerate(filters):
+##        lp = f.lpivot.to("micron").value
+##        fphot = f.get_flux(wavelengths*pyphot.unit['micron'], flam*pyphot.unit['flam'], axis=-1).value
+##        print(fphot)
+##        modSed.append(fphot*lp**2)
 
-    modSed = np.array(modSed)
+##    modSed = np.array(modSed)
 
-    input_noise_phot = 0.1 #Fractional uncertainty
-    photunc = input_noise_phot * modSed #Absolute uncertainty
-    modSed = modSed + np.random.randn(len(filterName)) * photunc #Now perturb data by drawing from a Gaussian distribution
+##    input_noise_phot = 0.1 #Fractional uncertainty
+##    photunc = input_noise_phot * modSed #Absolute uncertainty
+##    modSed = modSed + np.random.randn(len(filterName)) * photunc #Now perturb data by drawing from a Gaussian distribution
 
-    
-    
+
+### hiero
+
     #now we'll create a synthetic spectrum from the model fluxes, using the to be fitted spectrum to get the wavelength sampling
     dataDir = os.getcwd() + '/NGC6302/'
     specFileExample = 'NGC6302_100.tab'
     specdata = ascii.read(dataDir+specFileExample,data_start=2)
     spec = Spectrum(specdata[0][:],specdata[1][:],specdata[1][:]*0.05,"um","Jy")
     #assume a 5% error on the flux measurements. check with what I did in 2002
-
+    
     #And again, add some noise to it
 #    input_noise_spec = 0.1
 #    unc0 = input_noise_spec*spec0
@@ -316,8 +321,8 @@ if __name__ == "__main__":
     #optimizer = EmceeSearch(model=model, data=dataset, nwalkers=100, moves=m)
     optimizer = EmceeSearch(model=model, data=dataset, nwalkers=100, moves=m)
     guess = [
-        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, #The parameters of the model
+        [10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10,
+         10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, #The parameters of the model
          35, 65, 100, 150, 1.5, 1,#1.0, 0.1, 0.1, #Each Spectrum object contains a noise model with three free parameters
          #The first one is a calibration factor which the observed spectrum will be multiplied by
          #The second is the fraction of correlated noise assumed
@@ -330,11 +335,9 @@ if __name__ == "__main__":
                                            1,1,1
                                            ]
         for i in range(optimizer.nwalkers)]
-
     #guess = "None"
 
     #Then we tell it to explore the parameter space
-    print("Number of parameters: ", len(guess))
 
     #optimizer.optimise(nsamples = 1500, burnin=1000, guess=guess)
     optimizer.optimise(nsamples = 50, burnin=10, guess=guess)
