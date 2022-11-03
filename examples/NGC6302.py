@@ -308,6 +308,7 @@ if __name__ == "__main__":
          ]
 
     #Now we set up the optimizer object:
+    #optimizer = EmceeSearch(model=model, data=dataset, nwalkers=100, moves=m)
     optimizer = EmceeSearch(model=model, data=dataset, nwalkers=100, moves=m)
     guess = [
         [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
@@ -330,8 +331,8 @@ if __name__ == "__main__":
     #Then we tell it to explore the parameter space
     print("Number of parameters: ", len(guess))
 
-    optimizer.optimise(nsamples = 1500, burnin=1000, guess=guess
-                       )
+    #optimizer.optimise(nsamples = 1500, burnin=1000, guess=guess)
+    optimizer.optimise(nsamples = 50, burnin=10, guess=guess)
 
 
     optimizer.postProcess() #now we call the postprocessing to produce some figures
