@@ -80,29 +80,29 @@ class SpectrumNGC6302(Model):
         # But that's for a slightly more complex example.
         # Here we'll just use a simple flat prior
         if lims is None:
-            self.lims = np.zeros((self.npars,2))  # #CK to be defined
-            # acold = theta[0:11] 0, np.inf
-            # awarm = theta[11:22] 0, np.inf
-            # Tcold = theta[22:24] 10, 80; 10, 80 
-            # Twarm = theta[24:26] 80, 200; 80, 200
-            # indexp = theta[26] 0, 3;
-            # multfact = theta[27] 0, np.inf
+            self.lims = np.zeros((self.npars,2)) 
+            # acold = theta[0:8] 0, 1
+            # awarm = theta[8:16] 0, 1
+            # Tcold = theta[16:18] 10, 80; 10, 80 
+            # Twarm = theta[18:20] 80, 200; 80, 200
+            # indexp = theta[20] 0, 3;
+            # multfact = theta[21] 0, np.inf
             self.lims[:, 1] = 1
-            self.lims[22:24, 0] = 10.
-            self.lims[22:24, 1] = 80.
-            self.lims[24:26, 0] = 80.
-            self.lims[24:26, 1] = 200.
-            self.lims[26, 1] = 3.
-            self.lims[27, 1] = np.inf
+            self.lims[16:18, 0] = 10.
+            self.lims[16:18, 1] = 80.
+            self.lims[18:20, 0] = 80.
+            self.lims[18:20, 1] = 200.
+            self.lims[20, 1] = 3.
+            self.lims[21, 1] = np.inf
         else:            
             self.lims = lims
         self.flatprior = flatprior
 
 
     def __call__(self, acold0, acold1, acold2, acold3, acold4, acold5,
-                 acold6, acold7, acold8, acold9, acold10,
+                 acold6, acold7, 
                  awarm0, awarm1, awarm2, awarm3, awarm4, awarm5,
-                 awarm6, awarm7, awarm8, awarm9, awarm10,
+                 awarm6, awarm7, 
                  Tcold0, Tcold1, Twarm0, Twarm1, indexp, multfact,
                  *args, **kwargs):
         '''The model itself, using the callable class functionality of python.
@@ -122,9 +122,9 @@ class SpectrumNGC6302(Model):
         # 60-30 K, following Kemper et al. 2002
 
 #        print(acold0, acold1, acold2, acold3, acold4, acold5,
-#                 acold6, acold7, acold8, acold9, acold10,
+#                 acold6, acold7, 
 #                 awarm0, awarm1, awarm2, awarm3, awarm4, awarm5,
-#                 awarm6, awarm7, awarm8, awarm9, awarm10,
+#                 awarm6, awarm7, 
 #                 Tcold0, Tcold1, Twarm0, Twarm1, indexp, multfact)
 
         
@@ -133,9 +133,9 @@ class SpectrumNGC6302(Model):
         warmcomponent = np.zeros((2, wavelengths.__len__()))
         warmcomponent[0, :] = self.wavelength
         acold = [acold0, acold1, acold2, acold3, acold4, acold5, acold6,
-                 acold7, acold8, acold9, acold10]
+                 acold7]
         awarm = [awarm0, awarm1, awarm2, awarm3, awarm4, awarm5, awarm6,
-                 awarm7, awarm8, awarm9, awarm10]
+                 awarm7] 
  
 #        print("acold: ",acold)
         for i, a in enumerate(acold):
@@ -202,17 +202,17 @@ class SpectrumNGC6302(Model):
         return mbb
 
     def lnprior(self, theta, **kwargs): 
-        # acold = theta[0:11]
-        # awarm = theta[11:22]
-        # Tcold = theta[22:24]; theta[23] > theta[22]
-        # Twarm = theta[24:26]; theta[25] > theta[24]
-        # indexp = theta[26]
-        # multfact = theta[27]
+        # acold = theta[0:8]
+        # awarm = theta[8:16]
+        # Tcold = theta[16:18]; theta[17] > theta[16]
+        # Twarm = theta[18:20]; theta[19] > theta[18]
+        # indexp = theta[20]
+        # multfact = theta[21]
         
         if self.flatprior:
-            if np.all([self.lims[i,0] < theta[i] < self.lims[i,1] for i in
-                      range(len(self.lims[:,0]))] and (theta[23] > theta[22])
-                      and (theta[25] > theta[24])):
+            if np.all([self.lims[i,0] <= theta[i] <= self.lims[i,1] for i in
+                      range(len(self.lims[:,0]))] and (theta[17] > theta[16])
+                      and (theta[19] > theta[18])):
                 return 0
             else:
                 return -np.inf
@@ -239,30 +239,26 @@ if __name__ == "__main__":
     wavelengths = np.linspace(2.4,198.,1956)
 
     """ Choose some model parameters """
-    acold = [5.2e-9,3.2e-9,0,3.9e-2,0,1.1e-3,0,0,1.8e-9,0.6e-8,2.5e-9]
-    awarm = [0,0,1.2e-4,0,0,0,0,1.1e-6,8e-12,8e-11,0]
+    acold = [5e-9, 1e-8,  2e-3, 3e-9, 3e-9, 0,    1e-3, 4e-2]
+    awarm = [0,    1e-10, 1e-5, 0,    0,    1e-3, 0,    1e-4]
     Tcold = [30, 60]
     Twarm = [100, 118]
     indexp = 0.5
     multfact = 1.
-## TODO Put some numbers here that are close to what I fitted.  
-
 
     #Now init the model:
     model = SpectrumNGC6302(wavelengths)
     #And call it to produce the fluxes for our chosen parameters
     model(acold[0], acold[1], acold[2], acold[3], acold[4], acold[5],
-                 acold[6], acold[7], acold[8], acold[9], acold[10],
+                 acold[6], acold[7], 
                  awarm[0], awarm[1], awarm[2], awarm[3], awarm[4], awarm[5],
-                 awarm[6], awarm[7], awarm[8], awarm[9], awarm[10],
+                 awarm[6], awarm[7], 
           Tcold[0], Tcold[1], Twarm[0], Twarm[1],
           indexp=indexp, multfact=multfact)
     model_flux = model.modelFlux
-    #plt.plot(wavelengths, model.modelFlux)
-    #plt.show()
+    plt.plot(wavelengths, model.modelFlux)
+    plt.show()
     
-## TODO Plot model_flux to see if it makes sense
-
     #Now we create synthetic data:
 
     #First photometry
@@ -336,8 +332,8 @@ if __name__ == "__main__":
 
     optimizer = EmceeSearch(model=model, data=dataset, nwalkers=100, moves=m)
     guess = [
-        [5.2e-9,3.2e-9,1e-10,3.9e-2,1e-10,1.1e-3,1e-10,1e-10,1.8e-9,0.6e-8,2.5e-9,
-         1e-12,1e-12,1.2e-4,1e-12,1e-12,1e-12,1e-12,1.1e-6,8e-12,8e-11,1e-12,
+        [5e-9,  1e-8,  2e-3, 3e-9,  3e-9,  1e-10, 1e-3,  4e-2,
+         1e-10, 1e-10, 1e-5, 1e-10, 1e-10, 1e-3,  1e-10, 1e-4,
          30, 60,
          100, 118,
          0.5,
@@ -348,9 +344,9 @@ if __name__ == "__main__":
              #And the third is the scale length (in microns) of the correlated component of the noise
          1.0 ,0.1, 0.1
         ]
-        + np.random.rand(optimizer.npars)*[1e-10, 1e-10, 1e-10, 1e-10, 1e-10, 1e-10, 1e-10, 1e-10, 1e-10, 1e-10, 1e-10,
-                                           1e-12, 1e-12, 1e-12, 1e-12, 1e-12, 1e-12, 1e-12, 1e-12, 1e-12, 1e-12, 1e-12,
-                                           1, 1, 1, 1, 0.5, 1,
+        + np.random.rand(optimizer.npars)*[1e-9, 1e-8, 1e-3, 1e-9, 1e-9, 1e-10, 1e-3, 1e-2,
+                                           1e-10, 1e-10, 1e-5, 1e-10, 1e-10, 1e-3, 1e-10, 1e-4, 
+                                           10, 10, 10, 10, 0.5, 1,
                                            1,0.1,0.1
         ]
         for i in range(optimizer.nwalkers)]
