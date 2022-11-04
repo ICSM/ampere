@@ -87,12 +87,13 @@ class SpectrumNGC6302(Model):
             # Twarm = theta[24:26] 80, 200; 80, 200
             # indexp = theta[26] 0, 3;
             # multfact = theta[27] 0, np.inf
-            self.lims[:, 1] = np.inf
+            self.lims[:, 1] = 1
             self.lims[22:24, 0] = 10.
             self.lims[22:24, 1] = 80.
             self.lims[24:26, 0] = 80.
             self.lims[24:26, 1] = 200.
-            self.lims[26, 1] = 3.       
+            self.lims[26, 1] = 3.
+            self.lims[27, 1] = np.inf
         else:            
             self.lims = lims
         self.flatprior = flatprior
@@ -142,15 +143,23 @@ class SpectrumNGC6302(Model):
                                           tin=Tcold[1], tout=Tcold[0],
                                           n0=a, index=indexp)
             coldcomponent[1, :] = coldcomponent[1, :] + onespeciescold[1, :]
+            #print(max(coldcomponent[1,:]))
+            #plt.plot(coldcomponent[1,:])
+            
         for i, a in enumerate(awarm):
             onespecieswarm = self.ckmodbb(self.opacity_array[:, i],
                                           tin=Twarm[1], tout=Twarm[0],
                                           n0=a, index=indexp)
             warmcomponent[1, :] = warmcomponent[1, :] + onespecieswarm[1, :]
+            #print(max(warmcomponent[1,:]))
+            #plt.plot(warmcomponent[1,:])
         fModel = np.full_like(coldcomponent, 1.)
-        fModel[1, :] = fModel[1, :] + warmcomponent[1, :]
+        fModel[1, :] = coldcomponent[1,:] + warmcomponent[1, :]
         self.modelFlux = fModel[1, :]
-#        print(max(self.modelFlux), min(self.modelFlux))
+        
+        #plt.show()
+        
+
         return {"spectrum":{"wavelength":self.wavelength, "flux": self.modelFlux}}
 
     def ckmodbb(self, q, tin, tout, n0, index=0.5, r0=1e15, distance=910.,
@@ -230,13 +239,13 @@ if __name__ == "__main__":
     wavelengths = np.linspace(2.4,198.,1956)
 
     """ Choose some model parameters """
-    acold = np.ones(11)
-    awarm = np.ones(11)
-    Tcold = [20, 70]
-    Twarm = [100, 150]
-    indexp = 1.5
+    acold = [5.2e-9,3.2e-9,0,3.9e-2,0,1.1e-3,0,0,1.8e-9,0.6e-8,2.5e-9]
+    awarm = [0,0,1.2e-4,0,0,0,0,1.1e-6,8e-12,8e-11,0]
+    Tcold = [30, 60]
+    Twarm = [100, 118]
+    indexp = 0.5
     multfact = 1.
-  
+## TODO Put some numbers here that are close to what I fitted.  
 
 
     #Now init the model:
@@ -249,6 +258,11 @@ if __name__ == "__main__":
           Tcold[0], Tcold[1], Twarm[0], Twarm[1],
           indexp=indexp, multfact=multfact)
     model_flux = model.modelFlux
+    #plt.plot(wavelengths, model.modelFlux)
+    #plt.show()
+    
+## TODO Plot model_flux to see if it makes sense
+
     #Now we create synthetic data:
 
     #First photometry
