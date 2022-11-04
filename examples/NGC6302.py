@@ -336,19 +336,23 @@ if __name__ == "__main__":
 
     optimizer = EmceeSearch(model=model, data=dataset, nwalkers=100, moves=m)
     guess = [
-        [10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10,
-         10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, #The parameters of the model
-         35, 65, 100, 150, 1.5, 1,#1.0, 0.1, 0.1, #Each Spectrum object contains a noise model with three free parameters
-         #The first one is a calibration factor which the observed spectrum will be multiplied by
-         #The second is the fraction of correlated noise assumed
-         #And the third is the scale length (in microns) of the correlated component of the noise
+        [5.2e-9,3.2e-9,1e-10,3.9e-2,1e-10,1.1e-3,1e-10,1e-10,1.8e-9,0.6e-8,2.5e-9,
+         1e-12,1e-12,1.2e-4,1e-12,1e-12,1e-12,1e-12,1.1e-6,8e-12,8e-11,1e-12,
+         30, 60,
+         100, 118,
+         0.5,
+         1., #The parameters of the model
+             #Each Spectrum object contains a noise model with three free parameters
+             #The first one is a calibration factor which the observed spectrum will be multiplied by
+             #The second is the fraction of correlated noise assumed
+             #And the third is the scale length (in microns) of the correlated component of the noise
          1.0 ,0.1, 0.1
-       ] #
-        + np.random.rand(optimizer.npars)*[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-                                           1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-                                            1, 1, 1, 1, 1, 1,
-                                           1,1,1
-                                           ]
+        ]
+        + np.random.rand(optimizer.npars)*[1e-10, 1e-10, 1e-10, 1e-10, 1e-10, 1e-10, 1e-10, 1e-10, 1e-10, 1e-10, 1e-10,
+                                           1e-12, 1e-12, 1e-12, 1e-12, 1e-12, 1e-12, 1e-12, 1e-12, 1e-12, 1e-12, 1e-12,
+                                           1, 1, 1, 1, 0.5, 1,
+                                           1,0.1,0.1
+        ]
         for i in range(optimizer.nwalkers)]
     #guess = "None"
 
