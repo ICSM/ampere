@@ -319,6 +319,7 @@ if __name__ == "__main__":
 
     #Now we set up the optimizer object:
     #optimizer = EmceeSearch(model=model, data=dataset, nwalkers=100, moves=m)
+
     optimizer = EmceeSearch(model=model, data=dataset, nwalkers=100, moves=m)
     guess = [
         [10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10,
