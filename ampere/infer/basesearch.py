@@ -191,6 +191,12 @@ class BaseSearch(object):
         with open(filename, 'wb') as f:
             pickle.dump(self.__dict__, f)
 
+
+    #def __getstate__(self):
+    #    pass
+
+    #def __setstate__(self)
+
 def create_worker_init(searcher):    
     def init_workers(worker_state):
         worker_state['searcher'] = searcher
