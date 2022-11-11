@@ -265,22 +265,12 @@ if __name__ == "__main__":
     dataDir = os.getcwd() + '/NGC6302/'
     specFileExample = 'NGC6302_100.tab'
     specdata = ascii.read(dataDir+specFileExample,data_start=2)
+        #And again, add some noise to it
     input_noise_spec = 0.05 #assume a 5% error on the flux measurements. check with what I did in 2002
     unc = specdata[1][:]*input_noise_spec
     spec = Spectrum(specdata[0][:],specdata[1][:] +
                     np.random.randn(len(specdata[1][:]))*unc,specdata[1][:]*0.05,"um","Jy")
-#    spec0 = spectres(spec[0].wavelength,wavelengths,model_flux)
-#    spec1 = spectres(spec[1].wavelength,wavelengths,model_flux)
     
-    #And again, add some noise to it
-#    input_noise_spec = 0.05
-#    unc0 = input_noise_spec*spec0
-#    unc1 = input_noise_spec*spec1
-#    spec0 = spec0 + np.random.randn(len(spec0))*unc0
-#    spec1 = spec1 + np.random.randn(len(spec1))*unc1
-    
-#    spec0 = Spectrum(irsEx[0].wavelength, spec0, unc0,"um", "Jy",calUnc=0.0025, scaleLengthPrior = 0.01) #, resampleMethod=resmethod)
-#    spec1 = Spectrum(irsEx[1].wavelength, spec1, unc1,"um", "Jy",calUnc=0.0025, scaleLengthPrior = 0.01) #, resampleMethod=resmethod)
 
     #Now let's try changing the resampling method so it's faster
     #This model is very simple so exact flux conservation is not important
