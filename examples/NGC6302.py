@@ -261,42 +261,19 @@ if __name__ == "__main__":
     
     #Now we create synthetic data:
 
-    #First photometry
-
-##    filterName = np.array(['WISE_RSR_W1', 'SPITZER_MIPS_70']) #This is minimal, so we'll just have two bands well separated
-
-##    libDir = ampere.__file__.strip('__init__.py') # '/home/peter/pythonlibs/ampere/ampere/'
-##    libname = libDir + 'ampere_allfilters.hd5'
-##    filterLibrary = pyphot.get_library(fname=libname)
-##    filters = filterLibrary.load_filters(filterName, interp=True, lamb = wavelengths*pyphot.unit['micron'])
-    #Now we need to extract the photometry with pyphot
-    #first we need to convert the flux from Fnu to Flambda
-##    flam = model_flux / wavelengths**2
-##    modSed = []
-##    for i, f in enumerate(filters):
-##        lp = f.lpivot.to("micron").value
-##        fphot = f.get_flux(wavelengths*pyphot.unit['micron'], flam*pyphot.unit['flam'], axis=-1).value
-##        print(fphot)
-##        modSed.append(fphot*lp**2)
-
-##    modSed = np.array(modSed)
-
-##    input_noise_phot = 0.1 #Fractional uncertainty
-##    photunc = input_noise_phot * modSed #Absolute uncertainty
-##    modSed = modSed + np.random.randn(len(filterName)) * photunc #Now perturb data by drawing from a Gaussian distribution
-
-
-### hiero
-
     #now we'll create a synthetic spectrum from the model fluxes, using the to be fitted spectrum to get the wavelength sampling
     dataDir = os.getcwd() + '/NGC6302/'
     specFileExample = 'NGC6302_100.tab'
     specdata = ascii.read(dataDir+specFileExample,data_start=2)
-    spec = Spectrum(specdata[0][:],specdata[1][:],specdata[1][:]*0.05,"um","Jy")
-    #assume a 5% error on the flux measurements. check with what I did in 2002
+    input_noise_spec = 0.05 #assume a 5% error on the flux measurements. check with what I did in 2002
+    unc = specdata[1][:]*input_noise_spec
+    spec = Spectrum(specdata[0][:],specdata[1][:] +
+                    np.random.randn(len(specdata[1][:]))*unc,specdata[1][:]*0.05,"um","Jy")
+#    spec0 = spectres(spec[0].wavelength,wavelengths,model_flux)
+#    spec1 = spectres(spec[1].wavelength,wavelengths,model_flux)
     
     #And again, add some noise to it
-#    input_noise_spec = 0.1
+#    input_noise_spec = 0.05
 #    unc0 = input_noise_spec*spec0
 #    unc1 = input_noise_spec*spec1
 #    spec0 = spec0 + np.random.randn(len(spec0))*unc0
@@ -312,13 +289,9 @@ if __name__ == "__main__":
 #    spec1.setResampler(resampleMethod=resmethod)
 
     """ now set up ampere to try and fit the same stuff """
-#    photometry = Photometry(filterName=filterName, value=modSed, uncertainty=photunc, photUnits='Jy', libName=libname)
-    #print(photometry.filterMask)
-#    photometry.reloadFilters(wavelengths)
 
-    dataset = [#photometry,
-               #spec0, #Fitting spectra is slow because it needs to do a lot of resampling
-               spec   #As a result, we're leaving some of them out
+    dataset = [               
+               spec   
                ]
 
 
