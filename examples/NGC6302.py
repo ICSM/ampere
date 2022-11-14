@@ -63,7 +63,7 @@ class SpectrumNGC6302(Model):
             #plt.title(opacityFileList[j])
             #plt.xlim(0,200)
             #plt.ylim(0, max(opacity_array[:,j])/50)
-            plt.show()
+            #plt.show()
             print("Reading in species: ", j, " : ", opacityFileList[j])
 
  
@@ -159,7 +159,19 @@ class SpectrumNGC6302(Model):
         self.modelFlux = fModel[1, :]
         #plt.plot(fModel[0,:],fModel[1,:])
         #plt.show()
-        
+        print("Cold abundances: ", acold0, acold1, acold2, acold3, acold4, acold5,
+                 acold6, acold7)
+        print("Warm abundances: ", awarm0, awarm1, awarm2, awarm3, awarm4, awarm5,
+                 awarm6, awarm7)
+        print("Cold component outer T: ",     Tcold0)
+        print("Cold component inner T: ", Tcold1)
+        print("Warm component outer T: ", Twarm0)
+        print("Warm component inner T: ", Twarm1)
+        print("Index p: ", indexp)
+        print("Multiplication factor: ", multfact)
+        if min(fModel[1,:]) < 0 :
+            
+            stop
 
         return {"spectrum":{"wavelength":self.wavelength, "flux": self.modelFlux}}
 
@@ -195,8 +207,9 @@ class SpectrumNGC6302(Model):
 #        print("factor: ", factor)
 
         fnu[1, :] = fnu[1, :] * factor
-        if min(fnu[1,:]) < 0 :
-            print("T: ", t, " power: ", power, " a: ", a, " r0: ", r0, " n0: ", n0, " extra: ", extra, " factor: ", factor)
+        #if min(fnu[1,:]) < 0 :
+        #    print("T: ", t, " power: ", power, " a: ", a, " r0: ", r0, " n0: ", n0, " extra: ", extra, " factor: ", factor)
+        #    print("Outside of prior limits")
         return fnu
 
     def shbb(self, aar, temp, pinda):
@@ -219,10 +232,10 @@ class SpectrumNGC6302(Model):
             if np.all([self.lims[m,0] <= theta[m] <= self.lims[m,1] for m in
                        range(len(self.lims[:,0]))] and (theta[17] > theta[16])
                       and (theta[19] > theta[18])):
-                print("Yay!") 
+                #print("Yay!") 
                 return 0
             else:
-                print("Boo!")
+                #print("Boo!")
                 return -np.inf
         else:
             raise NotImplementedError()
@@ -247,10 +260,26 @@ if __name__ == "__main__":
     wavelengths = np.linspace(2.3603,196.6261,1956)
 
     """ Choose some model parameters """
-    acold = [5e-9, 1e-8,  2e-3, 3e-9, 3e-9, 0,    1e-3, 4e-2]
-    awarm = [0,    1e-10, 1e-5, 0,    0,    1e-3, 0,    1e-4]
-    Tcold = [30, 60]
-    Twarm = [100, 118]
+    acold0 = 5e-9
+    acold1 = 1e-8
+    acold2 = 2e-3
+    acold3 = 3e-9
+    acold4 = 3e-9
+    acold5 = 0
+    acold6 = 1e-3
+    acold7 = 4e-2
+    awarm0 = 0
+    awarm1 = 1e-10
+    awarm2 = 1e-5
+    awarm3 = 0
+    awarm4 = 0
+    awarm5 = 1e-3
+    awarm6 = 0
+    awarm7 = 1e-4
+    Tcold0 = 30
+    Tcold1 = 60
+    Twarm0 = 100
+    Twarm1 = 118
     indexp = 0.5
     multfact = 1.
 
@@ -261,11 +290,11 @@ if __name__ == "__main__":
 #                 awarm[0], awarm[1], awarm[2], awarm[3], awarm[4], awarm[5],
 #          Tcold[0], Tcold[1], Twarm[0], Twarm[1],
 #          indexp=indexp, multfact=multfact)
-    model(acold[0], acold[1], acold[2], acold[3], acold[4], acold[5],
-                 acold[6], acold[7], 
-                 awarm[0], awarm[1], awarm[2], awarm[3], awarm[4], awarm[5],
-                 awarm[6], awarm[7], 
-          Tcold[0], Tcold[1], Twarm[0], Twarm[1],
+    model(acold0, acold1, acold2, acold3, acold4, acold5,
+                 acold6, acold7, 
+                 awarm0, awarm1, awarm2, awarm3, awarm4, awarm5,
+                 awarm6, awarm7, 
+          Tcold0, Tcold1, Twarm0, Twarm1,
           indexp=indexp, multfact=multfact)
     model_flux = model.modelFlux
     #plt.plot(wavelengths, model.modelFlux)
@@ -282,8 +311,8 @@ if __name__ == "__main__":
     unc = specdata[1][:]*input_noise_spec
     spec = Spectrum(specdata[0][:],specdata[1][:] +
                     np.random.randn(len(specdata[1][:]))*unc,specdata[1][:]*0.05,"um","Jy")
-    #plt.plot(spec.wavelength, spec.value)
-    #plt.show()
+    plt.plot(spec.wavelength, spec.value)
+    plt.show()
 
 
     #Now let's try changing the resampling method so it's faster
