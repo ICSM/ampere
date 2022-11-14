@@ -53,7 +53,7 @@ class SpectrumNGC6302(Model):
             f = interpolate.interp1d(tempWl, np.log10(tempOpac), assume_sorted=False, fill_value = "extrapolate") 
             opacity_array[:, j] = np.power(np.full(self.wavelength.shape,10),f(self.wavelength))
             #extrapolate is needed because some opacities don't cover the
-            #entire ISO SWS-LWS range, from 2.4 to 198 micron
+            #entire spectral range, from 2.36 to 196.6 micron
             #the extrapolation is done in log space for the opacities for
             #better results. 
             #plt.xscale('log')
@@ -136,27 +136,32 @@ class SpectrumNGC6302(Model):
                  acold7]
         awarm = [awarm0, awarm1, awarm2, awarm3, awarm4, awarm5, awarm6,
                  awarm7] 
- 
-#        print("acold: ",acold)
-        for i, a in enumerate(acold):
-            onespeciescold = self.ckmodbb(self.opacity_array[:, i],
+        if min(acold)<0 :
+            print("Warning: negative a value in cold component in call")
+        if min(awarm)<0 :
+            print("Warning: negative a value in warm component in call")
+        
+
+        for ii, a in enumerate(acold):
+            onespeciescold = self.ckmodbb(self.opacity_array[:, ii],
                                           tin=Tcold[1], tout=Tcold[0],
                                           n0=a, index=indexp)
             coldcomponent[1, :] = coldcomponent[1, :] + onespeciescold[1, :]
-            #print(max(coldcomponent[1,:]))
-            #plt.plot(coldcomponent[1,:])
+            #print("Cold: ",min(coldcomponent[0,:]), max(coldcomponent[0,:]),max(coldcomponent[1,:]))
+            #plt.plot(coldcomponent[0,:],coldcomponent[1,:])
             
-        for i, a in enumerate(awarm):
-            onespecieswarm = self.ckmodbb(self.opacity_array[:, i],
+        for jj, a in enumerate(awarm):
+            onespecieswarm = self.ckmodbb(self.opacity_array[:, jj],
                                           tin=Twarm[1], tout=Twarm[0],
                                           n0=a, index=indexp)
             warmcomponent[1, :] = warmcomponent[1, :] + onespecieswarm[1, :]
-            #print(max(warmcomponent[1,:]))
-            #plt.plot(warmcomponent[1,:])
-        fModel = np.full_like(coldcomponent, 1.)
+            #print("Warm: ",min(warmcomponent[0,:]), max(warmcomponent[0,:]),max(warmcomponent[1,:]))
+            #plt.plot(warmcomponent[0,:],warmcomponent[1,:])
+        fModel = np.zeros((2, wavelengths.__len__()))
+        fModel[0, :] = self.wavelength
         fModel[1, :] = coldcomponent[1,:] + warmcomponent[1, :]
         self.modelFlux = fModel[1, :]
-        
+        #plt.plot(fModel[0,:],fModel[1,:])
         #plt.show()
         
 
@@ -236,7 +241,7 @@ class SpectrumNGC6302(Model):
 if __name__ == "__main__": 
     """ Set up the inputs for the model """
     """ wavelength grid """
-    wavelengths = np.linspace(2.4,198.,1956)
+    wavelengths = np.linspace(2.3603,196.6261,1956)
 
     """ Choose some model parameters """
     acold = [5e-9, 1e-8,  2e-3, 3e-9, 3e-9, 0,    1e-3, 4e-2]
@@ -256,8 +261,8 @@ if __name__ == "__main__":
           Tcold[0], Tcold[1], Twarm[0], Twarm[1],
           indexp=indexp, multfact=multfact)
     model_flux = model.modelFlux
-    plt.plot(wavelengths, model.modelFlux)
-    plt.show()
+    #plt.plot(wavelengths, model.modelFlux)
+    #plt.show()
     
     #Now we create synthetic data:
 
@@ -270,7 +275,9 @@ if __name__ == "__main__":
     unc = specdata[1][:]*input_noise_spec
     spec = Spectrum(specdata[0][:],specdata[1][:] +
                     np.random.randn(len(specdata[1][:]))*unc,specdata[1][:]*0.05,"um","Jy")
-    
+    #plt.plot(spec.wavelength, spec.value)
+    #plt.show()
+
 
     #Now let's try changing the resampling method so it's faster
     #This model is very simple so exact flux conservation is not important
