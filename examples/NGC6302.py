@@ -57,11 +57,11 @@ class SpectrumNGC6302(Model):
             #the extrapolation is done in log space for the opacities for
             #better results.
             #maybe we should also smooth the data. The koike data are quite noisy. 
-            plt.xscale('log')
-            plt.plot(self.wavelength, opacity_array[:,j])
-            plt.plot(tempWl,tempOpac)
-            plt.title(opacityFileList[j])
-            plt.xlim(0,200)
+            #plt.xscale('log')
+            #plt.plot(self.wavelength, opacity_array[:,j])
+            #plt.plot(tempWl,tempOpac)
+            #plt.title(opacityFileList[j])
+            #plt.xlim(0,200)
             #plt.ylim(0, max(opacity_array[:,j])/50)
             plt.show()
             print("Reading in species: ", j, " : ", opacityFileList[j])
@@ -215,13 +215,14 @@ class SpectrumNGC6302(Model):
         # indexp = theta[20]
         # multfact = theta[21]
         
-        if self.flatprior:
+        if self.flatprior: ## HIERO. So there is something wrong here. When the conditions for the prior are not met (Yay!) is not printed, the program continues anyway, with negative abundances/fluxes as a reasult. Should that be possible?
             if np.all([self.lims[m,0] <= theta[m] <= self.lims[m,1] for m in
                        range(len(self.lims[:,0]))] and (theta[17] > theta[16])
                       and (theta[19] > theta[18])):
-                print("Yay!")
+                print("Yay!") 
                 return 0
             else:
+                print("Boo!")
                 return -np.inf
         else:
             raise NotImplementedError()
