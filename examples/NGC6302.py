@@ -55,12 +55,15 @@ class SpectrumNGC6302(Model):
             #extrapolate is needed because some opacities don't cover the
             #entire spectral range, from 2.36 to 196.6 micron
             #the extrapolation is done in log space for the opacities for
-            #better results. 
-            #plt.xscale('log')
-            #plt.plot(self.wavelength, opacity_array[:,j])
-            #plt.plot(tempWl,tempOpac)
-            #plt.title(opacityFileList[j])
-            #plt.show()
+            #better results.
+            #maybe we should also smooth the data. The koike data are quite noisy. 
+            plt.xscale('log')
+            plt.plot(self.wavelength, opacity_array[:,j])
+            plt.plot(tempWl,tempOpac)
+            plt.title(opacityFileList[j])
+            plt.xlim(0,200)
+            #plt.ylim(0, max(opacity_array[:,j])/50)
+            plt.show()
             print("Reading in species: ", j, " : ", opacityFileList[j])
 
  
@@ -120,13 +123,6 @@ class SpectrumNGC6302(Model):
         # let's first do this over fixed temperature ranges, instead of
         # allowing them to be free the temperature ranges are 118-100 K and
         # 60-30 K, following Kemper et al. 2002
-
-#        print(acold0, acold1, acold2, acold3, acold4, acold5,
-#                 acold6, acold7, 
-#                 awarm0, awarm1, awarm2, awarm3, awarm4, awarm5,
-#                 awarm6, awarm7, 
-#                 Tcold0, Tcold1, Twarm0, Twarm1, indexp, multfact)
-
         
         coldcomponent = np.zeros((2, wavelengths.__len__()))
         coldcomponent[0, :] = self.wavelength
@@ -136,24 +132,24 @@ class SpectrumNGC6302(Model):
                  acold7]
         awarm = [awarm0, awarm1, awarm2, awarm3, awarm4, awarm5, awarm6,
                  awarm7] 
-        if min(acold)<0 :
-            print("Warning: negative a value in cold component in call")
-        if min(awarm)<0 :
-            print("Warning: negative a value in warm component in call")
+        #if min(acold)<0 :
+        #    print("Warning: negative a value in cold component in call")
+        #if min(awarm)<0 :
+        #    print("Warning: negative a value in warm component in call")
         
 
-        for ii, a in enumerate(acold):
+        for ii, aa in enumerate(acold):
             onespeciescold = self.ckmodbb(self.opacity_array[:, ii],
-                                          tin=Tcold[1], tout=Tcold[0],
-                                          n0=a, index=indexp)
+                                          tin=Tcold1, tout=Tcold0,
+                                          n0=aa, index=indexp)
             coldcomponent[1, :] = coldcomponent[1, :] + onespeciescold[1, :]
             #print("Cold: ",min(coldcomponent[0,:]), max(coldcomponent[0,:]),max(coldcomponent[1,:]))
             #plt.plot(coldcomponent[0,:],coldcomponent[1,:])
             
-        for jj, a in enumerate(awarm):
+        for jj, bb in enumerate(awarm):
             onespecieswarm = self.ckmodbb(self.opacity_array[:, jj],
-                                          tin=Twarm[1], tout=Twarm[0],
-                                          n0=a, index=indexp)
+                                          tin=Twarm1, tout=Twarm0,
+                                          n0=bb, index=indexp)
             warmcomponent[1, :] = warmcomponent[1, :] + onespecieswarm[1, :]
             #print("Warm: ",min(warmcomponent[0,:]), max(warmcomponent[0,:]),max(warmcomponent[1,:]))
             #plt.plot(warmcomponent[0,:],warmcomponent[1,:])
@@ -168,7 +164,8 @@ class SpectrumNGC6302(Model):
         return {"spectrum":{"wavelength":self.wavelength, "flux": self.modelFlux}}
 
     def ckmodbb(self, q, tin, tout, n0, index=0.5, r0=1e15, distance=910.,
-                grainsize=0.1, steps=10):
+                grainsize=0.1, steps=15):
+        #print("Tin: ", tin, "Tout: ", tout, "n0: ", n0, "index: ", index, "r0: ", r0, "D: ", distance)
         d = distance * 3.0857e18  # convert distance from pc to cm
         a = grainsize * 1e-4  # convert grainsize from micron to cm
         fnu = np.zeros((2, self.wavelength.__len__()))
@@ -177,15 +174,18 @@ class SpectrumNGC6302(Model):
 
         for j in range(steps - 1):
             t = tin - j * (tin-tout)/steps
+            #print("T :", t)
             power = (t/tin)**(2*index - 6)
+            #print("power: ", power)
             bb = self.shbb(fnu, t, 0.)
-          #  print(min(bb[1,:]), max(bb[1,:]))
-          #  print(power*((tin-tout)/steps))
+            #print(min(bb[1,:]), max(bb[1,:]))
+            #print(power*((tin-tout)/steps))
             fnu[1, :] = np.add(fnu[1, :], 
                                np.multiply(q,
                                            bb[1, :])*(power*((tin-tout)/steps)))
         extra = r0/d
         factor = 4 * math.pi * a * a * r0 * n0 * extra * extra / (3-index)
+        #print("factor: ", factor)
       #  print("pi: ", math.pi)
       #  print("a: ", a)
       #  print("r0: ", r0)
@@ -195,7 +195,8 @@ class SpectrumNGC6302(Model):
 #        print("factor: ", factor)
 
         fnu[1, :] = fnu[1, :] * factor
-        
+        if min(fnu[1,:]) < 0 :
+            print("T: ", t, " power: ", power, " a: ", a, " r0: ", r0, " n0: ", n0, " extra: ", extra, " factor: ", factor)
         return fnu
 
     def shbb(self, aar, temp, pinda):
@@ -215,9 +216,10 @@ class SpectrumNGC6302(Model):
         # multfact = theta[21]
         
         if self.flatprior:
-            if np.all([self.lims[i,0] <= theta[i] <= self.lims[i,1] for i in
-                      range(len(self.lims[:,0]))] and (theta[17] > theta[16])
+            if np.all([self.lims[m,0] <= theta[m] <= self.lims[m,1] for m in
+                       range(len(self.lims[:,0]))] and (theta[17] > theta[16])
                       and (theta[19] > theta[18])):
+                print("Yay!")
                 return 0
             else:
                 return -np.inf
@@ -254,6 +256,10 @@ if __name__ == "__main__":
     #Now init the model:
     model = SpectrumNGC6302(wavelengths)
     #And call it to produce the fluxes for our chosen parameters
+#    model(acold[0], acold[1], acold[2], acold[3], acold[4], acold[5], 
+#                 awarm[0], awarm[1], awarm[2], awarm[3], awarm[4], awarm[5],
+#          Tcold[0], Tcold[1], Twarm[0], Twarm[1],
+#          indexp=indexp, multfact=multfact)
     model(acold[0], acold[1], acold[2], acold[3], acold[4], acold[5],
                  acold[6], acold[7], 
                  awarm[0], awarm[1], awarm[2], awarm[3], awarm[4], awarm[5],
