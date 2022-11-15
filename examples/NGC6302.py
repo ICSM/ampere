@@ -57,12 +57,12 @@ class SpectrumNGC6302(Model):
             #the extrapolation is done in log space for the opacities for
             #better results.
             #maybe we should also smooth the data. The koike data are quite noisy. 
-            #plt.xscale('log')
-            #plt.plot(self.wavelength, opacity_array[:,j])
-            #plt.plot(tempWl,tempOpac)
-            #plt.title(opacityFileList[j])
-            #plt.xlim(0,200)
-            #plt.show()
+            plt.xscale('log')
+            plt.plot(self.wavelength, opacity_array[:,j])
+            plt.plot(tempWl,tempOpac)
+            plt.title(opacityFileList[j])
+            plt.xlim(0,200)
+            plt.show()
             print("Reading in species: ", j, " : ", opacityFileList[j])
 
  
@@ -100,6 +100,8 @@ class SpectrumNGC6302(Model):
             self.lims[15, 1] = np.inf
         else:            
             self.lims = lims
+        print("Limits: ")
+        print(self.lims)
         self.flatprior = flatprior
 
 
@@ -201,8 +203,8 @@ class SpectrumNGC6302(Model):
         # multfact = theta[15]
         
         if self.flatprior: 
-            if np.all([self.lims[m,0] <= theta[m] <= self.lims[m,1] for m in
-                       range(len(self.lims[:,0]))] and (theta[11] > theta[10])
+            if (np.all([self.lims[i,0] <= theta[i] <= self.lims[i,1] for i in
+                       range(len(self.lims[:,0]))]) and (theta[11] > theta[10])
                       and (theta[13] > theta[12])):
                 return 0
             else:
