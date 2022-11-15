@@ -57,12 +57,12 @@ class SpectrumNGC6302(Model):
             #the extrapolation is done in log space for the opacities for
             #better results.
             #maybe we should also smooth the data. The koike data are quite noisy. 
-            plt.xscale('log')
-            plt.plot(self.wavelength, opacity_array[:,j])
-            plt.plot(tempWl,tempOpac)
-            plt.title(opacityFileList[j])
-            plt.xlim(0,200)
-            plt.show()
+            #plt.xscale('log')
+            #plt.plot(self.wavelength, opacity_array[:,j])
+            #plt.plot(tempWl,tempOpac)
+            #plt.title(opacityFileList[j])
+            #plt.xlim(2,200)
+            #plt.show()
             print("Reading in species: ", j, " : ", opacityFileList[j])
 
  
@@ -154,14 +154,6 @@ class SpectrumNGC6302(Model):
         self.modelFlux = fModel[1, :]
         #plt.plot(fModel[0,:],fModel[1,:])
         #plt.show()
-        #print("Cold abundances: ", acold)
-        #print("Warm abundances: ", awarm)
-        #print("Cold component outer T: ",     Tcold0)
-        #print("Cold component inner T: ", Tcold1)
-        #print("Warm component outer T: ", Twarm0)
-        #print("Warm component inner T: ", Twarm1)
-        #print("Index p: ", indexp)
-        #print("Multiplication factor: ", multfact)
 
         return {"spectrum":{"wavelength":self.wavelength, "flux": self.modelFlux}}
 
@@ -201,7 +193,7 @@ class SpectrumNGC6302(Model):
         # Twarm = theta[12:14]; theta[13] > theta[12]
         # indexp = theta[14]
         # multfact = theta[15]
-        
+
         if self.flatprior: 
             if (np.all([self.lims[i,0] <= theta[i] <= self.lims[i,1] for i in
                        range(len(self.lims[:,0]))]) and (theta[11] > theta[10])
