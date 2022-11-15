@@ -69,7 +69,7 @@ class SpectrumNGC6302(Model):
  
         self.opacity_array = opacity_array
         self.nSpecies = nSpecies
-        self.npars = 2*nSpecies + 6
+        self.npars = 16
         # the number of free parameters for the model (__call__()). For
         # some models this can be determined through introspection, but it is
         # still strongly recommended to define this explicitly here.
@@ -91,23 +91,23 @@ class SpectrumNGC6302(Model):
             # indexp = theta[20] 0, 3;
             # multfact = theta[21] 0, np.inf
             self.lims[:, 0] = -10
-            self.lims[16:18, 0] = 10.
-            self.lims[16:18, 1] = 80.
-            self.lims[18:20, 0] = 80.
-            self.lims[18:20, 1] = 200.
-            self.lims[20, 0] = 0.
-            self.lims[20, 1] = 3.
-            self.lims[21, 0] = 0.
-            self.lims[21, 1] = np.inf
+            self.lims[10:12, 0] = 10.
+            self.lims[10:12, 1] = 80.
+            self.lims[12:14, 0] = 80.
+            self.lims[12:14, 1] = 200.
+            self.lims[14, 0] = 0.
+            self.lims[14, 1] = 3.
+            self.lims[15, 0] = 0.
+            self.lims[15, 1] = np.inf
         else:            
             self.lims = lims
         self.flatprior = flatprior
 
 
-    def __call__(self, logacold0, logacold1, logacold2, logacold3, logacold4, logacold5,
+    def __call__(self, logacold0, logacold1, logacold2, logacold3, logacold4,
                  logacold6, logacold7, 
-                 logawarm0, logawarm1, logawarm2, logawarm3, logawarm4, logawarm5,
-                 logawarm6, logawarm7, 
+                 logawarm2, logawarm5,
+                 logawarm7, 
                  Tcold0, Tcold1, Twarm0, Twarm1, indexp, multfact,
                  *args, **kwargs):
         '''The model itself, using the callable class functionality of python.
@@ -130,9 +130,9 @@ class SpectrumNGC6302(Model):
         coldcomponent[0, :] = self.wavelength
         warmcomponent = np.zeros((2, wavelengths.__len__()))
         warmcomponent[0, :] = self.wavelength
-        acold = [10**logacold0, 10**logacold1, 10**logacold2, 10**logacold3, 10**logacold4, 10**logacold5, 10**logacold6,
+        acold = [10**logacold0, 10**logacold1, 10**logacold2, 10**logacold3, 10**logacold4, 0, 10**logacold6,
                  10**logacold7]
-        awarm = [10**logawarm0, 10**logawarm1, 10**logawarm2, 10**logawarm3, 10**logawarm4, 10**logawarm5, 10**logawarm6,
+        awarm = [0, 0, 10**logawarm2, 0, 0, 10**logawarm5, 0,
                  10**logawarm7]
         #print("parameters: ")
         #print(acold)
@@ -173,9 +173,6 @@ class SpectrumNGC6302(Model):
         #print("Warm component inner T: ", Twarm1)
         #print("Index p: ", indexp)
         #print("Multiplication factor: ", multfact)
-        if min(fModel[1,:]) < 0 :
-            
-            stop
 
         return {"spectrum":{"wavelength":self.wavelength, "flux": self.modelFlux}}
 
@@ -225,21 +222,19 @@ class SpectrumNGC6302(Model):
         return mbb
 
     def lnprior(self, theta, **kwargs): 
-        # acold = theta[0:8]
-        # awarm = theta[8:16]
-        # Tcold = theta[16:18]; theta[17] > theta[16]
-        # Twarm = theta[18:20]; theta[19] > theta[18]
-        # indexp = theta[20]
-        # multfact = theta[21]
+        # acold = theta[0:7]
+        # awarm = theta[7:10]
+        # Tcold = theta[10:12]; theta[11] > theta[10]
+        # Twarm = theta[12:14]; theta[13] > theta[12]
+        # indexp = theta[14]
+        # multfact = theta[15]
         
-        if self.flatprior: ## HIERO. So there is something wrong here. When the conditions for the prior are not met (Yay!) is not printed, the program continues anyway, with negative abundances/fluxes as a reasult. Should that be possible?
+        if self.flatprior: 
             if np.all([self.lims[m,0] <= theta[m] <= self.lims[m,1] for m in
-                       range(len(self.lims[:,0]))] and (theta[17] > theta[16])
-                      and (theta[19] > theta[18])):
-                #print("Yay!") 
+                       range(len(self.lims[:,0]))] and (theta[11] > theta[10])
+                      and (theta[13] > theta[12])):
                 return 0
             else:
-                #print("Boo!")
                 return -np.inf
         else:
             raise NotImplementedError()
@@ -269,16 +264,16 @@ if __name__ == "__main__":
     logacold2 = -2.7
     logacold3 = -8.5
     logacold4 = -8.5
-    logacold5 = -10
+#    logacold5 = -10
     logacold6 = -3
     logacold7 = -1.4
-    logawarm0 = -10
-    logawarm1 = -10
+#    logawarm0 = -10
+#    logawarm1 = -10
     logawarm2 = -5
-    logawarm3 = -10
-    logawarm4 = -10
+#    logawarm3 = -10
+#    logawarm4 = -10
     logawarm5 = -3
-    logawarm6 = -10
+#    logawarm6 = -10
     logawarm7 = -4
     Tcold0 = 30
     Tcold1 = 60
@@ -294,10 +289,10 @@ if __name__ == "__main__":
 #                 awarm[0], awarm[1], awarm[2], awarm[3], awarm[4], awarm[5],
 #          Tcold[0], Tcold[1], Twarm[0], Twarm[1],
 #          indexp=indexp, multfact=multfact)
-    model(logacold0, logacold1, logacold2, logacold3, logacold4, logacold5,
+    model(logacold0, logacold1, logacold2, logacold3, logacold4, 
                  logacold6, logacold7, 
-                 logawarm0, logawarm1, logawarm2, logawarm3, logawarm4, logawarm5,
-                 logawarm6, logawarm7, 
+                 logawarm2, logawarm5,
+                 logawarm7, 
           Tcold0, Tcold1, Twarm0, Twarm1,
           indexp=indexp, multfact=multfact)
     model_flux = model.modelFlux
@@ -342,8 +337,8 @@ if __name__ == "__main__":
 
     optimizer = EmceeSearch(model=model, data=dataset, nwalkers=100, moves=m)
     guess = [
-        [-8.3, -8, -2.7, -8.5, -8.5, -9, -3, -1.4,
-         -9, -9, -5, -9, -9, -3,  -9, -4,
+        [-8.3, -8, -2.7, -8.5, -8.5, -3, -1.4,
+         -5,  -3,   -4,
          30, 60,
          100, 118,
          0.5,
@@ -354,11 +349,7 @@ if __name__ == "__main__":
              #And the third is the scale length (in microns) of the correlated component of the noise
          1.0 ,0.1, 0.1
         ]
-        + np.random.rand(optimizer.npars)*[1, 1, 1, 1, 1, 1, 1, 1,
-                                           1, 1, 1, 1, 1, 1, 1, 1, 
-                                           30, 30, 30, 30, 1, 1,
-                                           1, 1, 1
-        ]
+        + np.random.rand(optimizer.npars)*[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 10, 10, 10, 10, 1, 1, 1, 1, 1]
         for i in range(optimizer.nwalkers)]
     #guess = "None"
 
