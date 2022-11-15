@@ -84,13 +84,13 @@ class SpectrumNGC6302(Model):
         # Here we'll just use a simple flat prior
         if lims is None:
             self.lims = np.zeros((self.npars,2)) 
-            # logacold = theta[0:8] -np.inf, 0
-            # logawarm = theta[8:16] -np.inf, 0
+            # logacold = theta[0:8] -10, 0
+            # logawarm = theta[8:16] -10, 0
             # Tcold = theta[16:18] 10, 80; 10, 80 
             # Twarm = theta[18:20] 80, 200; 80, 200
             # indexp = theta[20] 0, 3;
             # multfact = theta[21] 0, np.inf
-            self.lims[:, 0] = -np.inf
+            self.lims[:, 0] = -10
             self.lims[16:18, 0] = 10.
             self.lims[16:18, 1] = 80.
             self.lims[18:20, 0] = 80.
@@ -134,9 +134,9 @@ class SpectrumNGC6302(Model):
                  10**logacold7]
         awarm = [10**logawarm0, 10**logawarm1, 10**logawarm2, 10**logawarm3, 10**logawarm4, 10**logawarm5, 10**logawarm6,
                  10**logawarm7]
-        print("parameters: ")
-        print(acold)
-        print(awarm)
+        #print("parameters: ")
+        #print(acold)
+        #print(awarm)
         
         #if min(acold)<0 :
         #    print("Warning: negative a value in cold component in call")
@@ -150,7 +150,7 @@ class SpectrumNGC6302(Model):
                                           n0=aa, index=indexp)
             coldcomponent[1, :] = coldcomponent[1, :] + onespeciescold[1, :]
             #print("Cold: ",min(coldcomponent[0,:]), max(coldcomponent[0,:]),max(coldcomponent[1,:]))
-            plt.plot(coldcomponent[0,:],coldcomponent[1,:])
+            #plt.plot(coldcomponent[0,:],coldcomponent[1,:])
             
         for jj, bb in enumerate(awarm):
             onespecieswarm = self.ckmodbb(self.opacity_array[:, jj],
@@ -158,13 +158,13 @@ class SpectrumNGC6302(Model):
                                           n0=bb, index=indexp)
             warmcomponent[1, :] = warmcomponent[1, :] + onespecieswarm[1, :]
             #print("Warm: ",min(warmcomponent[0,:]), max(warmcomponent[0,:]),max(warmcomponent[1,:]))
-            plt.plot(warmcomponent[0,:],warmcomponent[1,:])
+            #plt.plot(warmcomponent[0,:],warmcomponent[1,:])
         fModel = np.zeros((2, wavelengths.__len__()))
         fModel[0, :] = self.wavelength
         fModel[1, :] = coldcomponent[1,:] + warmcomponent[1, :]
         self.modelFlux = fModel[1, :]
-        plt.plot(fModel[0,:],fModel[1,:])
-        plt.show()
+        #plt.plot(fModel[0,:],fModel[1,:])
+        #plt.show()
         #print("Cold abundances: ", acold)
         #print("Warm abundances: ", awarm)
         #print("Cold component outer T: ",     Tcold0)
@@ -315,8 +315,8 @@ if __name__ == "__main__":
     unc = specdata[1][:]*input_noise_spec
     spec = Spectrum(specdata[0][:],specdata[1][:] +
                     np.random.randn(len(specdata[1][:]))*unc,specdata[1][:]*0.05,"um","Jy")
-    plt.plot(spec.wavelength, spec.value)
-    plt.show()
+    #plt.plot(spec.wavelength, spec.value)
+    #plt.show()
 
 
     #Now let's try changing the resampling method so it's faster
@@ -342,8 +342,8 @@ if __name__ == "__main__":
 
     optimizer = EmceeSearch(model=model, data=dataset, nwalkers=100, moves=m)
     guess = [
-        [-8.3, -8, -2.7, -8.5, -8.5, -10, -3, -1.4,
-         -10, -10, -5, -10, -10, -3,  -10, -4,
+        [-8.3, -8, -2.7, -8.5, -8.5, -9, -3, -1.4,
+         -9, -9, -5, -9, -9, -3,  -9, -4,
          30, 60,
          100, 118,
          0.5,
