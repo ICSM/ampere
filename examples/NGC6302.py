@@ -62,7 +62,6 @@ class SpectrumNGC6302(Model):
             #plt.plot(tempWl,tempOpac)
             #plt.title(opacityFileList[j])
             #plt.xlim(0,200)
-            #plt.ylim(0, max(opacity_array[:,j])/50)
             #plt.show()
             print("Reading in species: ", j, " : ", opacityFileList[j])
 
@@ -96,7 +95,7 @@ class SpectrumNGC6302(Model):
             self.lims[12:14, 0] = 80.
             self.lims[12:14, 1] = 200.
             self.lims[14, 0] = 0.
-            self.lims[14, 1] = 3.
+            self.lims[14, 1] = 1.
             self.lims[15, 0] = 0.
             self.lims[15, 1] = np.inf
         else:            
@@ -115,41 +114,30 @@ class SpectrumNGC6302(Model):
         calculate the output fluxes. Once done, it should stop the output
         fluxes in self.modelFlux.
         '''
-        # number of dust species in opacityDirectory are all going to be fitted
+        # number of dust species in opacityDirectory.
         # for each we will consider a hot and a cold component. We will allow
         # only 2 temperature ranges, the same for all dust species.
+        # we only fit the species that were non-zero in the original model fit,
+        # e.g. 7 species in the cold component, and 3 species in the hot
+        # component
         # the module translated from ck_modbb calculates the flux for each
         # component at a single temperature
-        # ckmodbb and shbb are now written. Now I just need to figure out how
-        # to do the fit over 8 dust species and 2 temperature ranges.
-        # let's first do this over fixed temperature ranges, instead of
-        # allowing them to be free the temperature ranges are 118-100 K and
-        # 60-30 K, following Kemper et al. 2002
-        
+        # ckmodbb and shbb are now written.
+
         coldcomponent = np.zeros((2, wavelengths.__len__()))
         coldcomponent[0, :] = self.wavelength
         warmcomponent = np.zeros((2, wavelengths.__len__()))
         warmcomponent[0, :] = self.wavelength
         acold = [10**logacold0, 10**logacold1, 10**logacold2, 10**logacold3, 10**logacold4, 0, 10**logacold6,
-                 10**logacold7]
+                 10**logacold7] #0 values correspond to dust species that were 0 in Kemper et al. 2002
         awarm = [0, 0, 10**logawarm2, 0, 0, 10**logawarm5, 0,
-                 10**logawarm7]
-        #print("parameters: ")
-        #print(acold)
-        #print(awarm)
-        
-        #if min(acold)<0 :
-        #    print("Warning: negative a value in cold component in call")
-        #if min(awarm)<0 :
-        #    print("Warning: negative a value in warm component in call")
-        
+                 10**logawarm7]        
 
         for ii, aa in enumerate(acold):
             onespeciescold = self.ckmodbb(self.opacity_array[:, ii],
                                           tin=Tcold1, tout=Tcold0,
                                           n0=aa, index=indexp)
             coldcomponent[1, :] = coldcomponent[1, :] + onespeciescold[1, :]
-            #print("Cold: ",min(coldcomponent[0,:]), max(coldcomponent[0,:]),max(coldcomponent[1,:]))
             #plt.plot(coldcomponent[0,:],coldcomponent[1,:])
             
         for jj, bb in enumerate(awarm):
@@ -157,7 +145,6 @@ class SpectrumNGC6302(Model):
                                           tin=Twarm1, tout=Twarm0,
                                           n0=bb, index=indexp)
             warmcomponent[1, :] = warmcomponent[1, :] + onespecieswarm[1, :]
-            #print("Warm: ",min(warmcomponent[0,:]), max(warmcomponent[0,:]),max(warmcomponent[1,:]))
             #plt.plot(warmcomponent[0,:],warmcomponent[1,:])
         fModel = np.zeros((2, wavelengths.__len__()))
         fModel[0, :] = self.wavelength
@@ -178,7 +165,6 @@ class SpectrumNGC6302(Model):
 
     def ckmodbb(self, q, tin, tout, n0, index=0.5, r0=1e15, distance=910.,
                 grainsize=0.1, steps=15):
-        #print("Tin: ", tin, "Tout: ", tout, "n0: ", n0, "index: ", index, "r0: ", r0, "D: ", distance)
         d = distance * 3.0857e18  # convert distance from pc to cm
         a = grainsize * 1e-4  # convert grainsize from micron to cm
         fnu = np.zeros((2, self.wavelength.__len__()))
@@ -187,30 +173,15 @@ class SpectrumNGC6302(Model):
 
         for j in range(steps - 1):
             t = tin - j * (tin-tout)/steps
-            #print("T :", t)
             power = (t/tin)**(2*index - 6)
-            #print("power: ", power)
             bb = self.shbb(fnu, t, 0.)
-            #print(min(bb[1,:]), max(bb[1,:]))
-            #print(power*((tin-tout)/steps))
             fnu[1, :] = np.add(fnu[1, :], 
                                np.multiply(q,
                                            bb[1, :])*(power*((tin-tout)/steps)))
         extra = r0/d
         factor = 4 * math.pi * a * a * r0 * n0 * extra * extra / (3-index)
-        #print("factor: ", factor)
-      #  print("pi: ", math.pi)
-      #  print("a: ", a)
-      #  print("r0: ", r0)
-      #  print("n0: ", n0)
-      #  print("extra: ", extra)
-      #  print("index: ", index)
-#        print("factor: ", factor)
 
         fnu[1, :] = fnu[1, :] * factor
-        #if min(fnu[1,:]) < 0 :
-        #    print("T: ", t, " power: ", power, " a: ", a, " r0: ", r0, " n0: ", n0, " extra: ", extra, " factor: ", factor)
-        #    print("Outside of prior limits")
         return fnu
 
     def shbb(self, aar, temp, pinda):
@@ -264,16 +235,16 @@ if __name__ == "__main__":
     logacold2 = -2.7
     logacold3 = -8.5
     logacold4 = -8.5
-#    logacold5 = -10
+#    logacold5 = -10 # Not used in Kemper et al. 2002
     logacold6 = -3
     logacold7 = -1.4
-#    logawarm0 = -10
-#    logawarm1 = -10
+#    logawarm0 = -10 # Not used in Kemper et al. 2002
+#    logawarm1 = -10 # Not used in Kemper et al. 2002
     logawarm2 = -5
-#    logawarm3 = -10
-#    logawarm4 = -10
-    logawarm5 = -3
-#    logawarm6 = -10
+#    logawarm3 = -10 # Not used in Kemper et al. 2002
+#    logawarm4 = -10 # not used in Kemper et al. 2002
+    logawarm5 = -3 
+#    logawarm6 = -10 # not used in Kemper et al. 2002
     logawarm7 = -4
     Tcold0 = 30
     Tcold1 = 60
@@ -285,14 +256,10 @@ if __name__ == "__main__":
     #Now init the model:
     model = SpectrumNGC6302(wavelengths)
     #And call it to produce the fluxes for our chosen parameters
-#    model(acold[0], acold[1], acold[2], acold[3], acold[4], acold[5], 
-#                 awarm[0], awarm[1], awarm[2], awarm[3], awarm[4], awarm[5],
-#          Tcold[0], Tcold[1], Twarm[0], Twarm[1],
-#          indexp=indexp, multfact=multfact)
     model(logacold0, logacold1, logacold2, logacold3, logacold4, 
                  logacold6, logacold7, 
                  logawarm2, logawarm5,
-                 logawarm7, 
+                 logawarm7, #zero-value dust species are removed
           Tcold0, Tcold1, Twarm0, Twarm1,
           indexp=indexp, multfact=multfact)
     model_flux = model.modelFlux
@@ -306,7 +273,7 @@ if __name__ == "__main__":
     specFileExample = 'NGC6302_100.tab'
     specdata = ascii.read(dataDir+specFileExample,data_start=2)
         #And again, add some noise to it
-    input_noise_spec = 0.05 #assume a 5% error on the flux measurements. check with what I did in 2002
+    input_noise_spec = 0.01 #assume a 1% error on the flux measurements. 
     unc = specdata[1][:]*input_noise_spec
     spec = Spectrum(specdata[0][:],specdata[1][:] +
                     np.random.randn(len(specdata[1][:]))*unc,specdata[1][:]*0.05,"um","Jy")
@@ -349,7 +316,12 @@ if __name__ == "__main__":
              #And the third is the scale length (in microns) of the correlated component of the noise
          1.0 ,0.1, 0.1
         ]
-        + np.random.rand(optimizer.npars)*[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 10, 10, 10, 10, 1, 1, 1, 1, 1]
+        + np.random.rand(optimizer.npars)*[1, 1, 1, 1, 1, 1, 1,
+                                           1, 1, 1,
+                                           10, 10,
+                                           10, 10,
+                                           0.1, 1,
+                                           1, 1, 1]
         for i in range(optimizer.nwalkers)]
     #guess = "None"
 
