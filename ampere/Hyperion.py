@@ -239,7 +239,7 @@ class HyperionRTModel(Model):
                 self.x = np.linspace(-1.*self.rmax*units.au, self.rmax*units.au, ngrid)
                 self.y = np.linspace(-1.*self.rmax*units.au, self.rmax*units.au, ngrid)
                 self.z = np.linspace(-1.*self.rmax*units.au, self.rmax*units.au, ngrid)
-                 model.set_cartesian_grid(self.x,self.y,self.z)
+                self.model.set_cartesian_grid(self.x,self.y,self.z)
             #Set up density grid
                 self.rr = np.sqrt(self.model.grid.gx**2 + self.model.grid.gy**2 + self.model.grid.gz**2)
             if gridtype == 'polar':
