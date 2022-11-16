@@ -89,24 +89,15 @@ class SpectrumNGC6302(Model):
             # Twarm = theta[18:20] 80, 200; 80, 200
             # indexp = theta[20] 0, 3;
             # multfact = theta[21] 0, np.inf
-            self.lims[0, :] = [-8.8,-7.8]
-            self.lims[1, :] = [-8.5,-7.5]
-            self.lims[2, :] = [-3.2,-2.2]
-            self.lims[3, :] = [-9,-8]
-            self.lims[4, :] = [-9, -8]
-            self.lims[5, :] = [-3.5,-2.5]
-            self.lims[6, :] = [-1.9,-0.9]
-            self.lims[7, :] = [-5.5, -4.5]
-            self.lims[8, :] = [-3.5, -2.5]
-            self.lims[9, :] = [ -4.5, -3.5]
-            self.lims[10:12, 0] = 20.
-            self.lims[10:12, 1] = 70.
-            self.lims[12:14, 0] = 90.
-            self.lims[12:14, 1] = 128.
+            self.lims[:, 0] = -10.
+            self.lims[10:12, 0] = 10.
+            self.lims[10:12, 1] = 80.
+            self.lims[12:14, 0] = 80.
+            self.lims[12:14, 1] = 180.
             self.lims[14, 0] = 0.
             self.lims[14, 1] = 1.
             self.lims[15, 0] = 0.
-            self.lims[15, 1] = 5.
+            self.lims[15, 1] = 10.
         else:            
             self.lims = lims
         print("Limits: ")
@@ -277,7 +268,7 @@ if __name__ == "__main__":
     specFileExample = 'NGC6302_100.tab'
     specdata = ascii.read(dataDir+specFileExample,data_start=2)
         #And again, add some noise to it
-    input_noise_spec = 0.05 #assume a 5% error on the flux measurements. 
+    input_noise_spec = 0.01 #assume a 1% error on the spectrum
     unc = specdata[1][:]*input_noise_spec
     spec = Spectrum(specdata[0][:],specdata[1][:] +
                     np.random.randn(len(specdata[1][:]))*unc,specdata[1][:]*0.05,"um","Jy")
@@ -331,8 +322,8 @@ if __name__ == "__main__":
 
     #Then we tell it to explore the parameter space
 
-    #optimizer.optimise(nsamples = 1500, burnin=1000, guess=guess)
-    optimizer.optimise(nsamples = 50, burnin=10, guess=guess)
+    optimizer.optimise(nsamples = 5000, burnin=3500, guess=guess)
+    #optimizer.optimise(nsamples = 50, burnin=10, guess=guess)
 
 
     optimizer.postProcess() #now we call the postprocessing to produce some figures
