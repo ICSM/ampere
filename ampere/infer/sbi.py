@@ -293,9 +293,9 @@ class SBI_SNPE(LFIBase,SBIPostProcessor):
         A method to post-process the sampler results 
         '''
 
-        self.print_summary()
+        self.print_summary(**kwargs)
 
-        self.plot_corner()
+        self.plot_corner(**kwargs)
 
         self.plot_posteriorpredictive(**kwargs)
 

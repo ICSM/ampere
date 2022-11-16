@@ -239,7 +239,7 @@ class HyperionRTModel(Model):
                 self.x = np.linspace(-1.*self.rmax*units.au, self.rmax*units.au, ngrid)
                 self.y = np.linspace(-1.*self.rmax*units.au, self.rmax*units.au, ngrid)
                 self.z = np.linspace(-1.*self.rmax*units.au, self.rmax*units.au, ngrid)
-                self.model.set_cartesian_grid(self.x,self.y,self.z)
+                 model.set_cartesian_grid(self.x,self.y,self.z)
             #Set up density grid
                 self.rr = np.sqrt(self.model.grid.gx**2 + self.model.grid.gy**2 + self.model.grid.gz**2)
             if gridtype == 'polar':
@@ -351,12 +351,12 @@ class HyperionRTModel(Model):
         else:
             raise NotImplementedError()
 
-    
     def __str__(self, **kwargs):
-        raise NotImplementedError()
+        return  str(self.__class__) + '\n'+ '\n'.join(('{} = {}'.format(item, type(self.__dict__[item])) for item in self.__dict__))
     #This will provide a summary of the properties of the model
     def __repr__(self, **kwargs):
-        raise NotImplementedError()
+        from pprint import pformat
+        return "<" + type(self).__name__ + "> " + pformat(vars(self), indent=4, width=1)
 
     def power_law_shell(self):
         density = np.zeros(self.rr)
@@ -716,12 +716,12 @@ class HyperionCStarRTModel(Model):
         theta = gamma_quantiles/gamma_quantiles.sum()
         return theta
 
-    
     def __str__(self, **kwargs):
-        raise NotImplementedError()
+        return  str(self.__class__) + '\n' + '\n'.join((str(item) + ' = ' + str(self.__dict__[item]) for item in sorted(self.__dict__)))
     #This will provide a summary of the properties of the model
     def __repr__(self, **kwargs):
-        raise NotImplementedError()
+        return  str(self.__class__) + '\n'+ '\n'.join(('{} = {}'.format(item, type(self.__dict__[item])) for item in self.__dict__))
+
 
     # def power_law_shell(self):
     #     density = np.zeros(self.rr)

@@ -91,7 +91,7 @@ class Data(object):
         '''
 
         if interval == "closed": #Both arguments will be treated with less/greater-than-or-equal-to
-
+            
             mask = np.logical_and(self.wavelength >= low, self.wavelength <= up)
 
         elif interval == "left-open": #only the upper limit will be treated with less-than-or-equal-to
