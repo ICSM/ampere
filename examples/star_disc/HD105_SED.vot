@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Produced with astropy.io.votable version 5.0.3
+     http://www.astropy.org/ -->
+<VOTABLE version="1.4" xmlns="http://www.ivoa.net/xml/VOTable/v1.3" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.ivoa.net/xml/VOTable/v1.3 http://www.ivoa.net/xml/VOTable/VOTable-1.4.xsd">
+ <RESOURCE type="results">
+  <TABLE>
+   <FIELD ID="sed_filter" arraysize="20" datatype="unicodeChar" name="sed_filter"/>
+   <FIELD ID="sed_flux" datatype="double" name="sed_flux" unit="Jy"/>
+   <FIELD ID="sed_eflux" datatype="double" name="sed_eflux" unit="Jy"/>
+   <DATA>
+    <TABLEDATA>
+     <TR>
+      <TD>GROUND_JOHNSON_B</TD>
+      <TD>1.897E+00</TD>
+      <TD>1.403E-02</TD>
+     </TR>
+     <TR>
+      <TD>GROUND_JOHNSON_V</TD>
+      <TD>3.499E+00</TD>
+      <TD>2.587E-02</TD>
+     </TR>
+     <TR>
+      <TD>GROUND_COUSINS_I</TD>
+      <TD>4.468E+00</TD>
+      <TD>4.134E-02</TD>
+     </TR>
+     <TR>
+      <TD>2MASS_J</TD>
+      <TD>4.139E+00</TD>
+      <TD>0.09574</TD>
+     </TR>
+     <TR>
+      <TD>2MASS_H</TD>
+      <TD>3.425E+00</TD>
+      <TD>0.3395</TD>
+     </TR>
+     <TR>
+      <TD>2MASS_Ks</TD>
+      <TD>2.383E+00</TD>
+      <TD>0.5671</TD>
+     </TR>
+     <TR>
+      <TD>WISE_RSR_W1</TD>
+      <TD>1.152E+00</TD>
+      <TD>1.217E-01</TD>
+     </TR>
+     <TR>
+      <TD>WISE_RSR_W2</TD>
+      <TD>6.986E-01</TD>
+      <TD>2.421E-02</TD>
+     </TR>
+     <TR>
+      <TD>WISE_RSR_W3</TD>
+      <TD>1.143E-01</TD>
+      <TD>1.591E-03</TD>
+     </TR>
+     <TR>
+      <TD>WISE_RSR_W4</TD>
+      <TD>3.477E-02</TD>
+      <TD>1.338E-03</TD>
+     </TR>
+     <TR>
+      <TD>SPITZER_MIPS_24</TD>
+      <TD>2.873E-02</TD>
+      <TD>1.437E-03</TD>
+     </TR>
+     <TR>
+      <TD>HERSCHEL_PACS_BLUE</TD>
+      <TD>1.324E-01</TD>
+      <TD>8.400E-03</TD>
+     </TR>
+     <TR>
+      <TD>SPITZER_MIPS_70</TD>
+      <TD>1.412E-01</TD>
+      <TD>1.040E-02</TD>
+     </TR>
+     <TR>
+      <TD>HERSCHEL_PACS_GREEN</TD>
+      <TD>1.679E-01</TD>
+      <TD>8.400E-03</TD>
+     </TR>
+     <TR>
+      <TD>HERSCHEL_PACS_RED</TD>
+      <TD>1.118E-01</TD>
+      <TD>9.300E-03</TD>
+     </TR>
+     <TR>
+      <TD>HERSCHEL_SPIRE_PSW</TD>
+      <TD>5.650E-02</TD>
+      <TD>1.030E-02</TD>
+     </TR>
+     <TR>
+      <TD>HERSCHEL_SPIRE_PMW</TD>
+      <TD>3.800E-02</TD>
+      <TD>1.470E-02</TD>
+     </TR>
+    </TABLEDATA>
+   </DATA>
+  </TABLE>
+ </RESOURCE>
+</VOTABLE>
