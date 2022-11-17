@@ -683,11 +683,10 @@ class HyperionCStarRTModel(Model):
         
         self.wave = self.HyperionRTSED.wav.value
         self.flux = self.HyperionRTSED.val.value
-        
-        
+
         #Interpolate model fluxes onto fixed wavelength grid
-        self.modelFlux = np.interp(self.wavelength, self.wave, self.flux)
-        
+        self.modelFlux = np.interp(self.wavelength, np.flip(self.wave), np.flip(self.flux))
+
         return {"spectrum":{"wavelength":self.wavelength, "flux": self.modelFlux}}
 
     def lnprior(self, theta, **kwargs): #theta will only have nSpecies-1 entries for this case
