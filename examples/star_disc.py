@@ -8,11 +8,11 @@ import dill
 
 libdir= ampere.__file__.strip('__init__.py')
 
-p = data.Photometry.fromFile('HD105_SED.vot', format = 'votable',libName = libdir+ 'ampere_allfilters.hd5')
+p = data.Photometry.fromFile('./star_disc/HD105_SED.vot', format = 'votable',libName = libdir+ 'ampere_allfilters.hd5')
 
 p.reloadFilters(np.logspace(np.log10(0.2),np.log10(500),1000,base=10))
 
-s = data.Spectrum.fromFile('HD105_IRS_Spectrum.csv', 'User-Defined', filetype = 'text', keywords = {'waveCol': 'wavelength', 'fluxCol': 'fluxdensity', 'uncsCol': 'uncertainty', 'waveUnit': 'micron', 'fluxUnit': 'Jy'})
+s = data.Spectrum.fromFile('./star_disc/HD105_IRS_Spectrum.csv', 'User-Defined', filetype = 'text', keywords = {'waveCol': 'wavelength', 'fluxCol': 'fluxdensity', 'uncsCol': 'uncertainty', 'waveUnit': 'micron', 'fluxUnit': 'Jy'})
 
 dataset = [p]
 #for sp in s:

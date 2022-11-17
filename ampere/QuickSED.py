@@ -58,6 +58,7 @@ class QuickSEDModel(Model):
         There are also several important variables it *MUST* define here
         '''
         self.wave = wavelengths
+        self.wavelengths = wavelengths
         self.freq = (wavelengths * u.micron).to(u.Hz, equivalencies=u.spectral()).value
         self.npars = 7 #Number of free parameters for the model (__call__()). For some models this can be determined through introspection, but it is still strongly recommended to define this explicitly here. Introspection will only be attempted if self.npars is not defined.
         self.npars_ptform = 7 #Sometimes the number of free parameters is different when using the prior transform instead of the prior. In that case, self.npars_ptform should also be defined.
