@@ -328,17 +328,17 @@ if __name__ == "__main__":
         ]
         + np.random.rand(optimizer.npars)*[0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1,
                                            0.1, 0.1, 0.1, #these values are
-                                           3, 3,          #adjusted so that 
-                                           3, 3,          #the first guesses
-                                           0.1, 0.5,      #do not fall outside
+                                           10, 10,          #adjusted so that 
+                                           10, 10,          #the first guesses
+                                           0.1, 1,      #do not fall outside
                                            1, 1, 1]       #the prior range
         for i in range(optimizer.nwalkers)]
     #guess = "None"
 
     #Then we tell it to explore the parameter space
 
-    #optimizer.optimise(nsamples = 5000, burnin=3500, guess=guess)
-    optimizer.optimise(nsamples = 50, burnin=10, guess=guess) #short run for tests
+    optimizer.optimise(nsamples = 1500, burnin=1000, guess=guess)
+    #optimizer.optimise(nsamples = 50, burnin=10, guess=guess) #short run for tests
 
 
     optimizer.postProcess() #now we call the postprocessing to produce some figures
