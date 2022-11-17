@@ -94,8 +94,8 @@ class SpectrumNGC6302(Model):
             self.lims[10:12, 1] = 80.
             self.lims[12:14, 0] = 80.
             self.lims[12:14, 1] = 180.
-            self.lims[14, 0] = 0.
-            self.lims[14, 1] = 1.
+            self.lims[14, 0] = -1.
+            self.lims[14, 1] = 0.
             self.lims[15, 0] = 0.
             self.lims[15, 1] = 10.
         else:            
@@ -131,9 +131,9 @@ class SpectrumNGC6302(Model):
         warmcomponent = np.zeros((2, wavelengths.__len__()))
         warmcomponent[0, :] = self.wavelength
         acold = [10**logacold0, 10**logacold1, 10**logacold2, 10**logacold3, 10**logacold4, 0, 10**logacold6,
-                 10**logacold7] #0 values correspond to dust species that were 0 in Kemper et al. 2002
+                 10**logacold7] #0 values correspond to dust species that were not included in the fit by Kemper et al. 2002
         awarm = [0, 0, 10**logawarm2, 0, 0, 10**logawarm5, 0,
-                 10**logawarm7]        
+                 10**logawarm7] #same here       
 
         for ii, aa in enumerate(acold):
             onespeciescold = self.ckmodbb(self.opacity_array[:, ii],
@@ -159,10 +159,14 @@ class SpectrumNGC6302(Model):
 
     def ckmodbb(self, q, tin, tout, n0, index=0.5, r0=1e15, distance=910.,
                 grainsize=0.1, steps=15):
+        ## ckmodbb calculates the flux of either the warm or the cold component
+        ## according to equation 6 and 7 from Kemper et al. (2002, A&A 394, 679)
+        ## translated from ck_modbb.pro (IDL script)
         d = distance * 3.0857e18  # convert distance from pc to cm
         a = grainsize * 1e-4  # convert grainsize from micron to cm
         fnu = np.zeros((2, self.wavelength.__len__()))
-        fnu[0, :] = self.wavelength  #TODO: make fnu (and therefore onespecies)
+        fnu[0, :] = self.wavelength  #maybe it is better to  make fnu
+                                     #(and therefore onespecies)
                                      #an array with just 1 column, remove wl
 
         for j in range(steps - 1):
@@ -179,6 +183,13 @@ class SpectrumNGC6302(Model):
         return fnu
 
     def shbb(self, aar, temp, pinda):
+        ## This calculates the blackbody flux, if necessary multiplied with a
+        ## powerlaw opacity.
+        ## We call it with the index 0, so no power-law opacity
+        ## based on sh_bb.pro (IDL script) by Sacha Hony. His original comments:
+        ## ;(SH Jan 27 1999)
+        ## ;wavelength dependent emissivity powerindex:power
+        ## ; fit = bb(T)*H*l**power        
         a1 = 3.97296e19
         a2 = 1.43875e4
         mbb = np.copy(aar)
@@ -198,6 +209,10 @@ class SpectrumNGC6302(Model):
             if (np.all([self.lims[i,0] <= theta[i] <= self.lims[i,1] for i in
                        range(len(self.lims[:,0]))]) and (theta[11] > theta[10])
                       and (theta[13] > theta[12])):
+                # the temperature of the inner radius needs to be higher than
+                # the temperature of the outer radius for both temperature
+                # components. Hence theta[11] > theta[10] and theta[13] >
+                # theta[12].
                 return 0
             else:
                 return -np.inf
@@ -225,28 +240,28 @@ if __name__ == "__main__":
 
 
     """ Choose some model parameters """
-    logacold0 = -8.3
-    logacold1 = -8
-    logacold2 = -2.7
-    logacold3 = -8.5
-    logacold4 = -8.5
-#    logacold5 = -10 # Not used in Kemper et al. 2002
-    logacold6 = -3
-    logacold7 = -1.4
-#    logawarm0 = -10 # Not used in Kemper et al. 2002
-#    logawarm1 = -10 # Not used in Kemper et al. 2002
-    logawarm2 = -5
-#    logawarm3 = -10 # Not used in Kemper et al. 2002
-#    logawarm4 = -10 # not used in Kemper et al. 2002
-    logawarm5 = -3 
-#    logawarm6 = -10 # not used in Kemper et al. 2002
-    logawarm7 = -4
-    Tcold0 = 30
-    Tcold1 = 60
-    Twarm0 = 100
-    Twarm1 = 118
-    indexp = 0.5
-    multfact = 1.
+    logacold0 = -8.3  # Cold calcite (kappa)
+    logacold1 = -8 # Cold enstatite (Q/a)
+    logacold2 = -2.7 # Cold forsterite (Q)
+    logacold3 = -8.5 # Cold diopside (Q/a)
+    logacold4 = -8.5 # Cold dolomite (kappa)
+#    logacold5 = -10 # Cold metallic iron. Not used by Kemper et al. 2002
+    logacold6 = -3 # Cold crystalline water ice (Q)
+    logacold7 = -1.4 # Cold amorphous olivine (Q)
+#    logawarm0 = -10 # Warm calcite. Not used by Kemper et al. 2002
+#    logawarm1 = -10 # Warm enstatite. Not used by Kemper et al. 2002
+    logawarm2 = -5 # Warm forsterite (Q)
+#    logawarm3 = -10 # Warm diopside. Not used by Kemper et al. 2002
+#    logawarm4 = -10 # Warm dolomite. Not used by Kemper et al. 2002
+    logawarm5 = -3 # Warm metallic iron (Q).
+#    logawarm6 = -10 # Warm crystalline water ice. Not used in Kemper et al. 2002. Would have been evaporated at these temperatures anyway
+    logawarm7 = -4 # Warm amorphous olivine (Q)
+    Tcold0 = 30 # Temperature outer radius cold dust shell
+    Tcold1 = 60 # Temperature inner radius cold dust shell
+    Twarm0 = 100 # Temperature outer radius warm dust shell
+    Twarm1 = 118 # Temperature inner radius warm dust shell
+    indexp = -0.5 # Index p from Kemper et al. 2002. Index q is not a fit parameter and fixed to -0.5. In previous runs indexp was set to 0.5, but Kemper et al. 2002 report that this value should be -0.5. This was corrected on 2022-11-17.
+    multfact = 1. # A scaling factor incorporating the distance and absolute abundances/dust masses
 
     #Now init the model:
     model = SpectrumNGC6302(wavelengths)
@@ -254,12 +269,12 @@ if __name__ == "__main__":
     model(logacold0, logacold1, logacold2, logacold3, logacold4, 
                  logacold6, logacold7, 
                  logawarm2, logawarm5,
-                 logawarm7, #zero-value dust species are removed
+                 logawarm7, #zero-value dust species are removed from the call
           Tcold0, Tcold1, Twarm0, Twarm1,
           indexp=indexp, multfact=multfact)
     model_flux = model.modelFlux
-    plt.plot(wavelengths, model.modelFlux)
-    plt.show()
+    plt.plot(wavelengths, model.modelFlux) #sanity check plot. Can be commented
+    plt.show()                             # out.
     
     #Now we create synthetic data:
 
@@ -272,8 +287,8 @@ if __name__ == "__main__":
     unc = specdata[1][:]*input_noise_spec
     spec = Spectrum(specdata[0][:],specdata[1][:] +
                     np.random.randn(len(specdata[1][:]))*unc,specdata[1][:]*0.05,"um","Jy")
-    plt.plot(spec.wavelength, spec.value)
-    plt.show()
+    plt.plot(spec.wavelength, spec.value) #another sanity check
+    plt.show()                            #comment out if it is bothersome
 
 
     #Now let's try changing the resampling method so it's faster
@@ -299,11 +314,11 @@ if __name__ == "__main__":
 
     optimizer = EmceeSearch(model=model, data=dataset, nwalkers=100, moves=m)
     guess = [
-        [-8.3, -8, -2.7, -8.5, -8.5, -3, -1.4,
-         -5,  -3,   -4,
-         30, 60,
+        [-8.3, -8, -2.7, -8.5, -8.5, -3, -1.4, #values are essentially the 
+         -5,  -3,   -4,                        #same as fitted values from
+         30, 60,                               # 2002.
          100, 118,
-         0.5,
+         -0.5,
          1., #The parameters of the model
              #Each Spectrum object contains a noise model with three free parameters
              #The first one is a calibration factor which the observed spectrum will be multiplied by
@@ -312,18 +327,18 @@ if __name__ == "__main__":
          1.0 ,0.1, 0.1
         ]
         + np.random.rand(optimizer.npars)*[0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1,
-                                           0.1, 0.1, 0.1,
-                                           3, 3,
-                                           3, 3,
-                                           0.1, 0.5,
-                                           1, 1, 1]
+                                           0.1, 0.1, 0.1, #these values are
+                                           3, 3,          #adjusted so that 
+                                           3, 3,          #the first guesses
+                                           0.1, 0.5,      #do not fall outside
+                                           1, 1, 1]       #the prior range
         for i in range(optimizer.nwalkers)]
     #guess = "None"
 
     #Then we tell it to explore the parameter space
 
-    optimizer.optimise(nsamples = 5000, burnin=3500, guess=guess)
-    #optimizer.optimise(nsamples = 50, burnin=10, guess=guess)
+    #optimizer.optimise(nsamples = 5000, burnin=3500, guess=guess)
+    optimizer.optimise(nsamples = 50, burnin=10, guess=guess) #short run for tests
 
 
     optimizer.postProcess() #now we call the postprocessing to produce some figures
