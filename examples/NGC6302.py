@@ -97,7 +97,7 @@ class SpectrumNGC6302(Model):
             self.lims[14, 0] = -1.
             self.lims[14, 1] = 0.
             self.lims[15, 0] = 0.
-            self.lims[15, 1] = 10.
+            self.lims[15, 1] = np.inf
         else:            
             self.lims = lims
         print("Limits: ")
@@ -157,27 +157,34 @@ class SpectrumNGC6302(Model):
 
         return {"spectrum":{"wavelength":self.wavelength, "flux": self.modelFlux}}
 
-    def ckmodbb(self, q, tin, tout, n0, index=0.5, r0=1e15, distance=910.,
+    def ckmodbb(self, q, tin, tout, n0, index=-0.5, r0=1e15, distance=910.,
                 grainsize=0.1, steps=15):
         ## ckmodbb calculates the flux of either the warm or the cold component
         ## according to equation 6 and 7 from Kemper et al. (2002, A&A 394, 679)
         ## translated from ck_modbb.pro (IDL script)
         d = distance * 3.0857e18  # convert distance from pc to cm
         a = grainsize * 1e-4  # convert grainsize from micron to cm
+        qindex = -0.5
+        pindex = index
         fnu = np.zeros((2, self.wavelength.__len__()))
         fnu[0, :] = self.wavelength  #maybe it is better to  make fnu
                                      #(and therefore onespecies)
                                      #an array with just 1 column, remove wl
 
         for j in range(steps - 1):
-            t = tin - j * (tin-tout)/steps
-            power = (t/tin)**(2*index - 6)
+            t = tin - j * (tin-tout)/steps # integrating. This is how it was
+            # done by Kemper et al. 2002. This can be done better, but I'll
+            # leave it as is for now.
+            power = (t/tin)**((-1*(3-pindex))/qindex) #staying closer to eq. 6
             bb = self.shbb(fnu, t, 0.)
             fnu[1, :] = np.add(fnu[1, :], 
                                np.multiply(q,
                                            bb[1, :])*(power*((tin-tout)/steps)))
-        extra = r0/d
-        factor = 4 * math.pi * a * a * r0 * n0 * extra * extra / (3-index)
+            # adding the fnu together calculated in the different steps. 
+        
+        factor = (4*math.pi*a*a * r0**3 * n0)/((3-index)*d*d)
+        # this factor from eq. 6 (Kemper et al. 2002) can be placed outside the
+        # integral
 
         fnu[1, :] = fnu[1, :] * factor
         return fnu
