@@ -41,12 +41,12 @@ class QuickSEDModel(Model):
 
     '''
     def __init__(self, wavelengths, flatprior = True,
-                 lims = np.array([[0.,1e30], #pc
-                                  [1.0,1e5], #K
-                                  [0.0,1e3], #Rsun
-                                  [0.0,1.0], #Ldust/Lstar
-                                  [1.0,1e5], #K
-                                  [0.0,1e3], #micron 
+                 lims = np.array([[1.,100.], #pc
+                                  [3000.0,1e5], #K
+                                  [0.1,10.0], #Rsun
+                                  [1e-12,1e1], #au**2
+                                  [10.0,1000.0], #K
+                                  [10.0,1000.0], #micron 
                                   [-3.0,3.0]]),**kwargs):
 
         '''The model constructor, which will set everything up
@@ -58,7 +58,7 @@ class QuickSEDModel(Model):
         There are also several important variables it *MUST* define here
         '''
         self.wave = wavelengths
-        self.wavelengths = wavelengths
+        self.wavelength = wavelengths
         self.freq = (wavelengths * u.micron).to(u.Hz, equivalencies=u.spectral()).value
         self.npars = 7 #Number of free parameters for the model (__call__()). For some models this can be determined through introspection, but it is still strongly recommended to define this explicitly here. Introspection will only be attempted if self.npars is not defined.
         self.npars_ptform = 7 #Sometimes the number of free parameters is different when using the prior transform instead of the prior. In that case, self.npars_ptform should also be defined.
@@ -68,7 +68,7 @@ class QuickSEDModel(Model):
         #Here we'll just use a simple flat prior
         self.lims = lims
         self.flatprior = flatprior
-        self.parLabels = ['dstar','tstar','rstar','fdust','tdust','lam0','beta']
+        self.parLabels = ['dstar','tstar','rstar','Adust','tdust','lam0','beta']
 
         '''Assign any other keywords.'''
         l = locals()
@@ -77,7 +77,7 @@ class QuickSEDModel(Model):
                 continue
             setattr(self, key, value)
 
-    def __call__(self,dstar,tstar,rstar,fdust,tdust,lam0,beta,**kwargs):
+    def __call__(self,dstar,tstar,rstar,Adust,tdust,lam0,beta,**kwargs):
         '''The model itself, using the callable class functionality of python.
 
         This is an essential method. It should do any steps required to 
@@ -93,11 +93,11 @@ class QuickSEDModel(Model):
 
         self.lstar = 4.*np.pi*(self.rstar*rsol)**2*sb*self.tstar**4 / lsol
 
-        sc = 1e26*(1./(self.dstar*pc)**2)*(self.wave*um)**2 /c
+        sc = 1e26*(1./(self.dstar*pc)**2)*(c/(self.wave*um)**2)
 
-        photosphere = (rstar*rsol)**2*np.pi*BlackBody().evaluate(self.freq, self.tstar, 1*u.Jy/u.sr)
+        photosphere = BlackBody().evaluate(self.freq, self.tstar, 1*u.Jy/u.sr)
 
-        photopshere = photosphere * ( self.lstar / np.trapz(photosphere) ) * sc
+        photopshere = photosphere * np.pi*(self.rstar*rsol)**2 * sc
 
         self.star = photosphere
 
@@ -107,7 +107,7 @@ class QuickSEDModel(Model):
 
         emission[modified] = emission[modified]*(self.lam0/self.wave[modified])**beta
 
-        emission = emission*(self.fdust*np.trapz(self.star)/np.trapz(emission))*sc
+        emission = emission*sc*self.Adust*au**2
         
         self.dust = emission
 

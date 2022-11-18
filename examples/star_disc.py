@@ -30,7 +30,7 @@ optimizer = EmceeSearch(model=model,data=dataset,nwalkers=20,vectorize=False)
 #self.parLabels = ['dstar','tstar','rstar','fdust','tdust','lam0','beta'] + noise parameters
 guess = [20.0,6000.0,1.0,1e-4,100.0,200.0,1.0]#,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0]
 
-optimizer.optimise(nsamples=200,nburnin=25,guess=guess)
+optimizer.optimise(nsamples=10000,nburnin=2500,guess=guess)
 
 optimizer.summary()
 
