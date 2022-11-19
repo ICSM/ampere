@@ -94,10 +94,10 @@ class SpectrumNGC6302(Model):
             self.lims[10:12, 1] = 80.
             self.lims[12:14, 0] = 80.
             self.lims[12:14, 1] = 180.
-            self.lims[14, 0] = -1.
-            self.lims[14, 1] = 0.
+            self.lims[14, 0] = 0.
+            self.lims[14, 1] = 1.
             self.lims[15, 0] = 0.
-            self.lims[15, 1] = np.inf
+            self.lims[15, 1] = 10.
         else:            
             self.lims = lims
         print("Limits: ")
@@ -157,15 +157,13 @@ class SpectrumNGC6302(Model):
 
         return {"spectrum":{"wavelength":self.wavelength, "flux": self.modelFlux}}
 
-    def ckmodbb(self, q, tin, tout, n0, index=-0.5, r0=1e15, distance=910.,
+    def ckmodbb(self, q, tin, tout, n0, index=0.5, r0=1e15, distance=910.,
                 grainsize=0.1, steps=15):
         ## ckmodbb calculates the flux of either the warm or the cold component
         ## according to equation 6 and 7 from Kemper et al. (2002, A&A 394, 679)
         ## translated from ck_modbb.pro (IDL script)
         d = distance * 3.0857e18  # convert distance from pc to cm
         a = grainsize * 1e-4  # convert grainsize from micron to cm
-        qindex = -0.5
-        pindex = index
         fnu = np.zeros((2, self.wavelength.__len__()))
         fnu[0, :] = self.wavelength  #maybe it is better to  make fnu
                                      #(and therefore onespecies)
@@ -175,7 +173,7 @@ class SpectrumNGC6302(Model):
             t = tin - j * (tin-tout)/steps # integrating. This is how it was
             # done by Kemper et al. 2002. This can be done better, but I'll
             # leave it as is for now.
-            power = (t/tin)**((-1*(3-pindex))/qindex) #staying closer to eq. 6
+            power = (t/tin)**(2*index - 6)
             bb = self.shbb(fnu, t, 0.)
             fnu[1, :] = np.add(fnu[1, :], 
                                np.multiply(q,
@@ -267,7 +265,7 @@ if __name__ == "__main__":
     Tcold1 = 60 # Temperature inner radius cold dust shell
     Twarm0 = 100 # Temperature outer radius warm dust shell
     Twarm1 = 118 # Temperature inner radius warm dust shell
-    indexp = -0.5 # Index p from Kemper et al. 2002. Index q is not a fit parameter and fixed to -0.5. In previous runs indexp was set to 0.5, but Kemper et al. 2002 report that this value should be -0.5. This was corrected on 2022-11-17.
+    indexp = 0.5 # Index p from Kemper et al. 2002. Index q is not a fit parameter and fixed to -0.5. In previous runs indexp was set to 0.5, but Kemper et al. 2002 report that this value should be -0.5. This was corrected on 2022-11-17.
     multfact = 1. # A scaling factor incorporating the distance and absolute abundances/dust masses
 
     #Now init the model:
