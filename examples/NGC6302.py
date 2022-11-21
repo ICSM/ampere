@@ -83,20 +83,18 @@ class SpectrumNGC6302(Model):
         # Here we'll just use a simple flat prior
         if lims is None:
             self.lims = np.zeros((self.npars,2)) 
-            # logacold = theta[0:8] -10, 0
-            # logawarm = theta[8:16] -10, 0
+            # logacold = theta[0:8] 0, 1
+            # logawarm = theta[8:16] 0, 1
             # Tcold = theta[16:18] 10, 80; 10, 80 
             # Twarm = theta[18:20] 80, 200; 80, 200
             # indexp = theta[20] 0, 3;
             # multfact = theta[21] 0, np.inf
-            self.lims[:, 0] = -10.
+            self.lims[:, 1] = 1.
             self.lims[10:12, 0] = 10.
             self.lims[10:12, 1] = 80.
             self.lims[12:14, 0] = 80.
             self.lims[12:14, 1] = 180.
-            self.lims[14, 0] = 0.
             self.lims[14, 1] = 1.
-            self.lims[15, 0] = 0.
             self.lims[15, 1] = 10.
         else:            
             self.lims = lims
@@ -105,10 +103,10 @@ class SpectrumNGC6302(Model):
         self.flatprior = flatprior
 
 
-    def __call__(self, logacold0, logacold1, logacold2, logacold3, logacold4,
-                 logacold6, logacold7, 
-                 logawarm2, logawarm5,
-                 logawarm7, 
+    def __call__(self, acold0, acold1, acold2, acold3, acold4,
+                 acold6, acold7, 
+                 awarm2, awarm5,
+                 awarm7, 
                  Tcold0, Tcold1, Twarm0, Twarm1, indexp, multfact,
                  *args, **kwargs):
         '''The model itself, using the callable class functionality of python.
@@ -130,30 +128,30 @@ class SpectrumNGC6302(Model):
         coldcomponent[0, :] = self.wavelength
         warmcomponent = np.zeros((2, wavelengths.__len__()))
         warmcomponent[0, :] = self.wavelength
-        acold = [10**logacold0, 10**logacold1, 10**logacold2, 10**logacold3, 10**logacold4, 0, 10**logacold6,
-                 10**logacold7] #0 values correspond to dust species that were not included in the fit by Kemper et al. 2002
-        awarm = [0, 0, 10**logawarm2, 0, 0, 10**logawarm5, 0,
-                 10**logawarm7] #same here       
+        acold = [acold0, acold1, acold2, acold3, acold4, 0, acold6,
+                 acold7] #0 values correspond to dust species that were not included in the fit by Kemper et al. 2002
+        awarm = [0, 0, awarm2, 0, 0, awarm5, 0,
+                 awarm7] #same here       
 
         for ii, aa in enumerate(acold):
             onespeciescold = self.ckmodbb(self.opacity_array[:, ii],
                                           tin=Tcold1, tout=Tcold0,
                                           n0=aa, index=indexp)
             coldcomponent[1, :] = coldcomponent[1, :] + onespeciescold[1, :]
-            #plt.plot(coldcomponent[0,:],coldcomponent[1,:])
+            plt.plot(coldcomponent[0,:],coldcomponent[1,:])
             
         for jj, bb in enumerate(awarm):
             onespecieswarm = self.ckmodbb(self.opacity_array[:, jj],
                                           tin=Twarm1, tout=Twarm0,
                                           n0=bb, index=indexp)
             warmcomponent[1, :] = warmcomponent[1, :] + onespecieswarm[1, :]
-            #plt.plot(warmcomponent[0,:],warmcomponent[1,:])
+            plt.plot(warmcomponent[0,:],warmcomponent[1,:])
         fModel = np.zeros((2, wavelengths.__len__()))
         fModel[0, :] = self.wavelength
         fModel[1, :] = coldcomponent[1,:] + warmcomponent[1, :]
         self.modelFlux = fModel[1, :]
-        #plt.plot(fModel[0,:],fModel[1,:])
-        #plt.show()
+        plt.plot(fModel[0,:],fModel[1,:])
+        plt.show()
 
         return {"spectrum":{"wavelength":self.wavelength, "flux": self.modelFlux}}
 
@@ -245,22 +243,22 @@ if __name__ == "__main__":
 
 
     """ Choose some model parameters """
-    logacold0 = -8.3  # Cold calcite (kappa)
-    logacold1 = -8 # Cold enstatite (Q/a)
-    logacold2 = -2.7 # Cold forsterite (Q)
-    logacold3 = -8.5 # Cold diopside (Q/a)
-    logacold4 = -8.5 # Cold dolomite (kappa)
-#    logacold5 = -10 # Cold metallic iron. Not used by Kemper et al. 2002
-    logacold6 = -3 # Cold crystalline water ice (Q)
-    logacold7 = -1.4 # Cold amorphous olivine (Q)
-#    logawarm0 = -10 # Warm calcite. Not used by Kemper et al. 2002
-#    logawarm1 = -10 # Warm enstatite. Not used by Kemper et al. 2002
-    logawarm2 = -5 # Warm forsterite (Q)
-#    logawarm3 = -10 # Warm diopside. Not used by Kemper et al. 2002
-#    logawarm4 = -10 # Warm dolomite. Not used by Kemper et al. 2002
-    logawarm5 = -3 # Warm metallic iron (Q).
-#    logawarm6 = -10 # Warm crystalline water ice. Not used in Kemper et al. 2002. Would have been evaporated at these temperatures anyway
-    logawarm7 = -4 # Warm amorphous olivine (Q)
+    acold0 = 5e-9  # Cold calcite (kappa)
+    acold1 = 1e-8 # Cold enstatite (Q/a)
+    acold2 = 2e-3 # Cold forsterite (Q)
+    acold3 = 3e-9 # Cold diopside (Q/a)
+    acold4 = 3e-9 # Cold dolomite (kappa)
+#    acold5 = 0 # Cold metallic iron. Not used by Kemper et al. 2002
+    acold6 = 1e-3 # Cold crystalline water ice (Q)
+    acold7 = 4e-2 # Cold amorphous olivine (Q)
+#    awarm0 = 0 # Warm calcite. Not used by Kemper et al. 2002
+#    awarm1 = 0 # Warm enstatite. Not used by Kemper et al. 2002
+    awarm2 = 1e-5 # Warm forsterite (Q)
+#    awarm3 = 0 # Warm diopside. Not used by Kemper et al. 2002
+#    awarm4 = 0 # Warm dolomite. Not used by Kemper et al. 2002
+    awarm5 = 1e-3 # Warm metallic iron (Q).
+#    awarm6 = 0 # Warm crystalline water ice. Not used in Kemper et al. 2002. Would have been evaporated at these temperatures anyway
+    awarm7 = 1e-4 # Warm amorphous olivine (Q)
     Tcold0 = 30 # Temperature outer radius cold dust shell
     Tcold1 = 60 # Temperature inner radius cold dust shell
     Twarm0 = 100 # Temperature outer radius warm dust shell
@@ -271,10 +269,10 @@ if __name__ == "__main__":
     #Now init the model:
     model = SpectrumNGC6302(wavelengths)
     #And call it to produce the fluxes for our chosen parameters
-    model(logacold0, logacold1, logacold2, logacold3, logacold4, 
-                 logacold6, logacold7, 
-                 logawarm2, logawarm5,
-                 logawarm7, #zero-value dust species are removed from the call
+    model(acold0, acold1, acold2, acold3, acold4, 
+                 acold6, acold7, 
+                 awarm2, awarm5,
+                 awarm7, #zero-value dust species are removed from the call
           Tcold0, Tcold1, Twarm0, Twarm1,
           indexp=indexp, multfact=multfact)
     model_flux = model.modelFlux
@@ -319,11 +317,11 @@ if __name__ == "__main__":
 
     optimizer = EmceeSearch(model=model, data=dataset, nwalkers=100, moves=m)
     guess = [
-        [-8.3, -8, -2.7, -8.5, -8.5, -3, -1.4, #values are essentially the 
-         -5,  -3,   -4,                        #same as fitted values from
+        [5e-9, 1e-8, 2e-3, 3e-9, 3e-9, 1e-3, 4e-2, #values are essentially the 
+         1e-5,  1e-3,   1e-4,                        #same as fitted values from
          30, 60,                               # 2002.
          100, 118,
-         -0.5,
+         0.5,
          1., #The parameters of the model
              #Each Spectrum object contains a noise model with three free parameters
              #The first one is a calibration factor which the observed spectrum will be multiplied by
@@ -331,8 +329,8 @@ if __name__ == "__main__":
              #And the third is the scale length (in microns) of the correlated component of the noise
          1.0 ,0.1, 0.1
         ]
-        + np.random.rand(optimizer.npars)*[0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1,
-                                           0.1, 0.1, 0.1, #these values are
+        + np.random.rand(optimizer.npars)*[1e-9, 1e-9, 1e-3, 1e-9, 1e-9, 1e-4, 1e-2,
+                                           1e-6, 1e-4, 1e-5, #these values are
                                            10, 10,          #adjusted so that 
                                            10, 10,          #the first guesses
                                            0.1, 1,      #do not fall outside
@@ -342,8 +340,8 @@ if __name__ == "__main__":
 
     #Then we tell it to explore the parameter space
 
-    optimizer.optimise(nsamples = 1500, burnin=1000, guess=guess)
-    #optimizer.optimise(nsamples = 50, burnin=10, guess=guess) #short run for tests
+    #optimizer.optimise(nsamples = 1500, burnin=1000, guess=guess)
+    optimizer.optimise(nsamples = 50, burnin=10, guess=guess) #short run for tests
 
 
     optimizer.postProcess() #now we call the postprocessing to produce some figures
