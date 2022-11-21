@@ -79,7 +79,7 @@ class SpectrumNGC6302(Model):
  
         self.opacity_array = opacity_array
         self.nSpecies = nSpecies
-        self.npars = 15
+        self.npars = 14
         # the number of free parameters for the model (__call__()). For
         # some models this can be determined through introspection, but it is
         # still strongly recommended to define this explicitly here.
@@ -104,8 +104,8 @@ class SpectrumNGC6302(Model):
             self.lims[10:12, 1] = 80.
             self.lims[12:14, 0] = 80.
             self.lims[12:14, 1] = 180.
-            self.lims[14, 0] = 0.
-            self.lims[14, 1] = 1.
+#            self.lims[14, 0] = 0. 
+#            self.lims[14, 1] = 1.
         else:            
             self.lims = lims
         print("Limits: ")
@@ -117,7 +117,7 @@ class SpectrumNGC6302(Model):
                  logacold6, logacold7, 
                  logawarm2, logawarm5,
                  logawarm7, 
-                 Tcold0, Tcold1, Twarm0, Twarm1, indexp, 
+                 Tcold0, Tcold1, Twarm0, Twarm1, #indexp, 
                  *args, **kwargs):
         '''The model itself, using the callable class functionality of python.
         This is an essential method. It should do any steps required to
@@ -146,14 +146,14 @@ class SpectrumNGC6302(Model):
         for ii, aa in enumerate(acold):
             onespeciescold = self.ckmodbb(self.opacity_array[:, ii],
                                           tin=Tcold1, tout=Tcold0,
-                                          n0=aa, index=indexp)
+                                          n0=aa)#, index=indexp)
             coldcomponent[1, :] = coldcomponent[1, :] + onespeciescold[1, :]
             #plt.plot(coldcomponent[0,:],coldcomponent[1,:])
             
         for jj, bb in enumerate(awarm):
             onespecieswarm = self.ckmodbb(self.opacity_array[:, jj],
                                           tin=Twarm1, tout=Twarm0,
-                                          n0=bb, index=indexp)
+                                          n0=bb)#, index=indexp)
             warmcomponent[1, :] = warmcomponent[1, :] + onespecieswarm[1, :]
             #plt.plot(warmcomponent[0,:],warmcomponent[1,:])
         fModel = np.zeros((2, wavelengths.__len__()))
@@ -273,7 +273,7 @@ if __name__ == "__main__":
     Tcold1 = 60 # Temperature inner radius cold dust shell
     Twarm0 = 100 # Temperature outer radius warm dust shell
     Twarm1 = 118 # Temperature inner radius warm dust shell
-    indexp = 0.5 # Index p from Kemper et al. 2002. Index q is not a fit parameter and fixed to -0.5. In previous runs indexp was set to 0.5, but Kemper et al. 2002 report that this value should be -0.5. This was corrected on 2022-11-17.
+#    indexp = 0.5 # Index p from Kemper et al. 2002. Kept fixed for now to reduce the number of parameters 
 
 
     #Now init the model:
@@ -283,8 +283,8 @@ if __name__ == "__main__":
                  acold6, acold7, 
                  awarm2, awarm5,
                  awarm7, #zero-value dust species are removed from the call
-          Tcold0, Tcold1, Twarm0, Twarm1,
-          indexp=indexp)
+          Tcold0, Tcold1, Twarm0, Twarm1)
+#          indexp=indexp)
     model_flux = model.modelFlux
     plt.plot(wavelengths, model.modelFlux) #sanity check plot. Can be commented
     plt.show()                             # out.
@@ -327,13 +327,13 @@ if __name__ == "__main__":
     #Now we set up the optimizer object:
     #optimizer = EmceeSearch(model=model, data=dataset, nwalkers=100, moves=m)
 
-    optimizer = EmceeSearch(model=model, data=dataset, nwalkers=100, moves=m)
+    optimizer = EmceeSearch(model=model, data=dataset, nwalkers=50, moves=m)
     guess = [
         [-4.9, -4, -2.7, -4.5, -5.1, -3, -1.4, #values are essentially the 
          -5,  -3,   -4,                        #same as fitted values from
          30, 60,                               # 2002.
          100, 118,
-         0.5, #The parameters of the model
+         #The parameters of the model
              #Each Spectrum object contains a noise model with three free parameters
              #The first one is a calibration factor which the observed spectrum will be multiplied by
              #The second is the fraction of correlated noise assumed
@@ -344,15 +344,15 @@ if __name__ == "__main__":
                                            0.1, 0.1, 0.1, #these values are
                                            10, 10,          #adjusted so that 
                                            10, 10,          #the first guesses
-                                           0.1,       #do not fall outside
+                                           #0.1,       #do not fall outside
                                            1, 1, 1]       #the prior range
         for i in range(optimizer.nwalkers)]
     #guess = "None"
 
     #Then we tell it to explore the parameter space
 
-    optimizer.optimise(nsamples = 1500, burnin=1000, guess=guess)
-    #optimizer.optimise(nsamples = 50, burnin=10, guess=guess) #short run for tests
+#    optimizer.optimise(nsamples = 15000, burnin=10000, guess=guess)
+    optimizer.optimise(nsamples = 50, burnin=10, guess=guess) #short run for tests
 
 
     optimizer.postProcess() #now we call the postprocessing to produce some figures
