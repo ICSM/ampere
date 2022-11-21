@@ -25,8 +25,6 @@ class SpectrumNGC6302(Model):
        Twarm : temperature range of the warm component (low, high)
        indexp : index p of the density distribution 
        indexq : index q of the temperature distribution
-       multfact : multiplication factor that the sum of the modified black
-                  bodies has to be multiplied with to fit the spectrum
        Output is an array of model fluxes (fluxes), to match wavelengths
     '''
     def __init__(self, wavelengths, flatprior=True,
@@ -68,7 +66,7 @@ class SpectrumNGC6302(Model):
  
         self.opacity_array = opacity_array
         self.nSpecies = nSpecies
-        self.npars = 16
+        self.npars = 15
         # the number of free parameters for the model (__call__()). For
         # some models this can be determined through introspection, but it is
         # still strongly recommended to define this explicitly here.
@@ -88,14 +86,12 @@ class SpectrumNGC6302(Model):
             # Tcold = theta[16:18] 10, 80; 10, 80 
             # Twarm = theta[18:20] 80, 200; 80, 200
             # indexp = theta[20] 0, 3;
-            # multfact = theta[21] 0, np.inf
             self.lims[:, 1] = 1.
             self.lims[10:12, 0] = 10.
             self.lims[10:12, 1] = 80.
             self.lims[12:14, 0] = 80.
             self.lims[12:14, 1] = 180.
             self.lims[14, 1] = 1.
-            self.lims[15, 1] = 10.
         else:            
             self.lims = lims
         print("Limits: ")
@@ -107,7 +103,7 @@ class SpectrumNGC6302(Model):
                  acold6, acold7, 
                  awarm2, awarm5,
                  awarm7, 
-                 Tcold0, Tcold1, Twarm0, Twarm1, indexp, multfact,
+                 Tcold0, Tcold1, Twarm0, Twarm1, indexp, 
                  *args, **kwargs):
         '''The model itself, using the callable class functionality of python.
         This is an essential method. It should do any steps required to
@@ -206,7 +202,7 @@ class SpectrumNGC6302(Model):
         # Tcold = theta[10:12]; theta[11] > theta[10]
         # Twarm = theta[12:14]; theta[13] > theta[12]
         # indexp = theta[14]
-        # multfact = theta[15]
+ 
 
         if self.flatprior: 
             if (np.all([self.lims[i,0] <= theta[i] <= self.lims[i,1] for i in
@@ -264,7 +260,7 @@ if __name__ == "__main__":
     Twarm0 = 100 # Temperature outer radius warm dust shell
     Twarm1 = 118 # Temperature inner radius warm dust shell
     indexp = 0.5 # Index p from Kemper et al. 2002. Index q is not a fit parameter and fixed to -0.5. In previous runs indexp was set to 0.5, but Kemper et al. 2002 report that this value should be -0.5. This was corrected on 2022-11-17.
-    multfact = 1. # A scaling factor incorporating the distance and absolute abundances/dust masses
+
 
     #Now init the model:
     model = SpectrumNGC6302(wavelengths)
@@ -274,7 +270,7 @@ if __name__ == "__main__":
                  awarm2, awarm5,
                  awarm7, #zero-value dust species are removed from the call
           Tcold0, Tcold1, Twarm0, Twarm1,
-          indexp=indexp, multfact=multfact)
+          indexp=indexp)
     model_flux = model.modelFlux
     plt.plot(wavelengths, model.modelFlux) #sanity check plot. Can be commented
     plt.show()                             # out.
@@ -323,8 +319,7 @@ if __name__ == "__main__":
          1e-5,  1e-3,   1e-4,                        #same as fitted values from
          30, 60,                               # 2002.
          100, 118,
-         0.5,
-         1., #The parameters of the model
+         0.5, #The parameters of the model
              #Each Spectrum object contains a noise model with three free parameters
              #The first one is a calibration factor which the observed spectrum will be multiplied by
              #The second is the fraction of correlated noise assumed
@@ -335,7 +330,7 @@ if __name__ == "__main__":
                                            1e-6, 1e-4, 1e-5, #these values are
                                            10, 10,          #adjusted so that 
                                            10, 10,          #the first guesses
-                                           0.1, 1,      #do not fall outside
+                                           0.1,       #do not fall outside
                                            1, 1, 1]       #the prior range
         for i in range(optimizer.nwalkers)]
     #guess = "None"
