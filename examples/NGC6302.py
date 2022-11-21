@@ -59,13 +59,7 @@ class SpectrumNGC6302(Model):
             # calcite and dolomite are M.A.C. (kappa) values
             # enstatite and diopside are Q/a values
             # we need to convert those to Q values
-            opacity_array[:,1] = opacity_array[:,1]*1e-4 # convert enstatite to Q
-            opacity_array[:,3] = opacity_array[:,3]*1e-4 # convert diopside to Q
-
-            opacity_array[:,0] = opacity_array[:,0]*2.71*(4/3)*1e-4 # convert calcite from kappa to Q. Calcite has a density of 2.71 g cm^-3.
-            opacity_array[:,4] = opacity_array[:,4]*2.87*(4/3)*1e-4 # convert calcite from kappa to Q. Calcite has a density of 2.71 g cm^-3. 
-
-
+            
             
             #plt.xscale('log')
             #plt.plot(self.wavelength, opacity_array[:,j])
@@ -74,6 +68,13 @@ class SpectrumNGC6302(Model):
             #plt.xlim(2,200)
             #plt.show()
             print("Reading in species: ", j, " : ", opacityFileList[j])
+
+        opacity_array[:,1] = opacity_array[:,1]*1e-4 # convert enstatite to Q
+        opacity_array[:,3] = opacity_array[:,3]*1e-4 # convert diopside to Q
+
+        opacity_array[:,0] = opacity_array[:,0]*2.71*(4/3)*1e-4 # convert calcite from kappa to Q. Calcite has a density of 2.71 g cm^-3.
+        opacity_array[:,4] = opacity_array[:,4]*2.87*(4/3)*1e-4 # convert calcite from kappa to Q. Calcite has a density of 2.71 g cm^-3. 
+
 
  
         self.opacity_array = opacity_array
@@ -93,16 +94,17 @@ class SpectrumNGC6302(Model):
         # Here we'll just use a simple flat prior
         if lims is None:
             self.lims = np.zeros((self.npars,2)) 
-            # logacold = theta[0:8] 0, 1
-            # logawarm = theta[8:16] 0, 1
+            # logacold = theta[0:8] -6, 0
+            # logawarm = theta[8:16] -6, 0
             # Tcold = theta[16:18] 10, 80; 10, 80 
-            # Twarm = theta[18:20] 80, 200; 80, 200
-            # indexp = theta[20] 0, 3;
-            self.lims[:, 1] = 1.
+            # Twarm = theta[18:20] 80, 200; 80, 180
+            # indexp = theta[20] 0, 1;
+            self.lims[:, 0] = -6.
             self.lims[10:12, 0] = 10.
             self.lims[10:12, 1] = 80.
             self.lims[12:14, 0] = 80.
             self.lims[12:14, 1] = 180.
+            self.lims[14, 0] = 0.
             self.lims[14, 1] = 1.
         else:            
             self.lims = lims
@@ -111,10 +113,10 @@ class SpectrumNGC6302(Model):
         self.flatprior = flatprior
 
 
-    def __call__(self, acold0, acold1, acold2, acold3, acold4,
-                 acold6, acold7, 
-                 awarm2, awarm5,
-                 awarm7, 
+    def __call__(self, logacold0, logacold1, logacold2, logacold3, logacold4,
+                 logacold6, logacold7, 
+                 logawarm2, logawarm5,
+                 logawarm7, 
                  Tcold0, Tcold1, Twarm0, Twarm1, indexp, 
                  *args, **kwargs):
         '''The model itself, using the callable class functionality of python.
@@ -136,10 +138,10 @@ class SpectrumNGC6302(Model):
         coldcomponent[0, :] = self.wavelength
         warmcomponent = np.zeros((2, wavelengths.__len__()))
         warmcomponent[0, :] = self.wavelength
-        acold = [acold0, acold1, acold2, acold3, acold4, 0, acold6,
-                 acold7] #0 values correspond to dust species that were not included in the fit by Kemper et al. 2002
-        awarm = [0, 0, awarm2, 0, 0, awarm5, 0,
-                 awarm7] #same here       
+        acold = [10**logacold0, 10**logacold1, 10**logacold2, 10**logacold3, 10**logacold4, 0, 10**logacold6,
+                 10**logacold7] #0 values correspond to dust species that were not included in the fit by Kemper et al. 2002
+        awarm = [0, 0, 10**logawarm2, 0, 0, 10**logawarm5, 0,
+                 10**logawarm7] #same here       
 
         for ii, aa in enumerate(acold):
             onespeciescold = self.ckmodbb(self.opacity_array[:, ii],
@@ -251,22 +253,22 @@ if __name__ == "__main__":
 
 
     """ Choose some model parameters """
-    acold0 = 1.4e-5  # Cold calcite (kappa)
-    acold1 = 1e-4 # Cold enstatite (Q)
-    acold2 = 2e-3 # Cold forsterite (Q)
-    acold3 = 3e-5 # Cold diopside (Q)
-    acold4 = 8e-6 # Cold dolomite (kappa)
-#    acold5 = 0 # Cold metallic iron. Not used by Kemper et al. 2002
-    acold6 = 1e-3 # Cold crystalline water ice (Q)
-    acold7 = 4e-2 # Cold amorphous olivine (Q)
-#    awarm0 = 0 # Warm calcite. Not used by Kemper et al. 2002
-#    awarm1 = 0 # Warm enstatite. Not used by Kemper et al. 2002
-    awarm2 = 1e-5 # Warm forsterite (Q)
-#    awarm3 = 0 # Warm diopside. Not used by Kemper et al. 2002
-#    awarm4 = 0 # Warm dolomite. Not used by Kemper et al. 2002
-    awarm5 = 1e-3 # Warm metallic iron (Q).
-#    awarm6 = 0 # Warm crystalline water ice. Not used in Kemper et al. 2002. Would have been evaporated at these temperatures anyway
-    awarm7 = 1e-4 # Warm amorphous olivine (Q)
+    acold0 = -4.9  # Cold calcite (converted to Q)
+    acold1 = -4 # Cold enstatite (converted to Q)
+    acold2 = -2.7 # Cold forsterite (Q)
+    acold3 = -4.5 # Cold diopside (converted to Q)
+    acold4 = -5.1 # Cold dolomite (converted to Q)
+#    acold5 = -10 # Cold metallic iron. Not used by Kemper et al. 2002
+    acold6 = -3 # Cold crystalline water ice (Q)
+    acold7 = -1.4 # Cold amorphous olivine (Q)
+#    awarm0 = -10 # Warm calcite. Not used by Kemper et al. 2002
+#    awarm1 = -10 # Warm enstatite. Not used by Kemper et al. 2002
+    awarm2 = -5 # Warm forsterite (Q)
+#    awarm3 = -10 # Warm diopside. Not used by Kemper et al. 2002
+#    awarm4 = -10 # Warm dolomite. Not used by Kemper et al. 2002
+    awarm5 = -3 # Warm metallic iron (Q).
+#    awarm6 = -10 # Warm crystalline water ice. Not used in Kemper et al. 2002. Would have been evaporated at these temperatures anyway
+    awarm7 = -4 # Warm amorphous olivine (Q)
     Tcold0 = 30 # Temperature outer radius cold dust shell
     Tcold1 = 60 # Temperature inner radius cold dust shell
     Twarm0 = 100 # Temperature outer radius warm dust shell
@@ -327,8 +329,8 @@ if __name__ == "__main__":
 
     optimizer = EmceeSearch(model=model, data=dataset, nwalkers=100, moves=m)
     guess = [
-        [1.4e-5, 1e-4, 2e-3, 3e-5, 8e-6, 1e-3, 4e-2, #values are essentially the 
-         1e-5,  1e-3,   1e-4,                        #same as fitted values from
+        [-4.9, -4, -2.7, -4.5, -5.1, -3, -1.4, #values are essentially the 
+         -5,  -3,   -4,                        #same as fitted values from
          30, 60,                               # 2002.
          100, 118,
          0.5, #The parameters of the model
@@ -338,8 +340,8 @@ if __name__ == "__main__":
              #And the third is the scale length (in microns) of the correlated component of the noise
          1.0 ,0.1, 0.1
         ]
-        + np.random.rand(optimizer.npars)*[1e-6, 1e-5, 1e-3, 1e-5, 1e-6, 1e-4, 1e-2,
-                                           1e-6, 1e-4, 1e-5, #these values are
+        + np.random.rand(optimizer.npars)*[0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1,
+                                           0.1, 0.1, 0.1, #these values are
                                            10, 10,          #adjusted so that 
                                            10, 10,          #the first guesses
                                            0.1,       #do not fall outside
