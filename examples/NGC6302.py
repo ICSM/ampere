@@ -300,6 +300,8 @@ if __name__ == "__main__":
     spec.setResampler(resampleMethod=resmethod)
 #    spec1.setResampler(resampleMethod=resmethod)
 
+    spec.selectWaves(low=10, up=120)
+
     """ now set up ampere to try and fit the same stuff """
 
     dataset = [               
