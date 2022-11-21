@@ -54,7 +54,19 @@ class SpectrumNGC6302(Model):
             #entire spectral range, from 2.36 to 196.6 micron
             #the extrapolation is done in log space for the opacities for
             #better results.
-            #maybe we should also smooth the data. The koike data are quite noisy. 
+            #maybe we should also smooth the data. The koike data are quite noisy.
+
+            # calcite and dolomite are M.A.C. (kappa) values
+            # enstatite and diopside are Q/a values
+            # we need to convert those to Q values
+            opacity_array[:,1] = opacity_array[:,1]*1e-4 # convert enstatite to Q
+            opacity_array[:,3] = opacity_array[:,3]*1e-4 # convert diopside to Q
+
+            opacity_array[:,0] = opacity_array[:,0]*2.71*(4/3)*1e-4 # convert calcite from kappa to Q. Calcite has a density of 2.71 g cm^-3.
+            opacity_array[:,4] = opacity_array[:,4]*2.87*(4/3)*1e-4 # convert calcite from kappa to Q. Calcite has a density of 2.71 g cm^-3. 
+
+
+            
             #plt.xscale('log')
             #plt.plot(self.wavelength, opacity_array[:,j])
             #plt.plot(tempWl,tempOpac)
@@ -134,20 +146,20 @@ class SpectrumNGC6302(Model):
                                           tin=Tcold1, tout=Tcold0,
                                           n0=aa, index=indexp)
             coldcomponent[1, :] = coldcomponent[1, :] + onespeciescold[1, :]
-            plt.plot(coldcomponent[0,:],coldcomponent[1,:])
+            #plt.plot(coldcomponent[0,:],coldcomponent[1,:])
             
         for jj, bb in enumerate(awarm):
             onespecieswarm = self.ckmodbb(self.opacity_array[:, jj],
                                           tin=Twarm1, tout=Twarm0,
                                           n0=bb, index=indexp)
             warmcomponent[1, :] = warmcomponent[1, :] + onespecieswarm[1, :]
-            plt.plot(warmcomponent[0,:],warmcomponent[1,:])
+            #plt.plot(warmcomponent[0,:],warmcomponent[1,:])
         fModel = np.zeros((2, wavelengths.__len__()))
         fModel[0, :] = self.wavelength
         fModel[1, :] = coldcomponent[1,:] + warmcomponent[1, :]
         self.modelFlux = fModel[1, :]
-        plt.plot(fModel[0,:],fModel[1,:])
-        plt.show()
+        #plt.plot(fModel[0,:],fModel[1,:])
+        #plt.show()
 
         return {"spectrum":{"wavelength":self.wavelength, "flux": self.modelFlux}}
 
@@ -239,11 +251,11 @@ if __name__ == "__main__":
 
 
     """ Choose some model parameters """
-    acold0 = 5e-9  # Cold calcite (kappa)
-    acold1 = 1e-8 # Cold enstatite (Q/a)
+    acold0 = 1.4e-5  # Cold calcite (kappa)
+    acold1 = 1e-4 # Cold enstatite (Q)
     acold2 = 2e-3 # Cold forsterite (Q)
-    acold3 = 3e-9 # Cold diopside (Q/a)
-    acold4 = 3e-9 # Cold dolomite (kappa)
+    acold3 = 3e-5 # Cold diopside (Q)
+    acold4 = 8e-6 # Cold dolomite (kappa)
 #    acold5 = 0 # Cold metallic iron. Not used by Kemper et al. 2002
     acold6 = 1e-3 # Cold crystalline water ice (Q)
     acold7 = 4e-2 # Cold amorphous olivine (Q)
@@ -296,8 +308,8 @@ if __name__ == "__main__":
     spec.setResampler(resampleMethod=resmethod)
 #    spec1.setResampler(resampleMethod=resmethod)
 
-    spec.selectWaves(low=10, up=120)
-
+    spec.selectWaves(low=20, up=120)
+    
     """ now set up ampere to try and fit the same stuff """
 
     dataset = [               
@@ -315,7 +327,7 @@ if __name__ == "__main__":
 
     optimizer = EmceeSearch(model=model, data=dataset, nwalkers=100, moves=m)
     guess = [
-        [5e-9, 1e-8, 2e-3, 3e-9, 3e-9, 1e-3, 4e-2, #values are essentially the 
+        [1.4e-5, 1e-4, 2e-3, 3e-5, 8e-6, 1e-3, 4e-2, #values are essentially the 
          1e-5,  1e-3,   1e-4,                        #same as fitted values from
          30, 60,                               # 2002.
          100, 118,
@@ -326,7 +338,7 @@ if __name__ == "__main__":
              #And the third is the scale length (in microns) of the correlated component of the noise
          1.0 ,0.1, 0.1
         ]
-        + np.random.rand(optimizer.npars)*[1e-9, 1e-9, 1e-3, 1e-9, 1e-9, 1e-4, 1e-2,
+        + np.random.rand(optimizer.npars)*[1e-6, 1e-5, 1e-3, 1e-5, 1e-6, 1e-4, 1e-2,
                                            1e-6, 1e-4, 1e-5, #these values are
                                            10, 10,          #adjusted so that 
                                            10, 10,          #the first guesses
