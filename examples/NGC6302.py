@@ -310,7 +310,7 @@ if __name__ == "__main__":
     spec.setResampler(resampleMethod=resmethod)
 #    spec1.setResampler(resampleMethod=resmethod)
 
-    spec.selectWaves(low=20, up=120)
+    spec.selectWaves(low=25, up=120) #limit wavelength range over which fit is performed -- similar to 2002 result
     
     """ now set up ampere to try and fit the same stuff """
 
@@ -319,7 +319,7 @@ if __name__ == "__main__":
                ]
 
 
-    #Ampere exposes acces to emcee's moves interface. This can be useful if the posterior turns out to not be well behaved - the default move only deals well with posteriors that are monomodal and approximately Gaussian. Here's an example that usually deals a bit better with posteriors that don't meet these criteria:
+    #Ampere exposes access to emcee's moves interface. This can be useful if the posterior turns out to not be well behaved - the default move only deals well with posteriors that are monomodal and approximately Gaussian. Here's an example that usually deals a bit better with posteriors that don't meet these criteria:
     m = [(moves.DEMove(), 0.8),
         (moves.DESnookerMove(), 0.2),
          ]
@@ -351,8 +351,8 @@ if __name__ == "__main__":
 
     #Then we tell it to explore the parameter space
 
-    #optimizer.optimise(nsamples = 1500, burnin=1000, guess=guess)
-    optimizer.optimise(nsamples = 50, burnin=10, guess=guess) #short run for tests
+    optimizer.optimise(nsamples = 1500, burnin=1000, guess=guess)
+    #optimizer.optimise(nsamples = 50, burnin=10, guess=guess) #short run for tests
 
 
     optimizer.postProcess() #now we call the postprocessing to produce some figures
