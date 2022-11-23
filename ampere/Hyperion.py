@@ -554,9 +554,9 @@ class HyperionCStarRTModel(Model):
                 f.write(str(self.optconst[i])+'\n')
                 f.write(str(self.disttype[i])+'\n')
                 f.write(str(self.amin[i])+' '+str(self.amax[i])+' '+str(self.q[i])+'\n')
-            #f.close()
+            f.close()
             
-            #self.npars += 5 #3 for size distribution, 1 for material, 1 for mass fraction
+            self.npars += 5 #3 for size distribution, 1 for material, 1 for mass fraction
             
         print("BHMie dust input file created.")
     

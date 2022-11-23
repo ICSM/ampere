@@ -40,14 +40,7 @@ class QuickSEDModel(Model):
     This model shows you the basics of writing a model for ampere
 
     '''
-    def __init__(self, wavelengths, flatprior = True,
-                 lims = np.array([[1.,100.], #pc
-                                  [3000.0,1e5], #K
-                                  [0.1,10.0], #Rsun
-                                  [1e-12,1e1], #au**2
-                                  [10.0,1000.0], #K
-                                  [10.0,1000.0], #micron 
-                                  [-3.0,3.0]]),**kwargs):
+    def __init__(self, wavelengths, flatprior = True,lims=None,*args,**kwargs):
 
         '''The model constructor, which will set everything up
 
@@ -57,7 +50,6 @@ class QuickSEDModel(Model):
         the model output on, or establishing the dust opacities if involved.
         There are also several important variables it *MUST* define here
         '''
-        self.wave = wavelengths
         self.wavelength = wavelengths
         self.freq = (wavelengths * u.micron).to(u.Hz, equivalencies=u.spectral()).value
         self.npars = 7 #Number of free parameters for the model (__call__()). For some models this can be determined through introspection, but it is still strongly recommended to define this explicitly here. Introspection will only be attempted if self.npars is not defined.
@@ -66,8 +58,8 @@ class QuickSEDModel(Model):
         #For example, we could define some cases to set up different priors
         #But that's for a slightly more complex example.
         #Here we'll just use a simple flat prior
-        self.lims = lims
         self.flatprior = flatprior
+        #self.lims=lims
         self.parLabels = ['dstar','tstar','rstar','Adust','tdust','lam0','beta']
 
         '''Assign any other keywords.'''
@@ -91,29 +83,27 @@ class QuickSEDModel(Model):
                 continue
             setattr(self, key, value)
 
-        self.lstar = 4.*np.pi*(self.rstar*rsol)**2*sb*self.tstar**4 / lsol
-
-        sc = 1e26*(1./(self.dstar*pc)**2)*(c/(self.wave*um)**2)
+        self.lstar = 4.*np.pi*((10**self.rstar)*rsol)**2*sb*self.tstar**4 / lsol
 
         photosphere = BlackBody().evaluate(self.freq, self.tstar, 1*u.Jy/u.sr)
 
-        photopshere = photosphere * np.pi*(self.rstar*rsol)**2 * sc
+        photosphere *= np.pi * 1e23 * (((10**self.rstar)*rsol)/(self.dstar*pc))**2
 
         self.star = photosphere
 
-        modified = np.where(self.wave >= self.lam0) 
+        modified = np.where(self.wavelength >= self.lam0) 
         
         emission = BlackBody().evaluate(self.freq, self.tdust, 1*u.Jy/u.sr)    
 
-        emission[modified] = emission[modified]*(self.lam0/self.wave[modified])**beta
+        emission[modified] = emission[modified]*(self.lam0/self.wavelength[modified])**beta
 
-        emission = emission*sc*self.Adust*au**2
+        emission *= np.pi * 1e23 *((10**self.Adust*au)/(self.dstar*pc))**2
         
         self.dust = emission
 
         self.modelFlux = self.star + self.dust
 
-        return {"spectrum":{"wavelength":self.wave, "flux": self.modelFlux}}
+        return {"spectrum":{"wavelength":self.wavelength, "flux": self.modelFlux}}
 
     def lnprior(self, theta, **kwargs):
         if self.flatprior:
