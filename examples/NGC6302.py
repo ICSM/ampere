@@ -25,8 +25,11 @@ class SpectrumNGC6302(Model):
        Twarm : temperature range of the warm component (low, high)
        indexp : index p of the density distribution 
        indexq : index q of the temperature distribution
+       Kemper et al. 2002 use p and q of 0.5.
        Output is an array of model fluxes (fluxes), to match wavelengths
     '''
+    # Kemper et al. 2002 talk about p and q being -1/2, but what they actually
+    # mean is that -p and -q are -1/2, or p and q are 1/2. 
     def __init__(self, wavelengths, flatprior=True,
                  opacityFileName='NGC6302-opacities.txt', lims=None):
         '''The model constructor, which will set everything up
@@ -176,19 +179,21 @@ class SpectrumNGC6302(Model):
         fnu[0, :] = self.wavelength  #maybe it is better to  make fnu
                                      #(and therefore onespecies)
                                      #an array with just 1 column, remove wl
+        pindex = index
+        qindex = index
 
         for j in range(steps - 1):
             t = tin - j * (tin-tout)/steps # integrating. This is how it was
             # done by Kemper et al. 2002. This can be done better, but I'll
             # leave it as is for now.
-            power = (t/tin)**(2*index - 6)
+            power = (t/tin)**(-1*(3-pindex)/qindex)
             bb = self.shbb(fnu, t, 0.)
             fnu[1, :] = np.add(fnu[1, :], 
                                np.multiply(q,
                                            bb[1, :])*(power*((tin-tout)/steps)))
             # adding the fnu together calculated in the different steps. 
         
-        factor = (4*math.pi*a*a * r0**3 * n0)/((3-index)*d*d)
+        factor = (4*math.pi*a*a * r0**3 * n0)/((3-pindex)*d*d)
         # this factor from eq. 6 (Kemper et al. 2002) can be placed outside the
         # integral
 
