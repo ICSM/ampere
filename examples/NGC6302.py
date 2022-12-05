@@ -356,8 +356,8 @@ if __name__ == "__main__":
 
     #Then we tell it to explore the parameter space
 
-#    optimizer.optimise(nsamples = 15000, burnin=10000, guess=guess)
-    optimizer.optimise(nsamples = 50, burnin=10, guess=guess) #short run for tests
+    optimizer.optimise(nsamples = 50000, burnin=40000, guess=guess)
+#    optimizer.optimise(nsamples = 50, burnin=10, guess=guess) #short run for tests
 
 
     optimizer.postProcess() #now we call the postprocessing to produce some figures
