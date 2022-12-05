@@ -571,7 +571,7 @@ class Spectrum(Data):
         rng = np.random.default_rng() #Optimise this, no need to re-create object each time, plus need seed to be stored so it can be saved
         #Now we update the covariance matrix
         self.cov(theta[1:])
-        simulated_data = rng.multivariate_normal(modSpec[self.mask], self.covMat) #We draw one sample from the multivariate normal distribution with mean = model spectrum and covariance = data covariances
+        simulated_data = rng.multivariate_normal(modSpec[self.mask], self.covMat, method='eigh') #We draw one sample from the multivariate normal distribution with mean = model spectrum and covariance = data covariances
         
         #now we can return the simulated data
         return simulated_data

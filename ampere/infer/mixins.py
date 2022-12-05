@@ -87,16 +87,22 @@ class SBIPostProcessor(object):
                 istart+=d.npars
                 fig.savefig(self.name+"_"+"covMat_"+str(i)+".png")
 
-    def plot_posteriorpredictive(self, n_post_samples = 100,plotfile=None, logx = False, logy = False, alpha = 0.1,**kwargs):
+    def plot_posteriorpredictive(self,
+                                 n_post_samples = 100,
+                                 plotfile=None, save = True,
+                                 logx = False, logy = False,
+                                 xlims = None, ylims = None,
+                                 alpha = 0.1,show=False,
+                                 return_figure = False,
+                                 **kwargs):
         '''
         Function to plot the data and samples drawn from the posterior of the models and data.
         '''
         if plotfile is None:
             plotfile = self.name+"_"+"posteriorpredictive.png"
         fig,axes = plt.subplots(1,1,figsize=(8,6))
-        axes.set_xlabel(r"Wavelength ($\mu$m)")
-        axes.set_ylabel(r"Flux density (mJy)")
 
+            
         #observations
         for d in self.dataSet:
             if isinstance(d,(Photometry,Spectrum)):
@@ -140,6 +146,23 @@ class SBIPostProcessor(object):
         #except ValueError:
         #    print("Error in MAP solution \n Skipping MAP in plot")
 
+        #Now just before saving, we're going to clean up the presentation of the figure a bit
+        axes.set_xlabel(r"Wavelength ($\mu$m)")
+        axes.set_ylabel(r"Flux density (mJy)")
+
+        if logx:
+            axes.set_xscale("log")
+        if logy:
+            axes.set_yscale("log")
+
+        if xlims is not None:
+            #try:
+            axes.set_xlim(xlims)
+        if ylims is not None:
+            axes.set_ylim(ylims)
+
+                
+
         #These plots end up with too many labels for the legend, so we clobber the label information so that only one of each one is plotted
         handles, labels = plt.gca().get_legend_handles_labels()
         # labels will be the keys of the dict, handles will be values
@@ -148,9 +171,16 @@ class SBIPostProcessor(object):
 
         #plt.legend()
         plt.tight_layout()
-        fig.savefig(plotfile,dpi=200)
-        plt.close(fig)
-        plt.clf()
+        if save:
+            fig.savefig(plotfile,dpi=200)
+        if show:
+            plt.show()
+        else:
+            if return_figure:
+                return fig
+            else:
+                plt.close(fig)
+                plt.clf()
 
     def plot_corner(self, **kwargs):
         """
@@ -159,7 +189,7 @@ class SBIPostProcessor(object):
         import corner
         try:
             fig2 = corner.corner(self.samples,labels=self.parLabels, **kwargs)
-        except ImportError:
+        except (ImportError, ValueError):
             fig2 = corner.corner(self.samples.numpy(),labels=self.parLabels, **kwargs)
         fig2.savefig(self.name+"_"+"corner.png")
 
@@ -431,6 +461,11 @@ class SimpleMCMCPostProcessor(object):
         fig,axes = plt.subplots(1,1,figsize=(8,6))
         axes.set_xlabel(r"Wavelength ($\mu$m)")
         axes.set_ylabel(r"Flux density (mJy)")
+
+        if logx:
+            axes.set_xscale('log')
+        if logy: 
+            axes.set_yscale('log')
 
         #observations
         for d in self.dataSet:

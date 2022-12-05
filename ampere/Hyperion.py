@@ -351,12 +351,12 @@ class HyperionRTModel(Model):
         else:
             raise NotImplementedError()
 
-    
     def __str__(self, **kwargs):
-        raise NotImplementedError()
+        return  str(self.__class__) + '\n'+ '\n'.join(('{} = {}'.format(item, type(self.__dict__[item])) for item in self.__dict__))
     #This will provide a summary of the properties of the model
     def __repr__(self, **kwargs):
-        raise NotImplementedError()
+        from pprint import pformat
+        return "<" + type(self).__name__ + "> " + pformat(vars(self), indent=4, width=1)
 
     def power_law_shell(self):
         density = np.zeros(self.rr)
@@ -554,9 +554,9 @@ class HyperionCStarRTModel(Model):
                 f.write(str(self.optconst[i])+'\n')
                 f.write(str(self.disttype[i])+'\n')
                 f.write(str(self.amin[i])+' '+str(self.amax[i])+' '+str(self.q[i])+'\n')
-            #f.close()
+            f.close()
             
-            #self.npars += 5 #3 for size distribution, 1 for material, 1 for mass fraction
+            self.npars += 5 #3 for size distribution, 1 for material, 1 for mass fraction
             
         print("BHMie dust input file created.")
     
@@ -683,11 +683,10 @@ class HyperionCStarRTModel(Model):
         
         self.wave = self.HyperionRTSED.wav.value
         self.flux = self.HyperionRTSED.val.value
-        
-        
+
         #Interpolate model fluxes onto fixed wavelength grid
-        self.modelFlux = np.interp(self.wavelength, self.wave, self.flux)
-        
+        self.modelFlux = np.interp(self.wavelength, np.flip(self.wave), np.flip(self.flux))
+
         return {"spectrum":{"wavelength":self.wavelength, "flux": self.modelFlux}}
 
     def lnprior(self, theta, **kwargs): #theta will only have nSpecies-1 entries for this case
@@ -716,12 +715,12 @@ class HyperionCStarRTModel(Model):
         theta = gamma_quantiles/gamma_quantiles.sum()
         return theta
 
-    
     def __str__(self, **kwargs):
-        raise NotImplementedError()
+        return  str(self.__class__) + '\n' + '\n'.join((str(item) + ' = ' + str(self.__dict__[item]) for item in sorted(self.__dict__)))
     #This will provide a summary of the properties of the model
     def __repr__(self, **kwargs):
-        raise NotImplementedError()
+        return  str(self.__class__) + '\n'+ '\n'.join(('{} = {}'.format(item, type(self.__dict__[item])) for item in self.__dict__))
+
 
     # def power_law_shell(self):
     #     density = np.zeros(self.rr)
