@@ -301,7 +301,7 @@ if __name__ == "__main__":
     input_noise_spec = 0.01 #assume a 1% error on the spectrum
     unc = specdata[1][:]*input_noise_spec
     spec = Spectrum(specdata[0][:],specdata[1][:] +
-                    np.random.randn(len(specdata[1][:]))*unc,specdata[1][:]*0.05,"um","Jy", calUnc=1e-10) #added extra keyword calUnc with a small value
+                    np.random.randn(len(specdata[1][:]))*unc,specdata[1][:]*0.05,"um","Jy", calUnc=1e-10, scalelengthPrior=0.1) #added extra keyword calUnc with a small value
     plt.plot(spec.wavelength, spec.value) #another sanity check
     plt.show()                            #comment out if it is bothersome
 
@@ -352,7 +352,7 @@ if __name__ == "__main__":
     #guess = "None"
 
     #Then we tell it to explore the parameter space
-    optimizer.optimise(nsamples = 150, burnin=100, guess=guess
+    optimizer.optimise(nsamples = 50000, burnin=40000, guess=guess
                        )
 
 
