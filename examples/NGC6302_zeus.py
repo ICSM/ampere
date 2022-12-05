@@ -1,5 +1,6 @@
 import numpy as np
 import os
+import math
 import ampere
 from ampere.data import Spectrum, Photometry
 from ampere.infer.zeussearch import ZeusSearch
@@ -7,6 +8,8 @@ from ampere.models import Model
 from spectres import spectres
 import pyphot
 from zeus import moves
+import matplotlib.pyplot as plt
+from astropy.io import ascii
 
 # Definition of model
 class SpectrumNGC6302(Model):
