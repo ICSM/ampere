@@ -352,7 +352,7 @@ if __name__ == "__main__":
     #guess = "None"
 
     #Then we tell it to explore the parameter space
-    optimizer.optimise(nsamples = 100, burnin=75, guess=guess
+    optimizer.optimise(nsamples = 10000, burnin=8000, guess=guess
                        )
 
 
