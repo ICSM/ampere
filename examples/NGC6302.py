@@ -291,8 +291,8 @@ if __name__ == "__main__":
           Tcold0, Tcold1, Twarm0, Twarm1)
 #          indexp=indexp)
     model_flux = model.modelFlux
-    plt.plot(wavelengths, model.modelFlux) #sanity check plot. Can be commented
-    plt.show()                             # out.
+    #plt.plot(wavelengths, model.modelFlux) #sanity check plot. Can be commented
+    #plt.show()                             # out.
     
     #Now we create synthetic data:
 
@@ -305,8 +305,8 @@ if __name__ == "__main__":
     unc = specdata[1][:]*input_noise_spec
     spec = Spectrum(specdata[0][:],specdata[1][:] +
                     np.random.randn(len(specdata[1][:]))*unc,specdata[1][:]*0.05,"um","Jy", calUnc=1e-10, scalelengthPrior=0.1) #added extra keyword calUnc with a small value, and scalelengthPrior to restrict cov. scale length
-    plt.plot(spec.wavelength, spec.value) #another sanity check
-    plt.show()                            #comment out if it is bothersome
+    #plt.plot(spec.wavelength, spec.value) #another sanity check
+    #plt.show()                            #comment out if it is bothersome
 
 
     #Now let's try changing the resampling method so it's faster
