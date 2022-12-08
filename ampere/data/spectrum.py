@@ -39,9 +39,17 @@ class Spectrum(Data):
     freqSpec : bool, default False
         If the input is wavelength (False, default) of Frequncy (True). Currently only works for frequncies in GHz, otherwise input must be wavelength (deprecated)
     calUnc : float, optional, default 0.01
-        Parameter controlling width of prior on the scale factor for absolute calibration uncertainty. Larger values imply larger calibration uncertainty. The default value corresponds to roughly 2.5% uncertainty. 
+        Parameter controlling width of prior on the scale factor for absolute calibration uncertainty. Larger values imply larger calibration uncertainty. The default value corresponds to roughly 2.5% uncertainty. This is essentially an alias of scaleFacPrior (see below) when a float is passed. 
     covarianceTruncation : float, optional, default 1e-3
         Threshold below which the covariance matrix is truncated to zero.
+    scaleFacPrior : float, scipy.stats.rv_continuous, or None 
+        Sets the prior on the (base-10 logarithm of the) scale factor which re-normalises the spectrum. If a float is passed, it is assumed to be the sigma for a LogNormal distribution (the same as calUnc). If a float is passed to both calUnc and scaleFacPrior, calUnc is treated as the sigma, and scaleFacPrior as mu (a bias term). Finally, you can pass an instance of rv_continuous, in which case that will be treated as the prior on the logarithm of the scale factor.
+    scaleLengthPrior : float, scipy.stats.rv_continuous, or None
+        Sets the prior on the scale length of the RBF kernel of the additional correlated noise. You can pass an instance of rv_continuous, in which case that will be treated as the prior on the length scale - beware, distributions which allow negative values will cause errors. If a float is passed, it is treated as the sigma (in micron) for a half-normal distribution used as the prior. If None (default) then a half-normal with sigma = 0.1 micron is used.
+    covWeightPrior : float, scipy.stats.rv_continuous, or None
+        Sets the prior on the scale factor for the additional correlated noise. As above, if an rv_continuous is passed it will be used directly as the prior on this scale factor - negative values will result in errors as the covariance matrix may not be positive semi-definite. If a float is passed, it will be used as the sigma for a half-normal distribution prior on this weighting factor. If None (default) then a half-normal with sigma = 0.2 is used. 
+    label : str, default "Spectrum", 
+    resampleMethod : callable or str, default "exact"
     
     
     Attributes
@@ -95,8 +103,8 @@ class Spectrum(Data):
     def __init__(self, wavelength=None, value=None, uncertainty=None,
                  bandUnits=None, fluxUnits=None,
                  freqSpec = False, calUnc = None, covarianceTruncation = 1e-3,
-                 scaleLengthPrior = None, scaleFacPrior = None, label="Spectrum",
-                 resampleMethod="exact",
+                 scaleLengthPrior = None, scaleFacPrior = None, covWeightPrior = None,
+                 label="Spectrum", resampleMethod="exact",
                  **kwargs):
         #self.filterName = filterName #Telescope/Instrument cf photometry
         self.type = 'Spectrum'
@@ -211,6 +219,7 @@ class Spectrum(Data):
         self.parLabels = ["calVar", "cov scale factor", "cov scale length"]
 
 
+        #These bits need to be moved to @propertys to make getting and setting much cleaner!!
         ''' Assume default of 10% calibration uncertainty unless otherwise specified by the user '''
         if calUnc is None:
             self.calUnc = 0.010 #beware! This is a variance!
@@ -248,9 +257,16 @@ class Spectrum(Data):
             #The user has provided the width of the prior
             self.scaleLengthPrior = halfnorm(loc=0., scale = scaleLengthPrior) #Using the half normal results in infinite bounds on the length scale, and hence there is always room to improve the likelihood by increasing the length scale. It may be necessary to alter this to a truncated normal distribution.
         else:
-            self.scaleLengthPrior = halfnorm(loc=0., scale = 1)
+            self.scaleLengthPrior = halfnorm(loc=0., scale = 0.1) #The scale is in the same units as the wavelengths, so micron. For IR spectra, this is basically assuming that correlated noise (or residuals) on the scale of 0.1 micron is typical, but this would need to be chosen more carefully for spectra at shorter wavelenghts.
         
         #self.scaleLengthPrior = halfnorm(loc = 0, scale= 1.) #.logpdf(theta[2], 0., 1.)
+
+        if isinstance(covWeightPrior, rv_continuous):
+            self.covWeightPrior = covWeightPrior
+        elif isinstance(covWeightPrior, float):
+            self.covWeightPrior = halfnorm(loc=0., scale = covWeightPrior)
+        else:
+            self.covWeightPrior = halfnorm(loc=0., scale = 0.2) #choosing 0.2 as a default so that the uncertainty on the data dominates at the 5-sigma level
 
         self.covarianceTruncation = covarianceTruncation #if defined, covariance matrices will be truncated when their values are less than this number, to minimise the number of operation
 
@@ -409,7 +425,7 @@ class Spectrum(Data):
         #self.varMat = #uncertainty[self.mask] * uncertainty[self.mask][:,np.newaxis] #make a square array of sigma_i * sigma_j, i.e. variances
         self.varMat = np.outer(self.uncertainty[self.mask], self.uncertainty[self.mask])
         #covMat = (1-theta[0])*np.diag(np.ones_like(self.uncertainty[self.mask])) + theta[0]*m
-        covMat = (1-theta[0])*np.diag(np.ones_like(self.uncertainty[self.mask])) + theta[0]*m
+        covMat = np.diag(np.ones_like(self.uncertainty[self.mask])) + theta[0]*m
         self.covMat = covMat * self.varMat
 
         #covMatmask = np.reshape(self.covMat[self.cov_mask], (self.value[mask].shape[0], self.value[mask].shape[0]))
@@ -450,7 +466,7 @@ class Spectrum(Data):
 
         theta = np.zeros_like(u)
         theta[0] = 10**self.scaleFacPrior.ppf(u[0])
-        theta[1] = u[1]
+        theta[1] = self.covWeightPrior.ppf(u[1])
         theta[2] = self.scaleLengthPrior.ppf(u[2])
         return theta
     
@@ -571,7 +587,7 @@ class Spectrum(Data):
         rng = np.random.default_rng() #Optimise this, no need to re-create object each time, plus need seed to be stored so it can be saved
         #Now we update the covariance matrix
         self.cov(theta[1:])
-        simulated_data = rng.multivariate_normal(modSpec[self.mask], self.covMat, method='eigh') #We draw one sample from the multivariate normal distribution with mean = model spectrum and covariance = data covariances
+        simulated_data = rng.multivariate_normal(modSpec, self.covMat, method='eigh') #We draw one sample from the multivariate normal distribution with mean = model spectrum and covariance = data covariances
         
         #now we can return the simulated data
         return simulated_data

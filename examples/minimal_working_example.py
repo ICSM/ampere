@@ -57,7 +57,7 @@ class ASimpleModel(Model):
         parameter combinations. 
         """
         slope = theta[0]
-        print(slope)
+        #print(slope)
         intercept = theta[1]
         if self.flatprior:
             if (self.lims[0,0] < theta[0] < self.lims[0,1]) and (self.lims[1,0] < theta[1] < self.lims[1,1]):
