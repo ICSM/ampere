@@ -51,19 +51,18 @@ class SpectrumNGC6302(Model):
                                   comments='#')
             tempWl = tempData[:, 0]
             tempOpac = tempData[:, 1]
+
             f = interpolate.interp1d(tempWl, np.log10(tempOpac), assume_sorted=False, fill_value = "extrapolate") 
             opacity_array[:, j] = np.power(np.full(self.wavelength.shape,10),f(self.wavelength))
             #extrapolate is needed because some opacities don't cover the
             #entire spectral range, from 2.36 to 196.6 micron
             #the extrapolation is done in log space for the opacities for
             #better results.
-            #maybe we should also smooth the data. The koike data are quite noisy.
 
             # calcite and dolomite are M.A.C. (kappa) values
             # enstatite and diopside are Q/a values
             # we need to convert those to Q values
-            
-            
+                        
             #plt.xscale('log')
             #plt.plot(self.wavelength, opacity_array[:,j])
             #plt.plot(tempWl,tempOpac)
@@ -254,8 +253,10 @@ class SpectrumNGC6302(Model):
 if __name__ == "__main__": 
     """ Set up the inputs for the model """
     """ wavelength grid """
-    wavelengths = np.linspace(2.3603,196.6261,1956)
-
+    wave1 = np.linspace(2.3603,35.0603,327)
+    wave2 = np.linspace(1/196.6261,1/35.1,117)
+    wavelengths = np.concatenate((wave1,1/wave2[::-1]))
+    #print(wavelengths[:])
 
     """ Choose some model parameters """
     acold0 = -4.9  # Cold calcite (converted to Q)
