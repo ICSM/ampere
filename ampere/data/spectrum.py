@@ -482,12 +482,14 @@ class Spectrum(Data):
         """
         try:
             scaleFac = theta[0]
-        except IndexError: #Only possible if theta is scalar or can't be indexed
+            #return self.scaleFacPrior.logpdf(np.log10(scaleFac)) + self.covWeightPrior.logpdf(theta[1]) + self.scaleLengthPrior.logpdf(theta[2])#norm.logpdf(np.log10(scaleFac), loc=0., scale = self.calUnc) + halfnorm.logpdf(theta[2], 0., 1.)
+        except IndexError: #Only possible if theta is scalar or can't be indexed, in which case only the normalisation factor is in use
             scaleFac = theta
-        if scaleFac > 0 and 0. <= theta[1] <= 1. and theta[2] > 0.:
+            return self.scaleFacPrior.logpdf(np.log10(scaleFac))
+        #if scaleFac > 0 and 0. <= theta[1] <= 1. and theta[2] > 0.:
             #print(scalefac)
-            return self.scaleFacPrior.logpdf(np.log10(scaleFac)) + self.scaleLengthPrior.logpdf(theta[2])#norm.logpdf(np.log10(scaleFac), loc=0., scale = self.calUnc) + halfnorm.logpdf(theta[2], 0., 1.)
-        return -np.inf
+        return self.scaleFacPrior.logpdf(np.log10(scaleFac)) + self.covWeightPrior.logpdf(theta[1]) + self.scaleLengthPrior.logpdf(theta[2])#norm.logpdf(np.log10(scaleFac), loc=0., scale = self.calUnc) + halfnorm.logpdf(theta[2], 0., 1.)
+        #return -np.inf
 
     def lnlike(self, theta, model, **kwargs):
         '''Compute the likelihood of the photometry given the model. 

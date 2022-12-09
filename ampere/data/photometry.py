@@ -547,7 +547,17 @@ class Photometry(Data):
         #modSed = []
         modSed = np.zeros_like(self.wavelength)
         for i, (f, lp) in enumerate(zip(self.filters, self.wavelength)):
-            fphot = f.get_flux(model.spectrum["wavelength"]*pyphot.unit['micron'], flam*pyphot.unit['flam'], axis = -1).value
+            try:
+                fphot = f.get_flux(model.spectrum["wavelength"]*pyphot.unit['micron'], flam*pyphot.unit['flam'], axis = -1).value
+            except TypeError:
+                print(type(model.spectrum["wavelength"]*pyphot.unit['micron']).__mro__,
+                      type(flam*pyphot.unit['flam']).__mro__,
+                      type(f).__mro__
+                      )
+                print(model.spectrum["wavelength"].dtype,
+                      flam.dtype
+                      )
+                exit()
             modSed[i] = (fphot*lp**2) #.to(spectrum.flux.unit, equivalencies = units.spectral_density(lp)).value)
 
         #First, we compute the model photometry

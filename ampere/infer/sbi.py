@@ -9,13 +9,14 @@ import numpy as np
 import torch
 import pickle
 import logging
+import copy
 from tqdm import tqdm
 from datetime import datetime
 from .basesearch import BaseSearch
 from .mixins import SBIPostProcessor
 from ..logger import Logger
 from ..models.results import ModelResults
-from sbi.inference import SNPE
+from sbi.inference import SNPE, DirectPosterior
 from sbi import utils as utils
 from sbi import analysis as analysis
 
@@ -196,6 +197,7 @@ class SBI_SNPE(LFIBase,SBIPostProcessor):
                  parameter_labels = None,
                  name='', namestyle="full",
                  check_prior_normalisation = True,
+                 get_prior_bounds = True,
                  n_prior_norm_samples = 100000,
                  prior_norm_thres = 0.01,
                  cache_models = True,
@@ -234,15 +236,31 @@ class SBI_SNPE(LFIBase,SBIPostProcessor):
                 self.logger.warning("Prior does not appear to be normalised! Inference will proceed with an approximate normalisation, but it would be better to ensure it is normalised in future. To prevent this warning in future, pass ``check_prior_normalisation = False'' to the inference object")
                 self._prior_is_normalised = True
                 self.logprior_norm = log_int_est
-        
-        prior, *_ = process_prior(self)#not sure if this kind of recursion will work :/ In principle
-                                        #it should, since and SBI_SNPE instance provides both sample() and logprob()
-                                        #methods which meet the requirements.
+
+        if get_prior_bounds:
+            #now we should try to establish what the bounds of the prior are so we can pass it to SBI to limit the number of samples outside the range.
+            self.logger.info("Trying to determine prior bounds from prior transforms")
+            lower_bounds = self.prior_transform(np.zeros(self.npars)) #the lower bounds should be easy to get like this unless there is something very strange going on with the joint prior (e.g. strange conditioning?)
+            upper_bounds = np.zeros(self.npars)
+            for i in range(self.npars): #Now we can iterate over all the parameters and get the maximum value of each one in turn
+                u = np.zeros(self.npars)
+                u[i] = 1 #
+                upper_bounds[i] = self.prior_transform(u)[i]
+
+            self.logger.info("Inferred prior bounds:")
+            for i in range(self.npars):
+                self.logger.info("%s: Lower bounds =  %.5f, upper bounds = %.5f", self.parLabels[i], lower_bounds[i], upper_bounds[i])
+
+            prior, *_ = process_prior(self, custom_prior_wrapper_kwargs = dict(lower_bound = torch.from_numpy(lower_bounds.astype(np.float32)), upper_bound = torch.from_numpy(upper_bounds.astype(np.float32))))
+        else:
+            prior, *_ = process_prior(self)
+
+        self.prior = prior
         self.sampler = SNPE(prior=prior)
         pass
 
 
-    def optimise(self, nsamples = None, nsamples_post = None,
+    def optimise(self, nsamples = None, nsamples_post = None, n_rounds = 1,
                  **kwargs):
 
         self.logger.info("Preparing to sample")
@@ -263,7 +281,8 @@ class SBI_SNPE(LFIBase,SBIPostProcessor):
         #...and start doing inference
         self.logger.info("Training posterior")
         self.density_estimator = self.inference.train()
-        self.posterior = self.inference.build_posterior(self.density_estimator)
+        #self.posterior = self.inference.build_posterior(self.density_estimator)
+        self.posterior = DirectPosterior(self.density_estimator, self.prior, enable_transform=False) #Doing it this way avoids problems with re-transformation of samples by stopping SBI from applying any of its own transformations.
 
         #now that the posterior is trained, we can apply it to our observation
         #first we need to check how many observations we're dealing with
@@ -274,9 +293,38 @@ class SBI_SNPE(LFIBase,SBIPostProcessor):
         #print(obs)
         #print(sims[-1])
         obs = torch.Tensor(obs)
-        self.logger.info("Sampling trained posterior")
+        #self.logger.info("Sampling trained posterior")
         self.posterior.set_default_x(obs)
+        if n_rounds > 1:
+            self.posteriors = []
+            #self.caches = []
+            self.thetas_hist = []
+            self.sims_hist = []
+            self.posteriors.append(copy.deepcopy(self.posterior))
+            #self.caches.append(copy.deepcopy(self.cache))
+            self.thetas_hist.append(copy.deepcopy(thetas))
+            self.sims_hist.append(copy.deepcopy(sims))
+            for i in range(n_rounds-1):
+                self.logger.info("Starting inference round %i", i+2)
+                #self.cache = {}
+                proposal = self.posterior.set_default_x(obs)
+                theta = proposal.sample((nsamples,))
+                self.logger.info("Generating round %i samples", i+2)
+                sims = self.simulate_vector(thetas.detach().numpy())
+                thetas = torch.Tensor(thetas)#, dtype=torch.float32)
+                sims = torch.Tensor(sims)#, dtype=torch.float32)
+                self.thetas_hist.append(copy.deepcopy(thetas))
+                self.sims_hist.append(copy.deepcopy(sims))
+                self.logger.info("Training round %i posterior", i+2)
+                density_estimator = self.sampler.append_simulations(thetas, sims, proposal = proposal).train()
+                posterior = DirectPosterior(density_estimator, self.prior, enable_transform=False)
+                self.posteriors.append(posterior)
+                #self.caches.append(self.cache)
+            self.posterior = posterior
+            self.posterior.set_default_x(obs)
+            
         #self.samples = self.posterior.sample((nsamples_post,), x = obs)
+        self.logger.info("Sampling trained posterior")
         self.samples = self.posterior.sample((nsamples_post,))
         #for posterity (and post-processing) we're going to save the parameter values for the prior samples
         self.thetas = thetas
