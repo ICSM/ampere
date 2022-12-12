@@ -1,0 +1,15 @@
+(3.14*(1e15)^3)/2.5 * ((27.83/61.06)^(-4) -1) * (4/3) * 3.14 * (0.1e-4)^3 * rho_d * n0 in c.g.s units
+
+1 Solar mass is 1.9885e33 g
+
+rho_d:
+am. oli: 3.71
+cr. oli: 3.33
+calcite: 2.71
+cr. ice: 1.00
+diopside: 3.4
+cr. pyr: 2.80
+dolomite: 2.84
+
+another option is to calibrate the cold dust mass to what is derived in our 2002 paper for the total cold dust mass: 0.050 Msun
+
