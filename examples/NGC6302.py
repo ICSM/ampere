@@ -81,7 +81,7 @@ class SpectrumNGC6302(Model):
  
         self.opacity_array = opacity_array
         self.nSpecies = nSpecies
-        self.npars = 14
+        self.npars = 15
         # the number of free parameters for the model (__call__()). For
         # some models this can be determined through introspection, but it is
         # still strongly recommended to define this explicitly here.
@@ -102,12 +102,12 @@ class SpectrumNGC6302(Model):
             # Twarm = theta[18:20] 80, 200; 80, 180
             # indexp = theta[20] 0, 1;
             self.lims[:, 0] = -6.
-            self.lims[10:12, 0] = 10.
-            self.lims[10:12, 1] = 80.
-            self.lims[12:14, 0] = 80.
-            self.lims[12:14, 1] = 180.
-#            self.lims[14, 0] = 0. 
-#            self.lims[14, 1] = 1.
+            self.lims[11:13, 0] = 10.
+            self.lims[11:13, 1] = 80.
+            self.lims[13:15, 0] = 80.
+            self.lims[13:15, 1] = 180.
+#            self.lims[15, 0] = 0. 
+#            self.lims[15, 1] = 1.
         else:            
             self.lims = lims
         print("Limits: ")
@@ -117,7 +117,7 @@ class SpectrumNGC6302(Model):
 
     def __call__(self, logacold0, logacold1, logacold2, logacold3, logacold4,
                  logacold6, logacold7, 
-                 logawarm2, logawarm5,
+                 logawarm1, logawarm2, logawarm5,
                  logawarm7, 
                  Tcold0, Tcold1, Twarm0, Twarm1, #indexp, 
                  *args, **kwargs):
@@ -142,7 +142,7 @@ class SpectrumNGC6302(Model):
         warmcomponent[0, :] = self.wavelength
         acold = [10**logacold0, 10**logacold1, 10**logacold2, 10**logacold3, 10**logacold4, 0, 10**logacold6,
                  10**logacold7] #0 values correspond to dust species that were not included in the fit by Kemper et al. 2002
-        awarm = [0, 0, 10**logawarm2, 0, 0, 10**logawarm5, 0,
+        awarm = [0, 10**logawarm1, 10**logawarm2, 0, 0, 10**logawarm5, 0,
                  10**logawarm7] #same here       
 
         for ii, aa in enumerate(acold):
@@ -224,12 +224,12 @@ class SpectrumNGC6302(Model):
 
         if self.flatprior: 
             if (np.all([self.lims[i,0] <= theta[i] <= self.lims[i,1] for i in
-                       range(len(self.lims[:,0]))]) and (theta[11] > theta[10])
-                      and (theta[13] > theta[12])):
+                       range(len(self.lims[:,0]))]) and (theta[12] > theta[11])
+                      and (theta[14] > theta[13])):
                 # the temperature of the inner radius needs to be higher than
                 # the temperature of the outer radius for both temperature
-                # components. Hence theta[11] > theta[10] and theta[13] >
-                # theta[12].
+                # components. Hence theta[12] > theta[11] and theta[14] >
+                # theta[13].
                 return 0
             else:
                 return -np.inf
@@ -268,7 +268,7 @@ if __name__ == "__main__":
     acold6 = -3 # Cold crystalline water ice (Q)
     acold7 = -1.4 # Cold amorphous olivine (Q)
 #    awarm0 = -10 # Warm calcite. Not used by Kemper et al. 2002
-#    awarm1 = -10 # Warm enstatite. Not used by Kemper et al. 2002
+    awarm1 = -5 # Warm enstatite. (converted to Q)
     awarm2 = -5 # Warm forsterite (Q)
 #    awarm3 = -10 # Warm diopside. Not used by Kemper et al. 2002
 #    awarm4 = -10 # Warm dolomite. Not used by Kemper et al. 2002
@@ -287,7 +287,7 @@ if __name__ == "__main__":
     #And call it to produce the fluxes for our chosen parameters
     model(acold0, acold1, acold2, acold3, acold4, 
                  acold6, acold7, 
-                 awarm2, awarm5,
+                 awarm1, awarm2, awarm5,
                  awarm7, #zero-value dust species are removed from the call
           Tcold0, Tcold1, Twarm0, Twarm1)
 #          indexp=indexp)
@@ -336,7 +336,7 @@ if __name__ == "__main__":
     optimizer = EmceeSearch(model=model, data=dataset, nwalkers=50, moves=m)
     guess = [
         [-4.9, -4, -2.7, -4.5, -5.1, -3, -1.4, #values are essentially the 
-         -5,  -3,   -4,                        #same as fitted values from
+         -5, -5,  -3,   -4,                        #same as fitted values from
          30, 60,                               # 2002.
          100, 118,
          #The parameters of the model
@@ -347,7 +347,7 @@ if __name__ == "__main__":
          1.0 ,0.1, 0.1
         ]
         + np.random.rand(optimizer.npars)*[0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1,
-                                           0.1, 0.1, 0.1, #these values are
+                                           0.1, 0.1, 0.1, 0.1, #these values are
                                            10, 10,          #adjusted so that 
                                            10, 10,          #the first guesses
                                            #0.1,       #do not fall outside
