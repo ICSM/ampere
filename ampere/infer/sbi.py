@@ -240,12 +240,16 @@ class SBI_SNPE(LFIBase,SBIPostProcessor):
         if get_prior_bounds:
             #now we should try to establish what the bounds of the prior are so we can pass it to SBI to limit the number of samples outside the range.
             self.logger.info("Trying to determine prior bounds from prior transforms")
-            lower_bounds = self.prior_transform(np.zeros(self.npars)) #the lower bounds should be easy to get like this unless there is something very strange going on with the joint prior (e.g. strange conditioning?)
-            upper_bounds = np.zeros(self.npars)
+            bounds_test = self.prior_transform(np.zeros(self.npars))
+            #lower_bounds = self.prior_transform(np.zeros(self.npars)) #the lower bounds should be easy to get like this unless there is something very strange going on with the joint prior (e.g. strange conditioning?)
+            #upper_bounds = np.zeros(self.npars)
             for i in range(self.npars): #Now we can iterate over all the parameters and get the maximum value of each one in turn
                 u = np.zeros(self.npars)
                 u[i] = 1 #
-                upper_bounds[i] = self.prior_transform(u)[i]
+                bounds_test = np.vstack((bounds_test, self.prior_transform(u)))
+                #upper_bounds[i] = self.prior_transform(u)[i]
+            lower_bounds = np.nanmin(bounds_test, axis=0)
+            upper_bounds = np.nanmax(bounds_test, axis=0)
 
             self.logger.info("Inferred prior bounds:")
             for i in range(self.npars):
