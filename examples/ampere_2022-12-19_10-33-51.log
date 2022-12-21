@@ -1,0 +1,102 @@
+2022-12-19 10:33:51,940 [MainThread  ] [INFO    ]  Welcome to ampere
+2022-12-19 10:33:51,940 [MainThread  ] [INFO    ]  Setting up your inference problem:
+2022-12-19 10:33:51,940 [MainThread  ] [INFO    ]  You are using Affine-invariance ensemble MCMC with emcee
+2022-12-19 10:33:51,940 [MainThread  ] [INFO    ]  You have 1 items in your dataset
+2022-12-19 10:33:51,940 [MainThread  ] [INFO    ]  This model has 15 parameters.
+2022-12-19 10:33:51,940 [MainThread  ] [INFO    ]  There are also 3 parameters for the noise model
+2022-12-19 10:33:51,940 [MainThread  ] [INFO    ]  Hence, there are a total of 18 parameters to sample
+2022-12-19 10:33:51,940 [MainThread  ] [INFO    ]  The parameter names are:
+2022-12-19 10:33:51,940 [MainThread  ] [INFO    ]  x0
+2022-12-19 10:33:51,941 [MainThread  ] [INFO    ]  x1
+2022-12-19 10:33:51,941 [MainThread  ] [INFO    ]  x2
+2022-12-19 10:33:51,941 [MainThread  ] [INFO    ]  x3
+2022-12-19 10:33:51,941 [MainThread  ] [INFO    ]  x4
+2022-12-19 10:33:51,941 [MainThread  ] [INFO    ]  x5
+2022-12-19 10:33:51,941 [MainThread  ] [INFO    ]  x6
+2022-12-19 10:33:51,941 [MainThread  ] [INFO    ]  x7
+2022-12-19 10:33:51,941 [MainThread  ] [INFO    ]  x8
+2022-12-19 10:33:51,941 [MainThread  ] [INFO    ]  x9
+2022-12-19 10:33:51,941 [MainThread  ] [INFO    ]  x10
+2022-12-19 10:33:51,941 [MainThread  ] [INFO    ]  x11
+2022-12-19 10:33:51,941 [MainThread  ] [INFO    ]  x12
+2022-12-19 10:33:51,941 [MainThread  ] [INFO    ]  x13
+2022-12-19 10:33:51,941 [MainThread  ] [INFO    ]  x14
+2022-12-19 10:33:51,941 [MainThread  ] [INFO    ]  calVar
+2022-12-19 10:33:51,941 [MainThread  ] [INFO    ]  cov scale factor
+2022-12-19 10:33:51,941 [MainThread  ] [INFO    ]  cov scale length
+2022-12-19 10:33:51,941 [MainThread  ] [INFO    ]  This problem will be sampled with 50 walkers
+2022-12-19 10:33:51,941 [MainThread  ] [INFO    ]  Using vectorised posterior
+2022-12-19 10:33:51,942 [MainThread  ] [INFO    ]  Preparing to sample
+2022-12-19 10:33:51,942 [MainThread  ] [INFO    ]  Searching for approximate MAP solution as starting point for MCMC
+2022-12-19 10:33:51,945 [MainThread  ] [INFO    ]  Selecting start point for scipy.minimize
+2022-12-19 10:33:51,945 [MainThread  ] [INFO    ]  Using scipy.minimize to find approximate MAP solution
+2022-12-19 10:33:51,945 [MainThread  ] [INFO    ]  starting from position: [ -4.89662762  -3.94099262  -2.63804055  -4.48735069  -5.02647296
+  -2.97948687  -1.30622714  -4.97759136  -4.94856036  -2.95713051
+  -3.96228874  30.37889942  65.7585915  108.50556115 125.68213931
+   1.00593533   0.56829455   0.64886444]
+2022-12-19 10:33:54,938 [MainThread  ] [INFO    ]  Minimization complete, final position: [-4.896627615307188, -3.94099262207714, -2.6380405497428954, -4.487350688046078, -5.026472961637679, -2.9794868665951593, -1.3062271378636077, -4.9775913579542825, -4.948560359760464, -2.9571305083156463, -3.9622887371225453, 30.378899422502457, 65.75859150335373, 108.5055611467496, 125.68213930617608, 1.000134743132679, 0.5682945544311144, 0.648864442122941] 
+2022-12-19 10:33:54,939 [MainThread  ] [INFO    ]  Starting to sample: 
+2022-12-19 10:33:54,939 [MainThread  ] [INFO    ]  Each walker will produce 50000 samples, of which the first 40000 will be discarded as burn-in
+2022-12-20 08:45:44,097 [MainThread  ] [WARNING ]  geweke drift (z=2.187) detected for parameter 'x1'
+2022-12-20 08:45:44,098 [MainThread  ] [WARNING ]  geweke drift (z=9.017) detected for parameter 'x12'
+2022-12-20 08:45:44,139 [MainThread  ] [INFO    ]  Rhat = 1.004 <= 1.050 
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  MAP solution:
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  x0  = -4.50926
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  x1  = -5.06234
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  x2  = -3.03347
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  x3  = -4.22974
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  x4  = -5.02033
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  x5  = -4.12537
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  x6  = -1.18014
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  x7  = -5.69256
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  x8  = -5.55045
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  x9  = -3.46042
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  x10  = -3.95522
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  x11  = 34.74147
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  x12  = 58.15411
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  x13  = 102.51174
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  x14  = 125.23032
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  calVar  = 1.00000
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  cov scale factor  = 0.94227
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  cov scale length  = 0.85740
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  Median and confidence intervals for parameters in order:
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  x0  = -4.44527 + 0.19633 - 0.16012
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  x1  = -5.03878 + 0.35895 - 0.39903
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  x2  = -2.95189 + 0.23234 - 0.13779
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  x3  = -4.23599 + 0.19287 - 0.30474
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  x4  = -4.89447 + 0.32192 - 0.37751
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  x5  = -4.01175 + 0.32286 - 0.44453
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  x6  = -1.07680 + 0.15684 - 0.10860
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  x7  = -5.49659 + 0.23843 - 0.24730
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  x8  = -5.57701 + 0.26744 - 0.27350
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  x9  = -3.70948 + 0.36852 - 0.66095
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  x10  = -3.72738 + 0.24436 - 0.26545
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  x11  = 36.13010 + 2.08017 - 1.59386
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  x12  = 57.03042 + 1.36092 - 1.97380
+2022-12-20 08:45:44,232 [MainThread  ] [INFO    ]  x13  = 105.19534 + 2.59608 - 2.78754
+2022-12-20 08:45:44,233 [MainThread  ] [INFO    ]  x14  = 122.69678 + 3.33791 - 3.08084
+2022-12-20 08:45:44,233 [MainThread  ] [INFO    ]  calVar  = 1.00000 + 0.00000 - 0.00000
+2022-12-20 08:45:44,233 [MainThread  ] [INFO    ]  cov scale factor  = 0.94242 + 0.00295 - 0.00327
+2022-12-20 08:45:44,233 [MainThread  ] [INFO    ]  cov scale length  = 0.87337 + 0.02052 - 0.02782
+2022-12-20 08:45:44,233 [MainThread  ] [INFO    ]  Mean Autocorrelation Time: 4460.09107
+2022-12-20 08:45:44,233 [MainThread  ] [INFO    ]  Autocorrelation times for each parameter:
+2022-12-20 08:45:44,233 [MainThread  ] [INFO    ]  x0  = 5866 steps
+2022-12-20 08:45:44,233 [MainThread  ] [INFO    ]  x1  = 6121 steps
+2022-12-20 08:45:44,233 [MainThread  ] [INFO    ]  x2  = 3329 steps
+2022-12-20 08:45:44,233 [MainThread  ] [INFO    ]  x3  = 5014 steps
+2022-12-20 08:45:44,233 [MainThread  ] [INFO    ]  x4  = 4023 steps
+2022-12-20 08:45:44,233 [MainThread  ] [INFO    ]  x5  = 5975 steps
+2022-12-20 08:45:44,233 [MainThread  ] [INFO    ]  x6  = 6239 steps
+2022-12-20 08:45:44,233 [MainThread  ] [INFO    ]  x7  = 3828 steps
+2022-12-20 08:45:44,233 [MainThread  ] [INFO    ]  x8  = 3005 steps
+2022-12-20 08:45:44,233 [MainThread  ] [INFO    ]  x9  = 4386 steps
+2022-12-20 08:45:44,233 [MainThread  ] [INFO    ]  x10  = 4614 steps
+2022-12-20 08:45:44,233 [MainThread  ] [INFO    ]  x11  = 6196 steps
+2022-12-20 08:45:44,233 [MainThread  ] [INFO    ]  x12  = 6491 steps
+2022-12-20 08:45:44,233 [MainThread  ] [INFO    ]  x13  = 4135 steps
+2022-12-20 08:45:44,233 [MainThread  ] [INFO    ]  x14  = 4715 steps
+2022-12-20 08:45:44,233 [MainThread  ] [INFO    ]  calVar  = 16 steps
+2022-12-20 08:45:44,233 [MainThread  ] [INFO    ]  cov scale factor  = 4326 steps
+2022-12-20 08:45:44,233 [MainThread  ] [INFO    ]  cov scale length  = 2002 steps
+2022-12-20 08:45:44,233 [MainThread  ] [INFO    ]  Effective sample size: 560.527
+2022-12-20 08:45:44,233 [MainThread  ] [INFO    ]  Mean Acceptance Fraction : 0.03847
