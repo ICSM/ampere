@@ -321,13 +321,13 @@ class Spectrum(Data):
 
         if resampleMethod == "exact":
             self.resampler = spectres
-            print("Using exact resampling")
+            l.append("Using exact resampling")
         elif resampleMethod=="fast":
             self.resampler = np.interp
-            print("Using fast resampling")
+            l.append("Using fast resampling")
         elif callable(resampleMethod):
             self.resampler = resampleMethod
-            print("Using user-specified resampling")
+            l.append("Using user-specified resampling")
         #elif resampleMethod=="exactcompiled":
         #    #Raise a warning here, this is going to be experimental when it's implemented
         #    self.resampler = spectres_numba
@@ -432,12 +432,12 @@ class Spectrum(Data):
 
         self.signDetCovMat, self.logDetCovMat = np.linalg.slogdet(self.covMat)
         if self.logDetCovMat == -np.inf: #This needs to be updated to raise an error! Or at least force the likelihood to be zero
-            print("""The determinant of the covariance matrix for this dataset is 0.
+            l.error("""The determinant of the covariance matrix for this dataset is 0.
             Please check that the uncertainties are positive real numbers """)
-            print(self)
-            print(theta)
-            print(self.signDetCovMat,self.logDetCovMat)
-            print(self.covMat)
+            l.error(self)
+            l.error(theta)
+            l.error(self.signDetCovMat,self.logDetCovMat)
+            l.error(self.covMat)
             exit()
         #elif self.signDetCovMat < 0:
         #    print("""The determinant of the covariance matrix for this dataset is negative.
@@ -518,6 +518,7 @@ class Spectrum(Data):
         try:
             scaleFac = theta[0]
         except IndexError: #Only possible if theta is scalar or can't be indexed
+            l.error("IndexError: theta is not scalar or can't be indexed.")
             scaleFac = theta
 
         #print(self)
@@ -552,16 +553,16 @@ class Spectrum(Data):
         #covMatmask = np.reshape(self.covMat[self.cov_mask], np.shape(self.covMat))
         probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(inv(self.covMat), a) ) ) )
         if np.isnan(probFlux):
-            print("NaN probability")
-            print(theta)
-            print(b)
-            print(inv(self.covMat))
-            print(self.value[self.mask])
-            print(modSpec)
-            print(model.modelFlux)
-            print(a)
-            print(np.matmul(inv(self.covMat), a))
-            print(np.matmul ( a.T, np.matmul(inv(self.covMat), a) ) )
+            l.append("NaN probability")
+            l.append(theta)
+            l.append(b)
+            l.append(inv(self.covMat))
+            l.append(self.value[self.mask])
+            l.append(modSpec)
+            l.append(model.modelFlux)
+            l.append(a)
+            l.append(np.matmul(inv(self.covMat), a))
+            l.append(np.matmul( a.T, np.matmul(inv(self.covMat), a) ) )
             return -np.inf #hack for now so we can see how often this occurs and hopefully troubleshoot it!
         #print(((np.float128(2.)*np.pi)**(len(self.value))), np.linalg.det(self.covMat))
         #print(((np.float128(2.)*np.pi)**(len(self.value)) * np.linalg.det(self.covMat)))
@@ -841,11 +842,13 @@ class Spectrum(Data):
                 self=cls.__new__(Spectrum)
                 self.__init__(table['wavelength'][selection].data, value[selection], uncertainty[selection], bandUnits, photUnits, **kwargs) #Also pass in flux units
                 specList.append(self)
+            l.append("Table['chunk'] column found : spectrum has",np.unique(table['chunk'].data," chunks.")
         except:
             print("Spectrum has no chunks, assuming one continuous order.")
             self=cls.__new__(Spectrum)
             self.__init__(table['wavelength'][selection].data, value[selection], uncertainty[selection], bandUnits, photUnits, **kwargs) #Also pass in flux units
             specList.append(self)
+            l.append("No table['chunk'] column found : spectrum assumed to be a single chunk.")
 
         return specList #self
 
