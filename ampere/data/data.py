@@ -88,6 +88,31 @@ class Data(object):
 
     def selectWaves(self, low = 0, up = np.inf, interval = "closed", **kwargs):
         '''Method to generate a mask for the data by wavelength. Uses interval terminology to determine how the limits are treated.
+
+        This function generates a mask for the data by selecting the data points with wavelengths in the specified range. The
+        limits of the range are defined by the low and up parameters, and the way the limits are treated is determined by
+        the interval parameter.
+
+        If interval is "closed", both low and up are treated as closed intervals, meaning that data points with
+        wavelengths equal to low and up are included in the mask. If interval is "left-open", low is treated as an
+        open interval and up is treated as a closed interval. If interval is "right-open", low is treated as a closed
+        interval and up is treated as an open interval. If interval is "open", both low and up are treated as open
+        intervals.
+
+        If the object has a pre-existing mask, the new mask is combined with the existing mask using a logical AND operation.
+        Otherwise, the new mask is stored in the object as the current mask.
+
+        Parameters
+        ----------
+        low : float, optional
+        The lower limit of the wavelength range. Default is 0.
+        up : float, optional
+        The upper limit of the wavelength range. Default is infinity.
+        interval : str, optional
+        The type of interval to use for the limits. Valid values are "closed", "left-open", "right-open", and "open".
+        Default is "closed".
+
+        Generated with Chat-GPT
         '''
 
         if interval == "closed": #Both arguments will be treated with less/greater-than-or-equal-to
@@ -145,6 +170,18 @@ class Data(object):
 #        self.cov_mask = np.outer(self.mask, self.mask)
         
     def unmask(self, **kwargs):
+        """
+        Overwrite previous masks with True.
+
+        This function overwrites the mask for the object with True values. If the object has a pre-existing mask, the new
+        mask is the same shape as the existing mask. If the object does not have a pre-existing mask, the new mask is the same
+        shape as the object's value array.
+
+        After the mask is overwritten, the function calls cov() to update the object's covariance matrix.
+
+        Generated with Chat-GPT
+        """
+
         '''A method to overwrite previous masks with True in case something goes wrong
         
         '''

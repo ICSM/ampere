@@ -392,7 +392,11 @@ class Photometry(Data):
         This method reloads the filters and interpolates their definitions onto the given 
         wavelength grid. This should be used to make sure the filter definitions are ready 
         to compute synthetic photometry in the likelihood calls
-        
+
+        Parameters
+        ---------
+        modwaves: array-like, float
+        Model wavelengths to which the filter profiles should be interpolated
         '''
         #Create wavelength array for photometry based on pivot wavelengths of
         #filters

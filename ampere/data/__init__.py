@@ -1,6 +1,7 @@
 """
 Welcome to AMPERE
 
+This sub-package provides classes for observational data.
 """
 
 __version__ = "0.1.1"

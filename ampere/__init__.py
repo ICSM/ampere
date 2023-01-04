@@ -49,10 +49,11 @@ __license__ = "GNU Public License v3" #
 
 from . import models
 #from . import extinction
-from . import basesearch
-from . import emceesearch
+from . import infer
+#from . import emceesearch
 #from . import PowerLawAGN #ClassRT
 from . import data
+from . import utils
 
 __all__=["models","extinction","emceesearch","PowerLawAGN","data"] #Nothing to import just yet
 
