@@ -19,7 +19,7 @@ from numpy.linalg import inv
 from .data import Data
 
 class Spectrum(Data):
-    """A class to represent 1D spectra data objects and their properties
+    '''A class to represent 1D spectra data objects and their properties
 
     
 
@@ -77,12 +77,7 @@ class Spectrum(Data):
     >>> spec = Spectrum.fromFile('filename', 'SPITZER-YAAAR')
     
     creates an instance from a Spitzer spectrum downloaded from the CASSIS database.
-    """
-
-    """
-
-
-    """
+    '''
 
     plotParams={"alpha": 1.0,
                      "color": "blue",
@@ -278,7 +273,7 @@ class Spectrum(Data):
         raise NotImplementedError()
 
     def setResampler(self, resampleMethod = "exact", **kwargs):
-        """Change the method used to resample the model spectra to the observed wavelengths
+        '''Change the method used to resample the model spectra to the observed wavelengths
 
         Parameters
         ----------
@@ -317,7 +312,7 @@ class Spectrum(Data):
         >>> from package import resampler
         >>> spec.setResampler(resampleMethod = resampler)
         
-        """
+        '''
 
         if resampleMethod == "exact":
             self.resampler = spectres

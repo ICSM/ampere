@@ -85,7 +85,7 @@ class Photometry(Data):
                      "markerfacecolor": 'orange',
                      "markersize": 2.,
                      "zorder": 10
-        }
+         }
 
     _hasNoiseModel = False
 
@@ -345,19 +345,20 @@ class Photometry(Data):
 
         Notes
         ------
-        Future work: go through multiple libraries from different (user-defined) locations and import htem all
+        Future work: go through multiple libraries from different (user-defined) locations and import them all
         
         '''
         
         if libName is None:
-            print("No library given, using default pyphot filters")
+            l.append("No library given, using default pyphot filters")
             libDir = pyphot.__file__.strip('__init__.py')+'libs/'
             libName = libDir + 'synphot_nonhst.hd5' 
         
         self.filterLibrary = pyphot.get_library(fname=libName)
 
     def filterNamesToPyphot(self, **kwargs):
-        """Attempt to convert the set of filter names that the objects was instantiated with so that they match the contents of the pyphot library """
+        """Attempt to convert the set of filter names that the objects was instantiated with 
+           so that they match the contents of the pyphot library """
         pyphotFilts = self.filterLibrary.get_library_content()
         #print(pyphotFilts)
         filtsOrig = self.filterName
@@ -387,7 +388,7 @@ class Photometry(Data):
                 logging.warning(f)
 
     def reloadFilters(self, modwaves):
-        ''' Use this method to reload the filters after your model has got a defined wavelength grid. 
+        ''' Use this method to reload the filters once your model has a defined wavelength grid. 
 
         This method reloads the filters and interpolates their definitions onto the given 
         wavelength grid. This should be used to make sure the filter definitions are ready 
@@ -398,6 +399,7 @@ class Photometry(Data):
         modwaves: array-like, float
         Model wavelengths to which the filter profiles should be interpolated
         '''
+
         #Create wavelength array for photometry based on pivot wavelengths of
         #filters
         #if modwaves is not None:
@@ -530,29 +532,24 @@ class Photometry(Data):
         #print(self.logDetCovMat)
         if self.logDetCovMat == -np.inf: #This needs to be updated to raise an error!
 
-            print("""The determinant of the covariance matrix for this dataset is 0.
+            l.error("""The determinant of the covariance matrix for this dataset is 0.
             Please check that the uncertainties are positive real numbers """)
-            print(self)
+            l.append(self)
             exit()
         elif self.signDetCovMat < 0:
-            print("""The determinant of the covariance matrix for this dataset is negative.
+            l.error("""The determinant of the covariance matrix for this dataset is negative.
             Please check that the uncertainties are positive real numbers """)
-            print(self)
+            l.append(self)
             exit()
         return self.covMat
 
     def simulate(self, theta, model, **kwargs):
-        """ Simulate photometry, given a model result
+        '''This function simulates photometry for the object using a given model result. 
 
-        This function simulates photometry for the object using a given model result. The model result is passed as a model
-        parameter, which should contain a spectrum with "wavelength" and "flux" keys. The function first computes the model
-        photometry using the object's filters and the model spectrum. It then adds noise to the model photometry using the
-        object's covariance matrix and returns the simulated data as a sample drawn from a multivariate normal distribution with
-        mean equal to the model photometry and covariance equal to the object's covariance matrix.
-
-        If an error occurs during the computation of the model photometry, the function prints the types of the model spectrum
-        wavelengths and fluxes, the type of the filters, and the dtypes of the model spectrum wavelengths and fluxes, and
-        exits.
+        The function first computes model photometry using the requested filters and provided model spectrum. It then adds 
+        noise to the model photometry using the model's covariance matrix and returns the simulated data as a sample drawn 
+        from a multivariate normal distribution with mean equal to the model photometry and covariance equal to the object's 
+        covariance matrix.
 
         Parameters
         ----------
@@ -561,8 +558,11 @@ class Photometry(Data):
         model : object
         An object containing a spectrum with "wavelength" and "flux" keys.
 
-        Generated with Chat-GPT
-        """
+        Returns
+        -------
+        simulated_data : object
+        An object containing photometry drawn calculated with a mean and covariance consistent the provided data.
+        '''
 
         #modflux = model.spectrum["flux"]
 
@@ -574,11 +574,11 @@ class Photometry(Data):
             try:
                 fphot = f.get_flux(model.spectrum["wavelength"]*pyphot.unit['micron'], flam*pyphot.unit['flam'], axis = -1).value
             except TypeError:
-                print(type(model.spectrum["wavelength"]*pyphot.unit['micron']).__mro__,
+                l.append(type(model.spectrum["wavelength"]*pyphot.unit['micron']).__mro__,
                       type(flam*pyphot.unit['flam']).__mro__,
                       type(f).__mro__
                       )
-                print(model.spectrum["wavelength"].dtype,
+                l.append(model.spectrum["wavelength"].dtype,
                       flam.dtype
                       )
                 exit()
@@ -640,14 +640,15 @@ class Photometry(Data):
         return self
 
     def fromTable(self, table, format=None, **kwargs):
-        '''Populates the photometry instance from an Astropy Table instance.
-
-        This is used to populate an existing Photometry instance from an astropy table, called from fromFile. 
+        '''This routine is used to populate an existing Photometry instance from an astropy table, called from fromFile.
 
         Parameters
         ----------
-        table: astropy.table.Table
+        table : astropy.table.Table
             The table containing the photometry data
+        format : string
+            Keyword argument to expedite reading in the table using Astropy Tables
+            Default None
 
 
         Notes
@@ -660,9 +661,7 @@ class Photometry(Data):
         build the table in memory. We hope to revise this in future.
 
         '''
-        ''' 
-        Routine to generate data object from an astropy Table object or a file containing data in a format that can be read in as an astropy Table
-        '''
+
         # extract the variables that we are intrested in from the table
         # for the moment we use the columns from the VO Table
         value = table['sed_flux'].data
@@ -681,7 +680,8 @@ class Photometry(Data):
 
     def setPlotParams(self,**kwargs):
         '''
-            Routine to set up the plotting parameters for any photometry data set, and optionally plot (and show and/or save) the data. 
+            Routine to set up the plotting parameters for any photometry data set, and optionally plot 
+            (and show and/or save) the data. 
             A limited set of keywords can be set by passing `**kwargs` to the function.
         
         '''
@@ -715,7 +715,7 @@ class Photometry(Data):
 
     def plot(self, fig = None, ax = None, unmask=False,
              doPlot=True,savePlot=False,showPlot=False, **kwargs):
-        """
+        '''
         Plot the data.
 
         This function plots the data for the object using error bars. The plot can be made on an existing figure and/or axes
@@ -745,9 +745,7 @@ class Photometry(Data):
         Whether to save the plot to a file. Default is False.
         showPlot : bool, optional
         Whether to show the plot. Default is False.
-
-        Generated with Chat-GPT
-        """
+        '''
         
         self.setPlotParams(**kwargs)
 
