@@ -384,9 +384,15 @@ class SBI_SNPE(LFIBase,SBIPostProcessor):
         """
 
         if self._prior_is_normalised:
-            return self.lnprior_vector(theta)
+            try:
+                return self.lnprior_vector(theta)
+            except TypeError:
+                return self.lnprior_vector(theta.detach().numpy())
         else:
-            return self.lnprior_vector(theta) - self.logprior_norm
+            try:
+                return self.lnprior_vector(theta) - self.logprior_norm
+            except TypeError:
+                return self.lnprior_vector(theta.detach().numpy()) - self.logprior_norm
 
         
 
