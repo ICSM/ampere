@@ -9,6 +9,30 @@ from ..logger import Logger
 
 class MCMCSampler(BaseSearch, Logger):
 
+    """
+    A base class for MCMC Sampling inference approaches.
+
+    Intended to be subclassed for package-specific implementations.
+
+    Parameters
+    ----------
+    model : ampere.model.Model
+    Model which will be used
+    data : list or iterable of ampere.data.Data
+    the dataset to fit
+    verbose : bool, optional
+    If True, print verbose output.
+    parameter_labels : list of str, optional
+    List of strings containing names of each parameter.
+    name : str, optional
+    Name of the sampler.
+    namestyle : str, optional
+    String specifying style for naming the sampler.
+    Options: 'full', 'short', 'stamp', 'model'.
+    
+    Generated with Chat-GPT
+    """
+
     _inference_method = "MCMC"
 
     def __init__(self, model = None, data= None, verbose = False,
@@ -89,6 +113,28 @@ class MCMCSampler(BaseSearch, Logger):
 class EnsembleSampler(MCMCSampler):
     """ A base-class for emcee-like samplers (e.g. emcee, zeus, ptemcee)
 
+     Intended to be subclassed for package-specific implementations.
+
+    Parameters
+    ----------
+    model : ampere.model.Model
+    Model which will be used
+    data : list or iterable of ampere.data.Data
+    the dataset to fit
+    nwalkers : int
+    number of walkers to use in the ensemble
+    verbose : bool, optional
+    If True, print verbose output.
+    parameter_labels : list of str, optional
+    List of strings containing names of each parameter.
+    name : str, optional
+    Name of the sampler.
+    namestyle : str, optional
+    String specifying style for naming the sampler.
+    Options: 'full', 'short', 'stamp', 'model'.
+    
+    Generated with Chat-GPT
+
     """
 
     _inference_method = "Ensemble MCMC"
@@ -109,6 +155,30 @@ class EnsembleSampler(MCMCSampler):
                        data = None, lnprior = None,
                        labels = None, 
                        **kwargs):
+
+        """
+        Rebuilds the MCMC sampler with the specified parameters.
+        
+        Parameters
+        ----------
+        nwalkers : int, optional
+        The number of walkers to use in the MCMC sampling. If not provided, the current number of walkers will be used.
+        model : object, optional
+        A new model to use in the MCMC sampling. If not provided, the current model will be used.
+        data : object, optional
+        New data to use in the MCMC sampling. If not provided, the current data will be used.
+        lnprior : function, optional
+        A new prior distribution to use in the MCMC sampling. If not provided, the current prior will be used.
+        labels : list of str, optional
+        A list of parameter labels to use in post-processing. If not provided, the
+        
+        current labels will be used.
+        
+        **kwargs : additional keyword arguments
+Additional keyword arguments to pass to the sampler.
+
+        Generated with Chat-GPT
+        """
 
         self.logger.info("Rebuilding your sampler")
         if np.any([model, data]):

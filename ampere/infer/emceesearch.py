@@ -16,6 +16,37 @@ class EmceeSearch(EnsembleSampler,
                   ScipyMinMixin):
     """
     A class to use the emcee affine-invariant ensemble sampler
+
+    Parameters
+    ----------
+nwalkers : int, optional
+The number of Markov Chain Monte Carlo (MCMC) walkers. The default is None.
+nsteps : int, optional
+The number of MCMC steps to take. The default is None.
+model : object, optional
+The model to use for the MCMC sampling. The default is None.
+verbose : bool, optional
+Whether to print progress statements during the MCMC sampling. The default is False.
+data : list, optional
+The data to use for the MCMC sampling. The default is None.
+lnprior : function, optional
+The log prior distribution to use for the MCMC sampling. The default is None.
+vectorize : bool, optional
+Whether to use a vectorized version of the log posterior distribution. The default is True.
+parameter_labels : list, optional
+The labels for the parameters being sampled. The default is None.
+acceptRate : float, optional
+The acceptance rate for the MCMC sampling. The default is 2.0.
+moves : list, optional
+The moves to use during the MCMC sampling. The default is None.
+name : str, optional
+The name for the MCMC sampler. The default is an empty string.
+namestyle : str, optional
+The style for the name of the MCMC sampler. The default is 'full'.
+**kwargs : additional keyword arguments
+Additional keyword arguments to pass to the super class.
+
+    Generated with Chat-GPT
     """
     _inference_method = "Affine-invariance ensemble MCMC with emcee"
 
@@ -61,7 +92,27 @@ class EmceeSearch(EnsembleSampler,
                        moves=None,
                        **kwargs):
         ''' This method will replace parts of the optimiser object if it is passed them. It can 
-        be used to update the model, data, sampler setup, or prior part-way through a run '''
+        be used to update the model, data, sampler setup, or prior part-way through a run 
+
+        Parameters
+        ----------
+        nwalkers : int, optional
+        The number of walkers to use in the MCMC sampling. If not provided, the current number of walkers will be used.
+        model : object, optional
+        A new model to use in the MCMC sampling. If not provided, the current model will be used.
+        data : object, optional
+        New data to use in the MCMC sampling. If not provided, the current data will be used.
+        lnprior : function, optional
+        A new prior distribution to use in the MCMC sampling. If not provided, the current prior will be used.
+        labels : list of str, optional
+        A list of parameter labels to use in post-processing. If not provided, the 
+        current labels will be used.
+        **kwargs : additional keyword arguments
+Additional keyword arguments to pass to the sampler.
+
+        Generated with Chat-GPT
+
+        '''
 
         #if np.any([model, data]):
         #    if model is not None:
@@ -101,6 +152,20 @@ class EmceeSearch(EnsembleSampler,
     def lnprior(self, theta, **kwargs):
         """
         We delegate the priors to the models and the data
+
+        Parameters
+        ----------
+        theta : array_like
+            The parameter values for which the prior probability is to be calculated.
+        kwargs : optional
+            Any additional keyword arguments required for the prior probability calculation.
+        
+        Returns
+        -------
+        lp : float
+            The prior probability for the given parameter values.
+
+        Generated with Chat-GPT
         """
         #print(theta)
         lp = self.model.lnprior(theta[:self.nparsMod])
@@ -127,6 +192,40 @@ class EmceeSearch(EnsembleSampler,
 
     def optimise(self, nsamples = None, burnin = None, guess = None,
                  preopt = True, guessscale = 1e-3, noguess=False, progress=True, **kwargs):
+        """
+        Optimise the model using the Markov Chain Monte Carlo (MCMC) method with emcee
+        
+        Parameters
+        ----------
+        nsamples : int, optional
+        Number of samples to produce. The default is None.
+        burnin : int, optional
+        Number of samples to discard as burn-in. The default is None.
+        guess : list or array-like, optional
+        Initial guess for the model parameters. The default is None.
+        preopt : bool, optional
+        Whether to use a pre-optimization step to find an approximate maximum a posteriori (MAP) solution. The default is True.
+        guessscale : float, optional
+        Scaling factor for the initial guess when using pre-optimization. The default is 1e-3.
+        noguess : bool, optional
+        Whether to use initial guess for sampling. The default is False.
+        progress : bool, optional
+        Whether to display progress bar while sampling. The default is True.
+        **kwargs : optional
+        Additional keyword arguments to pass to scipy.optimize.minimize when using pre-optimization.
+        
+        Returns
+        -------
+        None
+        
+        Raises
+        --------
+        ValueError
+        If the input guess does not conform to expectations.
+
+        Generated with Chat-GPT
+        """
+        
         from collections.abc import Sequence, Iterable
         self.logger.info("Preparing to sample")
         if guess == 'None': # and not noguess:
@@ -183,6 +282,15 @@ class EmceeSearch(EnsembleSampler,
     def postProcess(self, show=False, textfile=None, **kwargs):
         ''' 
         A method to post-process the sampler results 
+
+        Parameters
+        ----------
+        show : bool, optional
+        Whether to show the plots, by default False
+        textfile : str, optional
+        Path to a text file to save a summary of the results, by default None
+        **kwargs
+        Additional keyword arguments to be passed to plot_posteriorpredictive()
         '''
 
         #Compute things like autocorrelation time.
@@ -206,43 +314,15 @@ class EmceeSearch(EnsembleSampler,
 
 
         self.plot_posteriorpredictive(**kwargs)
-        
-    #def plot_walkers(self):
-    #    #MUST USE autocorrelation time and burnin info on plots!
-    #    #Should probably have quiet set 'False' to pick up too short emcee runs
-    #    tauto = self.sampler.get_autocorr_time(quiet=True)
-
-    #    fig, axes = plt.subplots(self.npars, 1, sharex=True, figsize=(8, 9))
-    #    for i in range(self.npars):
-    #        axes[i].plot(self.sampler.chain[:, :, i].T, color="k", alpha=0.4) #,label=self.parLabels[i])
-    #        axes[i].set_xlim(0, self.nsamp)
-    #        ylims = axes[i].get_ylim()
-    #        xlims = axes[i].get_xlim()
-    #        axes[i].plot([10*tauto[i],10*tauto[i]],[ylims[0],ylims[1]],color="red",marker="",linestyle="-")#,label=r"10$\times t_{\rm autocorr}$")
-    #        axes[i].add_patch(Polygon([[xlims[0], ylims[0]], [xlims[0], ylims[1]], [self.burnin, ylims[1]], [self.burnin, ylims[0]]], closed=True,
-    #                  fill=True, color='darkgrey'))
-    #        axes[i].set_xlabel("Steps")
-    #        axes[i].set_ylabel(self.parLabels[i])
-    #        axes[i].label_outer()
-    #        axes[i].set_xlim(0, self.nsamp)
-
-    #    #plt.legend(fontsize="small")
-    #    plt.tight_layout()
-
-    #        #    axes[0].yaxis.set_major_locator(MaxNLocator(5))
-    #        #axes[0].axhline(m_true, color="#888888", lw=2)
-    #        #axes[i].set_ylabel("$m$")
-    #    
-    #
-    #    #fig.tight_layout(h_pad=0.0)
-    #    fig.savefig("walkers.png")
-    
-    #def plot_corner(self):
-    #    import corner
-    #    fig2 = corner.corner(self.samples,labels=self.parLabels)
-    #    fig2.savefig("corner.png")
 
     def plot_lnprob(self):
+        """ Plot the log probability of each walker
+
+        Plots the evolution of the log-probability of each walker throughout the sampling process. 
+        A grey patch is added to indicate the burn-in period and a red line is added to indicate 
+        10 times the autocorrelation time.
+
+        """
         #USE autocorrelation time and burnin info on plots?
         tauto = self.sampler.get_autocorr_time(quiet=True)
 
@@ -264,68 +344,6 @@ class EmceeSearch(EnsembleSampler,
                       fill=True, color='grey'))
         axes.plot([10*tauto,10*tauto],[ylims[0],ylims[1]],color="red",marker="",linestyle="-",label=r"10$\times t_{\rm autocorr}$")
         fig.savefig(self.name+"_lnprob.png")        
-        
-    #def plot_covmats(self):
-    #    istart = self.nparsMod
-    #    for i, d in enumerate(self.dataSet):
-    #        if isinstance(d, Photometry):
-    #            continue
-    #        elif isinstance(d, Spectrum):
-    #            fig, ax = plt.subplots(1,1)
-    #            #for d in self.dataSet[1:]:
-    #            #d=self.dataSet[1]
-    #            #print("Using these parameters for the covariance matrix:")
-    #            #print(self.parLabels[istart+1], self.parLabels[istart+2])
-    #            d.cov([self.res[istart+1][0],self.res[istart+2][0]])
-    #            #ax0.set_title('Covariance matrix')
-    #            im = ax.imshow(np.log10(d.covMat))
-    #            istart+=d.npars
-    #            fig.savefig("covMat_"+str(i)+".png")
-
-    #def plot_posteriorpredictive(self, n_post_samples = 1000,plotfile="posteriorpredictive.png", logx = False, logy = False, alpha = 0.1,**kwargs):
-    #    '''
-    #    Function to plot the data and samples drawn from the posterior of the models and data.
-    #    '''
-    #    fig,axes = plt.subplots(1,1,figsize=(8,6))
-    #    axes.set_xlabel(r"Wavelength ($\mu$m)")
-    #    axes.set_ylabel(r"Flux density (mJy)")
-
-    #    #observations
-    #    for d in self.dataSet:
-    #        if isinstance(d,(Photometry,Spectrum)):
-    #            d.plot(ax = axes)
-    #    for s in self.samples[np.random.randint(len(self.samples), size=n_post_samples)]:
-    #        try:
-    #            self.model(*s[:self.nparsMod])
-    #            axes.plot(self.model.wavelength,self.model.modelFlux, '-', color='k', alpha=alpha,label='Samples', zorder = 0)
-    #        except ValueError:
-    #            pass
-    #        i = self.nparsMod
-    #        for d in self.dataSet:
-    #            if isinstance(d,(Photometry,Spectrum)):
-    #                if d._hasNoiseModel:
-    #                    d.plotRealisation(s[i:i+d.npars], ax=axes)
-    #                i+= d.npars
-
-
-    #    #best fit model
-    #    try:
-    #        self.model(*self.bestPars[:self.nparsMod])
-    #        axes.plot(self.model.wavelength,self.model.modelFlux, '-', color='k', alpha=1.0,label='MAP', zorder=8)
-    #    except ValueError:
-    #        print("Error in MAP solution \n Skipping MAP in plot")
-
-    #    #These plots end up with too many labels for the legend, so we clobber the label information so that only one of each one is plotted
-    #    handles, labels = plt.gca().get_legend_handles_labels()
-    #    # labels will be the keys of the dict, handles will be values
-    #    temp = {k:v for k,v in zip(labels, handles)}
-    #    plt.legend(temp.values(), temp.keys(), loc='best')
-
-    #    #plt.legend()
-    #    plt.tight_layout()
-    #    fig.savefig(plotfile,dpi=200)
-    #    plt.close(fig)
-    #    plt.clf()
 
     def summary(self):
         super().summary()
@@ -337,57 +355,3 @@ class EmceeSearch(EnsembleSampler,
 
         super().print_summary()
         self.logger.info("Mean Acceptance Fraction : %.5f", self.maf)
-        
-       # print("Mean Acceptance Fraction : {0:.5f}",np.mean(self.sampler.acceptance_fraction))
-       # #try:
-       # tauto = self.sampler.get_autocorr_time(quiet=True)
-       # print("Mean Autocorrelation Time: {0:.5f}",np.mean(tauto))
-       # 
-       # print("Autocorrelation times for each parameter:")
-       # #tauto = self.sampler.get_autocorr_time()
-       # for i in range(self.npars):
-       #     print("{0}  = {1:.0f} steps".format(self.parLabels[i],tauto[i]))
-       # #except emcee.autocorr.AutocorrError as e:
-       # #    print(repr(e))
-       # #    print("Skipping autocorrelation time")
-       #     
-
-       # #Compute things like autocorrelation time.
-       # #ESS?
-       # #Acceptance fraction?
-
-       # '''Now find the median and 68% interval '''
-       # self.res=[]
-       # print("Median and confidence intervals for parameters in order:")
-       # for i in range(self.npars):
-       #     a = np.percentile(self.samples[:,i], [16, 50, 84])
-       #     self.res.append([a[1], a[2]-a[1], a[1]-a[0]])
-       #     #res.append((lambda v: (v[1], v[2]-v[1], v[1]-v[0]),
-       #     #                     *zip(np.percentile(self.samples[:,i], [16, 50, 84])))#,
-       #                                             #axis=0)))
-       #     #      )
-       #     print("{0}  = {1[0]:.5f} + {1[1]:.5f} - {1[2]:.5f}".format(self.parLabels[i],self.res[i])) #make this look prettier
-            
-
-        #''' Then check what the "best fit" was '''
-        #print("Range of lnprob values in model from sampler: {0:.5f} to {1:.5f}",np.min(self.sampler.lnprobability),np.max(self.sampler.lnprobability))
-        #row_ind, col_ind = np.unravel_index(np.argmax(self.sampler.lnprobability), self.sampler.lnprobability.shape)
-        #self.bestPars = self.sampler.chain[row_ind, col_ind, :]
-
-        #print("MAP Solution: ")
-        #for i in range(self.npars):
-        #    print("{0}  = {1:.5f}".format(self.parLabels[i],self.bestPars[i])) #
-
-        #if outfile is not None:
-        #    with open(outfile, 'w') as f:
-        #        f.write("Posterior means and 1-sigma confidence intervals of the parameters marginalising over all other parameters: \n ")
-        #        for i in range(self.npars):
-        #            f.write("{0}  = {1[0]:.5f} + {1[1]:.5f} - {1[2]:.5f}".format(self.parLabels[i],self.res[i])
-        #            )
-
-        #        f.write("\n")
-        #        f.write("MAP Solution: \n")
-        #        for i in range(self.npars):
-        #            f.write("{0}  = {1:.5f}".format(self.parLabels[i],self.bestPars[i])) #
-        #            #f.write("with Posterior probability ln(P*) = {0:.5f}\n".format(self.results.logwt[-1]))
-        #            #f.write("and likelihood ln(L*) = {0:.5f}\n".format(self.results.logl[-1]))
