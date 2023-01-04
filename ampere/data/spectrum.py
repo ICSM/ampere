@@ -834,11 +834,19 @@ class Spectrum(Data):
         specList = []
         ## what about the modules?
         # the loop below breaks the spectrum up into chunks based on a column in the table. We can decide whether to group SL and LL, or split all the orders separately
-        for chunk in np.unique(table['chunk'].data):
-            selection = table['chunk'] == chunk
+        try:
+            print("Spectrum has ",np.unique(table['chunk'].data)," chunks, breaking up the spectrum into separate chunks.")
+            for chunk in np.unique(table['chunk'].data):
+                selection = table['chunk'] == chunk
+                self=cls.__new__(Spectrum)
+                self.__init__(table['wavelength'][selection].data, value[selection], uncertainty[selection], bandUnits, photUnits, **kwargs) #Also pass in flux units
+                specList.append(self)
+        except:
+            print("Spectrum has no chunks, assuming one continuous order.")
             self=cls.__new__(Spectrum)
             self.__init__(table['wavelength'][selection].data, value[selection], uncertainty[selection], bandUnits, photUnits, **kwargs) #Also pass in flux units
             specList.append(self)
+
         return specList #self
 
     #def setPlotParameters(self,doPlot=False,savePlot=False,showPlot=True,**kwargs):
