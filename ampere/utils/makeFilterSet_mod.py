@@ -74,6 +74,17 @@ def getFilterList(filterList, outfile='filters.hd5'):
 
 
 def get_filter_svo(filt, url = 'http://svo2.cab.inta-csic.es/theory/fps/fps.php?ID='):
+    """
+    This function retrieves the filter file specified by the input filt from the URL url.
+    
+    Args:
+    filt (str): The file name or path of the filter file.
+    url (str): The URL to fetch the filter file from. Default: SVO url (http://svo2.cab.inta-csic.es/theory/fps/fps.php?ID=)
+
+    Returns:
+    g (pyphot.Filter): An object representing the filter.
+    fname (str): The file name of the filter file, with '/' replaced by '_'.
+    """
     _ = subprocess.call(['curl', '-o', 'temp.vot', url + filt])
     with open('temp.vot') as f:
         content = f.readlines()
@@ -98,6 +109,17 @@ def get_filter_svo(filt, url = 'http://svo2.cab.inta-csic.es/theory/fps/fps.php?
 
 
 def get_filter_file(filt, comment='#'):
+    """
+    This function gets the filter file specified by the input filt.
+
+    Args:
+    filt (str): The file name or path of the filter file.
+    comment (str): The comment character used in the filter file.
+
+    Returns:
+    g (pyphot.Filter): An object representing the filter.
+    fname (str): The file name of the filter file, with '/' replaced by '_'.
+    """
     header = np.loadtxt(filt + '.csv', max_rows = 2, delimiter = ',', dtype = 'str')
     data = np.loadtxt(filt + '.csv', skiprows = 2, delimiter = ',')
     fname = filt.replace('/','_')
