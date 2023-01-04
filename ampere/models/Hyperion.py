@@ -1,7 +1,7 @@
 #
 # Ampere Stuff
 #
-
+import copy
 import numpy as np
 from astropy import constants as const
 from astropy import units
@@ -352,11 +352,10 @@ class HyperionRTModel(Model):
             raise NotImplementedError()
 
     def __str__(self, **kwargs):
-        return  str(self.__class__) + '\n'+ '\n'.join(('{} = {}'.format(item, type(self.__dict__[item])) for item in self.__dict__))
+        raise NotImplementedError()
     #This will provide a summary of the properties of the model
     def __repr__(self, **kwargs):
-        from pprint import pformat
-        return "<" + type(self).__name__ + "> " + pformat(vars(self), indent=4, width=1)
+        raise NotImplementedError()
 
     def power_law_shell(self):
         density = np.zeros(self.rr)
@@ -376,7 +375,9 @@ class HyperionCStarRTModel(Model):
 
     def __init__(self,wavelength, #This is a grid of wavelengths onto which we will interpolate the RT output. 
                                    #This is kinda dangerous, but necessary at least for now.
-                 flatprior=True,                 
+                 flatprior=True,
+                 lims = None,
+                 parLabels = None,
                  #RT parameters - use in __init__ and store as self.XXX
                         niter=5,
                         nph_initial=1e4,
@@ -499,16 +500,22 @@ class HyperionCStarRTModel(Model):
         print("Hyperion RT Model setup for carbon star complete.")
         #self.dictionary of fixed parameters that are needed for modelling in __call__
         
-        self.npars = 1
-        self.npars_ptform = 2
+        self.npars = 9
+        self.npars_ptform = 9
 
     #Only give __call__ the numbers that emcee is going to change.
-    def __call__(self, *args, **kwargs):
+    #labels = ['envelope_mass','envelope_rin','envelope_rout','envelope_r0','envelope_power','stellar_mass','stellar_luminosity','stellar_distnace','stellar_radius']
+    def __call__(self,envelope_mass,envelope_rin,envelope_rout,envelope_r0,envelope_power,stellar_mass,stellar_luminosity,stellar_distance,stellar_radius, *args, **kwargs):
         """
-        The only parameters passed to *args at the moment are the two
+        The parameters passed to *args at the moment are the two
         mass fractions.
         """
         #Same as in __init__!
+        self.envelope_mass = 10**envelope_mass
+        self.envelope_rin = 10**envelope_rin
+        self.envelope_rout = 10**envelope_rout
+        self.envelope_r0 = 10**envelope_r0
+        
         l = locals()
         for key, value in l.items():
             if key == "self": #skip self to avoid possible recursion
@@ -526,7 +533,6 @@ class HyperionCStarRTModel(Model):
         if np.sum(args) != 1.0:
             print("Total mass fraction of all chemical components must equal 1")
         
-
         #Define opacities for use in model calculation - probably only going to be a single species in most cases, but
         #should make it general for multiple species per component, and multiple components (see above)    
         #Read in opacities - do this in __init__, check they exist during __call__
@@ -547,6 +553,8 @@ class HyperionCStarRTModel(Model):
             f.write(str(self.gtd)+'\n')
             f.write(str(self.lmin)+' '+str(self.lmax)+' '+str(self.nl)+'\n')
             f.write(str(self.nproc)+'\n') #parallel processing version of BHMie
+            
+            print(args,len(args))
             for i in range(0,len(self.optconst)):
                 f.write(''+'\n')
                 f.write(str(args[i])+'\n')
@@ -681,46 +689,48 @@ class HyperionCStarRTModel(Model):
         #forcing code to return total (scattered + emitted) component here - might want to avoid this if self-scattering is not desired, for example
         self.HyperionRTSED = self.result.get_sed(inclination=0, aperture=-1, distance=self.dstar,component='total',units='Jy')
         
-        self.wave = self.HyperionRTSED.wav.value
-        self.flux = self.HyperionRTSED.val.value
-
+        self.wave = copy.copy(self.HyperionRTSED.wav)
+        self.flux = copy.copy(self.HyperionRTSED.val)
+        
         #Interpolate model fluxes onto fixed wavelength grid
         self.modelFlux = np.interp(self.wavelength, np.flip(self.wave), np.flip(self.flux))
-
+        
         return {"spectrum":{"wavelength":self.wavelength, "flux": self.modelFlux}}
 
     def lnprior(self, theta, **kwargs): #theta will only have nSpecies-1 entries for this case
         
-        if theta.all() > 0. and theta.all() < 1.:
+        #Some of our random variables are relative abundances - this means that they lie on a simplex and we have to sample from a dirichlet distribution to get it right:
+        if theta[-self.nSpecies::].all() > 0. and theta[-self.nSpecies::].all() < 1.:
             try:
-                return dirichlet((1.,)*self.nSpecies).logpdf(theta) #When you have a set of random variates whose sum = 1 by definition, the correct prior is a dirichlet distribution (which is a generalisation of the beta distribution).
+                lp = dirichlet((1.,)*self.nSpecies).logpdf(theta) #When you have a set of random variates whose sum = 1 by definition, the correct prior is a dirichlet distribution (which is a generalisation of the beta distribution).
             except ValueError:
                 return -np.inf
         else:
             return -np.inf
-        #if self.flatprior:
-        #    if (self.lims[0,0] < theta[0] < self.lims[0,1]) and \
-        #       (self.lims[1,0] < theta[1] < self.lims[1,1]) and \
-        #       (self.lims[2,0] < theta[2] < self.lims[2,1]) and \
-        #       (self.lims[3,0] < theta[3] < self.lims[3,1]) and \
-        #        np.sum(10**theta[4:]) <= 1. and np.all(theta[4:] < 0.): 
-        #        return 0
-        #    else:
-        #        return -np.inf
-        #else:
-        #    raise NotImplementedError()
-        
+        #print(theta)
+        #print(self.lims)
+        #The rest of our parameters are uniform random variables, so we need to draw those appropriately
+        lp+=np.sum([uniform(self.lims[i,0], self.lims[i,1] - self.lims[i,0]).logpdf(theta[i]) for i in range(self.npars_ptform - self.nSpecies)])
+        return lp
+    
     def prior_transform(self, u, **kwargs): #In this case, u will contain nSpecies entries, rather than nSpecies-1 as above
-        gamma_quantiles = -np.log(u)
-        theta = gamma_quantiles/gamma_quantiles.sum()
+        theta = np.zeros_like(u)
+        #First we deal with all the non-abundance parameters - for simplicity, let's say they're linearly distributed in the range of the limits
+        theta[:-self.nSpecies] = self.lims[:-self.nSpecies,0] + np.asarray(u[:-self.nSpecies]) * (self.lims[:-self.nSpecies,1] - self.lims[:-self.nSpecies,0])
+        #Now we come to the abundances, which should be dirichlet-distributed:
+        gamma_quantiles = -np.log(u[-self.nSpecies:])
+        theta[-self.nSpecies:] = gamma_quantiles/gamma_quantiles.sum()
+        
         return theta
-
+    
+    #def __fuck__(self):
+    #    return  str(self.__class__) + '\n'+ '\n'.join(('{} = {}'.format(item, type(self.__dict__[item]).__mro__) for item in self.__dict__))
     def __str__(self, **kwargs):
         return  str(self.__class__) + '\n' + '\n'.join((str(item) + ' = ' + str(self.__dict__[item]) for item in sorted(self.__dict__)))
     #This will provide a summary of the properties of the model
     def __repr__(self, **kwargs):
-        return  str(self.__class__) + '\n'+ '\n'.join(('{} = {}'.format(item, type(self.__dict__[item])) for item in self.__dict__))
-
+        from pprint import pformat
+        return "<" + type(self).__name__ + "> " + pformat(vars(self), indent=4, width=1)
 
     # def power_law_shell(self):
     #     density = np.zeros(self.rr)
