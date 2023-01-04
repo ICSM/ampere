@@ -18,7 +18,7 @@ def makeFilterSet(infile = 'filters.csv', outfile = 'filters.hd5'):
     #infile = 'filters.csv'
     tin = Table.read(infile, format = 'csv', \
                      names = ('column', 'filtername'))
-    url = 'http://svo2.cab.inta-csic.es//theory/fps3/fps.php?ID='
+    url = 'http://svo2.cab.inta-csic.es/theory/fps/fps.php?ID='
     filters = []
     fnames = []
     for t in tin:
@@ -47,7 +47,7 @@ def makeFilterSet(infile = 'filters.csv', outfile = 'filters.hd5'):
 
 
 def getFilterList(filterList, outfile='filters.hd5'):
-    url = 'http://svo2.cab.inta-csic.es//theory/fps3/fps.php?ID='
+    url = 'http://svo2.cab.inta-csic.es/theory/fps/fps.php?ID='
     filters = []
     fnames=[]
     for filt in filterList:
@@ -73,7 +73,7 @@ def getFilterList(filterList, outfile='filters.hd5'):
     return fnames
 
 
-def get_filter_svo(filt, url = 'http://svo2.cab.inta-csic.es//theory/fps3/fps.php?ID='):
+def get_filter_svo(filt, url = 'http://svo2.cab.inta-csic.es/theory/fps/fps.php?ID='):
     _ = subprocess.call(['curl', '-o', 'temp.vot', url + filt])
     with open('temp.vot') as f:
         content = f.readlines()
