@@ -542,7 +542,27 @@ class Photometry(Data):
         return self.covMat
 
     def simulate(self, theta, model, **kwargs):
-        """ Simulate photometry, given a model result"""
+        """ Simulate photometry, given a model result
+
+        This function simulates photometry for the object using a given model result. The model result is passed as a model
+        parameter, which should contain a spectrum with "wavelength" and "flux" keys. The function first computes the model
+        photometry using the object's filters and the model spectrum. It then adds noise to the model photometry using the
+        object's covariance matrix and returns the simulated data as a sample drawn from a multivariate normal distribution with
+        mean equal to the model photometry and covariance equal to the object's covariance matrix.
+
+        If an error occurs during the computation of the model photometry, the function prints the types of the model spectrum
+        wavelengths and fluxes, the type of the filters, and the dtypes of the model spectrum wavelengths and fluxes, and
+        exits.
+
+        Parameters
+        ----------
+        theta : array
+        An array of model parameters.
+        model : object
+        An object containing a spectrum with "wavelength" and "flux" keys.
+
+        Generated with Chat-GPT
+        """
 
         #modflux = model.spectrum["flux"]
 
@@ -695,6 +715,39 @@ class Photometry(Data):
 
     def plot(self, fig = None, ax = None, unmask=False,
              doPlot=True,savePlot=False,showPlot=False, **kwargs):
+        """
+        Plot the data.
+
+        This function plots the data for the object using error bars. The plot can be made on an existing figure and/or axes
+        using the fig and ax parameters, respectively. If neither a figure nor axes are provided, new ones are created.
+
+        The data points to be plotted are determined by the object's mask. By default, only the data points with True values
+        in the mask are plotted. However, if the unmask parameter is set to True, all data points are plotted regardless of
+        the mask.
+
+        The appearance of the plot can be customized using the plotParams attribute and any additional keyword arguments
+        passed to the function.
+
+        The plot can be saved to a file using the savePlot parameter, and displayed using the showPlot parameter. If
+        savePlot is True, the plot is saved to a file named "{object label}plot.png" in the current working directory.
+
+        Parameters
+        ----------
+        fig : Figure, optional
+        A matplotlib Figure object to use for the plot.
+        ax : Axes, optional
+        A matplotlib Axes object to use for the plot.
+        unmask : bool, optional
+        Whether to plot all data points regardless of the object's mask. Default is False.
+        doPlot : bool, optional
+        Whether to make the plot. Default is True.
+        savePlot : bool, optional
+        Whether to save the plot to a file. Default is False.
+        showPlot : bool, optional
+        Whether to show the plot. Default is False.
+
+        Generated with Chat-GPT
+        """
         
         self.setPlotParams(**kwargs)
 

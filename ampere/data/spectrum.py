@@ -571,7 +571,24 @@ class Spectrum(Data):
         return probFlux
 
     def simulate(self, theta, model, **kwargs):
-        """ Simulate a spectrum, given a model result"""
+        """ Simulate a spectrum, given a model result
+
+        This function simulates a spectrum, given a model result. The model spectrum is resampled to match the wavelengths of
+        the object's data and then scaled by a factor theta[0]. Some noise is added to the simulated spectrum using a
+        multivariate normal distribution with mean equal to the scaled model spectrum and covariance equal to the object's
+        covariance matrix. The covariance matrix is updated using the remaining elements of theta.
+
+        The simulated spectrum is returned as an array.
+
+        Parameters
+        ----------
+        theta : array-like
+        The scale factor for the model spectrum and the parameters for the covariance matrix.
+        model : Model
+        A model object containing a spectrum.
+
+        Generated with Chat-GPT
+        """
 
         try:
             scaleFac = theta[0]
@@ -931,6 +948,36 @@ class Spectrum(Data):
     def plot(self, fig = None, ax = None, unmask=False,
              doPlot=True,savePlot=False,showPlot=False,
              **kwargs):
+
+        """
+        Plot the spectrum.
+    
+        Parameters
+        ----------
+        fig : matplotlib.figure.Figure, optional
+            Figure to plot on. If not provided, a new figure will be created.
+        ax : matplotlib.axes.Axes, optional
+            Axes to plot on. If not provided, new axes will be created on the provided figure or a new figure.
+        unmask : bool, optional
+            If True, plot all wavelengths, ignoring any previously defined mask.
+        doPlot : bool, optional
+            If False, do not perform the plot.
+        savePlot : bool, optional
+            If True, save the plot to a file.
+        showPlot : bool, optional
+            If True, show the plot using `matplotlib.pyplot.show`.
+        **kwargs : optional
+            Additional arguments to pass to `matplotlib.pyplot.plot` or `matplotlib.pyplot.fill_between`.
+    
+        Returns
+        -------
+        matplotlib.figure.Figure
+            The figure object containing the plot.
+        matplotlib.axes.Axes
+            The axes object containing the plot.
+
+        Generated with Chat-GPT
+        """
         
         self.setPlotParams(**kwargs)
         if "steps-" in self.plotParams["drawstyle"]:
@@ -998,6 +1045,20 @@ class Spectrum(Data):
                     plt.show()
 
     def plotRealisation(self, s, ax=None, **kwargs):
+        """
+        Plot a realisation of the data model.
+
+        Parameters
+        ----------
+        s : ndarray
+            The realisation of the data model to plot. The first element of `s` should be the scaling factor applied to the model.
+        ax : matplotlib.axes.Axes, optional
+            The Axes to plot on. If not provided, a new Axes will be created.
+        **kwargs
+            Additional keyword arguments to be passed to the plot function.
+
+        Generated with Chat-GPT
+        """
 
         localplotParams = {k:v for k,v in self.plotParams.items() if k not in ["color", "linewidth", "zorder", "alpha", "label"]}
         waves = self.wavelength[self.mask]
