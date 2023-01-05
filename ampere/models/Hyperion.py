@@ -104,10 +104,11 @@ class HyperionRTModel(Model):
                         optconst=["silicate_d03.lnk"],
                         q=[3.5],
                  #Source parameters
-                        #sources=[['spherical',1.0,1.0,1.0,5784,[0.0,0.0,0.0]]], #(type,lstar,rstar,mstar,tstar,position[x,y,z],spectrum file)
-                        sources =[['spherical',stellar_luminosity,stellar_radius,stellar_mass,stellar_temperature,[0,0,0]]]
+                        #sources=[['spherical',1.0,1.0,1.0,5784,[0.0,0.0,0.0]]],(type,lstar,rstar,mstar,tstar,position[x,y,z],spectrum file)
+                        sources =[['spherical',1.0,1.0,1.0,5784,[0,0,0]]],
                  #Disc parameters
-                        distribution=[['power_law_shell',envelope_rin,envelope_rout,envelope_power]], #type,rin,rout,alpha
+                 #type, rin, rout, alpha
+                        distribution=[['power_law_shell',10.,1000.,-1]],
                         gridtype='cartesian',
                         rmax= 100.,
                         rho0= 1.5e-19,
@@ -182,7 +183,7 @@ class HyperionRTModel(Model):
         #                                     2 power law disc = 5 parameters (S0, R0, h, alpha_in, alpha_out), 
         #                                     Gaussian annulus = 4 parameters (S0, R0, dR, h)
         self.npars += len(self.distribution) - 1
-        
+
         for distro in self.distribution:
         
             if gridtype == 'cartesian':
@@ -410,7 +411,7 @@ class HyperionCStarRTModel(Model):
         # Set up envelope parameters
         self.envelope_shell = self.model.add_power_law_envelope()
         # Convert to appropriate units and then feed in the magnitudes
-        self.envelope_shell.mass = envelope_mass.to('g').value
+        self.envelope_shell.mass = (envelope_mass * units.solMass).to('g').value
         self.envelope_shell.rmin = (envelope_rin * self.model.star.radius)
         self.envelope_shell.rmax = envelope_rout * self.envelope_shell.rmin
         self.envelope_shell.r_0 = envelope_r0 * self.envelope_shell.rmin
@@ -450,8 +451,8 @@ class HyperionCStarRTModel(Model):
         print("Hyperion RT Model setup for carbon star complete.")
         #self.dictionary of fixed parameters that are needed for modelling in __call__
         
-        self.npars = 9
-        self.npars_ptform = 9
+        self.npars = 8
+        self.npars_ptform = 8
 
     #Only give __call__ the numbers that emcee is going to change.
     #labels = ['envelope_mass','envelope_rin','envelope_rout','envelope_r0','stellar_mass','stellar_luminosity']
@@ -526,21 +527,23 @@ class HyperionCStarRTModel(Model):
                
         #Add the grid(s) to the model - can specify multiple density grids for different species, physical components
         #Set up spatial grid
+        self.distribution = ['power_law_shell',self.envelope_rin,self.envelope_rout,self.envelope_power]
+        
         self.npars += len(self.distribution) - 1
         
         self.model = AnalyticalYSOModel()
         
         # Set up stellar parameters
-        if stellar_spectrum is not None:
-            nu, fnu = np.loadtxt(stellar_spectrum, delimiter = ',', skiprows = 1, unpack = True)
+        if self.stellar_spectrum is not None:
+            nu, fnu = np.loadtxt(self.stellar_spectrum, delimiter = ',', skiprows = 1, unpack = True)
             self.model.star.spectrum = (nu, fnu)
         elif temperature is not None:
-            self.model.star.temperature = stellar_temperature.value
+            self.model.star.temperature = self.stellar_temperature.value
         else: 
             raise ValueError("Either the stellar temperature must be specified or a template spectrum must be specified")
         self.model.star.luminosity = (stellar_luminosity*units.solLum).to(units.erg / units.s).value
         self.model.star.mass = (stellar_mass*units.solMass).to('g').value
-        #self.model.star.radius = (stellar_radius*units.au).to('cm').value
+        self.model.star.radius = self.stellar_radius.value
         #self.dstar = (stellar_distance*units.kpc).to('cm').value
         
         # Set up envelope parameters
@@ -550,15 +553,15 @@ class HyperionCStarRTModel(Model):
         self.envelope_shell.rmin = (10**envelope_rin) * self.model.star.radius
         self.envelope_shell.rmax = (10**envelope_rout) * self.model.star.radius
         self.envelope_shell.r_0 = (10**envelope_r0) * self.model.star.radius
-        #self.envelope_shell.power = envelope_power
-        # self.envelope_shell.dust This should be done by Hyperion (see Jonty's code)
+        self.envelope_shell.power = self.envelope_power
+        self.envelope_shell.dust = self.d #This should be done by Hyperion (see Jonty's code)
         # self.envelope_shell.ngrid = envelope_ngrid # where is this used?
         # self.envelope_shell.gridtype = envelope_gridtype # where is this used?
         
         # A spherical grid with sampling along r but not along theta or phi
-        self.model.set_spherical_polar_grid_auto(envelope_ngrid, 1, 1)
+        self.model.set_spherical_polar_grid_auto(self.envelope_ngrid, 1, 1)
         
-        self.nSpecies = nchem
+        self.nSpecies = self.nchem
         
         #Use raytracing to improve s/n of thermal/source emission
         self.model.set_raytracing(self.raytracing)
@@ -570,7 +573,7 @@ class HyperionCStarRTModel(Model):
         sed = self.model.add_peeled_images(sed=self.api_sed, image=False)
         sed.set_viewing_angles(self.view_angles,self.view_repeats)
         sed.set_uncertainties(uncertainties = True) #This is currently ignored by ampere
-        sed.set_wavelength_range(nl, lmin, lmax)
+        sed.set_wavelength_range(self.nl, self.lmin, self.lmax)
         sed.set_track_origin(self.track_mode)
 
         self.sed = sed
