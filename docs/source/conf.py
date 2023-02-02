@@ -28,7 +28,10 @@ author = 'Peter Scicluna, Francisca Kemper, Sundar Srinivasan, Jonathan Marshall
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
-extensions = ['sphinx.ext.autodoc', 'sphinx.ext.napoleon', 'sphinx.ext.mathjax'#'sphinx.ext.imgmath'
+extensions = ['sphinx.ext.autodoc',
+              'sphinx.ext.napoleon',
+              'sphinx.ext.mathjax',
+              'nbsphinx'#'sphinx.ext.imgmath'
 ]
 
 # Add any paths that contain templates here, relative to this directory.

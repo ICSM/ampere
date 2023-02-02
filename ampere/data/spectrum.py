@@ -858,7 +858,7 @@ class Spectrum(Data):
                 self=cls.__new__(Spectrum)
                 self.__init__(table['wavelength'][selection].data, value[selection], uncertainty[selection], bandUnits, photUnits, **kwargs) #Also pass in flux units
                 specList.append(self)
-            l.append("Table['chunk'] column found : spectrum has",np.unique(table['chunk'].data," chunks.")
+            l.append("Table['chunk'] column found : spectrum has",np.unique(table['chunk'].data," chunks."))
         except:
             print("Spectrum has no chunks, assuming one continuous order.")
             self=cls.__new__(Spectrum)
