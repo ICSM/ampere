@@ -28,6 +28,7 @@ var/
 *.egg-info/
 .installed.cfg
 *.egg
+pyphot-master/
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
@@ -55,7 +56,7 @@ coverage.xml
 *.pot
 
 # Django stuff:
-*.log
+#*.log
 
 # Sphinx documentation
 docs/_build/
@@ -67,7 +68,7 @@ target/
 .DS_Store
 
 #Output files
-*.png
+#*.png
 irs-0.txt
 irs-1.txt
 irs-last.txt
