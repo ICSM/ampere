@@ -68,11 +68,12 @@ target/
 .DS_Store
 
 #Output files
-#*.png
+*.png
 irs-0.txt
 irs-1.txt
 irs-last.txt
 *.pkl
+ampere*.log
 
 #Ciska's personal directories
 notes/
