@@ -77,7 +77,6 @@ Additional keyword arguments to pass to the super class.
         self.sampler.run_mcmc(guess, self.nsamp)
         self.allSamples = self.sampler.chain
         self.samples = self.sampler.chain[:, self.burnin, :].reshape((-1, self.npars))
-        
         pass
 
     def __str__(self, **kwargs):
@@ -243,6 +242,8 @@ Additional keyword arguments to pass to the sampler.
         #print('burnin = ', burnin)
         #print("np.max(guess, axis=0) = ", np.max(guess, axis=0))
         #print("np.min(guess, axis=0) = ", np.min(guess, axis=0))
+        #print(self.dataSet)
+        #print(self.model.lims)
 
         if preopt:
             self.logger.info("Searching for approximate MAP solution as starting point for MCMC")

@@ -3,15 +3,15 @@ import os
 import math
 import ampere
 from ampere.data import Spectrum, Photometry
-from ampere.infer.emceesearch import EmceeSearch
+from ampere.infer.zeussearch import ZeusSearch
 from ampere.models import Model
 from spectres import spectres
 import pyphot
-from emcee import moves
+from zeus import moves
 import matplotlib.pyplot as plt
 from astropy.io import ascii
 
-
+# Definition of model
 class SpectrumNGC6302(Model):
     '''This model fits a modfied blackbody multiplied by sum of opacties,
         consisting of a warm and cold component, not necessarily of the same
@@ -51,18 +51,19 @@ class SpectrumNGC6302(Model):
                                   comments='#')
             tempWl = tempData[:, 0]
             tempOpac = tempData[:, 1]
-
             f = interpolate.interp1d(tempWl, np.log10(tempOpac), assume_sorted=False, fill_value = "extrapolate") 
             opacity_array[:, j] = np.power(np.full(self.wavelength.shape,10),f(self.wavelength))
             #extrapolate is needed because some opacities don't cover the
             #entire spectral range, from 2.36 to 196.6 micron
             #the extrapolation is done in log space for the opacities for
             #better results.
+            #maybe we should also smooth the data. The koike data are quite noisy.
 
             # calcite and dolomite are M.A.C. (kappa) values
             # enstatite and diopside are Q/a values
             # we need to convert those to Q values
-                        
+            
+            
             #plt.xscale('log')
             #plt.plot(self.wavelength, opacity_array[:,j])
             #plt.plot(tempWl,tempOpac)
@@ -81,7 +82,7 @@ class SpectrumNGC6302(Model):
  
         self.opacity_array = opacity_array
         self.nSpecies = nSpecies
-        self.npars = 15
+        self.npars = 14
         # the number of free parameters for the model (__call__()). For
         # some models this can be determined through introspection, but it is
         # still strongly recommended to define this explicitly here.
@@ -102,12 +103,12 @@ class SpectrumNGC6302(Model):
             # Twarm = theta[18:20] 80, 200; 80, 180
             # indexp = theta[20] 0, 1;
             self.lims[:, 0] = -6.
-            self.lims[11:13, 0] = 10.
-            self.lims[11:13, 1] = 80.
-            self.lims[13:15, 0] = 80.
-            self.lims[13:15, 1] = 180.
-#            self.lims[15, 0] = 0. 
-#            self.lims[15, 1] = 1.
+            self.lims[10:12, 0] = 10.
+            self.lims[10:12, 1] = 80.
+            self.lims[12:14, 0] = 80.
+            self.lims[12:14, 1] = 180.
+#            self.lims[14, 0] = 0. 
+#            self.lims[14, 1] = 1.
         else:            
             self.lims = lims
         print("Limits: ")
@@ -117,7 +118,7 @@ class SpectrumNGC6302(Model):
 
     def __call__(self, logacold0, logacold1, logacold2, logacold3, logacold4,
                  logacold6, logacold7, 
-                 logawarm1, logawarm2, logawarm5,
+                 logawarm2, logawarm5,
                  logawarm7, 
                  Tcold0, Tcold1, Twarm0, Twarm1, #indexp, 
                  *args, **kwargs):
@@ -142,7 +143,7 @@ class SpectrumNGC6302(Model):
         warmcomponent[0, :] = self.wavelength
         acold = [10**logacold0, 10**logacold1, 10**logacold2, 10**logacold3, 10**logacold4, 0, 10**logacold6,
                  10**logacold7] #0 values correspond to dust species that were not included in the fit by Kemper et al. 2002
-        awarm = [0, 10**logawarm1, 10**logawarm2, 0, 0, 10**logawarm5, 0,
+        awarm = [0, 0, 10**logawarm2, 0, 0, 10**logawarm5, 0,
                  10**logawarm7] #same here       
 
         for ii, aa in enumerate(acold):
@@ -224,12 +225,12 @@ class SpectrumNGC6302(Model):
 
         if self.flatprior: 
             if (np.all([self.lims[i,0] <= theta[i] <= self.lims[i,1] for i in
-                       range(len(self.lims[:,0]))]) and (theta[12] > theta[11])
-                      and (theta[14] > theta[13])):
+                       range(len(self.lims[:,0]))]) and (theta[11] > theta[10])
+                      and (theta[13] > theta[12])):
                 # the temperature of the inner radius needs to be higher than
                 # the temperature of the outer radius for both temperature
-                # components. Hence theta[12] > theta[11] and theta[14] >
-                # theta[13].
+                # components. Hence theta[11] > theta[10] and theta[13] >
+                # theta[12].
                 return 0
             else:
                 return -np.inf
@@ -249,14 +250,11 @@ class SpectrumNGC6302(Model):
             return (self.lims[:,1] - self.lims[:,0]) * u + self.lims[:,0]
         else:
             raise NotImplementedError()
-
-if __name__ == "__main__": 
+if __name__ == "__main__":
     """ Set up the inputs for the model """
     """ wavelength grid """
-    wave1 = np.linspace(2.3603,35.0603,327)
-    wave2 = np.linspace(1/196.6261,1/35.1,117)
-    wavelengths = np.concatenate((wave1,1/wave2[::-1]))
-    #print(wavelengths[:])
+    wavelengths = np.linspace(2.3603,196.6261,1956)
+
 
     """ Choose some model parameters """
     acold0 = -4.9  # Cold calcite (converted to Q)
@@ -268,7 +266,7 @@ if __name__ == "__main__":
     acold6 = -3 # Cold crystalline water ice (Q)
     acold7 = -1.4 # Cold amorphous olivine (Q)
 #    awarm0 = -10 # Warm calcite. Not used by Kemper et al. 2002
-    awarm1 = -5 # Warm enstatite. (converted to Q)
+#    awarm1 = -10 # Warm enstatite. Not used by Kemper et al. 2002
     awarm2 = -5 # Warm forsterite (Q)
 #    awarm3 = -10 # Warm diopside. Not used by Kemper et al. 2002
 #    awarm4 = -10 # Warm dolomite. Not used by Kemper et al. 2002
@@ -281,21 +279,19 @@ if __name__ == "__main__":
     Twarm1 = 118 # Temperature inner radius warm dust shell
 #    indexp = 0.5 # Index p from Kemper et al. 2002. Kept fixed for now to reduce the number of parameters 
 
-
     #Now init the model:
     model = SpectrumNGC6302(wavelengths)
     #And call it to produce the fluxes for our chosen parameters
     model(acold0, acold1, acold2, acold3, acold4, 
                  acold6, acold7, 
-                 awarm1, awarm2, awarm5,
+                 awarm2, awarm5,
                  awarm7, #zero-value dust species are removed from the call
           Tcold0, Tcold1, Twarm0, Twarm1)
 #          indexp=indexp)
     model_flux = model.modelFlux
     #plt.plot(wavelengths, model.modelFlux) #sanity check plot. Can be commented
     #plt.show()                             # out.
-    
-    #Now we create synthetic data:
+
 
     #now we'll create a synthetic spectrum from the model fluxes, using the to be fitted spectrum to get the wavelength sampling
     dataDir = os.getcwd() + '/NGC6302/'
@@ -305,7 +301,7 @@ if __name__ == "__main__":
     input_noise_spec = 0.01 #assume a 1% error on the spectrum
     unc = specdata[1][:]*input_noise_spec
     spec = Spectrum(specdata[0][:],specdata[1][:] +
-                    np.random.randn(len(specdata[1][:]))*unc,specdata[1][:]*0.05,"um","Jy", calUnc=1e-10, scalelengthPrior=0.1) #added extra keyword calUnc with a small value, and scalelengthPrior to restrict cov. scale length
+                    np.random.randn(len(specdata[1][:]))*unc,specdata[1][:]*0.05,"um","Jy", calUnc=1e-10, scalelengthPrior=0.1) #added extra keyword calUnc with a small value
     #plt.plot(spec.wavelength, spec.value) #another sanity check
     #plt.show()                            #comment out if it is bothersome
 
@@ -317,26 +313,24 @@ if __name__ == "__main__":
 #    spec1.setResampler(resampleMethod=resmethod)
 
     spec.selectWaves(low=25, up=120) #limit wavelength range over which fit is performed -- similar to 2002 result
-    
-    """ now set up ampere to try and fit the same stuff """
 
+    """ now set up ampere to try and fit the same stuff """
     dataset = [               
                spec   
                ]
 
 
-    #Ampere exposes access to emcee's moves interface. This can be useful if the posterior turns out to not be well behaved - the default move only deals well with posteriors that are monomodal and approximately Gaussian. Here's an example that usually deals a bit better with posteriors that don't meet these criteria:
-    m = [(moves.DEMove(), 0.8),
-        (moves.DESnookerMove(), 0.2),
+    #Ampere exposes acces to Zeus' moves interface. This can be useful if the posterior turns out to not be well behaved. This shows you how to define moves, but doesn't actually use them in the inference
+    m = [(moves.GlobalMove(), 0.8),
+        (moves.DifferentialMove(), 0.2),
          ]
+    #For example, You might want to burn in your sampler, then re-build it with new moves if the posterior is very multimodal
 
     #Now we set up the optimizer object:
-    #optimizer = EmceeSearch(model=model, data=dataset, nwalkers=100, moves=m)
-
-    optimizer = EmceeSearch(model=model, data=dataset, nwalkers=50, moves=m)
+    optimizer = ZeusSearch(model=model, data=dataset, nwalkers=50, vectorize = False)
     guess = [
         [-4.9, -4, -2.7, -4.5, -5.1, -3, -1.4, #values are essentially the 
-         -5, -5,  -3,   -4,                        #same as fitted values from
+         -5,  -3,   -4,                        #same as fitted values from
          30, 60,                               # 2002.
          100, 118,
          #The parameters of the model
@@ -347,18 +341,19 @@ if __name__ == "__main__":
          1.0 ,0.1, 0.1
         ]
         + np.random.rand(optimizer.npars)*[0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1,
-                                           0.1, 0.1, 0.1, 0.1, #these values are
+                                           0.1, 0.1, 0.1, #these values are
                                            10, 10,          #adjusted so that 
                                            10, 10,          #the first guesses
                                            #0.1,       #do not fall outside
                                            1, 1, 1]       #the prior range
         for i in range(optimizer.nwalkers)]
+
+
     #guess = "None"
 
     #Then we tell it to explore the parameter space
-
-    optimizer.optimise(nsamples = 50000, burnin=40000, guess=guess)
-#    optimizer.optimise(nsamples = 50, burnin=10, guess=guess) #short run for tests
+    optimizer.optimise(nsamples = 5000, burnin=3500, guess=guess
+                       )
 
 
     optimizer.postProcess() #now we call the postprocessing to produce some figures
