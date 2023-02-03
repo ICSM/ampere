@@ -107,7 +107,7 @@ Additional keyword arguments to pass to the super class.
         A list of parameter labels to use in post-processing. If not provided, the 
         current labels will be used.
         **kwargs : additional keyword arguments
-Additional keyword arguments to pass to the sampler.
+        Additional keyword arguments to pass to the sampler.
 
         Generated with Chat-GPT
 
