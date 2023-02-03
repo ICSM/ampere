@@ -519,7 +519,7 @@ res: list
             chain = self.samples
         self.res = []
         for i in range(self.npars):
-            a = np.percentile(self.samples[:,i], percentiles])
+            a = np.percentile(self.samples[:,i], percentiles)
             self.res.append([a[1], a[2]-a[1], a[1]-a[0]])
         return self.res
 

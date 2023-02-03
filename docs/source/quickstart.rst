@@ -1,5 +1,5 @@
-AMPERE Quickstart guide
-=======================
+Quickstart guide
+================
 
 
 

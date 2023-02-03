@@ -58,4 +58,6 @@ html_static_path = ['_static']
 
 autodoc_mock_imports = ['bs4', 'requests', 'astropy', 'emcee']
 
+nbsphinx_allow_errors = True
+
 #imgmath_latex = "latex"

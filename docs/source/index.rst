@@ -24,8 +24,8 @@ User guide
    install
    quickstart
    concept
-   advanced
    tutorials
+   advanced
    faqs
 
 
@@ -42,6 +42,7 @@ API reference
 Contributing
 ------------
 
+We very much welcome contributions to AMPERE! Please take a look at our `github repository <https://github.com/ICSM/ampere/>`_ for more information on how to contribute!
 
 Indices and tables
 ==================

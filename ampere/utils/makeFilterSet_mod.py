@@ -1,10 +1,9 @@
 """Download filter transmission curves from the Spanish Virtual Observatory.
 Save these as an hd5 file to be ingested into pyphot.
-INPUT: filters.csv, a two-column file containing the name of the magnitude column and the name of the
-    SVO/VOSA filter file to download.
+INPUT: filters.csv, a two-column file containing the name of the magnitude column and the name of the SVO/VOSA filter file to download.
 At the moment, the header in the output files only contains the DetectorType specification if the filter
-    is a photon counter (DetectorType value = "1"). We read in the entire file and check for the occurrence
-    of this line and set the detector type accordingly.
+is a photon counter (DetectorType value = "1"). We read in the entire file and check for the occurrence
+of this line and set the detector type accordingly.
 """
 
 import numpy as np
@@ -77,11 +76,13 @@ def get_filter_svo(filt, url = 'http://svo2.cab.inta-csic.es/theory/fps/fps.php?
     """
     This function retrieves the filter file specified by the input filt from the URL url.
     
-    Args:
+    Parameters
+    ----------
     filt (str): The file name or path of the filter file.
     url (str): The URL to fetch the filter file from. Default: SVO url (http://svo2.cab.inta-csic.es/theory/fps/fps.php?ID=)
 
-    Returns:
+    Returns
+    -------
     g (pyphot.Filter): An object representing the filter.
     fname (str): The file name of the filter file, with '/' replaced by '_'.
     """

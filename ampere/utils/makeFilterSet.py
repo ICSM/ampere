@@ -12,8 +12,9 @@ import h5py
 def makeFilterSet(infile = 'filters.csv', outfile = 'filters.hd5'):
     """Download filter transmission curves from the Spanish Virtual Observatory and write into an HDF file.
 
-    Keyword arguments:
-    infile -- (default 'filters.csv')
+    Parameters
+    ----------
+    infile : string, name of the file containing the filter names, default 'filters.csv'
         name of two-column CSV file, with the first column containing a unique name for the filter,
         and the second column containing the name of the filter as specified on the SVO/VOSA webpage. For
         example, a row "IRAC45, Spitzer/IRAC.I2" in infile will download the IRAC 4.5 µm filter curve.
@@ -22,14 +23,17 @@ def makeFilterSet(infile = 'filters.csv', outfile = 'filters.hd5'):
         search the local machine. This allows the user to incorporate filter files not available on the SVO.
         In this case, the filter profile must be a CSV, with two header lines providing the column content
         as well as the units for the wavelength, and the detector type. For example:
-                Wavelength, Transmission
-                um, energy
-                0.5, 0.00
-                0.6, 0.10
+                
+        Wavelength, Transmission
+        um, energy
+        0.5, 0.00
+        0.6, 0.10
 
-    outfile -- (default 'filters.hd5') name of output HDF file.
+    outfile : string, name of output HDF file, default 'filters.hd5')
 
-    Notes: The current SVO data only specify the DetectorType if the filter is a photon counter, by setting
+    Notes:
+    -----
+    The current SVO data only specify the DetectorType if the filter is a photon counter, by setting
     DetectorType = "1". This script reads in the entire file and checks for the occurrence of this line
     to set the detector type in the output file accordingly. The SVO has said that they will improve
     the implementation of this keyword in the future.
