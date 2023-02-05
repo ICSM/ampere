@@ -1,6 +1,0 @@
-Quickstart guide
-================
-
-
-
-Coming soon!

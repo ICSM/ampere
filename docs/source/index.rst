@@ -22,7 +22,7 @@ User guide
    :maxdepth: 2
 
    install
-   quickstart
+   notebooks/quickstart
    concept
    tutorials
    advanced
