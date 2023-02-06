@@ -316,13 +316,16 @@ class Spectrum(Data):
 
         if resampleMethod == "exact":
             self.resampler = spectres
-            l.append("Using exact resampling")
+            #l.append("Using exact resampling")
+            print("Using exact resampling")
         elif resampleMethod=="fast":
             self.resampler = np.interp
-            l.append("Using fast resampling")
+            #l.append("Using fast resampling")
+            print("Using fast resampling")
         elif callable(resampleMethod):
             self.resampler = resampleMethod
-            l.append("Using user-specified resampling")
+            #l.append("Using user-specified resampling")
+            print("Using user-specified resampling")
         #elif resampleMethod=="exactcompiled":
         #    #Raise a warning here, this is going to be experimental when it's implemented
         #    self.resampler = spectres_numba
@@ -858,13 +861,14 @@ class Spectrum(Data):
                 self=cls.__new__(Spectrum)
                 self.__init__(table['wavelength'][selection].data, value[selection], uncertainty[selection], bandUnits, photUnits, **kwargs) #Also pass in flux units
                 specList.append(self)
-            l.append("Table['chunk'] column found : spectrum has",np.unique(table['chunk'].data," chunks."))
+            #l.append("Table['chunk'] column found : spectrum has",np.unique(table['chunk'].data," chunks.")) #I don't know where this line comes from or what it is for - will have to investigate...
+            #Looks like it was a botched attempt to add logging here - needs to be fixed properly but that requires more extensive updates to the ampere logger!
         except:
             print("Spectrum has no chunks, assuming one continuous order.")
             self=cls.__new__(Spectrum)
             self.__init__(table['wavelength'][selection].data, value[selection], uncertainty[selection], bandUnits, photUnits, **kwargs) #Also pass in flux units
             specList.append(self)
-            l.append("No table['chunk'] column found : spectrum assumed to be a single chunk.")
+            #l.append("No table['chunk'] column found : spectrum assumed to be a single chunk.")
 
         return specList #self
 

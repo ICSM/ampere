@@ -134,7 +134,13 @@ class DynestyNestedSampler(BaseNestedSampler):
                 fig.savefig(self.name+"_"+"covMat_"+str(i)+".png")
 
 
-    def plot_posteriorpredictive(self, n_post_samples = 1000, plotfile=None, logx = False, logy = False, alpha = 0.1, **kwargs):
+    def plot_posteriorpredictive(self, n_post_samples = 1000,
+                                 plotfile=None, save = True,
+                                 logx = False, logy = False,
+                                 xlims = None, ylims = None,
+                                 alpha = 0.1,show=False,
+                                 return_figure = False,
+                                 close_figure = False, **kwargs):
         ''' Generate the posterior-predictive plots so that the suitability of the model for the data can be inspected. 
         '''
 
@@ -188,10 +194,18 @@ class DynestyNestedSampler(BaseNestedSampler):
         temp = {k:v for k,v in zip(labels, handles)}
         plt.legend(temp.values(), temp.keys(), loc='best')
 
+        #plt.legend()
         plt.tight_layout()
-        fig.savefig(plotfile)
-        plt.close(fig)
-        plt.clf()
+        if save:
+            fig.savefig(plotfile,dpi=200)
+        if show:
+            plt.show()
+        else:
+            if return_figure:
+                return fig
+            elif close_figure:
+                plt.close(fig)
+                plt.clf()
 
     def postProcess(self, maxiter=None, maxcall = None, dlogz = None, **kwargs):
         """ Some simple post-processing and plotting """

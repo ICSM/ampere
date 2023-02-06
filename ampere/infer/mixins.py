@@ -154,6 +154,7 @@ The maximum a posteriori parameters.
                                  xlims = None, ylims = None,
                                  alpha = 0.1,show=False,
                                  return_figure = False,
+                                 close_figure = False,
                                  **kwargs):
         '''
         Function to plot the data and samples drawn from the posterior of the models and data.
@@ -270,7 +271,7 @@ Generated with Chat-GPT
         else:
             if return_figure:
                 return fig
-            else:
+            elif close_figure:
                 plt.close(fig)
                 plt.clf()
 
@@ -627,7 +628,14 @@ The maximum a posteriori parameters.
                 istart+=d.npars
                 fig.savefig(self.name+"_covMat_"+str(i)+".png")
 
-    def plot_posteriorpredictive(self, n_post_samples = 1000,plotfile=None, logx = False, logy = False, alpha = 0.1,**kwargs):
+    def plot_posteriorpredictive(self, n_post_samples = 1000,
+                                 plotfile=None, save = True,
+                                 logx = False, logy = False,
+                                 xlims = None, ylims = None,
+                                 alpha = 0.1,show=False,
+                                 return_figure = False,
+                                 close_figure = False,
+                                 **kwargs):
         '''
         Function to plot the data and samples drawn from the posterior of the models and data.
 
@@ -704,9 +712,16 @@ Generated with Chat-GPT
 
         #plt.legend()
         plt.tight_layout()
-        fig.savefig(plotfile,dpi=200)
-        plt.close(fig)
-        plt.clf()
+        if save:
+            fig.savefig(plotfile,dpi=200)
+        if show:
+            plt.show()
+        else:
+            if return_figure:
+                return fig
+            elif close_figure:
+                plt.close(fig)
+                plt.clf()
 
         
 class ArvizPostProcessor(object):
