@@ -5,7 +5,7 @@ from astropy import units, constants
 from astropy.io import fits, ascii
 from scipy.interpolate import interp1d
 from scipy.stats import uniform
-import Starfish
+import Starfish 
 from Starfish.emulator import Emulator
 from Starfish.grid_tools import GridInterface
 from Starfish.grid_tools import PHOENIXGridInterfaceNoAlpha as PHOENIX #NoAlpha
@@ -84,7 +84,7 @@ class StarfishStellarModel(Model):
 if __name__=="__main__":
     path = './phoenix_models/'
     ranges = [
-        [5700, 8000], #T
+        [5000, 8000], #T
         [4.0, 5.0], #log g
         [0., 0.5] #We'll stick with solar metallicity here
     ]

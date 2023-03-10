@@ -15,6 +15,16 @@ from .models import AnalyticalModel
 from scipy.stats import dirichlet
 from scipy.stats import uniform
 
+from Starfish.emulator import Emulator
+from Starfish.grid_tools import GridInterface
+from Starfish.grid_tools import PHOENIXGridInterfaceNoAlpha as PHOENIX #NoAlpha
+#from Starfish.grid_tools import BTSettlGridInterface as BTSettl
+import Starfish.constants as C
+from Starfish.utils import create_log_lam_grid
+from Starfish.grid_tools.utils import vacuum_to_air, idl_float
+from Starfish.grid_tools import download_PHOENIX_models as dpm
+from Starfish.grid_tools import HDF5Creator
+
 #
 # Other Stuff
 #
@@ -52,15 +62,18 @@ class QuickSEDModel(Model):
         '''
         self.wavelength = wavelengths
         self.freq = (wavelengths * u.micron).to(u.Hz, equivalencies=u.spectral()).value
-        self.npars = 7 #Number of free parameters for the model (__call__()). For some models this can be determined through introspection, but it is still strongly recommended to define this explicitly here. Introspection will only be attempted if self.npars is not defined.
-        self.npars_ptform = 7 #Sometimes the number of free parameters is different when using the prior transform instead of the prior. In that case, self.npars_ptform should also be defined.
+        self.npars = 8 #Number of free parameters for the model (__call__()). For some models this can be determined through introspection, but it is still strongly recommended to define this explicitly here. Introspection will only be attempted if self.npars is not defined.
+        self.npars_ptform = 8 #Sometimes the number of free parameters is different when using the prior transform instead of the prior. In that case, self.npars_ptform should also be defined.
         #You can do any other set up you need in this method.
         #For example, we could define some cases to set up different priors
         #But that's for a slightly more complex example.
         #Here we'll just use a simple flat prior
         self.flatprior = flatprior
         #self.lims=lims
-        self.parLabels = ['dstar','tstar','rstar','Adust','tdust','lam0','beta']
+        self.parLabels = ['lstar','tstar','log_g','[fe/h]','Adust','tdust','lam0','beta']
+
+        #Photosphere modelling
+        self.emu = Emulator.load("ampere_test_emulator.hdf5")
 
         '''Assign any other keywords.'''
         l = locals()
@@ -69,7 +82,7 @@ class QuickSEDModel(Model):
                 continue
             setattr(self, key, value)
 
-    def __call__(self,dstar,tstar,rstar,Adust,tdust,lam0,beta,**kwargs):
+    def __call__(self,lstar,tstar,gstar,zstar,Adust,tdust,lam0,beta,**kwargs):
         '''The model itself, using the callable class functionality of python.
 
         This is an essential method. It should do any steps required to 
@@ -85,11 +98,24 @@ class QuickSEDModel(Model):
 
         self.lstar = 4.*np.pi*((10**self.rstar)*rsol)**2*sb*self.tstar**4 / lsol
 
-        photosphere = BlackBody().evaluate(self.freq, self.tstar, 1*u.Jy/u.sr)
+        #Blackbody approximation
+        #photosphere = BlackBody().evaluate(self.freq, self.tstar, 1*u.Jy/u.sr)
+        #photosphere *= np.pi * 1e23 * (((10**self.rstar)*rsol)/(self.dstar*pc))**2
 
-        photosphere *= np.pi * 1e23 * (((10**self.rstar)*rsol)/(self.dstar*pc))**2
+        #Starfish model
+        star_params = [np.log10(lstar), tstar, gstar, zstar]
+        fl = self.emu.load_flux(star_params[1:])
+        #Now to convert to a more useful unit, we calculate the bolometric flux of the model, and we will rescale it to the desired luminosity
+        fbol_init = np.trapz(fl, emu.wl)
+        nu = c/self.emu.wl
+        scale = (fbol_1l1p/fbol_init)*(10**star_params[0])
+        fl = fl*scale * (3.34e5 * self.emu.wl**2)
+        fl /= (4*np.pi*(self.dstar)**2) #454**2
 
-        self.star = photosphere
+        f = interp1d(self.emu.wl,fl)
+        fl_interp = f(self.wavelength)
+
+        self.star = fl_interp
 
         modified = np.where(self.wavelength >= self.lam0) 
         
