@@ -1,9 +1,10 @@
 import ampere
 from ampere import data
 from ampere.infer.emceesearch import EmceeSearch
-import ampere.models.QuickSED
+from ampere import QuickSED
 from astropy import units, constants
 import numpy as np
+import scipy
 
 libdir= ampere.__file__.strip('__init__.py')
 
@@ -84,16 +85,24 @@ nu = c/emu.wl
 scale = (fbol_1l1p/fbol_init)*(10**theta[0])
 fl = fl*scale * (3.34e5 * emu.wl**2)
 fl /= (4*np.pi*(1000/parallax)**2)
-print(fl)
+#print(fl)
 
-wav = emu.wl/10000 #A -> um
+wfl = np.linspace(4e3,1.2e4,8e2,endpoint=True)
+
+ffl = scipy.interpolate.interp1d(emu.wl,fl)
+
+fl = ffl(wfl)
+
+wav = wfl/10000 #A -> um
 
 #Add Gaussian noise to calculated spectrum assuming s/n 100 spectrum
-unc = fl*0.01*np.random.normal(fl.shape)
+unc = np.zeros(len(fl))
+for i in range(0,len(fl)):
+	unc[i] = fl[i]*0.01*np.random.normal()
 
-star_spec = data.Spectrum(wav,fl,unc,"um","Jy",calUnc=0.0025, scaleLengthPrior = 0.01)
+star_spec = data.Spectrum(wfl,fl,unc,"um","Jy",calUnc=0.0025, scaleLengthPrior = 0.01)
 
-dataset = [star_spec,photomeetry,irs_spec]
+dataSet = [photometry,star_spec,irs_spec]
 
 #Now we get to the searching
 #Create a wavelength grid
@@ -103,12 +112,12 @@ model = ampere.QuickSED.QuickSEDModel(wavelengths,lims=np.array([[0.5,1.5],[5500
 
 print(model.__repr__)
 
-optimizer = EmceeSearch(model=model,data=dataset,nwalkers=20,vectorize=False)
+optimizer = EmceeSearch(model=model,data=dataSet,nwalkers=20,vectorize=False)
 
 #self.parLabels = ['lstar','tstar','log_g','[fe/h]','Adust','tdust','lam0','beta'] + noise parameters
 guess = [1.0,5784.0,4.5,0.01,-3,50.0,200.0,1.0]#,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0]
 
-optimizer.optimise(nsamples=1000,nburnin=250,guess=guess)
+optimizer.optimise(nsamples=1000,nburnin=250,guess=guess + np.random.rand(10)*[10,1,1,0.1, 1,1,1,1,1,1])
 
 optimizer.summary()
 
