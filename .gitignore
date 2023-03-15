@@ -79,3 +79,6 @@ ampere*.log
 notes/
 old/
 *.tar.gz
+*.0
+*.hdf5
+*.fits

@@ -87,7 +87,7 @@ fl = fl*scale * (3.34e5 * emu.wl**2)
 fl /= (4*np.pi*(1000/parallax)**2)
 #print(fl)
 
-wfl = np.linspace(4e3,1.2e4,8e2,endpoint=True)
+wfl = np.linspace(4e3,1.2e4,int(8e2),endpoint=True)
 
 ffl = scipy.interpolate.interp1d(emu.wl,fl)
 
