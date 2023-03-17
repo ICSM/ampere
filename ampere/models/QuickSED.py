@@ -11,7 +11,7 @@ try:
 except ImportError:
     from astropy.modeling.physical_models import BlackBody
 from .models import AnalyticalModel
-
+from scipy.interpolate import interp1d
 from scipy.stats import dirichlet
 from scipy.stats import uniform
 
@@ -50,7 +50,7 @@ class QuickSEDModel(Model):
     This model shows you the basics of writing a model for ampere
 
     '''
-    def __init__(self, wavelengths, flatprior = True,lims=None,*args,**kwargs):
+    def __init__(self, wavelengths, flatprior = True,lims=None,starfish_dir=None,fbol_1l1p=None,dstar=None,*args,**kwargs):
 
         '''The model constructor, which will set everything up
 
@@ -72,15 +72,16 @@ class QuickSEDModel(Model):
         #self.lims=lims
         self.parLabels = ['lstar','tstar','log_g','[fe/h]','Adust','tdust','lam0','beta']
 
-        #Photosphere modelling
-        self.emu = Emulator.load("ampere_test_emulator.hdf5")
-
         '''Assign any other keywords.'''
         l = locals()
         for key, value in l.items():
             if key == "self": #skip self to avoid possible recursion
                 continue
             setattr(self, key, value)
+            #print(key, value)
+
+        #Photosphere modelling
+        self.emu = Emulator.load(self.starfish_dir + "ampere_test_emulator.hdf5")
 
     def __call__(self,lstar,tstar,gstar,zstar,Adust,tdust,lam0,beta,**kwargs):
         '''The model itself, using the callable class functionality of python.
@@ -95,8 +96,8 @@ class QuickSEDModel(Model):
             if key == "self": #skip self to avoid possible recursion
                 continue
             setattr(self, key, value)
-
-        self.lstar = 4.*np.pi*((10**self.rstar)*rsol)**2*sb*self.tstar**4 / lsol
+            #print(key, value)
+        #self.lstar = 4.*np.pi*((10**self.rstar)*rsol)**2*sb*self.tstar**4 / lsol
 
         #Blackbody approximation
         #photosphere = BlackBody().evaluate(self.freq, self.tstar, 1*u.Jy/u.sr)
@@ -105,14 +106,22 @@ class QuickSEDModel(Model):
         #Starfish model
         star_params = [np.log10(lstar), tstar, gstar, zstar]
         fl = self.emu.load_flux(star_params[1:])
+        #extend flux and wavelength to cover a proper range of values (up to 1cm)
+        exwav   = np.logspace(np.log10(self.emu.wl[-1]),np.log10(1e8),1000) 
+        wav_ext = np.append(self.emu.wl,exwav[1::])
+        exfl    = np.asarray(fl[-1] * (self.emu.wl[-1]/exwav)**4)
+        fl_ext  = np.append(fl,exfl[1::])
         #Now to convert to a more useful unit, we calculate the bolometric flux of the model, and we will rescale it to the desired luminosity
-        fbol_init = np.trapz(fl, emu.wl)
-        nu = c/self.emu.wl
-        scale = (fbol_1l1p/fbol_init)*(10**star_params[0])
-        fl = fl*scale * (3.34e5 * self.emu.wl**2)
-        fl /= (4*np.pi*(self.dstar)**2) #454**2
+        fbol_init = np.trapz(fl_ext, wav_ext)
+        nu = c/wav_ext
+        scale = (self.fbol_1l1p/fbol_init)*(10**star_params[0])
+        fl = fl_ext*scale * (3.34e5 * wav_ext**2)
+        fl /= (4*np.pi*(self.dstar)**2)
 
-        f = interp1d(self.emu.wl,fl)
+        #print(wav_ext,self.wavelength)
+        wav_ext_um = wav_ext/1e4
+
+        f = interp1d(wav_ext_um,fl) #emu.wl in A, wavelength in um
         fl_interp = f(self.wavelength)
 
         self.star = fl_interp

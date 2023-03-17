@@ -1,7 +1,7 @@
 import ampere
 from ampere import data
 from ampere.infer.emceesearch import EmceeSearch
-from ampere import QuickSED
+from ampere.models import QuickSED
 from astropy import units, constants
 import numpy as np
 import scipy
@@ -56,7 +56,7 @@ if recreate_hdf5:
     creator = HDF5Creator(grid, "ampere_test_grid.hdf5", ranges = ranges)
     creator.process_grid()
 
-retrain_emulator = True
+retrain_emulator = False
 if retrain_emulator:
     emu = Emulator.from_grid(path + "../" + "ampere_test_grid.hdf5")
     emu.train()
@@ -102,22 +102,28 @@ for i in range(0,len(fl)):
 
 star_spec = data.Spectrum(wfl,fl,unc,"um","Jy",calUnc=0.0025, scaleLengthPrior = 0.01)
 
-dataSet = [photometry,star_spec,irs_spec]
+dataSet = [photometry]
+#dataSet.append(irs_spec)
+
 
 #Now we get to the searching
 #Create a wavelength grid
-wavelengths = np.logspace(np.log10(0.1),np.log10(500),1000,endpoint=True)
+wavelengths = np.logspace(np.log10(0.31),np.log10(500),1000,endpoint=True)
 
-model = ampere.QuickSED.QuickSEDModel(wavelengths,lims=np.array([[0.5,1.5],[5500.,6500.],[4.0,5.0],[0.0,0.1],[-30,30],[30.,300.],[50.,500.],[-2.,2.]]),dstar=1000./parallax)
+model = QuickSED.QuickSEDModel(wavelengths,
+							   lims=np.array([[0.5,1.5],[5500.,6500.],[4.0,5.0],[0.0,0.1],[-30,30],[30.,300.],[50.,500.],[-2.,2.]]),
+							   dstar=1000./parallax,
+							   starfish_dir=path+'../',
+							   fbol_1l1p=fbol_1l1p)
 
-print(model.__repr__)
+#print(model.__repr__)
 
 optimizer = EmceeSearch(model=model,data=dataSet,nwalkers=20,vectorize=False)
 
 #self.parLabels = ['lstar','tstar','log_g','[fe/h]','Adust','tdust','lam0','beta'] + noise parameters
-guess = [1.0,5784.0,4.5,0.01,-3,50.0,200.0,1.0]#,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0]
+guess = [1.0,5784.0,4.5,0.01,0.5,50.0,200.0,1.0]#,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0]
 
-optimizer.optimise(nsamples=1000,nburnin=250,guess=guess + np.random.rand(10)*[10,1,1,0.1, 1,1,1,1,1,1])
+optimizer.optimise(nsamples=4000,nburnin=1000,guess=guess)
 
 optimizer.summary()
 
