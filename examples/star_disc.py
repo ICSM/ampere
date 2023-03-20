@@ -103,14 +103,13 @@ spec0 = spectres(specwaves,emu.wl*1e-4,fl)
 input_noise_spec = 0.01
 unc0 = input_noise_spec*spec0
 spec0 = spec0 + np.random.randn(len(spec0))*unc0
-from ampere.data import Spectrum
-star_spec = Spectrum(specwaves, spec0, unc0,"um", "Jy",calUnc=0.0025, scaleLengthPrior = 0.01) #, resampleMethod=resmethod)
+star_spec = data.Spectrum(specwaves, spec0, unc0,"um", "Jy",calUnc=0.0025, scaleLengthPrior = 0.01) #, resampleMethod=resmethod)
 
 dataSet = [photometry,
-		   star_spec,
-		   irs_spec,]
+		   star_spec,]
 
-print(irs_spec)
+for irs in irs_spec:
+	dataSet.append(irs)
 
 #Now we get to the searching
 #Create a wavelength grid
