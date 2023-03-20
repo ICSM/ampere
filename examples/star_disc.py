@@ -1,4 +1,5 @@
 import ampere
+from spectres import spectres
 from ampere import data
 from ampere.infer.emceesearch import EmceeSearch
 from ampere.models import QuickSED
@@ -17,7 +18,7 @@ photometry = data.Photometry.fromFile('./star_disc/HD105_SED.vot', format = 'vot
 photometry.reloadFilters(np.logspace(np.log10(0.2),np.log10(500),1000,base=10))
 
 #IRS spectrum
-irs_spec = data.Spectrum.fromFile('./star_disc/HD105_IRS_Spectrum.csv', 'User-Defined', filetype = 'text', keywords = {'waveCol': 'wavelength', 'fluxCol': 'fluxdensity', 'uncsCol': 'uncertainty', 'waveUnit': 'micron', 'fluxUnit': 'Jy'})
+irs_spec = data.Spectrum.fromFile('./star_disc/cassis_yaaar_spcfw_5295616t.fits', format='SPITZER-YAAAR', filetype = 'fits')
 
 #Stellar spectrum - we'll also need some of this for the fitting
 import Starfish 
@@ -36,7 +37,7 @@ fbol_1l1p = ((fbol_1l1p/(4*np.pi*(1*units.pc)**2)).to(units.erg/units.s/units.cm
 c = constants.c.to(units.AA/units.s)
 
 path = libdir + '../examples/examples_paper/phoenix_models/'
-print(path)
+#print(path)
 download_models = False #Should be True if this is the first time you're running this script, others False
 if download_models:
     #First, we download a subsection of the PHOENIX grid using the tools that STARFISH provides.
@@ -72,10 +73,10 @@ parallax_error = 0.0211
 
 #Create a synthetic spectrum for HD 105 based on the fitted parameters from Marshall et al. 2018
 hd105_params = [6034, 4.478, 0.02]
-print(emu.load_flux(hd105_params, norm=True))
-print(emu.wl)
-print(emu.norm_factor(hd105_params))
-print(np.trapz(emu.load_flux(hd105_params, norm=True), emu.wl))
+#print(emu.load_flux(hd105_params, norm=True))
+#print(emu.wl)
+#print(emu.norm_factor(hd105_params))
+#print(np.trapz(emu.load_flux(hd105_params, norm=True), emu.wl))
 
 theta = [np.log10(1.216), 6034, 4.478, 0.02]
 fl = emu.load_flux(theta[1:])
@@ -87,41 +88,46 @@ fl = fl*scale * (3.34e5 * emu.wl**2)
 fl /= (4*np.pi*(1000/parallax)**2)
 #print(fl)
 
-wfl = np.linspace(4e3,1.2e4,int(8e2),endpoint=True)
+#Create s/n 100 synthetic stellar spectrum that looks like Gaia RV spec
+r = 11000
+lam_start = 0.842
+lam_end = 0.872
 
-ffl = scipy.interpolate.interp1d(emu.wl,fl)
+specwaves = [lam_start]
+while specwaves[-1] < lam_end:
+    specwaves.append(specwaves[-1]*(1+(1/r)))
 
-fl = ffl(wfl)
+specwaves = np.array(specwaves)
+spec0 = spectres(specwaves,emu.wl*1e-4,fl)
+#And again, add some noise to it
+input_noise_spec = 0.01
+unc0 = input_noise_spec*spec0
+spec0 = spec0 + np.random.randn(len(spec0))*unc0
+from ampere.data import Spectrum
+star_spec = Spectrum(specwaves, spec0, unc0,"um", "Jy",calUnc=0.0025, scaleLengthPrior = 0.01) #, resampleMethod=resmethod)
 
-wav = wfl/10000 #A -> um
+dataSet = [photometry,
+		   star_spec,
+		   irs_spec,]
 
-#Add Gaussian noise to calculated spectrum assuming s/n 100 spectrum
-unc = np.zeros(len(fl))
-for i in range(0,len(fl)):
-	unc[i] = fl[i]*0.01*np.random.normal()
-
-star_spec = data.Spectrum(wfl,fl,unc,"um","Jy",calUnc=0.0025, scaleLengthPrior = 0.01)
-
-dataSet = [photometry]
-#dataSet.append(irs_spec)
-
+print(irs_spec)
 
 #Now we get to the searching
 #Create a wavelength grid
 wavelengths = np.logspace(np.log10(0.31),np.log10(500),1000,endpoint=True)
 
 model = QuickSED.QuickSEDModel(wavelengths,
-							   lims=np.array([[0.5,1.5],[5500.,6500.],[4.0,5.0],[0.0,0.1],[-30,30],[30.,300.],[50.,500.],[-2.,2.]]),
+							   lims=np.array([[0.5,1.5],[5500.,6500.],[4.0,5.0],[0.0,0.1],[-30,30],[30.,300.],[50.,500.],[0.,4.]]),
 							   dstar=1000./parallax,
 							   starfish_dir=path+'../',
 							   fbol_1l1p=fbol_1l1p)
 
 #print(model.__repr__)
 
-optimizer = EmceeSearch(model=model,data=dataSet,nwalkers=20,vectorize=False)
+optimizer = EmceeSearch(model=model,data=dataSet,nwalkers=40,vectorize=False)
 
 #self.parLabels = ['lstar','tstar','log_g','[fe/h]','Adust','tdust','lam0','beta'] + noise parameters
-guess = [1.0,5784.0,4.5,0.01,0.5,50.0,200.0,1.0]#,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0]
+guess = [1.0,5784.0,4.5,0.01,0.5,50.0,200.0,1.0,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0]#,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0]
 
 optimizer.optimise(nsamples=4000,nburnin=1000,guess=guess)
 

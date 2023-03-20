@@ -148,7 +148,8 @@ class QuickSEDModel(Model):
                (self.lims[3,0] < theta[3] < self.lims[3,1]) and \
                (self.lims[4,0] < theta[4] < self.lims[4,1]) and \
                (self.lims[5,0] < theta[5] < self.lims[5,1]) and \
-               (self.lims[6,0] < theta[6] < self.lims[6,1]): 
+               (self.lims[6,0] < theta[6] < self.lims[6,1]) and \
+               (self.lims[7,0] < theta[7] < self.lims[7,1]) : 
                 return 0
             else:
                 return -np.inf
