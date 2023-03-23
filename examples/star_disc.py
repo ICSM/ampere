@@ -98,15 +98,15 @@ while specwaves[-1] < lam_end:
     specwaves.append(specwaves[-1]*(1+(1/r)))
 
 specwaves = np.array(specwaves)
-spec0 = spectres(specwaves,emu.wl*1e-4,fl)
+spec0 = spectres(specwaves,emu.wl*1e-4,1.216*fl)
 #And again, add some noise to it
 input_noise_spec = 0.01
 unc0 = input_noise_spec*spec0
 spec0 = spec0 + np.random.randn(len(spec0))*unc0
-star_spec = data.Spectrum(specwaves, spec0, unc0,"um", "Jy",calUnc=0.0025, scaleLengthPrior = 0.01) #, resampleMethod=resmethod)
+star_spec = data.Spectrum(specwaves, spec0, unc0,"um", "Jy",calUnc=0.10, scaleLengthPrior = 0.01) #, resampleMethod=resmethod)
 
-dataSet = [photometry,
-		   star_spec,]
+dataSet = [photometry,#star_spec,
+		   ]
 
 for irs in irs_spec:
 	dataSet.append(irs)
@@ -116,7 +116,7 @@ for irs in irs_spec:
 wavelengths = np.logspace(np.log10(0.31),np.log10(500),1000,endpoint=True)
 
 model = QuickSED.QuickSEDModel(wavelengths,
-							   lims=np.array([[0.5,1.5],[5500.,6500.],[4.0,5.0],[0.0,0.1],[-30,30],[30.,300.],[50.,500.],[0.,4.]]),
+							   lims=np.array([[0.7,1.3],[5500.,6500.],[4.1,4.9],[0.01,0.1],[-3,3],[30.,100.],[100.,500.],[0.,4.]]),
 							   dstar=1000./parallax,
 							   starfish_dir=path+'../',
 							   fbol_1l1p=fbol_1l1p)
@@ -126,7 +126,7 @@ model = QuickSED.QuickSEDModel(wavelengths,
 optimizer = EmceeSearch(model=model,data=dataSet,nwalkers=40,vectorize=False)
 
 #self.parLabels = ['lstar','tstar','log_g','[fe/h]','Adust','tdust','lam0','beta'] + noise parameters
-guess = [1.0,5784.0,4.5,0.01,0.5,50.0,200.0,1.0,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0]#,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0]
+guess = [1.0,5784.0,4.3,0.05,0.5,50.0,200.0,1.0,1.0,0.5,1.0,1.0,0.5,1.0]#,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0]
 
 optimizer.optimise(nsamples=4000,nburnin=1000,guess=guess)
 
@@ -138,5 +138,5 @@ optimizer.postProcess(logx=True,logy=True)
 
 #save object before crashing.
 import dill
-with open('circumstellar_disc.pkl', 'wb') as f:
+with open('circumstellar_disc_no_starspec_data_long_test.pkl', 'wb') as f:
 	dill.dump(optimizer,f)
