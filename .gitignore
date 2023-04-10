@@ -58,6 +58,9 @@ coverage.xml
 # Django stuff:
 #*.log
 
+# Tensorboard outputs
+*.tfevents.*
+
 # Sphinx documentation
 docs/_build/
 

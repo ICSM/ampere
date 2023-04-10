@@ -102,7 +102,7 @@ if __name__ == "__main__":
     filterName = np.array(['WISE_RSR_W1', 'SPITZER_MIPS_70']) #This is minimal, so we'll just have two bands well separated
 
     libDir = ampere.__file__.strip('__init__.py') # '/home/peter/pythonlibs/ampere/ampere/'
-    libname = libDir + 'ampere_allfilters.hd5'
+    libname = f'{libDir}ampere_allfilters.hd5'
     filterLibrary = pyphot.get_library(fname=libname)
     filters = filterLibrary.load_filters(filterName, interp=True, lamb = wavelengths*pyphot.unit['micron'])
     #Now we need to extract the photometry with pyphot
@@ -121,9 +121,9 @@ if __name__ == "__main__":
     photunc = input_noise_phot * modSed #Absolute uncertainty
     modSed = modSed + np.random.randn(len(filterName)) * photunc #Now perturb data by drawing from a Gaussian distribution
 
-    
+
     #now we'll create a synthetic spectrum from the model fluxes, using a Spitzer IRS observation to get the wavelength sampling
-    dataDir = os.getcwd() + '/test_data/'
+    dataDir = f'{os.getcwd()}/test_data/'
     specFileExample = 'cassis_yaaar_spcfw_14191360t.fits'
     irsEx = Spectrum.fromFile(os.path.normpath(dataDir+specFileExample),format='SPITZER-YAAAR')
     spec0 = spectres(irsEx[0].wavelength,wavelengths,model_flux)
@@ -135,7 +135,7 @@ if __name__ == "__main__":
     unc1 = input_noise_spec*spec1
     spec0 = spec0 + np.random.randn(len(spec0))*unc0
     spec1 = spec1 + np.random.randn(len(spec1))*unc1
-    
+
     spec0 = Spectrum(irsEx[0].wavelength, spec0, unc0,"um", "Jy",calUnc=0.0025, scaleLengthPrior = 0.01) #, resampleMethod=resmethod)
     spec1 = Spectrum(irsEx[1].wavelength, spec1, unc1,"um", "Jy",calUnc=0.0025, scaleLengthPrior = 0.01) #, resampleMethod=resmethod)
 
@@ -182,7 +182,7 @@ if __name__ == "__main__":
     #Then we tell it to explore the parameter space
     optimizer.optimise(nsamples = 150, burnin=100, guess=guess
                        )
-    
+
 
 
     optimizer.postProcess() #now we call the postprocessing to produce some figures
