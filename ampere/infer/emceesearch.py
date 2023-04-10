@@ -66,14 +66,14 @@ Additional keyword arguments to pass to the super class.
         if vectorize:
             self.logger.info("Using vectorised posterior")
             #self.lnprob = self.lnprob_vector
-            self.sampler = emcee.EnsembleSampler(self.nwalkers, np.int(self.npars), self.lnprob_vector, a = self.acceptRate, moves=self.moves, vectorize=True)#, args=self.dataSet)
+            self.sampler = emcee.EnsembleSampler(self.nwalkers, int(self.npars), self.lnprob_vector, a = self.acceptRate, moves=self.moves, vectorize=True)#, args=self.dataSet)
         else:
-            self.sampler = emcee.EnsembleSampler(self.nwalkers, np.int(self.npars), self.lnprob, a = self.acceptRate, moves=self.moves)#, args=self.dataSet)
+            self.sampler = emcee.EnsembleSampler(self.nwalkers, int(self.npars), self.lnprob, a = self.acceptRate, moves=self.moves)#, args=self.dataSet)
 
 
     def __call__(self, guess=None, **kwargs):
         if guess is None:
-            guess = [np.random.randn(np.int(self.npars)) for i in range(self.nwalkers)]
+            guess = [np.random.randn(int(self.npars)) for i in range(self.nwalkers)]
         self.sampler.run_mcmc(guess, self.nsamp)
         self.allSamples = self.sampler.chain
         self.samples = self.sampler.chain[:, self.burnin, :].reshape((-1, self.npars))
@@ -125,7 +125,7 @@ Additional keyword arguments to pass to the super class.
         #        self.dataSet = data
         #        self.nparsData = [data.npars for data in self.dataSet] #number of parameters to be passed into each set of data
 
-        #    self.npars = np.int(self.nparsMod + np.sum(self.nparsData))
+        #    self.npars = int(self.nparsMod + np.sum(self.nparsData))
         
         #if lnprior is not None: 
        #    self.lnprior = lnprior
@@ -144,7 +144,7 @@ Additional keyword arguments to pass to the super class.
             ''' first destroy the sampler '''
             self.sampler=None
             ''' now rebuild it '''
-            self.sampler = emcee.EnsembleSampler(self.nwalkers, np.int(self.npars), self.lnprob, a = self.acceptRate, moves=self.moves, **kwargs)
+            self.sampler = emcee.EnsembleSampler(self.nwalkers, int(self.npars), self.lnprob, a = self.acceptRate, moves=self.moves, **kwargs)
         else:
             self.logger.info("No arguments passed, proceeding with sampler as is")
 
@@ -236,7 +236,7 @@ Additional keyword arguments to pass to the super class.
                 #print(guess)
             except AttributeError: #not all components have a ptform, so we'll do this the simple way
                 self.logger.info("Drawing from prior transform failed, drawing randomly")
-                guess = [np.random.randn(np.int(self.npars)) for i in range(self.nwalkers)]
+                guess = [np.random.randn(int(self.npars)) for i in range(self.nwalkers)]
         #print('dimensions of guess = ', np.shape(guess))
         #print('nsamples = ', nsamples)
         #print('burnin = ', burnin)
@@ -262,7 +262,7 @@ Additional keyword arguments to pass to the super class.
                 #Guess is not appropriate, need to do something here!
                 raise ValueError("guess does not conform to expectations")
             newguess = self.preopt(start)
-            guess = [newguess + guessscale*np.random.randn(np.int(self.npars)) for i in range(self.nwalkers)]
+            guess = [newguess + guessscale*np.random.randn(int(self.npars)) for i in range(self.nwalkers)]
             
         self.nsamp = nsamples
         self.burnin = burnin

@@ -107,14 +107,14 @@ if __name__=="__main__":
     
     #model.lnprior = lnprior
 
-    print(opt.npars,np.int(opt.npars))
+    print(opt.npars,int(opt.npars))
     """ Run it """
     pos = [
            [
                250., 23., 0., 3., 1., 0.5, 1., 1., 0.5, 1.
-               #20 + np.random.randn() for i in range(np.int(opt.npars))
+               #20 + np.random.randn() for i in range(int(opt.npars))
            ]
-           + np.random.randn(np.int(opt.npars)) for j in range(opt.nwalkers)
+           + np.random.randn(int(opt.npars)) for j in range(opt.nwalkers)
           ]
     print(pos[0])
     print(np.max(pos, axis=0))

@@ -56,7 +56,7 @@ class DynestyNestedSampler(BaseNestedSampler):
         ##self.npars = something # total number of parameters
         ##self.nparsMod = something #number of parameters for the model
         #self.nparsData = [data.npars for data in self.dataSet] #number of parameters to be passed into each set of data
-        #self.npars = np.int(self.nparsMod + np.sum(self.nparsData))
+        #self.npars = int(self.nparsMod + np.sum(self.nparsData))
         #print(self.npars, self.nparsMod, self.nparsData)
         #self.parLabels = ['x'+str(i) for i in range(self.npars)] #Parameter for parameter names (labels) to associate with output in post processing
         self.sampler = NestedSampler(self.lnlike, self.prior_transform, self.npars,

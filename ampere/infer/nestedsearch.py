@@ -47,7 +47,7 @@ class BaseNestedSampler(BaseSearch, Logger):
                 sig = signature(model.__call__)
                 self.nparsMod = len(sig.parameters) - 1 #Always subtract **kwargs from the parameters, but don't need to worry about self once it is bound to an instance
         self.nparsData = [data.npars for data in self.dataSet] #number of parameters to be passed into each set of data
-        self.npars = np.int(self.nparsMod + np.sum(self.nparsData))
+        self.npars = int(self.nparsMod + np.sum(self.nparsData))
 
         if parameter_labels is None:
             #The user hasn't specified parameter labels, let's see if the models and data have instead

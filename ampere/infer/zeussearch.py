@@ -36,14 +36,14 @@ class ZeusSearch(EnsembleSampler,
         if vectorize:
             self.logger.info("Using vectorised posterior")
             #self.lnprob = self.lnprob_vector
-            self.sampler = zeus.EnsembleSampler(self.nwalkers, np.int(self.npars), self.lnprob_vector, moves=self.moves, vectorize=True)#, args=self.dataSet)
+            self.sampler = zeus.EnsembleSampler(self.nwalkers, int(self.npars), self.lnprob_vector, moves=self.moves, vectorize=True)#, args=self.dataSet)
         else:
-            self.sampler = zeus.EnsembleSampler(self.nwalkers, np.int(self.npars), self.lnprob, moves=self.moves)#, args=self.dataSet)
+            self.sampler = zeus.EnsembleSampler(self.nwalkers, int(self.npars), self.lnprob, moves=self.moves)#, args=self.dataSet)
 
 
     def __call__(self, guess=None, **kwargs):
         if guess is None:
-            guess = [np.random.randn(np.int(self.npars)) for i in range(self.nwalkers)]
+            guess = [np.random.randn(int(self.npars)) for i in range(self.nwalkers)]
         self.sampler.run_mcmc(guess, self.nsamp)
         self.allSamples = self.sampler.chain
         self.samples = self.sampler.chain[:, self.burnin, :].reshape((-1, self.npars))
@@ -71,7 +71,7 @@ class ZeusSearch(EnsembleSampler,
             ''' first destroy the sampler '''
             self.sampler=None
             ''' now rebuild it '''
-            self.sampler = zeus.EnsembleSampler(self.nwalkers, np.int(self.npars), self.lnprob, moves = self.moves, **kwargs)
+            self.sampler = zeus.EnsembleSampler(self.nwalkers, int(self.npars), self.lnprob, moves = self.moves, **kwargs)
 
     def lnprior(self, theta, **kwargs):
         """
@@ -101,7 +101,7 @@ class ZeusSearch(EnsembleSampler,
                 self.logger.info("Initial guess = ",guess)
             except AttributeError: #not all components have a ptform, so we'll do this the simple way
                 self.logger.info("Drawing from prior transform failed, drawing randomly")
-                guess = [np.random.randn(np.int(self.npars)) for i in range(self.nwalkers)]
+                guess = [np.random.randn(int(self.npars)) for i in range(self.nwalkers)]
 
         if preopt:
             self.logger.info("Searching for approximate MAP solution as starting point for MCMC")
@@ -120,7 +120,7 @@ class ZeusSearch(EnsembleSampler,
                 #Guess is not appropriate, need to do something here!
                 raise ValueError("guess does not conform to expectations")
             newguess = self.preopt(start)
-            guess = [newguess + guessscale*np.random.randn(np.int(self.npars)) for i in range(self.nwalkers)]
+            guess = [newguess + guessscale*np.random.randn(int(self.npars)) for i in range(self.nwalkers)]
             
         self.nsamp = nsamples
         self.burnin = burnin
