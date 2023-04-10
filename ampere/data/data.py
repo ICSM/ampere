@@ -16,6 +16,7 @@ from scipy.stats import rv_continuous, norm, halfnorm
 #from scipy.linalg import inv
 from numpy.linalg import inv
 
+
 class Data(object):
     """A base class to represent data objects and their properties
 
@@ -52,7 +53,7 @@ class Data(object):
 
     _ismasked = False
 
-    def __init__(**kwargs):
+    def __init__(self, **kwargs):
         pass
 
     def __call__(self, **kwargs):
@@ -76,7 +77,8 @@ class Data(object):
         pass
 
     def fromTable(self, table, format, **kwargs):
-        '''Routine to generate data object from an astropy Table object or a file containing data in a format that can be read in as an astropy Table
+        '''Routine to generate data object from an astropy Table object or a file 
+        containing data in a format that can be read in as an astropy Table
         '''
         pass
 
@@ -87,30 +89,35 @@ class Data(object):
         pass
 
     def selectWaves(self, low = 0, up = np.inf, interval = "closed", **kwargs):
-        '''Method to generate a mask for the data by wavelength. Uses interval terminology to determine how the limits are treated.
+        '''Method to generate a mask for the data by wavelength. Uses interval 
+        terminology to determine how the limits are treated.
 
-        This function generates a mask for the data by selecting the data points with wavelengths in the specified range. The
-        limits of the range are defined by the low and up parameters, and the way the limits are treated is determined by
-        the interval parameter.
+        This function generates a mask for the data by selecting the data points with 
+        wavelengths in the specified range. The limits of the range are defined by the 
+        low and up parameters, and the way the limits are treated is determined by the 
+        interval parameter.
 
-        If interval is "closed", both low and up are treated as closed intervals, meaning that data points with
-        wavelengths equal to low and up are included in the mask. If interval is "left-open", low is treated as an
-        open interval and up is treated as a closed interval. If interval is "right-open", low is treated as a closed
-        interval and up is treated as an open interval. If interval is "open", both low and up are treated as open
-        intervals.
+        If interval is "closed", both low and up are treated as closed intervals, 
+        meaning that data points with wavelengths equal to low and up are included in 
+        the mask. If interval is "left-open", low is treated as an open interval and up 
+        is treated as a closed interval. If interval is "right-open", low is treated as 
+        a closed interval and up is treated as an open interval. If interval is "open", 
+        both low and up are treated as open intervals.
 
-        If the object has a pre-existing mask, the new mask is combined with the existing mask using a logical AND operation.
-        Otherwise, the new mask is stored in the object as the current mask.
+        If the object has a pre-existing mask, the new mask is combined with the 
+        existing mask using a logical AND operation. Otherwise, the new mask is stored 
+        in the object as the current mask.
 
         Parameters
         ----------
         low : float, optional
-        The lower limit of the wavelength range. Default is 0.
+            The lower limit of the wavelength range. Default is 0.
         up : float, optional
-        The upper limit of the wavelength range. Default is infinity.
+            The upper limit of the wavelength range. Default is infinity.
         interval : str, optional
-        The type of interval to use for the limits. Valid values are "closed", "left-open", "right-open", and "open".
-        Default is "closed".
+            The type of interval to use for the limits. Valid values are "closed", 
+            "left-open", "right-open", and "open".
+            Default is "closed".
         '''
 
         if interval == "closed": #Both arguments will be treated with less/greater-than-or-equal-to
@@ -187,11 +194,6 @@ class Data(object):
         self.cov_mask = np.outer(self.mask, self.mask)
 
         self.cov()
-
-    
-    
-                   
-
 
 
 class Image(Data):
