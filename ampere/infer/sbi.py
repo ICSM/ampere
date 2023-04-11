@@ -285,11 +285,13 @@ class SBI_SNPE(LFIBase, SBIPostProcessor):
             if embedding_net in [True, "default", "Conv", "CNN"]:
                 from sbi.neural_nets.embedding_nets import CNNEmbedding
                 embedding_net = CNNEmbedding(input_shape=data_shape, output_dim=2*self.npars)
+                self.logger.info("Using default CNN embedding net")
             elif embedding_net in ["FC"]:
                 from sbi.neural_nets.embedding_nets import FCEmbedding
                 embedding_net = FCEmbedding(input_dim=data_shape[0], output_dim=2*self.npars)
+                self.logger.info("Using default fully-connected embedding net")
             elif isinstance(embedding_net, nn.Module):
-                pass
+                self.logger.info("Using user-defined embedding net")
             elif isinstance(embedding_net, dict):
                 #embedding_net is a dictionary of parameters for one of the default embedding nets
                 net = embedding_net.get("type", "CNN")
@@ -310,13 +312,20 @@ class SBI_SNPE(LFIBase, SBIPostProcessor):
                                                  num_linear_layers=n_linear_layers, 
                                                  num_linear_units=num_linear_units, 
                                                  pool_kernel_size=pool_kernel_size)
+                    self.logger.info("Using default CNN embedding net with user-defined parameters")
+                    self.logger.info("Network:")
+                    self.logger.info(embedding_net)
                 elif net in ["FC", "FullyConnected"]:
+                    from sbi.neural_nets.embedding_nets import FCEmbedding
                     n_layers = embedding_net.get("n_layers", 2)
                     num_hiddens = embedding_net.get("num_hiddens", 40)
                     embedding_net = FCEmbedding(input_dim=data_shape[0],
                                                 output_dim=output_dim,
                                                 num_layers=n_layers,
                                                 num_hiddens=num_hiddens)
+                    self.logger.info("Using default fully-connected embedding net with user-defined parameters")
+                    self.logger.info("Network:")
+                    self.logger.info(embedding_net)
             elif isinstance(embedding_net, str):
                 raise ValueError(f"Unknown embedding net type {embedding_net}")
             else:
