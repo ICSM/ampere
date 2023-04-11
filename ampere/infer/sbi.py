@@ -259,6 +259,7 @@ class SBI_SNPE(LFIBase, SBIPostProcessor):
                  n_prior_norm_samples=100000,
                  prior_norm_thres=0.01,
                  cache_models=True,
+                 embedding_net=None,
                  **kwargs):
         super().__init__(model=model, data= data, verbose=verbose,
                          parameter_labels=parameter_labels,
@@ -278,7 +279,56 @@ class SBI_SNPE(LFIBase, SBIPostProcessor):
             prior, *_ = process_prior(self)
 
         self.prior = prior
-        self.sampler = SNPE(prior=prior)
+        if embedding_net:
+            from torch import nn
+            data_shape = (np.sum([data.value.shape[0] for data in self.dataSet]) ,)#this highlights an important issue - data objects need to define their __len__ in an appropriate way, but this will do for now
+            if embedding_net in [True, "default", "Conv", "CNN"]:
+                from sbi.neural_nets.embedding_nets import CNNEmbedding
+                embedding_net = CNNEmbedding(input_shape=data_shape, output_dim=2*self.npars)
+            elif embedding_net in ["FC"]:
+                from sbi.neural_nets.embedding_nets import FCEmbedding
+                embedding_net = FCEmbedding(input_dim=data_shape[0], output_dim=2*self.npars)
+            elif isinstance(embedding_net, nn.Module):
+                pass
+            elif isinstance(embedding_net, dict):
+                #embedding_net is a dictionary of parameters for one of the default embedding nets
+                net = embedding_net.get("type", "CNN")
+                output_dim = embedding_net.get("output_dim", 2*self.npars)
+                if net in ["CNN", "Conv"]:
+                    from sbi.neural_nets.embedding_nets import CNNEmbedding
+                    n_conv_layers = embedding_net.get("n_conv_layers", 2)
+                    out_channels_per_layer = embedding_net.get("out_channels_per_layer", [6, 12])
+                    kernel_size_per_layer = embedding_net.get("kernel_size_per_layer", 5)
+                    n_linear_layers = embedding_net.get("n_linear_layers", 2)
+                    num_linear_units = embedding_net.get("num_linear_units", 50)
+                    pool_kernel_size = embedding_net.get("pool_kernel_size", 2)
+                    embedding_net = CNNEmbedding(input_shape=data_shape, 
+                                                 output_dim=output_dim, 
+                                                 num_conv_layers = n_conv_layers, 
+                                                 out_channels_per_layer=out_channels_per_layer, 
+                                                 kernel_size_per_layer=kernel_size_per_layer, 
+                                                 num_linear_layers=n_linear_layers, 
+                                                 num_linear_units=num_linear_units, 
+                                                 pool_kernel_size=pool_kernel_size)
+                elif net in ["FC", "FullyConnected"]:
+                    n_layers = embedding_net.get("n_layers", 2)
+                    num_hiddens = embedding_net.get("num_hiddens", 40)
+                    embedding_net = FCEmbedding(input_dim=data_shape[0],
+                                                output_dim=output_dim,
+                                                num_layers=n_layers,
+                                                num_hiddens=num_hiddens)
+            elif isinstance(embedding_net, str):
+                raise ValueError(f"Unknown embedding net type {embedding_net}")
+            else:
+                raise ValueError(f"Unknown embedding net type {embedding_net}")
+            neural_posterior = utils.posterior_nn(model="maf", 
+                                                  embedding_net=embedding_net, 
+                                                  hidden_features=10, 
+                                                  num_transforms=2
+                                                  )
+            self.sampler = SNPE(prior=prior, density_estimator=neural_posterior)
+        else:
+            self.sampler = SNPE(prior=prior)
 
     def _check_prior_normalisation(self, n_prior_norm_samples=100000, 
                                    prior_norm_thres=0.01):
