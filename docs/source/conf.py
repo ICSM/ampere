@@ -19,8 +19,11 @@ from datetime import date
 # -- Project information -----------------------------------------------------
 
 project = 'AMPERE'
-copyright = f'{date.today().year}, Peter Scicluna, Francisca Kemper, Sundar Srinivasan, Jonathan Marshall, Sacha Hony, Sascha Zeegers, Lapo Fanciullo'
-author = 'Peter Scicluna, Francisca Kemper, Sundar Srinivasan, Jonathan Marshall, Sacha Hony, Sascha Zeegers, Lapo Fanciullo'
+copyright = f'{date.today().year}, Peter Scicluna, Francisca Kemper, Sundar'\
+             ' Srinivasan, Jonathan Marshall, Sacha Hony, Sascha Zeegers, '\
+             'Lapo Fanciullo'
+author = 'Peter Scicluna, Francisca Kemper, Sundar Srinivasan, Jonathan'\
+         ' Marshall, Sacha Hony, Sascha Zeegers, Lapo Fanciullo'
 
 
 # -- General configuration ---------------------------------------------------
@@ -31,8 +34,8 @@ author = 'Peter Scicluna, Francisca Kemper, Sundar Srinivasan, Jonathan Marshall
 extensions = ['sphinx.ext.autodoc',
               'sphinx.ext.napoleon',
               'sphinx.ext.mathjax',
-              'nbsphinx'#'sphinx.ext.imgmath'
-]
+              'nbsphinx'  # 'sphinx.ext.imgmath'
+              ]
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
@@ -60,4 +63,4 @@ autodoc_mock_imports = ['bs4', 'requests', 'astropy', 'emcee']
 
 nbsphinx_allow_errors = True
 
-#imgmath_latex = "latex"
+# imgmath_latex = "latex"
