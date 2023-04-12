@@ -131,8 +131,9 @@ class Data(object):
         elif interval == "open": #neither limit will be treated with less-than-or-equal-to
             mask = np.logical_and(self.wavelength > low, self.wavelength < up)
             
-        #Now we add check to make sure that if masks have previously been defined we don't overwrite them, and only accept values 
-        #that pass both masks. Otherwise, we define a mask.
+        # Now we add check to make sure that if masks have previously been defined we 
+        # don't overwrite them, and only accept values that pass both masks. Otherwise, 
+        # we define a mask.
         if self._ismasked:
             self.mask = np.logical_and(mask, self.mask)
         else:
