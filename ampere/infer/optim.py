@@ -1,7 +1,6 @@
 from __future__ import print_function
 
 import numpy as np
-import pickle
 from datetime import datetime
 from ..logger import Logger
 from .basesearch import BaseSearch
@@ -12,7 +11,7 @@ from ..data import Photometry, Spectrum
 
 class OptimBase(BaseSearch, Logger):
     """ A base class for MAP inferece algorithms.
-    
+
     This class will be used to derive subclasses that wrap specific
     optimisation algorithms.
     """
@@ -41,7 +40,7 @@ class OptimBase(BaseSearch, Logger):
 
     _inference_method = "Optimisation"
 
-    def __init__(self, 
+    def __init__(self,
                  model=None,
                  data=None,
                  verbose=False,
@@ -105,10 +104,11 @@ class OptimBase(BaseSearch, Logger):
         # Now we should check whether the number of parameters matches with
         # the parameter labels!
         if len(self.parLabels) != self.npars:
-            self.logger.critical("You have %d free parameters but %d parameter labels",
+            self.logger.critical("You have %d parameters but %d labels",
                                  self.npars, len(self.parLabels))
-            self.logger.critical("Please check the number of parameters and labels")
-            raise ValueError("Mismatch between number of parameters and labels")
+            self.logger.critical("Please check parameters and labels")
+            raise ValueError("Mismatch between number of parameters and labels"
+                             )
 
     @property
     def name(self):
@@ -122,8 +122,8 @@ class OptimBase(BaseSearch, Logger):
             modelname = self.model.__class__.__name__
         if self.namestyle == 'full':
             self._name = ("ampere_"+str(datetime.now()
-                                       ).replace(' ',
-                                                 '_').replace(":", "-")[:-7]
+                                        ).replace(' ',
+                                                  '_').replace(":", "-")[:-7]
                           + "_" + modelname + "_" + name
                           )
         elif self.namestyle == "model":
@@ -131,12 +131,44 @@ class OptimBase(BaseSearch, Logger):
         elif self.namestyle == "short":
             self._name = name
         elif self.namestyle == "stamp":
-            self._name = ("ampere_"+str(datetime.now()).replace(' ',
-                                                                '_').replace(":",
-                                                                             "-")[:-7]
+            self._name = ("ampere_" +
+                          str(datetime.now()).replace(' ',
+                                                      '_').replace(":",
+                                                                   "-")[:-7]
                           + "_" + name
                           )
- 
+
+    def optimize_with_restarts(self,
+                               n_restarts=10,
+                               guesses=None,
+                               **kwargs):
+        for i in range(n_restarts):
+            self.logger.info("Optimisation restart %s", i)
+            guess = guesses[i] if guesses is not None else None
+            solution = self.optimize(guess=guess, return_solution=True,
+                                     **kwargs)
+            # now we have to check if this is the best solution so far
+            # and add the final solution to the chain
+            if i == 0:
+                self.bestPars = self.solution
+                self.bestLnprob = solution.fun
+                self.chain = [(self.bestPars, self.bestLnprob)]
+                i_best = 0
+            else:
+                if solution.fun > self.bestLnprob:
+                    self.bestPars = self.solution
+                    self.bestLnprob = solution.fun
+                    i_best = i
+                self.chain.append((self.solution, solution.fun))
+            self.logger.info("Best solution so far: %s", self.bestPars)
+            self.logger.info("Found at restart %s", i_best)
+            self.logger.info("With lnprob: %s", self.bestLnprob)
+        # now we have to set the solution to the best one
+        self.solution = self.bestPars  # so that get_map works
+        self.logger.info("Optimisation complete")
+        # convert the chain to a numpy array so it is easier to work with
+        self.chain = np.array(self.chain)
+
     def get_map(self, **kwargs):
         """Get the maximum a posteriori (MAP) point.
         """
@@ -151,14 +183,15 @@ class OptimBase(BaseSearch, Logger):
         if self.bestPars is not None:
             self.logger.info("MAP solution:")
             for i in range(self.npars):
-                self.logger.info("%s  = %.5f", self.parLabels[i],self.bestPars[i])
+                self.logger.info("%s  = %.5f", self.parLabels[i],
+                                 self.bestPars[i])
 
     def plot_posteriorpredictive(self,
-                                 plotfile=None, 
+                                 plotfile=None,
                                  save=True,
-                                 logx=False, 
+                                 logx=False,
                                  logy=False,
-                                 xlims=None, 
+                                 xlims=None,
                                  ylims=None,
                                  show=False,
                                  return_figure=False,
@@ -175,7 +208,7 @@ class OptimBase(BaseSearch, Logger):
         density (in mJy). The x-axis can be set to a log scale by setting logx
         to True. The y-axis can be set to a log scale by setting logy to True.
         Additional keyword arguments can be passed in **kwargs to specify
-        additional plot properties. 
+        additional plot properties.
 
         Parameters
         ----------
@@ -280,7 +313,7 @@ class ScipyMinOpt(OptimBase):
                  name='',
                  namestyle="full",
                  **kwargs):
-        
+
         super().__init__(model=model, data=data, verbose=verbose,
                          parameter_labels=parameter_labels, name=name,
                          namestyle=namestyle, **kwargs)
@@ -291,9 +324,10 @@ class ScipyMinOpt(OptimBase):
                  tol=None,
                  return_solution=False,
                  **kwargs):
-        
+
         from scipy.optimize import minimize
         self.logger.info("Starting optimisation")
+
         def neglnprob(*args):
             return -self.lnprob(*args)
         if guess is None:
@@ -303,9 +337,9 @@ class ScipyMinOpt(OptimBase):
             try:
                 self.logger.info("Attempting to draw from prior transform")
                 u = np.array([0.5 for _ in range(self.npars)])
-                guess = self.model.priorTransform(u)
+                guess = self.prior_transform(u)
             except AttributeError:
-                self.logger.warning("No prior transform found, using random guess")
+                self.logger.warning("No prior transform, using random guess")
                 guess = np.random.rand(self.npars)
         self.logger.info("starting from position: %s", guess)
         solution = minimize(neglnprob, guess, method=method, tol=tol, **kwargs)
@@ -319,37 +353,6 @@ class ScipyMinOpt(OptimBase):
             self.logger.warning("Message: %s", solution.message)
         if return_solution:
             return solution
-
-    def optimize_with_restarts(self,
-                               n_restarts=10,
-                               guesses=None,
-                               **kwargs):
-        for i in range(n_restarts):
-            self.logger.info("Optimisation restart %s", i)
-            guess = guesses[i] if guesses is not None else None
-            solution = self.optimize(guess=guess, return_solution=True, 
-                                     **kwargs)
-            # now we have to check if this is the best solution so far
-            # and add the final solution to the chain
-            if i == 0:
-                self.bestPars = self.solution
-                self.bestLnprob = solution.fun
-                self.chain = [(self.bestPars, self.bestLnprob)]
-                i_best = 0
-            else:
-                if solution.fun > self.bestLnprob:
-                    self.bestPars = self.solution
-                    self.bestLnprob = solution.fun
-                    i_best = i
-                self.chain.append((self.solution, solution.fun))
-            self.logger.info("Best solution so far: %s", self.bestPars)
-            self.logger.info("Found at restart %s", i_best)
-            self.logger.info("With lnprob: %s", self.bestLnprob)
-        # now we have to set the solution to the best one
-        self.solution = self.bestPars # so that get_map works
-        self.logger.info("Optimisation complete")
-        # convert the chain to a numpy array so it is easier to work with
-        self.chain = np.array(self.chain)
 
 
 class ScipyBasinOpt(OptimBase):
@@ -373,12 +376,47 @@ class ScipyBasinOpt(OptimBase):
                  name='',
                  namestyle="full",
                  **kwargs):
-        
+
         super().__init__(model=model, data=data, verbose=verbose,
                          parameter_labels=parameter_labels, name=name,
                          namestyle=namestyle, **kwargs)
 
-    pass
+    def optimize(self,
+                 guess=None,
+                 niter=100,
+                 minimizer_kwargs=None,
+                 return_solution=False,
+                 **kwargs):
+        from scipy.optimize import basinhopping
+        self.logger.info("Starting optimisation")
+
+        def neglnprob(*args):
+            return -self.lnprob(*args)
+        if guess is None:
+            # no guess, let's attempt to draw one from the prior and use
+            # a value roughly in the middle
+            self.logger.info("No inital guess provided")
+            try:
+                self.logger.info("Attempting to draw from prior transform")
+                u = np.array([0.5 for _ in range(self.npars)])
+                guess = self.prior_transform(u)
+            except AttributeError:
+                self.logger.warning("No prior transform, using random guess")
+                guess = np.random.rand(self.npars)
+        self.logger.info("starting from position: %s", guess)
+        solution = basinhopping(neglnprob, guess, niter=niter,
+                                minimizer_kwargs=minimizer_kwargs, **kwargs)
+        self.solution = list(solution.x)
+        self.logger.info("Optimisation completed in %s iterations",
+                         solution.nit)
+        self.logger.info("after %s function calls",
+                         solution.nfev)
+        if not solution.success:
+            self.logger.warning("Optimisation did not converge")
+            self.logger.warning("Message: %s", solution.message)
+        if return_solution:
+            return solution
+
 
 class ScipyDE(OptimBase):
     """A wrapper for scipy.optimize.differential_evolution
@@ -393,7 +431,82 @@ class ScipyDE(OptimBase):
 
     _inference_method = "Scipy Differential Evolution"
 
-    pass
+    def __init__(self,
+                 model=None,
+                 data=None,
+                 verbose=False,
+                 parameter_labels=None,
+                 name='',
+                 namestyle="full",
+                 **kwargs):
+
+        super().__init__(model=model, data=data, verbose=verbose,
+                         parameter_labels=parameter_labels, name=name,
+                         namestyle=namestyle, **kwargs)
+
+    def optimize(self,
+                 popsize=15,
+                 maxiter=1000,
+                 strategy='best1bin',
+                 tol=0.01,
+                 mutation=(0.5, 1),
+                 recombination=0.7,
+                 seed=None,
+                 polish=True,
+                 atol=0,
+                 updating='immediate',
+                 guess=None,
+                 return_solution=False,
+                 **kwargs):
+        from scipy.optimize import differential_evolution
+        self.logger.info("Starting optimisation")
+
+        # DE requires a bounds argument to be passed
+        # but our models may not be bounded
+        # hence, we'll let DE run in the unit cube
+        # and transform the parameters back to the
+        # prior volume with the prior transform
+        def neglnprob(*args):
+            theta = self.prior_transform(*args)
+            return -self.lnprob(theta)
+
+        bounds = [(0, 1) for _ in range(self.npars)]
+        if guess is None:
+            # Unlike other scipy minimisers, DE requires a population
+            # of guesses to start from, but since we've already
+            # incorporated the prior transform, we'll just use
+            # a population of random numbers in the unit cube
+            self.logger.info("No inital guess provided")
+            self.logger.info("Using random population")
+            guess = np.random.rand(popsize, self.npars)
+        elif (isinstance(guess, np.ndarray)
+              and guess.shape != (popsize, self.npars)):
+            self.logger.info("Guess is not a population, ")
+            self.logger.info("adding random purturbations")
+            guess = np.array([guess + tol*np.random.randn(self.npars)
+                              for _ in range(popsize)])
+        self.logger.info("starting from population: %s", guess)
+
+        solution = differential_evolution(neglnprob, bounds,
+                                          popsize=popsize, maxiter=maxiter,
+                                          strategy=strategy, tol=tol,
+                                          mutation=mutation,
+                                          recombination=recombination,
+                                          seed=seed, polish=polish, atol=atol,
+                                          updating=updating,
+                                          init=guess,
+                                          **kwargs)
+        # transform back to the prior volume
+        self.solution = self.prior_transform(*list(solution.x))
+        self.logger.info("Optimisation completed in %s iterations",
+                         solution.nit)
+        self.logger.info("after %s function calls",
+                         solution.nfev)
+        if not solution.success:
+            self.logger.warning("Optimisation did not converge")
+            self.logger.warning("Message: %s", solution.message)
+        if return_solution:
+            return solution
 
 
 class ScipyDualAnneal(OptimBase):
@@ -409,7 +522,243 @@ class ScipyDualAnneal(OptimBase):
 
     _inference_method = "Scipy Dual Annealing"
 
-    pass
+    def __init__(self,
+                 model=None,
+                 data=None,
+                 verbose=False,
+                 parameter_labels=None,
+                 name='',
+                 namestyle="full",
+                 **kwargs):
+
+        super().__init__(model=model, data=data, verbose=verbose,
+                         parameter_labels=parameter_labels, name=name,
+                         namestyle=namestyle, **kwargs)
+
+    def optimize(self,
+                 guess=None,
+                 bounds=None,
+                 maxiter=1000,
+                 local_search_options=None,
+                 initial_temp=5230,
+                 restart_temp_ratio=2e-05,
+                 visit=2.62,
+                 accept=-5.0,
+                 maxfun=1e+07,
+                 seed=None,
+                 no_local_search=False,
+                 return_solution=False,
+                 **kwargs):
+        from scipy.optimize import dual_annealing
+        self.logger.info("Starting optimisation")
+
+        # DA requires a bounds argument to be passed
+        # but our models may not be bounded
+        # hence, we'll let DA run in the unit cube
+        # and transform the parameters back to the
+        # prior volume with the prior transform
+        def neglnprob(*args):
+            theta = self.prior_transform(*args)
+            return -self.lnprob(theta)
+
+        bounds = [(0, 1) for _ in range(self.npars)]
+        if guess is None:
+            # DA requires a guess to start from
+            # but since we've already incorporated the prior transform,
+            # we'll just use a random number in the unit cube
+            self.logger.info("No inital guess provided")
+            self.logger.info("Using random guess")
+            guess = np.random.rand(self.npars)
+        self.logger.info("starting from position: %s", guess)
+
+        solution = dual_annealing(neglnprob, bounds,
+                                  maxiter=maxiter,
+                                  local_search_options=local_search_options,
+                                  initial_temp=initial_temp,
+                                  restart_temp_ratio=restart_temp_ratio,
+                                  visit=visit,
+                                  accept=accept,
+                                  maxfun=maxfun,
+                                  seed=seed,
+                                  no_local_search=no_local_search,
+                                  **kwargs)
+        # transform back to the prior volume
+        self.solution = self.prior_transform(*list(solution.x))
+        self.logger.info("Optimisation completed in %s iterations",
+                         solution.nit)
+        self.logger.info("after %s function calls",
+                         solution.nfev)
+        if not solution.success:
+            self.logger.warning("Optimisation did not converge")
+            self.logger.warning("Message: %s", solution.message)
+        if return_solution:
+            return solution
+
+
+class ScipyShgo(OptimBase):
+    """A wrapper for scipy.optimize.shgo
+
+    _extended_summary_
+
+    Parameters
+    ----------
+    OptimBase : _type_
+        _description_
+    """
+
+    _inference_method = "Scipy SHGO"
+
+    def __init__(self,
+                 model=None,
+                 data=None,
+                 verbose=False,
+                 parameter_labels=None,
+                 name='',
+                 namestyle="full",
+                 **kwargs):
+
+        super().__init__(model=model, data=data, verbose=verbose,
+                         parameter_labels=parameter_labels, name=name,
+                         namestyle=namestyle, **kwargs)
+
+    def optimize(self,
+                 guess=None,
+                 bounds=None,
+                 n=100,
+                 iters=1,
+                 sampling_method='simplicial',
+                 options=None,
+                 minimizer_kwargs=None,
+                 callback=None,
+                 disp=False,
+                 return_solution=False,
+                 **kwargs):
+        from scipy.optimize import shgo
+        self.logger.info("Starting optimisation")
+
+        # DA requires a bounds argument to be passed
+        # but our models may not be bounded
+        # hence, we'll let DA run in the unit cube
+        # and transform the parameters back to the
+        # prior volume with the prior transform
+        def neglnprob(*args):
+            theta = self.prior_transform(*args)
+            return -self.lnprob(theta)
+
+        bounds = [(0, 1) for _ in range(self.npars)]
+        if guess is None:
+            # DA requires a guess to start from
+            # but since we've already incorporated the prior transform,
+            # we'll just use a random number in the unit cube
+            self.logger.info("No inital guess provided")
+            self.logger.info("Using random guess")
+            guess = np.random.rand(self.npars)
+        self.logger.info("starting from position: %s", guess)
+
+        solution = shgo(neglnprob, bounds,
+                        n=n,
+                        iters=iters,
+                        sampling_method=sampling_method,
+                        options=options,
+                        minimizer_kwargs=minimizer_kwargs,
+                        callback=callback,
+                        disp=disp,
+                        **kwargs)
+        # transform back to the prior volume
+        self.solution = self.prior_transform(*list(solution.x))
+        self.logger.info("Optimisation completed in %s iterations",
+                         solution.nit)
+        self.logger.info("after %s function calls",
+                         solution.nfev)
+        if not solution.success:
+            self.logger.warning("Optimisation did not converge")
+            self.logger.warning("Message: %s", solution.message)
+        if return_solution:
+            return solution
+
+
+class ScipyDirect(OptimBase):
+    """A wrapper for scipy.optimize.direct
+
+    _extended_summary_
+
+    Parameters
+    ----------
+    OptimBase : _type_
+        _description_
+    """
+
+    _inference_method = "Scipy DIRECT"
+
+    def __init__(self,
+                 model=None,
+                 data=None,
+                 verbose=False,
+                 parameter_labels=None,
+                 name='',
+                 namestyle="full",
+                 **kwargs):
+
+        super().__init__(model=model, data=data, verbose=verbose,
+                         parameter_labels=parameter_labels, name=name,
+                         namestyle=namestyle, **kwargs)
+
+    def optimize(self,
+                 guess=None,
+                 bounds=None,
+                 eps=1e-4,
+                 maxiter=1000,
+                 maxfun=None,
+                 locally_biased=True,
+                 f_min=-np.inf,
+                 f_min_rtol=0.0001,
+                 vol_tol=1e-16,
+                 len_tol=1e-06,
+                 return_solution=False,
+                 **kwargs):
+        from scipy.optimize import direct
+        self.logger.info("Starting optimisation")
+
+        # DA requires a bounds argument to be passed
+        # but our models may not be bounded
+        # hence, we'll let DA run in the unit cube
+        # and transform the parameters back to the
+        # prior volume with the prior transform
+        def neglnprob(*args):
+            theta = self.prior_transform(*args)
+            return -self.lnprob(theta)
+
+        bounds = [(0, 1) for _ in range(self.npars)]
+        if guess is None:
+            # DA requires a guess to start from
+            # but since we've already incorporated the prior transform,
+            # we'll just use a random number in the unit cube
+            self.logger.info("No inital guess provided")
+            self.logger.info("Using random guess")
+            guess = np.random.rand(self.npars)
+        self.logger.info("starting from position: %s", guess)
+
+        solution = direct(neglnprob, bounds,
+                          maxiter=maxiter,
+                          maxfun=maxfun,
+                          eps=eps,
+                          locally_biased=locally_biased,
+                          f_min=f_min,
+                          f_min_rtol=f_min_rtol,
+                          vol_tol=vol_tol,
+                          len_tol=len_tol,
+                          **kwargs)
+        # transform back to the prior volume
+        self.solution = self.prior_transform(*list(solution.x))
+        self.logger.info("Optimisation completed in %s iterations",
+                         solution.nit)
+        self.logger.info("after %s function calls",
+                         solution.nfev)
+        if not solution.success:
+            self.logger.warning("Optimisation did not converge")
+            self.logger.warning("Message: %s", solution.message)
+        if return_solution:
+            return solution
 
 
 class AxOpt(OptimBase):
@@ -426,6 +775,7 @@ class AxOpt(OptimBase):
     _inference_method = "Ax"
 
     pass
+
 
 class AxBO(OptimBase):
     """A wrapper for Bayesian Optimisation with Ax
