@@ -7,6 +7,7 @@ from ..logger import Logger
 from .basesearch import BaseSearch
 from inspect import signature
 import matplotlib.pyplot as plt
+from ..data import Photometry, Spectrum
 
 
 class OptimBase(BaseSearch, Logger):
@@ -131,10 +132,10 @@ class OptimBase(BaseSearch, Logger):
             self._name = name
         elif self.namestyle == "stamp":
             self._name = ("ampere_"+str(datetime.now()).replace(' ',
-                                                               '_').replace(":",
-                                                                            "-")[:-7]
-                                  + "_" + name
-                         )
+                                                                '_').replace(":",
+                                                                             "-")[:-7]
+                          + "_" + name
+                          )
  
     def get_map(self, **kwargs):
         """Get the maximum a posteriori (MAP) point.
@@ -202,19 +203,19 @@ class OptimBase(BaseSearch, Logger):
 
         if logx:
             axes.set_xscale('log')
-        if logy: 
+        if logy:
             axes.set_yscale('log')
 
-        #observations
+        # observations
         for d in self.dataSet:
-            if isinstance(d,(Photometry,Spectrum)):
-                d.plot(ax = axes)
+            if isinstance(d, (Photometry, Spectrum)):
+                d.plot(ax=axes)
 
-        #best fit model
+        # best fit model
         try:
             self.model(*self.bestPars[:self.nparsMod])
             axes.plot(self.model.wavelength, self.model.modelFlux, '-',
-                      color='k', alpha=1.0,label='MAP', zorder=8)
+                      color='k', alpha=1.0, label='MAP', zorder=8)
         except ValueError:
             self.logger.warning("Error in MAP solution")
             self.logger.warning("Skipping MAP in plot")
@@ -288,6 +289,7 @@ class ScipyMinOpt(OptimBase):
                  guess=None,
                  method=None,
                  tol=None,
+                 return_solution=False,
                  **kwargs):
         
         from scipy.optimize import minimize
@@ -315,15 +317,39 @@ class ScipyMinOpt(OptimBase):
         if not solution.success:
             self.logger.warning("Optimisation did not converge")
             self.logger.warning("Message: %s", solution.message)
+        if return_solution:
+            return solution
 
-    def postProcess(self):
-        # Post processing an optimiser is quite different to a sampler!
-        # Instead of examining the chain, we just need to evaluate the
-        # Maximum A Posteriori (MAP) estimate of the parameters and plot
-        # the model with those parameters.
-        pass
-
-    pass
+    def optimize_with_restarts(self,
+                               n_restarts=10,
+                               guesses=None,
+                               **kwargs):
+        for i in range(n_restarts):
+            self.logger.info("Optimisation restart %s", i)
+            guess = guesses[i] if guesses is not None else None
+            solution = self.optimize(guess=guess, return_solution=True, 
+                                     **kwargs)
+            # now we have to check if this is the best solution so far
+            # and add the final solution to the chain
+            if i == 0:
+                self.bestPars = self.solution
+                self.bestLnprob = solution.fun
+                self.chain = [(self.bestPars, self.bestLnprob)]
+                i_best = 0
+            else:
+                if solution.fun > self.bestLnprob:
+                    self.bestPars = self.solution
+                    self.bestLnprob = solution.fun
+                    i_best = i
+                self.chain.append((self.solution, solution.fun))
+            self.logger.info("Best solution so far: %s", self.bestPars)
+            self.logger.info("Found at restart %s", i_best)
+            self.logger.info("With lnprob: %s", self.bestLnprob)
+        # now we have to set the solution to the best one
+        self.solution = self.bestPars # so that get_map works
+        self.logger.info("Optimisation complete")
+        # convert the chain to a numpy array so it is easier to work with
+        self.chain = np.array(self.chain)
 
 
 class ScipyBasinOpt(OptimBase):
@@ -338,6 +364,19 @@ class ScipyBasinOpt(OptimBase):
     """
 
     _inference_method = "Scipy Basin Hopping"
+
+    def __init__(self,
+                 model=None,
+                 data=None,
+                 verbose=False,
+                 parameter_labels=None,
+                 name='',
+                 namestyle="full",
+                 **kwargs):
+        
+        super().__init__(model=model, data=data, verbose=verbose,
+                         parameter_labels=parameter_labels, name=name,
+                         namestyle=namestyle, **kwargs)
 
     pass
 
