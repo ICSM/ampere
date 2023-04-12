@@ -37,6 +37,8 @@ class OptimBase(BaseSearch, Logger):
         Options: 'full', 'short', 'stamp', 'model'.
     """
 
+    _inference_method = "Optimisation"
+
     def __init__(self, 
                  model=None,
                  data=None,
@@ -155,8 +157,20 @@ class ScipyMinOpt(OptimBase):
         _description_
     """
 
+    _inference_method = "Scipy Minimisation"
+
     def __init__(self,
+                 model=None,
+                 data=None,
+                 verbose=False,
+                 parameter_labels=None,
+                 name='',
+                 namestyle="full",
                  **kwargs):
+        
+        super().__init__(model=model, data=data, verbose=verbose,
+                         parameter_labels=parameter_labels, name=name,
+                         namestyle=namestyle, **kwargs)
         
         pass
 
@@ -180,6 +194,8 @@ class ScipyBasinOpt(OptimBase):
         _description_
     """
 
+    _inference_method = "Scipy Basin Hopping"
+
     pass
 
 class ScipyDE(OptimBase):
@@ -192,6 +208,8 @@ class ScipyDE(OptimBase):
     OptimBase : _type_
         _description_
     """
+
+    _inference_method = "Scipy Differential Evolution"
 
     pass
 
@@ -207,6 +225,8 @@ class ScipyDualAnneal(OptimBase):
         _description_
     """
 
+    _inference_method = "Scipy Dual Annealing"
+
     pass
 
 
@@ -221,6 +241,8 @@ class AxOpt(OptimBase):
         _description_
     """
 
+    _inference_method = "Ax"
+
     pass
 
 class AxBO(OptimBase):
@@ -233,5 +255,7 @@ class AxBO(OptimBase):
     OptimBase : _type_
         _description_
     """
+
+    _inference_method = "Ax Bayesian Optimisation"
 
     pass
