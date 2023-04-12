@@ -127,7 +127,7 @@ class OptimBase(BaseSearch, Logger):
         elif self.namestyle == "short":
             self._name = name
         elif self.namestyle == "stamp":
-            self.name = ("ampere_"+str(datetime.now()).replace(' ',
+            self._name = ("ampere_"+str(datetime.now()).replace(' ',
                                                                '_').replace(":",
                                                                             "-")[:-7]
                                   + "_" + name
