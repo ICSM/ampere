@@ -171,13 +171,40 @@ class ScipyMinOpt(OptimBase):
         super().__init__(model=model, data=data, verbose=verbose,
                          parameter_labels=parameter_labels, name=name,
                          namestyle=namestyle, **kwargs)
-        
-        pass
 
-    def optimize(self):
-        pass
+    def optimize(self,
+                 guess=None,
+                 method=None,
+                 tol=None,
+                 **kwargs):
+        neglnprob = lambda *args: -self.lnprob(*args)
+        from scipy.optimize import minimize
+        self.logger.info("Starting optimisation")
+        if guess is None:
+            # no guess, let's attempt to draw one from the prior and use
+            # a value roughly in the middle
+            self.logger.info("No inital guess provided")
+            try:
+                self.logger.info("Attempting to draw from prior transform")
+                u = np.array([0.5 for _ in range(self.npars)])
+                guess = self.model.priorTransform(u)
+            except AttributeError:
+                self.logger.warning("No prior transform found, using random guess")
+                guess = np.random.rand(self.npars)
+        self.logger.info("starting from position: %s", guess)
+        solution = minimize(neglnprob, guess, method=method, tol=tol, **kwargs)
+        self.solution = list(solution.x)
+        self.logger.info("Optimisation completed after %s function calls",
+                         solution.nfev)
+        if not solution.success:
+            self.logger.warning("Optimisation did not converge")
+            self.logger.warning("Message: %s", solution.message)
 
     def postProcess(self):
+        # Post processing an optimiser is quite different to a sampler!
+        # Instead of examining the chain, we just need to evaluate the
+        # Maximum A Posteriori (MAP) estimate of the parameters and plot
+        # the model with those parameters.
         pass
 
     pass
