@@ -6,6 +6,7 @@ from datetime import datetime
 from ..logger import Logger
 from .basesearch import BaseSearch
 from inspect import signature
+import matplotlib.pyplot as plt
 
 
 class OptimBase(BaseSearch, Logger):
@@ -134,6 +135,117 @@ class OptimBase(BaseSearch, Logger):
                                                                             "-")[:-7]
                                   + "_" + name
                          )
+ 
+    def get_map(self, **kwargs):
+        """Get the maximum a posteriori (MAP) point.
+        """
+        self.bestPars = self.solution
+        return self.bestPars
+
+    def summary(self, **kwargs):
+        self.bestPars = self.get_map(**kwargs)
+
+    def print_summary(self, **kwargs):
+        self.summary(**kwargs)
+        if self.bestPars is not None:
+            self.logger.info("MAP solution:")
+            for i in range(self.npars):
+                self.logger.info("%s  = %.5f", self.parLabels[i],self.bestPars[i])
+
+    def plot_posteriorpredictive(self,
+                                 plotfile=None, 
+                                 save=True,
+                                 logx=False, 
+                                 logy=False,
+                                 xlims=None, 
+                                 ylims=None,
+                                 show=False,
+                                 return_figure=False,
+                                 close_figure=False,
+                                 **kwargs):
+        '''
+        Function to plot the data and samples drawn from the posterior of the
+        models and data.
+
+        Generates a plot of the data and the model for the MAP parameter
+        values. The plot is saved to a file specified by plotfile, or
+        self.name_posteriorpredictive.png if plotfile is not provided.
+        The x-axis is the wavelength (in $\mu$m) and the y-axis is the flux
+        density (in mJy). The x-axis can be set to a log scale by setting logx
+        to True. The y-axis can be set to a log scale by setting logy to True.
+        Additional keyword arguments can be passed in **kwargs to specify
+        additional plot properties. 
+
+        Parameters
+        ----------
+        plotfile : str, optional
+            The filename for the plot, by default None
+        logx : bool, optional
+            Whether to plot the x-axis on a log scale, by default False
+        logy : bool, optional
+            Whether to plot the y-axis on a log scale, by default False
+        **kwargs : optional
+            Additional keyword arguments to pass to matplotlib.pyplot.plot
+
+        Returns
+        -------
+        fig : matplotlib.pyplot.figure
+            if return_figure is True, the figure object is returned
+        '''
+
+        if plotfile is None:
+            plotfile = f"{self.name}_posteriorpredictive.png"
+
+        fig, axes = plt.subplots(1, 1, figsize=(8, 6))
+        axes.set_xlabel(r"Wavelength ($\mu$m)")
+        axes.set_ylabel(r"Flux density (mJy)")
+
+        if logx:
+            axes.set_xscale('log')
+        if logy: 
+            axes.set_yscale('log')
+
+        #observations
+        for d in self.dataSet:
+            if isinstance(d,(Photometry,Spectrum)):
+                d.plot(ax = axes)
+
+        #best fit model
+        try:
+            self.model(*self.bestPars[:self.nparsMod])
+            axes.plot(self.model.wavelength, self.model.modelFlux, '-',
+                      color='k', alpha=1.0,label='MAP', zorder=8)
+        except ValueError:
+            self.logger.warning("Error in MAP solution")
+            self.logger.warning("Skipping MAP in plot")
+
+        # These plots end up with too many labels for the legend, so we
+        # clobber the label information so that only one of each one is plotted
+        handles, labels = plt.gca().get_legend_handles_labels()
+        # labels will be the keys of the dict, handles will be values
+        temp = dict(zip(labels, handles))
+        plt.legend(temp.values(), temp.keys(), loc='best')
+
+        if xlims is not None:
+            axes.set_xlim(xlims)
+        if ylims is not None:
+            axes.set_ylim(ylims)
+
+        plt.tight_layout()
+        if save:
+            fig.savefig(plotfile, dpi=200)
+        if show:
+            plt.show()
+        else:
+            if return_figure:
+                return fig
+            elif close_figure:
+                plt.close(fig)
+                plt.clf()
+
+    def postProcess(self, **kwargs):
+        self.print_summary(**kwargs)
+        self.plot_posteriorpredictive(**kwargs)
 
 
 class ScipyMinOpt(OptimBase):
@@ -177,9 +289,11 @@ class ScipyMinOpt(OptimBase):
                  method=None,
                  tol=None,
                  **kwargs):
-        neglnprob = lambda *args: -self.lnprob(*args)
+        
         from scipy.optimize import minimize
         self.logger.info("Starting optimisation")
+        def neglnprob(*args):
+            return -self.lnprob(*args)
         if guess is None:
             # no guess, let's attempt to draw one from the prior and use
             # a value roughly in the middle
@@ -194,7 +308,9 @@ class ScipyMinOpt(OptimBase):
         self.logger.info("starting from position: %s", guess)
         solution = minimize(neglnprob, guess, method=method, tol=tol, **kwargs)
         self.solution = list(solution.x)
-        self.logger.info("Optimisation completed after %s function calls",
+        self.logger.info("Optimisation completed in %s iterations",
+                         solution.nit)
+        self.logger.info("after %s function calls",
                          solution.nfev)
         if not solution.success:
             self.logger.warning("Optimisation did not converge")
