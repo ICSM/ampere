@@ -764,7 +764,19 @@ class ScipyDirect(OptimBase):
 class AxOpt(OptimBase):
     """A wrapper for Ax
 
-    _extended_summary_
+    Ax is a platform for 'Adaptive Experimentation' developed by Facebook.
+    It is a Bayesian optimisation framework that can be used to optimise
+    any function. It is particularly useful for optimising functions
+    that are expensive to evaluate. It is also useful for optimising
+    functions that are stochastic, as it can be used to optimise the
+    expected value of the function.
+
+    This provides access to the simple Loop API, which handles a lot
+    of the boilerplate code for you. For more information, see
+    https://ax.dev/tutorials/gpei_hartmann_loop.html. It will make
+    automatic choices about which optimisation algorithms to use for
+    you, and will also handle the parallelisation of the optimisation
+    process.
 
     Parameters
     ----------
@@ -774,10 +786,102 @@ class AxOpt(OptimBase):
 
     _inference_method = "Ax"
 
-    pass
+    def __init__(self,
+                 model=None,
+                 data=None,
+                 verbose=False,
+                 parameter_labels=None,
+                 name='',
+                 namestyle="full",
+                 **kwargs):
 
+        super().__init__(model=model, data=data, verbose=verbose,
+                         parameter_labels=parameter_labels, name=name,
+                         namestyle=namestyle, **kwargs)
 
-class AxBO(OptimBase):
+    def objective(self, parametrisation):
+        u = np.array([parametrisation[p] for p in self.parLabels])
+        theta = self.prior_transform(u)
+        # Ax needs the mean and the standard error on the mean
+        # for the objective function. For now, we'll assume
+        # we're not working with stocahstic models, so the
+        # standard error is zero.
+        return (self.lnprob(theta), 0.0)
+
+    def optimize(self,
+                 total_trials=100,
+                 return_solution=False,
+                 ):
+        self.logger.info("Starting optimisation")
+        from ax.service.managed_loop import optimize
+        # Ax requires a list of dictionaries for the parameter info
+        # this includes a name, type and bounds at least
+        # since this is bounded inference, we use the prior transform
+        # to map the unit cube to the prior volume again.
+        parameters = [{'name': p, 'type': 'range', 'bounds': [0, 1]}
+                      for p in self.parLabels]
+        best_parameters, values, experiment, model = optimize(
+            parameters=parameters,
+            evaluation_function=self.objective,
+            objective_name='logP',
+            experiment_name=self.name,
+            total_trials=total_trials,
+            minimize=False,
+            )
+        self.logger.info("Optimisation completed in %s iterations",
+                         total_trials)
+        self.solution = self.prior_transform(*[best_parameters[p]
+                                               for p in self.parLabels])
+        self.opt_model = model
+        self.opt_experiment = experiment
+        self.opt_values = values
+        # now lets try to construct something approximating a chain from this:
+        trials = experiment.trials
+        self.chain = np.array([self.prior_transform(*[trials[i].arm.parameters[pn]
+                                                      for pn in self.parLabels
+                                                      ])
+                               for i in range(len(trials))
+                               ])
+        self.lnprobs = [trials[i].objective_mean for i in range(len(trials))]
+        if return_solution:
+            return {'solution': self.solution,
+                    'lnprobs': self.lnprobs,
+                    'chain': self.chain}
+
+    def optimize_with_restarts(self,
+                               n_restarts=10,
+                               total_trials=100,
+                               **kwargs):
+        self.all_chains = np.zeros((n_restarts, total_trials, self.npars))
+        self.all_lnprobs = np.zeros((n_restarts, total_trials))
+        for i in range(n_restarts):
+            self.logger.info("Optimisation restart %s", i)
+            solution = self.optimize(total_trials=total_trials,
+                                     return_solution=True,
+                                     **kwargs)
+            self.all_chains[i, :, :] = self.chain
+            self.all_lnprobs[i, :] = self.lnprobs
+            # now we have to check if this is the best solution so far
+            # and add the final solution to the chain
+            if i == 0:
+                self.bestPars = self.solution
+                self.bestLnprob = self.opt_values[0]  # solution['lnprobs']
+                self.chain = [(self.bestPars, self.bestLnprob)]
+                i_best = 0
+            else:
+                if solution.fun > self.bestLnprob:
+                    self.bestPars = self.solution
+                    self.bestLnprob = solution.fun
+                    i_best = i
+                self.chain.append((self.solution, solution.fun))
+            self.logger.info("Best solution so far: %s", self.bestPars)
+            self.logger.info("Found at restart %s", i_best)
+            self.logger.info("With lnprob: %s", self.bestLnprob)
+        # now we have to set the solution to the best one
+        self.solution = self.bestPars  # so that get_map works
+        self.logger.info("Optimisation complete")
+
+class AxBO(AxOpt):
     """A wrapper for Bayesian Optimisation with Ax
 
     _extended_summary_
@@ -789,5 +893,21 @@ class AxBO(OptimBase):
     """
 
     _inference_method = "Ax Bayesian Optimisation"
+
+    pass
+
+
+class AxSAASBO(AxOpt):
+    """A wrapper for Sparse Axis-Aligned Subspace Bayesian Optimisation with Ax
+
+    _extended_summary_
+
+    Parameters
+    ----------
+    OptimBase : _type_
+        _description_
+    """
+
+    _inference_method = "Ax SAAS Bayesian Optimisation"
 
     pass
