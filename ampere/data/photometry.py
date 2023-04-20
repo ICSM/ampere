@@ -89,8 +89,6 @@ class Photometry(Data):
 
     _hasNoiseModel = False
 
-    
-
     def __init__(self, filterName, value, uncertainty, photunits,
                  bandUnits=None, libName = None, label = "Photometry", **kwargs):
         self.filterName = filterName
@@ -108,13 +106,13 @@ class Photometry(Data):
         print(photunits)
         print(type(photunits))
 
-        #print(self.filterMask)
+        # print(self.filterMask)
         if np.all(self.filterMask):
             self.filterName = filterName
         else:
             self.filterName = filterName[self.filterMask]
-        #Create wavelength array for photometry based on pivot wavelengths of
-        #filters
+        # Create wavelength array for photometry based on pivot wavelengths of
+        # filters
         filters = self.filterLibrary.load_filters(self.filterName, interp=False)#[self.filterMask])
         self.wavelength = np.array([filt.lpivot.to("micron").value for filt in filters])#*u.micron
 
@@ -350,7 +348,8 @@ class Photometry(Data):
         '''
         
         if libName is None:
-            l.append("No library given, using default pyphot filters")
+            # l.append
+            print("No library given, using default pyphot filters")
             libDir = pyphot.__file__.strip('__init__.py')+'libs/'
             libName = libDir + 'synphot_nonhst.hd5' 
         
@@ -532,14 +531,18 @@ class Photometry(Data):
         #print(self.logDetCovMat)
         if self.logDetCovMat == -np.inf: #This needs to be updated to raise an error!
 
-            l.error("""The determinant of the covariance matrix for this dataset is 0.
+            # l.error
+            print("""The determinant of the covariance matrix for this dataset is 0.
             Please check that the uncertainties are positive real numbers """)
-            l.append(self)
+            # l.append
+            print(self)
             exit()
         elif self.signDetCovMat < 0:
-            l.error("""The determinant of the covariance matrix for this dataset is negative.
+            # l.error
+            print("""The determinant of the covariance matrix for this dataset is negative.
             Please check that the uncertainties are positive real numbers """)
-            l.append(self)
+            # l.append
+            print(self)
             exit()
         return self.covMat
 
@@ -574,11 +577,13 @@ class Photometry(Data):
             try:
                 fphot = f.get_flux(model.spectrum["wavelength"]*pyphot.unit['micron'], flam*pyphot.unit['flam'], axis = -1).value
             except TypeError:
-                l.append(type(model.spectrum["wavelength"]*pyphot.unit['micron']).__mro__,
+                # l.append
+                print(type(model.spectrum["wavelength"]*pyphot.unit['micron']).__mro__,
                       type(flam*pyphot.unit['flam']).__mro__,
                       type(f).__mro__
                       )
-                l.append(model.spectrum["wavelength"].dtype,
+                #l.append
+                print(model.spectrum["wavelength"].dtype,
                       flam.dtype
                       )
                 exit()
