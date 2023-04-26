@@ -536,7 +536,7 @@ class Spectrum(Data):
         try:
             scaleFac = theta[0]
         except IndexError: #Only possible if theta is scalar or can't be indexed
-            l.error("IndexError: theta is not scalar or can't be indexed.")
+            raise IndexError("theta is not scalar or can't be indexed.")
             scaleFac = theta
 
         #print(self)
@@ -571,16 +571,27 @@ class Spectrum(Data):
         #covMatmask = np.reshape(self.covMat[self.cov_mask], np.shape(self.covMat))
         probFlux = b + ( -0.5 * ( np.matmul ( a.T, np.matmul(inv(self.covMat), a) ) ) )
         if np.isnan(probFlux):
-            l.append("NaN probability")
-            l.append(theta)
-            l.append(b)
-            l.append(inv(self.covMat))
-            l.append(self.value[self.mask])
-            l.append(modSpec)
-            l.append(model.modelFlux)
-            l.append(a)
-            l.append(np.matmul(inv(self.covMat), a))
-            l.append(np.matmul( a.T, np.matmul(inv(self.covMat), a) ) )
+            # l.append("NaN probability")
+            # l.append(theta)
+            # l.append(b)
+            # l.append(inv(self.covMat))
+            # l.append(self.value[self.mask])
+            # l.append(modSpec)
+            # l.append(model.modelFlux)
+            # l.append(a)
+            # l.append(np.matmul(inv(self.covMat), a))
+            # l.append(np.matmul( a.T, np.matmul(inv(self.covMat), a) ) )
+
+            print("NaN probability")
+            print(theta)
+            print(b)
+            print(inv(self.covMat))
+            print(self.value[self.mask])
+            print(modSpec)
+            print(model.spectrum["flux"])
+            print(a)
+            print(np.matmul(inv(self.covMat), a))
+            print(np.matmul( a.T, np.matmul(inv(self.covMat), a) ) )
             return -np.inf #hack for now so we can see how often this occurs and hopefully troubleshoot it!
         #print(((np.float128(2.)*np.pi)**(len(self.value))), np.linalg.det(self.covMat))
         #print(((np.float128(2.)*np.pi)**(len(self.value)) * np.linalg.det(self.covMat)))

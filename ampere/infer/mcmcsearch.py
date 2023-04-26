@@ -84,6 +84,8 @@ class MCMCSampler(BaseSearch, Logger):
         if parameter_labels is None:
             # The user hasn't specified parameter labels, let's see if the
             # models and data have instead
+            self.parLabels = [] # first set parLabels to an empty list, to prevent endlessly 
+            # extending the same list if re-creating the same object.
             try:  # First the model parameters
                 self.parLabels = self.model.parLabels
             except AttributeError:

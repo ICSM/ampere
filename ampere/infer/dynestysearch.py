@@ -64,8 +64,9 @@ class DynestyNestedSampler(BaseNestedSampler):
                                      update_interval = update_interval,
                                      first_update = first_update, queue_size = queue_size,
                                      pool = pool, use_pool = use_pool, enlarge = enlarge,
-                                     bootstrap = bootstrap, vol_dec = vol_dec,
-                                     vol_check = vol_check, walks = walks, facc = facc,
+                                     bootstrap = bootstrap, #vol_dec = vol_dec,
+                                     # vol_check = vol_check, 
+                                     walks = walks, facc = facc,
                                      slices = slices, **kwargs
         )
 

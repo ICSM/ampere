@@ -95,7 +95,14 @@ class BaseSearch(object):
         p = self.lnprior(theta)  # [:self.nparsMod])
         if p == -np.inf:
             return p
-        return p + self.lnlike(theta)
+        prob = p + self.lnlike(theta)
+        if np.isnan(prob):
+            self.logger.warning("logprob is NaN:")
+            self.logger.info(theta)
+            self.logger.info(prob)
+            self.logger.info("Resetting logprob to -inf")
+            prob = -np.inf
+        return prob
 
     def lnprob_vector(self, thetas):
         ''' This method is a drop-in replacement for the above method but
