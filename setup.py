@@ -40,6 +40,7 @@ setup(
               'ampere.utils',
               'ampere.data',
               'ampere.models'],
+    package_data={'ampere': ['ampere_allfilters.hd5', ], },
     install_requires=['numpy',
                       'astropy>=4.0.0',
                       'scipy',
