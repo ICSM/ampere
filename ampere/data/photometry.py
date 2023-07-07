@@ -83,7 +83,7 @@ class Photometry(Data):
                      "marker": 'o',
                      "markeredgecolor": 'black',
                      "markerfacecolor": 'orange',
-                     "markersize": 2.,
+                     "markersize": 2.5,
                      "zorder": 10
          }
 
