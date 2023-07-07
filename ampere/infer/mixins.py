@@ -720,7 +720,7 @@ Generated with Chat-GPT
         #best fit model
         try:
             self.model(*self.bestPars[:self.nparsMod])
-            axes.plot(self.model.wavelength,self.model.modelFlux, '-', color='cyan', alpha=1.0,label='MAP', zorder=8)
+            axes.plot(self.model.wavelength,self.model.modelFlux, '-', color='magenta', alpha=1.0,label='MAP', zorder=8)
         except ValueError:
             print("Error in MAP solution \n Skipping MAP in plot")
 
