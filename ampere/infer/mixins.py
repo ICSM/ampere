@@ -299,12 +299,41 @@ Generated with Chat-GPT
         """
         Generate a corner plot
         """
+        if self.npars > 10:
+            self.plot_multiple_corner(**kwargs)
+        else:
+            import corner
+            try:
+                fig2 = corner.corner(self.samples,labels=self.parLabels, **kwargs)
+            except (ImportError, ValueError):
+                fig2 = corner.corner(self.samples.numpy(),labels=self.parLabels, **kwargs)
+            fig2.savefig(self.name+"_"+"corner.png")
+
+    def plot_multiple_corner(self, **kwargs):
+        '''
+        Generate separate corner plots for batches of parameters.
+        
+        Parameters
+        ----------
+        **kwargs : optional
+            Additional keyword arguments to pass to corner.corner.
+        '''
         import corner
         try:
-            fig2 = corner.corner(self.samples,labels=self.parLabels, **kwargs)
+            # first we make the corner plot for the model parameters
+            fig2 = corner.corner(self.samples[:,:self.nparsMod],labels=self.parLabels[:self.nparsMod], **kwargs)
+            fig2.savefig(self.name+"_"+"corner_model.png")
+            # then we make the corner plot for the data parameters
+            fig3 = corner.corner(self.samples[:,self.nparsMod:],labels=self.parLabels[self.nparsMod:], **kwargs)
+            fig3.savefig(self.name+"_"+"corner_data.png")
         except (ImportError, ValueError):
-            fig2 = corner.corner(self.samples.numpy(),labels=self.parLabels, **kwargs)
-        fig2.savefig(self.name+"_"+"corner.png")
+            # first we make the corner plot for the model parameters
+            fig2 = corner.corner(self.samples.numpy()[:,:self.nparsMod],labels=self.parLabels[:self.nparsMod], **kwargs)
+            fig2.savefig(self.name+"_"+"corner_model.png")
+            # then we make the corner plot for the data parameters
+            fig3 = corner.corner(self.samples.numpy()[:,self.nparsMod:],labels=self.parLabels[self.nparsMod:], **kwargs)
+            fig3.savefig(self.name+"_"+"corner_data.png")
+
 
     def summary(self, interval = [16, 50, 84], **kwargs):
         """
