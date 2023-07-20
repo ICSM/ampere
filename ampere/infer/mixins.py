@@ -263,8 +263,8 @@ Generated with Chat-GPT
         else:
             axes.set_xlim(xlims)
         if ylims is None:
-            ymin = np.min([np.min(d.flux) for d in self.dataSet])
-            ymax = np.max([np.max(d.flux) for d in self.dataSet])
+            ymin = np.min([np.min(d.value) for d in self.dataSet])
+            ymax = np.max([np.max(d.value) for d in self.dataSet])
             ymin = 0.5*ymin if logy else 0.8*ymin  # a little extra buffer if we're plotting in log space
             ymax = 2*ymax if logy else 1.2*ymax  # a little extra buffer if we're plotting in log space
             ylims = [ymin,ymax]
@@ -334,12 +334,13 @@ Generated with Chat-GPT
             fig3 = corner.corner(self.samples.numpy()[:,self.nparsMod:],labels=self.parLabels[self.nparsMod:], **kwargs)
             fig3.savefig(self.name+"_"+"corner_data.png")
 
-
-    def summary(self, interval = [16, 50, 84], **kwargs):
+    def summary(self, interval=None, **kwargs):
         """
         Generate the required summary statistics
         """
         
+        if interval is None:
+            interval = [16, 50, 84]
         self.res = self.get_credible_interval(interval)
         self.bestPars = self.get_map()
 
@@ -765,8 +766,8 @@ Generated with Chat-GPT
         else:
             axes.set_xlim(xlims)
         if ylims is None:
-            ymin = np.min([np.min(d.flux) for d in self.dataSet])
-            ymax = np.max([np.max(d.flux) for d in self.dataSet])
+            ymin = np.min([np.min(d.value) for d in self.dataSet])
+            ymax = np.max([np.max(d.value) for d in self.dataSet])
             ymin = 0.5*ymin if logy else 0.8*ymin  # a little extra buffer if we're plotting in log space
             ymax = 2*ymax if logy else 1.2*ymax  # a little extra buffer if we're plotting in log space
             ylims = [ymin,ymax]
