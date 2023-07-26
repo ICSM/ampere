@@ -28,13 +28,25 @@ Very slow models
 AMPERE allows you to use a wide variety of models to interpret your data, which may include models which take a very long time to compute.
 In such cases, Neural Posterior Estimation (NPE) is probably a good bet!
 
-AMPERE uses `sbi <https://>`_ under the hood to do NPE. You can see a few examples in the tutorials, but a more complete guide will appear here in the future. 
+AMPERE uses `sbi <https//www.mackelab.org/sbi/>`_ under the hood to do NPE. You can see a few examples in the tutorials, but a more complete guide will appear here in the future. 
 
+
+Embedding Networks for automatic summary statistics with NPE
+-----------------------------------------------------------
+
+NPE is a powerful tool for speeding up inference with models where the likelihood is difficult to evaluate. 
+However, *because* the likelihood is difficult to evaluate, we can find ourselves simply comparing the simulated data to the real ones.
+When your data is high dimensional, this can make the comparison difficult, and even worse, it makes training the neural network for the posterior _very_ slow.
+
+In these cases, it is better to define some summary statistics that can reduce the dimensionality of the data with minimal loss of useful information. 
+However, in the case of astronomical data it can be difficult to define a good statistics that are also easy to transfer to other problems.
+Hence, we can use a neural network to learn the best summary statistics for our problem, and then use these to train the NPE network.
+The interface provided by SBI is exposed and instructions for how to use it can be found in `notebooks/Ampere_MBB_Example`_.
 
 Parallelised evaluation
 -----------------------
 
-Automatic parallel evaluation of paramater sets will be implemented in AMPERE soon! In the meantime, you can parallelise your model itself if that makes sense.
+Automatic parallel evaluation of parameter sets will be implemented in AMPERE soon! In the meantime, you can parallelise your model itself if that makes sense.
 
 
 Defining new data types
