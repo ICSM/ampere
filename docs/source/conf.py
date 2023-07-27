@@ -25,6 +25,13 @@ copyright = f'{date.today().year}, Peter Scicluna, Francisca Kemper, Sundar'\
 author = 'Peter Scicluna, Francisca Kemper, Sundar Srinivasan, Jonathan'\
          ' Marshall, Sacha Hony, Sascha Zeegers, Lapo Fanciullo'
 
+from importlib.metadata import version
+release = version('pgmuvi')
+# for example take major/minor
+version = '.'.join(release.split('.')[:2])
+
+master_doc = 'index'
+
 
 # -- General configuration ---------------------------------------------------
 

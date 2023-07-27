@@ -1,0 +1,112 @@
+[build-system]
+requires = ["setuptools>=61.2", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ampere"
+# version = "0.1.2"
+dynamic = ["version"]
+license = {text = "GPL"}
+description = ""
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GPL License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+]
+requires-python = ">=3.7"
+dependencies = [
+    "numpy",
+    "astropy>=4.0.0",
+    "scipy",
+    "matplotlib",
+    "spectres",
+    "tqdm",
+    "pyphot",
+    "emcee",
+    "dynesty",
+    "corner",
+]
+
+[[project.authors]]
+name = "Peter Scicluna"
+email = "peter.scicluna@eso.org"
+
+[[project.authors]]
+name = "Francisca Kemper"
+
+[[project.authors]]
+name = "Sundar Srinivasan"
+
+[[project.authors]]
+name = "Jonathan Marshall"
+
+[[project.authors]]
+name = "Oscar Morata"
+
+[[project.authors]]
+name = "Alfonso Trejo"
+
+[[project.authors]]
+name = "Sascha Zeegers"
+
+[[project.authors]]
+name = "Lapo Fanciullo"
+
+[[project.authors]]
+name = "Thavisha Dharmawardena"
+
+[project.readme]
+file = "README.md"
+content-type = "text/markdown"
+
+[project.urls]
+Homepage = "https://github.com/icsm/ampere"
+"Bug Tracker" = "https://github.com/icsm/ampere/issues"
+
+[project.optional-dependencies]
+sbi = ["torch", "sbi"]
+zeus = ["zeus-mcmc"]
+arviz = ["arviz"]
+dev = ["sphinx", "nbsphinx", "nbconvert"]
+
+[tool.setuptools]
+packages = [
+    "ampere",
+    "ampere.infer",
+    "ampere.utils",
+    "ampere.data",
+    "ampere.models",
+]
+include-package-data = false
+
+[tool.setuptools.package-data]
+ampere = ["ampere_allfilters.hd5"]
+
+[tool.setuptools_scm]
+
+[tool.ruff]
+select = ["A",  # prevent using keywords that clobber python builtins
+          "B",  # bugbear: security warnings
+          "E",  # pycodestyle
+          "F",  # pyflakes
+          "ISC",  # implicit string concatenation
+          "UP",  # alert you when better syntax is available in your python version
+          "RUF",  # the ruff developer's own rules
+          "W",  # pycodestyle warnings
+
+          ]
+ignore = ["UP004", "B007"]  # ["E501", "W503"]
+exclude = ["tests"]
+
+# include notebooks!
+include = ["*.py", "*.pyi", "**/pyproject.toml", "*.ipynb"]
+
+[tool.black]
+line-length = 88
+target-version = ['py38', 'py39']
+include = '\.pyi?$'
+
+# [tool.pytest]
+# TBD

@@ -4,7 +4,16 @@ Welcome to AMPERE
 This sub-package provides classes for observational data.
 """
 
-__version__ = "0.1.1"
+from importlib.metadata import version, PackageNotFoundError
+
+try:
+    __version__ = version("pgmuvi")
+except PackageNotFoundError:
+    # package is not installed
+    __version__ = "unknown"
+
+
+# __version__ = "0.1.1"
 __copyright__ = """ Copyright (C) 2017  P. Scicluna, F. Kemper, S. Srinivasan
 J.P. Marshall, L. Fanciullo, T. Dharmawardena, A. Trejo, S. Hony
 
