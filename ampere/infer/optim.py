@@ -270,12 +270,11 @@ class OptimBase(BaseSearch, Logger):
             fig.savefig(plotfile, dpi=200)
         if show:
             plt.show()
-        else:
-            if return_figure:
-                return fig
-            elif close_figure:
-                plt.close(fig)
-                plt.clf()
+        elif return_figure:
+            return fig
+        elif close_figure:
+            plt.close(fig)
+            plt.clf()
 
     def postProcess(self, **kwargs):
         self.print_summary(**kwargs)
@@ -780,8 +779,18 @@ class AxOpt(OptimBase):
 
     Parameters
     ----------
-    OptimBase : _type_
-        _description_
+    model : instance of Model
+        The model to be optimised
+    data : list of instances of Data
+        The data to be used in the optimisation
+    verbose : bool, optional
+        Whether to print verbose output, by default False
+    parameter_labels : list of str, optional
+        The names of the parameters, by default None
+    name : str, optional
+        The name of the optimisation, by default ''
+    namestyle : str, optional
+        The style of the name, by default "full"
     """
 
     _inference_method = "Ax"
@@ -812,6 +821,27 @@ class AxOpt(OptimBase):
                  total_trials=100,
                  return_solution=False,
                  ):
+        """Optimise the model using Ax
+        
+        This function uses the Ax package to optimise the model. It
+        uses the Bayesian optimisation algorithm to find the maximum
+        of the posterior probability distribution. It is intended to
+        be used for optimising functions that are expensive to evaluate.
+        It is also useful for optimising functions that are stochastic,
+        as it can be used to optimise the expected value of the function.
+        
+        Parameters
+        ----------
+        total_trials : int, optional
+            The total number of trials to run, by default 100
+        return_solution : bool, optional
+            Whether to return the solution, by default False
+            
+        Returns
+        -------
+        dict
+            A dictionary containing the solution, the lnprobs and the chain
+        """
         self.logger.info("Starting optimisation")
         from ax.service.managed_loop import optimize
         # Ax requires a list of dictionaries for the parameter info
@@ -852,6 +882,24 @@ class AxOpt(OptimBase):
                                n_restarts=10,
                                total_trials=100,
                                **kwargs):
+        """Optimise the model using Ax with restarts
+
+        This function repeatedly calls optimize() to perform a number
+        of BO runs. It then returns the best solution found. The results are
+        stored in the all_chains and all_lnprobs attributes, rather than being
+        returned. The best solution is stored in the solution attribute.
+
+        Parameters
+        ----------
+        n_restarts : int, optional
+            The number of restarts to perform, by default 10
+        total_trials : int, optional
+            The total number of trials to run for each restart, by default 100
+
+        Returns
+        -------
+        None
+        """
         self.all_chains = np.zeros((n_restarts, total_trials, self.npars))
         self.all_lnprobs = np.zeros((n_restarts, total_trials))
         for i in range(n_restarts):
@@ -881,26 +929,38 @@ class AxOpt(OptimBase):
         self.solution = self.bestPars  # so that get_map works
         self.logger.info("Optimisation complete")
 
+
 class AxBO(AxOpt):
     """A wrapper for Bayesian Optimisation with Ax
 
-    _extended_summary_
+    This is actually just an alias for AxOpt, but it is provided for
+    ease, and to make it obvious that we are using BO. It is intended 
+    to be used for optimising functions that are expensive to evaluate. 
+    It is also useful for optimising functions that are stochastic, as 
+    it can be used to optimise the expected value of the function.
 
-    Parameters
-    ----------
-    OptimBase : _type_
-        _description_
-    """
+    This provides access to the simple Loop API, which handles a lot
+    of the boilerplate code for you. For more information, see
+    https://ax.dev/tutorials/gpei_hartmann_loop.html. It will make
+    automatic choices about which optimisation algorithms to use for
+    you, and will also handle the parallelisation of the optimisation
+    process."""
 
     _inference_method = "Ax Bayesian Optimisation"
-
-    pass
 
 
 class AxSAASBO(AxOpt):
     """A wrapper for Sparse Axis-Aligned Subspace Bayesian Optimisation with Ax
 
-    _extended_summary_
+    This class performs Bayesian Optimisation using the SAAS algorithm.
+    It is intended to be used for higher-dimensional problems than
+    standard BO, up to a few hundred dimensions. For example, Eriksson
+    & Jankowiak (2021) showed success with a 388 dimensional SVM problem.
+
+    Unlike standard BO, SAASBO cannot use the managed loop API, and
+    so it is necessary to write a custom loop. This is provided in the
+    optimise() method. The loop is based on the example provided in
+    https://ax.dev/tutorials/saasbo.html.
 
     Parameters
     ----------
@@ -909,5 +969,58 @@ class AxSAASBO(AxOpt):
     """
 
     _inference_method = "Ax SAAS Bayesian Optimisation"
+    _citation = """
+@InProceedings{pmlr-v161-eriksson21a,
+  title = 	 {High-dimensional {Bayesian} optimization with sparse axis-aligned subspaces},
+  author =       {Eriksson, David and Jankowiak, Martin},
+  booktitle = 	 {Proceedings of the Thirty-Seventh Conference on Uncertainty in Artificial Intelligence},
+  pages = 	 {493--503},
+  year = 	 {2021},
+  editor = 	 {de Campos, Cassio and Maathuis, Marloes H.},
+  volume = 	 {161},
+  series = 	 {Proceedings of Machine Learning Research},
+  month = 	 {27--30 Jul},
+  publisher =    {PMLR},
+  pdf = 	 {https://proceedings.mlr.press/v161/eriksson21a/eriksson21a.pdf},
+  url = 	 {https://proceedings.mlr.press/v161/eriksson21a.html},
+  abstract = 	 {Bayesian optimization (BO) is a powerful paradigm for efficient optimization of black-box objective functions. High-dimensional BO presents a particular challenge, in part because the curse of dimensionality makes it difficult to define—as well as do inference over—a suitable class of surrogate models. We argue that Gaussian process surrogate models defined on sparse axis-aligned subspaces offer an attractive compromise between flexibility and parsimony. We demonstrate that our approach, which relies on Hamiltonian Monte Carlo for inference, can rapidly identify sparse subspaces relevant to modeling the unknown objective function, enabling sample-efficient high-dimensional BO. In an extensive suite of experiments comparing to existing methods for high-dimensional BO we demonstrate that our algorithm, Sparse Axis-Aligned Subspace BO (SAASBO), achieves excellent performance on several synthetic and real-world problems without the need to set problem-specific hyperparameters.}
+}
+"""
 
-    pass
+    def optimize(self, total_trials=100, return_solution=False):
+        """optimize _summary_
+
+        _extended_summary_
+
+        Parameters
+        ----------
+        total_trials : int, optional
+            _description_, by default 100
+        return_solution : bool, optional
+            _description_, by default False
+        """
+
+        from ax import Data, Experiment, ParameterType, RangeParameter, SearchSpace
+        from ax.modelbridge.generation_strategy import GenerationStep, GenerationStrategy
+        from ax.modelbridge.registry import Models
+        from ax.runners.synthetic import SyntheticRunner
+        from ax.core.metric import Metric
+        from ax.core.objective import Objective
+        from ax.core.optimization_config import OptimizationConfig
+
+        self.logger.info("Starting optimisation")
+        # Ax requires a list of dictionaries for the parameter info
+
+
+
+class AxBOParallel(AxOpt):
+    """Perform Bayesian Optimisation with Ax in parallel using Ray
+    
+    This class performs Bayesian Optimisation using the Ax package
+    in parallel using the Ray package. It is intended to be used for
+    optimising functions that are so expensive to evaluate that you
+    need to distribute the evaluations to complete in a reasonable 
+    time. As a result, it will make more evaluations in total than
+    regular BO would, but will hopefully take less time. It is also
+    useful for optimising functions that are stochastic, as it can
+    be used to optimise the expected value of the function."""
