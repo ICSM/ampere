@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Produced with astropy.io.votable version 5.0.3
+     http://www.astropy.org/ -->
+<VOTABLE version="1.4" xmlns="http://www.ivoa.net/xml/VOTable/v1.3" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.ivoa.net/xml/VOTable/v1.3 http://www.ivoa.net/xml/VOTable/VOTable-1.4.xsd">
+ <RESOURCE type="results">
+  <TABLE>
+   <FIELD ID="sed_filter" arraysize="15" datatype="unicodeChar" name="sed_filter"/>
+   <FIELD ID="sed_flux" datatype="double" name="sed_flux" unit="mJy"/>
+   <FIELD ID="sed_eflux" datatype="double" name="sed_eflux" unit="mJy"/>
+   <DATA>
+    <TABLEDATA>
+     <TR>
+      <TD>MCPS_B</TD>
+      <TD>0.00916697512944165</TD>
+      <TD>0.0024569409686967</TD>
+     </TR>
+     <TR>
+      <TD>MCPS_V</TD>
+      <TD>0.0130345021662466</TD>
+      <TD>0.00359196186978933</TD>
+     </TR>
+     <TR>
+      <TD>MCPS_I</TD>
+      <TD>0.00822956646406888</TD>
+      <TD>0.00252404370465424</TD>
+     </TR>
+     <TR>
+      <TD>2MASS_J</TD>
+      <TD>3.465</TD>
+      <TD>0.09574</TD>
+     </TR>
+     <TR>
+      <TD>2MASS_H</TD>
+      <TD>12.29</TD>
+      <TD>0.3395</TD>
+     </TR>
+     <TR>
+      <TD>2MASS_Ks</TD>
+      <TD>29.32</TD>
+      <TD>0.5671</TD>
+     </TR>
+     <TR>
+      <TD>SPITZER_IRAC_36</TD>
+      <TD>62.32</TD>
+      <TD>2.877</TD>
+     </TR>
+     <TR>
+      <TD>SPITZER_IRAC_45</TD>
+      <TD>73.67</TD>
+      <TD>3.395</TD>
+     </TR>
+     <TR>
+      <TD>SPITZER_IRAC_58</TD>
+      <TD>77.43</TD>
+      <TD>1.933</TD>
+     </TR>
+     <TR>
+      <TD>SPITZER_IRAC_80</TD>
+      <TD>66.98</TD>
+      <TD>1.509</TD>
+     </TR>
+     <TR>
+      <TD>SPITZER_MIPS_24</TD>
+      <TD>14.53</TD>
+      <TD>0.3499</TD>
+     </TR>
+    </TABLEDATA>
+   </DATA>
+  </TABLE>
+ </RESOURCE>
+</VOTABLE>
