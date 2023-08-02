@@ -148,7 +148,7 @@ if __name__ == "__main__":
 
     # now we'll create a synthetic spectrum from the model fluxes, using a Spitzer IRS 
     # observation to get the wavelength sampling
-    dataDir = f'{os.getcwd()}/test_data/'
+    dataDir = f"{'/'.join(ampere.__file__.split('/')[:-2])}/examples/test_data/"
     specFileExample = 'cassis_yaaar_spcfw_14191360t.fits'
     irsEx = Spectrum.fromFile(os.path.normpath(dataDir+specFileExample),
                               format='SPITZER-YAAAR')
