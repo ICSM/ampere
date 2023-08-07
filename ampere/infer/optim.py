@@ -848,7 +848,7 @@ class AxOpt(OptimBase):
         # this includes a name, type and bounds at least
         # since this is bounded inference, we use the prior transform
         # to map the unit cube to the prior volume again.
-        parameters = [{'name': p, 'type': 'range', 'bounds': [0, 1]}
+        parameters = [{'name': p, 'type': 'range', 'bounds': [0.0, 1.0]}
                       for p in self.parLabels]
         best_parameters, values, experiment, model = optimize(
             parameters=parameters,
@@ -1024,3 +1024,112 @@ class AxBOParallel(AxOpt):
     regular BO would, but will hopefully take less time. It is also
     useful for optimising functions that are stochastic, as it can
     be used to optimise the expected value of the function."""
+
+    _inference_method = "Ax Bayesian Optimisation with Ray"
+
+    def __init__(self,
+                    model=None,
+                    data=None,
+                    verbose=False,
+                    parameter_labels=None,
+                    name='',
+                    namestyle="full",
+                    max_concurrent=4,
+                    **kwargs):
+        
+        super().__init__(model=model, data=data, verbose=verbose,
+                            parameter_labels=parameter_labels, name=name,
+                            namestyle=namestyle, **kwargs)
+        
+        self.max_concurrent = max_concurrent
+    
+
+    def optimize(self, total_trials=100, return_solution=False):
+        """Optimise the model using Ax with Ray
+
+        This function uses the Ax package to optimise the model. It
+        uses the Bayesian optimisation algorithm to find the maximum
+        of the posterior probability distribution. It is intended to
+        be used for optimising functions that are expensive to evaluate.
+        It is also useful for optimising functions that are stochastic,
+        as it can be used to optimise the expected value of the function.
+
+        Parameters
+        ----------
+        total_trials : int, optional
+            The total number of trials to run, by default 100
+        return_solution : bool, optional
+            Whether to return the solution, by default False
+
+        Returns
+        -------
+        dict
+            A dictionary containing the solution, the lnprobs and the chain
+        """
+
+        from ray import tune
+        from ray.tune import report
+        from ray.tune.suggest.ax import AxSearch
+        from ax.service.ax_client import AxClient
+        
+        # Before we start, we need to set up the Ray environment
+        # This includes creating the Client that will be used to
+        # communicate with the Ray server
+        client = AxClient(enforce_sequential_optimization=False)
+        client.create_experiment(
+            name=self.name,
+            parameters=[{"name": self.parLabels[i], 
+                         "type": "range", 
+                         "bounds": [0.0, 1.0]  # we're working in the unit cube for ease
+                         } for i in range(self.npars)],
+            #     {"name": "lr", "type": "range", "bounds": [1e-6, 0.4], "log_scale": True},
+            #     {"name": "momentum", "type": "range", "bounds": [0.0, 1.0]},
+            # ],
+            objective_name="logP",
+            minimize=False,  # our objective is to maximise the lnprob
+        )
+
+        def evaluate(parameters):
+            return {"logP": self.objective(parameters)}
+        
+        # Now we can set up the AxSearch object that will be used
+        # to perform the optimisation
+        ax_search = AxSearch(
+            ax_client=client,
+            )
+        
+        if self.max_concurrent is not None:
+            ax_search = tune.suggest.ConcurrencyLimiter(ax_search,
+                                                        max_concurrent=self.max_concurrent)
+            
+        # Now we can run the optimisation
+        self.logger.info("Starting optimisation")
+        analysis = tune.run(
+            evaluate,
+            search_alg=ax_search,
+            num_samples=total_trials,
+            resources_per_trial={"cpu": 1},
+            )
+        
+        self.logger.info("Optimisation completed in %s iterations",
+                         total_trials)
+        
+        # Now we can extract the results
+        best_parameters, values = ax.get_best_parameters()
+        
+        # and store them
+        self.solution = self.prior_transform(*[best_parameters[p]
+                                                  for p in self.parLabels])
+        self.opt_values = values
+        # now lets try to construct something approximating a chain from this:
+        trials = client.experiment.trials
+        self.chain = np.array([self.prior_transform(*[trials[i].arm.parameters[pn]
+                                                        for pn in self.parLabels
+                                                        ])
+                                 for i in range(len(trials))
+                                 ])
+        self.lnprobs = [trials[i].objective_mean for i in range(len(trials))]
+        if return_solution:
+            return {'solution': self.solution,
+                    'lnprobs': self.lnprobs,
+                    'chain': self.chain}
