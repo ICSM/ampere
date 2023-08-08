@@ -770,6 +770,8 @@ Generated with Chat-GPT
             ymax = np.max([np.max(d.value) for d in self.dataSet])
             ymin = 0.5*ymin if logy else 0.8*ymin  # a little extra buffer if we're plotting in log space
             ymax = 2*ymax if logy else 1.2*ymax  # a little extra buffer if we're plotting in log space
+            if ymax/ymin > 1e5 and logy:
+                ymin = 1e-5*ymax
             ylims = [ymin,ymax]
             axes.set_ylim(ylims)
         elif ylims == -1:
