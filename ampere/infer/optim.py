@@ -987,17 +987,56 @@ class AxSAASBO(AxOpt):
 }
 """
 
-    def optimize(self, total_trials=100, return_solution=False):
-        """optimize _summary_
+    def optimize(self, total_trials=100, return_solution=False,
+                 n_initial_samples=10, n_samples_per_batch=5,
+                 n_batches=10, 
+                 # SAASBO parameters
+                 n_samples_saasbo=1000, warmup_steps=1000,
+                 gp_kernel='rbf', vebose=False,
+                 display_progress=True,
+                 **kwargs):
+        """Optimise the model using Ax with SAASBO
 
-        _extended_summary_
+        This function uses the Ax package to optimise the model. It
+        uses the SAASBO algorithm to find the maximum of the posterior
+        probability distribution. It is intended to be used for
+        optimising higher-dimensional functions than standard BO, up
+        to a few hundred dimensions. For example, Eriksson & Jankowiak
+        (2021) showed success with a 388 dimensional SVM problem.
+
+        Unlike standard BO, SAASBO cannot use the managed loop API, and
+        so it is necessary to write a custom loop. This is provided in the
+        optimise() method. The loop is based on the example provided in
+        https://ax.dev/tutorials/saasbo.html.
 
         Parameters
         ----------
         total_trials : int, optional
-            _description_, by default 100
+            The total number of trials to run, by default 100
         return_solution : bool, optional
-            _description_, by default False
+            Whether to return the solution, by default False
+        n_initial_samples : int, optional
+            The number of initial samples to use, by default 10
+        n_samples_per_batch : int, optional
+            The number of samples per batch, by default 5
+        n_batches : int, optional
+            The number of batches, by default 10
+        n_samples_saasbo : int, optional
+            The number of NUTS samples to use for SAASBO, by default 1000
+        warmup_steps : int, optional
+            The number of NUTS warmup steps to use for SAASBO, by default 1000
+        gp_kernel : str, optional
+            The kernel to use for the GP, by default 'rbf'. Must be one of
+            'rbf', 'matern'. See the Ax documentation for more details.
+        vebose : bool, optional
+            Whether to print verbose output, by default False
+        display_progress : bool, optional
+            Whether to display a progress bar for NUTS, by default True
+        
+        Returns
+        -------
+        dict
+            A dictionary containing the solution, the lnprobs and the chain
         """
 
         from ax import Data, Experiment, ParameterType, RangeParameter, SearchSpace
@@ -1009,7 +1048,59 @@ class AxSAASBO(AxOpt):
         from ax.core.optimization_config import OptimizationConfig
 
         self.logger.info("Starting optimisation")
+        # We're going to try and use the Service API, since the
+        # Loop API doesn't support SAASBO and the Developer API
+        # is a bit too low level for our purposes.
         # Ax requires a list of dictionaries for the parameter info
+        # this includes a name, type and bounds at least
+        # since this is bounded inference, we use the prior transform
+        # to map the unit cube to the prior volume again.
+        
+        client = AxClient(enforce_sequential_optimization=False)
+        client.create_experiment(
+            name=self.name,
+            parameters=[{"name": self.parLabels[i], 
+                         "type": "range", 
+                         "bounds": [0.0, 1.0]  # we're working in the unit cube for ease
+                         } for i in range(self.npars)],
+            #     {"name": "lr", "type": "range", "bounds": [1e-6, 0.4], "log_scale": True},
+            #     {"name": "momentum", "type": "range", "bounds": [0.0, 1.0]},
+            # ],
+            objective_name="logP",
+            minimize=False,  # our objective is to maximise the lnprob
+        )
+
+        def evaluate(parameters):
+            return {"logP": self.objective(parameters)}
+        
+        experiment = client.experiment
+        
+        # Initial Sobol points
+        sobol = Models.SOBOL(search_space=experiment.search_space)
+        for _ in range(n_initial_samples):
+            experiment.new_trial(sobol.gen(1)).run()
+
+        # Now we can set up the SAASBO optimisation
+        # we need to define the model
+        data = experiment.fetch_data()
+        for i in range(n_batches):
+            model = Models.FullyBayesian(
+                experiment=experiment,
+                data=data,
+                num_samples=n_samples_saasbo,
+                warmup_steps=warmup_steps,
+                gp_kernel=gp_kernel,
+                verbose=verbose,
+                disable_progress=~display_progress,
+            )
+            generator_run = model.gen(batch_size)
+            trial = experiment.new_batch_trial(generator_run=generator_run)
+            trial.run()
+            data = Data.from_multiple_data([data, trial.fetch_data()])
+            
+            new_value = trial.fetch_data().df["mean"].min()
+            print(f"Iteration: {i}, Best in iteration {new_value:.3f}, Best so far: {data.df['mean'].min():.3f}")
+
 
 
 
