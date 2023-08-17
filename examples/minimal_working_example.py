@@ -51,22 +51,22 @@ class ASimpleModel(Model):
 
     def lnprior(self, theta, **kwargs):
         """The model prior probability distribution
-        
+
         The prior is essential to most types of inference with ampere. The prior
         describes the relative weights (or probabilities if normalised) of different
         parameter combinations. 
         """
-        slope = theta[0]
-        #print(slope)
-        intercept = theta[1]
+
         if self.flatprior:
-            if (self.lims[0,0] < theta[0] < self.lims[0,1]) and (self.lims[1,0] < theta[1] < self.lims[1,1]):
+            if (
+                (self.lims[0,0] < theta[0] < self.lims[0,1]) 
+                and (self.lims[1,0] < theta[1] < self.lims[1,1])
+                ):
                 return 0
             else:
                 return -np.inf
         else:
             raise NotImplementedError()
-        
 
     def prior_transform(self, u, **kwargs):
         '''The prior transform, which takes samples from the Uniform(0,1) distribution to the desired distribution.
@@ -175,7 +175,7 @@ if __name__ == "__main__":
                                            #1,1,1,
                                            1,1,1
                                            ]
-        for i in range(optimizer.nwalkers)]
+        for _ in range(optimizer.nwalkers)]
 
     #guess = "None"
 
@@ -186,3 +186,12 @@ if __name__ == "__main__":
 
 
     optimizer.postProcess() #now we call the postprocessing to produce some figures
+    # Save the optimizer object to a file so we can read it back in later
+    import pickle
+    with open("test_pickle_emcee.pkl", 'wb') as f:
+        pickle.dump(optimizer, f)
+
+    #Now try reading it back in:
+    with open("test_pickle_emcee.pkl", 'rb') as f2:
+        opt2 = pickle.load(f2)
+

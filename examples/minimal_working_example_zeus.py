@@ -178,3 +178,11 @@ if __name__ == "__main__":
 
 
     optimizer.postProcess() #now we call the postprocessing to produce some figures
+    # Save the optimizer object to a file so we can read it back in later
+    import pickle
+    with open("test_pickle_zeus.pkl", 'wb') as f:
+        pickle.dump(optimizer, f)
+
+    #Now try reading it back in:
+    with open("test_pickle_zeus.pkl", 'rb') as f2:
+        opt2 = pickle.load(f2)

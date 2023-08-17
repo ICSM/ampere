@@ -212,9 +212,9 @@ if __name__ == "__main__":
     # now we call the postprocessing to produce some figures
     optimizer.postProcess()
     import pickle
-    with open("test_pickle_sbi.pkl", 'wb') as f:
+    with open("test_pickle_sbi_embed.pkl", 'wb') as f:
         pickle.dump(optimizer, f)
 
     # Now try reading it back in:
-    with open("test_pickle_sbi.pkl", 'rb') as f2:
+    with open("test_pickle_sbi_embed.pkl", 'rb') as f2:
         opt2 = pickle.load(f2)
