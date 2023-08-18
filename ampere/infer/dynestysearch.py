@@ -141,7 +141,11 @@ class DynestyNestedSampler(BaseNestedSampler):
                                  xlims = None, ylims = None,
                                  alpha = 0.1,show=False,
                                  return_figure = False,
-                                 close_figure = False, **kwargs):
+                                 close_figure = False, 
+                                 fig = None, axes=None,
+                                 sample_label=None,
+                                 sample_color=None,
+                                 **kwargs):
         ''' Generate the posterior-predictive plots so that the suitability of the model for the data can be inspected. 
         '''
 
@@ -163,8 +167,19 @@ class DynestyNestedSampler(BaseNestedSampler):
         samples_unif = dyfunc.resample_equal(samples.T, weights)
 
         #First set up the plot
-        fig = plt.figure()
-        axes = fig.add_subplot(111)
+        if fig is None and axes is None:
+            fig = plt.figure()
+            axes = fig.add_subplot(111)
+        elif fig is not None and axes is None:
+            axes = fig.add_subplot(111)
+        elif fig is None:
+            fig = axes.get_figure()
+
+        if sample_label is None:
+            sample_label = 'Samples'
+        if sample_color is None:
+            sample_color = 'k'
+
 
         #observations
         for d in self.dataSet:
@@ -173,7 +188,9 @@ class DynestyNestedSampler(BaseNestedSampler):
 
         for s in samples_unif[np.random.randint(len(samples_unif), size=n_post_samples)]:
             self.model(*s[:self.nparsMod])
-            axes.plot(self.model.wavelength,self.model.modelFlux, '-', color='k', alpha=alpha, label='Samples', zorder=0)
+            axes.plot(self.model.wavelength,self.model.modelFlux, '-',
+                      color=sample_color, alpha=alpha, label=sample_label, 
+                      zorder=0)
 
             i = self.nparsMod
             for d in self.dataSet:
@@ -184,7 +201,8 @@ class DynestyNestedSampler(BaseNestedSampler):
         #best fit model
         try:
             self.model(*self.bestPars[:self.nparsMod])
-            axes.plot(self.model.wavelength,self.model.modelFlux, '-', color='k', alpha=1.0,label='MAP', zorder=8)
+            axes.plot(self.model.wavelength,self.model.modelFlux, '-', 
+                      color='magenta', alpha=1.0,label='MAP', zorder=8)
         except ValueError as e:
             self.logger.error("Error in MAP solution \n Skipping MAP in plot")
 
