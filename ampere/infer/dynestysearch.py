@@ -245,16 +245,15 @@ class DynestyNestedSampler(BaseNestedSampler):
         
         pass
 
-
     def print_summary(self,**kwargs):
         ''' Standalone method to compute and present estimates of the posterior.
         '''
-        
+
         #Calculate
         samples, weights = self.results.samples, np.exp(self.results.logwt - self.results.logz[-1])
         self.mean, self.cov = dyfunc.mean_and_cov(samples, weights)
-        self.res = np.array([[self.mean[i], self.cov[i]] for i in range(self.npars)])
-        
+        self.res = np.array([[self.mean[i], np.diag(self.cov)[i]] for i in range(self.npars)])
+
         #Present
         self.logger.info("Posterior means and 1-sigma confidence intervals of the parameters marginalising over all other parameters: ")
         for i in range(self.npars):
