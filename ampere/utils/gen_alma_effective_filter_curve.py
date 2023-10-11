@@ -35,17 +35,29 @@ def make_alma_filter(windows, unit = "GHz",**kwargs):
 
 if __name__=="__main__":
 
+    #  GHz -- 8 spws!
+    windows_B10 = [[849.3, 851.2],[851.3, 853.3],[853.3, 855.2],[855.3, 857.2],[865.3, 867.2],[867.3, 869.2],[869.3, 871.2],[871.3, 873.2]]
+    #  GHz -- 8 spws!
+    windows_B9 = [[659,661],[661, 663],[663, 665],[665,667],[675,677],[677, 679],[679, 681],[681,683]]
+    # [397,399],[399,401],[409,411],[411,413] GHz
+    windows_B8 = [[397,399],[399,401],[409,411],[411,413]]
     # 335.5 -- 337.5, 337.5 -- 339.5, 347.5 -- 349.5, 349.5 -- 351.5 GHz
     windows_B7 = [[335.5, 337.5],[337.5, 339.5],[347.5, 349.5],[349.5, 351.5]]
     #213--214, 214--216, 228--230, 230--232 GHz.
     windows_B6 = [[213,214],[214,216],[228,230],[230,232]]
+    #195.05--196.95, 197.05--198.95, 207.05--208.95, 209.05--210.95
+    windows_B5 = [[195,197],[197,199],[207,209],[209,211]]
+    #137.05--138.95, 139.05--140.95, 149.05--150.95, 151.05--152.95
+    windows_B4 = [[137,139],[139,141],[149,151],[151,153]]
     #85--87, 87--89, 97--99, 99--101 GHz.
     windows_B3 = [[85,87],[87,89],[97,99],[99,101]]
+    #35--37, 37--39, 39--41, 41--43 GHz
+    windows_B1 = [[35,37],[37,39],[39,41],[41,43]]
 
     fig = plt.figure()
     ax = fig.add_subplot(111)
-    filternames = ['ALMA/ALMA.B7','ALMA/ALMA.B6','ALMA/ALMA.B3']
-    bands = [windows_B7, windows_B6, windows_B3]
+    filternames = ['ALMA/ALMA.B10','ALMA/ALMA.B9','ALMA/ALMA.B8','ALMA/ALMA.B7','ALMA/ALMA.B6','ALMA/ALMA.B5','ALMA/ALMA.B4','ALMA/ALMA.B3','ALMA/ALMA.B1']
+    bands = [windows_B10, windows_B9, windows_B8, windows_B7, windows_B6, windows_B5, windows_B4, windows_B3, windows_B1]
 
     for i in range(len(bands)):
         #print(band)

@@ -1,4 +1,6 @@
 import ampere
+import pyphot
+from pyphot import unit, Filter
 from spectres import spectres
 from ampere import data
 from ampere.infer.emceesearch import EmceeSearch
@@ -12,10 +14,16 @@ libdir= ampere.__file__.strip('__init__.py')
 
 #Load data for fitting process - photometry, irs spectrum, stellar spectrum
 
+#Create the ATCA photometry to the data set manually, as they don't have PyPhot filters
+#Here we approximate them as simple tophat functions rather than taking into account the full 
+#details of the spectral windows used in the original observations
 
 #Photometry
-photometry = data.Photometry.fromFile('./star_disc/HD105_SED.vot', format = 'votable',libName = libdir+ 'ampere_allfilters.hd5')
-photometry.reloadFilters(np.logspace(np.log10(0.2),np.log10(500),1000,base=10))
+photometry = data.Photometry.fromFile('./star_disc/HD105_SED.vot', format = 'votable',libName = libdir+ 'ampere_allfilters_extended.hd5')
+#photometry.reloadFilters(np.logspace(np.log10(0.2),np.log10(10000),1000,base=10))
+
+
+
 
 #IRS spectrum
 irs_spec = data.Spectrum.fromFile('./star_disc/cassis_yaaar_spcfw_5295616t.fits', format='SPITZER-YAAAR', filetype = 'fits')
@@ -90,8 +98,8 @@ fl /= (4*np.pi*(1000/parallax)**2)
 
 #Create s/n 100 synthetic stellar spectrum that looks like Gaia RV spec
 r = 11000
-lam_start = 0.842
-lam_end = 0.872
+lam_start = 0.847
+lam_end = 0.871
 
 specwaves = [lam_start]
 while specwaves[-1] < lam_end:
@@ -100,12 +108,12 @@ while specwaves[-1] < lam_end:
 specwaves = np.array(specwaves)
 spec0 = spectres(specwaves,emu.wl*1e-4,1.216*fl)
 #And again, add some noise to it
-input_noise_spec = 0.01
+input_noise_spec = 0.05
 unc0 = input_noise_spec*spec0
 spec0 = spec0 + np.random.randn(len(spec0))*unc0
 star_spec = data.Spectrum(specwaves, spec0, unc0,"um", "Jy",calUnc=0.10, scaleLengthPrior = 0.01) #, resampleMethod=resmethod)
 
-dataSet = [photometry,#star_spec,
+dataSet = [photometry,star_spec,
 		   ]
 
 for irs in irs_spec:
@@ -113,10 +121,10 @@ for irs in irs_spec:
 
 #Now we get to the searching
 #Create a wavelength grid
-wavelengths = np.logspace(np.log10(0.31),np.log10(500),1000,endpoint=True)
+wavelengths = np.logspace(np.log10(0.31),np.log10(10000),1000,endpoint=True)
 
 model = QuickSED.QuickSEDModel(wavelengths,
-							   lims=np.array([[0.7,1.3],[5500.,6500.],[4.1,4.9],[0.01,0.1],[-3,3],[30.,100.],[100.,500.],[0.,4.]]),
+							   lims=np.array([[0.7,1.3],[5500.,6500.],[4.1,4.9],[0.01,0.1],[-3,3],[30.,100.],[50.,500.],[0.,4.]]),
 							   dstar=1000./parallax,
 							   starfish_dir=path+'../',
 							   fbol_1l1p=fbol_1l1p)
@@ -126,7 +134,7 @@ model = QuickSED.QuickSEDModel(wavelengths,
 optimizer = EmceeSearch(model=model,data=dataSet,nwalkers=40,vectorize=False)
 
 #self.parLabels = ['lstar','tstar','log_g','[fe/h]','Adust','tdust','lam0','beta'] + noise parameters
-guess = [1.0,5784.0,4.3,0.05,0.5,50.0,200.0,1.0,1.0,0.5,1.0,1.0,0.5,1.0]#,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0]
+guess = [1.0,5900.0,4.3,0.05,0.5,50.0,100.0,1.0,1.0,0.5,1.0,1.0,0.5,1.0]#,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0,1.0,0.5,1.0]
 
 optimizer.optimise(nsamples=4000,nburnin=1000,guess=guess)
 
@@ -138,5 +146,5 @@ optimizer.postProcess(logx=True,logy=True)
 
 #save object before crashing.
 import dill
-with open('circumstellar_disc_no_starspec_data_long_test.pkl', 'wb') as f:
+with open('star_disc_PRODUCTION_v1.pkl', 'wb') as f:
 	dill.dump(optimizer,f)
