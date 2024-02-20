@@ -85,3 +85,12 @@ old/
 *.0
 *.hdf5
 *.fits
+ampere/utils/ALMA/ALMA.B1.csv
+ampere/utils/ALMA/ALMA.B10.csv
+ampere/utils/ALMA/ALMA.B3.csv
+ampere/utils/ALMA/ALMA.B4.csv
+ampere/utils/ALMA/ALMA.B5.csv
+ampere/utils/ALMA/ALMA.B6.csv
+ampere/utils/ALMA/ALMA.B7.csv
+ampere/utils/ALMA/ALMA.B8.csv
+ampere/utils/ALMA/ALMA.B9.csv
