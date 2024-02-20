@@ -20,8 +20,10 @@ mixins for clarity (so that all the methods required by one public method get
 inhereted at the same time).
 """
 
+
 from __future__ import print_function
 
+import contextlib
 import numpy as np
 import logging
 import matplotlib.pyplot as plt
@@ -64,8 +66,175 @@ class ScipyMinMixin(object):
         self.logger.info("Minimization complete, final position: %s ",solution)
         return solution
 
+class _PostProcessorMixin(object):
+    """ A base mixin for post-processing results
 
-class SBIPostProcessor(object):
+    This is a base class for mixins providing methods for computing diagnostic
+    statistics and creating plots to explore the output. This includes e.g. producing
+    corner plots. Methods that are used by multiple mixins should be defined here.
+    """
+
+    def _plot_data(self, axes, **kwargs):
+        for d in self.dataSet:
+            if isinstance(d,(Photometry,Spectrum)):
+                d.plot(ax = axes)
+
+    def _plot_samples(self, axes,
+                      n_post_samples=1000,
+                      alpha=0.1,
+                      sample_label=None,
+                      sample_color=None,
+                      **kwargs):
+        if sample_label is None:
+            sample_label = 'Samples'
+        if sample_color is None:
+            sample_color = 'k'
+        for s in self.samples[np.random.randint(len(self.samples),
+                                                size=n_post_samples)]:
+            with contextlib.suppress(ValueError):
+                self.model(*s[:self.nparsMod])
+                axes.plot(self.model.wavelength,self.model.modelFlux, '-',
+                        color=sample_color,
+                        alpha=alpha,label=sample_label, zorder = 0)
+            i = self.nparsMod
+            for d in self.dataSet:
+                if isinstance(d,(Photometry,Spectrum)):
+                    if d._hasNoiseModel:
+                        d.plotRealisation(s[i:i+d.npars], ax=axes, **kwargs)
+                    i+= d.npars
+
+
+    def plot_posteriorpredictive(self, n_post_samples = 1000,
+                                 plotfile=None, save = True,
+                                 logx = False, logy = False,
+                                 xlims = None, ylims = None,
+                                 alpha = 0.1,show=False,
+                                 return_figure = False,
+                                 close_figure = False,
+                                 **kwargs):
+        '''
+        Function to plot the data and samples drawn from the posterior of the models
+        and data.
+
+        Generates a plot of the data and posterior predictive samples for the given
+        model and data. The plot is saved to a file specified by plotfile, or
+        self.name_posteriorpredictive.png if plotfile is not provided. The x-axis is the
+        wavelength (in $\mu$m) and the y-axis is the flux density (in mJy). The x-axis
+        can be set to a log scale by setting logx to True. The y-axis can be set to a
+        log scale by setting logy to True. The alpha parameter controls the transparency
+        of the posterior predictive samples. Additional keyword arguments can be passed
+        in **kwargs to specify additional plot properties. The posterior predictive
+        samples are drawn from self.samples and the number of samples plotted is
+        controlled by n_post_samples. The best-fit model is plotted with solid lines and
+        the posterior predictive samples are plotted with transparent lines.
+
+        Parameters
+        ----------
+        n_post_samples : int, optional
+            The number of posterior samples to plot, by default 1000
+        plotfile : str, optional
+            The filename for the plot, by default None
+        logx : bool, optional
+            Whether to plot the x-axis on a log scale, by default False
+        logy : bool, optional
+            Whether to plot the y-axis on a log scale, by default False
+        alpha : float, optional
+            The transparency of the samples, by default 0.1
+        **kwargs : optional
+            Additional keyword arguments to pass to matplotlib.pyplot.plot
+
+        Returns
+        -------
+        None
+
+        Generated with Chat-GPT
+        '''
+
+        if plotfile is None:
+            plotfile = f"{self.name}_posteriorpredictive.png"
+
+        fig,axes = plt.subplots(1,1,figsize=(8,6))
+        axes.set_xlabel(r"Wavelength ($\mu$m)")
+        axes.set_ylabel(r"Flux density (mJy)")
+
+        if logx:
+            axes.set_xscale('log')
+        if logy: 
+            axes.set_yscale('log')
+
+        #observations
+        for d in self.dataSet:
+            if isinstance(d,(Photometry,Spectrum)):
+                d.plot(axes = axes)
+        # posterior predictive samples
+        for s in self.samples[np.random.randint(len(self.samples), size=n_post_samples)]:
+            with contextlib.suppress(ValueError):
+                self.model(*s[:self.nparsMod])
+                axes.plot(self.model.wavelength,self.model.modelFlux, '-', color='k',
+                          alpha=alpha,label='Samples', zorder = 0)
+            i = self.nparsMod
+            for d in self.dataSet:
+                if isinstance(d,(Photometry,Spectrum)):
+                    if d._hasNoiseModel:
+                        d.plotRealisation(s[i:i+d.npars], ax=axes)
+                    i+= d.npars
+
+
+        #best fit model
+        try:
+            self.model(*self.bestPars[:self.nparsMod])
+            axes.plot(self.model.wavelength,self.model.modelFlux, '-', color='magenta',
+                      alpha=1.0,label='MAP', zorder=8)
+        except ValueError:
+            print("Error in MAP solution \n Skipping MAP in plot")
+
+        if xlims is None:
+            xmin = np.min([np.min(d.wavelength) for d in self.dataSet])
+            xmax = np.max([np.max(d.wavelength) for d in self.dataSet])
+            xmin = 0.5*xmin if logx else 0.8*xmin  # a little extra buffer if we're plotting in log space
+            xmax = 2*xmax if logx else 1.2*xmax  # a little extra buffer if we're plotting in log space
+            xlims = [xmin,xmax]
+            axes.set_xlim(xlims)
+        elif xlims == -1:
+            xlims = None
+        else:
+            axes.set_xlim(xlims)
+        if ylims is None:
+            ymin = np.min([np.min(d.value) for d in self.dataSet])
+            ymax = np.max([np.max(d.value) for d in self.dataSet])
+            ymin = 0.5*ymin if logy else 0.8*ymin  # a little extra buffer if we're plotting in log space
+            ymax = 2*ymax if logy else 1.2*ymax  # a little extra buffer if we're plotting in log space
+            if ymax/ymin > 1e5 and logy:
+                ymin = 1e-5*ymax
+            ylims = [ymin,ymax]
+            axes.set_ylim(ylims)
+        elif ylims == -1:
+            ylims = None
+        else:
+            axes.set_ylim(ylims)
+
+
+        #These plots end up with too many labels for the legend, so we clobber the label
+        # information so that only one of each one is plotted
+        handles, labels = plt.gca().get_legend_handles_labels()
+        # labels will be the keys of the dict, handles will be values
+        temp = {k:v for k,v in zip(labels, handles)}
+        plt.legend(temp.values(), temp.keys(), loc='best')
+
+        #plt.legend()
+        plt.tight_layout()
+        if save:
+            fig.savefig(plotfile,dpi=200)
+        if show:
+            plt.show()
+        else:
+            if return_figure:
+                return fig
+            elif close_figure:
+                plt.close(fig)
+                plt.clf()
+
+class SBIPostProcessor(_PostProcessorMixin):
     """
     A mixin for post-processing SBI results
 
@@ -158,80 +327,91 @@ The maximum a posteriori parameters.
                                  alpha = 0.1,show=False,
                                  return_figure = False,
                                  close_figure = False,
+                                 fig=None, axes=None,
+                                 sample_label=None,
+                                 sample_color=None,
                                  **kwargs):
         '''
-        Function to plot the data and samples drawn from the posterior of the models and data.
+        Function to plot the data and samples drawn from the posterior of the models
+        and data.
 
-        Generates a plot of the data and posterior predictive samples for the given model
-        and data. The plot is saved to a file specified by plotfile, or 
-        self.name_posteriorpredictive.png if plotfile is not provided. The x-axis is the 
-        wavelength (in $\mu$m) and the y-axis is the flux density (in mJy). The x-axis can 
-be set to a log scale by setting logx to True. The y-axis can be set to a log scale by setting 
-        logy to True. The alpha parameter controls the transparency of the posterior predictive samples. 
-Additional keyword arguments can be passed in **kwargs to specify additional plot properties. 
-The posterior predictive samples are drawn from self.samples and the number of samples plotted 
-is controlled by n_post_samples. The best-fit model is plotted with solid lines and the posterior 
-predictive samples are plotted with transparent lines.
+        Generates a plot of the data and posterior predictive samples for the given
+        model and data. The plot is saved to a file specified by plotfile, or
+        self.name_posteriorpredictive.png if plotfile is not provided. The x-axis is the
+        wavelength (in $\mu$m) and the y-axis is the flux density (in mJy). The x-axis
+        can be set to a log scale by setting logx to True. The y-axis can be set to a log
+        scale by setting logy to True. The alpha parameter controls the transparency of
+        the posterior predictive samples. Additional keyword arguments can be passed in
+        **kwargs to specify additional plot properties. The posterior predictive samples
+        are drawn from self.samples and the number of samples plotted is controlled by
+        n_post_samples. The best-fit model is plotted with solid lines and the posterior
+        predictive samples are plotted with transparent lines.
 
         Parameters
-----------
-n_post_samples : int, optional
-    The number of posterior samples to plot, by default 1000
-plotfile : str, optional
-    The filename for the plot, by default None
-logx : bool, optional
-    Whether to plot the x-axis on a log scale, by default False
-logy : bool, optional
-    Whether to plot the y-axis on a log scale, by default False
-alpha : float, optional
-    The transparency of the samples, by default 0.1
-**kwargs : optional
-    Additional keyword arguments to pass to matplotlib.pyplot.plot
+        ----------
+        n_post_samples : int, optional
+            The number of posterior samples to plot, by default 1000
+        plotfile : str, optional
+            The filename for the plot, by default None
+        logx : bool, optional
+            Whether to plot the x-axis on a log scale, by default False
+        logy : bool, optional
+            Whether to plot the y-axis on a log scale, by default False
+        alpha : float, optional
+            The transparency of the samples, by default 0.1
+        **kwargs : optional
+            Additional keyword arguments to pass to matplotlib.pyplot.plot
 
-Returns
--------
-None
-
-Generated with Chat-GPT
+        Returns
+        -------
+        None
         '''
         if plotfile is None:
-            plotfile = self.name+"_"+"posteriorpredictive.png"
-        fig,axes = plt.subplots(1,1,figsize=(8,6))
+            plotfile = f"{self.name}_posteriorpredictive.png"
+        if fig is None and axes is None:
+            fig,axes = plt.subplots(1,1,figsize=(8,6))
+        elif fig is not None and axes is None:
+            axes = fig.add_subplot(111)
+        elif fig is None:
+            fig = axes.get_figure()
 
+        if sample_label is None:
+            sample_label = 'Samples'
+        if sample_color is None:
+            sample_color = 'k'
 
         #observations
-        for d in self.dataSet:
-            if isinstance(d,(Photometry,Spectrum)):
-                d.plot(ax = axes)
+        self._plot_data(axes = axes, **kwargs)
 
         #For SBI, we will plot cached models if we can, because the model is probably too slow to generate new ones
         if self.cache_models:
             #First, we have to calculate the *posterior* logprob of each *prior* sample
-            post_probs = 10**self.posterior.log_prob(self.thetas)
+            post_probs = self.posterior.log_prob(self.thetas).exp()
             print(self.thetas.size())
-            post_probs = post_probs/ post_probs.sum() #divide by log(sum(probabilites) to normalise them
-            print(np.sum(post_probs.numpy()))
+            post_probs = post_probs/ post_probs[post_probs.isfinite()].sum() #divide by log(sum(probabilites) to normalise them
+            print(np.sum(post_probs[post_probs.isfinite()].numpy()))
             #next we need to sample from these, with the most-probable models being most likely to be selected
             rng = np.random.default_rng()
-            chosen_thetas = rng.choice(self.thetas[post_probs.numpy() > 0], size = n_post_samples, p = post_probs.numpy()[post_probs.numpy() > 0], axis = 0) #, replace=False)
-            for i, t in enumerate(chosen_thetas):
+            chosen_thetas = rng.choice(self.thetas[(post_probs.numpy() > 0) & post_probs.isfinite().numpy()], size = n_post_samples, p = post_probs.numpy()[(post_probs.numpy() > 0) & post_probs.isfinite().numpy()], axis = 0) #, replace=False)
+            for t in chosen_thetas:
                 key = tuple(t[:self.nparsMod])
                 r = self.cache[key]
                 axes.plot(r.spectrum["wavelength"], r.spectrum["flux"], '-', color='k', alpha = alpha, label = 'Samples', zorder=0)
-            pass
         else:
-            for s in self.samples[np.random.randint(len(self.samples), size=n_post_samples)]:
-                try:
-                    self.model(*s[:self.nparsMod])
-                    axes.plot(self.model.wavelength,self.model.modelFlux, '-', color='k', alpha=alpha,label='Samples', zorder = 0)
-                except ValueError:
-                    pass
-                i = self.nparsMod
-                for d in self.dataSet:
-                    if isinstance(d,(Photometry,Spectrum)):
-                        if d._hasNoiseModel:
-                            d.plotRealisation(s[i:i+d.npars], ax=axes)
-                        i+= d.npars
+            #posterior predictive samples
+            self._plot_samples(axes = axes, n_post_samples=n_post_samples, alpha = alpha,
+                               sample_label=sample_label, sample_color=sample_color,
+                               **kwargs)
+            # for s in self.samples[np.random.randint(len(self.samples), size=n_post_samples)]:
+            #     with contextlib.suppress(ValueError):
+            #         self.model(*s[:self.nparsMod])
+            #         axes.plot(self.model.wavelength,self.model.modelFlux, '-', color='k', alpha=alpha,label='Samples', zorder = 0)
+            #     i = self.nparsMod
+            #     for d in self.dataSet:
+            #         if isinstance(d,(Photometry,Spectrum)):
+            #             if d._hasNoiseModel:
+            #                 d.plotRealisation(s[i:i+d.npars], ax=axes)
+            #             i+= d.npars
 
 
         #We won't try plotting the MAP in this case, because it almost certainly hasn't been generated a priori
@@ -288,12 +468,11 @@ Generated with Chat-GPT
             fig.savefig(plotfile,dpi=200)
         if show:
             plt.show()
-        else:
-            if return_figure:
-                return fig
-            elif close_figure:
-                plt.close(fig)
-                plt.clf()
+        elif return_figure:
+            return fig
+        elif close_figure:
+            plt.close(fig)
+            plt.clf()
 
     def plot_corner(self, **kwargs):
         """
@@ -371,7 +550,7 @@ Generated with Chat-GPT
 
 
 
-class SimpleMCMCPostProcessor(object):
+class SimpleMCMCPostProcessor(_PostProcessorMixin):
     """
     A mixin for post-processing MCMC results
 
@@ -685,42 +864,58 @@ The maximum a posteriori parameters.
                                  alpha = 0.1,show=False,
                                  return_figure = False,
                                  close_figure = False,
+                                 fig = None, axes=None,
+                                 sample_label=None,
+                                 sample_color=None,
                                  **kwargs):
         '''
-        Function to plot the data and samples drawn from the posterior of the models and data.
+        Function to plot the data and samples drawn from the posterior of the models
+        and data.
 
-        Generates a plot of the data and posterior predictive samples for the given model
-        and data. The plot is saved to a file specified by plotfile, or 
-        self.name_posteriorpredictive.png if plotfile is not provided. The x-axis is the 
-        wavelength (in $\mu$m) and the y-axis is the flux density (in mJy). The x-axis can 
-be set to a log scale by setting logx to True. The y-axis can be set to a log scale by setting logy to True. The alpha parameter controls the transparency of the posterior predictive samples. Additional keyword arguments can be passed in **kwargs to specify additional plot properties. The posterior predictive samples are drawn from self.samples and the number of samples plotted is controlled by n_post_samples. The best-fit model is plotted with solid lines and the posterior predictive samples are plotted with transparent lines.
+        Generates a plot of the data and posterior predictive samples for the given
+        model and data. The plot is saved to a file specified by plotfile, or
+        self.name_posteriorpredictive.png if plotfile is not provided. The x-axis is the
+        wavelength (in $\mu$m) and the y-axis is the flux density (in mJy). The x-axis
+        can be set to a log scale by setting logx to True. The y-axis can be set to a
+        log scale by setting logy to True. The alpha parameter controls the transparency
+        of the posterior predictive samples. Additional keyword arguments can be passed
+        in **kwargs to specify additional plot properties. The posterior predictive
+        samples are drawn from self.samples and the number of samples plotted is
+        controlled by n_post_samples. The best-fit model is plotted with solid lines and
+        the posterior predictive samples are plotted with transparent lines.
 
         Parameters
-----------
-n_post_samples : int, optional
-    The number of posterior samples to plot, by default 1000
-plotfile : str, optional
-    The filename for the plot, by default None
-logx : bool, optional
-    Whether to plot the x-axis on a log scale, by default False
-logy : bool, optional
-    Whether to plot the y-axis on a log scale, by default False
-alpha : float, optional
-    The transparency of the samples, by default 0.1
-**kwargs : optional
-    Additional keyword arguments to pass to matplotlib.pyplot.plot
+        ----------
+        n_post_samples : int, optional
+            The number of posterior samples to plot, by default 1000
+        plotfile : str, optional
+            The filename for the plot, by default None
+        logx : bool, optional
+            Whether to plot the x-axis on a log scale, by default False
+        logy : bool, optional
+            Whether to plot the y-axis on a log scale, by default False
+        alpha : float, optional
+            The transparency of the samples, by default 0.1
+        **kwargs : optional
+            Additional keyword arguments to pass to matplotlib.pyplot.plot
 
-Returns
--------
-None
+        Returns
+        -------
+        None
 
-Generated with Chat-GPT
+        Generated with Chat-GPT
         '''
 
         if plotfile is None:
-            plotfile = self.name+"_"+"posteriorpredictive.png"
-            
-        fig,axes = plt.subplots(1,1,figsize=(8,6))
+            plotfile = f"{self.name}_posteriorpredictive.png"
+
+        if fig is None and axes is None:
+            fig,axes = plt.subplots(1,1,figsize=(8,6))
+        elif fig is not None and axes is None:
+            axes = fig.add_subplot(111)
+        elif fig is None:
+            fig = axes.get_figure()
+
         axes.set_xlabel(r"Wavelength ($\mu$m)")
         axes.set_ylabel(r"Flux density (mJy)")
 
@@ -730,27 +925,31 @@ Generated with Chat-GPT
             axes.set_yscale('log')
 
         #observations
-        for d in self.dataSet:
-            if isinstance(d,(Photometry,Spectrum)):
-                d.plot(ax = axes)
-        for s in self.samples[np.random.randint(len(self.samples), size=n_post_samples)]:
-            try:
-                self.model(*s[:self.nparsMod])
-                axes.plot(self.model.wavelength,self.model.modelFlux, '-', color='k', alpha=alpha,label='Samples', zorder = 0)
-            except ValueError:
-                pass
-            i = self.nparsMod
-            for d in self.dataSet:
-                if isinstance(d,(Photometry,Spectrum)):
-                    if d._hasNoiseModel:
-                        d.plotRealisation(s[i:i+d.npars], ax=axes)
-                    i+= d.npars
+        self._plot_data(axes = axes, **kwargs)
+        # for d in self.dataSet:
+        #     if isinstance(d,(Photometry,Spectrum)):
+        #         d.plot(ax = axes)
+        # posterior predictive samples
+        self._plot_samples(axes = axes, n_post_samples=n_post_samples, alpha=alpha,
+                           **kwargs)
+        # for s in self.samples[np.random.randint(len(self.samples), size=n_post_samples)]:
+        #     with contextlib.suppress(ValueError):
+        #         self.model(*s[:self.nparsMod])
+        #         axes.plot(self.model.wavelength,self.model.modelFlux, '-', color='k',
+        #                   alpha=alpha,label='Samples', zorder = 0)
+        #     i = self.nparsMod
+        #     for d in self.dataSet:
+        #         if isinstance(d,(Photometry,Spectrum)):
+        #             if d._hasNoiseModel:
+        #                 d.plotRealisation(s[i:i+d.npars], ax=axes)
+        #             i+= d.npars
 
 
         #best fit model
         try:
             self.model(*self.bestPars[:self.nparsMod])
-            axes.plot(self.model.wavelength,self.model.modelFlux, '-', color='magenta', alpha=1.0,label='MAP', zorder=8)
+            axes.plot(self.model.wavelength,self.model.modelFlux, '-', color='magenta',
+                      alpha=1.0,label='MAP', zorder=8)
         except ValueError:
             print("Error in MAP solution \n Skipping MAP in plot")
 
@@ -780,7 +979,8 @@ Generated with Chat-GPT
             axes.set_ylim(ylims)
 
 
-        #These plots end up with too many labels for the legend, so we clobber the label information so that only one of each one is plotted
+        #These plots end up with too many labels for the legend, so we clobber the label
+        # information so that only one of each one is plotted
         handles, labels = plt.gca().get_legend_handles_labels()
         # labels will be the keys of the dict, handles will be values
         temp = {k:v for k,v in zip(labels, handles)}
@@ -792,15 +992,14 @@ Generated with Chat-GPT
             fig.savefig(plotfile,dpi=200)
         if show:
             plt.show()
-        else:
-            if return_figure:
-                return fig
-            elif close_figure:
-                plt.close(fig)
-                plt.clf()
+        elif return_figure:
+            return fig
+        elif close_figure:
+            plt.close(fig)
+            plt.clf()
 
         
-class ArvizPostProcessor(object):
+class ArvizPostProcessor(_PostProcessorMixin):
     """
     A mixin for post-processing MCMC results that uses ArViz instead of rolling 
     its own

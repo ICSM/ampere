@@ -126,8 +126,11 @@ class Photometry(Data):
             #This is the best case. We don't need to worry about photUnits, because everything is already in the same units and we just have to convert them with astropy, then strip the units.
             if value.unit == units.mag:
                 zeropoints = np.array([f.Vega_zero_Jy.magnitude for f in filters])
-                value = zeropoints*10**(-(100**(-1/5))*value.value)
-                uncertainty = value.value - zeropoints*10**(-(100**(-1/5))*(value.value+uncertainty.value))
+                self.value = zeropoints*10**(-(100**(-1/5))*value.value)
+                #self.uncertainty = value.value - zeropoints*10**(-(100**(-1/5))*(value.value+uncertainty.value))
+                unc_lower = self.value * (1.0 - 10**((-100**(-1/5))*uncertainty.value))
+                unc_upper = self.value * (10**((100**(-1/5))*(uncertainty.value)) - 1.0)
+                self.uncertainty = (unc_lower + unc_upper) / 2.0
             else:
                 self.value = value.to(units.Jy, equivalencies = units.spectral_density(self.wavelength*units.micron)).value
                 self.uncertainty = uncertainty.to(units.Jy, equivalencies = units.spectral_density(self.wavelength*units.micron)).value
@@ -136,11 +139,17 @@ class Photometry(Data):
             if photunits == units.mag:
                 zeropoints = np.array([f.Vega_zero_Jy.magnitude for f in filters])
                 try:
-                    value = zeropoints*10**(-(100**(-1/5))*value)
-                    uncertainty = value - zeropoints*10**(-(100**(-1/5))*(value+uncertainty))
+                    self.value = zeropoints*10**(-(100**(-1/5))*value)
+                    #self.uncertainty = value - zeropoints*10**(-(100**(-1/5))*(value+uncertainty))
+                    unc_lower = self.value * (1.0 - 10**(-(100**(-1/5))*uncertainty))
+                    unc_upper = self.value * (10**((100**(-1/5))*(uncertainty)) - 1.0)
+                    self.uncertainty = (unc_lower + unc_upper) / 2.0
                 except TypeError: #If value and uncertainty are lists instead of arrays this branch will trigger
-                    value = np.array([zeropoints*10**(-(100**(-1/5))*v) for v in value])
-                    uncertainty = np.array([value[i] - zeropoints*10**(-(100**(-1/5))*(value[i]+uncertainty[i])) for i in range(len(value))])
+                    self.value = np.array([zeropoints*10**(-(100**(-1/5))*v) for v in value])
+                    #self.uncertainty = np.array([value[i] - zeropoints*10**(-(100**(-1/5))*(value[i]+uncertainty[i])) for i in range(len(value))])
+                    unc_lower = np.array([self.value[i] * (1.0 - 10**(-(100**(-1/5))*uncertainty[i])) for i in range(len(value))])
+                    unc_upper = np.array([self.value[i] * (10**((100**(-1/5))*(uncertainty[i])) - 1.0) for i in range(len(value))])
+                    self.uncertainty = (unc_lower + unc_upper) / 2.0
             elif np.ndim(value) > 0:
                 if isinstance(value, (list, tuple)): # and isinstance(uncertainty, list | tuple):
                     self.value = (np.array(value) * photunits).to(units.Jy, equivalencies = units.spectral_density(self.wavelength*units.micron)).value
@@ -161,7 +170,10 @@ class Photometry(Data):
                     #convert from magnitudes to Jy
                     zp = filters[i].Vega_zero_Jy.magnitude
                     value[i] = zp*10**(-(100**(-1/5))*value[i])
-                    uncertainty[i] = value[i] - zp*10**(-(100**(-1/5))*(value[i]+uncertainty[i]))
+                    #uncertainty[i] = value[i] - zp*10**(-(100**(-1/5))*(value[i]+uncertainty[i]))
+                    unc_lower = value[i] * (1.0 - 10**((-100**(-1/5))*uncertainty[i]))
+                    unc_upper = value[i] * (10**((100**(-1/5))*(uncertainty[i])) - 1.0)
+                    uncertainty[i] = (unc_lower + unc_upper) / 2.0
                 elif isinstance(pu, units.code.Unit):
                     value[i] = (value[i]*pu).to(units.Jy, equivalencies = units.spectral_density(self.wavelength*units.micron)).value
                     uncertainty[i] = (uncertainty[i]*pu).to(units.Jy, equivalencies = units.spectral_density(self.wavelength*units.micron)).value
