@@ -92,15 +92,15 @@ class _PostProcessorMixin(object):
         for s in self.samples[np.random.randint(len(self.samples),
                                                 size=n_post_samples)]:
             with contextlib.suppress(ValueError):
-                self.model(*s[:self.nparsMod])
-                axes.plot(self.model.wavelength,self.model.modelFlux, '-',
-                        color=sample_color,
-                        alpha=alpha,label=sample_label, zorder = 0)
+                result = self.model(*np.asarray(s[:self.nparsMod]))
+                axes.plot(result['spectrum']['wavelength'], result['spectrum']['flux'], 
+                          '-', color=sample_color,
+                          alpha=alpha,label=sample_label, zorder = 0)
             i = self.nparsMod
             for d in self.dataSet:
                 if isinstance(d,(Photometry,Spectrum)):
                     if d._hasNoiseModel:
-                        d.plotRealisation(s[i:i+d.npars], ax=axes, **kwargs)
+                        d.plotRealisation(np.asarray(s[i:i+d.npars]), ax=axes, **kwargs)
                     i+= d.npars
 
 
