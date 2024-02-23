@@ -482,7 +482,7 @@ class SBI_SNPE(LFIBase, SBIPostProcessor):
                 self.logger.info("Starting inference round %i", i+2)
                 #self.cache = {}
                 proposal = self.posterior.set_default_x(obs)
-                theta = proposal.sample((nsamples,))
+                thetas = proposal.sample((nsamples,))
                 self.logger.info("Generating round %i samples", i+2)
                 sims = self.simulate_vector(thetas.detach().numpy())
                 thetas = torch.Tensor(thetas)#, dtype=torch.float32)
