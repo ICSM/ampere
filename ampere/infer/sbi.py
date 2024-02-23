@@ -592,6 +592,70 @@ class SBI_SNPE(LFIBase, SBIPostProcessor):
             except TypeError:
                 return self.lnprior_vector(theta.detach().numpy()) - self.logprior_norm
 
-        
 
+class Swyft_TMNRE(LFIBase):
+    """A class to perform likelihood-free inference using the Swyft package.
+
+    Swyft is a package that provides a framework for likelihood-free inference using
+    Truncated Marginal Neural Ratio Estimation (TMNRE). TMNRE is a method for
+    likelihood-free inference that targets the marginal likelihood ratio rather than
+    the joint likelihood ratio. As a result, it typically requires fewer simulations
+    than other methods, and is able to scale to high-dimensional problems. However, it
+    is not amortised, and so it is most effective for working with small samples, high-
+    dimensional parameter spaces, and particularly expensive models.
+
+    Parameters
+    ----------
+    model : Callable
+        The model to be fit to the data.
+    data : list of Data objects
+        The data to be fit to the model.
+    verbose : bool, optional
+        Flag to print output messages. Default is False.
+    parameter_labels : list of str, optional
+        Labels to give to each parameter. Default is None.
+    """
+
+    _inference_method = "Truncated Marginal Neural Ratio Estimation"
+
+    def __init__(self, model=None, data=None, verbose=False,
+                 parameter_labels=None,
+                 name='', namestyle="full",
+                 **kwargs):
+        super().__init__(model=model, data= data, verbose=verbose,
+                         parameter_labels=parameter_labels,
+                         name=name, namestyle=namestyle, **kwargs)
         
+        pass
+    def optimise(self, nsamples=None, nsamples_post=None, n_rounds=1,
+                 **kwargs):
+        
+        #first we draw a batch of samples from the prior
+        self.logger.info("Generating samples from the prior")
+        thetas = self.sample(nsamples)
+        #Now we simulate models for all of these samples
+        self.logger.info("Simulating all prior samples")
+        sims = self.simulate_vector(thetas)
+        # Now translate them to swyft format
+        sims_swyft = swift.Samples(pars = thetas, data = sims)
+        
+        # Now we define the SwyftModule that will be used to train the TMNRE
+        self.logger.info("Defining SwyftModule")
+        self.num_features = (np.sum([data.value.shape[0] for data in self.dataSet]) ,)
+        class Network(swyft.SwyftModule):
+            def __init__(self):
+                super().__init__()
+                self.embedding = torch.nn.Linear(10, 2)
+                self.logratios1 = swyft.LogRatioEstimator_1dim(num_features = self.num_features,
+                                                               num_params = self.npars,
+                                                               varnames = self.parLabels)
+                self.logratios2 = swyft.LogRatioEstimator_Ndim(num_features = self.num_features,
+                                                               marginals = ((0, 1),),
+                                                               varnames = self.parLabels)
+
+            def forward(self, A, B):
+                embedding = self.embedding(A['data'])
+                logratios1 = self.logratios1(embedding, B['pars'])
+                logratios2 = self.logratios2(embedding, B['pars'])
+                return logratios1, logratios2
+        pass
