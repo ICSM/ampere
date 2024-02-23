@@ -22,6 +22,12 @@ from sbi import analysis as analysis
 
 from sbi.utils import process_prior  # CustomPriorWrapper
 
+try:
+    import swyft
+    is_swift_installed = True
+except (ModuleNotFoundError, ImportError):
+    is_swift_installed = False
+
 
 class CustomPriorWrapper:
     pass
@@ -622,6 +628,10 @@ class Swyft_TMNRE(LFIBase):
                  parameter_labels=None,
                  name='', namestyle="full",
                  **kwargs):
+        if not is_swift_installed:
+            raise ImportError("""The Swyft package is not installed.
+                              To enable TMNRE, please install it using
+                              `>>> pip install swyft`""")
         super().__init__(model=model, data= data, verbose=verbose,
                          parameter_labels=parameter_labels,
                          name=name, namestyle=namestyle, **kwargs)
