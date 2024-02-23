@@ -4,6 +4,8 @@ A file for simulation-based inference approaches, starting with the sbi package
 """
 
 from __future__ import print_function
+from typing import Optional, Any, Tuple, List
+
 
 import numpy as np
 import torch
@@ -599,6 +601,51 @@ class SBI_SNPE(LFIBase, SBIPostProcessor):
                 return self.lnprior_vector(theta.detach().numpy()) - self.logprior_norm
 
 
+
+### TMNRE with Swyft Stars here:
+
+class SwyftNetwork(swyft.SwyftModule):
+    def __init__(self, npars, num_features, parLabels, marginals=None):
+        super().__init__()
+        #self.embedding = torch.nn.Linear(self.num_features, self.npars)
+        # If marginals is not defined, use all combinations of parameters
+        # create a tuple of tuples that contains the indices of all the marginals
+        # This needs all the combinations in the lower triangle of the matrix
+        if marginals is None:
+            marginals = tuple((i, j) for i in range(npars) for j in range(i+1, npars))
+        self.logratios1 = swyft.LogRatioEstimator_1dim(num_features = num_features,
+                                                        num_params = npars,
+                                                        varnames = parLabels)
+        self.logratios2 = swyft.LogRatioEstimator_Ndim(num_features = num_features,
+                                                        marginals = marginals,
+                                                        varnames = self.parLabels)
+
+    def forward(self, A, B):
+        logratios1 = self.logratios1(A['data'], B['pars'])
+        logratios2 = self.logratios2(A['data'], B['pars'])
+        return logratios1, logratios2
+    
+
+class SwyftNetworkLinearEmbedding(swyft.SwyftModule):
+    def __init__(self, npars, num_features, parLabels, marginals=None):
+        super().__init__()
+        # If marginals is not defined, use all combinations of parameters
+        if marginals is None:
+            marginals = tuple((i, j) for i in range(npars) for j in range(i+1, npars))
+        self.embedding = torch.nn.Linear(num_features, npars)
+        self.logratios1 = swyft.LogRatioEstimator_1dim(num_features =npars,
+                                                        num_params = npars,
+                                                        varnames = parLabels)
+        self.logratios2 = swyft.LogRatioEstimator_Ndim(num_features = npars,
+                                                        marginals = marginals,
+                                                        varnames = parLabels)
+
+    def forward(self, A, B):
+        embedding = self.embedding(A['data'])
+        logratios1 = self.logratios1(embedding, B['pars'])
+        logratios2 = self.logratios2(embedding, B['pars'])
+        return logratios1, logratios2
+
 class Swyft_TMNRE(LFIBase):
     """A class to perform likelihood-free inference using the Swyft package.
 
@@ -626,7 +673,7 @@ class Swyft_TMNRE(LFIBase):
 
     def __init__(self, model=None, data=None, verbose=False,
                  parameter_labels=None,
-                 name='', namestyle="full",
+                 name='', namestyle="full", accelerator=None,
                  **kwargs):
         if not is_swift_installed:
             raise ImportError("""The Swyft package is not installed.
@@ -635,11 +682,29 @@ class Swyft_TMNRE(LFIBase):
         super().__init__(model=model, data= data, verbose=verbose,
                          parameter_labels=parameter_labels,
                          name=name, namestyle=namestyle, **kwargs)
-        
-        pass
-    def optimise(self, nsamples=None, nsamples_post=None, n_rounds=1,
-                 **kwargs):
-        
+
+        # Set the device to use for training
+        # This rather long conditional assignment is to ensure that the device is set
+        # while allowing the user to override it if they want to
+        self.DEVICE = (
+            'gpu'
+            if torch.cuda.is_available() and accelerator == 'cuda'
+            else accelerator
+            if accelerator is not None
+            else 'cpu'
+        )
+
+        # TODO: Add a check for the device to ensure that it is valid
+        # TODO: Enable using multiple GPUs if available
+
+    def optimise(self,
+                 nsamples: Optional[int] = 10000,
+                 nsamples_post: Optional[int] = 10000,
+                 n_rounds: int = 1,
+                 embedding_net: bool = True,
+                 marginals: Optional[Tuple[int, Tuple[int], Any]] = None,
+                 **kwargs: Any) -> None:
+
         #first we draw a batch of samples from the prior
         self.logger.info("Generating samples from the prior")
         thetas = self.sample(nsamples)
@@ -647,25 +712,80 @@ class Swyft_TMNRE(LFIBase):
         self.logger.info("Simulating all prior samples")
         sims = self.simulate_vector(thetas)
         # Now translate them to swyft format
-        sims_swyft = swift.Samples(pars = thetas, data = sims)
-        
+        sims_swyft = swyft.Samples(pars = thetas, data = sims)
+
         # Now we define the SwyftModule that will be used to train the TMNRE
         self.logger.info("Defining SwyftModule")
         self.num_features = (np.sum([data.value.shape[0] for data in self.dataSet]) ,)
-        class Network(swyft.SwyftModule):
-            def __init__(self):
-                super().__init__()
-                self.embedding = torch.nn.Linear(10, 2)
-                self.logratios1 = swyft.LogRatioEstimator_1dim(num_features = self.num_features,
-                                                               num_params = self.npars,
-                                                               varnames = self.parLabels)
-                self.logratios2 = swyft.LogRatioEstimator_Ndim(num_features = self.num_features,
-                                                               marginals = ((0, 1),),
-                                                               varnames = self.parLabels)
 
-            def forward(self, A, B):
-                embedding = self.embedding(A['data'])
-                logratios1 = self.logratios1(embedding, B['pars'])
-                logratios2 = self.logratios2(embedding, B['pars'])
-                return logratios1, logratios2
+
+        trainer = swyft.SwyftTrainer(accelerator = self.DEVICE, precision = 64)
+        dm = swyft.SwyftDataModule(sims_swyft)
+        if embedding_net is True: # Being specific so that there can be more cases in
+                                  # the future
+            self.logger.info("Using default embedding net")
+            network = SwyftNetworkLinearEmbedding(self.npars,
+                                                  self.num_features,
+                                                  self.parLabels,
+                                                  marginals)
+        else:
+            network = SwyftNetwork(self.npars,
+                                   self.num_features,
+                                   self.parLabels,
+                                   marginals)
+        self.logger.info("Training TMNRE")
+        trainer.fit(network, dm)
+
+        # Now we can use the trained network to sample from the posterior
+        # First we need to generate samples from the prior
+        self.logger.info("Generating samples from the prior for inference")
+        prior_samples = swyft.Samples(pars = self.sample(nsamples_post))
+        obs = [].extend(d.value[d.mask] for d in self.dataSet)
+        obs_swyft = swyft.Samples(data = obs)
+        self.logger.info("Drawing samples from trained TMNRE")
+        self.predictions = trainer.infer(network, obs_swyft, prior_samples)
+        self.logger.info("TMNRE inference complete")
+
+    def sample(self, nsamples: int) -> np.ndarray:
+        """ 
+        Produce samples from the prior
+
+        The sbi package requires priors that have sample() and logprob() methods
+        to generate samples and evaluate the prior. Seeing as we have effectively 
+        already designed such functions for other purposes, we simply define a wrapper
+        to them here
+
+        Parameters
+        ----------
+        nsamples : int
+            number of prior samples to generate
+        """
+
+        if isinstance(nsamples, torch.Size):
+            nsamples = 1
+        elif isinstance(nsamples, tuple):
+            #if len
+            #print(nsamples)
+            #print(len(nsamples))
+            nsamples = nsamples[0]
+
+        #First, we generate nsamples samples of self.npars uniform random variates
+        u = np.single(np.random.default_rng().uniform(size=(nsamples, self.npars)))
+        samples = np.zeros((nsamples, self.npars))
+
+        #Now we call the prior transform. For safety, we will manually iterate over the batch dimension
+        for i in range(nsamples):
+            samples[i] = self.prior_transform(u[i,:])
+        return samples
+
+    def postProcess(self, **kwargs):
+        pass
+
+    def print_summary(self, **kwargs):
+        pass
+
+    def plot_corner(self, **kwargs):
+        pass
+
+    def plot_posteriorpredictive(self, **kwargs):
         pass
