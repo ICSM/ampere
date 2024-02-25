@@ -13,6 +13,7 @@ import pickle
 import logging
 import copy
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 from datetime import datetime
 from .basesearch import BaseSearch
 from .mixins import SBIPostProcessor
@@ -624,7 +625,7 @@ class SwyftNetwork(swyft.SwyftModule):
         logratios1 = self.logratios1(A['data'], B['pars'])
         logratios2 = self.logratios2(A['data'], B['pars'])
         return logratios1, logratios2
-    
+
 
 class SwyftNetworkLinearEmbedding(swyft.SwyftModule):
     def __init__(self, npars, num_features, parLabels, marginals=None):
@@ -784,8 +785,49 @@ class Swyft_TMNRE(LFIBase):
     def print_summary(self, **kwargs):
         pass
 
-    def plot_corner(self, **kwargs):
+    def get_credible_interval(self, **kwargs):
         pass
+
+    def get_map(self, **kwargs):
+        pass
+
+    def plot_corner(self, **kwargs):
+        # We will make plots of the 2-d marginals using the swyft package
+        # First we will plot all the parameters
+        swyft.plot_corner(self.predictions, self.parLabels, **kwargs)
+        fig = plt.gcf()
+        fig.savefig(f"{self.name}_corner_all.png")
+
+        # Then we will make separate plots of the physical parameters
+        swyft.plot_corner(self.predictions, self.parLabels[:self.nparsMod], **kwargs)
+        fig = plt.gcf()
+        fig.savefig(f"{self.name}_corner_model.png")
+
+        # And finally we will make separate plots of the noise parameters
+        swyft.plot_corner(self.predictions, self.parLabels[self.nparsMod:], **kwargs)
+        fig = plt.gcf()
+        fig.savefig(f"{self.name}_corner_data.png")
+
+    def plot_marginals(self, **kwargs):
+        # We will make plots of the marginals using the swyft package
+        # First we will plot all the parameters
+        fig = swyft.plot_posterior(self.predictions, **kwargs)
+        fig.savefig(f"{self.name}_marginals_all.png")
+        plt.close(fig)
+
+        # Then we will make separate plots of the physical parameters
+        fig = swyft.plot_posterior(self.predictions,
+                                   parnames=self.parLabels[:self.nparsMod],
+                                   **kwargs)
+        fig.savefig(f"{self.name}_marginals_model.png")
+        plt.close(fig)
+
+        # And finally we will make separate plots of the noise parameters
+        fig = swyft.plot_posterior(self.predictions,
+                                   parnames=self.parLabels[self.nparsMod:],
+                                   **kwargs)
+        fig.savefig(f"{self.name}_marginals_data.png")
+        plt.close(fig)
 
     def plot_posteriorpredictive(self, **kwargs):
         pass
