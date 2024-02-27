@@ -783,13 +783,65 @@ class Swyft_TMNRE(LFIBase):
         pass
 
     def print_summary(self, **kwargs):
-        pass
+        """ Print a summary of the results"""
+        self.summary(**kwargs)
+        if self.bestPars is not None:
+            self.logger.info("MAP solution:")
+            #print("MAP Solution: ")
+            for i in range(self.npars):
+                self.logger.info("%s  = %.5f", self.parLabels[i],self.bestPars[i]) #
+
+
+        if self.res is not None:
+            self.logger.info("Median and confidence intervals for parameters in order:")
+            for i in range(self.npars):
+                self.logger.info("%s  = %.5f \u00B1 %.5f", self.parLabels[i],self.res[i][0],self.res[i][1])
+
+
+    def summary(self, **kwargs):
+        self.get_credible_interval(**kwargs)
+        self.bestPars = self.get_map(**kwargs)
+
+    def _mean_and_cov(self, samples, weights):
+        """Calculate the mean and covariance of the samples
+
+        Parameters
+        ----------
+        samples : np.ndarray
+            The samples to calculate the mean and covariance of
+        weights : np.ndarray
+            The weights to use for the calculation
+
+        Returns
+        -------
+        mean : np.ndarray
+            The mean of the samples
+        cov : np.ndarray
+            The covariance of the samples
+        """
+        mean = np.average(samples, axis=0, weights=weights)
+
+        # Compute the weighted covariance.
+        dx = samples - mean
+        wsum = np.sum(weights)
+        w2sum = np.sum(weights**2)
+        cov = wsum / (wsum**2 - w2sum) * np.einsum('i,ij,ik', weights, dx, dx)
+        return mean, cov
 
     def get_credible_interval(self, **kwargs):
-        pass
+        samples, weights = swyft.utils.get_weighted_samples(self.predictions)
+        self.mean, self.cov = self._mean_and_cov(samples, weights)
+        self.res = np.array([[self.mean[i], np.diag(self.cov)[i]] 
+                             for i in range(self.npars)])
+
 
     def get_map(self, **kwargs):
-        pass
+        samples, weights = swyft.utils.get_weighted_samples(self.predictions)
+
+        #the map is the sample with the highest weight
+        map_index = np.argmax(weights)
+        self.map = samples[map_index]
+        return self.map
 
     def plot_corner(self, **kwargs):
         # We will make plots of the 2-d marginals using the swyft package
