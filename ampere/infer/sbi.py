@@ -704,6 +704,7 @@ class Swyft_TMNRE(LFIBase):
                  n_rounds: int = 1,
                  embedding_net: bool = True,
                  marginals: Optional[Tuple[int, Tuple[int], Any]] = None,
+                 num_workers: Optional[int] = 0,
                  **kwargs: Any) -> None:
 
         #first we draw a batch of samples from the prior
@@ -717,11 +718,11 @@ class Swyft_TMNRE(LFIBase):
 
         # Now we define the SwyftModule that will be used to train the TMNRE
         self.logger.info("Defining SwyftModule")
-        self.num_features = (np.sum([data.value.shape[0] for data in self.dataSet]) ,)
+        self.num_features = (np.sum([data.value.shape[0] for data in self.dataSet]) ,)[0]
 
 
         trainer = swyft.SwyftTrainer(accelerator = self.DEVICE, precision = 64)
-        dm = swyft.SwyftDataModule(sims_swyft)
+        dm = swyft.SwyftDataModule(sims_swyft, num_workers=num_workers)
         if embedding_net is True: # Being specific so that there can be more cases in
                                   # the future
             self.logger.info("Using default embedding net")
@@ -740,9 +741,14 @@ class Swyft_TMNRE(LFIBase):
         # Now we can use the trained network to sample from the posterior
         # First we need to generate samples from the prior
         self.logger.info("Generating samples from the prior for inference")
-        prior_samples = swyft.Samples(pars = self.sample(nsamples_post))
-        obs = [].extend(d.value[d.mask] for d in self.dataSet)
-        obs_swyft = swyft.Samples(data = obs)
+        prior_samples = self.sample(nsamples_post)
+        prior_samples = swyft.Samples(pars = prior_samples)
+        obs = []
+        for d in self.dataSet:
+            obs.extend(d.value[d.mask])
+        obs_swyft = swyft.Samples(data = torch.Tensor(obs))
+        print(f'obs_swyft: {obs_swyft}')
+        print(f'obs_swyft["data"].shape: {obs_swyft["data"].shape}')
         self.logger.info("Drawing samples from trained TMNRE")
         self.predictions = trainer.infer(network, obs_swyft, prior_samples)
         self.logger.info("TMNRE inference complete")

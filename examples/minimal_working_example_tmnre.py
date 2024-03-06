@@ -20,6 +20,7 @@ from ampere.models import Model
 from spectres import spectres
 import pyphot
 from astropy import units
+from pathlib import Path
 
 # %% [markdown]
 # ##Define the model
@@ -138,11 +139,13 @@ model_flux = model.modelFlux
 # wavelength
 filterName = np.array(['WISE_RSR_W1', 'SPITZER_MIPS_70'])  
 
-libDir = ampere.__file__.strip('__init__.py') # '/home/peter/pythonlibs/ampere/ampere/'
-libname = f'{libDir}ampere_allfilters.hd5'
+libDir = Path(ampere.__file__.strip('__init__.py')) # '/home/peter/pythonlibs/ampere/ampere/'
+print(f'{libDir=}')
+libname = libDir/'ampere_allfilters.hd5'
+print(f'{libname=}')
 filterLibrary = pyphot.get_library(fname=libname)
-filters = filterLibrary.load_filters(filterName, interp=True, 
-                                        lamb=wavelengths*pyphot.unit['micron'])
+filters = filterLibrary.load_filters(filterName, interp=True,
+                                     lamb=wavelengths*pyphot.unit['micron'])
 # Now we need to extract the photometry with pyphot
 # first we need to convert the flux from Fnu to Flambda
 flam = model_flux / wavelengths**2
@@ -168,10 +171,13 @@ modSed = modSed + np.random.randn(len(filterName)) * photunc
 
 # now we'll create a synthetic spectrum from the model fluxes, using a Spitzer IRS 
 # observation to get the wavelength sampling
-dataDir = f"{'/'.join(ampere.__file__.split('/')[:-2])}/examples/test_data/"
-specFileExample = 'cassis_yaaar_spcfw_14191360t.fits'
-irsEx = Spectrum.fromFile(os.path.normpath(dataDir+specFileExample),
-                            format='SPITZER-YAAAR')
+#print(ampere.__file__.split('/'))
+dataDir = Path(__file__).parent / 'test_data'
+#dataDir = f"{'/'.join(ampere.__file__.split('/')[:-2])}/examples/test_data/"
+print(f'{dataDir=}')
+specFileExample = dataDir/'cassis_yaaar_spcfw_14191360t.fits'
+irsEx = Spectrum.fromFile(specFileExample,  #os.path.normpath(dataDir+specFileExample),
+                          format='SPITZER-YAAAR')
 spec0 = spectres(irsEx[0].wavelength,wavelengths,model_flux)
 spec1 = spectres(irsEx[1].wavelength,wavelengths,model_flux)
 
