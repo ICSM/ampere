@@ -94,3 +94,7 @@ ampere/utils/ALMA/ALMA.B6.csv
 ampere/utils/ALMA/ALMA.B7.csv
 ampere/utils/ALMA/ALMA.B8.csv
 ampere/utils/ALMA/ALMA.B9.csv
+
+# swyft intermediate files
+examples/lightning_logs/*
+*.ckpt
