@@ -1,0 +1,360 @@
+""" This module defines the base class for all `ampere.torch` data objects. This
+includes individual data points, datasets, and data loaders. """
+
+
+from typing import Union, List, Dict, Any
+import pyro.distributions
+from torch.utils.data import Dataset, DataLoader
+import numpy as np
+import torch
+from torch.nn import Sequential
+from functools import partial
+import pyro
+
+from .module import Module
+from .likelihoods import Likelihood
+
+
+
+
+class _Data_Base(Module):
+    """ The base class for all `ampere.torch` data objects. This includes individual
+    data points, datasets, and data loaders. 
+    
+    Data objects are used to store and manipulate data in a way that is compatible with
+    Ampere. They are intended to be used as a base class for all data objects in the
+    `ampere.torch` namespace, and to be extended to include more complex data objects.
+    
+    Attributes:
+        data: The data stored in the object. This can be any type of data, including
+            a single data point, a list of data points, a dictionary of data points,
+            or a data loader.
+        target: The observed target data stored in the object. This can be any type of
+            data, including a single data point, a list of data points, a dictionary of
+            data points, or a data loader.
+        likelihood: The likelihood function used to evaluate the data. This can be any
+            type of likelihood, including a single likelihood, a list of likelihoods, or
+            a dictionary of likelihoods.
+        data_generating_process: The data generating process used to generate the data.
+            This can be any type of data generating process, including a single data
+            generating process, a list of data generating processes, or a dictionary of
+            data generating processes.
+        model_target: The model target used to generate the data. This can be any type of
+            model target, including a single model target, a list of model targets, or a
+            dictionary of model targets.
+    
+    Methods:
+        __len__(): Returns the length of the data stored in the object.
+        __getitem__(): Returns the data at the specified index.
+        __iter__(): Returns an iterator over the data stored in the object.
+        __next__(): Returns the next data point in the iterator.
+        __repr__(): Returns a string representation of the data stored in the object.
+        __str__(): Returns a string representation of the data stored in the object.
+        __call__(): Returns the data stored in the object.
+        likelihood(): Returns the likelihood function used to evaluate the data.
+        log_likelihood(): Returns the log likelihood function used to evaluate the data.
+        sample(): Returns a sample from the data generating process.
+        log_prob(): Returns the log probability function used to evaluate the data.
+    
+    Example:
+        >>> data = Data(data=[1, 2, 3])
+        >>> data = Data(data={'a': 1, 'b': 2, 'c': 3})
+        >>> data = Data(data=DataLoader(dataset, batch_size=32))
+    """
+    
+    _data: Union[List[Any], Dict[str, Any], DataLoader] = None
+    _data_uncertainty: Union[List[Any], Dict[str, Any], DataLoader] = None
+    _target: Union[List[Any], Dict[str, Any], DataLoader] = None
+    _target_uncertainty: Union[List[Any], Dict[str, Any], DataLoader] = None
+    _likelihood: Union[Likelihood, Module] = None
+    _data_generating_process: Module = None
+    _model_target: Union[str, List[str], Dict[str, str]] = None
+
+
+    def __init__(self, 
+                 data: Union[List[Any], Dict[str, Any], DataLoader] = None,
+                 target: Union[List[Any], Dict[str, Any], DataLoader] = None,
+                 likelihood: Union[Likelihood, Module] = None,
+                 data_generating_process: Module = None,
+                 model_target: Union[str, List[str], Dict[str, str]] = None,
+                 *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.data = data
+        self.target = target
+        self.likelihood = likelihood
+        self.data_generating_process = data_generating_process
+        self.model_target = model_target
+
+    @property
+    def data(self):
+        return self._data
+
+    @data.setter
+    def data(self, data):
+        self._data = torch.register_buffer('data', data) if isinstance(data, torch.Tensor) else data
+
+    @property
+    def target(self):
+        return self._target
+
+    @target.setter
+    def target(self, target):
+        self._target = torch.register_buffer('target', target) if isinstance(target, torch.Tensor) else target
+
+    @property
+    def likelihood(self):
+        return self._likelihood
+    
+    @likelihood.setter
+    def likelihood(self, likelihood):
+        self._likelihood = likelihood
+
+    @property
+    def data_generating_process(self):
+        return self._data_generating_process
+    
+    @data_generating_process.setter
+    def data_generating_process(self, 
+                                data_generating_process: Union[DataGeneratingProcess, Sequential, List[DataGeneratingProcess]]):
+        if isinstance(data_generating_process, Sequential):
+            self._data_generating_process = data_generating_process
+        elif isinstance(data_generating_process, list):
+            self._data_generating_process = Sequential(data_generating_process)
+        elif isinstance(data_generating_process, DataGeneratingProcess):
+            self._data_generating_process = data_generating_process
+        else:
+            raise ValueError(f"Invalid data generating process: {data_generating_process}")
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        return self.data[idx]
+
+    def __iter__(self):
+        return iter(self.data)
+
+    def __next__(self):
+        return next(self.data)
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}"
+
+    def __str__(self):
+        return f"{self.__class__.__name__}"
+
+    def forward(self, *args, **kwargs):
+        return self.data
+
+    def likelihood(self, *args, **kwargs):
+        raise NotImplementedError
+
+    def log_likelihood(self, *args, **kwargs):
+        raise NotImplementedError
+
+    def sample(self, *args, **kwargs):
+        raise NotImplementedError
+
+    def log_prob(self, *args, **kwargs):
+        raise NotImplementedError
+
+
+
+class Data(_Data_Base):
+    def log_likelihood(self, model_output: Dict[torch.Tensor, torch.Tensor],
+                       *args, **kwargs):
+        # First get the model output
+        model_output = model_output[self._model_target]
+
+        # Then push the model output through the data generating process
+        data, model_data, model_target = self._data_generating_process(self.data,
+                                                     model_output['data'],
+                                                     model_output['target'])
+
+        # Then compute the residuals
+        residuals = self._target - model_target
+
+        # Then compute the log likelihood
+        log_likelihood = self._likelihood.log_likelihood(residuals)
+
+        # Then return the log likelihood
+        return log_likelihood
+
+
+class Dataset(_Data_Base, Dataset, torch.nn.ModuleList):
+    pass
+
+
+class DataLoader(_Data_Base, DataLoader):
+    pass
+
+class DataModule(_Data_Base):
+    pass
+
+class Photometry(Data):
+    pass
+
+
+class Spectroscopy(Data):
+    pass
+
+class Interferometry(Data):
+    pass
+
+class Imaging(Data):
+    pass
+
+class DataGeneratingProcess(Module):
+    """ The base class for all `ampere.torch` data generating processes. This should be
+    subclassed to create the data generating processes that you require. 
+
+    By default, any data generating process should have a `forward` method that takes
+    in the model output and returns synthetic data. In most cases, this will involve
+    pushing the model output through a (physical) forward model. Typically, the data
+    generating process will not add any noise to the data, as this is handled by the
+    likelihood function. However, if your data generating process is intrinsically
+    stochastic, you may want to add noise to the data here. The objective is to create
+    a distinction between the ideal data generating process and the likelihood function
+    that is used to evaluate the data.
+
+    If you have more than one data generating process, you can take a number of
+    different approaches:
+    - You can create an iterable of data generating processes, which will be
+      automatically wrapped in a `Sequential` module in the order that they are
+      provided. This is the easiest way to combine multiple data generating processes.
+      However, it assumes that the output of one data generating process is the input
+      to the next data generating process.
+    - You can manually compose the data generating processes into a `Sequential`
+      module, and then pass this module as the `data_generating_process` argument
+      to the `Data` object. This is similar to the above approach, but it allows you
+      specify the order of the data generating processes more explicitly.
+    - You can create a custom data generating process that combines all of the data
+      generating processes into a single module. This is the most flexible approach,
+      but it may be more complex to implement. 
+    """
+    pass
+
+class Scaling(DataGeneratingProcess):
+    """ A data generating process that scales the input data by a multiplicative scalar
+    factor. This is useful for simulating data where the absolute flux calibration is
+    poorly known.
+
+    Parameters:
+        scale: The multiplicative scalar factor to apply to the data.
+
+    """
+
+    def __init__(self,
+                 scale: Union[torch.Tensor, pyro.distributions.Distribution],
+                 fixed: bool=False) -> None:
+        super().__init__()
+        if isinstance(scale, torch.Tensor):
+            # If the input is a tensor, we assume the user wants to define either a
+            # fixed scale factor, and exponential or a log-normal prior for the scale
+            # factor. We use a PyroSample to define the prior for the scale factor.
+            if scale.ndim == 0 and fixed:
+                self.scale = pyro.nn.PyroSample(pyro.distributions.Delta(scale))
+            elif scale.ndim == 0:
+                self.scale = pyro.nn.PyroSample(pyro.distributions.Exponential(scale))
+            elif scale.ndim == 1 and scale.shape[0] == 2:
+                self.scale = pyro.nn.PyroSample(pyro.distributions.LogNormal(*scale))
+        elif isinstance(scale, pyro.distributions.Distribution):
+            # If the input is a distribution, we assume the user has defined the prior
+            # they want to use.
+            self.scale = pyro.nn.PyroSample(scale)
+
+    def forward(self, x_new: torch.Tensor, x: torch.Tensor, y: torch.Tensor):
+        return x_new, x_new, y * self.scale
+
+class OneDInterpolatingResampler(DataGeneratingProcess):
+    """ A data generating process that resamples one-dimensional data using linear
+    interpolation. This is useful for resampling data from one grid to another, for
+    example to resample spectroscopic data from a higher resolution to a lower
+    resolution without considering flux conservation.
+
+    Args:
+        x: The x values of the original data."""
+
+    def __init__(self, extrapolate: str='constant', dim: int=-1):
+        super().__init__()
+        self.extrapolate = extrapolate
+        self.dim = dim
+
+    def forward(self, x_new: torch.Tensor, x: torch.Tensor, y: torch.Tensor):
+        # Torch doesn't define a convenient function for linear interpolation, so we
+        # need to define it ourselves
+        # We have to return x_new, x_new, interp(x_new, x, y) because the data generating
+        # process is expected to return the data in the same format as the input data
+        # so it can be passed to a subsequent data generating process if necessary
+        return x_new, x_new, interp(x_new, x, y, 
+                                    dim=self.dim, extrapolate=self.extrapolate)
+
+# Define the interpolation function - https://github.com/pytorch/pytorch/issues/50334#issuecomment-2304751532
+def interp(x: torch.Tensor, xp: torch.Tensor, fp: torch.Tensor, 
+           dim: int=-1, extrapolate: str='constant') -> torch.Tensor:
+    """One-dimensional linear interpolation between monotonically increasing sample
+    points, with extrapolation beyond sample points.
+
+    Returns the one-dimensional piecewise linear interpolant to a function with
+    given discrete data points :math:`(xp, fp)`, evaluated at :math:`x`.
+
+    Args:
+        x: The :math:`x`-coordinates at which to evaluate the interpolated
+            values.
+        xp: The :math:`x`-coordinates of the data points, must be increasing.
+        fp: The :math:`y`-coordinates of the data points, same shape as `xp`.
+        dim: Dimension across which to interpolate.
+        extrapolate: How to handle values outside the range of `xp`. Options are:
+            - 'linear': Extrapolate linearly beyond range of xp values.
+            - 'constant': Use the boundary value of `fp` for `x` values outside `xp`.
+
+    Returns:
+        The interpolated values, same size as `x`.
+    """
+    # Move the interpolation dimension to the last axis
+    x = x.movedim(dim, -1)
+    xp = xp.movedim(dim, -1)
+    fp = fp.movedim(dim, -1)
+    
+    m = torch.diff(fp) / torch.diff(xp) # slope
+    b = fp[..., :-1] - m * xp[..., :-1] # offset
+    indices = torch.searchsorted(xp, x, right=False)
+    
+    if extrapolate == 'constant':
+        # Pad m and b to get constant values outside of xp range
+        m = torch.cat([torch.zeros_like(m)[..., :1], m, torch.zeros_like(m)[..., :1]], dim=-1)
+        b = torch.cat([fp[..., :1], b, fp[..., -1:]], dim=-1)
+    else: # extrapolate == 'linear'
+        indices = torch.clamp(indices - 1, 0, m.shape[-1] - 1)
+
+    values = m.gather(-1, indices) * x + b.gather(-1, indices)
+    
+    return values.movedim(-1, dim)
+
+
+class LineSpreadFunction(DataGeneratingProcess):
+    """ A data generating process that convolves the input data with a line spread
+    function. This is useful for simulating spectroscopic data that is convolved with
+    the instrumental line spread function.
+
+    Args:
+        x: The x values of the original data."""
+
+    def __init__(self, line_spread_kernel: Union[torch.Tensor, Module]):
+        super().__init__()
+        self.line_spread_kernel = line_spread_kernel
+
+    def forward(self, x_new: torch.Tensor, x: torch.Tensor, y: torch.Tensor):
+        # We can expect the line spread kernel to be a fixed resolution kernel, so we
+        # need to weights on the fly
+        # We have to return x_new, x_new, convolve(x_new, x, y) because the data generating
+        # process is expected to return the data in the same format as the input data
+        # so it can be passed to a subsequent data generating process if necessary
+
+        # Compute the weights
+        weights = self.line_spread_kernel(x_new, x)
+
+        # Convolve the data with the line spread kernel
+        y_new = weights @ y
+
+        return x_new, x_new, y_new
