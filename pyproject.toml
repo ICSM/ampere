@@ -69,15 +69,20 @@ Homepage = "https://github.com/icsm/ampere"
 sbi = ["torch", "sbi"]
 zeus = ["zeus-mcmc"]
 arviz = ["arviz"]
+jax = ["jax", "numpyro"]
 dev = ["sphinx", "nbsphinx", "nbconvert"]
+all = ["torch", "sbi", "zeus-mcmc", "arviz", "jax", "numpyro", "sphinx", "nbsphinx", "nbconvert"]
 
 [tool.setuptools]
 packages = [
     "ampere",
+    "ampere.core",
     "ampere.infer",
     "ampere.utils",
     "ampere.data",
     "ampere.models",
+    "ampere.backends",
+    "ampere.backends.jax",
 ]
 include-package-data = false
 
