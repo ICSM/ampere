@@ -88,7 +88,7 @@ if __name__=="__main__":
         [4.0, 5.0], #log g
         [0., 0.5] #We'll stick with solar metallicity here
     ]
-    download_models = False #Should be True if this is the first time you're running this script, others False
+    download_models = True #Should be True if this is the first time you're running this script, others False
     if download_models:
         #First, we download a subsection of the PHOENIX grid using the tools that STARFISH provides.
         
@@ -97,12 +97,12 @@ if __name__=="__main__":
     grid = PHOENIX(path)
     #grid.load_flux(header=True)
 
-    recreate_hdf5 = False
+    recreate_hdf5 = True
     if recreate_hdf5:
         creator = HDF5Creator(grid, "ampere_test_grid.hdf5", ranges = ranges)
         creator.process_grid()
     
-    retrain_emulator = False
+    retrain_emulator = True
     if retrain_emulator:
         emu = Emulator.from_grid("ampere_test_grid.hdf5")
         emu.train()

@@ -1,6 +1,6 @@
 import ampere
 import pyphot
-from pyphot import unit, Filter
+from pyphot import Filter
 from spectres import spectres
 from ampere import data
 from ampere.infer.emceesearch import EmceeSearch
@@ -19,14 +19,11 @@ libdir= ampere.__file__.strip('__init__.py')
 #details of the spectral windows used in the original observations
 
 #Photometry
-photometry = data.Photometry.fromFile('./star_disc/HD105_SED.vot', format = 'votable',libName = libdir+ 'ampere_allfilters_extended.hd5')
+photometry = data.Photometry.fromFile(libdir + '../examples/star_disc/HD105_SED.vot', format = 'votable',libName = libdir+ 'ampere_allfilters.hd5')
 #photometry.reloadFilters(np.logspace(np.log10(0.2),np.log10(10000),1000,base=10))
 
-
-
-
 #IRS spectrum
-irs_spec = data.Spectrum.fromFile('./star_disc/cassis_yaaar_spcfw_5295616t.fits', format='SPITZER-YAAAR', filetype = 'fits')
+irs_spec = data.Spectrum.fromFile(libdir + '../examples/star_disc/cassis_yaaar_spcfw_5295616t.fits', format='SPITZER-YAAAR', filetype = 'fits')
 
 #Stellar spectrum - we'll also need some of this for the fitting
 import Starfish 
@@ -45,12 +42,14 @@ fbol_1l1p = ((fbol_1l1p/(4*np.pi*(1*units.pc)**2)).to(units.erg/units.s/units.cm
 c = constants.c.to(units.AA/units.s)
 
 path = libdir + '../examples/examples_paper/phoenix_models/'
-#print(path)
+
+print(libdir)
+print(path)
 download_models = False #Should be True if this is the first time you're running this script, others False
 if download_models:
     #First, we download a subsection of the PHOENIX grid using the tools that STARFISH provides.
     ranges = [
-        [5000, 8000], #T
+        [5000., 8000.], #T
         [4.0, 5.0], #log g
         [0., 0.5] #We'll stick with solar metallicity here
     ]
@@ -60,18 +59,18 @@ if download_models:
 grid = PHOENIX(path)
 #grid.load_flux(header=True)
 
-recreate_hdf5 = False
+recreate_hdf5 = True
 if recreate_hdf5:
-    creator = HDF5Creator(grid, "ampere_test_grid.hdf5", ranges = ranges)
+    creator = HDF5Creator(grid,libdir + "../examples/star_disc/ampere_test_grid.hdf5",ranges=ranges)
     creator.process_grid()
 
-retrain_emulator = False
+retrain_emulator = True
 if retrain_emulator:
-    emu = Emulator.from_grid(path + "../" + "ampere_test_grid.hdf5")
+    emu = Emulator.from_grid(libdir + "../examples/star_disc/ampere_test_grid.hdf5")
     emu.train()
-    emu.save(path + "../" + "ampere_test_emulator.hdf5")
+    emu.save(libdir + "../examples/star_disc/ampere_test_emulator.hdf5")
 else:
-    emu = Emulator.load(path + "../" + "ampere_test_emulator.hdf5")
+    emu = Emulator.load(libdir + "../examples/star_disc/ampere_test_emulator.hdf5")
 
 #Now we have a spectral emulator that can be called to interpolate to arbitrary stellar parameters within the bounds of the grid it was trained on.
 
@@ -122,6 +121,8 @@ for irs in irs_spec:
 #Now we get to the searching
 #Create a wavelength grid
 wavelengths = np.logspace(np.log10(0.31),np.log10(10000),1000,endpoint=True)
+
+#photometry.reloadFilters(wavelengths)
 
 model = QuickSED.QuickSEDModel(wavelengths,
 							   lims=np.array([[0.7,1.3],[5500.,6500.],[4.1,4.9],[0.01,0.1],[-3,3],[30.,100.],[50.,500.],[0.,4.]]),
