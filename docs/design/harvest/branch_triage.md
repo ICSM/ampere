@@ -37,3 +37,16 @@ rule 3).**
 - **0** are recommended to **keep active** — nothing here looks like ongoing, in-flight development as of 2026-09-01.
 
 No tags were created, no branches were deleted, and nothing was pushed while producing this table.
+
+## Execution record (2026-09-01, approved by Peter)
+
+- All 15 branches archive-tagged as `archive/<branch>` and the tags pushed.
+- `jax` re-pushed filtered: tip rewritten from `55e1266` to `803a780`,
+  removing only `examples/lightning_logs/` (~50 MB of checkpoint binaries;
+  the sole commit touching them was the tip). `archive/jax` points at the
+  filtered tip, so the binaries are unreachable from any ref; GitHub
+  reclaims unreachable objects on its own schedule (support can force it
+  if storage matters sooner).
+- 13 remote branches deleted (recoverable from their archive tags).
+- Kept: `master`, `jax` (filtered), `small_silicates` (per Peter: must not
+  be deleted; tagged and left live).
