@@ -1,13 +1,16 @@
 # Ampere v2 — Diagnostics Design Spec (W1.12)
 
-Status: **DRAFT for Peter's review.** Implements `DEVELOPMENT_PLAN.md` §4.8.
-This is a **design document only** — no code lands with this item. It fixes
-where the three diagnostic families live, what they consume and produce in
-the §4.2 container vocabulary, their dependency/extras story, and what is in
-scope for Phase 2 versus deferred. Exact class/function APIs are sketched for
-orientation, not frozen; the binding API is written when the code lands
-(Phase 2 for post-fit families; Phase 2 also for the pre-fit family, per
-§4.8's "1D implementation lands with Phase 2").
+Status: **approved by Peter, 2026-09-01** (the §10 defaults stand as
+written; §11 records the one addition from his review — posterior
+calibration as a future family). Not frozen until W1.13. Implements
+`DEVELOPMENT_PLAN.md` §4.8. This is a **design document only** — no code
+lands with this item. It fixes where the diagnostic families live, what
+they consume and produce in the §4.2 container vocabulary, their
+dependency/extras story, and what is in scope for Phase 2 versus deferred.
+Exact class/function APIs are sketched for orientation, not frozen; the
+binding API is written when the code lands (Phase 2 for post-fit families;
+Phase 2 also for the pre-fit family, per §4.8's "1D implementation lands
+with Phase 2").
 
 Where this document and `DEVELOPMENT_PLAN.md` disagree, the plan wins and
 this document is wrong — file it as a decision-log correction.
@@ -33,6 +36,7 @@ the fitting pipeline:
 | A | RHMF-style screening | pre-fit, collection-level | No — runs on raw data |
 | B | Residual whiteness / posterior-predictive checks | post-fit, standard-likelihood | Yes — a plain iid-Gaussian fit |
 | C | GP-localisation | post-fit, flexible-likelihood | Yes — a GP-noise-model fit |
+| D | Posterior calibration (SBC / coverage) — **future, Phase 3** (§11) | validation of the inference itself | Yes — many fits of simulated data |
 
 B is explicitly the trigger for "should I turn the GP on"; C is what you get
 once you have. A is a cheaper, earlier, collection-level version of the same
@@ -581,3 +585,63 @@ Each of these is a decision, not an oversight. Each has an extension point.
    addition awkward (e.g. if all §4.2 containers turn out to carry more
    structure than this lightweight type wants)? Flagged for W1.13
    reconciliation rather than pre-empted here.
+
+---
+
+## 11. Family D — posterior calibration (recorded at review, 2026-09-01; future scope)
+
+Raised by Peter at review: is simulation-based calibration, or other
+posterior-calibration diagnostics, useful — especially for SBI? **Yes**, and
+it is a genuinely distinct axis from families A–C, which is why it is
+recorded as a fourth family rather than folded into one of them: A–C
+diagnose the *model* (where is a smooth model, or the fit's noise budget,
+inadequate for this data); calibration diagnoses the *inference machinery*
+(does the posterior the engine produces actually have the coverage it
+claims), independently of whether the model is right.
+
+The candidates and their hooks:
+
+- **Simulation-based calibration** (SBC; Talts et al. 2018,
+  arXiv:1804.06788): draw parameters from the prior, simulate data, fit
+  each simulated dataset, and check that the rank of each true parameter
+  among its posterior draws is uniform. Its ingredients are exactly what
+  the §4.5 contracts already provide — `simulate(params)` and
+  `prior_transform`/`sample` — which is why it costs no new contract
+  surface, only compute.
+- **Expected-coverage / TARP-style tests** (e.g. Lemos et al. 2023,
+  arXiv:2302.03026): the SBI-era refinements of the same question, testing
+  whether credible regions contain the truth at their nominal rate.
+- The `sbi` package ships SBC and coverage diagnostics in its own
+  `diagnostics` module, so for the NPE/NLE/NRE path this family is largely
+  an integration, not an implementation — the same
+  depend-don't-reimplement posture §2.2 takes for RHMF.
+
+**Why it matters most for SBI** (Phase 3): an amortised neural posterior
+can be silently overconfident in a way no residual test detects — the fit
+to the *observed* data can look excellent while the posterior's claimed
+uncertainties are fiction. Calibration is the diagnostic that catches
+this, and the SBI literature increasingly treats it as mandatory
+reporting. For MCMC/nested paths it is a heavier, optional check (each
+rank statistic costs a full fit), useful when validating a new likelihood
+or noise-model configuration — for instance the flexible-GP likelihood
+itself in milestone M2.
+
+**Scope and placement**: lands with **Phase 3's SBI layer**, not Phase 2 —
+it needs `simulate()` and the inference engines to exist first. Placement
+follows this document's own rules: it consumes `InferenceData` (many of
+them) plus `simulate()`, carries no new heavy dependency beyond what the
+SBI extra already brings, and so belongs with `ampere.results` or the SBI
+module's own diagnostics — decided when the code lands, per the §8 table's
+logic. Its outputs (rank histograms, coverage curves) are not
+coordinate-indexed deficiency maps, so — like family B, and for the same
+reason — it does **not** adopt the `AnomalyScore` convention.
+
+**On evolution generally** (Peter's second point): diagnostics are
+expected to grow as the field produces new ones. This document's structure
+is the extension template — a new family states its pipeline stage, its
+inputs/outputs in contract vocabulary, its module placement per §8's
+reasoning, its dependency story per `architecture.md` §4, and whether it
+adopts or (with justification) declines the shared `AnomalyScore`
+convention. Adding a family is an ordinary documentation-plus-code change,
+not a contract change, so long as it follows that template; nothing in
+§4.8's three named families was ever a closed list.
