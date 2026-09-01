@@ -264,6 +264,7 @@ to this file.
 | W0.3 | merged 2026-09-01 |
 | W0.4 | merged 2026-09-01 |
 | W0.7 | merged 2026-09-01 — branch-archival actions in `docs/design/harvest/branch_triage.md` await Peter's approval |
-| W0.5 | dispatched 2026-09-01 |
-| W0.6, W0.8, W0.9 | not started |
+| W0.5 | merged 2026-09-01 |
+| W0.6 + W0.8 | dispatched together 2026-09-01 (deliberately paired: CI built on pixi once) |
+| W0.9 | not started |
 | W1.1–W1.13 | not started |
