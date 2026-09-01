@@ -404,6 +404,38 @@ class TestConditionedGP:
         conditional = gp.conditional(data.with_values(np.zeros(coordinates.size)), data)
         assert conditional.mean.size == coordinates.size
 
+    def test_it_evaluates_on_a_finer_grid_when_asked(self, coordinates: np.ndarray) -> None:
+        """W1.12's family C wants a visualisation grid, not only the data's own."""
+        residual = np.sin(coordinates)
+        data = Spectrum(
+            coordinates * u.um,
+            residual * u.Jy,
+            uncertainty=np.full(coordinates.size, 0.05) * u.Jy,
+        )
+        gp = Likelihood(GaussianFamily(), GaussianProcessNoise(Matern32(1.0, 1.5)))
+        grid = np.linspace(coordinates.min(), coordinates.max(), 101)[:, None]
+        conditional = gp.conditional(data.with_values(np.zeros(coordinates.size)), data, at=grid)
+        assert conditional.mean.shape == (101,)
+        assert conditional.variance.shape == (101,)
+
+        # Against the textbook formulae, computed with an explicit inverse.
+        covariance = matern32_matrix(coordinates, 1.0, 1.5)
+        total = covariance + np.diag(np.full(coordinates.size, 0.05**2))
+        inverse = np.linalg.inv(total)
+        separation = np.abs(grid - coordinates[None, :])
+        scaled = math.sqrt(3.0) * separation / 1.5
+        cross = (1.0 + scaled) * np.exp(-scaled)
+        assert np.allclose(conditional.mean, cross @ inverse @ residual, atol=1e-9)
+        assert np.allclose(
+            conditional.variance,
+            1.0 - np.einsum("ij,ji->i", cross, inverse @ cross.T),
+            atol=1e-9,
+        )
+        # Away from any datum the posterior must revert towards the prior; at a
+        # datum it must be tighter than the prior. Both, or the band is wrong.
+        assert conditional.variance.max() > conditional.variance.min()
+        assert conditional.variance.max() <= 1.0 + 1e-9
+
     def test_it_refuses_an_uncorrelated_noise_model(
         self, predicted: Spectrum, observed: Spectrum
     ) -> None:
