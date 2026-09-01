@@ -1,8 +1,10 @@
 # Ampere v2 — Architecture Spec (W1.2)
 
-Status: **DRAFT — pending reconciliation with W1.1 (prior-art memo,
-in progress) and Peter's review.** This is not yet frozen; §10 lists what
-might move once the prior-art memo lands.
+Status: **DRAFT — reconciled against W1.1 (2026-09-01, Fable review);
+awaiting Peter's review.** Not yet frozen; §10 records the reconciliation
+outcome, and §9 carries one open decision (the curated-translation default,
+which conflicts with `DEVELOPMENT_PLAN.md` §4.7's current wording) for the
+plan's decision log.
 
 Relationship to other documents: `DEVELOPMENT_PLAN.md` §2–3 record the
 architectural *decisions*; this document expands them into the connective
@@ -43,9 +45,20 @@ to use, but the underlying `astropy.modeling` evaluation is not
 differentiable. The curated-translation escape hatch (mapping common
 analytic astropy models — blackbody, power laws, polynomials — to native
 torch/jax equivalents) is precisely a rung-1-to-rung-2 promotion for
-specific, recognised models; it is opt-in and the adapter must never
-silently substitute a native model for a user's actual astropy definition
-without that model being byte-for-byte in the curated table.
+specific, recognised model classes and parameterisations.
+
+**Open decision — flagged for the plan's decision log (see §9).** This
+document takes the position that the substitution must be **opt-in, or at
+minimum loudly disclosed per run**: a curated native implementation is not
+guaranteed to be numerically identical to the astropy original, and a fit
+whose model changed implementation without the user's knowledge is exactly
+the silent-downgrade class this section forbids in the other direction.
+`DEVELOPMENT_PLAN.md` §4.7 currently says the opposite ("silently restoring
+differentiability for the most frequent cases"). By this document's own
+precedence rule the plan wins until its decision log says otherwise, so the
+conflict must be resolved — by Peter now, or at W1.13 before the astropy
+adapter contract is specified — rather than left for the adapter's author
+to discover.
 
 ## 2. Reference backend: the trade-off, written out
 
@@ -114,8 +127,11 @@ Option B wins. It is the standing decision.
 ampere/
 ├── core/            # Backend-neutral contracts. STRICT: no torch/jax
 │                     # imports, ever, at any point, even lazily. Only
-│                     # numpy/scipy/typing/stdlib. Everything else depends
-│                     # on core; core depends on nothing backend-specific.
+│                     # numpy/scipy/astropy/stdlib — the required base
+│                     # dependencies (astropy is one: §4.1 of the plan puts
+│                     # units on parameters, and astropy_compat.py below is
+│                     # core). Everything else depends on core; core depends
+│                     # on nothing backend-specific or optional.
 │   ├── parameter.py      # §4.1 — Parameter, ParameterSet, priors, tying
 │   ├── results_schema.py # §4.2 — ModelResult, named channels, containers
 │   ├── transform.py      # §4.3 — Transformation, Instrument, negotiation
@@ -139,6 +155,7 @@ ampere/
 |---|---|---|
 | *(none)* | reference backend, astropy adapter, emcee/dynesty, celerite2-numpy | the base install; must always work |
 | `zeus` | zeus-mcmc | `inference`'s zeus driver |
+| `arviz` | arviz | legacy postprocessing today; folded into the base install when `ampere.results` lands (§4.6 of the plan makes InferenceData the single results format) |
 | `sbi` | torch, sbi | `inference`'s SBI layer (also unlocks `backends/torch` incidentally, but does not itself require native-model authoring) |
 | `extinction` | dust_extinction | legacy `extinctionModels.F99Extinction` (W0.5) |
 | `torch` | torch, (GP solver library — deferred choice, plan §6) | `backends/torch` |
@@ -150,10 +167,15 @@ ampere/
 
 Rules, binding on all new code:
 
-1. **`ampere.core` never imports a heavy or optional dependency**, lazily
-   or otherwise. It is pure numpy/scipy/stdlib. This is what keeps the
-   base install light and keeps `backends/torch` and `backends/jax`
-   interchangeable consumers of the same contracts.
+1. **`ampere.core` never imports an optional dependency**, lazily or
+   otherwise. It is pure numpy/scipy/astropy/stdlib — the required base
+   dependencies and nothing else. This is what keeps the base install
+   light and keeps `backends/torch` and `backends/jax` interchangeable
+   consumers of the same contracts. (Amended 2026-09-01 during the W1.3
+   review: the original wording omitted astropy, which the plan requires
+   for units on parameters and which is a required dependency of the base
+   install — `ampere/core/parameter.py` importing `astropy.units` at
+   module level is in-policy.)
 2. **Outside `ampere.core`, an optional dependency is imported at module
    top level only within the subpackage that exists *because of* that
    dependency** — e.g. `ampere/backends/torch/__init__.py` may `import
@@ -280,37 +302,47 @@ structure are exactly the two things that negotiation reconciles.
 
 ## 9. Open items carried from this document
 
+- **Curated-translation default (§1)**: this document says opt-in/disclosed;
+  `DEVELOPMENT_PLAN.md` §4.7 says silent. A decision-log entry must resolve
+  the conflict before W1.13 freezes the spec (the astropy adapter itself is
+  Phase 4 work, so there is no implementation pressure — only the wording).
 - **jax x64 activation call site** in a multi-library host process — W1.9
   gate check.
 - **GP solver library per backend** — already an open deferred choice in
   `DEVELOPMENT_PLAN.md` §6; unaffected by this document.
 - **`OptionalDependencyError` exact shape** (fields, message format) —
-  small, but should be pinned once, in `core/exceptions.py`'s own
-  docstring, so it isn't reinvented per contract spec.
+  pinned by W1.3 in `ampere/core/exceptions.py` as this section asked;
+  W1.13 ratifies or moves it.
 
-## 10. Status and what W1.1 might change
+## 10. Reconciliation with W1.1 (done 2026-09-01)
 
 This document was drafted in parallel with W1.1 (prior-art memo), per the
 project's orchestration policy — not after it, despite the plan's stated
-dependency — because the capability-ladder framing above does not depend
-on prior-art specifics to state, and starting the specs in parallel saves
-a full round trip. It is **not final**. Once W1.1 lands, re-check
-specifically:
+dependency. The memo has since landed (`docs/design/prior_art.md`), and the
+four questions this section originally posed were checked against it in the
+2026-09-01 Fable review:
 
-- Whether bilby's `Likelihood`/`PriorDict`/`Result` separation suggests a
-  different shape for the capability-flag / `FittingProblem` framing in
-  §1.
-- Whether gammapy's `Datasets` joint-fitting pattern changes how §3's
-  "execution venue" language should describe multi-dataset composition
-  (this bears more on W1.7 than this document, but the ladder framing
-  should stay consistent with it).
-- Whether 3ML's per-instrument plugin-likelihood pattern argues for
-  likelihoods being instrument-owned rather than composed separately —
-  this would touch §1's rung description and the boundary between §4.3
-  and §4.4 of the plan.
-- Whether Starfish's implementation experience surfaces a kernel or
-  cost pitfall the dtype/precision policy (§5) or the reference-backend
-  scope (§2) should account for.
+- **bilby (memo §1)**: lessons B1/B3 corroborate the framing here rather
+  than changing it — bilby's own core moved to explicit-argument
+  `log_likelihood(parameters)` (re-verified against current `bilby-dev`
+  source during the review), and its sampler-parametrised `Result` grab-bag
+  is precisely the failure mode the single-InferenceData decision avoids.
+  No change to §1's capability-flag / `FittingProblem` framing.
+- **gammapy (memo §2)**: G1 (joint log-likelihood as a sum over member
+  datasets; stacking is an opt-in change of objective, never a silent
+  optimisation) and G2 (identity-based tying broke a downstream consumer;
+  tie by explicit declaration instead) bear on W1.7 and W1.3 respectively
+  — W1.3 implements name/declaration-based tying. The ladder and
+  "execution venue" language here needed no change.
+- **3ML (memo §3)**: 3M1's verdict is to keep the factored
+  Transformation/NoiseModel split, with an awkward-instrument stress test
+  (physically coupled calibration and noise) delegated to W1.11's modality
+  sketches before the freeze. §1's rung description and the §4.3/§4.4
+  boundary stand.
+- **Starfish (memo §4)**: S1 corroborates the Matérn-3/2 default; S2's
+  windowed-sparse truncation is a third solver-strategy family for W1.6 to
+  name (or explicitly decline); S3's trans-dimensional local kernels are a
+  scope boundary for W1.6 to state. Nothing touches the dtype/precision
+  policy (§5) or the reference-backend scope (§2).
 
-Peter's review pass is the other half of this item's acceptance
-criterion and is independent of W1.1's content.
+Peter's review pass remains this item's outstanding acceptance criterion.
