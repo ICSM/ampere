@@ -355,11 +355,14 @@ freeze.
 - Fix-or-quarantine the broken legacy modules (#74 import error, #75
   `extinction` dependency, #76 syntax errors, #77 astropy BlackBody API) —
   lazy imports so broken corners cannot block `import ampere`.
-- Branch harvest & archive: extract the useful diffs (swyft TMNRE ~550
-  lines; `optim_only` optimisers; `jax` branch design sketches — note its
-  `equinox.Dataset`/`equinox.Parameter` imports don't exist, and it carries
-  ~50 MB of committed lightning checkpoints that must not be merged), then
-  tag and archive stale branches.
+- Branch harvest & archive: DONE (W0.7, merged 2026-09-01) — harvested
+  content and per-branch provenance/caveats live in `docs/design/harvest/`
+  (swyft TMNRE; `optim_only` optimisers; annotated `jax`-branch sketches;
+  the copilot core scaffold that seeds W1.3), with archival
+  recommendations for all 15 remote branches in
+  `docs/design/harvest/branch_triage.md` awaiting Peter's approval.
+  Phase 1+ design work should read the relevant harvest README before
+  reinventing or reviving anything.
 
 ### Phase 1 — Core contracts (§4)
 - Write the interface specs as **layered design documents** under
@@ -410,9 +413,12 @@ paper-grade evidence the redesign delivers its central promise.
 ### Phase 3 — SBI layer (backend-spanning)
 - One SBI module in `ampere.inference` consuming `simulate()` from any
   backend (including legacy black-box models): NPE/NLE/NRE via `sbi`;
-  revive the swyft TMNRE implementation from the branch; embedding-network
-  support carried over from the existing `infer/sbi.py` work. jax-native
-  SBI (sbijax/flowjax) optional, later.
+  revive the swyft TMNRE implementation from
+  `docs/design/harvest/swyft/` (note its README's latent bug: the lazy
+  swyft-import guard never protected the `SwyftNetwork*` class
+  definitions — fix during revival); embedding-network support carried
+  over from the existing `infer/sbi.py` work. jax-native SBI
+  (sbijax/flowjax) optional, later.
 - A canonical **coordinate–value–mask tensor encoding** of containers for
   embedding networks, so set/attention-based embeddings can consume any
   modality — irregular sampling and missing data included. Fixed-size

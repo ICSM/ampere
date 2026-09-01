@@ -228,6 +228,6 @@ to this file.
 | W0.2 | merged 2026-09-01 |
 | W0.3 | merged 2026-09-01 |
 | W0.4 | dispatched 2026-09-01 |
-| W0.7 | dispatched 2026-09-01 |
+| W0.7 | merged 2026-09-01 — branch-archival actions in `docs/design/harvest/branch_triage.md` await Peter's approval |
 | W0.5, W0.6, W0.8 | not started |
 | W1.1–W1.13 | not started |
