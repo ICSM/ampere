@@ -38,17 +38,31 @@ non-trivial work, read:
 
 ## Environment
 
+- **pixi is the supported route** (W0.8): `pixi install -e dev` sets up the
+  daily-use environment (Python 3.13 + `dev`, `zeus`, `extinction` extras)
+  from a clean clone with only `pixi` installed; pyproject.toml's
+  `[tool.pixi.*]` tables wrap `[project.dependencies]` /
+  `[project.optional-dependencies]` rather than duplicating them —
+  `pixi.lock` is committed, `.pixi/` is not. Common tasks: `pixi run test`
+  (fast: `tests/test_imports.py`), `pixi run test-characterisation` (full
+  suite), `pixi run lint`, `pixi run format-check`, `pixi run typecheck`,
+  `pixi run docs`. Other environments: `test-py311`/`test-py312`/
+  `test-py313` (the CI matrix), `sbi` (adds the `sbi` extra — torch is a
+  large download, not part of `dev`), `torch`/`jax` (backend placeholders).
+  Select one with `pixi run -e <env> <task>`.
+- Plain-pip alternative: `pip install -e ".[dev]"` (Python ≥ 3.11; CI
+  targets 3.11–3.13).
 - Conda env **`ampere`** (`~/miniforge3/envs/ampere`, Python 3.13):
   `conda run -n ampere python ...`. Caution: that env has an editable
   install pointing at the main checkout — if you are working in a worktree
-  and need to *import* your changed code, `pip install -e .` into a fresh
-  env/venv from your worktree instead.
-- Fresh setup: `pip install -e ".[dev]"` (Python ≥ 3.11; CI targets
-  3.11–3.13).
-- Tests: `pytest tests/` once the suite exists (characterisation suite:
-  `pytest tests/characterisation`, slower; it defines "legacy still works").
-- Lint/format: `ruff check .` / `ruff format`. Types: `pyrefly check`
-  (scoped to the new namespaces).
+  and need to *import* your changed code, use pixi or `pip install -e .`
+  into a fresh env/venv from your worktree instead.
+- Tests: `pytest tests/` (characterisation suite: `pytest
+  tests/characterisation`, slower; it defines "legacy still works") — or
+  the equivalent pixi tasks above.
+- Lint/format: `ruff check .` / `ruff format` (or `pixi run lint` /
+  `pixi run format-check`). Types: `pyrefly check` (scoped to the new
+  namespaces), or `pixi run typecheck`.
 
 ## Workflow for a work item
 

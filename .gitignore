@@ -87,6 +87,10 @@ lightning_logs/
 # Locally downloaded installer at the repository root
 /miniforge.sh
 
+# pixi (W0.8): per-machine installed environments; pixi.lock is committed,
+# this is not.
+.pixi/
+
 # Example run output directories (pickles and figure PDFs/PNGs); the
 # corresponding *.py scripts remain visible as untracked
 examples/examples_paper/flexible_likelihood_comparison/

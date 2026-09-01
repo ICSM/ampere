@@ -137,3 +137,97 @@ include = '\.pyi?$'
 
 # [tool.pytest]
 # TBD
+
+# ---------------------------------------------------------------------------
+# pixi (W0.8): environment management wraps pyproject.toml rather than
+# duplicating it. Python itself comes from conda-forge (pixi needs a conda
+# interpreter); every other dependency -- [project.dependencies] and
+# whichever [project.optional-dependencies] extras a feature below asks
+# for -- comes from installing `ampere` itself as an editable PyPI
+# dependency (the pixi equivalent of `pip install -e ".[...]"`), so
+# pyproject.toml stays the single source of truth. No package version is
+# pinned twice.
+# ---------------------------------------------------------------------------
+
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+# Matches the project's sole OS classifier (`Operating System :: POSIX ::
+# Linux`, [project.classifiers] above).
+platforms = ["linux-64"]
+
+[tool.pixi.pypi-dependencies]
+ampere = { path = ".", editable = true }
+
+[tool.pixi.tasks]
+# Fast tests: the import-quarantine suite (tests/test_imports.py) --
+# everything else quick enough to belong here already lives there. The
+# slow suite is test-characterisation, below.
+test = "pytest tests/test_imports.py"
+test-characterisation = "pytest tests/characterisation"
+lint = "ruff check ."
+format-check = "ruff format --check . --exclude tests/characterisation"
+# pyrefly is scoped to the new namespaces (AGENTS.md ground rule 8); none
+# of them exist yet, and a bare `pyrefly check ampere/core ampere/backends
+# ampere/inference ampere/results` errors ("No Python files matched
+# pattern ...") when a given directory is missing, so this must check
+# which of the four exist and exit 0 cleanly when none do.
+typecheck = "bash -c 'dirs=\"\"; for d in ampere/core ampere/backends ampere/inference ampere/results; do [ -d \"$d\" ] && dirs=\"$dirs $d\"; done; if [ -z \"$dirs\" ]; then echo \"typecheck: none of ampere/{core,backends,inference,results} exist yet -- nothing to check\"; else pyrefly check $dirs; fi'"
+docs = "sphinx-build -b html docs/source docs/_build/html"
+
+# --- One feature per Python interpreter, driving the CI matrix (W0.3
+# packaging floor: requires-python >=3.11; CI targets 3.11-3.13) ---
+[tool.pixi.feature.py311.dependencies]
+python = "3.11.*"
+
+[tool.pixi.feature.py312.dependencies]
+python = "3.12.*"
+
+[tool.pixi.feature.py313.dependencies]
+python = "3.13.*"
+
+# --- One feature per [project.optional-dependencies] extra, mirrored 1:1
+# via the editable install's `extras`, never duplicated here. ---
+[tool.pixi.feature.dev.pypi-dependencies]
+ampere = { path = ".", editable = true, extras = ["dev"] }
+
+[tool.pixi.feature.zeus.pypi-dependencies]
+ampere = { path = ".", editable = true, extras = ["zeus"] }
+
+[tool.pixi.feature.sbi.pypi-dependencies]
+ampere = { path = ".", editable = true, extras = ["sbi"] }
+
+[tool.pixi.feature.extinction.pypi-dependencies]
+ampere = { path = ".", editable = true, extras = ["extinction"] }
+
+# Backend placeholders (Phase 2): [project.optional-dependencies] already
+# stubs these (torch = ["torch"], jax = ["jax"]); wiring the pixi features
+# up now means the eventual backend split doesn't also need a pixi change.
+[tool.pixi.feature.torch.pypi-dependencies]
+ampere = { path = ".", editable = true, extras = ["torch"] }
+
+[tool.pixi.feature.jax.pypi-dependencies]
+ampere = { path = ".", editable = true, extras = ["jax"] }
+
+[tool.pixi.environments]
+# Daily-use environment: latest supported Python plus the full non-sbi,
+# non-backend toolchain (mirrors AGENTS.md's conda `ampere` env, which is
+# Python 3.13).
+dev = { features = ["py313", "dev", "zeus", "extinction"] }
+# CI test matrix: one environment per Python version. Deliberately no
+# `sbi` extra here -- torch is a large download and sbi tests skip cleanly
+# by design (tests/characterisation/conftest.py's `requires_sbi` marker);
+# see ci.yml and this item's report for the full rationale.
+test-py311 = { features = ["py311", "dev", "zeus", "extinction"] }
+test-py312 = { features = ["py312", "dev", "zeus", "extinction"] }
+test-py313 = { features = ["py313", "dev", "zeus", "extinction"] }
+# Full characterisation run including the sbi flow. sbi (extras =
+# ["sbi"]) already depends on torch (pyproject.toml sbi = ["torch",
+# "sbi<0.28"]), so torch is not listed separately here. Kept out of the
+# default test-py3* matrix -- see ci.yml's non-blocking
+# sbi-characterisation job.
+sbi = { features = ["py313", "dev", "zeus", "extinction", "sbi"] }
+# Standalone backend placeholder environments (Phase 2 not started; these
+# just prove the torch/jax extras solve and stay installable until a real
+# backend lands and needs them for something).
+torch = { features = ["py313", "dev", "torch"] }
+jax = { features = ["py313", "dev", "jax"] }
