@@ -158,6 +158,25 @@ gate their branches' merges):
   vs FITS convention (cheap to change now); whether a `ModelResult`
   should carry the θ that produced it (emulator training sets). Review at
   `docs/design/contracts/results_schema.md` §17.
+- W1.5 spec §15's open questions (merged 2026-09-01) — most notably:
+  whether the ANY mask-propagation rule is too conservative for real
+  resampling (`min_valid_fraction` is the named extension); whether a
+  model should be able to *refuse* a requirement rather than silently
+  ignoring it; confirming the `Model` ABC's placement in W1.5 rather than
+  W1.7 (§9 has the argument); and §15.8's `max_step`/`min_resolving_power`
+  dual meaning (declaration vs post-union summary — the review leans
+  towards demoting the scalars before the freeze, cheap now). Review at
+  `docs/design/contracts/transformations.md` §15.
+
+**Sol-review blocker (confirmed 2026-09-01)**: `codex exec -m gpt-5.6-sol`
+is refused — "The 'gpt-5.6-sol' model is not supported when using Codex
+with a ChatGPT account" (reproduced independently of the W1.5 agent's
+report). This blocks the batched adversarial review planned at W1.13.
+Options for Peter: check whether the model name has moved; authenticate
+codex with an API key instead of the ChatGPT account; pick another
+cross-provider reviewer available to the account; or substitute a
+fresh-context Claude adversarial pass (weaker: correlated failure modes,
+per `docs/orchestration.md`).
 
 **Tooling note** (found by the W1.4 agent): `ruff format` invoked with an
 explicit path bypasses `extend-exclude`, so it can silently rewrite the
