@@ -213,10 +213,11 @@ def _dedupe(values: np.ndarray, rtol: float = COORDINATE_RTOL) -> np.ndarray:
     return np.concatenate([ordered[:1], ordered[1:][keep]])
 
 
-def _merge_intervals(intervals: Sequence[tuple[float, float]]) -> tuple[tuple[float, float], ...]:
+Density = tuple[float | None, float | None]
+
+
+def _merge_runs(intervals: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
     """Union of closed intervals: sorted, with overlapping or touching pairs joined."""
-    if not intervals:
-        return ()
     ordered = sorted(intervals)
     merged: list[list[float]] = [list(ordered[0])]
     for low, high in ordered[1:]:
@@ -224,7 +225,31 @@ def _merge_intervals(intervals: Sequence[tuple[float, float]]) -> tuple[tuple[fl
             merged[-1][1] = max(merged[-1][1], high)
         else:
             merged.append([low, high])
-    return tuple((low, high) for low, high in merged)
+    return [(low, high) for low, high in merged]
+
+
+def _merge_intervals(
+    intervals: Sequence[tuple[float, float]], densities: Sequence[Density]
+) -> tuple[tuple[tuple[float, float], ...], tuple[Density, ...]]:
+    """Union of intervals, **grouped by sampling density**.
+
+    Intervals asking for the same density merge when they overlap; intervals
+    asking for different densities never do, because merging them would apply
+    the stricter of the two across the whole span. That is the difference
+    between "cover 1-200 micron at R=40 *and* one 0.1 micron window at 0.0025
+    micron sampling" (a few hundred coordinates) and the same statement with
+    0.0025 micron sampling imposed from 1 to 200 micron (eighty thousand) —
+    which would defeat the purpose ``DEVELOPMENT_PLAN.md`` §4.3 gives
+    negotiation, namely to avoid evaluating expensively everywhere.
+    """
+    if not intervals:
+        return (), ()
+    grouped: dict[Density, list[tuple[float, float]]] = {}
+    for pair, density in zip(intervals, densities, strict=True):
+        grouped.setdefault(density, []).append(pair)
+    merged = [(pair, density) for density, items in grouped.items() for pair in _merge_runs(items)]
+    merged.sort(key=lambda item: item[0])
+    return tuple(pair for pair, _ in merged), tuple(density for _, density in merged)
 
 
 def _to_unit(raw: object, unit: u.UnitBase | None, what: str) -> np.ndarray:
@@ -276,7 +301,9 @@ class AxisRequirement:
     *how finely* — :attr:`max_step` (an absolute spacing) and
     :attr:`min_resolving_power` (:math:`\\lambda/\\Delta\\lambda`, the natural
     statement for a spectrograph). Giving both is allowed and means both must
-    hold.
+    hold. A density applies to the intervals declared **alongside** it, which
+    is why a requirement declaring one and no coverage is refused: after a
+    :meth:`union` there would be no way to say where it applied.
 
     Requirements are declared **in the coordinates of the channel the
     instrument binds**, not in the coordinates of whichever step in the chain
@@ -293,11 +320,20 @@ class AxisRequirement:
         :class:`~astropy.units.Quantity` argument.
     intervals
         A ``(low, high)`` pair, a sequence of them, or a ``Quantity`` of shape
-        ``(2,)`` or ``(n, 2)``. Overlapping intervals are merged.
+        ``(2,)`` or ``(n, 2)``. Overlapping intervals asking for the same
+        density are merged.
+    densities
+        Per-interval ``(max_step, min_resolving_power)``, aligned with
+        :attr:`intervals`. Not normally passed by hand: it is how
+        :meth:`union` keeps one instrument's fine window from imposing its
+        sampling on another's broad coverage. Omit it and every interval takes
+        the requirement's own ``max_step``/``min_resolving_power``.
     points
         Coordinates that must appear exactly.
     max_step, min_resolving_power
-        Sampling density; see above.
+        Sampling density; see above. After a :meth:`union` these report the
+        strictest constraint anywhere in the requirement — a summary. What the
+        grid is actually built from is :attr:`densities`, per interval.
     source
         Free text naming who asked, quoted back in composition errors.
 
@@ -316,6 +352,7 @@ class AxisRequirement:
     _: dataclasses.KW_ONLY
     unit: u.UnitBase | None = None
     intervals: Any = ()
+    densities: Any = None
     points: Any = None
     max_step: float | None = None
     min_resolving_power: float | None = None
@@ -355,8 +392,6 @@ class AxisRequirement:
                     f"{what} has the degenerate interval ({low}, {high}). A single coordinate is "
                     f"a point, not an interval: pass points=[{low}] instead."
                 )
-        set_(self, "intervals", _merge_intervals([(float(a), float(b)) for a, b in pairs]))
-
         if self.points is None:
             set_(self, "points", None)
         else:
@@ -369,12 +404,42 @@ class AxisRequirement:
         step = self.max_step
         if isinstance(step, u.Quantity):
             step = float(_to_unit(step, unit, f"the max_step of {what}"))
-        set_(self, "max_step", _positive(step, f"the max_step of {what}"))
-        set_(
-            self,
-            "min_resolving_power",
-            _positive(self.min_resolving_power, f"the min_resolving_power of {what}"),
-        )
+        declared_step = _positive(step, f"the max_step of {what}")
+        declared_power = _positive(self.min_resolving_power, f"the min_resolving_power of {what}")
+
+        given_pairs = [(float(low), float(high)) for low, high in pairs]
+        if self.densities is None:
+            densities: list[Density] = [(declared_step, declared_power)] * len(given_pairs)
+            summary: Density = (declared_step, declared_power)
+        else:
+            densities = [
+                (
+                    _positive(one, f"a per-interval max_step of {what}"),
+                    _positive(other, f"a per-interval min_resolving_power of {what}"),
+                )
+                for one, other in self.densities
+            ]
+            if len(densities) != len(given_pairs):
+                raise TransformationError(
+                    f"{what} was given {len(densities)} per-interval densities for "
+                    f"{len(given_pairs)} interval(s); they are aligned one to one."
+                )
+            steps = [one for one, _ in densities if one is not None]
+            powers = [other for _, other in densities if other is not None]
+            summary = (min(steps) if steps else None, max(powers) if powers else None)
+        if (declared_step is not None or declared_power is not None) and not given_pairs:
+            raise TransformationError(
+                f"{what} declares a sampling density but no coverage for it to apply to. A "
+                f"density belongs to the intervals declared alongside it — otherwise, once "
+                f"requirements are unioned, there is no way to say where it holds. Add "
+                f"intervals=(low, high)."
+            )
+        merged_pairs, merged_densities = _merge_intervals(given_pairs, densities)
+        set_(self, "intervals", merged_pairs)
+        set_(self, "densities", merged_densities)
+        set_(self, "max_step", summary[0])
+        set_(self, "min_resolving_power", summary[1])
+
         if not isinstance(self.source, str):
             raise TransformationError(f"the source of {what} must be a string, got {self.source!r}")
 
@@ -382,6 +447,18 @@ class AxisRequirement:
     def constrains_density(self) -> bool:
         """Whether this requirement says anything about how finely to sample."""
         return self.max_step is not None or self.min_resolving_power is not None
+
+    def segments(self) -> tuple[tuple[float, float, float | None, float | None], ...]:
+        """``(low, high, max_step, min_resolving_power)`` per interval.
+
+        The requirement's canonical form: what :meth:`coordinates` builds from,
+        and the thing to read when :attr:`max_step` (a strictest-anywhere
+        summary) is not specific enough.
+        """
+        return tuple(
+            (low, high, step, power)
+            for (low, high), (step, power) in zip(self.intervals, self.densities, strict=True)
+        )
 
     def quantity(self, values: np.ndarray) -> Any:
         """*values* as a :class:`~astropy.units.Quantity` when the axis has a unit."""
@@ -403,22 +480,28 @@ class AxisRequirement:
                 f"— ampere will not assume a bare number is in the other's unit."
             )
         factor = float(u.Quantity(1.0, self.unit).to_value(unit))
-        return dataclasses.replace(
-            self,
+        return AxisRequirement(
+            self.axis,
             unit=unit,
             intervals=np.asarray(self.intervals, dtype=float).reshape(-1, 2) * factor
             if self.intervals
             else (),
+            densities=tuple(
+                (None if step is None else step * factor, power) for step, power in self.densities
+            ),
             points=None if self.points is None else self.points * factor,
-            max_step=None if self.max_step is None else self.max_step * factor,
+            source=self.source,
         )
 
     def union(self, other: AxisRequirement) -> AxisRequirement:
         """The weakest requirement that satisfies both.
 
-        Coverage and required points accumulate; density constraints take the
-        stricter of the two. This is what makes "evaluate once, feed several
-        instruments" possible without any instrument's needs being dropped.
+        Coverage and required points accumulate. Density constraints stay
+        attached to the intervals that asked for them, so unioning a broad,
+        coarse requirement with a narrow, fine one gives a coarse grid with a
+        fine window in it — not a fine grid everywhere. Merging them into a
+        single strictest-everywhere constraint would defeat the purpose
+        ``DEVELOPMENT_PLAN.md`` §4.3 gives negotiation.
         """
         if other.axis != self.axis:
             raise CompositionError(
@@ -433,9 +516,8 @@ class AxisRequirement:
             intervals=np.asarray(self.intervals + aligned.intervals, dtype=float).reshape(-1, 2)
             if (self.intervals or aligned.intervals)
             else (),
+            densities=self.densities + aligned.densities,
             points=np.concatenate(points) if points else None,
-            max_step=_least(self.max_step, aligned.max_step),
-            min_resolving_power=_most(self.min_resolving_power, aligned.min_resolving_power),
             source=", ".join(dict.fromkeys(sources)),
         )
 
@@ -444,36 +526,40 @@ class AxisRequirement:
 
         A :class:`~astropy.units.Quantity` when the axis has a unit, a bare
         array otherwise — in both cases exactly what a container constructor
-        wants. This is a *reference* grid builder: a model is free to build its
-        own grid, or to ignore the requirement entirely.
+        wants. Each interval is sampled at *its own* declared density and the
+        results are merged, so every contributing requirement's constraint
+        holds over its own coverage and nowhere else.
+
+        This is a *reference* grid builder: a model is free to build its own
+        grid, or to ignore the requirement entirely.
         """
         if not self.intervals and self.points is None:
             raise TransformationError(
                 f"the requirement on axis {self.axis!r} declares no intervals and no points, so "
-                f"there are no coordinates to build from it — it only constrains sampling "
-                f"density. Add intervals=(low, high), or ask the model for its own grid."
+                f"there are no coordinates to build from it. Add intervals=(low, high), or ask "
+                f"the model for its own grid."
             )
         pieces: list[np.ndarray] = []
         if self.points is not None:
             pieces.append(self.points)
-        for low, high in self.intervals:
-            pieces.append(self._grid(low, high))
+        for low, high, step, power in self.segments():
+            pieces.append(self._grid(low, high, step, power))
         return self.quantity(_dedupe(np.concatenate(pieces)))
 
-    def _grid(self, low: float, high: float) -> np.ndarray:
+    def _grid(self, low: float, high: float, step: float | None, power: float | None) -> np.ndarray:
         pieces = [np.array([low, high])]
-        if self.max_step is not None:
-            count = max(int(np.ceil((high - low) / self.max_step)) + 1, 2)
+        if step is not None:
+            count = max(int(np.ceil((high - low) / step)) + 1, 2)
             pieces.append(np.linspace(low, high, count))
-        if self.min_resolving_power is not None:
+        if power is not None:
             if low <= 0.0:
                 raise TransformationError(
-                    f"the requirement on axis {self.axis!r} asks for resolving power "
-                    f"{self.min_resolving_power} over an interval starting at {low}, but "
-                    f"resolving power is a ratio and needs strictly positive coordinates. Use "
-                    f"max_step for an interval that reaches zero."
+                    f"the requirement on axis {self.axis!r} asks for resolving power {power} over "
+                    f"an interval starting at {low}, but resolving power is a ratio and needs "
+                    f"strictly positive coordinates. Use max_step for an interval that reaches "
+                    f"zero."
                 )
-            ratio = 1.0 + 1.0 / self.min_resolving_power
+            ratio = 1.0 + 1.0 / power
             count = max(int(np.ceil(np.log(high / low) / np.log(ratio))) + 1, 2)
             pieces.append(np.geomspace(low, high, count))
         return np.concatenate(pieces)
@@ -482,15 +568,19 @@ class AxisRequirement:
         bits = [repr(self.axis)]
         if self.unit is not None:
             bits.append(str(self.unit))
-        if self.intervals:
-            bits.append(" ".join(f"[{low:g},{high:g}]" for low, high in self.intervals))
+        bits.extend(_segment_repr(segment) for segment in self.segments())
         if self.points is not None:
             bits.append(f"{self.points.size} point(s)")
-        if self.max_step is not None:
-            bits.append(f"step<={self.max_step:g}")
-        if self.min_resolving_power is not None:
-            bits.append(f"R>={self.min_resolving_power:g}")
         return f"<AxisRequirement {' '.join(bits)}>"
+
+
+def _segment_repr(segment: tuple[float, float, float | None, float | None]) -> str:
+    low, high, step, power = segment
+    density = [] if step is None else [f"step<={step:g}"]
+    if power is not None:
+        density.append(f"R>={power:g}")
+    suffix = f"@{','.join(density)}" if density else ""
+    return f"[{low:g},{high:g}]{suffix}"
 
 
 def _least(left: float | None, right: float | None) -> float | None:

@@ -570,7 +570,7 @@ class TestAxisRequirement:
         with pytest.raises(TransformationError, match="positive finite"):
             AxisRequirement("spectral_axis", intervals=(1.0, 2.0) * u.um, max_step=0.0)
         with pytest.raises(TransformationError, match="positive finite"):
-            AxisRequirement("spectral_axis", min_resolving_power=-1.0)
+            AxisRequirement("spectral_axis", intervals=(1.0, 2.0) * u.um, min_resolving_power=-1.0)
 
     def test_an_axis_name_must_be_an_identifier(self) -> None:
         with pytest.raises(CompositionError, match="axis name"):
@@ -645,7 +645,12 @@ class TestAxisRequirement:
 
     def test_a_requirement_with_no_geometry_cannot_build_a_grid(self) -> None:
         with pytest.raises(TransformationError, match="no intervals and no points"):
-            AxisRequirement("spectral_axis", max_step=0.1).coordinates()
+            AxisRequirement("spectral_axis").coordinates()
+
+    def test_a_density_without_coverage_is_refused_at_construction(self) -> None:
+        """A density with nowhere to apply would be lost, or over-applied, in a union."""
+        with pytest.raises(TransformationError, match="no coverage for it to apply to"):
+            AxisRequirement("spectral_axis", max_step=0.1)
 
     def test_resolving_power_needs_positive_coordinates(self) -> None:
         with pytest.raises(TransformationError, match="strictly positive"):
@@ -689,12 +694,39 @@ class TestRequirementUnion:
         right = AxisRequirement("spectral_axis", points=[2.0, 3.0] * u.um)
         assert left.union(right).points.tolist() == [1.0, 2.0, 3.0]
 
-    def test_the_union_satisfies_both_inputs(self) -> None:
+    def test_each_input_is_satisfied_over_its_own_coverage(self) -> None:
         left = AxisRequirement("spectral_axis", intervals=(1.0, 10.0) * u.um, max_step=1.0)
         right = AxisRequirement("spectral_axis", intervals=(5.0, 20.0) * u.um, max_step=0.5)
         grid = left.union(right).coordinates().to_value(u.um)
-        assert grid[0] <= 1.0 and grid[-1] >= 20.0
-        assert np.max(np.diff(grid)) <= 0.5 + 1e-12
+        assert grid[0] <= 1.0
+        assert grid[-1] >= 20.0
+        coarse = grid[(grid >= 1.0) & (grid <= 10.0)]
+        fine = grid[(grid >= 5.0) & (grid <= 20.0)]
+        assert np.max(np.diff(coarse)) <= 1.0 + 1e-12
+        assert np.max(np.diff(fine)) <= 0.5 + 1e-12
+
+    def test_a_fine_window_does_not_refine_a_coarse_neighbour(self) -> None:
+        """The defect the per-interval density exists to prevent."""
+        broad = AxisRequirement("spectral_axis", intervals=(1.0, 200.0) * u.um, max_step=1.0)
+        window = AxisRequirement("spectral_axis", intervals=(100.0, 100.1) * u.um, max_step=0.001)
+        both = broad.union(window)
+        assert both.intervals == ((1.0, 200.0), (100.0, 100.1))
+        assert both.segments() == (
+            (1.0, 200.0, 1.0, None),
+            (100.0, 100.1, 0.001, None),
+        )
+        # ~200 from the broad interval plus ~101 from the window, not 200 000.
+        assert both.coordinates().size < 400
+
+    def test_intervals_of_equal_density_still_merge(self) -> None:
+        left = AxisRequirement("spectral_axis", intervals=(1.0, 10.0) * u.um, max_step=0.5)
+        right = AxisRequirement("spectral_axis", intervals=(5.0, 20.0) * u.um, max_step=0.5)
+        assert left.union(right).intervals == ((1.0, 20.0),)
+
+    def test_the_summary_density_is_the_strictest_anywhere(self) -> None:
+        broad = AxisRequirement("spectral_axis", intervals=(1.0, 200.0) * u.um, max_step=1.0)
+        window = AxisRequirement("spectral_axis", intervals=(100.0, 100.1) * u.um, max_step=0.001)
+        assert broad.union(window).max_step == pytest.approx(0.001)
 
     def test_units_are_reconciled(self) -> None:
         left = AxisRequirement("spectral_axis", intervals=(1.0, 2.0) * u.um)
@@ -727,7 +759,7 @@ class TestNegotiate:
         left = Instrument([Binner(np.linspace(1.0, 5.0, 5))], channel="sed", label="a")
         right = Instrument([Binner(np.linspace(4.0, 20.0, 9))], channel="sed", label="b")
         asked = negotiate([left, right])["sed"]["spectral_axis"]
-        assert asked.intervals == ((1.0, 20.0),)
+        assert asked.segments() == ((1.0, 5.0, 0.5, None), (4.0, 20.0, 1.0, None))
         assert asked.max_step == pytest.approx(0.5)
 
     def test_requirements_are_unioned_across_steps_of_one_instrument(self) -> None:
@@ -740,7 +772,10 @@ class TestNegotiate:
         )
         asked = instrument.requirements()
         assert len(asked) == 2
-        assert negotiate([instrument])["sed"]["spectral_axis"].intervals == ((1.0, 20.0),)
+        assert negotiate([instrument])["sed"]["spectral_axis"].intervals == (
+            (1.0, 5.0),
+            (4.0, 20.0),
+        )
 
     def test_the_source_defaults_to_instrument_dot_step(self) -> None:
         instrument = Instrument([Binner(np.linspace(1.0, 5.0, 5))], channel="sed", label="irs")

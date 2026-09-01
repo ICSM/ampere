@@ -499,14 +499,28 @@ two independent halves:
 | *where* | `intervals`, `points` | coverage to span; coordinates that must be present exactly |
 | *how finely* | `max_step`, `min_resolving_power` | absolute spacing; λ/Δλ, the spectrograph's own language |
 
+A density belongs to the coverage declared **alongside** it — the `@` in the
+repr is that association, and it is what makes the union below usable.
+
 ```pycon
 >>> band = AxisRequirement(
 ...     "spectral_axis", intervals=(1.0, 30.0) * u.um, min_resolving_power=40.0, source="wise"
 ... )
 >>> band
-<AxisRequirement 'spectral_axis' um [1,30] R>=40>
+<AxisRequirement 'spectral_axis' um [1,30]@R>=40>
 >>> band.intervals, band.constrains_density
 (((1.0, 30.0),), True)
+
+```
+
+A density with no coverage to apply to is therefore refused, rather than
+quietly becoming a constraint on whatever anybody else asks for:
+
+```pycon
+>>> AxisRequirement("spectral_axis", min_resolving_power=1000.0)
+Traceback (most recent call last):
+    ...
+ampere.core.exceptions.TransformationError: the requirement on axis 'spectral_axis' declares a sampling density but no coverage for it to apply to. A density belongs to the intervals declared alongside it — otherwise, once requirements are unioned, there is no way to say where it holds. Add intervals=(low, high).
 
 ```
 
@@ -537,18 +551,61 @@ True
 ### The union
 
 Two instruments wanting different things from one channel is the whole point.
-Coverage and required points accumulate; density constraints take the stricter
-of the two. The result is the weakest grid that satisfies everybody:
+Coverage and required points accumulate, and **each density stays attached to
+the coverage that asked for it**:
 
 ```pycon
 >>> deep = AxisRequirement(
 ...     "spectral_axis", intervals=(20.0, 200.0) * u.um, max_step=2.0, source="pacs"
 ... )
 >>> both_bands = band.union(deep)
->>> both_bands.intervals, both_bands.min_resolving_power, both_bands.max_step
-(((1.0, 200.0),), 40.0, 2.0)
+>>> both_bands
+<AxisRequirement 'spectral_axis' um [1,30]@R>=40 [20,200]@step<=2>
+>>> both_bands.segments()
+((1.0, 30.0, None, 40.0), (20.0, 200.0, 2.0, None))
 >>> both_bands.source
 'wise, pacs'
+
+```
+
+That the two intervals overlap and were *not* merged is the point, not an
+oversight. Merging them would mean applying the stricter of R=40 and
+Δλ ≤ 2 µm across the whole 1–200 µm span, which is a different — and much more
+expensive — request than either instrument made. The pathological case is easy
+to reach: a broad SED at R=40 and one 0.1 µm line window at 0.0025 µm sampling
+would become 0.0025 µm sampling from 1 to 200 µm, some eighty thousand
+coordinates in place of a couple of hundred, defeating the purpose §4.3 gives
+negotiation. Per-interval densities are what prevent it:
+
+```pycon
+>>> broad = AxisRequirement(
+...     "spectral_axis", intervals=(1.0, 200.0) * u.um, min_resolving_power=40.0
+... )
+>>> window = AxisRequirement("spectral_axis", intervals=(866.9, 867.0) * u.um, max_step=0.0025)
+>>> broad.union(window).coordinates().size
+258
+
+```
+
+Intervals asking for the *same* density do merge, because then there is nothing
+to lose by it:
+
+```pycon
+>>> coarse = AxisRequirement("spectral_axis", intervals=(1.0, 10.0) * u.um, max_step=0.5)
+>>> more = AxisRequirement("spectral_axis", intervals=(5.0, 20.0) * u.um, max_step=0.5)
+>>> coarse.union(more).intervals
+((1.0, 20.0),)
+
+```
+
+`max_step` and `min_resolving_power` survive on a merged requirement as a
+*summary* — the strictest constraint anywhere in it — which is useful for
+reporting and useless for building a grid. `segments()` is the canonical form,
+and it is what `coordinates()` reads:
+
+```pycon
+>>> both_bands.max_step, both_bands.min_resolving_power
+(2.0, 40.0)
 
 ```
 
@@ -632,7 +689,7 @@ requirements per axis:
 >>> asked
 <ChannelRequirements 'sed_lowres' Spectrum axes=['spectral_axis'] from ['irs', 'wise']>
 >>> asked["spectral_axis"]
-<AxisRequirement 'spectral_axis' um [5,25] step<=0.5>
+<AxisRequirement 'spectral_axis' um [5,25]@step<=0.5>
 
 ```
 
@@ -751,7 +808,9 @@ needs of that channel:
 ...     [
 ...         Coverage(
 ...             AxisRequirement(
-...                 "spectral_axis", intervals=[(866.9, 867.0), (1300.3, 1300.5)] * u.um
+...                 "spectral_axis",
+...                 intervals=[(866.9, 867.0), (1300.3, 1300.5)] * u.um,
+...                 max_step=0.005,
 ...             )
 ...         ),
 ...         NearestResampler(np.linspace(866.92, 866.99, 15)),
@@ -769,16 +828,17 @@ Negotiation, once:
 >>> sorted(asked)
 ['co_windows', 'sed_lowres']
 >>> asked["sed_lowres"]["spectral_axis"]
-<AxisRequirement 'spectral_axis' um [1,200] R>=40>
+<AxisRequirement 'spectral_axis' um [1,200]@R>=40>
 >>> asked["co_windows"]["spectral_axis"]
-<AxisRequirement 'spectral_axis' um [866.9,867] [1300.3,1300.5] step<=0.0025>
+<AxisRequirement 'spectral_axis' um [866.9,867]@step<=0.005 [866.92,866.99]@step<=0.0025 [1300.3,1300.5]@step<=0.005>
 
 ```
 
 The heterodyne requirement is itself a union of two steps' needs: the windows
-come from the receiver's tuning (the `Coverage` step) and the sampling from the
-detector's own pixel spacing (the resampler). Neither step had to know about
-the other.
+and their nominal sampling come from the receiver's tuning (the `Coverage`
+step), and the finer sampling over the part of the first window the detector
+actually reads comes from the resampler. Neither step had to know about the
+other, and the resampler's 0.0025 µm did not leak onto the second window.
 
 The channel also keeps its **gap**. That is the whole argument for
 negotiating coordinates rather than a range and a resolution: the union of two
@@ -789,7 +849,7 @@ narrow windows is two narrow windows, and the model never evaluates across the
 >>> envelope = DustyEnvelope().compile_for(asked)
 >>> result = envelope(temperature=300.0, line_flux=2.0)
 >>> result
-<ModelResult sed_lowres: Spectrum[216], co_windows: Spectrum[124]>
+<ModelResult sed_lowres: Spectrum[216], co_windows: Spectrum[94]>
 >>> float(np.diff(result["co_windows"].spectral_axis.values).max()) > 400.0
 True
 
@@ -950,7 +1010,9 @@ monolithic plugin buys trivially and a factored design has to earn.
 | Dropping a mask raises rather than warning | `results_schema.md` §16 makes propagation an obligation; an unenforced obligation is documentation. The escape hatch — an explicit all-`False` mask — is one argument |
 | Requirements are expressed as coordinates | `results_schema.md` §16: containers are built coordinates-first, and `with_values` refills them. Anything else would need translating before it could be used |
 | Requirements are declared in the *channel's* coordinates; no pull-back through the chain | A general pull-back needs every step to invert its own coordinate map, and a kind-changing step (photometry, Fourier sampling) cannot in general. The standard library's steps all know their targets at construction, so they can say what they need directly (§13.1) |
-| `negotiate` unions coverage and takes the stricter density | The weakest grid satisfying everybody is the one that lets one evaluation feed several instruments — and disjoint intervals stay disjoint, which is the whole low-res-plus-windows case |
+| `negotiate` unions coverage; density stays attached to the interval that asked for it | The weakest grid satisfying everybody is the one that lets one evaluation feed several instruments. A single strictest-everywhere density is *not* that grid: a broad SED at R=40 unioned with one 0.1 µm line window at 0.0025 µm sampling would demand eighty thousand coordinates instead of a couple of hundred, defeating the purpose §4.3 gives negotiation. Disjoint intervals stay disjoint for the same reason |
+| `max_step`/`min_resolving_power` survive a union as a strictest-anywhere *summary*; `segments()` is canonical | The scalar reads naturally on a freshly declared requirement and is useful for reporting; keeping it as the thing grids are built from is what would reintroduce the over-refinement above |
+| A density declared with no coverage raises | It has nowhere to apply. Silently dropping it in a union loses a real constraint; silently applying it to everyone else's coverage is the over-refinement bug by another route |
 | `compile_for` defaults to `return self` | §4.3: models are free to ignore requests, and a model that does must still be a working model. Making the default a no-op is what keeps the simple path simple |
 | Units on a requirement are converted once, and unitless never mixes with unit-bearing | `results_schema.md` §6's rule, and the units trap in `DEVELOPMENT_PLAN.md` §7. Assuming a bare number shares the other requirement's unit is exactly the silent factor-of-1000 to avoid |
 | No spectral equivalencies in requirement unit conversion | Converting a wavelength interval to frequency reverses it and turns even spacing into uneven; a loud refusal beats a subtly wrong grid |
@@ -970,10 +1032,15 @@ Each is a decision, not an oversight. Each has an extension point.
    in the second step's output coordinates cannot say so. The extension point
    is a `Transformation.pull_back(requirement)` method with an identity default
    for kind-preserving steps and a loud refusal for kind-changing ones.
-2. **One requirement per axis, per instrument, unioned.** A requirement cannot
-   express "either of these two grids will do", nor a per-region density that
-   varies continuously. Piecewise density is expressible only by splitting into
-   several intervals — which the union does keep separate.
+2. **Density is piecewise-constant, per interval.** A requirement cannot
+   express "either of these two grids will do", nor a density that varies
+   continuously across an interval. Nor can it express "no coarser than R=40
+   *and* no finer than R=200" — there is no upper bound on sampling, only a
+   lower one, so a model is always free to over-sample. Splitting an interval
+   is the way to vary density, and the union keeps the pieces separate.
+   Overlapping intervals of different density are also kept separate rather
+   than being split at their boundaries: the resulting grid is the union of
+   both, which satisfies both and costs only the coordinates in the overlap.
 3. **`negotiate` does not build containers.** It produces coordinates; the
    model builds the container, because only the model knows the value unit,
    the fidelity tag and (for `PhotometricPoints` or a user kind) what else the
@@ -1082,3 +1149,12 @@ Each is a decision, not an oversight. Each has an extension point.
 7. **`Model` is defined here, not in W1.7** (§9). Confirm the split: this
    contract owns "produces a `ModelResult`, may be compiled"; W1.7 owns
    everything an engine calls.
+8. **`max_step` and `min_resolving_power` mean two things.** On a freshly
+   declared requirement they *are* the density; after a union they are a
+   strictest-anywhere summary, and `segments()` is what the grid is built from.
+   That dual reading is convenient — the scalar is how an instrument author
+   naturally writes a requirement — but a reader who trusts `max_step` on a
+   merged requirement will overestimate what was asked for. The alternative is
+   to make `segments()` the only public form and demote the scalars to
+   constructor arguments that do not survive as attributes. Cheap to change
+   now, awkward after the freeze.
