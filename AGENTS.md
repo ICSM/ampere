@@ -56,11 +56,19 @@ See the `work-item` skill (`.claude/skills/work-item/SKILL.md`) — it is the
 step-by-step procedure. Codex agents: follow that file manually; it is
 short.
 
-## Delegating to Codex
+## Delegation & model selection
+
+`docs/orchestration.md` is the policy for which model tier gets which
+work — read it before dispatching anything. In short: Sonnet for
+well-specified items, Opus for judgement-within-spec, Haiku/luna for
+mechanical bulk, Fable for contracts and integration, gpt-5.6-sol for
+cross-model reviews.
 
 Claude agents may delegate well-scoped, self-contained subtasks to the
 OpenAI Codex CLI (installed: `codex`). See
-`.claude/skills/delegate-codex/SKILL.md`. Codex reads this AGENTS.md
+`.claude/skills/delegate-codex/SKILL.md` (use `-m luna` for cheap
+mechanical work), and `.claude/skills/sol-review/SKILL.md` for detailed or
+adversarial reviews with gpt-5.6-sol. Codex reads this AGENTS.md
 automatically. Always review Codex's diff before committing it; Codex never
 pushes.
 
