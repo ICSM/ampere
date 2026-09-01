@@ -211,14 +211,22 @@ this section commits to the *policy*, not the incantations.)
   relied upon via `torch.set_default_dtype` — that call is global mutable
   process state and unsafe to set implicitly from library code that
   another user's process also imports.
-- **jax**: `jax.config.update("jax_enable_x64", True)` is process-global
-  and must be set at the *earliest* possible point when `ampere.backends.
-  jax` is first imported, with a loud one-time log message — jax warns
-  (and silently truncates precision) if arrays are created before the
-  flag is set. The exact call site and interaction with a host
-  application that also uses jax is a W1.9 gate check (flagged there
-  already); this document only fixes the policy: **x64 on, always, for
-  this backend.**
+- **jax**: the policy is **x64 on, always, for this backend** — and the
+  mechanism was ruled 2026-09-01 (decision log, amending this bullet's
+  original set-on-first-import sketch): ampere **never** flips
+  `jax_enable_x64` as an import side effect, for the same reason this
+  section forbids `torch.set_default_dtype` — a library mutating global
+  interpreter state on import changes every other jax user in the
+  process. Instead `ampere.backends.jax` ships an explicit, idempotent
+  `configure_x64()` (deliberately not named `enable_x64`, which jax now
+  uses for a context manager with different semantics), and construction
+  of any jax-backed likelihood, GP or model **raises** when the flag is
+  off, naming the three remedies: `JAX_ENABLE_X64=1` in the environment
+  (the only route guaranteed to precede array creation), the explicit
+  call, or a per-run, provenance-recorded `float32` opt-out. numpyro
+  needs no separate switch — its `enable_x64` is a verified thin wrapper
+  over the same jax flag. Full analysis in `docs/design/lowering.md`
+  §10.2.
 - **Device is CPU by default, GPU strictly opt-in and explicit**
   (`device="cuda"` or backend-equivalent) — never auto-detected. This
   keeps behaviour reproducible and guarantees CI (CPU-only runners)
@@ -305,8 +313,10 @@ structure are exactly the two things that negotiation reconciles.
 - **Curated-translation default (§1)**: *resolved 2026-09-01* — ruled
   opt-in/never silent; recorded in `DEVELOPMENT_PLAN.md` §2's decision
   table, §4.7 amended to match. No longer open.
-- **jax x64 activation call site** in a multi-library host process — W1.9
-  gate check.
+- **jax x64 activation call site**: *resolved 2026-09-01* — ruled
+  guard-and-raise, never set-on-import; recorded in the plan's §2 decision
+  table, this document's §5 amended to match, analysis in
+  `docs/design/lowering.md` §10.2. No longer open.
 - **GP solver library per backend** — already an open deferred choice in
   `DEVELOPMENT_PLAN.md` §6; unaffected by this document.
 - **`OptionalDependencyError` exact shape** (fields, message format) —

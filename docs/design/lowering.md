@@ -1096,16 +1096,18 @@ crashing, which is the criterion for needing a mechanical check.
    discrete family rather than return a bijection that cannot be right. That
    is a §4.1 contract change and therefore not this document's to make; §3.5
    states the lowering-side rule in the meantime. **Recommend routing to W1.13.**
-2. **Which non-trainable mechanism on jax — this document changes the
-   expected answer.** `DEVELOPMENT_PLAN.md` §4.1 names `paramax.NonTrainable`
-   and an `eqx.partition` filter spec as alternatives without ranking them.
-   §6.2 ranks them, and comes down on `eqx.partition`, because
-   `paramax.NonTrainable` turns out not to remove the leaf from the
-   differentiated pytree at all — it applies `stop_gradient` at `unwrap()`
-   time, so forgetting to call `unwrap` silently trains the buffers. The
-   plan's binding requirement (never equinox static fields) is unaffected, and
-   nothing in the plan is contradicted, but a reader of §4.1 would reasonably
-   have expected paramax to win. Worth an explicit ruling, and worth
+2. ***Ruled 2026-09-01: `eqx.partition` wins.*** Recorded in
+   `DEVELOPMENT_PLAN.md` §2's decision table with §4.1 amended to match.
+   The Phase 2 revisit noted below still applies if the GP library choice
+   (GPJax) puts paramax-wrapped leaves at ampere's boundary. *(Original
+   question follows for the record.)* `DEVELOPMENT_PLAN.md` §4.1 named
+   `paramax.NonTrainable` and an `eqx.partition` filter spec as
+   alternatives without ranking them. §6.2 ranks them, and comes down on
+   `eqx.partition`, because `paramax.NonTrainable` turns out not to remove
+   the leaf from the differentiated pytree at all — it applies
+   `stop_gradient` at `unwrap()` time, so forgetting to call `unwrap`
+   silently trains the buffers. The plan's binding requirement (never
+   equinox static fields) is unaffected. Worth
    revisiting at Phase 2 start when the GP library is chosen, since a
    paramax-founded library (GPJax) would put wrapped leaves at ampere's
    boundary regardless of what ampere itself uses internally.
@@ -1125,15 +1127,18 @@ crashing, which is the criterion for needing a mechanical check.
    a small widening of core's remit and should be ratified rather than
    assumed. `architecture.md` §9 already hands `OptionalDependencyError` to
    W1.13 to ratify or move; same disposition suggested.
-5. **§10.2(a) narrows `architecture.md` §5, which should be amended if it is
-   accepted.** That section says the x64 flag "must be set at the *earliest*
-   possible point when `ampere.backends.jax` is first imported, with a loud
-   one-time log message". This document recommends the opposite mechanism for
-   the same policy: ampere never sets it on import, and instead guards and
-   raises. The *policy* ("x64 on, always, for this backend") is untouched; only
-   who flips the switch changes. Flagged rather than fixed, per the working
-   agreement — a §4 contract or architecture change needs a decision-log entry,
-   and this document is not the place to make one.
+5. ***Ruled 2026-09-01: guard-and-raise accepted.*** Recorded in
+   `DEVELOPMENT_PLAN.md` §2's decision table; `architecture.md` §5 amended
+   to match and its §9 item closed. One addition from Peter's review,
+   verified against numpyro source: `numpyro.enable_x64()` is a thin
+   wrapper over `jax.config.update("jax_enable_x64", ...)` with no
+   separate numpyro-side dtype state, so the one jax flag governs numpyro
+   draws too — the §10.2(c) guard covers the numpyro path, and Phase 2's
+   numpyro lowering may call `numpyro.enable_x64()` as its idiom for the
+   same switch. *(Original question:)* §10.2(a) narrows `architecture.md`
+   §5's "set at the earliest possible point on first import" sketch: same
+   policy, opposite mechanism — ampere never sets the flag on import, and
+   instead guards and raises.
 6. **Should the reference backend be a sanctioned fallback for a missing
    `icdf`?** §3.6 says yes and argues it is not the silent substitution §3.4
    forbids, because `prior_transform` has one mathematical definition. That
@@ -1145,6 +1150,21 @@ crashing, which is the criterion for needing a mechanical check.
    That seems right — it is pure stdlib, and the alternative is three backends
    agreeing by convention — but it is a (small) addition to a frozen contract's
    surface and should be ratified rather than assumed.
+8. **Backend-specific lowerings for user-defined cases** (raised by Peter,
+   2026-09-01). A duck-typed prior and a custom `Bijection` currently
+   evaluate on the reference path only; §3.4 and §4 both name "supply a
+   backend-native equivalent alongside" as the extension point without
+   specifying its plumbing. The natural shape is a registration hook keyed
+   on the neutral name — `register_lowering(family, backend, constructor)`
+   for prior families, and the analogous per-backend transform slot for a
+   custom `Bijection` — mirroring how §4.4's likelihood families register.
+   That would let a user with a genuinely custom prior run it natively
+   (and serialise it, if their registration round-trips) instead of being
+   confined to the reference path. Needs design care at exactly one point:
+   a user-registered lowering bypasses the conformance suite's guarantees,
+   so registered entries should be marked as such in provenance. Route to
+   W1.13 for the decision in principle; the plumbing is Phase 2's, beside
+   the backends that consume it.
 
 ## 13. Confidence and sourcing
 

@@ -56,6 +56,8 @@ backend-neutral core plus modern computational backends, targeting:
 | Dependency management | **pixi replaces manual environment control** (work item W0.8): pyproject.toml stays the single source of truth for dependencies; pixi provides locked environments (features mirroring the extras), tasks, and the CI environment setup. Adopt before/with W0.6 so CI is built on it once. |
 | Dependency pins | `pyphot<2` and `sbi<0.28` pinned 2026-09-01 as **temporary** measures (pyphot ≥2 removed `pyphot.unit`; sbi 0.27 changed `posterior.map()` shapes). Policy is to migrate forwards, not freeze: work item W0.9 lifts both — pyphot before Phase 2's synthetic-photometry Transformation (new code targets the ≥2 API from the start), sbi with Phase 3 (which wants the latest inference algorithms anyway). |
 | Curated astropy→native translation | **Opt-in only, never silent** (ruled 2026-09-01 during the W1.2 review, amending this document's original §4.7 "silently restoring differentiability" wording). The default adapter path always wraps the user's actual astropy model as a black box; a curated native equivalent is substituted only on an explicit, backend-scoped request — sketched as a `from_astropy()` constructor on the backend subpackage, which raises if the model (or any component of a compound model) is not fully in the curated table, rather than silently falling back to black-box. Exact API fixed with the adapter contract (Phase 4). |
+| jax non-trainable mechanism | **`eqx.partition` filter specs** (ruled 2026-09-01 at the W1.9 review, ranking what §4.1 originally left unranked): buffers and fixed parameters lower to ordinary array leaves excluded from the trainable partition via an explicit filter spec — not `paramax.NonTrainable`, whose freezing happens only when `unwrap()` is called, so a forgotten call silently trains the buffers; and never equinox static fields (§7). paramax remains an interop layer at the boundary if Phase 2's GP library choice (GPJax) puts wrapped leaves there. Analysis in `docs/design/lowering.md` §6.2. |
+| jax x64 activation | **Guard-and-raise, never set-on-import** (ruled 2026-09-01 at the W1.9 review, amending `architecture.md` §5's original set-on-first-import sketch — the *policy*, float64 always for likelihood/GP linear algebra, is unchanged). Ampere never flips `jax_enable_x64` as an import side effect; `ampere.backends.jax` ships an explicit, idempotent `configure_x64()`, and construction of any jax-backed likelihood/GP/model raises when the flag is off, naming the three remedies (the `JAX_ENABLE_X64=1` environment variable; the explicit call; or a per-run, provenance-recorded `float32` opt-out). numpyro needs no separate switch — its `enable_x64` is a verified thin wrapper over the same jax flag. Analysis in `docs/design/lowering.md` §10.2. |
 
 ## 3. Architecture: a core and a capability ladder, not four peer backends
 
@@ -157,9 +159,11 @@ with device/dtype changes and are traced through computations, but are
 never sampled, optimised, or differentiated — from parameters. Lowering:
 torch has this natively (`register_buffer`); equinox does not, so on the
 jax side buffers lower to ordinary array fields excluded from the trainable
-partition (`paramax.NonTrainable` or an `eqx.partition` filter spec) —
-**never** equinox static fields, which hash array contents into the JIT
-cache key (see §7).
+partition via an **`eqx.partition` filter spec** (ruled 2026-09-01 —
+preferred over `paramax.NonTrainable`, whose freezing depends on `unwrap()`
+being called; see §2 and `docs/design/lowering.md` §6.2) — **never**
+equinox static fields, which hash array contents into the JIT cache key
+(see §7).
 
 ### 4.2 ModelResult schema
 Typed containers for what a model produces — `Spectrum`, `PhotometricPoints`,
