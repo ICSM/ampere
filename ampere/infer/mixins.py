@@ -947,9 +947,9 @@ The maximum a posteriori parameters.
 
         #best fit model
         try:
-            self.model(*self.bestPars[:self.nparsMod])
-            axes.plot(self.model.wavelength,self.model.modelFlux, '-', color='magenta',
-                      alpha=1.0,label='MAP', zorder=8)
+            res = self.model(*self.bestPars[:self.nparsMod])
+            axes.plot(res['spectrum']['wavelength'], res['spectrum']['flux'], '-', color='magenta',
+                      alpha=1.0, label='MAP', zorder=8)
         except ValueError:
             print("Error in MAP solution \n Skipping MAP in plot")
 
