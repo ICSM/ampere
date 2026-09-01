@@ -12,18 +12,36 @@ except ImportError:
 from .models import AnalyticalModel
 
 from scipy.stats import dirichlet
-import dill
 from copy import deepcopy
 
-# 
+#
 # Hyperion Stuff
-# 
+#
 
-import hyperion
-from hyperion.model import Model, AnalyticalYSOModel
-from hyperion.model import ModelOutput
-from hyperion.dust import BHDust
-#from hyperion.util.constants import lsun, rsun, au, msun, sigma, pc, pi #get these from astropy units 
+# NOTE (W0.5 lazy-import quarantine): 'hyperion' (radiative-transfer code)
+# and 'dill' are heavy/optional externals, not currently declared as an
+# ampere dependency or extra. Importing this module must not require them
+# -- only *using* HyperionCStarRTModel should. If either import fails, we
+# fall back to a plain `object` base class so the module (and the class
+# definition, which needs a base class at import time) still loads; the
+# class raises an informative error on construction instead. See
+# WORK_ITEMS.md W0.5 ("Hyperion/Dusty externals" lazy-import quarantine).
+try:
+    import dill
+    import hyperion
+    from hyperion.model import Model, AnalyticalYSOModel
+    from hyperion.model import ModelOutput
+    from hyperion.dust import BHDust
+    #from hyperion.util.constants import lsun, rsun, au, msun, sigma, pc, pi #get these from astropy units
+    _HYPERION_IMPORT_ERROR = None
+except ImportError as _exc:
+    dill = None
+    hyperion = None
+    Model = object
+    AnalyticalYSOModel = None
+    ModelOutput = None
+    BHDust = None
+    _HYPERION_IMPORT_ERROR = _exc
 
 import subprocess
 
@@ -384,7 +402,17 @@ class HyperionCStarRTModel(Model):
                 #output to be added in SED
                         components = ['total'],
                         **kwargs):
-        
+        if _HYPERION_IMPORT_ERROR is not None:
+            raise ImportError(
+                "ampere.models.Hyperion.HyperionCStarRTModel requires the "
+                "optional 'hyperion' radiative-transfer package and 'dill', "
+                "neither of which is installed in this environment. These "
+                "are not currently packaged as an ampere extra (see "
+                "WORK_ITEMS.md W0.5 quarantine notes / ampere issues "
+                "#74-77). Install hyperion and dill to use this model. "
+                f"Original import error: {_HYPERION_IMPORT_ERROR}"
+            ) from _HYPERION_IMPORT_ERROR
+
         #Assign keyword variables to the object
         #Assign all the inputs to __init__ to instance variables with the same name as above
         #this is equivalent to many lines of self.niter = niter etc

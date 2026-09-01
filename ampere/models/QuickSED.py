@@ -15,15 +15,33 @@ from scipy.interpolate import interp1d
 from scipy.stats import dirichlet
 from scipy.stats import uniform
 
-from Starfish.emulator import Emulator
-from Starfish.grid_tools import GridInterface
-from Starfish.grid_tools import PHOENIXGridInterfaceNoAlpha as PHOENIX #NoAlpha
-#from Starfish.grid_tools import BTSettlGridInterface as BTSettl
-import Starfish.constants as C
-from Starfish.utils import create_log_lam_grid
-from Starfish.grid_tools.utils import vacuum_to_air, idl_float
-from Starfish.grid_tools import download_PHOENIX_models as dpm
-from Starfish.grid_tools import HDF5Creator
+# NOTE (W0.5 lazy-import quarantine): 'Starfish' (stellar spectral emulator)
+# is a heavy/optional external, not currently declared as an ampere
+# dependency or extra. Importing this module must not require it -- only
+# *using* QuickSEDModel should. See WORK_ITEMS.md W0.5 ("Hyperion/Dusty
+# externals" lazy-import quarantine) -- QuickSED's external is Starfish.
+try:
+    from Starfish.emulator import Emulator
+    from Starfish.grid_tools import GridInterface
+    from Starfish.grid_tools import PHOENIXGridInterfaceNoAlpha as PHOENIX #NoAlpha
+    #from Starfish.grid_tools import BTSettlGridInterface as BTSettl
+    import Starfish.constants as C
+    from Starfish.utils import create_log_lam_grid
+    from Starfish.grid_tools.utils import vacuum_to_air, idl_float
+    from Starfish.grid_tools import download_PHOENIX_models as dpm
+    from Starfish.grid_tools import HDF5Creator
+    _STARFISH_IMPORT_ERROR = None
+except ImportError as _exc:
+    Emulator = None
+    GridInterface = None
+    PHOENIX = None
+    C = None
+    create_log_lam_grid = None
+    vacuum_to_air = None
+    idl_float = None
+    dpm = None
+    HDF5Creator = None
+    _STARFISH_IMPORT_ERROR = _exc
 
 #
 # Other Stuff
@@ -54,12 +72,23 @@ class QuickSEDModel(Model):
 
         '''The model constructor, which will set everything up
 
-        This method does essential setup actions, primarily things that 
-        may change from one fit to another, but will stay constant throughout 
+        This method does essential setup actions, primarily things that
+        may change from one fit to another, but will stay constant throughout
         the fit. This may be things like the grid of wavelengths to calculate
         the model output on, or establishing the dust opacities if involved.
         There are also several important variables it *MUST* define here
         '''
+        if _STARFISH_IMPORT_ERROR is not None:
+            raise ImportError(
+                "ampere.models.QuickSED.QuickSEDModel requires the "
+                "optional 'Starfish' stellar-spectral-emulator package, "
+                "which is not installed in this environment. It is not "
+                "currently packaged as an ampere extra (see WORK_ITEMS.md "
+                "W0.5 quarantine notes / ampere issues #74-77). Install "
+                "Starfish to use this model. "
+                f"Original import error: {_STARFISH_IMPORT_ERROR}"
+            ) from _STARFISH_IMPORT_ERROR
+
         self.wavelength = wavelengths
         self.freq = (wavelengths * u.micron).to(u.Hz, equivalencies=u.spectral()).value
         self.npars = 8 #Number of free parameters for the model (__call__()). For some models this can be determined through introspection, but it is still strongly recommended to define this explicitly here. Introspection will only be attempted if self.npars is not defined.
