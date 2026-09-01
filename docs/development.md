@@ -23,6 +23,13 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
   self-contained prompt; see `.claude/skills/delegate-codex/SKILL.md`.
 - Agents do not push unless told to; review happens locally or on pushed
   branches at Peter's discretion.
+- **Harness trap (hit and solved 2026-09-01)**: subagent worktrees may be
+  created from the *session-start* commit rather than current HEAD. Every
+  dispatch prompt must state the intended base commit and the recovery:
+  verify the tree is clean and HEAD is a strict ancestor of the target
+  (`git merge-base --is-ancestor HEAD <target>`), then branch directly
+  from the target; STOP and report otherwise. Both W1.5/W1.6 agents
+  recovered cleanly with this.
 
 ## Review checklist (per PR)
 
@@ -62,24 +69,91 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
   the "legacy still works" gate; run it before merging anything that
   touches shared files.
 
-## Phase 1: W1.1–W1.4 merged; W1.9 + W1.12 on Peter's review list (2026-09-01)
+## ⚡ Pick up here (end of the 2026-09-01 session)
 
-The Fable review the previous handoff asked for is done and, on Peter's
-instruction, the reviewed branches were merged to local master
-(W1.1 → W1.2 → W1.3, then W1.4), keeping master's `WORK_ITEMS.md` and
-`docs/development.md` where branches carried stale snapshots. All gates
-re-verified on the merged master after each merge (247 core tests as of
-W1.4, the fast import suite, pyrefly, ruff lint and format). Nothing has
-been pushed to origin. One correction to the earlier handoff text: W1.2 was
-Sonnet-authored (not Fable, as previously recorded) and was therefore given
-a full contract-tier review rather than a light reconciliation.
+**State**: Phase 1 is eight of thirteen items done — W1.1–W1.6, W1.9 and
+W1.12 are all Fable-reviewed and **merged to local master** (nothing is
+pushed to origin; origin/master is far behind by design). The working tree
+is clean; all gates green at the tip: **498 core tests**, full suite
+534 passed / 5 skipped, pyrefly 0 errors, ruff lint clean. Remaining items:
+**W1.7** (Dataset/FittingProblem), **W1.11** (modality sketches) — both
+fully unblocked and parallelisable — then W1.8 (needs W1.7), W1.10
+(needs W1.3–W1.8), and the W1.13 freeze. W0.9 remains open in Phase 0.
 
-**Adversarial sol review is batched at the W1.13 freeze** (Peter's call,
-2026-09-01): one pass over the §4 contract code (W1.3 parameters, W1.4
-results schema, plus whatever lands by then) and the lowering spec (W1.9),
-per `docs/orchestration.md` principle 3, rather than per-item passes now.
+**Next action**: dispatch W1.7 (Opus) and W1.11 (splittable, Sonnet/Opus
+per `docs/orchestration.md`) in parallel, with self-contained prompts per
+orchestration principle 4, carrying the consolidated obligations below and
+the worktree-trap recovery above. Then Fable-review each result at the
+depth established this session (independent gate verification, full spec
+read, adversarial probes of the implementation, fix small defects on the
+branch with tests) before presenting for Peter's merge decision.
 
-**Review outcomes (branches now in master's history):**
+**Restart prompt for a new session** (paste as the opening message):
+
+> Read docs/development.md's "Pick up here" section and the W1.7/W1.11
+> obligations checklist below it, then dispatch W1.7 and W1.11 in
+> parallel per docs/orchestration.md, carrying every listed obligation in
+> the prompts (including the stale-worktree recovery). Review each result
+> at full Fable depth as in the 2026-09-01 session and present merge
+> recommendations; merge only what needs no ruling from me, and put the
+> rest on my review list.
+
+### Consolidated obligations for the W1.7 dispatch prompt
+
+W1.7 is the item most other contracts have been leaving notes for. Its
+prompt must carry, at minimum:
+
+- **Nested merging is an open design question Peter expressly kept open**
+  (`parameters.md` §14 preamble): evaluate a nested `ParameterMapping` as
+  a first-class option for `DatasetCollection`, on its merits — not
+  dismissed because single-call merge is what exists. Ties crossing merge
+  levels (`transformations.md` §14) and **nested result channels via
+  qualified flat names** (`results_schema.md` §17 preamble — symmetrical
+  question, routed here) are part of the same decision.
+- `parameters.md` §13: build the joint space on
+  `ParameterMapping`/`distribute()`; `merge` is not associative — one
+  call, or the nested design above.
+- `transformations.md` §14: a `Dataset` pairs an observed container with
+  an `Instrument`; the instrument's `label` is its merge component; W1.7
+  owns *when* `negotiate` and `compile_for` are called.
+- `likelihoods.md` §16 (all load-bearing): call
+  `Likelihood.check_alignment(predicted_template, observed)` once at
+  construction — it is where unimplemented latent combinations are
+  refused, so it is not optional; call `check_engine(..., observed=...)`
+  so a censored sample the mask excludes is not counted against a
+  gradient-free engine; `Likelihood.parameters` is one flat component for
+  the single merge, and `latent_declaration(n)` (n = *retained* samples)
+  joins that same merge; convert this contract's `LikelihoodError` on a
+  non-positive-definite covariance into §4.5's −inf-with-recorded-reason
+  failure signalling (Peter's pending W1.6 §17 Q1 ruling may add a
+  `strict=False` alternative).
+- Plan §4.5 verbatim: `log_prob`/`log_likelihood`/`log_prior` split,
+  `prior_transform`, `simulate`, capability flags, failure signalling,
+  RNG policy — `lowering.md` §9.2's `substream(seed, label)` design is
+  the seed-derivation policy to adopt (its home in core is W1.9 §12.7's
+  ratification item).
+- Accept: a toy two-dataset joint problem with a tied parameter,
+  end-to-end against a stub model.
+
+### For the W1.11 dispatch prompt(s)
+
+Sketches (a)–(f) per WORK_ITEMS.md, plus the specific claims the merged
+specs ask it to check: the deliberately-awkward instrument stress test of
+the §4.3/§4.4 split (`prior_art.md` 3M1/Tension 3); whether X-ray RMF/ARF
+works as a matrix multiply on an energy-axis `Spectrum` *without a
+per-sample exposure concept* (`likelihoods.md` §16); what Fourier sampling
+can publish as requirements given no pull-back through chains
+(`transformations.md` §13.1/§14); whether closure phases need
+`VonMisesFamily` before the freeze, and input to Rice's parameterisation
+(`likelihoods.md` §17 Q3/Q4).
+
+**Sol review batched at the W1.13 freeze** (Peter's call): one adversarial
+pass over the §4 contract code and the lowering spec. `codex exec -m
+gpt-5.6-sol` is currently refused on this account ("not supported when
+using Codex with a ChatGPT account"); Peter expects to configure the extra
+codex steps himself before the freeze. Nothing blocks on it until then.
+
+## Phase 1 review outcomes (2026-09-01, all merged)
 
 - **W1.1** (`w1.1-prior-art-memo`, Sonnet): merged as authored — no
   changes. Its two most load-bearing claims were re-verified against live
@@ -124,8 +198,33 @@ per `docs/orchestration.md` principle 3, rather than per-item passes now.
   `UnitConversionError` where every sibling path raises `SchemaError` —
   now wrapped. 247 core tests; W1.3 untouched.
 
-**Peter's review list** (none block further Phase 1 work; the first two
-gate their branches' merges):
+- **W1.5** (`w1.5-transformation-contract`, Opus): merged 2026-09-01 with
+  **no defects needing Fable fixes** — the agent's own self-review caught
+  the deep one (a requirements union imposing one instrument's fine
+  sampling on another's broad coverage; fixed with per-interval
+  densities). Mask propagation is *enforced* (a step dropping its input's
+  mask raises); the `Model` ABC landed here minimally with the
+  engine-facing surface reserved for W1.7. Review probes confirmed loud
+  partial-value failures, correct cross-unit unions, and negotiated grids
+  passing `Spectrum`'s ordering validation.
+- **W1.6** (`w1.6-likelihood-contract`, Opus): merged 2026-09-01, the
+  strongest deliverable of the phase; no Fable fixes needed. The critical
+  defect (Student-t/Cauchy/complex-Gaussian silently discarding the GP
+  while every check reported a working latent problem) was caught by the
+  adversarial review the agent commissioned itself and fixed with the
+  `CONSUMES_LATENT_GP` opt-in (default `False`, so third-party families
+  inherit the refusal). DenseGP anchor validated to ~1e-15; Fable
+  verification covered the marginal-likelihood/conditioning/whitening
+  mathematics, an independent Tobit-censoring probe (exact), and the
+  masking-beats-censoring declaration behaviour. Key positions on record:
+  masks are consumed via `weights()` + row/column excision (the
+  infinite-variance limit diverges — spec §8 has the proof); the latent
+  declaration is the whitened non-centred form, *not* `HierarchicalPrior`
+  (wrong at any N — GP priors are not i.i.d.); the plan's "per-sample
+  log_likelihood" ambiguity (per-draw vs per-observation) is flagged for
+  W1.13, since a GP likelihood has no per-observation decomposition.
+
+**Rulings recorded this session** (all implemented, not just noted):
 
 - **W1.9**: *both rulings approved by Peter and merged 2026-09-01* —
   `eqx.partition` over `paramax.NonTrainable`, and x64 guard-and-raise —
@@ -166,48 +265,71 @@ gate their branches' merges):
   symmetrical nested-merge question**; see `results_schema.md` §17's
   preamble. Questions 3–6 (`Cube` axis order, `extra_coords` units, axis
   naming, serialisation) remain open as written.
-- W1.5 spec §15's open questions (merged 2026-09-01) — most notably:
-  whether the ANY mask-propagation rule is too conservative for real
-  resampling (`min_valid_fraction` is the named extension); whether a
-  model should be able to *refuse* a requirement rather than silently
-  ignoring it; confirming the `Model` ABC's placement in W1.5 rather than
-  W1.7 (§9 has the argument); and §15.8's `max_step`/`min_resolving_power`
-  dual meaning (declaration vs post-union summary — the review leans
-  towards demoting the scalars before the freeze, cheap now). Review at
+**Peter's remaining reading list** (nothing blocks dispatches; all are
+freeze-relevant):
+
+- W1.5 spec §15's open questions — most notably: whether the ANY
+  mask-propagation rule is too conservative for real resampling
+  (`min_valid_fraction` is the named extension); whether a model should
+  be able to *refuse* a requirement rather than silently ignoring it;
+  confirming the `Model` ABC's placement in W1.5 rather than W1.7 (§9 has
+  the argument); and §15.8's `max_step`/`min_resolving_power` dual
+  meaning (declaration vs post-union summary — the review leans towards
+  demoting the scalars before the freeze, cheap now). Review at
   `docs/design/contracts/transformations.md` §15.
+- W1.6 spec §17's open questions — sharpest first: whether a
+  non-positive-definite covariance should raise (current) or return
+  `−inf` via a `strict=False` mode (Q1, affects every engine driver);
+  whether the mask union lives in `Likelihood` or W1.7's `Dataset` (Q2);
+  Rice's parameterisation and von Mises's concentration (Q3/Q4 — W1.11's
+  interferometry sketch will inform both); per-dataset vs per-channel
+  `IndependentNoise.scale` (Q5); the conservatively-`LATENT` correlated
+  complex Gaussian (Q6, a Phase-4 decision that unblocks real
+  functionality); `Likelihood.to_spec()` for provenance (Q8, with W1.8).
+- W1.4 spec §17 questions 3–6 (`Cube` axis order vs FITS — cheap to
+  change only until the freeze; axis naming; `extra_coords` units;
+  container serialisation, owed to W1.8).
+- W1.9/`lowering.md` §12's remaining ratification items, all routed to
+  W1.13 (discrete-family default bijection; `LoweringError` placement;
+  reference-path `icdf` fallback; `substream` in core; backend-specific
+  lowering registration — item 8, from Peter's review).
 
-**Sol review (status 2026-09-01)**: `codex exec -m gpt-5.6-sol` is
-currently refused — "The 'gpt-5.6-sol' model is not supported when using
-Codex with a ChatGPT account" (reproduced independently of the W1.5
-agent's report). Peter is aware and expects to configure the extra codex
-steps to make sol available — one more reason the adversarial review is
-batched at the W1.13 freeze rather than run per item. No Phase 1 work
-blocks on it before then.
+**Housekeeping for the next session:**
 
-**Tooling note** (found by the W1.4 agent): `ruff format` invoked with an
-explicit path bypasses `extend-exclude`, so it can silently rewrite the
-frozen W0.7 harvest snapshots under `docs/design/harvest/`. Worth a guard
-in a small W0.x follow-up.
+- **Nothing is pushed to origin.** All session work is on local `master`;
+  pushing is Peter's call and Peter's action (agents never push).
+- **Leftover worktrees and scratch branches**: several agent worktrees
+  remain under `.claude/worktrees/` and the merged item branches
+  (`w1.1-*` … `w1.6-*`, `w1.9-*`, `w1.12-*`) plus stale
+  `worktree-agent-*` scratch branches still exist. All item branches are
+  fully merged; cleanup (`git worktree remove` + branch deletion) awaits
+  Peter's explicit approval per ground rule 3. Until then, note that
+  `pixi run format-check` in the main checkout reports ~20 files to
+  reformat — **all inside `.claude/worktrees/`** (nested copies of
+  `tests/characterisation` that the task's top-level exclude does not
+  match). Tracked files are format-clean; do not "fix" those.
+- **Tooling trap (confirmed twice)**: `ruff format <explicit path>`
+  bypasses `extend-exclude` and will rewrite the frozen W0.7 harvest
+  snapshots under `docs/`. Format only `ampere/core tests/core` (or use
+  the pixi task). Worth a guard in a small W0.x follow-up.
+- A `SendFeedback` draft about the `/model` switch-back failure from the
+  pre-handoff session remains queued; Peter can review/send it with
+  `/feedback`.
 
-**Obligations W1.3 places on later specs** are recorded in the spec's own
-§13 (`docs/design/contracts/parameters.md`) — W1.4–W1.10 authors read that
-section before starting; dispatch prompts should cite it.
+## Current state (end of 2026-09-01)
 
-A `SendFeedback` draft was queued in the downgraded session about the
-`/model` switch-back failure (usage-credit downgrade not reversible via
-`/model` even after `/login`) — the user can review and send it with
-`/feedback` if they want to report it.
-
-## Current state (2026-09-01)
-
-- **Phase 0: complete.** W0.1–W0.8 merged to master; CI green on the first
-  live run. Issues #74–77 closed. Branch archival executed (15 branches
-  tagged `archive/*`; `jax` re-pushed filtered to drop ~50 MB of
-  checkpoints; `small_silicates` kept live per Peter). W0.9 (pyphot ≥2 /
-  current-sbi forward migration) not started — the temporary
-  `pyphot<2`/`sbi<0.28` pins are in place and documented in
-  `DEVELOPMENT_PLAN.md` §2.
-- **Phase 1: in progress**, see the handoff section above for exact
-  branch/review state of W1.1–W1.3. W1.4 onward not started.
+- **Phase 0: complete** (W0.1–W0.8 merged; CI green; issues #74–77
+  closed; archival executed). **W0.9 not started** — the temporary
+  `pyphot<2`/`sbi<0.28` pins stand, documented in `DEVELOPMENT_PLAN.md`
+  §2; the pyphot half must land before Phase 2's synthetic-photometry
+  Transformation is written.
+- **Phase 1: eight of thirteen items merged** (W1.1–W1.6, W1.9, W1.12);
+  W1.7 + W1.11 ready to dispatch in parallel; then W1.8, W1.10, W1.13.
+  See "Pick up here" above for the restart procedure and consolidated
+  dispatch obligations.
+- **Decisions ruled this session** (all in `DEVELOPMENT_PLAN.md` §2's
+  table): curated astropy→native translation is opt-in/never silent; jax
+  non-trainables lower via `eqx.partition`, not paramax; jax x64 is
+  guard-and-raise, never set-on-import.
 - The AMPERE paper revision proceeds on the legacy code and takes priority
   in any conflict over `examples/examples_paper/`.
