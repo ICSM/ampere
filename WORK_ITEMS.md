@@ -268,5 +268,6 @@ to this file.
 | W0.6 + W0.8 | merged 2026-09-01 |
 | W0.9 | not started |
 | W1.1 | dispatched 2026-09-01 |
-| W1.2 | in progress 2026-09-01 (orchestrator-drafted, per orchestration policy) |
-| W1.1–W1.13 | not started |
+| W1.2 | draft done 2026-09-01 — branch `w1.2-architecture-spec` (orchestrator-authored, local only, not pushed), awaiting reconciliation with W1.1 and Peter's review |
+| W1.3 | dispatched 2026-09-01 (Opus — genuine contract-design work, per orchestration policy) |
+| W1.4–W1.13 | not started |
