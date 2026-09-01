@@ -1058,25 +1058,41 @@ class TestSimulate:
         assert np.allclose(drawn, 2.0, atol=1.0)
 
     def test_observe_draws_correlated_noise_from_the_gp(self) -> None:
+        # sigma is deliberately large enough (0.3, so sigma^2 = 0.09) that the
+        # diagonal noise term is resolvable against the sampling error of a
+        # 4000-draw covariance estimate. With the 0.1 uncertainties used
+        # elsewhere in this file, dropping sigma entirely would shift the
+        # diagonal by 0.01 and no honest tolerance would catch it.
         likelihood = Likelihood(GaussianFamily(), GaussianProcessNoise(Matern32(0.5, 2.0)))
+        observed = flat_spectrum(uncertainty=[0.3, 0.3, 0.3] * u.Jy)
         problem = FittingProblem(
             Flat(WAVELENGTH),
-            [Dataset(flat_spectrum(), likelihood=likelihood, label="d")],
+            [Dataset(observed, likelihood=likelihood, label="d")],
             seed=3,
         )
         draws = np.array(
             [
                 problem.simulate({"model.level": 2.0}, observe=True).observations["d"].values
-                for _ in range(400)
+                for _ in range(4000)
             ]
         )
         empirical = np.cov(draws.T)
         kernel = likelihood.noise.kernel
         coordinates = WAVELENGTH[:, None]
-        expected = kernel.matrix(
+        covariance = kernel.matrix(
             coordinates, coordinates, {"amplitude": 0.5, "length_scale": 2.0}
-        ) + np.diag(np.full(3, 0.01))
-        assert empirical == pytest.approx(expected, abs=0.06)
+        )
+        expected = covariance + np.diag(np.full(3, 0.09))
+        assert empirical == pytest.approx(expected, abs=0.03)
+        # The two ways this could be wrong and still look plausible, ruled out
+        # explicitly rather than left to the joint tolerance: no correlation at
+        # all (the off-diagonals would collapse to zero), and no diagonal noise
+        # at all (the variances would be K's alone). Both assertions were
+        # mutation-tested against a patched draw_observation.
+        off_diagonal = np.abs(empirical[np.triu_indices(3, k=1)])
+        assert off_diagonal.min() > 0.03
+        assert np.abs(np.diag(empirical) - np.diag(covariance)).min() > 0.04
+        assert np.mean(draws) == pytest.approx(2.0, abs=0.05)
 
     def test_masked_samples_keep_the_observed_values(self) -> None:
         observed = flat_spectrum(values=(9.0, 9.0, 9.0), mask=[False, False, True])

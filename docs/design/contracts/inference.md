@@ -220,10 +220,10 @@ scale`.
 | Question | A (flat leaf merge) | B (one merge per level) |
 |---|---|---|
 | Merged names | `sed_calibrate.scale` — one level of qualification whatever the depth | `sed.instrument.calibrate.scale` — one segment per level |
-| Component labels | synthesised by flattening; collisions are constructible (dataset `a` + step `b_c` collides with dataset `a_b` + step `c`) | one namespace per level; the dataset level uses two reserved role names, the top level is checked |
+| Component labels | synthesised by flattening; collisions constructible (dataset `a` + step `b_c` collides with dataset `a_b` + step `c`) and so needing an explicit check, as B's top level also has | one namespace per level; the dataset level uses two reserved role names, the top level is checked |
 | `Tie` reach | any leaf | **any site, by its full path — including one inside an inner merge** (§6) |
 | `shared_as` reach | the whole fit | within one merge level (§6, limitation 17.1) |
-| `Instrument.mapping` / `Instrument.__call__`'s values path | unused; W1.7 re-implements chain evaluation over `instrument.steps` | used exactly as `transformations.md` §5 wrote them |
+| `Instrument.mapping` / `Instrument.__call__`'s values path | usable only after W1.7 re-keys values back into instrument-merged names, duplicating `merge`'s qualification rule outside it | used exactly as `transformations.md` §5 wrote them |
 | Hierarchical prior references | rewritten once | rewritten once per level, and they compose — including through a tie (§9) |
 | Merges per evaluation | 1 | 1 (the problem's, cached) + 1 per instrument per call (W1.5's own, §11) |
 | Available mistake | none: there is one mapping | a level that discards its mapping loses its bindings |
@@ -232,13 +232,20 @@ scale`.
 
 **Design B is implemented.** Three reasons, in decreasing order of weight.
 
-**1. A hollows out a merged contract.** `Instrument.mapping`,
-`Instrument.parameters` and the values path of `Instrument.__call__` exist, are
-tested, and are what `transformations.md` §5 tells a user to use. Under A, W1.7
-could call none of them: the instrument-merged names it consumes would no longer
-exist anywhere, so this contract would re-implement chain evaluation over
-`instrument.steps`. Two code paths for one operation, of which the tested one is
-dead, is how contracts drift — and W1.5 is three weeks old.
+**1. A duplicates `merge`'s qualification rule outside `merge`.** Under A the
+problem holds `sed_calibrate.scale`, while `Instrument.__call__` wants
+`calibrate.scale`. So the problem must either **re-key by convention** —
+rebuilding `f"{step.label}.{local}"` inside W1.7, for names `ParameterSet.merge`
+already knows how to build — or bypass `Instrument.__call__` and drive the steps
+itself, re-implementing the chain's kind and mask checks.
+
+An earlier draft of this section claimed A could use none of W1.5's entry points.
+That was wrong, and checking it is what turned this from the decisive reason into
+the weakest of the three: the re-keying route is four lines and **works**. What
+it costs is that the qualification convention then lives in two places, and
+`Instrument.parameters` / `Instrument.mapping` play no part in building the joint
+space at all. Under B the same names arrive without reconstruction, because they
+are exactly what the inner merge produced.
 
 **2. A's headline advantage is smaller than it looks.** The apparent advantage
 is "one place where tying is resolved, so a `Tie` may name any two leaves". But
@@ -253,6 +260,13 @@ entry, an ArviZ coordinate, a corner-plot axis label, and a string a user types.
 `sed.instrument.calibrate.scale` says where to look. `sed_calibrate.scale`
 requires knowing the flattening convention to parse, cannot be parsed
 unambiguously at all, and is one level deep however deep the structure is.
+
+**On the weight of the case.** With reason 1 corrected, B rests mainly on
+reasons 2 and 3, and the honest summary is that this is closer than a first
+reading suggests: A's real cost is a duplicated naming convention and worse
+names, not a broken one. What tips it is that B's own defect (§4.6) has a fix
+at source — "lossless nesting" in `ParameterSet.merge` — whereas A's duplicated
+convention has none short of not doing it. Peter should read §4.6 before ruling.
 
 And the hazard `parameters.md` §12.4 names is **contained by a rule, not by
 luck**:
@@ -1178,11 +1192,24 @@ Observation drawing is implemented for the combinations this contract can get
 **provably right** from the merged contracts alone, which is the Gaussian family
 with either noise model:
 
-- `IndependentNoise` — `x = μ + σ z`;
+- `IndependentNoise` — `x = μ + σ z`, with the noise model's *own* σ, so a
+  fitted `scale` or `jitter` is already in it and the draw matches what the
+  likelihood would score;
 - `GaussianProcessNoise` — `x = μ + L z₁ + σ z₂`, where `L` comes from
   `GPSolver.latent_transform`, the same whitening the latent declaration uses.
-  That is an exact draw from `N(μ, K + diag(σ²))`, and the suite checks the
-  empirical covariance against `K + diag(σ²)`.
+
+The second is a draw from `N(μ, K + diag(σ²))` **up to the solver's numerical
+stabiliser**, and it is worth being exact about the inexactness: `DenseGP`
+factorises `K + jitter · mean(diag K) · I` with `jitter = 1e-10`, so the realised
+covariance exceeds `K` by a relative 1e-10 on the diagonal. Exact in the sense
+that matters — it is the same `L` the latent path uses, so a simulated dataset is
+consistent with the model that will score it — but not exact simpliciter.
+
+The suite checks the empirical covariance of 4000 draws against `K + diag(σ²)`,
+and separately asserts that the off-diagonals are non-zero and that the variances
+exceed `K`'s own. Those two extra assertions exist because the joint tolerance
+alone would not have caught a dropped σ at the uncertainties used elsewhere in
+the file; both were mutation-tested against a patched `draw_observation`.
 
 Everything else raises, and does so at the point of use rather than being
 flagged, because "ampere cannot sample this family" is a fact about the
@@ -1433,11 +1460,6 @@ Each is a decision, not an oversight. Each has an extension point.
    for tens of datasets and wrong for thousands. Closing that needs per-element
    routing of a plate's array-valued parameter — an optional `Binding.index` —
    which is `parameters.md`'s to add.
-9. **An inner tie is invisible to the top-level mapping** (§4.6).
-   `problem.mapping.tied_names` reports only the ties this problem resolved;
-   `problem.shared_names` and `problem.sites()` descend and report every shared
-   parameter. The extension point is "lossless nesting" in `ParameterSet.merge`,
-   which would make the descent unnecessary.
 7. **The failure history is per-process.** Under multiprocessing (emcee's
    `Pool`), each worker accumulates its own counts and the driver must aggregate
    them. W1.8 owns the aggregation when it writes provenance.
@@ -1445,6 +1467,11 @@ Each is a decision, not an oversight. Each has an extension point.
    `DIFFERENTIABLE = True` is believed. There is no way to check the claim from
    `ampere.core`, which has no autodiff; the conformance suite (W1.10) is where a
    backend's claim gets tested.
+9. **An inner tie is invisible to the top-level mapping** (§4.6).
+   `problem.mapping.tied_names` reports only the ties this problem resolved;
+   `problem.shared_names` and `problem.sites()` descend and report every shared
+   parameter. The extension point is "lossless nesting" in `ParameterSet.merge`,
+   which would make the descent unnecessary.
 
 ## 18. What this contract hands to the specs downstream
 
@@ -1500,14 +1527,15 @@ Each is a decision, not an oversight. Each has an extension point.
 **R1 — the merge topology (§4). The main ruling this document asks for.**
 Nested `ParameterMapping`, one merge per level, is implemented; §4.2–4.4 set out
 the flat-leaf-merge alternative and compare them; §4.5 gives the rationale, §4.6
-the one real cost and §4.8 the cost of reversing. The summary of the case: a flat
-merge would leave three tested pieces of W1.5's contract unused and force this
-contract to re-implement chain evaluation, in exchange for a tying advantage that
-turns out to be much narrower than it looks (an outer tie already reaches an
-inner site; only declaration-time `shared_as` is lost). Against that stands one
-genuine defect, §4.6's: an inner tie is invisible to the top-level mapping, so
-provenance and labelling consumers must use `sites()` rather than the obvious
-`bindings`. **Reverse now or not at all** — after W1.8 emits these names into
+the one real cost and §4.8 the cost of reversing. The summary of the case: a flat merge
+buys a tying advantage that turns out to be much narrower than it looks (an
+outer tie already reaches an inner site — verified; only declaration-time
+`shared_as` is lost), and costs a duplicated naming convention and names that
+cannot be parsed unambiguously. Against that stands B's one genuine defect,
+§4.6's: an inner tie is invisible to the top-level mapping, so provenance and
+labelling consumers must reach for `sites()` rather than the obvious `bindings`.
+The case is closer than §4.5 first made it look — one of its three reasons did
+not survive being checked, and §4.5 now says so. **Reverse now or not at all** — after W1.8 emits these names into
 stored `InferenceData` and W1.10 asserts them, it is no longer a cheap change.
 
 A sub-ruling, and the one this document would most like granted: **adopt

@@ -459,9 +459,11 @@ class Evaluation:
     log_prob
         ``log_prior + log_likelihood``, or ``-inf``.
     contributions
-        Per-dataset log-likelihood, by dataset label. Empty when the point was
-        rejected by the prior. The natural input to "which dataset is driving
-        this fit?".
+        Per-dataset log-likelihood, by dataset label — the natural input to
+        "which dataset is driving this fit?". Empty when the point was rejected
+        by the prior, and **partial** when a dataset failed: it holds the
+        datasets scored before the failure, in collection order, which is what
+        localises the failure alongside :attr:`failure`'s own ``where``.
     failure
         Why the point could not be scored, or ``None``. A point rejected by the
         prior has **no** failure: zero prior mass is an answer, not an error.
@@ -842,18 +844,27 @@ class Dataset:
 
         This method, and :meth:`FittingProblem.sites`, are the descent that
         recovers it: they walk the retained mappings down to the leaves and
-        report the fully qualified path of each. See ``inference.md`` §4.7.
+        report the fully qualified path of each. See ``inference.md`` §4.6.
         """
         paths: list[str] = []
         for binding in self._mapping.sites_of(name):
             if binding.component != INSTRUMENT_COMPONENT:
                 paths.append(f"{binding.component}{SEPARATOR}{binding.local_name}")
                 continue
-            inner = self.instrument.mapping
-            for step in inner.sites_of(binding.local_name) or ():
-                paths.append(
-                    f"{INSTRUMENT_COMPONENT}{SEPARATOR}{step.component}{SEPARATOR}{step.local_name}"
-                )
+            # The instrument recomputes its mapping on every access (W1.5's
+            # deliberate choice), while this dataset's was taken once. If a step
+            # has been reconfigured since, the two can disagree — in which case
+            # report the un-descended path rather than silently dropping the
+            # site, because a *missing* entry here would understate sharing and
+            # that is the very failure this method exists to prevent.
+            inner = self.instrument.mapping.sites_of(binding.local_name)
+            if not inner:
+                paths.append(f"{binding.component}{SEPARATOR}{binding.local_name}")
+                continue
+            paths.extend(
+                f"{INSTRUMENT_COMPONENT}{SEPARATOR}{step.component}{SEPARATOR}{step.local_name}"
+                for step in inner
+            )
         return tuple(paths)
 
     # -- composition-time obligations -----------------------------------------
@@ -918,12 +929,22 @@ class Dataset:
         right** from the merged contracts alone, which is the Gaussian family
         with either noise model:
 
-        * :class:`~ampere.core.likelihood.IndependentNoise` — ``x = mu + sigma z``;
+        * :class:`~ampere.core.likelihood.IndependentNoise` — ``x = mu + sigma z``,
+          where ``sigma`` is the noise model's own, so a fitted ``scale`` or
+          ``jitter`` is already in it and the draw matches what the likelihood
+          would score;
         * :class:`~ampere.core.likelihood.GaussianProcessNoise` — ``x = mu + L z1
           + sigma z2``, where ``L`` comes from
           :meth:`~ampere.core.likelihood.GPSolver.latent_transform`, the same
-          whitening the latent declaration uses. That is an exact draw from
-          ``N(mu, K + diag(sigma^2))``.
+          whitening the latent declaration uses. That is a draw from
+          ``N(mu, K + diag(sigma^2))`` **up to the solver's numerical
+          stabiliser**: :class:`~ampere.core.likelihood.DenseGP` factorises
+          ``K + jitter * mean(diag K) * I`` with ``jitter = 1e-10``, so the
+          realised covariance exceeds ``K`` by a relative 1e-10 on the diagonal.
+          Exact in the sense that matters — it is the same ``L`` the latent path
+          uses, so a simulated dataset is consistent with the model that scores
+          it — but not exact simpliciter, and this docstring says so rather than
+          claiming otherwise.
 
         Everything else raises. Deliberately: a
         :class:`~ampere.core.likelihood.LikelihoodFamily` declares only
@@ -1772,37 +1793,50 @@ class FittingProblem:
         theta = self._mapping.merged.pack(resolved)
         routed = self._mapping.distribute(resolved)
 
+        # Each stage is trapped separately, so a failure's recorded reason and
+        # location are as specific here as they are in log_prob. Trapping the
+        # model and the instrument chain together would report every chain
+        # failure as MODEL_FAILED with no dataset named, which is exactly the
+        # unhelpful half of "-inf with a recorded reason".
         results: dict[str, ModelResult] = {}
         predicted: dict[str, FunctionSamples] = {}
         try:
             results = self._evaluate_models(routed)
-            for label, dataset in self.datasets.items():
-                predicted[label] = dataset.predict(
-                    results[self._bindings[label]], routed.get(label)
-                )
         except self._failure_types as error:
             failure = _failure_from(_reason_for(error), error, _where(error))
             self._record(failure)
             return Simulation(parameters=resolved, theta=theta, failure=failure)
 
+        for label, dataset in self.datasets.items():
+            try:
+                predicted[label] = dataset.predict(
+                    results[self._bindings[label]], routed.get(label)
+                )
+            except self._failure_types as error:
+                failure = _failure_from(FailureReason.INSTRUMENT_FAILED, error, label)
+                self._record(failure)
+                return Simulation(
+                    parameters=resolved, theta=theta, results=results, failure=failure
+                )
+
         observations: dict[str, FunctionSamples] | None = None
         if observe:
             observations = {}
-            try:
-                for label, dataset in self.datasets.items():
+            for label, dataset in self.datasets.items():
+                try:
                     observations[label] = dataset.draw_observation(
                         predicted[label], routed.get(label), generator
                     )
-            except self._failure_types as error:
-                failure = _failure_from(FailureReason.LIKELIHOOD_FAILED, error, "")
-                self._record(failure)
-                return Simulation(
-                    parameters=resolved,
-                    theta=theta,
-                    results=results,
-                    predicted=predicted,
-                    failure=failure,
-                )
+                except self._failure_types as error:
+                    failure = _failure_from(FailureReason.LIKELIHOOD_FAILED, error, label)
+                    self._record(failure)
+                    return Simulation(
+                        parameters=resolved,
+                        theta=theta,
+                        results=results,
+                        predicted=predicted,
+                        failure=failure,
+                    )
 
         return Simulation(
             parameters=resolved,
