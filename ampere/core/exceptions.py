@@ -25,10 +25,12 @@ from __future__ import annotations
 __all__ = [
     "AmpereError",
     "ChannelError",
+    "CompositionError",
     "ContractError",
     "OptionalDependencyError",
     "ParameterError",
     "SchemaError",
+    "TransformationError",
     "TyingError",
 ]
 
@@ -113,6 +115,39 @@ class ChannelError(SchemaError, KeyError):
         if len(self.args) == 1 and isinstance(self.args[0], str):
             return self.args[0]
         return super().__str__()
+
+
+class TransformationError(ContractError):
+    """A transformation or instrument chain is malformed, or misbehaved.
+
+    Raised by :mod:`ampere.core.transform` for: a transformation handed a
+    container kind it does not accept, one that returned something other than
+    the kind it declares it produces, one that dropped a mask its input
+    carried (``docs/design/contracts/results_schema.md`` §16 makes mask
+    propagation an obligation on this contract), and malformed requirement
+    declarations.
+
+    Kept distinct from :class:`SchemaError` because a container can be
+    perfectly well formed while the *chain* that produced it is not: the
+    failure is in the composition, not in the data.
+    """
+
+
+class CompositionError(TransformationError):
+    """Two pieces of a transformation chain cannot be composed.
+
+    Raised at composition time — when an :class:`~ampere.core.transform.
+    Instrument` is built, or when requirements are negotiated — for: a step
+    whose input kind cannot be produced by the step before it, duplicate step
+    labels within one chain, two instruments binding one channel with
+    incompatible expectations, and requirements on one axis declared in
+    incompatible units.
+
+    ``DEVELOPMENT_PLAN.md`` §4.2-4.3 require these to fail loudly when the
+    chain is *assembled*, not deep inside a likelihood evaluation thousands of
+    samples later, which is why they are a distinct type: a caller composing a
+    fit programmatically may reasonably catch this and try another chain.
+    """
 
 
 class OptionalDependencyError(AmpereError, ImportError):

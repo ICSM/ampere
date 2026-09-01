@@ -6,10 +6,11 @@ otherwise (``architecture.md`` §3-4), because it is the shared vocabulary the
 reference, torch and jax backends all implement.
 
 Currently landed: the parameter and prior contract (W1.3,
-``docs/design/contracts/parameters.md``) and the ModelResult schema (W1.4,
-``docs/design/contracts/results_schema.md``). The remaining §4 contracts —
-``transform``, ``likelihood``, ``dataset``, ``astropy_compat`` — arrive with
-W1.5-W1.7.
+``docs/design/contracts/parameters.md``), the ModelResult schema (W1.4,
+``docs/design/contracts/results_schema.md``) and the transformation and
+instrument contract (W1.5, ``docs/design/contracts/transformations.md``). The
+remaining §4 contracts — ``likelihood``, ``dataset``, ``astropy_compat`` —
+arrive with W1.6-W1.7.
 """
 
 from __future__ import annotations
@@ -17,10 +18,12 @@ from __future__ import annotations
 from .exceptions import (
     AmpereError,
     ChannelError,
+    CompositionError,
     ContractError,
     OptionalDependencyError,
     ParameterError,
     SchemaError,
+    TransformationError,
     TyingError,
 )
 from .parameter import (
@@ -62,28 +65,44 @@ from .results_schema import (
     TimeSeries,
     VisibilitySet,
 )
+from .transform import (
+    COORDINATE_RTOL,
+    AxisRequirement,
+    ChannelRequirements,
+    Instrument,
+    Model,
+    Transformation,
+    negotiate,
+    propagate_mask,
+)
 
 __all__ = [
+    "COORDINATE_RTOL",
     "DEFAULT_CHANNEL",
     "REGULARITY_RTOL",
     "SEPARATOR",
     "AmpereError",
     "Axis",
+    "AxisRequirement",
     "AxisSpec",
     "Bijection",
     "Binding",
     "Buffer",
     "BufferSet",
     "ChannelError",
+    "ChannelRequirements",
+    "CompositionError",
     "ContractError",
     "Cube",
     "FunctionSamples",
     "HierarchicalPrior",
     "Identity",
     "Image",
+    "Instrument",
     "Layout",
     "Log",
     "Logit",
+    "Model",
     "ModelResult",
     "OptionalDependencyError",
     "Order",
@@ -100,10 +119,14 @@ __all__ = [
     "Spectrum",
     "Tie",
     "TimeSeries",
+    "Transformation",
+    "TransformationError",
     "TyingError",
     "VisibilitySet",
     "default_bijection_for",
     "describe_prior",
     "log_density",
+    "negotiate",
     "prior_from_spec",
+    "propagate_mask",
 ]
