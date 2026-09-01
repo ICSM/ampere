@@ -26,10 +26,12 @@ import scipy.stats as st
 from scipy.stats import multivariate_normal
 
 from ampere.core import (
+    AxisSpec,
     CauchyFamily,
     Censoring,
     ComplexGaussianFamily,
     DenseGP,
+    FunctionSamples,
     GaussianFamily,
     GaussianProcessNoise,
     GPConditional,
@@ -37,6 +39,7 @@ from ampere.core import (
     Image,
     IndependentNoise,
     InducingPointGP,
+    Layout,
     Likelihood,
     LikelihoodFamily,
     LimitKind,
@@ -44,6 +47,7 @@ from ampere.core import (
     Marginalisation,
     Matern32,
     NoiseParams,
+    Order,
     Parameter,
     PhotometricPoints,
     PoissonFamily,
@@ -1107,6 +1111,62 @@ class TestComposition:
         like = Likelihood(GaussianFamily(), IndependentNoise())
         with pytest.raises(LikelihoodError, match="non-finite entries"):
             like.log_prob(data.with_values(np.zeros(coordinates.size)), data)
+
+    def test_a_user_defined_container_kind_works_unchanged(self) -> None:
+        """§4.3's extensibility requirement, from this contract's side.
+
+        ``results_schema.md`` §13 makes a new container kind three class
+        attributes and no changes inside ampere. That promise is only worth
+        anything if the likelihood contract consumes one without knowing it
+        exists, GP and all.
+        """
+
+        class PolarisationCurve(FunctionSamples):
+            AXES = (
+                AxisSpec(
+                    "spectral_axis",
+                    physical_types=("length",),
+                    order=Order.STRICTLY_INCREASING,
+                ),
+            )
+            LAYOUT = Layout.POINTS
+
+        curve = PolarisationCurve(
+            {"spectral_axis": [0.4, 0.6, 0.8] * u.um},
+            [0.02, 0.03, 0.01],
+            uncertainty=[0.002, 0.002, 0.002],
+        )
+        model = curve.with_values([0.021, 0.028, 0.011])
+        like = Likelihood(GaussianFamily(), GaussianProcessNoise(Matern32(0.005, 0.2)))
+        like.check_alignment(model, curve)
+
+        coordinates = np.array([0.4, 0.6, 0.8])
+        covariance = matern32_matrix(coordinates, 0.005, 0.2) + np.diag(np.full(3, 0.002**2))
+        expected = multivariate_normal.logpdf(
+            curve.values - model.values, mean=np.zeros(3), cov=covariance
+        )
+        assert like.log_prob(model, curve) == pytest.approx(float(expected), abs=1e-9)
+        assert like.conditional(model, curve).mean.size == 3
+
+    def test_a_container_with_a_different_axis_signature_is_refused(self) -> None:
+        """A subclass is comparable with its base only if it kept the axes."""
+
+        class TwoAxisSpectrum(Spectrum):
+            AXES = (
+                AxisSpec("spectral_axis", physical_types=("length",), order=Order.ANY),
+                AxisSpec("epoch", physical_types=("time",), order=Order.ANY),
+            )
+
+            __init__ = FunctionSamples.__init__  # bypass Spectrum's one-axis signature
+
+        odd = TwoAxisSpectrum(
+            {"spectral_axis": [1.0, 2.0] * u.um, "epoch": [0.0, 1.0] * u.day},
+            [1.0, 1.0],
+        )
+        plain = Spectrum([1.0, 2.0] * u.um, [1.0, 1.0] * u.Jy, uncertainty=[0.1, 0.1] * u.Jy)
+        like = Likelihood(GaussianFamily(), IndependentNoise())
+        with pytest.raises(LikelihoodError, match="compares like with like"):
+            like.check_alignment(odd, plain)
 
     def test_the_repr_states_the_marginalisation(self) -> None:
         like = Likelihood(PoissonFamily(), GaussianProcessNoise(Matern32(0.3, 1.0)))
