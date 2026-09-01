@@ -1010,13 +1010,23 @@ Each is a decision, not an oversight. Each has an extension point.
   right place to do it.
 - **W1.8 (Results)** — two things. (a) The latent block cannot be labelled with
   `free_labels()` at scale: 10⁵ scalar names is the wrong ArviZ representation,
-  and a named dimension with a coordinate is the right one. (b) §4.6 requires
-  per-sample `log_likelihood`; for a GP likelihood the samples are not
-  independent and a per-sample decomposition is not well defined, so decide
-  explicitly what is stored (the natural choices are the scalar joint value, or
-  the leave-one-out conditional decomposition, which is computable from the same
-  Cholesky). W1.12's family B also needs *signed* standardised residuals, which
-  neither of those provides on its own.
+  and a named dimension with a coordinate is the right one. (b) **"Per-sample
+  `log_likelihood`" is ambiguous and the two readings differ for this
+  contract.** `DEVELOPMENT_PLAN.md` §4.6 asks that "every run stores per-sample
+  `log_likelihood` and `log_prior`", and justifies it by population-level
+  importance reweighting (design horizon (b)) — which needs the *scalar joint*
+  log-likelihood per posterior draw, and which this contract's `log_prob`
+  returns directly. ArviZ's own `log_likelihood` group, however, is
+  conventionally per-*observation*, because that is what LOO and WAIC consume;
+  and W1.12 §7 reads §4.6 the second way when it asks for "signed per-point
+  residuals, not just per-observation log-likelihood". Both are legitimate
+  readings of the same sentence. It matters here because **a GP likelihood has
+  no well-defined per-observation decomposition**: the samples are not
+  independent, so the joint value does not factorise. If W1.8 wants the ArviZ
+  convention it must choose a decomposition and name it — the leave-one-out
+  conditional terms are the standard choice and are computable from the same
+  Cholesky this contract already forms. W1.13 should reconcile the two readings
+  in the plan's own wording.
 - **W1.9 (Lowering)** — the declaration forms needing a lowering row are:
   `KernelSpec` per family (`matern32` → `celerite2.terms.Matern32Term` /
   `tinygp.kernels.quasisep.Matern32` / a GPyTorch equivalent;
