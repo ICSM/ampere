@@ -8,19 +8,40 @@ reference, torch and jax backends all implement.
 Currently landed: the parameter and prior contract (W1.3,
 ``docs/design/contracts/parameters.md``), the ModelResult schema (W1.4,
 ``docs/design/contracts/results_schema.md``), the transformation and
-instrument contract (W1.5, ``docs/design/contracts/transformations.md``) and
-the likelihood/noise-model contract (W1.6,
-``docs/design/contracts/likelihoods.md``). The remaining §4 contracts —
-``dataset``, ``astropy_compat`` — arrive with W1.7 and Phase 4.
+instrument contract (W1.5, ``docs/design/contracts/transformations.md``), the
+likelihood/noise-model contract (W1.6,
+``docs/design/contracts/likelihoods.md``) and the dataset, fitting-problem and
+inference contract (W1.7, ``docs/design/contracts/inference.md``). The
+remaining §4 contract — ``astropy_compat`` — arrives with Phase 4.
 """
 
 from __future__ import annotations
 
+from .dataset import (
+    DEFAULT_FAILURE_HISTORY,
+    INSTRUMENT_COMPONENT,
+    LATENT_COMPONENT,
+    LATENT_NAME,
+    LIKELIHOOD_COMPONENT,
+    MODEL_COMPONENT,
+    SHARED_COMPONENT,
+    Capabilities,
+    Capable,
+    Dataset,
+    DatasetCollection,
+    Evaluation,
+    Failure,
+    FailureReason,
+    FittingProblem,
+    Simulation,
+    declared_capabilities,
+)
 from .exceptions import (
     AmpereError,
     ChannelError,
     CompositionError,
     ContractError,
+    DatasetError,
     LikelihoodError,
     OptionalDependencyError,
     ParameterError,
@@ -87,6 +108,10 @@ from .parameter import (
     log_density,
     prior_from_spec,
 )
+from .rng import (
+    generator,
+    substream,
+)
 from .results_schema import (
     DEFAULT_CHANNEL,
     REGULARITY_RTOL,
@@ -117,9 +142,16 @@ from .transform import (
 __all__ = [
     "COORDINATE_RTOL",
     "DEFAULT_CHANNEL",
+    "DEFAULT_FAILURE_HISTORY",
     "DTYPE",
+    "INSTRUMENT_COMPONENT",
+    "LATENT_COMPONENT",
+    "LATENT_NAME",
+    "LIKELIHOOD_COMPONENT",
+    "MODEL_COMPONENT",
     "REGULARITY_RTOL",
     "SEPARATOR",
+    "SHARED_COMPONENT",
     "AmpereError",
     "Axis",
     "AxisRequirement",
@@ -128,6 +160,8 @@ __all__ = [
     "Binding",
     "Buffer",
     "BufferSet",
+    "Capabilities",
+    "Capable",
     "CauchyFamily",
     "Censoring",
     "ChannelError",
@@ -136,7 +170,14 @@ __all__ = [
     "CompositionError",
     "ContractError",
     "Cube",
+    "Dataset",
+    "DatasetCollection",
+    "DatasetError",
     "DenseGP",
+    "Evaluation",
+    "Failure",
+    "FailureReason",
+    "FittingProblem",
     "FunctionSamples",
     "GPConditional",
     "GPSolver",
@@ -179,6 +220,7 @@ __all__ = [
     "QuasisepGP",
     "RiceFamily",
     "SchemaError",
+    "Simulation",
     "Spectrum",
     "SquaredExponential",
     "StructuredGridGP",
@@ -192,9 +234,11 @@ __all__ = [
     "VisibilitySet",
     "VonMisesFamily",
     "WindowedSparseGP",
+    "declared_capabilities",
     "default_bijection_for",
     "describe_prior",
     "family_named",
+    "generator",
     "latent_parameter",
     "list_families",
     "log_density",
@@ -202,4 +246,5 @@ __all__ = [
     "prior_from_spec",
     "propagate_mask",
     "register_family",
+    "substream",
 ]
