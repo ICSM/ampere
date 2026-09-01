@@ -583,14 +583,6 @@ def _segment_repr(segment: tuple[float, float, float | None, float | None]) -> s
     return f"[{low:g},{high:g}]{suffix}"
 
 
-def _least(left: float | None, right: float | None) -> float | None:
-    return right if left is None else left if right is None else min(left, right)
-
-
-def _most(left: float | None, right: float | None) -> float | None:
-    return right if left is None else left if right is None else max(left, right)
-
-
 @dataclasses.dataclass(frozen=True)
 class ChannelRequirements:
     """Everything the instruments bound to one channel need of it.
