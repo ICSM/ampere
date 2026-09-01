@@ -1,21 +1,27 @@
 [build-system]
-requires = ["setuptools>=61.2", "setuptools_scm[toml]>=6.2"]
+requires = ["setuptools>=77.0.3", "setuptools_scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "ampere"
 # version = "0.1.2"
 dynamic = ["version"]
-license = {text = "GPL"}
+# SPDX expression (PEP 639); the shipped licence text is GPLv3, and
+# ampere/__init__.py declares "version 3 ... or (at your option) any later
+# version".
+license = "GPL-3.0-or-later"
+license-files = ["licenses/gpl.txt"]
 description = ""
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: GPL License",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
-requires-python = ">=3.7"
+requires-python = ">=3.11"
 dependencies = [
     "numpy",
     "astropy>=4.0.0",
@@ -66,20 +72,37 @@ Homepage = "https://github.com/icsm/ampere"
 "Bug Tracker" = "https://github.com/icsm/ampere/issues"
 
 [project.optional-dependencies]
+# Backend extras are placeholders for the Phase 2 backend split; they will
+# grow pinned/qualified requirements as the backends land.
+torch = ["torch"]
+jax = ["jax"]
 sbi = ["torch", "sbi"]
 zeus = ["zeus-mcmc"]
 arviz = ["arviz"]
-dev = ["sphinx", "nbsphinx", "nbconvert"]
+dev = [
+    # test + coverage
+    "pytest",
+    "pytest-cov",
+    "coverage",
+    # lint/format + types
+    "ruff",
+    "pyrefly",
+    # docs
+    "sphinx",
+    "nbsphinx",
+    "nbconvert",
+]
+# Every feature extra (not dev) composed; self-referential extras are
+# supported by pip and setuptools.
+all = ["ampere[torch,jax,sbi,zeus,arviz]"]
 
 [tool.setuptools]
-packages = [
-    "ampere",
-    "ampere.infer",
-    "ampere.utils",
-    "ampere.data",
-    "ampere.models",
-]
 include-package-data = false
+
+# Automatic package discovery: future namespaces (ampere.core,
+# ampere.backends, ...) are picked up without manual listing.
+[tool.setuptools.packages.find]
+include = ["ampere*"]
 
 [tool.setuptools.package-data]
 ampere = ["ampere_allfilters.hd5"]
