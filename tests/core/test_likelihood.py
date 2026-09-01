@@ -46,6 +46,7 @@ from ampere.core import (
     Log,
     Marginalisation,
     Matern32,
+    NoiseModel,
     NoiseParams,
     Order,
     Parameter,
@@ -290,6 +291,44 @@ class TestDenseGPAgainstAnalyticCases:
             assert float(value) == pytest.approx(float(excised) - offset, abs=1e-3)
             assert float(value) < float(excised) - 2.0
 
+    def test_the_diagonal_case_diverges_by_exactly_the_same_amount(
+        self, predicted: Spectrum, observed: Spectrum, coordinates: np.ndarray
+    ) -> None:
+        """The half of the argument it would be easy to get wrong.
+
+        A zero weight and an infinite uncertainty are equivalent statements
+        about a *chi-square term*, which is what ``results_schema.md`` §7
+        claims for them — but not about a normalised log-density, because each
+        term carries a ``-log sigma`` that diverges too. The uncorrelated case
+        is therefore no more forgiving than the GP case, and the spec must not
+        claim it is.
+        """
+        residual = observed.values - predicted.values
+        sigma = np.asarray(observed.uncertainty)
+        keep = np.ones(coordinates.size, dtype=bool)
+        keep[5] = False
+        excised = iid_gaussian_log_prob(residual[keep], sigma[keep])
+
+        masked = Spectrum(
+            coordinates * u.um, observed.values * u.Jy, uncertainty=sigma * u.Jy, mask=~keep
+        )
+        plain = Likelihood(GaussianFamily(), IndependentNoise())
+        assert plain.log_prob(masked.with_values(predicted.values), masked) == pytest.approx(
+            excised, abs=1e-12
+        )
+
+        for inflated in (1e1, 1e2, 1e3, 1e6):
+            widened = sigma.copy()
+            widened[5] = inflated
+            value = iid_gaussian_log_prob(residual, widened)
+            offset = 0.5 * math.log(2.0 * math.pi * inflated**2)
+            # The remaining discrepancy is the vanishing chi-square, O(1/sigma^2).
+            tolerance = max(5.0 / inflated**2, 1e-9)
+            assert value == pytest.approx(excised - offset, abs=tolerance)
+            # The chi-square term does vanish, which is the true half of §7's
+            # claim; it is the normalisation that does not.
+            assert (residual[5] / inflated) ** 2 <= (residual[5] / 10.0) ** 2
+
     def test_a_fully_masked_pair_contributes_nothing(
         self, predicted: Spectrum, observed: Spectrum, coordinates: np.ndarray
     ) -> None:
@@ -404,6 +443,51 @@ class TestConditionedGP:
         conditional = gp.conditional(data.with_values(np.zeros(coordinates.size)), data)
         assert conditional.mean.size == coordinates.size
 
+    def test_a_bare_1d_grid_means_n_points_not_one_n_dimensional_point(
+        self, coordinates: np.ndarray
+    ) -> None:
+        """``np.atleast_2d`` reads a 1-D grid the wrong way round, silently.
+
+        ``atleast_2d`` on shape ``(m,)`` yields ``(1, m)`` — one m-dimensional
+        point — which then *broadcasts* through the kernel rather than erroring,
+        turning a 101-point localisation grid into a one-point answer. Passing a
+        bare list of wavelengths is the natural call, so it must mean what a
+        reader thinks it means.
+        """
+        data = Spectrum(
+            coordinates * u.um,
+            np.sin(coordinates) * u.Jy,
+            uncertainty=np.full(coordinates.size, 0.05) * u.Jy,
+        )
+        gp = Likelihood(GaussianFamily(), GaussianProcessNoise(Matern32(1.0, 1.5)))
+        model = data.with_values(np.zeros(coordinates.size))
+        flat = np.linspace(coordinates.min(), coordinates.max(), 25)
+
+        one_dimensional = gp.conditional(model, data, at=flat)
+        assert one_dimensional.mean.shape == (25,)
+        column = gp.conditional(model, data, at=flat[:, None])
+        assert np.array_equal(one_dimensional.mean, column.mean)
+        assert np.array_equal(one_dimensional.variance, column.variance)
+
+        # An unusable shape is refused rather than broadcast.
+        with pytest.raises(LikelihoodError, match="coordinate\\(s\\) per point"):
+            gp.conditional(model, data, at=np.zeros((5, 3)))
+        with pytest.raises(LikelihoodError, match="must be a 1-D array"):
+            gp.conditional(model, data, at=np.zeros((2, 2, 2)))
+
+    def test_the_solver_reads_a_1d_grid_the_same_way(self, coordinates: np.ndarray) -> None:
+        """The same guarantee one level down, where a backend will call it."""
+        kernel = Matern32(1.0, 1.5)
+        values = {"amplitude": 1.0, "length_scale": 1.5}
+        residual = np.sin(coordinates)
+        variance = np.full(coordinates.size, 0.05**2)
+        flat = np.linspace(coordinates.min(), coordinates.max(), 9)
+        got = DenseGP().condition(kernel, coordinates, residual, variance, values, at=flat)
+        assert got.mean.shape == (9,)
+        # The kernel itself reads a bare 1-D array as a column too.
+        assert kernel.matrix(flat, flat, values).shape == (9, 9)
+        assert kernel.diagonal(flat, values).shape == (9,)
+
     def test_it_evaluates_on_a_finer_grid_when_asked(self, coordinates: np.ndarray) -> None:
         """W1.12's family C wants a visualisation grid, not only the data's own."""
         residual = np.sin(coordinates)
@@ -482,8 +566,57 @@ class TestLatentPathDeclaration:
     def test_every_non_gaussian_family_goes_latent_under_a_gp(
         self, family: LikelihoodFamily
     ) -> None:
-        like = Likelihood(family, GaussianProcessNoise(Matern32(0.3, 1.0)))
-        assert like.marginalisation is Marginalisation.LATENT
+        noise = GaussianProcessNoise(Matern32(0.3, 1.0))
+        assert family.marginalisation_with(noise) is Marginalisation.LATENT
+
+    @pytest.mark.parametrize("family", [StudentTFamily(), CauchyFamily(), ComplexGaussianFamily()])
+    def test_a_latent_family_that_ignores_the_latent_values_cannot_be_composed(
+        self, family: LikelihoodFamily
+    ) -> None:
+        """The defect this flag exists to stop, pinned.
+
+        A family whose ``log_prob`` never reads ``noise.latent`` would return
+        the *uncorrelated* likelihood under a GP — so every GP hyperparameter
+        and every latent value an engine sampled would leave the
+        log-probability untouched, and the fit would run, converge and be
+        wrong. Declaring LATENT is not enough; the family must implement it.
+        """
+        assert not family.CONSUMES_LATENT_GP
+        with pytest.raises(LikelihoodError, match="does not implement the latent-conditional"):
+            Likelihood(family, GaussianProcessNoise(Matern32(0.3, 1.0)))
+
+    def test_the_family_that_does_implement_it_composes(self) -> None:
+        assert PoissonFamily.CONSUMES_LATENT_GP
+        Likelihood(PoissonFamily(), GaussianProcessNoise(Matern32(0.3, 1.0)))
+
+    def test_a_third_party_family_must_opt_in_to_the_latent_path(self) -> None:
+        """The safe default: a new family does not silently inherit the defect."""
+        assert LikelihoodFamily.CONSUMES_LATENT_GP is False
+
+        @register_family
+        class TestLatentAware(LikelihoodFamily):
+            NAME = "test_latent_aware"
+            CONSUMES_LATENT_GP = True
+            REQUIRES_UNCERTAINTY = False
+
+            def log_prob(
+                self, predicted: np.ndarray, observed: np.ndarray, noise: NoiseParams
+            ) -> float:
+                if noise.correlated and noise.latent is None:
+                    raise LikelihoodError("needs latent values")
+                offset = 0.0 if noise.latent is None else float(np.sum(noise.latent))
+                return float(np.sum(observed - predicted)) + offset
+
+        try:
+            data = Spectrum([1.0, 2.0] * u.um, [1.0, 2.0] * u.Jy)
+            model = data.with_values([0.0, 0.0])
+            like = Likelihood(TestLatentAware(), GaussianProcessNoise(Matern32(0.3, 1.0)))
+            assert like.marginalisation is Marginalisation.LATENT
+            assert like.log_prob(model, data, latent=np.array([1.0, 1.0])) == pytest.approx(5.0)
+        finally:
+            from ampere.core import likelihood as module
+
+            module._FAMILIES.pop("test_latent_aware", None)
 
     def test_a_gradient_free_engine_is_refused_loudly(self, counts: Spectrum) -> None:
         """Capability flagging: the plan's "modern-backend capability", enforced."""
@@ -838,15 +971,59 @@ class TestCensoring:
     def test_censoring_plus_a_gp_is_declared_latent(self) -> None:
         """The answer to issue #11's "how the matrix algebra changes"."""
         censoring = Censoring(np.array([0, 0, 1]))
-        like = Likelihood(
-            GaussianFamily(), GaussianProcessNoise(Matern32(0.3, 1.0)), censoring=censoring
-        )
+        noise = GaussianProcessNoise(Matern32(0.3, 1.0))
+        assert GaussianFamily().marginalisation_with(noise, censoring) is Marginalisation.LATENT
+
+        like = Likelihood(GaussianFamily(), noise, censoring=censoring)
         assert like.marginalisation is Marginalisation.LATENT
         data = Spectrum(
             [1.0, 2.0, 3.0] * u.um, [1.0, 2.0, 0.3] * u.Jy, uncertainty=[0.1, 0.1, 0.1] * u.Jy
         )
+        # No family implements the truncated-latent form, so composition with
+        # real data is refused rather than silently evaluated.
+        with pytest.raises(LikelihoodError, match="does not implement the latent-conditional"):
+            like.check_alignment(data.with_values([1.0, 2.0, 0.1]), data)
+        # The family-level guard stays as a second line of defence for a caller
+        # driving log_prob directly rather than through a Likelihood.
         with pytest.raises(LikelihoodError, match="orthant probability"):
             like.log_prob(data.with_values([1.0, 2.0, 0.1]), data)
+
+    def test_a_masked_limit_does_not_force_the_latent_path(self) -> None:
+        """§9's "masking beats censoring" has to hold for the declaration too.
+
+        A limit sitting on a sample the mask excludes contributes nothing to
+        the arithmetic, so it must not condemn an otherwise analytic problem to
+        a gradient-based engine, nor be refused at composition.
+        """
+        censoring = Censoring(np.array([0, 1, 0, 0]))
+        data = Spectrum(
+            [1.0, 2.0, 3.0, 4.0] * u.um,
+            [1.0, 2.0, 3.0, 4.0] * u.Jy,
+            uncertainty=np.full(4, 0.1) * u.Jy,
+            mask=np.array([False, True, False, False]),
+        )
+        like = Likelihood(
+            GaussianFamily(), GaussianProcessNoise(Matern32(0.3, 1.0)), censoring=censoring
+        )
+        # Declaration-time: conservative, because it has not seen the mask.
+        assert like.marginalisation is Marginalisation.LATENT
+        # Data-aware: the only limit is masked, so nothing is censored in fact.
+        assert like.marginalisation_for(data) is Marginalisation.ANALYTIC
+        like.check_alignment(data.with_values(np.zeros(4)), data)
+        like.check_engine(differentiable=False, engine="emcee", observed=data)
+        plain = Likelihood(GaussianFamily(), GaussianProcessNoise(Matern32(0.3, 1.0)))
+        assert like.log_prob(data.with_values(np.zeros(4)), data) == pytest.approx(
+            plain.log_prob(data.with_values(np.zeros(4)), data), abs=1e-12
+        )
+        # Without the mask the same declaration is genuinely latent, and refused.
+        exposed = Spectrum(
+            [1.0, 2.0, 3.0, 4.0] * u.um,
+            [1.0, 2.0, 3.0, 4.0] * u.Jy,
+            uncertainty=np.full(4, 0.1) * u.Jy,
+        )
+        assert like.marginalisation_for(exposed) is Marginalisation.LATENT
+        with pytest.raises(LikelihoodError, match="does not implement the latent-conditional"):
+            like.check_alignment(exposed.with_values(np.zeros(4)), exposed)
 
     def test_codes_and_samples_stay_aligned_on_a_gridded_container(self) -> None:
         """Excision ravels; a censoring declaration must ravel the same way.
@@ -1079,15 +1256,23 @@ class TestSolverStrategies:
 class TestComposition:
     def test_the_parameter_namespace_is_flat(self) -> None:
         """One ParameterSet, no nested merge — ``parameters.md`` §12.4."""
-        like = Likelihood(
-            StudentTFamily(nu=st.loguniform(2.0, 50.0)),
+        gp = Likelihood(
+            GaussianFamily(),
             GaussianProcessNoise(
                 Matern32(st.loguniform(1e-3, 1e1), st.loguniform(0.1, 10.0)),
                 scale=st.loguniform(0.5, 2.0),
+                jitter=st.halfnorm(0.0, 1.0),
             ),
         )
-        assert like.parameters.free_names == ("amplitude", "length_scale", "scale", "nu")
-        assert like.parameters.free_size == 4
+        assert gp.parameters.free_names == ("amplitude", "length_scale", "scale", "jitter")
+        assert gp.parameters.free_size == 4
+        # A family's own parameters join the same flat set, after the noise
+        # model's, in declaration order.
+        with_family = Likelihood(
+            StudentTFamily(nu=st.loguniform(2.0, 50.0)),
+            IndependentNoise(scale=st.loguniform(0.5, 2.0)),
+        )
+        assert with_family.parameters.free_names == ("scale", "nu")
 
     def test_a_name_collision_is_loud(self) -> None:
         @register_family
@@ -1225,6 +1410,66 @@ class TestComposition:
         like = Likelihood(GaussianFamily(), IndependentNoise())
         with pytest.raises(LikelihoodError, match="compares like with like"):
             like.check_alignment(odd, plain)
+
+    def test_non_finite_complex_data_are_refused_too(self) -> None:
+        """The complex path must not be the one that leaks a NaN into a posterior."""
+        vis = VisibilitySet(
+            [1.0, 2.0, 3.0],
+            [4.0, 5.0, 6.0],
+            [1.0 + 0.2j, 0.6 - 0.3j, complex(np.nan, 1.0)],
+            uncertainty=[0.05, 0.05, 0.05],
+        )
+        like = Likelihood(ComplexGaussianFamily(), IndependentNoise())
+        with pytest.raises(LikelihoodError, match="non-finite entries"):
+            like.log_prob(vis.with_values([1.0 + 0j, 0.6 + 0j, 0.4 + 0j]), vis)
+
+    def test_an_overflowing_amplitude_raises_this_contracts_error(self) -> None:
+        """Not a bare ValueError: W1.7 is told to catch ``LikelihoodError``."""
+        data = Spectrum(
+            [1.0, 2.0, 3.0] * u.um, [0.0, 0.0, 0.0] * u.Jy, uncertainty=[0.1, 0.1, 0.1] * u.Jy
+        )
+        model = data.with_values([0.0, 0.0, 0.0])
+        # amplitude**2 overflows float64 while amplitude itself is finite, so
+        # the support check passes and the covariance is full of infs.
+        huge = Likelihood(GaussianFamily(), GaussianProcessNoise(Matern32(1e200, 1.0)))
+        with pytest.raises(LikelihoodError, match="non-finite entries"):
+            huge.log_prob(model, data)
+        with pytest.raises(LikelihoodError, match="non-finite entries"):
+            huge.conditional(model, data)
+        with pytest.raises(LikelihoodError, match="non-finite entries"):
+            DenseGP().latent_transform(
+                Matern32(1e200, 1.0),
+                np.array([[1.0], [2.0], [3.0]]),
+                np.zeros(3),
+                {"amplitude": 1e200, "length_scale": 1.0},
+            )
+
+    def test_a_correlated_noise_model_must_supply_its_own_noise_params(self) -> None:
+        """Two notions of "correlated" must not be able to disagree.
+
+        A third-party subclass that sets ``CORRELATED = True`` but inherits the
+        base ``noise_params`` would report ``NoiseParams.correlated is False``,
+        so every family would take its uncorrelated branch and the correlations
+        would silently do nothing.
+        """
+
+        class HalfDeclaredNoise(NoiseModel):
+            CORRELATED = True
+
+            def sigma(
+                self,
+                observed: FunctionSamples,
+                retain: np.ndarray,
+                values: dict[str, object],
+            ) -> np.ndarray:
+                return np.asarray(observed.uncertainty).ravel()[retain]
+
+        data = Spectrum(
+            [1.0, 2.0, 3.0] * u.um, [1.0, 2.0, 3.0] * u.Jy, uncertainty=[0.1, 0.1, 0.1] * u.Jy
+        )
+        like = Likelihood(GaussianFamily(), HalfDeclaredNoise())
+        with pytest.raises(LikelihoodError, match="declares CORRELATED = True but inherits"):
+            like.log_prob(data.with_values([0.0, 0.0, 0.0]), data)
 
     def test_the_repr_states_the_marginalisation(self) -> None:
         like = Likelihood(PoissonFamily(), GaussianProcessNoise(Matern32(0.3, 1.0)))

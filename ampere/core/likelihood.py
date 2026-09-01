@@ -116,16 +116,47 @@ _LOG_2PI = math.log(2.0 * math.pi)
 _SQRT3 = math.sqrt(3.0)
 
 
-def _as_float64(array: Any, what: str) -> np.ndarray:
-    """Cast to a contiguous float64 array, loudly."""
-    result = np.ascontiguousarray(np.asarray(array), dtype=DTYPE)
-    if not np.all(np.isfinite(result)):
+def _check_finite(array: np.ndarray, what: str) -> np.ndarray:
+    """Refuse NaN or inf. Applies to complex arrays as well as real ones."""
+    if not np.all(np.isfinite(array)):
         raise LikelihoodError(
             f"{what} contains non-finite entries. A likelihood cannot be evaluated on NaN or "
             f"inf; mask the affected samples (mask=True excludes them entirely) rather than "
             f"threading sentinels through the arithmetic."
         )
-    return result
+    return array
+
+
+def _as_float64(array: Any, what: str) -> np.ndarray:
+    """Cast to a contiguous float64 array, loudly."""
+    return _check_finite(np.ascontiguousarray(np.asarray(array), dtype=DTYPE), what)
+
+
+def _as_points(array: Any, what: str, *, dimensions: int | None = None) -> np.ndarray:
+    """Coerce coordinates to an ``(n, d)`` float64 array of *n points*.
+
+    ``np.atleast_2d`` is the wrong tool here and the reason this helper exists:
+    it turns a shape ``(m,)`` array into ``(1, m)`` — **one m-dimensional
+    point** — when what a caller passing a bare list of wavelengths means is m
+    one-dimensional points. That reading silently broadcasts through the kernel
+    and yields a one-element answer instead of an error, so a 1-D input is
+    interpreted here as a column, explicitly, and anything ambiguous raises.
+    """
+    values = np.asarray(array, dtype=DTYPE)
+    if values.ndim == 1:
+        values = values[:, None]
+    elif values.ndim != 2:
+        raise LikelihoodError(
+            f"{what} must be a 1-D array of coordinates or an (n, d) array of points, but it "
+            f"has shape {values.shape}."
+        )
+    if dimensions is not None and values.shape[1] != dimensions:
+        raise LikelihoodError(
+            f"{what} has {values.shape[1]} coordinate(s) per point, but the data it is being "
+            f"compared against have {dimensions}. Pass an (n, {dimensions}) array"
+            + (", or a bare 1-D array of coordinates." if dimensions == 1 else ".")
+        )
+    return _check_finite(np.ascontiguousarray(values), what)
 
 
 # ---------------------------------------------------------------------------
@@ -415,21 +446,22 @@ class Kernel(Parameterised, abc.ABC):
         """Dense covariance between two coordinate sets.
 
         ``left`` and ``right`` are ``(n, d)`` and ``(m, d)`` float64 arrays;
-        the result is ``(n, m)``. Separation is Euclidean in the coordinate
+        a bare 1-D array is read as a column of ``n`` one-dimensional points.
+        The result is ``(n, m)``. Separation is Euclidean in the coordinate
         space, which is why :meth:`GPSolver.check_compatible` requires every
         coordinate axis to share one unit.
         """
         resolved = self.resolve(values)
-        left = np.atleast_2d(_as_float64(left, "kernel coordinates"))
-        right = np.atleast_2d(_as_float64(right, "kernel coordinates"))
-        difference = left[:, None, :] - right[None, :, :]
+        points = _as_points(left, "kernel coordinates")
+        other = _as_points(right, "kernel coordinates", dimensions=points.shape[1])
+        difference = points[:, None, :] - other[None, :, :]
         separation = np.sqrt(np.einsum("ijk,ijk->ij", difference, difference))
         return self._covariance(separation, resolved)
 
     def diagonal(self, coordinates: np.ndarray, values: Mapping[str, Any]) -> np.ndarray:
         """The prior variance at each coordinate; ``k(0)`` for a stationary kernel."""
         resolved = self.resolve(values)
-        n = int(np.atleast_2d(coordinates).shape[0])
+        n = int(_as_points(coordinates, "kernel coordinates").shape[0])
         return self._covariance(np.zeros(n, dtype=DTYPE), resolved)
 
     def __repr__(self) -> str:
@@ -737,6 +769,13 @@ class DenseGP(GPSolver):
     ) -> tuple[np.ndarray, bool]:
         covariance = kernel.matrix(coordinates, coordinates, values)
         total = covariance + np.diag(variance + self.jitter**2)
+        if not np.all(np.isfinite(total)):
+            raise LikelihoodError(
+                "the covariance matrix K + diag(sigma^2) contains non-finite entries, so it "
+                "cannot be factorised. The usual cause is a kernel amplitude large enough that "
+                "amplitude**2 overflows float64; constrain the amplitude prior to the data's "
+                "own scale."
+            )
         try:
             return scipy.linalg.cho_factor(total, lower=True)
         except scipy.linalg.LinAlgError as error:
@@ -772,9 +811,13 @@ class DenseGP(GPSolver):
         values: Mapping[str, Any],
         at: np.ndarray | None = None,
     ) -> GPConditional:
-        factor = self._factor(kernel, coordinates, variance, values)
-        target = coordinates if at is None else np.atleast_2d(_as_float64(at, "conditioning grid"))
-        cross = kernel.matrix(target, coordinates, values)
+        points = _as_points(coordinates, "data coordinates")
+        factor = self._factor(kernel, points, variance, values)
+        if at is None:
+            target = points
+        else:
+            target = _as_points(at, "conditioning grid", dimensions=points.shape[1])
+        cross = kernel.matrix(target, points, values)
         mean = cross @ scipy.linalg.cho_solve(factor, residual)
         solved = scipy.linalg.cho_solve(factor, cross.T)
         prior_variance = kernel.diagonal(target, values)
@@ -790,7 +833,14 @@ class DenseGP(GPSolver):
         *,
         jitter: float = 1e-10,
     ) -> np.ndarray:
-        covariance = kernel.matrix(coordinates, coordinates, values)
+        points = _as_points(coordinates, "data coordinates")
+        covariance = kernel.matrix(points, points, values)
+        if not np.all(np.isfinite(covariance)):
+            raise LikelihoodError(
+                "the kernel matrix K contains non-finite entries, so the whitening transform "
+                "f = L z is undefined. The usual cause is a kernel amplitude large enough that "
+                "amplitude**2 overflows float64."
+            )
         scale = float(np.mean(np.diag(covariance))) or 1.0
         stabilised = covariance + np.eye(covariance.shape[0]) * (jitter * scale)
         try:
@@ -996,7 +1046,22 @@ class NoiseModel(Parameterised, abc.ABC):
         latent: np.ndarray | None = None,
         limits: np.ndarray | None = None,
     ) -> NoiseParams:
-        """Assemble the per-evaluation noise description."""
+        """Assemble the per-evaluation noise description.
+
+        The base implementation describes *uncorrelated* noise. A subclass that
+        sets :attr:`CORRELATED` must override it, and is told so rather than
+        being allowed to inherit a description that contradicts its own
+        declaration — the resulting ``NoiseParams.correlated`` would be
+        ``False`` and every family would take the uncorrelated branch.
+        """
+        if self.CORRELATED:
+            raise LikelihoodError(
+                f"{type(self).__name__} declares CORRELATED = True but inherits NoiseModel's "
+                f"uncorrelated noise_params(), which reports no kernel and no solver. Every "
+                f"family would then take its uncorrelated branch and the correlations would "
+                f"silently do nothing. Override noise_params() to supply the kernel, solver and "
+                f"coordinates (see GaussianProcessNoise)."
+            )
         return NoiseParams(
             sigma=self.sigma(observed, retain, values),
             values=values,
@@ -1369,6 +1434,16 @@ class LikelihoodFamily(Parameterised, abc.ABC):
     #: Whether a GP covariance can be folded into this family's own noise
     #: process and marginalised in closed form. True for Gaussian noise only.
     ANALYTIC_WITH_GP: ClassVar[bool] = False
+    #: Whether :meth:`log_prob` actually implements the latent-conditional form
+    #: — i.e. whether it reads ``noise.latent`` and refuses to proceed without
+    #: it. **False by default, deliberately**: a family that declares
+    #: :attr:`Marginalisation.LATENT` but ignores the latent values would
+    #: silently return the *uncorrelated* likelihood, so every GP
+    #: hyperparameter and every latent value an engine sampled would leave the
+    #: log-probability untouched — a fit that runs, converges, and is wrong.
+    #: :class:`Likelihood` therefore refuses a latent combination whose family
+    #: has not opted in, exactly as it refuses an unimplemented family.
+    CONSUMES_LATENT_GP: ClassVar[bool] = False
     #: Whether this family can consume a :class:`Censoring` declaration.
     SUPPORTS_CENSORING: ClassVar[bool] = False
     #: Whether it needs per-sample uncertainties on the observed container.
@@ -1674,6 +1749,7 @@ class PoissonFamily(LikelihoodFamily):
 
     NAME: ClassVar[str] = "poisson"
     ANALYTIC_WITH_GP: ClassVar[bool] = False
+    CONSUMES_LATENT_GP: ClassVar[bool] = True
     REQUIRES_UNCERTAINTY: ClassVar[bool] = False
 
     def log_prob(
@@ -1834,6 +1910,12 @@ class Likelihood(Parameterised):
         self._family = family
         self._noise = noise
         self._censoring = censoring
+        # Latency that follows from the family and noise model alone is a fact
+        # about the pair, so it is refused here. Latency that only censoring
+        # induces depends on whether a limit survives the mask, so it is
+        # refused in check_alignment, which has the data.
+        if family.marginalisation_with(noise) is Marginalisation.LATENT:
+            self._refuse_unconsumed_latent(family, noise, censored=False)
         for parameter in noise.parameters:
             self.register_parameter(parameter)
         for parameter in family.parameters:
@@ -1845,6 +1927,41 @@ class Likelihood(Parameterised):
                     f"does not nest one); rename one of them."
                 )
             self.register_parameter(parameter)
+
+    @staticmethod
+    def _refuse_unconsumed_latent(
+        family: LikelihoodFamily, noise: NoiseModel, *, censored: bool
+    ) -> None:
+        """Refuse a latent combination whose family does not implement one.
+
+        The failure this prevents is the worst kind available to a likelihood
+        contract: a family that declares :attr:`Marginalisation.LATENT` but
+        whose ``log_prob`` never reads ``noise.latent`` returns the
+        *uncorrelated* likelihood, so every GP hyperparameter and every latent
+        value an engine samples leaves the log-probability untouched. Their
+        posteriors come back as their priors and the physical parameters are
+        biased exactly as they would have been under the rigid likelihood — a
+        fit that runs, converges, and is wrong, which is what this whole
+        contract exists to make impossible.
+        """
+        if family.CONSUMES_LATENT_GP:
+            return
+        because = (
+            "with a censoring declaration on correlated noise"
+            if censored
+            else f"with a {type(noise).__name__} noise model"
+        )
+        raise LikelihoodError(
+            f"the {family.NAME} family {because} is a latent-variable model (see "
+            f"Marginalisation.LATENT), but {type(family).__name__} does not implement the "
+            f"latent-conditional log_prob — its CONSUMES_LATENT_GP is False. Evaluating it would "
+            f"return the *uncorrelated* likelihood, leaving the GP hyperparameters and every "
+            f"latent value with no effect on the log-probability at all: a fit that runs, "
+            f"converges, and is wrong. Use IndependentNoise with this family, or the gaussian "
+            f"family, whose GP marginalises in closed form. "
+            f"family.marginalisation_with(noise, censoring) reports the declaration without "
+            f"composing anything."
+        )
 
     # -- declarations --------------------------------------------------------
 
@@ -1865,8 +1982,32 @@ class Likelihood(Parameterised):
 
     @property
     def marginalisation(self) -> Marginalisation:
-        """Whether this combination integrates its noise process in closed form."""
+        """Whether this combination integrates its noise process in closed form.
+
+        Answered from the *declaration* alone, before any data are seen, and so
+        deliberately conservative about censoring: a limit that a container's
+        mask happens to exclude still counts here, because this property does
+        not know which container it will meet. Use
+        :meth:`marginalisation_for` once the observed container is in hand —
+        which is the answer W1.7 should act on.
+        """
         return self._family.marginalisation_with(self._noise, self._censoring)
+
+    def marginalisation_for(self, observed: FunctionSamples) -> Marginalisation:
+        """The marginalisation this combination actually needs for these data.
+
+        Identical to :attr:`marginalisation` except that censoring is read
+        through the mask, so a limit on a masked sample does not force the
+        latent path. §9's rule is that masking beats censoring — a masked
+        sample contributes nothing whatever its limit kind — and that has to
+        hold for the declaration as well as for the arithmetic, or a problem
+        that is analytic in fact gets refused a gradient-free engine.
+        """
+        if self._censoring is None:
+            return self._family.marginalisation_with(self._noise, None)
+        self._censoring.check_against(observed)
+        retained = Censoring(np.asarray(self._censoring.kinds)[np.asarray(observed.valid).ravel()])
+        return self._family.marginalisation_with(self._noise, retained)
 
     def latent_declaration(self, size: int, name: str = "latent") -> LatentDeclaration:
         """The latent parameters this combination adds, for ``size`` samples.
@@ -1892,7 +2033,13 @@ class Likelihood(Parameterised):
             solver=self._noise.solver,
         )
 
-    def check_engine(self, *, differentiable: bool, engine: str = "this engine") -> None:
+    def check_engine(
+        self,
+        *,
+        differentiable: bool,
+        engine: str = "this engine",
+        observed: FunctionSamples | None = None,
+    ) -> None:
         """Refuse an engine that cannot deliver this likelihood's marginalisation.
 
         ``DEVELOPMENT_PLAN.md`` §4.4: "gradient-free samplers cannot
@@ -1900,8 +2047,13 @@ class Likelihood(Parameterised):
         flexible-GP robustness is effectively a modern-backend capability". A
         silent downgrade here would be a fit that runs, converges to something,
         and is wrong.
+
+        Pass ``observed`` when the data are to hand — W1.7's ``Dataset`` always
+        has them — so that a censored sample the mask excludes is not counted
+        against a gradient-free engine.
         """
-        if self.marginalisation is Marginalisation.ANALYTIC or differentiable:
+        required = self.marginalisation if observed is None else self.marginalisation_for(observed)
+        if required is Marginalisation.ANALYTIC or differentiable:
             return
         raise LikelihoodError(
             f"{engine} cannot run this likelihood: the {self._family.NAME} family with a "
@@ -1948,6 +2100,12 @@ class Likelihood(Parameterised):
                 raise LikelihoodError(
                     f"the {self._family.NAME} family cannot consume a censoring declaration."
                 )
+            # Censoring on correlated noise turns the likelihood into a
+            # multivariate-normal orthant probability, which is latent. Whether
+            # it actually does depends on whether a limit survives the mask, so
+            # this is the earliest point the question can honestly be asked.
+            if self.marginalisation_for(observed) is Marginalisation.LATENT:
+                self._refuse_unconsumed_latent(self._family, self._noise, censored=True)
         self._noise.check_compatible(self._family, observed)
         if observed.values.dtype.kind == "c" and not self._family.ALLOWS_COMPLEX:
             raise LikelihoodError(
@@ -1989,14 +2147,20 @@ class Likelihood(Parameterised):
         an inclusion indicator. Retained samples are then **excised**: they are
         the only rows and columns that enter the covariance at all.
 
-        Excision, not the infinite-variance limit, is the rule, and the GP case
-        is what forces the choice. Letting ``sigma_i → ∞`` in a Gaussian marginal
-        likelihood leaves the remaining samples' conditional structure correct
-        but adds a divergent ``-½ log(2π sigma_i²)`` term: the limit does not
-        converge to the excised value, it diverges. Since
-        ``results_schema.md`` §7 defines a masked sample as carrying *exactly*
-        zero information, only excision delivers that. For an uncorrelated
-        noise model the two rules agree term by term, so nothing is lost.
+        Excision, not the infinite-variance limit, is the rule — for *every*
+        noise model, not only the correlated one. ``masked_uncertainty()`` and
+        a zero weight are equivalent statements about a **chi-square term**,
+        which is exactly what ``results_schema.md`` §7 claims for them; they
+        are not equivalent statements about a normalised log-density, and a
+        likelihood is a normalised log-density. Each Gaussian term carries a
+        ``-log sigma`` alongside its chi-square, so
+        ``-1/2 log(2 pi) - log sigma - 1/2 (r/sigma)**2`` tends to ``-inf``
+        rather than to zero as ``sigma`` grows. The GP case is the same
+        statement with a log-determinant in place of the ``-log sigma``: the
+        limit approaches the excised value minus ``1/2 log(2 pi sigma**2)``,
+        and so diverges. Since §7 defines a masked sample as carrying *exactly*
+        zero information, only excision delivers that, and a 0/1 weight
+        multiplying a whole term is excision written arithmetically.
 
         A fully masked pair returns ``0.0``: no data, no information, no
         contribution — which is the correct limit of the same rule, not a
@@ -2075,10 +2239,14 @@ class Likelihood(Parameterised):
                 f"latent-GP combination localises through its latent posterior instead, which "
                 f"is inference's output rather than this method's."
             )
-        if at is None:
-            target = self._coordinates(observed, np.ones(observed.n_samples, dtype=bool))
-        else:
-            target = np.atleast_2d(np.asarray(at, dtype=DTYPE))
+        # Default to the *full* axis, masked samples included; otherwise hand
+        # `at` to the solver untouched, so one place (``_as_points``) decides
+        # what a bare 1-D array of coordinates means.
+        target = (
+            self._coordinates(observed, np.ones(observed.n_samples, dtype=bool))
+            if at is None
+            else at
+        )
         return self._noise.solver.condition(
             self._noise.kernel, coordinates, residual, sigma**2, resolved, at=target
         )
@@ -2101,7 +2269,8 @@ class Likelihood(Parameterised):
                     f"the {self._family.NAME} family holds real values, but the {role} container "
                     f"is complex. Use the complex_gaussian family."
                 )
-            return np.ascontiguousarray(flat, dtype=np.complex128)
+            complex_values = np.ascontiguousarray(flat, dtype=np.complex128)
+            return _check_finite(complex_values, f"{role} values")
         return _as_float64(flat, f"{role} values")
 
     def _retained_limits(self, retain: np.ndarray) -> np.ndarray | None:

@@ -199,15 +199,48 @@ Poisson on its own is perfectly analytic; it is Poisson *plus a GP* that is not:
 <Marginalisation.ANALYTIC: 'analytic'>
 >>> Likelihood(StudentTFamily(), IndependentNoise()).marginalisation
 <Marginalisation.ANALYTIC: 'analytic'>
->>> Likelihood(StudentTFamily(), GaussianProcessNoise(Matern32(0.3, 2.0))).marginalisation
+>>> gp_noise = GaussianProcessNoise(Matern32(0.3, 2.0))
+>>> StudentTFamily().marginalisation_with(gp_noise)
 <Marginalisation.LATENT: 'latent'>
 
 ```
 
-The declaration exists to be *enforced*. §4.4: "gradient-free samplers cannot
-realistically handle hundreds of latent values, so non-Gaussian + flexible-GP
-robustness is effectively a modern-backend capability." A silent downgrade here
-would be a fit that runs, converges to something, and is wrong:
+`marginalisation_with` is asked of the *family* there, and not of a composed
+`Likelihood`, for a reason that is the sharpest edge in this contract.
+
+### Declaring `LATENT` is not the same as implementing it
+
+A family whose `log_prob` declares `LATENT` but never reads `noise.latent`
+returns the **uncorrelated** likelihood. Every GP hyperparameter and every
+latent value an engine sampled would then leave the log-probability untouched:
+their posteriors would come back as their priors, and the physical parameters
+would be biased exactly as they were under the rigid likelihood. The fit runs,
+converges, and is wrong — which is the failure this whole contract exists to
+make impossible, so it may not be reachable by composing two objects that each
+look reasonable.
+
+A family therefore opts in, and the default is refusal:
+
+```pycon
+>>> StudentTFamily.CONSUMES_LATENT_GP, PoissonFamily.CONSUMES_LATENT_GP
+(False, True)
+>>> Likelihood(StudentTFamily(), gp_noise)
+Traceback (most recent call last):
+    ...
+ampere.core.exceptions.LikelihoodError: the student_t family with a GaussianProcessNoise noise model is a latent-variable model (see Marginalisation.LATENT), but StudentTFamily does not implement the latent-conditional log_prob — its CONSUMES_LATENT_GP is False. ...
+
+```
+
+`LikelihoodFamily.CONSUMES_LATENT_GP` is `False` on the base class, so a
+third-party family inherits the refusal rather than the defect. This is the
+same discipline the unimplemented `RiceFamily` gets, applied to a combination
+rather than to a family.
+
+### Enforcing it against the engine
+
+§4.4: "gradient-free samplers cannot realistically handle hundreds of latent
+values, so non-Gaussian + flexible-GP robustness is effectively a
+modern-backend capability."
 
 ```pycon
 >>> latent_poisson.check_engine(differentiable=False, engine="emcee")
@@ -229,7 +262,9 @@ so is *any* engine on an analytic likelihood.
 W1.7 owns the capability record (`differentiable`, `batchable`, `device`); this
 method is what it calls with it. It takes plain keyword flags rather than
 defining a capability type here, so the two contracts do not have to agree on a
-class.
+class. Pass `observed=` as well when the data are to hand — see §9, where a
+censored sample the mask excludes must not count against a gradient-free
+engine.
 
 ## 5. Noise models
 
@@ -275,9 +310,12 @@ A `Likelihood` holds one flat parameter namespace — the family's and the noise
 model's together, with no nesting:
 
 ```pycon
->>> composed = Likelihood(StudentTFamily(nu=st.loguniform(2.0, 50.0)), gp_noise)
+>>> composed = Likelihood(
+...     StudentTFamily(nu=st.loguniform(2.0, 50.0)),
+...     IndependentNoise(scale=st.loguniform(0.5, 2.0), jitter=st.halfnorm(0.0, 1.0)),
+... )
 >>> composed.parameters.free_names
-('amplitude', 'length_scale', 'nu')
+('scale', 'jitter', 'nu')
 
 ```
 
@@ -500,15 +538,37 @@ True
 ```
 
 **Why excision and not the infinite-variance limit**, which
-`results_schema.md` §7 offers as the equivalent statement: the two are
-equivalent for a *diagonal* noise model, where a zero weight and an infinite
-variance both delete the same term, but they are not equivalent for a GP.
-Letting `σ_i → ∞` in `log N(r; 0, K + diag(σ²))` leaves the remaining samples'
-conditional structure correct while adding a `−½ log(2π σ_i²)` term that
-diverges to `−∞`. The limit does not converge to the excised value. Since §7
-defines a masked sample as carrying **exactly** zero information, only excision
-delivers that, and a contract that used `masked_uncertainty()` for the GP path
-would have to subtract an infinite constant to get back to where it started.
+`results_schema.md` §7 offers as the equivalent statement.
+
+The two are equivalent statements about a **chi-square term** — which is
+exactly what §7 claims, and how it phrases `masked_uncertainty()`: "for
+consumers whose algebra divides by σ² rather than multiplying by a weight".
+`(r_i/σ_i)² → 0` as `σ_i → ∞`, and a zero weight deletes the same quantity.
+
+They are **not** equivalent statements about a *normalised log-density*, and a
+likelihood is a normalised log-density. Each Gaussian term carries a
+`−log σ_i` alongside its chi-square, so
+
+```
+−½log(2π) − log σ_i − ½(r_i/σ_i)²  →  −∞   as σ_i → ∞,
+```
+
+which is not zero. Inflating an uncertainty does not remove a sample from a
+log-likelihood; it makes that sample's contribution diverge. The GP case is the
+same statement with a log-determinant instead of a `log σ`: letting `σ_i → ∞`
+in `log N(r; 0, K + diag(σ²))` leaves the remaining samples' conditional
+structure correct but adds `−½ log(2π σ_i²)`, so the limit approaches
+*(excised value) − ½log(2π σ_i²)* and diverges rather than converging to the
+excised value.
+
+So the choice is not "the two rules agree on the diagonal and disagree under a
+GP" — they disagree in both cases, by exactly the same divergent constant.
+`results_schema.md` §7 defines a masked sample as carrying **exactly** zero
+information; only excision delivers that, for any noise model. `weights()` is
+the convention because a 0/1 weight multiplying a whole *term* (chi-square and
+normalisation together) is excision written arithmetically, whereas
+`masked_uncertainty()` is a statement about the chi-square alone. Both remain
+correct for what §7 says they are; only one of them is a likelihood.
 
 Consequences worth stating:
 
@@ -639,6 +699,32 @@ limit kind. Declaring a limit on a masked sample is allowed and has no effect,
 which is deliberate — masking a region for a test run should not require
 editing the censoring array too.
 
+That rule has to hold for the *declaration* as well as for the arithmetic, or a
+problem that is analytic in fact would be refused a gradient-free engine.
+Because whether a limit survives the mask is a property of the data,
+`marginalisation` answers conservatively (it has seen no container) and
+`marginalisation_for(observed)` answers for real data. W1.7, which has the
+container, should use the second — and pass `observed=` to `check_engine` for
+the same reason.
+
+```pycon
+>>> partly_masked = PhotometricPoints(
+...     ["WISE_W1", "WISE_W3", "WISE_W4"],
+...     [3.4, 12.1, 22.2] * u.um,
+...     [1.0, 0.40, 0.90] * u.Jy,
+...     uncertainty=[0.05, 0.05, 0.30] * u.Jy,
+...     mask=np.array([False, False, True]),          # the only limit is masked
+... )
+>>> latent_by_declaration = Likelihood(
+...     GaussianFamily(), GaussianProcessNoise(Matern32(0.3, 2.0)), censoring=censoring
+... )
+>>> latent_by_declaration.marginalisation
+<Marginalisation.LATENT: 'latent'>
+>>> latent_by_declaration.marginalisation_for(partly_masked)
+<Marginalisation.ANALYTIC: 'analytic'>
+
+```
+
 **How the matrix algebra changes** — issue #11's own open question. It does not
 close. A censored *multivariate* Gaussian likelihood is an orthant probability
 of the multivariate normal, which has no closed form beyond a handful of
@@ -647,10 +733,28 @@ truncated latent values. So censoring composed with a correlated noise model is
 declared `LATENT`, and the analytic path refuses rather than approximating:
 
 ```pycon
->>> Likelihood(
-...     GaussianFamily(), GaussianProcessNoise(Matern32(0.3, 2.0)), censoring=censoring
-... ).marginalisation
+>>> GaussianFamily().marginalisation_with(
+...     GaussianProcessNoise(Matern32(0.3, 2.0)), censoring
+... )
 <Marginalisation.LATENT: 'latent'>
+
+```
+
+No family implements the truncated-latent form, so — by §4's rule that
+declaring `LATENT` is not the same as implementing it — the combination is
+refused as soon as data confirm a limit actually survives the mask:
+
+```pycon
+>>> observation = PhotometricPoints(
+...     ["WISE_W1", "WISE_W3", "WISE_W4"],
+...     [3.4, 12.1, 22.2] * u.um,
+...     [1.0, 0.40, 0.90] * u.Jy,
+...     uncertainty=[0.05, 0.05, 0.30] * u.Jy,
+... )
+>>> latent_by_declaration.check_alignment(observation.with_values([1.0, 0.4, 0.1]), observation)
+Traceback (most recent call last):
+    ...
+ampere.core.exceptions.LikelihoodError: the gaussian family with a censoring declaration on correlated noise is a latent-variable model ...
 
 ```
 
@@ -810,11 +914,24 @@ True
 
 ```
 
-`prior_art.md` lesson S4 attaches a mandatory caveat to that output, which
-W1.12's family C already carries and which this contract endorses: a large
-fitted amplitude with a short length-scale localises a deficiency but does not
-say *why* — model error, an underestimated noise budget, and a genuinely
-correlated astrophysical process are all consistent with the same posterior.
+A caveat is attached to that output, and it has two distinct sources that
+should not be run together.
+
+`prior_art.md` lesson S4 records Starfish's own finding: its global-kernel
+amplitude and its explicit local kernels trade off against each other on real
+data, so "a large fitted GP amplitude with a short length-scale can mean either
+'genuinely misspecified locally' or 'the kernel's smooth global component is
+under-amplitude and compensating locally'". That is a *global-versus-local*
+degeneracy, and ampere's single-kernel design does not have it in that form —
+there are no local components to trade against.
+
+The caveat that does apply here, and which W1.12's family C carries as a
+mandatory part of its output, is the more general one: a large fitted amplitude
+localises a deficiency but does not say *why*. Model error, an underestimated
+noise budget and a genuinely correlated astrophysical process are all
+consistent with the same posterior. That is this contract's own statement, not
+a quotation from S4, and it is why the localisation output is a pointer to
+where to look rather than a diagnosis.
 
 ## 12. Position on the irregular-coordinate whiteness test
 
@@ -928,8 +1045,12 @@ W1.7's `Dataset` discharges once. `log_prob` re-checks only shapes, mirroring
 | `Marginalisation` is a property of the *combination* | Poisson alone is analytic; Poisson + GP is not. Declaring it on either piece separately would be wrong for half the pairs |
 | `check_engine` refuses a gradient-free engine on a latent likelihood | §4.4's "effectively a modern-backend capability", enforced. A silent downgrade is a fit that runs and is wrong |
 | `check_engine` takes keyword flags, not a capability object | W1.7 owns the capability record (§4.5); the two contracts should not have to agree on a class before either is written |
-| Masks arrive as `weights()`; masked samples are **excised** | `results_schema.md` §16 asked for one convention. The infinite-variance limit diverges (`−½ log 2πσ²`) in a GP marginal likelihood rather than converging to the excised value, so only excision delivers §7's "exactly zero information" |
+| Masks arrive as `weights()`; masked samples are **excised** | `results_schema.md` §16 asked for one convention. Zero weight and infinite uncertainty are equivalent statements about a chi-square term, which is what §7 claims for them — but not about a normalised log-density, whose `−log σ` (and, under a GP, log-determinant) diverges too. Excision is the only rule delivering §7's "exactly zero information", for *any* noise model, and a 0/1 weight on a whole term is excision written arithmetically |
 | The effective mask is the union of predicted and observed | A sample needs both sides valid; this also composes with W1.5's obligation to propagate masks through transformations |
+| A family opts in to the latent path via `CONSUMES_LATENT_GP`, default `False` | Declaring `LATENT` and implementing it are different things, and a family that declares without implementing returns the *uncorrelated* likelihood — so every GP hyperparameter and every latent value an engine sampled leaves the log-probability untouched. That is the "runs, converges, and is wrong" failure the contract exists to prevent, so it must not be reachable by composing two objects that each look reasonable |
+| Family-and-noise latency is refused at construction; censoring-induced latency at `check_alignment` | Whether a family plus a noise model is latent is a fact about the pair. Whether *censoring* makes it latent depends on whether a limit survives the mask, which needs the data — so it is refused at the earliest point the question can honestly be asked |
+| `marginalisation` is conservative; `marginalisation_for(observed)` is data-aware | §9's "masking beats censoring" has to hold for the declaration too, or an analytic problem gets refused a gradient-free engine. A property that has seen no container cannot know, so both answers exist and W1.7 uses the second |
+| A bare 1-D array of coordinates means *n* 1-D points, never one *n*-D point | `np.atleast_2d` reads it the other way and then broadcasts silently through the kernel, turning a 101-point diagnostic grid into a one-point answer with no error. `_as_points` fixes the reading and raises on anything ambiguous |
 | A fully masked pair returns `0.0` | The correct limit of the same rule, not a special case |
 | The conditioned GP mean is evaluated on the *full* axis, masked points included | "What would the GP have said here?" is exactly the question a user asks about a region they excluded |
 | Non-finite values in retained samples raise | `results_schema.md` §7 and `prior_art.md` R1: no sentinel NaNs threaded through arithmetic |
@@ -979,6 +1100,14 @@ Each is a decision, not an oversight. Each has an extension point.
    any layout.
 5. **Rice and von Mises are declared, not implemented.** Both raise on
    composition. The open parameterisation questions are in §17.
+5a. **`PoissonFamily` is the only family that consumes the latent path.**
+   Student-t, Cauchy and the complex Gaussian all *declare* `LATENT` under a
+   GP and none of them implements it, so composing any of them with
+   `GaussianProcessNoise` is refused (§4). That is a real capability gap — a
+   heavy-tailed flexible likelihood is a reasonable thing to want — and it is
+   a refusal rather than a wrong answer only because `CONSUMES_LATENT_GP`
+   exists. Implementing one is a `log_prob` that reads `noise.latent` plus
+   flipping the flag.
 6. **The latent path has no inference.** `latent_declaration` and
    `latent_transform` are the declaration and the transform; sampling `f` is
    Phase 2's, on the torch/jax rungs. `DenseGP.latent_transform` exists so the
@@ -1110,7 +1239,11 @@ Each is a decision, not an oversight. Each has an extension point.
    applies, differently, to Student-t: a *multivariate* Student-t with scale
    matrix `K + D` is closed-form, but it is a single global scale mixture rather
    than the per-point outlier robustness the family is chosen for, so it is a
-   different model and not a shortcut to `ANALYTIC`.
+   different model and not a shortcut to `ANALYTIC`. Note the practical
+   consequence: because `CONSUMES_LATENT_GP` is `False` for both, neither can
+   currently be *composed* with a GP at all, so the conservative declaration is
+   a refusal rather than a silently different model — which is the right way
+   round, but does mean a Phase-4 decision unblocks real functionality.
 7. **Does `extra_coords` need units after all?** `results_schema.md` §15.4 and
    §17.5 flag this and name W1.6 as the possible requester. This contract does
    not need them — `limit_kind` is a code, not a quantity — so the answer from
