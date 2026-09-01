@@ -224,6 +224,8 @@ class PriorSpec:
         ``"loguniform"``, ``"poisson"``.
     args, kwds
         Positional and keyword arguments the distribution was frozen with.
+        :func:`describe_prior` always emits the canonical keyword-only form
+        (``args`` empty); ``args`` remains accepted for hand-written specs.
     discrete
         Whether the family is discrete (``rv_discrete``).
 
@@ -277,8 +279,30 @@ class PriorSpec:
         )
 
 
+def _argument_names(dist: object) -> list[str]:
+    """The ordered freezing-argument names of a scipy distribution family.
+
+    Shape parameters first (``dist.shapes``, e.g. ``"a, b"`` for
+    ``loguniform``), then ``loc``, then — for continuous families — ``scale``;
+    the order scipy itself assigns positional arguments when freezing.
+    """
+    shapes = getattr(dist, "shapes", None)
+    names = [] if not shapes else [part.strip() for part in shapes.split(",")]
+    names.append("loc")
+    if isinstance(dist, _stats.rv_continuous):
+        names.append("scale")
+    return names
+
+
 def describe_prior(prior: object) -> PriorSpec:
     """Describe a frozen ``scipy.stats`` distribution as a :class:`PriorSpec`.
+
+    The description is **canonical**: scipy accepts the same freezing either
+    positionally or by keyword, so positional arguments are mapped onto their
+    names here (via the family's shape names plus ``loc``/``scale``). Two
+    declarations of one distribution therefore describe — and compare, tie
+    and serialise — identically, and W1.9's lowering table has a single form
+    to translate.
 
     Raises
     ------
@@ -298,17 +322,22 @@ def describe_prior(prior: object) -> PriorSpec:
             f"scipy.stats.norm(0, 1); a custom prior object may still be evaluated on the "
             f"reference path, but it must not be serialised or lowered."
         )
-    args = tuple(
-        _numeric(a, f"argument of prior family {family!r}")
-        for a in tuple(getattr(prior, "args", ()))
-    )
+    names = _argument_names(dist)
+    args = tuple(getattr(prior, "args", ()))
+    if len(args) > len(names):
+        raise ParameterError(
+            f"prior family {family!r} was frozen with {len(args)} positional argument(s) "
+            f"but only takes {names}; cannot describe it neutrally."
+        )
     kwds = {
+        name: _numeric(value, f"argument {name!r} of prior family {family!r}")
+        for name, value in zip(names, args, strict=False)
+    }
+    kwds |= {
         str(k): _numeric(v, f"keyword {k!r} of prior family {family!r}")
         for k, v in dict(getattr(prior, "kwds", {})).items()
     }
-    return PriorSpec(
-        family=family, args=args, kwds=kwds, discrete=isinstance(dist, _stats.rv_discrete)
-    )
+    return PriorSpec(family=family, kwds=kwds, discrete=isinstance(dist, _stats.rv_discrete))
 
 
 def _distribution_factory(family: str) -> Any:
@@ -2148,6 +2177,14 @@ def _merge(sets: Mapping[str, ParameterSet], ties: Sequence[Tie]) -> ParameterMa
     )
 
 
+def _qualified_prior(parameter: Parameter, rename: Mapping[str, str]) -> AnyPrior:
+    """A site's prior with hierarchical references mapped to merged names."""
+    prior = parameter.prior
+    if isinstance(prior, HierarchicalPrior):
+        return prior.rename_references(rename)
+    return prior
+
+
 def _collapse(
     group: str,
     sites: Sequence[tuple[str, Parameter]],
@@ -2191,6 +2228,11 @@ def _collapse(
                 f"free or fixed, not both."
             )
         prior: AnyPrior = tie.prior
+        if isinstance(prior, HierarchicalPrior):
+            # A composer-supplied hierarchical prior is written against local
+            # names; qualify it with the first component's mapping
+            # (merged-global references pass through unchanged).
+            prior = prior.rename_references(rename[first_component])
         fixed = False
         value: Value = first.value
     elif fixed_sites:
@@ -2218,24 +2260,42 @@ def _collapse(
                 f"tie {group!r} has no prior: every site is declared shared without one. One "
                 f"site must carry the prior, or the Tie must supply it."
             )
-        reference = prior_sites[0][1]
+        # Hierarchical priors are compared *after* qualifying their references
+        # with each site's own component mapping: two sites are only the same
+        # prior if their hyperparameters resolve to the same merged parameters.
+        # Comparing the raw declarations instead would let a tie silently wire
+        # the collapsed parameter to the first component's hyperparameters.
+        reference_component, reference = prior_sites[0]
+        prior = _qualified_prior(reference, rename[reference_component])
         for component, parameter in prior_sites[1:]:
-            if not _priors_equal(parameter.prior, reference.prior):
-                raise TyingError(
-                    f"tie {group!r} has disagreeing priors: {prior_sites[0][0]}."
-                    f"{reference.name} declares {_prior_repr(reference.prior)} but "
-                    f"{component}.{parameter.name} declares {_prior_repr(parameter.prior)}. "
-                    f"Tied parameters are one parameter and must have one prior; pass an "
-                    f"explicit Tie(prior=...) if you meant to override."
+            candidate = _qualified_prior(parameter, rename[component])
+            if not _priors_equal(candidate, prior):
+                hint = (
+                    " If the hyperparameters are themselves the same quantity, tie them too:"
+                    " hierarchical references are compared after qualification."
+                    if isinstance(prior, HierarchicalPrior)
+                    and isinstance(candidate, HierarchicalPrior)
+                    else " Pass an explicit Tie(prior=...) if you meant to override."
                 )
-        prior = reference.prior
+                raise TyingError(
+                    f"tie {group!r} has disagreeing priors: {reference_component}."
+                    f"{reference.name} declares {_prior_repr(prior)} but "
+                    f"{component}.{parameter.name} declares {_prior_repr(candidate)}. "
+                    f"Tied parameters are one parameter and must have one prior.{hint}"
+                )
         fixed = False
         value = reference.value
 
-    if isinstance(prior, HierarchicalPrior):
-        prior = prior.rename_references(rename[first_component])
-
-    bijection = next((p.bijection for _c, p in sites if p.bijection is not None), None)
+    declared_bijections = [(c, p) for c, p in sites if p.bijection is not None]
+    bijection = declared_bijections[0][1].bijection if declared_bijections else None
+    for component, parameter in declared_bijections[1:]:
+        if parameter.bijection != bijection:
+            raise TyingError(
+                f"tied parameters declare different bijections: "
+                f"{declared_bijections[0][0]}.{declared_bijections[0][1].name} declares "
+                f"{bijection!r} but {component}.{parameter.name} declares "
+                f"{parameter.bijection!r}. Declare it on one site, or identically on all."
+            )
     description = next((p.description for _c, p in sites if p.description), "")
 
     return Parameter(

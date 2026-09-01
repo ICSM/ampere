@@ -364,6 +364,56 @@ class TestTying:
         with pytest.raises(TyingError, match="has no prior"):
             ParameterSet.merge({"a": deferred, "b": deferred})
 
+    def test_positional_and_keyword_prior_declarations_tie_cleanly(self) -> None:
+        # scipy accepts the same freezing either way; describe_prior
+        # canonicalises, so the two declarations are one prior.
+        positional = ParameterSet([Parameter("d", st.norm(1.5, 0.1), shared_as="d")])
+        keyword = ParameterSet([Parameter("d", st.norm(loc=1.5, scale=0.1), shared_as="d")])
+        assert describe_prior(st.norm(1.5, 0.1)) == describe_prior(st.norm(loc=1.5, scale=0.1))
+        mapping = ParameterSet.merge({"a": positional, "b": keyword})
+        assert mapping.merged.free_size == 1
+
+    def test_tied_hierarchical_priors_must_share_their_hyperparameters(self) -> None:
+        # Each component's theta references its *own* mu; collapsing the two
+        # thetas would have to pick one component's mu over the other's.
+        def component() -> ParameterSet:
+            return ParameterSet(
+                [
+                    Parameter("mu", st.norm(0.0, 5.0)),
+                    Parameter("theta", HierarchicalPrior("norm", {"loc": "mu"}), shared_as="theta"),
+                ]
+            )
+
+        with pytest.raises(TyingError, match=r"compared after qualification"):
+            ParameterSet.merge({"a": component(), "b": component()})
+
+    def test_tied_hierarchical_priors_with_shared_hyperparameters_collapse(self) -> None:
+        def component() -> ParameterSet:
+            return ParameterSet(
+                [
+                    Parameter("mu", st.norm(0.0, 5.0), shared_as="mu"),
+                    Parameter("theta", HierarchicalPrior("norm", {"loc": "mu"}), shared_as="theta"),
+                ]
+            )
+
+        mapping = ParameterSet.merge({"a": component(), "b": component()})
+        assert mapping.merged.names == ("mu", "theta")
+        assert mapping.merged["theta"].references == ("mu",)
+        assert mapping.merged.free_size == 2
+
+    def test_tied_sites_may_not_declare_conflicting_bijections(self) -> None:
+        left = ParameterSet([Parameter("s", st.uniform(0.0, 1.0), shared_as="s", bijection=Log())])
+        right = ParameterSet(
+            [Parameter("s", st.uniform(0.0, 1.0), shared_as="s", bijection=Logit(0.0, 1.0))]
+        )
+        with pytest.raises(TyingError, match="different bijections"):
+            ParameterSet.merge({"a": left, "b": right})
+        # One site declaring for the group is fine and wins over inference.
+        mapping = ParameterSet.merge(
+            {"a": left, "b": ParameterSet([Parameter("s", st.uniform(0.0, 1.0), shared_as="s")])}
+        )
+        assert mapping.merged["s"].bijection == Log()
+
 
 # ===========================================================================
 # Acceptance criterion: plate-aware hierarchical grouping

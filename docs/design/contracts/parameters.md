@@ -150,6 +150,18 @@ the numbers it was frozen with, and both survive introspection.
 
 ```
 
+The description is **canonical**: scipy accepts the same freezing positionally
+or by keyword, and `describe_prior` maps positional arguments onto their names
+(the family's shape names, then `loc`, then `scale`). Two declarations of one
+distribution therefore describe — and compare, tie and serialise —
+identically:
+
+```pycon
+>>> describe_prior(st.norm(1.0, 2.0)) == spec
+True
+
+```
+
 `PriorSpec` is the handle W1.9's mapping table works from. Translating scipy's
 `loc`/`scale` convention into torch's or numpyro's is W1.9's job; this
 contract's job is to guarantee the family name and its numeric arguments are
@@ -453,8 +465,8 @@ being shared:
 
 ### What tied sites must agree about
 
-Shape, unit, and prior. Disagreement is an error with a message naming both
-sites, never a silent choice:
+Shape, unit, prior, and any explicitly declared bijection. Disagreement is an
+error with a message naming both sites, never a silent choice:
 
 ```pycon
 >>> ParameterSet.merge({
@@ -473,6 +485,27 @@ units and rescaling a `scipy.stats` distribution's parameters correctly is
 family-specific (`loc` scales, `scale` scales, a shape parameter may not). A
 loud error with a one-line fix beats a clever conversion that is right for
 `norm` and wrong for `lognorm`.
+
+Hierarchical priors are compared **after their references are qualified**: two
+sites are only the same prior if their hyperparameters resolve to the same
+merged parameters. Anything else would force the collapsed parameter to adopt
+one component's hyperparameters and silently orphan the other's:
+
+```pycon
+>>> def hier_component():
+...     return ParameterSet([
+...         Parameter("mu", st.norm(0.0, 5.0)),
+...         Parameter("theta", HierarchicalPrior("norm", {"loc": "mu"}), shared_as="theta"),
+...     ])
+>>> ParameterSet.merge({"a": hier_component(), "b": hier_component()})
+Traceback (most recent call last):
+    ...
+ampere.core.exceptions.TyingError: tie 'theta' has disagreeing priors: a.theta declares norm(a.mu) but b.theta declares norm(b.mu). Tied parameters are one parameter and must have one prior. If the hyperparameters are themselves the same quantity, tie them too: hierarchical references are compared after qualification.
+
+```
+
+Adding `shared_as="mu"` to both `mu` declarations makes the two references
+resolve to one merged `"mu"`, and the tie then collapses cleanly.
 
 A site may also *defer* its prior entirely — useful when one model is the
 authority on a quantity and another merely consumes it. The consuming set is
@@ -699,7 +732,7 @@ who wants to fit it says so at composition time, and `__call__` is untouched:
 
 ```pycon
 >>> model.promote_buffer("beta", prior=st.norm(1.8, 0.2))
-Parameter('beta', prior=norm(1.8, 0.2))
+Parameter('beta', prior=norm(loc=1.8, scale=0.2))
 >>> model.parameters.names, model.buffers.names
 (('temperature', 'beta'), ('wavelength',))
 >>> model.parameters.free_size
@@ -746,6 +779,9 @@ W1.9's table, not this document's.
 | Decision | Reasoning |
 |---|---|
 | Priors declared as frozen `scipy.stats` distributions; `PriorSpec` is the neutral description | Family name plus numeric arguments is the minimum W1.9 needs and the maximum that translates across scipy/torch/numpyro. Anything richer would bake in one library's semantics |
+| `describe_prior` canonicalises to keyword form | scipy accepts the same freezing positionally or by keyword; one distribution must have one description, so equality, tying and W1.9's table see a single form |
+| Tied hierarchical priors must reference the same merged hyperparameters | Compared after qualification; the alternative silently wires the collapsed parameter to one component's hyperparameters and orphans the other's |
+| Tied sites' explicit bijections must agree | First-declared-wins was a silent choice; disagreement errors like every other tie disagreement |
 | Duck-typed priors evaluate but do not lower or serialise | Neither locks out custom priors nor lets an un-lowerable one travel silently to a backend |
 | Fixed is a state, not a delta prior | A delta prior is a degenerate free parameter: a wasted sampler dimension with a pathological density, and no clean lowering |
 | Flat vector = free parameters; value mapping = all parameters | Makes fixing, and buffer promotion, invisible to model code — `architecture.md` §6's test |
