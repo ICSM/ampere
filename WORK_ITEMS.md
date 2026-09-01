@@ -267,7 +267,13 @@ to this file.
 | W0.5 | merged 2026-09-01 |
 | W0.6 + W0.8 | merged 2026-09-01 |
 | W0.9 | not started |
-| W1.1 | dispatched 2026-09-01 |
-| W1.2 | draft done 2026-09-01 — branch `w1.2-architecture-spec` (orchestrator-authored, local only, not pushed), awaiting reconciliation with W1.1 and Peter's review |
-| W1.3 | dispatched 2026-09-01 (Opus — genuine contract-design work, per orchestration policy) |
+| W1.1 | done 2026-09-01 — branch `w1.1-prior-art-memo` (Sonnet), staged/rebased onto master, **not merged** — see `docs/development.md` session-handoff note |
+| W1.2 | draft done 2026-09-01 — branch `w1.2-architecture-spec` (Fable-authored, before the session's mid-task model downgrade; local only, not pushed), awaiting reconciliation with W1.1 and Peter's review |
+| W1.3 | dispatched 2026-09-01 to Opus, before the downgrade; see `docs/development.md` session-handoff note for status/review state |
 | W1.4–W1.13 | not started |
+
+**Session note (2026-09-01):** the dispatching session was downgraded from
+Fable 5 to Sonnet 5 mid-Phase-1 (usage credits; `/model` would not switch
+back). W1.1–W1.3 above were dispatched/drafted before or at the downgrade;
+none are merged. See `docs/development.md`'s "Session handoff in effect"
+section before doing any further Phase 1 work.

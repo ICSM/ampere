@@ -62,9 +62,61 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
   the "legacy still works" gate; run it before merging anything that
   touches shared files.
 
+## ⚠ Session handoff in effect (2026-09-01) — read this first
+
+The orchestrating session hit a Claude usage-credit limit partway through
+Phase 1 and was downgraded from Fable 5 to Sonnet 5; `/model` could not
+switch it back even after re-login. Per Peter's instruction, from the
+downgrade point onward that session stopped doing Fable-tier contract
+authorship and contract-soundness review — it only finished mechanical
+bookkeeping (staging/rebasing agent branches, updating this file and
+`WORK_ITEMS.md`) so a fresh Fable session can pick up cleanly. **A new
+Fable session should do the following before dispatching any further
+Phase 1 work:**
+
+1. Read `DEVELOPMENT_PLAN.md` and `WORK_ITEMS.md` (as always).
+2. Read `docs/design/architecture.md` (**W1.2**) — drafted by Fable earlier
+   in the downgraded session, *before* the downgrade, so its content is
+   legitimate contract-tier work, not a Sonnet artefact. It is on local
+   branch `w1.2-architecture-spec` (**not pushed to origin, not merged**).
+   Its own §10 lists exactly what to re-check against W1.1's findings
+   (bilby's capability-flag framing, gammapy's `Datasets` pattern, 3ML's
+   instrument-owned-likelihood question, Starfish's kernel/cost lessons).
+3. Read `docs/design/prior_art.md` (**W1.1**) — Sonnet-authored (on-policy;
+   W1.1 was always meant for a cheaper tier), staged and rebased onto
+   master on branch `w1.1-prior-art-memo` (**not merged**). It flags one
+   correction to a dispatch-prompt error: gammapy's `Datasets`/tying
+   material bears on `DEVELOPMENT_PLAN.md` **§4.5** (inference contracts,
+   → W1.7), not §4.7 (astropy interop) — no committed doc currently
+   contains that error, but keep it in mind when drafting W1.7.
+4. Reconcile W1.2 against W1.1 (architecture.md §10), do a real Fable-tier
+   review of both, merge what's sound, and only then continue.
+5. Check whether **W1.3** (parameter & prior contract, dispatched to Opus
+   before the downgrade) has completed. If its task notification already
+   arrived in the downgraded session, its branch (`w1.3-parameter-contract`)
+   was mechanically staged/rebased but **not content-reviewed** — treat it
+   the same as W1.1/W1.2: unreviewed, unmerged, needs a genuine Fable pass
+   before merge. If it hadn't completed by the time this note was written,
+   check `WORK_ITEMS.md`'s status table for the latest known state.
+
+None of W1.1/W1.2/W1.3's branches were pushed to origin, so `git branch -v`
+in the main checkout is the authoritative list of what exists locally.
+
+A `SendFeedback` draft was queued in the downgraded session about the
+`/model` switch-back failure (usage-credit downgrade not reversible via
+`/model` even after `/login`) — the user can review and send it with
+`/feedback` if they want to report it.
+
 ## Current state (2026-09-01)
 
-- Phase 0 in progress: W0.1 done (committed directly to master — the fix
-  existed only in the local working tree); W0.2, W0.3 dispatched.
+- **Phase 0: complete.** W0.1–W0.8 merged to master; CI green on the first
+  live run. Issues #74–77 closed. Branch archival executed (15 branches
+  tagged `archive/*`; `jax` re-pushed filtered to drop ~50 MB of
+  checkpoints; `small_silicates` kept live per Peter). W0.9 (pyphot ≥2 /
+  current-sbi forward migration) not started — the temporary
+  `pyphot<2`/`sbi<0.28` pins are in place and documented in
+  `DEVELOPMENT_PLAN.md` §2.
+- **Phase 1: in progress**, see the handoff section above for exact
+  branch/review state of W1.1–W1.3. W1.4 onward not started.
 - The AMPERE paper revision proceeds on the legacy code and takes priority
   in any conflict over `examples/examples_paper/`.
