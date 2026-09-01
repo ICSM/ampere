@@ -945,8 +945,12 @@ class NoiseParams:
         """``sigma**2``, or a loud failure if this noise model has no sigma."""
         if self.sigma is None:
             raise LikelihoodError(
-                "this noise model supplies no per-sample sigma, so its variance is undefined. "
-                "A count-based family (Poisson) defines its own dispersion and must not ask."
+                "the noise model supplied no per-sample sigma, because the observed container "
+                "carries no uncertainties, so the diagonal of K + diag(sigma^2) is undefined. "
+                "Attach uncertainties to the observed container, or give the noise model a "
+                "'jitter' parameter. (A count-based family such as Poisson defines its own "
+                "dispersion and never reaches this path.) "
+                "Likelihood.check_alignment() catches this at composition time."
             )
         return self.sigma**2
 
@@ -1422,7 +1426,12 @@ class LikelihoodFamily(Parameterised, abc.ABC):
 
 def _independent_sigma(noise: NoiseParams, family: str) -> np.ndarray:
     if noise.sigma is None:
-        raise LikelihoodError(f"the {family} family needs per-sample uncertainties.")
+        raise LikelihoodError(
+            f"the {family} family needs per-sample uncertainties, but the noise model supplied "
+            f"none — the observed container has no 'uncertainty'. Attach them at construction "
+            f"(uncertainty=...), or give the noise model a 'jitter' parameter to stand in for "
+            f"them. Likelihood.check_alignment() catches this at composition time."
+        )
     return noise.sigma
 
 
@@ -1948,7 +1957,11 @@ class Likelihood(Parameterised):
             )
 
     def _check_kinds(self, predicted: FunctionSamples, observed: FunctionSamples) -> None:
-        if not (isinstance(predicted, type(observed)) or isinstance(observed, type(predicted))):
+        related = isinstance(predicted, type(observed)) or isinstance(observed, type(predicted))
+        # A subclass may legitimately be compared with its base, but only if it
+        # kept the same axis signature; otherwise the axis loop below would be
+        # comparing different things under the same name.
+        if not related or len(predicted.axes) != len(observed.axes):
             raise LikelihoodError(
                 f"the predicted container is a {type(predicted).__name__} but the observed one "
                 f"is a {type(observed).__name__}. A likelihood compares like with like; channel "

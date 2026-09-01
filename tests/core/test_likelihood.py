@@ -239,6 +239,53 @@ class TestDenseGPAgainstAnalyticCases:
             expected, abs=1e-12
         )
 
+    def test_the_infinite_variance_limit_really_does_diverge(
+        self, predicted: Spectrum, observed: Spectrum, coordinates: np.ndarray
+    ) -> None:
+        """The argument the mask convention rests on, kept honest.
+
+        ``likelihoods.md`` §8 rejects ``masked_uncertainty()`` on the grounds
+        that ``sigma_i -> inf`` in a GP marginal likelihood does not converge to
+        the excised value but to ``excised - 0.5*log(2*pi*sigma_i**2)``, which
+        diverges. If that ever stopped being true the convention would need
+        revisiting, so it is asserted rather than merely asserted *about*.
+        """
+        residual = observed.values - predicted.values
+        covariance = matern32_matrix(coordinates, 0.4, 2.0)
+        sigma = np.asarray(observed.uncertainty)
+        keep = np.ones(coordinates.size, dtype=bool)
+        keep[5] = False
+
+        excised = multivariate_normal.logpdf(
+            residual[keep],
+            mean=np.zeros(int(keep.sum())),
+            cov=covariance[np.ix_(keep, keep)] + np.diag(sigma[keep] ** 2),
+        )
+        gp = Likelihood(GaussianFamily(), GaussianProcessNoise(Matern32(0.4, 2.0)))
+        masked = Spectrum(
+            coordinates * u.um,
+            observed.values * u.Jy,
+            uncertainty=sigma * u.Jy,
+            mask=~keep,
+        )
+        assert gp.log_prob(masked.with_values(predicted.values), masked) == pytest.approx(
+            float(excised), abs=1e-9
+        )
+
+        # ... whereas inflating the uncertainty converges to a *different*,
+        # divergent quantity, one that gets worse the larger sigma is made.
+        for inflated in (1e1, 1e2, 1e3):
+            widened = sigma.copy()
+            widened[5] = inflated
+            value = multivariate_normal.logpdf(
+                residual,
+                mean=np.zeros(coordinates.size),
+                cov=covariance + np.diag(widened**2),
+            )
+            offset = 0.5 * math.log(2.0 * math.pi * inflated**2)
+            assert float(value) == pytest.approx(float(excised) - offset, abs=1e-3)
+            assert float(value) < float(excised) - 2.0
+
     def test_a_fully_masked_pair_contributes_nothing(
         self, predicted: Spectrum, observed: Spectrum, coordinates: np.ndarray
     ) -> None:
