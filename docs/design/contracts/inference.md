@@ -1,7 +1,7 @@
 # Ampere v2 — Dataset, FittingProblem & Inference Contract (W1.7)
 
-Status: **DRAFT for Peter's review**, and it carries three ruling requests
-(§19, R1–R3) that later work is blocked on. Implements
+Status: **DRAFT for Peter's review**, and it carries four ruling requests
+(§19, R1–R4) that later work is blocked on. Implements
 `DEVELOPMENT_PLAN.md` §4.5, discharges the obligations `parameters.md` §13/§14,
 `transformations.md` §14, `likelihoods.md` §16 and `results_schema.md` §17 place
 on this item, and adopts `lowering.md` §9.2's seed-derivation policy. Code:
