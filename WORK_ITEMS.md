@@ -267,4 +267,6 @@ to this file.
 | W0.5 | merged 2026-09-01 |
 | W0.6 + W0.8 | merged 2026-09-01 |
 | W0.9 | not started |
+| W1.1 | dispatched 2026-09-01 |
+| W1.2 | in progress 2026-09-01 (orchestrator-drafted, per orchestration policy) |
 | W1.1–W1.13 | not started |
