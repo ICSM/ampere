@@ -413,6 +413,22 @@ class TestOrdering:
         tidy = Spectrum.from_unsorted([3.0, 1.0, 2.0] * u.um, [30.0, 10.0, 20.0])
         assert tidy.flux.tolist() == [10.0, 20.0, 30.0]
 
+    def test_from_unsorted_permutes_extra_coords_too(self) -> None:
+        """Per-sample labels must follow their samples through the sort."""
+        tidy = Spectrum.from_unsorted(
+            [3.0, 1.0, 2.0] * u.um,
+            [30.0, 10.0, 20.0],
+            extra_coords={"epoch": np.array(["c", "a", "b"])},
+        )
+        assert tidy.spectral_axis.values.tolist() == [1.0, 2.0, 3.0]
+        assert tidy.extra_coords["epoch"].tolist() == ["a", "b", "c"]
+        stamped = TimeSeries.from_unsorted(
+            [5.0, 1.0] * u.day,
+            [0.5, 0.1],
+            extra_coords={"visit": np.array([2, 1])},
+        )
+        assert stamped.extra_coords["visit"].tolist() == [1, 2]
+
     def test_from_unsorted_converts_a_declared_unit(self) -> None:
         tidy = Spectrum.from_unsorted([3.0, 1.0] * u.um, [2000.0, 1000.0] * u.mJy, unit=u.Jy)
         assert tidy.flux.tolist() == [1.0, 2.0]
@@ -535,6 +551,11 @@ class TestUnits:
     def test_to_unit_without_a_unit_is_refused(self) -> None:
         with pytest.raises(SchemaError, match="has no value unit"):
             Spectrum([1.0, 2.0] * u.um, [1.0, 1.0]).to_unit(u.Jy)
+
+    def test_to_unit_inconvertible_raises_schema_error(self) -> None:
+        """The contract's own error type, not a raw astropy exception."""
+        with pytest.raises(SchemaError, match="not convertible"):
+            Spectrum([1.0, 2.0] * u.um, [1.0, 1.0] * u.Jy).to_unit(u.K)
 
     def test_wrong_physical_type_on_an_axis_is_refused(self) -> None:
         with pytest.raises(SchemaError, match="which this axis does not accept"):

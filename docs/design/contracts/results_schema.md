@@ -305,8 +305,10 @@ ampere.core.exceptions.SchemaError: Spectrum requires its 'spectral_axis' coordi
 ```
 
 `from_unsorted` is the explicit opt-in for data that genuinely arrive in
-arbitrary order. It sorts, carrying uncertainties and mask along with the
-permutation; duplicates still raise.
+arbitrary order. It sorts, carrying uncertainties, mask and extra coordinates
+along with the permutation — a per-sample label left in declaration order
+while its sample moved would be a silent misalignment; duplicates still
+raise.
 
 ```pycon
 >>> tidy = Spectrum.from_unsorted(

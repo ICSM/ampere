@@ -879,7 +879,13 @@ class FunctionSamples:
                 f"{target}. Declare the unit at construction (unit=...) or pass the values as "
                 f"a Quantity."
             )
-        factor = float(self.unit.to(target))
+        try:
+            factor = float(self.unit.to(target))
+        except u.UnitConversionError as exc:
+            raise SchemaError(
+                f"{type(self).__name__} values are in {self.unit}, which is not convertible to "
+                f"{target}. ({exc})"
+            ) from exc
         converted = self.with_values(self.values * factor)
         object.__setattr__(converted, "unit", target)
         if self.uncertainty is not None:
@@ -964,21 +970,34 @@ def _permute(value: ArrayLike, order: np.ndarray) -> Any:
 
 
 def _sorted_copy(
-    coordinate: ArrayLike, arrays: Mapping[str, ArrayLike | None]
-) -> tuple[Any, dict[str, Any]]:
-    """Sort ``coordinate`` ascending and apply the same permutation to ``arrays``.
+    coordinate: ArrayLike,
+    arrays: Mapping[str, ArrayLike | None],
+    extra_coords: Mapping[str, ArrayLike] | None = None,
+) -> tuple[Any, dict[str, Any], dict[str, Any] | None]:
+    """Sort ``coordinate`` ascending and apply the same permutation everywhere.
 
     Sequences are accepted as well as arrays, so ``from_unsorted`` behaves like
     every other constructor here rather than failing with a bare ``TypeError``
     from numpy's fancy indexing.
+
+    ``extra_coords`` are permuted too: they are per-sample labels, and leaving
+    them in declaration order while the samples move would silently misalign
+    them with the data they annotate — the exact bug class this module exists
+    to end.
     """
     if not isinstance(coordinate, u.Quantity):
         coordinate = np.asarray(coordinate)
     raw = coordinate.value if isinstance(coordinate, u.Quantity) else coordinate
     order = np.argsort(np.asarray(raw), kind="stable")
-    return coordinate[order], {
+    permuted = {
         name: (None if value is None else _permute(value, order)) for name, value in arrays.items()
     }
+    extras = (
+        None
+        if extra_coords is None
+        else {name: _permute(value, order) for name, value in extra_coords.items()}
+    )
+    return coordinate[order], permuted, extras
 
 
 # ---------------------------------------------------------------------------
@@ -1041,21 +1060,26 @@ class Spectrum(FunctionSamples):
         *,
         uncertainty: ArrayLike | None = None,
         mask: ArrayLike | None = None,
+        extra_coords: Mapping[str, ArrayLike] | None = None,
         **kwargs: Any,
     ) -> Spectrum:
         """Sort the spectral axis ascending, then construct.
 
         The explicit opt-in for data that arrive in arbitrary order. Duplicated
         coordinates still raise — sorting cannot make them well posed.
+        Uncertainties, mask and extra coordinates all follow the permutation.
         """
-        axis, reordered = _sorted_copy(
-            spectral_axis, {"flux": flux, "uncertainty": uncertainty, "mask": mask}
+        axis, reordered, extras = _sorted_copy(
+            spectral_axis,
+            {"flux": flux, "uncertainty": uncertainty, "mask": mask},
+            extra_coords,
         )
         return cls(
             axis,
             reordered["flux"],
             uncertainty=reordered["uncertainty"],
             mask=reordered["mask"],
+            extra_coords=extras,
             **kwargs,
         )
 
@@ -1190,17 +1214,24 @@ class TimeSeries(FunctionSamples):
         *,
         uncertainty: ArrayLike | None = None,
         mask: ArrayLike | None = None,
+        extra_coords: Mapping[str, ArrayLike] | None = None,
         **kwargs: Any,
     ) -> TimeSeries:
-        """Sort by time ascending, then construct."""
-        axis, reordered = _sorted_copy(
-            time, {"values": values, "uncertainty": uncertainty, "mask": mask}
+        """Sort by time ascending, then construct.
+
+        Uncertainties, mask and extra coordinates all follow the permutation.
+        """
+        axis, reordered, extras = _sorted_copy(
+            time,
+            {"values": values, "uncertainty": uncertainty, "mask": mask},
+            extra_coords,
         )
         return cls(
             axis,
             reordered["values"],
             uncertainty=reordered["uncertainty"],
             mask=reordered["mask"],
+            extra_coords=extras,
             **kwargs,
         )
 
