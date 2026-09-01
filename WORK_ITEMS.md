@@ -225,7 +225,7 @@ to this file.
 | Item | Status |
 |---|---|
 | W0.1 | done 2026-09-01 (committed directly to master — the pending fix existed only in the local working tree, so the branch-per-item rule was waived for it) |
-| W0.2 | done 2026-09-01 — branch `w0.2-repo-hygiene`, awaiting review/merge |
-| W0.3 | done 2026-09-01 — branch `w0.3-packaging-floor`, awaiting review/merge |
+| W0.2 | merged 2026-09-01 |
+| W0.3 | merged 2026-09-01 |
 | W0.4–W0.8 | not started |
 | W1.1–W1.13 | not started |
