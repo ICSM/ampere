@@ -127,15 +127,19 @@ per `docs/orchestration.md` principle 3, rather than per-item passes now.
 **Peter's review list** (none block further Phase 1 work; the first two
 gate their branches' merges):
 
-- **W1.9** (`w1.9-lowering-spec`, Opus, Fable-reviewed, **not merged**):
-  needs two decision-log rulings before merge — (a) jax non-trainable
-  mechanism: the spec ranks `eqx.partition` above `paramax.NonTrainable`
-  (whose freezing depends on `unwrap()` being called — forgetting it
-  silently trains the buffers), narrowing plan §4.1's unranked wording;
-  (b) x64 activation: guard-and-raise at construction instead of
-  set-on-import, amending `architecture.md` §5's sketch (the policy —
-  x64 always — is unchanged). The Fable review endorses both. The spec's
-  §12 lists five further ratification items (most route to W1.13).
+- **W1.9**: *both rulings approved by Peter and merged 2026-09-01* —
+  `eqx.partition` over `paramax.NonTrainable`, and x64 guard-and-raise —
+  recorded in the plan's §2 decision table, §4.1 and `architecture.md` §5
+  amended to match. Three follow-ups from Peter's review, all recorded:
+  dependent priors (y ~ norm(x, 1)) are already first-class via
+  `HierarchicalPrior` (verified live against the merged contract —
+  `parameters.md` §9); `numpyro.enable_x64()` was source-verified as a
+  thin wrapper over the same jax flag, so the construction guard covers
+  numpyro with no separate switch (lowering.md §12.5); and
+  backend-specific lowerings for user-defined priors/bijections are now
+  lowering.md §12 item 8 (registration-hook sketch, W1.13 decides the
+  principle, Phase 2 builds the plumbing). Remaining §12 items route to
+  W1.13.
 - **W1.12**: *approved by Peter and merged 2026-09-01* — the §10 defaults
   (peer `diagnostics` namespace, `AnomalyScore` in core, RHMF expert
   opt-in) stand as written. His review added one thing, recorded as the
