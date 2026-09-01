@@ -223,13 +223,17 @@ fix-it cases. This is a real test of whether the parameter contract
 (W1.3) is well designed: if promoting a buffer to a parameter requires
 touching the model's `__call__`, the contract has failed.
 
-Declaration mechanism (**flagged as a W1.3 decision, not settled here**):
-either (a) buffers are declared explicitly alongside parameters (safer,
-friendlier to static typing/pyrefly, more boilerplate), or (b) any array
-attribute not registered as a parameter is implicitly a buffer (less
-boilerplate, fragile — a typo'd parameter registration silently becomes
-an untracked buffer). This document's recommendation is (a); W1.3 makes
-the binding call and documents the reasoning.
+**Decided**: buffers are declared **explicitly**, alongside parameters,
+not inferred from "any array attribute that isn't a parameter". The
+alternative (implicit: unregistered arrays default to buffer status) saves
+boilerplate but fails silently — a typo'd or forgotten parameter
+registration quietly becomes an untracked buffer, which is exactly the
+kind of silent-drift bug class §4.2's ModelResult schema exists to end
+elsewhere in the contracts; the parameter/buffer boundary deserves the
+same discipline. Explicit declaration is also the friendlier shape for
+pyrefly, since a buffer's presence is then a checkable structural fact
+about the class rather than something only known at runtime. W1.3
+implements this as the binding API.
 
 Per-backend lowering mechanics (torch `register_buffer`; jax via
 partition filters, never `equinox` static fields — see the trap in plan
@@ -276,7 +280,6 @@ structure are exactly the two things that negotiation reconciles.
 
 ## 9. Open items carried from this document
 
-- **Buffer declaration style** (§6): explicit vs implicit — W1.3 to decide.
 - **jax x64 activation call site** in a multi-library host process — W1.9
   gate check.
 - **GP solver library per backend** — already an open deferred choice in
