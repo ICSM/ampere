@@ -1,0 +1,591 @@
+diff --git a/ampere/infer/sbi.py b/ampere/infer/sbi.py
+index 79e3fb6..da53546 100644
+--- a/ampere/infer/sbi.py
++++ b/ampere/infer/sbi.py
+@@ -4,6 +4,8 @@ A file for simulation-based inference approaches, starting with the sbi package
+ """
+ 
+ from __future__ import print_function
++from typing import Optional, Any, Tuple, List
++
+ 
+ import numpy as np
+ import torch
+@@ -11,6 +13,7 @@ import pickle
+ import logging
+ import copy
+ from tqdm import tqdm
++import matplotlib.pyplot as plt
+ from datetime import datetime
+ from .basesearch import BaseSearch
+ from .mixins import SBIPostProcessor
+@@ -22,6 +25,12 @@ from sbi import analysis as analysis
+ 
+ from sbi.utils import process_prior  # CustomPriorWrapper
+ 
++try:
++    import swyft
++    is_swift_installed = True
++except (ModuleNotFoundError, ImportError):
++    is_swift_installed = False
++
+ 
+ class CustomPriorWrapper:
+     pass
+@@ -592,6 +601,291 @@ class SBI_SNPE(LFIBase, SBIPostProcessor):
+             except TypeError:
+                 return self.lnprior_vector(theta.detach().numpy()) - self.logprior_norm
+ 
+-        
+ 
+-        
++
++### TMNRE with Swyft Stars here:
++
++class SwyftNetwork(swyft.SwyftModule):
++    def __init__(self, npars, num_features, parLabels, marginals=None):
++        super().__init__()
++        #self.embedding = torch.nn.Linear(self.num_features, self.npars)
++        # If marginals is not defined, use all combinations of parameters
++        # create a tuple of tuples that contains the indices of all the marginals
++        # This needs all the combinations in the lower triangle of the matrix
++        if marginals is None:
++            marginals = tuple((i, j) for i in range(npars) for j in range(i+1, npars))
++        self.logratios1 = swyft.LogRatioEstimator_1dim(num_features = num_features,
++                                                        num_params = npars,
++                                                        varnames = parLabels)
++        self.logratios2 = swyft.LogRatioEstimator_Ndim(num_features = num_features,
++                                                        marginals = marginals,
++                                                        varnames = self.parLabels)
++
++    def forward(self, A, B):
++        logratios1 = self.logratios1(A['data'], B['pars'])
++        logratios2 = self.logratios2(A['data'], B['pars'])
++        return logratios1, logratios2
++
++
++class SwyftNetworkLinearEmbedding(swyft.SwyftModule):
++    def __init__(self, npars, num_features, parLabels, marginals=None):
++        super().__init__()
++        # If marginals is not defined, use all combinations of parameters
++        if marginals is None:
++            marginals = tuple((i, j) for i in range(npars) for j in range(i+1, npars))
++        self.embedding = torch.nn.Linear(num_features, npars)
++        self.logratios1 = swyft.LogRatioEstimator_1dim(num_features =npars,
++                                                        num_params = npars,
++                                                        varnames = parLabels)
++        self.logratios2 = swyft.LogRatioEstimator_Ndim(num_features = npars,
++                                                        marginals = marginals,
++                                                        varnames = parLabels)
++
++    def forward(self, A, B):
++        embedding = self.embedding(A['data'])
++        logratios1 = self.logratios1(embedding, B['pars'])
++        logratios2 = self.logratios2(embedding, B['pars'])
++        return logratios1, logratios2
++
++class Swyft_TMNRE(LFIBase):
++    """A class to perform likelihood-free inference using the Swyft package.
++
++    Swyft is a package that provides a framework for likelihood-free inference using
++    Truncated Marginal Neural Ratio Estimation (TMNRE). TMNRE is a method for
++    likelihood-free inference that targets the marginal likelihood ratio rather than
++    the joint likelihood ratio. As a result, it typically requires fewer simulations
++    than other methods, and is able to scale to high-dimensional problems. However, it
++    is not amortised, and so it is most effective for working with small samples, high-
++    dimensional parameter spaces, and particularly expensive models.
++
++    Parameters
++    ----------
++    model : Callable
++        The model to be fit to the data.
++    data : list of Data objects
++        The data to be fit to the model.
++    verbose : bool, optional
++        Flag to print output messages. Default is False.
++    parameter_labels : list of str, optional
++        Labels to give to each parameter. Default is None.
++    """
++
++    _inference_method = "Truncated Marginal Neural Ratio Estimation"
++
++    def __init__(self, model=None, data=None, verbose=False,
++                 parameter_labels=None,
++                 name='', namestyle="full", accelerator=None,
++                 **kwargs):
++        if not is_swift_installed:
++            raise ImportError("""The Swyft package is not installed.
++                              To enable TMNRE, please install it using
++                              `>>> pip install swyft`""")
++        super().__init__(model=model, data= data, verbose=verbose,
++                         parameter_labels=parameter_labels,
++                         name=name, namestyle=namestyle, **kwargs)
++
++        # Set the device to use for training
++        # This rather long conditional assignment is to ensure that the device is set
++        # while allowing the user to override it if they want to
++        self.DEVICE = (
++            'gpu'
++            if torch.cuda.is_available() and accelerator == 'cuda'
++            else accelerator
++            if accelerator is not None
++            else 'cpu'
++        )
++
++        # TODO: Add a check for the device to ensure that it is valid
++        # TODO: Enable using multiple GPUs if available
++
++    def optimise(self,
++                 nsamples: Optional[int] = 10000,
++                 nsamples_post: Optional[int] = 10000,
++                 n_rounds: int = 1,
++                 embedding_net: bool = True,
++                 marginals: Optional[Tuple[int, Tuple[int], Any]] = None,
++                 num_workers: Optional[int] = 0,
++                 **kwargs: Any) -> None:
++
++        #first we draw a batch of samples from the prior
++        self.logger.info("Generating samples from the prior")
++        thetas = self.sample(nsamples)
++        #Now we simulate models for all of these samples
++        self.logger.info("Simulating all prior samples")
++        sims = self.simulate_vector(thetas)
++        # Now translate them to swyft format
++        sims_swyft = swyft.Samples(pars = thetas, data = sims)
++
++        # Now we define the SwyftModule that will be used to train the TMNRE
++        self.logger.info("Defining SwyftModule")
++        self.num_features = (np.sum([data.value.shape[0] for data in self.dataSet]) ,)[0]
++
++
++        trainer = swyft.SwyftTrainer(accelerator = self.DEVICE, precision = 64)
++        dm = swyft.SwyftDataModule(sims_swyft, num_workers=num_workers)
++        if embedding_net is True: # Being specific so that there can be more cases in
++                                  # the future
++            self.logger.info("Using default embedding net")
++            network = SwyftNetworkLinearEmbedding(self.npars,
++                                                  self.num_features,
++                                                  self.parLabels,
++                                                  marginals)
++        else:
++            network = SwyftNetwork(self.npars,
++                                   self.num_features,
++                                   self.parLabels,
++                                   marginals)
++        self.logger.info("Training TMNRE")
++        trainer.fit(network, dm)
++
++        # Now we can use the trained network to sample from the posterior
++        # First we need to generate samples from the prior
++        self.logger.info("Generating samples from the prior for inference")
++        prior_samples = self.sample(nsamples_post)
++        prior_samples = swyft.Samples(pars = prior_samples)
++        obs = []
++        for d in self.dataSet:
++            obs.extend(d.value[d.mask])
++        obs_swyft = swyft.Samples(data = torch.Tensor(obs))
++        print(f'obs_swyft: {obs_swyft}')
++        print(f'obs_swyft["data"].shape: {obs_swyft["data"].shape}')
++        self.logger.info("Drawing samples from trained TMNRE")
++        self.predictions = trainer.infer(network, obs_swyft, prior_samples)
++        self.logger.info("TMNRE inference complete")
++
++    def sample(self, nsamples: int) -> np.ndarray:
++        """ 
++        Produce samples from the prior
++
++        The sbi package requires priors that have sample() and logprob() methods
++        to generate samples and evaluate the prior. Seeing as we have effectively 
++        already designed such functions for other purposes, we simply define a wrapper
++        to them here
++
++        Parameters
++        ----------
++        nsamples : int
++            number of prior samples to generate
++        """
++
++        if isinstance(nsamples, torch.Size):
++            nsamples = 1
++        elif isinstance(nsamples, tuple):
++            #if len
++            #print(nsamples)
++            #print(len(nsamples))
++            nsamples = nsamples[0]
++
++        #First, we generate nsamples samples of self.npars uniform random variates
++        u = np.single(np.random.default_rng().uniform(size=(nsamples, self.npars)))
++        samples = np.zeros((nsamples, self.npars))
++
++        #Now we call the prior transform. For safety, we will manually iterate over the batch dimension
++        for i in range(nsamples):
++            samples[i] = self.prior_transform(u[i,:])
++        return samples
++
++    def postProcess(self, **kwargs):
++        pass
++
++    def print_summary(self, **kwargs):
++        """ Print a summary of the results"""
++        self.summary(**kwargs)
++        if self.bestPars is not None:
++            self.logger.info("MAP solution:")
++            #print("MAP Solution: ")
++            for i in range(self.npars):
++                self.logger.info("%s  = %.5f", self.parLabels[i],self.bestPars[i]) #
++
++
++        if self.res is not None:
++            self.logger.info("Median and confidence intervals for parameters in order:")
++            for i in range(self.npars):
++                self.logger.info("%s  = %.5f \u00B1 %.5f", self.parLabels[i],self.res[i][0],self.res[i][1])
++
++
++    def summary(self, **kwargs):
++        self.get_credible_interval(**kwargs)
++        self.bestPars = self.get_map(**kwargs)
++
++    def _mean_and_cov(self, samples, weights):
++        """Calculate the mean and covariance of the samples
++
++        Parameters
++        ----------
++        samples : np.ndarray
++            The samples to calculate the mean and covariance of
++        weights : np.ndarray
++            The weights to use for the calculation
++
++        Returns
++        -------
++        mean : np.ndarray
++            The mean of the samples
++        cov : np.ndarray
++            The covariance of the samples
++        """
++        mean = np.average(samples, axis=0, weights=weights)
++
++        # Compute the weighted covariance.
++        dx = samples - mean
++        wsum = np.sum(weights)
++        w2sum = np.sum(weights**2)
++        cov = wsum / (wsum**2 - w2sum) * np.einsum('i,ij,ik', weights, dx, dx)
++        return mean, cov
++
++    def get_credible_interval(self, **kwargs):
++        samples, weights = swyft.utils.get_weighted_samples(self.predictions)
++        self.mean, self.cov = self._mean_and_cov(samples, weights)
++        self.res = np.array([[self.mean[i], np.diag(self.cov)[i]] 
++                             for i in range(self.npars)])
++
++
++    def get_map(self, **kwargs):
++        samples, weights = swyft.utils.get_weighted_samples(self.predictions)
++
++        #the map is the sample with the highest weight
++        map_index = np.argmax(weights)
++        self.map = samples[map_index]
++        return self.map
++
++    def plot_corner(self, **kwargs):
++        # We will make plots of the 2-d marginals using the swyft package
++        # First we will plot all the parameters
++        swyft.plot_corner(self.predictions, self.parLabels, **kwargs)
++        fig = plt.gcf()
++        fig.savefig(f"{self.name}_corner_all.png")
++
++        # Then we will make separate plots of the physical parameters
++        swyft.plot_corner(self.predictions, self.parLabels[:self.nparsMod], **kwargs)
++        fig = plt.gcf()
++        fig.savefig(f"{self.name}_corner_model.png")
++
++        # And finally we will make separate plots of the noise parameters
++        swyft.plot_corner(self.predictions, self.parLabels[self.nparsMod:], **kwargs)
++        fig = plt.gcf()
++        fig.savefig(f"{self.name}_corner_data.png")
++
++    def plot_marginals(self, **kwargs):
++        # We will make plots of the marginals using the swyft package
++        # First we will plot all the parameters
++        fig = swyft.plot_posterior(self.predictions, **kwargs)
++        fig.savefig(f"{self.name}_marginals_all.png")
++        plt.close(fig)
++
++        # Then we will make separate plots of the physical parameters
++        fig = swyft.plot_posterior(self.predictions,
++                                   parnames=self.parLabels[:self.nparsMod],
++                                   **kwargs)
++        fig.savefig(f"{self.name}_marginals_model.png")
++        plt.close(fig)
++
++        # And finally we will make separate plots of the noise parameters
++        fig = swyft.plot_posterior(self.predictions,
++                                   parnames=self.parLabels[self.nparsMod:],
++                                   **kwargs)
++        fig.savefig(f"{self.name}_marginals_data.png")
++        plt.close(fig)
++
++    def plot_posteriorpredictive(self, **kwargs):
++        pass
+diff --git a/examples/minimal_working_example_tmnre.py b/examples/minimal_working_example_tmnre.py
+new file mode 100644
+index 0000000..e87700e
+--- /dev/null
++++ b/examples/minimal_working_example_tmnre.py
+@@ -0,0 +1,257 @@
++# %% [markdown]
++# # Truncated Marginal Neural Ratio Estimation with _Swyft_
++# This notebook demonstrates how to use _Swyft_ to perform Truncated Marginal Neural
++# Ratio Estimation (TMNRE) in Ampere. We will use the same simple example to demonstrate
++# the basic steps. The example is a simple linear model of flux as a function of
++# wavelength.
++
++# %% [markdown]
++# ## Imports
++#
++# Before we do anything else, we need to import a few key packages.
++
++# %%
++import numpy as np
++import os
++import ampere
++from ampere.data import Spectrum, Photometry
++from ampere.infer.sbi import Swyft_TMNRE
++from ampere.models import Model
++from spectres import spectres
++import pyphot
++from astropy import units
++from pathlib import Path
++
++# %% [markdown]
++# ##Define the model
++#
++# Now we can define our model. The model is a simple linear model of flux as a function
++# of wavelength. We will use this to generate some synthetic data in a minute.
++
++# %%
++
++class ASimpleModel(Model):
++    '''This is a very simple model in which the flux is linear in wavelength.
++
++    This model shows you the basics of writing a model for ampere
++
++    '''
++    def __init__(self, wavelengths, flatprior=True, lims=None):
++        '''The model constructor, which will set everything up
++
++        This method does essential setup actions, primarily things that 
++        may change from one fit to another, but will stay constant throughout 
++        the fit. This may be things like the grid of wavelengths to calculate
++        the model output on, or establishing the dust opacities if involved.
++        There are also several important variables it *MUST* define here
++        '''
++        if lims is None:
++            lims = np.array([[-10, 10], [-10, 10]])
++        self.wavelength = wavelengths
++        self.npars = 2 #Number of free parameters for the model (__call__()). For some 
++        # models this can be determined through introspection, but it is still strongly 
++        # recommended to define this explicitly here. Introspection will only be 
++        # attempted if self.npars is not defined.
++        self.npars_ptform = 2 #Sometimes the number of free parameters is different 
++        # when using the prior transform instead of the prior. In that case, 
++        # self.npars_ptform should also be defined.
++
++        # You can do any other set up you need in this method.
++        # For example, we could define some cases to set up different priors
++        # But that's for a slightly more complex example.
++        # Here we'll just use a simple flat prior
++        self.lims = lims
++        self.flatprior = flatprior
++        self.parLabels = ["slope", "intercept"]
++
++    def __call__(self, slope, intercept, **kwargs):
++        '''The model itself, using the callable class functionality of python.
++
++        This is an essential method. It should do any steps required to 
++        calculate the output fluxes. Once done, it should stop the output fluxes
++        in self.modelFlux.
++        '''
++
++        self.modelFlux = slope*self.wavelength + intercept
++        return {"spectrum": {"wavelength": self.wavelength, "flux": self.modelFlux}}
++
++    def lnprior(self, theta, **kwargs):
++        """The model prior probability distribution
++
++        The prior is essential to most types of inference with ampere. The
++        prior describes the relative weights (or probabilities if normalised)
++        of different parameter combinations. Using a normalised prior with
++        SNPE is strongly recommended, otherwise ampere will attempt
++        approximate normalisation using Monte Carlo integration.
++        """
++        if not self.flatprior:
++            raise NotImplementedError()
++        slope = theta[0]
++        #print(slope)
++        intercept = theta[1]
++        return (
++            0
++            if self.lims[0, 0] < slope < self.lims[0, 1]
++            and self.lims[1, 0] < intercept < self.lims[1, 1]
++            else -np.inf
++        )
++
++    def prior_transform(self, u, **kwargs):
++        '''The prior transform, which takes samples from the Uniform(0,1)
++        distribution to the desired distribution.
++
++        Prior transforms are essential for SNPE. SNPE needs to be able to
++        generate samples from the prior, and this method is integral to doing 
++        so. Therefore, unlike other inference methods, if you want to use 
++        SNPE (or other SBI approaches) you need to define *both* lnprior and 
++        prior_transform.
++        '''
++        if self.flatprior:
++            return (self.lims[:,1] - self.lims[:,0]) * u + self.lims[:,0]
++        else:
++            raise NotImplementedError()
++
++# %% [markdown]
++# ## Set up the data
++#
++# Now we need to set up the data. We will use the model to generate some synthetic
++# data with intercept and slope set to 1.0. We will then use this synthetic data to
++# perform inference.
++        
++# %%
++""" Set up the inputs for the model """
++""" wavelength grid """
++wavelengths = 10**np.linspace(0.,1.9, 2000)
++
++""" Choose some model parameters """
++slope = 1. #Keep it super simple for now
++intercept = 1.
++
++# Now we can initialise the model
++model = ASimpleModel(wavelengths)
++# And call it to produce the fluxes for our chosen parameters
++model(slope, intercept)
++model_flux = model.modelFlux
++
++# Now we create synthetic data:
++# First photometry
++# This is minimal, so we'll just have two bands well separated in 
++# wavelength
++filterName = np.array(['WISE_RSR_W1', 'SPITZER_MIPS_70'])  
++
++libDir = Path(ampere.__file__.strip('__init__.py')) # '/home/peter/pythonlibs/ampere/ampere/'
++print(f'{libDir=}')
++libname = libDir/'ampere_allfilters.hd5'
++print(f'{libname=}')
++filterLibrary = pyphot.get_library(fname=libname)
++filters = filterLibrary.load_filters(filterName, interp=True,
++                                     lamb=wavelengths*pyphot.unit['micron'])
++# Now we need to extract the photometry with pyphot
++# first we need to convert the flux from Fnu to Flambda
++flam = model_flux / wavelengths**2
++modSed = []
++for i, f in enumerate(filters):
++    lp = f.lpivot.to("micron").value
++    fphot = f.get_flux(wavelengths*pyphot.unit['micron'], flam*pyphot.unit['flam'], axis=-1).value
++    print(fphot)
++    modSed.append(fphot*lp**2)
++print(modSed)
++modSed = np.array(modSed)
++print(modSed)
++print(units.Quantity(modSed, 'Jy'))
++print(modSed*units.Jy)
++print(modSed*units.Unit('Jy'))
++
++#exit()
++
++input_noise_phot = 0.1  # Fractional uncertainty
++photunc = input_noise_phot * modSed  # Absolute uncertainty
++# Now perturb data by drawing from a Gaussian distribution
++modSed = modSed + np.random.randn(len(filterName)) * photunc 
++
++# now we'll create a synthetic spectrum from the model fluxes, using a Spitzer IRS 
++# observation to get the wavelength sampling
++#print(ampere.__file__.split('/'))
++dataDir = Path(__file__).parent / 'test_data'
++#dataDir = f"{'/'.join(ampere.__file__.split('/')[:-2])}/examples/test_data/"
++print(f'{dataDir=}')
++specFileExample = dataDir/'cassis_yaaar_spcfw_14191360t.fits'
++irsEx = Spectrum.fromFile(specFileExample,  #os.path.normpath(dataDir+specFileExample),
++                          format='SPITZER-YAAAR')
++spec0 = spectres(irsEx[0].wavelength,wavelengths,model_flux)
++spec1 = spectres(irsEx[1].wavelength,wavelengths,model_flux)
++
++# And again, add some noise to it
++input_noise_spec = 0.1
++unc0 = input_noise_spec*spec0
++unc1 = input_noise_spec*spec1
++spec0 = spec0 + np.random.randn(len(spec0))*unc0
++spec1 = spec1 + np.random.randn(len(spec1))*unc1
++
++spec0 = Spectrum(irsEx[0].wavelength, spec0, unc0, "um", "Jy", 
++                    calUnc=0.0025, 
++                    scaleLengthPrior=0.01)  # , resampleMethod=resmethod)
++spec1 = Spectrum(irsEx[1].wavelength, spec1, unc1, "um", "Jy", 
++                    calUnc=0.0025, 
++                    scaleLengthPrior=0.01)  # , resampleMethod=resmethod)
++
++# Now let's try changing the resampling method so it's faster
++# This model is very simple so exact flux conservation is not important
++resmethod = "fast"  # "exact"#"fast"#
++spec0.setResampler(resampleMethod=resmethod)
++spec1.setResampler(resampleMethod=resmethod)
++
++""" now set up ampere to try and fit the same stuff """
++photometry = Photometry(filterName=filterName, value=modSed, 
++                        uncertainty=photunc, photunits="Jy", 
++                        libName=libname)
++# print(photometry.filterMask)
++photometry.reloadFilters(wavelengths)
++
++dataset = [photometry,
++            # spec0, #Fitting spectra is slow because it needs to do a lot of resampling
++            spec1   # As a result, we're leaving some of them out
++            ]
++
++# %% [markdown]
++# ## Set up the optimizer
++#
++# Now we have a model and some data, we can set up the optimizer. We will use
++# Swyft_TMNRE, which wraps the official implementation of Truncated Marginal
++# Neural Ratio Estimation (TMNRE) in _Swyft_. This is a powerful method for
++# likelihood-free inference. It is particularly useful when the likelihood is
++# expensive to evaluate, and when the data or model is high-dimensional.
++
++# %%
++# Now we set up the optimizer object:
++optimizer = Swyft_TMNRE(model=model, data=dataset)
++
++# Now we can do the inference
++optimizer.optimise()
++
++# %% [markdown]
++# ## Post-processing
++#
++# Now we can do some post-processing. This will produce some figures and save the
++# optimizer object to a file so we can read it back in later.
++
++# %%
++optimizer.postProcess() #now we call the postprocessing to produce some figures
++# Save the optimizer object to a file so we can read it back in later
++import pickle
++with open("test_pickle_swyft.pkl", 'wb') as f:
++    pickle.dump(optimizer, f)
++
++# Now try reading it back in:
++with open("test_pickle_swyft.pkl", 'rb') as f2:
++    opt2 = pickle.load(f2)
++
++# %% [markdown]
++# ## Conclusion
++#
++# This notebook demonstrates how to use _Swyft_ to perform Truncated Marginal Neural
++# Ratio Estimation (TMNRE) in Ampere. We used a simple example to demonstrate the
++# basic steps. The example is a simple linear model of flux as a function of wavelength.
++# We generated some synthetic data and used it to perform inference. We then did some
++# post-processing, producing some figures and saving the optimizer object to a file so
++# we can read it back in later.
