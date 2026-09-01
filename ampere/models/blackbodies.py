@@ -1,4 +1,15 @@
 
+# NOTE (W0.5 / issue #77): this module used to call
+# astropy.modeling.blackbody.blackbody_nu(freq, temperature), which was
+# removed from current astropy (the analytic-function API was replaced by
+# the astropy.modeling.models.BlackBody model class some releases ago).
+# ``models.BlackBody(temperature=T*u.K)(freq*u.Hz)`` returns the spectral
+# radiance in the same convention (erg / (s cm2 Hz sr), i.e. B_nu(T) per
+# steradian) that ``blackbody_nu`` used, so ``.to(u.Jy / u.sr)`` reproduces
+# the old numerical output exactly -- verified against a from-scratch Planck
+# function evaluation (2*h*nu**3/c**2 / expm1(h*nu/(k*T))) converted to
+# Jy/sr, which agrees with the new BlackBody-based call to full float
+# precision (ratio == 1.0) at T=300 K across a spread of wavelengths.
 import numpy as np
 from astropy import constants as const
 from astropy import units as u
@@ -78,12 +89,12 @@ class SingleModifiedBlackBody(AnalyticalModel):
         #    print('Scale factor must be positive and non-zero.') #not relevant - scale is a log
         if t <= 0.0:
             print('Temperature must be positive and in Kelvin.')
-        bb = blackbody.blackbody_nu(freq,t).to(u.Jy / u.sr).value
+        bb = models.BlackBody(temperature=t * u.K)(freq * u.Hz).to(u.Jy / u.sr).value
         bb = bb / dist**2
         bb = bb * 10**(scale) * self.sigmaNormWave * ((self.wavelength / self.normWave)**index)
         self.modelFlux = bb
         return {"spectrum":{"wavelength":self.wavelength, "flux": self.modelFlux}}
-        #return (blackbody.blackbody_nu(const.c.value*1e6/self.wavelengths,t).to(u.Jy / u.sr).value / (dist_lum.value)**2 * kappa230.value * ((wave/230.)**betaf) * massf) #*M_sun.cgs.value
+        #return (models.BlackBody(temperature=t * u.K)(const.c.value*1e6/self.wavelengths * u.Hz).to(u.Jy / u.sr).value / (dist_lum.value)**2 * kappa230.value * ((wave/230.)**betaf) * massf) #*M_sun.cgs.value
 
     def lnprior(self, theta, **kwargs):
         if self.flatprior:
@@ -183,7 +194,7 @@ class DualBlackBodyDust(AnalyticalModel):
         freq = const.c.value / (self.wavelength*1e-6)
         
         fModel = (np.matmul(self.opacity_array, dustAbundances))
-        fModel = fModel*(F1f*blackbody.blackbody_nu(freq,T1f).to(u.Jy / u.sr).value + F2f*blackbody.blackbody_nu(freq,T2f).to(u.Jy / u.sr).value) + (F1c*blackbody.blackbody_nu(freq,T1c).to(u.Jy / u.sr).value + F2c*blackbody.blackbody_nu(freq,T2c).to(u.Jy / u.sr).value)           
+        fModel = fModel*(F1f*models.BlackBody(temperature=T1f * u.K)(freq * u.Hz).to(u.Jy / u.sr).value + F2f*models.BlackBody(temperature=T2f * u.K)(freq * u.Hz).to(u.Jy / u.sr).value) + (F1c*models.BlackBody(temperature=T1c * u.K)(freq * u.Hz).to(u.Jy / u.sr).value + F2c*models.BlackBody(temperature=T2c * u.K)(freq * u.Hz).to(u.Jy / u.sr).value)
         self.modelFlux = fModel
         return {"spectrum":{"wavelength":self.wavelength, "flux": self.modelFlux}}
 

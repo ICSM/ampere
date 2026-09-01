@@ -166,8 +166,16 @@
 import numpy as np
 from astropy import constants as const
 from astropy import units as u
-from astropy.modeling import blackbody
-from models import AnalyticalModel
+# NOTE (W0.5 / issue #77): astropy.modeling.blackbody.blackbody_nu was
+# removed from current astropy; astropy.modeling.models.BlackBody is the
+# replacement and reproduces the old Jy/sr output exactly -- see the note
+# in ampere/models/blackbodies.py for the verification.
+from astropy.modeling import models
+# NOTE (W0.5 / issue #74-style import error): this used to be an absolute
+# `import models`, which only worked when ampere/models/ was importable as
+# a top-level package (pre-restructure layout). It is now a subpackage, so
+# the import must be relative.
+from .models import AnalyticalModel
 
 # is it better to use all these explicit keyword arguments or use the kwargs mechanism in python?
 class DustySpectrum(AnalyticalModel):
@@ -1267,13 +1275,13 @@ class DustySpectrum(AnalyticalModel):
 
         ## perhaps we should remove or rename the dusty input file?
 
-        bb = blackbody.blackbody_nu(freq,t).to(u.Jy / u.sr).value
+        bb = models.BlackBody(temperature=t * u.K)(freq * u.Hz).to(u.Jy / u.sr).value
         bb = bb / dist**2
         bb = bb * 10**(scale) * self.sigmaNormWave * ((self.wavelength / self.normWave)**index)
         #Subtract the sum of opacities from the blackbody continuum to calculate model spectrum
         fModel = bb * (1.0 - (np.matmul(self.opacity_array, weights)))
         self.modelFlux = fModel
-        #return (blackbody.blackbody_nu(const.c.value*1e6/self.wavelengths,t).to(u.Jy / u.sr).value / (dist_lum.value)**2 * kappa230.value * ((wave/230.)**betaf) * massf) #*M_sun.cgs.value
+        #return (models.BlackBody(temperature=t * u.K)(const.c.value*1e6/self.wavelengths * u.Hz).to(u.Jy / u.sr).value / (dist_lum.value)**2 * kappa230.value * ((wave/230.)**betaf) * massf) #*M_sun.cgs.value
 
     def dusty_run_dusty():
         import subprocess

@@ -9,7 +9,11 @@
 import numpy as np
 from astropy import constants as const
 from astropy import units as u
-from astropy.modeling import blackbody
+# NOTE (W0.5 / issue #77): astropy.modeling.blackbody.blackbody_nu was
+# removed from current astropy; astropy.modeling.models.BlackBody is the
+# replacement and reproduces the old Jy/sr output exactly -- see the note
+# in ampere/models/blackbodies.py for the verification.
+from astropy.modeling import models
 from .models import AnalyticalModel
 import matplotlib.pyplot as plt
 
@@ -222,7 +226,7 @@ class DualBlackBodyDust(AnalyticalModel):
         freq = const.c.value / (self.wavelength*1e-6)
         
         fModel = (np.matmul(self.opacity_array, dustAbundances))
-        fModel = fModel*(F1f*blackbody.blackbody_nu(freq,T1f).to(u.Jy / u.sr).value + F2f*blackbody.blackbody_nu(freq,T2f).to(u.Jy / u.sr).value) + (F1c*blackbody.blackbody_nu(freq,T1c).to(u.Jy / u.sr).value + F2c*blackbody.blackbody_nu(freq,T2c).to(u.Jy / u.sr).value)           
+        fModel = fModel*(F1f*models.BlackBody(temperature=T1f * u.K)(freq * u.Hz).to(u.Jy / u.sr).value + F2f*models.BlackBody(temperature=T2f * u.K)(freq * u.Hz).to(u.Jy / u.sr).value) + (F1c*models.BlackBody(temperature=T1c * u.K)(freq * u.Hz).to(u.Jy / u.sr).value + F2c*models.BlackBody(temperature=T2c * u.K)(freq * u.Hz).to(u.Jy / u.sr).value)
         self.modelFlux = fModel
 
                  
