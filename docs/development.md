@@ -148,16 +148,14 @@ gate their branches' merges):
   than the model, matters most for Phase 3's SBI layer, and needs no new
   contract surface (§4.5's `simulate()` is the hook). §11 also records
   the extension template for future families, since the area will evolve.
-- W1.3 spec §14's remaining open questions — tie labels as a flat global
-  namespace; whether a lone `shared_as` should raise; ratifying
-  `OptionalDependencyError`'s shape at W1.13; confirming nothing needs
-  the legacy `npars` alias. Review at
-  `docs/design/contracts/parameters.md` §14, with §8 (tying semantics) and
-  §12 (deliberate limitations) as the supporting context, and
-  `ampere/core/parameter.py` (`_merge`/`_collapse`) /
-  `ampere/core/exceptions.py` as the implementation. (Question 1,
-  astropy-in-core, was resolved by the W1.2 amendment; question 2,
-  recursive merge, is explicitly deferred to W1.7.)
+- W1.3 spec §14: *ruled by Peter 2026-09-01* — recommendations stand (flat
+  tie labels; lone `shared_as` allowed; `npars` dropped;
+  `OptionalDependencyError` to W1.13), **except that recursive merge is
+  expressly kept open**: nested/hierarchical merging may be the natural
+  approach for `DatasetCollection`, so W1.7 must evaluate a nested
+  `ParameterMapping` as a first-class design option (recorded in
+  `parameters.md` §14's preamble; W1.5 §14's ties-across-levels note is
+  part of the same question). **W1.7's dispatch prompt must carry this.**
 - W1.4 spec §17's open questions — whether `"default"` should be a
   reserved channel name; overlapping échelle orders as two channels
   (duplicate coordinates refused); `Cube` axis order `(x, y, spectral)`

@@ -863,6 +863,18 @@ Obligations and hooks the later contract specs should reconcile against.
 
 ## 14. Open questions for review
 
+**Ruled by Peter, 2026-09-01**: the recommendations below stand — question 1
+was already resolved by the W1.2 review amendment (core's dependency floor is
+numpy/scipy/astropy/stdlib); question 3's flat tie-label namespace stands;
+question 4's lone `shared_as` stays allowed; question 5 goes to W1.13 as
+written; question 6's `npars` removal is confirmed. **Question 2 (recursive
+merge) is expressly kept open**, not closed: Peter can see cases where
+hierarchical/nested merging is the natural approach, so W1.7 must treat a
+nested `ParameterMapping` as a live design option for `DatasetCollection` —
+evaluated on its merits, not dismissed because single-call merge is what
+exists today. (W1.5's §14 note that ties crossing merge levels are uncovered
+is part of the same question.)
+
 1. **`astropy.units` in `ampere.core`.** `architecture.md` §3–4 says core is
    "numpy/scipy/typing/stdlib"; this module imports `astropy.units` at module
    level. That seems right — astropy is a *required* dependency of the base
