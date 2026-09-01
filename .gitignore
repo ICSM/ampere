@@ -50,6 +50,8 @@ nosetests.xml
 coverage.xml
 *,cover
 .hypothesis/
+.pytest_cache/
+.ruff_cache/
 
 # Translations
 *.mo
@@ -77,6 +79,18 @@ irs-1.txt
 irs-last.txt
 *.pkl
 ampere*.log
+
+# Machine-learning run outputs (PyTorch Lightning, checkpoints)
+lightning_logs/
+*.ckpt
+
+# Locally downloaded installer at the repository root
+/miniforge.sh
+
+# Example run output directories (pickles and figure PDFs/PNGs); the
+# corresponding *.py scripts remain visible as untracked
+examples/examples_paper/flexible_likelihood_comparison/
+examples/examples_paper/flexible_likelihood_comparison_v0/
 
 #Ciska's personal directories
 notes/
