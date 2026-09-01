@@ -816,6 +816,32 @@ class TestCensoring:
         with pytest.raises(LikelihoodError, match="orthant probability"):
             like.log_prob(data.with_values([1.0, 2.0, 0.1]), data)
 
+    def test_codes_and_samples_stay_aligned_on_a_gridded_container(self) -> None:
+        """Excision ravels; a censoring declaration must ravel the same way.
+
+        Nothing else in the contract pairs a 1-D per-sample array with a 2-D
+        container, so this is the one place a silent index shift could hide.
+        """
+        codes = np.array([[0, 0, 1], [0, 1, 0]])
+        image = Image(
+            np.linspace(-1.0, 1.0, 2) * u.arcsec,
+            np.linspace(-1.0, 1.0, 3) * u.arcsec,
+            np.ones((2, 3)) * u.Jy,
+            uncertainty=np.full((2, 3), 0.1) * u.Jy,
+            extra_coords={"limit_kind": codes},
+        )
+        censoring = Censoring.from_extra_coord(image, "limit_kind")
+        assert censoring.n_samples == 6
+        like = Likelihood(GaussianFamily(), IndependentNoise(), censoring=censoring)
+        model = image.with_values(np.zeros((2, 3)))
+        like.check_alignment(model, image)
+
+        flat = codes.ravel()
+        detected = flat == int(LimitKind.DETECTION)
+        expected = float(np.sum(st.norm.logpdf(np.ones(int(detected.sum())), 0.0, 0.1)))
+        expected += float(np.sum(st.norm.logcdf(np.full(int((~detected).sum()), 1.0 / 0.1))))
+        assert like.log_prob(model, image) == pytest.approx(expected, abs=1e-9)
+
     def test_a_misaligned_declaration_is_caught(self, photometry: PhotometricPoints) -> None:
         like = Likelihood(
             GaussianFamily(), IndependentNoise(), censoring=Censoring(np.array([0, 0]))
