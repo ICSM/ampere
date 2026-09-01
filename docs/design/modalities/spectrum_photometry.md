@@ -250,10 +250,14 @@ requester of that channel.
 Axis.locate(values) -> np.ndarray[intp]
 ```
 
-Exact-match index lookup (points published via `points=` are guaranteed to
-survive `union` verbatim — `transformations.md` §7's `_dedupe` — so this
-never needs a tolerance), raising a `SchemaError` naming any value that is
-absent (which would indicate a negotiation defect, not a usage error). A
+Index lookup matching within `COORDINATE_RTOL`, not exactly: `union`'s
+`_dedupe` collapses coordinates that coincide to within that relative
+tolerance (`transformations.md` §7), so when two instruments publish
+near-coincident but non-identical points only one representative survives,
+and a step's own published value may differ from the surviving coordinate
+by up to `COORDINATE_RTOL`. `locate` must therefore match within the same
+tolerance, raising a `SchemaError` naming any value with no match inside
+it (which would indicate a negotiation defect, not a usage error). A
 buffer-matrix step then does:
 
 ```python
