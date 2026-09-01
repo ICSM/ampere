@@ -136,12 +136,14 @@ gate their branches' merges):
   set-on-import, amending `architecture.md` §5's sketch (the policy —
   x64 always — is unchanged). The Fable review endorses both. The spec's
   §12 lists five further ratification items (most route to W1.13).
-- **W1.12** (`w1.12-diagnostics-spec`, Sonnet, Fable-reviewed, **not
-  merged**): the acceptance criterion is Peter's review pass. Key
-  decisions to check: `ampere.diagnostics` as a new peer namespace behind
-  a `diagnostics` extra; the shared `AnomalyScore` container with
-  mandatory provenance metadata (Tension 5's resolution); RHMF
-  hyperparameters as expert opt-in. Its §10 lists the open questions.
+- **W1.12**: *approved by Peter and merged 2026-09-01* — the §10 defaults
+  (peer `diagnostics` namespace, `AnomalyScore` in core, RHMF expert
+  opt-in) stand as written. His review added one thing, recorded as the
+  spec's §11: posterior calibration (SBC, expected-coverage/TARP) as a
+  fourth, future diagnostic family — it validates the *inference* rather
+  than the model, matters most for Phase 3's SBI layer, and needs no new
+  contract surface (§4.5's `simulate()` is the hook). §11 also records
+  the extension template for future families, since the area will evolve.
 - W1.3 spec §14's remaining open questions — tie labels as a flat global
   namespace; whether a lone `shared_as` should raise; ratifying
   `OptionalDependencyError`'s shape at W1.13; confirming nothing needs
@@ -168,15 +170,13 @@ gate their branches' merges):
   towards demoting the scalars before the freeze, cheap now). Review at
   `docs/design/contracts/transformations.md` §15.
 
-**Sol-review blocker (confirmed 2026-09-01)**: `codex exec -m gpt-5.6-sol`
-is refused — "The 'gpt-5.6-sol' model is not supported when using Codex
-with a ChatGPT account" (reproduced independently of the W1.5 agent's
-report). This blocks the batched adversarial review planned at W1.13.
-Options for Peter: check whether the model name has moved; authenticate
-codex with an API key instead of the ChatGPT account; pick another
-cross-provider reviewer available to the account; or substitute a
-fresh-context Claude adversarial pass (weaker: correlated failure modes,
-per `docs/orchestration.md`).
+**Sol review (status 2026-09-01)**: `codex exec -m gpt-5.6-sol` is
+currently refused — "The 'gpt-5.6-sol' model is not supported when using
+Codex with a ChatGPT account" (reproduced independently of the W1.5
+agent's report). Peter is aware and expects to configure the extra codex
+steps to make sol available — one more reason the adversarial review is
+batched at the W1.13 freeze rather than run per item. No Phase 1 work
+blocks on it before then.
 
 **Tooling note** (found by the W1.4 agent): `ruff format` invoked with an
 explicit path bypasses `extend-exclude`, so it can silently rewrite the
