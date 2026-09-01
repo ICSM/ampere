@@ -270,4 +270,7 @@ to this file.
 | W1.1 | merged 2026-09-01 (Sonnet-authored, Fable-reviewed; two load-bearing claims re-verified against live sources). Peter's review pass remains the formal accept gate |
 | W1.2 | merged 2026-09-01 (Sonnet-authored, Fable-reviewed and amended; reconciled against W1.1, see its §10). The curated-translation conflict found in review was ruled **opt-in, never silent** — decision recorded in `DEVELOPMENT_PLAN.md` §2, §4.7 amended. Peter's review pass remains the formal accept gate |
 | W1.3 | merged 2026-09-01 (Opus-authored, Fable-reviewed; three tying/serialisation defects fixed on the branch with tests — 112 pass, pyrefly/ruff clean). Remaining open questions for Peter in the spec's §14; obligations on W1.4–W1.10 in its §13 |
-| W1.4–W1.13 | not started |
+| W1.4 | merged 2026-09-01 (Opus-authored, Fable-reviewed; two defects fixed on the branch — `from_unsorted` extra-coordinate misalignment, `to_unit` error type — 247 core tests, pyrefly/ruff clean). Open questions for Peter in the spec's §17 |
+| W1.9 | done 2026-09-01 — branch `w1.9-lowering-spec` (Opus, Fable-reviewed), **not merged**: on Peter's review list — needs two decision-log rulings (jax non-trainable mechanism: `eqx.partition` over `paramax.NonTrainable`, narrowing plan §4.1; x64 activation: guard-and-raise instead of set-on-import, amending `architecture.md` §5). Its §12 lists the full set |
+| W1.12 | done 2026-09-01 — branch `w1.12-diagnostics-spec` (Sonnet, Fable-reviewed), **not merged**: acceptance criterion is Peter's review pass; its §10 lists the open questions |
+| W1.5–W1.8, W1.10, W1.11, W1.13 | not started |

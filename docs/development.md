@@ -62,17 +62,22 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
   the "legacy still works" gate; run it before merging anything that
   touches shared files.
 
-## Phase 1: W1.1–W1.3 merged (2026-09-01)
+## Phase 1: W1.1–W1.4 merged; W1.9 + W1.12 on Peter's review list (2026-09-01)
 
 The Fable review the previous handoff asked for is done and, on Peter's
-instruction, the three branches were merged to local master in order
-(W1.1 → W1.2 → W1.3), keeping master's `WORK_ITEMS.md` and
-`docs/development.md` in each merge (the branches carried stale snapshots).
-All gates re-verified on the merged master: 112 core tests, the fast import
-suite, pyrefly, ruff lint and format. Nothing has been pushed to origin.
-One correction to the earlier handoff text: W1.2 was Sonnet-authored (not
-Fable, as previously recorded) and was therefore given a full contract-tier
-review rather than a light reconciliation.
+instruction, the reviewed branches were merged to local master
+(W1.1 → W1.2 → W1.3, then W1.4), keeping master's `WORK_ITEMS.md` and
+`docs/development.md` where branches carried stale snapshots. All gates
+re-verified on the merged master after each merge (247 core tests as of
+W1.4, the fast import suite, pyrefly, ruff lint and format). Nothing has
+been pushed to origin. One correction to the earlier handoff text: W1.2 was
+Sonnet-authored (not Fable, as previously recorded) and was therefore given
+a full contract-tier review rather than a light reconciliation.
+
+**Adversarial sol review is batched at the W1.13 freeze** (Peter's call,
+2026-09-01): one pass over the §4 contract code (W1.3 parameters, W1.4
+results schema, plus whatever lands by then) and the lowering spec (W1.9),
+per `docs/orchestration.md` principle 3, rather than per-item passes now.
 
 **Review outcomes (branches now in master's history):**
 
@@ -110,8 +115,33 @@ review rather than a light reconciliation.
   retrospectively: its declaration-based tying is exactly what memo lesson
   G2 prescribes.
 
-**Still needing Peter's decision** (none block further Phase 1 work):
+- **W1.4** (`w1.4-results-schema`, Opus + Fable fix commit): merged
+  2026-09-01. Strong contract; the agent's own self-review caught three
+  unit-handling bugs, and the Fable pass found and fixed two more:
+  (1) `from_unsorted` permuted the axis/values/uncertainty/mask but left
+  `extra_coords` in declaration order — silent per-sample misalignment,
+  now permuted with the data; (2) `to_unit` leaked astropy's raw
+  `UnitConversionError` where every sibling path raises `SchemaError` —
+  now wrapped. 247 core tests; W1.3 untouched.
 
+**Peter's review list** (none block further Phase 1 work; the first two
+gate their branches' merges):
+
+- **W1.9** (`w1.9-lowering-spec`, Opus, Fable-reviewed, **not merged**):
+  needs two decision-log rulings before merge — (a) jax non-trainable
+  mechanism: the spec ranks `eqx.partition` above `paramax.NonTrainable`
+  (whose freezing depends on `unwrap()` being called — forgetting it
+  silently trains the buffers), narrowing plan §4.1's unranked wording;
+  (b) x64 activation: guard-and-raise at construction instead of
+  set-on-import, amending `architecture.md` §5's sketch (the policy —
+  x64 always — is unchanged). The Fable review endorses both. The spec's
+  §12 lists five further ratification items (most route to W1.13).
+- **W1.12** (`w1.12-diagnostics-spec`, Sonnet, Fable-reviewed, **not
+  merged**): the acceptance criterion is Peter's review pass. Key
+  decisions to check: `ampere.diagnostics` as a new peer namespace behind
+  a `diagnostics` extra; the shared `AnomalyScore` container with
+  mandatory provenance metadata (Tension 5's resolution); RHMF
+  hyperparameters as expert opt-in. Its §10 lists the open questions.
 - W1.3 spec §14's remaining open questions — tie labels as a flat global
   namespace; whether a lone `shared_as` should raise; ratifying
   `OptionalDependencyError`'s shape at W1.13; confirming nothing needs
@@ -122,6 +152,17 @@ review rather than a light reconciliation.
   `ampere/core/exceptions.py` as the implementation. (Question 1,
   astropy-in-core, was resolved by the W1.2 amendment; question 2,
   recursive merge, is explicitly deferred to W1.7.)
+- W1.4 spec §17's open questions — whether `"default"` should be a
+  reserved channel name; overlapping échelle orders as two channels
+  (duplicate coordinates refused); `Cube` axis order `(x, y, spectral)`
+  vs FITS convention (cheap to change now); whether a `ModelResult`
+  should carry the θ that produced it (emulator training sets). Review at
+  `docs/design/contracts/results_schema.md` §17.
+
+**Tooling note** (found by the W1.4 agent): `ruff format` invoked with an
+explicit path bypasses `extend-exclude`, so it can silently rewrite the
+frozen W0.7 harvest snapshots under `docs/design/harvest/`. Worth a guard
+in a small W0.x follow-up.
 
 **Obligations W1.3 places on later specs** are recorded in the spec's own
 §13 (`docs/design/contracts/parameters.md`) — W1.4–W1.10 authors read that
