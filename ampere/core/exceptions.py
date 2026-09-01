@@ -27,6 +27,7 @@ __all__ = [
     "ChannelError",
     "CompositionError",
     "ContractError",
+    "DatasetError",
     "LikelihoodError",
     "OptionalDependencyError",
     "ParameterError",
@@ -166,6 +167,31 @@ class LikelihoodError(ContractError):
     Kept distinct from :class:`SchemaError` because a container may be
     perfectly well formed and still be one this likelihood cannot consume —
     the failure is in the *composition*, not in either object.
+    """
+
+
+class DatasetError(ContractError):
+    """A dataset, dataset collection or fitting problem is malformed.
+
+    Raised by :mod:`ampere.core.dataset` for: an observed container whose kind
+    the instrument chain cannot produce, a dataset naming a model the problem
+    does not hold, colliding component labels in the joint parameter space, a
+    latent declaration whose size disagrees with the number of samples that
+    actually survive masking, capability declarations that contradict each
+    other, and a fitting problem asked to evaluate before it is composed.
+
+    Kept distinct from :class:`TransformationError` and :class:`LikelihoodError`
+    because the failure is in the *assembly of the problem*: every piece may be
+    individually well formed and still not compose into something an engine can
+    run.
+
+    Note what this is **not** for. A model that crashes, or a covariance that
+    will not factorise, during an evaluation is not a malformed problem — it is
+    a proposal that cannot be scored, and ``DEVELOPMENT_PLAN.md`` §4.5 requires
+    those to become ``-inf`` with a recorded reason
+    (:class:`~ampere.core.dataset.Failure`) rather than an exception. This error
+    is for the composition-time failures that should stop a run before it
+    starts.
     """
 
 
