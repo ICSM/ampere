@@ -24,9 +24,11 @@ from __future__ import annotations
 
 __all__ = [
     "AmpereError",
+    "ChannelError",
     "ContractError",
     "OptionalDependencyError",
     "ParameterError",
+    "SchemaError",
     "TyingError",
 ]
 
@@ -64,6 +66,53 @@ class TyingError(ParameterError):
     are the ones a user is most likely to want to handle (or explain)
     separately when composing a joint fit from independently written models.
     """
+
+
+class SchemaError(ContractError):
+    """A model result, channel or data container is malformed or unusable.
+
+    Raised by :mod:`ampere.core.results_schema` for: channel names that are not
+    usable, duplicate or missing channels, coordinate/value/uncertainty/mask
+    shapes that disagree, coordinates that violate the ordering a container
+    kind requires, units that are missing or of the wrong physical type, and
+    complex values in a container kind that does not admit them.
+
+    Kept distinct from :class:`ParameterError` because the two contracts have
+    separate namespaces and separate failure modes: a channel name and a
+    parameter name may collide harmlessly (see
+    ``docs/design/contracts/results_schema.md`` §2).
+    """
+
+
+class ChannelError(SchemaError, KeyError):
+    """A channel could not be bound, or was bound to the wrong kind of data.
+
+    Raised when an instrument (or any other consumer) asks a
+    :class:`~ampere.core.results_schema.ModelResult` for a channel that does
+    not exist, or for one that exists but holds a different container kind than
+    the consumer requires. ``DEVELOPMENT_PLAN.md`` §4.2 requires these
+    mismatches to fail loudly at composition time rather than producing a
+    confusing shape error inside a likelihood, and §4.3 makes name-based
+    binding the instrument contract — so this is the error a consumer catches
+    when it wants to offer an alternative rather than abort.
+
+    Also a :class:`KeyError`, per this module's second rule: a
+    ``ModelResult`` is a :class:`~collections.abc.Mapping`, and ``KeyError`` is
+    the builtin a caller reaches for when a lookup fails. That inheritance is
+    load-bearing rather than decorative — ``Mapping``'s own ``get`` and
+    ``__contains__`` mixins are defined in terms of catching ``KeyError``, so
+    without it ``result.get(name)`` and ``name in result`` would raise instead
+    of answering.
+
+    :meth:`__str__` is overridden because ``KeyError`` uniquely formats itself
+    as ``repr(args[0])``, which would wrap every one of these messages in
+    quotes and defeat the point of writing them.
+    """
+
+    def __str__(self) -> str:
+        if len(self.args) == 1 and isinstance(self.args[0], str):
+            return self.args[0]
+        return super().__str__()
 
 
 class OptionalDependencyError(AmpereError, ImportError):
