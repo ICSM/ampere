@@ -66,7 +66,7 @@ cross-model reviews.
 
 Claude agents may delegate well-scoped, self-contained subtasks to the
 OpenAI Codex CLI (installed: `codex`). See
-`.claude/skills/delegate-codex/SKILL.md` (use `-m luna` for cheap
+`.claude/skills/delegate-codex/SKILL.md` (use `-m gpt-5.6-luna` for cheap
 mechanical work), and `.claude/skills/sol-review/SKILL.md` for detailed or
 adversarial reviews with gpt-5.6-sol. Codex reads this AGENTS.md
 automatically. Always review Codex's diff before committing it; Codex never
