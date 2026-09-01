@@ -289,7 +289,31 @@ The maximum a posteriori parameters.
         Generated with Chat-GPT
         """
         self.logger.info("Estimating MAP parameters")
-        self.bestPars = self.posterior.map()
+        map_estimate = self.posterior.map()
+        # W0.4/W0.5: sbi's DirectPosterior.map() (sbi<0.28 pinned -- see
+        # WORK_ITEMS.md W0.5/W0.9) returns a *batched* tensor whose shape
+        # has been observed to vary run-to-run (both (1,) and (1, npars)
+        # seen for the same problem) -- an sbi-side quirk, not something
+        # ampere controls. print_summary() indexes self.bestPars as a flat
+        # (npars,) vector, so normalise the shape here rather than there:
+        # squeeze out any leading batch/singleton dimensions.
+        map_arr = (
+            map_estimate.detach().numpy()
+            if hasattr(map_estimate, "detach")
+            else np.asarray(map_estimate)
+        )
+        map_arr = np.asarray(map_arr).reshape(-1)
+        if map_arr.shape[0] != self.npars:
+            raise ValueError(
+                f"posterior.map() returned {map_arr.shape[0]} value(s) "
+                f"(raw shape {tuple(np.shape(map_estimate))}) but this "
+                f"model has {self.npars} parameters -- cannot determine "
+                "a MAP parameter vector from this shape. This indicates "
+                "an incompatibility between ampere and the installed "
+                "'sbi' version's DirectPosterior.map() return shape; see "
+                "ampere/infer/mixins.py SBIPostProcessor.get_map() (W0.5)."
+            )
+        self.bestPars = map_arr
         return self.bestPars
 
     def plot_covmats(self):

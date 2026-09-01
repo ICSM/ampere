@@ -266,9 +266,22 @@ class SBI_SNPE(LFIBase, SBIPostProcessor):
                          cache_models=cache_models,
                          name=name, namestyle=namestyle, **kwargs)
 
+        # W0.4/W0.5: self._prior_is_normalised is read unconditionally by
+        # log_prob() below. It used to only be set as a side effect of
+        # _check_prior_normalisation(), so check_prior_normalisation=False
+        # (a documented, supported way to skip that expensive MC check
+        # when the caller already knows the prior is normalised) left it
+        # unset, and log_prob() -- called by sbi while validating the
+        # prior, immediately inside __init__ -- raised AttributeError
+        # before construction even completed. Default to True (i.e. "skip
+        # the check" means "trust the prior is normalised", which is what
+        # the parameter is documented to mean); _check_prior_normalisation
+        # below overrides it with the measured result when the check runs.
+        self._prior_is_normalised = True
+
         if check_prior_normalisation:
             self.logger.info("Checking prior normalisation")
-            self._check_prior_normalisation(n_prior_norm_samples, 
+            self._check_prior_normalisation(n_prior_norm_samples,
                                             prior_norm_thres)
 
         if get_prior_bounds:

@@ -6,14 +6,15 @@ Wraps ``ampere.infer.sbi.SBI_SNPE`` end-to-end: build the same linear-model
 simulation-based-inference round, and check the run completes, produces the
 expected output shapes and a picklable result, and recovers posterior
 summary statistics close to previously-recorded golden values.
-``postProcess()`` (diagnostic plots) is checked in a separate, ``xfail``-ed
-test -- see below.
+``postProcess()`` (diagnostic plots) is checked separately -- see
+``test_sbi_postprocess_plots`` below.
 
 Skipped cleanly (via ``skipif``) when ``torch``/``sbi`` are not installed,
 e.g. in an environment built without the ``ampere[sbi]`` extra.
 
 Notes on determinism and budget, and two legacy bugs found while writing
-this test (documented in full in the W0.4 report):
+this test (documented in full in the W0.4 report; both fixed by W0.5 --
+see ``ampere/infer/sbi.py`` and ``ampere/infer/mixins.py``):
 
 * ``ampere/infer/sbi.py`` calls ``numpy.random.default_rng()`` with no seed
   in several places (``SBI_SNPE.sample``,
@@ -25,19 +26,25 @@ this test (documented in full in the W0.4 report):
   tolerances below absorb that.
 * ``SBI_SNPE(..., check_prior_normalisation=False)`` -- offered specifically
   to *skip* the (expensive) prior-normalisation Monte-Carlo integration --
-  is actually broken in this version of ampere: skipping it also skips
-  setting ``self._prior_is_normalised``, which ``SBI_SNPE.log_prob`` (called
-  by ``sbi`` while validating the prior, immediately inside ``__init__``)
-  unconditionally reads, raising ``AttributeError`` before the object is
-  even constructed. We therefore leave ``check_prior_normalisation=True``
-  (the example's default) and instead pass a much smaller
-  ``n_prior_norm_samples`` to keep that step's Monte-Carlo integration
-  cheap, which is a supported, documented parameter of ``SBI_SNPE``.
+  used to be broken: skipping it also skipped setting
+  ``self._prior_is_normalised``, which ``SBI_SNPE.log_prob`` (called by
+  ``sbi`` while validating the prior, immediately inside ``__init__``)
+  unconditionally reads, raising ``AttributeError`` before the object was
+  even constructed. W0.5 fixed this (``self._prior_is_normalised`` now
+  always defaults to ``True`` before the optional check runs) --
+  ``test_sbi_check_prior_normalisation_false`` below exercises it
+  directly. This test itself still leaves
+  ``check_prior_normalisation=True`` (the example's default) and instead
+  passes a much smaller ``n_prior_norm_samples`` to keep that step's
+  Monte-Carlo integration cheap, matching the example.
 * ``optimizer.postProcess()`` -- called by the example script exactly as
-  we call it below -- reliably raises (``IndexError`` or ``ValueError``,
-  depending on the run) with the currently-resolved ``sbi`` package
-  (0.27.0). See ``test_sbi_postprocess_plots`` for the root cause and
-  reference.
+  we call it below -- used to reliably raise (``IndexError`` or
+  ``ValueError``, depending on the run) with the currently-resolved
+  ``sbi`` package (0.27.0), because ``SBIPostProcessor.get_map()``
+  (``ampere/infer/mixins.py``) indexed ``posterior.map()``'s batched
+  return value as if it were a flat ``(npars,)`` vector. W0.5 fixed this
+  by normalising the shape in ``get_map()``. See
+  ``test_sbi_postprocess_plots`` below.
 """
 
 from __future__ import annotations
@@ -45,7 +52,6 @@ from __future__ import annotations
 import pickle
 
 import numpy as np
-import pytest
 
 from conftest import (
     SEED,
@@ -125,30 +131,21 @@ def test_sbi_minimal_working_example(tmp_path, monkeypatch):
 
 @requires_sbi
 @xfail_if_pyphot_incompatible
-@pytest.mark.xfail(
-    reason=(
-        "ampere/infer/mixins.py:542 (SBIPostProcessor.print_summary, called "
-        "from SBI_SNPE.postProcess) indexes self.bestPars as if it were a "
-        "flat (npars,) vector: 'self.bestPars[i]' for i in range(self.npars). "
-        "self.bestPars comes from SBIPostProcessor.get_map() "
-        "(ampere/infer/mixins.py:292), i.e. 'self.posterior.map()'. With the "
-        "currently-resolved sbi package (0.27.0), DirectPosterior.map() "
-        "returns a batched tensor whose shape varies from call to call "
-        "(observed both (1,) and (1, npars) across otherwise-identical "
-        "runs -- an sbi-side quirk, not something we control), so this "
-        "raises either 'IndexError: index 1 is out of bounds for dimension "
-        "0 with size 1' or 'ValueError: only one element tensors can be "
-        "converted to Python scalars' (from the '%.5f' formatting), "
-        "depending on the run. This reproduces with "
-        "examples/minimal_working_example_sbi.py's own call to "
-        "optimizer.postProcess() -- not something introduced by this test. "
-        "Not fixed here (frozen legacy code) -- see the W0.4 report. "
-        "(No 'raises=' pinned above, deliberately, since the exact "
-        "exception type is not stable.)"
-    ),
-    strict=False,
-)
 def test_sbi_postprocess_plots(tmp_path, monkeypatch):
+    """W0.4 found this reliably raising (``IndexError``/``ValueError``,
+    depending on the run) with the currently-resolved ``sbi`` package
+    (0.27.0): ``SBIPostProcessor.print_summary`` (called from
+    ``SBI_SNPE.postProcess``, ``ampere/infer/mixins.py``) indexed
+    ``self.bestPars`` as if it were a flat ``(npars,)`` vector, but
+    ``self.bestPars`` comes from ``SBIPostProcessor.get_map()``'s
+    ``self.posterior.map()`` call, and sbi 0.27's ``DirectPosterior.map()``
+    returns a *batched* tensor whose shape has been observed to vary
+    run-to-run (both ``(1,)`` and ``(1, npars)`` seen for the same
+    problem) -- an sbi-side quirk, not something ampere controls. W0.5
+    fixed this by normalising the shape in ``get_map()`` (see
+    ``ampere/infer/mixins.py``), so this is a real (not ``xfail``) pass
+    now -- confirmed twice in a row locally.
+    """
     monkeypatch.chdir(tmp_path)
     optimizer = _build_and_run_sbi(monkeypatch)
 
@@ -158,3 +155,31 @@ def test_sbi_postprocess_plots(tmp_path, monkeypatch):
         assert any(name.endswith(suffix) for name in produced), (
             f"expected a plot ending in {suffix!r}, got {produced}"
         )
+
+
+@requires_sbi
+@xfail_if_pyphot_incompatible
+def test_sbi_check_prior_normalisation_false(monkeypatch):
+    """W0.4 found ``SBI_SNPE(..., check_prior_normalisation=False)`` --
+    documented as a way to *skip* the expensive prior-normalisation
+    Monte-Carlo integration when the caller already knows the prior is
+    normalised -- raising ``AttributeError`` before construction even
+    completed, because skipping the check also skipped setting
+    ``self._prior_is_normalised``, which ``SBI_SNPE.log_prob`` (called by
+    ``sbi`` while validating the prior, inside ``__init__``) reads
+    unconditionally. W0.5 fixed this by always setting
+    ``self._prior_is_normalised`` (default ``True``) before the optional
+    check runs (see ``ampere/infer/sbi.py``). This only exercises
+    construction (no training), so it stays fast.
+    """
+    seed_default_rng(monkeypatch, SEED)
+
+    from ampere.infer.sbi import SBI_SNPE
+
+    problem = build_linear_sed_problem(SEED)
+    optimizer = SBI_SNPE(
+        model=problem["model"],
+        data=problem["dataset"],
+        check_prior_normalisation=False,
+    )
+    assert optimizer._prior_is_normalised is True
