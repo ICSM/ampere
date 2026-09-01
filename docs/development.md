@@ -62,84 +62,74 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
   the "legacy still works" gate; run it before merging anything that
   touches shared files.
 
-## ⚠ Session handoff in effect (2026-09-01) — read this first
+## ⚠ Phase 1 review complete (2026-09-01) — merges await Peter
 
-The orchestrating session hit a Claude usage-credit limit partway through
-Phase 1 and was downgraded from Fable 5 to Sonnet 5; `/model` could not
-switch it back even after re-login. Per Peter's instruction, from the
-downgrade point onward that session stopped doing Fable-tier contract
-authorship and contract-soundness review — it only finished mechanical
-bookkeeping (staging/rebasing agent branches, updating this file and
-`WORK_ITEMS.md`) so a fresh Fable session can pick up cleanly. **A new
-Fable session should do the following before dispatching any further
-Phase 1 work:**
+The Fable review the previous handoff asked for has been done: W1.1, W1.2
+and W1.3 are reviewed, amended where needed, and **ready to merge** on
+their local branches (none pushed to origin; `git branch -v` in the main
+checkout is authoritative). The review session's own merge to master was
+declined by the permission gate, consistent with the working agreement, so
+**Peter performs the merges**. One correction to the earlier handoff text:
+W1.2 was Sonnet-authored (not Fable, as previously recorded) and was
+therefore given a full contract-tier review rather than a light
+reconciliation.
 
-1. Read `DEVELOPMENT_PLAN.md` and `WORK_ITEMS.md` (as always).
-2. Read `docs/design/architecture.md` (**W1.2**) — drafted by Fable earlier
-   in the downgraded session, *before* the downgrade, so its content is
-   legitimate contract-tier work, not a Sonnet artefact. It is on local
-   branch `w1.2-architecture-spec` (**not pushed to origin, not merged**).
-   Its own §10 lists exactly what to re-check against W1.1's findings
-   (bilby's capability-flag framing, gammapy's `Datasets` pattern, 3ML's
-   instrument-owned-likelihood question, Starfish's kernel/cost lessons).
-3. Read `docs/design/prior_art.md` (**W1.1**) — Sonnet-authored (on-policy;
-   W1.1 was always meant for a cheaper tier), staged and rebased onto
-   master on branch `w1.1-prior-art-memo` (**not merged**). It flags one
-   correction to a dispatch-prompt error: gammapy's `Datasets`/tying
-   material bears on `DEVELOPMENT_PLAN.md` **§4.5** (inference contracts,
-   → W1.7), not §4.7 (astropy interop) — no committed doc currently
-   contains that error, but keep it in mind when drafting W1.7.
-4. Reconcile W1.2 against W1.1 (architecture.md §10), do a real Fable-tier
-   review of both, merge what's sound, and only then continue.
-5. **W1.3** (parameter & prior contract, Opus) **has completed** and is
-   mechanically staged on branch `w1.3-parameter-contract` (rebased onto
-   master, 4 commits: exceptions, `ampere/core/parameter.py`, the spec at
-   `docs/design/contracts/parameters.md`, and `tests/core/`) — but it is
-   **not content-reviewed or merged**. Treat it exactly like W1.1/W1.2. It
-   is substantial (2,451-line contract, 854-line spec with 112 executable
-   examples, 108 passing tests) and its own report names five open
-   questions for Peter and per-downstream-spec obligations for W1.4–W1.10
-   — captured below — before deciding what to merge as-is vs revise.
-   Read `docs/design/contracts/parameters.md` (the spec itself, §12–14
-   especially) for the full design reasoning; this section only carries
-   the points that need a decision, not the whole rationale.
+**Merging (suggested order W1.1 → W1.2 → W1.3):** take each branch's
+design docs/code, but keep **master's** `WORK_ITEMS.md` and
+`docs/development.md` — every branch carries stale snapshots of both that
+would regress the status table and delete this section. E.g.:
+`git merge --no-ff <branch>` then, if those two files conflict or change,
+`git checkout HEAD -- WORK_ITEMS.md docs/development.md` before committing.
 
-   **W1.3 ran without W1.1's findings** (the memo branch didn't exist yet
-   when it started) — its tying design is the agent's own, not checked
-   against 3ML's multi-instrument pattern; re-check when reconciling.
+**Review outcomes:**
 
-   **Five questions W1.3 raised for Peter specifically:** (1) it imports
-   `astropy.units` at module level in `ampere/core`, which contradicts
-   `architecture.md`'s literal "numpy/scipy/typing/stdlib" wording for
-   core even though the *plan* requires units on parameters — the spec
-   needs a wording fix, not a design change, but confirm; (2) tie labels
-   are a flat global namespace (`"distance"`, not `"shared.distance"`);
-   (3) a `shared_as` with nothing to merge with is currently allowed
-   rather than raising; (4) `OptionalDependencyError`'s shape is pinned
-   per `architecture.md` §9 and should be ratified or moved at W1.13;
-   (5) the legacy `npars` alias was dropped in favour of `len(pset)` /
-   `pset.free_size` — confirm nothing needs the old name.
+- **W1.1** (`w1.1-prior-art-memo`, Sonnet): merged as authored — no
+  changes. Its two most load-bearing claims were re-verified against live
+  sources during review: bilby's current core really does take an explicit
+  `log_likelihood(parameters)` argument (checked against `bilby-dev/bilby`
+  `main`), and gammapy issue #2859 / fix PR #2861 are as described. The
+  memo's own §7 confidence table is accurate; its weakest section (3ML,
+  tutorial-level sourcing) is honestly flagged there.
+- **W1.2** (`w1.2-architecture-spec`, Sonnet + Fable amendments): one
+  amendment commit on top of the draft. Core's dependency floor corrected
+  to numpy/scipy/**astropy**/stdlib (the plan requires units on parameters;
+  astropy is a required base dependency; this resolves W1.3's open
+  question 1). §10 rewritten as the W1.1 reconciliation record — none of
+  the four questions it posed required structural change. **One genuine
+  conflict with the plan found and flagged, needing Peter's decision-log
+  ruling by W1.13**: architecture.md §1 says curated astropy→native model
+  translation must be opt-in/disclosed; `DEVELOPMENT_PLAN.md` §4.7 says
+  "silently restoring differentiability". The review recommends the
+  opt-in/disclosed position (a silently substituted implementation is not
+  guaranteed numerically identical), but the plan wins until its decision
+  log says otherwise.
+- **W1.3** (`w1.3-parameter-contract`, Opus + Fable fix commit): strong
+  contract; three defects found and fixed on the branch, with tests
+  (112 pass; pyrefly/ruff/format clean): (1) tying two hierarchical-prior
+  parameters whose hyperparameters were not themselves tied silently wired
+  the collapsed parameter to the first component's hyperparameters — now a
+  `TyingError` with a hint; (2) `describe_prior` kept scipy's positional/
+  keyword split, so `st.norm(1.5, 0.1)` and `st.norm(loc=1.5, scale=0.1)`
+  counted as different priors when tied and serialised differently — the
+  description is now canonical (keyword-only), which also gives W1.9 a
+  single form to lower; (3) conflicting explicit bijections on tied sites
+  silently took the first — now a `TyingError`. Checked against W1.1
+  retrospectively: its declaration-based tying is exactly what memo lesson
+  G2 prescribes.
 
-   **Obligations it places on later specs** (its own §13): W1.5 must call
-   the unconstrained-space slot `Bijection` (not `Transform`, which W1.5
-   owns) and have parameterised transformations inherit its `Parameterised`
-   mixin; W1.6 should treat GP hyperparameters as ordinary parameters with
-   `Log` bijections and explicitly answer whether array-valued
-   `HierarchicalPrior` declarations scale to ~10⁵ latent values (not
-   assume they do); W1.7 should build `DatasetCollection` on
-   `ParameterMapping`/`distribute()` and note that **`merge()` is not
-   associative** — merge all components in one call, or extend to a
-   nested mapping if `DatasetCollection`s must nest; W1.8 should hash
-   `to_spec()` into provenance attrs and use `free_labels()` for ArviZ
-   coordinates; W1.9 has an enumerated list (§13) of declaration forms
-   needing a lowering row, plus `lnprior_unconstrained` as the reference
-   semantics native backends must agree with; W1.10 already has seven
-   conformance-suite rows implemented and testable straight from this
-   contract; W1.4 should confirm channel names and parameter names are
-   allowed to collide harmlessly as separate namespaces.
+**Still needing Peter's decision** (none block the merges):
 
-None of W1.1/W1.2/W1.3's branches were pushed to origin, so `git branch -v`
-in the main checkout is the authoritative list of what exists locally.
+1. The curated-translation conflict above (architecture.md §9; plan §4.7).
+2. W1.3 spec §14's remaining open questions — tie labels as a flat global
+   namespace; whether a lone `shared_as` should raise; ratifying
+   `OptionalDependencyError`'s shape at W1.13; confirming nothing needs
+   the legacy `npars` alias. (Question 1, astropy-in-core, is resolved by
+   the W1.2 amendment; question 2, recursive merge, is explicitly deferred
+   to W1.7.)
+
+**Obligations W1.3 places on later specs** are recorded in the spec's own
+§13 (`docs/design/contracts/parameters.md`) — W1.4–W1.10 authors read that
+section before starting; dispatch prompts should cite it.
 
 A `SendFeedback` draft was queued in the downgraded session about the
 `/model` switch-back failure (usage-credit downgrade not reversible via

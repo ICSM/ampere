@@ -267,13 +267,15 @@ to this file.
 | W0.5 | merged 2026-09-01 |
 | W0.6 + W0.8 | merged 2026-09-01 |
 | W0.9 | not started |
-| W1.1 | done 2026-09-01 — branch `w1.1-prior-art-memo` (Sonnet), staged/rebased onto master, **not merged** — see `docs/development.md` session-handoff note |
-| W1.2 | draft done 2026-09-01 — branch `w1.2-architecture-spec` (Fable-authored, before the session's mid-task model downgrade; local only, not pushed), awaiting reconciliation with W1.1 and Peter's review |
-| W1.3 | done 2026-09-01 — branch `w1.3-parameter-contract` (Opus), staged/rebased onto master, **not merged**; ran without W1.1's findings (memo didn't exist yet) — see `docs/development.md` session-handoff note for the full report, five questions for Peter, and obligations it places on W1.4–W1.10 |
+| W1.1 | Fable-reviewed 2026-09-01, **ready to merge** — branch `w1.1-prior-art-memo` (Sonnet-authored). Two load-bearing claims re-verified against live sources during review (bilby's current explicit-argument `log_likelihood(parameters)`; gammapy issue #2859/PR #2861). Peter's review pass is the formal accept gate |
+| W1.2 | Fable-reviewed and amended 2026-09-01, **ready to merge** — branch `w1.2-architecture-spec` (Sonnet-authored, contrary to the earlier handoff note; given a full contract-tier review accordingly). Reconciled against W1.1 (its §10 records the outcome); core dependency floor corrected to include astropy; one genuine plan conflict found and flagged (curated-translation default, §1/§9 vs plan §4.7) — needs Peter's decision-log ruling by W1.13 |
+| W1.3 | Fable-reviewed and fixed 2026-09-01, **ready to merge** — branch `w1.3-parameter-contract` (Opus-authored). Three defects fixed on the branch (tied hierarchical priors silently adopting one component's hyperparameters; non-canonical prior descriptions breaking tie equality; unchecked bijection conflicts on tied sites); 112 tests, pyrefly/ruff clean. Open questions for Peter in the spec's §14 — see `docs/development.md` |
 | W1.4–W1.13 | not started |
 
-**Session note (2026-09-01):** the dispatching session was downgraded from
-Fable 5 to Sonnet 5 mid-Phase-1 (usage credits; `/model` would not switch
-back). W1.1–W1.3 above were dispatched/drafted before or at the downgrade;
-none are merged. See `docs/development.md`'s "Session handoff in effect"
-section before doing any further Phase 1 work.
+**Session note (2026-09-01, updated after the Fable review):** the branches
+above are reviewed and ready but **not merged** — the review session's merge
+to master was declined by the permission gate, consistent with the working
+agreement that Peter merges. On merge, take the branch's design docs but keep
+master's `WORK_ITEMS.md` and `docs/development.md` (each branch carries stale
+snapshots of both that would regress this table and delete the handoff
+section). Suggested order: W1.1, W1.2, W1.3.
