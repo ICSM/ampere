@@ -54,6 +54,7 @@ backend-neutral core plus modern computational backends, targeting:
 | Buffers | The model contract distinguishes parameters from **buffers** (constant arrays); lowering rules per backend in §4.1 (torch `register_buffer`; jax via partition filters, never equinox static fields). |
 | Diagnostics | **Misspecification diagnostics are in scope** (§4.8): RHMF-style pre-fit screening (Hilder et al. 2026), post-fit residual tests, GP-based localisation. |
 | Dependency management | **pixi replaces manual environment control** (work item W0.8): pyproject.toml stays the single source of truth for dependencies; pixi provides locked environments (features mirroring the extras), tasks, and the CI environment setup. Adopt before/with W0.6 so CI is built on it once. |
+| Dependency pins | `pyphot<2` and `sbi<0.28` pinned 2026-09-01 as **temporary** measures (pyphot ≥2 removed `pyphot.unit`; sbi 0.27 changed `posterior.map()` shapes). Policy is to migrate forwards, not freeze: work item W0.9 lifts both — pyphot before Phase 2's synthetic-photometry Transformation (new code targets the ≥2 API from the start), sbi with Phase 3 (which wants the latest inference algorithms anyway). |
 
 ## 3. Architecture: a core and a capability ladder, not four peer backends
 

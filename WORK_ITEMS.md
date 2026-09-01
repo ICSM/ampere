@@ -63,11 +63,8 @@ error (#74). Make heavy/optional imports lazy so no broken or missing
 optional corner can block `import ampere`.
 
 Additional scope from W0.4's findings (2026-09-01):
-- **Pin `pyphot<2` in pyproject.toml** (or write a small unit-compat
-  adapter): pyphot ≥2 removed `pyphot.unit`, which
-  `ampere/data/photometry.py` uses directly, so a fresh install is broken
-  for every photometry-bearing flow — and the characterisation suite
-  xfails vacuously until the pin lands.
+- (The `pyphot<2` and `sbi<0.28` pins were applied directly on master
+  2026-09-01; forward-migration to current versions is W0.9.)
 - Fix or quarantine-with-informative-error the two SBI defects W0.4
   isolated: `SBI_SNPE.postProcess()` crashes on sbi 0.27's batched
   `posterior.map()` shapes (`mixins.py:542`), and
@@ -103,6 +100,29 @@ is built on pixi once, not twice.
 **Accept:** from a clean clone with only pixi installed, `pixi run test`
 (and lint/typecheck tasks) work; lockfile committed; CI green via pixi;
 `environment.yml` removed; docs updated.
+
+### W0.9 — Dependency forward-migration: pyphot ≥2 and current sbi [L]
+The `pyphot<2` and `sbi<0.28` pins are temporary; both ecosystems should
+be migrated forwards, not frozen out — we want current pyphot and the
+latest sbi inference algorithms available.
+- **pyphot**: write a small compat layer (e.g. `ampere/utils/
+  pyphot_compat.py`) supporting both pyphot 1.x and ≥2 unit handling;
+  migrate `ampere/data/photometry.py` onto it (a permitted critical fix to
+  frozen legacy — a breaking dependency counts); lift the pin. MUST land
+  before Phase 2's synthetic-photometry Transformation is written, so new
+  code targets the pyphot ≥2 API from the start and never inherits the
+  legacy idiom.
+- **sbi**: update `ampere/infer/sbi.py` for the current sbi API (batched
+  `posterior.map()` shapes in `postProcess`, prior-validation behaviour);
+  lift the pin. Natural timing: with, or just before, Phase 3, which
+  targets latest sbi for the new SBI layer anyway.
+- Characterisation suite must pass for real against the migrated versions
+  in the same PR(s); remove any obsoleted xfail markers.
+**Depends:** W0.4 merged (the suite is the safety net for exactly this
+migration); the sbi half also benefits from W0.5's quarantine decisions.
+**Accept:** fresh-env suite green with unpinned pyphot ≥2 (and current sbi
+for the sbi half); pins removed from pyproject.toml; compat layer
+documented.
 
 ### W0.7 — Branch harvest & archive proposal [M]
 Extract into `docs/design/harvest/`: the swyft TMNRE diff, the

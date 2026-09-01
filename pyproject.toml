@@ -29,7 +29,7 @@ dependencies = [
     "matplotlib",
     "spectres",
     "tqdm",
-    "pyphot",
+    "pyphot<2",  # TEMPORARY pin: legacy photometry uses pyphot.unit, removed in pyphot 2; lift via W0.9 forward-migration
     "emcee",
     "dynesty",
     "corner",
@@ -76,7 +76,7 @@ Homepage = "https://github.com/icsm/ampere"
 # grow pinned/qualified requirements as the backends land.
 torch = ["torch"]
 jax = ["jax"]
-sbi = ["torch", "sbi"]
+sbi = ["torch", "sbi<0.28"]  # TEMPORARY upper pin at the tested version; lift via W0.9/Phase 3
 zeus = ["zeus-mcmc"]
 arviz = ["arviz"]
 dev = [
