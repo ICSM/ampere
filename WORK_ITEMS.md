@@ -269,7 +269,7 @@ to this file.
 | W0.9 | not started |
 | W1.1 | done 2026-09-01 — branch `w1.1-prior-art-memo` (Sonnet), staged/rebased onto master, **not merged** — see `docs/development.md` session-handoff note |
 | W1.2 | draft done 2026-09-01 — branch `w1.2-architecture-spec` (Fable-authored, before the session's mid-task model downgrade; local only, not pushed), awaiting reconciliation with W1.1 and Peter's review |
-| W1.3 | dispatched 2026-09-01 to Opus, before the downgrade; see `docs/development.md` session-handoff note for status/review state |
+| W1.3 | done 2026-09-01 — branch `w1.3-parameter-contract` (Opus), staged/rebased onto master, **not merged**; ran without W1.1's findings (memo didn't exist yet) — see `docs/development.md` session-handoff note for the full report, five questions for Peter, and obligations it places on W1.4–W1.10 |
 | W1.4–W1.13 | not started |
 
 **Session note (2026-09-01):** the dispatching session was downgraded from

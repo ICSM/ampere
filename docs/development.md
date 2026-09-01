@@ -91,13 +91,52 @@ Phase 1 work:**
    contains that error, but keep it in mind when drafting W1.7.
 4. Reconcile W1.2 against W1.1 (architecture.md §10), do a real Fable-tier
    review of both, merge what's sound, and only then continue.
-5. Check whether **W1.3** (parameter & prior contract, dispatched to Opus
-   before the downgrade) has completed. If its task notification already
-   arrived in the downgraded session, its branch (`w1.3-parameter-contract`)
-   was mechanically staged/rebased but **not content-reviewed** — treat it
-   the same as W1.1/W1.2: unreviewed, unmerged, needs a genuine Fable pass
-   before merge. If it hadn't completed by the time this note was written,
-   check `WORK_ITEMS.md`'s status table for the latest known state.
+5. **W1.3** (parameter & prior contract, Opus) **has completed** and is
+   mechanically staged on branch `w1.3-parameter-contract` (rebased onto
+   master, 4 commits: exceptions, `ampere/core/parameter.py`, the spec at
+   `docs/design/contracts/parameters.md`, and `tests/core/`) — but it is
+   **not content-reviewed or merged**. Treat it exactly like W1.1/W1.2. It
+   is substantial (2,451-line contract, 854-line spec with 112 executable
+   examples, 108 passing tests) and its own report names five open
+   questions for Peter and per-downstream-spec obligations for W1.4–W1.10
+   — captured below — before deciding what to merge as-is vs revise.
+   Read `docs/design/contracts/parameters.md` (the spec itself, §12–14
+   especially) for the full design reasoning; this section only carries
+   the points that need a decision, not the whole rationale.
+
+   **W1.3 ran without W1.1's findings** (the memo branch didn't exist yet
+   when it started) — its tying design is the agent's own, not checked
+   against 3ML's multi-instrument pattern; re-check when reconciling.
+
+   **Five questions W1.3 raised for Peter specifically:** (1) it imports
+   `astropy.units` at module level in `ampere/core`, which contradicts
+   `architecture.md`'s literal "numpy/scipy/typing/stdlib" wording for
+   core even though the *plan* requires units on parameters — the spec
+   needs a wording fix, not a design change, but confirm; (2) tie labels
+   are a flat global namespace (`"distance"`, not `"shared.distance"`);
+   (3) a `shared_as` with nothing to merge with is currently allowed
+   rather than raising; (4) `OptionalDependencyError`'s shape is pinned
+   per `architecture.md` §9 and should be ratified or moved at W1.13;
+   (5) the legacy `npars` alias was dropped in favour of `len(pset)` /
+   `pset.free_size` — confirm nothing needs the old name.
+
+   **Obligations it places on later specs** (its own §13): W1.5 must call
+   the unconstrained-space slot `Bijection` (not `Transform`, which W1.5
+   owns) and have parameterised transformations inherit its `Parameterised`
+   mixin; W1.6 should treat GP hyperparameters as ordinary parameters with
+   `Log` bijections and explicitly answer whether array-valued
+   `HierarchicalPrior` declarations scale to ~10⁵ latent values (not
+   assume they do); W1.7 should build `DatasetCollection` on
+   `ParameterMapping`/`distribute()` and note that **`merge()` is not
+   associative** — merge all components in one call, or extend to a
+   nested mapping if `DatasetCollection`s must nest; W1.8 should hash
+   `to_spec()` into provenance attrs and use `free_labels()` for ArviZ
+   coordinates; W1.9 has an enumerated list (§13) of declaration forms
+   needing a lowering row, plus `lnprior_unconstrained` as the reference
+   semantics native backends must agree with; W1.10 already has seven
+   conformance-suite rows implemented and testable straight from this
+   contract; W1.4 should confirm channel names and parameter names are
+   allowed to collide harmlessly as separate namespaces.
 
 None of W1.1/W1.2/W1.3's branches were pushed to origin, so `git branch -v`
 in the main checkout is the authoritative list of what exists locally.
