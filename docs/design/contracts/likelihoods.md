@@ -683,6 +683,15 @@ parameterisation, which needs no extension to `parameters.md` at all:
   the `GPSolver`, where it can be a Cholesky factor (`DenseGP`) or a state-space
   recursion (`QuasisepGP`) without the declaration changing.
 
+One honest caveat, since fixing the declaration fixes the geometry with it: the
+non-centred form is the right default when the data constrain the latent
+function weakly relative to its prior, which is the regime a misspecification
+GP is usually in, but the *centred* form (`f` sampled directly, with the
+hyperparameters entering its prior) has the better geometry when the data
+constrain it strongly. Switching between them is a reparameterisation, not a
+model change, so a backend may offer it; this contract fixes the default and
+the transform, not the only possible parameterisation.
+
 ```pycon
 >>> declaration = latent_poisson.latent_declaration(counts.n_samples)
 >>> parameter = declaration.parameter
