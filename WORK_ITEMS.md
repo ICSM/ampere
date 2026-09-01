@@ -55,15 +55,30 @@ document the choice per test.
 **Depends:** W0.3. **Accept:** `pytest tests/characterisation` green twice in
 a row locally (determinism) in < ~10 min.
 
-### W0.5 — Broken-module quarantine (issues #74–77) [M]
+### W0.5 — Broken-module quarantine and dependency pins (issues #74–77 + W0.4 findings) [M]
 Fix the astropy `BlackBody` API usage (#77); fix `CCMExtinctionLaw` syntax
 errors (#76); replace the abandoned `extinction` dependency with
 `dust_extinction` or inline curves (#75); fix the `extinctionModels` import
 error (#74). Make heavy/optional imports lazy so no broken or missing
 optional corner can block `import ampere`.
+
+Additional scope from W0.4's findings (2026-09-01):
+- **Pin `pyphot<2` in pyproject.toml** (or write a small unit-compat
+  adapter): pyphot ≥2 removed `pyphot.unit`, which
+  `ampere/data/photometry.py` uses directly, so a fresh install is broken
+  for every photometry-bearing flow — and the characterisation suite
+  xfails vacuously until the pin lands.
+- Fix or quarantine-with-informative-error the two SBI defects W0.4
+  isolated: `SBI_SNPE.postProcess()` crashes on sbi 0.27's batched
+  `posterior.map()` shapes (`mixins.py:542`), and
+  `check_prior_normalisation=False` raises `AttributeError` because
+  `_prior_is_normalised` is never set. Consider an upper pin on `sbi` if
+  fixing is disproportionate.
 **Accept:** `import ampere` succeeds in a minimal-deps env; a test imports
 every non-quarantined module; quarantined corners raise informative errors
-on use, not on import.
+on use, not on import; **`pytest tests/characterisation` in a fresh
+`.[dev,zeus,sbi]` env yields real passes, not pyphot xfails**; the W0.4
+xfail markers that the fixes obsolete are removed in the same PR.
 
 ### W0.6 — CI + pre-commit [M]
 GitHub Actions PR gate: ruff (lint + format), pyrefly (scoped to
@@ -227,7 +242,7 @@ to this file.
 | W0.1 | done 2026-09-01 (committed directly to master — the pending fix existed only in the local working tree, so the branch-per-item rule was waived for it) |
 | W0.2 | merged 2026-09-01 |
 | W0.3 | merged 2026-09-01 |
-| W0.4 | dispatched 2026-09-01 |
+| W0.4 | done 2026-09-01 — branch `w0.4-characterisation-harness`, awaiting review/merge |
 | W0.7 | merged 2026-09-01 — branch-archival actions in `docs/design/harvest/branch_triage.md` await Peter's approval |
 | W0.5, W0.6, W0.8 | not started |
 | W1.1–W1.13 | not started |
