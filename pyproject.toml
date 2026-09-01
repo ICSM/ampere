@@ -114,6 +114,50 @@ ampere = ["ampere_allfilters.hd5"]
 [tool.setuptools_scm]
 
 [tool.ruff]
+# 100, not ruff's 88 default: wide enough that the pre-existing W0.4/W0.5
+# characterisation suite (tests/characterisation/, frozen for this item --
+# see WORK_ITEMS.md W0.6 "Constraints") passes lint/format-check without
+# editing it, while still being a normal, deliberate line-length choice for
+# new code.
+line-length = 100
+target-version = "py311"
+
+# Lint/format scope policy (W0.6, 2026-09-01): the legacy codebase carries
+# ~900 pre-existing ruff findings that are out of scope for this item and
+# that AGENTS.md/WORK_ITEMS.md freeze anyway (`ampere/data`, `ampere/models`,
+# `ampere/infer`; extended here to `ampere/utils`, `ampere/__init__.py`,
+# `ampere/logger.py`, `ampere/examples`, `examples/` and `setup.py`, all of
+# comparable vintage/quality) -- these are excluded outright rather than
+# per-file-ignored, so the gate is meaningful. `docs` (Sphinx conf.py +
+# demo notebooks under docs/source, and W0.7's harvested/archived branch
+# snapshots under docs/design -- explicitly "does not import" per
+# AGENTS.md) and the root `demo_pyphot.ipynb` are excluded for the same
+# reason -- documentation/demo/archival material, not package or test
+# source.
+# `tests/` and the future new namespaces (`ampere/core`, `ampere/backends`,
+# `ampere/inference`, `ampere/results`, per AGENTS.md ground rule 8) are
+# NOT excluded -- they are linted/formatted strictly. The three remaining
+# findings in `tests/characterisation/conftest.py` and the three in
+# `tests/test_imports.py` are pre-existing and cannot be fixed here without
+# editing frozen test logic; see `[tool.ruff.lint.per-file-ignores]` below.
+extend-exclude = [
+    "ampere/data",
+    "ampere/models",
+    "ampere/infer",
+    "ampere/utils",
+    "ampere/examples",
+    "ampere/__init__.py",
+    "ampere/logger.py",
+    "examples",
+    "docs",
+    "demo_pyphot.ipynb",
+    "setup.py",
+]
+
+# include notebooks!
+include = ["*.py", "*.pyi", "**/pyproject.toml", "*.ipynb"]
+
+[tool.ruff.lint]
 select = ["A",  # prevent using keywords that clobber python builtins
           "B",  # bugbear: security warnings
           "E",  # pycodestyle
@@ -125,15 +169,28 @@ select = ["A",  # prevent using keywords that clobber python builtins
 
           ]
 ignore = ["UP004", "B007"]  # ["E501", "W503"]
-exclude = ["tests"]
 
-# include notebooks!
-include = ["*.py", "*.pyi", "**/pyproject.toml", "*.ipynb"]
+[tool.ruff.lint.per-file-ignores]
+# tests/characterisation/ is frozen test logic for this item (W0.6
+# Constraints) -- these three Bugbear findings pre-date this branch and
+# cannot be fixed by editing the file, only ignored: B008 (np.array(...) in
+# a default argument -- LinearModel mirrors the legacy example's
+# ASimpleModel signature deliberately), B005 (ampere.__file__.strip(...)
+# multi-char strip -- mirrors legacy filter-library loading idiom), B905
+# (zip() without strict= in assert_means_within_tolerance).
+"tests/characterisation/conftest.py" = ["B005", "B008", "B905"]
+# Same freeze does not cover test_imports.py, but this item is config-only
+# outside frozen paths too: three `# noqa: F401` comments (W0.5, on
+# `import ampere.models` / `.infer` / `.data` inside
+# test_top_level_packages_import_cleanly) are flagged RUF100
+# (unused-noqa) because ruff's pyflakes only raises F401 once per
+# repeatedly-rebound local name (`ampere`) across the four `import
+# ampere[.x]` statements -- a ruff quirk, not a reason to touch W0.5's test.
+"tests/test_imports.py" = ["RUF100"]
 
-[tool.black]
-line-length = 88
-target-version = ['py38', 'py39']
-include = '\.pyi?$'
+# ruff format is the formatter (replaces the historical black config,
+# which was never wired into CI/pre-commit and had drifted -- py38/py39
+# target versions predating the >=3.11 packaging floor set in W0.3).
 
 # [tool.pytest]
 # TBD

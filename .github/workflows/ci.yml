@@ -1,0 +1,128 @@
+name: CI
+
+# W0.6/W0.8: the whole gate runs through pixi (prefix-dev/setup-pixi), so
+# the environment setup is built once and shared with local development
+# (`pixi run <task>`) rather than duplicated as ad-hoc pip/apt steps here.
+# pyproject.toml's [tool.pixi.*] tables are the actual environment
+# definitions; this file only decides which environment/task runs where.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  # Non-blocking triggers for the sbi-characterisation job only (see its
+  # `if:` guard below) -- push/pull_request never run it, since torch+sbi
+  # are a large download that would otherwise sit on every PR's critical
+  # path. Everything else in this workflow also reruns on these two
+  # events, which is harmless (same jobs as any push) rather than
+  # something to specifically avoid.
+  workflow_dispatch:
+  schedule:
+    # Weekly; 03:17 UTC Monday is an arbitrary off-peak time, chosen only
+    # to avoid the top-of-hour scheduled-workflow crowd on GitHub's side.
+    - cron: "17 3 * * 1"
+
+# Cancel superseded runs on the same branch/PR to save CI minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: lint + format-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          environments: dev
+          cache: true
+      - run: pixi run -e dev lint
+      - run: pixi run -e dev format-check
+
+  typecheck:
+    name: typecheck (pyrefly, new namespaces)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          environments: dev
+          cache: true
+      # ampere/core, ampere/backends, ampere/inference, ampere/results
+      # don't exist yet (AGENTS.md ground rule 8) -- the task itself
+      # detects this and exits 0 cleanly; see pyproject.toml
+      # [tool.pixi.tasks].typecheck.
+      - run: pixi run -e dev typecheck
+
+  test:
+    name: test (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["311", "312", "313"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          environments: test-py${{ matrix.python }}
+          cache: true
+      - name: fast tests (with coverage)
+        run: pixi run -e test-py${{ matrix.python }} pytest tests/test_imports.py --cov=ampere --cov-report=xml --cov-report=term
+      # Characterisation suite (W0.4/W0.5, "legacy still works"): runs here
+      # in [dev,zeus,extinction] -- no `sbi` extra, so torch is never
+      # pulled into the main matrix. The sbi flow's tests skip cleanly by
+      # design (tests/characterisation/conftest.py's `requires_sbi`
+      # marker checks for torch+sbi and calls pytest.mark.skipif) rather
+      # than failing, so this job still exercises real emcee/dynesty/zeus
+      # passes plus a clean-skip check on every PR. Kept in the same job
+      # as the fast tests (not split out) because total time here is a
+      # couple of minutes, well within budget -- see the sbi-
+      # characterisation job below for the torch/sbi-inclusive run this
+      # deliberately excludes.
+      - name: characterisation suite (emcee/dynesty/zeus; sbi skips cleanly)
+        run: pixi run -e test-py${{ matrix.python }} test-characterisation
+      - name: upload coverage
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-py${{ matrix.python }}
+          path: coverage.xml
+          if-no-files-found: ignore
+
+  minimal-install:
+    name: minimal install (no extras)
+    runs-on: ubuntu-latest
+    # Deliberately NOT pixi: this job's entire point is to catch lazy-
+    # import regressions under the plainest possible install --
+    # `pip install -e .` with none of the optional extras -- which is
+    # exactly the environment W0.5's quarantine work targets. Using pixi
+    # here would exercise the pypi-dependencies/editable-install path
+    # instead of a bare pip install, defeating the point.
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - run: pip install -e .
+      - run: python -c "import ampere"
+      - run: pip install pytest
+      - run: pytest tests/test_imports.py
+
+  sbi-characterisation:
+    name: characterisation suite (with sbi extra)
+    runs-on: ubuntu-latest
+    # Non-blocking: torch+sbi are a large download and this duplicates
+    # most of what the `test` job's characterisation step already covers
+    # (emcee/dynesty/zeus), adding only the sbi flow itself. Run on a
+    # schedule and on demand rather than on every push/PR, so the sbi
+    # extra's weight never sits on the PR-gate critical path. See this
+    # item's report for the full rationale.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          environments: sbi
+          cache: true
+      - run: pixi run -e sbi test-characterisation

@@ -1,0 +1,29 @@
+# Pre-commit hooks mirroring the CI lint/format gate (W0.6, ci.yml's
+# `lint` job). Uses the ruff-pre-commit mirror repo, which vendors its own
+# isolated ruff install, so `pre-commit run` works without `pixi install`
+# or `pip install -e ".[dev]"` first. `rev` is pinned to the ruff version
+# this branch developed/verified against (`ruff --version` via
+# `pixi run -e dev lint`); bump it when the `dev` extra's ruff resolves to
+# a newer release.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.17
+    hooks:
+      # Mirrors `pixi run lint` / `ruff check .`: reports findings, does
+      # not auto-fix (run `ruff check --fix .` yourself if you want that).
+      # Respects pyproject.toml's [tool.ruff] scope -- legacy ampere/
+      # paths, examples/, docs/, demo_pyphot.ipynb and setup.py are
+      # excluded there, not here.
+      - id: ruff-check
+        name: ruff check
+      # Mirrors `pixi run format-check` / `ruff format --check .`, except
+      # this hook (conventionally, for pre-commit) reformats in place
+      # rather than only reporting -- re-stage and commit again if it
+      # changes anything. tests/characterisation/ is excluded, same as
+      # the format-check task and for the same reason: it is frozen test
+      # logic (W0.4/W0.5; see this item's Constraints) that is not
+      # reformatted as part of this work item -- see pyproject.toml's
+      # [tool.ruff] policy comment.
+      - id: ruff-format
+        name: ruff format
+        exclude: ^tests/characterisation/
