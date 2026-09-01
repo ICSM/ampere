@@ -79,6 +79,10 @@ jax = ["jax"]
 sbi = ["torch", "sbi<0.28"]  # TEMPORARY upper pin at the tested version; lift via W0.9/Phase 3
 zeus = ["zeus-mcmc"]
 arviz = ["arviz"]
+# W0.5: replaces the abandoned 'extinction' package (issue #75) for
+# ampere.models.extinctionModels.F99Extinction; imported lazily, so it is
+# optional rather than a core dependency.
+extinction = ["dust_extinction"]
 dev = [
     # test + coverage
     "pytest",
@@ -94,7 +98,7 @@ dev = [
 ]
 # Every feature extra (not dev) composed; self-referential extras are
 # supported by pip and setuptools.
-all = ["ampere[torch,jax,sbi,zeus,arviz]"]
+all = ["ampere[torch,jax,sbi,zeus,arviz,extinction]"]
 
 [tool.setuptools]
 include-package-data = false
