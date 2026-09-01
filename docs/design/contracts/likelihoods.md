@@ -1136,8 +1136,13 @@ Each is a decision, not an oversight. Each has an extension point.
   axes for equality — negotiation should target the observed grid.
 - **W1.7 (Dataset / FittingProblem)** — `Dataset` should call
   `Likelihood.check_alignment(predicted_template, observed)` once at
-  construction, and `Likelihood.check_engine(differentiable=…, engine=…)` when
-  an engine is selected. `Likelihood.parameters` is a flat `ParameterSet` ready
+  construction, and `Likelihood.check_engine(differentiable=…, engine=…,
+  observed=…)` when an engine is selected. **Pass `observed`**: without it the
+  censoring half of the marginalisation is answered conservatively, and a
+  problem whose only limits are masked would be refused a gradient-free engine
+  it can perfectly well use (§9). `check_alignment` is also where a latent
+  combination whose family does not implement the latent path is refused, so
+  calling it is not optional. `Likelihood.parameters` is a flat `ParameterSet` ready
   to be one component of a single `ParameterSet.merge` across datasets — do not
   merge it again on its own. For a latent combination, `latent_declaration(n)`
   returns the extra parameter to include in that same merge; `n` is the number
