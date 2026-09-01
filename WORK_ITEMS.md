@@ -70,8 +70,24 @@ GitHub Actions PR gate: ruff (lint + format), pyrefly (scoped to
 `ampere/core`, `ampere/backends`, `ampere/inference`, `ampere/results` —
 initially empty scope is fine), pytest + coverage, Python 3.11–3.13 matrix.
 Matching pre-commit config.
-**Depends:** W0.4, W0.5. **Accept:** green runs on a PR; a deliberately
-broken test/lint fails the gate.
+**Depends:** W0.4, W0.5; coordinate with W0.8 — prefer building the CI
+environment setup on pixi directly rather than migrating it afterwards.
+**Accept:** green runs on a PR; a deliberately broken test/lint fails the
+gate.
+
+### W0.8 — pixi migration [M]
+Move environment management to pixi while keeping pyproject.toml the single
+source of truth for dependencies: `[tool.pixi]` tables with features/
+environments mirroring the extras (`dev`, `torch`, `jax`, `sbi`), a
+committed `pixi.lock`, tasks for the common commands (test, lint,
+typecheck, docs), and CI switched to `setup-pixi` with caching. Retire
+`environment.yml`; update AGENTS.md and `docs/development.md` environment
+instructions.
+**Depends:** W0.3 merged. Schedule just before or together with W0.6 so CI
+is built on pixi once, not twice.
+**Accept:** from a clean clone with only pixi installed, `pixi run test`
+(and lint/typecheck tasks) work; lockfile committed; CI green via pixi;
+`environment.yml` removed; docs updated.
 
 ### W0.7 — Branch harvest & archive proposal [M]
 Extract into `docs/design/harvest/`: the swyft TMNRE diff, the
@@ -209,7 +225,7 @@ to this file.
 | Item | Status |
 |---|---|
 | W0.1 | done 2026-09-01 (committed directly to master — the pending fix existed only in the local working tree, so the branch-per-item rule was waived for it) |
-| W0.2 | dispatched 2026-09-01 |
-| W0.3 | dispatched 2026-09-01 |
-| W0.4–W0.7 | not started |
+| W0.2 | done 2026-09-01 — branch `w0.2-repo-hygiene`, awaiting review/merge |
+| W0.3 | done 2026-09-01 — branch `w0.3-packaging-floor`, awaiting review/merge |
+| W0.4–W0.8 | not started |
 | W1.1–W1.13 | not started |

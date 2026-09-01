@@ -39,7 +39,9 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
 - Conda env `ampere` (Python 3.13) has an editable install pointing at the
   main checkout — worktree-based work that needs importing its own changes
   should `pip install -e .` into a fresh env instead.
-- Fresh setup: `pip install -e ".[dev]"`, Python ≥ 3.11.
+- Fresh setup: `pip install -e ".[dev]"`, Python ≥ 3.11. (Interim: once
+  W0.8 lands, pixi becomes the supported route — `pixi install` /
+  `pixi run test` — and environment.yml is retired.)
 - `pytest tests/characterisation` is the "legacy still works" gate once
   W0.4 lands; run it before merging anything that touches shared files.
 

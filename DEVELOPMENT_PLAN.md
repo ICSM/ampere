@@ -53,6 +53,7 @@ backend-neutral core plus modern computational backends, targeting:
 | Non-Gaussian robustness | **Accepted**: flexible-GP robustness for non-Gaussian likelihood families (latent-GP path) is promised on the torch/jax rungs only (§4.4). |
 | Buffers | The model contract distinguishes parameters from **buffers** (constant arrays); lowering rules per backend in §4.1 (torch `register_buffer`; jax via partition filters, never equinox static fields). |
 | Diagnostics | **Misspecification diagnostics are in scope** (§4.8): RHMF-style pre-fit screening (Hilder et al. 2026), post-fit residual tests, GP-based localisation. |
+| Dependency management | **pixi replaces manual environment control** (work item W0.8): pyproject.toml stays the single source of truth for dependencies; pixi provides locked environments (features mirroring the extras), tasks, and the CI environment setup. Adopt before/with W0.6 so CI is built on it once. |
 
 ## 3. Architecture: a core and a capability ladder, not four peer backends
 
