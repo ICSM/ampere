@@ -156,12 +156,16 @@ gate their branches' merges):
   `ParameterMapping` as a first-class design option (recorded in
   `parameters.md` §14's preamble; W1.5 §14's ties-across-levels note is
   part of the same question). **W1.7's dispatch prompt must carry this.**
-- W1.4 spec §17's open questions — whether `"default"` should be a
-  reserved channel name; overlapping échelle orders as two channels
-  (duplicate coordinates refused); `Cube` axis order `(x, y, spectral)`
-  vs FITS convention (cheap to change now); whether a `ModelResult`
-  should carry the θ that produced it (emulator training sets). Review at
-  `docs/design/contracts/results_schema.md` §17.
+- W1.4 spec §17: *ruled by Peter 2026-09-01* — `"default"` stays
+  unreserved (clash accepted, loudly documented); overlapping échelle
+  orders as two channels confirmed; and θ-carrying results implemented:
+  `ModelResult.parameters` exists and `Model.__call__` attaches the
+  resolved values automatically (`65c997f`). His follow-up — nested
+  result channels — assessed as feasible via qualified flat names
+  (mirroring `ParameterSet.merge`) and **routed to W1.7 together with the
+  symmetrical nested-merge question**; see `results_schema.md` §17's
+  preamble. Questions 3–6 (`Cube` axis order, `extra_coords` units, axis
+  naming, serialisation) remain open as written.
 - W1.5 spec §15's open questions (merged 2026-09-01) — most notably:
   whether the ANY mask-propagation rule is too conservative for real
   resampling (`min_valid_fraction` is the named extension); whether a
