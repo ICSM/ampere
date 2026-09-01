@@ -141,6 +141,12 @@ __all__ = [
 
 #: Channel name given to a model that returns a single bare container. The
 #: plan's §4.2 requires the one-channel case to stay trivial; this is how.
+#:
+#: **The name is deliberately not reserved** (ruled 2026-09-01): a user may
+#: name a real channel ``"default"``, and it is then indistinguishable from
+#: the automatic one. This is an accepted, documented clash — reserving the
+#: obvious word was judged more annoying than the ambiguity it prevents. If
+#: an instrument must bind by name, name the channel something distinctive.
 DEFAULT_CHANNEL = "default"
 
 #: Relative tolerance for *advertising* an axis as evenly spaced
@@ -1448,15 +1454,24 @@ class ModelResult(Mapping[str, FunctionSamples]):
     iteration, ``in``, ``keys``/``values``/``items`` and ``.get`` all behave as
     expected. Use :meth:`require` rather than ``[]`` when binding an
     instrument: it checks the kind and explains the mismatch.
+
+    A result may carry the **parameter values that produced it**
+    (:attr:`parameters` — ruled 2026-09-01, resolving this contract's open
+    question 7): a ``(θ, result)`` pair is then self-contained, which is what
+    emulator training sets (``DEVELOPMENT_PLAN.md`` design horizon (c)) and
+    provenance want. ``Model.__call__`` (W1.5) attaches the resolved values
+    automatically; the coupling is a plain name-to-value mapping, not a
+    dependency on the parameter contract's types.
     """
 
-    __slots__ = ("_channels", "_meta")
+    __slots__ = ("_channels", "_meta", "_parameters")
 
     def __init__(
         self,
         channels: FunctionSamples | Mapping[str, FunctionSamples],
         *,
         meta: Mapping[str, Any] | None = None,
+        parameters: Mapping[str, Any] | None = None,
     ) -> None:
         if isinstance(channels, FunctionSamples):
             channels = {DEFAULT_CHANNEL: channels}
@@ -1484,6 +1499,19 @@ class ModelResult(Mapping[str, FunctionSamples]):
             built[checked] = container
         object.__setattr__(self, "_channels", types.MappingProxyType(built))
         object.__setattr__(self, "_meta", types.MappingProxyType(dict(meta) if meta else {}))
+        if parameters is None:
+            object.__setattr__(self, "_parameters", None)
+        else:
+            if not isinstance(parameters, Mapping) or not all(
+                isinstance(key, str) for key in parameters
+            ):
+                raise SchemaError(
+                    f"a ModelResult's parameters record is a mapping of parameter name to "
+                    f"value — the θ that produced this result — got "
+                    f"{type(parameters).__name__}. Model.__call__ attaches it automatically; "
+                    f"pass parameters=... only when constructing a result by hand."
+                )
+            object.__setattr__(self, "_parameters", types.MappingProxyType(dict(parameters)))
 
     # -- Mapping protocol ----------------------------------------------------
 
@@ -1549,6 +1577,22 @@ class ModelResult(Mapping[str, FunctionSamples]):
         return self._meta
 
     @property
+    def parameters(self) -> Mapping[str, Any] | None:
+        """The parameter values this result was evaluated at, or ``None``.
+
+        A plain name-to-value mapping — the θ half of the ``(θ, result)``
+        pairs emulator training sets and provenance need
+        (``DEVELOPMENT_PLAN.md`` design horizon (c); ruled 2026-09-01).
+        ``Model.__call__`` attaches it automatically; ``None`` means the
+        result was built without one, not that the model has no parameters.
+        """
+        return self._parameters
+
+    def with_parameters(self, parameters: Mapping[str, Any]) -> ModelResult:
+        """Return a copy carrying *parameters* as the values that produced it."""
+        return ModelResult(dict(self._channels), meta=self._meta, parameters=parameters)
+
+    @property
     def is_single(self) -> bool:
         """Whether this result carries exactly one channel."""
         return len(self._channels) == 1
@@ -1589,7 +1633,7 @@ class ModelResult(Mapping[str, FunctionSamples]):
         """
         merged = dict(self._channels)
         merged.update(channels)
-        return ModelResult(merged, meta=self._meta)
+        return ModelResult(merged, meta=self._meta, parameters=self._parameters)
 
     def without_channels(self, *names: str) -> ModelResult:
         """Return a copy with the named channels removed."""
@@ -1597,7 +1641,7 @@ class ModelResult(Mapping[str, FunctionSamples]):
             if name not in self._channels:
                 raise ChannelError(self._missing_message(name))
         remaining = {key: value for key, value in self._channels.items() if key not in names}
-        return ModelResult(remaining, meta=self._meta)
+        return ModelResult(remaining, meta=self._meta, parameters=self._parameters)
 
     def __repr__(self) -> str:
         entries = ", ".join(
@@ -1610,8 +1654,21 @@ class ModelResult(Mapping[str, FunctionSamples]):
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, ModelResult):
             return NotImplemented
-        return dict(self._channels) == dict(other._channels) and dict(self._meta) == dict(
-            other._meta
+        return (
+            dict(self._channels) == dict(other._channels)
+            and dict(self._meta) == dict(other._meta)
+            and _parameter_records_equal(self._parameters, other._parameters)
         )
 
     __hash__: ClassVar[None] = None
+
+
+def _parameter_records_equal(
+    left: Mapping[str, Any] | None, right: Mapping[str, Any] | None
+) -> bool:
+    """Array-aware comparison of two parameter records (values may be arrays)."""
+    if left is None or right is None:
+        return left is None and right is None
+    if set(left) != set(right):
+        return False
+    return all(np.array_equal(value, right[name]) for name, value in left.items())

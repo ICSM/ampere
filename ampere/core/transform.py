@@ -1152,15 +1152,19 @@ class Model(Parameterised, abc.ABC):
         else:
             resolved = self.parameters.complete(values)
         produced = self.evaluate(**resolved)
+        # Attach the θ that produced the result (results_schema.md §17, ruled
+        # 2026-09-01): a (θ, result) pair is then self-contained for emulator
+        # training sets and provenance. A record evaluate() attached itself is
+        # respected, never overwritten.
         if isinstance(produced, FunctionSamples):
-            return ModelResult(produced)
+            return ModelResult(produced, parameters=resolved)
         if not isinstance(produced, ModelResult):
             raise TransformationError(
                 f"{type(self).__name__}.evaluate returned {produced!r}. A model returns a "
                 f"ModelResult, or a single container which is filed under "
                 f"{DEFAULT_CHANNEL!r}."
             )
-        return produced
+        return produced if produced.parameters is not None else produced.with_parameters(resolved)
 
     def compile_for(self, requirements: Mapping[str, ChannelRequirements]) -> Model:
         """One-off configuration from the instruments' published requirements.

@@ -919,6 +919,18 @@ True
 
 ```
 
+`__call__` also attaches the resolved values to the result it returns
+(`results_schema.md` §3 — the `(θ, result)` pairing ruled 2026-09-01), so
+every evaluation is a self-contained training-set/provenance pair with no
+effort from the model author; a record `evaluate()` attached itself is
+respected:
+
+```pycon
+>>> model(temperature=400.0).parameters
+mappingproxy({'temperature': 400.0})
+
+```
+
 Mixing a vector with keywords is refused rather than resolved by precedence,
 because either interpretation would be a silent surprise:
 

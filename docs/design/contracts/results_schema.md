@@ -211,6 +211,32 @@ updates return a new result rather than mutating:
 
 ```
 
+### The parameters that produced it
+
+A result may carry the parameter values it was evaluated at (**ruled
+2026-09-01**, resolving §17's question 7): a `(θ, result)` pair is then
+self-contained, which is what emulator training sets (the plan's design
+horizon (c)) and provenance want. The record is a plain name-to-value
+mapping — no dependency on the parameter contract's types — and
+`Model.__call__` (W1.5) attaches the resolved values automatically, so a
+model author never builds it by hand; a record `evaluate()` attached itself
+is respected, never overwritten.
+
+```pycon
+>>> tagged = ModelResult(spectrum, parameters={"temperature": 300.0})
+>>> tagged.parameters["temperature"]
+300.0
+>>> tagged.with_channels(default=spectrum).parameters["temperature"]
+300.0
+>>> ModelResult(spectrum).parameters is None      # absent, not empty
+True
+
+```
+
+`None` means "no record was attached", not "the model has no parameters" —
+the distinction matters to a training-set builder deciding whether a pair is
+usable.
+
 ## 4. Containers are coordinate-indexed function samples
 
 Every container holds explicit coordinates. A `Spectrum` is **not** two
@@ -882,6 +908,8 @@ ampere.core.exceptions.SchemaError: PolarisationCurve requires its 'spectral_axi
 | `with_values` is the hot-loop constructor | O(N) coordinate validation is right once and wrong per evaluation; it is also where §4.2 meets §4.3's negotiated grids |
 | Containers are immutable, with read-only arrays | A consumer must not be able to corrupt a model's output in place, and shared axes (`with_values`) make aliasing routine |
 | `extra_coords` for per-sample labels that are not geometry | Filter names, per-visibility frequency, epoch labels; keeping them out of `axes` keeps "what indexes this container" a crisp question |
+| A `ModelResult` may carry the θ that produced it (`parameters`; ruled 2026-09-01) | Self-contained `(θ, result)` pairs are what emulator training sets (design horizon (c)) and provenance need; the record is a plain name-to-value mapping, attached automatically by `Model.__call__`, so the coupling to W1.3 is nominal |
+| `DEFAULT_CHANNEL` is not reserved (ruled 2026-09-01) | A user naming a real channel `"default"` is an accepted, loudly documented clash; reserving the obvious word was judged more annoying than the ambiguity it prevents |
 
 ## 15. Deliberate limitations of v1.4
 
@@ -967,6 +995,32 @@ Each of these is a decision, not an oversight. Each has an extension point.
   response matrix is expressible, since the axis already accepts `energy`.
 
 ## 17. Open questions for review
+
+**Ruled by Peter, 2026-09-01**: question 1 — `"default"` stays unreserved;
+the clash is accepted and loudly documented (the `DEFAULT_CHANNEL` docstring
+and §3 carry the warning). Question 2 — confirmed: overlapping échelle
+orders are two channels, which matches how they arrive on the data side (two
+separate observed items); no merge helper is owed. Question 7 — resolved in
+favour of carrying θ: `ModelResult.parameters` now exists and
+`Model.__call__` attaches it automatically (§3, §14). Questions 3–6 remain
+open as written.
+
+**Added at the same review — nested result channels.** Peter asked whether
+support for nested channels is feasible. Assessment: yes, and the cheap
+route is *qualified flat names* rather than true nesting — channel names
+like `"obj1.sed"`, mirroring exactly how `ParameterSet.merge` qualifies
+parameter names, requiring only that `_check_channel_name` accept
+dot-separated identifiers (as parameter names already do). True nesting
+(a `ModelResult` holding `ModelResult`s) would force recursion through
+`require`, kind-checking, serialisation and instrument binding for no
+expressive gain over qualified names. The real question is *where* the
+qualification happens: W1.7's `DatasetCollection` already namespaces
+per-dataset, and Peter's W1.3 ruling keeps nested parameter merging open
+there too — the two nesting questions are symmetrical and should be
+answered together. **Routed to W1.7**: if a single model emitting
+hierarchical output (a population model's per-object channels) needs
+in-result qualification, W1.7 specifies it; the container contract needs
+only the one-line name-rule relaxation, deferred until then.
 
 1. **`DEFAULT_CHANNEL` is the string `"default"`.** It is short and obvious, but
    it is also a name a user might plausibly want for a real channel. Reserving

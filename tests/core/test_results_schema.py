@@ -203,6 +203,39 @@ class TestNamedChannels:
             hash(ModelResult(sed))
 
 
+class TestCarriedParameters:
+    """`ModelResult.parameters` — the (θ, result) pairing ruled 2026-09-01."""
+
+    def test_a_result_may_carry_the_theta_that_produced_it(self, sed) -> None:
+        tagged = ModelResult(sed, parameters={"temperature": 300.0})
+        assert tagged.parameters["temperature"] == 300.0
+        assert ModelResult(sed).parameters is None, "absent, not empty"
+
+    def test_the_record_survives_channel_updates(self, sed) -> None:
+        tagged = ModelResult({"sed": sed}, parameters={"temperature": 300.0})
+        assert tagged.with_channels(line=sed).parameters["temperature"] == 300.0
+        assert tagged.with_channels(line=sed).without_channels("line").parameters == {
+            "temperature": 300.0
+        }
+
+    def test_the_record_is_immutable(self, sed) -> None:
+        tagged = ModelResult(sed, parameters={"temperature": 300.0})
+        with pytest.raises(TypeError):
+            tagged.parameters["temperature"] = 400.0  # type: ignore[index]
+
+    def test_equality_is_array_aware(self, sed) -> None:
+        record = {"offset": np.array([1.0, 2.0])}
+        assert ModelResult(sed, parameters=record) == ModelResult(sed, parameters=record)
+        assert ModelResult(sed, parameters=record) != ModelResult(
+            sed, parameters={"offset": np.array([1.0, 3.0])}
+        )
+        assert ModelResult(sed, parameters=record) != ModelResult(sed)
+
+    def test_a_non_mapping_record_is_refused(self, sed) -> None:
+        with pytest.raises(SchemaError, match="parameters record"):
+            ModelResult(sed, parameters=[300.0])  # type: ignore[arg-type]
+
+
 class TestKindChecking:
     def test_matching_kind_returns_the_container(self, sed) -> None:
         assert ModelResult({"sed": sed}).require("sed", Spectrum) is sed

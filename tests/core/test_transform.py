@@ -915,6 +915,23 @@ class TestModelABC:
     def test_compile_for_defaults_to_the_identity(self, model: GreyBody) -> None:
         assert model.compile_for({}) is model
 
+    def test_call_attaches_the_resolved_theta(self, model: GreyBody) -> None:
+        """results_schema.md §17 question 7, ruled 2026-09-01."""
+        record = model(temperature=400.0).parameters
+        assert record is not None and record["temperature"] == 400.0
+        vector_record = model([250.0]).parameters
+        assert vector_record is not None and vector_record["temperature"] == 250.0
+
+    def test_a_record_evaluate_attached_is_respected(self) -> None:
+        class SelfTagging(Model):
+            def evaluate(self, **values):
+                return ModelResult(
+                    Spectrum([1.0, 2.0] * u.um, np.ones(2) * u.Jy),
+                    parameters={"note": "mine"},
+                )
+
+        assert SelfTagging()().parameters == {"note": "mine"}
+
 
 class TestCompileOnceEvaluateMany:
     """`results_schema.md` §16's compile-once/evaluate-many split."""
