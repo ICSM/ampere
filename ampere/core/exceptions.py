@@ -27,6 +27,7 @@ __all__ = [
     "ChannelError",
     "CompositionError",
     "ContractError",
+    "LikelihoodError",
     "OptionalDependencyError",
     "ParameterError",
     "SchemaError",
@@ -147,6 +148,24 @@ class CompositionError(TransformationError):
     chain is *assembled*, not deep inside a likelihood evaluation thousands of
     samples later, which is why they are a distinct type: a caller composing a
     fit programmatically may reasonably catch this and try another chain.
+    """
+
+
+class LikelihoodError(ContractError):
+    """A likelihood, noise model, kernel or censoring declaration is unusable.
+
+    Raised by :mod:`ampere.core.likelihood` for: a family/noise-model
+    combination whose marginalisation an engine cannot deliver, a GP solver
+    strategy asked for something it does not support (an unquasiseparable
+    kernel, a gridded layout, mixed coordinate units), a covariance matrix that
+    will not factorise, kernel hyperparameters outside their support, censoring
+    codes that are not :class:`~ampere.core.likelihood.LimitKind` values or that
+    are misaligned with their container, and predicted/observed containers that
+    do not describe the same samples.
+
+    Kept distinct from :class:`SchemaError` because a container may be
+    perfectly well formed and still be one this likelihood cannot consume —
+    the failure is in the *composition*, not in either object.
     """
 
 
