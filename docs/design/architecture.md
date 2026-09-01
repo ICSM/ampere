@@ -1,10 +1,10 @@
 # Ampere v2 — Architecture Spec (W1.2)
 
-Status: **DRAFT — reconciled against W1.1 (2026-09-01, Fable review);
-awaiting Peter's review.** Not yet frozen; §10 records the reconciliation
-outcome, and §9 carries one open decision (the curated-translation default,
-which conflicts with `DEVELOPMENT_PLAN.md` §4.7's current wording) for the
-plan's decision log.
+Status: **merged 2026-09-01 (Fable-reviewed, reconciled against W1.1);
+awaiting Peter's review pass.** Not yet frozen (that is W1.13). §10 records
+the reconciliation outcome; the curated-translation default flagged during
+review has been ruled opt-in/never-silent and recorded in
+`DEVELOPMENT_PLAN.md` §2's decision table (§1, §9).
 
 Relationship to other documents: `DEVELOPMENT_PLAN.md` §2–3 record the
 architectural *decisions*; this document expands them into the connective
@@ -47,18 +47,18 @@ analytic astropy models — blackbody, power laws, polynomials — to native
 torch/jax equivalents) is precisely a rung-1-to-rung-2 promotion for
 specific, recognised model classes and parameterisations.
 
-**Open decision — flagged for the plan's decision log (see §9).** This
-document takes the position that the substitution must be **opt-in, or at
-minimum loudly disclosed per run**: a curated native implementation is not
-guaranteed to be numerically identical to the astropy original, and a fit
-whose model changed implementation without the user's knowledge is exactly
-the silent-downgrade class this section forbids in the other direction.
-`DEVELOPMENT_PLAN.md` §4.7 currently says the opposite ("silently restoring
-differentiability for the most frequent cases"). By this document's own
-precedence rule the plan wins until its decision log says otherwise, so the
-conflict must be resolved — by Peter now, or at W1.13 before the astropy
-adapter contract is specified — rather than left for the adapter's author
-to discover.
+**Decided (2026-09-01, plan §2 decision log): the substitution is opt-in,
+never silent.** A curated native implementation is not guaranteed to be
+numerically identical to the astropy original, and a fit whose model changed
+implementation without the user's knowledge is exactly the silent-downgrade
+class this section forbids in the other direction. The default adapter path
+always wraps the user's actual astropy model as a black box; promotion to a
+native equivalent happens only through an explicit, backend-scoped request —
+sketched as a `from_astropy()` constructor on the backend subpackage, so the
+call site itself names the intent, and raising if the model (or any
+component of a compound model) is not fully in the curated table rather than
+silently falling back to black-box. The exact API is fixed with the adapter
+contract (Phase 4).
 
 ## 2. Reference backend: the trade-off, written out
 
@@ -302,10 +302,9 @@ structure are exactly the two things that negotiation reconciles.
 
 ## 9. Open items carried from this document
 
-- **Curated-translation default (§1)**: this document says opt-in/disclosed;
-  `DEVELOPMENT_PLAN.md` §4.7 says silent. A decision-log entry must resolve
-  the conflict before W1.13 freezes the spec (the astropy adapter itself is
-  Phase 4 work, so there is no implementation pressure — only the wording).
+- **Curated-translation default (§1)**: *resolved 2026-09-01* — ruled
+  opt-in/never silent; recorded in `DEVELOPMENT_PLAN.md` §2's decision
+  table, §4.7 amended to match. No longer open.
 - **jax x64 activation call site** in a multi-library host process — W1.9
   gate check.
 - **GP solver library per backend** — already an open deferred choice in

@@ -62,26 +62,19 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
   the "legacy still works" gate; run it before merging anything that
   touches shared files.
 
-## ⚠ Phase 1 review complete (2026-09-01) — merges await Peter
+## Phase 1: W1.1–W1.3 merged (2026-09-01)
 
-The Fable review the previous handoff asked for has been done: W1.1, W1.2
-and W1.3 are reviewed, amended where needed, and **ready to merge** on
-their local branches (none pushed to origin; `git branch -v` in the main
-checkout is authoritative). The review session's own merge to master was
-declined by the permission gate, consistent with the working agreement, so
-**Peter performs the merges**. One correction to the earlier handoff text:
-W1.2 was Sonnet-authored (not Fable, as previously recorded) and was
-therefore given a full contract-tier review rather than a light
-reconciliation.
+The Fable review the previous handoff asked for is done and, on Peter's
+instruction, the three branches were merged to local master in order
+(W1.1 → W1.2 → W1.3), keeping master's `WORK_ITEMS.md` and
+`docs/development.md` in each merge (the branches carried stale snapshots).
+All gates re-verified on the merged master: 112 core tests, the fast import
+suite, pyrefly, ruff lint and format. Nothing has been pushed to origin.
+One correction to the earlier handoff text: W1.2 was Sonnet-authored (not
+Fable, as previously recorded) and was therefore given a full contract-tier
+review rather than a light reconciliation.
 
-**Merging (suggested order W1.1 → W1.2 → W1.3):** take each branch's
-design docs/code, but keep **master's** `WORK_ITEMS.md` and
-`docs/development.md` — every branch carries stale snapshots of both that
-would regress the status table and delete this section. E.g.:
-`git merge --no-ff <branch>` then, if those two files conflict or change,
-`git checkout HEAD -- WORK_ITEMS.md docs/development.md` before committing.
-
-**Review outcomes:**
+**Review outcomes (branches now in master's history):**
 
 - **W1.1** (`w1.1-prior-art-memo`, Sonnet): merged as authored — no
   changes. Its two most load-bearing claims were re-verified against live
@@ -95,14 +88,14 @@ would regress the status table and delete this section. E.g.:
   to numpy/scipy/**astropy**/stdlib (the plan requires units on parameters;
   astropy is a required base dependency; this resolves W1.3's open
   question 1). §10 rewritten as the W1.1 reconciliation record — none of
-  the four questions it posed required structural change. **One genuine
-  conflict with the plan found and flagged, needing Peter's decision-log
-  ruling by W1.13**: architecture.md §1 says curated astropy→native model
-  translation must be opt-in/disclosed; `DEVELOPMENT_PLAN.md` §4.7 says
-  "silently restoring differentiability". The review recommends the
-  opt-in/disclosed position (a silently substituted implementation is not
-  guaranteed numerically identical), but the plan wins until its decision
-  log says otherwise.
+  the four questions it posed required structural change. One genuine
+  conflict with the plan was found (curated astropy→native translation:
+  opt-in vs the plan's "silently restoring differentiability") and **ruled
+  by Peter on 2026-09-01: opt-in, never silent** — recorded in
+  `DEVELOPMENT_PLAN.md` §2's decision table with §4.7 amended, and
+  architecture.md §1 updated to match (sketch: a backend-scoped
+  `from_astropy()` constructor as the explicit opt-in, raising rather than
+  silently falling back when a model is not fully translatable).
 - **W1.3** (`w1.3-parameter-contract`, Opus + Fable fix commit): strong
   contract; three defects found and fixed on the branch, with tests
   (112 pass; pyrefly/ruff/format clean): (1) tying two hierarchical-prior
@@ -117,15 +110,18 @@ would regress the status table and delete this section. E.g.:
   retrospectively: its declaration-based tying is exactly what memo lesson
   G2 prescribes.
 
-**Still needing Peter's decision** (none block the merges):
+**Still needing Peter's decision** (none block further Phase 1 work):
 
-1. The curated-translation conflict above (architecture.md §9; plan §4.7).
-2. W1.3 spec §14's remaining open questions — tie labels as a flat global
-   namespace; whether a lone `shared_as` should raise; ratifying
-   `OptionalDependencyError`'s shape at W1.13; confirming nothing needs
-   the legacy `npars` alias. (Question 1, astropy-in-core, is resolved by
-   the W1.2 amendment; question 2, recursive merge, is explicitly deferred
-   to W1.7.)
+- W1.3 spec §14's remaining open questions — tie labels as a flat global
+  namespace; whether a lone `shared_as` should raise; ratifying
+  `OptionalDependencyError`'s shape at W1.13; confirming nothing needs
+  the legacy `npars` alias. Review at
+  `docs/design/contracts/parameters.md` §14, with §8 (tying semantics) and
+  §12 (deliberate limitations) as the supporting context, and
+  `ampere/core/parameter.py` (`_merge`/`_collapse`) /
+  `ampere/core/exceptions.py` as the implementation. (Question 1,
+  astropy-in-core, was resolved by the W1.2 amendment; question 2,
+  recursive merge, is explicitly deferred to W1.7.)
 
 **Obligations W1.3 places on later specs** are recorded in the spec's own
 §13 (`docs/design/contracts/parameters.md`) — W1.4–W1.10 authors read that

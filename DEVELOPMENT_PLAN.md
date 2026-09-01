@@ -55,6 +55,7 @@ backend-neutral core plus modern computational backends, targeting:
 | Diagnostics | **Misspecification diagnostics are in scope** (§4.8): RHMF-style pre-fit screening (Hilder et al. 2026), post-fit residual tests, GP-based localisation. |
 | Dependency management | **pixi replaces manual environment control** (work item W0.8): pyproject.toml stays the single source of truth for dependencies; pixi provides locked environments (features mirroring the extras), tasks, and the CI environment setup. Adopt before/with W0.6 so CI is built on it once. |
 | Dependency pins | `pyphot<2` and `sbi<0.28` pinned 2026-09-01 as **temporary** measures (pyphot ≥2 removed `pyphot.unit`; sbi 0.27 changed `posterior.map()` shapes). Policy is to migrate forwards, not freeze: work item W0.9 lifts both — pyphot before Phase 2's synthetic-photometry Transformation (new code targets the ≥2 API from the start), sbi with Phase 3 (which wants the latest inference algorithms anyway). |
+| Curated astropy→native translation | **Opt-in only, never silent** (ruled 2026-09-01 during the W1.2 review, amending this document's original §4.7 "silently restoring differentiability" wording). The default adapter path always wraps the user's actual astropy model as a black box; a curated native equivalent is substituted only on an explicit, backend-scoped request — sketched as a `from_astropy()` constructor on the backend subpackage, which raises if the model (or any component of a compound model) is not fully in the curated table, rather than silently falling back to black-box. Exact API fixed with the adapter contract (Phase 4). |
 
 ## 3. Architecture: a core and a capability ladder, not four peer backends
 
@@ -310,8 +311,15 @@ compound models — as an ampere model:
   models are black-box to torch/jax, so they get gradient-free inference and
   SBI — not NUTS/VI. As a later nicety, a curated translation table can map
   common analytic astropy models (blackbody, power laws, polynomials, …) to
-  native torch/jax equivalents, silently restoring differentiability for the
-  most frequent cases.
+  native torch/jax equivalents, restoring differentiability for the most
+  frequent cases. **Decided 2026-09-01: translation is opt-in, never
+  silent** (see §2) — the default adapter always evaluates the user's actual
+  astropy model; a native equivalent is substituted only through an explicit,
+  backend-scoped request (sketch: `from_astropy()` on the backend, raising
+  when the model is not fully translatable rather than silently degrading to
+  black-box). A substituted implementation is not guaranteed numerically
+  identical, and a model changing implementation without the user's
+  knowledge is exactly the silent-downgrade class the architecture forbids.
 
 ### 4.8 Misspecification diagnostics
 Tools that tell users **where** a flexible likelihood is needed, rather

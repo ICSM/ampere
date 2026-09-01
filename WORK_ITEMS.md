@@ -267,15 +267,7 @@ to this file.
 | W0.5 | merged 2026-09-01 |
 | W0.6 + W0.8 | merged 2026-09-01 |
 | W0.9 | not started |
-| W1.1 | Fable-reviewed 2026-09-01, **ready to merge** — branch `w1.1-prior-art-memo` (Sonnet-authored). Two load-bearing claims re-verified against live sources during review (bilby's current explicit-argument `log_likelihood(parameters)`; gammapy issue #2859/PR #2861). Peter's review pass is the formal accept gate |
-| W1.2 | Fable-reviewed and amended 2026-09-01, **ready to merge** — branch `w1.2-architecture-spec` (Sonnet-authored, contrary to the earlier handoff note; given a full contract-tier review accordingly). Reconciled against W1.1 (its §10 records the outcome); core dependency floor corrected to include astropy; one genuine plan conflict found and flagged (curated-translation default, §1/§9 vs plan §4.7) — needs Peter's decision-log ruling by W1.13 |
-| W1.3 | Fable-reviewed and fixed 2026-09-01, **ready to merge** — branch `w1.3-parameter-contract` (Opus-authored). Three defects fixed on the branch (tied hierarchical priors silently adopting one component's hyperparameters; non-canonical prior descriptions breaking tie equality; unchecked bijection conflicts on tied sites); 112 tests, pyrefly/ruff clean. Open questions for Peter in the spec's §14 — see `docs/development.md` |
+| W1.1 | merged 2026-09-01 (Sonnet-authored, Fable-reviewed; two load-bearing claims re-verified against live sources). Peter's review pass remains the formal accept gate |
+| W1.2 | merged 2026-09-01 (Sonnet-authored, Fable-reviewed and amended; reconciled against W1.1, see its §10). The curated-translation conflict found in review was ruled **opt-in, never silent** — decision recorded in `DEVELOPMENT_PLAN.md` §2, §4.7 amended. Peter's review pass remains the formal accept gate |
+| W1.3 | merged 2026-09-01 (Opus-authored, Fable-reviewed; three tying/serialisation defects fixed on the branch with tests — 112 pass, pyrefly/ruff clean). Remaining open questions for Peter in the spec's §14; obligations on W1.4–W1.10 in its §13 |
 | W1.4–W1.13 | not started |
-
-**Session note (2026-09-01, updated after the Fable review):** the branches
-above are reviewed and ready but **not merged** — the review session's merge
-to master was declined by the permission gate, consistent with the working
-agreement that Peter merges. On merge, take the branch's design docs but keep
-master's `WORK_ITEMS.md` and `docs/development.md` (each branch carries stale
-snapshots of both that would regress this table and delete the handoff
-section). Suggested order: W1.1, W1.2, W1.3.
