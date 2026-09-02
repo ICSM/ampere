@@ -1591,14 +1591,18 @@ class TestNestedMergeProperties:
         assert len(evaluation.contributions) == size
         assert math.isfinite(evaluation.log_prob)
 
-    def test_an_inner_tie_is_invisible_to_the_top_level_mapping(self) -> None:
-        # The concrete cost of nesting, recorded rather than hidden: two steps
-        # sharing a declaration-time label are collapsed by the *instrument's*
-        # own merge, so the top-level mapping records one binding and
-        # tied_names says nothing.
+    def test_an_inner_tie_is_visible_to_the_top_level_mapping(self) -> None:
+        # Lossless nesting (ruled 2026-09-02): two steps sharing a
+        # declaration-time label are collapsed by the *instrument's* own
+        # merge, and the top-level mapping's composed bindings now surface the
+        # collapse — tied_names tells the leaf-level truth without a descent.
+        # Before the ruling this very test asserted tied_names == ().
         problem = self._inner_tie_problem()
         assert "d.instrument.gain" in problem.parameters.free_names
-        assert problem.tied_names == ()
+        assert problem.tied_names == ("d.instrument.gain",)
+        assert {
+            (b.component, b.local_name) for b in problem.mapping.sites_of("d.instrument.gain")
+        } == {("d", "instrument.a.scale"), ("d", "instrument.b.scale")}
 
     def test_sites_descends_and_recovers_what_tied_names_loses(self) -> None:
         problem = self._inner_tie_problem()

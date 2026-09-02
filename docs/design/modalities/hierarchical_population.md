@@ -413,9 +413,12 @@ one on the critical path.
 
 ### H-2 — `Binding` cannot address one element of an array-valued parameter
 
-*Ruled 2026-09-02: **approved** — per-element plate routing through an
-optional `Binding.index`, with `distribute` doing the element routing, as
-proposed below. Implementation dispatched with the lossless-nesting work.*
+*Ruled 2026-09-02: **approved and implemented** — per-element plate routing
+through an optional `Binding.index`, declared via `merge`'s
+`plate_bindings`, with `distribute` doing the element routing. One deviation
+from the sketch below, recorded in `parameters.md` §8: `PlateBinding` names
+the parameter by its fully qualified merged name, since two components may
+each hold a plate of the same local name.*
 
 **Severity: blocking for the modality. Should land in the freeze**, because it
 changes a frozen dataclass and `distribute`'s contract.
@@ -499,10 +502,10 @@ the analogous case for sharing and has no counterpart here.
 
 ### H-3 — a nested merge silently loses the inner bindings
 
-*Ruled 2026-09-02: **lossless nesting approved** — `ParameterSet.merge`
-accepts a `ParameterMapping` as a component and composes its bindings, per
-this gap's extension point and `inference.md` §4.6. Implementation dispatched
-together with H-2's `Binding.index`.*
+*Ruled 2026-09-02: **lossless nesting approved and implemented** —
+`ParameterSet.merge` accepts a `ParameterMapping` as a component and composes
+its bindings, per this gap's extension point and `inference.md` §4.6
+(`parameters.md` §8 has the contract; routing stays one level deep).*
 
 **Severity: reporting; cheap.** §7(b). Routing is fine; introspection is not, and
 provenance, ArviZ coordinate naming and any future plate-lowering pass all walk

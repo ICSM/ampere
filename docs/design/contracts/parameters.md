@@ -47,7 +47,7 @@ so survives declaration, composition and serialisation.
 >>> import astropy.units as u
 >>> from ampere.core import (
 ...     Buffer, HierarchicalPrior, Identity, Log, Logit, Parameter,
-...     Parameterised, ParameterSet, Plate, PriorSpec, Tie,
+...     Parameterised, ParameterSet, Plate, PlateBinding, PriorSpec, Tie,
 ...     describe_prior, prior_from_spec,
 ... )
 >>> from ampere.core.exceptions import ParameterError, TyingError
@@ -528,6 +528,110 @@ ampere.core.exceptions.TyingError: cannot evaluate lnprior: parameter(s) ['dista
 
 ```
 
+### Lossless nesting: a `ParameterMapping` as a component
+
+**Ruled by Peter, 2026-09-02** ("lossless, not necessarily recursive"):
+`merge` accepts an already-merged `ParameterMapping` as a component. Its
+`merged` set joins the merge exactly as a plain set would — same names, same
+free dimensions, same routing — and the mapping is *retained*, so the
+result's public `bindings` view composes down to the ultimate leaves. What
+this buys is truthful introspection under the nested topology `inference.md`
+§4 ratified: a parameter collapsed by an *inner* merge (two instrument steps
+sharing a `shared_as` label, say) used to reach the outer mapping as a
+single binding, so `tied_names` under-reported and a provenance consumer
+walking `bindings` saw no sharing.
+
+```pycon
+>>> instrument = ParameterSet.merge({
+...     "a": ParameterSet([Parameter("scale", st.lognorm(0.2), shared_as="gain")]),
+...     "b": ParameterSet([Parameter("scale", st.lognorm(0.2), shared_as="gain")]),
+... })
+>>> nested = ParameterSet.merge({
+...     "instrument": instrument,
+...     "model": ParameterSet([Parameter("t", st.norm(0.0, 1.0))]),
+... })
+>>> nested.merged.names
+('instrument.gain', 'model.t')
+>>> nested.tied_names
+('instrument.gain',)
+>>> [(b.component, b.local_name) for b in nested.sites_of("instrument.gain")]
+[('instrument', 'a.scale'), ('instrument', 'b.scale')]
+
+```
+
+Routing and introspection are two views of one structure. `distribute` stays
+**one level deep** — the component receives its own merged names and
+re-distributes with its retained mapping, which is what keeps
+`Instrument.__call__`'s values path working unchanged (the nesting rule,
+`inference.md` §4.5) — while `bindings`/`sites_of`/`tied_names` compose
+through the retained mappings and tell the leaf-level truth. The raw
+one-level table remains available as `routing`.
+
+```pycon
+>>> routed = nested.distribute({"instrument.gain": 2.0, "model.t": 0.1})
+>>> routed["instrument"]
+{'gain': 2.0}
+>>> instrument.distribute(routed["instrument"])
+{'a': {'scale': 2.0}, 'b': {'scale': 2.0}}
+
+```
+
+### Plate bindings: routing one element to one component
+
+**Ruled by Peter, 2026-09-02** (the population sketch's gap H-2): `Binding`
+carries an optional element `index`, and `merge` accepts `PlateBinding`
+declarations that create such bindings — so one member of a `Plate`'s
+array-valued parameter reaches one component as a scalar under a bare local
+name. The merged set is untouched: one array-valued parameter, one sample
+site, so the numpyro lowering in `lowering.md` is unaffected; only the
+routing changes. This is *addressing*, not tying — each member remains its
+own draw, which is why limitation §12.3's refusal of ties across plate
+members stands — and element bindings accordingly do not count towards
+`tied_names`.
+
+```pycon
+>>> survey = ParameterSet([], plates=[Plate(
+...     "objects", size=3,
+...     hyperparameters=[Parameter("mu", st.norm(0.0, 5.0)),
+...                      Parameter("sigma", st.halfnorm(0.0, 2.0))],
+...     members=[Parameter("theta", HierarchicalPrior("norm", {"loc": "mu", "scale": "sigma"}))],
+... )])
+>>> population = ParameterSet.merge(
+...     {"population": survey,
+...      "obj0": ParameterSet([Parameter("cal", st.lognorm(0.1))]),
+...      "obj1": ParameterSet([Parameter("cal", st.lognorm(0.1))])},
+...     plate_bindings=[
+...         PlateBinding("population.objects.theta", "obj0", "theta", 0),
+...         PlateBinding("population.objects.theta", "obj1", "theta", 1),
+...     ],
+... )
+>>> routed = population.distribute({
+...     "population.objects.mu": 0.0, "population.objects.sigma": 1.0,
+...     "population.objects.theta": np.array([10.0, 20.0, 30.0]),
+...     "obj0.cal": 1.1, "obj1.cal": 0.9,
+... })
+>>> routed["obj0"]["cal"], float(routed["obj0"]["theta"])
+(1.1, 10.0)
+>>> routed["obj1"]["cal"], float(routed["obj1"]["theta"])
+(0.9, 20.0)
+
+```
+
+(The element arrives as a numpy scalar — dtype-preserving, and arithmetically
+a float.)
+
+`PlateBinding.parameter` is the **fully qualified merged name** (after
+qualification and tie collapse) — fully qualified rather than the sketch's
+bare form, because two components may each hold a plate of the same local
+name. Everything is validated at merge: the parameter must exist and be
+array-valued, the index in range for its shape, the component present, and
+the local name must not shadow anything the component already receives. Note
+the receiving component's own `ParameterSet` does **not** declare the local
+name: the element arrives as an extra key in `distribute`'s output, and
+consuming it is the composing caller's contract — the intended caller being
+W1.7's future plate-of-datasets construction, which will build these
+bindings from its own dataset ordering.
+
 ## 9. Hierarchical structure: `HierarchicalPrior` and `Plate`
 
 The plan's design horizon (d) asks that population models stay expressible and
@@ -809,12 +913,20 @@ Each of these is a decision, not an oversight. Each has an extension point.
 2. **One plate dimension per parameter.** Nested plates (objects within
    surveys) are not expressible. `Parameter.plate` would become a tuple.
 3. **Tying across plate members is refused.** A tie group whose sites carry a
-   plate raises, because cross-component plate identity needs an
-   index-alignment concept that belongs with W1.7's `DatasetCollection`. The
-   reference-based pattern in §9 covers the case in practice.
-4. **`merge` is not associative.** Merging a `ParameterMapping.merged` again
-   would silently drop the first merge's bindings. Merge all components in one
-   call. A nested `ParameterMapping` is the obvious extension if W1.7 needs it.
+   plate raises: tying makes N members one draw, which contradicts what a
+   plate is. The index-alignment concept this limitation originally deferred
+   **now exists** (ruled 2026-09-02): `Binding.index` and `merge`'s
+   `plate_bindings` route one *element* to one component (§8), which is
+   addressing rather than tying, so the refusal stands unchanged for genuine
+   ties.
+4. **`merge` is not associative in its bindings — unless the mapping is
+   passed.** Merging a `ParameterMapping.merged` (the bare set) again routes
+   correctly but silently drops the first merge's bindings from
+   introspection. Since 2026-09-02 the lossless route exists and is the
+   recommendation for composing composites: pass the `ParameterMapping`
+   itself as the component (§8) and the outer bindings compose to the
+   leaves. Merging all leaf components in one flat call remains equivalent
+   where the structure allows it.
 5. **Bijections are declared per parameter, not per set.** A joint bijection
    (a Cholesky factor over several parameters) is not expressible.
 6. **No built-in bijection for supports bounded above only.** §6.
@@ -884,9 +996,10 @@ accepts a `ParameterMapping` as a component and composes its bindings, so an
 outer mapping's bindings are the leaf bindings (`inference.md` §4.6, the
 population sketch's recommendation; "lossless, not necessarily recursive") —
 and the optional **`Binding.index`** for per-element plate routing through
-`distribute` (`hierarchical_population.md` gap H-2). Both are amendments to
-this contract; their implementation updates §7/§8/§12.3/§12.4 in the same
-change.
+`distribute` (`hierarchical_population.md` gap H-2). **Both are implemented**
+(same day): §8's "Lossless nesting" and "Plate bindings" subsections carry
+the contract and executed examples, and §12's items 3 and 4 are updated to
+match.
 
 1. **`astropy.units` in `ampere.core`.** `architecture.md` §3–4 says core is
    "numpy/scipy/typing/stdlib"; this module imports `astropy.units` at module

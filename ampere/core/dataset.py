@@ -764,9 +764,14 @@ class Dataset:
             return None
         return self.likelihood.latent_declaration(self.observed.n_valid, latent_name)
 
-    def _components(self) -> dict[str, ParameterSet]:
-        components = {
-            INSTRUMENT_COMPONENT: self.instrument.parameters,
+    def _components(self) -> dict[str, ParameterSet | ParameterMapping]:
+        # The instrument joins as its mapping, not its merged set (lossless
+        # nesting, ruled 2026-09-02): the dataset's bindings then compose down
+        # to the instrument's steps, so an inner shared_as collapse stays
+        # visible at every level above. This also snapshots the instrument's
+        # mapping once, here — the nesting rule's freeze point.
+        components: dict[str, ParameterSet | ParameterMapping] = {
+            INSTRUMENT_COMPONENT: self.instrument.mapping,
             LIKELIHOOD_COMPONENT: self.likelihood.parameters,
         }
         if self._latent is not None:
@@ -993,38 +998,18 @@ class Dataset:
     def leaf_sites(self, name: str) -> tuple[str, ...]:
         """Every leaf this dataset's merged parameter *name* actually feeds.
 
-        The nesting rule keeps every level's mapping, but a *consumer* reading
-        only the outermost one sees a merged name's bindings at that level and
-        no further. If two steps of one instrument share a declaration-time
-        label, the instrument's own merge collapses them, and the dataset's
-        mapping records a single binding — so an outer consumer walking
-        bindings for provenance or ArviZ labelling would not learn that the
-        parameter is shared at all.
-
-        This method, and :meth:`FittingProblem.sites`, are the descent that
-        recovers it: they walk the retained mappings down to the leaves and
-        report the fully qualified path of each. See ``inference.md`` §4.6.
+        A thin wrapper since lossless nesting landed (ruled 2026-09-02): the
+        dataset's mapping holds the instrument's mapping as an inner
+        component, so :meth:`ParameterMapping.sites_of` already composes to
+        the leaves — this method just renders the paths. The composition uses
+        the instrument mapping *snapshotted at construction* (the nesting
+        rule's freeze point), so a step reconfigured afterwards is not picked
+        up, consistently with everything else about a built dataset.
         """
-        paths: list[str] = []
-        for binding in self._mapping.sites_of(name):
-            if binding.component != INSTRUMENT_COMPONENT:
-                paths.append(f"{binding.component}{SEPARATOR}{binding.local_name}")
-                continue
-            # The instrument recomputes its mapping on every access (W1.5's
-            # deliberate choice), while this dataset's was taken once. If a step
-            # has been reconfigured since, the two can disagree — in which case
-            # report the un-descended path rather than silently dropping the
-            # site, because a *missing* entry here would understate sharing and
-            # that is the very failure this method exists to prevent.
-            inner = self.instrument.mapping.sites_of(binding.local_name)
-            if not inner:
-                paths.append(f"{binding.component}{SEPARATOR}{binding.local_name}")
-                continue
-            paths.extend(
-                f"{INSTRUMENT_COMPONENT}{SEPARATOR}{step.component}{SEPARATOR}{step.local_name}"
-                for step in inner
-            )
-        return tuple(paths)
+        return tuple(
+            f"{binding.component}{SEPARATOR}{binding.local_name}"
+            for binding in self._mapping.sites_of(name)
+        )
 
     # -- composition-time obligations -----------------------------------------
 
@@ -1297,7 +1282,7 @@ class DatasetCollection(Mapping[str, Dataset]):
         """Component label of :attr:`shared`."""
         return self._shared_label
 
-    def components(self) -> dict[str, ParameterSet]:
+    def components(self) -> dict[str, ParameterSet | ParameterMapping]:
         """The component sets this collection contributes to the joint merge.
 
         Handed to :class:`FittingProblem`, which adds the models and performs
@@ -1305,7 +1290,9 @@ class DatasetCollection(Mapping[str, Dataset]):
         so would produce a mapping the problem then had to merge *again*, which
         is the associativity trap ``parameters.md`` §12.4 names.
         """
-        components = {label: dataset.parameters for label, dataset in self._datasets.items()}
+        components: dict[str, ParameterSet | ParameterMapping] = {
+            label: dataset.mapping for label, dataset in self._datasets.items()
+        }
         if self._shared is not None:
             components[self._shared_label] = self._shared
         return components
@@ -1598,7 +1585,7 @@ class FittingProblem:
             )
         return compiled
 
-    def _components(self) -> dict[str, ParameterSet]:
+    def _components(self) -> dict[str, ParameterSet | ParameterMapping]:
         """Step (4)'s input: every top-level component, checked for collisions."""
         components: dict[str, ParameterSet] = {}
         for label, instance in self._compiled.items():
@@ -1700,44 +1687,33 @@ class FittingProblem:
     def sites(self) -> Mapping[str, tuple[str, ...]]:
         """Every leaf each merged parameter feeds, by fully qualified path.
 
-        The introspection nesting would otherwise cost, restored. A consumer
-        reading only the top-level :class:`~ampere.core.parameter.
-        ParameterMapping` sees one binding per component and stops there, so a
-        parameter collapsed by an *inner* merge looks unshared: verified
-        behaviour, and the strongest concrete objection to the nested topology
-        (``inference.md`` §4.7). Because the nesting rule retains every level's
-        mapping, the information was never destroyed — only not surfaced — and
-        this walk surfaces it.
+        A thin wrapper since lossless nesting landed (ruled 2026-09-02): the
+        problem's own :attr:`~ampere.core.parameter.ParameterMapping.bindings`
+        already compose through every retained inner mapping, so this groups
+        them by merged name and renders the paths. ``mapping.bindings`` and
+        ``mapping.tied_names`` now tell the leaf-level truth themselves; this
+        method remains as the convenient rendered form.
 
         Returns a mapping from merged name to the paths it reaches, e.g.
         ``{"calibration": ("sed.instrument.calibrate.scale",
-        "spectrum.instrument.calibrate.scale")}``.
-
-        W1.8 should record *this*, not the raw bindings, in a run's provenance:
-        it is the honest answer to "which parts of the model did this sampler
-        dimension drive?" whatever level collapsed it.
+        "spectrum.instrument.calibrate.scale")}``. Either this or the raw
+        composed bindings is right for a run's provenance — they carry the
+        same information.
         """
         found: dict[str, list[str]] = {name: [] for name in self._mapping.merged.names}
         for binding in self._mapping.bindings:
-            dataset = self.datasets.get(binding.component)
-            if dataset is None:
-                found[binding.global_name].append(
-                    f"{binding.component}{SEPARATOR}{binding.local_name}"
-                )
-                continue
-            for path in dataset.leaf_sites(binding.local_name):
-                found[binding.global_name].append(f"{binding.component}{SEPARATOR}{path}")
+            found[binding.global_name].append(f"{binding.component}{SEPARATOR}{binding.local_name}")
         return types.MappingProxyType({name: tuple(paths) for name, paths in found.items()})
 
     @property
     def shared_names(self) -> tuple[str, ...]:
         """Merged names driving more than one leaf, at **any** level.
 
-        The lossless counterpart of :attr:`tied_names`, in merged declaration
-        order.
+        Since lossless nesting landed (ruled 2026-09-02) this is the same
+        statement :attr:`tied_names` makes — the mapping's own reporting is
+        leaf-level now — and it is kept as the established name for it.
         """
-        sites = self.sites()
-        return tuple(name for name in self._mapping.merged.names if len(sites[name]) > 1)
+        return self._mapping.tied_names
 
     # -- the engine-facing surface (§4.5) -------------------------------------
 
