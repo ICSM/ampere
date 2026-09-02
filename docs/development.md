@@ -89,13 +89,14 @@ just populations); the tie-based hierarchical pattern stands, with the
 revisit design recorded in `inference.md` §17.2. **W1.8 and W1.10 are
 unblocked.**
 
-**Next action**: dispatch W1.8 (Opus) and W1.10 (Sonnet/Opus per
-`docs/orchestration.md`) — parallelisable once W1.8's emitted-name surface
-is agreed, or sequenced W1.8-then-W1.10 to be safe — with self-contained
-prompts carrying the stale-worktree recovery above; Fable-review at the
-established depth before merging. Then W1.13 (freeze), which owes the
-batched sol review (still unavailable on this account — Peter configures
-codex first), and the remaining decision backlog below.
+**W1.8 merged 2026-09-02** (see WORK_ITEMS.md); its seven ruling
+requests (R1–R7, `results.md` §15) join Peter's backlog. **W1.10 is in
+flight** (Opus). Then W1.13 (freeze), which owes the batched sol review
+(still unavailable on this account — Peter configures codex first) and
+the decision backlog below. **Out-of-scope finding worth a W0.x item**:
+CI never runs `tests/core` or `tests/results` — the whole Phase-1
+contract suite is unexercised by `ci.yml`, which runs only the import
+sweep and characterisation.
 
 **Ruled later on 2026-09-02, all landed**: lossless nesting +
 `Binding.index` (implemented by the orchestrator after the Opus dispatch
