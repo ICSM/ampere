@@ -1,0 +1,1026 @@
+"""W1.8: the results contract.
+
+The acceptance criterion is :class:`TestNetcdfRoundTrip`: an emission from a real
+``FittingProblem`` evaluation — ``inference.md`` §15's two-dataset joint fit with
+a tied calibration nuisance — round-tripping through netCDF with the per-sample
+``log_likelihood`` and ``log_prior``, the per-dataset contributions and the
+provenance attrs all intact.
+
+The problem is rebuilt here rather than imported from ``tests/core`` because
+``tests/core`` has no conftest and no shared fixture module; the construction is
+the one ``docs/design/contracts/inference.md`` §15 and
+``tests/core/test_dataset.py::TestJointTwoDatasetProblem`` both use.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import subprocess
+import sys
+from typing import Any, ClassVar
+
+import astropy.units as u
+import numpy as np
+import pytest
+import scipy.stats as st
+
+from ampere.core import (
+    Cube,
+    Dataset,
+    DatasetCollection,
+    FittingProblem,
+    FunctionSamples,
+    GaussianProcessNoise,
+    HierarchicalPrior,
+    Image,
+    Instrument,
+    Likelihood,
+    Matern32,
+    Model,
+    ModelResult,
+    Parameter,
+    ParameterSet,
+    PhotometricPoints,
+    Plate,
+    PlateBinding,
+    PoissonFamily,
+    Spectrum,
+    Tie,
+    TimeSeries,
+    Transformation,
+    VisibilitySet,
+)
+from ampere.results import (
+    ATTR_PREFIX,
+    GP_LOCALISATION_CAVEAT,
+    LOG_LIKELIHOOD_DECOMPOSITION,
+    DrawRecorder,
+    ResultsError,
+    add_posterior_predictive,
+    add_residuals,
+    canonical_json,
+    container_from_dict,
+    container_to_dict,
+    describe_likelihood,
+    emit,
+    from_netcdf,
+    gp_localisation,
+    gp_localisation_caveat,
+    hash_array,
+    hash_container,
+    hash_of,
+    kind_named,
+    model_result_from_dict,
+    model_result_to_dict,
+    package_versions,
+    plot_anomaly_score,
+    plot_corner,
+    plot_gp_localisation,
+    plot_posterior_predictive,
+    plot_residuals,
+    plot_trace,
+    problem_fingerprint,
+    provenance_attrs,
+    register_kind,
+    spec_hashes,
+    to_netcdf,
+    training_pair_to_dict,
+)
+from ampere.results.emission import _dimension_names, _index_coordinate
+
+arviz = pytest.importorskip("arviz", reason="ampere.results needs ampere[arviz]")
+
+
+# ---------------------------------------------------------------------------
+# The problem under test: inference.md §15
+# ---------------------------------------------------------------------------
+
+
+class Powerlaw(Model):
+    """A stub model with two channels, so one model can feed two datasets."""
+
+    def __init__(self, **grids: np.ndarray) -> None:
+        self._channels = tuple(grids)
+        for name, grid in grids.items():
+            self.register_buffer(name, np.asarray(grid, dtype=float), unit=u.micron)
+        self.register_parameter(Parameter("index", st.norm(-1.0, 0.5)))
+        self.register_parameter(Parameter("norm", st.loguniform(0.1, 10.0)))
+
+    def evaluate(self, **values: Any) -> ModelResult:
+        ctx = self.context(values)
+        return ModelResult(
+            {
+                name: Spectrum(ctx[name] * u.micron, ctx["norm"] * ctx[name] ** ctx["index"] * u.Jy)
+                for name in self._channels
+            }
+        )
+
+
+class Calibrate(Transformation):
+    """A one-parameter nuisance step: the classic per-instrument scale factor."""
+
+    ACCEPTS: ClassVar[tuple[type, ...]] = (Spectrum,)
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.register_parameter(Parameter("scale", st.lognorm(0.2)))
+
+    def apply(self, samples: Spectrum, values: Any) -> Spectrum:
+        return samples.with_values(samples.values * self.context(values)["scale"])
+
+
+BLUE = np.array([1.0, 2.0, 4.0])
+RED = np.array([10.0, 20.0, 40.0])
+TRUTH = {"model.index": -1.0, "model.norm": 1.0, "calibration": 1.0}
+#: A point the loguniform(0.1, 10) prior on ``norm`` rejects outright.
+OUTSIDE = {"model.index": -1.0, "model.norm": 1e9, "calibration": 1.0}
+
+
+def blue_data(values: Any = (1.0, 0.5, 0.25)) -> Spectrum:
+    return Spectrum(BLUE * u.micron, list(values) * u.Jy, uncertainty=[0.05] * 3 * u.Jy)
+
+
+def joint_problem(**kwargs: Any) -> FittingProblem:
+    """``inference.md`` §15's worked example, verbatim."""
+    red = Spectrum(RED * u.micron, [0.1, 0.05, 0.025] * u.Jy, uncertainty=[0.005] * 3 * u.Jy)
+    datasets = DatasetCollection(
+        {
+            "blue": Dataset(blue_data(), Instrument([Calibrate()], channel="blue")),
+            "red": Dataset(red, Instrument([Calibrate()], channel="red")),
+        }
+    )
+    tie = Tie(
+        "calibration",
+        ("blue.instrument.calibrate.scale", "red.instrument.calibrate.scale"),
+    )
+    return FittingProblem(
+        Powerlaw(blue=BLUE, red=RED), datasets, ties=[tie], seed=20260902, **kwargs
+    )
+
+
+def recorded(problem: FittingProblem, *, chains: int = 2, draws: int = 4) -> Any:
+    """A small but genuine run: prior draws, plus one point the prior rejects."""
+    recorder = DrawRecorder(problem, chains=chains)
+    rng = np.random.default_rng(20260902)
+    for chain in range(chains):
+        for _ in range(draws - 1):
+            recorder.record(problem.prior_transform(rng.random(problem.free_size)), chain=chain)
+        recorder.record(OUTSIDE, chain=chain)
+    return recorder.emit(engine="emcee")
+
+
+# ---------------------------------------------------------------------------
+# Hashing
+# ---------------------------------------------------------------------------
+
+
+class TestCanonicalJson:
+    def test_mapping_order_is_irrelevant(self) -> None:
+        assert canonical_json({"a": 1, "b": 2}) == canonical_json({"b": 2, "a": 1})
+
+    def test_list_order_is_significant(self) -> None:
+        # Load-bearing: lowering.md §9.2 makes a lowered model's seeding depend
+        # on the order parameters are emitted in, so the merged spec's order is
+        # part of what identifies a run.
+        assert canonical_json([1, 2]) != canonical_json([2, 1])
+
+    def test_no_whitespace_and_sorted(self) -> None:
+        assert canonical_json({"b": [1, 2], "a": "x"}) == '{"a":"x","b":[1,2]}'
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            (float("inf"), '"__inf__"'),
+            (float("-inf"), '"__-inf__"'),
+            (float("nan"), '"__nan__"'),
+        ],
+    )
+    def test_non_finite_floats_become_sentinels(self, value: float, expected: str) -> None:
+        assert canonical_json(value) == expected
+
+    def test_output_is_strict_json(self) -> None:
+        # allow_nan=False stays on, so anything canonical_json emits parses with
+        # a strict reader -- which a netCDF attribute's consumer is.
+        assert json.loads(canonical_json({"x": float("nan"), "y": [1.0, 2.0]})) == {
+            "x": "__nan__",
+            "y": [1.0, 2.0],
+        }
+
+    def test_numpy_scalars_and_units_normalise(self) -> None:
+        assert canonical_json({"n": np.int64(3), "u": u.Jy}) == '{"n":3,"u":{"__unit__":"Jy"}}'
+
+    def test_an_unrecordable_object_is_refused(self) -> None:
+        with pytest.raises(ResultsError, match="no defined JSON form"):
+            canonical_json(object())
+
+
+class TestArrayHashing:
+    def test_content_sensitive(self) -> None:
+        assert hash_array(np.arange(3.0)) != hash_array(np.array([0.0, 1.0, 3.0]))
+
+    def test_dtype_sensitive(self) -> None:
+        assert hash_array(np.arange(3.0)) != hash_array(np.arange(3.0, dtype=np.float32))
+
+    def test_shape_sensitive(self) -> None:
+        assert hash_array(np.zeros((2, 3))) != hash_array(np.zeros((3, 2)))
+
+    def test_non_contiguous_hashes_as_its_values(self) -> None:
+        base = np.arange(6.0).reshape(2, 3)
+        assert hash_array(base.T) == hash_array(np.ascontiguousarray(base.T))
+
+    def test_string_arrays_hash(self) -> None:
+        assert hash_array(np.array(["W1", "W2"])) != hash_array(np.array(["W1", "W3"]))
+
+    def test_object_arrays_hash_by_value(self) -> None:
+        assert hash_array(np.array([{"a": 1}], dtype=object)) == hash_array(
+            np.array([{"a": 1}], dtype=object)
+        )
+
+    def test_digest_is_stable_across_processes(self) -> None:
+        # hashlib, never hash(): PYTHONHASHSEED must not reach a provenance
+        # record (ampere.core.rng makes the same argument for seeds).
+        code = "from ampere.results import digest; print(digest('ampere'))"
+        runs = {
+            subprocess.run(
+                [sys.executable, "-c", code],
+                capture_output=True,
+                text=True,
+                check=True,
+                env={"PYTHONHASHSEED": seed, "PATH": "/usr/bin:/bin"},
+            ).stdout.strip()
+            for seed in ("0", "1", "random")
+        }
+        assert len(runs) == 1
+        assert len(runs.pop()) == 32
+
+
+class TestContainerAndProblemFingerprints:
+    def test_data_hash_moves_with_the_values(self) -> None:
+        assert hash_container(blue_data()) != hash_container(blue_data((1.0, 0.5, 0.26)))
+
+    def test_data_hash_moves_with_the_unit(self) -> None:
+        millijansky = Spectrum(BLUE * u.micron, [1.0, 0.5, 0.25] * u.mJy)
+        jansky = Spectrum(BLUE * u.micron, [1.0, 0.5, 0.25] * u.Jy)
+        assert hash_container(millijansky) != hash_container(jansky)
+
+    def test_data_hash_ignores_meta(self) -> None:
+        # A changed comment is not a different dataset.
+        annotated = Spectrum(
+            BLUE * u.micron, [1.0, 0.5, 0.25] * u.Jy, meta={"note": "reduced 2026-09-02"}
+        )
+        plain = Spectrum(BLUE * u.micron, [1.0, 0.5, 0.25] * u.Jy)
+        assert hash_container(annotated) == hash_container(plain)
+
+    def test_problem_hash_is_stable_for_the_same_composition(self) -> None:
+        assert hash_of(problem_fingerprint(joint_problem())) == hash_of(
+            problem_fingerprint(joint_problem())
+        )
+
+    def test_likelihood_description_separates_kernels(self) -> None:
+        # The concrete reason likelihoods.md §17 Q8 matters: two likelihoods
+        # with identical ParameterSets but different kernels must not share a
+        # provenance record, or a cached artefact is never invalidated.
+        first = Likelihood(
+            PoissonFamily(),
+            GaussianProcessNoise(Matern32(st.loguniform(1e-3, 1e1), st.loguniform(0.1, 10.0))),
+        )
+        second = Likelihood(
+            PoissonFamily(),
+            GaussianProcessNoise(Matern32(st.loguniform(1e-3, 1e1), st.loguniform(0.1, 10.0))),
+        )
+        assert describe_likelihood(first) == describe_likelihood(second)
+        assert describe_likelihood(first)["parameters"] == second.parameters.to_spec()
+        assert describe_likelihood(first)["solver"]
+        assert describe_likelihood(first)["kernel"]["family"] == "matern32"
+
+
+class TestProvenanceAttrs:
+    def test_every_value_is_netcdf_safe(self) -> None:
+        for key, value in provenance_attrs(joint_problem()).items():
+            assert key.startswith(ATTR_PREFIX)
+            assert isinstance(value, int | str), f"{key} is {type(value).__name__}"
+
+    def test_seed_and_its_source(self) -> None:
+        attrs = provenance_attrs(joint_problem())
+        assert attrs["ampere_seed"] == 20260902
+        assert attrs["ampere_seed_source"] == "explicit"
+
+    def test_an_unseeded_run_says_so_rather_than_inventing_a_seed(self) -> None:
+        unseeded = FittingProblem(
+            Powerlaw(blue=BLUE), [Dataset(blue_data(), Instrument([], channel="blue"))]
+        )
+        attrs = provenance_attrs(unseeded)
+        assert attrs["ampere_seed_source"] == "entropy"
+        assert "ampere_seed" not in attrs
+
+    def test_spec_hash_moves_when_a_prior_moves(self) -> None:
+        class Steeper(Model):
+            def __init__(self, grid: np.ndarray, location: float) -> None:
+                self.register_buffer("blue", grid, unit=u.micron)
+                self.register_parameter(Parameter("index", st.norm(location, 0.5)))
+
+            def evaluate(self, **values: Any) -> ModelResult:
+                ctx = self.context(values)
+                return ModelResult(
+                    {"blue": Spectrum(ctx["blue"] * u.micron, ctx["blue"] ** ctx["index"] * u.Jy)}
+                )
+
+        def problem(location: float) -> FittingProblem:
+            return FittingProblem(
+                Steeper(BLUE, location),
+                [Dataset(blue_data(), Instrument([], channel="blue", input_kind=Spectrum))],
+                seed=20260902,
+            )
+
+        # Same seed, same data, one prior moved: a different run.
+        assert (
+            provenance_attrs(problem(-1.0))["ampere_spec_hash"]
+            != provenance_attrs(problem(-2.0))["ampere_spec_hash"]
+        )
+        assert (
+            provenance_attrs(problem(-1.0))["ampere_data_hash"]
+            == provenance_attrs(problem(-2.0))["ampere_data_hash"]
+        )
+
+    def test_spec_hash_moves_when_a_component_is_relabelled(self) -> None:
+        # The merged names are part of the spec, so a relabelled step is a
+        # different declaration even though the priors are identical.
+        red = Spectrum(RED * u.micron, [0.1, 0.05, 0.025] * u.Jy, uncertainty=[0.005] * 3 * u.Jy)
+        relabelled = FittingProblem(
+            Powerlaw(blue=BLUE, red=RED),
+            DatasetCollection(
+                {
+                    "blue": Dataset(blue_data(), Instrument([Calibrate()], channel="blue")),
+                    "red": Dataset(red, Instrument([Calibrate(label="other")], channel="red")),
+                }
+            ),
+            seed=20260902,
+        )
+        assert (
+            provenance_attrs(relabelled)["ampere_spec_hash"]
+            != provenance_attrs(joint_problem())["ampere_spec_hash"]
+        )
+
+    def test_data_hash_moves_when_the_data_move(self) -> None:
+        red = Spectrum(RED * u.micron, [0.1, 0.05, 0.025] * u.Jy, uncertainty=[0.005] * 3 * u.Jy)
+        moved = FittingProblem(
+            Powerlaw(blue=BLUE, red=RED),
+            DatasetCollection(
+                {
+                    "blue": Dataset(
+                        blue_data((1.0, 0.5, 0.26)), Instrument([Calibrate()], channel="blue")
+                    ),
+                    "red": Dataset(red, Instrument([Calibrate()], channel="red")),
+                }
+            ),
+            ties=[
+                Tie(
+                    "calibration",
+                    ("blue.instrument.calibrate.scale", "red.instrument.calibrate.scale"),
+                )
+            ],
+            seed=20260902,
+        )
+        baseline = provenance_attrs(joint_problem())
+        assert provenance_attrs(moved)["ampere_data_hash"] != baseline["ampere_data_hash"]
+        assert provenance_attrs(moved)["ampere_spec_hash"] == baseline["ampere_spec_hash"]
+
+    def test_composed_bindings_are_recorded(self) -> None:
+        sites = json.loads(provenance_attrs(joint_problem())["ampere_sites"])
+        assert sites["calibration"] == [
+            "blue.instrument.calibrate.scale",
+            "red.instrument.calibrate.scale",
+        ]
+
+    def test_free_names_not_free_labels(self) -> None:
+        # likelihoods.md §16(a): 10^5 scalar names is the wrong representation,
+        # so the attrs carry one name per parameter and the size, never a label
+        # per flat-vector element.
+        attrs = provenance_attrs(joint_problem())
+        assert json.loads(attrs["ampere_free_names"]) == [
+            "model.index",
+            "model.norm",
+            "calibration",
+        ]
+        assert attrs["ampere_free_size"] == 3
+
+    def test_failure_counts_and_history_travel(self) -> None:
+        class Crash(RuntimeError):
+            pass
+
+        class Wrapped(Model):
+            def __init__(self, grid: np.ndarray) -> None:
+                self.register_buffer("grid", grid, unit=u.micron)
+                self.register_parameter(Parameter("slope", st.norm(1.0, 1.0)))
+
+            def evaluate(self, **values: Any) -> ModelResult:
+                raise Crash("the RT code exited 1")
+
+        problem = FittingProblem(
+            Wrapped(BLUE), [Dataset(blue_data())], validate=False, simulator_failures=(Crash,)
+        )
+        for _ in range(3):
+            problem.log_prob({"model.slope": 2.0})
+        attrs = provenance_attrs(problem)
+        assert json.loads(attrs["ampere_failure_counts"]) == {"model_failed": 3}
+        history = json.loads(attrs["ampere_failures"])
+        assert len(history) == 3
+        assert history[0]["exception_type"] == "Crash"
+        assert history[0]["where"] == "model"
+
+    def test_capabilities_are_recorded_as_declared(self) -> None:
+        assert json.loads(provenance_attrs(joint_problem())["ampere_capabilities"]) == {
+            "differentiable": False,
+            "batchable": False,
+            "device": "cpu",
+        }
+
+    def test_component_spec_hashes_locate_the_change(self) -> None:
+        hashes = spec_hashes(joint_problem())
+        assert set(hashes) == {"spec", "blue", "red", "model"}
+
+    def test_versions_include_the_stack_that_moves_numbers(self) -> None:
+        versions = package_versions()
+        assert {"python", "numpy", "scipy", "astropy"} <= set(versions)
+
+    def test_extra_attrs_cannot_shadow_ampere_s_own(self) -> None:
+        with pytest.raises(ResultsError, match="would overwrite"):
+            provenance_attrs(joint_problem(), extra={"seed": 1})
+
+    def test_extra_attrs_are_prefixed_and_serialised(self) -> None:
+        attrs = provenance_attrs(joint_problem(), extra={"walkers": 32, "moves": ["stretch"]})
+        assert attrs["ampere_walkers"] == 32
+        assert attrs["ampere_moves"] == '["stretch"]'
+
+
+# ---------------------------------------------------------------------------
+# Emission
+# ---------------------------------------------------------------------------
+
+
+class TestEmission:
+    def test_the_groups_a_run_carries(self) -> None:
+        tree = recorded(joint_problem())
+        assert set(tree.children) == {
+            "posterior",
+            "sample_stats",
+            "log_likelihood",
+            "observed_data",
+            "constant_data",
+        }
+
+    def test_posterior_is_keyed_by_merged_name(self) -> None:
+        tree = recorded(joint_problem())
+        assert set(tree["posterior"].data_vars) == {"model.index", "model.norm", "calibration"}
+        assert tree["posterior"]["calibration"].dims == ("chain", "draw")
+        assert tree["posterior"]["calibration"].shape == (2, 4)
+
+    def test_sample_stats_carries_the_split(self) -> None:
+        tree = recorded(joint_problem())
+        stats = tree["sample_stats"]
+        assert {"lp", "log_prior", "log_likelihood"} <= set(stats.data_vars)
+        finite = np.isfinite(stats["lp"].values)
+        assert np.allclose(
+            stats["lp"].values[finite],
+            (stats["log_prior"].values + stats["log_likelihood"].values)[finite],
+        )
+
+    def test_log_likelihood_is_nan_for_a_prior_rejected_draw(self) -> None:
+        # inference.md §18(c): "not evaluated" and "impossible" are different
+        # statements, and importance reweighting needs them apart.
+        tree = recorded(joint_problem())
+        stats = tree["sample_stats"]
+        rejected = np.isneginf(stats["log_prior"].values)
+        assert rejected.sum() == 2  # one per chain, by construction
+        assert np.isnan(stats["log_likelihood"].values[rejected]).all()
+        assert not np.isneginf(stats["log_likelihood"].values[rejected]).any()
+
+    def test_contributions_are_per_dataset_and_sum_to_the_joint(self) -> None:
+        tree = recorded(joint_problem())
+        group = tree["log_likelihood"]
+        assert set(group.data_vars) == {"blue", "red"}
+        total = group["blue"].values + group["red"].values
+        joint = tree["sample_stats"]["log_likelihood"].values
+        finite = np.isfinite(joint)
+        assert np.allclose(total[finite], joint[finite])
+
+    def test_a_prior_rejected_draw_contributes_nothing_rather_than_zero(self) -> None:
+        tree = recorded(joint_problem())
+        rejected = np.isneginf(tree["sample_stats"]["log_prior"].values)
+        assert np.isnan(tree["log_likelihood"]["blue"].values[rejected]).all()
+
+    def test_the_decomposition_is_declared_on_the_group(self) -> None:
+        tree = recorded(joint_problem())
+        assert tree["log_likelihood"].attrs[f"{ATTR_PREFIX}decomposition"] == (
+            LOG_LIKELIHOOD_DECOMPOSITION
+        )
+        assert (
+            "does not factorise" in tree["log_likelihood"].attrs[f"{ATTR_PREFIX}decomposition_note"]
+        )
+
+    def test_failures_are_recorded_per_draw(self) -> None:
+        tree = recorded(joint_problem())
+        stats = tree["sample_stats"]
+        assert stats["failed"].values.dtype == bool
+        # A prior rejection is not a failure: zero prior mass is an answer.
+        assert not stats["failed"].values.any()
+        assert set(np.unique(stats["failure_reason"].values)) == {""}
+
+    def test_observed_data_carries_the_axis_as_a_coordinate(self) -> None:
+        tree = recorded(joint_problem())
+        observed = tree["observed_data"]
+        assert set(observed.data_vars) == {"blue", "red"}
+        assert observed["blue"].dims == ("blue_spectral_axis",)
+        assert np.allclose(observed.coords["blue_spectral_axis"].values, BLUE)
+        assert observed["blue"].attrs["units"] == "Jy"
+        assert observed.coords["blue_spectral_axis"].attrs["units"] == "micron"
+
+    def test_uncertainties_land_in_constant_data(self) -> None:
+        tree = recorded(joint_problem())
+        assert np.allclose(tree["constant_data"]["blue_uncertainty"].values, 0.05)
+
+    def test_a_mask_is_stored_with_its_convention_stated(self) -> None:
+        # netCDF has no boolean type, so the sense of the ones has to be said.
+        masked = Spectrum(
+            BLUE * u.micron,
+            [1.0, 0.5, 0.25] * u.Jy,
+            uncertainty=[0.05] * 3 * u.Jy,
+            mask=[False, True, False],
+        )
+        problem = FittingProblem(
+            Powerlaw(blue=BLUE),
+            [Dataset(masked, Instrument([Calibrate()], channel="blue"), label="blue")],
+        )
+        recorder = DrawRecorder(problem)
+        recorder.record(problem.reference_values)
+        tree = recorder.emit()
+        assert tree["constant_data"]["blue_mask"].values.tolist() == [0, 1, 0]
+        assert "excluded" in tree["constant_data"].attrs[f"{ATTR_PREFIX}mask_convention"]
+        assert f"{ATTR_PREFIX}mask_convention" not in tree["observed_data"].attrs
+
+    def test_observed_groups_can_be_left_out(self) -> None:
+        recorder = DrawRecorder(joint_problem())
+        recorder.record(TRUTH)
+        tree = recorder.emit(observed=False)
+        assert "observed_data" not in tree.children
+
+    def test_draw_shape_is_checked_against_the_problem(self) -> None:
+        problem = joint_problem()
+        with pytest.raises(ResultsError, match="free dimension"):
+            emit(problem, np.zeros((2, 5)), [[problem.evaluate(TRUTH)] * 2] * 1)
+
+    def test_one_evaluation_per_draw_is_required(self) -> None:
+        problem = joint_problem()
+        with pytest.raises(ResultsError, match="One Evaluation per draw"):
+            emit(problem, np.zeros((3, 3)), [problem.evaluate(TRUTH)])
+
+    def test_log_prob_is_not_enough(self) -> None:
+        problem = joint_problem()
+        with pytest.raises(ResultsError, match="cannot carry the split"):
+            emit(problem, np.zeros((1, 3)), [problem.log_prob(TRUTH)])
+
+    def test_provenance_reaches_the_root(self) -> None:
+        tree = recorded(joint_problem())
+        assert tree.attrs["ampere_seed"] == 20260902
+        assert tree.attrs["ampere_chains"] == 2
+        assert tree.attrs["ampere_draws"] == 4
+        assert tree.attrs["ampere_engine"] == "emcee"
+
+
+class TestArrayValuedParameters:
+    """likelihoods.md §16(a) and hierarchical_population.md §10.2/§10.5."""
+
+    @staticmethod
+    def latent_problem() -> FittingProblem:
+        counts = Spectrum([1.0, 2.0, 3.0] * u.um, np.array([4.0, 7.0, 2.0]))
+
+        class Rate(Model):
+            def __init__(self, grid: np.ndarray) -> None:
+                self.register_buffer("grid", grid, unit=u.um)
+                self.register_parameter(Parameter("rate", st.loguniform(0.5, 50.0)))
+
+            def evaluate(self, **values: Any) -> Spectrum:
+                ctx = self.context(values)
+                return Spectrum(ctx["grid"] * u.um, np.full(ctx["grid"].shape, ctx["rate"]))
+
+        return FittingProblem(
+            Rate(np.array([1.0, 2.0, 3.0])),
+            [
+                Dataset(
+                    counts,
+                    likelihood=Likelihood(
+                        PoissonFamily(), GaussianProcessNoise(Matern32(0.3, 1.0))
+                    ),
+                    label="counts",
+                )
+            ],
+        )
+
+    def test_a_latent_block_is_one_variable_with_a_dimension(self) -> None:
+        problem = self.latent_problem()
+        draws = np.zeros((1, 2, problem.free_size))
+        draws[..., 0] = 3.0
+        tree = emit(problem, draws, [[problem.evaluate(draws[0, d]) for d in range(2)]])
+        block = tree["posterior"]["counts.latent.z"]
+        assert block.dims == ("chain", "draw", "counts.latent.z_dim_0")
+        assert block.shape == (1, 2, 3)
+        # Never 10^5 scalar names: the whole block is one variable.
+        assert set(tree["posterior"].data_vars) == {"model.rate", "counts.latent.z"}
+
+    def test_a_plate_takes_its_own_name_as_the_dimension(self) -> None:
+        plate = Plate(
+            "objects",
+            size=2,
+            hyperparameters=[Parameter("mu", st.norm(0.0, 5.0))],
+            members=[Parameter("theta", HierarchicalPrior("norm", {"loc": "mu"}))],
+        )
+        mapping = ParameterSet.merge(
+            {
+                "population": ParameterSet([], plates=[plate]),
+                "obj0": ParameterSet([Parameter("cal", st.lognorm(0.1))]),
+                "obj1": ParameterSet([Parameter("cal", st.lognorm(0.1))]),
+            },
+            plate_bindings=[
+                PlateBinding("population.objects.theta", "obj0", "theta", 0),
+                PlateBinding("population.objects.theta", "obj1", "theta", 1),
+            ],
+        )
+        member = mapping.merged["population.objects.theta"]
+        assert _dimension_names(member) == ("objects",)
+
+    def test_the_plate_coordinate_is_read_off_the_bindings(self) -> None:
+        # hierarchical_population.md §10.2: "W1.8 must record the dataset labels
+        # as the plate's coordinate, not an integer range."
+        plate = Plate(
+            "objects",
+            size=2,
+            hyperparameters=[Parameter("mu", st.norm(0.0, 5.0))],
+            members=[Parameter("theta", HierarchicalPrior("norm", {"loc": "mu"}))],
+        )
+        mapping = ParameterSet.merge(
+            {
+                "population": ParameterSet([], plates=[plate]),
+                "ngc1": ParameterSet([Parameter("cal", st.lognorm(0.1))]),
+                "ngc2": ParameterSet([Parameter("cal", st.lognorm(0.1))]),
+            },
+            plate_bindings=[
+                PlateBinding("population.objects.theta", "ngc1", "theta", 0),
+                PlateBinding("population.objects.theta", "ngc2", "theta", 1),
+            ],
+        )
+        member = mapping.merged["population.objects.theta"]
+        assert _index_coordinate(mapping.bindings, member) == ["ngc1", "ngc2"]
+
+    def test_an_unrouted_block_gets_no_invented_coordinate(self) -> None:
+        problem = self.latent_problem()
+        member = problem.parameters["counts.latent.z"]
+        assert _index_coordinate(problem.mapping.bindings, member) is None
+
+    def test_a_caller_may_supply_the_coordinate(self) -> None:
+        problem = self.latent_problem()
+        draws = np.zeros((1, 2, problem.free_size))
+        draws[..., 0] = 3.0
+        tree = emit(
+            problem,
+            draws,
+            [[problem.evaluate(draws[0, d]) for d in range(2)]],
+            coords={"counts.latent.z_dim_0": ["a", "b", "c"]},
+        )
+        assert tree["posterior"].coords["counts.latent.z_dim_0"].values.tolist() == [
+            "a",
+            "b",
+            "c",
+        ]
+
+
+class TestDrawRecorder:
+    def test_it_evaluates_when_not_given_an_evaluation(self) -> None:
+        recorder = DrawRecorder(joint_problem())
+        evaluation = recorder.record(TRUTH)
+        assert math.isfinite(evaluation.log_prob)
+        assert len(recorder) == 1
+
+    def test_ragged_chains_are_refused_rather_than_padded(self) -> None:
+        recorder = DrawRecorder(joint_problem(), chains=2)
+        recorder.record(TRUTH, chain=0)
+        with pytest.raises(ResultsError, match="different numbers of draws"):
+            recorder.emit()
+
+    def test_an_empty_recorder_has_nothing_to_emit(self) -> None:
+        with pytest.raises(ResultsError, match="nothing has been recorded"):
+            DrawRecorder(joint_problem()).emit()
+
+    def test_an_out_of_range_chain_is_refused(self) -> None:
+        with pytest.raises(ResultsError, match="out of range"):
+            DrawRecorder(joint_problem()).record(TRUTH, chain=3)
+
+
+# ---------------------------------------------------------------------------
+# The acceptance criterion
+# ---------------------------------------------------------------------------
+
+
+class TestNetcdfRoundTrip:
+    """W1.8's acceptance criterion, on ``inference.md`` §15's joint problem."""
+
+    @staticmethod
+    def round_tripped(tmp_path: Any, tree: Any) -> Any:
+        path = tmp_path / "run.nc"
+        written = to_netcdf(tree, path)
+        assert path.is_file() and written == str(path)
+        return from_netcdf(path)
+
+    def test_the_whole_run_survives_netcdf(self, tmp_path: Any) -> None:
+        problem = joint_problem()
+        tree = recorded(problem)
+        back = self.round_tripped(tmp_path, tree)
+
+        # -- the groups ---------------------------------------------------
+        assert set(back.children) == set(tree.children)
+
+        # -- per-sample log_prior, log_likelihood and their sum ------------
+        for name in ("lp", "log_prior", "log_likelihood"):
+            assert np.allclose(
+                back["sample_stats"][name].values,
+                tree["sample_stats"][name].values,
+                equal_nan=True,
+            )
+        rejected = np.isneginf(back["sample_stats"]["log_prior"].values)
+        assert rejected.any()
+        assert np.isnan(back["sample_stats"]["log_likelihood"].values[rejected]).all()
+        finite = np.isfinite(back["sample_stats"]["lp"].values)
+        assert np.allclose(
+            back["sample_stats"]["lp"].values[finite],
+            (
+                back["sample_stats"]["log_prior"].values
+                + back["sample_stats"]["log_likelihood"].values
+            )[finite],
+        )
+
+        # -- the per-dataset contributions --------------------------------
+        assert set(back["log_likelihood"].data_vars) == {"blue", "red"}
+        for label in ("blue", "red"):
+            assert np.allclose(
+                back["log_likelihood"][label].values,
+                tree["log_likelihood"][label].values,
+                equal_nan=True,
+            )
+        total = back["log_likelihood"]["blue"].values + back["log_likelihood"]["red"].values
+        joint = back["sample_stats"]["log_likelihood"].values
+        assert np.allclose(total[finite], joint[finite])
+        assert back["log_likelihood"].attrs[f"{ATTR_PREFIX}decomposition"] == "per_dataset"
+
+        # -- the posterior itself -----------------------------------------
+        for name in ("model.index", "model.norm", "calibration"):
+            assert np.allclose(back["posterior"][name].values, tree["posterior"][name].values)
+
+        # -- the observed data --------------------------------------------
+        assert np.allclose(back["observed_data"]["blue"].values, [1.0, 0.5, 0.25])
+        assert np.allclose(back["observed_data"].coords["blue_spectral_axis"].values, BLUE)
+        assert back["observed_data"]["blue"].attrs["units"] == "Jy"
+        assert np.allclose(back["constant_data"]["blue_uncertainty"].values, 0.05)
+
+        # -- the provenance attrs -----------------------------------------
+        assert dict(back.attrs) == {
+            key: (int(value) if isinstance(value, int) else value)
+            for key, value in tree.attrs.items()
+        }
+        assert back.attrs["ampere_seed"] == 20260902
+        assert back.attrs["ampere_seed_source"] == "explicit"
+        assert back.attrs["ampere_engine"] == "emcee"
+        assert back.attrs["ampere_backend"] == "reference"
+        assert len(back.attrs["ampere_spec_hash"]) == 32
+        assert len(back.attrs["ampere_data_hash"]) == 32
+        assert len(back.attrs["ampere_problem_hash"]) == 32
+        assert json.loads(back.attrs["ampere_sites"])["calibration"] == [
+            "blue.instrument.calibrate.scale",
+            "red.instrument.calibrate.scale",
+        ]
+        assert json.loads(back.attrs["ampere_dataset_labels"]) == ["blue", "red"]
+        assert json.loads(back.attrs["ampere_tied_names"]) == ["calibration"]
+        assert json.loads(back.attrs["ampere_capabilities"])["device"] == "cpu"
+        assert "numpy" in json.loads(back.attrs["ampere_library_versions"])
+        assert json.loads(back.attrs["ampere_likelihoods"])["blue"]["family"] == "gaussian"
+
+        # -- and it still identifies the same composition ------------------
+        assert back.attrs["ampere_spec_hash"] == provenance_attrs(problem)["ampere_spec_hash"]
+        assert back.attrs["ampere_problem_hash"] == hash_of(problem_fingerprint(problem))
+
+    @pytest.mark.parametrize("engine", ["h5netcdf", "netcdf4"])
+    def test_both_netcdf_engines_write_it(self, tmp_path: Any, engine: str) -> None:
+        pytest.importorskip(
+            {"h5netcdf": "h5netcdf", "netcdf4": "netCDF4"}[engine],
+            reason=f"the {engine} backend is not installed",
+        )
+        tree = recorded(joint_problem(), chains=1, draws=2)
+        path = tmp_path / f"run-{engine}.nc"
+        to_netcdf(tree, path, engine=engine)
+        back = from_netcdf(path)
+        assert back.attrs["ampere_spec_hash"] == tree.attrs["ampere_spec_hash"]
+
+    def test_a_latent_block_survives_with_its_dimension(self, tmp_path: Any) -> None:
+        problem = TestArrayValuedParameters.latent_problem()
+        draws = np.zeros((1, 2, problem.free_size))
+        draws[..., 0] = 3.0
+        tree = emit(problem, draws, [[problem.evaluate(draws[0, d]) for d in range(2)]])
+        back = self.round_tripped(tmp_path, tree)
+        assert back["posterior"]["counts.latent.z"].dims == (
+            "chain",
+            "draw",
+            "counts.latent.z_dim_0",
+        )
+        assert back["posterior"]["counts.latent.z"].shape == (1, 2, 3)
+
+
+# ---------------------------------------------------------------------------
+# Serialisation (results_schema.md §17 Q6)
+# ---------------------------------------------------------------------------
+
+
+class TestContainerSerialisation:
+    @pytest.mark.parametrize(
+        "container",
+        [
+            Spectrum(BLUE * u.micron, [1.0, 0.5, 0.25] * u.Jy, uncertainty=[0.05] * 3 * u.Jy),
+            Spectrum(BLUE * u.micron, [1.0, 0.5, 0.25] * u.Jy, mask=[False, True, False]),
+            PhotometricPoints(
+                ["W1", "W2"], [3.4, 4.6] * u.um, [1.0, 2.0] * u.Jy, uncertainty=[0.1, 0.2] * u.Jy
+            ),
+            TimeSeries([0.0, 1.0, 2.0] * u.day, [1.0, 2.0, 3.0] * u.mag),
+            Image(
+                [0.0, 1.0] * u.arcsec,
+                [0.0, 1.0, 2.0] * u.arcsec,
+                np.arange(6.0).reshape(2, 3),
+            ),
+            Cube(
+                [0.0, 1.0] * u.arcsec,
+                [0.0, 1.0] * u.arcsec,
+                [1.0, 2.0] * u.um,
+                np.arange(8.0).reshape(2, 2, 2),
+            ),
+            VisibilitySet([1.0, 2.0], [3.0, 4.0], [1 + 2j, 3 - 1j]),
+            Spectrum(BLUE * u.micron, [1.0, 0.5, 0.25] * u.Jy, fidelity="cheap"),
+        ],
+        ids=[
+            "spectrum",
+            "masked",
+            "photometry",
+            "timeseries",
+            "image",
+            "cube",
+            "visibilities",
+            "fidelity",
+        ],
+    )
+    def test_round_trip_by_value(self, container: FunctionSamples) -> None:
+        back = container_from_dict(container_to_dict(container))
+        assert type(back) is type(container)
+        assert back == container
+        assert back.fidelity == container.fidelity
+
+    def test_the_encoding_is_plain_data(self) -> None:
+        encoded = container_to_dict(
+            Spectrum(BLUE * u.micron, [1.0, 0.5, 0.25] * u.Jy, uncertainty=[0.05] * 3 * u.Jy)
+        )
+        assert json.loads(json.dumps(encoded)) == encoded
+        assert encoded["kind"] == "Spectrum"
+        assert encoded["unit"] == "Jy"
+        assert encoded["coordinates"]["spectral_axis"]["unit"] == "micron"
+
+    def test_a_tampered_record_fails_the_kind_s_own_validation(self) -> None:
+        encoded = container_to_dict(Spectrum(BLUE * u.micron, [1.0, 0.5, 0.25] * u.Jy))
+        encoded["coordinates"]["spectral_axis"]["values"] = [3.0, 2.0, 1.0]
+        with pytest.raises(Exception, match="increasing"):
+            container_from_dict(encoded)
+
+    def test_an_unknown_kind_names_the_remedy(self) -> None:
+        with pytest.raises(ResultsError, match="register_kind"):
+            container_from_dict({"version": 1, "kind": "Nope"})
+
+    def test_a_future_version_is_refused(self) -> None:
+        encoded = container_to_dict(Spectrum(BLUE * u.micron, [1.0] * 3 * u.Jy))
+        encoded["version"] = 99
+        with pytest.raises(ResultsError, match="unsupported container record version"):
+            container_from_dict(encoded)
+
+    def test_out_of_tree_kinds_register(self) -> None:
+        @register_kind
+        class Polarisation(FunctionSamples):
+            AXES = Spectrum.AXES
+
+        assert kind_named("Polarisation") is Polarisation
+        curve = Polarisation({"spectral_axis": BLUE * u.micron}, [0.1, 0.2, 0.3])
+        assert container_from_dict(container_to_dict(curve)) == curve
+
+    def test_unserialisable_metadata_is_refused_not_dropped(self) -> None:
+        container = Spectrum(BLUE * u.micron, [1.0] * 3 * u.Jy, meta={"origin": object()})
+        with pytest.raises(ResultsError, match="no plain form"):
+            container_to_dict(container)
+
+    def test_plain_metadata_travels(self) -> None:
+        container = Spectrum(BLUE * u.micron, [1.0] * 3 * u.Jy, meta={"programme": "GO-1234"})
+        back = container_from_dict(container_to_dict(container))
+        assert back.meta["programme"] == "GO-1234"
+
+
+class TestModelResultSerialisation:
+    def test_channels_and_theta_round_trip(self) -> None:
+        result = ModelResult(
+            {
+                "blue": Spectrum(BLUE * u.micron, [1.0, 0.5, 0.25] * u.Jy),
+                "red": Spectrum(RED * u.micron, [0.1, 0.05, 0.025] * u.Jy),
+            },
+            parameters={"model.index": -1.0, "model.norm": 1.0},
+        )
+        back = model_result_from_dict(model_result_to_dict(result))
+        assert back == result
+        assert back.parameters == {"model.index": -1.0, "model.norm": 1.0}
+
+    def test_a_training_pair_is_what_simulate_already_produces(self) -> None:
+        problem = joint_problem()
+        simulation = problem.simulate(TRUTH)
+        pair = training_pair_to_dict(
+            simulation.parameters, simulation.results["model"], failed=simulation.failed
+        )
+        assert pair["failed"] is False
+        assert set(pair["theta"]) == {"model.index", "model.norm", "calibration"}
+        rebuilt = model_result_from_dict(pair["result"])
+        assert set(rebuilt) == {"blue", "red"}
+        assert np.allclose(rebuilt["blue"].values, simulation.results["model"]["blue"].values)
+
+    def test_a_dotted_channel_name_survives(self) -> None:
+        result = ModelResult({"co.j3_2": Spectrum(BLUE * u.micron, [1.0] * 3 * u.Jy)})
+        assert set(model_result_from_dict(model_result_to_dict(result))) == {"co.j3_2"}
+
+
+# ---------------------------------------------------------------------------
+# Declared-but-unimplemented surfaces
+# ---------------------------------------------------------------------------
+
+
+class TestPlottingSurface:
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda: plot_corner(None),
+            lambda: plot_trace(None),
+            lambda: plot_posterior_predictive(None),
+            lambda: plot_residuals(None),
+            lambda: plot_gp_localisation(None),
+            lambda: plot_anomaly_score(None),
+        ],
+        ids=["corner", "trace", "ppc", "residuals", "gp_localisation", "anomaly"],
+    )
+    def test_every_plot_is_declared_and_refuses_clearly(self, call: Any) -> None:
+        with pytest.raises(NotImplementedError, match="Phase 2"):
+            call()
+
+    def test_the_gp_localisation_caveat_is_mandatory_and_reachable(self) -> None:
+        # diagnostics.md §4.3: the caveat must reach a programmatic consumer,
+        # not only someone looking at the figure.
+        assert gp_localisation_caveat() == GP_LOCALISATION_CAVEAT
+        assert "does not say why" in GP_LOCALISATION_CAVEAT
+
+    def test_the_caveat_is_in_the_docstring_by_construction(self) -> None:
+        # "a plotting-function requirement for W1.8, not a 'please remember to
+        # mention this' note" (diagnostics.md §4.3).
+        doc = " ".join((plot_gp_localisation.__doc__ or "").split())
+        assert "localises where the model is deficient; it does not say why" in doc
+        assert "GP_LOCALISATION_CAVEAT" in doc
+
+
+class TestDerivedGroups:
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda: add_posterior_predictive(None, joint_problem()),
+            lambda: add_residuals(None, joint_problem()),
+            lambda: gp_localisation(None, joint_problem()),
+        ],
+        ids=["posterior_predictive", "residuals", "gp_localisation"],
+    )
+    def test_declared_but_not_implemented(self, call: Any) -> None:
+        with pytest.raises(NotImplementedError, match="Phase 2"):
+            call()
+
+    def test_they_are_absent_from_a_default_emission(self) -> None:
+        # The cost policy, asserted: N_draws x N_obs is not paid unless asked.
+        tree = recorded(joint_problem(), chains=1, draws=2)
+        assert "posterior_predictive" not in tree.children
+        assert "residuals" not in tree.children
+
+
+class TestDependencyPolicy:
+    def test_importing_ampere_results_does_not_import_arviz(self) -> None:
+        # architecture.md §4 rule 2: ampere.results imports its optional
+        # dependency lazily, so `import ampere` stays light and the
+        # minimal-install CI job keeps passing.
+        code = (
+            "import sys, ampere.results; "
+            "print(any(name == 'arviz' or name.startswith('arviz.') for name in sys.modules))"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, check=True
+        )
+        assert result.stdout.strip() == "False"
