@@ -97,11 +97,13 @@ established depth before merging. Then W1.13 (freeze), which owes the
 batched sol review (still unavailable on this account — Peter configures
 codex first), and the remaining decision backlog below.
 
-**Ruled later on 2026-09-02**: lossless nesting + `Binding.index`
-approved (implementation dispatched on its own branch); I-1/I-5/X-2/X-3
-approved and landed; X-1 under iteration — Peter is positive and asked
-for the full mechanics, now written as the "Detailed design" subsection
-of `awkward_instrument.md` §6 X-1.
+**Ruled later on 2026-09-02, all landed**: lossless nesting +
+`Binding.index` (implemented by the orchestrator after the Opus dispatch
+hit its session limit — `parameters.md` §8; the problem's bindings now
+compose to the leaves and plate elements route per component);
+I-1/I-5/X-2/X-3 approved and landed; X-1 under iteration — Peter is
+positive and asked for the full mechanics, now written as the "Detailed
+design" subsection of `awkward_instrument.md` §6 X-1.
 
 **Peter's remaining review backlog** (nothing blocks W1.8/W1.10): X-1's
 detailed design (iterate, then rule); W1.5 §15 Q2/Q3 and W1.6 §17
