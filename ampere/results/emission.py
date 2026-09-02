@@ -336,25 +336,52 @@ def _data_groups(problem: FittingProblem) -> _DataGroups:
     dims: dict[str, list[str]] = {}
     coords: dict[str, Sequence[Any]] = {}
     units: dict[str, str] = {}
+    taken: set[str] = set()
+
+    def claim(name: str, label: str, what: str) -> str:
+        """Reserve a variable name, refusing a collision rather than overwriting.
+
+        Data-group names are built by joining a dataset label to an axis or
+        role name, so two datasets can in principle produce the same one — a
+        dataset ``a`` with an extra coordinate ``b_c`` against a dataset
+        ``a_b`` with one called ``c``. That is the flattening collision
+        ``inference.md`` §4.4 names, and here it would silently drop one
+        dataset's data on the floor: a stored run that quietly lost a
+        dataset is worse than one that refuses to be written.
+        """
+        if name in taken:
+            raise ResultsError(
+                f"dataset {label!r}'s {what} would be stored as {name!r}, which another dataset "
+                f"has already claimed. Data-group names join the dataset label to an axis or "
+                f"role name, so labels that differ only by where an underscore falls can "
+                f"collide. Rename one of the datasets."
+            )
+        taken.add(name)
+        return name
+
     for label in problem.datasets:
         container = problem.datasets[label].observed
         names = _container_dims(label, container)
         as_list = list(names)
+        value_unit = None if container.unit is None else str(container.unit.to_string())
         if container.values.dtype.kind == "c":
             # netCDF has no complex type; the two parts are stored separately
             # and named so that nothing mistakes one for the whole.
-            observed[f"{label}_real"] = np.asarray(container.values.real)
-            observed[f"{label}_imag"] = np.asarray(container.values.imag)
-            dims[f"{label}_real"] = as_list
-            dims[f"{label}_imag"] = as_list
-            if container.unit is not None:
-                units[f"{label}_real"] = str(container.unit.to_string())
-                units[f"{label}_imag"] = str(container.unit.to_string())
+            for part, values in (
+                ("real", container.values.real),
+                ("imag", container.values.imag),
+            ):
+                name = claim(f"{label}_{part}", label, f"{part} part")
+                observed[name] = np.asarray(values)
+                dims[name] = as_list
+                if value_unit is not None:
+                    units[name] = value_unit
         else:
-            observed[label] = np.asarray(container.values)
-            dims[label] = as_list
-            if container.unit is not None:
-                units[label] = str(container.unit.to_string())
+            name = claim(label, label, "values")
+            observed[name] = np.asarray(container.values)
+            dims[name] = as_list
+            if value_unit is not None:
+                units[name] = value_unit
         if len(names) == len(container.axes):
             for axis, dim in zip(container.axes, names, strict=True):
                 coords[dim] = axis.values.tolist()
@@ -362,25 +389,25 @@ def _data_groups(problem: FittingProblem) -> _DataGroups:
                     units[dim] = str(axis.unit.to_string())
         else:
             for axis in container.axes:
-                name = f"{label}_{axis.name}"
+                name = claim(f"{label}_{axis.name}", label, f"{axis.name} axis")
                 constant[name] = np.asarray(axis.values)
                 dims[name] = as_list
                 if axis.unit is not None:
                     units[name] = str(axis.unit.to_string())
         if container.uncertainty is not None:
-            name = f"{label}_uncertainty"
+            name = claim(f"{label}_uncertainty", label, "uncertainties")
             constant[name] = np.asarray(container.uncertainty)
             dims[name] = as_list
-            if container.unit is not None:
-                units[name] = str(container.unit.to_string())
+            if value_unit is not None:
+                units[name] = value_unit
         if container.mask is not None:
             # int8, because netCDF has no boolean type; the sense is the
             # container's own (True excludes the sample), stated in the attr.
-            name = f"{label}_mask"
+            name = claim(f"{label}_mask", label, "mask")
             constant[name] = np.asarray(container.mask, dtype=np.int8)
             dims[name] = as_list
         for extra, values in container.extra_coords.items():
-            name = f"{label}_{extra}"
+            name = claim(f"{label}_{extra}", label, f"extra coordinate {extra!r}")
             constant[name] = np.asarray(values)
             dims[name] = as_list
     groups: dict[str, dict[str, np.ndarray]] = {}

@@ -661,6 +661,34 @@ class TestEmission:
         assert "excluded" in tree["constant_data"].attrs[f"{ATTR_PREFIX}mask_convention"]
         assert f"{ATTR_PREFIX}mask_convention" not in tree["observed_data"].attrs
 
+    def test_a_data_variable_name_collision_is_refused_not_overwritten(self) -> None:
+        # Data-group names join the dataset label to a role name, so two labels
+        # differing only by where an underscore falls can produce the same one.
+        # Silently dropping one dataset's data would be far worse than refusing.
+        problem = FittingProblem(
+            Powerlaw(blue=BLUE),
+            DatasetCollection(
+                {
+                    # dataset "a"'s uncertainties are stored as "a_uncertainty"
+                    "a": Dataset(
+                        blue_data(),
+                        Instrument([], channel="blue", input_kind=Spectrum),
+                        label="a",
+                    ),
+                    # and so is dataset "a_uncertainty"'s own value array
+                    "a_uncertainty": Dataset(
+                        blue_data(),
+                        Instrument([], channel="blue", input_kind=Spectrum),
+                        label="a_uncertainty",
+                    ),
+                }
+            ),
+        )
+        recorder = DrawRecorder(problem)
+        recorder.record()
+        with pytest.raises(ResultsError, match="already claimed"):
+            recorder.emit()
+
     def test_observed_groups_can_be_left_out(self) -> None:
         recorder = DrawRecorder(joint_problem())
         recorder.record(TRUTH)

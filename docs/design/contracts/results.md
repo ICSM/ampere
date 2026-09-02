@@ -874,6 +874,15 @@ Each is a decision, not an oversight. Each has an extension point.
 10. **`AnomalyScore` is a `Protocol`, not a class.** `diagnostics.md` §5 proposes
     the class for `ampere.core`; until it exists the renderer is typed against
     its shape (R4).
+11. **Data-group variable names can collide, and a collision is refused rather
+    than resolved.** A name is the dataset label joined to an axis or role name,
+    so a dataset `a` with uncertainties and a dataset `a_uncertainty` both want
+    `a_uncertainty` — the same flattening collision `inference.md` §4.4 names for
+    design A, inherited here because a flat namespace is what netCDF gives. The
+    remedy is to rename a dataset, and the reason it is a refusal is that the
+    alternative is silently dropping one dataset's data from the stored run. The
+    extension point, if it ever bites in practice, is a nested group per dataset
+    rather than a flat namespace, which ArviZ's own conventions do not use.
 
 ## 14. What this contract hands to the specs downstream
 
