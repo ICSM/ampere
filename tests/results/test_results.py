@@ -277,6 +277,108 @@ class TestContainerAndProblemFingerprints:
             problem_fingerprint(joint_problem())
         )
 
+    @staticmethod
+    def _on_grid(grid: np.ndarray) -> FittingProblem:
+        observed = Spectrum(grid * u.micron, [1.0, 0.5, 0.25] * u.Jy, uncertainty=[0.05] * 3 * u.Jy)
+        return FittingProblem(
+            Powerlaw(blue=grid),
+            [Dataset(observed, Instrument([Calibrate()], channel="blue"), label="blue")],
+            seed=20260902,
+        )
+
+    def test_problem_hash_moves_with_a_model_buffer(self) -> None:
+        # A buffer is not a parameter, so it appears nowhere in to_spec() -- but
+        # a model built on a different wavelength grid predicts different
+        # numbers, and DEVELOPMENT_PLAN.md §7 wants this hash to invalidate a
+        # trained artefact automatically. Same data, same priors, same seed.
+        first, second = self._on_grid(BLUE), self._on_grid(np.array([1.0, 2.0, 4.000001]))
+        assert (
+            provenance_attrs(first)["ampere_spec_hash"]
+            == provenance_attrs(second)["ampere_spec_hash"]
+        )
+        assert hash_of(problem_fingerprint(first)) != hash_of(problem_fingerprint(second))
+
+    def test_problem_hash_moves_with_the_model_class(self) -> None:
+        # Two models declaring identical parameters can compute entirely
+        # different things; only the class distinguishes them.
+        class Otherwise(Powerlaw):
+            def evaluate(self, **values: Any) -> ModelResult:
+                ctx = self.context(values)
+                return ModelResult(
+                    {"blue": Spectrum(ctx["blue"] * u.micron, ctx["norm"] * ctx["blue"] * u.Jy)}
+                )
+
+        observed = blue_data()
+        common: dict[str, Any] = {"seed": 20260902}
+        first = FittingProblem(
+            Powerlaw(blue=BLUE),
+            [Dataset(observed, Instrument([Calibrate()], channel="blue"), label="blue")],
+            **common,
+        )
+        second = FittingProblem(
+            Otherwise(blue=BLUE),
+            [Dataset(observed, Instrument([Calibrate()], channel="blue"), label="blue")],
+            **common,
+        )
+        assert (
+            provenance_attrs(first)["ampere_spec_hash"]
+            == provenance_attrs(second)["ampere_spec_hash"]
+        )
+        assert hash_of(problem_fingerprint(first)) != hash_of(problem_fingerprint(second))
+
+    def test_problem_hash_moves_with_a_transformation_buffer(self) -> None:
+        # The same argument for a response matrix or a filter curve in the chain.
+        class Response(Transformation):
+            ACCEPTS: ClassVar[tuple[type, ...]] = (Spectrum,)
+
+            def __init__(self, gains: np.ndarray, **kwargs: Any) -> None:
+                super().__init__(**kwargs)
+                self.register_buffer("gains", np.asarray(gains, dtype=float))
+
+            def apply(self, samples: Spectrum, values: Any) -> Spectrum:
+                return samples.with_values(samples.values * self.context(values)["gains"])
+
+        def built(gains: np.ndarray) -> FittingProblem:
+            return FittingProblem(
+                Powerlaw(blue=BLUE),
+                [
+                    Dataset(
+                        blue_data(),
+                        Instrument([Response(gains)], channel="blue"),
+                        label="blue",
+                    )
+                ],
+                seed=20260902,
+            )
+
+        assert hash_of(problem_fingerprint(built(np.ones(3)))) != hash_of(
+            problem_fingerprint(built(np.array([1.0, 1.0, 1.1])))
+        )
+
+    def test_problem_hash_moves_with_the_ties(self) -> None:
+        red = Spectrum(RED * u.micron, [0.1, 0.05, 0.025] * u.Jy, uncertainty=[0.005] * 3 * u.Jy)
+        untied = FittingProblem(
+            Powerlaw(blue=BLUE, red=RED),
+            DatasetCollection(
+                {
+                    "blue": Dataset(blue_data(), Instrument([Calibrate()], channel="blue")),
+                    "red": Dataset(red, Instrument([Calibrate()], channel="red")),
+                }
+            ),
+            seed=20260902,
+        )
+        assert hash_of(problem_fingerprint(untied)) != hash_of(problem_fingerprint(joint_problem()))
+
+    def test_a_fixed_parameter_s_value_is_part_of_the_spec(self) -> None:
+        # A fixed parameter occupies no sampler dimension but does change the
+        # answer, so the spec hash has to move with it. `to_spec` records both
+        # `value` and `fixed`, so this comes for free -- asserted rather than
+        # assumed, because it is the one class of "constant" that is a parameter.
+        one = ParameterSet([Parameter("x", value=1.0, fixed=True)])
+        two = ParameterSet([Parameter("x", value=2.0, fixed=True)])
+        assert one.free_size == two.free_size == 0
+        assert hash_of(one.to_spec()) != hash_of(two.to_spec())
+
     def test_likelihood_description_separates_kernels(self) -> None:
         # The concrete reason likelihoods.md §17 Q8 matters: two likelihoods
         # with identical ParameterSets but different kernels must not share a

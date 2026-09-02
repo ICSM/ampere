@@ -654,11 +654,27 @@ changed comment is not a different dataset.
 `DEVELOPMENT_PLAN.md` §7's trap list: "cache keys must hash the model/prior/data
 spec so stale artefacts are invalidated automatically — the recent SBI caching
 bugs on master are the evidence this bites." `problem_fingerprint` is what that
-key is taken over, and it deliberately covers more than the parameters: the
-likelihood family, the noise model, the solver, the kernel and the censoring, per
-dataset. Two likelihoods differing only in Matérn-3/2 versus squared-exponential,
-or `DenseGP` versus `QuasisepGP`, have **identical** `ParameterSet` specs, so a
-hash over the parameters alone would serve a stale emulator without complaint.
+key is taken over, and the whole difficulty is that **the parameter spec is not
+enough**. Three things change a run's numbers without changing a single
+parameter declaration, and all three are covered here deliberately.
+
+**The likelihood's structure.** Family, noise model, solver, kernel and
+censoring, per dataset. Two likelihoods differing only in Matérn-3/2 versus
+squared-exponential, or `DenseGP` versus `QuasisepGP`, have identical
+`ParameterSet` specs. This is what `likelihoods.md` §17 question 8 asks about,
+and §15's R7 recommends moving it onto `Likelihood` itself.
+
+**Buffers.** A buffer is by definition the thing nobody puts a prior on
+(`architecture.md` §6), so it appears nowhere in `to_spec()` — and it is the
+wavelength grid, the opacity table, the filter curve, the response matrix. A
+model rebuilt on a different grid is a different forward model with the same
+declaration, and an emulator trained against one response matrix must not be
+served for a fit against another. Buffers are hashed by content, for the model
+and for every step of every instrument chain.
+
+**Model identity.** Two models of different classes can declare the same
+parameters and compute entirely different things, so the class and its module
+are part of the fingerprint too.
 
 ```pycon
 >>> description = describe_likelihood(joint.datasets["blue"].likelihood)
@@ -666,6 +682,29 @@ hash over the parameters alone would serve a stale emulator without complaint.
 ('gaussian', 'IndependentNoise', 'analytic')
 >>> len(hash_of(problem_fingerprint(joint)))
 32
+
+```
+
+Moving a buffer leaves the spec hash alone and moves the problem hash, which is
+exactly the division of labour the two hashes are for — the spec hash answers
+"was this the same declaration?", the problem hash answers "may I reuse what I
+computed last time?":
+
+```pycon
+>>> def on_grid(grid):
+...     observed = Spectrum(
+...         grid * u.micron, [1.0, 0.5, 0.25] * u.Jy, uncertainty=[0.05] * 3 * u.Jy
+...     )
+...     return FittingProblem(
+...         Powerlaw(blue=grid),
+...         [Dataset(observed, Instrument([Calibrate()], channel="blue"), label="blue")],
+...         seed=20260902,
+...     )
+>>> coarse, fine = on_grid(blue_grid), on_grid(np.array([1.0, 2.0, 4.000001]))
+>>> provenance_attrs(coarse)["ampere_spec_hash"] == provenance_attrs(fine)["ampere_spec_hash"]
+True
+>>> hash_of(problem_fingerprint(coarse)) == hash_of(problem_fingerprint(fine))
+False
 
 ```
 
@@ -792,7 +831,7 @@ training set and is what the composed problem is for.
 | An array-valued parameter is one variable with a named dimension | `likelihoods.md` §16(a): 10⁵ scalar names is the wrong representation |
 | A plate's coordinate is read off `Binding.index`, not the dataset ordering | It is a fact the composition already recorded; reading it stays correct when the wiring is not in collection order (`hierarchical_population.md` §10.2) |
 | The spec hash is over the **merged** set, in its own order | numpyro's seeding is trace-order dependent (`lowering.md` §9.2), so order is part of a run's identity |
-| The problem hash covers family, noise, solver, kernel and censoring | Two fits differing only in kernel have identical parameter specs; a parameters-only key never invalidates a stale artefact |
+| The problem hash covers the likelihood's structure, every buffer's contents, and the model class | Each changes a run's numbers without changing one parameter declaration; a parameters-only key never invalidates a stale artefact (§9) |
 | `hashlib.blake2b`, never `hash()` | Salted per process; the same argument `ampere.core.rng` makes for seeds |
 | Non-finite floats become sentinel strings, so `allow_nan=False` stays on | JSON has no `NaN`; the alternative is a non-portable token in a netCDF attribute |
 | An unrecognised object is refused rather than dropped from a record | A record missing a field it did not understand compares equal to a run that lacked it |
@@ -855,7 +894,7 @@ Each is a decision, not an oversight. Each has an extension point.
   names and the derivation for signed residuals (§7), the ruling that `y_rep` is
   computed on demand rather than stored (§7), and `plot_anomaly_score` as a
   first-class stub with the provenance/caveat requirement built in (§8).
-- **W1.13 (Spec assembly & freeze)** — five requests, all in §15, plus the
+- **W1.13 (Spec assembly & freeze)** — seven requests, all in §15, plus the
   wording correction in §2 (`InferenceData` is now `xarray.DataTree`) and the
   `architecture.md` §3 extras-table amendment in §10.
 - **Phase 2 (backends)** — a backend supplies draws and `Evaluation`s and nothing
@@ -935,3 +974,34 @@ decomposition that *is* well defined). The chosen middle — the conventional gr
 name, keyed by dataset, with the decomposition declared in the group's attributes
 — is the one this document recommends, but it is worth confirming, because
 changing it after runs are archived is not cheap.
+
+**R7 — should `Likelihood` gain `to_spec()`?** `likelihoods.md` §17 question 8
+routes this here: "`ParameterSet.to_spec()` covers its parameters, and
+`KernelSpec.to_dict()` its kernel, but there is no `Likelihood.to_spec()` for the
+family name plus solver plus censoring. W1.8 owns provenance hashing and should
+decide whether it wants one."
+
+**It does, and the argument is a correctness one rather than a tidiness one.**
+Two likelihoods differing only in Matérn-3/2 versus squared-exponential, or in
+`DenseGP` versus `QuasisepGP`, have *identical* `ParameterSet` specs, so a
+provenance record built from the parameters alone cannot tell them apart and a
+cache key built on it never invalidates (§9). Something has to serialise the
+triple, and the only question is where it lives.
+
+`ampere.results.describe_likelihood` is that something today, assembled from the
+public surface — `family.NAME`, `type(noise).__name__`, `solver.NAME`,
+`kernel.spec().to_dict()`, `marginalisation`, the censoring counts, the
+parameters and the buffers. That works, and it is deliberately written so that
+promoting it is a move rather than a rewrite. The recommendation is to promote
+it: `Likelihood.to_spec()`, returning the same mapping, at W1.13. Three reasons.
+A likelihood knows things about itself that an outside reader has to
+reverse-engineer (whether a solver's approximation parameters matter, what a
+future family's extra state is), and each new family would otherwise need this
+module amended in step. The conformance suite (W1.10) wants one definition to
+compare two backends' likelihoods against, not two. And every sibling — the
+kernel, the parameter set — already serialises itself, so this is the odd one
+out rather than a new idea.
+
+Against it: it is an addition to a merged §4.4 contract, needing a decision-log
+entry; and if the answer is no, nothing breaks — this module keeps doing it, and
+this document records that it is the definition.

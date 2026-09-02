@@ -91,6 +91,7 @@ __all__ = [
     "ATTR_PREFIX",
     "DIGEST_BYTES",
     "PROVENANCE_SCHEMA_VERSION",
+    "buffer_fingerprint",
     "canonical_json",
     "container_fingerprint",
     "dataset_fingerprint",
@@ -99,6 +100,7 @@ __all__ = [
     "hash_array",
     "hash_container",
     "hash_of",
+    "model_fingerprint",
     "normalise",
     "package_versions",
     "problem_fingerprint",
@@ -311,17 +313,47 @@ def hash_container(container: FunctionSamples) -> str:
     return hash_of(container_fingerprint(container))
 
 
+def buffer_fingerprint(owner: object) -> list[dict[str, Any]]:
+    """Every buffer one :class:`~ampere.core.parameter.Parameterised` declares.
+
+    Buffers are **not** parameters and so appear nowhere in
+    :meth:`~ampere.core.parameter.ParameterSet.to_spec` — but they are the
+    wavelength grids, opacity tables, filter curves and response matrices a
+    model computes with (``architecture.md`` §6), so a run whose buffers moved
+    is a different run even though its declaration is identical. Leaving them
+    out would make :func:`problem_fingerprint` unusable as the cache key
+    ``DEVELOPMENT_PLAN.md`` §7 asks for: an emulator trained against one
+    response matrix would be served for a fit against another.
+
+    Hashed by content, in declaration order, which is also the order a backend
+    registers them in.
+    """
+    buffers = getattr(owner, "buffers", None)
+    if buffers is None:
+        return []
+    return [
+        {
+            "name": buffer.name,
+            "unit": _unit(buffer.unit),
+            "values": hash_array(buffer.array),
+        }
+        for buffer in buffers
+    ]
+
+
 def describe_likelihood(likelihood: Likelihood) -> dict[str, Any]:
     """The family, noise model, solver, kernel and censoring of one likelihood.
 
     This is what ``likelihoods.md`` §17 question 8 asks about — "there is no
     ``Likelihood.to_spec()`` for the family name plus solver plus censoring.
     W1.8 owns provenance hashing and should decide whether it wants one." It
-    does want one, and this function is the shape it should take; see
-    ``docs/design/contracts/results.md`` §12 for the recommendation that it move
-    onto :class:`~ampere.core.likelihood.Likelihood` itself, so that backends
-    and the conformance suite share one definition instead of this module
-    reading the public surface from outside.
+    does want one, and this function is the shape it should take:
+    ``docs/design/contracts/results.md`` §15's R7 recommends promoting it onto
+    :class:`~ampere.core.likelihood.Likelihood` itself, so that backends and the
+    conformance suite share one definition instead of this module
+    reverse-engineering it from the public surface. It is written as a move
+    rather than a rewrite: the mapping does not change if the recommendation is
+    granted.
     """
     noise = likelihood.noise
     described: dict[str, Any] = {
@@ -330,6 +362,7 @@ def describe_likelihood(likelihood: Likelihood) -> dict[str, Any]:
         "noise": type(noise).__name__,
         "marginalisation": likelihood.marginalisation.value,
         "parameters": likelihood.parameters.to_spec(),
+        "buffers": buffer_fingerprint(likelihood),
     }
     if isinstance(noise, GaussianProcessNoise):
         described["kernel"] = noise.kernel.spec().to_dict()
@@ -349,7 +382,14 @@ def _describe_instrument(instrument: Instrument) -> dict[str, Any]:
         "label": instrument.label,
         "channel": instrument.channel,
         "input_kind": instrument.input_kind.__name__,
-        "steps": [{"label": step.label, "class": type(step).__name__} for step in instrument.steps],
+        "steps": [
+            {
+                "label": step.label,
+                "class": type(step).__name__,
+                "buffers": buffer_fingerprint(step),
+            }
+            for step in instrument.steps
+        ],
     }
 
 
@@ -366,6 +406,24 @@ def dataset_fingerprint(dataset: Dataset) -> dict[str, Any]:
     }
 
 
+def model_fingerprint(model: object) -> dict[str, Any]:
+    """One model's identity: its class, its declaration and its constant data.
+
+    All three are needed and none is implied by another. Two models of
+    *different classes* can declare the same parameters and compute completely
+    different things; the same class with the same parameters can be built on a
+    different wavelength grid; and the declaration itself is what
+    ``lowering.md`` §9.2 makes order-sensitive.
+    """
+    parameters = getattr(model, "parameters", None)
+    return {
+        "class": type(model).__name__,
+        "module": type(model).__module__,
+        "parameters": None if parameters is None else parameters.to_spec(),
+        "buffers": buffer_fingerprint(model),
+    }
+
+
 def problem_fingerprint(problem: FittingProblem) -> dict[str, Any]:
     """The whole composition, in the form :func:`hash_of` turns into a cache key.
 
@@ -376,7 +434,7 @@ def problem_fingerprint(problem: FittingProblem) -> dict[str, Any]:
         "version": PROVENANCE_SCHEMA_VERSION,
         "parameters": problem.parameters.to_spec(),
         "free_size": int(problem.free_size),
-        "models": sorted(problem.models),
+        "models": {label: model_fingerprint(model) for label, model in problem.models.items()},
         "model_bindings": dict(problem.bindings),
         "datasets": [dataset_fingerprint(problem.datasets[label]) for label in problem.datasets],
         "ties": [{"name": tie.name, "sites": list(tie.sites)} for tie in problem.ties],
