@@ -152,6 +152,34 @@ family supplies its own the same way `LaplaceFamily` above supplies
 
 ```
 
+### The composition-time hook: `check_observed`
+
+Also ruled 2026-09-02 (W1.11 gap I-5): a family may override
+`check_observed(observed)` — the family's half of the obligation
+`NoiseModel.check_compatible` already has. Some preconditions are properties
+of the *sampling distribution* rather than of the noise: a circular family
+needs angles in radians, `PoissonFamily` needs integer counts (its
+integrality test now lives here rather than in the hot loop — gap X-3), a
+Rice family needs non-negative amplitudes. `Likelihood.check_alignment`
+calls it on the **observed** container only — the unit check has already
+forced the two containers to agree on everything a container carries, and
+value-range properties genuinely differ between them (a Poisson *rate* is
+not an integer). Only retained samples are held to a precondition; a masked
+sample carries zero information and cannot fail one.
+
+```pycon
+>>> counts = Spectrum([1.0, 2.0] * u.um, [4.5, 7.0])
+>>> Likelihood(PoissonFamily(), IndependentNoise()).check_alignment(
+...     counts.with_values([4.0, 7.0]), counts
+... )
+Traceback (most recent call last):
+    ...
+ampere.core.exceptions.LikelihoodError: the poisson family needs non-negative integer counts,
+but the observed values are not integral. Counts are counts; if the data are rates, multiply
+by the exposure in the instrument chain (W1.5) rather than here.
+
+```
+
 The families the plan's target scope needs are all *declared*, whether or not
 they are implemented yet — a name in the registry is a commitment the spec
 freeze can be reviewed against:
@@ -617,6 +645,18 @@ True
 
 - A fully masked pair returns `0.0`. That is the correct limit of the same
   rule, not a special case: no data, no information, no contribution.
+  (W1.7's `FittingProblem` refuses to let a *parameter-dependent* mask reach
+  this limit — `inference.md` §8's evaluation-invariance check — because a
+  free `0.0` beats every finite log-likelihood.)
+
+- **Every array in `NoiseParams` covers the retained samples only**, and a
+  family that carries per-sample data of its own — a background spectrum, an
+  instrumental template, a per-sample weight from outside ampere — must
+  excise it with `noise.retain` (ruled 2026-09-02, W1.11 gap X-2): the
+  boolean inclusion indicator over the *full* containers, set by this
+  contract from the same weights product above, because `Likelihood` cannot
+  know about data it was never handed. Failing to is a silent misalignment
+  as soon as anything is masked.
 
 ```pycon
 >>> nothing = Spectrum(
@@ -1253,7 +1293,16 @@ mechanics (§8's `weights()` product and excision) are unchanged: a
 pre-resolved pair simply makes the internal union the identity. **Also ruled
 2026-09-02** (W1.7's R3): `LikelihoodFamily` gained the optional generative
 half, `sample(predicted, noise, rng)` — §3 has the contract; the default is
-a specific refusal and `GaussianFamily` implements it. Questions
+a specific refusal and `GaussianFamily` implements it. **And later the same
+day, three W1.11 amendments were approved and landed**: `check_alignment`
+compares value dtype kinds (gap I-1 — a complex prediction can no longer be
+silently fitted against real amplitudes); families gained the
+composition-time `check_observed(observed)` hook (gap I-5 — called by
+`check_alignment` on the observed container, where `PoissonFamily`'s
+integrality test now lives per gap X-3, masked samples exempt); and
+`NoiseParams` carries `retain` (gap X-2 — §8), the caller's inclusion
+indicator over the full containers, so a family with its own aligned
+per-sample data excises it the same way. Questions
 3, 4, 6 and 7 carry recommendations from the W1.11 interferometry sketch
 (`docs/design/modalities/interferometry.md` §§5–7 and §11: the model
 predicts the complex value with an `Amplitude` step taking the modulus;

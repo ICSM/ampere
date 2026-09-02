@@ -984,6 +984,11 @@ class NoiseParams:
     latent: np.ndarray | None = None
     #: :class:`LimitKind` codes for the retained samples, or ``None``.
     limits: np.ndarray | None = None
+    #: Boolean inclusion indicator over the *full* containers (ruled
+    #: 2026-09-02, W1.11 gap X-2), so a family carrying its own aligned
+    #: per-sample data — a background spectrum, an instrumental template — can
+    #: excise it the same way every array already in this record was excised.
+    retain: np.ndarray | None = None
 
     @property
     def correlated(self) -> bool:
@@ -1070,6 +1075,7 @@ class NoiseModel(Parameterised, abc.ABC):
             solver=None,
             latent=latent,
             limits=limits,
+            retain=retain,
         )
 
     def __repr__(self) -> str:
@@ -1288,6 +1294,7 @@ class GaussianProcessNoise(NoiseModel):
             solver=self._solver,
             latent=latent,
             limits=limits,
+            retain=retain,
         )
 
 
@@ -1495,6 +1502,23 @@ class LikelihoodFamily(Parameterised, abc.ABC):
             f"simulate(observe=False) and draw observations from the predicted containers "
             f"yourself."
         )
+
+    def check_observed(self, observed: FunctionSamples) -> None:
+        """Composition-time precondition on the observed data. Default: none.
+
+        The family's half of the obligation ``NoiseModel.check_compatible``
+        already has (ruled 2026-09-02, W1.11 gap I-5): some preconditions are
+        properties of the *sampling distribution* rather than of the noise — a
+        circular family needs angles in radians, ``PoissonFamily`` needs
+        integer counts, a Rice family needs non-negative amplitudes. Called by
+        :meth:`Likelihood.check_alignment` on the **observed** container only:
+        the unit check has already forced predicted and observed to agree on
+        everything a container carries, and value-range properties genuinely
+        differ between the two (a Poisson *rate* is not an integer). Checks
+        that belong here are the ones otherwise forced into the hot loop or
+        nowhere at all. Only retained samples should be held to a
+        precondition — a masked sample carries zero information.
+        """
 
     def marginalisation_with(
         self,
@@ -1819,6 +1843,24 @@ class PoissonFamily(LikelihoodFamily):
     CONSUMES_LATENT_GP: ClassVar[bool] = True
     REQUIRES_UNCERTAINTY: ClassVar[bool] = False
 
+    def check_observed(self, observed: FunctionSamples) -> None:
+        """Integer counts, checked once at composition (ruled 2026-09-02, X-3).
+
+        This ran in ``log_prob`` before the ``check_observed`` hook existed —
+        an O(N) scan of the *data* on every evaluation, which §13's
+        compile-once/evaluate-many split says is the wrong place. The
+        ``rate > 0`` guard stays in the hot loop, because it is a property of
+        the prediction and genuinely varies per draw.
+        """
+        counts = np.asarray(observed.values).ravel()
+        kept = counts[np.asarray(observed.valid).ravel()]
+        if np.any(kept < 0.0) or not np.all(kept == np.round(kept)):
+            raise LikelihoodError(
+                "the poisson family needs non-negative integer counts, but the observed values "
+                "are not integral. Counts are counts; if the data are rates, multiply by the "
+                "exposure in the instrument chain (W1.5) rather than here."
+            )
+
     def log_prob(
         self,
         predicted: np.ndarray,
@@ -1826,12 +1868,6 @@ class PoissonFamily(LikelihoodFamily):
         noise: NoiseParams,
     ) -> float:
         counts = np.asarray(observed)
-        if np.any(counts < 0.0) or not np.all(counts == np.round(counts)):
-            raise LikelihoodError(
-                "the poisson family needs non-negative integer counts, but the observed values "
-                "are not integral. Counts are counts; if the data are rates, multiply by the "
-                "exposure in the instrument chain (W1.5) rather than here."
-            )
         rate = np.asarray(predicted, dtype=DTYPE)
         if noise.correlated:
             if noise.latent is None:
@@ -2154,6 +2190,19 @@ class Likelihood(Parameterised):
                 f"observed one is in {observed.unit}. Convert once at composition time with "
                 f".to_unit(...); units never reach the hot loop (DEVELOPMENT_PLAN.md §7)."
             )
+        # Ruled 2026-09-02 (W1.11 gap I-1): kind equality does not imply
+        # comparability — VisibilitySet is legal with real or complex values,
+        # so a complex prediction could otherwise be fitted against real
+        # amplitudes with no warning anywhere.
+        if predicted.values.dtype.kind != observed.values.dtype.kind:
+            raise LikelihoodError(
+                f"the predicted {type(predicted).__name__} holds "
+                f"{'complex' if predicted.values.dtype.kind == 'c' else 'real'} values but the "
+                f"observed one holds "
+                f"{'complex' if observed.values.dtype.kind == 'c' else 'real'} values. A "
+                f"likelihood compares like with like: if you mean to fit amplitudes, take the "
+                f"modulus in the instrument chain (W1.5) so both sides are real."
+            )
         for left, right in zip(predicted.axes, observed.axes, strict=True):
             if left != right:
                 raise LikelihoodError(
@@ -2174,6 +2223,7 @@ class Likelihood(Parameterised):
             if self.marginalisation_for(observed) is Marginalisation.LATENT:
                 self._refuse_unconsumed_latent(self._family, self._noise, censored=True)
         self._noise.check_compatible(self._family, observed)
+        self._family.check_observed(observed)
         if observed.values.dtype.kind == "c" and not self._family.ALLOWS_COMPLEX:
             raise LikelihoodError(
                 f"the {self._family.NAME} family holds real values, but the observed "

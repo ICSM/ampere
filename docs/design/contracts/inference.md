@@ -1667,9 +1667,11 @@ Each is a decision, not an oversight. Each has an extension point.
 ## 19. Open questions for review
 
 **Ruled by Peter, 2026-09-02 — all four requests.** R1: design B (nested
-`ParameterMapping`, one merge per level) is **ratified**; the
-lossless-nesting sub-proposal for `parameters.md` was not ruled and remains
-open at W1.13 alongside `Binding.index`. R2: the tie-based pattern for
+`ParameterMapping`, one merge per level) is **ratified**; later the same day
+the **lossless-nesting sub-ruling was granted too** ("lossless, not
+necessarily recursive"), together with `Binding.index` — both are
+`parameters.md` amendments, and once they land, `sites()` and `shared_names`
+become thin wrappers and §4.6's defect closes at source. R2: the tie-based pattern for
 cross-component hierarchical structure **stands as documented**; the design
 for a future revisit (deferred reference resolution at merge time) is
 recorded in limitation 17.2 so it need not be re-derived. R3: **granted, and

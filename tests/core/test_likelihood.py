@@ -688,10 +688,12 @@ class TestLatentPathDeclaration:
             like.log_prob(rate, counts, latent=np.zeros(3))
 
     def test_non_integer_counts_are_refused(self) -> None:
+        # At composition since 2026-09-02 (X-3, via the check_observed hook):
+        # an O(N) property of the data is checked once, not per draw.
         counts = Spectrum([1.0, 2.0] * u.um, [4.5, 7.0])
         like = Likelihood(PoissonFamily(), IndependentNoise())
         with pytest.raises(LikelihoodError, match="non-negative integer counts"):
-            like.log_prob(counts.with_values([4.0, 7.0]), counts)
+            like.check_alignment(counts.with_values([4.0, 7.0]), counts)
 
     def test_latent_parameter_rejects_a_nonsense_size(self) -> None:
         with pytest.raises(LikelihoodError, match="positive number of latent values"):
@@ -1481,3 +1483,105 @@ class TestComposition:
         """Catchable by the family, and by the builtin, per ``exceptions.py``."""
         assert issubclass(LikelihoodError, ContractError)
         assert issubclass(LikelihoodError, ValueError)
+
+
+class TestCompositionTimeDataChecks:
+    """The three 2026-09-02 rulings on check_alignment and NoiseParams.
+
+    W1.11 gaps I-1 (value-dtype comparison), I-5 with X-3 (the family's
+    composition-time hook, and Poisson's integrality test moving into it) and
+    X-2 (``NoiseParams.retain``), all approved as proposed.
+    """
+
+    def test_a_complex_prediction_is_refused_against_real_amplitudes(self) -> None:
+        # I-1: VisibilitySet is the only kind legal with both dtypes, so only
+        # there could a complex prediction silently be fitted against |V|.
+        uv, vv = np.array([10.0, 20.0, 30.0]), np.array([5.0, 15.0, 25.0])
+        complex_prediction = VisibilitySet(uv, vv, (np.ones(3) + 0.5j) * u.Jy)
+        real_amplitudes = VisibilitySet(
+            uv, vv, np.abs(np.ones(3) + 0.5j) * u.Jy, uncertainty=0.1 * np.ones(3) * u.Jy
+        )
+        like = Likelihood(ComplexGaussianFamily(), IndependentNoise())
+        with pytest.raises(LikelihoodError, match="take the modulus in the instrument chain"):
+            like.check_alignment(complex_prediction, real_amplitudes)
+
+    def test_check_observed_is_called_at_composition(self) -> None:
+        # I-5: the family's half of NoiseModel.check_compatible's obligation.
+        class Circular(LikelihoodFamily):
+            NAME = "test_circular"
+
+            def log_prob(
+                self, predicted: np.ndarray, observed: np.ndarray, noise: NoiseParams
+            ) -> float:
+                return 0.0
+
+            def check_observed(self, observed: FunctionSamples) -> None:
+                if np.any(np.abs(np.asarray(observed.values)) > np.pi):
+                    raise LikelihoodError("a circular family needs angles in radians.")
+
+        degrees = Spectrum([1.0, 2.0] * u.um, [170.0, -50.0], uncertainty=[5.0, 5.0])
+        like = Likelihood(Circular(), IndependentNoise())
+        with pytest.raises(LikelihoodError, match="angles in radians"):
+            like.check_alignment(degrees.with_values([171.0, -49.0]), degrees)
+
+    def test_poisson_integrality_is_checked_at_composition_not_per_draw(self) -> None:
+        # X-3, folded into I-5: an O(N) property of the data belongs in
+        # check_alignment, not in the hot loop.
+        rates = Spectrum([1.0, 2.0, 3.0] * u.um, [3.5, 6.0, 2.5])
+        fractional = Spectrum([1.0, 2.0, 3.0] * u.um, [4.0, 6.51, 2.0])
+        like = Likelihood(PoissonFamily(), IndependentNoise())
+        with pytest.raises(LikelihoodError, match="not integral"):
+            like.check_alignment(rates, fractional)
+        # A masked non-integer is exempt: a masked sample carries zero
+        # information, so it cannot fail a precondition.
+        masked = Spectrum(
+            [1.0, 2.0, 3.0] * u.um,
+            [4.0, 6.51, 2.0],
+            mask=np.array([False, True, False]),
+        )
+        like.check_alignment(rates, masked)
+        # The rate > 0 guard stays per draw: it is a property of the prediction.
+        counts = Spectrum([1.0, 2.0, 3.0] * u.um, [4.0, 7.0, 2.0])
+        with pytest.raises(LikelihoodError, match="strictly positive expected count"):
+            like.log_prob(counts.with_values([3.5, -1.0, 2.5]), counts)
+
+    def test_noise_params_carry_the_retain_indicator(self) -> None:
+        # X-2: a family with its own aligned per-sample data excises it with
+        # noise.retain, full-container length, and matches deletion.
+        captured: dict[str, np.ndarray | None] = {}
+
+        class Background(LikelihoodFamily):
+            NAME = "test_background"
+
+            def __init__(self, background: np.ndarray) -> None:
+                self.background = np.asarray(background, dtype=float)
+
+            def log_prob(
+                self, predicted: np.ndarray, observed: np.ndarray, noise: NoiseParams
+            ) -> float:
+                captured["retain"] = noise.retain
+                assert noise.retain is not None
+                aligned = self.background[noise.retain]
+                assert aligned.shape == observed.shape
+                residual = (observed - predicted - aligned) / noise.sigma
+                return float(np.sum(-0.5 * residual**2 - np.log(noise.sigma)))
+
+        data = Spectrum(
+            [1.0, 2.0, 3.0, 4.0] * u.um,
+            [3.0, 2.5, 2.2, 1.4] * u.Jy,
+            uncertainty=[0.1, 0.1, 0.1, 0.1] * u.Jy,
+            mask=np.array([False, True, False, False]),
+        )
+        background = np.array([0.5, 99.0, 0.4, 0.3])
+        like = Likelihood(Background(background), IndependentNoise())
+        masked_value = like.log_prob(data.with_values([2.6, 0.0, 1.9, 1.2]), data)
+        assert captured["retain"] is not None
+        assert captured["retain"].tolist() == [True, False, True, True]
+        excised = Spectrum(
+            [1.0, 3.0, 4.0] * u.um,
+            [3.0, 2.2, 1.4] * u.Jy,
+            uncertainty=[0.1, 0.1, 0.1] * u.Jy,
+        )
+        deleted = Likelihood(Background(background[[0, 2, 3]]), IndependentNoise())
+        unmasked_value = deleted.log_prob(excised.with_values([2.6, 1.9, 1.2]), excised)
+        assert masked_value == pytest.approx(unmasked_value, abs=1e-12)

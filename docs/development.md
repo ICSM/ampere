@@ -97,12 +97,16 @@ established depth before merging. Then W1.13 (freeze), which owes the
 batched sol review (still unavailable on this account — Peter configures
 codex first), and the remaining decision backlog below.
 
-**Peter's remaining review backlog** (nothing blocks W1.8/W1.10):
-lossless nesting + `Binding.index` (W1.13, `parameters.md` §14 closure
-note); the W1.11 freeze-flagged amendments I-1/I-5/X-1/X-2/H-2; W1.5 §15
-Q2/Q3 and W1.6 §17 Q3/Q4/Q6 (recommendations on file in the sketches);
-W1.4 §17 Q3–Q6; `inference.md` §19 items 5–8; lowering.md §12's
-ratification items.
+**Ruled later on 2026-09-02**: lossless nesting + `Binding.index`
+approved (implementation dispatched on its own branch); I-1/I-5/X-2/X-3
+approved and landed; X-1 under iteration — Peter is positive and asked
+for the full mechanics, now written as the "Detailed design" subsection
+of `awkward_instrument.md` §6 X-1.
+
+**Peter's remaining review backlog** (nothing blocks W1.8/W1.10): X-1's
+detailed design (iterate, then rule); W1.5 §15 Q2/Q3 and W1.6 §17
+Q3/Q4/Q6 (recommendations on file in the sketches); W1.4 §17 Q3–Q6;
+`inference.md` §19 items 5–8; lowering.md §12's ratification items.
 
 **Restart prompt for a new session** (paste as the opening message):
 

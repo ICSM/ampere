@@ -413,6 +413,10 @@ one on the critical path.
 
 ### H-2 — `Binding` cannot address one element of an array-valued parameter
 
+*Ruled 2026-09-02: **approved** — per-element plate routing through an
+optional `Binding.index`, with `distribute` doing the element routing, as
+proposed below. Implementation dispatched with the lossless-nesting work.*
+
 **Severity: blocking for the modality. Should land in the freeze**, because it
 changes a frozen dataclass and `distribute`'s contract.
 
@@ -494,6 +498,11 @@ the analogous case for sharing and has no counterpart here.
 > `HierarchicalPrior`'s references must resolve within the component's own set.
 
 ### H-3 — a nested merge silently loses the inner bindings
+
+*Ruled 2026-09-02: **lossless nesting approved** — `ParameterSet.merge`
+accepts a `ParameterMapping` as a component and composes its bindings, per
+this gap's extension point and `inference.md` §4.6. Implementation dispatched
+together with H-2's `Binding.index`.*
 
 **Severity: reporting; cheap.** §7(b). Routing is fine; introspection is not, and
 provenance, ArviZ coordinate naming and any future plate-lowering pass all walk

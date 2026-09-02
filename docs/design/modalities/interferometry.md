@@ -459,6 +459,9 @@ and two documentation obligations.
 
 ### I-1 — `check_alignment` does not compare value dtypes, so a complex prediction can be fitted against real amplitudes
 
+*Ruled 2026-09-02: **approved and landed** — `check_alignment` compares value
+dtype kinds, with the proposed message.*
+
 **Severity: defect.** This is the only kind in the schema for which both a real
 and a complex value array are legal, so it is the only place this can happen —
 and it happens silently. Verified:
@@ -585,6 +588,13 @@ loud option:
 > source structure rather than like an error.
 
 ### I-5 — a `LikelihoodFamily` cannot declare a composition-time precondition on its data
+
+*Ruled 2026-09-02: **approved and landed**, with one refinement found in
+implementation: `check_observed` is called on the observed container only —
+the unit-equality check already forces the two containers to agree on
+everything a container carries, and value-range properties genuinely differ
+between them (a Poisson rate is not an integer, and would fail the very check
+its counts must pass).*
 
 **Severity: interface addition; should land in the freeze.** `check_alignment`
 calls `self._noise.check_compatible(family, observed)` — the *noise model* gets

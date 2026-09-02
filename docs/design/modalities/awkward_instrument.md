@@ -337,6 +337,9 @@ being pushed there by a signature.
 **Severity: the stress test's finding. Should land in the freeze**, because it
 changes an ABC signature that Phase 2's two backends will implement in lockstep.
 
+*Status 2026-09-02: Peter is positive but asked for the full mechanics before
+ruling — the detailed design below is for that iteration.*
+
 **Proposed amendment** — `likelihoods.md` §5, §14 and §16, and `NoiseModel`:
 
 > `NoiseModel.sigma` and `NoiseModel.noise_params` take the retained predicted
@@ -384,7 +387,70 @@ class FractionalModelNoise(NoiseModel):
 which composes with `GaussianFamily`, `StudentTFamily` and, as a diagonal term
 under the kernel, with the flexible GP.
 
+#### Detailed design (2026-09-02, for Peter's iteration — not yet ruled)
+
+Peter is positive about the amendment but asked for the mechanics in full
+before ruling. Ten points, in the order a reviewer needs them.
+
+1. **Signatures.** Both `NoiseModel` methods gain one keyword-only argument:
+   `sigma(observed, retain, values, *, predicted=None)` and
+   `noise_params(observed, retain, values, *, predicted=None,
+   coordinates=None, latent=None, limits=None)`. `predicted=None` preserves
+   today's semantics exactly — `IndependentNoise` and `GaussianProcessNoise`
+   ignore it.
+2. **What `predicted` is, precisely.** The *retained* predicted values, as a
+   float64 (or complex128) array — the identical object the family's
+   `log_prob` receives as its first argument, already excised, already
+   aligned with everything else in `NoiseParams`. For a complex family a
+   noise model wanting an amplitude takes `np.abs(predicted)` itself; ampere
+   does not project on its behalf.
+3. **Call sites.** `Likelihood.log_prob` already holds the excised
+   `predicted_values` three lines before it builds the noise parameters; it
+   passes them. Every other internal `noise_params`/`sigma` call site does
+   the same — including `Likelihood.conditional` (so W1.12's diagnostics see
+   the same effective σ the fit used) and `Dataset.draw_observation` (so a
+   `simulate(observe=True)` draw from a prediction-dependent noise is
+   consistent with the density that will score it).
+4. **The draw is σ(μ), not σ(x), by construction.** In generation the
+   `NoiseParams` are built from the noiseless model prediction *before* noise
+   is added, so a fractional model error scales with the true curve — the
+   standard generative reading. No circularity arises.
+5. **Compatibility is a pre-freeze question, and the honest answer is
+   "change it outright".** An out-of-tree `NoiseModel` overriding the old
+   signature without `**kwargs` would raise `TypeError` the first time a
+   caller passes `predicted=`. No such subclass exists yet — Phase 1 is
+   pre-freeze and both backends implement the ABC in Phase 2 — so the
+   signature changes cleanly now, with no inspection shims. This is the
+   strongest form of the "should land in the freeze" argument: after W1.10
+   encodes the ABC, this exact change becomes a compatibility programme.
+6. **Marginalisation declarations are untouched.** A prediction-dependent σ
+   is still diagonal, so `GaussianFamily` + a fractional noise stays
+   `ANALYTIC`; the declaration machinery never inspects *how* σ was
+   computed. Families that ignore `predicted` are unaffected on every path,
+   latent included (where σ is `None` anyway).
+7. **Composition with the flexible GP.** The route to "10 % model error
+   *and* a misspecification GP" is a `GaussianProcessNoise` subclass
+   overriding only `sigma` to add the fractional term in quadrature; the
+   kernel, solver and `noise_params` assembly are inherited, and the marginal
+   likelihood is `N(0, K + diag(σ_data² + (f·μ)²))` with no new mathematics.
+8. **Interaction with X-2.** `NoiseParams.retain` (landed) and `predicted`
+   are complementary halves of one statement: everything a noise model or
+   family consumes is either already excised (`predicted`, `sigma`,
+   `limits`) or excisable by the caller's own indicator (`retain`).
+9. **Conformance rows for W1.10.** (a) `σ_eff` from a fractional noise
+   equals the manual quadrature at fixed θ; (b) `simulate(observe=True)`
+   draw variance grows with the prediction as `(f·μ)²`; (c) the GP
+   composition of point 7 agrees with a `DenseGP` evaluation using a
+   manually precomputed diagonal.
+10. **The standard library** (§9 Q2): the contract's §5 list names
+    `FractionalModelNoise` the way `transformations.md` §10 names the
+    standard chain steps; the implementation is ten lines and lands with the
+    reference backend, not in `ampere.core`.
+
 ### X-2 — a family cannot excise its own per-sample arrays
+
+*Ruled 2026-09-02: **approved and landed** — `NoiseParams.retain` exists, both
+noise models set it, and the excision-equals-deletion semantics are tested.*
 
 **Severity: correctness trap for any user-written family with aligned data.
 Should land in the freeze** (it adds a `NoiseParams` field, which is frozen and
@@ -414,6 +480,10 @@ wrong owner when the data belong to the family. `retain` is smaller and puts the
 excision where the knowledge is.
 
 ### X-3 — `PoissonFamily`'s integrality check runs in the hot loop
+
+*Ruled 2026-09-02: **landed with I-5** — the check moved into
+`PoissonFamily.check_observed` (masked samples exempt); the `rate > 0` guard
+stays per draw.*
 
 **Severity: minor; folds into interferometry gap I-5.** `PoissonFamily.log_prob`
 runs `np.all(counts == np.round(counts))` on every evaluation. It is a
