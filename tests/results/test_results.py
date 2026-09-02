@@ -29,9 +29,11 @@ from ampere.core import (
     ComplexGaussianFamily,
     Cube,
     Dataset,
+    DenseGP,
     DatasetCollection,
     FittingProblem,
     FunctionSamples,
+    GaussianFamily,
     GaussianProcessNoise,
     HierarchicalPrior,
     Image,
@@ -52,6 +54,7 @@ from ampere.core import (
     Transformation,
     VisibilitySet,
 )
+from ampere.core.exceptions import SchemaError
 from ampere.results import (
     ATTR_PREFIX,
     GP_LOCALISATION_CAVEAT,
@@ -214,6 +217,15 @@ class TestCanonicalJson:
     def test_an_unrecordable_object_is_refused(self) -> None:
         with pytest.raises(ResultsError, match="no defined JSON form"):
             canonical_json(object())
+
+    @pytest.mark.parametrize("key", ["__ndarray__", "__unit__", "__quantity__", "__bytes__"])
+    def test_a_mapping_cannot_impersonate_an_encoding(self, key: str) -> None:
+        # Without this, a hand-written {"__ndarray__": {...}} would normalise to
+        # the same tree as a real array, and two different objects would hash
+        # alike -- the collision the refuse-don't-drop rule exists to prevent,
+        # arriving by the other door.
+        with pytest.raises(ResultsError, match="reserved"):
+            canonical_json({key: {"anything": 1}})
 
 
 class TestArrayHashing:
@@ -402,7 +414,11 @@ class TestProvenanceAttrs:
     def test_every_value_is_netcdf_safe(self) -> None:
         for key, value in provenance_attrs(joint_problem()).items():
             assert key.startswith(ATTR_PREFIX)
-            assert isinstance(value, int | str), f"{key} is {type(value).__name__}"
+            assert isinstance(value, int | float | str), f"{key} is {type(value).__name__}"
+            # `bool` is an `int` in Python but is NOT a netCDF type, so the
+            # obvious isinstance check above passes one straight through to a
+            # write-time failure. Excluded explicitly.
+            assert not isinstance(value, bool), f"{key} is a bool"
 
     def test_seed_and_its_source(self) -> None:
         attrs = provenance_attrs(joint_problem())
@@ -541,7 +557,64 @@ class TestProvenanceAttrs:
 
     def test_component_spec_hashes_locate_the_change(self) -> None:
         hashes = spec_hashes(joint_problem())
-        assert set(hashes) == {"spec", "blue", "red", "model"}
+        assert set(hashes) == {"spec", "components"}
+        assert set(hashes["components"]) == {"blue", "red", "model"}
+
+    def test_a_component_labelled_spec_cannot_shadow_the_joint_hash(self) -> None:
+        # "spec" is an ordinary word for a dataset, and a flat namespace would
+        # let one silently replace the joint merged-spec hash -- leaving
+        # ampere_spec_hash reporting one component's declaration instead of the
+        # whole run's, which is what everything downstream relies on it for.
+        def labelled_spec(location: float) -> FittingProblem:
+            class Line(Model):
+                def __init__(self, grid: np.ndarray) -> None:
+                    self.register_buffer("blue", grid, unit=u.micron)
+                    self.register_parameter(Parameter("index", st.norm(location, 0.5)))
+
+                def evaluate(self, **values: Any) -> ModelResult:
+                    ctx = self.context(values)
+                    return ModelResult(
+                        {"blue": Spectrum(ctx["blue"] * u.micron, ctx["blue"] * u.Jy)}
+                    )
+
+            return FittingProblem(
+                Line(BLUE),
+                [
+                    Dataset(
+                        blue_data(),
+                        Instrument([], channel="blue", input_kind=Spectrum),
+                        label="spec",
+                    )
+                ],
+                seed=20260902,
+            )
+
+        problem = labelled_spec(-1.0)
+        hashes = spec_hashes(problem)
+        assert "spec" in hashes["components"]
+        assert hashes["spec"] == hash_of(problem.parameters.to_spec())
+        assert provenance_attrs(problem)["ampere_spec_hash"] == hashes["spec"]
+        # and the load-bearing property still holds for such a problem
+        assert (
+            provenance_attrs(labelled_spec(-1.0))["ampere_spec_hash"]
+            != provenance_attrs(labelled_spec(-2.0))["ampere_spec_hash"]
+        )
+
+    def test_problem_hash_moves_with_the_solver_configuration(self) -> None:
+        # DenseGP's jitter is added to the diagonal before factorisation, so two
+        # runs of the same strategy at different jitters score the same theta
+        # differently. Recording only solver.NAME would let a cached artefact
+        # trained under one regularisation be served for a fit under another.
+        def with_jitter(jitter: float) -> Likelihood:
+            return Likelihood(
+                GaussianFamily(),
+                GaussianProcessNoise(Matern32(0.3, 1.0), solver=DenseGP(jitter=jitter)),
+            )
+
+        loose, tight = with_jitter(0.0), with_jitter(0.4)
+        assert describe_likelihood(loose) != describe_likelihood(tight)
+        assert describe_likelihood(loose)["solver"]["config"]["jitter"] == 0.0
+        assert describe_likelihood(loose)["solver"]["name"]
 
     def test_versions_include_the_stack_that_moves_numbers(self) -> None:
         versions = package_versions()
@@ -555,6 +628,35 @@ class TestProvenanceAttrs:
         attrs = provenance_attrs(joint_problem(), extra={"walkers": 32, "moves": ["stretch"]})
         assert attrs["ampere_walkers"] == 32
         assert attrs["ampere_moves"] == '["stretch"]'
+
+    @pytest.mark.parametrize(
+        ("given", "expected"),
+        [
+            (True, 1),
+            (False, 0),
+            (np.bool_(True), 1),
+            (np.int64(64), 64),
+            (np.float64(0.25), 0.25),
+            (0.25, 0.25),
+            (float("nan"), '"__nan__"'),
+        ],
+        ids=["true", "false", "np-bool", "np-int", "np-float", "float", "nan"],
+    )
+    def test_extra_attrs_are_coerced_to_netcdf_types(self, given: Any, expected: Any) -> None:
+        # A bool is an int in Python but not in netCDF, and both engines refuse
+        # one; a numpy scalar was being stringified for no reason.
+        value = provenance_attrs(joint_problem(), extra={"x": given})["ampere_x"]
+        assert value == expected
+        assert type(value) is type(expected)
+
+    def test_a_boolean_extra_attr_survives_netcdf(self, tmp_path: Any) -> None:
+        # The end-to-end version of the above: `adapt=True` is exactly what
+        # extra_attrs is documented for, and it used to fail at write time.
+        tree = recorded(joint_problem(), chains=1, draws=2)
+        tree.attrs.update(provenance_attrs(joint_problem(), extra={"adapt": True}))
+        path = tmp_path / "flags.nc"
+        to_netcdf(tree, path)
+        assert int(from_netcdf(path).attrs["ampere_adapt"]) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1173,11 +1275,43 @@ class TestContainerSerialisation:
         assert encoded["unit"] == "Jy"
         assert encoded["coordinates"]["spectral_axis"]["unit"] == "micron"
 
-    def test_a_tampered_record_fails_the_kind_s_own_validation(self) -> None:
+    def test_a_tampered_axis_order_is_refused(self) -> None:
         encoded = container_to_dict(Spectrum(BLUE * u.micron, [1.0, 0.5, 0.25] * u.Jy))
         encoded["coordinates"]["spectral_axis"]["values"] = [3.0, 2.0, 1.0]
         with pytest.raises(Exception, match="increasing"):
             container_from_dict(encoded)
+
+    def test_a_tampered_mask_is_refused_not_coerced(self) -> None:
+        # A mask is strictly boolean in the base contract; coercing `[0, 2, 0]`
+        # here would silently accept a record the container itself refuses.
+        encoded = container_to_dict(
+            Spectrum(BLUE * u.micron, [1.0, 0.5, 0.25] * u.Jy, mask=[False, True, False])
+        )
+        encoded["mask"] = [0, 2, 0]
+        with pytest.raises(Exception, match="boolean"):
+            container_from_dict(encoded)
+
+    def test_a_tampered_shape_is_refused(self) -> None:
+        encoded = container_to_dict(
+            Spectrum(BLUE * u.micron, [1.0, 0.5, 0.25] * u.Jy, uncertainty=[0.05] * 3 * u.Jy)
+        )
+        encoded["uncertainty"]["data"] = [0.05, 0.05]
+        with pytest.raises(SchemaError, match="uncertainties"):
+            container_from_dict(encoded)
+
+    def test_a_subclass_only_invariant_is_a_known_gap(self) -> None:
+        # results.md §13.12: reconstruction runs the *base* contract's checks,
+        # not an invariant a subclass declares in its own __init__ -- today that
+        # is exactly one thing, PhotometricPoints' unique filter names. Pinned
+        # so the limitation is visible and its removal is a deliberate change.
+        encoded = container_to_dict(
+            PhotometricPoints(["W1", "W2"], [3.4, 4.6] * u.um, [1.0, 2.0] * u.Jy)
+        )
+        encoded["extra_coords"]["filters"]["data"] = ["W1", "W1"]
+        rebuilt = container_from_dict(encoded)
+        assert rebuilt.filters.tolist() == ["W1", "W1"]
+        with pytest.raises(Exception, match="repeated filter names"):
+            PhotometricPoints(["W1", "W1"], [3.4, 4.6] * u.um, [1.0, 2.0] * u.Jy)
 
     def test_an_unknown_kind_names_the_remedy(self) -> None:
         with pytest.raises(ResultsError, match="register_kind"):

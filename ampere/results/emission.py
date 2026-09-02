@@ -336,27 +336,37 @@ def _data_groups(problem: FittingProblem) -> _DataGroups:
     dims: dict[str, list[str]] = {}
     coords: dict[str, Sequence[Any]] = {}
     units: dict[str, str] = {}
-    taken: set[str] = set()
+    taken: dict[str, tuple[str, str]] = {}
 
     def claim(name: str, label: str, what: str) -> str:
-        """Reserve a variable name, refusing a collision rather than overwriting.
+        """Reserve a name, refusing a collision rather than overwriting.
 
         Data-group names are built by joining a dataset label to an axis or
         role name, so two datasets can in principle produce the same one — a
         dataset ``a`` with an extra coordinate ``b_c`` against a dataset
         ``a_b`` with one called ``c``. That is the flattening collision
         ``inference.md`` §4.4 names, and here it would silently drop one
-        dataset's data on the floor: a stored run that quietly lost a
-        dataset is worse than one that refuses to be written.
+        dataset's data on the floor: a stored run that quietly lost a dataset
+        is worse than one that refuses to be written. One dataset can also
+        collide with *itself* — an extra coordinate called ``uncertainty``
+        against its own uncertainties — so the message names both claimants
+        rather than assuming there are two datasets to rename.
         """
-        if name in taken:
-            raise ResultsError(
-                f"dataset {label!r}'s {what} would be stored as {name!r}, which another dataset "
-                f"has already claimed. Data-group names join the dataset label to an axis or "
-                f"role name, so labels that differ only by where an underscore falls can "
-                f"collide. Rename one of the datasets."
+        previous = taken.get(name)
+        if previous is not None:
+            owner, theirs = previous
+            remedy = (
+                "Rename one of the datasets."
+                if owner != label
+                else f"Rename dataset {label!r}'s extra coordinate."
             )
-        taken.add(name)
+            raise ResultsError(
+                f"dataset {label!r}'s {what} would be stored as {name!r}, which dataset "
+                f"{owner!r}'s {theirs} has already claimed. Data-group names join the dataset "
+                f"label to an axis or role name, so names that differ only by where an "
+                f"underscore falls can collide. {remedy}"
+            )
+        taken[name] = (label, what)
         return name
 
     for label in problem.datasets:
@@ -384,7 +394,9 @@ def _data_groups(problem: FittingProblem) -> _DataGroups:
                 units[name] = value_unit
         if len(names) == len(container.axes):
             for axis, dim in zip(container.axes, names, strict=True):
-                coords[dim] = axis.values.tolist()
+                # Coordinates share the group's flat namespace with the
+                # variables, so they are claimed on the same terms.
+                coords[claim(dim, label, f"{axis.name} coordinate")] = axis.values.tolist()
                 if axis.unit is not None:
                     units[dim] = str(axis.unit.to_string())
         else:
@@ -612,7 +624,7 @@ def to_netcdf(tree: Any, path: str | Path, *, engine: str | None = None) -> str:
     target = str(path)
     try:
         tree.to_netcdf(target, engine=engine)
-    except (ImportError, ValueError) as error:
+    except (ImportError, TypeError, ValueError) as error:
         raise _netcdf_dependency_error(error) from error
     return target
 
@@ -622,7 +634,7 @@ def from_netcdf(path: str | Path, *, engine: str | None = None) -> Any:
     arviz = _require_arviz()
     try:
         return arviz.from_netcdf(str(path), engine=engine)
-    except (ImportError, ValueError) as error:
+    except (ImportError, TypeError, ValueError) as error:
         raise _netcdf_dependency_error(error) from error
 
 

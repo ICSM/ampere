@@ -293,11 +293,25 @@ def _plain_meta(meta: Mapping[str, Any], kind: str) -> dict[str, Any]:
 def container_from_dict(encoded: Mapping[str, Any]) -> FunctionSamples:
     """Rebuild a container from :func:`container_to_dict`'s output.
 
-    Reconstruction goes through :class:`~ampere.core.results_schema.FunctionSamples`'s
-    own ``__init__``, so every validation the kind declares — axis physical
-    types, ordering, shapes, complex support — runs again on the way back in. A
-    record that has been tampered with fails here rather than inside a
-    likelihood.
+    Reconstruction goes through
+    :class:`~ampere.core.results_schema.FunctionSamples`'s own ``__init__``, so
+    the whole **base** contract is re-checked on the way back in: axis names and
+    physical types, coordinate ordering, value and uncertainty shapes, complex
+    support, non-negative uncertainties, a strictly boolean mask, and extra
+    coordinates aligned with the values. A record that has been tampered with in
+    any of those ways fails here rather than inside a likelihood.
+
+    What it does **not** re-check is an invariant a subclass declares in its own
+    ``__init__`` rather than through :attr:`~ampere.core.results_schema.FunctionSamples.AXES`
+    — today that means exactly one thing, ``PhotometricPoints``' rule that filter
+    names are unique. A generic reconstructor cannot call the subclass
+    constructors, whose signatures differ per kind by design, so it builds the
+    base and inherits the base's checks. That is limitation 12 of
+    ``docs/design/contracts/results.md`` §13, and the extension point named
+    there is a ``validate()`` classmethod on ``FunctionSamples`` for W1.4 to
+    add, which this function would then call. It matters only for a
+    hand-edited or corrupted record: anything ampere itself wrote had the
+    subclass check applied when it was first built.
     """
     version = encoded.get("version", CONTAINER_SCHEMA_VERSION)
     if version != CONTAINER_SCHEMA_VERSION:
@@ -328,7 +342,10 @@ def container_from_dict(encoded: Mapping[str, Any]) -> FunctionSamples:
             if uncertainty is None
             else _array_from_dict(uncertainty, f"{kind.__name__} uncertainties")
         ),
-        mask=None if mask is None else np.asarray(mask, dtype=bool),
+        # Deliberately not `dtype=bool`: coercing here would quietly turn a
+        # tampered `[0, 2, 0]` into `[False, True, False]`, when the base
+        # contract's whole point is that a mask is *strictly* boolean.
+        mask=None if mask is None else np.asarray(mask),
         extra_coords=extra or None,
         fidelity=encoded.get("fidelity"),
         meta=encoded.get("meta"),

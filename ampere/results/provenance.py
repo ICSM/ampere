@@ -69,10 +69,12 @@ False
 
 from __future__ import annotations
 
+import dataclasses
 import enum
 import hashlib
 import importlib.metadata as _metadata
 import json
+import math
 import sys
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -129,6 +131,10 @@ _PERSON = b"ampere-prov"
 _POSITIVE_INFINITY = "__inf__"
 _NEGATIVE_INFINITY = "__-inf__"
 _NOT_A_NUMBER = "__nan__"
+
+#: Mapping keys :func:`normalise` reserves for its own encodings. A mapping
+#: using one could impersonate the thing it encodes, so one is refused.
+_SENTINEL_KEYS = frozenset({"__ndarray__", "__unit__", "__quantity__", "__bytes__"})
 
 #: Packages whose versions every run records. Anything else the caller adds.
 _RECORDED_PACKAGES = (
@@ -221,7 +227,21 @@ def normalise(obj: object) -> Any:
     if isinstance(obj, bytes | bytearray):
         return {"__bytes__": bytes(obj).hex()}
     if isinstance(obj, Mapping):
-        return {str(key): normalise(value) for key, value in obj.items()}
+        normalised: dict[str, Any] = {}
+        for key, value in obj.items():
+            name = str(key)
+            if name in _SENTINEL_KEYS:
+                # Otherwise a mapping could impersonate an array, a unit or a
+                # quantity, and two genuinely different objects would hash the
+                # same -- the collision this module's refusal-not-omission rule
+                # exists to prevent, arriving by the other door.
+                raise ResultsError(
+                    f"{name!r} is reserved: it is how a normalised record encodes an array, a "
+                    f"unit, a quantity or raw bytes, so a mapping using it as a key could not be "
+                    f"told apart from the real thing. Rename the key."
+                )
+            normalised[name] = normalise(value)
+        return normalised
     if isinstance(obj, Sequence):
         return [normalise(item) for item in obj]
     if isinstance(obj, set | frozenset):
@@ -341,6 +361,30 @@ def buffer_fingerprint(owner: object) -> list[dict[str, Any]]:
     ]
 
 
+def _describe_solver(solver: object) -> dict[str, Any]:
+    """A GP solver's identity **and its configuration**, not merely its name.
+
+    The name alone is not enough, and the gap is a numerical one rather than a
+    bookkeeping one: ``DenseGP``'s ``jitter`` is added to the diagonal before
+    the factorisation, so two runs of the same strategy at different jitters
+    score the same θ differently. A cache key that could not tell them apart
+    would serve an artefact trained under one regularisation for a fit under
+    another. Strategies declare their configuration as dataclass fields, which
+    is what makes this readable from outside; anything a future strategy
+    configures another way is limitation 12 of ``results.md`` §13.
+    """
+    described: dict[str, Any] = {
+        "name": getattr(solver, "NAME", "") or type(solver).__name__,
+        "class": type(solver).__name__,
+        "exact": bool(getattr(solver, "EXACT", True)),
+    }
+    if dataclasses.is_dataclass(solver) and not isinstance(solver, type):
+        described["config"] = {
+            field.name: getattr(solver, field.name) for field in dataclasses.fields(solver)
+        }
+    return described
+
+
 def describe_likelihood(likelihood: Likelihood) -> dict[str, Any]:
     """The family, noise model, solver, kernel and censoring of one likelihood.
 
@@ -366,7 +410,7 @@ def describe_likelihood(likelihood: Likelihood) -> dict[str, Any]:
     }
     if isinstance(noise, GaussianProcessNoise):
         described["kernel"] = noise.kernel.spec().to_dict()
-        described["solver"] = noise.solver.NAME or type(noise.solver).__name__
+        described["solver"] = _describe_solver(noise.solver)
     censoring = likelihood.censoring
     if censoring is not None:
         described["censoring"] = {
@@ -442,20 +486,29 @@ def problem_fingerprint(problem: FittingProblem) -> dict[str, Any]:
     }
 
 
-def spec_hashes(problem: FittingProblem) -> dict[str, str]:
-    """One hash per top-level merge component, for locating *which* piece moved.
+def spec_hashes(problem: FittingProblem) -> dict[str, Any]:
+    """The joint spec hash, and one per top-level merge component.
 
-    The joint ``spec`` entry is the load-bearing one — it is the merged set, in
-    the order ``lowering.md`` §9.2 says a lowered model's seeding depends on.
-    The rest are a convenience: if two runs disagree, they say where.
+    The ``"spec"`` entry is the load-bearing one — it is the *merged* set, in the
+    order ``lowering.md`` §9.2 says a lowered model's seeding depends on. The
+    per-component entries are a convenience: if two runs disagree, they say
+    where.
+
+    The two live in **separate** namespaces, under ``"spec"`` and
+    ``"components"``, rather than in one flat mapping. A component label is a
+    user's choice and ``"spec"`` is an ordinary word in this domain, so a
+    dataset or model innocently labelled ``spec`` would otherwise overwrite the
+    joint entry — and silently, leaving ``ampere_spec_hash`` reporting one
+    component's declaration instead of the whole run's, which is exactly the
+    property everything downstream relies on it for.
     """
-    hashes = {"spec": hash_of(problem.parameters.to_spec())}
+    components: dict[str, str] = {}
     for label, component in problem.datasets.components().items():
         merged = getattr(component, "merged", component)
-        hashes[label] = hash_of(merged.to_spec())
+        components[label] = hash_of(merged.to_spec())
     for label, model in problem.models.items():
-        hashes[label] = hash_of(model.parameters.to_spec())
-    return hashes
+        components[label] = hash_of(model.parameters.to_spec())
+    return {"spec": hash_of(problem.parameters.to_spec()), "components": components}
 
 
 # ---------------------------------------------------------------------------
@@ -565,7 +618,7 @@ def provenance_attrs(
         "engine": "" if engine is None else str(engine),
         "library_versions": canonical_json(package_versions()),
         "spec_hash": hashes["spec"],
-        "component_spec_hashes": canonical_json(hashes),
+        "component_spec_hashes": canonical_json(hashes["components"]),
         "data_hash": hash_of(data_hashes),
         "data_hashes": canonical_json(data_hashes),
         "problem_hash": hash_of(problem_fingerprint(problem)),
@@ -605,5 +658,34 @@ def provenance_attrs(
                     f"extra provenance key {key!r} would overwrite the one ampere writes; "
                     f"choose another name."
                 )
-            attrs[key] = value if isinstance(value, int | str) else canonical_json(value)
+            attrs[key] = _as_attribute(value)
     return {f"{ATTR_PREFIX}{key}": value for key, value in attrs.items()}
+
+
+def _as_attribute(value: object) -> int | float | str:
+    """Coerce one caller-supplied value into something netCDF can actually store.
+
+    The netCDF types are integers, floats and strings; **a boolean is not one of
+    them**, and both engines refuse one — netCDF4 with ``illegal data type for
+    attribute``, h5netcdf with ``boolean dtypes are not a supported NetCDF
+    feature``. A bare ``isinstance(value, int)`` does not catch this, because
+    ``bool`` *is* an ``int`` in Python, so ``adapt=True`` used to pass straight
+    through and fail much later, at write time, in a backend traceback. Booleans
+    become ``0``/``1``; numpy scalars become their Python equivalents (otherwise
+    ``np.int64(64)`` was stringified into ``'64'``, losing its type for no
+    reason); a non-finite float is JSON-encoded, since netCDF's handling of one
+    in an attribute is not portable; everything else becomes canonical JSON.
+    """
+    if isinstance(value, bool | np.bool_):
+        return int(value)
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, np.floating):
+        value = float(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else canonical_json(value)
+    if isinstance(value, str):
+        return value
+    return canonical_json(value)

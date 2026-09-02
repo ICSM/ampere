@@ -401,10 +401,12 @@ computing it**, for three reasons that are worth separating.
    `N_draws × N_obs` per dataset; the per-dataset decomposition is
    `N_draws × N_datasets`. Nothing in Phase 1 consumes the former.
 
-**Reserved now**: the group name `pointwise_log_likelihood`, with a required
-`ampere_decomposition` attribute taking one of `"factorised"` (independent noise;
-exact) or `"conditional_loo"` (GP; the leave-one-out conditionals named above).
-Written only by an explicit call, never by default. A run emitted today is
+**Reserved now**, as the constant
+`ampere.results.POINTWISE_LOG_LIKELIHOOD_GROUP` rather than in prose: the group
+name `pointwise_log_likelihood`, with a required `ampere_decomposition`
+attribute taking one of `"factorised"` (independent noise; exact) or
+`"conditional_loo"` (GP; the leave-one-out conditionals named above). Written
+only by an explicit call, never by default. A run emitted today is
 forward-compatible with one emitted after it lands, because the group it would
 occupy is empty rather than misused.
 
@@ -510,8 +512,17 @@ half-implemented plot would be a worse commitment than an honest refusal.
 ## 9. Provenance: the recipe, stated once
 
 Every run carries a flat set of `ampere_`-prefixed root attributes. Each value is
-a netCDF-safe scalar — an `int`, or a `str` holding canonical JSON for anything
-structured.
+a netCDF-safe scalar — an `int`, a finite `float`, or a `str` holding canonical
+JSON for anything structured.
+
+**A boolean is not a netCDF type**, and it is worth saying so rather than
+leaving it to be discovered: both engines refuse one (`netCDF4`: *illegal data
+type for attribute*; `h5netcdf`: *boolean dtypes are not a supported NetCDF
+feature*), and a bare `isinstance(value, int)` does not catch it because `bool`
+*is* an `int` in Python. So `extra=` coerces booleans to `0`/`1` and numpy
+scalars to their Python equivalents at the point of writing, not at the point of
+serialising — an engine setting like `adapt=True` is exactly what `extra=` is
+for, and it should not fail two steps later inside a backend.
 
 ```pycon
 >>> attrs = provenance_attrs(joint, engine="emcee")
@@ -542,6 +553,15 @@ not to materialise. `ampere_free_names` (one per parameter) and
 **The dataset ordering is provenance.** `ampere_dataset_labels` is written in the
 collection's own order because that order defines which posterior element belongs
 to which object (`hierarchical_population.md` §10.2).
+
+**The joint spec hash and the per-component ones do not share a namespace.**
+`spec_hashes` returns the joint entry under `"spec"` and the components under
+`"components"`, because a component label is a user's choice and `spec` is an
+ordinary word for a dataset. A flat mapping would let a dataset labelled `spec`
+overwrite the joint entry silently, leaving `ampere_spec_hash` reporting one
+component's declaration instead of the whole run's — which would quietly break
+every property below and Phase 5's "may these two archived fits be reweighted
+together?".
 
 **Failures travel.** `ampere_failure_counts` is the unbounded count per
 `FailureReason`; `ampere_failures` is the bounded history, each entry
@@ -658,11 +678,15 @@ key is taken over, and the whole difficulty is that **the parameter spec is not
 enough**. Three things change a run's numbers without changing a single
 parameter declaration, and all three are covered here deliberately.
 
-**The likelihood's structure.** Family, noise model, solver, kernel and
-censoring, per dataset. Two likelihoods differing only in Matérn-3/2 versus
-squared-exponential, or `DenseGP` versus `QuasisepGP`, have identical
-`ParameterSet` specs. This is what `likelihoods.md` §17 question 8 asks about,
-and §15's R7 recommends moving it onto `Likelihood` itself.
+**The likelihood's structure.** Family, noise model, kernel, censoring, and the
+solver **together with its configuration** — not merely its name. Two
+likelihoods differing only in Matérn-3/2 versus squared-exponential, or
+`DenseGP` versus `QuasisepGP`, have identical `ParameterSet` specs; and two
+`DenseGP`s differing only in `jitter` produce different log-likelihoods at the
+same θ, because the jitter is added to the diagonal before the factorisation.
+Recording the strategy's name alone would have missed the second. This is what
+`likelihoods.md` §17 question 8 asks about, and §15's R7 recommends moving it
+onto `Likelihood` itself.
 
 **Buffers.** A buffer is by definition the thing nobody puts a prior on
 (`architecture.md` §6), so it appears nowhere in `to_spec()` — and it is the
@@ -675,6 +699,15 @@ and for every step of every instrument chain.
 **Model identity.** Two models of different classes can declare the same
 parameters and compute entirely different things, so the class and its module
 are part of the fingerprint too.
+
+What the fingerprint reaches is therefore **parameters, buffers, declared class
+identity, and ampere's own configuration objects**. What it cannot reach is a
+plain Python attribute on a user's model or transformation — a `Redden(law=
+"ccm89")` whose behaviour is set by a string that is neither a parameter nor a
+buffer. Hashing an arbitrary `__dict__` is not a safe general answer (it would
+sweep in caches, file handles and unhashable state), so this is limitation 13 of
+§13 rather than a silent partial guarantee, and the extension point it names is
+a `describe()` hook on `Parameterised`.
 
 ```pycon
 >>> description = describe_likelihood(joint.datasets["blue"].likelihood)
@@ -767,8 +800,12 @@ rather than after". The answer is in two layers.
 
 **Layer 1 — a plain-data form per container**, versioned, built only from lists,
 strings, numbers, booleans and `None`, and round-tripping by value through the
-kind's *own* validation, so a tampered record fails at the boundary rather than
-inside a likelihood:
+**base** contract's validation — axis names and physical types, coordinate
+ordering, shapes, complex support, non-negative uncertainties, a strictly
+boolean mask — so a record tampered with in any of those ways fails at the
+boundary rather than inside a likelihood. An invariant a *subclass* declares in
+its own `__init__` is not re-checked, which today means exactly one thing and is
+limitation 12 of §13:
 
 ```pycon
 >>> encoded = container_to_dict(blue_data)
@@ -883,6 +920,24 @@ Each is a decision, not an oversight. Each has an extension point.
     alternative is silently dropping one dataset's data from the stored run. The
     extension point, if it ever bites in practice, is a nested group per dataset
     rather than a flat namespace, which ArviZ's own conventions do not use.
+12. **Reconstruction re-checks the base contract, not a subclass's own
+    `__init__`.** `container_from_dict` cannot call the kind-specific
+    constructors — their signatures differ per kind by design — so it builds the
+    base and inherits the base's checks. Today that misses exactly one
+    invariant: `PhotometricPoints`' rule that filter names are unique. It
+    matters only for a hand-edited or corrupted record, since anything ampere
+    wrote had the check applied when it was first built. The extension point is
+    a `validate()` classmethod on `FunctionSamples`, which is W1.4's to add and
+    which this function would then call (R5).
+13. **The problem hash cannot see a plain Python attribute.** Parameters,
+    buffers, class identity and ampere's own configuration objects are all
+    hashed; a user's `Redden(law="ccm89")`, configured by a bare attribute that
+    is neither a parameter nor a buffer, is not — and two such fits share a
+    cache key while scoring differently. Hashing an arbitrary `__dict__` is not
+    a safe general answer, so the extension point is an opt-in `describe()`
+    hook on `Parameterised` that a model or transformation implements when its
+    behaviour depends on something the contracts do not model. Worth deciding at
+    W1.13, since a Phase-2 emulator cache is the first thing that will care.
 
 ## 14. What this contract hands to the specs downstream
 

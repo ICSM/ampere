@@ -53,6 +53,7 @@ from ampere.core.dataset import FittingProblem
 
 __all__ = [
     "GP_LOCALISATION_GROUP",
+    "POINTWISE_LOG_LIKELIHOOD_GROUP",
     "POSTERIOR_PREDICTIVE_GROUP",
     "RESIDUALS_GROUP",
     "add_posterior_predictive",
@@ -72,6 +73,16 @@ RESIDUALS_GROUP = "residuals"
 #: variables per dataset (``<label>_mean``, ``<label>_variance``). Not written by
 #: default; family C's input.
 GP_LOCALISATION_GROUP = "gp_localisation"
+
+#: ArviZ's per-**observation** ``log_likelihood`` convention, reserved but not
+#: written: computing it needs a method on ``Likelihood`` that does not exist
+#: (``results.md`` §6 and its ruling request R2). It is a distinct group from
+#: ``log_likelihood`` precisely so the two decompositions cannot be confused —
+#: a variable here carries an ``ampere_decomposition`` of ``"factorised"``
+#: (independent noise; exact) or ``"conditional_loo"`` (a GP's leave-one-out
+#: conditional terms). Reserved now so a run emitted today is
+#: forward-compatible with one emitted after it lands.
+POINTWISE_LOG_LIKELIHOOD_GROUP = "pointwise_log_likelihood"
 
 _PHASE_2 = (
     "Its shape, group name and cost policy are fixed by W1.8 "
