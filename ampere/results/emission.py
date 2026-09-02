@@ -528,11 +528,22 @@ class DrawRecorder:
         self._evaluations: list[list[Evaluation]] = [[] for _ in range(self.chains)]
 
     def record(
-        self, values: Any, evaluation: Evaluation | None = None, *, chain: int = 0
+        self, values: Any = None, evaluation: Evaluation | None = None, *, chain: int = 0
     ) -> Evaluation:
-        """Record one draw. Evaluates the problem when no evaluation is given."""
+        """Record one draw. Evaluates the problem when no evaluation is given.
+
+        ``values`` may be a mapping of merged names or the flat free-parameter
+        vector, and ``None`` means the reference θ — the same three things
+        :meth:`~ampere.core.dataset.FittingProblem.evaluate` accepts, resolved
+        here **before** the draw is packed. Resolving it in one place is the
+        point: ``evaluate(None)`` scores the reference θ, so packing ``None``
+        separately would store a row of NaN beside a perfectly good
+        log-probability, and the two halves of a draw would disagree.
+        """
         if not 0 <= chain < self.chains:
             raise ResultsError(f"chain {chain} is out of range for {self.chains} chain(s).")
+        if values is None:
+            values = self.problem.reference_values
         if evaluation is None:
             evaluation = self.problem.evaluate(values)
         theta = self.problem.parameters.pack(

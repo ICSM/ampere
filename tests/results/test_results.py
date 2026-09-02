@@ -821,6 +821,27 @@ class TestDrawRecorder:
         assert math.isfinite(evaluation.log_prob)
         assert len(recorder) == 1
 
+    def test_the_stored_theta_is_the_one_that_was_scored(self) -> None:
+        # The two halves of a draw must agree. `evaluate(None)` scores the
+        # reference theta, so `record(None)` has to store the reference theta
+        # and not the NaN that unpacking None would give.
+        problem = joint_problem()
+        recorder = DrawRecorder(problem)
+        evaluation = recorder.record()
+        tree = recorder.emit()
+        assert math.isfinite(evaluation.log_prob)
+        for name, value in problem.reference_values.items():
+            assert float(tree["posterior"][name].values[0, 0]) == pytest.approx(float(value))
+        assert float(tree["sample_stats"]["lp"].values[0, 0]) == pytest.approx(evaluation.log_prob)
+
+    @pytest.mark.parametrize("form", ["mapping", "vector"], ids=["mapping", "vector"])
+    def test_both_accepted_forms_store_the_same_draw(self, form: str) -> None:
+        problem = joint_problem()
+        recorder = DrawRecorder(problem)
+        recorder.record(TRUTH if form == "mapping" else problem.parameters.pack(TRUTH))
+        tree = recorder.emit()
+        assert float(tree["posterior"]["calibration"].values[0, 0]) == pytest.approx(1.0)
+
     def test_ragged_chains_are_refused_rather_than_padded(self) -> None:
         recorder = DrawRecorder(joint_problem(), chains=2)
         recorder.record(TRUTH, chain=0)
