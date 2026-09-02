@@ -256,6 +256,18 @@ ampere = { path = ".", editable = true, extras = ["sbi"] }
 [tool.pixi.feature.extinction.pypi-dependencies]
 ampere = { path = ".", editable = true, extras = ["extinction"] }
 
+# W1.8: `ampere.results` imports arviz lazily behind OptionalDependencyError
+# (architecture.md §4 rule 2), so arviz stays an extra rather than a base
+# dependency -- but the results contract's acceptance criterion is a netCDF
+# round trip, so the daily-use `dev` environment has to be able to run it.
+# netCDF serialisation additionally needs an engine (`h5netcdf`); arviz does
+# not require one, so it is named here explicitly rather than relied upon.
+[tool.pixi.feature.arviz.pypi-dependencies]
+ampere = { path = ".", editable = true, extras = ["arviz"] }
+h5netcdf = "*"
+h5py = "*"
+netcdf4 = "*"
+
 # Backend placeholders (Phase 2): [project.optional-dependencies] already
 # stubs these (torch = ["torch"], jax = ["jax"]); wiring the pixi features
 # up now means the eventual backend split doesn't also need a pixi change.
@@ -269,7 +281,7 @@ ampere = { path = ".", editable = true, extras = ["jax"] }
 # Daily-use environment: latest supported Python plus the full non-sbi,
 # non-backend toolchain (mirrors AGENTS.md's conda `ampere` env, which is
 # Python 3.13).
-dev = { features = ["py313", "dev", "zeus", "extinction"] }
+dev = { features = ["py313", "dev", "zeus", "extinction", "arviz"] }
 # CI test matrix: one environment per Python version. Deliberately no
 # `sbi` extra here -- torch is a large download and sbi tests skip cleanly
 # by design (tests/characterisation/conftest.py's `requires_sbi` marker);
