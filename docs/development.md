@@ -69,34 +69,39 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
   the "legacy still works" gate; run it before merging anything that
   touches shared files.
 
-## ⚡ Pick up here (end of the 2026-09-01 session)
+## ⚡ Pick up here (end of the 2026-09-02 session)
 
-**State**: Phase 1 is eight of thirteen items done — W1.1–W1.6, W1.9 and
-W1.12 are all Fable-reviewed and **merged to local master** (nothing is
-pushed to origin; origin/master is far behind by design). The working tree
-is clean; all gates green at the tip: **498 core tests**, full suite
-534 passed / 5 skipped, pyrefly 0 errors, ruff lint clean. Remaining items:
-**W1.7** (Dataset/FittingProblem), **W1.11** (modality sketches) — both
-fully unblocked and parallelisable — then W1.8 (needs W1.7), W1.10
-(needs W1.3–W1.8), and the W1.13 freeze. W0.9 remains open in Phase 0.
+**State**: Phase 1 is ten of thirteen items done — W1.1–W1.7, W1.9, W1.11
+and W1.12 are all Fable-reviewed and **merged to local master** (nothing is
+pushed to origin; origin/master is far behind by design). All gates green
+at the tip: **671 tests** (including 174 spec doctests), pyrefly 0 errors,
+ruff lint/format clean. Five of Peter's rulings landed and were implemented
+this session (see the updated reading-list bullets below): the W1.5 density
+scalars are demoted, and W1.7 implements the strict toggle and
+once-at-construction mask resolution. Remaining items: **W1.8** (needs
+W1.7), **W1.10** (needs W1.3–W1.8), and the W1.13 freeze. W0.9 remains
+open in Phase 0.
 
-**Next action**: dispatch W1.7 (Opus) and W1.11 (splittable, Sonnet/Opus
-per `docs/orchestration.md`) in parallel, with self-contained prompts per
-orchestration principle 4, carrying the consolidated obligations below and
-the worktree-trap recovery above. Then Fable-review each result at the
-depth established this session (independent gate verification, full spec
-read, adversarial probes of the implementation, fix small defects on the
-branch with tests) before presenting for Peter's merge decision.
+**Next action — Peter rules, then dispatch.** W1.8 and W1.10 are blocked
+on **R1** (the merge-topology ruling, `inference.md` §19), not on code:
+once W1.8 emits merged names into stored `InferenceData` and W1.10 asserts
+them, the topology is no longer cheaply reversible — *reverse now or not at
+all*. Rule R1 (and ideally R2–R4, the W1.11 freeze-flagged amendments
+I-1/I-5/X-1/X-2/H-2, and the remaining W1.5 §15 / W1.6 §17 questions with
+recommendations on file) before the next dispatch. Then W1.8 (Opus) and
+W1.10 (Sonnet/Opus) per `docs/orchestration.md`, with self-contained
+prompts carrying the stale-worktree recovery above; Fable-review at the
+established depth before merging.
 
 **Restart prompt for a new session** (paste as the opening message):
 
-> Read docs/development.md's "Pick up here" section and the W1.7/W1.11
-> obligations checklist below it, then dispatch W1.7 and W1.11 in
-> parallel per docs/orchestration.md, carrying every listed obligation in
-> the prompts (including the stale-worktree recovery). Review each result
-> at full Fable depth as in the 2026-09-01 session and present merge
-> recommendations; merge only what needs no ruling from me, and put the
-> rest on my review list.
+> Read docs/development.md's "Pick up here" section. Present me the
+> pending rulings (R1–R4 from inference.md §19, the W1.11 freeze-flagged
+> amendments, and the remaining W1.5 §15 / W1.6 §17 questions) with your
+> recommendations; record whatever I rule in the specs and plan as before.
+> Then dispatch W1.8 and W1.10 per docs/orchestration.md with the
+> stale-worktree recovery, review at full Fable depth, and merge what
+> needs no further ruling from me.
 
 ### Consolidated obligations for the W1.7 dispatch prompt
 
