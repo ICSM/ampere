@@ -169,6 +169,19 @@ class TestNamedChannels:
         with pytest.raises(SchemaError, match="must be a valid Python identifier"):
             ModelResult({"sed lowres": sed})
 
+    def test_channel_names_may_be_dot_qualified(self, sed, co_windows) -> None:
+        # Ruled 2026-09-02 (results_schema.md §17): a model namespaces grouped
+        # output with dot-qualified names — per-object channels or one object's
+        # several CO lines — mirroring ParameterSet.merge's qualification.
+        result = ModelResult({"co.j3_2": co_windows, "obj1.sed": sed})
+        assert result.require("obj1.sed", Spectrum) is sed
+        assert "co.j3_2" in result
+
+    def test_a_malformed_dotted_channel_name_is_refused(self, sed) -> None:
+        for bad in ("obj1..sed", ".sed", "sed.", "obj 1.sed"):
+            with pytest.raises(SchemaError, match=r"'\.'-separated sequence"):
+                ModelResult({bad: sed})
+
     def test_empty_result_is_refused(self) -> None:
         with pytest.raises(SchemaError, match="at least one channel"):
             ModelResult({})

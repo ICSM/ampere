@@ -82,26 +82,35 @@ once-at-construction mask resolution. Remaining items: **W1.8** (needs
 W1.7), **W1.10** (needs W1.3–W1.8), and the W1.13 freeze. W0.9 remains
 open in Phase 0.
 
-**Next action — Peter rules, then dispatch.** W1.8 and W1.10 are blocked
-on **R1** (the merge-topology ruling, `inference.md` §19), not on code:
-once W1.8 emits merged names into stored `InferenceData` and W1.10 asserts
-them, the topology is no longer cheaply reversible — *reverse now or not at
-all*. Rule R1 (and ideally R2–R4, the W1.11 freeze-flagged amendments
-I-1/I-5/X-1/X-2/H-2, and the remaining W1.5 §15 / W1.6 §17 questions with
-recommendations on file) before the next dispatch. Then W1.8 (Opus) and
-W1.10 (Sonnet/Opus) per `docs/orchestration.md`, with self-contained
+**R1–R4 ruled 2026-09-02 and implemented**: design B (nested merge)
+ratified; `LikelihoodFamily.sample` landed (overridable, default refuses
+specifically); dotted channel names landed (grouped data motivate it, not
+just populations); the tie-based hierarchical pattern stands, with the
+revisit design recorded in `inference.md` §17.2. **W1.8 and W1.10 are
+unblocked.**
+
+**Next action**: dispatch W1.8 (Opus) and W1.10 (Sonnet/Opus per
+`docs/orchestration.md`) — parallelisable once W1.8's emitted-name surface
+is agreed, or sequenced W1.8-then-W1.10 to be safe — with self-contained
 prompts carrying the stale-worktree recovery above; Fable-review at the
-established depth before merging.
+established depth before merging. Then W1.13 (freeze), which owes the
+batched sol review (still unavailable on this account — Peter configures
+codex first), and the remaining decision backlog below.
+
+**Peter's remaining review backlog** (nothing blocks W1.8/W1.10):
+lossless nesting + `Binding.index` (W1.13, `parameters.md` §14 closure
+note); the W1.11 freeze-flagged amendments I-1/I-5/X-1/X-2/H-2; W1.5 §15
+Q2/Q3 and W1.6 §17 Q3/Q4/Q6 (recommendations on file in the sketches);
+W1.4 §17 Q3–Q6; `inference.md` §19 items 5–8; lowering.md §12's
+ratification items.
 
 **Restart prompt for a new session** (paste as the opening message):
 
-> Read docs/development.md's "Pick up here" section. Present me the
-> pending rulings (R1–R4 from inference.md §19, the W1.11 freeze-flagged
-> amendments, and the remaining W1.5 §15 / W1.6 §17 questions) with your
-> recommendations; record whatever I rule in the specs and plan as before.
-> Then dispatch W1.8 and W1.10 per docs/orchestration.md with the
-> stale-worktree recovery, review at full Fable depth, and merge what
-> needs no further ruling from me.
+> Read docs/development.md's "Pick up here" section, then dispatch W1.8
+> and W1.10 per docs/orchestration.md with the stale-worktree recovery
+> and the obligations their items name. Review each at full Fable depth
+> and merge what needs no ruling from me; put the rest, plus the standing
+> review backlog listed in that section, on my review list.
 
 ### Consolidated obligations for the W1.7 dispatch prompt
 

@@ -165,19 +165,26 @@ ArrayLike = Any
 def _check_channel_name(name: object) -> str:
     """Validate a channel name.
 
-    Channel names must be Python identifiers. They are not passed as keyword
-    arguments (that is the parameter contract's reason), but they do become
-    group names on serialisation and coordinate labels in ``ampere.results``,
-    and an identifier is the portable intersection of what those tolerate.
+    A channel name is a Python identifier or a ``.``-separated sequence of
+    them (ruled 2026-09-02, closing `results_schema.md` §17's nested-channel
+    question): qualification is how a model namespaces grouped output —
+    per-object channels (``obj1.sed``) or grouped data such as one object's
+    several CO lines (``co.j3_2``) — mirroring how ``ParameterSet.merge``
+    qualifies parameter names. Nothing interprets the dots; ``require`` still
+    matches the full name. Channel names are not passed as keyword arguments
+    (that is the parameter contract's reason), but they do become group names
+    on serialisation and coordinate labels in ``ampere.results``, and
+    dot-qualified identifiers are the portable intersection of what those
+    tolerate.
     """
     if not isinstance(name, str) or not name:
         raise SchemaError(f"a channel name must be a non-empty string, got {name!r}")
-    if not name.isidentifier():
+    if not all(piece.isidentifier() for piece in name.split(".")):
         raise SchemaError(
             f"channel name {name!r} is not usable: a channel name must be a valid Python "
-            f"identifier, because channel names become group names on serialisation and "
-            f"coordinate labels in ampere.results. Rename the channel, e.g. "
-            f"{_suggest_identifier(name)!r}."
+            f"identifier or a '.'-separated sequence of them, because channel names become "
+            f"group names on serialisation and coordinate labels in ampere.results. Rename "
+            f"the channel, e.g. {_suggest_identifier(name)!r}."
         )
     return name
 

@@ -875,6 +875,16 @@ evaluated on its merits, not dismissed because single-call merge is what
 exists today. (W1.5's §14 note that ties crossing merge levels are uncovered
 is part of the same question.)
 
+**Closed 2026-09-02**: W1.7 evaluated both topologies (`inference.md` §4) and
+Peter **ratified the nested design** — one merge per immediate level, every
+mapping retained, values re-distributed level by level; cross-level ties are
+verified to collapse correctly. Recursive merge is not adopted and `merge`
+itself is unchanged. Two related items remain open at W1.13: *lossless
+nesting* (`merge` accepting a `ParameterMapping` as a component and composing
+its bindings — `inference.md` §4.6, also the population sketch's
+recommendation), and the optional `Binding.index` for per-element plate
+routing (`hierarchical_population.md` gap H-2).
+
 1. **`astropy.units` in `ampere.core`.** `architecture.md` §3–4 says core is
    "numpy/scipy/typing/stdlib"; this module imports `astropy.units` at module
    level. That seems right — astropy is a *required* dependency of the base

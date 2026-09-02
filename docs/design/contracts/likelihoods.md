@@ -125,6 +125,33 @@ True
 
 ```
 
+### The optional generative half: `sample`
+
+**Ruled by Peter, 2026-09-02** (W1.7's ruling request R3, recorded in
+`DEVELOPMENT_PLAN.md` §2): a family may also override
+
+```
+sample(predicted, noise, rng) -> np.ndarray
+```
+
+— one draw of the retained observed values from the same distribution
+`log_prob` scores, given the same `NoiseParams`. It is what W1.7's
+`simulate(observe=True)` delegates to. The **default refuses, specifically**:
+it names the family and the override to provide, because a `log_prob` does
+not determine an observation process and ampere will not guess one — a wrong
+guess would silently train an SBI posterior on the wrong forward model.
+`GaussianFamily` implements it for both noise models (including the GP draw
+through the solver's own `latent_transform`, stabiliser included); a user
+family supplies its own the same way `LaplaceFamily` above supplies
+`log_prob`:
+
+```pycon
+>>> class SamplingLaplace(LaplaceFamily):
+...     def sample(self, predicted, noise, rng):
+...         return predicted + noise.sigma * rng.laplace(size=predicted.shape)
+
+```
+
 The families the plan's target scope needs are all *declared*, whether or not
 they are implemented yet — a name in the registry is a commitment the spec
 freeze can be reviewed against:
@@ -1223,7 +1250,10 @@ unsupported in a fitting problem, and W1.7 should check this loudly), which
 also makes explicit the invariance that `latent_declaration(n)` — whose `n`
 is fixed at composition — was already assuming. This contract's own
 mechanics (§8's `weights()` product and excision) are unchanged: a
-pre-resolved pair simply makes the internal union the identity. Questions
+pre-resolved pair simply makes the internal union the identity. **Also ruled
+2026-09-02** (W1.7's R3): `LikelihoodFamily` gained the optional generative
+half, `sample(predicted, noise, rng)` — §3 has the contract; the default is
+a specific refusal and `GaussianFamily` implements it. Questions
 3, 4, 6 and 7 carry recommendations from the W1.11 interferometry sketch
 (`docs/design/modalities/interferometry.md` §§5–7 and §11: the model
 predicts the complex value with an `Amplitude` step taking the modulus;

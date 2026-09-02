@@ -90,7 +90,7 @@ because their names become group names on serialisation and coordinate labels in
 >>> ModelResult({"2 channels": Spectrum([1.0, 2.0] * u.um, [1.0, 1.0])})
 Traceback (most recent call last):
     ...
-ampere.core.exceptions.SchemaError: channel name '2 channels' is not usable: a channel name must be a valid Python identifier, because channel names become group names on serialisation and coordinate labels in ampere.results. Rename the channel, e.g. 'channel_2_channels'.
+ampere.core.exceptions.SchemaError: channel name '2 channels' is not usable: a channel name must be a valid Python identifier or a '.'-separated sequence of them, because channel names become group names on serialisation and coordinate labels in ampere.results. Rename the channel, e.g. 'channel_2_channels'.
 
 ```
 
@@ -1021,6 +1021,14 @@ answered together. **Routed to W1.7**: if a single model emitting
 hierarchical output (a population model's per-object channels) needs
 in-result qualification, W1.7 specifies it; the container contract needs
 only the one-line name-rule relaxation, deferred until then.
+
+**Ruled by Peter, 2026-09-02, and landed**: qualification happens in the
+*model*, never in the `DatasetCollection` (`inference.md` §14 has the three
+reasons), and the name-rule relaxation is settled now rather than with the
+first population model — grouped data that are not hierarchical at all want
+it too (one object's several sub-mm CO lines: `co.j3_2`, `co.j2_1`).
+`_check_channel_name` accepts `.`-separated identifiers; nothing interprets
+the dots, and `require` still matches the full name.
 
 1. **`DEFAULT_CHANNEL` is the string `"default"`.** It is short and obvious, but
    it is also a name a user might plausibly want for a real channel. Reserving

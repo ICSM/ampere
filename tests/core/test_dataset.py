@@ -663,6 +663,34 @@ class TestProblemComposition:
         with pytest.raises(DatasetError, match="does not hold"):
             FittingProblem(Flat(WAVELENGTH), [Dataset(flat_spectrum(), label="d", model="ghost")])
 
+    def test_a_dot_qualified_channel_composes_end_to_end(self) -> None:
+        # Ruled 2026-09-02 (R4): the channel-name surface is settled now, and
+        # grouped data — one object's several CO lines — is the non-population
+        # case that wants it. The dataset label stays a bare identifier (it is
+        # a merge component), so it must be given explicitly.
+        class TwoLines(Model):
+            def __init__(self, wavelength):
+                self.register_buffer("wavelength", wavelength, unit=u.um)
+                self.register_parameter(Parameter("level", st.norm(1.0, 1.0)))
+
+            def evaluate(self, **values):
+                ctx = self.context(values)
+                spectrum = Spectrum(ctx["wavelength"] * u.um, np.full(3, ctx["level"]) * u.Jy)
+                return ModelResult({"co.j3_2": spectrum, "co.j2_1": spectrum})
+
+        dataset = Dataset(
+            flat_spectrum(),
+            Instrument([], channel="co.j3_2", input_kind=Spectrum),
+            label="j3_2",
+        )
+        problem = FittingProblem(TwoLines(WAVELENGTH), [dataset])
+        assert math.isfinite(problem.log_prob({"model.level": 1.0}))
+        # Without an explicit dataset label the dotted instrument label reaches
+        # the dataset-label check, which refuses loudly: merge components stay
+        # bare identifiers.
+        with pytest.raises(DatasetError, match="dataset label"):
+            Dataset(flat_spectrum(), Instrument([], channel="co.j3_2", input_kind=Spectrum))
+
     def test_refuses_non_models_and_empty_model_mappings(self) -> None:
         with pytest.raises(DatasetError, match="not a Model"):
             FittingProblem({"a": object()}, [Dataset(flat_spectrum())])  # type: ignore[dict-item]
@@ -1311,14 +1339,42 @@ class TestSimulate:
                 )
             ],
         )
-        # Raised, not flagged: "ampere cannot sample this family" is a fact
-        # about the composition and would fail identically for every draw, so a
-        # budget of 10^4 flagged failures would be strictly less useful than one
-        # clear error.
-        with pytest.raises(DatasetError, match="no general way to sample one"):
+        # Raised, not flagged: "this family cannot sample" is a fact about the
+        # composition and would fail identically for every draw, so a budget of
+        # 10^4 flagged failures would be strictly less useful than one clear
+        # error. The refusal is specific (ruled 2026-09-02, R3): it names the
+        # family and the override that provides the observation process.
+        with pytest.raises(DatasetError, match="does not implement sample"):
             problem.simulate({"model.rate": 3.0}, observe=True)
         # The noise-free half still works, which is what emulator training wants.
         assert not problem.simulate({"model.rate": 3.0}).failed
+
+    def test_a_user_family_provides_its_own_sample(self) -> None:
+        # R3's point: the observation process is the family author's to supply.
+        # A Poisson subclass overriding sample() makes observe=True draws work
+        # end to end, with the same NoiseParams the likelihood scores with.
+        class SamplingPoisson(PoissonFamily):
+            def sample(self, predicted, noise, rng):
+                return rng.poisson(predicted).astype(float)
+
+        counts = Spectrum(WAVELENGTH * u.um, np.array([40.0, 70.0, 20.0]))
+        problem = FittingProblem(
+            Counts(WAVELENGTH),
+            [
+                Dataset(
+                    counts,
+                    likelihood=Likelihood(SamplingPoisson(), IndependentNoise()),
+                    label="counts",
+                )
+            ],
+            seed=20260902,
+        )
+        drawn = problem.simulate({"model.rate": 30.0}, observe=True).observations["counts"]
+        assert drawn.values.shape == (3,)
+        assert np.all(drawn.values == np.round(drawn.values))
+        assert not np.allclose(drawn.values, 30.0)
+        # The draw is scoreable by the same likelihood that will fit it.
+        assert math.isfinite(problem.log_prob({"model.rate": 30.0}))
 
     def test_a_crash_is_flagged_not_raised(self) -> None:
         problem = FittingProblem(

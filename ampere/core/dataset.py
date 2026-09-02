@@ -130,7 +130,6 @@ from .exceptions import DatasetError, LikelihoodError, TransformationError
 from .likelihood import (
     DTYPE,
     GaussianFamily,
-    GaussianProcessNoise,
     IndependentNoise,
     LatentDeclaration,
     Likelihood,
@@ -1084,58 +1083,34 @@ class Dataset:
         values: Mapping[str, Value] | ArrayLike | None,
         rng: np.random.Generator,
     ) -> FunctionSamples:
-        """Draw one noisy realisation of *predicted* under this dataset's noise model.
+        """Draw one noisy realisation of *predicted* under this dataset's likelihood.
 
-        Implemented for the combinations this contract can get **provably
-        right** from the merged contracts alone, which is the Gaussian family
-        with either noise model:
-
-        * :class:`~ampere.core.likelihood.IndependentNoise` — ``x = mu + sigma z``,
-          where ``sigma`` is the noise model's own, so a fitted ``scale`` or
-          ``jitter`` is already in it and the draw matches what the likelihood
-          would score;
-        * :class:`~ampere.core.likelihood.GaussianProcessNoise` — ``x = mu + L z1
-          + sigma z2``, where ``L`` comes from
-          :meth:`~ampere.core.likelihood.GPSolver.latent_transform`, the same
-          whitening the latent declaration uses. That is a draw from
-          ``N(mu, K + diag(sigma^2))`` **up to the solver's numerical
-          stabiliser**: :class:`~ampere.core.likelihood.DenseGP` factorises
-          ``K + jitter * mean(diag K) * I`` with ``jitter = 1e-10``, so the
-          realised covariance exceeds ``K`` by a relative 1e-10 on the diagonal.
-          Exact in the sense that matters — it is the same ``L`` the latent path
-          uses, so a simulated dataset is consistent with the model that scores
-          it — but not exact simpliciter, and this docstring says so rather than
-          claiming otherwise.
-
-        Everything else raises. Deliberately: a
-        :class:`~ampere.core.likelihood.LikelihoodFamily` declares only
-        ``log_prob``, so there is no general way to sample one, and *guessing*
-        (adding Gaussian noise to a Poisson rate, say) would silently train an
-        SBI posterior on the wrong forward model — the exact class of silent
-        wrongness these contracts exist to prevent. ``inference.md`` §12
-        proposes an optional ``LikelihoodFamily.sample`` as the extension point
-        and routes it to W1.13; until it exists, a user with an exotic family
-        draws their own observations from :attr:`Simulation.predicted`.
+        Delegated to :meth:`LikelihoodFamily.sample` (ruled 2026-09-02,
+        ``inference.md`` §19 R3), which is the generative counterpart of
+        ``log_prob`` and receives the same :class:`NoiseParams` the likelihood
+        scores with — so a fitted ``scale`` or ``jitter``, a GP kernel and the
+        solver's own stabiliser are all in the draw exactly as they are in the
+        density. :class:`GaussianFamily` implements it for both noise models; a
+        family that does not implement it refuses **specifically**, naming the
+        override a user should provide for an exotic observation process.
 
         Masked samples keep the observed container's own values: they carry zero
         information and are excluded from every likelihood, so drawing noise for
-        them would be inventing data. For the same reason a censoring
-        declaration blocks a draw only when a limit **survives the mask** —
-        ``likelihoods.md`` §9's rule that masking beats censoring, applied here
-        as it already is in :meth:`_declare_latent`, so that one class does not
-        give two answers to one question.
+        them would be inventing data. A censoring declaration blocks a draw only
+        when a limit **survives the mask** — ``likelihoods.md`` §9's rule that
+        masking beats censoring, applied here as it already is in
+        :meth:`_declare_latent`, so that one class does not give two answers to
+        one question.
         """
         family = self.likelihood.family
         noise = self.likelihood.noise
-        censored = self._censored_after_masking()
-        if not isinstance(family, GaussianFamily) or censored:
-            because = " with a censoring declaration on retained samples" if censored else ""
+        if self._censored_after_masking():
             raise DatasetError(
-                f"dataset {self.label!r}: ampere can draw observations for the gaussian family "
-                f"without censoring, but this dataset uses {type(family).__name__}{because}. A "
-                f"LikelihoodFamily declares only log_prob, so there is no general way to sample "
-                f"one and this contract will not guess. Use simulate(observe=False) and draw your "
-                f"own observations from the predicted containers."
+                f"dataset {self.label!r}: a censoring declaration on retained samples blocks "
+                f"observation drawing — a limit is part of the observation process, and applying "
+                f"the censoring operator to a draw is not implemented. Use "
+                f"simulate(observe=False) and draw your own observations from the predicted "
+                f"containers."
             )
         observed = self.observed
         routed = {} if values is None else self.route(values)
@@ -1146,30 +1121,16 @@ class Dataset:
         if not np.any(retain):
             return observed.with_values(drawn.reshape(observed.shape))
 
+        coordinates = np.column_stack(
+            [np.asarray(axis.values, dtype=DTYPE) for axis in observed.axes]
+        )[retain]
+        params = noise.noise_params(observed, retain, resolved, coordinates=coordinates)
         realisation = np.asarray(predicted.values, dtype=DTYPE).ravel()[retain]
-        sigma = noise.sigma(observed, retain, resolved)
-        if isinstance(noise, GaussianProcessNoise):
-            coordinates = np.column_stack(
-                [np.asarray(axis.values, dtype=DTYPE) for axis in observed.axes]
-            )[retain]
-            whitened = rng.standard_normal(realisation.size)
-            realisation = realisation + noise.solver.latent_transform(
-                noise.kernel, coordinates, whitened, resolved
-            )
-            # The solver's *own* jitter is part of the covariance it scores:
-            # DenseGP factorises K + diag(sigma^2 + jitter^2). Omitting it here
-            # would draw from a narrower distribution than the likelihood
-            # evaluates — and the error is not small, because that jitter is a
-            # standard deviation in the data's units that the library's own
-            # error message tells a user to raise. At DenseGP(jitter=0.15) with
-            # sigma=0.1 the variance is understated by about 9 per cent.
-            stabiliser = float(getattr(noise.solver, "jitter", 0.0) or 0.0)
-            if stabiliser:
-                floor = np.full(realisation.shape, stabiliser)
-                sigma = floor if sigma is None else np.sqrt(sigma**2 + floor**2)
-        if sigma is not None:
-            realisation = realisation + sigma * rng.standard_normal(realisation.shape)
-        drawn[retain] = realisation
+        try:
+            realisation = family.sample(realisation, params, rng)
+        except LikelihoodError as error:
+            raise DatasetError(f"dataset {self.label!r}: {error}") from error
+        drawn[retain] = np.asarray(realisation, dtype=DTYPE)
         return observed.with_values(drawn.reshape(observed.shape))
 
     def __repr__(self) -> str:

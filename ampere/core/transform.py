@@ -112,6 +112,23 @@ def _check_label(name: object, kind: str) -> str:
     return name
 
 
+def _check_dotted_label(name: object, kind: str) -> str:
+    """Channel bindings (and the instrument labels defaulting to them) may be dot-qualified.
+
+    Channel names were relaxed to '.'-separated identifiers on 2026-09-02
+    (``results_schema.md`` §17); an instrument label is provenance, never a
+    merge component (``inference.md`` §4), so it follows the channel rule.
+    Step labels and dataset labels stay bare — they are merge components.
+    """
+    if not isinstance(name, str) or not name or not all(p.isidentifier() for p in name.split(".")):
+        raise CompositionError(
+            f"{kind} {name!r} is not usable: it must be a valid Python identifier or a "
+            f"'.'-separated sequence of them (a model may namespace grouped channels, e.g. "
+            f"'co.j3_2')."
+        )
+    return name
+
+
 def _check_unit(unit: object, what: str) -> u.UnitBase | None:
     if unit is None:
         return None
@@ -853,8 +870,8 @@ class Instrument:
                     f"an Instrument is a chain of Transformations, but one step is {step!r}. "
                     f"Subclass Transformation and implement apply()."
                 )
-        self.channel = _check_label(channel, "channel name")
-        self.label = _check_label(channel if label is None else label, "instrument label")
+        self.channel = _check_dotted_label(channel, "channel name")
+        self.label = _check_dotted_label(channel if label is None else label, "instrument label")
         self.meta: Mapping[str, Any] = types.MappingProxyType(dict(meta) if meta else {})
 
         seen: dict[str, int] = {}

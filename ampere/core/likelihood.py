@@ -1466,6 +1466,36 @@ class LikelihoodFamily(Parameterised, abc.ABC):
         for a complex family): masking has already been applied by excision.
         """
 
+    def sample(
+        self,
+        predicted: np.ndarray,
+        noise: NoiseParams,
+        rng: np.random.Generator,
+    ) -> np.ndarray:
+        """One draw of the retained observed values, given *predicted* and *noise*.
+
+        The generative counterpart of :meth:`log_prob` (ruled 2026-09-02,
+        ``inference.md`` §19 R3): a draw from the same distribution
+        ``log_prob`` scores, over the retained samples, using the same
+        ``NoiseParams``. ``simulate(observe=True)`` (W1.7) is the consumer.
+
+        The default **refuses, specifically**: ``log_prob`` defines how a
+        datum is scored, not how one is generated, and ampere will not guess a
+        sampling distribution — a wrong guess would silently train an SBI
+        posterior on the wrong forward model. A family for which the
+        observation process is well defined overrides this with it; a user
+        family may do the same, which is the supported route to
+        ``observe=True`` draws for an exotic observation process.
+        """
+        raise LikelihoodError(
+            f"the {self.NAME or type(self).__name__} family does not implement sample(): its "
+            f"log_prob defines how a datum is scored, not how one is generated, and ampere will "
+            f"not guess a sampling distribution. Subclass {type(self).__name__} and override "
+            f"sample(predicted, noise, rng) with the observation process, or use "
+            f"simulate(observe=False) and draw observations from the predicted containers "
+            f"yourself."
+        )
+
     def marginalisation_with(
         self,
         noise: NoiseModel,
@@ -1605,6 +1635,43 @@ class GaussianFamily(LikelihoodFamily):
         # hot loop of every ordinary fit ampere runs, and scipy's generic
         # machinery costs several times what the closed form does.
         return float(np.sum(-0.5 * ((residual / sigma) ** 2 + _LOG_2PI) - np.log(sigma)))
+
+    def sample(
+        self,
+        predicted: np.ndarray,
+        noise: NoiseParams,
+        rng: np.random.Generator,
+    ) -> np.ndarray:
+        """A draw from the same distribution :meth:`log_prob` scores.
+
+        * uncorrelated noise — ``x = mu + sigma z``, with the noise model's own
+          ``sigma``, so a fitted ``scale`` or ``jitter`` is already in it;
+        * correlated (GP) noise — ``x = mu + L z1 + sigma z2``, where ``L``
+          comes from :meth:`GPSolver.latent_transform`, the same whitening the
+          latent declaration uses. That is a draw from
+          ``N(mu, K + diag(sigma^2))`` **up to the solver's numerical
+          stabiliser**: the solver's own jitter is part of the covariance it
+          scores, so it is folded into the draw here — omitting it would draw
+          from a narrower distribution than the likelihood evaluates, and the
+          error is not small at the jitter values the library's own error
+          message tells a user to raise.
+        """
+        realisation = np.asarray(predicted, dtype=DTYPE).copy()
+        sigma = None if noise.sigma is None else np.asarray(noise.sigma, dtype=DTYPE)
+        if noise.correlated:
+            assert noise.solver is not None and noise.kernel is not None  # narrowed by .correlated
+            assert noise.coordinates is not None
+            whitened = rng.standard_normal(realisation.shape)
+            realisation = realisation + noise.solver.latent_transform(
+                noise.kernel, noise.coordinates, whitened, noise.values
+            )
+            stabiliser = float(getattr(noise.solver, "jitter", 0.0) or 0.0)
+            if stabiliser:
+                floor = np.full(realisation.shape, stabiliser)
+                sigma = floor if sigma is None else np.sqrt(sigma**2 + floor**2)
+        if sigma is not None:
+            realisation = realisation + sigma * rng.standard_normal(realisation.shape)
+        return realisation
 
 
 @register_family

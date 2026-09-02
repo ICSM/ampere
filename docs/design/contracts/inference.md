@@ -1,10 +1,13 @@
 # Ampere v2 — Dataset, FittingProblem & Inference Contract (W1.7)
 
-Status: **DRAFT for Peter's review**, and it carries four ruling requests
-(§19, R1–R4) that later work is blocked on. Two of Peter's earlier rulings —
-`likelihoods.md` §17 Q1 (a strict toggle; the engine path records and returns
-−inf) and Q2 (the `Dataset` resolves the effective mask once) — are implemented
-here, in §11 and §8 respectively. Implements
+Status: reviewed and merged; **all four ruling requests R1–R4 were ruled by
+Peter on 2026-09-02** (see §19's preamble for the dispositions — the merge
+topology is ratified, `LikelihoodFamily.sample` and the dotted channel-name
+surface landed the same day, and the tie-based hierarchical pattern stands as
+documented). Two of Peter's earlier rulings — `likelihoods.md` §17 Q1 (a
+strict toggle; the engine path records and returns −inf) and Q2 (the
+`Dataset` resolves the effective mask once) — are implemented here, in §11
+and §8 respectively. Implements
 `DEVELOPMENT_PLAN.md` §4.5, discharges the obligations `parameters.md` §13/§14,
 `transformations.md` §14, `likelihoods.md` §16 and `results_schema.md` §17 place
 on this item, and adopts `lowering.md` §9.2's seed-derivation policy. Code:
@@ -163,9 +166,11 @@ Spectrum was required. ...
 
 ## 4. The joint parameter space: the merge topology
 
-This is the contract's central design decision, and `parameters.md` §14 keeps
+This is the contract's central design decision, and `parameters.md` §14 kept
 it expressly open for W1.7 to settle rather than inherit. It is written out at
-length because Peter rules on it, not because it is complicated.
+length because Peter ruled on it, not because it is complicated. **Ruled
+2026-09-02: design B is ratified and stays** (§19 R1); the lossless-nesting
+sub-proposal remains open at W1.13.
 
 ### 4.1 The constraint
 
@@ -1285,9 +1290,22 @@ True
 
 ### What can be sampled, and what will not be guessed
 
-Observation drawing is implemented for the combinations this contract can get
-**provably right** from the merged contracts alone, which is the Gaussian family
-with either noise model:
+**Ruled by Peter, 2026-09-02 (R3)**: `LikelihoodFamily` has the generative
+half — an overridable `sample(predicted, noise, rng)`, receiving the same
+`NoiseParams` that `log_prob` scores with, with the **default a specific
+refusal** that names the family and the override to provide. Observation
+drawing delegates to it, so what a family cannot sample it refuses precisely,
+and a user with an exotic observation process supplies it by subclassing:
+
+```pycon
+>>> class SamplingPoisson(PoissonFamily):
+...     def sample(self, predicted, noise, rng):
+...         return rng.poisson(predicted).astype(float)
+
+```
+
+`GaussianFamily.sample` is implemented for both noise models — the
+combinations the merged contracts get **provably right**:
 
 - `IndependentNoise` — `x = μ + σ z`, with the noise model's *own* σ, so a
   fitted `scale` or `jitter` is already in it and the draw matches what the
@@ -1308,33 +1326,34 @@ exceed `K`'s own. Those two extra assertions exist because the joint tolerance
 alone would not have caught a dropped σ at the uncertainties used elsewhere in
 the file; both were mutation-tested against a patched `draw_observation`.
 
-Everything else raises, and does so at the point of use rather than being
-flagged, because "ampere cannot sample this family" is a fact about the
-composition that would fail identically for every draw:
+A family that does not implement `sample` refuses at the point of use rather
+than being flagged, because "this family cannot sample" is a fact about the
+composition that would fail identically for every draw — and the refusal is
+specific, naming the family and the override that provides the observation
+process:
 
 ```pycon
 >>> latent_theta = {"model.rate": 3.0, "counts.latent.z": np.zeros(3)}
 >>> latent_problem.simulate(latent_theta, observe=True)
 Traceback (most recent call last):
     ...
-ampere.core.exceptions.DatasetError: dataset 'counts': ampere can draw observations for the
-gaussian family without censoring, but this dataset uses PoissonFamily. ...
+ampere.core.exceptions.DatasetError: dataset 'counts': the poisson family does not implement
+sample(): its log_prob defines how a datum is scored, not how one is generated, and ampere
+will not guess a sampling distribution. Subclass PoissonFamily and override
+sample(predicted, noise, rng) with the observation process, or use simulate(observe=False)
+and draw observations from the predicted containers yourself.
 
 ```
 
-This is deliberate. A `LikelihoodFamily` declares only `log_prob`, so there is
-no general way to sample one, and *guessing* — adding Gaussian noise to a
-Poisson rate, say — would silently train an SBI posterior on the wrong forward
-model. The noise-free half still works, which is what emulator training wants:
+The default refuses rather than guessing — adding Gaussian noise to a Poisson
+rate would silently train an SBI posterior on the wrong forward model. The
+noise-free half still works, which is what emulator training wants:
 
 ```pycon
 >>> latent_problem.simulate(latent_theta).failed
 False
 
 ```
-
-An optional `LikelihoodFamily.sample(predicted, noise, rng)` is the obvious
-extension point and is proposed to W1.13 (ruling request **R3**, §19).
 
 Masked samples keep the observed container's own values: they carry zero
 information and are excluded from every likelihood, so drawing noise for them
@@ -1370,13 +1389,16 @@ Three reasons.
 So for a population model emitting per-object channels, the *model* names them,
 and qualified flat names are the right form — exactly as §17 assessed.
 
-**The one-line relaxation is owed, but not by W1.7.** Nothing in this contract
-needs it: a model can equally emit `obj1_sed` today, and W1.7's own datasets
-bind whatever names the model publishes. Widening a frozen contract's
-accepted-name surface for a consumer that does not yet exist is the sort of
-speculative change a freeze exists to prevent. Recommended disposition: land it
-with the first population model (Phase 5), or with W1.13 if Peter would rather
-have the name surface settled at the freeze. Ruling request **R4** (§19).
+**The relaxation has landed — ruled by Peter, 2026-09-02 (R4).** The name
+surface is settled now rather than with the first population model, on his
+observation that grouped data that are not hierarchical at all want it too —
+one object's several sub-mm CO lines (`co.j3_2`, `co.j2_1`) are the worked
+case. `_check_channel_name` accepts `.`-separated identifiers; an
+`Instrument`'s channel binding follows the same rule (and so does its label,
+which is provenance, never a merge component). What stays bare-identifier is
+every **merge component** — step labels, dataset labels — so a dotted
+instrument label reaching a `Dataset`'s default is refused loudly and the
+user names the dataset explicitly.
 
 ## 15. Worked example: the joint fit W1.7 is accepted on
 
@@ -1537,8 +1559,25 @@ Each is a decision, not an oversight. Each has an extension point.
 2. **A `HierarchicalPrior` cannot reference another component's parameter.**
    `ParameterSet.__init__` requires references to resolve within the set
    (`parameters.md` §9), so the reference must be declared locally and then tied
-   (§9). The extension point is `parameters.md`'s, not this contract's:
-   deferred reference resolution at merge time.
+   (§9). **Ruled by Peter, 2026-09-02 (R2): the tie-based pattern stands as
+   the documented route.** For the revisit, if the pattern ever proves too
+   awkward in practice, the required change is recorded here so it does not
+   have to be re-derived — it is `parameters.md`'s, in three parts:
+   (a) `ParameterSet.__init__` accepts a hierarchical reference it cannot
+   resolve when (and only when) an explicit flag marks it deferred
+   (`HierarchicalPrior(..., defer=True)` or equivalent), so today's loud
+   refusal stays the default and a typo'd reference is still caught;
+   (b) `ParameterSet.merge` resolves deferred references against the *merged*
+   namespace — the reference is then a full merged path (`shared.mu`),
+   resolved after qualification and tie collapse in the same pass that
+   already rewrites local references, and refused loudly if it still
+   dangles; (c) the lowering consequence is confined to naming — a deferred
+   reference lowers exactly like a local one once resolved, since the
+   topological ordering is over merged names already — so no backend work
+   follows. The cost that kept this out of v1.7: error timing moves from
+   declaration to merge for deferred references, a real loss of locality,
+   and nothing yet needs it — every population case composes with the tie
+   pattern.
 3. **The joint likelihood is a plain sum.** Datasets are conditionally
    independent given θ. A correlated pair of datasets — the same detector's two
    orders sharing a calibration error — is not expressible as a joint
@@ -1626,6 +1665,24 @@ Each is a decision, not an oversight. Each has an extension point.
   embedding networks rather than here.
 
 ## 19. Open questions for review
+
+**Ruled by Peter, 2026-09-02 — all four requests.** R1: design B (nested
+`ParameterMapping`, one merge per level) is **ratified**; the
+lossless-nesting sub-proposal for `parameters.md` was not ruled and remains
+open at W1.13 alongside `Binding.index`. R2: the tie-based pattern for
+cross-component hierarchical structure **stands as documented**; the design
+for a future revisit (deferred reference resolution at merge time) is
+recorded in limitation 17.2 so it need not be re-derived. R3: **granted, and
+landed the same day** — `LikelihoodFamily.sample(predicted, noise, rng)`
+exists with a default that refuses specifically, `GaussianFamily` implements
+it for both noise models, and a user family overrides it to supply an exotic
+observation process (§13; decision-log entry in `DEVELOPMENT_PLAN.md` §2).
+R4: **the name surface is settled now, not at Phase 5** — grouped
+non-hierarchical data (one object's several sub-mm CO lines) want dotted
+channels too, so `_check_channel_name` and the `Instrument` channel binding
+accept `.`-separated identifiers (§14; merge-component labels stay bare).
+The original requests are kept below for the record. Items 5–8 remain open
+as written.
 
 **R1 — the merge topology (§4). The main ruling this document asks for.**
 Nested `ParameterMapping`, one merge per level, is implemented; §4.2–4.4 set out

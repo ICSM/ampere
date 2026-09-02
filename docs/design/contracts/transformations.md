@@ -1099,14 +1099,18 @@ Each is a decision, not an oversight. Each has an extension point.
   that coupling has to be expressible as a tie or a `HierarchicalPrior`, not by
   merging the two objects.
 - **W1.7 (Dataset / FittingProblem)** — a `Dataset` pairs an observed container
-  with an `Instrument`, and the instrument's `label` is the component label to
-  merge its `parameters` under. Nesting works because each level re-distributes:
-  a top-level `merge({dataset: instrument.parameters})` yields
-  `dataset.calibration_scale.scale`, and `instrument.mapping.distribute` routes
-  the inner half. Ties that cross levels are the case `parameters.md`
-  limitation 4 (merge is not associative) does not cover, and W1.7 should say
-  what happens. W1.7 also owns *when* `negotiate` and `compile_for` are
-  called — this contract defines them but names no caller.
+  with an `Instrument`. *(Superseded in part, 2026-09-02: this bullet's
+  original "the instrument's `label` is the component label to merge its
+  `parameters` under" did not survive W1.7's ratified topology —
+  `inference.md` §4's nested design merges the instrument's own mapping under
+  the reserved role name `instrument` inside the **dataset's** component, so
+  an instrument label is provenance and never a merge component, and the
+  label-collision worry in §15.4 collapses to one check on dataset labels.)*
+  Nesting works because each level re-distributes, and ties that cross levels
+  collapse correctly — `inference.md` §6 demonstrates both, answering the
+  question this bullet left open. W1.7 also owns *when* `negotiate` and
+  `compile_for` are called: once each, jointly across every instrument of a
+  model, at `FittingProblem` construction (`inference.md` §8).
 - **W1.9 (Lowering)** — a `Transformation` lowers as its parameters and buffers
   do; `apply` is ordinary array code in the backend's array type. The
   declaration forms needing a lowering row are: nothing new for parameters, but
