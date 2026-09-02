@@ -26,6 +26,7 @@ import pytest
 import scipy.stats as st
 
 from ampere.core import (
+    ComplexGaussianFamily,
     Cube,
     Dataset,
     DatasetCollection,
@@ -840,6 +841,121 @@ class TestArrayValuedParameters:
             "b",
             "c",
         ]
+
+
+class TestObservedDataKinds:
+    """results.md §4's dimension rule, on every container kind that has one.
+
+    A gridded kind takes one dimension per axis; a point kind with a single axis
+    takes that axis, so a spectrum plots against wavelength unaided; a point kind
+    whose axes index samples *jointly* takes one sample dimension and puts its
+    axes in ``constant_data``; and a complex kind is split, because netCDF has no
+    complex type.
+    """
+
+    ARCSEC: ClassVar[Any] = [0.0, 1.0] * u.arcsec
+
+    @staticmethod
+    def problem_for(container: FunctionSamples, likelihood: Likelihood | None = None) -> Any:
+        class Emitter(Model):
+            def __init__(self, template: FunctionSamples) -> None:
+                self._template = template
+                self.register_parameter(Parameter("scale", st.lognorm(0.2)))
+
+            def evaluate(self, **values: Any) -> ModelResult:
+                scale = self.context(values)["scale"]
+                template = self._template
+                return ModelResult({"ch": template.with_values(template.values * scale)})
+
+        return FittingProblem(
+            Emitter(container),
+            [
+                Dataset(
+                    container,
+                    Instrument([], channel="ch", input_kind=type(container)),
+                    likelihood,
+                    label="d",
+                )
+            ],
+        )
+
+    def cases(self) -> dict[str, tuple[FunctionSamples, Likelihood | None]]:
+        return {
+            "image": (
+                Image(
+                    self.ARCSEC,
+                    [0.0, 1.0, 2.0] * u.arcsec,
+                    np.arange(6.0).reshape(2, 3) * u.Jy,
+                    uncertainty=np.full((2, 3), 0.1) * u.Jy,
+                ),
+                None,
+            ),
+            "cube": (
+                Cube(
+                    self.ARCSEC,
+                    self.ARCSEC,
+                    [1.0, 2.0] * u.um,
+                    np.arange(8.0).reshape(2, 2, 2) * u.Jy,
+                    uncertainty=np.full((2, 2, 2), 0.1) * u.Jy,
+                ),
+                None,
+            ),
+            "visibilities": (
+                VisibilitySet(
+                    [1.0, 2.0], [3.0, 4.0], np.array([1 + 2j, 3 - 1j]), uncertainty=[0.1, 0.1]
+                ),
+                Likelihood(ComplexGaussianFamily()),
+            ),
+            "photometry": (
+                PhotometricPoints(
+                    ["W1", "W2"],
+                    [3.4, 4.6] * u.um,
+                    [1.0, 2.0] * u.Jy,
+                    uncertainty=[0.1, 0.2] * u.Jy,
+                ),
+                None,
+            ),
+        }
+
+    EXPECTED: ClassVar[dict[str, tuple[list[str], list[str], list[str]]]] = {
+        # kind: observed variables, their dims, constant_data variables
+        "image": (["d"], ["d_x", "d_y"], ["d_uncertainty"]),
+        "cube": (["d"], ["d_x", "d_y", "d_spectral_axis"], ["d_uncertainty"]),
+        "visibilities": (["d_imag", "d_real"], ["d_index"], ["d_u", "d_uncertainty", "d_v"]),
+        "photometry": (["d"], ["d_spectral_axis"], ["d_filters", "d_uncertainty"]),
+    }
+
+    @pytest.mark.parametrize("kind", ["image", "cube", "visibilities", "photometry"])
+    def test_emitted_shape_and_round_trip(self, kind: str, tmp_path: Any) -> None:
+        container, likelihood = self.cases()[kind]
+        problem = self.problem_for(container, likelihood)
+        recorder = DrawRecorder(problem)
+        recorder.record()
+        tree = recorder.emit()
+
+        variables, dims, constant = self.EXPECTED[kind]
+        assert sorted(tree["observed_data"].data_vars) == variables
+        for name in variables:
+            assert list(tree["observed_data"][name].dims) == dims
+        assert sorted(tree["constant_data"].data_vars) == constant
+
+        path = tmp_path / f"{kind}.nc"
+        to_netcdf(tree, path)
+        back = from_netcdf(path)
+        assert sorted(back.children) == sorted(tree.children)
+        for name in variables:
+            assert np.allclose(
+                back["observed_data"][name].values, tree["observed_data"][name].values
+            )
+
+    def test_a_complex_container_is_split_losslessly(self) -> None:
+        container, likelihood = self.cases()["visibilities"]
+        problem = self.problem_for(container, likelihood)
+        recorder = DrawRecorder(problem)
+        recorder.record()
+        observed = recorder.emit()["observed_data"]
+        rebuilt = observed["d_real"].values + 1j * observed["d_imag"].values
+        assert np.allclose(rebuilt, container.values)
 
 
 class TestDrawRecorder:
