@@ -1,7 +1,10 @@
 # Ampere v2 — Dataset, FittingProblem & Inference Contract (W1.7)
 
 Status: **DRAFT for Peter's review**, and it carries four ruling requests
-(§19, R1–R4) that later work is blocked on. Implements
+(§19, R1–R4) that later work is blocked on. Two of Peter's earlier rulings —
+`likelihoods.md` §17 Q1 (a strict toggle; the engine path records and returns
+−inf) and Q2 (the `Dataset` resolves the effective mask once) — are implemented
+here, in §11 and §8 respectively. Implements
 `DEVELOPMENT_PLAN.md` §4.5, discharges the obligations `parameters.md` §13/§14,
 `transformations.md` §14, `likelihoods.md` §16 and `results_schema.md` §17 place
 on this item, and adopts `lowering.md` §9.2's seed-derivation policy. Code:
@@ -606,6 +609,55 @@ record ambiguous. Naming them is worth doing, but it is a readability
 recommendation rather than a correctness requirement, and nothing needs to check
 it at the `negotiate` step.
 
+### The effective mask, resolved once
+
+**Ruled by Peter** (`likelihoods.md` §17 Q2): the union of the observed and
+predicted masks is the `Dataset`'s to resolve **at construction**, not the
+`Likelihood`'s to recompute on every call. Step 5 takes it, and every later
+evaluation is handed a prediction already carrying the answer — so the
+likelihood's own `weights()` product becomes an identity rather than a
+recomputed union.
+
+Two consequences, and both are contract rather than optimisation.
+
+**(a) The effective mask is evaluation-invariant.** A transformation whose
+output mask depends on parameter values is *unsupported* by
+`DatasetCollection`, and is refused loudly:
+
+```pycon
+>>> class MaskAbove(Transformation):
+...     ACCEPTS = (Spectrum,)
+...     def __init__(self, **kwargs):
+...         super().__init__(**kwargs)
+...         self.register_parameter(Parameter("cut", st.uniform(0.0, 100.0)))
+...     def apply(self, samples, values):
+...         cut = self.context(values)["cut"]
+...         return samples.with_values(samples.values, mask=np.asarray(samples.values) > cut)
+>>> conditional = FittingProblem(
+...     Line(grid),
+...     [Dataset(observed, Instrument([MaskAbove()]), label="d")],
+...     reference_values={"model.slope": 2.0, "d.instrument.mask_above.cut": 99.0},
+... )
+>>> closed = conditional.evaluate({"model.slope": 2.0, "d.instrument.mask_above.cut": 0.5})
+>>> closed.log_prob, closed.failure.reason
+(-inf, <FailureReason.LIKELIHOOD_FAILED: 'likelihood_failed'>)
+
+```
+
+This is not fussiness. `Likelihood.log_prob` scores a fully masked pair as
+exactly `0.0`, which beats every finite log-likelihood the dataset could
+otherwise contribute — so a mask-controlling nuisance parameter has a **free
+maximum at "mask everything"**. Measured on a three-sample toy before the check
+existed: the joint `log_prob` rose from −255.1 to −9.2 as the mask closed, with
+no failure recorded. A sampler would have driven the data out of its own fit and
+converged happily on a posterior informed by nothing. A partial change is
+refused for the same reason: a log-likelihood over two points is not a
+comparable number to one over three.
+
+**(b) The latent block's size is a construction-time constant**, which the
+ruling makes explicit rather than implicit. `latent_declaration(n)` takes the
+retained count; the retained count is now fixed by declaration.
+
 ### Coordinates: hand the step the observed container's own
 
 `Likelihood.check_alignment` compares the predicted and observed axes for
@@ -988,9 +1040,11 @@ The catch set is **deliberately narrow**: `LikelihoodError`, plus whatever the
 user declares in `simulator_failures`. Nothing else.
 
 `LikelihoodError` is there because `likelihoods.md` §16 hands this contract the
-non-positive-definite-covariance case by name: that contract raises, on the
-argument that a silent `-inf` hides a mis-specified kernel and that §4.5's
-failure signalling is W1.7's. Here it is:
+non-positive-definite-covariance case by name, and because **Peter has ruled**
+on that contract's §17 Q1: the engine-facing path records and returns `-inf`,
+while strict raising stays available for direct use and debugging. The jax
+argument settled it — exception control flow cannot be traced, so Phase 2 forces
+the non-raising path regardless. Here it is:
 
 ```pycon
 >>> extreme = Likelihood(
@@ -1068,6 +1122,30 @@ a point that has already failed — so the hot loop pays nothing for it.
 
 ```
 
+### The strict toggle, and the workflow it is half of
+
+`strict=True` empties the catch set, so every exception propagates:
+
+```pycon
+>>> strict = FittingProblem(
+...     Line(grid), [Dataset(observed, likelihood=extreme, label="d")], strict=True
+... )
+>>> strict.evaluate({
+...     "model.slope": 2.0, "d.likelihood.amplitude": 1e200, "d.likelihood.length_scale": 1.0,
+... })
+Traceback (most recent call last):
+    ...
+ampere.core.exceptions.LikelihoodError: the covariance matrix K + diag(sigma^2) contains
+non-finite entries...
+
+```
+
+The intended workflow is the two halves together: run non-strict, read
+`failure_summary()`, then re-run strict to get the raise at the offending draw
+with a full traceback. Emptying the tuple rather than branching at each call site
+is deliberate — it is what lets a future *solver*-level strict flag replace this
+`try`/`except` without a contract change, since the call sites stay as they are.
+
 ### Counting, not just recording
 
 The history is bounded — a long run can propose millions of unscoreable points
@@ -1086,11 +1164,30 @@ True
 
 ```
 
-A `Failure` serialises for a run's provenance attrs:
+A `Failure` serialises for a run's provenance attrs, and carries the **scalar
+parameter values it failed at** — which is the half that tells a user *which*
+prior is too wide. Arrays are excluded deliberately: a latent block of 10⁵
+values kept on each of a bounded history's entries would be a memory leak
+wearing a diagnostic's clothes.
 
 ```pycon
 >>> sorted(result.failure.to_dict())
-['exception_type', 'message', 'reason', 'where']
+['exception_type', 'message', 'reason', 'values', 'where']
+>>> broke.failure.values["amplitude"]
+1e+200
+
+```
+
+`failure_summary()` is the aggregate a driver should print — one line per
+failure class, with the range of values over which it happened, rather than
+8 214 separate warnings:
+
+```pycon
+>>> print(gp_problem.failure_summary())
+1 draw(s) failed: likelihood_failed in ['d']; over amplitude=1e+200, length_scale=1
+Re-run with FittingProblem(..., strict=True) to raise at the offending draw.
+>>> FittingProblem(Line(grid), [Dataset(observed)]).failure_summary()
+''
 
 ```
 
@@ -1418,6 +1515,9 @@ True
 | `check_alignment` is never skipped, only deferred | `likelihoods.md` §16 says it is not optional — it is where an unimplemented latent combination is refused |
 | The reference θ is the prior median | Deterministic, always in support, and correct for hierarchical priors because `prior_transform` orders them |
 | Failure catch set is `LikelihoodError` + declared simulator exceptions, nothing more | Turning a composition bug into `-inf` is a fit that runs, converges and is wrong |
+| The effective mask is resolved once at construction and declared invariant | Peter's `likelihoods.md` §17 Q2 ruling; and a parameter-dependent mask makes "mask everything" a free maximum worth −inf to a sampler (§8) |
+| `strict=True` empties the catch set rather than branching per call site | Peter's §17 Q1 ruling; and it is what lets a solver-level strict flag replace the `try`/`except` later without a contract change |
+| A `Failure` carries the scalar values it failed at, never arrays | Localises the failure ("which prior is too wide?") without putting a 10⁵ latent block on every history entry |
 | Out-of-support returns NaN for `log_likelihood`, not `-inf`, and records no failure | "Not evaluated" ≠ "impossible"; zero prior mass is an answer |
 | `FailureReason` is a `StrEnum`, and counts are unbounded while history is not | A reason is only useful if it can be counted; a history must not leak memory over a 10⁶-proposal run |
 | Capability flags read by `getattr`, defaulting to the reference answers | W1.5's ABCs are frozen and this contract may not widen them; §18 asks W1.13 to promote them |
@@ -1444,11 +1544,14 @@ Each is a decision, not an oversight. Each has an extension point.
    orders sharing a calibration error — is not expressible as a joint
    likelihood, only as a shared nuisance parameter. The extension point is a
    `DatasetCollection` subclass overriding `contributions`.
-4. **The latent block's size is fixed at composition.** It is the number of
-   samples retained by the union of the observed and predicted masks at the
-   reference θ. A transformation that masks conditionally on a parameter would
-   change it mid-run, so a mismatch is refused loudly rather than silently
-   producing a sampler dimension that does not match the likelihood.
+4. **The effective mask is evaluation-invariant, and so is the latent size.**
+   Both are fixed at composition, by Peter's `likelihoods.md` §17 Q2 ruling
+   (§8). A transformation whose output mask depends on parameter values is
+   unsupported and is refused per draw — not because the case is uninteresting
+   but because `Likelihood.log_prob` scores a fully masked pair as `0.0`, which
+   makes "mask everything" a free maximum. Supporting it properly would need a
+   likelihood that renormalises over the retained subset, which is a modelling
+   decision this contract should not make silently.
 5. **`simulate` is one draw.** A batched `simulate_many(n)` — which is what an
    SBI budget actually wants, and what a `batchable` backend could vectorise —
    is Phase 3's, and needs the capability flag to mean something first.
@@ -1582,7 +1685,8 @@ the accepted-name surface is settled once.
    are declared against the `Capable` protocol, which is documentation until
    someone promotes them.
 7. **Is the failure catch set right?** §11 catches `LikelihoodError` and the
-   user's declared simulator exceptions, and nothing else. The argument against
+   user's declared simulator exceptions, and nothing else (with `strict=True`
+   catching nothing, per Peter's §17 Q1 ruling). The argument against
    catching more is that a bug turned into `-inf` is a fit that runs and is
    wrong. The argument for is that a user wrapping an untidy external code may
    not know every exception it raises, and will discover the list by having

@@ -156,6 +156,7 @@ __all__ = [
     "MODEL_COMPONENT",
     "SHARED_COMPONENT",
     "Capabilities",
+    "Capable",
     "Dataset",
     "DatasetCollection",
     "Evaluation",
@@ -163,6 +164,7 @@ __all__ = [
     "FailureReason",
     "FittingProblem",
     "Simulation",
+    "declared_capabilities",
 ]
 
 ArrayLike = Any
@@ -198,6 +200,24 @@ SHARED_COMPONENT = "shared"
 #: (:attr:`FittingProblem.failure_counts`) are unbounded and are what a driver
 #: should report.
 DEFAULT_FAILURE_HISTORY = 64
+
+
+def _mask_of(container: FunctionSamples) -> np.ndarray | None:
+    """A container's mask as a flat boolean array, or ``None`` if it has none."""
+    if container.mask is None:
+        return None
+    return np.asarray(container.mask, dtype=bool).ravel()
+
+
+def _masks_equal(left: np.ndarray | None, right: np.ndarray | None) -> bool:
+    """Compare two masks, treating ``None`` and an all-False mask as the same."""
+    if left is None and right is None:
+        return True
+    if left is None:
+        return not bool(np.any(right))
+    if right is None:
+        return not bool(np.any(left))
+    return left.shape == right.shape and bool(np.array_equal(left, right))
 
 
 def _check_label(name: object, kind: str) -> str:
@@ -412,27 +432,61 @@ class Failure:
     message: str
     where: str = ""
     exception_type: str = ""
+    values: Mapping[str, float] = types.MappingProxyType({})
 
-    def to_dict(self) -> dict[str, str]:
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "values", types.MappingProxyType(dict(self.values)))
+
+    def to_dict(self) -> dict[str, Any]:
         """A JSON-compatible form for a run's provenance attrs (W1.8)."""
         return {
             "reason": str(self.reason),
             "message": self.message,
             "where": self.where,
             "exception_type": self.exception_type,
+            "values": dict(self.values),
         }
 
     def __str__(self) -> str:
         where = f" [{self.where}]" if self.where else ""
-        return f"{self.reason}{where}: {self.message}"
+        at = ""
+        if self.values:
+            at = " at " + ", ".join(f"{k}={v:.6g}" for k, v in sorted(self.values.items()))
+        return f"{self.reason}{where}: {self.message}{at}"
 
 
-def _failure_from(reason: FailureReason, error: BaseException, where: str) -> Failure:
+def _scalars(values: Mapping[str, Value] | None) -> dict[str, float]:
+    """The scalar entries of a routed component's values.
+
+    Recorded on a :class:`Failure` so that "which hyperparameters broke the
+    Cholesky?" is answerable from the failure record itself. Arrays are
+    deliberately excluded: a latent block of 10⁵ values kept on each of a
+    bounded history's entries would be a memory leak wearing a diagnostic's
+    clothes, and it is the scalars — an amplitude, a length-scale, a rate — that
+    localise this class of failure.
+    """
+    if not values:
+        return {}
+    found: dict[str, float] = {}
+    for name, value in values.items():
+        array = np.asarray(value)
+        if array.ndim == 0 and array.dtype.kind in "fiub":
+            found[name] = float(array)
+    return found
+
+
+def _failure_from(
+    reason: FailureReason,
+    error: BaseException,
+    where: str,
+    values: Mapping[str, Value] | None = None,
+) -> Failure:
     return Failure(
         reason=reason,
         message=str(error).replace("\n", " "),
         where=where,
         exception_type=type(error).__name__,
+        values=_scalars(values),
     )
 
 
@@ -534,7 +588,9 @@ class Simulation:
         set_(self, "predicted", types.MappingProxyType(dict(self.predicted)))
         if self.observations is not None:
             set_(self, "observations", types.MappingProxyType(dict(self.observations)))
-        theta = np.asarray(self.theta, dtype=DTYPE)
+        # Copy before freezing: setflags on the array we were handed would make
+        # the *caller's* array read-only as a side effect of constructing this.
+        theta = np.array(self.theta, dtype=DTYPE, copy=True)
         theta.setflags(write=False)
         set_(self, "theta", theta)
 
@@ -669,6 +725,11 @@ class Dataset:
         self._check_output_kind()
         self._latent = self._declare_latent(latent_name)
         self._mapping = ParameterSet.merge(self._components())
+        # The effective mask, resolved once (Peter's W1.6 §17 Q2 ruling). All
+        # three are None until check_alignment has seen a predicted container.
+        self._predicted_mask: np.ndarray | None = None
+        self._effective_mask: np.ndarray | None = None
+        self._retained_reference: int | None = None
 
     # -- composition-time checks ---------------------------------------------
 
@@ -763,7 +824,11 @@ class Dataset:
         return self._mapping.distribute(self._mapping.merged.complete(values))
 
     def predict(
-        self, result: ModelResult, values: Mapping[str, Value] | ArrayLike | None = None
+        self,
+        result: ModelResult,
+        values: Mapping[str, Value] | ArrayLike | None = None,
+        *,
+        routed: Mapping[str, Mapping[str, Value]] | None = None,
     ) -> FunctionSamples:
         """Push *result* through the instrument chain to predicted-data space.
 
@@ -772,9 +837,15 @@ class Dataset:
         posterior-predictive and residual diagnostics of ``diagnostics.md``
         family B, and by the failure classifier, which needs to know whether a
         likelihood failed because the *prediction* was NaN.
+
+        *routed* is this dataset's values already split by :meth:`route`. A
+        caller that scores as well as predicts should route once and pass it to
+        both, rather than paying for ``complete`` and ``distribute`` twice per
+        evaluation — which, with a latent block of 10⁵ values, is two full-array
+        copies on the path this contract is sized for.
         """
-        routed = {} if values is None else self.route(values)
-        instrument_values = routed.get(INSTRUMENT_COMPONENT) or None
+        split = self._split(values, routed)
+        instrument_values = split.get(INSTRUMENT_COMPONENT) or None
         predicted = self.instrument(result, instrument_values)
         if not isinstance(predicted, FunctionSamples):  # pragma: no cover - Instrument checks it
             raise TransformationError(
@@ -786,20 +857,109 @@ class Dataset:
         self,
         predicted: FunctionSamples,
         values: Mapping[str, Value] | ArrayLike | None = None,
+        *,
+        routed: Mapping[str, Mapping[str, Value]] | None = None,
     ) -> float:
-        """Score an already-computed prediction against the observed data."""
-        routed = {} if values is None else self.route(values)
+        """Score an already-computed prediction against the observed data.
+
+        The prediction is handed to the likelihood carrying the **resolved**
+        effective mask (:meth:`_resolve_mask`), so the likelihood's own mask
+        union is an identity rather than a recomputation, and a
+        parameter-dependent mask is refused here rather than silently changing
+        which data are being fitted.
+        """
+        resolved_predicted = self._masked_pair(predicted)
+        split = self._split(values, routed)
         latent = None
         if self._latent is not None:
-            latent = np.asarray(routed[LATENT_COMPONENT][self._latent.parameter.name])
+            latent = np.asarray(split[LATENT_COMPONENT][self._latent.parameter.name])
         return float(
             self.likelihood.log_prob(
-                predicted,
+                resolved_predicted,
                 self.observed,
-                routed.get(LIKELIHOOD_COMPONENT),
+                split.get(LIKELIHOOD_COMPONENT),
                 latent=latent,
             )
         )
+
+    def _censored_after_masking(self) -> bool:
+        """Whether any limit survives the observed container's mask."""
+        censoring = self.likelihood.censoring
+        if censoring is None:
+            return False
+        censoring.check_against(self.observed)
+        valid = np.asarray(self.observed.valid).ravel()
+        return bool(np.any(np.asarray(censoring.kinds)[valid] != 0))
+
+    def _split(
+        self,
+        values: Mapping[str, Value] | ArrayLike | None,
+        routed: Mapping[str, Mapping[str, Value]] | None,
+    ) -> Mapping[str, Mapping[str, Value]]:
+        if routed is not None:
+            return routed
+        return {} if values is None else self.route(values)
+
+    def _resolve_mask(self, predicted: FunctionSamples) -> None:
+        """Take the union of the observed and predicted masks — **once**.
+
+        Peter's ruling on ``likelihoods.md`` §17 Q2: the effective mask is the
+        ``Dataset``'s to resolve at construction, not the ``Likelihood``'s to
+        recompute on every call. Two things follow, and both are contract, not
+        optimisation.
+
+        **The effective mask is evaluation-invariant.** A transformation whose
+        output mask depends on parameter values is *unsupported*, and
+        :meth:`_masked_pair` refuses one loudly rather than letting it through.
+        That is not fussiness: a mask-controlling nuisance parameter has a free
+        maximum at "mask everything", because ``Likelihood.log_prob`` scores a
+        fully masked pair as exactly ``0.0`` — which beats every finite
+        log-likelihood the dataset could otherwise contribute. Measured on a
+        three-sample toy before this check existed, the joint ``log_prob`` rose
+        from -255.1 to -9.2 as the mask closed, with no failure recorded: a
+        sampler would have driven the data out of its own fit and converged
+        happily on a posterior informed by nothing.
+
+        **The latent block's size is fixed here too**, which the ruling makes
+        explicit rather than implicit: ``latent_declaration(n)`` takes the
+        retained count, and the retained count is now a construction-time
+        constant by declaration.
+        """
+        self._predicted_mask = _mask_of(predicted)
+        excluded = ~(np.asarray(self.observed.valid).ravel() & np.asarray(predicted.valid).ravel())
+        self._effective_mask = excluded if bool(np.any(excluded)) else None
+        self._retained_reference = int(np.count_nonzero(~excluded))
+
+    def _masked_pair(self, predicted: FunctionSamples) -> FunctionSamples:
+        """*predicted* carrying the resolved effective mask, invariance checked.
+
+        The union having been taken once, this stamps the answer onto the
+        prediction so that ``Likelihood``'s own ``weights()`` product becomes an
+        identity rather than a recomputed union. The check comes first: stamping
+        without it would *hide* a parameter-dependent mask instead of refusing
+        it.
+        """
+        if self._retained_reference is None:
+            return predicted
+        current = _mask_of(predicted)
+        if not _masks_equal(current, self._predicted_mask):
+            now = 0 if current is None else int(np.count_nonzero(current))
+            before = (
+                0 if self._predicted_mask is None else int(np.count_nonzero(self._predicted_mask))
+            )
+            raise LikelihoodError(
+                f"dataset {self.label!r}: the instrument chain produced a different mask at this "
+                f"parameter vector than when the problem was composed ({now} sample(s) excluded, "
+                f"was {before}). The effective mask is evaluation-invariant by declaration "
+                f"(inference.md §8): a log-likelihood over one subset of the data is not "
+                f"comparable with one over another, and because a fully masked dataset scores "
+                f"exactly 0.0, 'mask everything' would be a free maximum a sampler will find. "
+                f"Mask the affected samples on the observed container instead, so the set is "
+                f"fixed before the run starts."
+            )
+        if _masks_equal(self._effective_mask, current):
+            return predicted
+        return predicted.with_values(predicted.values, mask=self._effective_mask)
 
     def log_likelihood(
         self, result: ModelResult, values: Mapping[str, Value] | ArrayLike | None = None
@@ -880,9 +1040,10 @@ class Dataset:
         evaluated.
         """
         self.likelihood.check_alignment(predicted, self.observed)
+        self._resolve_mask(predicted)
+        retained = self._retained_reference or 0
         if self._latent is None:
             return
-        retained = self.retained(predicted)
         if retained != self._latent.size:
             raise DatasetError(
                 f"dataset {self.label!r} declared {self._latent.size} latent value(s) from the "
@@ -958,15 +1119,20 @@ class Dataset:
 
         Masked samples keep the observed container's own values: they carry zero
         information and are excluded from every likelihood, so drawing noise for
-        them would be inventing data.
+        them would be inventing data. For the same reason a censoring
+        declaration blocks a draw only when a limit **survives the mask** —
+        ``likelihoods.md`` §9's rule that masking beats censoring, applied here
+        as it already is in :meth:`_declare_latent`, so that one class does not
+        give two answers to one question.
         """
         family = self.likelihood.family
         noise = self.likelihood.noise
-        if not isinstance(family, GaussianFamily) or self.likelihood.censoring is not None:
-            censored = " with a censoring declaration" if self.likelihood.censoring else ""
+        censored = self._censored_after_masking()
+        if not isinstance(family, GaussianFamily) or censored:
+            because = " with a censoring declaration on retained samples" if censored else ""
             raise DatasetError(
                 f"dataset {self.label!r}: ampere can draw observations for the gaussian family "
-                f"without censoring, but this dataset uses {type(family).__name__}{censored}. A "
+                f"without censoring, but this dataset uses {type(family).__name__}{because}. A "
                 f"LikelihoodFamily declares only log_prob, so there is no general way to sample "
                 f"one and this contract will not guess. Use simulate(observe=False) and draw your "
                 f"own observations from the predicted containers."
@@ -990,6 +1156,17 @@ class Dataset:
             realisation = realisation + noise.solver.latent_transform(
                 noise.kernel, coordinates, whitened, resolved
             )
+            # The solver's *own* jitter is part of the covariance it scores:
+            # DenseGP factorises K + diag(sigma^2 + jitter^2). Omitting it here
+            # would draw from a narrower distribution than the likelihood
+            # evaluates — and the error is not small, because that jitter is a
+            # standard deviation in the data's units that the library's own
+            # error message tells a user to raise. At DenseGP(jitter=0.15) with
+            # sigma=0.1 the variance is understated by about 9 per cent.
+            stabiliser = float(getattr(noise.solver, "jitter", 0.0) or 0.0)
+            if stabiliser:
+                floor = np.full(realisation.shape, stabiliser)
+                sigma = floor if sigma is None else np.sqrt(sigma**2 + floor**2)
         if sigma is not None:
             realisation = realisation + sigma * rng.standard_normal(realisation.shape)
         drawn[retain] = realisation
@@ -1075,6 +1252,11 @@ class DatasetCollection(Mapping[str, Dataset]):
         pairs: Iterable[tuple[str, Dataset]]
         if isinstance(datasets, Mapping):
             pairs = datasets.items()
+        elif isinstance(datasets, Dataset):
+            raise DatasetError(
+                "a DatasetCollection is built from several datasets; got a single Dataset. Wrap "
+                "it in a list — [dataset] — or pass a mapping of label to dataset."
+            )
         else:
             pairs = ((dataset.label, dataset) for dataset in datasets)
         for label, dataset in pairs:
@@ -1280,6 +1462,13 @@ class FittingProblem:
         model whose single evaluation is expensive. They are never skipped:
         ``likelihoods.md`` §16 is explicit that ``check_alignment`` is not
         optional.
+    strict
+        Let every exception propagate instead of becoming ``-inf`` with a
+        recorded reason. The engine-facing default is ``False``; ``True`` is for
+        direct use and debugging (Peter's ruling on ``likelihoods.md`` §17 Q1).
+        The intended workflow is to run non-strict, read
+        :meth:`failure_summary`, then re-run with ``strict=True`` to get the
+        raise at the offending draw with a full traceback.
     simulator_failures
         Extra exception types that count as an unscoreable point rather than a
         bug. :class:`~ampere.core.exceptions.LikelihoodError` is always included
@@ -1313,6 +1502,7 @@ class FittingProblem:
         capabilities: Capabilities | None = None,
         reference_values: Mapping[str, Value] | ArrayLike | None = None,
         validate: bool = True,
+        strict: bool = False,
         simulator_failures: Sequence[type[BaseException]] = (),
         failure_history: int = DEFAULT_FAILURE_HISTORY,
     ) -> None:
@@ -1337,9 +1527,20 @@ class FittingProblem:
         # §16 hands this contract the non-positive-definite covariance case by
         # name; everything else ampere raises is a composition bug, and turning
         # a bug into -inf produces a fit that runs, converges and is wrong.
+        #
+        # strict=True empties the set, so every exception propagates. That is
+        # Peter's ruling on likelihoods.md §17 Q1: the engine path records and
+        # returns -inf (exception control flow cannot be traced by jax, so the
+        # non-raising path is forced by Phase 2 regardless), while strict
+        # raising stays available for direct use and debugging. The intended
+        # workflow is to run non-strict, read failure_summary(), then re-run
+        # strict to get the raise at the offending draw. Emptying the tuple —
+        # rather than branching at each call site — is also what lets a future
+        # solver-level strict flag replace this try/except without a contract
+        # change: the call sites stay as they are.
+        self.strict = bool(strict)
         self._failure_types: tuple[type[BaseException], ...] = (
-            LikelihoodError,
-            *tuple(simulator_failures),
+            () if self.strict else (LikelihoodError, *tuple(simulator_failures))
         )
         self._failures: collections.deque[Failure] = collections.deque(maxlen=int(failure_history))
         self._failure_counts: collections.Counter[FailureReason] = collections.Counter()
@@ -1401,6 +1602,16 @@ class FittingProblem:
                 )
             else:
                 bindings[label] = named
+        orphans = sorted(set(self._models) - set(bindings.values()))
+        if orphans:
+            raise DatasetError(
+                f"model(s) {orphans} are held by this problem but observed by no dataset, so "
+                f"their parameters would be free sampler dimensions that no likelihood "
+                f"constrains — the posterior would simply return their priors, and the model "
+                f"would be re-evaluated on every log_prob for nothing. Give each one a dataset, "
+                f"or drop it. The mirror of this check (a dataset naming no model when there are "
+                f"several) is above."
+            )
         return bindings
 
     def _negotiate(self) -> dict[str, dict[str, Any]]:
@@ -1719,6 +1930,42 @@ class FittingProblem:
         """The most recent failure, or ``None``."""
         return self._failures[-1] if self._failures else None
 
+    def failure_summary(self) -> str:
+        """One aggregated sentence per failure class — what a driver should print.
+
+        Peter's §17 Q1 ruling asks the recording half to be "aggregated so high
+        failure rates do not spam". A run that could not score 8 214 of 200 000
+        proposals should say so once, with the range of parameter values over
+        which it happened, not emit 8 214 warnings — and the parameter range is
+        the part that tells a user *which* prior is too wide.
+
+        Returns an empty string when nothing has failed, so a driver can write
+        ``if summary := problem.failure_summary(): warn(summary)``.
+        """
+        if not self._failure_counts:
+            return ""
+        lines: list[str] = []
+        for reason, count in self._failure_counts.most_common():
+            seen = [f for f in self._failures if f.reason is reason]
+            where = sorted({f.where for f in seen if f.where})
+            ranges: dict[str, tuple[float, float]] = {}
+            for failure in seen:
+                for name, value in failure.values.items():
+                    low, high = ranges.get(name, (value, value))
+                    ranges[name] = (min(low, value), max(high, value))
+
+            detail = ""
+            if ranges:
+                detail = "; over " + ", ".join(
+                    f"{name} in [{low:.6g}, {high:.6g}]" if low != high else f"{name}={low:.6g}"
+                    for name, (low, high) in sorted(ranges.items())
+                )
+            located = f" in {where}" if where else ""
+            sampled = "" if count <= len(seen) else f" (ranges from the last {len(seen)})"
+            lines.append(f"{count} draw(s) failed: {reason}{located}{detail}{sampled}")
+        lines.append("Re-run with FittingProblem(..., strict=True) to raise at the offending draw.")
+        return "\n".join(lines)
+
     def reset_failures(self) -> None:
         """Forget the failure history and counts — call between runs."""
         self._failures.clear()
@@ -1922,41 +2169,72 @@ class FittingProblem:
         try:
             results = self._evaluate_models(routed)
         except self._failure_types as error:
-            return -math.inf, {}, _failure_from(_reason_for(error), error, _where(error))
-        if not self._validated:
-            self._run_alignment_checks(results, routed)
+            where = _where(error)
+            return (
+                -math.inf,
+                {},
+                _failure_from(_reason_for(error), error, where, routed.get(where)),
+            )
 
+        # Deferred validation runs *inside* this loop, on the predicted
+        # container the loop computes anyway. Running it beforehand, as an
+        # earlier version did, cost two chain evaluations on the first call —
+        # the very cost validate=False exists to avoid — and, worse, put
+        # dataset.predict outside the try below, so a declared simulator
+        # failure escaped log_prob as an exception on the first evaluation and
+        # returned -inf on every later one. Whether a run died then depended on
+        # whether the sampler's first proposal happened to be scoreable.
+        validating = not self._validated
         contributions: dict[str, float] = {}
         total = 0.0
         for label, dataset in self.datasets.items():
             values = routed.get(label)
+            split = dataset.route(values) if values is not None else None
             try:
-                predicted = dataset.predict(results[self._bindings[label]], values)
+                predicted = dataset.predict(results[self._bindings[label]], routed=split)
             except self._failure_types as error:
                 return (
                     -math.inf,
                     contributions,
-                    _failure_from(FailureReason.INSTRUMENT_FAILED, error, label),
+                    _failure_from(
+                        FailureReason.INSTRUMENT_FAILED,
+                        error,
+                        label,
+                        (split or {}).get(INSTRUMENT_COMPONENT),
+                    ),
                 )
+            if validating:
+                # Raises for a genuine composition error — a shape or unit
+                # mismatch is a broken problem, not an unscoreable point — and
+                # fixes the retained-sample count this dataset is held to.
+                dataset.check_alignment(predicted)
             try:
-                contribution = dataset.log_likelihood_of(predicted, values)
+                contribution = dataset.log_likelihood_of(predicted, routed=split)
             except self._failure_types as error:
                 reason = _classify_likelihood_failure(dataset, predicted)
-                return -math.inf, contributions, _failure_from(reason, error, label)
-            if math.isnan(contribution):
+                return (
+                    -math.inf,
+                    contributions,
+                    _failure_from(reason, error, label, (split or {}).get(LIKELIHOOD_COMPONENT)),
+                )
+            if math.isnan(contribution) or contribution == math.inf:
                 return (
                     -math.inf,
                     contributions,
                     Failure(
                         FailureReason.NON_FINITE_LOG_LIKELIHOOD,
-                        "the likelihood returned NaN, which is neither a density nor an "
-                        "impossibility; the usual cause is a prediction that is NaN on a "
-                        "retained sample.",
+                        f"the likelihood returned {contribution}, which is neither a density nor "
+                        f"an impossibility. NaN usually means a prediction that is NaN on a "
+                        f"retained sample; +inf means a degenerate, infinitely peaked density, "
+                        f"and both would otherwise be stored per draw as an Evaluation whose "
+                        f"log_likelihood contradicts its log_prob.",
                         where=label,
                     ),
                 )
             contributions[label] = contribution
             total += contribution
+        if validating:
+            self._validated = True
         return total, contributions, None
 
     def __repr__(self) -> str:
@@ -2003,8 +2281,20 @@ class _TaggedFailure(Exception):
 
 
 def _tag(error: BaseException, reason: FailureReason, where: str) -> None:
-    """Attach a reason and a location to an exception without changing its type."""
-    error._ampere_failure = _TaggedFailure(reason, where)  # type: ignore[attr-defined]
+    """Attach a reason and a location to an exception without changing its type.
+
+    Best-effort. ``BaseException`` always provides a ``__dict__``, so a
+    ``__slots__`` subclass is fine, but a class overriding ``__setattr__`` — a
+    frozen dataclass or ``attrs`` exception, which a wrapped external code may
+    well use — refuses the assignment. Losing the tag costs a less specific
+    failure reason; letting the ``AttributeError`` out of the ``except`` block
+    that is trying to *handle* a failure would replace an unscoreable point with
+    a crash, which is much worse.
+    """
+    try:
+        error._ampere_failure = _TaggedFailure(reason, where)  # type: ignore[attr-defined]
+    except Exception:  # an untaggable exception is still a failure
+        pass
 
 
 def _reason_for(error: BaseException) -> FailureReason:

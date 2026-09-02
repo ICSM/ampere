@@ -27,6 +27,7 @@ from ampere.core import (
     Dataset,
     DatasetCollection,
     DatasetError,
+    DenseGP,
     Evaluation,
     Failure,
     FailureReason,
@@ -493,7 +494,10 @@ class TestLifecycle:
         assert model.compiled_with is not None
         assert "default" in model.compiled_with
         requirement = model.compiled_with["default"]["spectral_axis"]
-        assert requirement.max_step == 1.0
+        # segments(), not the max_step scalar: those scalars are being demoted
+        # to constructor arguments that do not survive a union, so a consumer
+        # must read the per-interval form.
+        assert requirement.segments() == ((1.0, 4.0, 1.0, None),)
         # One model call for validation, and no re-negotiation thereafter.
         assert model.calls == 1
         problem.log_prob({"model.level": 2.0})
@@ -537,8 +541,9 @@ class TestLifecycle:
         assert list(model.compiled_with) == ["default"]
         requirement = model.compiled_with["default"]["spectral_axis"]
         # Both intervals present, each keeping its own density: the union, not
-        # the last one to speak.
-        assert requirement.intervals == ((1.0, 2.0), (3.0, 4.0))
+        # the last one to speak. Read through segments(), the only public
+        # post-union form.
+        assert requirement.segments() == ((1.0, 2.0, 0.5, None), (3.0, 4.0, 0.5, None))
         assert model.compiled_with["default"].sources == ("left", "right")
 
     def test_two_datasets_may_share_a_channel_with_different_instruments(self) -> None:
@@ -597,6 +602,40 @@ class TestLifecycle:
         with pytest.raises(LikelihoodError, match="shape"):
             problem.log_prob({"model.level": 1.0})
 
+    def test_a_declared_failure_on_the_first_deferred_evaluation_is_not_an_exception(
+        self,
+    ) -> None:
+        # Deferred validation used to run before the per-dataset try, so a
+        # declared simulator failure escaped log_prob as an exception on the
+        # first call and returned -inf on every later one — whether a run died
+        # depended on whether the sampler's first proposal happened to be
+        # scoreable, which is not a property anyone can debug.
+        class Fussy(Transformation):
+            ACCEPTS: ClassVar[tuple[type, ...]] = (Spectrum,)
+
+            class Crash(RuntimeError):
+                pass
+
+            def apply(self, samples: Spectrum, values: Any) -> Spectrum:
+                if float(np.max(samples.values)) > 5.0:
+                    raise Fussy.Crash("the response table stops at 5")
+                return samples
+
+        problem = FittingProblem(
+            Flat(WAVELENGTH),
+            [Dataset(flat_spectrum(), Instrument([Fussy()]), label="d")],
+            validate=False,
+            simulator_failures=(Fussy.Crash,),
+        )
+        first = problem.evaluate({"model.level": 9.0})
+        assert first.log_prob == -math.inf
+        assert first.failure is not None
+        assert first.failure.reason is FailureReason.INSTRUMENT_FAILED
+        assert first.failure.where == "d"
+        # And a scoreable point still validates and scores normally afterwards.
+        assert math.isfinite(problem.log_prob({"model.level": 1.0}))
+        assert problem.validated
+
     def test_reference_values_default_to_the_prior_median(self) -> None:
         problem = FittingProblem(Flat(WAVELENGTH), [Dataset(flat_spectrum())])
         assert problem.reference_values["model.level"] == pytest.approx(5.0)
@@ -632,10 +671,15 @@ class TestProblemComposition:
         with pytest.raises(DatasetError, match="takes a Model"):
             FittingProblem(object(), [Dataset(flat_spectrum())])  # type: ignore[arg-type]
 
-    def test_refuses_an_unresolved_shared_as_across_datasets(self) -> None:
-        # A deferred shared_as whose partner lives in another dataset cannot be
-        # resolved by an inner merge, and this contract says so rather than
-        # letting the failure surface as a confusing inner TyingError.
+    def test_a_prior_less_shared_as_is_refused_by_the_inner_merge(self) -> None:
+        # Documents where the error actually comes from. An earlier version of
+        # this test claimed FittingProblem refused it "rather than letting the
+        # failure surface as a confusing inner TyingError" — but matched
+        # loosely enough to pass on precisely that inner TyingError, which is
+        # what really happens: the instrument's own merge sees one prior-less
+        # site and refuses, long before a FittingProblem exists. That is
+        # inference.md §17 limitation 1, and FittingProblem._require_resolved is
+        # a defensive invariant that this path can never reach.
         class Deferred(Transformation):
             ACCEPTS: ClassVar[tuple[type, ...]] = (Spectrum,)
 
@@ -646,11 +690,23 @@ class TestProblemComposition:
             def apply(self, samples: Spectrum, values: Any) -> Spectrum:
                 return samples
 
-        with pytest.raises(Exception, match=r"no prior|shared"):
+        from ampere.core import TyingError
+
+        with pytest.raises(TyingError, match="every site is declared shared without one"):
+            Dataset(flat_spectrum(), Instrument([Deferred()]), label="d")
+
+    def test_a_model_no_dataset_observes_is_refused(self) -> None:
+        # Its parameters would be free dimensions no likelihood constrains, and
+        # it would be re-evaluated on every log_prob for nothing.
+        with pytest.raises(DatasetError, match="observed by no dataset"):
             FittingProblem(
-                Flat(WAVELENGTH),
-                [Dataset(flat_spectrum(), Instrument([Deferred()]), label="d")],
+                {"used": Flat(WAVELENGTH), "orphan": Flat(WAVELENGTH)},
+                [Dataset(flat_spectrum(), label="d", model="used")],
             )
+
+    def test_a_bare_dataset_is_refused_with_a_contract_error(self) -> None:
+        with pytest.raises(DatasetError, match="Wrap it in a list"):
+            DatasetCollection(Dataset(flat_spectrum()))  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -1005,8 +1061,63 @@ class TestFailureSignalling:
             "message": "boom",
             "where": "sed",
             "exception_type": "OSError",
+            "values": {},
         }
         assert str(failure) == "model_failed [sed]: boom"
+        located = Failure(
+            FailureReason.LIKELIHOOD_FAILED, "not PD", where="d", values={"amplitude": 1e3}
+        )
+        assert "amplitude=1000" in str(located)
+        assert located.to_dict()["values"] == {"amplitude": 1000.0}
+
+    def test_an_exception_that_refuses_attributes_is_still_a_failure(self) -> None:
+        # BaseException always provides __dict__, so a __slots__ subclass is
+        # fine — but a frozen dataclass or attrs exception overrides
+        # __setattr__, and letting that AttributeError out of the except block
+        # that is *handling* a failure would turn an unscoreable point into a
+        # crash.
+        class Frozen(RuntimeError):
+            def __setattr__(self, name: str, value: Any) -> None:
+                raise AttributeError(f"{type(self).__name__} is immutable")
+
+        class Raises(Flat):
+            def evaluate(self, **values: Any) -> Spectrum:
+                raise Frozen("the wrapped code exited 1")
+
+        problem = FittingProblem(
+            Raises(WAVELENGTH),
+            [Dataset(flat_spectrum(), label="d")],
+            validate=False,
+            simulator_failures=(Frozen,),
+        )
+        evaluation = problem.evaluate({"model.level": 1.0})
+        assert evaluation.log_prob == -math.inf
+        assert evaluation.failure is not None
+        assert evaluation.failure.exception_type == "Frozen"
+
+    def test_a_plus_inf_log_likelihood_is_a_recorded_failure(self) -> None:
+        # NaN was caught; +inf was not, and produced an Evaluation whose
+        # log_likelihood contradicted its log_prob with no reason recorded.
+        class Degenerate(GaussianFamily):
+            NAME: ClassVar[str] = "degenerate_for_test"
+
+            def log_prob(self, predicted: Any, observed: Any, noise: Any) -> float:
+                return math.inf
+
+        problem = FittingProblem(
+            Flat(WAVELENGTH),
+            [
+                Dataset(
+                    flat_spectrum(),
+                    likelihood=Likelihood(Degenerate(), IndependentNoise()),
+                    label="d",
+                )
+            ],
+        )
+        evaluation = problem.evaluate({"model.level": 1.0})
+        assert evaluation.log_prob == -math.inf
+        assert evaluation.failure is not None
+        assert evaluation.failure.reason is FailureReason.NON_FINITE_LOG_LIKELIHOOD
 
     def test_simulator_failures_must_be_exception_classes(self) -> None:
         with pytest.raises(DatasetError, match="takes exception classes"):
@@ -1049,13 +1160,66 @@ class TestSimulate:
         assert simulation.observations is None
 
     def test_observe_draws_independent_noise(self) -> None:
+        # The earlier version asserted only np.allclose(drawn, 2.0, atol=1.0)
+        # against sigma=0.1, which passes for any sigma up to ~0.3 and so
+        # pinned nothing. Check the variance the likelihood would actually use.
         problem = self.problem()
-        simulation = problem.simulate({"model.level": 2.0}, observe=True)
-        assert simulation.observations is not None
-        drawn = simulation.observations["d"].values
-        assert drawn.shape == (3,)
-        assert drawn != pytest.approx([2.0, 2.0, 2.0])
-        assert np.allclose(drawn, 2.0, atol=1.0)
+        draws = np.array(
+            [
+                problem.simulate({"model.level": 2.0}, observe=True).observations["d"].values
+                for _ in range(4000)
+            ]
+        )
+        assert draws.shape == (4000, 3)
+        assert np.mean(draws) == pytest.approx(2.0, abs=0.02)
+        assert np.var(draws, axis=0) == pytest.approx(0.01, abs=0.002)
+
+    def test_a_fitted_scale_and_jitter_reach_the_draw(self) -> None:
+        # The docstring claims the noise model's own sigma is used, so a fitted
+        # scale or jitter is already in it. Nothing held that down before.
+        likelihood = Likelihood(
+            GaussianFamily(),
+            IndependentNoise(scale=st.loguniform(0.5, 5.0), jitter=st.loguniform(0.01, 1.0)),
+        )
+        problem = FittingProblem(
+            Flat(WAVELENGTH),
+            [Dataset(flat_spectrum(), likelihood=likelihood, label="d")],
+            seed=11,
+        )
+        theta = {"model.level": 2.0, "d.likelihood.scale": 3.0, "d.likelihood.jitter": 0.4}
+        draws = np.array(
+            [problem.simulate(theta, observe=True).observations["d"].values for _ in range(4000)]
+        )
+        # sigma = sqrt((0.1 * 3)^2 + 0.4^2) = 0.5
+        assert np.var(draws, axis=0) == pytest.approx(0.25, abs=0.02)
+
+    def test_the_solver_jitter_is_part_of_the_drawn_covariance(self) -> None:
+        # DenseGP scores K + diag(sigma^2 + jitter^2); the draw must match, or
+        # simulate() and log_prob disagree about the same model. The library's
+        # own error message tells users to raise this jitter, so it is reachable.
+        likelihood = Likelihood(
+            GaussianFamily(),
+            GaussianProcessNoise(Matern32(0.5, 2.0), DenseGP(jitter=0.15)),
+        )
+        problem = FittingProblem(
+            Flat(WAVELENGTH),
+            [Dataset(flat_spectrum(), likelihood=likelihood, label="d")],
+            seed=5,
+        )
+        draws = np.array(
+            [
+                problem.simulate({"model.level": 2.0}, observe=True).observations["d"].values
+                for _ in range(6000)
+            ]
+        )
+        coordinates = WAVELENGTH[:, None]
+        kernel = likelihood.noise.kernel
+        expected = kernel.matrix(
+            coordinates, coordinates, {"amplitude": 0.5, "length_scale": 2.0}
+        ) + np.diag(np.full(3, 0.1**2 + 0.15**2))
+        assert np.cov(draws.T) == pytest.approx(expected, abs=0.025)
+        # Without the solver jitter the variance would be 0.26, not 0.2825.
+        assert np.var(draws, axis=0).min() > 0.27
 
     def test_observe_draws_correlated_noise_from_the_gp(self) -> None:
         # sigma is deliberately large enough (0.3, so sigma^2 = 0.09) that the
@@ -1101,6 +1265,39 @@ class TestSimulate:
         assert drawn.values[2] == pytest.approx(9.0)
         assert drawn.mask is not None
         assert bool(drawn.mask[2])
+
+    def test_masking_beats_censoring_for_a_draw_too(self) -> None:
+        # Dataset._declare_latent already consults marginalisation_for, so a
+        # limit on a masked sample does not conjure a latent block. draw_
+        # observation used to test `censoring is not None` unconditionally, so
+        # one class gave two answers to one question.
+        observed = flat_spectrum(mask=[False, False, True])
+        likelihood = Likelihood(
+            GaussianFamily(),
+            IndependentNoise(),
+            censoring=Censoring(np.array([0, 0, 1])),
+        )
+        problem = FittingProblem(
+            Flat(WAVELENGTH),
+            [Dataset(observed, likelihood=likelihood, label="d")],
+            seed=2,
+        )
+        simulation = problem.simulate({"model.level": 2.0}, observe=True)
+        assert simulation.observations is not None
+        assert simulation.observations["d"].values[2] == pytest.approx(observed.values[2])
+
+    def test_a_limit_that_survives_the_mask_still_blocks_a_draw(self) -> None:
+        likelihood = Likelihood(
+            GaussianFamily(),
+            IndependentNoise(),
+            censoring=Censoring(np.array([0, 1, 0])),
+        )
+        problem = FittingProblem(
+            Flat(WAVELENGTH),
+            [Dataset(flat_spectrum(), likelihood=likelihood, label="d")],
+        )
+        with pytest.raises(DatasetError, match="censoring declaration on retained samples"):
+            problem.simulate({"model.level": 2.0}, observe=True)
 
     def test_a_family_that_cannot_be_sampled_says_so(self) -> None:
         counts = Spectrum(WAVELENGTH * u.micron, np.array([4.0, 7.0, 2.0]))
@@ -1539,6 +1736,146 @@ class TestMasks:
 # ---------------------------------------------------------------------------
 # Repr / provenance surfaces
 # ---------------------------------------------------------------------------
+
+
+class MaskAbove(Transformation):
+    """A transformation whose output mask depends on a parameter value."""
+
+    ACCEPTS: ClassVar[tuple[type, ...]] = (Spectrum,)
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.register_parameter(Parameter("cut", st.uniform(0.0, 100.0)))
+
+    def apply(self, samples: Spectrum, values: Any) -> Spectrum:
+        cut = self.context(values)["cut"]
+        return samples.with_values(samples.values, mask=np.asarray(samples.values) > cut)
+
+
+class TestEffectiveMaskIsResolvedOnce:
+    """Peter's ruling on likelihoods.md §17 Q2."""
+
+    def problem(self, **kwargs: Any) -> FittingProblem:
+        return FittingProblem(
+            Flat(WAVELENGTH),
+            [Dataset(flat_spectrum(), Instrument([MaskAbove()]), label="d")],
+            reference_values={"model.level": 1.0, "d.instrument.mask_above.cut": 99.0},
+            **kwargs,
+        )
+
+    def test_a_run_time_mask_change_is_refused_not_silently_scored(self) -> None:
+        # Before the ruling this was the worst defect in the contract: masking
+        # everything made the dataset contribute exactly 0.0, which beats every
+        # finite log-likelihood, so a sampler maximising log_prob would drive
+        # the data out of its own fit. Measured then: log_prob rose from -255.1
+        # to -9.2 as the mask closed, with no failure recorded.
+        problem = self.problem()
+        good = problem.evaluate({"model.level": 1.0, "d.instrument.mask_above.cut": 99.0})
+        assert math.isfinite(good.log_prob)
+        closed = problem.evaluate({"model.level": 1.0, "d.instrument.mask_above.cut": 0.5})
+        assert closed.log_prob == -math.inf
+        assert closed.failure is not None
+        assert closed.failure.reason is FailureReason.LIKELIHOOD_FAILED
+        assert "evaluation-invariant" in closed.failure.message
+        assert closed.log_prob < good.log_prob
+
+    def test_a_partial_mask_change_is_refused_too(self) -> None:
+        problem = self.problem()
+        partial = problem.evaluate({"model.level": 2.0, "d.instrument.mask_above.cut": 1.5})
+        assert partial.log_prob == -math.inf
+        assert partial.failure is not None
+        assert partial.failure.reason is FailureReason.LIKELIHOOD_FAILED
+
+    def test_the_union_is_taken_once_and_stamped_thereafter(self) -> None:
+        # The observed container masks a sample the instrument does not; the
+        # effective mask is their union, resolved at composition, and the
+        # likelihood sees it already applied.
+        observed = flat_spectrum(mask=[False, False, True])
+        dataset = Dataset(observed, label="d")
+        problem = FittingProblem(Flat(WAVELENGTH), [dataset])
+        assert dataset._retained_reference == 2
+        assert dataset._effective_mask is not None
+        assert dataset._effective_mask.tolist() == [False, False, True]
+        # And the score matches excision of exactly that sample.
+        full = FittingProblem(Flat(WAVELENGTH), [Dataset(flat_spectrum(), label="d")])
+        theta = {"model.level": 1.0}
+        assert problem.log_likelihood(theta) == pytest.approx(
+            2.0 * full.log_likelihood(theta) / 3.0
+        )
+
+    def test_the_latent_size_is_a_construction_time_constant(self) -> None:
+        # The ruling makes explicit what was implicit: latent_declaration(n)
+        # takes the retained count, and the retained count is now fixed by
+        # declaration rather than by hope.
+        counts = Spectrum(WAVELENGTH * u.micron, np.array([4.0, 7.0, 2.0]))
+        dataset = Dataset(
+            counts,
+            likelihood=Likelihood(PoissonFamily(), GaussianProcessNoise(Matern32(0.3, 1.0))),
+            label="counts",
+        )
+        FittingProblem(
+            Counts(WAVELENGTH), [dataset], capabilities=Capabilities(differentiable=True)
+        )
+        assert dataset.latent is not None
+        assert dataset.latent.size == dataset._retained_reference == 3
+
+
+class TestStrictMode:
+    """Peter's ruling on likelihoods.md §17 Q1."""
+
+    def problem(self, **kwargs: Any) -> FittingProblem:
+        likelihood = Likelihood(
+            GaussianFamily(),
+            GaussianProcessNoise(Matern32(st.loguniform(1e-3, 1e250), st.loguniform(1e-3, 1e3))),
+        )
+        return FittingProblem(
+            Flat(WAVELENGTH),
+            [Dataset(flat_spectrum(), likelihood=likelihood, label="d")],
+            **kwargs,
+        )
+
+    THETA: ClassVar[dict[str, float]] = {
+        "model.level": 1.0,
+        "d.likelihood.amplitude": 1e200,
+        "d.likelihood.length_scale": 1.0,
+    }
+
+    def test_the_engine_path_records_and_returns_minus_inf(self) -> None:
+        problem = self.problem()
+        evaluation = problem.evaluate(self.THETA)
+        assert evaluation.log_prob == -math.inf
+        assert evaluation.failure is not None
+        assert evaluation.failure.reason is FailureReason.LIKELIHOOD_FAILED
+
+    def test_strict_lets_the_exception_through_for_debugging(self) -> None:
+        problem = self.problem(strict=True)
+        assert problem.strict
+        with pytest.raises(LikelihoodError, match=r"not positive definite|non-finite"):
+            problem.evaluate(self.THETA)
+
+    def test_the_failure_records_the_offending_parameter_values(self) -> None:
+        problem = self.problem()
+        failure = problem.evaluate(self.THETA).failure
+        assert failure is not None
+        assert failure.values["amplitude"] == pytest.approx(1e200)
+        assert failure.values["length_scale"] == pytest.approx(1.0)
+        # Arrays are excluded: a latent block on every history entry would be a
+        # memory leak wearing a diagnostic's clothes.
+        assert all(isinstance(v, float) for v in failure.values.values())
+
+    def test_the_summary_aggregates_rather_than_spamming(self) -> None:
+        problem = self.problem()
+        for amplitude in (1e200, 1e210, 1e220):
+            problem.evaluate({**self.THETA, "d.likelihood.amplitude": amplitude})
+        summary = problem.failure_summary()
+        assert "3 draw(s) failed: likelihood_failed" in summary
+        assert "['d']" in summary
+        assert "amplitude in [1e+200, 1e+220]" in summary
+        assert "strict=True" in summary
+        assert len(summary.splitlines()) == 2  # one line per class, plus the hint
+
+    def test_the_summary_is_empty_when_nothing_failed(self) -> None:
+        assert self.problem().failure_summary() == ""
 
 
 class TestRepresentations:
