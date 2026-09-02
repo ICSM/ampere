@@ -598,14 +598,19 @@ to lose by it:
 
 ```
 
-`max_step` and `min_resolving_power` survive on a merged requirement as a
-*summary* — the strictest constraint anywhere in it — which is useful for
-reporting and useless for building a grid. `segments()` is the canonical form,
-and it is what `coordinates()` reads:
+`max_step` and `min_resolving_power` are **constructor-only** (ruled by Peter,
+2026-09-02 — §15.8): they are folded into the per-interval densities at
+construction and do not survive as attributes. On a merged requirement a
+single scalar could only be a strictest-anywhere summary, and a reader who
+trusted it would overestimate what was asked of every other interval.
+`segments()` is the canonical — and only — public form, and it is what
+`coordinates()` reads:
 
 ```pycon
->>> both_bands.max_step, both_bands.min_resolving_power
-(2.0, 40.0)
+>>> both_bands.max_step
+Traceback (most recent call last):
+    ...
+AttributeError: ...
 
 ```
 
@@ -1129,6 +1134,21 @@ Each is a decision, not an oversight. Each has an extension point.
   conservatively masked bin as a data gap.
 
 ## 15. Open questions for review
+
+**Ruled by Peter, 2026-09-02**: question 1 — the ANY rule stands as the
+default; `min_valid_fraction` remains the named, per-transformation opt-in
+extension, to be added only if the conservative rule bites a real pipeline
+(none of the W1.11 sketches found it doing so). Question 7 — confirmed:
+`Model` belongs to this contract; W1.7 composes it. Question 8 — ruled in
+favour of demoting the scalars: `max_step`/`min_resolving_power` are
+constructor arguments that do not survive as attributes, and `segments()` is
+the only public statement of density (implemented the same day; §7 and the
+class docstring updated). Questions 2 and 3 carry recommendations from the
+W1.11 interferometry sketch (`docs/design/modalities/interferometry.md`
+gaps I-3 and I-4: a chain-internal `configure_from` rather than `pull_back`;
+`compile_for` may raise) and await Peter's ruling; questions 4–6 remain open
+as written, with question 4's concrete failure mode now recorded in
+`docs/design/modalities/spectrum_photometry.md` gap 2 and routed to W1.7.
 
 1. **Is the ANY mask rule too conservative for real resampling?** §6 ratifies
    it, and limitation 13.4 names the extension. The case against: a

@@ -1204,6 +1204,33 @@ Each is a decision, not an oversight. Each has an extension point.
 
 ## 17. Open questions for review
 
+**Ruled by Peter, 2026-09-02**: question 1 — a **`strict` mode** (or an
+equivalent toggle) is the approach. The engine-facing path is non-strict:
+`−inf` with a recorded reason — forced in the end by jax, whose traced hot
+loops cannot use exception control flow, so the non-raising path must exist
+by Phase 2 regardless. Strict raising remains the behaviour for direct use
+and debugging, and the intended workflow is: a sampling run surfaces the
+recorded-reason warnings, and the user re-runs with strict on to get the
+raise at the offending draw with full details. W1.7 owns the conversion
+layer and the reason recording (§16's obligation, extended the same day to
+`PoissonFamily`'s non-positive-rate raise); the solver-level flag on
+`DenseGP` follows once W1.7's recording mechanism exists, so try/except can
+be replaced without contract change. Question 2 — **the `Dataset` resolves
+the effective mask once at construction**, not `Likelihood` on every call.
+Consequences: the effective mask becomes a declared evaluation-time
+invariant (a transformation whose output mask depends on parameter values is
+unsupported in a fitting problem, and W1.7 should check this loudly), which
+also makes explicit the invariance that `latent_declaration(n)` — whose `n`
+is fixed at composition — was already assuming. This contract's own
+mechanics (§8's `weights()` product and excision) are unchanged: a
+pre-resolved pair simply makes the internal union the identity. Questions
+3, 4, 6 and 7 carry recommendations from the W1.11 interferometry sketch
+(`docs/design/modalities/interferometry.md` §§5–7 and §11: the model
+predicts the complex value with an `Amplitude` step taking the modulus;
+`κ = 1/σ²` per sample; declare the circular complex GP `ANALYTIC`;
+`extra_coords` units eventually, not for the freeze) and await Peter's
+ruling; questions 5 and 8 remain open as written.
+
 1. **Should a non-positive-definite covariance be `−inf` instead of an
    exception?** This contract raises, on the argument that a silent `−inf`
    hides a mis-specified kernel and that W1.7 owns failure signalling. The

@@ -582,7 +582,7 @@ class TestAxisRequirement:
         )
         microns = nanometres.convert_to(u.um)
         assert microns.intervals == ((2.0, 30.0),)
-        assert microns.max_step == pytest.approx(0.1)
+        assert microns.segments()[0][2] == pytest.approx(0.1)
 
     def test_inconvertible_units_are_refused(self) -> None:
         with pytest.raises(CompositionError, match="cannot be converted"):
@@ -678,7 +678,8 @@ class TestRequirementUnion:
         left = AxisRequirement("spectral_axis", intervals=(1.0, 2.0) * u.um, max_step=0.5)
         right = AxisRequirement("spectral_axis", intervals=(1.0, 2.0) * u.um, max_step=0.1)
         both = left.union(right)
-        assert both.max_step == pytest.approx(0.1)
+        assert both.segments() == ((1.0, 2.0, 0.5, None), (1.0, 2.0, 0.1, None))
+        assert np.diff(np.asarray(both.coordinates())).max() <= 0.1 + 1e-12
 
     def test_the_higher_resolving_power_wins(self) -> None:
         left = AxisRequirement(
@@ -687,7 +688,8 @@ class TestRequirementUnion:
         right = AxisRequirement(
             "spectral_axis", intervals=(1.0, 2.0) * u.um, min_resolving_power=1000.0
         )
-        assert left.union(right).min_resolving_power == pytest.approx(1000.0)
+        grid = np.asarray(left.union(right).coordinates())
+        assert (grid[:-1] / np.diff(grid)).min() >= 1000.0 - 1e-6
 
     def test_points_accumulate(self) -> None:
         left = AxisRequirement("spectral_axis", points=[1.0, 2.0] * u.um)
@@ -723,10 +725,18 @@ class TestRequirementUnion:
         right = AxisRequirement("spectral_axis", intervals=(5.0, 20.0) * u.um, max_step=0.5)
         assert left.union(right).intervals == ((1.0, 20.0),)
 
-    def test_the_summary_density_is_the_strictest_anywhere(self) -> None:
+    def test_the_density_scalars_do_not_survive_as_attributes(self) -> None:
+        # Ruled 2026-09-02 (spec §15.8): after a union a scalar could only be
+        # a strictest-anywhere summary that misreads as global; segments() is
+        # the only public statement of density.
         broad = AxisRequirement("spectral_axis", intervals=(1.0, 200.0) * u.um, max_step=1.0)
         window = AxisRequirement("spectral_axis", intervals=(100.0, 100.1) * u.um, max_step=0.001)
-        assert broad.union(window).max_step == pytest.approx(0.001)
+        both = broad.union(window)
+        assert both.segments() == ((1.0, 200.0, 1.0, None), (100.0, 100.1, 0.001, None))
+        with pytest.raises(AttributeError):
+            both.max_step  # noqa: B018
+        with pytest.raises(AttributeError):
+            both.min_resolving_power  # noqa: B018
 
     def test_units_are_reconciled(self) -> None:
         left = AxisRequirement("spectral_axis", intervals=(1.0, 2.0) * u.um)
@@ -760,7 +770,6 @@ class TestNegotiate:
         right = Instrument([Binner(np.linspace(4.0, 20.0, 9))], channel="sed", label="b")
         asked = negotiate([left, right])["sed"]["spectral_axis"]
         assert asked.segments() == ((1.0, 5.0, 0.5, None), (4.0, 20.0, 1.0, None))
-        assert asked.max_step == pytest.approx(0.5)
 
     def test_requirements_are_unioned_across_steps_of_one_instrument(self) -> None:
         instrument = Instrument(
@@ -1052,7 +1061,7 @@ class TestOutOfTreeExtension:
     def test_the_users_transformation_publishes_requirements(self, instrument: Instrument) -> None:
         asked = negotiate([instrument])["sed"]["spectral_axis"]
         assert asked.intervals == ((1.0, 100.0),)
-        assert asked.max_step == pytest.approx(0.75)
+        assert asked.segments()[0][2] == pytest.approx(0.75)
 
     def test_the_users_transformation_propagates_masks(self, model: GreyBody) -> None:
         flux = model(temperature=300.0).single()

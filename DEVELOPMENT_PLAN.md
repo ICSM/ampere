@@ -57,6 +57,8 @@ backend-neutral core plus modern computational backends, targeting:
 | Dependency pins | `pyphot<2` and `sbi<0.28` pinned 2026-09-01 as **temporary** measures (pyphot ≥2 removed `pyphot.unit`; sbi 0.27 changed `posterior.map()` shapes). Policy is to migrate forwards, not freeze: work item W0.9 lifts both — pyphot before Phase 2's synthetic-photometry Transformation (new code targets the ≥2 API from the start), sbi with Phase 3 (which wants the latest inference algorithms anyway). |
 | Curated astropy→native translation | **Opt-in only, never silent** (ruled 2026-09-01 during the W1.2 review, amending this document's original §4.7 "silently restoring differentiability" wording). The default adapter path always wraps the user's actual astropy model as a black box; a curated native equivalent is substituted only on an explicit, backend-scoped request — sketched as a `from_astropy()` constructor on the backend subpackage, which raises if the model (or any component of a compound model) is not fully in the curated table, rather than silently falling back to black-box. Exact API fixed with the adapter contract (Phase 4). |
 | jax non-trainable mechanism | **`eqx.partition` filter specs** (ruled 2026-09-01 at the W1.9 review, ranking what §4.1 originally left unranked): buffers and fixed parameters lower to ordinary array leaves excluded from the trainable partition via an explicit filter spec — not `paramax.NonTrainable`, whose freezing happens only when `unwrap()` is called, so a forgotten call silently trains the buffers; and never equinox static fields (§7). paramax remains an interop layer at the boundary if Phase 2's GP library choice (GPJax) puts wrapped leaves there. Analysis in `docs/design/lowering.md` §6.2. |
+| Likelihood failure signalling | **Non-strict engine path with a `strict` toggle** (ruled 2026-09-02 at the W1.6 §17 Q1 review): sampling-time evaluation failures reach the engine as −inf with a recorded reason; strict raising remains for direct use and debugging (see the amended §4.5 bullet). Decided in the end by jax — exception control flow does not trace, so the non-raising path is forced by Phase 2 regardless. W1.7 owns the conversion and recording; the `DenseGP`-level flag follows once that recording mechanism exists. |
+| Effective-mask resolution | **The `Dataset` resolves the effective (predicted ∪ observed) mask once at construction** (ruled 2026-09-02 at the W1.6 §17 Q2 review), not `Likelihood` per evaluation. The effective mask is thereby a declared evaluation-time invariant — parameter-dependent output masks are unsupported in a fitting problem and W1.7 checks this loudly — making explicit what `latent_declaration(n)`'s fixed shape already assumed. `likelihoods.md` §8's mechanics are unchanged; a pre-resolved pair makes its internal union the identity. |
 | jax x64 activation | **Guard-and-raise, never set-on-import** (ruled 2026-09-01 at the W1.9 review, amending `architecture.md` §5's original set-on-first-import sketch — the *policy*, float64 always for likelihood/GP linear algebra, is unchanged). Ampere never flips `jax_enable_x64` as an import side effect; `ampere.backends.jax` ships an explicit, idempotent `configure_x64()`, and construction of any jax-backed likelihood/GP/model raises when the flag is off, naming the three remedies (the `JAX_ENABLE_X64=1` environment variable; the explicit call; or a per-run, provenance-recorded `float32` opt-out). numpyro needs no separate switch — its `enable_x64` is a verified thin wrapper over the same jax flag. Analysis in `docs/design/lowering.md` §10.2. |
 
 ## 3. Architecture: a core and a capability ladder, not four peer backends
@@ -277,7 +279,13 @@ Also part of this contract:
 - **Failure signalling**: external simulators crash and return NaNs; the
   contract defines the behaviour (`log_prob` → −inf with a recorded reason;
   `simulate` failures are flagged so SBI can reject-and-record rather than
-  train on garbage).
+  train on garbage). Ruled 2026-09-02 (`likelihoods.md` §17 Q1): the
+  engine-facing path is **non-strict** — reachable evaluation failures (a
+  non-positive-definite GP covariance, a non-positive Poisson rate) become
+  −inf with a recorded reason, never an exception, because jax's traced hot
+  loops cannot use exception control flow; a `strict` toggle lets the
+  exception propagate instead, so a user who sees the recorded-reason
+  warnings can re-run strict and get the raise at the offending draw.
 - **RNG policy**: named seed handling that lowers to each backend's model
   (numpy Generators, torch Generators, jax PRNG keys), so runs are
   reproducible across backends.

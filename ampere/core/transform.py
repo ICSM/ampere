@@ -298,8 +298,8 @@ class AxisRequirement:
     must be present exactly, e.g. the sample positions a response matrix was
     tabulated on);
 
-    *how finely* — :attr:`max_step` (an absolute spacing) and
-    :attr:`min_resolving_power` (:math:`\\lambda/\\Delta\\lambda`, the natural
+    *how finely* — ``max_step`` (an absolute spacing) and
+    ``min_resolving_power`` (:math:`\\lambda/\\Delta\\lambda`, the natural
     statement for a spectrograph). Giving both is allowed and means both must
     hold. A density applies to the intervals declared **alongside** it, which
     is why a requirement declaring one and no coverage is refused: after a
@@ -331,9 +331,11 @@ class AxisRequirement:
     points
         Coordinates that must appear exactly.
     max_step, min_resolving_power
-        Sampling density; see above. After a :meth:`union` these report the
-        strictest constraint anywhere in the requirement — a summary. What the
-        grid is actually built from is :attr:`densities`, per interval.
+        Sampling density; see above. Constructor-only (ruled 2026-09-02):
+        both are folded into :attr:`densities` and do not survive as
+        attributes, because after a :meth:`union` a single scalar could only
+        be a strictest-anywhere summary, which misreads as applying to the
+        whole requirement. Read :meth:`segments` instead.
     source
         Free text naming who asked, quoted back in composition errors.
 
@@ -354,18 +356,18 @@ class AxisRequirement:
     intervals: Any = ()
     densities: Any = None
     points: Any = None
-    max_step: float | None = None
-    min_resolving_power: float | None = None
+    max_step: dataclasses.InitVar[float | None] = None
+    min_resolving_power: dataclasses.InitVar[float | None] = None
     source: str = ""
 
-    def __post_init__(self) -> None:
+    def __post_init__(self, max_step: float | None, min_resolving_power: float | None) -> None:
         set_ = object.__setattr__
         axis = _check_label(self.axis, "axis name")
         set_(self, "axis", axis)
 
         unit = _check_unit(self.unit, f"the unit of the requirement on axis {axis!r}")
         if unit is None:
-            unit = _first_quantity_unit(self.intervals, self.points, self.max_step)
+            unit = _first_quantity_unit(self.intervals, self.points, max_step)
         set_(self, "unit", unit)
 
         what = f"the requirement on axis {axis!r}"
@@ -401,16 +403,15 @@ class AxisRequirement:
             points.setflags(write=False)
             set_(self, "points", points)
 
-        step = self.max_step
+        step = max_step
         if isinstance(step, u.Quantity):
             step = float(_to_unit(step, unit, f"the max_step of {what}"))
         declared_step = _positive(step, f"the max_step of {what}")
-        declared_power = _positive(self.min_resolving_power, f"the min_resolving_power of {what}")
+        declared_power = _positive(min_resolving_power, f"the min_resolving_power of {what}")
 
         given_pairs = [(float(low), float(high)) for low, high in pairs]
         if self.densities is None:
             densities: list[Density] = [(declared_step, declared_power)] * len(given_pairs)
-            summary: Density = (declared_step, declared_power)
         else:
             densities = [
                 (
@@ -424,9 +425,6 @@ class AxisRequirement:
                     f"{what} was given {len(densities)} per-interval densities for "
                     f"{len(given_pairs)} interval(s); they are aligned one to one."
                 )
-            steps = [one for one, _ in densities if one is not None]
-            powers = [other for _, other in densities if other is not None]
-            summary = (min(steps) if steps else None, max(powers) if powers else None)
         if (declared_step is not None or declared_power is not None) and not given_pairs:
             raise TransformationError(
                 f"{what} declares a sampling density but no coverage for it to apply to. A "
@@ -437,8 +435,6 @@ class AxisRequirement:
         merged_pairs, merged_densities = _merge_intervals(given_pairs, densities)
         set_(self, "intervals", merged_pairs)
         set_(self, "densities", merged_densities)
-        set_(self, "max_step", summary[0])
-        set_(self, "min_resolving_power", summary[1])
 
         if not isinstance(self.source, str):
             raise TransformationError(f"the source of {what} must be a string, got {self.source!r}")
@@ -446,14 +442,14 @@ class AxisRequirement:
     @property
     def constrains_density(self) -> bool:
         """Whether this requirement says anything about how finely to sample."""
-        return self.max_step is not None or self.min_resolving_power is not None
+        return any(step is not None or power is not None for step, power in self.densities)
 
     def segments(self) -> tuple[tuple[float, float, float | None, float | None], ...]:
         """``(low, high, max_step, min_resolving_power)`` per interval.
 
-        The requirement's canonical form: what :meth:`coordinates` builds from,
-        and the thing to read when :attr:`max_step` (a strictest-anywhere
-        summary) is not specific enough.
+        The requirement's canonical form: what :meth:`coordinates` builds
+        from, and the only public statement of density — the constructor's
+        scalars do not survive as attributes (see the class docstring).
         """
         return tuple(
             (low, high, step, power)
@@ -572,6 +568,13 @@ class AxisRequirement:
         if self.points is not None:
             bits.append(f"{self.points.size} point(s)")
         return f"<AxisRequirement {' '.join(bits)}>"
+
+
+# The density scalars are constructor-only (ruled 2026-09-02). dataclasses
+# leaves an InitVar's default behind as a class attribute, so an instance
+# read of .max_step would silently return None instead of failing; remove
+# them so the read raises AttributeError.
+del AxisRequirement.max_step, AxisRequirement.min_resolving_power
 
 
 def _segment_repr(segment: tuple[float, float, float | None, float | None]) -> str:
@@ -945,7 +948,15 @@ class Instrument:
                 published.append(
                     requirement
                     if requirement.source
-                    else dataclasses.replace(requirement, source=f"{self.label}.{step.label}")
+                    # The InitVars are passed explicitly: replace() would
+                    # otherwise fetch their (deleted) class-attribute
+                    # defaults. densities already carries the declaration.
+                    else dataclasses.replace(
+                        requirement,
+                        max_step=None,
+                        min_resolving_power=None,
+                        source=f"{self.label}.{step.label}",
+                    )
                 )
         return tuple(published)
 

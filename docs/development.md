@@ -268,24 +268,26 @@ codex steps himself before the freeze. Nothing blocks on it until then.
 **Peter's remaining reading list** (nothing blocks dispatches; all are
 freeze-relevant):
 
-- W1.5 spec §15's open questions — most notably: whether the ANY
-  mask-propagation rule is too conservative for real resampling
-  (`min_valid_fraction` is the named extension); whether a model should
-  be able to *refuse* a requirement rather than silently ignoring it;
-  confirming the `Model` ABC's placement in W1.5 rather than W1.7 (§9 has
-  the argument); and §15.8's `max_step`/`min_resolving_power` dual
-  meaning (declaration vs post-union summary — the review leans towards
-  demoting the scalars before the freeze, cheap now). Review at
-  `docs/design/contracts/transformations.md` §15.
-- W1.6 spec §17's open questions — sharpest first: whether a
-  non-positive-definite covariance should raise (current) or return
-  `−inf` via a `strict=False` mode (Q1, affects every engine driver);
-  whether the mask union lives in `Likelihood` or W1.7's `Dataset` (Q2);
-  Rice's parameterisation and von Mises's concentration (Q3/Q4 — W1.11's
-  interferometry sketch will inform both); per-dataset vs per-channel
-  `IndependentNoise.scale` (Q5); the conservatively-`LATENT` correlated
-  complex Gaussian (Q6, a Phase-4 decision that unblocks real
-  functionality); `Likelihood.to_spec()` for provenance (Q8, with W1.8).
+- W1.5 spec §15 — **three of eight ruled 2026-09-02** (recorded in the
+  §15 preamble): the ANY mask rule stands as the default; `Model` stays
+  in W1.5; the `max_step`/`min_resolving_power` scalars are demoted to
+  constructor-only, with `segments()` the only public density form
+  (implemented and merged the same day). Still open: Q2/Q3 now carry the
+  interferometry sketch's recommendations (`configure_from` over
+  `pull_back`; `compile_for` may raise — gaps I-3/I-4) and await ruling;
+  Q4 (label collisions) has its concrete failure mode recorded in the
+  spectrum+photometry sketch and is routed to W1.7; Q5/Q6 as written.
+- W1.6 spec §17 — **the two sharpest ruled 2026-09-02** (recorded in the
+  §17 preamble): Q1, a `strict` toggle — non-strict engine path
+  (−inf + recorded reason, forced by jax tracing), strict raise for
+  debugging, W1.7 owns conversion and recording; Q2, the `Dataset`
+  resolves the effective mask once at construction, making the mask an
+  evaluation-time invariant. Still awaiting ruling with W1.11
+  recommendations on file: Rice's parameterisation and von Mises's
+  concentration (Q3/Q4), the circular complex GP as `ANALYTIC` (Q6),
+  `extra_coords` units eventually-not-freeze (Q7). Open as written:
+  per-dataset vs per-channel `IndependentNoise.scale` (Q5);
+  `Likelihood.to_spec()` for provenance (Q8, with W1.8).
 - W1.4 spec §17 questions 3–6 (`Cube` axis order vs FITS — cheap to
   change only until the freeze; axis naming; `extra_coords` units;
   container serialisation, owed to W1.8).
