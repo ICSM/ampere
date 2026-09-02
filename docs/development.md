@@ -89,14 +89,18 @@ just populations); the tie-based hierarchical pattern stands, with the
 revisit design recorded in `inference.md` §17.2. **W1.8 and W1.10 are
 unblocked.**
 
-**W1.8 merged 2026-09-02** (see WORK_ITEMS.md); its seven ruling
-requests (R1–R7, `results.md` §15) join Peter's backlog. **W1.10 is in
-flight** (Opus). Then W1.13 (freeze), which owes the batched sol review
-(still unavailable on this account — Peter configures codex first) and
-the decision backlog below. **Out-of-scope finding worth a W0.x item**:
-CI never runs `tests/core` or `tests/results` — the whole Phase-1
-contract suite is unexercised by `ci.yml`, which runs only the import
-sweep and characterisation.
+**W1.8 and W1.10 both merged 2026-09-02** (see WORK_ITEMS.md); W1.8's
+seven ruling requests (R1–R7, `results.md` §15) join Peter's backlog.
+**Only W1.13 (spec assembly & freeze) remains in Phase 1.** It owes the
+batched sol review (still unavailable on this account — Peter
+configures codex first) and resolves the decision backlog below.
+**Findings worth W0.x items before the freeze**: (a) CI never runs
+`tests/core`, `tests/results` or `tests/conformance` — the whole
+Phase-1 suite is unexercised by `ci.yml` (the py3.11 import break that
+survived until W1.10's review is the proof it bites; fixed `a8e6f54`);
+(b) `pixi run <task>` in the *default* environment cannot import
+ampere from a worktree — the tasks should default to `dev` or the
+default env pin a supported Python.
 
 **Ruled later on 2026-09-02, all landed**: lossless nesting +
 `Binding.index` (implemented by the orchestrator after the Opus dispatch
