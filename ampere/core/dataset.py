@@ -219,6 +219,11 @@ def _masks_equal(left: np.ndarray | None, right: np.ndarray | None) -> bool:
     return left.shape == right.shape and bool(np.array_equal(left, right))
 
 
+def _empty_mapping() -> Mapping[str, Any]:
+    """A fresh immutable empty mapping — a dataclass default 3.11 accepts."""
+    return types.MappingProxyType({})
+
+
 def _check_label(name: object, kind: str) -> str:
     """Labels become merge components, so they must be bare identifiers."""
     if not isinstance(name, str) or not name.isidentifier():
@@ -431,7 +436,7 @@ class Failure:
     message: str
     where: str = ""
     exception_type: str = ""
-    values: Mapping[str, float] = types.MappingProxyType({})
+    values: Mapping[str, float] = dataclasses.field(default_factory=_empty_mapping)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "values", types.MappingProxyType(dict(self.values)))
@@ -525,7 +530,7 @@ class Evaluation:
     log_prior: float
     log_likelihood: float
     log_prob: float
-    contributions: Mapping[str, float] = types.MappingProxyType({})
+    contributions: Mapping[str, float] = dataclasses.field(default_factory=_empty_mapping)
     failure: Failure | None = None
 
     def __post_init__(self) -> None:
@@ -575,8 +580,8 @@ class Simulation:
 
     parameters: Mapping[str, Value]
     theta: np.ndarray
-    results: Mapping[str, ModelResult] = types.MappingProxyType({})
-    predicted: Mapping[str, FunctionSamples] = types.MappingProxyType({})
+    results: Mapping[str, ModelResult] = dataclasses.field(default_factory=_empty_mapping)
+    predicted: Mapping[str, FunctionSamples] = dataclasses.field(default_factory=_empty_mapping)
     observations: Mapping[str, FunctionSamples] | None = None
     failure: Failure | None = None
 

@@ -949,11 +949,20 @@ Each is a decision, not an oversight. Each has an extension point.
   changes and not when the data change, and the data hash vice versa; the digest
   is identical across processes with different `PYTHONHASHSEED`; a container of
   each kind round-trips by value; an array-valued parameter emits one variable
-  with a named dimension. The **backend-spanning** row this contract adds: two
-  backends emitting the same problem must produce the same `ampere_spec_hash`,
-  `ampere_data_hash` and `ampere_problem_hash` — those are functions of the
-  declaration and the data, not of the arithmetic, so any disagreement is a
-  lowering bug and the hash is the cheapest possible detector of it.
+  with a named dimension. The **backend-spanning** rows this contract adds
+  (claim corrected 2026-09-02, when W1.10 tested it): two backends emitting
+  the same problem must produce the same `ampere_spec_hash` and
+  `ampere_data_hash` — those two are functions of the declaration and the
+  data, not of the arithmetic, so any disagreement is a lowering bug and the
+  hash is the cheapest possible detector of it. `ampere_problem_hash` is
+  **deliberately not backend-invariant**: it fingerprints the model's class
+  and module (§9) precisely so that two differently implemented forward
+  models never share a cache key, and a backend's lowered model is a
+  different implementation. W1.10's row asserts that actual equivalence.
+  Whether Phase 2 additionally wants a backend-neutral model identity — so
+  an emulator trained on the reference backend can be *offered* (never
+  silently served) to a torch fit of the same declaration — is a freeze
+  question, and it belongs with §13.13's `describe()` hook.
 - **W1.12 (Diagnostics)** — the three answers it asked for: the reserved group
   names and the derivation for signed residuals (§7), the ruling that `y_rep` is
   computed on demand rather than stored (§7), and `plot_anomaly_score` as a

@@ -242,7 +242,7 @@ class PriorSpec:
 
     family: str
     args: tuple[float, ...] = ()
-    kwds: Mapping[str, float] = _EMPTY_NUM_MAP
+    kwds: Mapping[str, float] = dataclasses.field(default_factory=lambda: _EMPTY_NUM_MAP)
     discrete: bool = False
 
     def __post_init__(self) -> None:
@@ -413,9 +413,9 @@ class HierarchicalPrior:
     """
 
     family: str
-    hyperparameters: Mapping[str, str] = _EMPTY_STR_MAP
+    hyperparameters: Mapping[str, str] = dataclasses.field(default_factory=lambda: _EMPTY_STR_MAP)
     args: tuple[float, ...] = ()
-    kwds: Mapping[str, float] = _EMPTY_NUM_MAP
+    kwds: Mapping[str, float] = dataclasses.field(default_factory=lambda: _EMPTY_NUM_MAP)
 
     def __post_init__(self) -> None:
         if not isinstance(self.family, str) or not self.family:
