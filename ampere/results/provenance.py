@@ -134,7 +134,12 @@ _NOT_A_NUMBER = "__nan__"
 
 #: Mapping keys :func:`normalise` reserves for its own encodings. A mapping
 #: using one could impersonate the thing it encodes, so one is refused.
-_SENTINEL_KEYS = frozenset({"__ndarray__", "__unit__", "__quantity__", "__bytes__"})
+_SENTINEL_KEYS = frozenset({"__ndarray__", "__unit__", "__quantity__", "__bytes__", "__str__"})
+
+#: A *string* equal to a float sentinel would impersonate the non-finite
+#: float it encodes — normalise(float("nan")) and normalise("__nan__") must
+#: not compare equal — so such a string is wrapped rather than passed through.
+_FLOAT_SENTINELS = frozenset({_POSITIVE_INFINITY, _NEGATIVE_INFINITY, _NOT_A_NUMBER})
 
 #: Packages whose versions every run records. Anything else the caller adds.
 _RECORDED_PACKAGES = (
@@ -209,7 +214,11 @@ def normalise(obj: object) -> Any:
         ...
     ampere.results.exceptions.ResultsError: cannot record an object of type 'object'...
     """
-    if obj is None or isinstance(obj, bool | int | str):
+    if isinstance(obj, str):
+        # A string equal to a float sentinel is wrapped, or it would hash the
+        # same as the non-finite float it spells.
+        return {"__str__": obj} if obj in _FLOAT_SENTINELS else obj
+    if obj is None or isinstance(obj, bool | int):
         return obj
     if isinstance(obj, float):
         return _normalise_float(obj)

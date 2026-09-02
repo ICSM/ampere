@@ -203,6 +203,21 @@ class TestCanonicalJson:
     def test_non_finite_floats_become_sentinels(self, value: float, expected: str) -> None:
         assert canonical_json(value) == expected
 
+    @pytest.mark.parametrize(
+        ("spelled", "value"),
+        [
+            ("__inf__", float("inf")),
+            ("__-inf__", float("-inf")),
+            ("__nan__", float("nan")),
+        ],
+    )
+    def test_a_string_cannot_impersonate_a_float_sentinel(self, spelled: str, value: float) -> None:
+        # The value-side twin of the reserved-key rule below: without the wrap,
+        # normalise(float("nan")) and normalise("__nan__") would compare equal
+        # and two genuinely different records would hash alike.
+        assert canonical_json(spelled) != canonical_json(value)
+        assert json.loads(canonical_json(spelled)) == {"__str__": spelled}
+
     def test_output_is_strict_json(self) -> None:
         # allow_nan=False stays on, so anything canonical_json emits parses with
         # a strict reader -- which a netCDF attribute's consumer is.
