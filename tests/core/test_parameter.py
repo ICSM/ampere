@@ -25,8 +25,10 @@ from ampere.core import (
     Logit,
     Parameter,
     Parameterised,
+    ParameterMapping,
     ParameterSet,
     Plate,
+    PlateBinding,
     PriorSpec,
     Tie,
     default_bijection_for,
@@ -1012,3 +1014,166 @@ class TestLoweringExtensionPoint:
         assert result.stdout.strip() == "", (
             f"ampere.core imported optional dependencies: {result.stdout.strip()}"
         )
+
+
+class TestLosslessNesting:
+    """merge accepting a ParameterMapping component (ruled 2026-09-02).
+
+    Bindings compose to the leaves; routing stays one level deep.
+    """
+
+    @staticmethod
+    def _instrument_like() -> ParameterMapping:
+        return ParameterSet.merge(
+            {
+                "a": ParameterSet([Parameter("scale", st.lognorm(0.2), shared_as="gain")]),
+                "b": ParameterSet([Parameter("scale", st.lognorm(0.2), shared_as="gain")]),
+            }
+        )
+
+    def test_an_inner_collapse_surfaces_in_the_outer_bindings(self) -> None:
+        inner = self._instrument_like()
+        assert inner.tied_names == ("gain",)
+        outer = ParameterSet.merge(
+            {"instrument": inner, "model": ParameterSet([Parameter("t", st.norm(0, 1))])}
+        )
+        assert outer.merged.names == ("instrument.gain", "model.t")
+        assert outer.tied_names == ("instrument.gain",)
+        assert {(b.component, b.local_name) for b in outer.sites_of("instrument.gain")} == {
+            ("instrument", "a.scale"),
+            ("instrument", "b.scale"),
+        }
+
+    def test_routing_stays_one_level_deep(self) -> None:
+        inner = self._instrument_like()
+        outer = ParameterSet.merge(
+            {"instrument": inner, "model": ParameterSet([Parameter("t", st.norm(0, 1))])}
+        )
+        routed = outer.distribute({"instrument.gain": 2.0, "model.t": 0.1})
+        assert routed["instrument"] == {"gain": 2.0}
+        assert inner.distribute(routed["instrument"]) == {
+            "a": {"scale": 2.0},
+            "b": {"scale": 2.0},
+        }
+
+    def test_plain_set_components_are_unchanged(self) -> None:
+        mapping = ParameterSet.merge(
+            {
+                "x": ParameterSet([Parameter("p", st.norm(0, 1))]),
+                "y": ParameterSet([Parameter("q", st.norm(0, 1))]),
+            }
+        )
+        assert mapping.bindings == mapping.routing
+        assert mapping.tied_names == ()
+
+    def test_a_cross_level_tie_composes_to_both_leaf_sets(self) -> None:
+        def leaf() -> ParameterSet:
+            return ParameterSet([Parameter("scale", st.norm(1.0, 0.1))])
+
+        def dataset_like():
+            return ParameterSet.merge({"instr": leaf()})
+
+        outer = ParameterSet.merge(
+            {"obj0": dataset_like(), "obj1": dataset_like()},
+            ties=[Tie("cal", ("obj0.instr.scale", "obj1.instr.scale"))],
+        )
+        assert outer.tied_names == ("cal",)
+        assert {(b.component, b.local_name) for b in outer.sites_of("cal")} == {
+            ("obj0", "instr.scale"),
+            ("obj1", "instr.scale"),
+        }
+
+    def test_global_name_for_accepts_both_forms(self) -> None:
+        inner = self._instrument_like()
+        outer = ParameterSet.merge({"instrument": inner})
+        assert outer.global_name_for("instrument", "gain") == "instrument.gain"
+        assert outer.global_name_for("instrument", "a.scale") == "instrument.gain"
+
+
+class TestPlateBindings:
+    """Binding.index element routing (ruled 2026-09-02, gap H-2)."""
+
+    @staticmethod
+    def _survey() -> ParameterSet:
+        plate = Plate(
+            "objects",
+            size=3,
+            hyperparameters=[
+                Parameter("mu", st.norm(0.0, 5.0)),
+                Parameter("sigma", st.halfnorm(0.0, 2.0)),
+            ],
+            members=[
+                Parameter("theta", HierarchicalPrior("norm", {"loc": "mu", "scale": "sigma"}))
+            ],
+        )
+        return ParameterSet([], plates=[plate])
+
+    def _merged(self):
+        return ParameterSet.merge(
+            {
+                "population": self._survey(),
+                "obj0": ParameterSet([Parameter("cal", st.lognorm(0.1))]),
+                "obj1": ParameterSet([Parameter("cal", st.lognorm(0.1))]),
+            },
+            plate_bindings=[
+                PlateBinding("population.objects.theta", "obj0", "theta", 0),
+                PlateBinding("population.objects.theta", "obj1", "theta", 1),
+            ],
+        )
+
+    def test_each_component_receives_its_own_element(self) -> None:
+        mapping = self._merged()
+        values = {
+            "population.objects.mu": 0.0,
+            "population.objects.sigma": 1.0,
+            "population.objects.theta": np.array([10.0, 20.0, 30.0]),
+            "obj0.cal": 1.1,
+            "obj1.cal": 0.9,
+        }
+        routed = mapping.distribute(values)
+        assert routed["obj0"] == {"cal": 1.1, "theta": 10.0}
+        assert routed["obj1"] == {"cal": 0.9, "theta": 20.0}
+        # The merged set is unchanged: one array-valued parameter, no extras.
+        assert mapping.merged["population.objects.theta"].shape == (3,)
+
+    def test_element_bindings_are_addressing_not_tying(self) -> None:
+        mapping = self._merged()
+        assert "population.objects.theta" not in mapping.tied_names
+        by_index = {
+            b.index: b.component
+            for b in mapping.sites_of("population.objects.theta")
+            if b.index is not None
+        }
+        assert by_index == {0: "obj0", 1: "obj1"}
+
+    def test_bad_declarations_are_refused_loudly(self) -> None:
+        base = {
+            "population": self._survey(),
+            "obj0": ParameterSet([Parameter("cal", st.lognorm(0.1))]),
+        }
+        with pytest.raises(ParameterError, match="does not exist"):
+            ParameterSet.merge(
+                dict(base), plate_bindings=[PlateBinding("population.ghost", "obj0", "t", 0)]
+            )
+        with pytest.raises(ParameterError, match="scalar"):
+            ParameterSet.merge(
+                dict(base),
+                plate_bindings=[PlateBinding("population.objects.mu", "obj0", "t", 0)],
+            )
+        with pytest.raises(ParameterError, match="out of range"):
+            ParameterSet.merge(
+                dict(base),
+                plate_bindings=[PlateBinding("population.objects.theta", "obj0", "t", 7)],
+            )
+        with pytest.raises(ParameterError, match="does not have"):
+            ParameterSet.merge(
+                dict(base),
+                plate_bindings=[PlateBinding("population.objects.theta", "ghost", "t", 0)],
+            )
+        with pytest.raises(ParameterError, match="already receives"):
+            ParameterSet.merge(
+                dict(base),
+                plate_bindings=[PlateBinding("population.objects.theta", "obj0", "cal", 0)],
+            )
+        with pytest.raises(ParameterError, match="int or a non-empty tuple"):
+            PlateBinding("population.objects.theta", "obj0", "t", 1.5)  # type: ignore[arg-type]

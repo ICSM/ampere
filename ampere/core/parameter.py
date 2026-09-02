@@ -85,6 +85,7 @@ __all__ = [
     "ParameterSet",
     "Parameterised",
     "Plate",
+    "PlateBinding",
     "Prior",
     "PriorSpec",
     "Tie",
@@ -1392,11 +1393,66 @@ class Binding:
     is the record that makes tying *structural* rather than a constraint
     applied after the fact: the merged set has one free dimension, and the
     bindings say which component sees it under which local name.
+
+    ``index`` (ruled 2026-09-02, ``hierarchical_population.md`` gap H-2) is
+    the optional element address: when set, :meth:`ParameterMapping.distribute`
+    routes ``resolved[global_name][index]`` — one element of an array-valued
+    parameter — rather than the whole array, so a component consuming one
+    member of a :class:`Plate` receives a scalar under its own local name.
+    The merged set is unchanged (one array-valued parameter, one sample
+    site — the lowering is unaffected); only the routing changes. This is
+    *addressing*, not tying: each member remains its own draw, which is why
+    limitation §12.3's refusal of ties across plate members stands.
     """
 
     global_name: str
     component: str
     local_name: str
+    index: int | tuple[int, ...] | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class PlateBinding:
+    """Declare, at merge time, that a component consumes one plate element.
+
+    The composition-time counterpart of :class:`Binding.index` (ruled
+    2026-09-02): ``ParameterSet.merge(..., plate_bindings=[...])`` turns each
+    of these into an element :class:`Binding`. ``parameter`` is the **fully
+    qualified merged name** of the array-valued parameter (after
+    qualification and tie collapse, e.g. ``"population.objects.theta"``) —
+    fully qualified rather than bare, because two components may each hold a
+    plate of the same local name. ``local_name`` is the bare name under which
+    the element arrives in the receiving component's ``distribute`` output;
+    it must not collide with any name that component already receives, and
+    the receiving component's own :class:`ParameterSet` does **not** declare
+    it — consuming the routed element is the composing caller's contract.
+    """
+
+    parameter: str
+    component: str
+    local_name: str
+    index: int | tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "parameter", _check_name(self.parameter, "plate binding"))
+        _check_local_name(self.component, "plate binding component")
+        _check_local_name(self.local_name, "plate binding local name")
+        raw = self.index
+        index: int | tuple[int, ...]
+        if isinstance(raw, (int, np.integer)) and not isinstance(raw, bool):
+            index = int(raw)
+        elif (
+            isinstance(raw, tuple)
+            and raw
+            and all(isinstance(i, (int, np.integer)) and not isinstance(i, bool) for i in raw)
+        ):
+            index = tuple(int(i) for i in raw)
+        else:
+            raise ParameterError(
+                f"plate binding for {self.parameter!r} has index {raw!r}; an element address "
+                f"is an int or a non-empty tuple of ints."
+            )
+        object.__setattr__(self, "index", index)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1407,32 +1463,95 @@ class ParameterMapping:
     ----------
     merged
         The joint :class:`ParameterSet` an inference engine samples.
-    bindings
-        Every ``(global_name, component, local_name)`` triple.
+    routing
+        One ``(global_name, component, local_name)`` triple per immediate
+        consumer — the table :meth:`distribute` walks, one level deep.
     components
         Component labels, in merge order.
+    inner
+        The retained :class:`ParameterMapping` of every component that was
+        merged *as a mapping* (lossless nesting, ruled 2026-09-02). Empty for
+        components merged as plain sets.
+
+    The public :attr:`bindings` view **composes** :attr:`routing` through
+    :attr:`inner`, so it enumerates the ultimate leaves: a consumer walking
+    ``bindings`` for provenance or labelling sees a parameter collapsed by an
+    inner merge as the several leaf sites it really drives, not as the single
+    local name the routing table needs. Routing and introspection are thereby
+    two views of one structure — value flow stays level-by-level (each
+    component receives its immediate-level names, so an inner composite
+    re-distributes with its own retained mapping), while introspection tells
+    the leaf-level truth.
     """
 
     merged: ParameterSet
-    bindings: tuple[Binding, ...]
+    routing: tuple[Binding, ...]
     components: tuple[str, ...]
+    inner: Mapping[str, ParameterMapping] = dataclasses.field(
+        default_factory=lambda: types.MappingProxyType({})
+    )
+
+    @property
+    def bindings(self) -> tuple[Binding, ...]:
+        """Every leaf consumer of each merged parameter, composed through ``inner``.
+
+        For a mapping with no inner mappings this is exactly :attr:`routing`.
+        For a nested one, each routing entry whose component was merged as a
+        mapping expands to that component's own (recursively composed) leaf
+        bindings, with dotted local paths — so an inner ``shared_as`` collapse
+        surfaces here as several bindings under the outer merged name. An
+        element binding (``index`` set) does not descend: the element is the
+        leaf.
+        """
+        out: list[Binding] = []
+        for binding in self.routing:
+            mapping = self.inner.get(binding.component)
+            if mapping is None or binding.index is not None:
+                out.append(binding)
+                continue
+            leaves = [b for b in mapping.bindings if b.global_name == binding.local_name]
+            if not leaves:
+                out.append(binding)
+                continue
+            out.extend(
+                Binding(
+                    global_name=binding.global_name,
+                    component=binding.component,
+                    local_name=f"{leaf.component}{SEPARATOR}{leaf.local_name}",
+                    index=leaf.index,
+                )
+                for leaf in leaves
+            )
+        return tuple(out)
 
     def sites_of(self, global_name: str) -> tuple[Binding, ...]:
-        """Every binding fed by the merged parameter *global_name*."""
+        """Every leaf binding fed by the merged parameter *global_name*."""
         return tuple(b for b in self.bindings if b.global_name == global_name)
 
     def global_name_for(self, component: str, local_name: str) -> str:
-        """The merged name a component's local parameter was collapsed into."""
-        for binding in self.bindings:
+        """The merged name a component's local parameter was collapsed into.
+
+        Accepts either the immediate local name (a routing entry) or a fully
+        qualified leaf path (a composed binding).
+        """
+        for binding in (*self.routing, *self.bindings):
             if binding.component == component and binding.local_name == local_name:
                 return binding.global_name
         raise KeyError(f"no binding for {component!r}.{local_name!r}")
 
     @property
     def tied_names(self) -> tuple[str, ...]:
-        """Merged names with more than one binding site, in merged order."""
+        """Merged names driving more than one leaf site, in merged order.
+
+        Composed through ``inner`` (lossless nesting), so a parameter
+        collapsed by an inner merge is reported here too. Element bindings
+        (``index`` set) do not count towards sharing: each element is its own
+        draw, and a plate routed to N components is addressing, not tying.
+        """
         counts: dict[str, int] = {}
         for binding in self.bindings:
+            if binding.index is not None:
+                continue
             counts[binding.global_name] = counts.get(binding.global_name, 0) + 1
         return tuple(name for name in self.merged.names if counts.get(name, 0) > 1)
 
@@ -1443,17 +1562,23 @@ class ParameterMapping:
         over the merged set, and returns ``{component: {local_name: value}}``
         — exactly the keyword arguments each component model expects, with
         tied parameters appearing (identically) in every component that binds
-        them, and fixed parameters included.
+        them, and fixed parameters included. Routing is one level deep by
+        design (the nesting rule): a component merged as a mapping receives
+        its own merged names and re-distributes with its retained mapping. An
+        element binding hands the component the addressed element alone.
         """
         resolved = values if isinstance(values, Mapping) else self.merged.unpack(values)
         routed: dict[str, dict[str, Value]] = {component: {} for component in self.components}
-        for binding in self.bindings:
+        for binding in self.routing:
             try:
-                routed[binding.component][binding.local_name] = resolved[binding.global_name]
+                value = resolved[binding.global_name]
             except KeyError as exc:
                 raise ParameterError(
                     f"no value supplied for merged parameter {binding.global_name!r}"
                 ) from exc
+            if binding.index is not None:
+                value = np.asarray(value)[binding.index]
+            routed[binding.component][binding.local_name] = value
         return routed
 
 
@@ -1890,9 +2015,10 @@ class ParameterSet:
     @classmethod
     def merge(
         cls,
-        sets: Mapping[str, ParameterSet],
+        sets: Mapping[str, ParameterSet | ParameterMapping],
         *,
         ties: Sequence[Tie] = (),
+        plate_bindings: Sequence[PlateBinding] = (),
     ) -> ParameterMapping:
         """Compose several parameter sets into one joint set.
 
@@ -1907,10 +2033,21 @@ class ParameterSet:
         Parameters
         ----------
         sets
-            Component label to :class:`ParameterSet`. Labels must be Python
+            Component label to :class:`ParameterSet` — or to a
+            :class:`ParameterMapping` (**lossless nesting**, ruled
+            2026-09-02): the mapping's ``merged`` set joins the merge exactly
+            as a plain set would, and the mapping is retained so the result's
+            :attr:`~ParameterMapping.bindings` compose down to the leaves.
+            Routing is unchanged either way. Labels must be Python
             identifiers; iteration order fixes the merged declaration order.
         ties
             Composition-time ties, in addition to any ``shared_as`` labels.
+        plate_bindings
+            :class:`PlateBinding` declarations (ruled 2026-09-02): each routes
+            one element of a merged array-valued parameter to a component
+            under a bare local name, via :attr:`Binding.index`. Validated
+            here — the parameter must exist and be array-valued, the index in
+            range, the component present, and the local name free.
 
         Returns
         -------
@@ -1926,8 +2063,12 @@ class ParameterSet:
             If tied sites disagree about shape, unit, prior or fixed value; if
             a tie names a site that does not exist; if a site is claimed by two
             ties; or if a tie group has no prior and no fixed value at all.
+        ParameterError
+            If a plate binding names an absent or scalar parameter, an
+            out-of-range index, an unknown component, or a colliding local
+            name.
         """
-        return _merge(sets, ties)
+        return _merge(sets, ties, plate_bindings)
 
     # -- serialisation -----------------------------------------------------
 
@@ -2102,10 +2243,28 @@ def _evaluation_order(parameters: Sequence[Parameter], index: Mapping[str, int])
 # ---------------------------------------------------------------------------
 
 
-def _merge(sets: Mapping[str, ParameterSet], ties: Sequence[Tie]) -> ParameterMapping:
+def _merge(
+    sets: Mapping[str, ParameterSet | ParameterMapping],
+    ties: Sequence[Tie],
+    plate_bindings: Sequence[PlateBinding] = (),
+) -> ParameterMapping:
     components = tuple(sets)
     for component in components:
         _check_local_name(component, "component label")
+
+    # Lossless nesting (ruled 2026-09-02): a component given as a mapping
+    # contributes its merged set to the algorithm below unchanged, and the
+    # mapping itself is retained so the public bindings view composes to the
+    # leaves. Nothing downstream of this loop knows the difference.
+    inner: dict[str, ParameterMapping] = {}
+    resolved_sets: dict[str, ParameterSet] = {}
+    for component, given in sets.items():
+        if isinstance(given, ParameterMapping):
+            inner[component] = given
+            resolved_sets[component] = given.merged
+        else:
+            resolved_sets[component] = given
+    sets = resolved_sets
 
     qualified: dict[str, tuple[str, Parameter]] = {}
     for component in components:
@@ -2172,8 +2331,57 @@ def _merge(sets: Mapping[str, ParameterSet], ties: Sequence[Tie]) -> ParameterMa
             Binding(global_name=group, component=component, local_name=parameter.name)
             for component, parameter in sites
         )
+
+    merged_set = ParameterSet(merged)
+    taken = {(b.component, b.local_name) for b in bindings}
+    for pb in plate_bindings:
+        if pb.component not in resolved_sets:
+            raise ParameterError(
+                f"plate binding routes {pb.parameter!r} to component {pb.component!r}, which "
+                f"this merge does not have; components are {sorted(resolved_sets)}."
+            )
+        if pb.parameter not in merged_set.names:
+            raise ParameterError(
+                f"plate binding names merged parameter {pb.parameter!r}, which does not exist. "
+                f"The name is the fully qualified merged one (after qualification and tie "
+                f"collapse), e.g. 'population.objects.theta'."
+            )
+        shape = merged_set[pb.parameter].shape
+        if not shape:
+            raise ParameterError(
+                f"plate binding addresses element {pb.index!r} of {pb.parameter!r}, which is "
+                f"scalar. Element routing is for array-valued (plate) parameters."
+            )
+        index = (pb.index,) if isinstance(pb.index, int) else pb.index
+        if len(index) != len(shape) or any(
+            not 0 <= i < extent for i, extent in zip(index, shape, strict=True)
+        ):
+            raise ParameterError(
+                f"plate binding index {pb.index!r} is out of range for {pb.parameter!r}, whose "
+                f"shape is {shape}."
+            )
+        if (pb.component, pb.local_name) in taken:
+            raise ParameterError(
+                f"plate binding would deliver {pb.parameter!r} to "
+                f"{pb.component}{SEPARATOR}{pb.local_name}, but component {pb.component!r} "
+                f"already receives a value under {pb.local_name!r}. Element routing must not "
+                f"shadow a component's own parameter; pick a different local name."
+            )
+        taken.add((pb.component, pb.local_name))
+        bindings.append(
+            Binding(
+                global_name=pb.parameter,
+                component=pb.component,
+                local_name=pb.local_name,
+                index=pb.index,
+            )
+        )
+
     return ParameterMapping(
-        merged=ParameterSet(merged), bindings=tuple(bindings), components=components
+        merged=merged_set,
+        routing=tuple(bindings),
+        components=components,
+        inner=types.MappingProxyType(inner),
     )
 
 

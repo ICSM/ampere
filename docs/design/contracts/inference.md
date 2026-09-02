@@ -288,18 +288,24 @@ Re-distributing cannot lose a binding; it re-derives one, one level down. What
 §12.4 warns against is merging a `merged` set and *throwing the mapping away*,
 which no level here does.
 
-### 4.6 The strongest objection: nesting loses introspection
+### 4.6 The strongest objection: nesting loses introspection — closed at source
 
-This is the one real cost, and it was found by W1.11's hierarchical-population
-sketch rather than by this contract, so it is recorded here in its own section
-rather than buried in a limitation.
+This was the one real cost, found by W1.11's hierarchical-population sketch
+rather than by this contract. **It no longer exists**: Peter granted the
+lossless-nesting sub-ruling on 2026-09-02 ("lossless, not necessarily
+recursive"), `parameters.md` §8 now lets `merge` take a `ParameterMapping` as
+a component and compose its bindings, and this contract passes its mappings
+accordingly — so the section below records what the defect *was*, and what
+the surface says now.
 
-**The loss.** A `ParameterMapping` records one binding per component, not per
-leaf. So a parameter collapsed by an *inner* merge — two steps of one instrument
-sharing a declaration-time `shared_as` label — reaches the top level as a single
-local name with a single binding. The top-level mapping therefore says it is not
-tied, and any consumer walking `mapping.bindings` for provenance or for ArviZ
-labelling will not learn that the sampler dimension drives two places:
+**The loss, as it was.** A `ParameterMapping` used to record one binding per
+component, not per leaf. So a parameter collapsed by an *inner* merge — two
+steps of one instrument sharing a declaration-time `shared_as` label —
+reached the top level as a single local name with a single binding, the
+top-level mapping said it was not tied, and a consumer walking
+`mapping.bindings` for provenance or ArviZ labelling would not learn that
+the sampler dimension drives two places. Today the composed surface tells
+the truth by itself:
 
 ```pycon
 >>> class Gain(Transformation):
@@ -320,15 +326,7 @@ labelling will not learn that the sampler dimension drives two places:
 >>> hidden.parameters.free_names
 ('model.index', 'model.norm', 'd.instrument.gain')
 >>> hidden.tied_names
-()
-
-```
-
-**The recovery.** The information was never destroyed — the nesting rule retains
-every level's mapping — it was only not surfaced by the outermost one. So this
-contract surfaces it, by descending:
-
-```pycon
+('d.instrument.gain',)
 >>> hidden.shared_names
 ('d.instrument.gain',)
 >>> hidden.sites()["d.instrument.gain"]
@@ -336,25 +334,18 @@ contract surfaces it, by descending:
 
 ```
 
-`FittingProblem.sites()` maps every merged name to the fully qualified leaf
-paths it feeds, at whatever level they were collapsed, and `shared_names` is the
-lossless counterpart of `tied_names`. **W1.8 should record `sites()`, not the
-raw bindings**, in a run's provenance: it is the honest answer to "which parts of
-the model did this sampler dimension drive?".
-
-**The honest residual.** The *default* introspection surface —
-`problem.mapping.tied_names` and `problem.mapping.bindings` — is now misleading
-unless a consumer knows to reach for `sites()`. A helper that must be remembered
-is worse than a surface that is right, and this is the one place where design A
-would genuinely have been simpler.
-
-The right fix is upstream and is smaller than either candidate here.
-W1.11's sketch calls it **lossless nesting**: let `ParameterSet.merge` accept a
-`ParameterMapping` as a component and *compose* its bindings, so the outer
-mapping's bindings are already the leaf bindings and `sites()` becomes
-unnecessary. That is strictly smaller than recursive merge, it fixes the problem
-where the problem is, and it belongs in `parameters.md` rather than here.
-Recommended to W1.13 as part of ruling request **R1**.
+`tied_names` now reports the collapse at whatever level it happened, because
+the problem's bindings compose through every retained inner mapping.
+`FittingProblem.sites()` remains as the convenient rendered form (merged name
+to fully qualified leaf paths) and `shared_names` as the established name for
+what is now the same statement `tied_names` makes; either the composed
+bindings or `sites()` is right for W1.8's provenance — they carry the same
+information. Value **routing** is untouched by all of this: `distribute`
+stays one level deep, each composite re-distributes with its retained
+mapping, and `Instrument.__call__`'s values path is exactly as
+`transformations.md` §5 wrote it. The two views — leaf-level introspection,
+level-by-level routing — are two readings of one retained structure, which
+is what "lossless, not necessarily recursive" means in practice.
 
 ### 4.7 What the population sketch says, and what it does not
 
@@ -1609,11 +1600,13 @@ Each is a decision, not an oversight. Each has an extension point.
    `DIFFERENTIABLE = True` is believed. There is no way to check the claim from
    `ampere.core`, which has no autodiff; the conformance suite (W1.10) is where a
    backend's claim gets tested.
-9. **An inner tie is invisible to the top-level mapping** (§4.6).
-   `problem.mapping.tied_names` reports only the ties this problem resolved;
-   `problem.shared_names` and `problem.sites()` descend and report every shared
-   parameter. The extension point is "lossless nesting" in `ParameterSet.merge`,
-   which would make the descent unnecessary.
+9. **Resolved — an inner tie is now visible to the top-level mapping**
+   (§4.6). Lossless nesting landed on 2026-09-02: the problem passes its
+   retained mappings into the merge, so `tied_names` and the composed
+   `bindings` report every collapse at whatever level it happened;
+   `shared_names` and `sites()` remain as the established rendered forms of
+   the same information. Kept in this list because the limitation it
+   replaces was load-bearing in §4's ruling discussion.
 
 ## 18. What this contract hands to the specs downstream
 
@@ -1669,9 +1662,9 @@ Each is a decision, not an oversight. Each has an extension point.
 **Ruled by Peter, 2026-09-02 — all four requests.** R1: design B (nested
 `ParameterMapping`, one merge per level) is **ratified**; later the same day
 the **lossless-nesting sub-ruling was granted too** ("lossless, not
-necessarily recursive"), together with `Binding.index` — both are
-`parameters.md` amendments, and once they land, `sites()` and `shared_names`
-become thin wrappers and §4.6's defect closes at source. R2: the tie-based pattern for
+necessarily recursive"), together with `Binding.index` — both landed in
+`parameters.md` §8 the same day; `sites()` and `shared_names` are now thin
+wrappers and §4.6's defect is closed at source. R2: the tie-based pattern for
 cross-component hierarchical structure **stands as documented**; the design
 for a future revisit (deferred reference resolution at merge time) is
 recorded in limitation 17.2 so it need not be re-derived. R3: **granted, and
