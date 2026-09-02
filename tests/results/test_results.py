@@ -672,6 +672,24 @@ class TestEmission:
         with pytest.raises(ResultsError, match="free dimension"):
             emit(problem, np.zeros((2, 5)), [[problem.evaluate(TRUTH)] * 2] * 1)
 
+    @pytest.mark.parametrize("shape", [(0, 2), (1, 0)], ids=["no-chains", "no-draws"])
+    def test_an_empty_run_is_refused(self, shape: tuple[int, int]) -> None:
+        # Not merely tidiness: emitting it would produce zero-length sampling
+        # dimensions that every consumer downstream then has to guard against.
+        problem = joint_problem()
+        with pytest.raises(ResultsError, match="at least one chain and one draw"):
+            emit(problem, np.zeros((*shape, problem.free_size)), [])
+
+    def test_a_single_draw_in_a_single_chain_is_a_run(self) -> None:
+        problem = joint_problem()
+        tree = emit(
+            problem,
+            np.array([problem.parameters.pack(TRUTH)]),
+            [problem.evaluate(TRUTH)],
+        )
+        assert tree["posterior"]["calibration"].shape == (1, 1)
+        assert tree.attrs["ampere_chains"] == 1 and tree.attrs["ampere_draws"] == 1
+
     def test_one_evaluation_per_draw_is_required(self) -> None:
         problem = joint_problem()
         with pytest.raises(ResultsError, match="One Evaluation per draw"):

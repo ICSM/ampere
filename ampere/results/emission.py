@@ -123,6 +123,15 @@ def _as_draw_array(theta: Any, free_size: int) -> np.ndarray:
             f"dimension(s). An engine must emit the flat vector in FittingProblem.parameters "
             f"order — the order free_labels() names."
         )
+    if array.shape[0] == 0 or array.shape[1] == 0:
+        # An empty run is refused rather than emitted. It carries no
+        # information, and what it would produce is an InferenceData with
+        # zero-length sampling dimensions that every consumer downstream then
+        # has to guard against -- the same reason DrawRecorder.emit refuses to
+        # emit before anything has been recorded.
+        raise ResultsError(
+            f"a run needs at least one chain and one draw; the draws have shape {array.shape}."
+        )
     return array
 
 
