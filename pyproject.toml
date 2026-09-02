@@ -221,6 +221,10 @@ ampere = { path = ".", editable = true }
 # slow suite is test-characterisation, below.
 test = "pytest tests/test_imports.py"
 test-characterisation = "pytest tests/characterisation"
+# W1.10: the backend-parametrised battery every backend must pass. Runs
+# against the in-repo reference and mirror fixtures today; a Phase-2 backend
+# joins by registering one fixture (tests/conformance/README.md).
+conformance = "pytest tests/conformance"
 lint = "ruff check ."
 format-check = "ruff format --check . --exclude tests/characterisation"
 # pyrefly is scoped to the new namespaces (AGENTS.md ground rule 8); none
