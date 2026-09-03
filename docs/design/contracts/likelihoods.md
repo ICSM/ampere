@@ -52,11 +52,11 @@ is W1.9's table and Phase 2's code.
 >>> import scipy.stats as st
 >>> import astropy.units as u
 >>> from ampere.core import (
-...     Censoring, DenseGP, GaussianFamily, GaussianProcessNoise, IndependentNoise,
-...     InducingPointGP, Likelihood, LikelihoodFamily, LimitKind, Marginalisation,
-...     Matern32, NoiseParams, PhotometricPoints, PoissonFamily, QuasisepGP,
-...     RiceFamily, Spectrum, SquaredExponential, StudentTFamily, VisibilitySet,
-...     WindowedSparseGP, family_named, list_families, register_family,
+...     Censoring, ComplexGaussianFamily, DenseGP, GaussianFamily, GaussianProcessNoise,
+...     IndependentNoise, InducingPointGP, Likelihood, LikelihoodFamily, LimitKind,
+...     Marginalisation, Matern32, NoiseParams, PhotometricPoints, PoissonFamily,
+...     QuasisepGP, RiceFamily, Spectrum, SquaredExponential, StudentTFamily,
+...     VisibilitySet, WindowedSparseGP, family_named, list_families, register_family,
 ... )
 >>> from ampere.core.exceptions import LikelihoodError
 
@@ -290,6 +290,36 @@ ampere.core.exceptions.LikelihoodError: the student_t family with a GaussianProc
 third-party family inherits the refusal rather than the defect. This is the
 same discipline the unimplemented `RiceFamily` gets, applied to a combination
 rather than to a family.
+
+### The circular complex GP: declared analytic, implemented in Phase 4
+
+**Ruled by Peter, 2026-09-03** (§17 Q6, the interferometry sketch's
+recommendation accepted): `complex_gaussian` + `GaussianProcessNoise`
+declares `ANALYTIC`, with the **circular complex GP** — one real kernel
+applied independently to the real and imaginary parts: equal component
+covariances, zero pseudo-covariance — as the fixed meaning. That is the
+declaration under which the flexible likelihood reaches the plan's Phase-4
+proof modality, and fixing it now is what lets the freeze be reviewed
+against it.
+
+The *implementation* is Phase 4's, with the visibility modality, so the
+combination is **refused at composition with the schedule named** — the same
+declared-but-staged discipline `RiceFamily` gets for a whole family, applied
+to one combination. A refusal, never a silently different model:
+
+```pycon
+>>> ComplexGaussianFamily().marginalisation_with(gp_noise)
+<Marginalisation.ANALYTIC: 'analytic'>
+>>> Likelihood(ComplexGaussianFamily(), gp_noise)
+Traceback (most recent call last):
+    ...
+ampere.core.exceptions.LikelihoodError: the complex_gaussian family with a correlated noise model declares Marginalisation.ANALYTIC ... but the implementation is Phase 4's, with the interferometric-visibility modality ...
+
+```
+
+`LikelihoodFamily.GP_ANALYTIC_IMPLEMENTED` is the staging flag (default
+`True`; `False` here until Phase 4), so a future family in the same position
+inherits the discipline rather than reinventing it.
 
 ### Enforcing it against the engine
 
@@ -1200,6 +1230,8 @@ W1.7's `Dataset` discharges once. `log_prob` re-checks only shapes, mirroring
 | Censoring + correlated noise is `LATENT` | Issue #11's own open question, answered: it is a multivariate-normal orthant probability with no closed form beyond a few dimensions |
 | Masking beats censoring on the same sample | Masking a region for a test run should not require editing the censoring array too |
 | Complex data are the circular complex Gaussian only | `results_schema.md` §16: the container's real σ encodes exactly that. Non-circular noise supplies its own 2×2 structure and is not a container concern |
+| `complex_gaussian` + GP is `ANALYTIC` — circular meaning fixed, implementation staged | Ruled 2026-09-03 (§17 Q6). The circular complex GP marginalises in closed form exactly as the real Gaussian does, and fixing the declaration now unblocks the flexible likelihood on the Phase-4 proof modality. `GP_ANALYTIC_IMPLEMENTED = False` keeps the pair a composition-time refusal until Phase 4 lands the closed form — declared-but-staged, never silently different |
+| Rice takes amplitudes from an `Amplitude` chain step; von Mises takes `κ = 1/σ²` per sample | Ruled 2026-09-03 (§17 Q3/Q4). The model predicts what it physically produces — the complex value — and projection is the instrument chain's job; the concentration comes from the container's own uncertainties, exact in the small-σ limit where closure-phase practice lives. Families themselves are Phase 4's |
 | `check_alignment` is composition-time; `log_prob` re-checks only shapes | O(N) coordinate comparison is right once and wrong per evaluation — `results_schema.md` §10's split |
 | A noise model receives the prediction as well as the observation | Ruled 2026-09-03 (X-1). A noise whose magnitude depends on the model — a fractional model uncertainty, an analytically marginalised multiplicative calibration systematic, a model-variance weighting of counts — is a `NoiseModel`, not a family. Without the `predicted` argument the only way to express one is to re-implement the sampling distribution, which welds noise to family, cannot be reused, and cannot reach the GP path: exactly the monolithic collapse `prior_art.md` Tension 3 warns against |
 
@@ -1226,15 +1258,20 @@ Each is a decision, not an oversight. Each has an extension point.
    the SVGP/SKI/Vecchia slots' business (Phase 5); `IndependentNoise` works on
    any layout.
 5. **Rice and von Mises are declared, not implemented.** Both raise on
-   composition. The open parameterisation questions are in §17.
+   composition; the implementations are Phase 4's. Their parameterisations
+   were fixed by the 2026-09-03 rulings (§17 Q3/Q4): the model predicts the
+   complex value and an `Amplitude` chain step takes the modulus for Rice;
+   `κ = 1/σ²` per sample for von Mises.
 5a. **`PoissonFamily` is the only family that consumes the latent path.**
-   Student-t, Cauchy and the complex Gaussian all *declare* `LATENT` under a
-   GP and none of them implements it, so composing any of them with
-   `GaussianProcessNoise` is refused (§4). That is a real capability gap — a
-   heavy-tailed flexible likelihood is a reasonable thing to want — and it is
-   a refusal rather than a wrong answer only because `CONSUMES_LATENT_GP`
-   exists. Implementing one is a `log_prob` that reads `noise.latent` plus
-   flipping the flag.
+   Student-t and Cauchy *declare* `LATENT` under a GP and neither implements
+   it, so composing either with `GaussianProcessNoise` is refused (§4). That
+   is a real capability gap — a heavy-tailed flexible likelihood is a
+   reasonable thing to want — and it is a refusal rather than a wrong answer
+   only because `CONSUMES_LATENT_GP` exists. Implementing one is a
+   `log_prob` that reads `noise.latent` plus flipping the flag. (The complex
+   Gaussian left this list at the freeze: under a GP it now declares a
+   *staged* `ANALYTIC` — §4 — refused until Phase 4 implements the circular
+   closed form.)
 6. **The latent path has no inference.** `latent_declaration` and
    `latent_transform` are the declaration and the transform; sampling `f` is
    Phase 2's, on the torch/jax rungs. `DenseGP.latent_transform` exists so the

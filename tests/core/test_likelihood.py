@@ -560,16 +560,37 @@ class TestLatentPathDeclaration:
         like = Likelihood(GaussianFamily(), GaussianProcessNoise(Matern32(0.3, 1.0)))
         assert like.marginalisation is Marginalisation.ANALYTIC
 
-    @pytest.mark.parametrize(
-        "family", [StudentTFamily(), CauchyFamily(), PoissonFamily(), ComplexGaussianFamily()]
-    )
+    @pytest.mark.parametrize("family", [StudentTFamily(), CauchyFamily(), PoissonFamily()])
     def test_every_non_gaussian_family_goes_latent_under_a_gp(
         self, family: LikelihoodFamily
     ) -> None:
         noise = GaussianProcessNoise(Matern32(0.3, 1.0))
         assert family.marginalisation_with(noise) is Marginalisation.LATENT
 
-    @pytest.mark.parametrize("family", [StudentTFamily(), CauchyFamily(), ComplexGaussianFamily()])
+    def test_the_circular_complex_gp_is_declared_analytic_and_staged(self) -> None:
+        """Ruled 2026-09-03 (§17 Q6): the declaration lands now, Phase 4 implements.
+
+        ``complex_gaussian`` + ``GaussianProcessNoise`` declares ``ANALYTIC``
+        with the circular (equal-component, zero-pseudo-covariance) complex GP
+        as the fixed meaning — but composing the pair is refused with a message
+        naming Phase 4, because the closed form is not implemented yet and a
+        refusal is the only honest alternative to a silently different model.
+        """
+        noise = GaussianProcessNoise(Matern32(0.3, 1.0))
+        family = ComplexGaussianFamily()
+        assert family.marginalisation_with(noise) is Marginalisation.ANALYTIC
+        assert not ComplexGaussianFamily.GP_ANALYTIC_IMPLEMENTED
+        with pytest.raises(LikelihoodError, match="Phase 4"):
+            Likelihood(family, noise)
+        # Reaching log_prob directly with a correlated NoiseParams refuses too,
+        # rather than quietly computing the independent value.
+        params = NoiseParams(
+            sigma=np.array([0.1]), values={}, kernel=Matern32(0.3, 1.0), solver=DenseGP()
+        )
+        with pytest.raises(LikelihoodError, match="Phase 4"):
+            family.log_prob(np.array([1.0 + 0.0j]), np.array([1.0 + 0.1j]), params)
+
+    @pytest.mark.parametrize("family", [StudentTFamily(), CauchyFamily()])
     def test_a_latent_family_that_ignores_the_latent_values_cannot_be_composed(
         self, family: LikelihoodFamily
     ) -> None:

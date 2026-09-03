@@ -358,12 +358,15 @@ class TestTobitCensoring:
 #: uncorrelated and a correlated noise model. Written out rather than
 #: recomputed from ``ANALYTIC_WITH_GP``, so the table is an oracle and not a
 #: restatement: an uncorrelated noise model always marginalises analytically,
-#: and under a GP only the Gaussian family still does.
+#: and under a GP only the Gaussian family — and, since the 2026-09-03 ruling
+#: fixed the circular complex GP as its meaning (``likelihoods.md`` §17 Q6),
+#: the complex Gaussian — still does. The complex closed form is Phase 4's to
+#: implement; ``TestStagedAnalyticCombination`` holds the refusal meanwhile.
 EXPECTED_MARGINALISATION: dict[str, tuple[Marginalisation, Marginalisation]] = {
     "gaussian": (Marginalisation.ANALYTIC, Marginalisation.ANALYTIC),
     "student_t": (Marginalisation.ANALYTIC, Marginalisation.LATENT),
     "cauchy": (Marginalisation.ANALYTIC, Marginalisation.LATENT),
-    "complex_gaussian": (Marginalisation.ANALYTIC, Marginalisation.LATENT),
+    "complex_gaussian": (Marginalisation.ANALYTIC, Marginalisation.ANALYTIC),
     "poisson": (Marginalisation.ANALYTIC, Marginalisation.LATENT),
     "rice": (Marginalisation.ANALYTIC, Marginalisation.LATENT),
     "von_mises": (Marginalisation.ANALYTIC, Marginalisation.LATENT),
@@ -415,6 +418,35 @@ class TestMarginalisationDeclaration:
         codes[0] = int(LimitKind.UPPER_LIMIT)
         likelihood = Likelihood(GaussianFamily(), IndependentNoise(), censoring=Censoring(codes))
         assert likelihood.marginalisation_for(observed) is Marginalisation.ANALYTIC
+
+
+class TestStagedAnalyticCombination:
+    """``complex_gaussian`` + GP: declared ``ANALYTIC``, implemented in Phase 4.
+
+    The 2026-09-03 ruling (``likelihoods.md`` §17 Q6) fixed the circular
+    (equal-component, zero-pseudo-covariance) complex GP as the combination's
+    meaning and landed the declaration at the freeze. Until Phase 4 implements
+    the closed form, composition must refuse with the schedule named — the
+    same declared-but-staged discipline as the ``QuasisepGP`` slot above.
+    Phase 4 replaces the refusal row with agreement rows against the circular
+    closed form.
+    """
+
+    def test_the_declaration_is_analytic(self, backend: ConformanceBackend) -> None:
+        from ampere.core import ComplexGaussianFamily
+
+        gp = GaussianProcessNoise(backend.kernel(MATERN32), backend.gp_solver(SolverKind.DENSE))
+        family = ComplexGaussianFamily()
+        assert family.marginalisation_with(gp) is Marginalisation.ANALYTIC
+
+    def test_the_staged_combination_refuses_rather_than_pretending(
+        self, backend: ConformanceBackend
+    ) -> None:
+        from ampere.core import ComplexGaussianFamily
+
+        gp = GaussianProcessNoise(backend.kernel(MATERN32), backend.gp_solver(SolverKind.DENSE))
+        with pytest.raises(LikelihoodError, match="Phase 4"):
+            Likelihood(ComplexGaussianFamily(), gp)
 
 
 # ---------------------------------------------------------------------------
