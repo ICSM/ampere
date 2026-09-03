@@ -527,6 +527,11 @@ note, and `likelihoods.md` §16's W1.5 bullet:
 
 ### I-3 — a step after a kind-changing step cannot publish requirements at all
 
+*Ruled 2026-09-03: **approved and landed at the freeze** — the chain-internal
+`configure_from(downstream)` is in the contract (`transformations.md` §5),
+called once per step at `Instrument` construction; `pull_back` is not
+adopted. The concrete smearing steps remain Phase 4's.*
+
 **Severity: expressiveness; a real loss of reuse, with a workaround.** Bandwidth
 smearing and time smearing are ordinary, reusable interferometric effects whose
 needs are stated in `(u, v)`, and `negotiate` refuses them because the channel
@@ -567,6 +572,11 @@ the `pull_back` sketch with the honest statement:
 > first real instance arrives.
 
 ### I-4 — `compile_for` cannot refuse, and here that produces a plausible wrong answer
+
+*Ruled 2026-09-03: **approved and landed at the freeze** — `compile_for`
+raises `CompositionError` when it cannot honour a requirement
+(`transformations.md` §7), with `FittingProblem(lenient_compile=True)` the
+explicit warning-and-proceed opt-out.*
 
 **Severity: this modality upgrades §15.3 from "would be nice" to "should be
 decided".** `transformations.md` §15.3 asks whether a model should be able to

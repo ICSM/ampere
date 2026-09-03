@@ -763,6 +763,26 @@ class Transformation(Parameterised, abc.ABC):
         """
         return ()
 
+    def configure_from(self, downstream: Sequence[Transformation]) -> None:
+        """Read the declarations of the steps after this one. Default: nothing.
+
+        The chain-internal half of negotiation (ruled 2026-09-03,
+        ``transformations.md`` §15 Q2 — gap I-3's mechanism, adopted in place
+        of a ``pull_back``). ``requirements()`` are statements about the
+        *channel's* coordinates, so a step downstream of a kind-changing step
+        cannot publish at all; what it can do is tell the step before it what
+        it needs — interferometric bandwidth and time smearing want extra
+        (u, v) samples that are the Fourier step's own buffer, not the
+        model's. :class:`Instrument` calls this once per step at chain
+        construction, with the tuple of that step's successors, before the
+        hot loop; a step that wants nothing inherits this no-op.
+
+        The posture is **push-forward-and-raise**: a step that is handed
+        something it cannot use fails loudly at evaluation rather than ampere
+        inferring requirements backwards through the chain. The first real
+        instances (the smearing steps) are Phase 4's.
+        """
+
     # -- evaluation ----------------------------------------------------------
 
     def __call__(self, samples: FunctionSamples, values: Mapping[str, Value] | None = None) -> Any:
@@ -904,6 +924,15 @@ class Instrument:
             kind = step.output_kind(kind)
         self.output_kind: type[FunctionSamples] = kind
 
+        # Chain-internal negotiation (ruled 2026-09-03, §15 Q2 — gap I-3):
+        # each step reads its successors' declarations once, here, before the
+        # hot loop. The default configure_from is a no-op.
+        for position, step in enumerate(self.steps):
+            step.configure_from(self.steps[position + 1 :])
+
+        self._frozen_mapping: ParameterMapping | None = None
+        self._frozen_declarations: tuple[tuple[str, tuple[int, ...]], ...] | None = None
+
     def _resolve_input_kind(self, declared: type[FunctionSamples] | None) -> type[FunctionSamples]:
         if declared is not None:
             if not (isinstance(declared, type) and issubclass(declared, FunctionSamples)):
@@ -935,8 +964,51 @@ class Instrument:
         snapshot of that is exactly the silent-drift bug class these contracts
         exist to end. The merge is a few dozen dictionary operations; the hot
         loop is inside :meth:`Transformation.apply`, not here.
+
+        After :meth:`freeze` the snapshot is served instead — with the steps'
+        declarations verified first, so a post-freeze reconfiguration is
+        **refused**, never silently served stale.
         """
+        if self._frozen_mapping is not None:
+            if self._declarations() != self._frozen_declarations:
+                raise CompositionError(
+                    f"instrument {self.label!r} was frozen and one of its steps has been "
+                    f"reconfigured since (promote_buffer, register_parameter). A frozen "
+                    f"instrument's merged parameters are a snapshot — the joint parameter "
+                    f"space built from them would silently disagree with the steps. Configure "
+                    f"the steps first and freeze() afterwards, or build a fresh Instrument."
+                )
+            return self._frozen_mapping
         return ParameterSet.merge({step.label: step.parameters for step in self.steps})
+
+    def _declarations(self) -> tuple[tuple[str, tuple[int, ...]], ...]:
+        """A cheap fingerprint of each step's parameter declarations.
+
+        ``Parameter`` is a frozen dataclass, so reconfiguration always
+        replaces objects; object identity per step is therefore exactly the
+        invariant :meth:`freeze` snapshots.
+        """
+        return tuple(
+            (step.label, tuple(id(parameter) for parameter in step.parameters))
+            for step in self.steps
+        )
+
+    def freeze(self) -> Instrument:
+        """Snapshot the merged parameters; refuse later step reconfiguration.
+
+        Ruled 2026-09-03 (``transformations.md`` §15 Q5, with ``inference.md``
+        §19.8 as the consumer evidence): W1.7's ``Dataset`` calls this at
+        construction, so the per-``log_prob`` re-merge in :meth:`__call__`
+        disappears from the hot loop. Deliberately **not** a silent cache: a
+        step reconfigured after the freeze makes the next :attr:`mapping`
+        access raise rather than serve the stale snapshot — the silent-drift
+        bug class this contract exists to end. Idempotent; returns ``self``.
+        """
+        self._frozen_mapping = ParameterSet.merge(
+            {step.label: step.parameters for step in self.steps}
+        )
+        self._frozen_declarations = self._declarations()
+        return self
 
     @property
     def parameters(self) -> ParameterSet:
@@ -1208,5 +1280,18 @@ class Model(Parameterised, abc.ABC):
         :meth:`~ampere.core.results_schema.FunctionSamples.with_values` on
         every evaluation. Return ``self`` (having stored the templates) or a
         new, configured instance.
+
+        **A model that engages with a requirement it cannot honour must
+        raise** :class:`~ampere.core.exceptions.CompositionError` (ruled
+        2026-09-03, ``transformations.md`` §15 Q3 — gap I-4's loud option).
+        The asymmetry with the default is deliberate: ignoring negotiation
+        entirely is a *declared* stance, visible in the model's code, and the
+        model stays correct on its own grid; accepting a requirement and
+        quietly under-sampling it is not — an under-sampled image grid
+        aliases, and aliased visibilities look like real source structure
+        rather than like an error. Raising is the default posture; the
+        explicit opt-out that downgrades the refusal to a warning-and-proceed
+        lives on the caller (W1.7's ``FittingProblem(lenient_compile=True)``),
+        with the *unconfigured* model used instead.
         """
         return self

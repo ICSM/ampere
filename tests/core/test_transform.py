@@ -1104,3 +1104,60 @@ class TestOutOfTreeExtension:
             "propagate_mask",
         }
         assert used <= set(ampere.core.__all__)
+
+
+class TestFreezeAndConfigureFrom:
+    """The two 2026-09-03 chain rulings: ``freeze()`` and ``configure_from``.
+
+    ``transformations.md`` §15 Q5 (freeze: snapshot + refuse later mutation,
+    never a silent cache) and Q2 (gap I-3's chain-internal negotiation in
+    place of a ``pull_back``).
+    """
+
+    def test_freeze_snapshots_the_mapping(self) -> None:
+        instrument = Instrument([CalibrationScale()], input_kind=Spectrum)
+        assert instrument.mapping is not instrument.mapping  # live: recomputed
+        instrument.freeze()
+        assert instrument.mapping is instrument.mapping  # frozen: the snapshot
+
+    def test_a_post_freeze_reconfiguration_is_refused_not_served_stale(self) -> None:
+        step = CalibrationScale()
+        instrument = Instrument([step], input_kind=Spectrum).freeze()
+        assert instrument.parameters.names == ("calibration_scale.scale",)
+        step.register_parameter(Parameter("gain", st.lognorm(0.1), value=1.0))
+        with pytest.raises(CompositionError, match="reconfigured since"):
+            instrument.mapping  # noqa: B018 - the access itself is the assertion
+        # freeze() again re-snapshots, so the loud path has a stated recovery.
+        instrument.freeze()
+        assert "calibration_scale.gain" in instrument.parameters.names
+
+    def test_freeze_returns_self_and_is_idempotent(self) -> None:
+        instrument = Instrument([CalibrationScale()], input_kind=Spectrum)
+        assert instrument.freeze() is instrument
+        first = instrument.mapping
+        assert instrument.freeze() is instrument
+        assert instrument.mapping is not first  # a fresh snapshot, same content
+        assert instrument.parameters.names == ("calibration_scale.scale",)
+
+    def test_an_unfrozen_instrument_still_picks_up_reconfiguration(self) -> None:
+        step = CalibrationScale()
+        instrument = Instrument([step], input_kind=Spectrum)
+        step.register_parameter(Parameter("gain", st.lognorm(0.1), value=1.0))
+        assert "calibration_scale.gain" in instrument.parameters.names
+
+    def test_configure_from_hands_each_step_its_successors(self) -> None:
+        seen: dict[str, tuple[str, ...]] = {}
+
+        class Recording(CalibrationScale):
+            def configure_from(self, downstream) -> None:
+                seen[self.label] = tuple(step.label for step in downstream)
+
+        Instrument(
+            [Recording(label="first"), Recording(label="second"), Recording(label="third")],
+            input_kind=Spectrum,
+        )
+        assert seen == {"first": ("second", "third"), "second": ("third",), "third": ()}
+
+    def test_the_default_configure_from_is_a_no_op(self) -> None:
+        # The simple path must stay simple: no step is obliged to override it.
+        assert Transformation.configure_from(CalibrationScale(), ()) is None

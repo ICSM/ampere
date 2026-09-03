@@ -121,12 +121,18 @@ import dataclasses
 import enum
 import math
 import types
+import warnings
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 
-from .exceptions import DatasetError, LikelihoodError, TransformationError
+from .exceptions import (
+    CompositionError,
+    DatasetError,
+    LikelihoodError,
+    TransformationError,
+)
 from .likelihood import (
     DTYPE,
     GaussianFamily,
@@ -712,7 +718,11 @@ class Dataset:
                 f"a Dataset's instrument must be an Instrument, got {type(instrument).__name__}. "
                 f"A bare Transformation becomes one with Instrument([step])."
             )
-        self.instrument = instrument
+        # A dataset is a composed object, so its instrument is frozen here
+        # (ruled 2026-09-03, transformations.md §15 Q5): the per-log_prob
+        # re-merge disappears from the hot loop, and a step reconfigured after
+        # composition is refused at the next use rather than silently ignored.
+        self.instrument = instrument.freeze()
 
         if likelihood is None:
             likelihood = Likelihood(GaussianFamily(), IndependentNoise())
@@ -800,10 +810,11 @@ class Dataset:
         """This dataset's own merge: instrument, likelihood and latent.
 
         Computed **once**, at construction, and retained — the nesting rule.
-        A dataset is a composed object: reconfiguring one of its instrument's
-        steps afterwards (``promote_buffer``, say) is not picked up, which is
-        the ``freeze()`` answer ``transformations.md`` §15.5 anticipated for the
-        hot loop. Build the dataset after configuring its pieces.
+        A dataset is a composed object: construction freezes its instrument
+        (``Instrument.freeze()``, ruled 2026-09-03), so reconfiguring one of
+        its steps afterwards (``promote_buffer``, say) is refused at the next
+        use rather than silently ignored. Build the dataset after configuring
+        its pieces.
         """
         return self._mapping
 
@@ -1428,6 +1439,13 @@ class FittingProblem:
         The intended workflow is to run non-strict, read
         :meth:`failure_summary`, then re-run with ``strict=True`` to get the
         raise at the offending draw with a full traceback.
+    lenient_compile
+        Downgrade a model's ``compile_for`` refusal
+        (:class:`~ampere.core.exceptions.CompositionError`) to a warning and
+        proceed with the unconfigured model. ``False`` by default — ruled
+        2026-09-03 (``transformations.md`` §15 Q3): negotiation refuses an
+        unachievable requirement by raising, and silencing that is an
+        explicit, per-problem decision.
     simulator_failures
         Extra exception types that count as an unscoreable point rather than a
         bug. :class:`~ampere.core.exceptions.LikelihoodError` is always included
@@ -1462,6 +1480,7 @@ class FittingProblem:
         reference_values: Mapping[str, Value] | ArrayLike | None = None,
         validate: bool = True,
         strict: bool = False,
+        lenient_compile: bool = False,
         simulator_failures: Sequence[type[BaseException]] = (),
         failure_history: int = DEFAULT_FAILURE_HISTORY,
     ) -> None:
@@ -1507,6 +1526,7 @@ class FittingProblem:
         # (2)-(3) Negotiate, then compile — once, before anything is merged, so
         # that a model which reconfigures itself for its instruments is the one
         # whose parameters enter the joint space.
+        self._lenient_compile = bool(lenient_compile)
         self._requirements = self._negotiate()
         self._compiled = {
             label: self._compile(label, instance) for label, instance in self._models.items()
@@ -1586,8 +1606,28 @@ class FittingProblem:
         return collected
 
     def _compile(self, label: str, instance: Model) -> Model:
-        """Step (3): the one-off ``compile_for``, and the check that it behaved."""
-        compiled = instance.compile_for(self._requirements[label])
+        """Step (3): the one-off ``compile_for``, and the check that it behaved.
+
+        A model that engages with a requirement it cannot honour raises
+        ``CompositionError`` (ruled 2026-09-03, ``transformations.md`` §15
+        Q3), and by default that refusal propagates — an unachievable
+        requirement is a composition problem, not a warning. The explicit
+        opt-out is ``lenient_compile=True``: the refusal is downgraded to a
+        warning and the *unconfigured* model is used, which is the same
+        declared stance as a model that ignores negotiation entirely.
+        """
+        try:
+            compiled = instance.compile_for(self._requirements[label])
+        except CompositionError as error:
+            if not self._lenient_compile:
+                raise
+            warnings.warn(
+                f"model {label!r} refused its instruments' requirements ({error}); proceeding "
+                f"with the unconfigured model because lenient_compile=True. The instruments "
+                f"may now be handed a grid they cannot use.",
+                stacklevel=2,
+            )
+            return instance
         if not isinstance(compiled, Model):
             raise DatasetError(
                 f"model {label!r}'s compile_for() returned {compiled!r}, not a Model. It must "

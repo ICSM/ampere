@@ -2029,3 +2029,57 @@ class TestMultipleModels:
         before = model.calls
         problem.log_prob({"model.level": 1.0})
         assert model.calls == before + 1
+
+
+class TestFreezeAndLenientCompile:
+    """Two 2026-09-03 rulings consumed here: freeze-at-composition, loud compile."""
+
+    def test_a_dataset_freezes_its_instrument(self) -> None:
+        # transformations.md §15 Q5: a dataset is a composed object, so
+        # reconfiguring a step afterwards is refused, never silently ignored.
+        step = Calibrate()
+        dataset = Dataset(flat_spectrum(), Instrument([step]))
+        assert dataset.instrument.mapping is dataset.instrument.mapping
+        step.register_parameter(Parameter("gain", st.lognorm(0.1), value=1.0))
+        with pytest.raises(Exception, match="reconfigured since"):
+            dataset.instrument.mapping  # noqa: B018 - the access is the assertion
+
+    def test_a_compile_refusal_propagates_by_default(self) -> None:
+        # transformations.md §15 Q3: negotiation refuses an unachievable
+        # requirement by raising, by default.
+        from ampere.core.exceptions import CompositionError
+
+        class Refusing(Model):
+            def __init__(self) -> None:
+                self.register_parameter(Parameter("level", st.uniform(0.0, 4.0)))
+
+            def evaluate(self, **values: Any) -> Spectrum:
+                ctx = self.context(values)
+                return Spectrum(WAVELENGTH * u.micron, np.full(3, ctx["level"]) * u.Jy)
+
+            def compile_for(self, requirements):
+                raise CompositionError("this model cannot reach the requested resolution")
+
+        with pytest.raises(CompositionError, match="cannot reach the requested resolution"):
+            FittingProblem(Refusing(), [Dataset(flat_spectrum(), label="d")])
+
+    def test_lenient_compile_downgrades_the_refusal_to_a_warning(self) -> None:
+        from ampere.core.exceptions import CompositionError
+
+        class Refusing(Model):
+            def __init__(self) -> None:
+                self.register_parameter(Parameter("level", st.uniform(0.0, 4.0)))
+
+            def evaluate(self, **values: Any) -> Spectrum:
+                ctx = self.context(values)
+                return Spectrum(WAVELENGTH * u.micron, np.full(3, ctx["level"]) * u.Jy)
+
+            def compile_for(self, requirements):
+                raise CompositionError("this model cannot reach the requested resolution")
+
+        with pytest.warns(UserWarning, match="proceeding with the unconfigured model"):
+            problem = FittingProblem(
+                Refusing(), [Dataset(flat_spectrum(), label="d")], lenient_compile=True
+            )
+        # The unconfigured model is used, and the problem still evaluates.
+        assert math.isfinite(problem.log_prob({"model.level": 1.0}))

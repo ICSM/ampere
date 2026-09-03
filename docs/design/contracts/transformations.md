@@ -400,6 +400,45 @@ observable needs a channel binding and nothing else.
 
 ```
 
+### Freezing, and chain-internal configuration
+
+Two chain hooks were **ruled by Peter, 2026-09-03** (§15 Q5 and Q2) and
+landed at the freeze.
+
+**`freeze()`** snapshots the merged parameters. Unfrozen, `mapping` is
+recomputed on every access so a reconfigured step is always picked up (§12);
+that recomputation is also what `Instrument.__call__` paid per evaluation,
+which `inference.md` §19.8 measured against a cheap analytic model and found
+worth removing. `freeze()` is the ruled answer — a snapshot that **refuses
+later mutation, never a silent cache**: a step reconfigured after the freeze
+makes the next access raise rather than serve the stale snapshot. W1.7's
+`Dataset` freezes its instrument at construction, because a dataset is a
+composed object.
+
+```pycon
+>>> frozen = Instrument([CalibrationScale()], label="frozen_demo").freeze()
+>>> frozen.mapping is frozen.mapping
+True
+>>> _ = frozen.steps[0].register_parameter(Parameter("gain", st.lognorm(0.1), value=1.0))
+>>> frozen.mapping
+Traceback (most recent call last):
+    ...
+ampere.core.exceptions.CompositionError: instrument 'frozen_demo' was frozen and one of its steps has been reconfigured since ...
+
+```
+
+**`configure_from(downstream)`** is the chain-internal half of negotiation —
+gap I-3's mechanism, adopted in place of a `pull_back`. `requirements()` are
+statements about the *channel's* coordinates (§7), so a step downstream of a
+kind-changing step cannot publish at all; what it can do is tell the step
+before it what it needs. `Instrument.__init__` calls each step's
+`configure_from` once, with the tuple of its successors, before the hot
+loop; the default is a no-op, so the simple path stays simple. The first
+real instances — interferometric bandwidth and time smearing, which want
+extra (u, v) samples that are the Fourier step's own buffer — are Phase 4's.
+The posture is push-forward-and-raise: ampere never infers requirements
+backwards through a chain.
+
 ## 6. Masks: the rule this contract ratifies
 
 `results_schema.md` §15.9 leaves mask propagation to this contract, and §16
@@ -737,6 +776,19 @@ them with `with_values` on every evaluation. That compile-once/evaluate-many
 split is the one `results_schema.md` §16 specifies, and it is where the caching
 `DEVELOPMENT_PLAN.md` §4.3 wants naturally lives.
 
+**A model that engages with a requirement it cannot honour raises
+`CompositionError`** (ruled 2026-09-03, §15 Q3 — gap I-4's loud option,
+landed at the freeze). The asymmetry with the default is deliberate:
+ignoring negotiation entirely is a *declared* stance, visible in the model's
+code, and the model stays correct on its own grid; accepting a requirement
+and quietly under-sampling it is not — the interferometry sketch is the case
+that makes the difference matter, because an under-sampled image grid
+aliases, and aliased visibilities look like real source structure rather
+than like an error. Raising is the default posture for negotiation
+generally; the one sanctioned opt-out is W1.7's
+`FittingProblem(lenient_compile=True)`, which downgrades the refusal to a
+warning and proceeds with the *unconfigured* model.
+
 ## 8. Worked example: a low-resolution SED and high-resolution CO windows
 
 This is the pattern `DEVELOPMENT_PLAN.md` §4.2 uses to justify named channels
@@ -967,10 +1019,29 @@ core is the vocabulary, not the library.
 Two of them are worth a note. A **response matrix is a matrix multiply**, so
 X-ray forward folding is an ordinary `Transformation` and needs nothing special
 — `results_schema.md` §16 asks W1.11 to confirm that `Spectrum` with an energy
-axis suffices, and this table is the claim it should check. And **Fourier
-sampling changes both the kind and the meaning of the axes**, which is why it
-is also the one whose requirements cannot be pulled back through a chain
-(§13.1).
+axis suffices, and this table is the claim it should check (it did:
+`awkward_instrument.md` §2 — the exposure folds into the same matrix, because
+expected counts, not count rates, are what a Poisson likelihood compares
+against; there is deliberately no per-sample exposure concept anywhere in the
+contracts, and several observations with different exposures are several
+`Dataset`s). And **Fourier sampling changes both the kind and the meaning of
+the axes**, which is why it is also the one whose requirements cannot be
+pulled back through a chain (§13.1).
+
+### The image and 1-D-spatial slots (recorded 2026-09-03; Phase 2+)
+
+The table above is spectral-shaped, because the v1 slice is. Peter's review
+recorded the image and 1-D-spatial equivalents the roadmap overlooked, as
+named standard-library slots — interfaces to come, precluded by nothing in
+the freeze, since each fits the existing `Transformation` surface exactly:
+
+| Transformation | Accepts → produces | Notes |
+|---|---|---|
+| PSF convolution | `Image` → `Image` | the image analogue of LSF convolution; the kernel is usually a buffer |
+| Spatial resampling | `Image` → `Image` | the image analogue of spectral resampling; publishes on `x`/`y` |
+| Affine transform (rotation/translation/scaling/warping) | `Image`/`Cube` → same | the point at which `results_schema.md` §17 Q3's WCS carrier on `Image`/`Cube` becomes necessary — a future *container* addition, not a change here |
+| Hankel transform | radial profile → visibility amplitudes | for radial profiles, and for visibilities as functions of u–v distance alone |
+| NUFFT Fourier sampling | `Image` → `VisibilitySet` | the non-uniform variant, where a plain FFT is the wrong tool |
 
 ## 11. User extensibility, proved out of tree
 
@@ -1022,6 +1093,9 @@ monolithic plugin buys trivially and a factored design has to earn.
 | A chain's parameters compose via `ParameterSet.merge`, step label as component | Also `parameters.md` §13. It makes every nuisance parameter traceable to the step that owns it, and independently written steps cannot collide |
 | `Instrument` is **not** `Parameterised` | Its parameters are its steps', merged — a `ParameterMapping`, not a `ParameterSet`. An instrument-level nuisance parameter is a one-step transformation, which is what a calibration factor already is |
 | The merge is recomputed on access, not cached at construction | A step may be reconfigured (`promote_buffer`) after the chain is built, and a stale snapshot is the silent-drift bug class these contracts exist to end. The hot loop is inside `apply`, not here |
+| `freeze()` snapshots the merge and refuses later mutation (ruled 2026-09-03, §15 Q5) | `inference.md` §19.8 supplied the consumer evidence that the per-`log_prob` re-merge is measurable beside a cheap model. A snapshot that raises on a post-freeze reconfiguration keeps the loud-drift guarantee; a silent cache would trade it away. W1.7's `Dataset` freezes at construction |
+| `configure_from(downstream)` is the chain-internal negotiation hook (ruled 2026-09-03, §15 Q2) | Gap I-3's evidence: a step after a kind-changing step wants the *step before it* configured differently (extra (u, v) samples the Fourier step owns), which no pull-back through the channel's coordinates can express. Called once at chain construction; default no-op; push-forward-and-raise stays the posture |
+| `compile_for` may — and, engaging with an unachievable requirement, must — raise (ruled 2026-09-03, §15 Q3) | Gap I-4: an under-sampled image grid aliases, and aliased visibilities look like source structure, not like an error. The refusal is loud by default; the opt-out (`lenient_compile`) is explicit and per problem |
 | Duplicate step labels raise; they are not auto-numbered | Numbering makes a parameter's name depend on its position, so inserting a step silently renames everything after it — and those names go into priors, provenance and ArviZ coordinates |
 | Mask rule: an output touching **any** masked input is masked | `results_schema.md` §7 defines a masked sample as carrying zero information. Conservative loses a little data at a masked edge; permissive feeds a partly-invalid number to a likelihood, indistinguishable from a good one |
 | Dropping a mask raises rather than warning | `results_schema.md` §16 makes propagation an obligation; an unenforced obligation is documentation. The escape hatch — an explicit all-`False` mask — is one argument |
@@ -1043,12 +1117,22 @@ Each is a decision, not an oversight. Each has an extension point.
 
 1. **No requirement pull-back through a chain.** A step's `requirements()` are
    read as statements about the *channel's* coordinates, not about that step's
-   own input. For the standard library this is exact — every one of those steps
-   knows its target grid, its filter curves or its response matrix at
-   construction — but a chain whose third step needs something only expressible
-   in the second step's output coordinates cannot say so. The extension point
-   is a `Transformation.pull_back(requirement)` method with an identity default
-   for kind-preserving steps and a loud refusal for kind-changing ones.
+   own input. A step downstream of a kind-changing step therefore cannot
+   publish at all, and `negotiate` says so. *(Amended 2026-09-03 — the W1.11
+   interferometry sketch's gap I-3 replaced the original `pull_back` sketch,
+   and the ruling adopted its mechanism.)* Two distinct needs hide behind the
+   limitation, and they want different mechanisms:
+   - *"I need the model evaluated differently"* — the case `pull_back` would
+     serve, and no standard-library step has it, because every kind-changing
+     step in §10's table is the first in its chain. There is still no
+     pull-back, deliberately: it would need every step to invert its own
+     coordinate map, which a kind-changing step cannot in general do.
+   - *"I need the step before me configured differently"* (interferometric
+     bandwidth and time smearing, which want extra (u, v) samples the Fourier
+     step owns) — **chain-internal** negotiation, which is now in the
+     contract: `Transformation.configure_from(downstream)`, called once per
+     step at `Instrument` construction with the tuple of its successors (§5).
+     The first real instances are Phase 4's.
 2. **Density is piecewise-constant, per interval.** A requirement cannot
    express "either of these two grids will do", nor a density that varies
    continuously across an interval. Nor can it express "no coarser than R=40
@@ -1081,10 +1165,12 @@ Each is a decision, not an oversight. Each has an extension point.
    expressible, and would want an `Instrument` that binds a tuple of channels.
 8. **No instrument-level parameters.** Deliberate (§5); the workaround is a
    one-step transformation, which is what a calibration factor is anyway.
-9. **`compile_for` has no failure mode.** A model that *cannot* satisfy a
-   requirement has no way to say so other than ignoring it or raising. Whether
-   a negotiation should be able to fail loudly — "you asked for R=10⁵ and my
-   opacity tables stop at 10³" — is an open question (§15.3).
+9. **`compile_for`'s failure mode is a raise.** *(Closed 2026-09-03 — no
+   longer a limitation.)* A model that engages with a requirement it cannot
+   honour — "you asked for R=10⁵ and my opacity tables stop at 10³" — raises
+   `CompositionError` (§7); ignoring negotiation entirely remains legal and
+   declared. The explicit opt-out that downgrades the refusal to a warning
+   lives on W1.7's `FittingProblem` (`lenient_compile=True`).
 
 ## 14. What this contract hands to the specs downstream
 
