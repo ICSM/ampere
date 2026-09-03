@@ -1381,6 +1381,53 @@ class TestSimulate:
         with pytest.raises(DatasetError, match="censoring declaration on retained samples"):
             problem.simulate({"model.level": 2.0}, observe=True)
 
+    def test_a_limit_excluded_by_the_prediction_mask_does_not_block_a_draw(self) -> None:
+        # Found by the freeze's adversarial review: the censoring refusal read
+        # the observed mask alone, so a limit a prediction-side mask excludes
+        # blocked a draw log_prob would happily have excised. Masking beats
+        # censoring for the *effective* (union) mask.
+        class MaskSecond(Transformation):
+            ACCEPTS = (Spectrum,)
+
+            def apply(self, samples: Spectrum, values: Any) -> Spectrum:
+                mask = np.zeros(samples.n_samples, dtype=bool)
+                mask[1] = True
+                return samples.with_values(samples.values, mask=mask)
+
+        likelihood = Likelihood(
+            GaussianFamily(),
+            IndependentNoise(),
+            censoring=Censoring(np.array([0, 1, 0])),
+        )
+        observed = flat_spectrum(mask=[False, True, False])
+        problem = FittingProblem(
+            Flat(WAVELENGTH),
+            [Dataset(observed, Instrument([MaskSecond()]), likelihood, label="d")],
+            seed=9,
+        )
+        simulation = problem.simulate({"model.level": 2.0}, observe=True)
+        assert simulation.observations is not None
+        # The masked, censored sample keeps the observed value; the rest drew.
+        assert simulation.observations["d"].values[1] == pytest.approx(observed.values[1])
+
+    def test_seeds_are_validated_loudly_at_composition(self) -> None:
+        # Found by the freeze's adversarial review: int(seed) silently
+        # truncated 1.9, counted True as 1, and accepted seeds that crash
+        # substream's signed 64-bit derivation at the first stream request.
+        def problem(seed: Any) -> FittingProblem:
+            return FittingProblem(
+                Flat(WAVELENGTH), [Dataset(flat_spectrum(), label="d")], seed=seed
+            )
+
+        with pytest.raises(DatasetError, match="must be an integer"):
+            problem(1.9)
+        with pytest.raises(DatasetError, match="must be an integer"):
+            problem(True)
+        with pytest.raises(DatasetError, match="does not fit substream"):
+            problem(2**63)
+        assert problem(-1).seed == -1  # signed is part of the derivation
+        assert problem(np.int64(7)).seed == 7
+
     def test_a_family_that_cannot_be_sampled_says_so(self) -> None:
         counts = Spectrum(WAVELENGTH * u.micron, np.array([4.0, 7.0, 2.0]))
         problem = FittingProblem(

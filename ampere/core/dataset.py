@@ -149,6 +149,7 @@ from .parameter import (
     Value,
 )
 from .results_schema import FunctionSamples, ModelResult
+from .rng import SEED_BYTES
 from .rng import generator as _generator
 from .transform import Instrument, Model, negotiate
 
@@ -928,14 +929,29 @@ class Dataset:
             )
         )
 
-    def _censored_after_masking(self) -> bool:
-        """Whether any limit survives the observed container's mask."""
+    def _censored_after_masking(self, retain: np.ndarray | None = None) -> bool:
+        """Whether any limit survives the mask.
+
+        With no *retain*, the observed container's own mask answers — the
+        composition-time reading :meth:`_declare_latent` needs, before any
+        prediction exists. A caller holding a prediction passes the
+        **effective** inclusion indicator (the observed-and-predicted union
+        ``likelihoods.md`` §8 defines), so a limit a prediction-side mask
+        excludes does not count — masking beats censoring for the union too.
+        (The asymmetry was found at the freeze's adversarial review:
+        ``log_prob`` excised such a limit while ``draw_observation`` still
+        refused because of it.)
+        """
         censoring = self.likelihood.censoring
         if censoring is None:
             return False
         censoring.check_against(self.observed)
-        valid = np.asarray(self.observed.valid).ravel()
-        return bool(np.any(np.asarray(censoring.kinds)[valid] != 0))
+        included = (
+            np.asarray(self.observed.valid).ravel()
+            if retain is None
+            else np.asarray(retain, dtype=bool).ravel()
+        )
+        return bool(np.any(np.asarray(censoring.kinds)[included] != 0))
 
     def _split(
         self,
@@ -1131,7 +1147,15 @@ class Dataset:
         """
         family = self.likelihood.family
         noise = self.likelihood.noise
-        if self._censored_after_masking():
+        observed = self.observed
+        routed = {} if values is None else self.route(values)
+        resolved = routed.get(LIKELIHOOD_COMPONENT, {})
+        weights = np.asarray(observed.weights()).ravel() * np.asarray(predicted.weights()).ravel()
+        retain = weights > 0.0
+        # Checked against the *effective* mask, prediction side included, so a
+        # limit the union excludes does not block the draw — the same answer
+        # log_prob's excision gives (masking beats censoring, likelihoods.md §9).
+        if self._censored_after_masking(retain):
             raise DatasetError(
                 f"dataset {self.label!r}: a censoring declaration on retained samples blocks "
                 f"observation drawing — a limit is part of the observation process, and applying "
@@ -1139,11 +1163,6 @@ class Dataset:
                 f"simulate(observe=False) and draw your own observations from the predicted "
                 f"containers."
             )
-        observed = self.observed
-        routed = {} if values is None else self.route(values)
-        resolved = routed.get(LIKELIHOOD_COMPONENT, {})
-        weights = np.asarray(observed.weights()).ravel() * np.asarray(predicted.weights()).ravel()
-        retain = weights > 0.0
         drawn = np.array(np.asarray(observed.values).ravel(), dtype=DTYPE, copy=True)
         if not np.any(retain):
             return observed.with_values(drawn.reshape(observed.shape))
@@ -1520,7 +1539,30 @@ class FittingProblem:
             if not isinstance(tie, Tie):
                 raise DatasetError(f"ties must be Tie instances, got {type(tie).__name__}.")
 
-        self.seed = None if seed is None else int(seed)
+        # Loud, at composition (found by the freeze's adversarial review):
+        # int(1.9) silently truncating, True counting as 1, or a seed outside
+        # substream's signed 64-bit derivation crashing at the first stream
+        # request would all contradict the reproducibility contract this seed
+        # exists for (lowering.md §9.2 — every backend derives its streams
+        # from the same bytes).
+        if seed is None:
+            self.seed = None
+        else:
+            if isinstance(seed, bool) or not isinstance(seed, (int, np.integer)):
+                raise DatasetError(
+                    f"a run seed must be an integer, got {seed!r}. substream "
+                    f"(lowering.md §9.2) derives every named stream from it, and ampere will "
+                    f"not guess what a non-integer seed means."
+                )
+            bound = 1 << (8 * SEED_BYTES - 1)
+            if not -bound <= int(seed) < bound:
+                raise DatasetError(
+                    f"seed {seed!r} does not fit substream's {8 * SEED_BYTES}-byte signed "
+                    f"derivation. Every backend derives its streams from the same "
+                    f"{SEED_BYTES}-byte encoding, so the range is part of the "
+                    f"reproducibility contract."
+                )
+            self.seed = int(seed)
         self._streams: dict[str, np.random.Generator] = {}
         for candidate in simulator_failures:
             if not (isinstance(candidate, type) and issubclass(candidate, BaseException)):

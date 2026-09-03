@@ -1776,12 +1776,18 @@ class GaussianFamily(LikelihoodFamily):
         * correlated (GP) noise — ``x = mu + L z1 + sigma z2``, where ``L``
           comes from :meth:`GPSolver.latent_transform`, the same whitening the
           latent declaration uses. That is a draw from
-          ``N(mu, K + diag(sigma^2))`` **up to the solver's numerical
-          stabiliser**: the solver's own jitter is part of the covariance it
-          scores, so it is folded into the draw here — omitting it would draw
-          from a narrower distribution than the likelihood evaluates, and the
-          error is not small at the jitter values the library's own error
-          message tells a user to raise.
+          ``N(mu, K + diag(sigma^2))`` **up to the numerical stabilisers**:
+          the solver's own jitter is part of the covariance it scores, so it
+          is folded into the draw here — omitting it would draw from a
+          narrower distribution than the likelihood evaluates, and the error
+          is not small at the jitter values the library's own error message
+          tells a user to raise. ``latent_transform``'s own factorisation
+          epsilon (a relative ``1e-10`` on the diagonal of ``K``, needed so a
+          smooth kernel's near-singular matrix factorises at all) also
+          inflates the drawn covariance, by an amount ten orders below the
+          marginal variance; the scoring path does not carry it, and aligning
+          the two exactly — drawing through the same factorisation the
+          marginal likelihood forms — is recorded as a Phase 2 refinement.
         """
         realisation = np.asarray(predicted, dtype=DTYPE).copy()
         sigma = None if noise.sigma is None else np.asarray(noise.sigma, dtype=DTYPE)
