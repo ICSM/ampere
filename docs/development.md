@@ -100,7 +100,14 @@ Phase-1 suite is unexercised by `ci.yml` (the py3.11 import break that
 survived until W1.10's review is the proof it bites; fixed `a8e6f54`);
 (b) `pixi run <task>` in the *default* environment cannot import
 ampere from a worktree — the tasks should default to `dev` or the
-default env pin a supported Python.
+default env pin a supported Python; (c) found 2026-09-03: running
+`tests/core` and `tests/conformance` in **one pytest process** fails
+`test_the_table_covers_every_registered_family` —
+`tests/core/test_likelihood.py` registers throwaway families
+module-globally and never deregisters them, so they leak into
+`list_families()`; each suite alone passes, which is why nothing has
+caught it (see (a)). The fix is a registry-snapshot fixture around the
+registering tests.
 
 **Ruled later on 2026-09-02, all landed**: lossless nesting +
 `Binding.index` (implemented by the orchestrator after the Opus dispatch
@@ -132,9 +139,15 @@ fallback sanctioned with a loud warning and a `strict` raise). **New
 scope recorded** in `transformations.md` §15: image/1-D-spatial
 standard-library transformations (PSF convolution, spatial resampling,
 affine + WCS, Hankel, NUFFT) — W1.13 confirms the freeze precludes none.
+**And later the same day, `results.md` §15 R1–R7 were all accepted as
+recommended** (decision-log row in the plan's §2): R3's wording
+corrections and R5's `ResultsError`-to-core move were implemented at
+once; R2 (`pointwise_log_prob`, granted-not-stored) and R4
+(`AnomalyScore` in core) land at W1.13; R1 (arviz + netCDF engine into
+the base install) waits for Phase 2's engine drivers; R6 confirmed; R7
+folds into the consolidated serialisation review.
 
-**Peter's remaining review backlog**: `results.md` §15 **R1–R7**
-(untouched — the largest block); X-1's detailed design
+**Peter's remaining review backlog**: X-1's detailed design
 (`awkward_instrument.md` §6, then its §9 Q1 — iterate, then rule);
 `transformations.md` §15 Q6 (two-channel instruments) and Q4's
 default-label residual; `inference.md` §19 items 5–7 (context supplied

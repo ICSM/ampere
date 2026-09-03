@@ -31,6 +31,7 @@ __all__ = [
     "LikelihoodError",
     "OptionalDependencyError",
     "ParameterError",
+    "ResultsError",
     "SchemaError",
     "TransformationError",
     "TyingError",
@@ -192,6 +193,28 @@ class DatasetError(ContractError):
     (:class:`~ampere.core.dataset.Failure`) rather than an exception. This error
     is for the composition-time failures that should stop a run before it
     starts.
+    """
+
+
+class ResultsError(ContractError):
+    """Results emission or serialisation was asked for something it cannot do.
+
+    Raised by :mod:`ampere.results` for: a container carrying metadata that
+    will not serialise, a draw array whose shape disagrees with the problem's
+    free size, an unknown container kind on the way back in. Like every
+    sibling, it signals a composition that cannot be honoured rather than a
+    bug in ampere.
+
+    Declared in ``ampere/results/exceptions.py`` until Peter's 2026-09-03
+    ruling on ``results.md`` §15 R5 moved it here beside its siblings;
+    ``ampere.results`` re-exports it, so both import paths name this class.
+
+    Examples
+    --------
+    >>> raise ResultsError("nope")
+    Traceback (most recent call last):
+        ...
+    ampere.core.exceptions.ResultsError: nope
     """
 
 

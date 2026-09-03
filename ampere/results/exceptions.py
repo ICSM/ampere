@@ -1,36 +1,22 @@
-"""The results contract's own error type.
+"""The results contract's error type — re-exported from its ruled home.
 
-Every other contract raises its own :class:`~ampere.core.exceptions.ContractError`
-subclass — ``ParameterError``, ``SchemaError``, ``TransformationError``,
-``LikelihoodError``, ``DatasetError`` — and they all live together in
-``ampere/core/exceptions.py``. :class:`ResultsError` belongs beside them; it is
-declared here instead only because ``ampere/core/exceptions.py`` is a merged
-Phase-1 contract and widening it is a decision-log matter rather than a W1.8 one
-(``AGENTS.md`` ground rule 9). ``docs/design/contracts/results.md`` §13 asks
-W1.13 to move it, which is a two-line change and no import-site change at all,
-since ``ampere.results`` re-exports it either way.
+:class:`ResultsError` was declared here while ``ampere/core/exceptions.py`` was
+a merged Phase-1 contract that W1.8 could not widen (``AGENTS.md`` ground
+rule 9). Peter's 2026-09-03 ruling on ``docs/design/contracts/results.md`` §15
+R5 moved it to ``ampere.core.exceptions``, beside every sibling contract error
+(``ParameterError``, ``SchemaError``, ``TransformationError``,
+``LikelihoodError``, ``DatasetError``). This module remains so that existing
+import sites keep working; both paths name the same class.
+
+Examples
+--------
+>>> import ampere.core.exceptions
+>>> ResultsError is ampere.core.exceptions.ResultsError
+True
 """
 
 from __future__ import annotations
 
-from ampere.core.exceptions import ContractError
+from ampere.core.exceptions import ResultsError
 
 __all__ = ["ResultsError"]
-
-
-class ResultsError(ContractError):
-    """Results emission or serialisation was asked for something it cannot do.
-
-    A ``ContractError``, hence a ``ValueError``: like every sibling, it signals a
-    composition that cannot be honoured — a container carrying metadata that will
-    not serialise, a draw array whose shape disagrees with the problem's free
-    size, an unknown container kind on the way back in — rather than a bug in
-    ampere.
-
-    Examples
-    --------
-    >>> raise ResultsError("nope")
-    Traceback (most recent call last):
-        ...
-    ampere.results.exceptions.ResultsError: nope
-    """

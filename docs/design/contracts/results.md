@@ -171,7 +171,7 @@ silently storing less:
 >>> emit(joint, np.zeros((1, 3)), [joint.log_prob({"model.index": -1.0, "model.norm": 1.0, "calibration": 1.0})])
 Traceback (most recent call last):
     ...
-ampere.results.exceptions.ResultsError: every recorded draw must be a FittingProblem.evaluate()
+ampere.core.exceptions.ResultsError: every recorded draw must be a FittingProblem.evaluate()
 result, got float. ...
 
 ```
@@ -986,6 +986,26 @@ Each is a decision, not an oversight. Each has an extension point.
   fits used the same declaration and may be reweighted together.
 
 ## 15. Open questions for review
+
+**Ruled by Peter, 2026-09-03 — all seven, in the direction each request
+recommends.** R1: arviz joins the base install with **Phase 2's engine
+drivers**, promoted together with a netCDF engine, when a user can first
+emit a run. R2: `Likelihood.pointwise_log_prob` is **granted at the
+freeze but not stored by default** — W1.13 lands the §4.4 addition with
+its decision-log entry. R3: the `InferenceData` → `xarray.DataTree`
+wording is ratified — `DEVELOPMENT_PLAN.md` §4.6 and `architecture.md`
+§3 corrected the same day, with the decision-log entry. R4:
+`AnomalyScore` lands in `ampere.core` at W1.13. R5: `ResultsError`
+**moved to `ampere/core/exceptions.py`** the same day (`ampere.results`
+still re-exports it, so no import site changes); container serialisation
+**stays functions** in `ampere.results`. R6: the per-dataset
+`log_likelihood` group — the conventional name, keyed by dataset, with
+the decomposition declared in the group's attributes — is confirmed. R7
+rides with the consolidated cross-contract serialisation review at W1.13
+(Peter's same-day `likelihoods.md` §17 Q8 ruling), where
+`describe_likelihood`'s promotion to `Likelihood.to_spec()` is the
+leading candidate rather than a separately ruled point. The original
+requests are kept below for the record.
 
 **R1 — when does arviz join the base install, and with which netCDF engine?**
 `architecture.md` §3's extras table says arviz is "folded into the base install
