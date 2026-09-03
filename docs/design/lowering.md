@@ -454,7 +454,21 @@ The distinction worth holding onto is that §3.4 forbids substituting a
 fallback emits a warning naming the affected families and the backend, so
 a nominally torch-backed run that computes its prior transform in numpy is
 never a surprise discovered later; a `strict` option turns the warning
-into a raise. W1.13 fixes where the flag lives (§12, item 6).
+into a raise.
+
+**The flag's home is pinned (W1.13, at the freeze): the fitting problem's
+existing `strict` toggle** — `FittingProblem(strict=...)`, the run-level
+control `inference.md` §11 defines — not a new per-lowering knob. One flag,
+one meaning: `strict=True` already says "I would rather fail than have
+anything smoothed over" (exceptions propagate instead of becoming −inf
+with a recorded reason), and refusing to mix a numpy prior transform into
+a nominally native run is the same preference at lowering time. Phase 2
+implements exactly this: when a backend lowers `prior_transform` and a
+family lacks a native `icdf`, it consults the problem's `strict` — `False`
+(the default) takes the reference fallback and warns **once per run**,
+naming the families and the backend; `True` raises a `LoweringError`
+naming them instead. The warning is per run, not per call, because the
+fallback decision is made once at lowering time, before any sampling.
 
 ## 4. Bijection mapping
 
@@ -1181,8 +1195,10 @@ crashing, which is the criterion for needing a mechanical check.
    a missing native `icdf` is accepted on two conditions: taking it emits
    a loud warning naming the families and the backend, and a `strict`
    switch turns that warning into a raise for the user who would rather
-   fail than mix paths. §3.6 amended to match; W1.13 fixes the flag's
-   home (plausibly beside the run's other strictness controls). *(Original
+   fail than mix paths. §3.6 amended to match; the flag's home was fixed
+   at the freeze — **the fitting problem's existing `strict` toggle**,
+   threaded to the lowering path, one flag with one meaning (§3.6 has the
+   Phase 2 implementation contract). *(Original
    question follows for the record.)* **Should the reference backend be a sanctioned fallback for a missing
    `icdf`?** §3.6 says yes and argues it is not the silent substitution §3.4
    forbids, because `prior_transform` has one mathematical definition. That
