@@ -225,6 +225,19 @@ test-characterisation = "pytest tests/characterisation"
 # against the in-repo reference and mirror fixtures today; a Phase-2 backend
 # joins by registering one fixture (tests/conformance/README.md).
 conformance = "pytest tests/conformance"
+# W0.10: named tasks for the other two Phase 1 suites, so CI (and anyone
+# working locally) invokes them the same way as `test-characterisation` and
+# `conformance` above rather than a raw pytest line. `test-phase1` runs all
+# three Phase-1 suites (core, results, conformance) in ONE pytest process --
+# this is not just for speed: it is the invocation that proves
+# tests/core/conftest.py's registry-snapshot fixture actually stops a
+# likelihood-family registration leaking from `tests/core` into
+# `tests/conformance`'s check that the marginalisation table covers exactly
+# the registered family set (finding (c) in this item; each suite passing
+# alone does not catch it -- see tests/core/conftest.py's docstring).
+test-core = "pytest tests/core"
+test-results = "pytest tests/results"
+test-phase1 = "pytest tests/core tests/results tests/conformance"
 lint = "ruff check ."
 format-check = "ruff format --check . --exclude tests/characterisation"
 # pyrefly is scoped to the new namespaces (AGENTS.md ground rule 8); none
@@ -282,10 +295,36 @@ ampere = { path = ".", editable = true, extras = ["torch"] }
 ampere = { path = ".", editable = true, extras = ["jax"] }
 
 [tool.pixi.environments]
+# W0.10 finding (b): without an explicit `default` entry here, pixi
+# synthesises one from only the base [tool.pixi.pypi-dependencies] table
+# (just the editable `ampere` install, no extras) -- no `python` feature
+# means no version pin, so it solves to conda-forge's newest available
+# interpreter (found to be 3.14 -- ahead of this project's tested 3.11-3.13
+# range, see [project.classifiers]), and no `dev` feature means no pytest.
+# `pixi run <task>` with no `-e` targets that implicit `default`
+# environment; since pytest isn't present in it, the task falls through to
+# whatever `pytest` is first on $PATH -- typically an unrelated
+# system/conda install with no knowledge of this checkout at all, so it
+# reports `ModuleNotFoundError: No module named 'ampere'` from a worktree
+# (or worse, silently runs against a *different* ampere checkout's install
+# if one happens to be on PATH). Aliasing `default` to the same feature set
+# as `dev` fixes both problems at once -- a pinned, supported Python *and*
+# pytest actually present -- rather than pinning the Python version alone,
+# which would leave the missing-pytest half of the failure unfixed. This
+# makes plain `pixi run <task>` behave exactly like `pixi run -e dev
+# <task>`, the daily-use environment AGENTS.md documents. The shared
+# `solve-group` ties the two to the same locked package set -- without it,
+# `default` and `dev` solve independently and can drift to different exact
+# builds of the same versions on a future `pixi lock`/`pixi update`, which
+# would quietly contradict "behaves exactly like dev".
+default = { features = ["py313", "dev", "zeus", "extinction", "arviz"], solve-group = "dev" }
 # Daily-use environment: latest supported Python plus the full non-sbi,
 # non-backend toolchain (mirrors AGENTS.md's conda `ampere` env, which is
-# Python 3.13).
-dev = { features = ["py313", "dev", "zeus", "extinction", "arviz"] }
+# Python 3.13). Kept as its own named environment (rather than relying on
+# `default` alone) so `pixi run -e dev <task>` -- used throughout ci.yml and
+# AGENTS.md -- keeps working unambiguously even if `default` above ever
+# needs to diverge.
+dev = { features = ["py313", "dev", "zeus", "extinction", "arviz"], solve-group = "dev" }
 # CI test matrix: one environment per Python version. Deliberately no
 # `sbi` extra here -- torch is a large download and sbi tests skip cleanly
 # by design (tests/characterisation/conftest.py's `requires_sbi` marker);
