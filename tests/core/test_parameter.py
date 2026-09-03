@@ -1027,6 +1027,37 @@ class TestDiscreteFamilies:
         assert default_bijection_for(st.expon(0.0, 1.0)) == Log(lower=0.0)
 
 
+class TestExceptionHomes:
+    """The W1.13 exception dispositions (ruled 2026-09-03, lowering.md §12.4)."""
+
+    def test_lowering_error_is_an_ampere_error_but_not_a_contract_error(self) -> None:
+        # lowering.md §3.4: a family torch does not implement is a capability
+        # gap in the backend, not a malformed declaration by the user, so the
+        # two must stay distinguishable to a caller catching by type.
+        from ampere.core import AmpereError, ContractError, LoweringError
+
+        err = LoweringError("truncnorm", backend="torch", parameter="temperature")
+        assert isinstance(err, AmpereError)
+        assert not isinstance(err, ContractError)
+        assert (err.family, err.parameter, err.backend) == ("truncnorm", "temperature", "torch")
+        assert "truncnorm" in str(err) and "torch" in str(err)
+        assert "never substitutes an approximation" in str(err)
+
+    def test_optional_dependency_error_stands_ratified_in_place(self) -> None:
+        # parameters.md §14 Q5, closed at the freeze: the shape pinned in
+        # ampere/core/exceptions.py is the contract.
+        err = OptionalDependencyError("paramax", extra="jax", context="lowering a ParameterSet")
+        assert isinstance(err, ImportError)
+        assert (err.package, err.extra) == ("paramax", "jax")
+
+    def test_results_error_lives_in_core_and_is_reexported(self) -> None:
+        # results.md §15 R5, implemented 2026-09-03: one class, two import paths.
+        from ampere.core.exceptions import ResultsError as from_core
+        from ampere.results.exceptions import ResultsError as from_results
+
+        assert from_core is from_results
+
+
 class TestLoweringExtensionPoint:
     def test_as_paramax_explains_that_it_belongs_to_the_backend(self) -> None:
         pset = ParameterSet([Parameter("t", st.norm(0.0, 1.0))])

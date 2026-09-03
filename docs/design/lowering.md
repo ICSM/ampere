@@ -376,16 +376,18 @@ The rule, in order:
 
 The error type should be one shared class across backends, so tests and
 tooling assert on it uniformly, in the same spirit as `architecture.md` §4's
-rule 3. `ampere/core/exceptions.py` today defines `AmpereError` (the base),
-`ContractError` and its subclasses `ParameterError`/`TyingError`, and
-`OptionalDependencyError`. The candidate is a new
-`LoweringError(AmpereError)` — deliberately **not** under `ContractError`,
-because a family torch does not implement is a capability gap in the backend,
-not a malformed declaration by the user; conflating the two would make
-"your prior is invalid" and "this backend cannot express your valid prior"
-indistinguishable to a caller catching the exception. It should carry the
-family, the parameter name and the backend as fields. To be pinned by W1.13
-alongside `OptionalDependencyError` (§12, open question 4).
+rule 3. **Landed at the freeze** (ruled 2026-09-03, §12.4):
+`ampere.core.exceptions.LoweringError(AmpereError)` — deliberately **not**
+under `ContractError`, because a family torch does not implement is a
+capability gap in the backend, not a malformed declaration by the user;
+conflating the two would make "your prior is invalid" and "this backend
+cannot express your valid prior" indistinguishable to a caller catching the
+exception. It carries the family, the parameter name and the backend as
+fields (plus a free-text `detail`), and its message names the three options:
+change the prior, register your own lowering (§12.8's hook, Phase 2), or
+run on a backend that has the family. `OptionalDependencyError` was
+ratified in place in the same pass (`parameters.md` §14 Q5), and
+`ResultsError` had already moved to core (`results.md` §15 R5).
 
 ### 3.5 Discrete families
 
