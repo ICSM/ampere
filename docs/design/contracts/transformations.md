@@ -1181,6 +1181,18 @@ Peter suspects one will surface — limitation 13.7's tuple-binding
 extension stays the named escape hatch, and the first modality that
 needs it should be sketched before the contract is widened.
 
+**And later the same day, the question 4 residual and question 6 were
+settled.** Q4: the label may keep defaulting to the channel name in the
+one-instrument case; when more than one instrument reads a channel,
+distinct instrument labels are **required**, checked at problem
+composition — where the ambiguous requirements-provenance `sources`
+tuple is produced (`inference.md` §8 carries the qualified conclusion) —
+and W1.13 lands the check. Q6: formally deferred with the rule of
+engagement above — the contract is not widened for the freeze, and the
+first modality that genuinely needs a two-channel instrument gets a
+W1.11-style sketch before limitation 13.7's tuple-binding extension is
+taken up.
+
 **Recorded at the same review — standard-library transformations the
 roadmap overlooked.** §10 is spectral-shaped; the image and 1-D spatial
 equivalents were not named: PSF convolution and spatial resampling (the

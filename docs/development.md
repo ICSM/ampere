@@ -94,7 +94,8 @@ seven ruling requests (R1–R7, `results.md` §15) join Peter's backlog.
 **Only W1.13 (spec assembly & freeze) remains in Phase 1.** It owes the
 batched sol review (still unavailable on this account — Peter
 configures codex first) and resolves the decision backlog below.
-**Findings worth W0.x items before the freeze**: (a) CI never runs
+**Findings worth W0.x items before the freeze** (all three now covered
+by W0.10, authorised 2026-09-03): (a) CI never runs
 `tests/core`, `tests/results` or `tests/conformance` — the whole
 Phase-1 suite is unexercised by `ci.yml` (the py3.11 import break that
 survived until W1.10's review is the proof it bites; fixed `a8e6f54`);
@@ -147,15 +148,30 @@ once; R2 (`pointwise_log_prob`, granted-not-stored) and R4
 the base install) waits for Phase 2's engine drivers; R6 confirmed; R7
 folds into the consolidated serialisation review.
 
+**Third ruling batch, later on 2026-09-03 — everything but X-1.**
+`inference.md` §19 items 5–7 ruled (substream ratified in core;
+capability flags promoted into W1.5's ABCs at the freeze; narrow catch
+set confirmed); `lowering.md` §12 item 1 ruled — option (a), **with the
+door left ajar** for eventual discrete support ((variational) EM,
+enumeration, SBI, nested sampling, Bayesian optimisation): the refusal
+lives only in `default_bijection_for`, is a typed capability error, and
+discreteness becomes queryable — and item 8 ruled (the hardened
+registry, inert to jit/vmap/grad because it resolves before tracing);
+`transformations.md` §15 Q4's residual settled (distinct labels required
+only when >1 instrument reads a channel, checked at problem composition;
+singleton default kept) and Q6 formally deferred, sketch-first; W1.10's
+narrowed hash claim ratified (backend-neutral model identity routed to
+the freeze beside `describe()`); the serialisation-review scope stands
+as proposed; **W0.10 authorised** (CI runs the Phase-1 suites, with
+different schedules per part if needed; the registry-leak and
+pixi-default-env fixes ride along; py3.11 droppable if problematic).
+Decision-log rows in the plan's §2; every ruling is in its spec's
+§-preamble; implementation routes to W1.13 (and W0.10).
+
 **Peter's remaining review backlog**: X-1's detailed design
-(`awkward_instrument.md` §6, then its §9 Q1 — iterate, then rule);
-`transformations.md` §15 Q6 (two-channel instruments) and Q4's
-default-label residual; `inference.md` §19 items 5–7 (context supplied
-2026-09-03, awaiting rulings); lowering.md §12 items 1 (discrete-family
-bijection — options supplied) and 8 (registration hook — candidate designs
-supplied); the consolidated serialisation review's scope. Housekeeping:
-W0.9; branch-triage approval (`docs/design/harvest/branch_triage.md`);
-the two pre-freeze CI/pixi findings above.
+(`awkward_instrument.md` §6, then its §9 Q1) — under review now.
+Housekeeping: W0.9 and W0.10 scheduling; branch-triage approval
+(`docs/design/harvest/branch_triage.md`).
 
 **Restart prompt for a new session** (paste as the opening message):
 

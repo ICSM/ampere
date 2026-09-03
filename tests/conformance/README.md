@@ -254,3 +254,12 @@ Run the suite to see it; as of W1.10:
   either the contract or the fingerprint changes. A ruling is owed on whether
   §14's backend-spanning claim should be narrowed to the spec and data hashes,
   or the fingerprint should carry a backend-neutral model identity.
+
+  **Ruled 2026-09-03: the narrowed claim stands.** The spec and data hashes
+  are the backend-spanning promise; `ampere_problem_hash` remains
+  deliberately backend-variant (a lowered model is a different
+  implementation, and different implementations must not share a cache
+  key). Whether Phase 2 additionally wants a backend-neutral model identity
+  — so an emulator trained on one backend can be *offered*, never silently
+  served, to a fit on another — stays routed to the freeze beside
+  `results.md` §13.13's `describe()` hook.

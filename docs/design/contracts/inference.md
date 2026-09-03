@@ -605,6 +605,17 @@ record ambiguous. Naming them is worth doing, but it is a readability
 recommendation rather than a correctness requirement, and nothing needs to check
 it at the `negotiate` step.
 
+**Ruled 2026-09-03** (the `transformations.md` §15 Q4 residual): that
+conclusion is now qualified. The label and the channel are distinct
+concepts — the channel says which part of the simulation an instrument
+consumes, the label is how the user identifies the instrument and which
+parameters are constrained by which data — so when more than one
+instrument reads a channel, distinct instrument labels are *required*:
+the `sources` tuple above is exactly the provenance record that stays
+ambiguous otherwise. The check lands with W1.13, at problem composition
+(not at `negotiate`, which still merges nothing); the one-instrument
+default-to-channel-name case is unchanged.
+
 ### The effective mask, resolved once
 
 **Ruled by Peter** (`likelihoods.md` §17 Q2): the union of the observed and
@@ -1676,10 +1687,18 @@ R4: **the name surface is settled now, not at Phase 5** — grouped
 non-hierarchical data (one object's several sub-mm CO lines) want dotted
 channels too, so `_check_channel_name` and the `Instrument` channel binding
 accept `.`-separated identifiers (§14; merge-component labels stay bare).
-The original requests are kept below for the record. Items 5–7 remain open
-as written; item 8 was closed on 2026-09-03 by Peter's acceptance of
-`transformations.md` §15 Q5 — `freeze()` is confirmed as worth doing, and
-W1.13 lands it.
+The original requests are kept below for the record. Item 8 was closed on
+2026-09-03 by Peter's acceptance of `transformations.md` §15 Q5 —
+`freeze()` is confirmed as worth doing, and W1.13 lands it. **Later the
+same day items 5–7 were ruled too**: item 5 — `substream` is ratified in
+`ampere.core` (closing `lowering.md` §12.7 with it); item 6 — the
+capability flags are promoted into W1.5's ABCs at the freeze, as class
+attributes whose conservative defaults (`False`/`False`/`"cpu"`)
+reproduce the current `getattr` semantics exactly; item 7 — confirmed:
+the catch set stays narrow by default (`LikelihoodError` plus declared
+`simulator_failures`, with `strict=True` catching nothing), and
+`simulator_failures=(Exception,)` remains the explicit escape hatch for
+an untidy external simulator.
 
 **R1 — the merge topology (§4). The main ruling this document asks for.**
 Nested `ParameterMapping`, one merge per level, is implemented; §4.2–4.4 set out

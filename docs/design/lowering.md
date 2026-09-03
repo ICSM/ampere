@@ -1094,7 +1094,23 @@ crashing, which is the criterion for needing a mechanical check.
 
 ## 12. Open questions for review
 
-1. **Discrete parameters get a continuous default bijection.**
+1. ***Ruled 2026-09-03: raise, with the door left ajar.*** Option (a) is
+   accepted — `default_bijection_for` raises for a discrete family — with
+   Peter's modification: the route to *eventual* discrete support
+   (numpyro-style enumeration, (variational) EM, SBI, nested sampling,
+   bare optimisation such as Bayesian optimisation) must not be
+   foreclosed, though none of it is in the current development plan.
+   Three design constraints make that so, recorded for W1.13's landing:
+   the refusal lives **only** in `default_bijection_for` — declaration,
+   prior sampling, constrained-space `log_prob`, `prior_transform` (an
+   inverse-CDF composition, and scipy's discrete families implement
+   `ppf`) and §3.5's lowering-as-distribution are untouched, so the
+   non-gradient routes keep working; the error is a typed *capability*
+   refusal naming the reason, not a malformed-declaration error; and
+   discreteness becomes queryable from the canonical prior description,
+   so a future engine path branches on it rather than catching.
+   *(Original question follows for the record.)*
+   **Discrete parameters get a continuous default bijection.**
    `default_bijection_for(scipy.stats.poisson(3.0))` returns `Log(lower=0.0)`,
    inferred from the support with no discreteness check. `parameters.md` §12.8
    declares discrete parameters unexercised, so nothing is broken today, but
@@ -1163,12 +1179,35 @@ crashing, which is the criterion for needing a mechanical check.
    reasoning is sound but it does put a numpy computation inside a nominally
    torch-backed run, which someone will eventually be surprised by. Worth an
    explicit ruling.
-7. **`substream(seed, label)` belongs in `ampere.core`** (§9.2), which means
+7. ***Ruled 2026-09-03: ratified in place.*** `substream` stays in
+   `ampere.core` (`ampere/core/rng.py`) — pure stdlib+numpy, deliberately
+   free-standing, and the alternative was three backends agreeing by
+   convention. Closes `inference.md` §19 item 5 with it. *(Original
+   question follows for the record.)*
+   **`substream(seed, label)` belongs in `ampere.core`** (§9.2), which means
    the core gains a small RNG-policy responsibility it does not have today.
    That seems right — it is pure stdlib, and the alternative is three backends
    agreeing by convention — but it is a (small) addition to a frozen contract's
    surface and should be ratified rather than assumed.
-8. **Backend-specific lowerings for user-defined cases** (raised by Peter,
+8. ***Ruled 2026-09-03: accepted in principle, hardened.*** The
+   registration hook sketched below is the mechanism — a module-level
+   registry keyed on the *neutral* family name and the backend, plus the
+   analogous per-backend slot for a custom `Bijection` — with three
+   hardenings: registration refuses to overwrite a built-in row or an
+   existing registration without an explicit `override=True`; every
+   registered row is stamped user-registered in provenance (as this item
+   already demands); and the conformance suite grows an *opt-in* battery
+   a registrant can run against their own lowering (reference-vs-native
+   agreement), so "bypasses the suite's guarantees" becomes "can
+   self-certify". On the jax question that prompted the ruling: the
+   registry is consulted at lowering time, before any tracing, so the
+   mechanism itself cannot interact with `jax.jit`/`vmap`/gradients —
+   what must hold is that a registered constructor returns trace-pure
+   objects, the same requirement the built-in table rows meet, and the
+   hook's documentation states that as a rule. The plumbing is Phase 2's,
+   beside the backends that consume it. *(Original question follows for
+   the record.)*
+   **Backend-specific lowerings for user-defined cases** (raised by Peter,
    2026-09-01). A duck-typed prior and a custom `Bijection` currently
    evaluate on the reference path only; §3.4 and §4 both name "supply a
    backend-native equivalent alongside" as the extension point without

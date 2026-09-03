@@ -124,6 +124,27 @@ migration); the sbi half also benefits from W0.5's quarantine decisions.
 for the sbi half); pins removed from pyproject.toml; compat layer
 documented.
 
+### W0.10 — CI coverage of the Phase 1 suites [M]
+Authorised by Peter 2026-09-03. `ci.yml` never runs `tests/core`,
+`tests/results` or `tests/conformance` — the py3.11 core-import break that
+survived until W1.10's review (fixed `a8e6f54`) is the proof it bites.
+- Run the three Phase-1 suites in CI per PR; different schedules for
+  different parts are acceptable if runtime demands it (e.g. the full
+  cross-backend battery on a schedule, the fast suites per PR).
+- Fix finding (c): `tests/core/test_likelihood.py` registers throwaway
+  likelihood families module-globally and never deregisters them, so the
+  suites fail in one pytest process — a registry-snapshot fixture around
+  the registering tests.
+- Fix finding (b): `pixi run <task>` in the *default* environment cannot
+  import ampere from a worktree — default the tasks to `dev` or pin the
+  default environment's Python.
+- Policy (Peter, 2026-09-03): py3.11 stays in the matrix but may be
+  dropped if it proves problematic — with 3.15 imminent it is not worth
+  fighting for.
+**Accept:** a deliberately broken conformance row fails a PR; the three
+suites green in a single pytest invocation; pixi tasks work from a
+worktree.
+
 ### W0.7 — Branch harvest & archive proposal [M]
 Extract into `docs/design/harvest/`: the swyft TMNRE diff, the
 `optim_only` optimiser module, the `jax`-branch design sketches (annotated:
@@ -267,6 +288,7 @@ to this file.
 | W0.5 | merged 2026-09-01 |
 | W0.6 + W0.8 | merged 2026-09-01 |
 | W0.9 | not started |
+| W0.10 | not started (authorised 2026-09-03) |
 | W1.1 | merged 2026-09-01 (Sonnet-authored, Fable-reviewed; two load-bearing claims re-verified against live sources). Peter's review pass remains the formal accept gate |
 | W1.2 | merged 2026-09-01 (Sonnet-authored, Fable-reviewed and amended; reconciled against W1.1, see its §10). The curated-translation conflict found in review was ruled **opt-in, never silent** — decision recorded in `DEVELOPMENT_PLAN.md` §2, §4.7 amended. Peter's review pass remains the formal accept gate |
 | W1.3 | merged 2026-09-01 (Opus-authored, Fable-reviewed; three tying/serialisation defects fixed on the branch with tests — 112 pass, pyrefly/ruff clean). Remaining open questions for Peter in the spec's §14; obligations on W1.4–W1.10 in its §13 |
