@@ -118,6 +118,7 @@ from .rng import (
 from .results_schema import (
     DEFAULT_CHANNEL,
     REGULARITY_RTOL,
+    AnomalyScore,
     Axis,
     AxisSpec,
     Cube,
@@ -156,6 +157,7 @@ __all__ = [
     "SEPARATOR",
     "SHARED_COMPONENT",
     "AmpereError",
+    "AnomalyScore",
     "Axis",
     "AxisRequirement",
     "AxisSpec",

@@ -507,10 +507,11 @@ different provenance are drawn together.
 `diagnostics.md` §5 proposes the `AnomalyScore` container itself for
 `ampere.core`, so that `ampere.diagnostics` (family A, which carries a JAX
 dependency) and `ampere.results` can each produce one without either namespace
-depending on the other. W1.4 landed before that proposal, so the class does not
-exist; `plot_anomaly_score` is typed against the *shape* (`AnomalyScoreLike`, a
-runtime-checkable `Protocol`) instead, and nothing at a call site changes when
-the class lands. §15's R4 asks for it.
+depending on the other. *(R4 granted and landed at the freeze, 2026-09-03:
+`ampere.core.AnomalyScore` exists — `results_schema.md` §13 — and satisfies
+the protocol.)* `plot_anomaly_score` stays typed against the *shape*
+(`AnomalyScoreLike`, a runtime-checkable `Protocol`), so a caller may hand
+it the real class or anything matching.
 
 Every plotting function is a declared signature that raises `NotImplementedError`
 naming Phase 2. That is deliberate: the surface is what two backend tracks and
@@ -916,9 +917,9 @@ Each is a decision, not an oversight. Each has an extension point.
 9. **The training-set writer is specified, not implemented.** §11's layer 2 is a
    table and a rationale; the writer lands with Phase 2's SBI and emulator work,
    against the format fixed here.
-10. **`AnomalyScore` is a `Protocol`, not a class.** `diagnostics.md` §5 proposes
-    the class for `ampere.core`; until it exists the renderer is typed against
-    its shape (R4).
+10. **`AnomalyScore` is a `Protocol`, not a class.** *(Closed at the freeze:
+    R4 was granted and `ampere.core.AnomalyScore` landed 2026-09-03. The
+    renderer stays typed against the shape, which the class satisfies.)*
 11. **Data-group variable names can collide, and a collision is refused rather
     than resolved.** A name is the dataset label joined to an axis or role name,
     so a dataset `a` with uncertainties and a dataset `a_uncertainty` both want

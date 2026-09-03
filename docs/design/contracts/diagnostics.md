@@ -459,7 +459,7 @@ about, applied to a case where it genuinely does not fit.
 | A — RHMF pre-fit screening | `ampere.diagnostics.rhmf` (new namespace) | `ampere[diagnostics]` | JAX (via `robusta-hmf`) |
 | B — residual whiteness / PPC | `ampere.results` | none | none beyond `ampere.results`'s own (ArviZ; optionally `statsmodels`, Phase-2 decision) |
 | C — GP-localisation | `ampere.results` | none | none beyond the fit's own backend |
-| Shared `AnomalyScore` container | `ampere.core` (proposed for W1.4) | none | none — plain numpy/scipy, per `architecture.md` §4 rule 1 |
+| Shared `AnomalyScore` container | `ampere.core` (**landed at the freeze** — ruled 2026-09-03, `results.md` §15 R4; `ampere.core.results_schema.AnomalyScore`) | none | none — plain numpy/scipy, per `architecture.md` §4 rule 1 |
 
 ---
 

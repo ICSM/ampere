@@ -1030,3 +1030,57 @@ class TestCoreDependencyFloor:
             assert forbidden not in sys.modules, (
                 f"importing ampere.core.results_schema pulled in {forbidden}"
             )
+
+
+class TestAnomalyScore:
+    """diagnostics.md §5's shared container, landed at the freeze (R4)."""
+
+    @staticmethod
+    def _score(**overrides: object) -> object:
+        from ampere.core import AnomalyScore
+
+        settings: dict = {
+            "coordinates": np.array([1.0, 2.0, 3.0]),
+            "values": np.array([0.1, 2.4, 0.3]),
+            "provenance": "gp_localisation_postfit",
+            "interpretation_notes": "Amplitude localises deficiency; see the docs.",
+        }
+        settings.update(overrides)
+        return AnomalyScore(**settings)
+
+    def test_construction_and_the_repr(self) -> None:
+        score = self._score()
+        assert score.n_samples == 3
+        assert "gp_localisation_postfit" in repr(score)
+
+    def test_provenance_and_notes_are_required_non_empty(self) -> None:
+        # The comparability guard: two differently-computed scores must never
+        # travel without saying which family produced them.
+        with pytest.raises(SchemaError, match="provenance"):
+            self._score(provenance="  ")
+        with pytest.raises(SchemaError, match="interpretation_notes"):
+            self._score(interpretation_notes="")
+
+    def test_misaligned_shapes_are_refused(self) -> None:
+        with pytest.raises(SchemaError, match="indexed by its coordinates"):
+            self._score(values=np.array([0.1, 2.4]))
+        with pytest.raises(SchemaError, match="mask covers"):
+            self._score(mask=np.array([True, False]))
+
+    def test_a_masked_sample_may_carry_a_non_finite_score(self) -> None:
+        score = self._score(
+            values=np.array([0.1, np.nan, 0.3]), mask=np.array([False, True, False])
+        )
+        assert score.n_samples == 3
+        with pytest.raises(SchemaError, match="finite where retained"):
+            self._score(values=np.array([0.1, np.nan, 0.3]))
+
+    def test_it_satisfies_the_results_protocol(self) -> None:
+        # ampere.results stays typed against the shape; the class is the shape.
+        from ampere.results.plots import AnomalyScoreLike
+
+        assert isinstance(self._score(), AnomalyScoreLike)
+
+    def test_two_dimensional_coordinates_are_legal(self) -> None:
+        score = self._score(coordinates=np.array([[1.0, 0.0], [2.0, 1.0], [3.0, 2.0]]))
+        assert score.coordinates.shape == (3, 2)

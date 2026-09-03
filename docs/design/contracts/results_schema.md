@@ -879,6 +879,34 @@ ampere.core.exceptions.SchemaError: PolarisationCurve requires its 'spectral_axi
 
 ```
 
+### Not a kind: `AnomalyScore`
+
+Added at the freeze (ruled 2026-09-03, `results.md` §15 R4, implementing
+`diagnostics.md` §5's proposal): `ampere.core.AnomalyScore` — coordinates,
+values (higher = more anomalous), an optional mask with the usual excluding
+sense, and the **required** `provenance` and `interpretation_notes` strings
+that keep two differently-computed scores from being read as
+interchangeable. It lives in this module but deliberately **outside** the
+kind system: a score is not an observable a model predicts or an instrument
+transforms — nothing binds it to a channel and no likelihood consumes it —
+it is a statement *about* a fit or a collection, indexed by the same
+coordinates. `ampere.diagnostics` (pre-fit RHMF) and `ampere.results`
+(post-fit GP localisation) both produce it without depending on each other;
+`ampere.results.plots.AnomalyScoreLike` remains the structural type its
+renderer accepts, and the class satisfies it.
+
+```pycon
+>>> from ampere.core import AnomalyScore
+>>> AnomalyScore(
+...     coordinates=np.array([1.0, 2.0, 3.0]),
+...     values=np.array([0.1, 2.4, 0.3]),
+...     provenance="gp_localisation_postfit",
+...     interpretation_notes="Amplitude localises deficiency; see the docs.",
+... )
+<AnomalyScore 'gp_localisation_postfit': 3 sample(s), max 2.4>
+
+```
+
 ## 14. Decisions and their reasoning
 
 | Decision | Reasoning |
