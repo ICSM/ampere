@@ -1114,8 +1114,14 @@ class Dataset:
         coordinates = np.column_stack(
             [np.asarray(axis.values, dtype=DTYPE) for axis in observed.axes]
         )[retain]
-        params = noise.noise_params(observed, retain, resolved, coordinates=coordinates)
         realisation = np.asarray(predicted.values, dtype=DTYPE).ravel()[retain]
+        # The NoiseParams are built from the noiseless prediction *before* noise
+        # is added (ruled 2026-09-03, X-1 point 4): a prediction-dependent noise
+        # scales with the true curve — the standard generative reading — and the
+        # draw is then consistent with the density that will score it.
+        params = noise.noise_params(
+            observed, retain, resolved, predicted=realisation, coordinates=coordinates
+        )
         try:
             realisation = family.sample(realisation, params, rng)
         except LikelihoodError as error:

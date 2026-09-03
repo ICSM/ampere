@@ -204,6 +204,12 @@ Spectrum's coordinate axis is in keV.
 
 This is 3M1's coupled case, and it is the finding this document exists for.
 
+*Status: **fixed at the freeze** (ruled 2026-09-03, landed by W1.13). The
+sections below record the stress test as it was run, against the pre-X-1
+contract; `likelihoods.md` §5 now carries the `predicted` keyword and the
+`FractionalModelNoise` slot, and the family workaround below is no longer
+necessary.*
+
 ### The physics
 
 An X-ray effective-area calibration carries a systematic uncertainty of order

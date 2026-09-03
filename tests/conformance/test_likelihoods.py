@@ -477,3 +477,132 @@ class TestSolverAgreement:
         noise = GaussianProcessNoise(kernel, backend.gp_solver(SolverKind.QUASISEP))
         with pytest.raises(LikelihoodError, match="quasiseparable representation"):
             noise.check_compatible(GaussianFamily(), observed)
+
+
+# ---------------------------------------------------------------------------
+# Prediction-aware noise: the X-1 rows (ruled 2026-09-03)
+# ---------------------------------------------------------------------------
+
+
+class _FractionalNoise(IndependentNoise):
+    """In-repo stand-in for Phase 2's ``FractionalModelNoise``.
+
+    ``sigma_eff**2 = sigma_data**2 + (f * predicted)**2`` with ``f`` held
+    fixed — the ten-line implementation ``awkward_instrument.md`` §6 point 10
+    sketches. The shipped class lands with the reference backend in Phase 2
+    (with ``f`` an ordinary fitted parameter); this double exists so the
+    contract rows below run today, and Phase 2 should point them at the real
+    class when it arrives.
+    """
+
+    def __init__(self, fraction: float) -> None:
+        super().__init__()
+        self.fraction = float(fraction)
+
+    def sigma(self, observed, retain, values, *, predicted=None):
+        base = super().sigma(observed, retain, values, predicted=predicted)
+        if predicted is None or base is None:
+            raise LikelihoodError(
+                "a fractional model noise needs the prediction (X-1) and the observed "
+                "uncertainties; one of them is missing."
+            )
+        return np.sqrt(base**2 + (self.fraction * np.abs(predicted)) ** 2)
+
+
+class _FractionalGPNoise(GaussianProcessNoise):
+    """X-1 point 7's composition: the fractional term in quadrature under the kernel."""
+
+    def __init__(self, kernel, solver, fraction: float) -> None:
+        super().__init__(kernel, solver)
+        self.fraction = float(fraction)
+
+    def sigma(self, observed, retain, values, *, predicted=None):
+        base = super().sigma(observed, retain, values, predicted=predicted)
+        if predicted is None or base is None:
+            raise LikelihoodError(
+                "a fractional model noise needs the prediction (X-1) and the observed "
+                "uncertainties; one of them is missing."
+            )
+        return np.sqrt(base**2 + (self.fraction * np.abs(predicted)) ** 2)
+
+
+FRACTION = 0.5
+
+
+class TestPredictionAwareNoise:
+    """The three X-1 conformance rows (``awkward_instrument.md`` §6 point 9).
+
+    ``NoiseModel.sigma``/``noise_params`` receive the retained predicted
+    values as a keyword-only ``predicted`` at every call site, so a noise
+    whose magnitude depends on the model is a noise model, not a family.
+    """
+
+    def test_fractional_sigma_equals_the_manual_quadrature(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """Row (a): sigma_eff from a fractional noise, at fixed theta."""
+        predicted, observed = spectra()
+        likelihood = Likelihood(GaussianFamily(), _FractionalNoise(FRACTION))
+        mean = np.asarray(predicted.values, dtype=float)
+        sigma_eff = np.sqrt(SIGMA**2 + (FRACTION * mean) ** 2)
+        expected = analytic_diagonal_gaussian_log_prob(
+            np.asarray(observed.values, dtype=float) - mean, sigma_eff
+        )
+        assert likelihood.log_prob(predicted, observed) == pytest.approx(
+            expected, abs=tolerances.analytic
+        )
+
+    def test_draw_variance_grows_with_the_prediction(self, backend: ConformanceBackend) -> None:
+        """Row (b): ``simulate(observe=True)`` draws with variance ``sigma**2 + (f*mu)**2``."""
+        from ampere.core import Dataset
+
+        from .composition import DatasetSpec, ProblemSpec, observed_container
+
+        spec = ProblemSpec()
+        dataset_spec = DatasetSpec()
+        observed = observed_container(spec, dataset_spec)
+        dataset = Dataset(
+            observed, likelihood=Likelihood(GaussianFamily(), _FractionalNoise(FRACTION)), label="d"
+        )
+        mean = 1.0 + 0.1 * np.arange(observed.n_samples, dtype=float)
+        predicted = observed.with_values(mean)
+        rng = np.random.default_rng(20260903)
+        draws = np.array(
+            [
+                np.asarray(dataset.draw_observation(predicted, None, rng).values, dtype=float)
+                for _ in range(4000)
+            ]
+        )
+        expected = dataset_spec.uncertainty**2 + (FRACTION * mean) ** 2
+        # The sample variance of a Gaussian has standard error var * sqrt(2/(n-1)).
+        standard_error = expected * math.sqrt(2.0 / (draws.shape[0] - 1))
+        limit = backend.capabilities.tolerances.monte_carlo_sigmas * standard_error
+        assert np.all(np.abs(np.var(draws, axis=0, ddof=1) - expected) < limit)
+        # And the growth itself: the fractional term dominates sigma_data here,
+        # so the last sample's draw variance must exceed the first's.
+        assert np.var(draws[:, -1], ddof=1) > 2.0 * np.var(draws[:, 0], ddof=1)
+
+    def test_the_gp_composition_agrees_with_a_manual_diagonal(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """Row (c): K + diag(sigma_data**2 + (f*mu)**2), against scipy's own solve."""
+        predicted, observed = spectra()
+        noise = _FractionalGPNoise(
+            backend.kernel(MATERN32), backend.gp_solver(SolverKind.DENSE), FRACTION
+        )
+        likelihood = Likelihood(GaussianFamily(), noise)
+        grid = np.asarray(GP_GRID, dtype=float)
+        mean = np.asarray(predicted.values, dtype=float)
+        covariance = kernel_matrix(
+            MATERN32.family, grid, MATERN32.amplitude, MATERN32.length_scale
+        ) + np.diag(SIGMA**2 + (FRACTION * mean) ** 2)
+        expected = float(
+            multivariate_normal.logpdf(
+                np.asarray(observed.values, dtype=float) - mean,
+                mean=np.zeros(grid.size),
+                cov=covariance,
+            )
+        )
+        assert likelihood.log_prob(predicted, observed) == pytest.approx(
+            expected, abs=tolerances.linear_algebra
+        )

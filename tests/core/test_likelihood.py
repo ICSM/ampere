@@ -1463,6 +1463,8 @@ class TestComposition:
                 observed: FunctionSamples,
                 retain: np.ndarray,
                 values: dict[str, object],
+                *,
+                predicted: np.ndarray | None = None,
             ) -> np.ndarray:
                 return np.asarray(observed.uncertainty).ravel()[retain]
 
@@ -1585,3 +1587,87 @@ class TestCompositionTimeDataChecks:
         deleted = Likelihood(Background(background[[0, 2, 3]]), IndependentNoise())
         unmasked_value = deleted.log_prob(excised.with_values([2.6, 1.9, 1.2]), excised)
         assert masked_value == pytest.approx(unmasked_value, abs=1e-12)
+
+
+class TestPredictionAwareNoise:
+    """The X-1 ruling (2026-09-03): a noise model sees the prediction.
+
+    ``NoiseModel.sigma`` and ``noise_params`` take the retained predicted
+    values as a keyword-only ``predicted`` argument, passed at every call
+    site — ``awkward_instrument.md`` §6's detailed design, accepted as
+    written. The conformance battery holds the arithmetic
+    (``tests/conformance/test_likelihoods.py``); these tests hold the
+    plumbing: the argument arrives, excised, at each call site.
+    """
+
+    @staticmethod
+    def _recording_independent(captured: dict) -> NoiseModel:
+        class Recording(IndependentNoise):
+            def sigma(self, observed, retain, values, *, predicted=None):
+                captured["predicted"] = predicted
+                return super().sigma(observed, retain, values, predicted=predicted)
+
+        return Recording()
+
+    def test_log_prob_passes_the_retained_predicted_values(self) -> None:
+        captured: dict = {}
+        data = Spectrum(
+            [1.0, 2.0, 3.0, 4.0] * u.um,
+            [3.0, 2.5, 2.2, 1.4] * u.Jy,
+            uncertainty=[0.1, 0.1, 0.1, 0.1] * u.Jy,
+            mask=np.array([False, True, False, False]),
+        )
+        like = Likelihood(GaussianFamily(), self._recording_independent(captured))
+        like.log_prob(data.with_values([2.6, 0.0, 1.9, 1.2]), data)
+        # Excised exactly as the family's own first argument is: the masked
+        # second sample is gone.
+        assert captured["predicted"] is not None
+        np.testing.assert_array_equal(captured["predicted"], [2.6, 1.9, 1.2])
+
+    def test_conditional_passes_the_same_prediction_the_fit_used(self) -> None:
+        captured: dict = {}
+
+        class RecordingGP(GaussianProcessNoise):
+            def sigma(self, observed, retain, values, *, predicted=None):
+                captured["predicted"] = predicted
+                return super().sigma(observed, retain, values, predicted=predicted)
+
+        data = Spectrum(
+            [1.0, 2.0, 3.0] * u.um,
+            [1.0, 2.0, 3.0] * u.Jy,
+            uncertainty=[0.1, 0.1, 0.1] * u.Jy,
+        )
+        like = Likelihood(GaussianFamily(), RecordingGP(Matern32(0.3, 1.0)))
+        like.conditional(data.with_values([0.9, 1.8, 2.7]), data)
+        assert captured["predicted"] is not None
+        np.testing.assert_array_equal(captured["predicted"], [0.9, 1.8, 2.7])
+
+    def test_a_fractional_model_noise_composes_with_the_gaussian_family(self) -> None:
+        """The motivating case: sigma_eff**2 = sigma_data**2 + (f * mu)**2."""
+
+        class FractionalModelNoise(NoiseModel):
+            def __init__(self, f: float) -> None:
+                self._f = float(f)
+
+            def sigma(self, observed, retain, values, *, predicted=None):
+                base = np.asarray(observed.uncertainty).ravel()[retain]
+                assert predicted is not None
+                return np.sqrt(base**2 + (self._f * predicted) ** 2)
+
+        fraction = 0.1
+        data = Spectrum(
+            [1.0, 2.0, 3.0] * u.um,
+            [1.1, 2.1, 2.9] * u.Jy,
+            uncertainty=[0.1, 0.2, 0.3] * u.Jy,
+        )
+        prediction = np.array([1.0, 2.0, 3.0])
+        like = Likelihood(GaussianFamily(), FractionalModelNoise(fraction))
+        # Diagonal noise: the declaration stays ANALYTIC however sigma was
+        # computed (X-1 point 6).
+        assert like.marginalisation is Marginalisation.ANALYTIC
+        sigma_eff = np.sqrt(np.array([0.1, 0.2, 0.3]) ** 2 + (fraction * prediction) ** 2)
+        residual = np.array([1.1, 2.1, 2.9]) - prediction
+        expected = float(np.sum(st.norm(0.0, sigma_eff).logpdf(residual)))
+        assert like.log_prob(data.with_values(prediction), data) == pytest.approx(
+            expected, abs=1e-12
+        )

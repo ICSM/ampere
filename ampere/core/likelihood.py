@@ -1018,6 +1018,20 @@ class NoiseModel(Parameterised, abc.ABC):
     bijections", and that is what this class is: nothing about noise-model
     parameters is special, so tying, fixing, priors, plates, serialisation and
     W1.9's lowering all work on them unchanged.
+
+    **A noise model receives the prediction as well as the observation**
+    (ruled 2026-09-03, W1.11 gap X-1): :meth:`sigma` and :meth:`noise_params`
+    take the *retained* predicted values as a keyword-only ``predicted``
+    argument, passed at every call site. A noise whose magnitude depends on
+    the model — a fractional model uncertainty, an analytically marginalised
+    multiplicative calibration systematic, a model-variance weighting of
+    counts — is a ``NoiseModel``, not a family: without the argument the only
+    way to express one is to re-implement the sampling distribution, which
+    welds noise to family, cannot be reused, and cannot reach the GP path.
+    ``predicted`` defaults to ``None`` because a model that does not need it
+    (:class:`IndependentNoise`, :class:`GaussianProcessNoise`) simply ignores
+    it; the noise model sees the prediction but never the model's *parameters*
+    beyond those the likelihood declares.
     """
 
     #: Whether this model induces correlations between samples.
@@ -1029,8 +1043,18 @@ class NoiseModel(Parameterised, abc.ABC):
         observed: FunctionSamples,
         retain: np.ndarray,
         values: Mapping[str, Any],
+        *,
+        predicted: np.ndarray | None = None,
     ) -> np.ndarray | None:
-        """Per-sample standard deviation on the retained samples."""
+        """Per-sample standard deviation on the retained samples.
+
+        ``predicted`` is the retained predicted values — the identical,
+        already-excised array the family's ``log_prob`` receives as its first
+        argument (float64, or complex128 for a complex family; a noise model
+        wanting an amplitude takes ``np.abs(predicted)`` itself). It is
+        ``None`` only when no caller holds a prediction; every ampere call
+        site passes it.
+        """
 
     def check_compatible(self, family: LikelihoodFamily, observed: FunctionSamples) -> None:
         """Composition-time check. Subclasses extend; this checks uncertainties."""
@@ -1047,6 +1071,7 @@ class NoiseModel(Parameterised, abc.ABC):
         retain: np.ndarray,
         values: Mapping[str, Any],
         *,
+        predicted: np.ndarray | None = None,
         coordinates: np.ndarray | None = None,
         latent: np.ndarray | None = None,
         limits: np.ndarray | None = None,
@@ -1068,7 +1093,7 @@ class NoiseModel(Parameterised, abc.ABC):
                 f"coordinates (see GaussianProcessNoise)."
             )
         return NoiseParams(
-            sigma=self.sigma(observed, retain, values),
+            sigma=self.sigma(observed, retain, values, predicted=predicted),
             values=values,
             coordinates=None,
             kernel=None,
@@ -1139,6 +1164,8 @@ class IndependentNoise(NoiseModel):
         observed: FunctionSamples,
         retain: np.ndarray,
         values: Mapping[str, Any],
+        *,
+        predicted: np.ndarray | None = None,
     ) -> np.ndarray | None:
         resolved = self.context({k: v for k, v in values.items() if k in self.parameters})
         if observed.uncertainty is None:
@@ -1232,6 +1259,8 @@ class GaussianProcessNoise(NoiseModel):
         observed: FunctionSamples,
         retain: np.ndarray,
         values: Mapping[str, Any],
+        *,
+        predicted: np.ndarray | None = None,
     ) -> np.ndarray | None:
         resolved = self.context({k: v for k, v in values.items() if k in self.parameters})
         if observed.uncertainty is None:
@@ -1282,12 +1311,13 @@ class GaussianProcessNoise(NoiseModel):
         retain: np.ndarray,
         values: Mapping[str, Any],
         *,
+        predicted: np.ndarray | None = None,
         coordinates: np.ndarray | None = None,
         latent: np.ndarray | None = None,
         limits: np.ndarray | None = None,
     ) -> NoiseParams:
         return NoiseParams(
-            sigma=self.sigma(observed, retain, values),
+            sigma=self.sigma(observed, retain, values, predicted=predicted),
             values=values,
             coordinates=coordinates,
             kernel=self._kernel,
@@ -2309,6 +2339,7 @@ class Likelihood(Parameterised):
             observed,
             retain,
             resolved,
+            predicted=predicted_values,
             coordinates=coordinates,
             latent=latent,
             limits=limits,
@@ -2345,10 +2376,11 @@ class Likelihood(Parameterised):
                 "every sample is masked, so there is nothing to condition the GP on."
             )
         coordinates = self._coordinates(observed, retain)
-        residual = self._retained(observed, retain, "observed") - self._retained(
-            predicted, retain, "predicted"
-        )
-        sigma = self._noise.sigma(observed, retain, resolved)
+        predicted_values = self._retained(predicted, retain, "predicted")
+        residual = self._retained(observed, retain, "observed") - predicted_values
+        # The prediction is passed here too (ruled 2026-09-03, X-1), so W1.12's
+        # diagnostics see the same effective sigma the fit used.
+        sigma = self._noise.sigma(observed, retain, resolved, predicted=predicted_values)
         if sigma is None:
             raise LikelihoodError(
                 f"conditioning the GP on residuals needs the observed "

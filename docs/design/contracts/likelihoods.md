@@ -380,6 +380,65 @@ first merge's bindings. W1.7 merges every dataset in one call, so this contract
 must not consume a merge level. A genuine collision therefore raises rather
 than being silently qualified — see §14.
 
+### Prediction-aware noise: `predicted` reaches the noise model
+
+**Ruled by Peter, 2026-09-03** (W1.11 gap X-1 — `awkward_instrument.md` §6's
+detailed design, accepted as written and landed at W1.13): `NoiseModel.sigma`
+and `NoiseModel.noise_params` take the **retained predicted values** as a
+keyword-only argument:
+
+```
+sigma(observed, retain, values, *, predicted=None)
+noise_params(observed, retain, values, *,
+             predicted=None, coordinates=None, latent=None, limits=None)
+```
+
+`predicted` is the identical, already-excised array the family's `log_prob`
+receives as its first argument — float64, or complex128 for a complex family
+(a noise model wanting an amplitude takes `np.abs(predicted)` itself; ampere
+does not project on its behalf). Every call site passes it:
+`Likelihood.log_prob`, `Likelihood.conditional` (so W1.12's diagnostics see
+the same effective σ the fit used) and W1.7's `Dataset.draw_observation`,
+where the `NoiseParams` are built from the noiseless prediction *before*
+noise is added — the draw is σ(μ), not σ(x), the standard generative
+reading. `IndependentNoise` and `GaussianProcessNoise` ignore it, so the
+simple path is unchanged.
+
+The case this exists for is a noise whose magnitude depends on the model.
+The standard library names **`FractionalModelNoise`** —
+`sigma_eff² = (s·σ_data)² + (f·predicted)²`, the single most requested thing
+missing from legacy ampere's likelihood — the way `transformations.md` §10
+names standard chain steps: the contract fixes the name and semantics here,
+and the ten-line implementation lands with the reference backend in Phase 2
+(with `f` an ordinary fitted parameter). A prediction-dependent σ is still
+diagonal, so `GaussianFamily` plus a fractional noise stays `ANALYTIC` — the
+marginalisation machinery never inspects *how* σ was computed — and the GP
+composition ("10 % model error *and* a misspecification GP") is a
+`GaussianProcessNoise` subclass overriding only `sigma`: the marginal
+likelihood is `N(0, K + diag(σ_data² + (f·μ)²))` with no new mathematics.
+
+```pycon
+>>> class FractionalModelNoise(IndependentNoise):
+...     """sigma_eff**2 = sigma_data**2 + (f * predicted)**2, with f fixed."""
+...     def __init__(self, f):
+...         super().__init__()
+...         self.f = f
+...     def sigma(self, observed, retain, values, *, predicted=None):
+...         base = super().sigma(observed, retain, values)
+...         return np.sqrt(base**2 + (self.f * predicted) ** 2)
+>>> fractional = Likelihood(GaussianFamily(), FractionalModelNoise(0.1))
+>>> fractional.marginalisation
+<Marginalisation.ANALYTIC: 'analytic'>
+>>> round(fractional.log_prob(model, data), 6)
+1.842006
+
+```
+
+The boundary holds in both directions: the noise model sees the prediction,
+but never the model's *parameters* beyond those the likelihood declares
+(§15.10). A noise term that depends on a physical parameter is tied to a
+likelihood parameter or expressed as a transformation.
+
 ## 6. Kernels: declared neutrally, hyperparameters are ordinary parameters
 
 A kernel is a *declaration*, not an implementation detail: a neutral family
@@ -1142,6 +1201,7 @@ W1.7's `Dataset` discharges once. `log_prob` re-checks only shapes, mirroring
 | Masking beats censoring on the same sample | Masking a region for a test run should not require editing the censoring array too |
 | Complex data are the circular complex Gaussian only | `results_schema.md` §16: the container's real σ encodes exactly that. Non-circular noise supplies its own 2×2 structure and is not a container concern |
 | `check_alignment` is composition-time; `log_prob` re-checks only shapes | O(N) coordinate comparison is right once and wrong per evaluation — `results_schema.md` §10's split |
+| A noise model receives the prediction as well as the observation | Ruled 2026-09-03 (X-1). A noise whose magnitude depends on the model — a fractional model uncertainty, an analytically marginalised multiplicative calibration systematic, a model-variance weighting of counts — is a `NoiseModel`, not a family. Without the `predicted` argument the only way to express one is to re-implement the sampling distribution, which welds noise to family, cannot be reused, and cannot reach the GP path: exactly the monolithic collapse `prior_art.md` Tension 3 warns against |
 
 ## 15. Deliberate limitations of v1.6
 
@@ -1190,7 +1250,18 @@ Each is a decision, not an oversight. Each has an extension point.
 9. **No log-likelihood *per sample*.** `log_prob` returns a scalar. W1.8's
    InferenceData requirement is per-*observation* log-likelihood, which for the
    GP case is not well defined anyway (the samples are not independent) — see
-   §16's obligation on W1.8.
+   §16's obligation on W1.8. *(Amended at the freeze: the named decomposition
+   — pointwise terms for independent noise, leave-one-out conditionals for a
+   GP — is now available on request through `pointwise_log_prob`, ruled
+   2026-09-03, `results.md` §15 R2; it is not stored by default and
+   `log_prob` still returns a scalar.)*
+10. **The noise model sees the prediction, but not the model's parameters.**
+   `predicted` (§5) carries the retained predicted *values* only; a noise
+   term that depends on a physical parameter beyond those the likelihood
+   declares must be tied to a likelihood parameter or expressed as a
+   transformation. Retained deliberately (X-1's ruling keeps it): widening
+   the argument to model internals would re-fuse the pieces this contract
+   exists to separate.
 
 ## 16. What this contract hands to the specs downstream
 
@@ -1251,7 +1322,12 @@ Each is a decision, not an oversight. Each has an extension point.
   deletion of the sample; DenseGP↔QuasisepGP agreement on Matérn-3/2 once the
   latter exists (§4.6 names it); `L L^T == K` for the whitening transform; the
   Tobit censored likelihood against `scipy.stats.norm.logcdf`; and the
-  marginalisation declaration for every family × noise-model pair.
+  marginalisation declaration for every family × noise-model pair. Added at
+  the freeze (X-1's three rows, `awkward_instrument.md` §6 point 9): the
+  σ_eff of a fractional noise against the manual quadrature at fixed θ;
+  `simulate(observe=True)` draw variance growing with the prediction as
+  `(f·μ)²`; and the GP composition against a `DenseGP` evaluation with a
+  manually precomputed diagonal.
 - **W1.11 (Modality sketches)** — `ComplexGaussianFamily` plus
   `IndependentNoise` is the visibility likelihood; check whether closure phases
   need `VonMisesFamily` before the freeze, since it is currently declared-only.

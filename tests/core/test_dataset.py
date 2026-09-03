@@ -1221,6 +1221,27 @@ class TestSimulate:
         # sigma = sqrt((0.1 * 3)^2 + 0.4^2) = 0.5
         assert np.var(draws, axis=0) == pytest.approx(0.25, abs=0.02)
 
+    def test_the_draw_hands_the_noise_model_the_noiseless_prediction(self) -> None:
+        # X-1 (ruled 2026-09-03): draw_observation builds the NoiseParams from
+        # the noiseless prediction *before* noise is added, so a prediction-
+        # dependent noise scales with the true curve (sigma(mu), not sigma(x)).
+        captured: dict = {}
+
+        class Recording(IndependentNoise):
+            def noise_params(self, observed, retain, values, *, predicted=None, **kwargs):
+                captured["predicted"] = predicted
+                return super().noise_params(observed, retain, values, predicted=predicted, **kwargs)
+
+        likelihood = Likelihood(GaussianFamily(), Recording())
+        problem = FittingProblem(
+            Flat(WAVELENGTH),
+            [Dataset(flat_spectrum(), likelihood=likelihood, label="d")],
+            seed=3,
+        )
+        problem.simulate({"model.level": 2.0}, observe=True)
+        assert captured["predicted"] is not None
+        np.testing.assert_allclose(captured["predicted"], [2.0, 2.0, 2.0])
+
     def test_the_solver_jitter_is_part_of_the_drawn_covariance(self) -> None:
         # DenseGP scores K + diag(sigma^2 + jitter^2); the draw must match, or
         # simulate() and log_prob disagree about the same model. The library's
