@@ -69,18 +69,28 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
   the "legacy still works" gate; run it before merging anything that
   touches shared files.
 
-## ⚡ Pick up here (updated 2026-09-03)
+## ⚡ Pick up here (end of the 2026-09-03 session — PHASE 1 COMPLETE)
 
-**State**: Phase 1 is ten of thirteen items done — W1.1–W1.7, W1.9, W1.11
-and W1.12 are all Fable-reviewed and **merged to local master** (nothing is
-pushed to origin; origin/master is far behind by design). All gates green
-at the tip: **671 tests** (including 174 spec doctests), pyrefly 0 errors,
-ruff lint/format clean. Five of Peter's rulings landed and were implemented
-this session (see the updated reading-list bullets below): the W1.5 density
-scalars are demoted, and W1.7 implements the strict toggle and
-once-at-construction mask resolution. Remaining items: **W1.8** (needs
-W1.7), **W1.10** (needs W1.3–W1.8), and the W1.13 freeze. W0.9 remains
-open in Phase 0.
+**State**: **Phase 1 is done and the spec is frozen.** W1.13 merged
+2026-09-03 (`a962b09`); the `spec-v1.0` tag sits on the freeze-content
+commit `58daa86`. All gates green at the tip: **1109 tests** in a single
+pytest process (`pixi run -e dev test-phase1`), pyrefly 0 errors, ruff
+lint/format clean, and CI (W0.10) runs the Phase-1 suites on every PR.
+Ground rule 9 is now in force: any §4 contract change needs a
+decision-log entry in the same PR. Nothing is pushed to origin
+(origin/master is far behind by design) — **a push is now worthwhile**,
+to let the W0.10 CI prove itself on a live run.
+
+**Next**: dispatch Phase 2 waves from WORK_ITEMS.md's W2.1–W2.11 per
+`docs/orchestration.md` (Opus for the backend tracks W2.4/W2.5; the
+reference slice W2.1 first — it carries the freeze-escalation landings:
+`describe()` + the backend-neutral model identity, and `Axis.locate`,
+each with its decision-log entry). **W0.9 (pyphot/sbi
+forward-migration) gates W2.1's synthetic-photometry step** and should
+be dispatched early; the rest of W2.1 must not wait on it. Also
+outstanding: branch-triage approval
+(`docs/design/harvest/branch_triage.md`). The paragraphs below are the
+Phase 0–1 ledger, kept as history.
 
 **R1–R4 ruled 2026-09-02 and implemented**: design B (nested merge)
 ratified; `LikelihoodFamily.sample` landed (overridable, default refuses
@@ -199,11 +209,12 @@ it freezes are guarded from here on.
 
 **Restart prompt for a new session** (paste as the opening message):
 
-> Read docs/development.md's "Pick up here" section, then dispatch W1.8
-> and W1.10 per docs/orchestration.md with the stale-worktree recovery
-> and the obligations their items name. Review each at full Fable depth
-> and merge what needs no ruling from me; put the rest, plus the standing
-> review backlog listed in that section, on my review list.
+> Read docs/development.md's "Pick up here" section, then propose the
+> first Phase 2 dispatch wave from WORK_ITEMS.md (W2.x) per
+> docs/orchestration.md — W0.9 and W2.1 first — with the stale-worktree
+> recovery and the obligations each item names. Review each at full
+> Fable depth; merging is mine. Ground rule 9 is in force: any §4
+> contract change carries a decision-log entry in the same PR.
 
 ### Consolidated obligations for the W1.7 dispatch prompt
 
