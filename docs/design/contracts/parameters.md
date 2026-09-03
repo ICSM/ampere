@@ -271,6 +271,33 @@ Log(lower=0.0)
 
 ```
 
+**A discrete family is refused, with a typed capability error** (ruled
+2026-09-03, `lowering.md` §12.1 — a §4.1 change, recorded in the plan's
+decision log). No continuous bijection to unconstrained space can be right
+for an integer-supported family, and before this rule the support-based
+inference happily returned one (`Log(lower=0.0)` for a Poisson). The
+refusal is `CapabilityError` — a `NotImplementedError`, deliberately *not*
+a `ValueError` — because nothing is malformed: the door stays ajar for the
+non-gradient routes that might eventually support discrete parameters
+((variational) EM, numpyro-style enumeration, SBI, nested sampling,
+Bayesian optimisation — none in the current plan), so the refusal lives
+**only** here. Declaration, prior sampling, constrained-space `lnprior`
+and `prior_transform` (scipy's discrete families implement `ppf`) all
+work, and discreteness is queryable from the canonical description so an
+engine path branches rather than catches:
+
+```pycon
+>>> default_bijection_for(st.poisson(3.0))
+Traceback (most recent call last):
+    ...
+ampere.core.exceptions.CapabilityError: no unconstraining bijection exists for this prior: prior family 'poisson' is discrete, ...
+>>> describe_prior(st.poisson(3.0)).discrete
+True
+>>> ParameterSet([Parameter("counts", st.poisson(3.0))]).prior_transform([0.7])
+array([4.])
+
+```
+
 A `ParameterSet` exposes the whole round trip, with the change-of-variables
 term. Stating it here, on the reference path, gives the torch and jax lowerings
 an oracle to agree with rather than each rediscovering the Jacobian:
@@ -933,7 +960,10 @@ Each of these is a decision, not an oversight. Each has an extension point.
 7. **Units must match exactly for tying**, not merely be convertible. §8.
 8. **Discrete parameters** evaluate and transform correctly (`log_density`
    handles `logpmf`, `ppf` is well defined) but no sampler in ampere currently
-   consumes them; treat the support as declared-but-unexercised.
+   consumes them; treat the support as declared-but-unexercised. *(Amended at
+   the freeze, ruled 2026-09-03: the one thing that could never be right —
+   a continuous default bijection — is now refused with a typed
+   `CapabilityError` in `default_bijection_for`, and only there; see §6.)*
 
 ## 13. What this contract hands to the specs downstream
 

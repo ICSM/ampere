@@ -38,6 +38,7 @@ from .dataset import (
 )
 from .exceptions import (
     AmpereError,
+    CapabilityError,
     ChannelError,
     CompositionError,
     ContractError,
@@ -162,6 +163,7 @@ __all__ = [
     "Buffer",
     "BufferSet",
     "Capabilities",
+    "CapabilityError",
     "Capable",
     "CauchyFamily",
     "Censoring",

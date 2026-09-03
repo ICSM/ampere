@@ -68,7 +68,12 @@ import astropy.units as u
 import numpy as np
 import scipy.stats as _stats
 
-from .exceptions import OptionalDependencyError, ParameterError, TyingError
+from .exceptions import (
+    CapabilityError,
+    OptionalDependencyError,
+    ParameterError,
+    TyingError,
+)
 
 __all__ = [
     "SEPARATOR",
@@ -648,6 +653,9 @@ def default_bijection_for(prior: AnyPrior, what: str = "this prior") -> Bijectio
     """
     if isinstance(prior, HierarchicalPrior):
         return _default_bijection_for_hierarchical(prior, what)
+    dist = getattr(prior, "dist", None)
+    if isinstance(dist, _stats.rv_discrete):
+        raise _discrete_refusal(getattr(dist, "name", "this family"), what)
     support = getattr(prior, "support", None)
     if support is None:
         raise ParameterError(
@@ -658,8 +666,29 @@ def default_bijection_for(prior: AnyPrior, what: str = "this prior") -> Bijectio
     return _bijection_for_support(float(lower), float(upper), what)
 
 
+def _discrete_refusal(family: str, what: str) -> CapabilityError:
+    """The typed capability refusal for a discrete family (ruled 2026-09-03).
+
+    Lives here and **only** here: declaration, prior sampling,
+    constrained-space ``log_prob``, ``prior_transform`` (scipy's discrete
+    families implement ``ppf``) and lowering-as-distribution are untouched,
+    so the non-gradient routes stay reachable.
+    """
+    return CapabilityError(
+        f"no unconstraining bijection exists for {what}: prior family {family!r} is discrete, "
+        f"and any continuous bijection to unconstrained space would be wrong for it — this is "
+        f"a missing capability of the gradient path, not a malformed declaration. The "
+        f"declaration itself, prior sampling, constrained-space log-probabilities, "
+        f"prior_transform (nested sampling) and lowering as a distribution all work; engines "
+        f"that need unconstrained space (HMC/NUTS, VI) cannot address a discrete parameter. "
+        f"Query describe_prior(prior).discrete to branch on this rather than catching it."
+    )
+
+
 def _default_bijection_for_hierarchical(prior: HierarchicalPrior, what: str) -> Bijection:
     dist = _distribution_factory(prior.family)
+    if isinstance(dist, _stats.rv_discrete):
+        raise _discrete_refusal(prior.family, what)
     referenced = set(prior.hyperparameters)
     if getattr(dist, "numargs", 0):
         raise ParameterError(

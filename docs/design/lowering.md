@@ -393,19 +393,27 @@ alongside `OptionalDependencyError` (§12, open question 4).
 **not** lower to a gradient-based sampling path: a discrete parameter has no
 meaningful unconstraining bijection, and NUTS/HMC cannot sample it.
 
-This is worth stating because ampere's own reference implementation currently
-*will* hand you one — `default_bijection_for(scipy.stats.poisson(3.0))`
-returns `Log(lower=0.0)`, inferred from the support `[0, ∞)` with no regard
-for discreteness. `parameters.md` §12.8 already declares discrete parameters
-"declared-but-unexercised", so this is consistent with the contract rather
-than in conflict with it, but the lowering layer is where it would bite.
+*(Amended at the freeze: the upstream fix this section asked for landed —
+ruled 2026-09-03, §12.1. `default_bijection_for(scipy.stats.poisson(3.0))`
+now raises `CapabilityError`, a typed capability refusal that is
+deliberately not a malformed-declaration error; the refusal lives only
+there, and discreteness is queryable as `describe_prior(prior).discrete`.
+The paragraph below records the pre-freeze state for the history.)*
+
+This was worth stating because ampere's reference implementation used to
+hand you one — `default_bijection_for(scipy.stats.poisson(3.0))` returned
+`Log(lower=0.0)`, inferred from the support `[0, ∞)` with no regard for
+discreteness. `parameters.md` §12.8 declares discrete parameters
+"declared-but-unexercised", so that was consistent with the contract rather
+than in conflict with it, but the lowering layer is where it would have
+bitten.
 
 **Rule: lowering a discrete parameter onto a gradient-requiring path (torch
-HMC, numpyro NUTS, any `lnprior_unconstrained` consumer) raises.** Lowering it
-onto a non-gradient path (a reference-backend nested sampler, an SBI
-simulator) is fine. See §12, open question 1 — the cleaner fix is upstream in
-`default_bijection_for`, and that is a contract change, not this document's to
-make.
+HMC, numpyro NUTS, any `lnprior_unconstrained` consumer) raises** — now
+enforced at the source, in `default_bijection_for` itself. Lowering it
+onto a non-gradient path (a reference-backend nested sampler via
+`prior_transform`, an SBI simulator, §3.5's lowering-as-distribution) is
+fine and untouched, which is exactly the door the ruling keeps ajar.
 
 ### 3.6 `icdf` availability, and what it costs the nested-sampling path
 

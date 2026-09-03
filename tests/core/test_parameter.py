@@ -984,6 +984,49 @@ class _UpperBounded:
         return (-np.inf, 3.0)
 
 
+class TestDiscreteFamilies:
+    """The 2026-09-03 ruling on lowering.md §12.1: refuse the bijection, door ajar.
+
+    The refusal lives only in ``default_bijection_for``; declaration, prior
+    sampling, constrained-space log-probabilities and ``prior_transform``
+    (scipy's discrete families implement ``ppf``) are untouched, and
+    discreteness is queryable from the canonical description.
+    """
+
+    def test_the_bijection_is_refused_with_a_typed_capability_error(self) -> None:
+        from ampere.core import CapabilityError
+
+        with pytest.raises(CapabilityError, match="discrete") as excinfo:
+            default_bijection_for(st.poisson(3.0))
+        # A capability refusal, not a malformed declaration: catchable as
+        # NotImplementedError, deliberately NOT a ValueError/ContractError.
+        assert isinstance(excinfo.value, NotImplementedError)
+        assert not isinstance(excinfo.value, ValueError)
+
+    def test_a_discrete_hierarchical_family_is_refused_the_same_way(self) -> None:
+        from ampere.core import CapabilityError
+
+        with pytest.raises(CapabilityError, match="discrete"):
+            default_bijection_for(HierarchicalPrior("poisson", {"mu": "rate"}))
+
+    def test_everything_but_the_bijection_still_works(self) -> None:
+        from ampere.core import CapabilityError
+
+        counts = Parameter("counts", st.poisson(3.0))
+        assert describe_prior(counts.prior).discrete is True  # the query
+        pset = ParameterSet([counts])
+        drawn = pset.sample(np.random.default_rng(7))  # prior sampling
+        assert float(drawn["counts"]) == int(drawn["counts"])
+        assert np.isfinite(pset.lnprior([2.0]))  # constrained log-prob
+        quantile = pset.prior_transform([0.7])  # nested sampling's route
+        assert quantile == st.poisson(3.0).ppf(0.7)
+        with pytest.raises(CapabilityError):  # and only this refuses
+            counts.unconstraining_bijection()
+
+    def test_a_continuous_family_still_infers_normally(self) -> None:
+        assert default_bijection_for(st.expon(0.0, 1.0)) == Log(lower=0.0)
+
+
 class TestLoweringExtensionPoint:
     def test_as_paramax_explains_that_it_belongs_to_the_backend(self) -> None:
         pset = ParameterSet([Parameter("t", st.norm(0.0, 1.0))])

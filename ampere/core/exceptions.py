@@ -24,6 +24,7 @@ from __future__ import annotations
 
 __all__ = [
     "AmpereError",
+    "CapabilityError",
     "ChannelError",
     "CompositionError",
     "ContractError",
@@ -40,6 +41,34 @@ __all__ = [
 
 class AmpereError(Exception):
     """Base class for every exception ampere raises deliberately."""
+
+
+class CapabilityError(AmpereError, NotImplementedError):
+    """A well-formed declaration asks for a capability this path does not have.
+
+    The deliberate contrast is with :class:`ContractError`: nothing here is
+    malformed. The declaration is valid, most routes through ampere consume
+    it happily, and one specific path cannot — so the refusal must be a
+    distinct type a caller can tell apart from "you wrote it wrongly", and
+    the message must name the capability, not the declaration.
+
+    The founding case (ruled 2026-09-03, ``lowering.md`` §12.1): a
+    **discrete prior family**. Declaration, prior sampling, constrained-space
+    ``log_prob``, ``prior_transform`` (scipy's discrete families implement
+    ``ppf``) and lowering-as-distribution all work; what cannot exist is a
+    continuous bijection to unconstrained space, so
+    :func:`~ampere.core.parameter.default_bijection_for` raises this — and
+    *only* it does, keeping the non-gradient routes that might eventually
+    support discrete parameters ((variational) EM, numpyro-style enumeration,
+    SBI, nested sampling, Bayesian optimisation) reachable. Discreteness is
+    queryable from the canonical description
+    (``describe_prior(prior).discrete``), so a future engine path branches on
+    it rather than catching this.
+
+    Also a :class:`NotImplementedError` — the builtin a caller naturally
+    reaches for when an operation is unsupported rather than wrong — and
+    deliberately **not** a :class:`ValueError`, because the value is fine.
+    """
 
 
 class ContractError(AmpereError, ValueError):
