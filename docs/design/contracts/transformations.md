@@ -1154,6 +1154,46 @@ gaps I-3 and I-4: a chain-internal `configure_from` rather than `pull_back`;
 as written, with question 4's concrete failure mode now recorded in
 `docs/design/modalities/spectrum_photometry.md` gap 2 and routed to W1.7.
 
+**Ruled by Peter, 2026-09-03**: question 2 — no pull-back; gap I-3's
+chain-internal `configure_from` is the accepted mechanism, and the posture
+is push-forward-and-raise: when what a step is handed does not match what
+it needs, the chain fails loudly and forces the user to fix it, rather
+than inferring requirements backwards. Question 3 — gap I-4's loud option
+is accepted: `compile_for` (and negotiation generally) refuses an
+unachievable requirement by raising, **by default**; a flag that silences
+the refusal into a warning-and-proceed is acceptable, but raising is the
+default. Question 5 — accepted: `freeze()` is now worth doing
+(`inference.md` §19 item 8 is the consumer evidence); W1.13 lands it.
+Question 4 — ruled in substance: the instrument label and the channel
+name are different *concepts*, and the relationship is not one-to-one —
+the channel says which part of the simulation an instrument consumes
+(several instruments may consume one channel), while the label is how the
+user identifies what they are working with and which parameters are
+constrained by which part of the dataset. `inference.md` §8 already keeps
+instrument labels out of the merge topology, so nothing collides
+structurally; the one residual, flagged for W1.13, is whether the label
+may still *default* to the channel name in the common one-instrument
+case, or whether distinct labels should be required whenever more than
+one instrument reads a channel (the requirements provenance `sources`
+tuple is the surface that stays ambiguous today). Question 6 remains
+open: no immediate use case for an instrument binding two channels, but
+Peter suspects one will surface — limitation 13.7's tuple-binding
+extension stays the named escape hatch, and the first modality that
+needs it should be sketched before the contract is widened.
+
+**Recorded at the same review — standard-library transformations the
+roadmap overlooked.** §10 is spectral-shaped; the image and 1-D spatial
+equivalents were not named: PSF convolution and spatial resampling (the
+image analogues of `Convolve`/`Resample`), affine transforms
+(rotation/translation/scaling — the point at which `results_schema.md`
+§17 Q3's WCS carrier on `Image`/`Cube` becomes necessary, a container
+addition rather than a change here), Hankel transforms for radial
+profiles and for visibilities as functions of u–v distance alone, and
+NUFFT variants where a plain FFT is the wrong tool. None is urgent and
+each fits the existing `Transformation` surface; W1.13 should confirm
+the freeze precludes none of them and record them as named Phase 2+
+standard-library slots.
+
 1. **Is the ANY mask rule too conservative for real resampling?** §6 ratifies
    it, and limitation 13.4 names the extension. The case against: a
    ground-based spectrum with a handful of bad pixels, resampled onto a much

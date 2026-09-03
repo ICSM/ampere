@@ -1030,6 +1030,24 @@ it too (one object's several sub-mm CO lines: `co.j3_2`, `co.j2_1`).
 `_check_channel_name` accepts `.`-separated identifiers; nothing interprets
 the dots, and `require` still matches the full name.
 
+**Ruled by Peter, 2026-09-03 — questions 3–6.** Question 3 — `x`/`y`
+stand, with an obligation recorded: `Image`/`Cube` will at some point
+need to carry a `WCS` (or similar) so that frames demonstrably line up,
+and that becomes necessary at the same moment as the affine image
+transformations recorded in `transformations.md` §15 (rotation/
+translation/warping); not for the freeze. Question 4 — `(x, y, spectral)`
+confirmed (the IFU and interferometry sketches both support it); a
+FITS-style axis-order interface may be wanted in future in addition, and
+since that is an axis permutation at an interop boundary it stays cheap.
+Question 5 — confirmed in the sketch's direction: visibilities are in
+general functions of (u, v, λ), for optical and heterodyne interferometry
+alike, so `extra_coords` becoming a mapping of `Axis` is the named
+Phase 4 extension (`interferometry.md` §11 Q2); not for the freeze.
+Question 6 — superseded: serialisation is consolidated into a single
+cross-contract review at W1.13 (with `likelihoods.md` §17 Q8 and
+`results.md` §15 R7) rather than settled per contract; the design-horizon
+(c) training-set requirement rides along with it.
+
 1. **`DEFAULT_CHANNEL` is the string `"default"`.** It is short and obvious, but
    it is also a name a user might plausibly want for a real channel. Reserving
    it (refusing an explicit `"default"`) would be safer and more annoying;

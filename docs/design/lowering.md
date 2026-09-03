@@ -440,6 +440,12 @@ has one mathematical definition and the reference path computes it exactly.
 The distinction worth holding onto is that §3.4 forbids substituting a
 *different prior*, not computing the *same* quantity somewhere else.
 
+**Ruled (2026-09-03): sanctioned on these terms, but loud.** Taking the
+fallback emits a warning naming the affected families and the backend, so
+a nominally torch-backed run that computes its prior transform in numpy is
+never a surprise discovered later; a `strict` option turns the warning
+into a raise. W1.13 fixes where the flag lives (§12, item 6).
+
 ## 4. Bijection mapping
 
 `parameters.md` §6 fixes the inference rule — real line → `Identity`,
@@ -1118,7 +1124,13 @@ crashing, which is the criterion for needing a mechanical check.
    `parameters.md` §14.3), so tied parameters land on the root module. If that
    open question is ever resolved the other way, this recommendation should be
    revisited with it.
-4. **Where the shared lowering error type lives.** §3.4 proposes
+4. ***Ruled 2026-09-03: accepted.*** `LoweringError(AmpereError)` lands in
+   `ampere.core.exceptions` at W1.13. Peter's phrasing ("the relevant
+   exceptions", plural) supports the same disposition for the other
+   homeless exception types on W1.13's list — `OptionalDependencyError`
+   ratified in place, `ResultsError` moved to core per `results.md` §15
+   R5's recommendation — to be confirmed in that pass. *(Original
+   question follows for the record.)* **Where the shared lowering error type lives.** §3.4 proposes
    `ampere.core.exceptions.LoweringError(AmpereError)` — a sibling of
    `ContractError`, not a subclass, for the reason given there. Adding it puts
    a *backend-facing* exception in `ampere.core`, which is defensible (core
@@ -1139,7 +1151,13 @@ crashing, which is the criterion for needing a mechanical check.
    §5's "set at the earliest possible point on first import" sketch: same
    policy, opposite mechanism — ampere never sets the flag on import, and
    instead guards and raises.
-6. **Should the reference backend be a sanctioned fallback for a missing
+6. ***Ruled 2026-09-03: sanctioned, loudly.*** The reference fallback for
+   a missing native `icdf` is accepted on two conditions: taking it emits
+   a loud warning naming the families and the backend, and a `strict`
+   switch turns that warning into a raise for the user who would rather
+   fail than mix paths. §3.6 amended to match; W1.13 fixes the flag's
+   home (plausibly beside the run's other strictness controls). *(Original
+   question follows for the record.)* **Should the reference backend be a sanctioned fallback for a missing
    `icdf`?** §3.6 says yes and argues it is not the silent substitution §3.4
    forbids, because `prior_transform` has one mathematical definition. That
    reasoning is sound but it does put a numpy computation inside a nominally

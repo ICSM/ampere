@@ -1310,6 +1310,30 @@ predicts the complex value with an `Amplitude` step taking the modulus;
 `extra_coords` units eventually, not for the freeze) and await Peter's
 ruling; questions 5 and 8 remain open as written.
 
+**Ruled by Peter, 2026-09-03**: questions 3, 4 and 6 — the sketch's
+recommendations are accepted as written: the model predicts the complex
+value and an `Amplitude` step takes the modulus; `κ = 1/σ²` per sample;
+and the circular (equal-component, zero-pseudo-covariance) complex GP is
+the fixed meaning under which `complex_gaussian` + `GaussianProcessNoise`
+is declared `ANALYTIC` — unblocking the flexible likelihood on the plan's
+proof modality. W1.13 lands the declaration change; the implementations
+are Phase 4's. Question 5 — ruled as it stands: the use case is one
+`scale` per instrument or survey, which the per-dataset scalar already
+expresses (each dataset carries its own `Likelihood`); a per-channel scale
+*within* one container is not wanted (one spectrum rarely carries the data
+to constrain more), and where scales are physically related across
+instruments (orders of an échelle spectrum, say) the relationship is
+expressed by tying or a hierarchical prior over the per-dataset scale
+parameters, not by an array-valued scale with a grouping declaration.
+Question 7 — resolved with `results_schema.md` §17 Q5's same-day ruling:
+per-visibility frequency is real (visibilities are functions of (u, v, λ)
+in general), so `extra_coords` gains `Axis` support eventually — Phase 4,
+not the freeze; this contract needs nothing. Question 8 — superseded:
+serialisation is to be consolidated *once* across all the contracts (an
+inventory of every `to_spec`/`to_dict`/emission mechanism, a gap
+analysis, and one coherent approach) rather than settled piecemeal;
+routed to W1.13 alongside `results.md` §15 R7.
+
 1. **Should a non-positive-definite covariance be `−inf` instead of an
    exception?** This contract raises, on the argument that a silent `−inf`
    hides a mis-specified kernel and that W1.7 owns failure signalling. The

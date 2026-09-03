@@ -69,7 +69,7 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
   the "legacy still works" gate; run it before merging anything that
   touches shared files.
 
-## ⚡ Pick up here (end of the 2026-09-02 session)
+## ⚡ Pick up here (updated 2026-09-03)
 
 **State**: Phase 1 is ten of thirteen items done — W1.1–W1.7, W1.9, W1.11
 and W1.12 are all Fable-reviewed and **merged to local master** (nothing is
@@ -110,10 +110,39 @@ I-1/I-5/X-2/X-3 approved and landed; X-1 under iteration — Peter is
 positive and asked for the full mechanics, now written as the "Detailed
 design" subsection of `awkward_instrument.md` §6 X-1.
 
-**Peter's remaining review backlog** (nothing blocks W1.8/W1.10): X-1's
-detailed design (iterate, then rule); W1.5 §15 Q2/Q3 and W1.6 §17
-Q3/Q4/Q6 (recommendations on file in the sketches); W1.4 §17 Q3–Q6;
-`inference.md` §19 items 5–8; lowering.md §12's ratification items.
+**Ruled 2026-09-03** (recorded in the spec preambles; implementation
+routed to W1.13): W1.6 §17 Q3/Q4/Q6 accepted as recommended (Rice on the
+complex value with an `Amplitude` step; `κ = 1/σ²` per sample; circular
+complex GP declared `ANALYTIC`), Q5 ruled (the per-dataset scalar *is*
+the per-instrument scale; cross-instrument relations via ties or
+hierarchical priors, never a per-channel array), Q7 closed with W1.4 Q5,
+Q8 superseded by a **consolidated cross-contract serialisation review**
+at W1.13 (with `results.md` §15 R7 and `results_schema.md` §17 Q6);
+W1.5 §15 Q2/Q3 accepted (`configure_from`, push-forward-and-raise;
+`compile_for` refuses by default with an opt-out warning flag), Q5
+accepted (`freeze()` — also closes `inference.md` §19 item 8), Q4 ruled
+in substance (label and channel are distinct concepts, not one-to-one;
+one residual: may the label still *default* to the channel name — see the
+§15 preamble); W1.4 §17 Q3–Q6 ruled (`x`/`y` plus a future WCS carrier;
+`(x, y, spectral)` stands; (u, v, λ) visibilities confirm the Phase 4
+`Axis` extension for `extra_coords`; serialisation folded into the
+consolidated review); lowering.md §12 items 4 and 6 ruled
+(`LoweringError` into `ampere.core.exceptions`; the reference `icdf`
+fallback sanctioned with a loud warning and a `strict` raise). **New
+scope recorded** in `transformations.md` §15: image/1-D-spatial
+standard-library transformations (PSF convolution, spatial resampling,
+affine + WCS, Hankel, NUFFT) — W1.13 confirms the freeze precludes none.
+
+**Peter's remaining review backlog**: `results.md` §15 **R1–R7**
+(untouched — the largest block); X-1's detailed design
+(`awkward_instrument.md` §6, then its §9 Q1 — iterate, then rule);
+`transformations.md` §15 Q6 (two-channel instruments) and Q4's
+default-label residual; `inference.md` §19 items 5–7 (context supplied
+2026-09-03, awaiting rulings); lowering.md §12 items 1 (discrete-family
+bijection — options supplied) and 8 (registration hook — candidate designs
+supplied); the consolidated serialisation review's scope. Housekeeping:
+W0.9; branch-triage approval (`docs/design/harvest/branch_triage.md`);
+the two pre-freeze CI/pixi findings above.
 
 **Restart prompt for a new session** (paste as the opening message):
 
@@ -177,6 +206,11 @@ pass over the §4 contract code and the lowering spec. `codex exec -m
 gpt-5.6-sol` is currently refused on this account ("not supported when
 using Codex with a ChatGPT account"); Peter expects to configure the extra
 codex steps himself before the freeze. Nothing blocks on it until then.
+**Ruled 2026-09-03**: sol remains blocked, so the batched pass proceeds
+with a combination of adversarial reviews from **Fable** and from
+**`gpt-5.6-terra`** (via the codex CLI), chosen to capture the difference
+in answer distributions between model families; sol can still be added if
+it becomes available before the freeze.
 
 ## Phase 1 review outcomes (2026-09-01, all merged)
 

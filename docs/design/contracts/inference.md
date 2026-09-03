@@ -1676,8 +1676,10 @@ R4: **the name surface is settled now, not at Phase 5** — grouped
 non-hierarchical data (one object's several sub-mm CO lines) want dotted
 channels too, so `_check_channel_name` and the `Instrument` channel binding
 accept `.`-separated identifiers (§14; merge-component labels stay bare).
-The original requests are kept below for the record. Items 5–8 remain open
-as written.
+The original requests are kept below for the record. Items 5–7 remain open
+as written; item 8 was closed on 2026-09-03 by Peter's acceptance of
+`transformations.md` §15 Q5 — `freeze()` is confirmed as worth doing, and
+W1.13 lands it.
 
 **R1 — the merge topology (§4). The main ruling this document asks for.**
 Nested `ParameterMapping`, one merge per level, is implemented; §4.2–4.4 set out
