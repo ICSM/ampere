@@ -180,10 +180,13 @@ close with it, Q4 dissolves). **W1.13 is now dispatchable**: its backlog
 is the accepted-recommendation implementations recorded in the spec
 preambles, the consolidated serialisation review, X-1, the standard
 freeze duties (cross-review, tag, Phase 2 breakdown), and the Fable +
-`gpt-5.6-terra` adversarial pass. The only open review item left
-anywhere is `awkward_instrument.md` §9 Q3 (whether WStat's profiling is
-supported at all) — minor, and W1.13 can carry it. Housekeeping: W0.9
-scheduling; branch-triage approval
+`gpt-5.6-terra` adversarial pass. `awkward_instrument.md` §9 Q3 was
+ruled 2026-09-03 (decision-log row): ampere does not ship WStat; the
+docs opinionatedly compare the profiled user-family workaround against
+the two-dataset Bayesian formulation (pros, cons and results), landing
+with Phase 2's engine drivers — W1.13 carries the obligation into the
+Phase 2 breakdown. **The review backlog is now empty.** Housekeeping:
+W0.9 scheduling; branch-triage approval
 (`docs/design/harvest/branch_triage.md`).
 
 **W0.10 dispatched, Fable-reviewed and merged 2026-09-03** (see the

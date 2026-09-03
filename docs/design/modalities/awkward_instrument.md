@@ -577,7 +577,16 @@ names `FractionalModelNoise` in `likelihoods.md` §5's list, and the
 ten-line implementation lands with the reference backend, not in
 `ampere.core`. Question 4 dissolves with the ruling — the
 microcalorimeter case was worth checking only if X-1 was not fixed.
-Question 3 (WStat's profiling) remains open as written.
+Question 3 — **ruled 2026-09-03: ampere does not ship WStat.** The docs
+take a deliberately opinionated line: the Bayesian two-dataset
+formulation is *the* correct approach for ampere, and the profiled
+statistic is a workaround users can build for themselves. A worked
+documentation example lays out the WStat-as-user-family route (safe
+under masking since X-2's `retain` landed; its `sample` must refuse, and
+per-sample log-likelihood semantics degrade), then the two-dataset joint
+fit, and compares the two's pros, cons and *results*. The comparison
+needs posteriors, so the example lands with Phase 2's engine drivers;
+W1.13 carries the obligation into the Phase 2 work-item breakdown.
 
 1. **Does X-1 belong in the freeze?** This sketch says yes: it is an ABC
    signature that both Phase 2 backends implement, and the conformance suite
