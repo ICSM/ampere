@@ -96,12 +96,14 @@ to let the W0.10 CI prove itself on a live run.
 `docs/orchestration.md` (Opus for the backend tracks W2.4/W2.5; the
 reference slice W2.1 first — it carries the freeze-escalation landings:
 `describe()` + the backend-neutral model identity, and `Axis.locate`,
-each with its decision-log entry). **W0.9 (pyphot/sbi
-forward-migration) gates W2.1's synthetic-photometry step** and should
-be dispatched early; the rest of W2.1 must not wait on it. Also
-outstanding: branch-triage approval
-(`docs/design/harvest/branch_triage.md`). The paragraphs below are the
-Phase 0–1 ledger, kept as history.
+each with its decision-log entry). **W0.9 merged 2026-09-03** — Phase 0
+is entirely complete and W2.1's synthetic-photometry step is ungated:
+new photometry code imports `get_unit` from
+`ampere/utils/pyphot_compat.py` (the pyphot ≥2 idiom) from its first
+line. Known follow-up for Phase 2: the `examples/` scripts still use the
+removed `pyphot.unit` API standalone. Also outstanding: branch-triage
+approval (`docs/design/harvest/branch_triage.md`). The paragraphs below
+are the Phase 0–1 ledger, kept as history.
 
 **R1–R4 ruled 2026-09-02 and implemented**: design B (nested merge)
 ratified; `LikelihoodFamily.sample` landed (overridable, default refuses
