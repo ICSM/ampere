@@ -171,7 +171,9 @@ test written out of tree.
 | `PRODUCES` | The kind returned, or `None` (the default) for "the same kind it was given" |
 | `apply(samples, values)` | The transformation itself. `values` are this step's *local* parameter values |
 | `requirements()` | Optional; §7. Empty by default |
+| `configure_from(downstream)` | Optional; §5. Chain-internal negotiation hook, called once at `Instrument` construction. No-op by default |
 | `label` | Component label for this step's parameters. Defaults to the class name in snake_case |
+| `DIFFERENTIABLE` / `BATCHABLE` / `DEVICE` | Capability flags (`DEVELOPMENT_PLAN.md` §4.5), promoted into this ABC and `Model`'s at the freeze (ruled 2026-09-03, `inference.md` §19.6). Conservative defaults `False`/`False`/`"cpu"` — the reference answers; Phase 2's backends override them |
 
 `PRODUCES = None` is the common case, because most instrumental effects are
 kind-preserving: convolution, resampling and calibration all take a `Spectrum`

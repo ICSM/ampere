@@ -698,6 +698,16 @@ class Transformation(Parameterised, abc.ABC):
     #: Kind produced, or ``None`` for "the same kind it was given".
     PRODUCES: ClassVar[type[FunctionSamples] | None] = None
 
+    #: Capability flags (``DEVELOPMENT_PLAN.md`` §4.5), promoted into this ABC
+    #: at the freeze (ruled 2026-09-03, ``inference.md`` §19.6). The defaults
+    #: are the reference path's honest answers, so a step that stays silent
+    #: promises nothing; Phase 2's torch/jax subclasses override them.
+    DIFFERENTIABLE: ClassVar[bool] = False
+    #: Whether this step evaluates a batch of parameter vectors in one call.
+    BATCHABLE: ClassVar[bool] = False
+    #: Device this step's arrays live on: ``"cpu"``, ``"cuda"``, ``"cuda:0"``, ...
+    DEVICE: ClassVar[str] = "cpu"
+
     _label: str
 
     def __init__(self, *, label: str | None = None) -> None:
@@ -1215,6 +1225,17 @@ class Model(Parameterised, abc.ABC):
     >>> model([-1.0]).single().values.tolist()      # a flat free-parameter vector
     [1.0, 0.5, 0.25]
     """
+
+    #: Capability flags (``DEVELOPMENT_PLAN.md`` §4.5), promoted into this ABC
+    #: at the freeze (ruled 2026-09-03, ``inference.md`` §19.6). Conservative
+    #: defaults — the reference path's honest answers; Phase 2's torch/jax
+    #: model subclasses override them, and W1.7's ``declared_capabilities``
+    #: reads them directly.
+    DIFFERENTIABLE: ClassVar[bool] = False
+    #: Whether ``evaluate`` accepts a batch of parameter vectors in one call.
+    BATCHABLE: ClassVar[bool] = False
+    #: Device this model's arrays live on.
+    DEVICE: ClassVar[str] = "cpu"
 
     @abc.abstractmethod
     def evaluate(self, **values: Value) -> Any:

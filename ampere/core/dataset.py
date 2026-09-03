@@ -248,26 +248,24 @@ def _check_label(name: object, kind: str) -> str:
 
 @runtime_checkable
 class Capable(Protocol):
-    """What a model or transformation may declare about how it can be run.
+    """What a model or transformation declares about how it can be run.
 
     ``DEVELOPMENT_PLAN.md`` §4.5 lists ``differentiable``, ``batchable`` and
     ``device`` as the fitting problem's capability flags. They are properties of
     the *pieces*, not of the problem: a problem is differentiable exactly when
     everything a gradient would have to pass through is.
 
-    Nothing in ``ampere.core`` declares them today — the reference path is
-    numpy, so the honest answers are ``False``, ``False`` and ``"cpu"``, which
-    are the defaults :func:`declared_capabilities` reads when a piece is silent.
-    Phase 2's torch and jax backends set them as class attributes on their own
-    :class:`~ampere.core.transform.Model` and
-    :class:`~ampere.core.transform.Transformation` subclasses, and this
-    Protocol is what they are declaring against.
-
-    They are read with :func:`getattr` rather than promoted into the
-    :class:`~ampere.core.transform.Model` and
-    :class:`~ampere.core.transform.Transformation` ABCs, because those are
-    W1.5's frozen contract and this one may not widen them. ``inference.md``
-    §12 asks W1.13 to promote them.
+    **Promoted into W1.5's ABCs at the freeze** (ruled 2026-09-03,
+    ``inference.md`` §19.6): :class:`~ampere.core.transform.Model` and
+    :class:`~ampere.core.transform.Transformation` carry the three as class
+    attributes with the conservative defaults ``False``, ``False`` and
+    ``"cpu"`` — the reference path's honest answers, reproducing the earlier
+    ``getattr`` semantics exactly — so every piece a problem composes now
+    declares them, silence included, and
+    :func:`declared_capabilities` reads the attributes directly. Phase 2's
+    torch and jax backends override them on their own subclasses; this
+    Protocol remains the statement of the surface for anything duck-typed
+    into :attr:`Dataset.capability_parts`.
     """
 
     #: Whether a gradient can be taken through this object's evaluation.
@@ -330,6 +328,13 @@ def declared_capabilities(parts: Sequence[object]) -> Capabilities:
     is ``True``, and silently promising gradients for a problem with nothing in
     it is precisely the silent-capability-upgrade this architecture forbids.
 
+    The flags are read directly (ruled 2026-09-03, ``inference.md`` §19.6):
+    :class:`~ampere.core.transform.Model` and
+    :class:`~ampere.core.transform.Transformation` carry ``DIFFERENTIABLE``,
+    ``BATCHABLE`` and ``DEVICE`` as class attributes with the conservative
+    defaults, so every part a problem composes declares them — a duck-typed
+    part must too (:class:`Capable` is the surface).
+
     Parameters
     ----------
     parts
@@ -351,25 +356,32 @@ def declared_capabilities(parts: Sequence[object]) -> Capabilities:
     >>> declared_capabilities([Native(), Native()])
     Capabilities(differentiable=True, batchable=True, device='cuda')
 
-    One silent part withdraws the whole conjunctive claim — and, because silence
-    counts as ``"cpu"``, mixing a silent part with a GPU one is a device
-    disagreement rather than a quiet round trip:
+    One conservative part withdraws the whole conjunctive claim — the ABCs'
+    defaults are ``False``/``False``/``"cpu"``, so a subclass that stays
+    silent inherits the reference answers rather than promising anything —
+    and a CPU part beside a GPU one is a device disagreement rather than a
+    quiet round trip:
 
     >>> class NativeOnCpu:
     ...     DIFFERENTIABLE = True
     ...     BATCHABLE = True
-    >>> declared_capabilities([NativeOnCpu(), object()])
+    ...     DEVICE = "cpu"
+    >>> class SilentOnCpu:
+    ...     DIFFERENTIABLE = False
+    ...     BATCHABLE = False
+    ...     DEVICE = "cpu"
+    >>> declared_capabilities([NativeOnCpu(), SilentOnCpu()])
     Capabilities(differentiable=False, batchable=False, device='cpu')
     >>> declared_capabilities([])
     Capabilities(differentiable=False, batchable=False, device='cpu')
-    >>> declared_capabilities([Native(), object()])
+    >>> declared_capabilities([Native(), SilentOnCpu()])
     Traceback (most recent call last):
         ...
     ampere.core.exceptions.DatasetError: the pieces of this problem declare different devices...
     """
     if not parts:
         return Capabilities()
-    devices = {str(getattr(part, "DEVICE", "cpu")) for part in parts}
+    devices = {str(part.DEVICE) for part in parts}  # type: ignore[attr-defined]
     if len(devices) > 1:
         raise DatasetError(
             f"the pieces of this problem declare different devices {sorted(devices)}. Ampere does "
@@ -378,8 +390,8 @@ def declared_capabilities(parts: Sequence[object]) -> Capabilities:
             f"device, or pass capabilities=Capabilities(device=...) to state which one is meant."
         )
     return Capabilities(
-        differentiable=all(bool(getattr(part, "DIFFERENTIABLE", False)) for part in parts),
-        batchable=all(bool(getattr(part, "BATCHABLE", False)) for part in parts),
+        differentiable=all(bool(part.DIFFERENTIABLE) for part in parts),  # type: ignore[attr-defined]
+        batchable=all(bool(part.BATCHABLE) for part in parts),  # type: ignore[attr-defined]
         device=devices.pop(),
     )
 

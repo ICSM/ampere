@@ -838,18 +838,29 @@ class TestCapabilities:
         assert problem.device == "cpu"
 
     def test_conjunctive_over_the_parts(self) -> None:
-        class Native:
+        # Promoted at the freeze (ruled 2026-09-03, inference.md §19.6): the
+        # flags are class attributes on the Model/Transformation ABCs with
+        # conservative defaults, and declared_capabilities reads them
+        # directly. A subclass that stays silent inherits the reference
+        # answers, so silence still withdraws the conjunctive claim.
+        class Native(Calibrate):
             DIFFERENTIABLE = True
             BATCHABLE = True
             DEVICE = "cuda"
 
-        class NativeOnCpu:
+        class NativeOnCpu(Calibrate):
             DIFFERENTIABLE = True
             BATCHABLE = True
 
-        class Silent:
+        class Silent(Calibrate):
             pass
 
+        assert Transformation.DIFFERENTIABLE is False
+        assert Transformation.BATCHABLE is False
+        assert Transformation.DEVICE == "cpu"
+        assert Model.DIFFERENTIABLE is False
+        assert Model.BATCHABLE is False
+        assert Model.DEVICE == "cpu"
         assert declared_capabilities([Native(), Native()]) == Capabilities(True, True, "cuda")
         assert declared_capabilities([NativeOnCpu(), NativeOnCpu()]) == Capabilities(True, True)
         # One silent part is enough to withdraw the whole conjunctive claim.
@@ -858,12 +869,12 @@ class TestCapabilities:
     def test_empty_parts_are_not_differentiable(self) -> None:
         assert declared_capabilities([]) == Capabilities()
 
-    def test_silence_counts_as_cpu_and_therefore_disagrees_with_a_gpu_part(self) -> None:
-        class OnGpu:
+    def test_an_inherited_cpu_default_disagrees_with_a_gpu_part(self) -> None:
+        class OnGpu(Calibrate):
             DEVICE = "cuda"
 
         with pytest.raises(DatasetError, match="different devices"):
-            declared_capabilities([OnGpu(), object()])
+            declared_capabilities([OnGpu(), Calibrate()])
 
     def test_disagreeing_devices_are_refused(self) -> None:
         class OnCpu:

@@ -942,13 +942,29 @@ have an oracle to agree with rather than each rediscovering the Jacobian
 
 `differentiable`, `batchable` and `device` are properties of the *pieces*: a
 problem is differentiable exactly when everything a gradient would have to pass
-through is. Nothing in `ampere.core` declares them, because the reference path is
-numpy and the honest answers are `False`, `False` and `"cpu"`:
+through is. On the reference path the honest answers are `False`, `False` and
+`"cpu"`:
 
 ```pycon
 >>> problem.capabilities
 Capabilities(differentiable=False, batchable=False, device='cpu')
 >>> problem.differentiable, problem.batchable, problem.device
+(False, False, 'cpu')
+
+```
+
+**Promoted into W1.5's ABCs at the freeze** (ruled 2026-09-03, §19.6):
+`Model` and `Transformation` carry `DIFFERENTIABLE`, `BATCHABLE` and
+`DEVICE` as class attributes whose conservative defaults reproduce the
+earlier `getattr` semantics exactly, so every piece a problem composes
+declares them — silence inherits the reference answers — and
+`declared_capabilities` reads the attributes directly:
+
+```pycon
+>>> Model.DIFFERENTIABLE, Model.BATCHABLE, Model.DEVICE
+(False, False, 'cpu')
+>>> from ampere.core import Transformation
+>>> (Transformation.DIFFERENTIABLE, Transformation.BATCHABLE, Transformation.DEVICE)
 (False, False, 'cpu')
 
 ```
@@ -962,20 +978,22 @@ forbids:
 >>> class Native:
 ...     DIFFERENTIABLE = True
 ...     BATCHABLE = True
+...     DEVICE = "cpu"
+>>> class Conservative(Transformation):
+...     def apply(self, samples, values):
+...         return samples
 >>> declared_capabilities([Native(), Native()])
 Capabilities(differentiable=True, batchable=True, device='cpu')
->>> declared_capabilities([Native(), object()])
+>>> declared_capabilities([Native(), Conservative()])
 Capabilities(differentiable=False, batchable=False, device='cpu')
 >>> declared_capabilities([])
 Capabilities(differentiable=False, batchable=False, device='cpu')
 
 ```
 
-Phase 2's backends set these as class attributes on their own `Model` and
-`Transformation` subclasses; the `Capable` protocol is what they declare
-against. They are read with `getattr` rather than promoted into W1.5's ABCs,
-because those are frozen and this contract may not widen them — §18 asks W1.13
-to promote them at the freeze.
+Phase 2's backends override these on their own `Model` and `Transformation`
+subclasses; the `Capable` protocol remains the statement of the surface for
+anything duck-typed into `capability_parts`.
 
 ### `check_engine`
 
@@ -1544,7 +1562,7 @@ True
 | A `Failure` carries the scalar values it failed at, never arrays | Localises the failure ("which prior is too wide?") without putting a 10⁵ latent block on every history entry |
 | Out-of-support returns NaN for `log_likelihood`, not `-inf`, and records no failure | "Not evaluated" ≠ "impossible"; zero prior mass is an answer |
 | `FailureReason` is a `StrEnum`, and counts are unbounded while history is not | A reason is only useful if it can be counted; a history must not leak memory over a 10⁶-proposal run |
-| Capability flags read by `getattr`, defaulting to the reference answers | W1.5's ABCs are frozen and this contract may not widen them; §18 asks W1.13 to promote them |
+| Capability flags are class attributes on W1.5's ABCs, defaulting to the reference answers | Promoted at the freeze (ruled 2026-09-03, §19.6), replacing the interim `getattr` reads with identical semantics: every composed piece declares the three flags, silence inherits `False`/`False`/`"cpu"`, and `declared_capabilities` reads them directly |
 | `simulate` draws Gaussian observations and refuses everything else | A family declares only `log_prob`; guessing would train SBI on the wrong forward model |
 | `substream` lives in its own module | `lowering.md` §12.7 asks W1.13 to ratify or move it; a one-file module makes either cheap |
 
