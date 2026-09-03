@@ -300,6 +300,13 @@ migration**, so new code targets the ≥2 API from the first line), and
 registered so the X-1 conformance rows run against the shipped class
 instead of the in-repo double. Register the backend as a conformance
 fixture (one registry line, per W1.10's acceptance).
+Also lands here (ruled 2026-09-03 at the freeze's escalations; both are
+post-freeze §4 additions, so this item's PR carries their decision-log
+entries): the opt-in `describe()` hook on `Parameterised` folded into
+`model_fingerprint`, plus the derived backend-neutral model identity
+(offer, never serve — `results.md` §14); and `Axis.locate(values)`
+matching within `COORDINATE_RTOL` (`spectrum_photometry.md` Gap 1),
+which this item's resampling/photometry steps are the first to consume.
 **Depends:** spec-v1.0 merged; W0.9 for the photometry step only (the rest
 must not wait on it).
 **Accept:** conformance suite green with the new backend registered; the

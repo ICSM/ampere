@@ -199,12 +199,12 @@ channel.
 
 ### Gap 1 — a shared channel's negotiated grid can silently break a step's own buffer alignment
 
-*Dispositioned at the freeze (W1.13): **deferred to Phase 2**, no ruling
-sought. The proposed `Axis.locate` (matching within `COORDINATE_RTOL`, per
-the W1.11 review's correction) is additive, so the freeze precludes
-nothing; W2.1's standard resampling/photometry steps are the first
-consumer and should land it — or an equivalent — with a decision-log
-entry then. Flagged in W1.13's report so Peter sees the deferral.*
+*Dispositioned at the freeze (W1.13) and **ruled by Peter, 2026-09-03**:
+the lookup is the approved approach — `Axis.locate` (matching within
+`COORDINATE_RTOL`, per the W1.11 review's correction) lands with W2.1,
+whose standard resampling/photometry steps are its first consumer. It is
+additive, so the freeze precludes nothing; the landing PR carries the
+decision-log entry ground rule 9 requires.*
 
 **What breaks.** Real SED fits bind several photometric instruments (2MASS,
 WISE, IRAS, ...) to the *same* model channel. Give a second instrument its

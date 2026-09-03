@@ -262,7 +262,14 @@ Run the suite to see it; as of W1.10:
   key). Whether Phase 2 additionally wants a backend-neutral model identity
   — so an emulator trained on one backend can be *offered*, never silently
   served, to a fit on another — stays routed to the freeze beside
-  `results.md` §13.13's `describe()` hook. (W1.13's report carries a
+  `results.md` §13.13's `describe()` hook.
+
+  **Ruled at the freeze's escalations (2026-09-03): adopted for early
+  Phase 2**, as one mechanism with the `describe()` hook — both land with
+  W2.1 (decision-log entry there). The derived neutral identity (the
+  fingerprint minus class/module) offers, never serves; the problem hash
+  itself stays backend-variant, so this suite's equivalence row is
+  unchanged. (W1.13's report carries a
   recommendation; the ruling is Peter's.)
 
 Added at the freeze (W1.13):

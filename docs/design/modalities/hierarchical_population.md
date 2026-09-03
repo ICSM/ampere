@@ -645,8 +645,16 @@ multi-level population (Phase 5 at the earliest), and land beside H-1's
 declaration if that is granted. Q4 — confirmed: per-object nuisance
 parameters as plate members is the intended reading of `parameters.md`
 §9's `members` argument, and is how this sketch and W1.7's tests already
-use it. **Q2 and Q5 remain Peter's** — carried in W1.13's report rather
-than answered here.
+use it. **Q2 and Q5 ruled by Peter, 2026-09-03** (at the freeze's
+escalations): Q2 — `Population` lands with **Phase 5**, and the timing is
+deliberately adaptable: nothing in the frozen contracts precludes it (the
+disposition above verified that), so it may be pulled forward if a real
+need surfaces earlier, and the tie-based pattern of §3 is the documented
+route until then. Q5 — no primary-route commitment is made now: H-2's
+landing at the freeze already removed the critical-path stake this
+question turned on, so both routes (the joint fit, and design horizon
+(b)'s importance reweighting of archived fits) stay open, and the choice
+is deferred to Phase 5 alongside `Population` itself.
 
 1. **Is `Binding.index` (H-2) the right shape, or should `DatasetCollection`
    slice before it calls the model?** The alternative to amending `Binding` is

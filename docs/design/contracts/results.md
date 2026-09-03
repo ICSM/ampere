@@ -948,8 +948,11 @@ Each is a decision, not an oversight. Each has an extension point.
     cache key while scoring differently. Hashing an arbitrary `__dict__` is not
     a safe general answer, so the extension point is an opt-in `describe()`
     hook on `Parameterised` that a model or transformation implements when its
-    behaviour depends on something the contracts do not model. Worth deciding at
-    W1.13, since a Phase-2 emulator cache is the first thing that will care.
+    behaviour depends on something the contracts do not model. **Ruled by
+    Peter, 2026-09-03** (at the freeze's escalations): the hook is adopted for
+    **early Phase 2** — it lands with W2.1, folded into `model_fingerprint`,
+    with the decision-log entry ground rule 9 requires, so the cache-key hole
+    is closed before any emulator cache exists to poison.
 
 ## 14. What this contract hands to the specs downstream
 
@@ -974,7 +977,14 @@ Each is a decision, not an oversight. Each has an extension point.
   Whether Phase 2 additionally wants a backend-neutral model identity — so
   an emulator trained on the reference backend can be *offered* (never
   silently served) to a torch fit of the same declaration — is a freeze
-  question, and it belongs with §13.13's `describe()` hook.
+  question, and it belongs with §13.13's `describe()` hook. **Ruled by
+  Peter, 2026-09-03**: yes, in early Phase 2, as one mechanism with that
+  hook (W2.1): a *derived* neutral identity — the model fingerprint minus
+  its class/module component — used only to **offer** a cross-backend
+  emulator with its provenance shown, never to serve one silently; the
+  neutral identity cannot pin the mathematics, which is why "offer, never
+  serve" is the rule. `ampere_problem_hash` itself stays deliberately
+  backend-variant.
 - **W1.12 (Diagnostics)** — the three answers it asked for: the reserved group
   names and the derivation for signed residuals (§7), the ruling that `y_rep` is
   computed on demand rather than stored (§7), and `plot_anomaly_score` as a
