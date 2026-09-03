@@ -24,11 +24,13 @@ from __future__ import annotations
 
 __all__ = [
     "AmpereError",
+    "CapabilityError",
     "ChannelError",
     "CompositionError",
     "ContractError",
     "DatasetError",
     "LikelihoodError",
+    "LoweringError",
     "OptionalDependencyError",
     "ParameterError",
     "ResultsError",
@@ -40,6 +42,34 @@ __all__ = [
 
 class AmpereError(Exception):
     """Base class for every exception ampere raises deliberately."""
+
+
+class CapabilityError(AmpereError, NotImplementedError):
+    """A well-formed declaration asks for a capability this path does not have.
+
+    The deliberate contrast is with :class:`ContractError`: nothing here is
+    malformed. The declaration is valid, most routes through ampere consume
+    it happily, and one specific path cannot — so the refusal must be a
+    distinct type a caller can tell apart from "you wrote it wrongly", and
+    the message must name the capability, not the declaration.
+
+    The founding case (ruled 2026-09-03, ``lowering.md`` §12.1): a
+    **discrete prior family**. Declaration, prior sampling, constrained-space
+    ``log_prob``, ``prior_transform`` (scipy's discrete families implement
+    ``ppf``) and lowering-as-distribution all work; what cannot exist is a
+    continuous bijection to unconstrained space, so
+    :func:`~ampere.core.parameter.default_bijection_for` raises this — and
+    *only* it does, keeping the non-gradient routes that might eventually
+    support discrete parameters ((variational) EM, numpyro-style enumeration,
+    SBI, nested sampling, Bayesian optimisation) reachable. Discreteness is
+    queryable from the canonical description
+    (``describe_prior(prior).discrete``), so a future engine path branches on
+    it rather than catching this.
+
+    Also a :class:`NotImplementedError` — the builtin a caller naturally
+    reaches for when an operation is unsupported rather than wrong — and
+    deliberately **not** a :class:`ValueError`, because the value is fine.
+    """
 
 
 class ContractError(AmpereError, ValueError):
@@ -218,8 +248,79 @@ class ResultsError(ContractError):
     """
 
 
+class LoweringError(AmpereError):
+    """A valid declaration cannot be lowered onto the requested backend.
+
+    Landed at the freeze (ruled 2026-09-03, ``lowering.md`` §12.4) with the
+    shape §3.4 of that document specifies. Deliberately **not** a
+    :class:`ContractError`: a family torch does not implement is a capability
+    gap in the *backend*, not a malformed declaration by the user, and
+    conflating the two would make "your prior is invalid" and "this backend
+    cannot express your valid prior" indistinguishable to a caller catching
+    by type. One shared class across all three backends, so tests and
+    tooling assert on it uniformly.
+
+    Raised (from Phase 2 on) when ``lowering.md`` §3.4's rule 2 applies: no
+    exact construction from the target's primitives exists, so lowering
+    fails early with a name attached — never a silent approximation, and
+    never an automatic fallback to the reference path.
+
+    Parameters
+    ----------
+    family
+        The neutral name of what would not lower — a prior family
+        (``"truncnorm"``), a kernel family, or a bijection class name.
+    backend
+        The backend that lacks it, e.g. ``"torch"``.
+    parameter
+        The parameter (or merged site) whose declaration triggered the
+        failure, when one is known.
+    detail
+        Anything the caller can add — the exact missing primitive, say.
+
+    Attributes
+    ----------
+    family, parameter, backend, detail
+        As above, kept as fields so tooling asserts on the cause without
+        parsing the message.
+
+    Examples
+    --------
+    >>> err = LoweringError("truncnorm", backend="torch", parameter="temperature")
+    >>> err.family, err.parameter, err.backend
+    ('truncnorm', 'temperature', 'torch')
+    >>> str(err).startswith("prior family 'truncnorm' (parameter 'temperature')")
+    True
+    """
+
+    def __init__(
+        self,
+        family: str,
+        *,
+        backend: str,
+        parameter: str | None = None,
+        detail: str | None = None,
+    ) -> None:
+        self.family = family
+        self.parameter = parameter
+        self.backend = backend
+        self.detail = detail
+        where = f" (parameter {parameter!r})" if parameter is not None else ""
+        why = detail if detail else "no exact construction exists from its primitives"
+        super().__init__(
+            f"prior family {family!r}{where} cannot be lowered to the {backend!r} backend: "
+            f"{why}. Options: change the prior to a family the backend implements, register "
+            f"your own lowering for it (register_lowering, Phase 2), or run on a backend "
+            f"that has it. Ampere never substitutes an approximation silently."
+        )
+
+
 class OptionalDependencyError(AmpereError, ImportError):
     """An optional dependency is required for the operation being attempted.
+
+    Ratified in place at the freeze (ruled 2026-09-03 with ``lowering.md``
+    §12.4's "the relevant exceptions" disposition; ``parameters.md`` §14 Q5
+    asked for the ratification): the shape below is the contract.
 
     Raised **on use, never on import** (``architecture.md`` §4, rule 3), so
     that ``import ampere`` never requires torch, jax, or any other heavy

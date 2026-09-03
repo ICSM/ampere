@@ -1,6 +1,6 @@
 # Ampere v2 — Likelihood & NoiseModel Contract (W1.6)
 
-Status: **DRAFT for Peter's review.** Implements `DEVELOPMENT_PLAN.md` §4.4,
+Status: **frozen at `spec-v1.0`** (the tag created at the W1.13 merge, 2026-09; any later change to a §4 contract requires a decision-log entry in `DEVELOPMENT_PLAN.md` in the same PR — ground rule 9). Implements `DEVELOPMENT_PLAN.md` §4.4,
 answers `results_schema.md` §16's and `parameters.md` §13's obligations on this
 item, and closes issue #11's design question. Code:
 `ampere/core/likelihood.py`, `ampere/core/exceptions.py`. Tests:
@@ -52,11 +52,11 @@ is W1.9's table and Phase 2's code.
 >>> import scipy.stats as st
 >>> import astropy.units as u
 >>> from ampere.core import (
-...     Censoring, DenseGP, GaussianFamily, GaussianProcessNoise, IndependentNoise,
-...     InducingPointGP, Likelihood, LikelihoodFamily, LimitKind, Marginalisation,
-...     Matern32, NoiseParams, PhotometricPoints, PoissonFamily, QuasisepGP,
-...     RiceFamily, Spectrum, SquaredExponential, StudentTFamily, VisibilitySet,
-...     WindowedSparseGP, family_named, list_families, register_family,
+...     Censoring, ComplexGaussianFamily, DenseGP, GaussianFamily, GaussianProcessNoise,
+...     IndependentNoise, InducingPointGP, Likelihood, LikelihoodFamily, LimitKind,
+...     Marginalisation, Matern32, NoiseParams, PhotometricPoints, PoissonFamily,
+...     QuasisepGP, RiceFamily, Spectrum, SquaredExponential, StudentTFamily,
+...     VisibilitySet, WindowedSparseGP, family_named, list_families, register_family,
 ... )
 >>> from ampere.core.exceptions import LikelihoodError
 
@@ -291,6 +291,36 @@ third-party family inherits the refusal rather than the defect. This is the
 same discipline the unimplemented `RiceFamily` gets, applied to a combination
 rather than to a family.
 
+### The circular complex GP: declared analytic, implemented in Phase 4
+
+**Ruled by Peter, 2026-09-03** (§17 Q6, the interferometry sketch's
+recommendation accepted): `complex_gaussian` + `GaussianProcessNoise`
+declares `ANALYTIC`, with the **circular complex GP** — one real kernel
+applied independently to the real and imaginary parts: equal component
+covariances, zero pseudo-covariance — as the fixed meaning. That is the
+declaration under which the flexible likelihood reaches the plan's Phase-4
+proof modality, and fixing it now is what lets the freeze be reviewed
+against it.
+
+The *implementation* is Phase 4's, with the visibility modality, so the
+combination is **refused at composition with the schedule named** — the same
+declared-but-staged discipline `RiceFamily` gets for a whole family, applied
+to one combination. A refusal, never a silently different model:
+
+```pycon
+>>> ComplexGaussianFamily().marginalisation_with(gp_noise)
+<Marginalisation.ANALYTIC: 'analytic'>
+>>> Likelihood(ComplexGaussianFamily(), gp_noise)
+Traceback (most recent call last):
+    ...
+ampere.core.exceptions.LikelihoodError: the complex_gaussian family with a correlated noise model declares Marginalisation.ANALYTIC ... but the implementation is Phase 4's, with the interferometric-visibility modality ...
+
+```
+
+`LikelihoodFamily.GP_ANALYTIC_IMPLEMENTED` is the staging flag (default
+`True`; `False` here until Phase 4), so a future family in the same position
+inherits the discipline rather than reinventing it.
+
 ### Enforcing it against the engine
 
 §4.4: "gradient-free samplers cannot realistically handle hundreds of latent
@@ -379,6 +409,65 @@ associative**: merging a `ParameterMapping.merged` again silently drops the
 first merge's bindings. W1.7 merges every dataset in one call, so this contract
 must not consume a merge level. A genuine collision therefore raises rather
 than being silently qualified — see §14.
+
+### Prediction-aware noise: `predicted` reaches the noise model
+
+**Ruled by Peter, 2026-09-03** (W1.11 gap X-1 — `awkward_instrument.md` §6's
+detailed design, accepted as written and landed at W1.13): `NoiseModel.sigma`
+and `NoiseModel.noise_params` take the **retained predicted values** as a
+keyword-only argument:
+
+```
+sigma(observed, retain, values, *, predicted=None)
+noise_params(observed, retain, values, *,
+             predicted=None, coordinates=None, latent=None, limits=None)
+```
+
+`predicted` is the identical, already-excised array the family's `log_prob`
+receives as its first argument — float64, or complex128 for a complex family
+(a noise model wanting an amplitude takes `np.abs(predicted)` itself; ampere
+does not project on its behalf). Every call site passes it:
+`Likelihood.log_prob`, `Likelihood.conditional` (so W1.12's diagnostics see
+the same effective σ the fit used) and W1.7's `Dataset.draw_observation`,
+where the `NoiseParams` are built from the noiseless prediction *before*
+noise is added — the draw is σ(μ), not σ(x), the standard generative
+reading. `IndependentNoise` and `GaussianProcessNoise` ignore it, so the
+simple path is unchanged.
+
+The case this exists for is a noise whose magnitude depends on the model.
+The standard library names **`FractionalModelNoise`** —
+`sigma_eff² = (s·σ_data)² + (f·predicted)²`, the single most requested thing
+missing from legacy ampere's likelihood — the way `transformations.md` §10
+names standard chain steps: the contract fixes the name and semantics here,
+and the ten-line implementation lands with the reference backend in Phase 2
+(with `f` an ordinary fitted parameter). A prediction-dependent σ is still
+diagonal, so `GaussianFamily` plus a fractional noise stays `ANALYTIC` — the
+marginalisation machinery never inspects *how* σ was computed — and the GP
+composition ("10 % model error *and* a misspecification GP") is a
+`GaussianProcessNoise` subclass overriding only `sigma`: the marginal
+likelihood is `N(0, K + diag(σ_data² + (f·μ)²))` with no new mathematics.
+
+```pycon
+>>> class FractionalModelNoise(IndependentNoise):
+...     """sigma_eff**2 = sigma_data**2 + (f * predicted)**2, with f fixed."""
+...     def __init__(self, f):
+...         super().__init__()
+...         self.f = f
+...     def sigma(self, observed, retain, values, *, predicted=None):
+...         base = super().sigma(observed, retain, values)
+...         return np.sqrt(base**2 + (self.f * predicted) ** 2)
+>>> fractional = Likelihood(GaussianFamily(), FractionalModelNoise(0.1))
+>>> fractional.marginalisation
+<Marginalisation.ANALYTIC: 'analytic'>
+>>> round(fractional.log_prob(model, data), 6)
+1.842006
+
+```
+
+The boundary holds in both directions: the noise model sees the prediction,
+but never the model's *parameters* beyond those the likelihood declares
+(§15.10). A noise term that depends on a physical parameter is tied to a
+likelihood parameter or expressed as a transformation.
 
 ## 6. Kernels: declared neutrally, hyperparameters are ordinary parameters
 
@@ -687,6 +776,74 @@ Traceback (most recent call last):
 ampere.core.exceptions.LikelihoodError: observed values contains non-finite entries. ...
 
 ```
+
+### Per-observation terms: `pointwise_log_prob`
+
+**Ruled by Peter, 2026-09-03** (`results.md` §15 R2 — a §4.4 addition,
+recorded in the plan's decision log) and landed at the freeze:
+`Likelihood.pointwise_log_prob(predicted, observed, values)` returns one
+log-likelihood term per **retained** sample, on request — never stored by
+default, and never called from the hot loop. Two decompositions, each under
+the name `results.md` §6 reserves for it:
+
+- **Independent noise** — `"factorised"`: the family's own `log_prob`
+  evaluated pointwise, exactly; the terms sum to `log_prob`. Every family
+  works, censoring included (a limit contributes its own Tobit term), and a
+  user family carrying its own aligned data keeps X-2's excision contract
+  per term: each single-sample call receives a full-length `retain`
+  selecting exactly that sample.
+- **A GP** — `"conditional_loo"`: the leave-one-out conditional terms
+  `log N(y_i | μ_i^{-i}, σ_i^{2,-i})`, computed by
+  `GPSolver.conditional_loo` from the same Cholesky the marginal likelihood
+  forms (`DenseGP` implements the closed form; `QuasisepGP` owes an O(N)
+  recursion in Phase 2 and refuses until then). These are what
+  `arviz.loo`/`waic` consume, and they are a *different* decomposition: a
+  GP joint has no per-observation factorisation, so the LOO terms
+  deliberately do not sum to `log_prob`.
+
+A latent combination is refused — its per-observation terms are conditional
+on latent values that belong to inference.
+
+```pycon
+>>> terms = simple.pointwise_log_prob(model, data)
+>>> terms.shape
+(4,)
+>>> bool(np.isclose(np.sum(terms), simple.log_prob(model, data)))
+True
+>>> gp_terms = flexible.pointwise_log_prob(model, data)
+>>> bool(np.isclose(np.sum(gp_terms), flexible.log_prob(model, data)))
+False
+
+```
+
+### The declarative spec: `to_spec`
+
+Also landed at the freeze (`results.md` §15 R7, confirmed by the
+consolidated serialisation review — `docs/design/serialisation_review.md`):
+`Likelihood.to_spec()` returns the declarative description of the
+composition as plain, JSON-able data — family name and class, noise-model
+class, marginalisation, the parameters' spec, and for a GP the kernel spec
+plus the solver's configuration. It is the one definition backends, the
+conformance suite and provenance share, and it distinguishes exactly what
+`ParameterSet.to_spec()` alone cannot:
+
+```pycon
+>>> matern = Likelihood(GaussianFamily(), GaussianProcessNoise(Matern32(0.3, 2.0)))
+>>> rbf = Likelihood(GaussianFamily(), GaussianProcessNoise(SquaredExponential(0.3, 2.0)))
+>>> matern.parameters.to_spec() == rbf.parameters.to_spec()
+True
+>>> matern.to_spec()["kernel"]["family"], rbf.to_spec()["kernel"]["family"]
+('matern32', 'squared_exponential')
+>>> matern.to_spec()["solver"]
+{'name': 'DenseGP', 'class': 'DenseGP', 'exact': True, 'config': {'jitter': 0.0}}
+
+```
+
+The spec describes the *declaration* only. Per-sample and bulk content — a
+censoring declaration's code positions, a family's buffers — is
+provenance's business: `ampere.results.describe_likelihood` composes this
+mapping and adds the content fingerprints. That split (specs declare,
+provenance fingerprints, storage carries values) is the review's one rule.
 
 ## 9. Censoring: what a limit is, and who consumes it (issue #11)
 
@@ -1141,7 +1298,10 @@ W1.7's `Dataset` discharges once. `log_prob` re-checks only shapes, mirroring
 | Censoring + correlated noise is `LATENT` | Issue #11's own open question, answered: it is a multivariate-normal orthant probability with no closed form beyond a few dimensions |
 | Masking beats censoring on the same sample | Masking a region for a test run should not require editing the censoring array too |
 | Complex data are the circular complex Gaussian only | `results_schema.md` §16: the container's real σ encodes exactly that. Non-circular noise supplies its own 2×2 structure and is not a container concern |
+| `complex_gaussian` + GP is `ANALYTIC` — circular meaning fixed, implementation staged | Ruled 2026-09-03 (§17 Q6). The circular complex GP marginalises in closed form exactly as the real Gaussian does, and fixing the declaration now unblocks the flexible likelihood on the Phase-4 proof modality. `GP_ANALYTIC_IMPLEMENTED = False` keeps the pair a composition-time refusal until Phase 4 lands the closed form — declared-but-staged, never silently different |
+| Rice takes amplitudes from an `Amplitude` chain step; von Mises takes `κ = 1/σ²` per sample | Ruled 2026-09-03 (§17 Q3/Q4). The model predicts what it physically produces — the complex value — and projection is the instrument chain's job; the concentration comes from the container's own uncertainties, exact in the small-σ limit where closure-phase practice lives. Families themselves are Phase 4's |
 | `check_alignment` is composition-time; `log_prob` re-checks only shapes | O(N) coordinate comparison is right once and wrong per evaluation — `results_schema.md` §10's split |
+| A noise model receives the prediction as well as the observation | Ruled 2026-09-03 (X-1). A noise whose magnitude depends on the model — a fractional model uncertainty, an analytically marginalised multiplicative calibration systematic, a model-variance weighting of counts — is a `NoiseModel`, not a family. Without the `predicted` argument the only way to express one is to re-implement the sampling distribution, which welds noise to family, cannot be reused, and cannot reach the GP path: exactly the monolithic collapse `prior_art.md` Tension 3 warns against |
 
 ## 15. Deliberate limitations of v1.6
 
@@ -1166,15 +1326,20 @@ Each is a decision, not an oversight. Each has an extension point.
    the SVGP/SKI/Vecchia slots' business (Phase 5); `IndependentNoise` works on
    any layout.
 5. **Rice and von Mises are declared, not implemented.** Both raise on
-   composition. The open parameterisation questions are in §17.
+   composition; the implementations are Phase 4's. Their parameterisations
+   were fixed by the 2026-09-03 rulings (§17 Q3/Q4): the model predicts the
+   complex value and an `Amplitude` chain step takes the modulus for Rice;
+   `κ = 1/σ²` per sample for von Mises.
 5a. **`PoissonFamily` is the only family that consumes the latent path.**
-   Student-t, Cauchy and the complex Gaussian all *declare* `LATENT` under a
-   GP and none of them implements it, so composing any of them with
-   `GaussianProcessNoise` is refused (§4). That is a real capability gap — a
-   heavy-tailed flexible likelihood is a reasonable thing to want — and it is
-   a refusal rather than a wrong answer only because `CONSUMES_LATENT_GP`
-   exists. Implementing one is a `log_prob` that reads `noise.latent` plus
-   flipping the flag.
+   Student-t and Cauchy *declare* `LATENT` under a GP and neither implements
+   it, so composing either with `GaussianProcessNoise` is refused (§4). That
+   is a real capability gap — a heavy-tailed flexible likelihood is a
+   reasonable thing to want — and it is a refusal rather than a wrong answer
+   only because `CONSUMES_LATENT_GP` exists. Implementing one is a
+   `log_prob` that reads `noise.latent` plus flipping the flag. (The complex
+   Gaussian left this list at the freeze: under a GP it now declares a
+   *staged* `ANALYTIC` — §4 — refused until Phase 4 implements the circular
+   closed form.)
 6. **The latent path has no inference.** `latent_declaration` and
    `latent_transform` are the declaration and the transform; sampling `f` is
    Phase 2's, on the torch/jax rungs. `DenseGP.latent_transform` exists so the
@@ -1190,7 +1355,28 @@ Each is a decision, not an oversight. Each has an extension point.
 9. **No log-likelihood *per sample*.** `log_prob` returns a scalar. W1.8's
    InferenceData requirement is per-*observation* log-likelihood, which for the
    GP case is not well defined anyway (the samples are not independent) — see
-   §16's obligation on W1.8.
+   §16's obligation on W1.8. *(Amended at the freeze: the named decomposition
+   — pointwise terms for independent noise, leave-one-out conditionals for a
+   GP — is now available on request through `pointwise_log_prob`, ruled
+   2026-09-03, `results.md` §15 R2; it is not stored by default and
+   `log_prob` still returns a scalar.)*
+10. **The noise model sees the prediction, but not the model's parameters.**
+   `predicted` (§5) carries the retained predicted *values* only; a noise
+   term that depends on a physical parameter beyond those the likelihood
+   declares must be tied to a likelihood parameter or expressed as a
+   transformation. Retained deliberately (X-1's ruling keeps it): widening
+   the argument to model internals would re-fuse the pieces this contract
+   exists to separate.
+11. **No cross-channel (vector-valued) correlated noise model.** A noise
+   model belongs to one `Likelihood`, which belongs to one dataset, so a
+   single correlated process over 2-vectors — astrometric (RA, Dec)
+   residuals perturbed together, Stokes Q/U leakage, a calibration
+   systematic shared across bands — is not expressible; two scalar GPs
+   with tied hyperparameters is the nearest approximation and is a
+   different model (it cannot express the cross-covariance). Recorded from
+   the W1.11 astrometric sketch at the freeze; the extension point is a
+   `JointGP` solver-strategy slot spanning datasets, deferred to
+   **Phase 5** with the other advanced strategies.
 
 ## 16. What this contract hands to the specs downstream
 
@@ -1200,7 +1386,10 @@ Each is a decision, not an oversight. Each has an extension point.
   the propagation obligation on you; this contract is the consumer that
   depends on it. Also: a resampling transformation must not produce coordinates
   that differ from the observed container's, because `check_alignment` compares
-  axes for equality — negotiation should target the observed grid.
+  axes for equality — negotiation should target the observed grid. (Its
+  general form, landed at the freeze from W1.11 gap I-2: any step
+  reproducing the observed coordinates takes them *from* the observed
+  container, never recomputes them — `transformations.md` §10.)
 - **W1.7 (Dataset / FittingProblem)** — `Dataset` should call
   `Likelihood.check_alignment(predicted_template, observed)` once at
   construction, and `Likelihood.check_engine(differentiable=…, engine=…,
@@ -1236,7 +1425,11 @@ Each is a decision, not an oversight. Each has an extension point.
   convention it must choose a decomposition and name it — the leave-one-out
   conditional terms are the standard choice and are computable from the same
   Cholesky this contract already forms. W1.13 should reconcile the two readings
-  in the plan's own wording.
+  in the plan's own wording. *(Done at the freeze: `results.md` §6 named both
+  decompositions, `pointwise_log_prob` computes them (§8, ruled 2026-09-03
+  R2), and `DEVELOPMENT_PLAN.md` §4.6's wording now states the per-draw
+  scalar as what every run stores and the per-observation terms as available
+  on request.)*
 - **W1.9 (Lowering)** — the declaration forms needing a lowering row are:
   `KernelSpec` per family (`matern32` → `celerite2.terms.Matern32Term` /
   `tinygp.kernels.quasisep.Matern32` / a GPyTorch equivalent;
@@ -1251,13 +1444,21 @@ Each is a decision, not an oversight. Each has an extension point.
   deletion of the sample; DenseGP↔QuasisepGP agreement on Matérn-3/2 once the
   latter exists (§4.6 names it); `L L^T == K` for the whitening transform; the
   Tobit censored likelihood against `scipy.stats.norm.logcdf`; and the
-  marginalisation declaration for every family × noise-model pair.
+  marginalisation declaration for every family × noise-model pair. Added at
+  the freeze (X-1's three rows, `awkward_instrument.md` §6 point 9): the
+  σ_eff of a fractional noise against the manual quadrature at fixed θ;
+  `simulate(observe=True)` draw variance growing with the prediction as
+  `(f·μ)²`; and the GP composition against a `DenseGP` evaluation with a
+  manually precomputed diagonal.
 - **W1.11 (Modality sketches)** — `ComplexGaussianFamily` plus
   `IndependentNoise` is the visibility likelihood; check whether closure phases
   need `VonMisesFamily` before the freeze, since it is currently declared-only.
   The X-ray sketch should check that `PoissonFamily` plus a response matrix in
   the instrument chain is expressible without a per-sample exposure concept
-  this contract lacks. And `prior_art.md` Tension 3 asks for a deliberately
+  this contract lacks. *(Confirmed — `awkward_instrument.md` §2: a `Spectrum`
+  with a keV axis plus a response-matrix `Transformation` is expressible, and
+  the absence of a per-sample exposure concept is correct rather than a gap —
+  the exposure folds into the response matrix, `transformations.md` §10.)* And `prior_art.md` Tension 3 asks for a deliberately
   awkward instrument as a stress test of the §4.3/§4.4 split — this contract
   is one half of what that test exercises.
 - **W1.12 (Diagnostics)** — the three things you asked for: (a) GP
@@ -1316,8 +1517,9 @@ value and an `Amplitude` step takes the modulus; `κ = 1/σ²` per sample;
 and the circular (equal-component, zero-pseudo-covariance) complex GP is
 the fixed meaning under which `complex_gaussian` + `GaussianProcessNoise`
 is declared `ANALYTIC` — unblocking the flexible likelihood on the plan's
-proof modality. W1.13 lands the declaration change; the implementations
-are Phase 4's. Question 5 — ruled as it stands: the use case is one
+proof modality. W1.13 lands the declaration change *(landed — §4's
+"circular complex GP" subsection is the body record, with the
+composition-time Phase-4 refusal)*; the implementations are Phase 4's. Question 5 — ruled as it stands: the use case is one
 `scale` per instrument or survey, which the per-dataset scalar already
 expresses (each dataset carries its own `Likelihood`); a per-channel scale
 *within* one container is not wanted (one spectrum rarely carries the data
@@ -1332,10 +1534,14 @@ not the freeze; this contract needs nothing. Question 8 — superseded:
 serialisation is to be consolidated *once* across all the contracts (an
 inventory of every `to_spec`/`to_dict`/emission mechanism, a gap
 analysis, and one coherent approach) rather than settled piecemeal;
-routed to W1.13 alongside `results.md` §15 R7. **And ruled later the same
+routed to W1.13 alongside `results.md` §15 R7. *(Closed at the freeze:
+the review is `docs/design/serialisation_review.md`, and it confirmed
+the promotion — `Likelihood.to_spec()` exists, §8 above documents it,
+and `describe_likelihood` composes it.)* **And ruled later the same
 day**: X-1 — the prediction-aware `NoiseModel`
 (`awkward_instrument.md` §6's detailed design) — is **accepted as
-written** and lands at the freeze: `sigma` and `noise_params` gain a
+written** and landed at the freeze (§5's "Prediction-aware noise"
+subsection is the body record): `sigma` and `noise_params` gain a
 keyword-only `predicted=None` (the retained predicted values, passed at
 every call site including `conditional` and `draw_observation`; an
 outright signature change, pre-freeze, no shims), §14 gains the

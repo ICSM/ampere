@@ -121,12 +121,18 @@ import dataclasses
 import enum
 import math
 import types
+import warnings
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 
-from .exceptions import DatasetError, LikelihoodError, TransformationError
+from .exceptions import (
+    CompositionError,
+    DatasetError,
+    LikelihoodError,
+    TransformationError,
+)
 from .likelihood import (
     DTYPE,
     GaussianFamily,
@@ -143,6 +149,7 @@ from .parameter import (
     Value,
 )
 from .results_schema import FunctionSamples, ModelResult
+from .rng import SEED_BYTES
 from .rng import generator as _generator
 from .transform import Instrument, Model, negotiate
 
@@ -242,26 +249,24 @@ def _check_label(name: object, kind: str) -> str:
 
 @runtime_checkable
 class Capable(Protocol):
-    """What a model or transformation may declare about how it can be run.
+    """What a model or transformation declares about how it can be run.
 
     ``DEVELOPMENT_PLAN.md`` §4.5 lists ``differentiable``, ``batchable`` and
     ``device`` as the fitting problem's capability flags. They are properties of
     the *pieces*, not of the problem: a problem is differentiable exactly when
     everything a gradient would have to pass through is.
 
-    Nothing in ``ampere.core`` declares them today — the reference path is
-    numpy, so the honest answers are ``False``, ``False`` and ``"cpu"``, which
-    are the defaults :func:`declared_capabilities` reads when a piece is silent.
-    Phase 2's torch and jax backends set them as class attributes on their own
-    :class:`~ampere.core.transform.Model` and
-    :class:`~ampere.core.transform.Transformation` subclasses, and this
-    Protocol is what they are declaring against.
-
-    They are read with :func:`getattr` rather than promoted into the
-    :class:`~ampere.core.transform.Model` and
-    :class:`~ampere.core.transform.Transformation` ABCs, because those are
-    W1.5's frozen contract and this one may not widen them. ``inference.md``
-    §12 asks W1.13 to promote them.
+    **Promoted into W1.5's ABCs at the freeze** (ruled 2026-09-03,
+    ``inference.md`` §19.6): :class:`~ampere.core.transform.Model` and
+    :class:`~ampere.core.transform.Transformation` carry the three as class
+    attributes with the conservative defaults ``False``, ``False`` and
+    ``"cpu"`` — the reference path's honest answers, reproducing the earlier
+    ``getattr`` semantics exactly — so every piece a problem composes now
+    declares them, silence included, and
+    :func:`declared_capabilities` reads the attributes directly. Phase 2's
+    torch and jax backends override them on their own subclasses; this
+    Protocol remains the statement of the surface for anything duck-typed
+    into :attr:`Dataset.capability_parts`.
     """
 
     #: Whether a gradient can be taken through this object's evaluation.
@@ -324,6 +329,13 @@ def declared_capabilities(parts: Sequence[object]) -> Capabilities:
     is ``True``, and silently promising gradients for a problem with nothing in
     it is precisely the silent-capability-upgrade this architecture forbids.
 
+    The flags are read directly (ruled 2026-09-03, ``inference.md`` §19.6):
+    :class:`~ampere.core.transform.Model` and
+    :class:`~ampere.core.transform.Transformation` carry ``DIFFERENTIABLE``,
+    ``BATCHABLE`` and ``DEVICE`` as class attributes with the conservative
+    defaults, so every part a problem composes declares them — a duck-typed
+    part must too (:class:`Capable` is the surface).
+
     Parameters
     ----------
     parts
@@ -345,25 +357,32 @@ def declared_capabilities(parts: Sequence[object]) -> Capabilities:
     >>> declared_capabilities([Native(), Native()])
     Capabilities(differentiable=True, batchable=True, device='cuda')
 
-    One silent part withdraws the whole conjunctive claim — and, because silence
-    counts as ``"cpu"``, mixing a silent part with a GPU one is a device
-    disagreement rather than a quiet round trip:
+    One conservative part withdraws the whole conjunctive claim — the ABCs'
+    defaults are ``False``/``False``/``"cpu"``, so a subclass that stays
+    silent inherits the reference answers rather than promising anything —
+    and a CPU part beside a GPU one is a device disagreement rather than a
+    quiet round trip:
 
     >>> class NativeOnCpu:
     ...     DIFFERENTIABLE = True
     ...     BATCHABLE = True
-    >>> declared_capabilities([NativeOnCpu(), object()])
+    ...     DEVICE = "cpu"
+    >>> class SilentOnCpu:
+    ...     DIFFERENTIABLE = False
+    ...     BATCHABLE = False
+    ...     DEVICE = "cpu"
+    >>> declared_capabilities([NativeOnCpu(), SilentOnCpu()])
     Capabilities(differentiable=False, batchable=False, device='cpu')
     >>> declared_capabilities([])
     Capabilities(differentiable=False, batchable=False, device='cpu')
-    >>> declared_capabilities([Native(), object()])
+    >>> declared_capabilities([Native(), SilentOnCpu()])
     Traceback (most recent call last):
         ...
     ampere.core.exceptions.DatasetError: the pieces of this problem declare different devices...
     """
     if not parts:
         return Capabilities()
-    devices = {str(getattr(part, "DEVICE", "cpu")) for part in parts}
+    devices = {str(part.DEVICE) for part in parts}  # type: ignore[attr-defined]
     if len(devices) > 1:
         raise DatasetError(
             f"the pieces of this problem declare different devices {sorted(devices)}. Ampere does "
@@ -372,8 +391,8 @@ def declared_capabilities(parts: Sequence[object]) -> Capabilities:
             f"device, or pass capabilities=Capabilities(device=...) to state which one is meant."
         )
     return Capabilities(
-        differentiable=all(bool(getattr(part, "DIFFERENTIABLE", False)) for part in parts),
-        batchable=all(bool(getattr(part, "BATCHABLE", False)) for part in parts),
+        differentiable=all(bool(part.DIFFERENTIABLE) for part in parts),  # type: ignore[attr-defined]
+        batchable=all(bool(part.BATCHABLE) for part in parts),  # type: ignore[attr-defined]
         device=devices.pop(),
     )
 
@@ -639,7 +658,12 @@ class Dataset:
         Defaults to a pure channel binding on
         :data:`~ampere.core.results_schema.DEFAULT_CHANNEL`, kind-checked
         against ``observed`` — so a model that already produces the observable
-        needs no instrument at all.
+        needs no instrument at all. **The caller builds the instrument from
+        the observed container's own coordinates** where a step reproduces
+        them (a Fourier step's (u, v) buffer, a resampler's target grid):
+        ``check_alignment`` compares axes exactly, and coordinates recomputed
+        from first principles differ in their last bits (W1.11 gap I-2's
+        rule, ``transformations.md`` §10).
     likelihood
         Defaults to an i.i.d. Gaussian
         (:class:`~ampere.core.likelihood.GaussianFamily` with
@@ -706,13 +730,26 @@ class Dataset:
         self.observed = observed
 
         if instrument is None:
-            instrument = Instrument(input_kind=type(observed))
+            # An implicit pure-binding instrument takes the dataset's own
+            # label when one is given: the instrument label is how a user
+            # identifies which instrument constrained what (ruled 2026-09-03,
+            # transformations.md §15 Q4), and for an instrument the dataset
+            # itself conjured, the dataset's label is that identity — so two
+            # labelled datasets on one channel stay composable without the
+            # user naming instruments nobody wrote.
+            instrument = Instrument(
+                input_kind=type(observed), label=None if label is None else str(label)
+            )
         if not isinstance(instrument, Instrument):
             raise DatasetError(
                 f"a Dataset's instrument must be an Instrument, got {type(instrument).__name__}. "
                 f"A bare Transformation becomes one with Instrument([step])."
             )
-        self.instrument = instrument
+        # A dataset is a composed object, so its instrument is frozen here
+        # (ruled 2026-09-03, transformations.md §15 Q5): the per-log_prob
+        # re-merge disappears from the hot loop, and a step reconfigured after
+        # composition is refused at the next use rather than silently ignored.
+        self.instrument = instrument.freeze()
 
         if likelihood is None:
             likelihood = Likelihood(GaussianFamily(), IndependentNoise())
@@ -800,10 +837,11 @@ class Dataset:
         """This dataset's own merge: instrument, likelihood and latent.
 
         Computed **once**, at construction, and retained — the nesting rule.
-        A dataset is a composed object: reconfiguring one of its instrument's
-        steps afterwards (``promote_buffer``, say) is not picked up, which is
-        the ``freeze()`` answer ``transformations.md`` §15.5 anticipated for the
-        hot loop. Build the dataset after configuring its pieces.
+        A dataset is a composed object: construction freezes its instrument
+        (``Instrument.freeze()``, ruled 2026-09-03), so reconfiguring one of
+        its steps afterwards (``promote_buffer``, say) is refused at the next
+        use rather than silently ignored. Build the dataset after configuring
+        its pieces.
         """
         return self._mapping
 
@@ -891,14 +929,29 @@ class Dataset:
             )
         )
 
-    def _censored_after_masking(self) -> bool:
-        """Whether any limit survives the observed container's mask."""
+    def _censored_after_masking(self, retain: np.ndarray | None = None) -> bool:
+        """Whether any limit survives the mask.
+
+        With no *retain*, the observed container's own mask answers — the
+        composition-time reading :meth:`_declare_latent` needs, before any
+        prediction exists. A caller holding a prediction passes the
+        **effective** inclusion indicator (the observed-and-predicted union
+        ``likelihoods.md`` §8 defines), so a limit a prediction-side mask
+        excludes does not count — masking beats censoring for the union too.
+        (The asymmetry was found at the freeze's adversarial review:
+        ``log_prob`` excised such a limit while ``draw_observation`` still
+        refused because of it.)
+        """
         censoring = self.likelihood.censoring
         if censoring is None:
             return False
         censoring.check_against(self.observed)
-        valid = np.asarray(self.observed.valid).ravel()
-        return bool(np.any(np.asarray(censoring.kinds)[valid] != 0))
+        included = (
+            np.asarray(self.observed.valid).ravel()
+            if retain is None
+            else np.asarray(retain, dtype=bool).ravel()
+        )
+        return bool(np.any(np.asarray(censoring.kinds)[included] != 0))
 
     def _split(
         self,
@@ -1094,7 +1147,15 @@ class Dataset:
         """
         family = self.likelihood.family
         noise = self.likelihood.noise
-        if self._censored_after_masking():
+        observed = self.observed
+        routed = {} if values is None else self.route(values)
+        resolved = routed.get(LIKELIHOOD_COMPONENT, {})
+        weights = np.asarray(observed.weights()).ravel() * np.asarray(predicted.weights()).ravel()
+        retain = weights > 0.0
+        # Checked against the *effective* mask, prediction side included, so a
+        # limit the union excludes does not block the draw — the same answer
+        # log_prob's excision gives (masking beats censoring, likelihoods.md §9).
+        if self._censored_after_masking(retain):
             raise DatasetError(
                 f"dataset {self.label!r}: a censoring declaration on retained samples blocks "
                 f"observation drawing — a limit is part of the observation process, and applying "
@@ -1102,11 +1163,6 @@ class Dataset:
                 f"simulate(observe=False) and draw your own observations from the predicted "
                 f"containers."
             )
-        observed = self.observed
-        routed = {} if values is None else self.route(values)
-        resolved = routed.get(LIKELIHOOD_COMPONENT, {})
-        weights = np.asarray(observed.weights()).ravel() * np.asarray(predicted.weights()).ravel()
-        retain = weights > 0.0
         drawn = np.array(np.asarray(observed.values).ravel(), dtype=DTYPE, copy=True)
         if not np.any(retain):
             return observed.with_values(drawn.reshape(observed.shape))
@@ -1114,8 +1170,14 @@ class Dataset:
         coordinates = np.column_stack(
             [np.asarray(axis.values, dtype=DTYPE) for axis in observed.axes]
         )[retain]
-        params = noise.noise_params(observed, retain, resolved, coordinates=coordinates)
         realisation = np.asarray(predicted.values, dtype=DTYPE).ravel()[retain]
+        # The NoiseParams are built from the noiseless prediction *before* noise
+        # is added (ruled 2026-09-03, X-1 point 4): a prediction-dependent noise
+        # scales with the true curve — the standard generative reading — and the
+        # draw is then consistent with the density that will score it.
+        params = noise.noise_params(
+            observed, retain, resolved, predicted=realisation, coordinates=coordinates
+        )
         try:
             realisation = family.sample(realisation, params, rng)
         except LikelihoodError as error:
@@ -1422,6 +1484,13 @@ class FittingProblem:
         The intended workflow is to run non-strict, read
         :meth:`failure_summary`, then re-run with ``strict=True`` to get the
         raise at the offending draw with a full traceback.
+    lenient_compile
+        Downgrade a model's ``compile_for`` refusal
+        (:class:`~ampere.core.exceptions.CompositionError`) to a warning and
+        proceed with the unconfigured model. ``False`` by default — ruled
+        2026-09-03 (``transformations.md`` §15 Q3): negotiation refuses an
+        unachievable requirement by raising, and silencing that is an
+        explicit, per-problem decision.
     simulator_failures
         Extra exception types that count as an unscoreable point rather than a
         bug. :class:`~ampere.core.exceptions.LikelihoodError` is always included
@@ -1456,6 +1525,7 @@ class FittingProblem:
         reference_values: Mapping[str, Value] | ArrayLike | None = None,
         validate: bool = True,
         strict: bool = False,
+        lenient_compile: bool = False,
         simulator_failures: Sequence[type[BaseException]] = (),
         failure_history: int = DEFAULT_FAILURE_HISTORY,
     ) -> None:
@@ -1469,7 +1539,30 @@ class FittingProblem:
             if not isinstance(tie, Tie):
                 raise DatasetError(f"ties must be Tie instances, got {type(tie).__name__}.")
 
-        self.seed = None if seed is None else int(seed)
+        # Loud, at composition (found by the freeze's adversarial review):
+        # int(1.9) silently truncating, True counting as 1, or a seed outside
+        # substream's signed 64-bit derivation crashing at the first stream
+        # request would all contradict the reproducibility contract this seed
+        # exists for (lowering.md §9.2 — every backend derives its streams
+        # from the same bytes).
+        if seed is None:
+            self.seed = None
+        else:
+            if isinstance(seed, bool) or not isinstance(seed, (int, np.integer)):
+                raise DatasetError(
+                    f"a run seed must be an integer, got {seed!r}. substream "
+                    f"(lowering.md §9.2) derives every named stream from it, and ampere will "
+                    f"not guess what a non-integer seed means."
+                )
+            bound = 1 << (8 * SEED_BYTES - 1)
+            if not -bound <= int(seed) < bound:
+                raise DatasetError(
+                    f"seed {seed!r} does not fit substream's {8 * SEED_BYTES}-byte signed "
+                    f"derivation. Every backend derives its streams from the same "
+                    f"{SEED_BYTES}-byte encoding, so the range is part of the "
+                    f"reproducibility contract."
+                )
+            self.seed = int(seed)
         self._streams: dict[str, np.random.Generator] = {}
         for candidate in simulator_failures:
             if not (isinstance(candidate, type) and issubclass(candidate, BaseException)):
@@ -1501,6 +1594,7 @@ class FittingProblem:
         # (2)-(3) Negotiate, then compile — once, before anything is merged, so
         # that a model which reconfigures itself for its instruments is the one
         # whose parameters enter the joint space.
+        self._lenient_compile = bool(lenient_compile)
         self._requirements = self._negotiate()
         self._compiled = {
             label: self._compile(label, instance) for label, instance in self._models.items()
@@ -1568,7 +1662,17 @@ class FittingProblem:
         return bindings
 
     def _negotiate(self) -> dict[str, dict[str, Any]]:
-        """Step (2): the instruments' requirements, per model, per channel."""
+        """Step (2): the instruments' requirements, per model, per channel.
+
+        Also the home of the instrument-label check (ruled 2026-09-03,
+        ``transformations.md`` §15 Q4's residual): when more than one
+        instrument reads a channel, distinct instrument labels are required —
+        the label is how a user identifies which parameters are constrained
+        by which data, and the requirements-provenance ``sources`` tuple is
+        otherwise ambiguous. Checked here, at problem composition; the
+        one-instrument default-to-channel-name case is unchanged, and
+        ``negotiate`` itself merges nothing and stays silent about labels.
+        """
         collected: dict[str, dict[str, Any]] = {}
         for label in self._models:
             instruments = [
@@ -1576,12 +1680,47 @@ class FittingProblem:
                 for name, dataset in self.datasets.items()
                 if self._bindings[name] == label
             ]
+            by_channel: dict[str, list[str]] = {}
+            for instrument in instruments:
+                by_channel.setdefault(instrument.channel, []).append(instrument.label)
+            for channel, labels in by_channel.items():
+                duplicates = sorted({name for name in labels if labels.count(name) > 1})
+                if duplicates:
+                    raise DatasetError(
+                        f"model {label!r}: {len(labels)} instruments read channel {channel!r} "
+                        f"but share the instrument label(s) {duplicates}. Instrument.label "
+                        f"defaults to the channel name, so several unnamed instruments on one "
+                        f"channel are indistinguishable — in the requirements provenance "
+                        f"(sources) and everywhere a user asks which instrument constrained "
+                        f"what. Pass label='...' to each Instrument (the single-instrument "
+                        f"default is unchanged)."
+                    )
             collected[label] = dict(negotiate(instruments))
         return collected
 
     def _compile(self, label: str, instance: Model) -> Model:
-        """Step (3): the one-off ``compile_for``, and the check that it behaved."""
-        compiled = instance.compile_for(self._requirements[label])
+        """Step (3): the one-off ``compile_for``, and the check that it behaved.
+
+        A model that engages with a requirement it cannot honour raises
+        ``CompositionError`` (ruled 2026-09-03, ``transformations.md`` §15
+        Q3), and by default that refusal propagates — an unachievable
+        requirement is a composition problem, not a warning. The explicit
+        opt-out is ``lenient_compile=True``: the refusal is downgraded to a
+        warning and the *unconfigured* model is used, which is the same
+        declared stance as a model that ignores negotiation entirely.
+        """
+        try:
+            compiled = instance.compile_for(self._requirements[label])
+        except CompositionError as error:
+            if not self._lenient_compile:
+                raise
+            warnings.warn(
+                f"model {label!r} refused its instruments' requirements ({error}); proceeding "
+                f"with the unconfigured model because lenient_compile=True. The instruments "
+                f"may now be handed a grid they cannot use.",
+                stacklevel=2,
+            )
+            return instance
         if not isinstance(compiled, Model):
             raise DatasetError(
                 f"model {label!r}'s compile_for() returned {compiled!r}, not a Model. It must "

@@ -1,6 +1,6 @@
 # Ampere v2 — Parameter & Prior Contract (W1.3)
 
-Status: **DRAFT for Peter's review.** Implements `DEVELOPMENT_PLAN.md` §4.1 and
+Status: **frozen at `spec-v1.0`** (the tag created at the W1.13 merge, 2026-09; any later change to a §4 contract requires a decision-log entry in `DEVELOPMENT_PLAN.md` in the same PR — ground rule 9). Implements `DEVELOPMENT_PLAN.md` §4.1 and
 the parameters-vs-buffers half of `architecture.md` §6. Code:
 `ampere/core/parameter.py`, `ampere/core/exceptions.py`. Tests:
 `tests/core/`.
@@ -268,6 +268,33 @@ Identity()
 Logit(lower=100.0, upper=10000.0)
 >>> default_bijection_for(st.halfnorm(0.0, 1.0))
 Log(lower=0.0)
+
+```
+
+**A discrete family is refused, with a typed capability error** (ruled
+2026-09-03, `lowering.md` §12.1 — a §4.1 change, recorded in the plan's
+decision log). No continuous bijection to unconstrained space can be right
+for an integer-supported family, and before this rule the support-based
+inference happily returned one (`Log(lower=0.0)` for a Poisson). The
+refusal is `CapabilityError` — a `NotImplementedError`, deliberately *not*
+a `ValueError` — because nothing is malformed: the door stays ajar for the
+non-gradient routes that might eventually support discrete parameters
+((variational) EM, numpyro-style enumeration, SBI, nested sampling,
+Bayesian optimisation — none in the current plan), so the refusal lives
+**only** here. Declaration, prior sampling, constrained-space `lnprior`
+and `prior_transform` (scipy's discrete families implement `ppf`) all
+work, and discreteness is queryable from the canonical description so an
+engine path branches rather than catches:
+
+```pycon
+>>> default_bijection_for(st.poisson(3.0))
+Traceback (most recent call last):
+    ...
+ampere.core.exceptions.CapabilityError: no unconstraining bijection exists for this prior: prior family 'poisson' is discrete, ...
+>>> describe_prior(st.poisson(3.0)).discrete
+True
+>>> ParameterSet([Parameter("counts", st.poisson(3.0))]).prior_transform([0.7])
+array([4.])
 
 ```
 
@@ -770,6 +797,17 @@ The second pattern in full, for two objects:
 
 ```
 
+**Cost, at population scale** (recorded at the freeze — the W1.11
+population sketch's gap H-4): `lnprior` and its relatives are O(number of
+`Parameter` objects), so the N-component pattern above evaluates N scalar
+priors through N objects per call, where a `Plate` evaluates one
+vectorised prior — measured at N = 1000 as roughly two orders of magnitude
+apart. That is not a defect (`ParameterSet` is a declaration container,
+not a hot-loop object, and an engine pays this once per proposal beside a
+model evaluation), but at genuinely population scale prefer the `Plate`
+layout where the data allow it, and expect the N-component layout's prior
+overhead to be visible beside a cheap model.
+
 ## 10. Buffers: explicit, and why
 
 `architecture.md` §6 gives the distinguishing question: *would you ever put a
@@ -933,7 +971,10 @@ Each of these is a decision, not an oversight. Each has an extension point.
 7. **Units must match exactly for tying**, not merely be convertible. §8.
 8. **Discrete parameters** evaluate and transform correctly (`log_density`
    handles `logpmf`, `ppf` is well defined) but no sampler in ampere currently
-   consumes them; treat the support as declared-but-unexercised.
+   consumes them; treat the support as declared-but-unexercised. *(Amended at
+   the freeze, ruled 2026-09-03: the one thing that could never be right —
+   a continuous default bijection — is now refused with a typed
+   `CapabilityError` in `default_bijection_for`, and only there; see §6.)*
 
 ## 13. What this contract hands to the specs downstream
 
@@ -979,7 +1020,9 @@ Obligations and hooks the later contract specs should reconcile against.
 was already resolved by the W1.2 review amendment (core's dependency floor is
 numpy/scipy/astropy/stdlib); question 3's flat tie-label namespace stands;
 question 4's lone `shared_as` stays allowed; question 5 goes to W1.13 as
-written; question 6's `npars` removal is confirmed. **Question 2 (recursive
+written *(closed there, 2026-09-03: `OptionalDependencyError` ratified in
+place, with `LoweringError` landing beside it — `lowering.md` §12.4)*;
+question 6's `npars` removal is confirmed. **Question 2 (recursive
 merge) is expressly kept open**, not closed: Peter can see cases where
 hierarchical/nested merging is the natural approach, so W1.7 must treat a
 nested `ParameterMapping` as a live design option for `DatasetCollection` —

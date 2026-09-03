@@ -560,16 +560,37 @@ class TestLatentPathDeclaration:
         like = Likelihood(GaussianFamily(), GaussianProcessNoise(Matern32(0.3, 1.0)))
         assert like.marginalisation is Marginalisation.ANALYTIC
 
-    @pytest.mark.parametrize(
-        "family", [StudentTFamily(), CauchyFamily(), PoissonFamily(), ComplexGaussianFamily()]
-    )
+    @pytest.mark.parametrize("family", [StudentTFamily(), CauchyFamily(), PoissonFamily()])
     def test_every_non_gaussian_family_goes_latent_under_a_gp(
         self, family: LikelihoodFamily
     ) -> None:
         noise = GaussianProcessNoise(Matern32(0.3, 1.0))
         assert family.marginalisation_with(noise) is Marginalisation.LATENT
 
-    @pytest.mark.parametrize("family", [StudentTFamily(), CauchyFamily(), ComplexGaussianFamily()])
+    def test_the_circular_complex_gp_is_declared_analytic_and_staged(self) -> None:
+        """Ruled 2026-09-03 (§17 Q6): the declaration lands now, Phase 4 implements.
+
+        ``complex_gaussian`` + ``GaussianProcessNoise`` declares ``ANALYTIC``
+        with the circular (equal-component, zero-pseudo-covariance) complex GP
+        as the fixed meaning — but composing the pair is refused with a message
+        naming Phase 4, because the closed form is not implemented yet and a
+        refusal is the only honest alternative to a silently different model.
+        """
+        noise = GaussianProcessNoise(Matern32(0.3, 1.0))
+        family = ComplexGaussianFamily()
+        assert family.marginalisation_with(noise) is Marginalisation.ANALYTIC
+        assert not ComplexGaussianFamily.GP_ANALYTIC_IMPLEMENTED
+        with pytest.raises(LikelihoodError, match="Phase 4"):
+            Likelihood(family, noise)
+        # Reaching log_prob directly with a correlated NoiseParams refuses too,
+        # rather than quietly computing the independent value.
+        params = NoiseParams(
+            sigma=np.array([0.1]), values={}, kernel=Matern32(0.3, 1.0), solver=DenseGP()
+        )
+        with pytest.raises(LikelihoodError, match="Phase 4"):
+            family.log_prob(np.array([1.0 + 0.0j]), np.array([1.0 + 0.1j]), params)
+
+    @pytest.mark.parametrize("family", [StudentTFamily(), CauchyFamily()])
     def test_a_latent_family_that_ignores_the_latent_values_cannot_be_composed(
         self, family: LikelihoodFamily
     ) -> None:
@@ -1463,6 +1484,8 @@ class TestComposition:
                 observed: FunctionSamples,
                 retain: np.ndarray,
                 values: dict[str, object],
+                *,
+                predicted: np.ndarray | None = None,
             ) -> np.ndarray:
                 return np.asarray(observed.uncertainty).ravel()[retain]
 
@@ -1585,3 +1608,242 @@ class TestCompositionTimeDataChecks:
         deleted = Likelihood(Background(background[[0, 2, 3]]), IndependentNoise())
         unmasked_value = deleted.log_prob(excised.with_values([2.6, 1.9, 1.2]), excised)
         assert masked_value == pytest.approx(unmasked_value, abs=1e-12)
+
+
+class TestLikelihoodToSpec:
+    """R7's promotion (ruled 2026-09-03): the object that knows itself describes itself."""
+
+    def test_the_spec_distinguishes_what_parameter_specs_cannot(self) -> None:
+        # The correctness argument R7 was granted on: same parameters,
+        # different kernel family or solver configuration, different spec.
+        matern = Likelihood(GaussianFamily(), GaussianProcessNoise(Matern32(0.3, 2.0)))
+        rbf = Likelihood(GaussianFamily(), GaussianProcessNoise(SquaredExponential(0.3, 2.0)))
+        assert matern.parameters.to_spec() == rbf.parameters.to_spec()
+        assert matern.to_spec()["kernel"]["family"] == "matern32"
+        assert rbf.to_spec()["kernel"]["family"] == "squared_exponential"
+        jittered = Likelihood(
+            GaussianFamily(), GaussianProcessNoise(Matern32(0.3, 2.0), DenseGP(jitter=0.1))
+        )
+        assert matern.to_spec()["solver"]["config"] == {"jitter": 0.0}
+        assert jittered.to_spec()["solver"]["config"] == {"jitter": 0.1}
+
+    def test_the_spec_is_declarative_and_censoring_carries_counts_only(self) -> None:
+        codes = np.array([0, 0, int(LimitKind.UPPER_LIMIT)], dtype=np.int8)
+        like = Likelihood(GaussianFamily(), IndependentNoise(), censoring=Censoring(codes))
+        spec = like.to_spec()
+        assert spec["family"] == "gaussian"
+        assert spec["marginalisation"] == "analytic"
+        assert spec["censoring"] == {"n_samples": 3, "n_censored": 1}
+        # Per-sample content (the code positions) is provenance's business,
+        # deliberately absent from the declarative spec.
+        assert "kinds" not in spec["censoring"]
+        import json
+
+        json.dumps(spec)  # the whole mapping is JSON-able
+
+    def test_provenance_composes_the_spec_rather_than_reassembling_it(self) -> None:
+        from ampere.results.provenance import describe_likelihood
+
+        codes = np.array([0, 0, int(LimitKind.UPPER_LIMIT)], dtype=np.int8)
+        like = Likelihood(GaussianFamily(), IndependentNoise(), censoring=Censoring(codes))
+        described = describe_likelihood(like)
+        spec = like.to_spec()
+        for key, value in spec.items():
+            if key == "censoring":
+                continue
+            assert described[key] == value
+        assert "buffers" in described  # the content-fingerprint layer's addition
+        assert "kinds" in described["censoring"]
+
+
+class TestPointwiseLogProb:
+    """The §4.4 addition results.md §15 R2 granted (ruled 2026-09-03).
+
+    Factorised terms for independent noise (exact: they sum to log_prob);
+    leave-one-out conditionals for a GP (a different decomposition, which
+    deliberately does not sum to the joint value).
+    """
+
+    @staticmethod
+    def _data(mask: object = None) -> Spectrum:
+        return Spectrum(
+            [1.0, 2.0, 3.0, 4.0] * u.um,
+            [3.0, 2.5, 2.2, 1.4] * u.Jy,
+            uncertainty=[0.1, 0.2, 0.1, 0.3] * u.Jy,
+            mask=mask,
+        )
+
+    def test_factorised_terms_sum_to_log_prob(self) -> None:
+        data = self._data(mask=np.array([False, True, False, False]))
+        model = data.with_values([3.05, 0.0, 2.25, 1.35])
+        like = Likelihood(GaussianFamily(), IndependentNoise())
+        terms = like.pointwise_log_prob(model, data)
+        assert terms.shape == (3,)  # masked sample excised
+        assert float(np.sum(terms)) == pytest.approx(like.log_prob(model, data), abs=1e-12)
+        # And each term is the closed form for its own sample.
+        sigma = np.array([0.1, 0.1, 0.3])
+        residual = np.array([3.0 - 3.05, 2.2 - 2.25, 1.4 - 1.35])
+        np.testing.assert_allclose(terms, st.norm(0.0, sigma).logpdf(residual), atol=1e-12)
+
+    def test_a_censored_sample_contributes_its_tobit_term(self) -> None:
+        data = self._data()
+        model = data.with_values([3.05, 2.40, 2.25, 1.35])
+        codes = np.array([0, 0, 0, int(LimitKind.UPPER_LIMIT)], dtype=np.int8)
+        like = Likelihood(GaussianFamily(), IndependentNoise(), censoring=Censoring(codes))
+        terms = like.pointwise_log_prob(model, data)
+        assert float(np.sum(terms)) == pytest.approx(like.log_prob(model, data), abs=1e-12)
+        assert terms[-1] == pytest.approx(float(st.norm.logcdf((1.4 - 1.35) / 0.3)), abs=1e-12)
+
+    def test_a_parameterised_family_and_noise_resolve_the_same_values(self) -> None:
+        data = self._data()
+        model = data.with_values([3.05, 2.40, 2.25, 1.35])
+        like = Likelihood(
+            StudentTFamily(nu=st.loguniform(2.0, 50.0)),
+            IndependentNoise(scale=st.loguniform(0.5, 5.0)),
+        )
+        values = {"nu": 4.0, "scale": 2.0}
+        terms = like.pointwise_log_prob(model, data, values)
+        assert float(np.sum(terms)) == pytest.approx(like.log_prob(model, data, values), abs=1e-12)
+
+    def test_a_family_with_its_own_aligned_data_excises_per_term(self) -> None:
+        # X-2's retain contract holds per single-sample call: the family sees
+        # a full-length indicator selecting exactly that sample.
+        class Background(LikelihoodFamily):
+            NAME = "test_pointwise_background"
+
+            def __init__(self, background: np.ndarray) -> None:
+                self.background = background
+
+            def log_prob(self, predicted, observed, noise):
+                assert noise.retain is not None
+                aligned = self.background[noise.retain]
+                residual = (observed - predicted - aligned) / noise.sigma
+                return float(np.sum(-0.5 * residual**2 - np.log(noise.sigma)))
+
+        data = self._data(mask=np.array([False, True, False, False]))
+        model = data.with_values([2.6, 0.0, 1.9, 1.2])
+        like = Likelihood(Background(np.array([0.5, 99.0, 0.4, 0.3])), IndependentNoise())
+        terms = like.pointwise_log_prob(model, data)
+        assert float(np.sum(terms)) == pytest.approx(like.log_prob(model, data), abs=1e-12)
+
+    def test_gp_terms_are_the_leave_one_out_conditionals(self) -> None:
+        data = self._data()
+        model = data.with_values([3.05, 2.40, 2.25, 1.35])
+        kernel_values = {"amplitude": 0.3, "length_scale": 1.5}
+        like = Likelihood(GaussianFamily(), GaussianProcessNoise(Matern32(0.3, 1.5), DenseGP()))
+        terms = like.pointwise_log_prob(model, data)
+        # Brute force: for each i, condition on the other samples explicitly.
+        coordinates = np.array([[1.0], [2.0], [3.0], [4.0]])
+        kernel = Matern32(0.3, 1.5)
+        covariance = kernel.matrix(coordinates, coordinates, kernel_values) + np.diag(
+            np.array([0.1, 0.2, 0.1, 0.3]) ** 2
+        )
+        residual = np.asarray(model.values - data.values, dtype=float) * -1.0
+        expected = np.empty(4)
+        for i in range(4):
+            others = [j for j in range(4) if j != i]
+            solve = np.linalg.solve(covariance[np.ix_(others, others)], residual[others])
+            mean = covariance[i, others] @ solve
+            var = covariance[i, i] - covariance[i, others] @ np.linalg.solve(
+                covariance[np.ix_(others, others)], covariance[others, i]
+            )
+            expected[i] = st.norm(mean, np.sqrt(var)).logpdf(residual[i])
+        np.testing.assert_allclose(terms, expected, atol=1e-9)
+        # A different decomposition: the LOO terms do not sum to the joint.
+        assert float(np.sum(terms)) != pytest.approx(like.log_prob(model, data), abs=1e-6)
+
+    def test_a_solver_without_the_recursion_refuses(self) -> None:
+        with pytest.raises(LikelihoodError, match="conditional_loo"):
+            QuasisepGP().conditional_loo(
+                Matern32(0.3, 1.5), np.array([[1.0]]), np.zeros(1), np.ones(1), {}
+            )
+
+    def test_a_latent_combination_is_refused(self) -> None:
+        counts = Spectrum([1.0, 2.0, 3.0] * u.um, [4.0, 7.0, 2.0])
+        like = Likelihood(PoissonFamily(), GaussianProcessNoise(Matern32(0.3, 1.0)))
+        with pytest.raises(LikelihoodError, match="latent"):
+            like.pointwise_log_prob(counts.with_values([4.0, 7.0, 2.0]), counts)
+
+
+class TestPredictionAwareNoise:
+    """The X-1 ruling (2026-09-03): a noise model sees the prediction.
+
+    ``NoiseModel.sigma`` and ``noise_params`` take the retained predicted
+    values as a keyword-only ``predicted`` argument, passed at every call
+    site — ``awkward_instrument.md`` §6's detailed design, accepted as
+    written. The conformance battery holds the arithmetic
+    (``tests/conformance/test_likelihoods.py``); these tests hold the
+    plumbing: the argument arrives, excised, at each call site.
+    """
+
+    @staticmethod
+    def _recording_independent(captured: dict) -> NoiseModel:
+        class Recording(IndependentNoise):
+            def sigma(self, observed, retain, values, *, predicted=None):
+                captured["predicted"] = predicted
+                return super().sigma(observed, retain, values, predicted=predicted)
+
+        return Recording()
+
+    def test_log_prob_passes_the_retained_predicted_values(self) -> None:
+        captured: dict = {}
+        data = Spectrum(
+            [1.0, 2.0, 3.0, 4.0] * u.um,
+            [3.0, 2.5, 2.2, 1.4] * u.Jy,
+            uncertainty=[0.1, 0.1, 0.1, 0.1] * u.Jy,
+            mask=np.array([False, True, False, False]),
+        )
+        like = Likelihood(GaussianFamily(), self._recording_independent(captured))
+        like.log_prob(data.with_values([2.6, 0.0, 1.9, 1.2]), data)
+        # Excised exactly as the family's own first argument is: the masked
+        # second sample is gone.
+        assert captured["predicted"] is not None
+        np.testing.assert_array_equal(captured["predicted"], [2.6, 1.9, 1.2])
+
+    def test_conditional_passes_the_same_prediction_the_fit_used(self) -> None:
+        captured: dict = {}
+
+        class RecordingGP(GaussianProcessNoise):
+            def sigma(self, observed, retain, values, *, predicted=None):
+                captured["predicted"] = predicted
+                return super().sigma(observed, retain, values, predicted=predicted)
+
+        data = Spectrum(
+            [1.0, 2.0, 3.0] * u.um,
+            [1.0, 2.0, 3.0] * u.Jy,
+            uncertainty=[0.1, 0.1, 0.1] * u.Jy,
+        )
+        like = Likelihood(GaussianFamily(), RecordingGP(Matern32(0.3, 1.0)))
+        like.conditional(data.with_values([0.9, 1.8, 2.7]), data)
+        assert captured["predicted"] is not None
+        np.testing.assert_array_equal(captured["predicted"], [0.9, 1.8, 2.7])
+
+    def test_a_fractional_model_noise_composes_with_the_gaussian_family(self) -> None:
+        """The motivating case: sigma_eff**2 = sigma_data**2 + (f * mu)**2."""
+
+        class FractionalModelNoise(NoiseModel):
+            def __init__(self, f: float) -> None:
+                self._f = float(f)
+
+            def sigma(self, observed, retain, values, *, predicted=None):
+                base = np.asarray(observed.uncertainty).ravel()[retain]
+                assert predicted is not None
+                return np.sqrt(base**2 + (self._f * predicted) ** 2)
+
+        fraction = 0.1
+        data = Spectrum(
+            [1.0, 2.0, 3.0] * u.um,
+            [1.1, 2.1, 2.9] * u.Jy,
+            uncertainty=[0.1, 0.2, 0.3] * u.Jy,
+        )
+        prediction = np.array([1.0, 2.0, 3.0])
+        like = Likelihood(GaussianFamily(), FractionalModelNoise(fraction))
+        # Diagonal noise: the declaration stays ANALYTIC however sigma was
+        # computed (X-1 point 6).
+        assert like.marginalisation is Marginalisation.ANALYTIC
+        sigma_eff = np.sqrt(np.array([0.1, 0.2, 0.3]) ** 2 + (fraction * prediction) ** 2)
+        residual = np.array([1.1, 2.1, 2.9]) - prediction
+        expected = float(np.sum(st.norm(0.0, sigma_eff).logpdf(residual)))
+        assert like.log_prob(data.with_values(prediction), data) == pytest.approx(
+            expected, abs=1e-12
+        )

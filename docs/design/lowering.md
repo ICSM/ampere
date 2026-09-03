@@ -1,6 +1,6 @@
 # Ampere v2 — Lowering Spec (W1.9)
 
-Status: **DRAFT for Peter's review.** Implements the lowering half of
+Status: **frozen at `spec-v1.0`** (the tag created at the W1.13 merge, 2026-09; later changes to lowering rules follow ground rule 9). Implements the lowering half of
 `DEVELOPMENT_PLAN.md` §4.1 and operationalises `architecture.md` §5. This is a
 **document, not code**: Phase 2 writes the backends, and this spec is the thing
 they are written against. Nothing here is executable, so — unlike
@@ -376,16 +376,18 @@ The rule, in order:
 
 The error type should be one shared class across backends, so tests and
 tooling assert on it uniformly, in the same spirit as `architecture.md` §4's
-rule 3. `ampere/core/exceptions.py` today defines `AmpereError` (the base),
-`ContractError` and its subclasses `ParameterError`/`TyingError`, and
-`OptionalDependencyError`. The candidate is a new
-`LoweringError(AmpereError)` — deliberately **not** under `ContractError`,
-because a family torch does not implement is a capability gap in the backend,
-not a malformed declaration by the user; conflating the two would make
-"your prior is invalid" and "this backend cannot express your valid prior"
-indistinguishable to a caller catching the exception. It should carry the
-family, the parameter name and the backend as fields. To be pinned by W1.13
-alongside `OptionalDependencyError` (§12, open question 4).
+rule 3. **Landed at the freeze** (ruled 2026-09-03, §12.4):
+`ampere.core.exceptions.LoweringError(AmpereError)` — deliberately **not**
+under `ContractError`, because a family torch does not implement is a
+capability gap in the backend, not a malformed declaration by the user;
+conflating the two would make "your prior is invalid" and "this backend
+cannot express your valid prior" indistinguishable to a caller catching the
+exception. It carries the family, the parameter name and the backend as
+fields (plus a free-text `detail`), and its message names the three options:
+change the prior, register your own lowering (§12.8's hook, Phase 2), or
+run on a backend that has the family. `OptionalDependencyError` was
+ratified in place in the same pass (`parameters.md` §14 Q5), and
+`ResultsError` had already moved to core (`results.md` §15 R5).
 
 ### 3.5 Discrete families
 
@@ -393,19 +395,27 @@ alongside `OptionalDependencyError` (§12, open question 4).
 **not** lower to a gradient-based sampling path: a discrete parameter has no
 meaningful unconstraining bijection, and NUTS/HMC cannot sample it.
 
-This is worth stating because ampere's own reference implementation currently
-*will* hand you one — `default_bijection_for(scipy.stats.poisson(3.0))`
-returns `Log(lower=0.0)`, inferred from the support `[0, ∞)` with no regard
-for discreteness. `parameters.md` §12.8 already declares discrete parameters
-"declared-but-unexercised", so this is consistent with the contract rather
-than in conflict with it, but the lowering layer is where it would bite.
+*(Amended at the freeze: the upstream fix this section asked for landed —
+ruled 2026-09-03, §12.1. `default_bijection_for(scipy.stats.poisson(3.0))`
+now raises `CapabilityError`, a typed capability refusal that is
+deliberately not a malformed-declaration error; the refusal lives only
+there, and discreteness is queryable as `describe_prior(prior).discrete`.
+The paragraph below records the pre-freeze state for the history.)*
+
+This was worth stating because ampere's reference implementation used to
+hand you one — `default_bijection_for(scipy.stats.poisson(3.0))` returned
+`Log(lower=0.0)`, inferred from the support `[0, ∞)` with no regard for
+discreteness. `parameters.md` §12.8 declares discrete parameters
+"declared-but-unexercised", so that was consistent with the contract rather
+than in conflict with it, but the lowering layer is where it would have
+bitten.
 
 **Rule: lowering a discrete parameter onto a gradient-requiring path (torch
-HMC, numpyro NUTS, any `lnprior_unconstrained` consumer) raises.** Lowering it
-onto a non-gradient path (a reference-backend nested sampler, an SBI
-simulator) is fine. See §12, open question 1 — the cleaner fix is upstream in
-`default_bijection_for`, and that is a contract change, not this document's to
-make.
+HMC, numpyro NUTS, any `lnprior_unconstrained` consumer) raises** — now
+enforced at the source, in `default_bijection_for` itself. Lowering it
+onto a non-gradient path (a reference-backend nested sampler via
+`prior_transform`, an SBI simulator, §3.5's lowering-as-distribution) is
+fine and untouched, which is exactly the door the ruling keeps ajar.
 
 ### 3.6 `icdf` availability, and what it costs the nested-sampling path
 
@@ -444,7 +454,21 @@ The distinction worth holding onto is that §3.4 forbids substituting a
 fallback emits a warning naming the affected families and the backend, so
 a nominally torch-backed run that computes its prior transform in numpy is
 never a surprise discovered later; a `strict` option turns the warning
-into a raise. W1.13 fixes where the flag lives (§12, item 6).
+into a raise.
+
+**The flag's home is pinned (W1.13, at the freeze): the fitting problem's
+existing `strict` toggle** — `FittingProblem(strict=...)`, the run-level
+control `inference.md` §11 defines — not a new per-lowering knob. One flag,
+one meaning: `strict=True` already says "I would rather fail than have
+anything smoothed over" (exceptions propagate instead of becoming −inf
+with a recorded reason), and refusing to mix a numpy prior transform into
+a nominally native run is the same preference at lowering time. Phase 2
+implements exactly this: when a backend lowers `prior_transform` and a
+family lacks a native `icdf`, it consults the problem's `strict` — `False`
+(the default) takes the reference fallback and warns **once per run**,
+naming the families and the backend; `True` raises a `LoweringError`
+naming them instead. The warning is per run, not per call, because the
+fallback decision is made once at lowering time, before any sampling.
 
 ## 4. Bijection mapping
 
@@ -505,9 +529,14 @@ Notes that decide implementations:
 - **A custom `Bijection` is a reference-path-only feature**, exactly parallel
   to a duck-typed prior (§1.5). It satisfies ampere's protocol with numpy
   operations that a torch tensor or a jax tracer will not accept. The
-  extension point is for the user to supply a backend-native transform
-  alongside; that plumbing is not specified here and is out of scope until
-  something needs it.
+  extension point is the **hardened registration hook** ruled 2026-09-03
+  (§12.8): `register_lowering(family, backend, constructor)` for prior
+  families and the analogous per-backend slot for a custom `Bijection` — no
+  silent overwrites (`override=True` required), user-registered rows stamped
+  in provenance, an opt-in conformance battery for registrants, and
+  constructors that must return trace-pure objects since the registry
+  resolves before any tracing. The plumbing is Phase 2's, beside the
+  backends that consume it.
 
 ## 5. The declaration-form lowering table
 
@@ -1100,7 +1129,9 @@ crashing, which is the criterion for needing a mechanical check.
    (numpyro-style enumeration, (variational) EM, SBI, nested sampling,
    bare optimisation such as Bayesian optimisation) must not be
    foreclosed, though none of it is in the current development plan.
-   Three design constraints make that so, recorded for W1.13's landing:
+   Three design constraints make that so, recorded for W1.13's landing
+   (*landed at the freeze* — `CapabilityError` in `default_bijection_for`,
+   `parameters.md` §6, §3.5 above amended):
    the refusal lives **only** in `default_bijection_for` — declaration,
    prior sampling, constrained-space `log_prob`, `prior_transform` (an
    inverse-CDF composition, and scipy's discrete families implement
@@ -1133,7 +1164,13 @@ crashing, which is the criterion for needing a mechanical check.
    revisiting at Phase 2 start when the GP library is chosen, since a
    paramax-founded library (GPJax) would put wrapped leaves at ampere's
    boundary regardless of what ampere itself uses internally.
-3. **Qualified names versus torch `state_dict` keys.** §6.1 recommends nesting
+3. ***Closed at the freeze (W1.13):*** the flat tie-label ruling stands —
+   Peter ruled `parameters.md` §14.3 on 2026-09-01 (tie labels stay global
+   and unqualified) and nothing since has reopened it — so §6.1's
+   recommendation is settled as written: one `nn.Module` per merge
+   component, tied parameters on the root module. *(Original question
+   follows for the record.)*
+   **Qualified names versus torch `state_dict` keys.** §6.1 recommends nesting
    one `nn.Module` per merge component so that dotted names come out
    naturally. This is clean for names produced by `merge`, but a tie label is
    deliberately unqualified (`"distance"`, not `"shared.distance"` —
@@ -1171,8 +1208,10 @@ crashing, which is the criterion for needing a mechanical check.
    a missing native `icdf` is accepted on two conditions: taking it emits
    a loud warning naming the families and the backend, and a `strict`
    switch turns that warning into a raise for the user who would rather
-   fail than mix paths. §3.6 amended to match; W1.13 fixes the flag's
-   home (plausibly beside the run's other strictness controls). *(Original
+   fail than mix paths. §3.6 amended to match; the flag's home was fixed
+   at the freeze — **the fitting problem's existing `strict` toggle**,
+   threaded to the lowering path, one flag with one meaning (§3.6 has the
+   Phase 2 implementation contract). *(Original
    question follows for the record.)* **Should the reference backend be a sanctioned fallback for a missing
    `icdf`?** §3.6 says yes and argues it is not the silent substitution §3.4
    forbids, because `prior_transform` has one mathematical definition. That

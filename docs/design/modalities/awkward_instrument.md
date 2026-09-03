@@ -204,6 +204,12 @@ Spectrum's coordinate axis is in keV.
 
 This is 3M1's coupled case, and it is the finding this document exists for.
 
+*Status: **fixed at the freeze** (ruled 2026-09-03, landed by W1.13). The
+sections below record the stress test as it was run, against the pre-X-1
+contract; `likelihoods.md` §5 now carries the `predicted` keyword and the
+`FractionalModelNoise` slot, and the family workaround below is no longer
+necessary.*
+
 ### The physics
 
 An X-ray effective-area calibration carries a systematic uncertainty of order
@@ -338,7 +344,7 @@ being pushed there by a signature.
 changes an ABC signature that Phase 2's two backends will implement in lockstep.
 
 *Status: **ruled 2026-09-03** — Peter accepted the detailed design below as
-written; it lands at the freeze (W1.13), conformance rows included.*
+written; **landed at the freeze** (W1.13), conformance rows included.*
 
 **Proposed amendment** — `likelihoods.md` §5, §14 and §16, and `NoiseModel`:
 
@@ -500,6 +506,12 @@ a property of the *prediction* and genuinely varies per evaluation).
 
 ### X-4 — the specs never say where the exposure goes, and overstate the response matrix
 
+*Dispositioned at the freeze (W1.13): **landed as documentation** — both
+clauses are in place: `transformations.md` §10's response-matrix row and
+note now carry the exposure-folds-into-the-matrix reasoning (fresh
+`Spectrum`, `propagate_mask` with the matrix as influence), and
+`likelihoods.md` §16's W1.11 bullet records the confirmed answer.*
+
 **Severity: documentation; two clauses.** The design works and nothing needs
 changing in the code, but the reasoning lives only in an error message.
 
@@ -552,6 +564,13 @@ Executed against `ampere.core` at `8c4e99d` in the pixi `dev` environment.
 
 ## 8. Requirements on W1.7
 
+*Dispositioned at the freeze (W1.13): **all three discharged** — W1.7 as
+merged lets two datasets share a model channel with different instruments
+(`inference.md` §8's worked example), calls `check_alignment` with the
+observed container, and converts `PoissonFamily`'s non-positive-rate
+raise to −inf with a recorded reason (its failure-signalling tests draw
+exactly this case).*
+
 1. **Two-region X-ray fits are a `DatasetCollection` case.** Source and
    background spectra are two `Dataset`s with a shared background model and
    different exposures. That is the Bayesian alternative to `WStat` and it needs
@@ -571,7 +590,9 @@ Executed against `ampere.core` at `8c4e99d` in the pixi `dev` environment.
 ## 9. Open questions for review
 
 **Ruled by Peter, 2026-09-03**: question 1 — yes; X-1's detailed design
-(§6) is accepted as written and lands at the freeze (W1.13). Question 2
+(§6) is accepted as written and lands at the freeze (W1.13) *(landed:
+`likelihoods.md` §5's "Prediction-aware noise" subsection, all three call
+sites, and the three conformance rows)*. Question 2
 is answered by that design's point 10, accepted with it: the contract
 names `FractionalModelNoise` in `likelihoods.md` §5's list, and the
 ten-line implementation lands with the reference backend, not in
@@ -586,7 +607,8 @@ under masking since X-2's `retain` landed; its `sample` must refuse, and
 per-sample log-likelihood semantics degrade), then the two-dataset joint
 fit, and compares the two's pros, cons and *results*. The comparison
 needs posteriors, so the example lands with Phase 2's engine drivers;
-W1.13 carries the obligation into the Phase 2 work-item breakdown.
+W1.13 carries the obligation into the Phase 2 work-item breakdown
+*(carried: item W2.9 in `WORK_ITEMS.md`)*.
 
 1. **Does X-1 belong in the freeze?** This sketch says yes: it is an ABC
    signature that both Phase 2 backends implement, and the conformance suite

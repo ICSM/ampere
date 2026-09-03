@@ -1,9 +1,10 @@
-# Ampere v2 — Work Items, Phases 0–1
+# Ampere v2 — Work Items, Phases 0–2
 
 Companion to `DEVELOPMENT_PLAN.md` (the source of truth for architecture and
 decisions — read it first). Each item below is sized for delegation to a
-development agent. Phase 2+ items are written only once the Phase 1 spec
-freezes (W1.13).
+development agent. The Phase 2 items were written at the spec freeze
+(W1.13), against `spec-v1.0`; Phase 3+ items are written once their
+prerequisites freeze.
 
 Sizes: **S** ≈ half an agent session, **M** ≈ one session, **L** ≈ 1–2
 sessions.
@@ -275,6 +276,185 @@ DEVELOPMENT_PLAN's decision log; write the Phase 2 work-item breakdown
 against the frozen spec.
 **Depends:** everything above. **Accept:** tag exists; Phase 2 items added
 to this file.
+
+## Phase 2 — Twin modern backends, lockstep (written at the freeze, W1.13)
+
+Everything below is against the **frozen spec** (`spec-v1.0`): any change a
+Phase 2 item needs to a §4 contract requires a decision-log entry in
+`DEVELOPMENT_PLAN.md` in the same PR (working agreement), and the
+conformance suite (`tests/conformance/`) is the lockstep mechanism — a
+feature is done only when every registered backend passes it. Dispatch per
+`docs/orchestration.md`: **Opus per backend track** (W2.4, W2.5), Sonnet
+for the well-specified rest, Fable review at merge, adversarial
+cross-model review at milestone M2. The v1 slice stays spectra +
+photometry end-to-end; no new modality before Phase 4.
+
+### W2.1 — `ampere.backends.reference`: the numpy backend and base-install slice [L]
+The conformance oracle becomes a real package (`architecture.md` §1/§3):
+native models (blackbody, modified blackbody, power law — plan §5's list),
+the standard instrument steps (spectral resampling, LSF convolution,
+calibration scale; **synthetic photometry only after W0.9's pyphot
+migration**, so new code targets the ≥2 API from the first line), and
+**`FractionalModelNoise`** — the prediction-aware noise model
+`likelihoods.md` §5 names (X-1), with `f` an ordinary fitted parameter —
+registered so the X-1 conformance rows run against the shipped class
+instead of the in-repo double. Register the backend as a conformance
+fixture (one registry line, per W1.10's acceptance).
+Also lands here (ruled 2026-09-03 at the freeze's escalations; both are
+post-freeze §4 additions, so this item's PR carries their decision-log
+entries): the opt-in `describe()` hook on `Parameterised` folded into
+`model_fingerprint`, plus the derived backend-neutral model identity
+(offer, never serve — `results.md` §14); and `Axis.locate(values)`
+matching within `COORDINATE_RTOL` (`spectrum_photometry.md` Gap 1),
+which this item's resampling/photometry steps are the first to consume.
+**Depends:** spec-v1.0 merged; W0.9 for the photometry step only (the rest
+must not wait on it).
+**Accept:** conformance suite green with the new backend registered; the
+X-1 σ_eff row exercises `FractionalModelNoise` itself; `import ampere`
+still requires no extras; a no-extras environment composes and scores a
+blackbody + resampling + flexible-GP problem end-to-end.
+
+### W2.2 — Engine drivers: emcee, dynesty, zeus in `ampere.inference` [L]
+The gradient-free engines, written once against §4.5's surface and nothing
+else (`inference.md` §10) — they must work unchanged with every backend.
+Every run emits the ArviZ `DataTree` through `ampere.results` (per-draw
+`log_likelihood`/`log_prior`, provenance attrs, netCDF round trip), which
+is also the moment **arviz + a netCDF engine join the base install**
+(`results.md` §15 R1's ruling: promoted with the engine drivers, when a
+user can first emit a run) — lift them from the extras in the same PR.
+Non-strict failure signalling consumed as declared (−inf + recorded
+reason; `failure_summary` surfaced to the user); `check_engine` called
+with `observed=`.
+**Depends:** W2.1 (a real backend to drive).
+**Accept:** the toy two-dataset joint problem samples end-to-end on all
+three engines; posterior summaries within tolerance of each other on a
+known problem; the stored run round-trips netCDF with hashes intact;
+arviz imports from the base install.
+
+### W2.3 — `QuasisepGP` on the reference path (celerite2) [M]
+Fill the declared O(N) solver slot with celerite2's numpy interface and
+un-skip the `DenseGP`↔`QuasisepGP` conformance rows (the debt W1.10
+recorded by name). Includes `GPSolver.conditional_loo`'s O(N) recursion
+for the leave-one-out terms — or, if that recursion is deferred, a
+decision-log-recorded deferral with the refusal row kept live. Matérn-3/2
+exactness is the whole point: agreement at `tolerances.cross_solver`.
+**Depends:** W2.1.
+**Accept:** the skipped solver rows run and pass for the reference
+backend; the empty-slot refusal row flips to the implemented branch;
+10³–10⁵-point scaling demonstrated (wall-clock, not asymptotics claimed).
+
+### W2.4 — The torch backend track [L, multiple sessions; Opus]
+`ampere.backends.torch` against the frozen spec, gated by the conformance
+suite throughout. Scope per plan §5 and `lowering.md`: distribution and
+bijection lowering (the §3 tables; `LoweringError` for rule-2 refusals),
+buffers via `register_buffer` (§7), RNG via `substream` →
+`torch.Generator.manual_seed` (§9), float64 policy for likelihood linear
+algebra (§10), native models (the W2.1 trio), GP solvers (`DenseGP`
+natively; `QuasisepGP` via GPyTorch or celerite2-torch — evaluate both
+against the conformance suite, plan §6), NUTS + VI via pyro, capability
+flags declared on the subclasses. **The icdf-fallback contract**
+(`lowering.md` §3.6): a family without native `icdf` takes the reference
+fallback with a once-per-run warning naming families and backend, and
+`FittingProblem.strict=True` raises `LoweringError` instead.
+**Depends:** W2.1, W2.2, W2.6; lockstep with W2.5 — neither track merges a
+feature the other cannot pass the suite on without a recorded reason.
+**Accept:** full conformance battery green for the torch fixture
+(cross-backend rows against reference included); NUTS recovers the toy
+joint problem's posterior; the icdf warning and strict raise are tested.
+
+### W2.5 — The jax backend track [L, multiple sessions; Opus]
+`ampere.backends.jax`, mirror of W2.4: numpyro distributions and
+`biject_to` (never `transform_to` — `lowering.md` §2), buffers and fixed
+parameters via `eqx.partition` filter specs (never static fields — plan
+§7), `configure_x64()` guard-and-raise (never set-on-import; the plan §2
+ruling), RNG via `substream` → `jax.random.key`, `QuasisepGP` via tinygp's
+`QuasisepSolver` or celerite2.jax (verify maintenance at track start, plan
+§6), NUTS + VI via numpyro, the same icdf-fallback contract. Trace purity
+throughout: no exception control flow on the engine path (the non-strict
+ruling exists because of exactly this).
+**Depends/Accept:** as W2.4, with the jax fixture.
+
+### W2.6 — The lowering registry: `register_lowering` and the bijection slot [M]
+The hardened hook ruled 2026-09-03 (`lowering.md` §12.8):
+`register_lowering(family, backend, constructor)` keyed on the neutral
+name, plus the per-backend custom-`Bijection` slot. Hardenings are part of
+the contract: no overwrite of a built-in or existing row without
+`override=True`; user-registered rows stamped in provenance; an **opt-in
+conformance battery** a registrant runs against their own lowering
+(reference-vs-native agreement); constructors must return trace-pure
+objects (the registry resolves before tracing, so the mechanism itself is
+inert to jit/vmap/grad — document that as a rule).
+**Depends:** W2.1 (the reference rows to agree with); consumed by W2.4/W2.5.
+**Accept:** a user-registered prior family lowers natively on a backend and
+its provenance record says so; the overwrite refusal and `override=True`
+path are tested; the registrant battery runs from the docs example.
+
+### W2.7 — Diagnostics, the 1D slice [M]
+Plan §4.8 / `diagnostics.md`: post-fit residual whiteness tests
+(separation-binned, permutation-calibrated) and GP-localisation output
+(`Likelihood.conditional` → `AnomalyScore` → the shared renderer) in
+`ampere.results`; the `ampere.diagnostics` namespace with RHMF pre-fit
+screening **if** the recorded adoptability assessment of Robusta-HMF
+holds at implementation time (licence, maturity, API — re-verify), behind
+the `diagnostics` extra. The namespace addition carries its decision-log
+entry (`diagnostics.md` §7's note). Carries `diagnostics.md` §2.5's
+obligation: validate `rank`/`robust_scale` heuristics on real ampere
+collections before promoting any default, with its own decision-log entry
+when that happens.
+**Depends:** W2.2 (posteriors to diagnose).
+**Accept:** both post-fit families produce output on the toy problem;
+every `AnomalyScore` renders with provenance shown; RHMF path either
+lands behind the extra or its deferral is recorded with reasons.
+
+### W2.8 — Results completion: plots, pointwise emission, training sets [M]
+Implement the declared plotting surface (corner, trace,
+posterior-predictive, GP-localisation) against the stored `DataTree`;
+the explicit-call emission of the `pointwise_log_likelihood` group
+(`results.md` §6's reserved names over `Likelihood.pointwise_log_prob`,
+never by default); and the training-set writer
+(`serialisation_review.md` §4's obligations: `training_pair_from_dict`
+completing the round trip, the θ-dtype loss fixed, batching/append for
+large budgets).
+**Depends:** W2.2.
+**Accept:** each plot renders from a stored run with merged names as
+labels; a run with the pointwise group survives netCDF and `arviz.loo`
+consumes it; a training set written, appended to, and read back
+round-trips by value.
+
+### W2.9 — The WStat comparison example [S]
+The 2026-09-03 ruling's obligation, carried here by W1.13: ampere ships no
+WStat, and the docs take the opinionated line. A worked example builds the
+profiled Cash-with-background statistic as a **user family** (safe under
+masking via `NoiseParams.retain`; its `sample` refuses; per-sample
+log-likelihood semantics degrade — say so), then the **two-dataset
+Bayesian formulation** (source + background as a `DatasetCollection` with
+a shared background model), runs both, and compares pros, cons and
+*results* — posteriors, so this needs the engine drivers.
+**Depends:** W2.1, W2.2.
+**Accept:** the example runs end-to-end in the docs build; the comparison
+states the recommendation and the trade-offs rather than false balance.
+
+### W2.10 — Milestone M2: the flagship misspecification validation [L]
+Reproduce the `flexible_likelihood_comparison` study on **both** modern
+backends at 10–100× the current data size, with wall-clock benchmarks
+against legacy (plan §5's M2). This is the paper-grade evidence the
+redesign delivers its central promise, and the adversarial cross-model
+review milestone (`docs/orchestration.md`).
+**Depends:** W2.3, W2.4, W2.5.
+**Accept:** posterior agreement between backends within stated tolerances;
+the benchmark table produced by CI-runnable code, not by hand; adversarial
+review dispositions recorded.
+
+### W2.11 — CI/CD Phase 2 expansion [M]
+Plan §5's cross-cutting workstream at this phase: separate torch, jax and
+**no-extras** matrix jobs (the last catches lazy-import breakage —
+`import ampere` must never require either), dependency caching, and the
+benchmark suite (choose pytest-benchmark vs asv here, plan §6) with
+results tracked as CI artefacts. GPU tests stay nightly/manual.
+**Depends:** W2.4/W2.5 far enough along to have something to gate; the
+benchmark half can trail with W2.10.
+**Accept:** a deliberately broken backend row fails only its own job; the
+no-extras job is green; benchmark results appear as artefacts on a PR.
 
 ## Status
 

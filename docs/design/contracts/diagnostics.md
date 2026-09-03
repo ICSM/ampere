@@ -1,8 +1,9 @@
 # Ampere v2 — Diagnostics Design Spec (W1.12)
 
-Status: **approved by Peter, 2026-09-01** (the §10 defaults stand as
+Status: **frozen at `spec-v1.0`** (the tag created at the W1.13 merge,
+2026-09) — **approved by Peter, 2026-09-01** (the §10 defaults stand as
 written; §11 records the one addition from his review — posterior
-calibration as a future family). Not frozen until W1.13. Implements
+calibration as a future family). Implements
 `DEVELOPMENT_PLAN.md` §4.8. This is a **design document only** — no code
 lands with this item. It fixes where the diagnostic families live, what
 they consume and produce in the §4.2 container vocabulary, their
@@ -459,7 +460,7 @@ about, applied to a case where it genuinely does not fit.
 | A — RHMF pre-fit screening | `ampere.diagnostics.rhmf` (new namespace) | `ampere[diagnostics]` | JAX (via `robusta-hmf`) |
 | B — residual whiteness / PPC | `ampere.results` | none | none beyond `ampere.results`'s own (ArviZ; optionally `statsmodels`, Phase-2 decision) |
 | C — GP-localisation | `ampere.results` | none | none beyond the fit's own backend |
-| Shared `AnomalyScore` container | `ampere.core` (proposed for W1.4) | none | none — plain numpy/scipy, per `architecture.md` §4 rule 1 |
+| Shared `AnomalyScore` container | `ampere.core` (**landed at the freeze** — ruled 2026-09-03, `results.md` §15 R4; `ampere.core.results_schema.AnomalyScore`) | none | none — plain numpy/scipy, per `architecture.md` §4 rule 1 |
 
 ---
 
@@ -509,13 +510,18 @@ about, applied to a case where it genuinely does not fit.
   no optional dependency, so both `ampere.diagnostics` and `ampere.results`
   can produce/consume it without a cross-namespace dependency) but does not
   bind W1.4's exact class hierarchy — reconcile at W1.13 spec assembly if
-  W1.4 lands with a materially different container design.
+  W1.4 lands with a materially different container design. *(Reconciled:
+  no conflict arose — `ampere.core.AnomalyScore` landed at the freeze as
+  the lightweight plain-numpy type proposed here, deliberately outside
+  W1.4's kind system; `results_schema.md` §13.)*
 - **Also flagged for `architecture.md`'s namespace diagram (§3)**: it does
   not currently list `ampere.diagnostics`. This document adds the namespace;
   the diagram should be updated to match at W1.13 spec assembly (a §4
   contract-affecting addition, per this repo's ground rule 9, belongs in a
   decision-log entry in `DEVELOPMENT_PLAN.md` in the same PR that actually
-  adds the namespace in code — not asserted unilaterally here).
+  adds the namespace in code — not asserted unilaterally here). *(Done at
+  the freeze: the §3 diagram now lists `diagnostics/` as the Phase 2 peer
+  namespace; the code-landing PR still carries the decision-log entry.)*
 
 ---
 
@@ -584,7 +590,9 @@ Each of these is a decision, not an oversight. Each has an extension point.
    W1.4 lands a container hierarchy that makes a plain-numpy `ampere.core`
    addition awkward (e.g. if all §4.2 containers turn out to carry more
    structure than this lightweight type wants)? Flagged for W1.13
-   reconciliation rather than pre-empted here.
+   reconciliation rather than pre-empted here. *(Reconciled at the freeze:
+   it did not need revisiting — the class landed exactly as proposed,
+   outside the kind system, and satisfies `ampere.results`'s protocol.)*
 
 ---
 

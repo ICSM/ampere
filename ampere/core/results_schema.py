@@ -125,6 +125,7 @@ from .exceptions import ChannelError, SchemaError
 __all__ = [
     "DEFAULT_CHANNEL",
     "REGULARITY_RTOL",
+    "AnomalyScore",
     "Axis",
     "AxisSpec",
     "Cube",
@@ -1679,3 +1680,117 @@ def _parameter_records_equal(
     if set(left) != set(right):
         return False
     return all(np.array_equal(value, right[name]) for name, value in left.items())
+
+
+# ---------------------------------------------------------------------------
+# The shared diagnostics container
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass(frozen=True)
+class AnomalyScore:
+    """A coordinate-indexed deficiency map — the shared diagnostics container.
+
+    ``diagnostics.md`` §5's proposal, landed at the freeze (ruled 2026-09-03,
+    ``results.md`` §15 R4). It lives in ``ampere.core`` precisely so that
+    ``ampere.diagnostics`` (family A, pre-fit RHMF screening) and
+    ``ampere.results`` (family C, post-fit GP localisation) can each produce
+    one **without either namespace depending on the other** — and plain
+    numpy, per ``architecture.md`` §4 rule 1.
+
+    It is deliberately *not* a :class:`FunctionSamples` kind: a score is not
+    an observable a model predicts or an instrument transforms — nothing
+    binds it to a channel, no likelihood consumes it — it is a statement
+    *about* a fit or a collection, indexed by the same coordinates.
+
+    ``provenance`` and ``interpretation_notes`` are **required, non-empty**:
+    they are what keeps the shared visual grammar from implying a
+    comparability two differently-computed statistics do not have
+    (``diagnostics.md`` §5 — two panels are never captioned as
+    interchangeable without their provenance shown).
+
+    Parameters
+    ----------
+    coordinates
+        Where each score sits: shape ``(n,)`` for one coordinate axis, or
+        ``(n, d)`` for *d* of them. Float64.
+    values
+        The scores, shape ``(n,)``, float64, finite where retained; a
+        documented, comparable range with **higher = more anomalous**.
+    mask
+        Optional boolean, shape ``(n,)``; ``True`` **excludes** a sample,
+        the same convention every container carries.
+    provenance
+        Which diagnostic family produced it — e.g. ``"rhmf_prefit"``,
+        ``"gp_localisation_postfit"``.
+    interpretation_notes
+        Free text: the caveat that travels with the numbers (family C's
+        localisation caveat lives here programmatically).
+
+    Examples
+    --------
+    >>> score = AnomalyScore(
+    ...     coordinates=np.array([1.0, 2.0, 3.0]),
+    ...     values=np.array([0.1, 2.4, 0.3]),
+    ...     provenance="gp_localisation_postfit",
+    ...     interpretation_notes="Amplitude localises deficiency; see docs.",
+    ... )
+    >>> score.n_samples
+    3
+    """
+
+    coordinates: np.ndarray
+    values: np.ndarray
+    provenance: str
+    interpretation_notes: str
+    mask: np.ndarray | None = None
+
+    def __post_init__(self) -> None:
+        coordinates = np.asarray(self.coordinates, dtype=np.float64)
+        if coordinates.ndim not in (1, 2) or coordinates.shape[0] == 0:
+            raise SchemaError(
+                f"AnomalyScore coordinates must be (n,) or (n, d) with n >= 1, got shape "
+                f"{coordinates.shape}."
+            )
+        values = np.asarray(self.values, dtype=np.float64).ravel()
+        if values.shape[0] != coordinates.shape[0]:
+            raise SchemaError(
+                f"AnomalyScore holds {coordinates.shape[0]} coordinate(s) but "
+                f"{values.shape[0]} value(s); a score is indexed by its coordinates."
+            )
+        mask = self.mask
+        if mask is not None:
+            mask = np.asarray(mask, dtype=bool).ravel()
+            if mask.shape[0] != values.shape[0]:
+                raise SchemaError(
+                    f"AnomalyScore mask covers {mask.shape[0]} sample(s) but there are "
+                    f"{values.shape[0]}."
+                )
+        retained = values if mask is None else values[~mask]
+        if not np.all(np.isfinite(retained)):
+            raise SchemaError(
+                "AnomalyScore values must be finite where retained; mask the samples that "
+                "have no score."
+            )
+        for field in ("provenance", "interpretation_notes"):
+            text = getattr(self, field)
+            if not isinstance(text, str) or not text.strip():
+                raise SchemaError(
+                    f"AnomalyScore.{field} is required and must be a non-empty string: it is "
+                    f"what keeps two differently-computed scores from being read as "
+                    f"interchangeable (diagnostics.md §5)."
+                )
+        object.__setattr__(self, "coordinates", coordinates)
+        object.__setattr__(self, "values", values)
+        object.__setattr__(self, "mask", mask)
+
+    @property
+    def n_samples(self) -> int:
+        """How many scored samples this map holds."""
+        return int(self.values.shape[0])
+
+    def __repr__(self) -> str:
+        return (
+            f"<AnomalyScore {self.provenance!r}: {self.n_samples} sample(s), "
+            f"max {float(np.nanmax(self.values)):.3g}>"
+        )

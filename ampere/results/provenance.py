@@ -69,7 +69,6 @@ False
 
 from __future__ import annotations
 
-import dataclasses
 import enum
 import hashlib
 import importlib.metadata as _metadata
@@ -83,7 +82,7 @@ import astropy.units as u
 import numpy as np
 
 from ampere.core.dataset import Dataset, FittingProblem
-from ampere.core.likelihood import GaussianProcessNoise, Likelihood
+from ampere.core.likelihood import Likelihood
 from ampere.core.results_schema import FunctionSamples
 from ampere.core.transform import Instrument
 
@@ -111,7 +110,10 @@ __all__ = [
 ]
 
 #: Bumped whenever the meaning of an ``ampere_*`` attribute changes.
-PROVENANCE_SCHEMA_VERSION = 1
+#: 2 (W1.13): ``describe_likelihood`` now fingerprints family- and
+#: noise-model-owned buffers too (they were invisible before), so
+#: ``ampere_problem_hash`` values differ from schema 1's.
+PROVENANCE_SCHEMA_VERSION = 2
 
 #: Every attribute this module writes starts with this, so ampere's provenance
 #: never collides with ArviZ's own (``created_at``, ``creation_library``, ...)
@@ -370,63 +372,42 @@ def buffer_fingerprint(owner: object) -> list[dict[str, Any]]:
     ]
 
 
-def _describe_solver(solver: object) -> dict[str, Any]:
-    """A GP solver's identity **and its configuration**, not merely its name.
-
-    The name alone is not enough, and the gap is a numerical one rather than a
-    bookkeeping one: ``DenseGP``'s ``jitter`` is added to the diagonal before
-    the factorisation, so two runs of the same strategy at different jitters
-    score the same θ differently. A cache key that could not tell them apart
-    would serve an artefact trained under one regularisation for a fit under
-    another. Strategies declare their configuration as dataclass fields, which
-    is what makes this readable from outside; anything a future strategy
-    configures another way is limitation 12 of ``results.md`` §13.
-    """
-    described: dict[str, Any] = {
-        "name": getattr(solver, "NAME", "") or type(solver).__name__,
-        "class": type(solver).__name__,
-        "exact": bool(getattr(solver, "EXACT", True)),
-    }
-    if dataclasses.is_dataclass(solver) and not isinstance(solver, type):
-        described["config"] = {
-            field.name: getattr(solver, field.name) for field in dataclasses.fields(solver)
-        }
-    return described
+# The solver's identity-and-configuration description that used to live here
+# (_describe_solver) moved into Likelihood.to_spec with R7's promotion: the
+# name alone was never enough — DenseGP's jitter changes the number the same
+# theta scores — and the object that knows its own configuration is the one
+# that should describe it.
 
 
 def describe_likelihood(likelihood: Likelihood) -> dict[str, Any]:
     """The family, noise model, solver, kernel and censoring of one likelihood.
 
-    This is what ``likelihoods.md`` §17 question 8 asks about — "there is no
-    ``Likelihood.to_spec()`` for the family name plus solver plus censoring.
-    W1.8 owns provenance hashing and should decide whether it wants one." It
-    does want one, and this function is the shape it should take:
-    ``docs/design/contracts/results.md`` §15's R7 recommends promoting it onto
-    :class:`~ampere.core.likelihood.Likelihood` itself, so that backends and the
-    conformance suite share one definition instead of this module
-    reverse-engineering it from the public surface. It is written as a move
-    rather than a rewrite: the mapping does not change if the recommendation is
-    granted.
+    R7 was granted (ruled 2026-09-03, confirmed by W1.13's consolidated
+    serialisation review): the declarative assembly this function used to do
+    is now :meth:`ampere.core.likelihood.Likelihood.to_spec` — the one
+    definition backends and the conformance suite share. What remains here is
+    exactly this module's business, per the review's rule that **specs
+    describe declarations and provenance fingerprints content**: the buffers'
+    content hashes, and the censoring codes' — per-sample data the spec
+    deliberately carries only as counts.
+
+    The buffers are fingerprinted on the family and the noise model as well
+    as on the ``Likelihood`` itself — a fix the review found: ``Likelihood``
+    forwards *parameters* from its pieces, never buffers, so the old
+    ``buffer_fingerprint(likelihood)`` alone was blind to a family's
+    background template or a noise model's tabulated response, exactly the
+    stale-cache trap ``DEVELOPMENT_PLAN.md`` §7 warns about. (The mapping
+    change rode a ``PROVENANCE_SCHEMA_VERSION`` bump.)
     """
-    noise = likelihood.noise
-    described: dict[str, Any] = {
-        "family": likelihood.family.NAME or type(likelihood.family).__name__,
-        "family_class": type(likelihood.family).__name__,
-        "noise": type(noise).__name__,
-        "marginalisation": likelihood.marginalisation.value,
-        "parameters": likelihood.parameters.to_spec(),
-        "buffers": buffer_fingerprint(likelihood),
+    described: dict[str, Any] = likelihood.to_spec()
+    described["buffers"] = {
+        "likelihood": buffer_fingerprint(likelihood),
+        "family": buffer_fingerprint(likelihood.family),
+        "noise": buffer_fingerprint(likelihood.noise),
     }
-    if isinstance(noise, GaussianProcessNoise):
-        described["kernel"] = noise.kernel.spec().to_dict()
-        described["solver"] = _describe_solver(noise.solver)
     censoring = likelihood.censoring
     if censoring is not None:
-        described["censoring"] = {
-            "n_samples": int(censoring.n_samples),
-            "n_censored": int(censoring.n_censored),
-            "kinds": hash_array(np.asarray(censoring.kinds)),
-        }
+        described["censoring"]["kinds"] = hash_array(np.asarray(censoring.kinds))
     return described
 
 

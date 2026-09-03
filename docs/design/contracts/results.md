@@ -1,6 +1,9 @@
 # Ampere v2 — Results, Provenance & Plotting Contract (W1.8)
 
-Status: drafted, awaiting Peter's review. Implements `DEVELOPMENT_PLAN.md` §4.6,
+Status: **frozen at `spec-v1.0`** (the tag created at the W1.13 merge,
+2026-09; any later change to a §4 contract requires a decision-log entry in
+`DEVELOPMENT_PLAN.md` in the same PR — ground rule 9; the §15 rulings of
+2026-09-03 are all landed). Implements `DEVELOPMENT_PLAN.md` §4.6,
 and discharges the obligations `inference.md` §18, `likelihoods.md` §16,
 `parameters.md` §13, `results_schema.md` §16/§17.6, `lowering.md` §9.2 and
 `diagnostics.md` §7 place on this item. Code: `ampere/results/`. Tests:
@@ -410,6 +413,14 @@ only by an explicit call, never by default. A run emitted today is
 forward-compatible with one emitted after it lands, because the group it would
 occupy is empty rather than misused.
 
+*(Landed at the freeze — ruled 2026-09-03, §15 R2, with the decision-log
+entry: `Likelihood.pointwise_log_prob` now computes both decompositions
+under exactly these names — the family's pointwise terms for independent
+noise, `GPSolver.conditional_loo` for a GP — see `likelihoods.md` §8. The
+not-stored-by-default rule is unchanged: emitting the group remains an
+explicit call, and the emission helper itself is Phase 2's, beside the
+engine drivers that produce runs worth decomposing.)*
+
 ## 7. Groups a run does not store, and the rule for getting them
 
 `diagnostics.md` §7 puts two questions to this contract.
@@ -499,10 +510,11 @@ different provenance are drawn together.
 `diagnostics.md` §5 proposes the `AnomalyScore` container itself for
 `ampere.core`, so that `ampere.diagnostics` (family A, which carries a JAX
 dependency) and `ampere.results` can each produce one without either namespace
-depending on the other. W1.4 landed before that proposal, so the class does not
-exist; `plot_anomaly_score` is typed against the *shape* (`AnomalyScoreLike`, a
-runtime-checkable `Protocol`) instead, and nothing at a call site changes when
-the class lands. §15's R4 asks for it.
+depending on the other. *(R4 granted and landed at the freeze, 2026-09-03:
+`ampere.core.AnomalyScore` exists — `results_schema.md` §13 — and satisfies
+the protocol.)* `plot_anomaly_score` stays typed against the *shape*
+(`AnomalyScoreLike`, a runtime-checkable `Protocol`), so a caller may hand
+it the real class or anything matching.
 
 Every plotting function is a declared signature that raises `NotImplementedError`
 naming Phase 2. That is deliberate: the surface is what two backend tracks and
@@ -877,7 +889,7 @@ training set and is what the composed problem is for.
 | The GP-localisation caveat is a constant, a docstring and a function | `diagnostics.md` §4.3 requires it to reach a programmatic consumer, not only a viewer |
 | Container serialisation is functions in `ampere.results`, not methods on the containers | A hot-loop object should not carry the one method no evaluation calls; and `results_schema.py` is a merged contract (§15 R5) |
 | Training sets are netCDF | NaN is native, coordinates are stored once, and the spec hash sits in the attributes where invalidation can see it |
-| `ResultsError` lives in `ampere/results/exceptions.py` for now | Its siblings are all in `ampere/core/exceptions.py`, which is merged; §15 R5 asks W1.13 to move it |
+| `ResultsError` lives in `ampere/core/exceptions.py`, re-exported here | §15 R5 asked for the move and it was made the same day the ruling landed (2026-09-03): one class, two import paths, no call-site changes — pinned by a test at the freeze |
 
 ## 13. Deliberate limitations of v1.8
 
@@ -908,9 +920,9 @@ Each is a decision, not an oversight. Each has an extension point.
 9. **The training-set writer is specified, not implemented.** §11's layer 2 is a
    table and a rationale; the writer lands with Phase 2's SBI and emulator work,
    against the format fixed here.
-10. **`AnomalyScore` is a `Protocol`, not a class.** `diagnostics.md` §5 proposes
-    the class for `ampere.core`; until it exists the renderer is typed against
-    its shape (R4).
+10. **`AnomalyScore` is a `Protocol`, not a class.** *(Closed at the freeze:
+    R4 was granted and `ampere.core.AnomalyScore` landed 2026-09-03. The
+    renderer stays typed against the shape, which the class satisfies.)*
 11. **Data-group variable names can collide, and a collision is refused rather
     than resolved.** A name is the dataset label joined to an axis or role name,
     so a dataset `a` with uncertainties and a dataset `a_uncertainty` both want
@@ -936,8 +948,11 @@ Each is a decision, not an oversight. Each has an extension point.
     cache key while scoring differently. Hashing an arbitrary `__dict__` is not
     a safe general answer, so the extension point is an opt-in `describe()`
     hook on `Parameterised` that a model or transformation implements when its
-    behaviour depends on something the contracts do not model. Worth deciding at
-    W1.13, since a Phase-2 emulator cache is the first thing that will care.
+    behaviour depends on something the contracts do not model. **Ruled by
+    Peter, 2026-09-03** (at the freeze's escalations): the hook is adopted for
+    **early Phase 2** — it lands with W2.1, folded into `model_fingerprint`,
+    with the decision-log entry ground rule 9 requires, so the cache-key hole
+    is closed before any emulator cache exists to poison.
 
 ## 14. What this contract hands to the specs downstream
 
@@ -962,7 +977,14 @@ Each is a decision, not an oversight. Each has an extension point.
   Whether Phase 2 additionally wants a backend-neutral model identity — so
   an emulator trained on the reference backend can be *offered* (never
   silently served) to a torch fit of the same declaration — is a freeze
-  question, and it belongs with §13.13's `describe()` hook.
+  question, and it belongs with §13.13's `describe()` hook. **Ruled by
+  Peter, 2026-09-03**: yes, in early Phase 2, as one mechanism with that
+  hook (W2.1): a *derived* neutral identity — the model fingerprint minus
+  its class/module component — used only to **offer** a cross-backend
+  emulator with its provenance shown, never to serve one silently; the
+  neutral identity cannot pin the mathematics, which is why "offer, never
+  serve" is the rule. `ampere_problem_hash` itself stays deliberately
+  backend-variant.
 - **W1.12 (Diagnostics)** — the three answers it asked for: the reserved group
   names and the derivation for signed residuals (§7), the ruling that `y_rep` is
   computed on demand rather than stored (§7), and `plot_anomaly_score` as a
@@ -1004,7 +1026,13 @@ the decomposition declared in the group's attributes — is confirmed. R7
 rides with the consolidated cross-contract serialisation review at W1.13
 (Peter's same-day `likelihoods.md` §17 Q8 ruling), where
 `describe_likelihood`'s promotion to `Likelihood.to_spec()` is the
-leading candidate rather than a separately ruled point. The original
+leading candidate rather than a separately ruled point. *(The review is
+done — `docs/design/serialisation_review.md` — and confirmed the
+promotion: `Likelihood.to_spec()` landed, `describe_likelihood` composes
+it and keeps the content fingerprints, and the review found and fixed
+one provenance hole: family- and noise-model-owned buffers were
+invisible to `buffer_fingerprint(likelihood)`;
+`PROVENANCE_SCHEMA_VERSION` is now 2.)* The original
 requests are kept below for the record.
 
 **R1 — when does arviz join the base install, and with which netCDF engine?**

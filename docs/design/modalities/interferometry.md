@@ -15,7 +15,11 @@ Nothing here is implemented. Every snippet below was executed against the
 merged `ampere.core` at commit `8c4e99d` (see §8 for what was checked and how);
 the sketches are **not** wired into `tests/core/test_spec_doctests.py`, which
 names its four contract specs explicitly. Whether modality sketches should be
-executed by the suite is W1.13's call.
+executed by the suite is W1.13's call — **decided at the freeze: they stay
+unexecuted.** The sketches are design records whose claims were verified by
+execution at review time (§8); the *contracts* are the executed documents,
+and freezing 600 lines of illustrative composition code as doctests would
+pin exactly the code Phase 4's real implementation supersedes.
 
 ---
 
@@ -500,6 +504,13 @@ and it happens silently. Verified:
 
 ### I-2 — the predicted and observed `(u, v)` axes must be bit-identical, and nothing says so
 
+*Dispositioned at the freeze (W1.13): **landed as documentation** — the
+rule is now stated in `transformations.md` §10 (every coordinate-reproducing
+step takes the observed coordinates from the observed container, never
+recomputes them), in `likelihoods.md` §16's W1.5 bullet, and in the
+`Dataset` docstring on the caller side. No tolerance was added: the check
+stays load-bearing and exact.*
+
 **Severity: documentation, with a real trap behind it.** `Axis.__eq__` uses
 `np.array_equal`, so `check_alignment` requires the Fourier step's `(u, v)`
 buffer to match the observed container's coordinates *exactly*. That is
@@ -526,6 +537,11 @@ note, and `likelihoods.md` §16's W1.5 bullet:
 > ("negotiation should target the observed grid").
 
 ### I-3 — a step after a kind-changing step cannot publish requirements at all
+
+*Ruled 2026-09-03: **approved and landed at the freeze** — the chain-internal
+`configure_from(downstream)` is in the contract (`transformations.md` §5),
+called once per step at `Instrument` construction; `pull_back` is not
+adopted. The concrete smearing steps remain Phase 4's.*
 
 **Severity: expressiveness; a real loss of reuse, with a workaround.** Bandwidth
 smearing and time smearing are ordinary, reusable interferometric effects whose
@@ -567,6 +583,11 @@ the `pull_back` sketch with the honest statement:
 > first real instance arrives.
 
 ### I-4 — `compile_for` cannot refuse, and here that produces a plausible wrong answer
+
+*Ruled 2026-09-03: **approved and landed at the freeze** — `compile_for`
+raises `CompositionError` when it cannot honour a requirement
+(`transformations.md` §7), with `FittingProblem(lenient_compile=True)` the
+explicit warning-and-proceed opt-out.*
 
 **Severity: this modality upgrades §15.3 from "would be nice" to "should be
 decided".** `transformations.md` §15.3 asks whether a model should be able to
@@ -633,6 +654,13 @@ says is the wrong place) and `RiceFamily` (non-negative amplitudes).
 
 ## 10. Requirements on W1.7
 
+*Dispositioned at the freeze (W1.13): **all four discharged** — item 1 by
+I-2's landed rule (the `Dataset` docstring now states the caller
+obligation); items 2 and 4 by W1.7 as merged (`inference.md` §8: once,
+jointly; `LikelihoodError` → −inf with a recorded reason); item 3 by
+W1.7's dataset-label refusal plus the 2026-09-03 instrument-label ruling
+landed at W1.13.*
+
 None of these invents W1.7's API; they are properties its `Dataset` /
 `DatasetCollection` must have for this modality to compose.
 
@@ -661,6 +689,17 @@ None of these invents W1.7's API; they are properties its `Dataset` /
    per §4.5.
 
 ## 11. Open questions for review
+
+*Dispositioned at the freeze (W1.13):* Q1 — **ruled 2026-09-03 as this
+sketch recommends** (`likelihoods.md` §17 Q6) and landed: the declaration
+is `ANALYTIC` with the circular GP as the fixed meaning, composition
+refusing until Phase 4 implements the closed form. Q2 — ruled the same day
+with `results_schema.md` §17 Q5: yes eventually, `extra_coords` gains
+`Axis` support in **Phase 4**, not at the freeze. Q3 — deferred to
+**Phase 4** as the sketch says (a user-kind signature, not a §4 contract).
+Q4 — closed by `results_schema.md` §17 Q4's ruling: `(x, y, spectral)`
+confirmed, this sketch's own analysis (the spatial axes stay adjacent
+under a Fourier consumer) being part of the evidence.
 
 1. **Should `complex_gaussian` + `GaussianProcessNoise` be declared `ANALYTIC`
    (§7)?** This sketch recommends yes, with the circular (equal-component,

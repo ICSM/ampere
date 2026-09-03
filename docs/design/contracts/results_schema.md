@@ -1,6 +1,6 @@
 # Ampere v2 — ModelResult Schema Contract (W1.4)
 
-Status: **DRAFT for Peter's review.** Implements `DEVELOPMENT_PLAN.md` §4.2 and
+Status: **frozen at `spec-v1.0`** (the tag created at the W1.13 merge, 2026-09; any later change to a §4 contract requires a decision-log entry in `DEVELOPMENT_PLAN.md` in the same PR — ground rule 9). Implements `DEVELOPMENT_PLAN.md` §4.2 and
 the functional-data stance of `architecture.md` §7. Code:
 `ampere/core/results_schema.py`, `ampere/core/exceptions.py`. Tests:
 `tests/core/test_results_schema.py`, `tests/core/test_spec_doctests.py`.
@@ -879,6 +879,34 @@ ampere.core.exceptions.SchemaError: PolarisationCurve requires its 'spectral_axi
 
 ```
 
+### Not a kind: `AnomalyScore`
+
+Added at the freeze (ruled 2026-09-03, `results.md` §15 R4, implementing
+`diagnostics.md` §5's proposal): `ampere.core.AnomalyScore` — coordinates,
+values (higher = more anomalous), an optional mask with the usual excluding
+sense, and the **required** `provenance` and `interpretation_notes` strings
+that keep two differently-computed scores from being read as
+interchangeable. It lives in this module but deliberately **outside** the
+kind system: a score is not an observable a model predicts or an instrument
+transforms — nothing binds it to a channel and no likelihood consumes it —
+it is a statement *about* a fit or a collection, indexed by the same
+coordinates. `ampere.diagnostics` (pre-fit RHMF) and `ampere.results`
+(post-fit GP localisation) both produce it without depending on each other;
+`ampere.results.plots.AnomalyScoreLike` remains the structural type its
+renderer accepts, and the class satisfies it.
+
+```pycon
+>>> from ampere.core import AnomalyScore
+>>> AnomalyScore(
+...     coordinates=np.array([1.0, 2.0, 3.0]),
+...     values=np.array([0.1, 2.4, 0.3]),
+...     provenance="gp_localisation_postfit",
+...     interpretation_notes="Amplitude localises deficiency; see the docs.",
+... )
+<AnomalyScore 'gp_localisation_postfit': 3 sample(s), max 2.4>
+
+```
+
 ## 14. Decisions and their reasoning
 
 | Decision | Reasoning |
@@ -1046,7 +1074,10 @@ Phase 4 extension (`interferometry.md` §11 Q2); not for the freeze.
 Question 6 — superseded: serialisation is consolidated into a single
 cross-contract review at W1.13 (with `likelihoods.md` §17 Q8 and
 `results.md` §15 R7) rather than settled per contract; the design-horizon
-(c) training-set requirement rides along with it.
+(c) training-set requirement rides along with it. *(Closed at the freeze:
+`docs/design/serialisation_review.md` — containers round-trip by value
+through `ampere.results.serialisation`, the training-pair format is
+pinned in its §4, and the writer is a named Phase 2 obligation.)*
 
 1. **`DEFAULT_CHANNEL` is the string `"default"`.** It is short and obvious, but
    it is also a name a user might plausibly want for a real channel. Reserving

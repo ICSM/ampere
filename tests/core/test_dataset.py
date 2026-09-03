@@ -416,8 +416,12 @@ class TestDatasetCollection:
     def test_no_parameter_is_lost_when_two_instruments_share_a_channel(self) -> None:
         collection = DatasetCollection(
             {
-                "gaia": Dataset(flat_spectrum(), Instrument([Calibrate()], channel="sed")),
-                "wise": Dataset(flat_spectrum(), Instrument([Calibrate()], channel="sed")),
+                "gaia": Dataset(
+                    flat_spectrum(), Instrument([Calibrate()], channel="sed", label="gaia")
+                ),
+                "wise": Dataset(
+                    flat_spectrum(), Instrument([Calibrate()], channel="sed", label="wise")
+                ),
             }
         )
         problem = FittingProblem(Powerlaw(sed=WAVELENGTH), collection)
@@ -427,6 +431,22 @@ class TestDatasetCollection:
             "gaia.instrument.calibrate.scale",
             "wise.instrument.calibrate.scale",
         )
+
+    def test_two_unnamed_instruments_on_one_channel_are_refused(self) -> None:
+        # Ruled 2026-09-03 (transformations.md §15 Q4 residual): the label is
+        # how a user identifies which instrument constrained what, so when
+        # more than one instrument reads a channel their labels must differ —
+        # checked at problem composition, where the requirements-provenance
+        # sources tuple is produced. Both labels default to the channel name
+        # here, so the composition is ambiguous and must be refused.
+        collection = DatasetCollection(
+            {
+                "gaia": Dataset(flat_spectrum(), Instrument([Calibrate()], channel="sed")),
+                "wise": Dataset(flat_spectrum(), Instrument([Calibrate()], channel="sed")),
+            }
+        )
+        with pytest.raises(DatasetError, match="share the instrument label"):
+            FittingProblem(Powerlaw(sed=WAVELENGTH), collection)
 
     def test_components_are_the_datasets_plus_shared(self) -> None:
         shared = ParameterSet([Parameter("distance", st.uniform(1.0, 9.0))])
@@ -553,10 +573,12 @@ class TestLifecycle:
             DatasetCollection(
                 {
                     "plain": Dataset(
-                        flat_spectrum(), Instrument([], channel="sed", input_kind=Spectrum)
+                        flat_spectrum(),
+                        Instrument([], channel="sed", input_kind=Spectrum, label="plain"),
                     ),
                     "calibrated": Dataset(
-                        flat_spectrum(), Instrument([Calibrate()], channel="sed")
+                        flat_spectrum(),
+                        Instrument([Calibrate()], channel="sed", label="calibrated"),
                     ),
                 }
             ),
@@ -838,18 +860,29 @@ class TestCapabilities:
         assert problem.device == "cpu"
 
     def test_conjunctive_over_the_parts(self) -> None:
-        class Native:
+        # Promoted at the freeze (ruled 2026-09-03, inference.md §19.6): the
+        # flags are class attributes on the Model/Transformation ABCs with
+        # conservative defaults, and declared_capabilities reads them
+        # directly. A subclass that stays silent inherits the reference
+        # answers, so silence still withdraws the conjunctive claim.
+        class Native(Calibrate):
             DIFFERENTIABLE = True
             BATCHABLE = True
             DEVICE = "cuda"
 
-        class NativeOnCpu:
+        class NativeOnCpu(Calibrate):
             DIFFERENTIABLE = True
             BATCHABLE = True
 
-        class Silent:
+        class Silent(Calibrate):
             pass
 
+        assert Transformation.DIFFERENTIABLE is False
+        assert Transformation.BATCHABLE is False
+        assert Transformation.DEVICE == "cpu"
+        assert Model.DIFFERENTIABLE is False
+        assert Model.BATCHABLE is False
+        assert Model.DEVICE == "cpu"
         assert declared_capabilities([Native(), Native()]) == Capabilities(True, True, "cuda")
         assert declared_capabilities([NativeOnCpu(), NativeOnCpu()]) == Capabilities(True, True)
         # One silent part is enough to withdraw the whole conjunctive claim.
@@ -858,12 +891,12 @@ class TestCapabilities:
     def test_empty_parts_are_not_differentiable(self) -> None:
         assert declared_capabilities([]) == Capabilities()
 
-    def test_silence_counts_as_cpu_and_therefore_disagrees_with_a_gpu_part(self) -> None:
-        class OnGpu:
+    def test_an_inherited_cpu_default_disagrees_with_a_gpu_part(self) -> None:
+        class OnGpu(Calibrate):
             DEVICE = "cuda"
 
         with pytest.raises(DatasetError, match="different devices"):
-            declared_capabilities([OnGpu(), object()])
+            declared_capabilities([OnGpu(), Calibrate()])
 
     def test_disagreeing_devices_are_refused(self) -> None:
         class OnCpu:
@@ -1221,6 +1254,27 @@ class TestSimulate:
         # sigma = sqrt((0.1 * 3)^2 + 0.4^2) = 0.5
         assert np.var(draws, axis=0) == pytest.approx(0.25, abs=0.02)
 
+    def test_the_draw_hands_the_noise_model_the_noiseless_prediction(self) -> None:
+        # X-1 (ruled 2026-09-03): draw_observation builds the NoiseParams from
+        # the noiseless prediction *before* noise is added, so a prediction-
+        # dependent noise scales with the true curve (sigma(mu), not sigma(x)).
+        captured: dict = {}
+
+        class Recording(IndependentNoise):
+            def noise_params(self, observed, retain, values, *, predicted=None, **kwargs):
+                captured["predicted"] = predicted
+                return super().noise_params(observed, retain, values, predicted=predicted, **kwargs)
+
+        likelihood = Likelihood(GaussianFamily(), Recording())
+        problem = FittingProblem(
+            Flat(WAVELENGTH),
+            [Dataset(flat_spectrum(), likelihood=likelihood, label="d")],
+            seed=3,
+        )
+        problem.simulate({"model.level": 2.0}, observe=True)
+        assert captured["predicted"] is not None
+        np.testing.assert_allclose(captured["predicted"], [2.0, 2.0, 2.0])
+
     def test_the_solver_jitter_is_part_of_the_drawn_covariance(self) -> None:
         # DenseGP scores K + diag(sigma^2 + jitter^2); the draw must match, or
         # simulate() and log_prob disagree about the same model. The library's
@@ -1326,6 +1380,53 @@ class TestSimulate:
         )
         with pytest.raises(DatasetError, match="censoring declaration on retained samples"):
             problem.simulate({"model.level": 2.0}, observe=True)
+
+    def test_a_limit_excluded_by_the_prediction_mask_does_not_block_a_draw(self) -> None:
+        # Found by the freeze's adversarial review: the censoring refusal read
+        # the observed mask alone, so a limit a prediction-side mask excludes
+        # blocked a draw log_prob would happily have excised. Masking beats
+        # censoring for the *effective* (union) mask.
+        class MaskSecond(Transformation):
+            ACCEPTS = (Spectrum,)
+
+            def apply(self, samples: Spectrum, values: Any) -> Spectrum:
+                mask = np.zeros(samples.n_samples, dtype=bool)
+                mask[1] = True
+                return samples.with_values(samples.values, mask=mask)
+
+        likelihood = Likelihood(
+            GaussianFamily(),
+            IndependentNoise(),
+            censoring=Censoring(np.array([0, 1, 0])),
+        )
+        observed = flat_spectrum(mask=[False, True, False])
+        problem = FittingProblem(
+            Flat(WAVELENGTH),
+            [Dataset(observed, Instrument([MaskSecond()]), likelihood, label="d")],
+            seed=9,
+        )
+        simulation = problem.simulate({"model.level": 2.0}, observe=True)
+        assert simulation.observations is not None
+        # The masked, censored sample keeps the observed value; the rest drew.
+        assert simulation.observations["d"].values[1] == pytest.approx(observed.values[1])
+
+    def test_seeds_are_validated_loudly_at_composition(self) -> None:
+        # Found by the freeze's adversarial review: int(seed) silently
+        # truncated 1.9, counted True as 1, and accepted seeds that crash
+        # substream's signed 64-bit derivation at the first stream request.
+        def problem(seed: Any) -> FittingProblem:
+            return FittingProblem(
+                Flat(WAVELENGTH), [Dataset(flat_spectrum(), label="d")], seed=seed
+            )
+
+        with pytest.raises(DatasetError, match="must be an integer"):
+            problem(1.9)
+        with pytest.raises(DatasetError, match="must be an integer"):
+            problem(True)
+        with pytest.raises(DatasetError, match="does not fit substream"):
+            problem(2**63)
+        assert problem(-1).seed == -1  # signed is part of the derivation
+        assert problem(np.int64(7)).seed == 7
 
     def test_a_family_that_cannot_be_sampled_says_so(self) -> None:
         counts = Spectrum(WAVELENGTH * u.micron, np.array([4.0, 7.0, 2.0]))
@@ -2008,3 +2109,57 @@ class TestMultipleModels:
         before = model.calls
         problem.log_prob({"model.level": 1.0})
         assert model.calls == before + 1
+
+
+class TestFreezeAndLenientCompile:
+    """Two 2026-09-03 rulings consumed here: freeze-at-composition, loud compile."""
+
+    def test_a_dataset_freezes_its_instrument(self) -> None:
+        # transformations.md §15 Q5: a dataset is a composed object, so
+        # reconfiguring a step afterwards is refused, never silently ignored.
+        step = Calibrate()
+        dataset = Dataset(flat_spectrum(), Instrument([step]))
+        assert dataset.instrument.mapping is dataset.instrument.mapping
+        step.register_parameter(Parameter("gain", st.lognorm(0.1), value=1.0))
+        with pytest.raises(Exception, match="reconfigured since"):
+            dataset.instrument.mapping  # noqa: B018 - the access is the assertion
+
+    def test_a_compile_refusal_propagates_by_default(self) -> None:
+        # transformations.md §15 Q3: negotiation refuses an unachievable
+        # requirement by raising, by default.
+        from ampere.core.exceptions import CompositionError
+
+        class Refusing(Model):
+            def __init__(self) -> None:
+                self.register_parameter(Parameter("level", st.uniform(0.0, 4.0)))
+
+            def evaluate(self, **values: Any) -> Spectrum:
+                ctx = self.context(values)
+                return Spectrum(WAVELENGTH * u.micron, np.full(3, ctx["level"]) * u.Jy)
+
+            def compile_for(self, requirements):
+                raise CompositionError("this model cannot reach the requested resolution")
+
+        with pytest.raises(CompositionError, match="cannot reach the requested resolution"):
+            FittingProblem(Refusing(), [Dataset(flat_spectrum(), label="d")])
+
+    def test_lenient_compile_downgrades_the_refusal_to_a_warning(self) -> None:
+        from ampere.core.exceptions import CompositionError
+
+        class Refusing(Model):
+            def __init__(self) -> None:
+                self.register_parameter(Parameter("level", st.uniform(0.0, 4.0)))
+
+            def evaluate(self, **values: Any) -> Spectrum:
+                ctx = self.context(values)
+                return Spectrum(WAVELENGTH * u.micron, np.full(3, ctx["level"]) * u.Jy)
+
+            def compile_for(self, requirements):
+                raise CompositionError("this model cannot reach the requested resolution")
+
+        with pytest.warns(UserWarning, match="proceeding with the unconfigured model"):
+            problem = FittingProblem(
+                Refusing(), [Dataset(flat_spectrum(), label="d")], lenient_compile=True
+            )
+        # The unconfigured model is used, and the problem still evaluates.
+        assert math.isfinite(problem.log_prob({"model.level": 1.0}))

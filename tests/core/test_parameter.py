@@ -984,6 +984,80 @@ class _UpperBounded:
         return (-np.inf, 3.0)
 
 
+class TestDiscreteFamilies:
+    """The 2026-09-03 ruling on lowering.md §12.1: refuse the bijection, door ajar.
+
+    The refusal lives only in ``default_bijection_for``; declaration, prior
+    sampling, constrained-space log-probabilities and ``prior_transform``
+    (scipy's discrete families implement ``ppf``) are untouched, and
+    discreteness is queryable from the canonical description.
+    """
+
+    def test_the_bijection_is_refused_with_a_typed_capability_error(self) -> None:
+        from ampere.core import CapabilityError
+
+        with pytest.raises(CapabilityError, match="discrete") as excinfo:
+            default_bijection_for(st.poisson(3.0))
+        # A capability refusal, not a malformed declaration: catchable as
+        # NotImplementedError, deliberately NOT a ValueError/ContractError.
+        assert isinstance(excinfo.value, NotImplementedError)
+        assert not isinstance(excinfo.value, ValueError)
+
+    def test_a_discrete_hierarchical_family_is_refused_the_same_way(self) -> None:
+        from ampere.core import CapabilityError
+
+        with pytest.raises(CapabilityError, match="discrete"):
+            default_bijection_for(HierarchicalPrior("poisson", {"mu": "rate"}))
+
+    def test_everything_but_the_bijection_still_works(self) -> None:
+        from ampere.core import CapabilityError
+
+        counts = Parameter("counts", st.poisson(3.0))
+        assert describe_prior(counts.prior).discrete is True  # the query
+        pset = ParameterSet([counts])
+        drawn = pset.sample(np.random.default_rng(7))  # prior sampling
+        assert float(drawn["counts"]) == int(drawn["counts"])
+        assert np.isfinite(pset.lnprior([2.0]))  # constrained log-prob
+        quantile = pset.prior_transform([0.7])  # nested sampling's route
+        assert quantile == st.poisson(3.0).ppf(0.7)
+        with pytest.raises(CapabilityError):  # and only this refuses
+            counts.unconstraining_bijection()
+
+    def test_a_continuous_family_still_infers_normally(self) -> None:
+        assert default_bijection_for(st.expon(0.0, 1.0)) == Log(lower=0.0)
+
+
+class TestExceptionHomes:
+    """The W1.13 exception dispositions (ruled 2026-09-03, lowering.md §12.4)."""
+
+    def test_lowering_error_is_an_ampere_error_but_not_a_contract_error(self) -> None:
+        # lowering.md §3.4: a family torch does not implement is a capability
+        # gap in the backend, not a malformed declaration by the user, so the
+        # two must stay distinguishable to a caller catching by type.
+        from ampere.core import AmpereError, ContractError, LoweringError
+
+        err = LoweringError("truncnorm", backend="torch", parameter="temperature")
+        assert isinstance(err, AmpereError)
+        assert not isinstance(err, ContractError)
+        assert (err.family, err.parameter, err.backend) == ("truncnorm", "temperature", "torch")
+        assert "truncnorm" in str(err) and "torch" in str(err)
+        assert "never substitutes an approximation" in str(err)
+
+    def test_optional_dependency_error_stands_ratified_in_place(self) -> None:
+        # parameters.md §14 Q5, closed at the freeze: the shape pinned in
+        # ampere/core/exceptions.py is the contract.
+        err = OptionalDependencyError("paramax", extra="jax", context="lowering a ParameterSet")
+        assert isinstance(err, ImportError)
+        assert (err.package, err.extra) == ("paramax", "jax")
+
+    def test_results_error_lives_in_core_and_is_reexported(self) -> None:
+        # results.md §15 R5, implemented 2026-09-03: one class, two import paths.
+        from ampere.core.exceptions import ResultsError as from_core
+        from ampere.results.exceptions import ResultsError as from_results
+
+        assert from_core is from_results
+
+
 class TestLoweringExtensionPoint:
     def test_as_paramax_explains_that_it_belongs_to_the_backend(self) -> None:
         pset = ParameterSet([Parameter("t", st.norm(0.0, 1.0))])

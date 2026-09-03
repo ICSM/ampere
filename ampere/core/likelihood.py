@@ -726,6 +726,36 @@ class GPSolver(abc.ABC):
         whatever representation it uses.
         """
 
+    def conditional_loo(
+        self,
+        kernel: Kernel,
+        coordinates: np.ndarray,
+        residual: np.ndarray,
+        variance: np.ndarray,
+        values: Mapping[str, Any],
+    ) -> np.ndarray:
+        """Per-sample leave-one-out conditional log-density terms.
+
+        The named GP decomposition of ``results.md`` §6 (ruled 2026-09-03,
+        R2): term *i* is ``log N(y_i | mu_i^{-i}, sigma_i^{2,-i})`` — the
+        density of sample *i* under the GP conditioned on every *other*
+        retained sample — computable in closed form from the same factor
+        :meth:`log_marginal_likelihood` uses. These terms are what
+        ``arviz.loo``/``waic`` consume; they are a *different* decomposition
+        from the factorised pointwise terms of independent noise and do not
+        sum to the joint log-likelihood.
+
+        The default refuses, naming the strategy — the same declared-slot
+        discipline as an unimplemented solver. :class:`DenseGP` implements
+        it; ``QuasisepGP`` owes an O(N) recursion in Phase 2.
+        """
+        raise LikelihoodError(
+            f"{self.NAME} does not implement the leave-one-out conditional terms "
+            f"(GPSolver.conditional_loo). DenseGP computes them exactly from its Cholesky; a "
+            f"faster strategy must supply its own recursion before pointwise_log_prob can use "
+            f"it."
+        )
+
     def __repr__(self) -> str:
         return f"{type(self).__name__}()"
 
@@ -801,6 +831,30 @@ class DenseGP(GPSolver):
         log_determinant = 2.0 * float(np.sum(np.log(np.abs(np.diag(factor[0])))))
         quadratic = float(residual @ alpha)
         return -0.5 * (quadratic + log_determinant + residual.size * _LOG_2PI)
+
+    def conditional_loo(
+        self,
+        kernel: Kernel,
+        coordinates: np.ndarray,
+        residual: np.ndarray,
+        variance: np.ndarray,
+        values: Mapping[str, Any],
+    ) -> np.ndarray:
+        """The closed form from the same Cholesky (Sundararajan & Keerthi 2001).
+
+        With ``A = (K + diag(variance + jitter^2))^{-1}``:
+        ``sigma_i^{2,-i} = 1 / A_ii`` and ``mu_i^{-i} = y_i - [A r]_i / A_ii``,
+        so ``log p_i = 0.5 log A_ii - [A r]_i^2 / (2 A_ii) - 0.5 log(2 pi)``.
+        """
+        factor = self._factor(kernel, coordinates, variance, values)
+        alpha = scipy.linalg.cho_solve(factor, residual)
+        precision_diagonal = np.diag(scipy.linalg.cho_solve(factor, np.eye(residual.size)))
+        return np.asarray(
+            0.5 * np.log(precision_diagonal)
+            - alpha**2 / (2.0 * precision_diagonal)
+            - 0.5 * _LOG_2PI,
+            dtype=DTYPE,
+        )
 
     def condition(
         self,
@@ -1018,6 +1072,20 @@ class NoiseModel(Parameterised, abc.ABC):
     bijections", and that is what this class is: nothing about noise-model
     parameters is special, so tying, fixing, priors, plates, serialisation and
     W1.9's lowering all work on them unchanged.
+
+    **A noise model receives the prediction as well as the observation**
+    (ruled 2026-09-03, W1.11 gap X-1): :meth:`sigma` and :meth:`noise_params`
+    take the *retained* predicted values as a keyword-only ``predicted``
+    argument, passed at every call site. A noise whose magnitude depends on
+    the model — a fractional model uncertainty, an analytically marginalised
+    multiplicative calibration systematic, a model-variance weighting of
+    counts — is a ``NoiseModel``, not a family: without the argument the only
+    way to express one is to re-implement the sampling distribution, which
+    welds noise to family, cannot be reused, and cannot reach the GP path.
+    ``predicted`` defaults to ``None`` because a model that does not need it
+    (:class:`IndependentNoise`, :class:`GaussianProcessNoise`) simply ignores
+    it; the noise model sees the prediction but never the model's *parameters*
+    beyond those the likelihood declares.
     """
 
     #: Whether this model induces correlations between samples.
@@ -1029,8 +1097,18 @@ class NoiseModel(Parameterised, abc.ABC):
         observed: FunctionSamples,
         retain: np.ndarray,
         values: Mapping[str, Any],
+        *,
+        predicted: np.ndarray | None = None,
     ) -> np.ndarray | None:
-        """Per-sample standard deviation on the retained samples."""
+        """Per-sample standard deviation on the retained samples.
+
+        ``predicted`` is the retained predicted values — the identical,
+        already-excised array the family's ``log_prob`` receives as its first
+        argument (float64, or complex128 for a complex family; a noise model
+        wanting an amplitude takes ``np.abs(predicted)`` itself). It is
+        ``None`` only when no caller holds a prediction; every ampere call
+        site passes it.
+        """
 
     def check_compatible(self, family: LikelihoodFamily, observed: FunctionSamples) -> None:
         """Composition-time check. Subclasses extend; this checks uncertainties."""
@@ -1047,6 +1125,7 @@ class NoiseModel(Parameterised, abc.ABC):
         retain: np.ndarray,
         values: Mapping[str, Any],
         *,
+        predicted: np.ndarray | None = None,
         coordinates: np.ndarray | None = None,
         latent: np.ndarray | None = None,
         limits: np.ndarray | None = None,
@@ -1068,7 +1147,7 @@ class NoiseModel(Parameterised, abc.ABC):
                 f"coordinates (see GaussianProcessNoise)."
             )
         return NoiseParams(
-            sigma=self.sigma(observed, retain, values),
+            sigma=self.sigma(observed, retain, values, predicted=predicted),
             values=values,
             coordinates=None,
             kernel=None,
@@ -1139,6 +1218,8 @@ class IndependentNoise(NoiseModel):
         observed: FunctionSamples,
         retain: np.ndarray,
         values: Mapping[str, Any],
+        *,
+        predicted: np.ndarray | None = None,
     ) -> np.ndarray | None:
         resolved = self.context({k: v for k, v in values.items() if k in self.parameters})
         if observed.uncertainty is None:
@@ -1232,6 +1313,8 @@ class GaussianProcessNoise(NoiseModel):
         observed: FunctionSamples,
         retain: np.ndarray,
         values: Mapping[str, Any],
+        *,
+        predicted: np.ndarray | None = None,
     ) -> np.ndarray | None:
         resolved = self.context({k: v for k, v in values.items() if k in self.parameters})
         if observed.uncertainty is None:
@@ -1282,12 +1365,13 @@ class GaussianProcessNoise(NoiseModel):
         retain: np.ndarray,
         values: Mapping[str, Any],
         *,
+        predicted: np.ndarray | None = None,
         coordinates: np.ndarray | None = None,
         latent: np.ndarray | None = None,
         limits: np.ndarray | None = None,
     ) -> NoiseParams:
         return NoiseParams(
-            sigma=self.sigma(observed, retain, values),
+            sigma=self.sigma(observed, retain, values, predicted=predicted),
             values=values,
             coordinates=coordinates,
             kernel=self._kernel,
@@ -1439,8 +1523,17 @@ class LikelihoodFamily(Parameterised, abc.ABC):
     #: Registry key. Also what appears in provenance and error messages.
     NAME: ClassVar[str] = ""
     #: Whether a GP covariance can be folded into this family's own noise
-    #: process and marginalised in closed form. True for Gaussian noise only.
+    #: process and marginalised in closed form. True for the Gaussian family
+    #: and — ruled 2026-09-03 (the circular complex GP, ``likelihoods.md``
+    #: §17 Q6) — for the complex Gaussian.
     ANALYTIC_WITH_GP: ClassVar[bool] = False
+    #: Whether the closed form :attr:`ANALYTIC_WITH_GP` declares is actually
+    #: implemented, as opposed to staged for a later phase. ``False`` makes
+    #: :class:`Likelihood` refuse the composition with a message naming the
+    #: phase that lands it — the same declared-but-staged discipline
+    #: :attr:`IMPLEMENTED` applies to a whole family, applied to one
+    #: combination (see :class:`ComplexGaussianFamily`).
+    GP_ANALYTIC_IMPLEMENTED: ClassVar[bool] = True
     #: Whether :meth:`log_prob` actually implements the latent-conditional form
     #: — i.e. whether it reads ``noise.latent`` and refuses to proceed without
     #: it. **False by default, deliberately**: a family that declares
@@ -1546,6 +1639,16 @@ class LikelihoodFamily(Parameterised, abc.ABC):
             f"(DEVELOPMENT_PLAN.md §4.4 puts it in the interface design and stages the "
             f"implementation). Its declaration is live — list_families() reports it and "
             f"composition checks against it — but it cannot be evaluated yet."
+        )
+
+    def _gp_analytic_unimplemented(self) -> LikelihoodError:
+        return LikelihoodError(
+            f"the {self.NAME} family with a correlated noise model declares "
+            f"Marginalisation.ANALYTIC — the circular (equal-component, "
+            f"zero-pseudo-covariance) complex GP marginalises in closed form — but the "
+            f"implementation is Phase 4's, with the interferometric-visibility modality "
+            f"(DEVELOPMENT_PLAN.md §5). The declaration is fixed now so the freeze can be "
+            f"reviewed against it; until Phase 4 lands, use IndependentNoise with this family."
         )
 
     def __repr__(self) -> str:
@@ -1673,12 +1776,18 @@ class GaussianFamily(LikelihoodFamily):
         * correlated (GP) noise — ``x = mu + L z1 + sigma z2``, where ``L``
           comes from :meth:`GPSolver.latent_transform`, the same whitening the
           latent declaration uses. That is a draw from
-          ``N(mu, K + diag(sigma^2))`` **up to the solver's numerical
-          stabiliser**: the solver's own jitter is part of the covariance it
-          scores, so it is folded into the draw here — omitting it would draw
-          from a narrower distribution than the likelihood evaluates, and the
-          error is not small at the jitter values the library's own error
-          message tells a user to raise.
+          ``N(mu, K + diag(sigma^2))`` **up to the numerical stabilisers**:
+          the solver's own jitter is part of the covariance it scores, so it
+          is folded into the draw here — omitting it would draw from a
+          narrower distribution than the likelihood evaluates, and the error
+          is not small at the jitter values the library's own error message
+          tells a user to raise. ``latent_transform``'s own factorisation
+          epsilon (a relative ``1e-10`` on the diagonal of ``K``, needed so a
+          smooth kernel's near-singular matrix factorises at all) also
+          inflates the drawn covariance, by an amount ten orders below the
+          marginal variance; the scoring path does not carry it, and aligning
+          the two exactly — drawing through the same factorisation the
+          marginal likelihood forms — is recorded as a Phase 2 refinement.
         """
         realisation = np.asarray(predicted, dtype=DTYPE).copy()
         sigma = None if noise.sigma is None else np.asarray(noise.sigma, dtype=DTYPE)
@@ -1773,18 +1882,22 @@ class ComplexGaussianFamily(LikelihoodFamily):
     sample, and belongs to whoever needs it; the amplitude/phase formulations
     are :class:`RiceFamily` and :class:`VonMisesFamily`.
 
-    :attr:`ANALYTIC_WITH_GP` is deliberately ``False`` even though a *particular*
-    complex GP — one real kernel applied independently to the real and
-    imaginary parts — would marginalise perfectly well in closed form. Which
-    complex GP is the right model for correlated visibility noise (are the two
-    components' covariances equal? is there a non-zero pseudo-covariance?) is a
-    Phase-4 modelling question this contract will not settle unilaterally, and
-    declaring ANALYTIC would amount to answering it. See the likelihoods
-    contract's open questions.
+    :attr:`ANALYTIC_WITH_GP` is ``True`` (ruled 2026-09-03, ``likelihoods.md``
+    §17 Q6), with the **circular complex GP** as the fixed meaning: one real
+    kernel applied independently to the real and imaginary parts — equal
+    component covariances, zero pseudo-covariance — which marginalises in
+    closed form exactly as the real Gaussian does. That unblocks the flexible
+    likelihood on the plan's Phase-4 proof modality. The *implementation* is
+    Phase 4's, with the visibility modality, so
+    :attr:`GP_ANALYTIC_IMPLEMENTED` is ``False`` and composing this family
+    with a :class:`GaussianProcessNoise` is refused with a message naming
+    exactly that — a refusal, never a silently different model.
     """
 
     NAME: ClassVar[str] = "complex_gaussian"
     ALLOWS_COMPLEX: ClassVar[bool] = True
+    ANALYTIC_WITH_GP: ClassVar[bool] = True
+    GP_ANALYTIC_IMPLEMENTED: ClassVar[bool] = False
 
     def log_prob(
         self,
@@ -1792,6 +1905,8 @@ class ComplexGaussianFamily(LikelihoodFamily):
         observed: np.ndarray,
         noise: NoiseParams,
     ) -> float:
+        if noise.correlated:
+            raise self._gp_analytic_unimplemented()
         sigma = _independent_sigma(noise, self.NAME)
         residual = np.abs(observed - predicted)
         variance = sigma**2
@@ -1897,12 +2012,14 @@ class PoissonFamily(LikelihoodFamily):
 class RiceFamily(LikelihoodFamily):
     """Rician amplitude noise — polarised intensity, debiased visibility amplitudes.
 
-    Declared, not implemented. The interface question this contract fixes is
-    that a Rice family consumes the *same* per-sample sigma as the Gaussian one
-    (it is the amplitude of a circular complex Gaussian), so a
-    ``VisibilitySet`` needs no extra structure to support it. What is *not*
-    fixed, and is an open question in the spec, is whether the model's
-    prediction is the true amplitude or the underlying complex value.
+    Declared, not implemented (the implementation is Phase 4's). The interface
+    is fixed (ruled 2026-09-03, ``likelihoods.md`` §17 Q3): the *model*
+    predicts the underlying complex value — which is what an interferometric
+    model actually produces — and an ``Amplitude`` step in the instrument
+    chain takes the modulus, so this family receives real, non-negative
+    amplitudes as its prediction. It consumes the *same* per-sample sigma as
+    the Gaussian family (it is the amplitude of a circular complex Gaussian),
+    so a ``VisibilitySet`` needs no extra structure to support it.
     """
 
     NAME: ClassVar[str] = "rice"
@@ -1921,10 +2038,14 @@ class RiceFamily(LikelihoodFamily):
 class VonMisesFamily(LikelihoodFamily):
     """Wrapped/von Mises phase noise — closure phases, position angles.
 
-    Declared, not implemented. The interface question this contract fixes is
-    that the observed and predicted values are angles in radians and the
-    residual must be wrapped, not subtracted; the open question is the mapping
-    from a per-sample sigma to a concentration κ.
+    Declared, not implemented (the implementation is Phase 4's). The interface
+    is fixed: the observed and predicted values are angles in radians and the
+    residual is wrapped, not subtracted; and the concentration is
+    ``kappa = 1/sigma**2`` **per sample** from the container's own
+    uncertainties (ruled 2026-09-03, ``likelihoods.md`` §17 Q4) — exact in
+    the small-sigma limit, which is where closure-phase practice lives. A
+    fitted global ``kappa`` that ignores the per-sample uncertainties is a
+    different model, and a user family if anyone wants it.
     """
 
     NAME: ClassVar[str] = "von_mises"
@@ -2019,6 +2140,15 @@ class Likelihood(Parameterised):
         # refused in check_alignment, which has the data.
         if family.marginalisation_with(noise) is Marginalisation.LATENT:
             self._refuse_unconsumed_latent(family, noise, censored=False)
+        # A combination whose closed-form GP marginalisation is declared but
+        # staged (the circular complex GP, Phase 4) is refused the same way an
+        # unimplemented family is: at composition, with the schedule named.
+        if (
+            noise.CORRELATED
+            and family.marginalisation_with(noise) is Marginalisation.ANALYTIC
+            and not family.GP_ANALYTIC_IMPLEMENTED
+        ):
+            raise family._gp_analytic_unimplemented()
         for parameter in noise.parameters:
             self.register_parameter(parameter)
         for parameter in family.parameters:
@@ -2167,6 +2297,56 @@ class Likelihood(Parameterised):
             f"closed form."
         )
 
+    def to_spec(self) -> dict[str, Any]:
+        """The declarative description of this likelihood, as plain data.
+
+        Ruled 2026-09-03 (``results.md`` §15 R7, confirmed by W1.13's
+        consolidated serialisation review) — the promotion of
+        ``ampere.results.describe_likelihood``'s assembly onto the object
+        that knows itself: the family name and class, the noise-model class,
+        the marginalisation declaration, the parameters' spec
+        (:meth:`ParameterSet.to_spec`), and — for a GP — the kernel spec and
+        the solver's declaration (name, class, exactness, dataclass
+        configuration: ``DenseGP``'s ``jitter`` changes the number the same
+        θ scores, so it is part of the identity). Everything is JSON-able.
+
+        **A spec describes the declaration; per-sample and bulk content is
+        provenance's business.** Censoring appears as its counts only, and
+        buffers not at all: the code positions of 10⁵ limits and the bytes of
+        an opacity table are content, fingerprinted by
+        ``ampere.results.provenance`` — which composes this mapping and adds
+        the hashes (``describe_likelihood``). Two likelihoods differing only
+        in kernel family or solver configuration — invisible to
+        ``ParameterSet.to_spec()`` alone — are distinguishable here, which is
+        the correctness argument R7 was granted on.
+        """
+        described: dict[str, Any] = {
+            "family": self._family.NAME or type(self._family).__name__,
+            "family_class": type(self._family).__name__,
+            "noise": type(self._noise).__name__,
+            "marginalisation": self.marginalisation.value,
+            "parameters": self.parameters.to_spec(),
+        }
+        if isinstance(self._noise, GaussianProcessNoise):
+            described["kernel"] = self._noise.kernel.spec().to_dict()
+            solver = self._noise.solver
+            solver_described: dict[str, Any] = {
+                "name": solver.NAME or type(solver).__name__,
+                "class": type(solver).__name__,
+                "exact": bool(solver.EXACT),
+            }
+            if dataclasses.is_dataclass(solver) and not isinstance(solver, type):
+                solver_described["config"] = {
+                    field.name: getattr(solver, field.name) for field in dataclasses.fields(solver)
+                }
+            described["solver"] = solver_described
+        if self._censoring is not None:
+            described["censoring"] = {
+                "n_samples": int(self._censoring.n_samples),
+                "n_censored": int(self._censoring.n_censored),
+            }
+        return described
+
     # -- composition-time checking -------------------------------------------
 
     def check_alignment(self, predicted: FunctionSamples, observed: FunctionSamples) -> None:
@@ -2309,11 +2489,102 @@ class Likelihood(Parameterised):
             observed,
             retain,
             resolved,
+            predicted=predicted_values,
             coordinates=coordinates,
             latent=latent,
             limits=limits,
         )
         return float(self._family.log_prob(predicted_values, observed_values, noise))
+
+    def pointwise_log_prob(
+        self,
+        predicted: FunctionSamples,
+        observed: FunctionSamples,
+        values: Mapping[str, Any] | Sequence[float] | np.ndarray | None = None,
+    ) -> np.ndarray:
+        """Per-retained-sample log-likelihood terms — the §4.4 addition R2 granted.
+
+        Ruled 2026-09-03 (``results.md`` §15 R2): granted at the freeze, **not
+        stored by default** — a run's ``log_likelihood`` group stays per
+        dataset, and these terms are written only by an explicit call. Two
+        decompositions, each with the name ``results.md`` §6 reserves for it:
+
+        * **independent noise** (``"factorised"``): the family's own
+          ``log_prob`` evaluated pointwise — exact, and the terms sum to
+          :meth:`log_prob`. Works for every family, censoring included, and
+          for a user family carrying its own aligned data: each single-sample
+          call receives a ``retain`` selecting exactly that sample from the
+          full containers, so X-2's excision contract holds per term.
+        * **a GP** (``"conditional_loo"``): the leave-one-out conditional
+          terms ``log N(y_i | mu_i^{-i}, sigma_i^{2,-i})``, from the same
+          Cholesky the marginal likelihood forms
+          (:meth:`GPSolver.conditional_loo`). These are what ``arviz.loo``
+          consumes; they are a *different* decomposition and deliberately do
+          **not** sum to the joint value, which has no per-observation
+          factorisation under a GP.
+
+        A latent combination is refused: its per-observation terms are
+        conditional on latent values that belong to inference, not to this
+        method.
+        """
+        if self.marginalisation is Marginalisation.LATENT:
+            raise LikelihoodError(
+                f"the {self._family.NAME} family with a {type(self._noise).__name__} noise model "
+                f"is a latent-variable likelihood, whose per-observation terms are conditional "
+                f"on latent values inference owns; pointwise_log_prob has no unconditional "
+                f"answer to give. Use the per-dataset log_likelihood group instead."
+            )
+        self._check_shapes(predicted, observed)
+        resolved = self.context(values)
+        weights = np.asarray(observed.weights()).ravel() * np.asarray(predicted.weights()).ravel()
+        retain = weights > 0.0
+        if not np.any(retain):
+            return np.zeros(0, dtype=DTYPE)
+
+        observed_values = self._retained(observed, retain, "observed")
+        predicted_values = self._retained(predicted, retain, "predicted")
+        limits = self._retained_limits(retain)
+
+        if self._noise.CORRELATED:
+            # Reachable only for the Gaussian family: every other implemented
+            # ANALYTIC-with-GP combination is refused at composition.
+            coordinates = self._coordinates(observed, retain)
+            noise = self._noise.noise_params(
+                observed,
+                retain,
+                resolved,
+                predicted=predicted_values,
+                coordinates=coordinates,
+                limits=limits,
+            )
+            assert noise.solver is not None and noise.kernel is not None
+            assert noise.coordinates is not None
+            return noise.solver.conditional_loo(
+                noise.kernel,
+                noise.coordinates,
+                observed_values - predicted_values,
+                noise.variance,
+                noise.values,
+            )
+
+        indices = np.flatnonzero(retain)
+        terms = np.empty(indices.size, dtype=DTYPE)
+        for position, index in enumerate(indices):
+            single = np.zeros(retain.size, dtype=bool)
+            single[index] = True
+            noise = self._noise.noise_params(
+                observed,
+                single,
+                resolved,
+                predicted=predicted_values[position : position + 1],
+                limits=None if limits is None else limits[position : position + 1],
+            )
+            terms[position] = self._family.log_prob(
+                predicted_values[position : position + 1],
+                observed_values[position : position + 1],
+                noise,
+            )
+        return terms
 
     def conditional(
         self,
@@ -2345,10 +2616,11 @@ class Likelihood(Parameterised):
                 "every sample is masked, so there is nothing to condition the GP on."
             )
         coordinates = self._coordinates(observed, retain)
-        residual = self._retained(observed, retain, "observed") - self._retained(
-            predicted, retain, "predicted"
-        )
-        sigma = self._noise.sigma(observed, retain, resolved)
+        predicted_values = self._retained(predicted, retain, "predicted")
+        residual = self._retained(observed, retain, "observed") - predicted_values
+        # The prediction is passed here too (ruled 2026-09-03, X-1), so W1.12's
+        # diagnostics see the same effective sigma the fit used.
+        sigma = self._noise.sigma(observed, retain, resolved, predicted=predicted_values)
         if sigma is None:
             raise LikelihoodError(
                 f"conditioning the GP on residuals needs the observed "

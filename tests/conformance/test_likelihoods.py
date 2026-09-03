@@ -358,12 +358,15 @@ class TestTobitCensoring:
 #: uncorrelated and a correlated noise model. Written out rather than
 #: recomputed from ``ANALYTIC_WITH_GP``, so the table is an oracle and not a
 #: restatement: an uncorrelated noise model always marginalises analytically,
-#: and under a GP only the Gaussian family still does.
+#: and under a GP only the Gaussian family — and, since the 2026-09-03 ruling
+#: fixed the circular complex GP as its meaning (``likelihoods.md`` §17 Q6),
+#: the complex Gaussian — still does. The complex closed form is Phase 4's to
+#: implement; ``TestStagedAnalyticCombination`` holds the refusal meanwhile.
 EXPECTED_MARGINALISATION: dict[str, tuple[Marginalisation, Marginalisation]] = {
     "gaussian": (Marginalisation.ANALYTIC, Marginalisation.ANALYTIC),
     "student_t": (Marginalisation.ANALYTIC, Marginalisation.LATENT),
     "cauchy": (Marginalisation.ANALYTIC, Marginalisation.LATENT),
-    "complex_gaussian": (Marginalisation.ANALYTIC, Marginalisation.LATENT),
+    "complex_gaussian": (Marginalisation.ANALYTIC, Marginalisation.ANALYTIC),
     "poisson": (Marginalisation.ANALYTIC, Marginalisation.LATENT),
     "rice": (Marginalisation.ANALYTIC, Marginalisation.LATENT),
     "von_mises": (Marginalisation.ANALYTIC, Marginalisation.LATENT),
@@ -415,6 +418,35 @@ class TestMarginalisationDeclaration:
         codes[0] = int(LimitKind.UPPER_LIMIT)
         likelihood = Likelihood(GaussianFamily(), IndependentNoise(), censoring=Censoring(codes))
         assert likelihood.marginalisation_for(observed) is Marginalisation.ANALYTIC
+
+
+class TestStagedAnalyticCombination:
+    """``complex_gaussian`` + GP: declared ``ANALYTIC``, implemented in Phase 4.
+
+    The 2026-09-03 ruling (``likelihoods.md`` §17 Q6) fixed the circular
+    (equal-component, zero-pseudo-covariance) complex GP as the combination's
+    meaning and landed the declaration at the freeze. Until Phase 4 implements
+    the closed form, composition must refuse with the schedule named — the
+    same declared-but-staged discipline as the ``QuasisepGP`` slot above.
+    Phase 4 replaces the refusal row with agreement rows against the circular
+    closed form.
+    """
+
+    def test_the_declaration_is_analytic(self, backend: ConformanceBackend) -> None:
+        from ampere.core import ComplexGaussianFamily
+
+        gp = GaussianProcessNoise(backend.kernel(MATERN32), backend.gp_solver(SolverKind.DENSE))
+        family = ComplexGaussianFamily()
+        assert family.marginalisation_with(gp) is Marginalisation.ANALYTIC
+
+    def test_the_staged_combination_refuses_rather_than_pretending(
+        self, backend: ConformanceBackend
+    ) -> None:
+        from ampere.core import ComplexGaussianFamily
+
+        gp = GaussianProcessNoise(backend.kernel(MATERN32), backend.gp_solver(SolverKind.DENSE))
+        with pytest.raises(LikelihoodError, match="Phase 4"):
+            Likelihood(ComplexGaussianFamily(), gp)
 
 
 # ---------------------------------------------------------------------------
@@ -477,3 +509,132 @@ class TestSolverAgreement:
         noise = GaussianProcessNoise(kernel, backend.gp_solver(SolverKind.QUASISEP))
         with pytest.raises(LikelihoodError, match="quasiseparable representation"):
             noise.check_compatible(GaussianFamily(), observed)
+
+
+# ---------------------------------------------------------------------------
+# Prediction-aware noise: the X-1 rows (ruled 2026-09-03)
+# ---------------------------------------------------------------------------
+
+
+class _FractionalNoise(IndependentNoise):
+    """In-repo stand-in for Phase 2's ``FractionalModelNoise``.
+
+    ``sigma_eff**2 = sigma_data**2 + (f * predicted)**2`` with ``f`` held
+    fixed — the ten-line implementation ``awkward_instrument.md`` §6 point 10
+    sketches. The shipped class lands with the reference backend in Phase 2
+    (with ``f`` an ordinary fitted parameter); this double exists so the
+    contract rows below run today, and Phase 2 should point them at the real
+    class when it arrives.
+    """
+
+    def __init__(self, fraction: float) -> None:
+        super().__init__()
+        self.fraction = float(fraction)
+
+    def sigma(self, observed, retain, values, *, predicted=None):
+        base = super().sigma(observed, retain, values, predicted=predicted)
+        if predicted is None or base is None:
+            raise LikelihoodError(
+                "a fractional model noise needs the prediction (X-1) and the observed "
+                "uncertainties; one of them is missing."
+            )
+        return np.sqrt(base**2 + (self.fraction * np.abs(predicted)) ** 2)
+
+
+class _FractionalGPNoise(GaussianProcessNoise):
+    """X-1 point 7's composition: the fractional term in quadrature under the kernel."""
+
+    def __init__(self, kernel, solver, fraction: float) -> None:
+        super().__init__(kernel, solver)
+        self.fraction = float(fraction)
+
+    def sigma(self, observed, retain, values, *, predicted=None):
+        base = super().sigma(observed, retain, values, predicted=predicted)
+        if predicted is None or base is None:
+            raise LikelihoodError(
+                "a fractional model noise needs the prediction (X-1) and the observed "
+                "uncertainties; one of them is missing."
+            )
+        return np.sqrt(base**2 + (self.fraction * np.abs(predicted)) ** 2)
+
+
+FRACTION = 0.5
+
+
+class TestPredictionAwareNoise:
+    """The three X-1 conformance rows (``awkward_instrument.md`` §6 point 9).
+
+    ``NoiseModel.sigma``/``noise_params`` receive the retained predicted
+    values as a keyword-only ``predicted`` at every call site, so a noise
+    whose magnitude depends on the model is a noise model, not a family.
+    """
+
+    def test_fractional_sigma_equals_the_manual_quadrature(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """Row (a): sigma_eff from a fractional noise, at fixed theta."""
+        predicted, observed = spectra()
+        likelihood = Likelihood(GaussianFamily(), _FractionalNoise(FRACTION))
+        mean = np.asarray(predicted.values, dtype=float)
+        sigma_eff = np.sqrt(SIGMA**2 + (FRACTION * mean) ** 2)
+        expected = analytic_diagonal_gaussian_log_prob(
+            np.asarray(observed.values, dtype=float) - mean, sigma_eff
+        )
+        assert likelihood.log_prob(predicted, observed) == pytest.approx(
+            expected, abs=tolerances.analytic
+        )
+
+    def test_draw_variance_grows_with_the_prediction(self, backend: ConformanceBackend) -> None:
+        """Row (b): ``simulate(observe=True)`` draws with variance ``sigma**2 + (f*mu)**2``."""
+        from ampere.core import Dataset
+
+        from .composition import DatasetSpec, ProblemSpec, observed_container
+
+        spec = ProblemSpec()
+        dataset_spec = DatasetSpec()
+        observed = observed_container(spec, dataset_spec)
+        dataset = Dataset(
+            observed, likelihood=Likelihood(GaussianFamily(), _FractionalNoise(FRACTION)), label="d"
+        )
+        mean = 1.0 + 0.1 * np.arange(observed.n_samples, dtype=float)
+        predicted = observed.with_values(mean)
+        rng = np.random.default_rng(20260903)
+        draws = np.array(
+            [
+                np.asarray(dataset.draw_observation(predicted, None, rng).values, dtype=float)
+                for _ in range(4000)
+            ]
+        )
+        expected = dataset_spec.uncertainty**2 + (FRACTION * mean) ** 2
+        # The sample variance of a Gaussian has standard error var * sqrt(2/(n-1)).
+        standard_error = expected * math.sqrt(2.0 / (draws.shape[0] - 1))
+        limit = backend.capabilities.tolerances.monte_carlo_sigmas * standard_error
+        assert np.all(np.abs(np.var(draws, axis=0, ddof=1) - expected) < limit)
+        # And the growth itself: the fractional term dominates sigma_data here,
+        # so the last sample's draw variance must exceed the first's.
+        assert np.var(draws[:, -1], ddof=1) > 2.0 * np.var(draws[:, 0], ddof=1)
+
+    def test_the_gp_composition_agrees_with_a_manual_diagonal(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """Row (c): K + diag(sigma_data**2 + (f*mu)**2), against scipy's own solve."""
+        predicted, observed = spectra()
+        noise = _FractionalGPNoise(
+            backend.kernel(MATERN32), backend.gp_solver(SolverKind.DENSE), FRACTION
+        )
+        likelihood = Likelihood(GaussianFamily(), noise)
+        grid = np.asarray(GP_GRID, dtype=float)
+        mean = np.asarray(predicted.values, dtype=float)
+        covariance = kernel_matrix(
+            MATERN32.family, grid, MATERN32.amplitude, MATERN32.length_scale
+        ) + np.diag(SIGMA**2 + (FRACTION * mean) ** 2)
+        expected = float(
+            multivariate_normal.logpdf(
+                np.asarray(observed.values, dtype=float) - mean,
+                mean=np.zeros(grid.size),
+                cov=covariance,
+            )
+        )
+        assert likelihood.log_prob(predicted, observed) == pytest.approx(
+            expected, abs=tolerances.linear_algebra
+        )

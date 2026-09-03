@@ -89,14 +89,13 @@ def gp_localisation_caveat() -> str:
 class AnomalyScoreLike(Protocol):
     """The coordinate-indexed deficiency map both diagnostic families produce.
 
-    ``diagnostics.md`` §5 proposes an ``AnomalyScore`` container in
-    ``ampere.core`` so that ``ampere.diagnostics`` (family A, pre-fit RHMF) and
-    ``ampere.results`` (family C, post-fit GP localisation) can each produce one
-    without either namespace depending on the other. That class does not exist —
-    W1.4 landed before the proposal — so the renderer here is typed against the
-    *shape* instead. Nothing changes at the call site when the class lands;
-    ``docs/design/contracts/results.md`` §13 asks W1.13 to land it and this
-    protocol then describes it exactly.
+    :class:`ampere.core.AnomalyScore` is the class — ``diagnostics.md`` §5's
+    proposal, landed at the freeze (ruled 2026-09-03, ``results.md`` §15 R4)
+    in ``ampere.core`` so that ``ampere.diagnostics`` (family A, pre-fit
+    RHMF) and ``ampere.results`` (family C, post-fit GP localisation) can
+    each produce one without either namespace depending on the other. This
+    protocol describes it exactly, and the renderer here stays typed against
+    the *shape*: a caller may hand it the real class or anything matching.
 
     ``provenance`` and ``interpretation_notes`` are **not** optional: they are
     what keeps a shared visual grammar from implying a comparability the two
