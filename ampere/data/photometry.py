@@ -18,6 +18,7 @@ from numpy.linalg import inv
 import logging
 
 from .data import Data
+from ..utils.pyphot_compat import get_unit
 
 
 #1. Should all the photometry be stored in one object
@@ -418,8 +419,8 @@ class Photometry(Data):
         #else:
         filters = self.filterLibrary.load_filters(self.filterName[self.filterMask],
                                                   interp = True,
-                                                  lamb = modwaves* units.micron ) #*pyphot.unit['micron'])
-        self.wavelength = np.array([filt.lpivot.to(pyphot.unit['micron'] #units.micron
+                                                  lamb = modwaves* units.micron ) #*get_unit('micron'))
+        self.wavelength = np.array([filt.lpivot.to(get_unit('micron') #units.micron
                                                    ).value for filt in filters])
         self.filters=filters
 
@@ -473,7 +474,7 @@ class Photometry(Data):
         flam = model.spectrum["flux"] / model.spectrum["wavelength"]**2 #(modflux*units.Jy).to('W m**-3', equivalencies = units.spectral_density(model.spectrum["wavelength"]*units.micron))
         modSed = np.zeros_like(self.wavelength)
         for i, (f, lp) in enumerate(zip(self.filters, self.wavelength)):
-            fphot = f.get_flux(model.spectrum["wavelength"]*pyphot.unit['micron'], flam*pyphot.unit['flam'], axis = -1).value
+            fphot = f.get_flux(model.spectrum["wavelength"]*get_unit('micron'), flam*get_unit('flam'), axis = -1).value
             modSed[i] = (fphot*lp**2) #.to(spectrum.flux.unit, equivalencies = units.spectral_density(lp)).value)
 
         ''' then update the covariance matrix for the parameters passed in '''
@@ -587,11 +588,11 @@ class Photometry(Data):
         modSed = np.zeros_like(self.wavelength)
         for i, (f, lp) in enumerate(zip(self.filters, self.wavelength)):
             try:
-                fphot = f.get_flux(model.spectrum["wavelength"]*pyphot.unit['micron'], flam*pyphot.unit['flam'], axis = -1).value
+                fphot = f.get_flux(model.spectrum["wavelength"]*get_unit('micron'), flam*get_unit('flam'), axis = -1).value
             except TypeError:
                 # l.append
-                print(type(model.spectrum["wavelength"]*pyphot.unit['micron']).__mro__,
-                      type(flam*pyphot.unit['flam']).__mro__,
+                print(type(model.spectrum["wavelength"]*get_unit('micron')).__mro__,
+                      type(flam*get_unit('flam')).__mro__,
                       type(f).__mro__
                       )
                 #l.append

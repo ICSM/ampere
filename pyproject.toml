@@ -29,7 +29,7 @@ dependencies = [
     "matplotlib",
     "spectres",
     "tqdm",
-    "pyphot<2",  # TEMPORARY pin: legacy photometry uses pyphot.unit, removed in pyphot 2; lift via W0.9 forward-migration
+    "pyphot",  # W0.9: forward-migrated onto pyphot >= 2's unit-adapter API via ampere/utils/pyphot_compat.py (pyphot < 2 still works through the same compat layer)
     "emcee",
     "dynesty",
     "corner",
@@ -76,7 +76,7 @@ Homepage = "https://github.com/icsm/ampere"
 # grow pinned/qualified requirements as the backends land.
 torch = ["torch"]
 jax = ["jax"]
-sbi = ["torch", "sbi<0.28"]  # TEMPORARY upper pin at the tested version; lift via W0.9/Phase 3
+sbi = ["torch", "sbi"]  # W0.9: forward-migrated -- pin lifted (PyPI's latest release is still 0.27.0, the version this was already tested against; see the W0.9 report)
 zeus = ["zeus-mcmc"]
 arviz = ["arviz"]
 # W0.5: replaces the abandoned 'extinction' package (issue #75) for
