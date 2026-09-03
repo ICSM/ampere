@@ -1009,7 +1009,9 @@ Obligations and hooks the later contract specs should reconcile against.
 was already resolved by the W1.2 review amendment (core's dependency floor is
 numpy/scipy/astropy/stdlib); question 3's flat tie-label namespace stands;
 question 4's lone `shared_as` stays allowed; question 5 goes to W1.13 as
-written; question 6's `npars` removal is confirmed. **Question 2 (recursive
+written *(closed there, 2026-09-03: `OptionalDependencyError` ratified in
+place, with `LoweringError` landing beside it — `lowering.md` §12.4)*;
+question 6's `npars` removal is confirmed. **Question 2 (recursive
 merge) is expressly kept open**, not closed: Peter can see cases where
 hierarchical/nested merging is the natural approach, so W1.7 must treat a
 nested `ParameterMapping` as a live design option for `DatasetCollection` —

@@ -147,6 +147,10 @@ ampere/
 ├── inference/       # Backend-agnostic engines consuming §4.5's contract:
 │                     # emcee/dynesty/zeus drivers, the SBI layer, optimisers.
 ├── results/         # ArviZ InferenceData emission + all plotting (§4.6).
+├── diagnostics/     # Misspecification diagnostics (§4.8) — the peer
+│                     # namespace contracts/diagnostics.md §6 fixes; lands
+│                     # Phase 2 (with its decision-log entry then), extra
+│                     # `diagnostics` for the JAX-carrying RHMF family.
 ├── data/, models/, infer/, utils/   # LEGACY — frozen; see plan §2.
 └── (docs/design/, tests/, examples/ — not package code)
 ```
@@ -321,7 +325,10 @@ structure are exactly the two things that negotiation reconciles.
   `DEVELOPMENT_PLAN.md` §6; unaffected by this document.
 - **`OptionalDependencyError` exact shape** (fields, message format) —
   pinned by W1.3 in `ampere/core/exceptions.py` as this section asked;
-  W1.13 ratifies or moves it.
+  **ratified in place at the freeze** (ruled 2026-09-03 with
+  `lowering.md` §12.4's "the relevant exceptions" disposition; W1.13
+  landed `LoweringError` beside it and `ResultsError` had already moved
+  to core). No longer open.
 
 ## 10. Reconciliation with W1.1 (done 2026-09-01)
 

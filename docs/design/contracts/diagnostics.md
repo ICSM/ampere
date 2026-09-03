@@ -509,13 +509,18 @@ about, applied to a case where it genuinely does not fit.
   no optional dependency, so both `ampere.diagnostics` and `ampere.results`
   can produce/consume it without a cross-namespace dependency) but does not
   bind W1.4's exact class hierarchy — reconcile at W1.13 spec assembly if
-  W1.4 lands with a materially different container design.
+  W1.4 lands with a materially different container design. *(Reconciled:
+  no conflict arose — `ampere.core.AnomalyScore` landed at the freeze as
+  the lightweight plain-numpy type proposed here, deliberately outside
+  W1.4's kind system; `results_schema.md` §13.)*
 - **Also flagged for `architecture.md`'s namespace diagram (§3)**: it does
   not currently list `ampere.diagnostics`. This document adds the namespace;
   the diagram should be updated to match at W1.13 spec assembly (a §4
   contract-affecting addition, per this repo's ground rule 9, belongs in a
   decision-log entry in `DEVELOPMENT_PLAN.md` in the same PR that actually
-  adds the namespace in code — not asserted unilaterally here).
+  adds the namespace in code — not asserted unilaterally here). *(Done at
+  the freeze: the §3 diagram now lists `diagnostics/` as the Phase 2 peer
+  namespace; the code-landing PR still carries the decision-log entry.)*
 
 ---
 
@@ -584,7 +589,9 @@ Each of these is a decision, not an oversight. Each has an extension point.
    W1.4 lands a container hierarchy that makes a plain-numpy `ampere.core`
    addition awkward (e.g. if all §4.2 containers turn out to carry more
    structure than this lightweight type wants)? Flagged for W1.13
-   reconciliation rather than pre-empted here.
+   reconciliation rather than pre-empted here. *(Reconciled at the freeze:
+   it did not need revisiting — the class landed exactly as proposed,
+   outside the kind system, and satisfies `ampere.results`'s protocol.)*
 
 ---
 

@@ -1129,7 +1129,9 @@ crashing, which is the criterion for needing a mechanical check.
    (numpyro-style enumeration, (variational) EM, SBI, nested sampling,
    bare optimisation such as Bayesian optimisation) must not be
    foreclosed, though none of it is in the current development plan.
-   Three design constraints make that so, recorded for W1.13's landing:
+   Three design constraints make that so, recorded for W1.13's landing
+   (*landed at the freeze* — `CapabilityError` in `default_bijection_for`,
+   `parameters.md` §6, §3.5 above amended):
    the refusal lives **only** in `default_bijection_for` — declaration,
    prior sampling, constrained-space `log_prob`, `prior_transform` (an
    inverse-CDF composition, and scipy's discrete families implement

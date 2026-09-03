@@ -886,7 +886,7 @@ training set and is what the composed problem is for.
 | The GP-localisation caveat is a constant, a docstring and a function | `diagnostics.md` §4.3 requires it to reach a programmatic consumer, not only a viewer |
 | Container serialisation is functions in `ampere.results`, not methods on the containers | A hot-loop object should not carry the one method no evaluation calls; and `results_schema.py` is a merged contract (§15 R5) |
 | Training sets are netCDF | NaN is native, coordinates are stored once, and the spec hash sits in the attributes where invalidation can see it |
-| `ResultsError` lives in `ampere/results/exceptions.py` for now | Its siblings are all in `ampere/core/exceptions.py`, which is merged; §15 R5 asks W1.13 to move it |
+| `ResultsError` lives in `ampere/core/exceptions.py`, re-exported here | §15 R5 asked for the move and it was made the same day the ruling landed (2026-09-03): one class, two import paths, no call-site changes — pinned by a test at the freeze |
 
 ## 13. Deliberate limitations of v1.8
 

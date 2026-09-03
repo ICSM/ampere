@@ -262,4 +262,19 @@ Run the suite to see it; as of W1.10:
   key). Whether Phase 2 additionally wants a backend-neutral model identity
   — so an emulator trained on one backend can be *offered*, never silently
   served, to a fit on another — stays routed to the freeze beside
-  `results.md` §13.13's `describe()` hook.
+  `results.md` §13.13's `describe()` hook. (W1.13's report carries a
+  recommendation; the ruling is Peter's.)
+
+Added at the freeze (W1.13):
+
+* **The X-1 rows run live** against an in-repo fractional-noise double
+  (`test_likelihoods.py::TestPredictionAwareNoise`); Phase 2 points them at
+  the shipped reference-backend `FractionalModelNoise` when it lands.
+* **`complex_gaussian` + GP is declared `ANALYTIC` and staged**
+  (`TestStagedAnalyticCombination`): the declaration row runs, the
+  composition-refusal row runs, and Phase 4 replaces the refusal with
+  agreement rows against the circular closed form.
+* **`GPSolver.conditional_loo`** joins the QuasisepGP debt: `DenseGP`
+  implements the leave-one-out terms and `QuasisepGP` refuses until its
+  O(N) recursion arrives; the eventual agreement row mirrors the marginal
+  one.

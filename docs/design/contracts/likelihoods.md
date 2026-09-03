@@ -1501,8 +1501,9 @@ value and an `Amplitude` step takes the modulus; `κ = 1/σ²` per sample;
 and the circular (equal-component, zero-pseudo-covariance) complex GP is
 the fixed meaning under which `complex_gaussian` + `GaussianProcessNoise`
 is declared `ANALYTIC` — unblocking the flexible likelihood on the plan's
-proof modality. W1.13 lands the declaration change; the implementations
-are Phase 4's. Question 5 — ruled as it stands: the use case is one
+proof modality. W1.13 lands the declaration change *(landed — §4's
+"circular complex GP" subsection is the body record, with the
+composition-time Phase-4 refusal)*; the implementations are Phase 4's. Question 5 — ruled as it stands: the use case is one
 `scale` per instrument or survey, which the per-dataset scalar already
 expresses (each dataset carries its own `Likelihood`); a per-channel scale
 *within* one container is not wanted (one spectrum rarely carries the data
@@ -1523,7 +1524,8 @@ the promotion — `Likelihood.to_spec()` exists, §8 above documents it,
 and `describe_likelihood` composes it.)* **And ruled later the same
 day**: X-1 — the prediction-aware `NoiseModel`
 (`awkward_instrument.md` §6's detailed design) — is **accepted as
-written** and lands at the freeze: `sigma` and `noise_params` gain a
+written** and landed at the freeze (§5's "Prediction-aware noise"
+subsection is the body record): `sigma` and `noise_params` gain a
 keyword-only `predicted=None` (the retained predicted values, passed at
 every call site including `conditional` and `draw_observation`; an
 outright signature change, pre-freeze, no shims), §14 gains the

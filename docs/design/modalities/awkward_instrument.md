@@ -344,7 +344,7 @@ being pushed there by a signature.
 changes an ABC signature that Phase 2's two backends will implement in lockstep.
 
 *Status: **ruled 2026-09-03** — Peter accepted the detailed design below as
-written; it lands at the freeze (W1.13), conformance rows included.*
+written; **landed at the freeze** (W1.13), conformance rows included.*
 
 **Proposed amendment** — `likelihoods.md` §5, §14 and §16, and `NoiseModel`:
 
@@ -577,7 +577,9 @@ Executed against `ampere.core` at `8c4e99d` in the pixi `dev` environment.
 ## 9. Open questions for review
 
 **Ruled by Peter, 2026-09-03**: question 1 — yes; X-1's detailed design
-(§6) is accepted as written and lands at the freeze (W1.13). Question 2
+(§6) is accepted as written and lands at the freeze (W1.13) *(landed:
+`likelihoods.md` §5's "Prediction-aware noise" subsection, all three call
+sites, and the three conformance rows)*. Question 2
 is answered by that design's point 10, accepted with it: the contract
 names `FractionalModelNoise` in `likelihoods.md` §5's list, and the
 ten-line implementation lands with the reference backend, not in

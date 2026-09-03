@@ -170,7 +170,9 @@ This is the contract's central design decision, and `parameters.md` §14 kept
 it expressly open for W1.7 to settle rather than inherit. It is written out at
 length because Peter ruled on it, not because it is complicated. **Ruled
 2026-09-02: design B is ratified and stays** (§19 R1); the lossless-nesting
-sub-proposal remains open at W1.13.
+sub-proposal was granted later the same day and is landed —
+`parameters.md` §8 carries the contract with executed examples, and §4.6's
+defect is closed at source.
 
 ### 4.1 The constraint
 
@@ -1281,9 +1283,10 @@ False
 which is the honest behaviour for a run that did not ask to be.
 
 **Placement.** `lowering.md` §9.2 puts `substream` "once in `ampere.core`"; its
-§12.7 asks W1.13 to ratify that rather than let it be assumed. It lives in
-`ampere/core/rng.py`, deliberately tiny and free-standing so that ratifying it —
-or moving it — is a one-line change. Flagged again in §19.
+§12.7 asked W1.13 to ratify that rather than let it be assumed. It lives in
+`ampere/core/rng.py`, and **the home is ratified** (ruled 2026-09-03, §19.5):
+pure stdlib+numpy, deliberately free-standing, the alternative having been
+three backends agreeing by convention.
 
 ## 13. `simulate` for SBI
 
@@ -1578,7 +1581,7 @@ True
 | `FailureReason` is a `StrEnum`, and counts are unbounded while history is not | A reason is only useful if it can be counted; a history must not leak memory over a 10⁶-proposal run |
 | Capability flags are class attributes on W1.5's ABCs, defaulting to the reference answers | Promoted at the freeze (ruled 2026-09-03, §19.6), replacing the interim `getattr` reads with identical semantics: every composed piece declares the three flags, silence inherits `False`/`False`/`"cpu"`, and `declared_capabilities` reads them directly |
 | `simulate` draws Gaussian observations and refuses everything else | A family declares only `log_prob`; guessing would train SBI on the wrong forward model |
-| `substream` lives in its own module | `lowering.md` §12.7 asks W1.13 to ratify or move it; a one-file module makes either cheap |
+| `substream` lives in its own module | `lowering.md` §12.7 asked W1.13 to ratify or move it; **ratified in place** (ruled 2026-09-03) — pure stdlib+numpy, deliberately free-standing |
 
 ## 17. Deliberate limitations of v1.7
 
@@ -1686,7 +1689,9 @@ Each is a decision, not an oversight. Each has an extension point.
   `LikelihoodFamily.sample` (R3), and the channel-name relaxation (R4). Plus two
   carried forward: `substream`'s placement (`lowering.md` §12.7) and promoting
   the capability flags into W1.5's `Model`/`Transformation` ABCs so they are
-  declared rather than duck-typed.
+  declared rather than duck-typed. *(All closed: R1–R4 were ruled 2026-09-02
+  and landed then; the carried pair were ruled 2026-09-03 and landed at the
+  freeze — §19's preamble is the record.)*
 - **Phase 2 (backends)** — a backend supplies models and transformations that
   declare `DIFFERENTIABLE`, `BATCHABLE` and `DEVICE`, and nothing else: the
   whole of this contract is reused unchanged, which is the claim
@@ -1726,7 +1731,9 @@ same day items 5–7 were ruled too**: item 5 — `substream` is ratified in
 `ampere.core` (closing `lowering.md` §12.7 with it); item 6 — the
 capability flags are promoted into W1.5's ABCs at the freeze, as class
 attributes whose conservative defaults (`False`/`False`/`"cpu"`)
-reproduce the current `getattr` semantics exactly; item 7 — confirmed:
+reproduce the current `getattr` semantics exactly *(landed — §10's
+"Capability flags" carries the promoted form, and
+`declared_capabilities` reads the attributes directly)*; item 7 — confirmed:
 the catch set stays narrow by default (`LikelihoodError` plus declared
 `simulator_failures`, with `strict=True` catching nothing), and
 `simulator_failures=(Exception,)` remains the explicit escape hatch for

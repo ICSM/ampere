@@ -1249,12 +1249,16 @@ as written, with question 4's concrete failure mode now recorded in
 chain-internal `configure_from` is the accepted mechanism, and the posture
 is push-forward-and-raise: when what a step is handed does not match what
 it needs, the chain fails loudly and forces the user to fix it, rather
-than inferring requirements backwards. Question 3 — gap I-4's loud option
-is accepted: `compile_for` (and negotiation generally) refuses an
-unachievable requirement by raising, **by default**; a flag that silences
-the refusal into a warning-and-proceed is acceptable, but raising is the
-default. Question 5 — accepted: `freeze()` is now worth doing
-(`inference.md` §19 item 8 is the consumer evidence); W1.13 lands it.
+than inferring requirements backwards *(landed at the freeze — §5's
+"chain-internal configuration", §13.1 rewritten)*. Question 3 — gap I-4's
+loud option is accepted: `compile_for` (and negotiation generally) refuses
+an unachievable requirement by raising, **by default**; a flag that
+silences the refusal into a warning-and-proceed is acceptable, but raising
+is the default *(landed — §7, with `FittingProblem(lenient_compile=True)`
+as the explicit opt-out and §13.9 closed)*. Question 5 — accepted: `freeze()` is now worth doing
+(`inference.md` §19 item 8 is the consumer evidence); W1.13 lands it
+*(landed — §5's "Freezing" subsection, with `Dataset` freezing at
+construction)*.
 Question 4 — ruled in substance: the instrument label and the channel
 name are different *concepts*, and the relationship is not one-to-one —
 the channel says which part of the simulation an instrument consumes
@@ -1278,7 +1282,8 @@ one-instrument case; when more than one instrument reads a channel,
 distinct instrument labels are **required**, checked at problem
 composition — where the ambiguous requirements-provenance `sources`
 tuple is produced (`inference.md` §8 carries the qualified conclusion) —
-and W1.13 lands the check. Q6: formally deferred with the rule of
+and W1.13 lands the check *(landed, with §5's label documentation and
+`inference.md` §8's doctests updated)*. Q6: formally deferred with the rule of
 engagement above — the contract is not widened for the freeze, and the
 first modality that genuinely needs a two-channel instrument gets a
 W1.11-style sketch before limitation 13.7's tuple-binding extension is
@@ -1295,7 +1300,8 @@ profiles and for visibilities as functions of u–v distance alone, and
 NUFFT variants where a plain FFT is the wrong tool. None is urgent and
 each fits the existing `Transformation` surface; W1.13 should confirm
 the freeze precludes none of them and record them as named Phase 2+
-standard-library slots.
+standard-library slots. *(Done: §10's "image and 1-D-spatial slots"
+subsection is the record — confirmed, the freeze precludes none.)*
 
 1. **Is the ANY mask rule too conservative for real resampling?** §6 ratifies
    it, and limitation 13.4 names the extension. The case against: a
