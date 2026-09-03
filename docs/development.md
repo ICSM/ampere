@@ -168,9 +168,17 @@ pixi-default-env fixes ride along; py3.11 droppable if problematic).
 Decision-log rows in the plan's §2; every ruling is in its spec's
 §-preamble; implementation routes to W1.13 (and W0.10).
 
-**Peter's remaining review backlog**: X-1's detailed design
-(`awkward_instrument.md` §6, then its §9 Q1) — under review now.
-Housekeeping: W0.9 and W0.10 scheduling; branch-triage approval
+**X-1 accepted, 2026-09-03 — the review backlog is clear.** Peter
+accepted `awkward_instrument.md` §6's detailed design as written; it
+lands at the freeze (decision-log row updated; the sketch's §9 Q1 and Q2
+close with it, Q4 dissolves). **W1.13 is now dispatchable**: its backlog
+is the accepted-recommendation implementations recorded in the spec
+preambles, the consolidated serialisation review, X-1, the standard
+freeze duties (cross-review, tag, Phase 2 breakdown), and the Fable +
+`gpt-5.6-terra` adversarial pass. The only open review item left
+anywhere is `awkward_instrument.md` §9 Q3 (whether WStat's profiling is
+supported at all) — minor, and W1.13 can carry it. Housekeeping: W0.9
+and W0.10 scheduling; branch-triage approval
 (`docs/design/harvest/branch_triage.md`).
 
 **Restart prompt for a new session** (paste as the opening message):

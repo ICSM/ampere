@@ -337,8 +337,8 @@ being pushed there by a signature.
 **Severity: the stress test's finding. Should land in the freeze**, because it
 changes an ABC signature that Phase 2's two backends will implement in lockstep.
 
-*Status 2026-09-02: Peter is positive but asked for the full mechanics before
-ruling — the detailed design below is for that iteration.*
+*Status: **ruled 2026-09-03** — Peter accepted the detailed design below as
+written; it lands at the freeze (W1.13), conformance rows included.*
 
 **Proposed amendment** — `likelihoods.md` §5, §14 and §16, and `NoiseModel`:
 
@@ -387,10 +387,11 @@ class FractionalModelNoise(NoiseModel):
 which composes with `GaussianFamily`, `StudentTFamily` and, as a diagonal term
 under the kernel, with the flexible GP.
 
-#### Detailed design (2026-09-02, for Peter's iteration — not yet ruled)
+#### Detailed design (2026-09-02; accepted as written 2026-09-03)
 
-Peter is positive about the amendment but asked for the mechanics in full
-before ruling. Ten points, in the order a reviewer needs them.
+Peter was positive about the amendment and asked for the mechanics in full
+before ruling; he accepted them as written. Ten points, in the order a
+reviewer needs them.
 
 1. **Signatures.** Both `NoiseModel` methods gain one keyword-only argument:
    `sigma(observed, retain, values, *, predicted=None)` and
@@ -568,6 +569,15 @@ Executed against `ampere.core` at `8c4e99d` in the pixi `dev` environment.
    reason rather than as an exception.
 
 ## 9. Open questions for review
+
+**Ruled by Peter, 2026-09-03**: question 1 — yes; X-1's detailed design
+(§6) is accepted as written and lands at the freeze (W1.13). Question 2
+is answered by that design's point 10, accepted with it: the contract
+names `FractionalModelNoise` in `likelihoods.md` §5's list, and the
+ten-line implementation lands with the reference backend, not in
+`ampere.core`. Question 4 dissolves with the ruling — the
+microcalorimeter case was worth checking only if X-1 was not fixed.
+Question 3 (WStat's profiling) remains open as written.
 
 1. **Does X-1 belong in the freeze?** This sketch says yes: it is an ABC
    signature that both Phase 2 backends implement, and the conformance suite

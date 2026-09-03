@@ -1332,7 +1332,16 @@ not the freeze; this contract needs nothing. Question 8 — superseded:
 serialisation is to be consolidated *once* across all the contracts (an
 inventory of every `to_spec`/`to_dict`/emission mechanism, a gap
 analysis, and one coherent approach) rather than settled piecemeal;
-routed to W1.13 alongside `results.md` §15 R7.
+routed to W1.13 alongside `results.md` §15 R7. **And ruled later the same
+day**: X-1 — the prediction-aware `NoiseModel`
+(`awkward_instrument.md` §6's detailed design) — is **accepted as
+written** and lands at the freeze: `sigma` and `noise_params` gain a
+keyword-only `predicted=None` (the retained predicted values, passed at
+every call site including `conditional` and `draw_observation`; an
+outright signature change, pre-freeze, no shims), §14 gains the
+noise-model-not-family principle, §15 retains the
+no-model-parameters limitation, and §5's list names
+`FractionalModelNoise` (implemented with the reference backend).
 
 1. **Should a non-positive-definite covariance be `−inf` instead of an
    exception?** This contract raises, on the argument that a silent `−inf`
