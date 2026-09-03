@@ -580,41 +580,55 @@ the *union*, keeping each interval's own sampling density
 (`transformations.md` §7). Two datasets may therefore share a channel while
 having entirely different chains:
 
+An instrument's label is **never** a merge component here, so two instruments
+sharing a label on one channel costs nothing structurally — but it makes the
+provenance record ambiguous, and **ruled 2026-09-03** (the
+`transformations.md` §15 Q4 residual, landed at the freeze): the label and
+the channel are distinct concepts — the channel says which part of the
+simulation an instrument consumes, the label is how the user identifies the
+instrument and which parameters are constrained by which data — so when more
+than one instrument reads a channel, **distinct instrument labels are
+required**, checked at problem composition (not at `negotiate`, which still
+merges nothing). `Instrument.label` defaults to the channel name, so two
+unnamed instruments on one channel are refused:
+
 ```pycon
->>> shared_channel = FittingProblem(
+>>> FittingProblem(
 ...     TwoChannel(grid),
 ...     DatasetCollection({
 ...         "plain": Dataset(observed, Instrument([], channel="blue", input_kind=Spectrum)),
 ...         "calibrated": Dataset(observed, Instrument([Calibrate()], channel="blue")),
 ...     }),
 ... )
->>> shared_channel.parameters.free_names
-('model.index', 'model.norm', 'calibrated.instrument.calibrate.scale')
->>> shared_channel.requirements["model"]["blue"].sources
-('blue', 'blue')
+Traceback (most recent call last):
+    ...
+ampere.core.exceptions.DatasetError: model 'model': 2 instruments read channel 'blue' but share the instrument label(s) ['blue']. ...
 
 ```
 
-Both instruments here report the same source name, because `Instrument.label`
-defaults to the channel name and neither was given one. That answers
-`transformations.md` question 15.4 — "two instruments on one channel must both
-be given labels or they collide when merged into a joint problem" — in the
-negative for this topology: an instrument's label is **never** a merge component
-here, so a collision costs nothing structurally and only makes the provenance
-record ambiguous. Naming them is worth doing, but it is a readability
-recommendation rather than a correctness requirement, and nothing needs to check
-it at the `negotiate` step.
+Named, the same composition works, and the `sources` tuple — the provenance
+record the ruling protects — says which instrument asked for what. The
+one-instrument default-to-channel-name case is unchanged:
 
-**Ruled 2026-09-03** (the `transformations.md` §15 Q4 residual): that
-conclusion is now qualified. The label and the channel are distinct
-concepts — the channel says which part of the simulation an instrument
-consumes, the label is how the user identifies the instrument and which
-parameters are constrained by which data — so when more than one
-instrument reads a channel, distinct instrument labels are *required*:
-the `sources` tuple above is exactly the provenance record that stays
-ambiguous otherwise. The check lands with W1.13, at problem composition
-(not at `negotiate`, which still merges nothing); the one-instrument
-default-to-channel-name case is unchanged.
+```pycon
+>>> shared_channel = FittingProblem(
+...     TwoChannel(grid),
+...     DatasetCollection({
+...         "plain": Dataset(
+...             observed,
+...             Instrument([], channel="blue", input_kind=Spectrum, label="direct"),
+...         ),
+...         "calibrated": Dataset(
+...             observed, Instrument([Calibrate()], channel="blue", label="scaled")
+...         ),
+...     }),
+... )
+>>> shared_channel.parameters.free_names
+('model.index', 'model.norm', 'calibrated.instrument.calibrate.scale')
+>>> shared_channel.requirements["model"]["blue"].sources
+('direct', 'scaled')
+
+```
 
 ### The effective mask, resolved once
 
@@ -802,7 +816,7 @@ datasets end up sharing one population mean:
 >>> def member(label):
 ...     return Dataset(
 ...         observed,
-...         Instrument([], channel="blue", input_kind=Spectrum),
+...         Instrument([], channel="blue", input_kind=Spectrum, label=f"{label}_scope"),
 ...         Likelihood(GaussianFamily(), Referring()),
 ...         label=label,
 ...     )

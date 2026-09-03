@@ -871,8 +871,14 @@ class Instrument:
         Kind expected on that channel. Inferred from the first step when it
         accepts exactly one kind; otherwise give it explicitly.
     label
-        Component label for this instrument's parameters when it is merged into
-        a joint fit (W1.7). Defaults to the channel name.
+        How a user identifies this instrument — in the requirements
+        provenance, in failure reports, and (via the dataset it serves) in
+        the joint parameter space. Defaults to the channel name, which is
+        right when one instrument reads one channel; when more than one
+        instrument reads a channel, distinct labels are **required**, checked
+        at problem composition (ruled 2026-09-03, ``transformations.md`` §15
+        Q4 — the label and the channel are different concepts, and their
+        relationship is not one-to-one).
     meta
         Free-form metadata.
 

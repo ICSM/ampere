@@ -1192,8 +1192,11 @@ Each is a decision, not an oversight. Each has an extension point.
   `parameters` under" did not survive W1.7's ratified topology —
   `inference.md` §4's nested design merges the instrument's own mapping under
   the reserved role name `instrument` inside the **dataset's** component, so
-  an instrument label is provenance and never a merge component, and the
-  label-collision worry in §15.4 collapses to one check on dataset labels.)*
+  an instrument label is provenance and never a merge component. The
+  label-collision worry in §15.4 was then ruled on its own terms,
+  2026-09-03: provenance ambiguity is reason enough, so when more than one
+  instrument reads a channel, distinct instrument labels are required —
+  checked at problem composition, `inference.md` §8.)*
   Nesting works because each level re-distributes, and ties that cross levels
   collapse correctly — `inference.md` §6 demonstrates both, answering the
   question this bullet left open. W1.7 also owns *when* `negotiate` and

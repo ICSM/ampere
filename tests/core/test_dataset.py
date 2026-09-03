@@ -416,8 +416,12 @@ class TestDatasetCollection:
     def test_no_parameter_is_lost_when_two_instruments_share_a_channel(self) -> None:
         collection = DatasetCollection(
             {
-                "gaia": Dataset(flat_spectrum(), Instrument([Calibrate()], channel="sed")),
-                "wise": Dataset(flat_spectrum(), Instrument([Calibrate()], channel="sed")),
+                "gaia": Dataset(
+                    flat_spectrum(), Instrument([Calibrate()], channel="sed", label="gaia")
+                ),
+                "wise": Dataset(
+                    flat_spectrum(), Instrument([Calibrate()], channel="sed", label="wise")
+                ),
             }
         )
         problem = FittingProblem(Powerlaw(sed=WAVELENGTH), collection)
@@ -427,6 +431,22 @@ class TestDatasetCollection:
             "gaia.instrument.calibrate.scale",
             "wise.instrument.calibrate.scale",
         )
+
+    def test_two_unnamed_instruments_on_one_channel_are_refused(self) -> None:
+        # Ruled 2026-09-03 (transformations.md §15 Q4 residual): the label is
+        # how a user identifies which instrument constrained what, so when
+        # more than one instrument reads a channel their labels must differ —
+        # checked at problem composition, where the requirements-provenance
+        # sources tuple is produced. Both labels default to the channel name
+        # here, so the composition is ambiguous and must be refused.
+        collection = DatasetCollection(
+            {
+                "gaia": Dataset(flat_spectrum(), Instrument([Calibrate()], channel="sed")),
+                "wise": Dataset(flat_spectrum(), Instrument([Calibrate()], channel="sed")),
+            }
+        )
+        with pytest.raises(DatasetError, match="share the instrument label"):
+            FittingProblem(Powerlaw(sed=WAVELENGTH), collection)
 
     def test_components_are_the_datasets_plus_shared(self) -> None:
         shared = ParameterSet([Parameter("distance", st.uniform(1.0, 9.0))])
@@ -553,10 +573,12 @@ class TestLifecycle:
             DatasetCollection(
                 {
                     "plain": Dataset(
-                        flat_spectrum(), Instrument([], channel="sed", input_kind=Spectrum)
+                        flat_spectrum(),
+                        Instrument([], channel="sed", input_kind=Spectrum, label="plain"),
                     ),
                     "calibrated": Dataset(
-                        flat_spectrum(), Instrument([Calibrate()], channel="sed")
+                        flat_spectrum(),
+                        Instrument([Calibrate()], channel="sed", label="calibrated"),
                     ),
                 }
             ),

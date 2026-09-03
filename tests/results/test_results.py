@@ -790,13 +790,13 @@ class TestEmission:
                     # dataset "a"'s uncertainties are stored as "a_uncertainty"
                     "a": Dataset(
                         blue_data(),
-                        Instrument([], channel="blue", input_kind=Spectrum),
+                        Instrument([], channel="blue", input_kind=Spectrum, label="a"),
                         label="a",
                     ),
                     # and so is dataset "a_uncertainty"'s own value array
                     "a_uncertainty": Dataset(
                         blue_data(),
-                        Instrument([], channel="blue", input_kind=Spectrum),
+                        Instrument([], channel="blue", input_kind=Spectrum, label="a_uncertainty"),
                         label="a_uncertainty",
                     ),
                 }

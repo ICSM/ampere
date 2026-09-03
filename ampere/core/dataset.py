@@ -724,7 +724,16 @@ class Dataset:
         self.observed = observed
 
         if instrument is None:
-            instrument = Instrument(input_kind=type(observed))
+            # An implicit pure-binding instrument takes the dataset's own
+            # label when one is given: the instrument label is how a user
+            # identifies which instrument constrained what (ruled 2026-09-03,
+            # transformations.md §15 Q4), and for an instrument the dataset
+            # itself conjured, the dataset's label is that identity — so two
+            # labelled datasets on one channel stay composable without the
+            # user naming instruments nobody wrote.
+            instrument = Instrument(
+                input_kind=type(observed), label=None if label is None else str(label)
+            )
         if not isinstance(instrument, Instrument):
             raise DatasetError(
                 f"a Dataset's instrument must be an Instrument, got {type(instrument).__name__}. "
@@ -1606,7 +1615,17 @@ class FittingProblem:
         return bindings
 
     def _negotiate(self) -> dict[str, dict[str, Any]]:
-        """Step (2): the instruments' requirements, per model, per channel."""
+        """Step (2): the instruments' requirements, per model, per channel.
+
+        Also the home of the instrument-label check (ruled 2026-09-03,
+        ``transformations.md`` §15 Q4's residual): when more than one
+        instrument reads a channel, distinct instrument labels are required —
+        the label is how a user identifies which parameters are constrained
+        by which data, and the requirements-provenance ``sources`` tuple is
+        otherwise ambiguous. Checked here, at problem composition; the
+        one-instrument default-to-channel-name case is unchanged, and
+        ``negotiate`` itself merges nothing and stays silent about labels.
+        """
         collected: dict[str, dict[str, Any]] = {}
         for label in self._models:
             instruments = [
@@ -1614,6 +1633,21 @@ class FittingProblem:
                 for name, dataset in self.datasets.items()
                 if self._bindings[name] == label
             ]
+            by_channel: dict[str, list[str]] = {}
+            for instrument in instruments:
+                by_channel.setdefault(instrument.channel, []).append(instrument.label)
+            for channel, labels in by_channel.items():
+                duplicates = sorted({name for name in labels if labels.count(name) > 1})
+                if duplicates:
+                    raise DatasetError(
+                        f"model {label!r}: {len(labels)} instruments read channel {channel!r} "
+                        f"but share the instrument label(s) {duplicates}. Instrument.label "
+                        f"defaults to the channel name, so several unnamed instruments on one "
+                        f"channel are indistinguishable — in the requirements provenance "
+                        f"(sources) and everywhere a user asks which instrument constrained "
+                        f"what. Pass label='...' to each Instrument (the single-instrument "
+                        f"default is unchanged)."
+                    )
             collected[label] = dict(negotiate(instruments))
         return collected
 
