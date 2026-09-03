@@ -30,6 +30,12 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
   (`git merge-base --is-ancestor HEAD <target>`), then branch directly
   from the target; STOP and report otherwise. Both W1.5/W1.6 agents
   recovered cleanly with this.
+- **Harness trap (hit and solved 2026-09-03)**: `!`-prefixed commands
+  typed by Peter run in the orchestrating session's *persistent shell
+  cwd*. If that shell was last in an agent worktree, a `git merge` typed
+  there silently no-ops ("Already up to date"). The orchestrator must
+  return its shell to the main checkout before handing over any git
+  command to run.
 
 ## Review checklist (per PR)
 
@@ -54,8 +60,13 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
   are reproducible; `.pixi/` (the installed environments themselves) is
   not, and is gitignored.
   - Common tasks: `pixi run test` (fast: `tests/test_imports.py`),
-    `pixi run test-characterisation` (the full suite), `pixi run lint`,
-    `pixi run format-check`, `pixi run typecheck`, `pixi run docs`.
+    `pixi run test-phase1` (core + results + conformance in one pytest
+    process — the main gate since W0.10; also `test-core`,
+    `test-results` and `conformance` individually),
+    `pixi run test-characterisation` (legacy still works),
+    `pixi run lint`, `pixi run format-check`, `pixi run typecheck`,
+    `pixi run docs`. Since W0.10, plain `pixi run <task>` equals
+    `-e dev`.
   - Other environments (`pixi run -e <env> <task>`): `test-py311` /
     `test-py312` / `test-py313` (the CI matrix, one Python each); `sbi`
     (adds the `sbi` extra — torch is a large download, so it is not part
@@ -441,7 +452,7 @@ freeze-relevant):
   pre-handoff session remains queued; Peter can review/send it with
   `/feedback`.
 
-## Current state (end of 2026-09-01)
+## Current state (SUPERSEDED — see "⚡ Pick up here" above; kept as the end-of-2026-09-01 snapshot)
 
 - **Phase 0: complete** (W0.1–W0.8 merged; CI green; issues #74–77
   closed; archival executed). **W0.9 not started** — the temporary

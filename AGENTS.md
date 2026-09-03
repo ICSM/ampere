@@ -4,8 +4,10 @@ Ampere is a Bayesian fitting environment for heterogeneous astronomical data
 (SEDs, spectra, and more), whose distinguishing feature is a flexible,
 GP-based likelihood providing robustness to model misspecification.
 
-The project is mid-way through a major redesign ("v2"). Before any
-non-trivial work, read:
+The project is undergoing a major redesign ("v2"). **Phases 0–1 are
+complete: the core contracts are frozen** (`spec-v1.0`, 2026-09-03) and
+Phase 2 — the reference/torch/jax backends and engine drivers, items
+W2.1–W2.11 — is beginning. Before any non-trivial work, read:
 
 - **`DEVELOPMENT_PLAN.md`** — the source of truth: decisions taken, target
   architecture (backend-neutral core + reference/torch/jax backends), phased
@@ -30,8 +32,10 @@ non-trivial work, read:
 8. New namespaces (`ampere/core`, `ampere/backends`, `ampere/inference`,
    `ampere/results`) are typed from the first line (pyrefly); legacy is
    exempt and never gets typed.
-9. After the Phase 1 spec freeze, any change to a §4 contract requires a
-   decision-log entry in `DEVELOPMENT_PLAN.md` in the same PR.
+9. **In force since the freeze (2026-09-03)**: any change to a §4
+   contract requires a decision-log entry in `DEVELOPMENT_PLAN.md` in the
+   same PR, and must keep the conformance suite green or update it in the
+   same PR with justification.
 10. End commit messages with:
     `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>` (or the
     equivalent for your agent/tool).
@@ -44,9 +48,13 @@ non-trivial work, read:
   `[tool.pixi.*]` tables wrap `[project.dependencies]` /
   `[project.optional-dependencies]` rather than duplicating them —
   `pixi.lock` is committed, `.pixi/` is not. Common tasks: `pixi run test`
-  (fast: `tests/test_imports.py`), `pixi run test-characterisation` (full
-  suite), `pixi run lint`, `pixi run format-check`, `pixi run typecheck`,
-  `pixi run docs`. Other environments: `test-py311`/`test-py312`/
+  (fast: `tests/test_imports.py`), `pixi run test-phase1` (the three
+  Phase-1 suites — core, results, conformance — in ONE pytest process;
+  the main gate), `pixi run test-core` / `test-results` / `conformance`
+  individually, `pixi run test-characterisation` (legacy still works),
+  `pixi run lint`, `pixi run format-check`, `pixi run typecheck`,
+  `pixi run docs`. Since W0.10, plain `pixi run <task>` equals
+  `pixi run -e dev <task>`. Other environments: `test-py311`/`test-py312`/
   `test-py313` (the CI matrix), `sbi` (adds the `sbi` extra — torch is a
   large download, not part of `dev`), `torch`/`jax` (backend placeholders).
   Select one with `pixi run -e <env> <task>`.
@@ -75,8 +83,11 @@ short.
 `docs/orchestration.md` is the policy for which model tier gets which
 work — read it before dispatching anything. In short: Sonnet for
 well-specified items, Opus for judgement-within-spec, Haiku/luna for
-mechanical bulk, Fable for contracts and integration, gpt-5.6-sol for
-cross-model reviews.
+mechanical bulk, Fable for contracts and integration, and cross-model
+adversarial reviews via the Codex CLI — `gpt-5.6-sol` where available,
+with **`gpt-5.6-terra` as the ruled stand-in** on this account (sol is
+refused on ChatGPT-auth codex; the Fable + terra pairing was proven at
+the W1.13 freeze).
 
 Claude agents may delegate well-scoped, self-contained subtasks to the
 OpenAI Codex CLI (installed: `codex`). See
@@ -90,12 +101,14 @@ pushes.
 
 - `DEVELOPMENT_PLAN.md`, `WORK_ITEMS.md` — plan + items (see above).
 - `docs/development.md` — human-facing onboarding/handoff notes.
-- `docs/design/` — Phase 1 output: architecture spec, per-contract specs,
-  lowering rules, modality sketches, prior-art memo, harvest of old
+- `docs/design/` — Phase 1 output, **frozen at `spec-v1.0`**: architecture
+  spec, per-contract specs (`contracts/`), lowering rules, the
+  serialisation review, modality sketches, prior-art memo, harvest of old
   branches.
 - `ampere/` — the package. Legacy: `data/`, `models/`, `infer/`, `utils/`.
-  New (as phases land): `core/`, `backends/{reference,torch,jax}/`,
-  `inference/`, `results/`.
+  Landed in Phase 1: `core/` (the frozen contracts, implemented) and
+  `results/`. Landing in Phase 2+: `backends/{reference,torch,jax}/`,
+  `inference/`.
 - `examples/` — legacy examples; `minimal_working_example*.py` are the
   characterisation-test anchors. `examples/examples_paper/` is
   paper-revision work in progress — leave it alone.

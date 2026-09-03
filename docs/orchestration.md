@@ -12,7 +12,7 @@ work; humans dispatching agents directly should follow it too.
 | Opus subagent | Strong Claude | Implementation requiring design judgement *within* a frozen spec — Phase 2 backend tracks, contract implementations. |
 | Sonnet subagent | Capable Claude, cheaper | The default for well-specified work items with tight acceptance criteria (most W0.x, harvest/memo work, test-writing from a spec). |
 | Haiku subagent | Cheap Claude | Mechanical sweeps: formatting checks, bulk file edits from an exact recipe, status chores. |
-| Codex + gpt-5.6-sol | Frontier OpenAI (separate budget) | Detailed and adversarial reviews — see the `sol-review` skill. Cross-provider review has uncorrelated failure modes with Claude-written code, which is the point. |
+| Codex + gpt-5.6-sol | Frontier OpenAI (separate budget) | Detailed and adversarial reviews — see the `sol-review` skill. Cross-provider review has uncorrelated failure modes with Claude-written code, which is the point. **Currently refused on this account** (ChatGPT-auth codex); the ruled stand-in (2026-09-03) is **`gpt-5.6-terra`**, run through the same skill's procedure with `-m gpt-5.6-terra` — proven at the W1.13 freeze, where it found two real pre-existing defects. |
 | Codex + gpt-5.6-luna | Cheap OpenAI (separate budget) | Bulk mechanical work when preserving Claude quota, or independent second drafts of small pieces. |
 
 Two mechanics worth knowing: Claude subagents **inherit the orchestrator's
@@ -50,12 +50,15 @@ work.
 
 ## Default phase mapping
 
-- Remaining Phase 0 (W0.5, W0.6, W0.8): Sonnet.
-- Phase 1 contract specs (W1.2–W1.9): Fable-drafted (or Fable-finalised),
-  sol-reviewed adversarially at the W1.13 freeze; mechanical companions
-  (prior-art memo W1.1, modality sketches W1.11) to Sonnet/Opus with
-  Fable review.
-- Phase 2 backend tracks: Opus per track (torch, jax), conformance suite
-  as the cross-check, sol adversarial review at milestone M2.
-- Reviews of merged-candidate PRs: orchestrator pass always; sol pass for
-  contract/maths-touching changes.
+- Phases 0–1: **complete** (spec frozen at `spec-v1.0`, 2026-09-03; the
+  freeze's adversarial pass ran as Fable + `gpt-5.6-terra`, sol being
+  blocked). Historical mapping: Phase 0 to Sonnet; contract specs
+  Fable-drafted or Fable-reviewed; mechanical companions to Sonnet/Opus.
+- Phase 2 (current, W2.1–W2.11): backend tracks W2.4/W2.5 to Opus, one
+  per track (torch, jax), conformance suite as the cross-check;
+  well-specified items (W2.1–W2.3, W2.6–W2.9, W2.11) to Sonnet or Opus by
+  judgement density; cross-model adversarial review (terra, until sol is
+  available) at milestone M2 and for anything touching the frozen §4
+  contracts, likelihood/GP mathematics, or lowering rules.
+- Reviews of merged-candidate PRs: orchestrator (Fable) pass always;
+  cross-model pass for contract/maths-touching changes.
