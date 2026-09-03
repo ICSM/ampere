@@ -1,6 +1,6 @@
 # Ampere v2 — Likelihood & NoiseModel Contract (W1.6)
 
-Status: **DRAFT for Peter's review.** Implements `DEVELOPMENT_PLAN.md` §4.4,
+Status: **frozen at `spec-v1.0`** (the tag created at the W1.13 merge, 2026-09; any later change to a §4 contract requires a decision-log entry in `DEVELOPMENT_PLAN.md` in the same PR — ground rule 9). Implements `DEVELOPMENT_PLAN.md` §4.4,
 answers `results_schema.md` §16's and `parameters.md` §13's obligations on this
 item, and closes issue #11's design question. Code:
 `ampere/core/likelihood.py`, `ampere/core/exceptions.py`. Tests:

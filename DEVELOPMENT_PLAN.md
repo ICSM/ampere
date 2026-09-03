@@ -1,11 +1,12 @@
 # Ampere v2 Development Plan — DRAFT for refinement
 
-Status: **plan settled; work-item breakdown live** (2026-09-01). All
+Status: **plan settled; Phase 1 spec frozen** (freeze recorded 2026-09-03,
+W1.13; the `spec-v1.0` tag is created at that item's merge). All
 architectural proposals are confirmed; remaining open items are
 implementation-level choices deferred to their natural phase (§6). This
 document is the source of truth for the redevelopment of ampere: decisions
 taken, target architecture, and phased roadmap. The agent-sized work items
-for Phases 0–1 live in `WORK_ITEMS.md`.
+for Phases 0–2 live in `WORK_ITEMS.md`.
 
 ---
 
@@ -72,6 +73,7 @@ backend-neutral core plus modern computational backends, targeting:
 | Interferometric likelihood interfaces | **Rice, von Mises and the circular complex GP fixed** (ruled 2026-09-03, `likelihoods.md` §17 Q3/Q4/Q6 — the W1.11 interferometry sketch's recommendations accepted as written; landed at W1.13). Rice: the model predicts the underlying complex value and an `Amplitude` instrument step takes the modulus, so the family receives real non-negative amplitudes. von Mises: `κ = 1/σ²` per sample from the container's own uncertainties. `complex_gaussian` + `GaussianProcessNoise` declares **`ANALYTIC`** with the circular (equal-component, zero-pseudo-covariance) complex GP as the fixed meaning — a §4.4 declaration change — while the implementation stays Phase 4's: composition refuses with the schedule named (`GP_ANALYTIC_IMPLEMENTED`, the declared-but-staged discipline), never a silently different model. Family implementations are Phase 4's, with the visibility modality. |
 | Consolidated serialisation review | **One review, not piecemeal — done at W1.13** (ruled 2026-09-03; supersedes `likelihoods.md` §17 Q8, `results_schema.md` §17 Q6 and `results.md` §15 R7 as separate questions). The review is `docs/design/serialisation_review.md`. Its rule: **specs describe declarations (on the objects, in core), provenance fingerprints content (one-way, in `ampere.results`), storage carries values (netCDF)**. It confirmed R7's promotion — `Likelihood.to_spec()` landed as a §4.4 addition, `describe_likelihood` now composes it — pinned the design-horizon (c) training-set format (the pair form and the spec-hash invalidation key are fixed; the writer is Phase 2's), recorded the deliberate absence of instrument/model reconstruction, and found and fixed one provenance hole (family/noise-model buffers were invisible to the likelihood fingerprint; `PROVENANCE_SCHEMA_VERSION` bumped to 2). |
 | WStat / profile likelihoods | **Not shipped; documented as a compared workaround** (ruled 2026-09-03, `awkward_instrument.md` §9 Q3): ampere's standard library never carries the profiled Cash-with-background statistic — the docs are deliberately opinionated that the two-dataset Bayesian formulation is the correct approach — but a worked example shows the user-family route (safe under masking since X-2's `retain`; its `sample` refuses; per-sample log-likelihood/LOO semantics degrade) beside the joint fit, comparing the two's pros, cons and results. Lands with Phase 2's engine drivers; W1.13 carries it into the Phase 2 breakdown. |
+| **Phase 1 spec freeze** | **The §4 contracts are frozen** (W1.13, 2026-09-03; the `spec-v1.0` tag is created at the W1.13 merge, after Peter's review). Frozen surface: `docs/design/architecture.md`, the seven contract specs under `docs/design/contracts/`, and `docs/design/lowering.md`, each at v1.x **as amended through the freeze** — the amendments being the recorded rulings W1.13 implemented (X-1's prediction-aware `NoiseModel`; the circular complex GP declared `ANALYTIC` with Rice/von Mises interfaces fixed; `configure_from`, `Instrument.freeze()` and the loud `compile_for` with `lenient_compile` as the opt-out; capability flags promoted into the ABCs; the instrument-label requirement; the discrete-family `CapabilityError`; `LoweringError` + the exception ratifications; the icdf strict-flag home; `pointwise_log_prob`; `AnomalyScore`; `Likelihood.to_spec()` with the consolidated serialisation review) plus the cross-review harmonisation and the W1.11 gap dispositions. From this point ground rule 9 is in force: **any change to a §4 contract requires a decision-log entry in this table in the same PR.** The Phase 2 work-item breakdown (W2.1–W2.11) is written against this frozen spec in `WORK_ITEMS.md`. |
 | jax x64 activation | **Guard-and-raise, never set-on-import** (ruled 2026-09-01 at the W1.9 review, amending `architecture.md` §5's original set-on-first-import sketch — the *policy*, float64 always for likelihood/GP linear algebra, is unchanged). Ampere never flips `jax_enable_x64` as an import side effect; `ampere.backends.jax` ships an explicit, idempotent `configure_x64()`, and construction of any jax-backed likelihood/GP/model raises when the flag is off, naming the three remedies (the `JAX_ENABLE_X64=1` environment variable; the explicit call; or a per-run, provenance-recorded `float32` opt-out). numpyro needs no separate switch — its `enable_x64` is a verified thin wrapper over the same jax flag. Analysis in `docs/design/lowering.md` §10.2. |
 
 ## 3. Architecture: a core and a capability ladder, not four peer backends
@@ -387,9 +389,9 @@ Design spec in Phase 1 (including an adoptability check on Robusta-HMF);
 Scope discipline: interfaces are designed for the full data scope (§2), but
 the **v1 vertical slice is spectra + photometry** — today's working use
 cases — delivered end-to-end on both modern backends before any new modality
-is built. Phases 0 and 1 are decomposed into agent-sized work items in
-`WORK_ITEMS.md`; later phases are decomposed when their prerequisites
-freeze.
+is built. Phases 0–2 are decomposed into agent-sized work items in
+`WORK_ITEMS.md` (Phase 2's at the W1.13 freeze); later phases are decomposed
+when their prerequisites freeze.
 
 ### Phase 0 — Safety net & hygiene (small, do first)
 - Commit the pending `mixins.py` MAP-plot fix.
@@ -433,7 +435,8 @@ freeze.
   No implementation — this is how the broad scope informs interfaces
   without exploding v1.
 - Freeze the spec (version it; changes thereafter require explicit
-  decision log entries).
+  decision log entries). — **Done** (W1.13, 2026-09-03; the freeze row in
+  §2 is the record, and the `spec-v1.0` tag is created at merge).
 
 ### Phase 2 — Twin modern backends, lockstep (the big one)
 Parallel agent tracks for `backends/torch` and `backends/jax`, both against

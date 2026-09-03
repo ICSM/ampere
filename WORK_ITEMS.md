@@ -1,9 +1,10 @@
-# Ampere v2 — Work Items, Phases 0–1
+# Ampere v2 — Work Items, Phases 0–2
 
 Companion to `DEVELOPMENT_PLAN.md` (the source of truth for architecture and
 decisions — read it first). Each item below is sized for delegation to a
-development agent. Phase 2+ items are written only once the Phase 1 spec
-freezes (W1.13).
+development agent. The Phase 2 items were written at the spec freeze
+(W1.13), against `spec-v1.0`; Phase 3+ items are written once their
+prerequisites freeze.
 
 Sizes: **S** ≈ half an agent session, **M** ≈ one session, **L** ≈ 1–2
 sessions.

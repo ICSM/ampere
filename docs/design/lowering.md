@@ -1,6 +1,6 @@
 # Ampere v2 — Lowering Spec (W1.9)
 
-Status: **DRAFT for Peter's review.** Implements the lowering half of
+Status: **frozen at `spec-v1.0`** (the tag created at the W1.13 merge, 2026-09; later changes to lowering rules follow ground rule 9). Implements the lowering half of
 `DEVELOPMENT_PLAN.md` §4.1 and operationalises `architecture.md` §5. This is a
 **document, not code**: Phase 2 writes the backends, and this spec is the thing
 they are written against. Nothing here is executable, so — unlike

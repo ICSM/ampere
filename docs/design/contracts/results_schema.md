@@ -1,6 +1,6 @@
 # Ampere v2 — ModelResult Schema Contract (W1.4)
 
-Status: **DRAFT for Peter's review.** Implements `DEVELOPMENT_PLAN.md` §4.2 and
+Status: **frozen at `spec-v1.0`** (the tag created at the W1.13 merge, 2026-09; any later change to a §4 contract requires a decision-log entry in `DEVELOPMENT_PLAN.md` in the same PR — ground rule 9). Implements `DEVELOPMENT_PLAN.md` §4.2 and
 the functional-data stance of `architecture.md` §7. Code:
 `ampere/core/results_schema.py`, `ampere/core/exceptions.py`. Tests:
 `tests/core/test_results_schema.py`, `tests/core/test_spec_doctests.py`.

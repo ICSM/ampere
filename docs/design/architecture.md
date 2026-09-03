@@ -1,7 +1,8 @@
 # Ampere v2 — Architecture Spec (W1.2)
 
-Status: **merged 2026-09-01 (Fable-reviewed, reconciled against W1.1);
-awaiting Peter's review pass.** Not yet frozen (that is W1.13). §10 records
+Status: **frozen at `spec-v1.0`** (the tag created at the W1.13 merge,
+2026-09) — merged 2026-09-01 (Fable-reviewed, reconciled against W1.1);
+Peter's review pass remains the formal accept gate. §10 records
 the reconciliation outcome; the curated-translation default flagged during
 review has been ruled opt-in/never-silent and recorded in
 `DEVELOPMENT_PLAN.md` §2's decision table (§1, §9).

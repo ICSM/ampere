@@ -1,8 +1,9 @@
 # Ampere v2 — Diagnostics Design Spec (W1.12)
 
-Status: **approved by Peter, 2026-09-01** (the §10 defaults stand as
+Status: **frozen at `spec-v1.0`** (the tag created at the W1.13 merge,
+2026-09) — **approved by Peter, 2026-09-01** (the §10 defaults stand as
 written; §11 records the one addition from his review — posterior
-calibration as a future family). Not frozen until W1.13. Implements
+calibration as a future family). Implements
 `DEVELOPMENT_PLAN.md` §4.8. This is a **design document only** — no code
 lands with this item. It fixes where the diagnostic families live, what
 they consume and produce in the §4.2 container vocabulary, their

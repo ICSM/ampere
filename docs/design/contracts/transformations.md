@@ -1,6 +1,6 @@
 # Ampere v2 — Transformation & Instrument Contract (W1.5)
 
-Status: **DRAFT for Peter's review.** Implements `DEVELOPMENT_PLAN.md` §4.3 and
+Status: **frozen at `spec-v1.0`** (the tag created at the W1.13 merge, 2026-09; any later change to a §4 contract requires a decision-log entry in `DEVELOPMENT_PLAN.md` in the same PR — ground rule 9). Implements `DEVELOPMENT_PLAN.md` §4.3 and
 the composition half of §4.2. Code: `ampere/core/transform.py`,
 `ampere/core/exceptions.py`. Tests: `tests/core/test_transform.py`,
 `tests/core/thirdparty_polarimeter.py` (the out-of-tree extension),

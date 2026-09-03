@@ -1,6 +1,6 @@
 # Ampere v2 — Parameter & Prior Contract (W1.3)
 
-Status: **DRAFT for Peter's review.** Implements `DEVELOPMENT_PLAN.md` §4.1 and
+Status: **frozen at `spec-v1.0`** (the tag created at the W1.13 merge, 2026-09; any later change to a §4 contract requires a decision-log entry in `DEVELOPMENT_PLAN.md` in the same PR — ground rule 9). Implements `DEVELOPMENT_PLAN.md` §4.1 and
 the parameters-vs-buffers half of `architecture.md` §6. Code:
 `ampere/core/parameter.py`, `ampere/core/exceptions.py`. Tests:
 `tests/core/`.

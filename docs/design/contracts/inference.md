@@ -1,6 +1,9 @@
 # Ampere v2 — Dataset, FittingProblem & Inference Contract (W1.7)
 
-Status: reviewed and merged; **all four ruling requests R1–R4 were ruled by
+Status: **frozen at `spec-v1.0`** (the tag created at the W1.13 merge,
+2026-09; any later change to a §4 contract requires a decision-log entry in
+`DEVELOPMENT_PLAN.md` in the same PR — ground rule 9). Previously: reviewed
+and merged; **all four ruling requests R1–R4 were ruled by
 Peter on 2026-09-02** (see §19's preamble for the dispositions — the merge
 topology is ratified, `LikelihoodFamily.sample` and the dotted channel-name
 surface landed the same day, and the tie-based hierarchical pattern stands as

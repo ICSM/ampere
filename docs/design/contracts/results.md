@@ -1,6 +1,9 @@
 # Ampere v2 — Results, Provenance & Plotting Contract (W1.8)
 
-Status: drafted, awaiting Peter's review. Implements `DEVELOPMENT_PLAN.md` §4.6,
+Status: **frozen at `spec-v1.0`** (the tag created at the W1.13 merge,
+2026-09; any later change to a §4 contract requires a decision-log entry in
+`DEVELOPMENT_PLAN.md` in the same PR — ground rule 9; the §15 rulings of
+2026-09-03 are all landed). Implements `DEVELOPMENT_PLAN.md` §4.6,
 and discharges the obligations `inference.md` §18, `likelihoods.md` §16,
 `parameters.md` §13, `results_schema.md` §16/§17.6, `lowering.md` §9.2 and
 `diagnostics.md` §7 place on this item. Code: `ampere/results/`. Tests:
