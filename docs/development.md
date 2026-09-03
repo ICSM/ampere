@@ -94,8 +94,8 @@ seven ruling requests (R1–R7, `results.md` §15) join Peter's backlog.
 **Only W1.13 (spec assembly & freeze) remains in Phase 1.** It owes the
 batched sol review (still unavailable on this account — Peter
 configures codex first) and resolves the decision backlog below.
-**Findings worth W0.x items before the freeze** (all three now covered
-by W0.10, authorised 2026-09-03): (a) CI never runs
+**Findings worth W0.x items before the freeze** (all three **fixed by
+W0.10, merged 2026-09-03**): (a) CI never runs
 `tests/core`, `tests/results` or `tests/conformance` — the whole
 Phase-1 suite is unexercised by `ci.yml` (the py3.11 import break that
 survived until W1.10's review is the proof it bites; fixed `a8e6f54`);
@@ -104,11 +104,16 @@ ampere from a worktree — the tasks should default to `dev` or the
 default env pin a supported Python; (c) found 2026-09-03: running
 `tests/core` and `tests/conformance` in **one pytest process** fails
 `test_the_table_covers_every_registered_family` —
-`tests/core/test_likelihood.py` registers throwaway families
-module-globally and never deregisters them, so they leak into
-`list_families()`; each suite alone passes, which is why nothing has
-caught it (see (a)). The fix is a registry-snapshot fixture around the
-registering tests.
+a likelihood-family registration leaks into `list_families()`; each
+suite alone passes, which is why nothing had caught it (see (a)).
+*Attribution corrected at W0.10's review*: the leaking source is the
+`likelihoods.md` worked example (a `"laplace"` family) run via
+`test_spec_doctests.py` — `test_likelihood.py`'s own registration sites
+use `test_*` names with their own cleanup, or fail before registering.
+Fixed by W0.10: an autouse registry-snapshot fixture in
+`tests/core/conftest.py` covers every source in the directory, and
+ci.yml's `phase1-suites` job runs the three suites in one pytest
+process to keep it honest.
 
 **Ruled later on 2026-09-02, all landed**: lossless nesting +
 `Binding.index` (implemented by the orchestrator after the Opus dispatch
@@ -178,8 +183,16 @@ freeze duties (cross-review, tag, Phase 2 breakdown), and the Fable +
 `gpt-5.6-terra` adversarial pass. The only open review item left
 anywhere is `awkward_instrument.md` §9 Q3 (whether WStat's profiling is
 supported at all) — minor, and W1.13 can carry it. Housekeeping: W0.9
-and W0.10 scheduling; branch-triage approval
+scheduling; branch-triage approval
 (`docs/design/harvest/branch_triage.md`).
+
+**W0.10 dispatched, Fable-reviewed and merged 2026-09-03** (see the
+status table): CI now runs `tests/core` and `tests/conformance` on every
+matrix leg and all three Phase-1 suites in one pytest process in the
+`dev` environment; the registry leak and the broken implicit-default
+pixi environment are fixed. Plain `pixi run <task>` now behaves like
+`-e dev`. **W1.13 is the only remaining Phase 1 item**, and the suites
+it freezes are guarded from here on.
 
 **Restart prompt for a new session** (paste as the opening message):
 
