@@ -1,6 +1,6 @@
 # Modality sketch (a) — joint spectrum + photometry (the v1 slice)
 
-Status: **design sketch for W1.13**, part of W1.11. Not a contract; a
+Status: **design sketch, dispositioned at the freeze (W1.13)** — every gap and requirement below carries its status line. Part of W1.11. Not a contract; a
 composition worked example against the merged W1.3–W1.6 code, written to
 find interface gaps before the Phase 1 spec freeze. Code cited here is
 `ampere.core` as merged at this repository's `master`; nothing in this
@@ -199,6 +199,13 @@ channel.
 
 ### Gap 1 — a shared channel's negotiated grid can silently break a step's own buffer alignment
 
+*Dispositioned at the freeze (W1.13): **deferred to Phase 2**, no ruling
+sought. The proposed `Axis.locate` (matching within `COORDINATE_RTOL`, per
+the W1.11 review's correction) is additive, so the freeze precludes
+nothing; W2.1's standard resampling/photometry steps are the first
+consumer and should land it — or an equivalent — with a decision-log
+entry then. Flagged in W1.13's report so Peter sees the deferral.*
+
 **What breaks.** Real SED fits bind several photometric instruments (2MASS,
 WISE, IRAS, ...) to the *same* model channel. Give a second instrument its
 own, independently tabulated `points=` requirement on that channel:
@@ -272,6 +279,13 @@ as the required pattern for any step whose buffer is tied to specific
 
 ### Gap 2 — two instruments on one channel can default to the same component label, and the collision is silent
 
+*Dispositioned at the freeze (W1.13): **landed.** W1.7's
+`DatasetCollection` refuses duplicate dataset labels with the message this
+gap asked for, and the 2026-09-03 ruling on `transformations.md` §15 Q4
+went further: when more than one instrument reads a channel, distinct
+instrument labels are required, checked at problem composition
+(`inference.md` §8).*
+
 **What breaks.** `Instrument.label` defaults to the channel name
 (`transformations.md` §5). Two instruments bound to the same channel that
 both omit `label=` therefore default to the *same* label:
@@ -322,6 +336,13 @@ sufficient, because the loss happens in the dict-building step that
 precedes it.
 
 ### Requirements on W1.7
+
+*Dispositioned at the freeze (W1.13): **all four discharged by W1.7**
+(merged 2026-09-02) — `inference.md` §8 is the record: one `negotiate` and
+one `compile_for` per model at `FittingProblem` construction;
+`check_alignment` and `check_engine(observed=…)` called; one merge with
+label uniqueness refused at `DatasetCollection`; and the channel/label
+collision made loud (Gap 2 above).*
 
 - **Must call `negotiate()` and `Model.compile_for()` before the first
   evaluation.** `transformations.md` §14 already flags this: "this contract

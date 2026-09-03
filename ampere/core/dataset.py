@@ -657,7 +657,12 @@ class Dataset:
         Defaults to a pure channel binding on
         :data:`~ampere.core.results_schema.DEFAULT_CHANNEL`, kind-checked
         against ``observed`` — so a model that already produces the observable
-        needs no instrument at all.
+        needs no instrument at all. **The caller builds the instrument from
+        the observed container's own coordinates** where a step reproduces
+        them (a Fourier step's (u, v) buffer, a resampler's target grid):
+        ``check_alignment`` compares axes exactly, and coordinates recomputed
+        from first principles differ in their last bits (W1.11 gap I-2's
+        rule, ``transformations.md`` §10).
     likelihood
         Defaults to an i.i.d. Gaussian
         (:class:`~ampere.core.likelihood.GaussianFamily` with

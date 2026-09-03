@@ -1,6 +1,6 @@
 # Modality sketch (b) — multi-channel low-res SED + CO-windows, and échelle orders
 
-Status: **design sketch for W1.13**, part of W1.11. Not a contract; a
+Status: **design sketch, dispositioned at the freeze (W1.13)** — every gap and requirement below carries its status line. Part of W1.11. Not a contract; a
 composition worked example against the merged W1.4–W1.6 code. Code cited
 here is `ampere.core` as merged at this repository's `master`.
 
@@ -207,6 +207,11 @@ its local name) is caught by the existing `LikelihoodError` message, not a
 gap.
 
 ### Requirements on W1.7
+
+*Dispositioned at the freeze (W1.13): **discharged by W1.7** (merged
+2026-09-02) — cross-dataset ties are declared at `FittingProblem`
+composition and collapse in the single top-level merge, exercised by
+`tests/core/test_dataset.py`'s tied-GP-hyperparameter cases.*
 
 - **A `DatasetCollection` joining `order_43` and `order_44` must perform the
   cross-dataset kernel-hyperparameter tie shown above in its single,

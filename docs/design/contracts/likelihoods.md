@@ -1367,6 +1367,16 @@ Each is a decision, not an oversight. Each has an extension point.
    transformation. Retained deliberately (X-1's ruling keeps it): widening
    the argument to model internals would re-fuse the pieces this contract
    exists to separate.
+11. **No cross-channel (vector-valued) correlated noise model.** A noise
+   model belongs to one `Likelihood`, which belongs to one dataset, so a
+   single correlated process over 2-vectors — astrometric (RA, Dec)
+   residuals perturbed together, Stokes Q/U leakage, a calibration
+   systematic shared across bands — is not expressible; two scalar GPs
+   with tied hyperparameters is the nearest approximation and is a
+   different model (it cannot express the cross-covariance). Recorded from
+   the W1.11 astrometric sketch at the freeze; the extension point is a
+   `JointGP` solver-strategy slot spanning datasets, deferred to
+   **Phase 5** with the other advanced strategies.
 
 ## 16. What this contract hands to the specs downstream
 
@@ -1376,7 +1386,10 @@ Each is a decision, not an oversight. Each has an extension point.
   the propagation obligation on you; this contract is the consumer that
   depends on it. Also: a resampling transformation must not produce coordinates
   that differ from the observed container's, because `check_alignment` compares
-  axes for equality — negotiation should target the observed grid.
+  axes for equality — negotiation should target the observed grid. (Its
+  general form, landed at the freeze from W1.11 gap I-2: any step
+  reproducing the observed coordinates takes them *from* the observed
+  container, never recomputes them — `transformations.md` §10.)
 - **W1.7 (Dataset / FittingProblem)** — `Dataset` should call
   `Likelihood.check_alignment(predicted_template, observed)` once at
   construction, and `Likelihood.check_engine(differentiable=…, engine=…,
@@ -1442,7 +1455,10 @@ Each is a decision, not an oversight. Each has an extension point.
   need `VonMisesFamily` before the freeze, since it is currently declared-only.
   The X-ray sketch should check that `PoissonFamily` plus a response matrix in
   the instrument chain is expressible without a per-sample exposure concept
-  this contract lacks. And `prior_art.md` Tension 3 asks for a deliberately
+  this contract lacks. *(Confirmed — `awkward_instrument.md` §2: a `Spectrum`
+  with a keV axis plus a response-matrix `Transformation` is expressible, and
+  the absence of a per-sample exposure concept is correct rather than a gap —
+  the exposure folds into the response matrix, `transformations.md` §10.)* And `prior_art.md` Tension 3 asks for a deliberately
   awkward instrument as a stress test of the §4.3/§4.4 split — this contract
   is one half of what that test exercises.
 - **W1.12 (Diagnostics)** — the three things you asked for: (a) GP

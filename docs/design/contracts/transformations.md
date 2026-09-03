@@ -1016,19 +1016,37 @@ core is the vocabulary, not the library.
 | Calibration / scale factor | any → same | the scale factor, or per-channel offsets as an array-valued parameter | nothing |
 | Epoch sampling | `TimeSeries` → `TimeSeries` | none | `points` at the observed epochs |
 | Fourier sampling | `Image` → `VisibilitySet` | none | `intervals` on `x`/`y` from the field of view, `max_step` from the longest baseline |
-| Response matrix (RMF/ARF) | `Spectrum` → `Spectrum` | none (the matrix is a buffer) | `points` at the matrix's own tabulated energies |
+| Response matrix (RMF/ARF) | `Spectrum` → `Spectrum` | usually none (the matrix is a buffer); a fitted gain or livetime is an ordinary parameter, and the matrix is then rebuilt inside `apply` | `points` at the matrix's own tabulated energies |
 
 Two of them are worth a note. A **response matrix is a matrix multiply**, so
 X-ray forward folding is an ordinary `Transformation` and needs nothing special
 — `results_schema.md` §16 asks W1.11 to confirm that `Spectrum` with an energy
 axis suffices, and this table is the claim it should check (it did:
-`awkward_instrument.md` §2 — the exposure folds into the same matrix, because
+`awkward_instrument.md` §2, whose X-4 clauses land here — **the exposure
+folds into that same matrix**, `T · R · A · dE` as one buffer, because
 expected counts, not count rates, are what a Poisson likelihood compares
-against; there is deliberately no per-sample exposure concept anywhere in the
-contracts, and several observations with different exposures are several
-`Dataset`s). And **Fourier sampling changes both the kind and the meaning of
+against, and `PoissonFamily` enforces this by refusing non-integer
+observations. There is deliberately no per-sample exposure concept anywhere
+in the contracts: exposure is a constant of the observation and belongs with
+the observation's other constants; several observations with different
+exposures are several `Dataset`s, and a fitted livetime or dead-time
+fraction is a one-step `Transformation` with an ordinary `Parameter`. The
+value unit changes across this step — flux density in, counts out — so it
+constructs a fresh `Spectrum` rather than using `with_values`, and must
+therefore call `propagate_mask` with the response matrix as its influence
+matrix). And **Fourier sampling changes both the kind and the meaning of
 the axes**, which is why it is also the one whose requirements cannot be
 pulled back through a chain (§13.1).
+
+One rule applies to every step in this table that reproduces the observed
+container's coordinates (landed at the freeze — W1.11 gap I-2's clause): it
+must take them **from** that container (or from the file it was read from),
+never recompute them. `check_alignment` compares axes with
+`np.array_equal`, and a `(u, v)` coverage recomputed from station
+coordinates, hour angle and wavelength differs in its last bits — failing a
+check whose message is about axes rather than about arithmetic. This is the
+general form of the instruction `likelihoods.md` §16 gives resampling steps
+("negotiation should target the observed grid").
 
 ### The image and 1-D-spatial slots (recorded 2026-09-03; Phase 2+)
 

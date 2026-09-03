@@ -797,6 +797,17 @@ The second pattern in full, for two objects:
 
 ```
 
+**Cost, at population scale** (recorded at the freeze — the W1.11
+population sketch's gap H-4): `lnprior` and its relatives are O(number of
+`Parameter` objects), so the N-component pattern above evaluates N scalar
+priors through N objects per call, where a `Plate` evaluates one
+vectorised prior — measured at N = 1000 as roughly two orders of magnitude
+apart. That is not a defect (`ParameterSet` is a declaration container,
+not a hot-loop object, and an engine pays this once per proposal beside a
+model evaluation), but at genuinely population scale prefer the `Plate`
+layout where the data allow it, and expect the N-component layout's prior
+overhead to be visible beside a cheap model.
+
 ## 10. Buffers: explicit, and why
 
 `architecture.md` §6 gives the distinguishing question: *would you ever put a

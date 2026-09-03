@@ -1,6 +1,6 @@
 # Modality sketch (e) — IFU cube
 
-Status: **design sketch for W1.13**, part of W1.11. Not a contract; a
+Status: **design sketch, dispositioned at the freeze (W1.13)** — every gap and requirement below carries its status line. Part of W1.11. Not a contract; a
 composition worked example against the merged W1.4–W1.6 code. Code cited
 here is `ampere.core` as merged at this repository's `master`.
 
@@ -155,6 +155,15 @@ hand-constructed the same way.
 
 ### Gap 1 — no "plate of datasets": per-spaxel decomposition does not scale ergonomically
 
+*Dispositioned at the freeze (W1.13): **deferred to Phase 5** — the
+hierarchical/population implementation phase, which this construct
+serves for IFU and population fitting alike. What Phase 1 landed is the
+substrate: `Binding.index` routes one element of a plate's array-valued
+parameter to one component (H-2, ruled 2026-09-02), so per-member wiring
+is expressible today at the cost of writing it out; the ergonomic
+plate-of-datasets construct is additive on top and the freeze precludes
+it nowhere. Its per-spaxel diagnostics half rides with it.*
+
 **What is missing.** `parameters.md` §9's `Plate` solves exactly this
 problem *for parameters*: "N members sharing hyperparameters" expands into
 one array-valued parameter rather than requiring N hand-written
@@ -198,6 +207,13 @@ independently.
 
 ### Gap 2 — mask propagation on `Layout.GRID` has no supported helper
 
+*Dispositioned at the freeze (W1.13): **deferred to Phase 5**, beside the
+gridded-container strategies that are its consumers (`transformations.md`
+§13.5 already names the limitation; the proposed `propagate_mask_grid` is
+an additive helper the freeze precludes nowhere). PSF convolution's
+standard-library slot (`transformations.md` §10) should land it — or an
+equivalent — when the image steps are implemented.*
+
 **What is missing.** `transformations.md` limitation 13.5 already states
 this precisely: "`propagate_mask`'s influence matrix is `(n_out, n_in)`,
 which fits `Layout.POINTS`. A `Layout.GRID` container's mask must be
@@ -234,6 +250,11 @@ already have, rather than leaving it as a documented but unsupported
 requirement.
 
 ### Requirements on W1.7
+
+*Dispositioned at the freeze (W1.13): items 1 and 2 defer with Gap 1
+(Phase 5); item 3 asked for nothing beyond it. W1.7 as merged supports the
+written-out per-spaxel composition today, which is this sketch's own
+finding.*
 
 - **`DatasetCollection` needs the "plate of datasets" construct from gap 1**
   before IFU fitting (or any modality needing many structurally identical

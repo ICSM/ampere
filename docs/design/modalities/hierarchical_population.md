@@ -470,6 +470,15 @@ rewritten from "needs an index-alignment concept that belongs with W1.7" to
 
 ### H-1 — hierarchy has no composition-time declaration
 
+*Dispositioned at the freeze (W1.13): **deferred, pending Peter's ruling**
+— §11 Q2 (freeze-vs-Phase-5) and Q5 (whether design horizon (b) is the
+primary population route) remain his, and W1.13's report carries them.
+The deferral is safe on the sketch's own severity assessment: the
+amendment is additive convenience ("could follow the freeze"), the
+tie-based pattern stands as the documented route (`inference.md` §19 R2,
+with the revisit design recorded in its limitation 17.2), and nothing in
+the frozen contracts precludes a `Population` declaration later.*
+
 **Severity: real composability cost; a convenience amendment, could follow the
 freeze.** §4 has the argument. A user with independently written per-object
 models must rewrite their parameter sets to introduce a population; `Tie` covers
@@ -531,6 +540,11 @@ associative":
 
 ### H-4 — `lnprior` is O(number of `Parameter` objects), which the recommended population idiom maximises
 
+*Dispositioned at the freeze (W1.13): **landed as documentation** — the
+cost note this gap asked for is now in `parameters.md` §9, steering a
+population-scale layout to a `Plate` rather than N hand-written
+components. No interface change, as the severity line says.*
+
 **Severity: documentation now, implementation later; no interface change.** §5's
 numbers. This is not a defect — `ParameterSet` is a declaration container, not a
 hot-loop object — but `parameters.md` §9 currently recommends the N-component
@@ -549,6 +563,12 @@ with no warning.
 > reason to choose the slow one.
 
 ### H-5 — channel names cannot be qualified, which blocks the one-model population layout
+
+*Dispositioned at the freeze (W1.13): **landed** — ruled 2026-09-02
+(`inference.md` §19 R4): `_check_channel_name` and the `Instrument`
+channel binding accept `.`-separated identifiers, qualification happens
+in the model, and grouped non-hierarchical data motivated settling it at
+once rather than with the first population model.*
 
 **Severity: one line; routed here by `results_schema.md` §17.** The other
 population layout — a single model that evaluates all N objects and emits one
@@ -576,6 +596,14 @@ should be answered "make nesting lossless", not "make it recursive".
 > interprets the dots, and `require` still matches the full name.
 
 ## 10. Requirements on W1.7
+
+*Dispositioned at the freeze (W1.13): items 2, 3, 5 and 6 **discharged**
+by W1.7 and W1.8 as merged (the `Binding.index` wiring and its ordering,
+the single merge, array-valued parameters emitting one variable with a
+named dimension and `Binding.index` coordinates, per-dataset failure
+records); item 1's deferred-stub convenience and item 4's `Population`
+extension point defer with H-1 (pending Peter's §11 Q2/Q5 ruling — the
+tie-based pattern is the documented route meanwhile).*
 
 1. **`DatasetCollection` owns the population component.** It should construct
    the deferred-stub shape of §3 (one authority for each hyperprior, a stub per
@@ -608,6 +636,17 @@ should be answered "make nesting lossless", not "make it recursive".
    should name the dataset.
 
 ## 11. Open questions for review
+
+*Dispositioned at the freeze (W1.13):* Q1 — closed by H-2's ruling
+(2026-09-02): `Binding.index` was adopted and implemented, so routing
+stays in one place. Q3 — nested plates stay deferred as `parameters.md`
+§12.2 already records; they belong with whichever phase first needs a
+multi-level population (Phase 5 at the earliest), and land beside H-1's
+declaration if that is granted. Q4 — confirmed: per-object nuisance
+parameters as plate members is the intended reading of `parameters.md`
+§9's `members` argument, and is how this sketch and W1.7's tests already
+use it. **Q2 and Q5 remain Peter's** — carried in W1.13's report rather
+than answered here.
 
 1. **Is `Binding.index` (H-2) the right shape, or should `DatasetCollection`
    slice before it calls the model?** The alternative to amending `Binding` is

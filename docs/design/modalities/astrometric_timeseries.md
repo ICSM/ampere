@@ -1,6 +1,6 @@
 # Modality sketch (d) — astrometric time series
 
-Status: **design sketch for W1.13**, part of W1.11. Not a contract; a
+Status: **design sketch, dispositioned at the freeze (W1.13)** — every gap and requirement below carries its status line. Part of W1.11. Not a contract; a
 composition worked example against the merged W1.3–W1.6 code. Code cited
 here is `ampere.core` as merged at this repository's `master`.
 
@@ -137,6 +137,13 @@ actually need, is where the gap below appears.
 
 ### Gap — no cross-channel (vector-valued) correlated noise model
 
+*Dispositioned at the freeze (W1.13): **deferred to Phase 5**, where the
+approximate/advanced GP strategies live — the `JointGP` slot proposed
+below rides with that work, and the freeze precludes nothing (it is an
+additive solver strategy plus a noise model spanning datasets, both
+extension points the contracts already reserve). The limitation itself is
+now recorded in `likelihoods.md` §15, as the amendment asked.*
+
 **What is missing.** Real astrometric residuals are not two independent 1D
 noise processes. A guide-star jitter, an uncorrected chromatic term, or an
 unmodelled short-period companion all perturb **both** coordinates at the
@@ -189,6 +196,12 @@ implicit:
    e.g. `JointGP` — not exact, applies to 2+ channels, Phase 5.
 
 ### Requirements on W1.7
+
+*Dispositioned at the freeze (W1.13): **discharged by W1.7** (merged
+2026-09-02) — one model evaluation per draw, distributed to every dataset
+(pinned by `tests/core/test_dataset.py`'s evaluation-count test); the
+extension point for the vector-GP gap is deferred with the gap itself
+(Phase 5, above).*
 
 - **`DatasetCollection` must support several `Dataset`s sharing one `Model`
   evaluation.** RA and Dec are two channels of a *single* `ModelResult`; a
