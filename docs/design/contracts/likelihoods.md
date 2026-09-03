@@ -777,6 +777,45 @@ ampere.core.exceptions.LikelihoodError: observed values contains non-finite entr
 
 ```
 
+### Per-observation terms: `pointwise_log_prob`
+
+**Ruled by Peter, 2026-09-03** (`results.md` §15 R2 — a §4.4 addition,
+recorded in the plan's decision log) and landed at the freeze:
+`Likelihood.pointwise_log_prob(predicted, observed, values)` returns one
+log-likelihood term per **retained** sample, on request — never stored by
+default, and never called from the hot loop. Two decompositions, each under
+the name `results.md` §6 reserves for it:
+
+- **Independent noise** — `"factorised"`: the family's own `log_prob`
+  evaluated pointwise, exactly; the terms sum to `log_prob`. Every family
+  works, censoring included (a limit contributes its own Tobit term), and a
+  user family carrying its own aligned data keeps X-2's excision contract
+  per term: each single-sample call receives a full-length `retain`
+  selecting exactly that sample.
+- **A GP** — `"conditional_loo"`: the leave-one-out conditional terms
+  `log N(y_i | μ_i^{-i}, σ_i^{2,-i})`, computed by
+  `GPSolver.conditional_loo` from the same Cholesky the marginal likelihood
+  forms (`DenseGP` implements the closed form; `QuasisepGP` owes an O(N)
+  recursion in Phase 2 and refuses until then). These are what
+  `arviz.loo`/`waic` consume, and they are a *different* decomposition: a
+  GP joint has no per-observation factorisation, so the LOO terms
+  deliberately do not sum to `log_prob`.
+
+A latent combination is refused — its per-observation terms are conditional
+on latent values that belong to inference.
+
+```pycon
+>>> terms = simple.pointwise_log_prob(model, data)
+>>> terms.shape
+(4,)
+>>> bool(np.isclose(np.sum(terms), simple.log_prob(model, data)))
+True
+>>> gp_terms = flexible.pointwise_log_prob(model, data)
+>>> bool(np.isclose(np.sum(gp_terms), flexible.log_prob(model, data)))
+False
+
+```
+
 ## 9. Censoring: what a limit is, and who consumes it (issue #11)
 
 `results_schema.md` §8 draws the line and hands this side to this contract: a
@@ -1344,7 +1383,11 @@ Each is a decision, not an oversight. Each has an extension point.
   convention it must choose a decomposition and name it — the leave-one-out
   conditional terms are the standard choice and are computable from the same
   Cholesky this contract already forms. W1.13 should reconcile the two readings
-  in the plan's own wording.
+  in the plan's own wording. *(Done at the freeze: `results.md` §6 named both
+  decompositions, `pointwise_log_prob` computes them (§8, ruled 2026-09-03
+  R2), and `DEVELOPMENT_PLAN.md` §4.6's wording now states the per-draw
+  scalar as what every run stores and the per-observation terms as available
+  on request.)*
 - **W1.9 (Lowering)** — the declaration forms needing a lowering row are:
   `KernelSpec` per family (`matern32` → `celerite2.terms.Matern32Term` /
   `tinygp.kernels.quasisep.Matern32` / a GPyTorch equivalent;

@@ -726,6 +726,36 @@ class GPSolver(abc.ABC):
         whatever representation it uses.
         """
 
+    def conditional_loo(
+        self,
+        kernel: Kernel,
+        coordinates: np.ndarray,
+        residual: np.ndarray,
+        variance: np.ndarray,
+        values: Mapping[str, Any],
+    ) -> np.ndarray:
+        """Per-sample leave-one-out conditional log-density terms.
+
+        The named GP decomposition of ``results.md`` §6 (ruled 2026-09-03,
+        R2): term *i* is ``log N(y_i | mu_i^{-i}, sigma_i^{2,-i})`` — the
+        density of sample *i* under the GP conditioned on every *other*
+        retained sample — computable in closed form from the same factor
+        :meth:`log_marginal_likelihood` uses. These terms are what
+        ``arviz.loo``/``waic`` consume; they are a *different* decomposition
+        from the factorised pointwise terms of independent noise and do not
+        sum to the joint log-likelihood.
+
+        The default refuses, naming the strategy — the same declared-slot
+        discipline as an unimplemented solver. :class:`DenseGP` implements
+        it; ``QuasisepGP`` owes an O(N) recursion in Phase 2.
+        """
+        raise LikelihoodError(
+            f"{self.NAME} does not implement the leave-one-out conditional terms "
+            f"(GPSolver.conditional_loo). DenseGP computes them exactly from its Cholesky; a "
+            f"faster strategy must supply its own recursion before pointwise_log_prob can use "
+            f"it."
+        )
+
     def __repr__(self) -> str:
         return f"{type(self).__name__}()"
 
@@ -801,6 +831,30 @@ class DenseGP(GPSolver):
         log_determinant = 2.0 * float(np.sum(np.log(np.abs(np.diag(factor[0])))))
         quadratic = float(residual @ alpha)
         return -0.5 * (quadratic + log_determinant + residual.size * _LOG_2PI)
+
+    def conditional_loo(
+        self,
+        kernel: Kernel,
+        coordinates: np.ndarray,
+        residual: np.ndarray,
+        variance: np.ndarray,
+        values: Mapping[str, Any],
+    ) -> np.ndarray:
+        """The closed form from the same Cholesky (Sundararajan & Keerthi 2001).
+
+        With ``A = (K + diag(variance + jitter^2))^{-1}``:
+        ``sigma_i^{2,-i} = 1 / A_ii`` and ``mu_i^{-i} = y_i - [A r]_i / A_ii``,
+        so ``log p_i = 0.5 log A_ii - [A r]_i^2 / (2 A_ii) - 0.5 log(2 pi)``.
+        """
+        factor = self._factor(kernel, coordinates, variance, values)
+        alpha = scipy.linalg.cho_solve(factor, residual)
+        precision_diagonal = np.diag(scipy.linalg.cho_solve(factor, np.eye(residual.size)))
+        return np.asarray(
+            0.5 * np.log(precision_diagonal)
+            - alpha**2 / (2.0 * precision_diagonal)
+            - 0.5 * _LOG_2PI,
+            dtype=DTYPE,
+        )
 
     def condition(
         self,
@@ -2385,6 +2439,96 @@ class Likelihood(Parameterised):
             limits=limits,
         )
         return float(self._family.log_prob(predicted_values, observed_values, noise))
+
+    def pointwise_log_prob(
+        self,
+        predicted: FunctionSamples,
+        observed: FunctionSamples,
+        values: Mapping[str, Any] | Sequence[float] | np.ndarray | None = None,
+    ) -> np.ndarray:
+        """Per-retained-sample log-likelihood terms — the §4.4 addition R2 granted.
+
+        Ruled 2026-09-03 (``results.md`` §15 R2): granted at the freeze, **not
+        stored by default** — a run's ``log_likelihood`` group stays per
+        dataset, and these terms are written only by an explicit call. Two
+        decompositions, each with the name ``results.md`` §6 reserves for it:
+
+        * **independent noise** (``"factorised"``): the family's own
+          ``log_prob`` evaluated pointwise — exact, and the terms sum to
+          :meth:`log_prob`. Works for every family, censoring included, and
+          for a user family carrying its own aligned data: each single-sample
+          call receives a ``retain`` selecting exactly that sample from the
+          full containers, so X-2's excision contract holds per term.
+        * **a GP** (``"conditional_loo"``): the leave-one-out conditional
+          terms ``log N(y_i | mu_i^{-i}, sigma_i^{2,-i})``, from the same
+          Cholesky the marginal likelihood forms
+          (:meth:`GPSolver.conditional_loo`). These are what ``arviz.loo``
+          consumes; they are a *different* decomposition and deliberately do
+          **not** sum to the joint value, which has no per-observation
+          factorisation under a GP.
+
+        A latent combination is refused: its per-observation terms are
+        conditional on latent values that belong to inference, not to this
+        method.
+        """
+        if self.marginalisation is Marginalisation.LATENT:
+            raise LikelihoodError(
+                f"the {self._family.NAME} family with a {type(self._noise).__name__} noise model "
+                f"is a latent-variable likelihood, whose per-observation terms are conditional "
+                f"on latent values inference owns; pointwise_log_prob has no unconditional "
+                f"answer to give. Use the per-dataset log_likelihood group instead."
+            )
+        self._check_shapes(predicted, observed)
+        resolved = self.context(values)
+        weights = np.asarray(observed.weights()).ravel() * np.asarray(predicted.weights()).ravel()
+        retain = weights > 0.0
+        if not np.any(retain):
+            return np.zeros(0, dtype=DTYPE)
+
+        observed_values = self._retained(observed, retain, "observed")
+        predicted_values = self._retained(predicted, retain, "predicted")
+        limits = self._retained_limits(retain)
+
+        if self._noise.CORRELATED:
+            # Reachable only for the Gaussian family: every other implemented
+            # ANALYTIC-with-GP combination is refused at composition.
+            coordinates = self._coordinates(observed, retain)
+            noise = self._noise.noise_params(
+                observed,
+                retain,
+                resolved,
+                predicted=predicted_values,
+                coordinates=coordinates,
+                limits=limits,
+            )
+            assert noise.solver is not None and noise.kernel is not None
+            assert noise.coordinates is not None
+            return noise.solver.conditional_loo(
+                noise.kernel,
+                noise.coordinates,
+                observed_values - predicted_values,
+                noise.variance,
+                noise.values,
+            )
+
+        indices = np.flatnonzero(retain)
+        terms = np.empty(indices.size, dtype=DTYPE)
+        for position, index in enumerate(indices):
+            single = np.zeros(retain.size, dtype=bool)
+            single[index] = True
+            noise = self._noise.noise_params(
+                observed,
+                single,
+                resolved,
+                predicted=predicted_values[position : position + 1],
+                limits=None if limits is None else limits[position : position + 1],
+            )
+            terms[position] = self._family.log_prob(
+                predicted_values[position : position + 1],
+                observed_values[position : position + 1],
+                noise,
+            )
+        return terms
 
     def conditional(
         self,

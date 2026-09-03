@@ -410,6 +410,14 @@ only by an explicit call, never by default. A run emitted today is
 forward-compatible with one emitted after it lands, because the group it would
 occupy is empty rather than misused.
 
+*(Landed at the freeze — ruled 2026-09-03, §15 R2, with the decision-log
+entry: `Likelihood.pointwise_log_prob` now computes both decompositions
+under exactly these names — the family's pointwise terms for independent
+noise, `GPSolver.conditional_loo` for a GP — see `likelihoods.md` §8. The
+not-stored-by-default rule is unchanged: emitting the group remains an
+explicit call, and the emission helper itself is Phase 2's, beside the
+engine drivers that produce runs worth decomposing.)*
+
 ## 7. Groups a run does not store, and the rule for getting them
 
 `diagnostics.md` §7 puts two questions to this contract.

@@ -312,10 +312,18 @@ Also part of this contract:
   in `ampere.results`; serialisation is netCDF. This is how the
   `mixins.py` monolith is retired and how sampler plotting parity stops
   regressing.
-- **Every run stores per-sample `log_likelihood` and `log_prior`** (and run
+- **Every run stores per-draw `log_likelihood` and `log_prior`** (and run
   provenance: package versions, seeds, data hashes, spec hash, in the
   InferenceData attrs). Cheap now; it is the enabling requirement for
   population-level importance reweighting later (Design horizon, item b).
+  (Wording reconciled at the freeze, resolving the ambiguity
+  `likelihoods.md` §16 flagged: what every run stores is the **per-draw**
+  value — the scalar joint log-likelihood per posterior draw, decomposed
+  per dataset, which is what reweighting needs. The **per-observation**
+  terms ArviZ's LOO/WAIC convention wants have no GP factorisation, so they
+  are a *named* decomposition available on request —
+  `Likelihood.pointwise_log_prob`, ruled 2026-09-03, `results.md` §6 —
+  and are never stored by default.)
 - **Conformance suite**: a pytest suite parametrised over backends that any
   implementation of the contracts must pass (round-trip priors, schema
   validation, log_prob agreement vs analytic cases, DenseGP↔QuasisepGP
