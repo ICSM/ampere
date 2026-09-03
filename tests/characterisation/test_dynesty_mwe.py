@@ -27,7 +27,6 @@ from conftest import (
     SEED,
     assert_means_within_tolerance,
     build_linear_sed_problem,
-    xfail_if_pyphot_incompatible,
 )
 
 NLIVE = 50
@@ -43,7 +42,6 @@ TOLERANCES = [0.2, 1.5, 0.05, 0.2, 0.05]
 PARAM_LABELS = ["slope", "intercept", "calVar", "cov scale factor", "cov scale length"]
 
 
-@xfail_if_pyphot_incompatible
 def test_dynesty_minimal_working_example(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 

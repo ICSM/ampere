@@ -50,7 +50,6 @@ from conftest import (
     assert_means_within_tolerance,
     build_linear_sed_problem,
     requires_zeus,
-    xfail_if_pyphot_incompatible,
 )
 
 NWALKERS = 16
@@ -68,7 +67,6 @@ PARAM_LABELS = ["slope", "intercept", "calVar", "cov scale factor", "cov scale l
 
 
 @requires_zeus
-@xfail_if_pyphot_incompatible
 def test_zeus_minimal_working_example(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 

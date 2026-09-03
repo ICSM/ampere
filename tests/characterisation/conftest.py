@@ -43,6 +43,7 @@ from spectres import spectres
 import ampere
 from ampere.data import Photometry, Spectrum
 from ampere.models import Model
+from ampere.utils.pyphot_compat import get_unit
 
 # ---------------------------------------------------------------------------
 # Fixed problem definition
@@ -113,9 +114,9 @@ def build_linear_sed_problem(seed=SEED, stride=SPECTRUM_STRIDE):
     Returns a dict with the model, the [photometry, spectrum] dataset, and
     the true parameter values used to generate the synthetic data.
 
-    Raises ``AttributeError`` (uncaught) if the installed ``pyphot`` is
-    incompatible with the legacy filter-convolution API used here and by
-    ``ampere.data.photometry`` -- see ``PYPHOT_LEGACY_COMPATIBLE`` below.
+    Builds its synthetic photometry through ``ampere.utils.pyphot_compat``
+    (W0.9), the same compat layer ``ampere.data.photometry`` now uses, so
+    this works against both pyphot 1.x and >= 2.
     """
     np.random.seed(seed)
 
@@ -128,14 +129,14 @@ def build_linear_sed_problem(seed=SEED, stride=SPECTRUM_STRIDE):
     libname = f"{libdir}ampere_allfilters.hd5"
     filter_library = pyphot.get_library(fname=libname)
     filters = filter_library.load_filters(
-        FILTER_NAMES, interp=True, lamb=wavelengths * pyphot.unit["micron"]
+        FILTER_NAMES, interp=True, lamb=wavelengths * get_unit("micron")
     )
     flam = model_flux / wavelengths**2
     mod_sed = []
     for f in filters:
         lp = f.lpivot.to("micron").value
         fphot = f.get_flux(
-            wavelengths * pyphot.unit["micron"], flam * pyphot.unit["flam"], axis=-1
+            wavelengths * get_unit("micron"), flam * get_unit("flam"), axis=-1
         ).value
         mod_sed.append(fphot * lp**2)
     mod_sed = np.array(mod_sed)
@@ -204,36 +205,17 @@ def seed_default_rng(monkeypatch, seed=SEED):
 
 
 # ---------------------------------------------------------------------------
-# Optional / broken dependency handling
+# Optional dependency handling
 # ---------------------------------------------------------------------------
 
-#: True if the installed pyphot still exposes the pint-based ``pyphot.unit``
-#: API that ``ampere.data.photometry`` (legacy, frozen) calls directly in
-#: ``Photometry.reloadFilters`` and ``Photometry.lnlike``
-#: (``ampere/data/photometry.py`` lines ~421-422, 476-477, 590-602).
-#: pyphot >= ~2.0 removed this attribute as part of a unit-adapter rework;
-#: pip resolves the unpinned ``pyphot`` dependency in ``pyproject.toml`` to
-#: the latest release, so a plain ``pip install -e ".[dev]"`` currently
-#: installs an incompatible pyphot. See the W0.4 report for full details.
-PYPHOT_LEGACY_COMPATIBLE = hasattr(pyphot, "unit")
-
-xfail_if_pyphot_incompatible = pytest.mark.xfail(
-    condition=not PYPHOT_LEGACY_COMPATIBLE,
-    reason=(
-        "ampere.data.photometry.Photometry (legacy, frozen) calls "
-        "pyphot.unit['micron'/'flam'] directly in reloadFilters()/lnlike() "
-        "(ampere/data/photometry.py:421-422,476-477,590-602). The installed "
-        f"pyphot ({getattr(pyphot, '__VERSION__', 'unknown version')}) "
-        "removed the module-level 'unit' attribute in its unit-adapter "
-        "rework (pyphot>=~2.0), which is what 'pip install -e \".[dev]\"' "
-        "resolves for the unpinned pyproject.toml dependency. This blocks "
-        "every SED-fitting flow that uses Photometry, not just this one. "
-        "Not fixed here (frozen legacy code; pin/adapter fix is out of "
-        "scope for W0.4) -- see the W0.4 report."
-    ),
-    strict=False,
-    raises=AttributeError,
-)
+# W0.4 added ``PYPHOT_LEGACY_COMPATIBLE``/``xfail_if_pyphot_incompatible``
+# here: ``ampere.data.photometry`` (legacy, frozen) called the pint-based
+# ``pyphot.unit['micron'/'flam']`` registry directly, which pyphot >= ~2.0
+# removed as part of a unit-adapter rework, so an unpinned/latest pyphot
+# broke every SED-fitting flow that uses ``Photometry``. W0.9 fixed this at
+# the source with ``ampere/utils/pyphot_compat.py`` (both ``Photometry`` and
+# ``build_linear_sed_problem`` above now use it), so the marker is obsolete
+# and removed here -- see the W0.9 report.
 
 
 def assert_means_within_tolerance(means, golden, tolerances, labels):

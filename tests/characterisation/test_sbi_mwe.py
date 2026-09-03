@@ -59,7 +59,6 @@ from conftest import (
     build_linear_sed_problem,
     requires_sbi,
     seed_default_rng,
-    xfail_if_pyphot_incompatible,
 )
 
 N_PRIOR_NORM_SAMPLES = 2000
@@ -100,7 +99,6 @@ def _build_and_run_sbi(monkeypatch):
 
 
 @requires_sbi
-@xfail_if_pyphot_incompatible
 def test_sbi_minimal_working_example(tmp_path, monkeypatch):
     from ampere.infer.sbi import SBI_SNPE
 
@@ -130,7 +128,6 @@ def test_sbi_minimal_working_example(tmp_path, monkeypatch):
 
 
 @requires_sbi
-@xfail_if_pyphot_incompatible
 def test_sbi_postprocess_plots(tmp_path, monkeypatch):
     """W0.4 found this reliably raising (``IndexError``/``ValueError``,
     depending on the run) with the currently-resolved ``sbi`` package
@@ -158,7 +155,6 @@ def test_sbi_postprocess_plots(tmp_path, monkeypatch):
 
 
 @requires_sbi
-@xfail_if_pyphot_incompatible
 def test_sbi_check_prior_normalisation_false(monkeypatch):
     """W0.4 found ``SBI_SNPE(..., check_prior_normalisation=False)`` --
     documented as a way to *skip* the expensive prior-normalisation
