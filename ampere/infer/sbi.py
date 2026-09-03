@@ -16,7 +16,14 @@ from .basesearch import BaseSearch
 from .mixins import SBIPostProcessor
 from ..logger import Logger
 from ..models.results import ModelResults
-from sbi.inference import SNPE, DirectPosterior
+
+# W0.9: sbi.inference.SNPE is a pure backward-compatibility alias for
+# NPE_C (sbi >= 0.27 -- see sbi/inference/__init__.py's
+# _DEPRECATED_ALIASES), emitting a FutureWarning on every access and
+# scheduled for removal in sbi 0.28. Import the canonical name directly so
+# ampere does not warn on every SBI_SNPE construction and does not break
+# once 0.28 actually drops the alias.
+from sbi.inference import NPE_C, DirectPosterior
 from sbi import utils as utils
 from sbi import analysis as analysis
 
@@ -348,9 +355,9 @@ class SBI_SNPE(LFIBase, SBIPostProcessor):
                                                   hidden_features=10, 
                                                   num_transforms=2
                                                   )
-            self.sampler = SNPE(prior=prior, density_estimator=neural_posterior)
+            self.sampler = NPE_C(prior=prior, density_estimator=neural_posterior)
         else:
-            self.sampler = SNPE(prior=prior)
+            self.sampler = NPE_C(prior=prior)
 
     def _check_prior_normalisation(self, n_prior_norm_samples=100000, 
                                    prior_norm_thres=0.01):
