@@ -1074,7 +1074,10 @@ Phase 4 extension (`interferometry.md` §11 Q2); not for the freeze.
 Question 6 — superseded: serialisation is consolidated into a single
 cross-contract review at W1.13 (with `likelihoods.md` §17 Q8 and
 `results.md` §15 R7) rather than settled per contract; the design-horizon
-(c) training-set requirement rides along with it.
+(c) training-set requirement rides along with it. *(Closed at the freeze:
+`docs/design/serialisation_review.md` — containers round-trip by value
+through `ampere.results.serialisation`, the training-pair format is
+pinned in its §4, and the writer is a named Phase 2 obligation.)*
 
 1. **`DEFAULT_CHANNEL` is the string `"default"`.** It is short and obvious, but
    it is also a name a user might plausibly want for a real channel. Reserving

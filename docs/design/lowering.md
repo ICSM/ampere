@@ -529,9 +529,14 @@ Notes that decide implementations:
 - **A custom `Bijection` is a reference-path-only feature**, exactly parallel
   to a duck-typed prior (§1.5). It satisfies ampere's protocol with numpy
   operations that a torch tensor or a jax tracer will not accept. The
-  extension point is for the user to supply a backend-native transform
-  alongside; that plumbing is not specified here and is out of scope until
-  something needs it.
+  extension point is the **hardened registration hook** ruled 2026-09-03
+  (§12.8): `register_lowering(family, backend, constructor)` for prior
+  families and the analogous per-backend slot for a custom `Bijection` — no
+  silent overwrites (`override=True` required), user-registered rows stamped
+  in provenance, an opt-in conformance battery for registrants, and
+  constructors that must return trace-pure objects since the registry
+  resolves before any tracing. The plumbing is Phase 2's, beside the
+  backends that consume it.
 
 ## 5. The declaration-form lowering table
 
@@ -1157,7 +1162,13 @@ crashing, which is the criterion for needing a mechanical check.
    revisiting at Phase 2 start when the GP library is chosen, since a
    paramax-founded library (GPJax) would put wrapped leaves at ampere's
    boundary regardless of what ampere itself uses internally.
-3. **Qualified names versus torch `state_dict` keys.** §6.1 recommends nesting
+3. ***Closed at the freeze (W1.13):*** the flat tie-label ruling stands —
+   Peter ruled `parameters.md` §14.3 on 2026-09-01 (tie labels stay global
+   and unqualified) and nothing since has reopened it — so §6.1's
+   recommendation is settled as written: one `nn.Module` per merge
+   component, tied parameters on the root module. *(Original question
+   follows for the record.)*
+   **Qualified names versus torch `state_dict` keys.** §6.1 recommends nesting
    one `nn.Module` per merge component so that dotted names come out
    naturally. This is clean for names produced by `merge`, but a tie label is
    deliberately unqualified (`"distance"`, not `"shared.distance"` —

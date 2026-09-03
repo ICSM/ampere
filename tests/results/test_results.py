@@ -36,6 +36,7 @@ from ampere.core import (
     GaussianFamily,
     GaussianProcessNoise,
     HierarchicalPrior,
+    IndependentNoise,
     Image,
     Instrument,
     Likelihood,
@@ -423,6 +424,24 @@ class TestContainerAndProblemFingerprints:
         assert describe_likelihood(first)["parameters"] == second.parameters.to_spec()
         assert describe_likelihood(first)["solver"]
         assert describe_likelihood(first)["kernel"]["family"] == "matern32"
+
+    def test_a_family_or_noise_buffer_reaches_the_fingerprint(self) -> None:
+        # Found by W1.13's serialisation review: Likelihood forwards
+        # parameters from its pieces, never buffers, so a family's background
+        # template was invisible to the provenance record — the stale-cache
+        # trap DEVELOPMENT_PLAN.md §7 warns about.
+        class Background(GaussianFamily):
+            NAME = "test_buffered_background"
+
+            def __init__(self, template: np.ndarray) -> None:
+                self.register_buffer("template", template)
+
+        with_one = Likelihood(Background(np.array([1.0, 2.0])), IndependentNoise())
+        with_other = Likelihood(Background(np.array([1.0, 3.0])), IndependentNoise())
+        first, second = describe_likelihood(with_one), describe_likelihood(with_other)
+        assert first["parameters"] == second["parameters"]
+        assert first["buffers"]["family"] != second["buffers"]["family"]
+        assert hash_of(first) != hash_of(second)
 
 
 class TestProvenanceAttrs:

@@ -816,6 +816,35 @@ False
 
 ```
 
+### The declarative spec: `to_spec`
+
+Also landed at the freeze (`results.md` §15 R7, confirmed by the
+consolidated serialisation review — `docs/design/serialisation_review.md`):
+`Likelihood.to_spec()` returns the declarative description of the
+composition as plain, JSON-able data — family name and class, noise-model
+class, marginalisation, the parameters' spec, and for a GP the kernel spec
+plus the solver's configuration. It is the one definition backends, the
+conformance suite and provenance share, and it distinguishes exactly what
+`ParameterSet.to_spec()` alone cannot:
+
+```pycon
+>>> matern = Likelihood(GaussianFamily(), GaussianProcessNoise(Matern32(0.3, 2.0)))
+>>> rbf = Likelihood(GaussianFamily(), GaussianProcessNoise(SquaredExponential(0.3, 2.0)))
+>>> matern.parameters.to_spec() == rbf.parameters.to_spec()
+True
+>>> matern.to_spec()["kernel"]["family"], rbf.to_spec()["kernel"]["family"]
+('matern32', 'squared_exponential')
+>>> matern.to_spec()["solver"]
+{'name': 'DenseGP', 'class': 'DenseGP', 'exact': True, 'config': {'jitter': 0.0}}
+
+```
+
+The spec describes the *declaration* only. Per-sample and bulk content — a
+censoring declaration's code positions, a family's buffers — is
+provenance's business: `ampere.results.describe_likelihood` composes this
+mapping and adds the content fingerprints. That split (specs declare,
+provenance fingerprints, storage carries values) is the review's one rule.
+
 ## 9. Censoring: what a limit is, and who consumes it (issue #11)
 
 `results_schema.md` §8 draws the line and hands this side to this contract: a
@@ -1488,7 +1517,10 @@ not the freeze; this contract needs nothing. Question 8 — superseded:
 serialisation is to be consolidated *once* across all the contracts (an
 inventory of every `to_spec`/`to_dict`/emission mechanism, a gap
 analysis, and one coherent approach) rather than settled piecemeal;
-routed to W1.13 alongside `results.md` §15 R7. **And ruled later the same
+routed to W1.13 alongside `results.md` §15 R7. *(Closed at the freeze:
+the review is `docs/design/serialisation_review.md`, and it confirmed
+the promotion — `Likelihood.to_spec()` exists, §8 above documents it,
+and `describe_likelihood` composes it.)* **And ruled later the same
 day**: X-1 — the prediction-aware `NoiseModel`
 (`awkward_instrument.md` §6's detailed design) — is **accepted as
 written** and lands at the freeze: `sigma` and `noise_params` gain a

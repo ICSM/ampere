@@ -1610,6 +1610,52 @@ class TestCompositionTimeDataChecks:
         assert masked_value == pytest.approx(unmasked_value, abs=1e-12)
 
 
+class TestLikelihoodToSpec:
+    """R7's promotion (ruled 2026-09-03): the object that knows itself describes itself."""
+
+    def test_the_spec_distinguishes_what_parameter_specs_cannot(self) -> None:
+        # The correctness argument R7 was granted on: same parameters,
+        # different kernel family or solver configuration, different spec.
+        matern = Likelihood(GaussianFamily(), GaussianProcessNoise(Matern32(0.3, 2.0)))
+        rbf = Likelihood(GaussianFamily(), GaussianProcessNoise(SquaredExponential(0.3, 2.0)))
+        assert matern.parameters.to_spec() == rbf.parameters.to_spec()
+        assert matern.to_spec()["kernel"]["family"] == "matern32"
+        assert rbf.to_spec()["kernel"]["family"] == "squared_exponential"
+        jittered = Likelihood(
+            GaussianFamily(), GaussianProcessNoise(Matern32(0.3, 2.0), DenseGP(jitter=0.1))
+        )
+        assert matern.to_spec()["solver"]["config"] == {"jitter": 0.0}
+        assert jittered.to_spec()["solver"]["config"] == {"jitter": 0.1}
+
+    def test_the_spec_is_declarative_and_censoring_carries_counts_only(self) -> None:
+        codes = np.array([0, 0, int(LimitKind.UPPER_LIMIT)], dtype=np.int8)
+        like = Likelihood(GaussianFamily(), IndependentNoise(), censoring=Censoring(codes))
+        spec = like.to_spec()
+        assert spec["family"] == "gaussian"
+        assert spec["marginalisation"] == "analytic"
+        assert spec["censoring"] == {"n_samples": 3, "n_censored": 1}
+        # Per-sample content (the code positions) is provenance's business,
+        # deliberately absent from the declarative spec.
+        assert "kinds" not in spec["censoring"]
+        import json
+
+        json.dumps(spec)  # the whole mapping is JSON-able
+
+    def test_provenance_composes_the_spec_rather_than_reassembling_it(self) -> None:
+        from ampere.results.provenance import describe_likelihood
+
+        codes = np.array([0, 0, int(LimitKind.UPPER_LIMIT)], dtype=np.int8)
+        like = Likelihood(GaussianFamily(), IndependentNoise(), censoring=Censoring(codes))
+        described = describe_likelihood(like)
+        spec = like.to_spec()
+        for key, value in spec.items():
+            if key == "censoring":
+                continue
+            assert described[key] == value
+        assert "buffers" in described  # the content-fingerprint layer's addition
+        assert "kinds" in described["censoring"]
+
+
 class TestPointwiseLogProb:
     """The §4.4 addition results.md §15 R2 granted (ruled 2026-09-03).
 

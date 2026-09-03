@@ -2291,6 +2291,56 @@ class Likelihood(Parameterised):
             f"closed form."
         )
 
+    def to_spec(self) -> dict[str, Any]:
+        """The declarative description of this likelihood, as plain data.
+
+        Ruled 2026-09-03 (``results.md`` §15 R7, confirmed by W1.13's
+        consolidated serialisation review) — the promotion of
+        ``ampere.results.describe_likelihood``'s assembly onto the object
+        that knows itself: the family name and class, the noise-model class,
+        the marginalisation declaration, the parameters' spec
+        (:meth:`ParameterSet.to_spec`), and — for a GP — the kernel spec and
+        the solver's declaration (name, class, exactness, dataclass
+        configuration: ``DenseGP``'s ``jitter`` changes the number the same
+        θ scores, so it is part of the identity). Everything is JSON-able.
+
+        **A spec describes the declaration; per-sample and bulk content is
+        provenance's business.** Censoring appears as its counts only, and
+        buffers not at all: the code positions of 10⁵ limits and the bytes of
+        an opacity table are content, fingerprinted by
+        ``ampere.results.provenance`` — which composes this mapping and adds
+        the hashes (``describe_likelihood``). Two likelihoods differing only
+        in kernel family or solver configuration — invisible to
+        ``ParameterSet.to_spec()`` alone — are distinguishable here, which is
+        the correctness argument R7 was granted on.
+        """
+        described: dict[str, Any] = {
+            "family": self._family.NAME or type(self._family).__name__,
+            "family_class": type(self._family).__name__,
+            "noise": type(self._noise).__name__,
+            "marginalisation": self.marginalisation.value,
+            "parameters": self.parameters.to_spec(),
+        }
+        if isinstance(self._noise, GaussianProcessNoise):
+            described["kernel"] = self._noise.kernel.spec().to_dict()
+            solver = self._noise.solver
+            solver_described: dict[str, Any] = {
+                "name": solver.NAME or type(solver).__name__,
+                "class": type(solver).__name__,
+                "exact": bool(solver.EXACT),
+            }
+            if dataclasses.is_dataclass(solver) and not isinstance(solver, type):
+                solver_described["config"] = {
+                    field.name: getattr(solver, field.name) for field in dataclasses.fields(solver)
+                }
+            described["solver"] = solver_described
+        if self._censoring is not None:
+            described["censoring"] = {
+                "n_samples": int(self._censoring.n_samples),
+                "n_censored": int(self._censoring.n_censored),
+            }
+        return described
+
     # -- composition-time checking -------------------------------------------
 
     def check_alignment(self, predicted: FunctionSamples, observed: FunctionSamples) -> None:

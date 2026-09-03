@@ -1013,7 +1013,13 @@ the decomposition declared in the group's attributes — is confirmed. R7
 rides with the consolidated cross-contract serialisation review at W1.13
 (Peter's same-day `likelihoods.md` §17 Q8 ruling), where
 `describe_likelihood`'s promotion to `Likelihood.to_spec()` is the
-leading candidate rather than a separately ruled point. The original
+leading candidate rather than a separately ruled point. *(The review is
+done — `docs/design/serialisation_review.md` — and confirmed the
+promotion: `Likelihood.to_spec()` landed, `describe_likelihood` composes
+it and keeps the content fingerprints, and the review found and fixed
+one provenance hole: family- and noise-model-owned buffers were
+invisible to `buffer_fingerprint(likelihood)`;
+`PROVENANCE_SCHEMA_VERSION` is now 2.)* The original
 requests are kept below for the record.
 
 **R1 — when does arviz join the base install, and with which netCDF engine?**

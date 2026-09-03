@@ -5,7 +5,10 @@ handling that lowers to each backend's model (numpy Generators, torch
 Generators, jax PRNG keys), so runs are reproducible across backends", and
 ``docs/design/lowering.md`` §9.2 is the design that answers it. This module is
 that design, implemented: a single pure function of ``(seed, label)`` that every
-backend turns into its own idiomatic generator.
+backend turns into its own idiomatic generator. Its home here was **ratified
+at the freeze** (ruled 2026-09-03, ``lowering.md`` §12.7 = ``inference.md``
+§19.5): pure stdlib+numpy, deliberately free-standing, and the alternative
+was three backends agreeing by convention.
 
 Why a shared derivation rather than a shared mechanism
 ------------------------------------------------------
