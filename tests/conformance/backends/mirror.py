@@ -35,6 +35,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+import astropy.units as u
 import numpy as np
 import scipy.stats as st
 
@@ -68,12 +69,17 @@ class MirrorPowerLawModel(_CountingModel):
 
     def __init__(self, spec: ModelSpec) -> None:
         super().__init__(spec)
-        self.register_buffer("reference", float(spec.reference_coordinate))
+        # The unit is part of the declaration, and W2.1's neutral model
+        # identity compares buffers: a reference wavelength declared unitless
+        # here and in micron there is a real disagreement, not a detail.
+        self.register_buffer(
+            "reference_wavelength", float(spec.reference_coordinate), unit=u.micron
+        )
         self.register_parameter(Parameter("norm", st.loguniform(0.1, 10.0)))
         self.register_parameter(Parameter("index", st.norm(-1.0, 0.5)))
 
     def _flux(self, grid: np.ndarray, context: Mapping[str, Any]) -> np.ndarray:
-        ratio = np.log(grid / context["reference"])
+        ratio = np.log(grid / context["reference_wavelength"])
         return np.exp(context["index"] * ratio + np.log(context["norm"]))
 
 

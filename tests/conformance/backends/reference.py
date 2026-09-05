@@ -1,16 +1,41 @@
-"""The reference backend fixture: pure numpy ``ampere.core``, as it stands.
+"""The reference backend fixture: ``ampere.backends.reference``, the shipped package.
 
-``architecture.md`` §1 rung 1 makes the reference backend "pure numpy/scipy",
-and §2 settles that it is a real backend rather than a promoted legacy path —
-"closer in size to a large contract-conformance test fixture than to a
-production backend". Until ``ampere/backends/reference/`` lands in Phase 2, the
-reference path *is* ``ampere.core`` plus a handful of concrete models and
-transformations, and those live here.
+Until W2.1 this module *was* the reference backend — ``ampere.core`` plus a
+handful of concrete models and transformations, written here because
+``ampere/backends/reference/`` did not exist yet. It does now, so this file has
+become what it was always meant to be: a thin adapter turning the battery's
+neutral declarations into the shipped classes.
 
-Everything in this module is ordinary numpy. The classes are deliberately the
-smallest thing that satisfies :mod:`tests.conformance.protocol`, so that a
-Phase-2 author reading it sees the shape of the obligation and not a second
-implementation to keep in step.
+What the battery therefore exercises for real, on every row:
+
+* :class:`~ampere.backends.reference.PowerLaw` — the ``POWER_LAW`` kind;
+* :class:`~ampere.backends.reference.CalibrationScale` — ``SCALE``;
+* :class:`~ampere.backends.reference.Resample` — ``REBIN``;
+* :class:`~ampere.backends.reference.FractionalModelNoise` and
+  :class:`~ampere.backends.reference.FractionalModelGPNoise` — the X-1 rows in
+  ``test_likelihoods.py``.
+
+Two pieces stay local, and deliberately:
+
+``LinearModel``
+    ``ModelKind.LINEAR`` is a *test* construct — the battery needs a closed
+    form whose parameters both lower to ``Identity`` — and a straight line in
+    wavelength is not on ``DEVELOPMENT_PLAN.md`` §5's list of models the
+    reference backend ships. Shipping one only to satisfy a fixture would put
+    test scaffolding in the installed package.
+``Photometry``
+    ``TransformationKind.PHOTOMETRY`` exists, per ``protocol.py``, "so a row
+    can build a chain whose kinds do not compose": it is a *kind*-changing
+    fixture, declared by bare pivots and names. The shipped
+    :class:`~ampere.backends.reference.SyntheticPhotometry` is the physics — it
+    takes tabulated response curves, publishes ``points=`` at its own
+    tabulation and reads the container through ``Axis.locate`` — which the
+    battery's declaration cannot supply. It is covered by ``tests/backends/``
+    instead, including Gap 1's two-instrument scenario.
+
+The counting wrapper is likewise test-only: :class:`CountingModel` is
+``protocol.py``'s requirement, not something a shipped model should carry, so
+it is mixed in here rather than in the package.
 """
 
 from __future__ import annotations
@@ -22,9 +47,13 @@ import astropy.units as u
 import numpy as np
 import scipy.stats as st
 
+from ampere.backends.reference import (
+    CalibrationScale,
+    PowerLaw,
+    Resample,
+)
+from ampere.backends.reference.models import _SpectralModel
 from ampere.core import (
-    AxisRequirement,
-    ChannelRequirements,
     DenseGP,
     GPSolver,
     HierarchicalPrior,
@@ -58,10 +87,8 @@ __all__ = [
     "LinearModel",
     "Photometry",
     "PowerLawModel",
-    "Rebin",
     "ReferenceBackend",
     "ReferenceParameterSpace",
-    "Scale",
     "influence_matrix",
     "offset_plate",
 ]
@@ -118,22 +145,24 @@ def influence_matrix(source: np.ndarray, target: np.ndarray) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
-class _CountingModel(Model):
-    """Shared plumbing: the evaluation counter and the optional template cache.
+class _CountingModel(_SpectralModel):
+    """The battery's counter and its opt-out from ``compile_for``.
 
-    The counter is what lets ``test_inference.py`` assert that an
-    out-of-support θ is refused *without* running the model (``inference.md``
-    §18). The template cache is the ``compile_for`` behaviour
-    ``transformations.md`` §14 asks a compiled model for.
+    ``protocol.py``'s :class:`~tests.conformance.protocol.CountingModel` asks
+    for an ``evaluations`` counter so ``test_inference.py`` can prove an
+    out-of-support theta is refused *without* running the model. That is a test
+    obligation, not something a shipped model should carry, so it is mixed in
+    here.
+
+    ``ModelSpec.compiled=False`` also has to be reproducible, and the shipped
+    models always honour ``compile_for``. Refusing it here is a one-line
+    override rather than a flag on the installed class.
     """
 
-    def __init__(self, spec: ModelSpec) -> None:
+    def __init__(self, spec: ModelSpec, **kwargs: Any) -> None:
+        super().__init__(spec.coordinates, channels=spec.channels, **kwargs)
         self.spec = spec
         self.evaluations = 0
-        self.templates: dict[str, Spectrum] = {}
-        self.register_buffer(
-            "wavelength", np.asarray(spec.coordinates, dtype=float), unit=COORDINATE_UNIT
-        )
         if spec.plated:
             for parameter in offset_plate(len(spec.channels)).expand():
                 self.register_parameter(parameter)
@@ -141,50 +170,40 @@ class _CountingModel(Model):
     def reset_evaluations(self) -> None:
         self.evaluations = 0
 
-    def compile_for(self, requirements: Mapping[str, ChannelRequirements]) -> Model:
+    def compile_for(self, requirements: Mapping[str, Any]) -> Model:
         if not self.spec.compiled:
-            return super().compile_for(requirements)
-        for channel in self.spec.channels:
-            asked = requirements.get(channel)
-            if asked is None or "spectral_axis" not in asked:
-                continue
-            grid = _to_micron(asked["spectral_axis"].coordinates())
-            self.templates[channel] = Spectrum(
-                grid * COORDINATE_UNIT, np.zeros(grid.size), unit=FLUX_UNIT
-            )
-        return self
-
-    def _grid(self, channel: str, context: Mapping[str, Any]) -> np.ndarray:
-        template = self.templates.get(channel)
-        if template is None:
-            return np.asarray(context["wavelength"], dtype=float)
-        return template.spectral_axis.values
-
-    def _emit(self, channel: str, grid: np.ndarray, flux: np.ndarray) -> Spectrum:
-        template = self.templates.get(channel)
-        if template is None:
-            return Spectrum(grid * COORDINATE_UNIT, flux, unit=FLUX_UNIT)
-        return template.with_values(flux)
-
-    def _flux(self, grid: np.ndarray, context: Mapping[str, Any]) -> np.ndarray:
-        raise NotImplementedError
+            return Model.compile_for(self, requirements)
+        return super().compile_for(requirements)
 
     def evaluate(self, **values: Any) -> ModelResult:
+        """The shipped evaluation, plus the plate's per-channel offset.
+
+        ``ModelSpec.plated`` adds ``offsets[i]`` to channel *i* so that
+        ``results.md`` §14's row has an array-valued parameter with a named
+        dimension to write. That is a declaration the battery needs and the
+        shipped models have no reason to carry, so it is applied here.
+        """
         self.evaluations += 1
         context = self.context(values)
         offsets = context.get("objects.offsets")
-        channels: dict[str, Spectrum] = {}
-        for index, channel in enumerate(self.spec.channels):
+        emitted: dict[str, Spectrum] = {}
+        for index, channel in enumerate(self.channels):
             grid = self._grid(channel, context)
             flux = self._flux(grid, context)
             if offsets is not None:
                 flux = flux + np.asarray(offsets, dtype=float)[index]
-            channels[channel] = self._emit(channel, grid, flux)
-        return ModelResult(channels)
+            emitted[channel] = self._emit(channel, grid, flux)
+        return ModelResult(emitted)
 
 
 class LinearModel(_CountingModel):
-    """``f(x) = offset + slope * x`` — the closed form, evaluated directly."""
+    """``f(x) = offset + slope * x`` — the closed form, evaluated directly.
+
+    Local to the battery: a straight line in wavelength is a test construct,
+    not one of the models ``DEVELOPMENT_PLAN.md`` §5 has the reference backend
+    ship. It exists because the battery needs a form whose parameters are both
+    unbounded, so both lower to ``Identity``.
+    """
 
     def __init__(self, spec: ModelSpec) -> None:
         super().__init__(spec)
@@ -195,71 +214,34 @@ class LinearModel(_CountingModel):
         return context["offset"] + context["slope"] * grid
 
 
-class PowerLawModel(_CountingModel):
-    """``f(x) = norm * (x / x_ref) ** index`` — evaluated as written."""
+class PowerLawModel(_CountingModel, PowerLaw):
+    """The battery's ``POWER_LAW`` kind, on the **shipped** power law.
+
+    The maths, the buffer and the parameter declaration all come from
+    :class:`~ampere.backends.reference.PowerLaw`; only the counter and the
+    ``compiled=False`` opt-out are added. The battery's priors are passed in,
+    because they are the declaration ``ModelKind.POWER_LAW`` fixes and the
+    shipped class rightly takes whatever the user asks for.
+    """
 
     def __init__(self, spec: ModelSpec) -> None:
-        super().__init__(spec)
-        self.register_buffer("reference", float(spec.reference_coordinate))
-        self.register_parameter(Parameter("norm", st.loguniform(0.1, 10.0)))
-        self.register_parameter(Parameter("index", st.norm(-1.0, 0.5)))
-
-    def _flux(self, grid: np.ndarray, context: Mapping[str, Any]) -> np.ndarray:
-        return context["norm"] * (grid / context["reference"]) ** context["index"]
-
-
-# ---------------------------------------------------------------------------
-# Transformations
-# ---------------------------------------------------------------------------
-
-
-class Scale(Transformation):
-    """A multiplicative calibration with one free parameter."""
-
-    ACCEPTS: ClassVar[tuple[type, ...]] = (Spectrum,)
-
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        self.register_parameter(Parameter("scale", st.lognorm(0.2)))
-
-    def apply(self, samples: Any, values: Any) -> Spectrum:
-        return samples.with_values(samples.values * self.context(values)["scale"])
-
-
-class Rebin(Transformation):
-    """Resample onto a coarser grid, publishing a requirement and a mask."""
-
-    ACCEPTS: ClassVar[tuple[type, ...]] = (Spectrum,)
-
-    def __init__(self, target: Any, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        self.target = np.asarray(target, dtype=float)
-
-    def requirements(self) -> tuple[AxisRequirement, ...]:
-        return (
-            AxisRequirement(
-                "spectral_axis",
-                unit=COORDINATE_UNIT,
-                intervals=(float(self.target[0]), float(self.target[-1])),
-                max_step=float(np.diff(self.target).min()) / 2.0,
-            ),
-        )
-
-    def influence(self, source: np.ndarray) -> np.ndarray:
-        return influence_matrix(np.asarray(source, dtype=float), self.target)
-
-    def apply(self, samples: Any, values: Any) -> Spectrum:
-        weights = self.influence(samples.spectral_axis.values)
-        return Spectrum(
-            self.target * COORDINATE_UNIT,
-            weights @ samples.values,
-            unit=samples.unit,
-            mask=propagate_mask(samples, weights),
+        super().__init__(
+            spec,
+            norm=st.loguniform(0.1, 10.0),
+            index=st.norm(-1.0, 0.5),
+            reference_wavelength=spec.reference_coordinate,
         )
 
 
 class Photometry(Transformation):
-    """``Spectrum → PhotometricPoints``: the kind-changing step."""
+    """``Spectrum -> PhotometricPoints``: the battery's kind-changing step.
+
+    Local to the battery. ``protocol.py`` says this kind "exists so a row can
+    build a chain whose kinds do not compose", and declares it by bare pivots
+    and filter names — there are no response curves to integrate. The shipped
+    :class:`~ampere.backends.reference.SyntheticPhotometry` is the real step,
+    and is covered by ``tests/backends/``.
+    """
 
     ACCEPTS: ClassVar[tuple[type, ...]] = (Spectrum,)
     PRODUCES: ClassVar[type] = PhotometricPoints
@@ -332,19 +314,12 @@ class ReferenceParameterSpace:
 # ---------------------------------------------------------------------------
 
 
-def _to_micron(coordinates: Any) -> np.ndarray:
-    """Coordinates as bare micron, whether or not they arrive as a Quantity."""
-    if isinstance(coordinates, u.Quantity):
-        return np.asarray(coordinates.to_value(COORDINATE_UNIT), dtype=float)
-    return np.asarray(coordinates, dtype=float)
-
-
 _MODELS = {ModelKind.LINEAR: LinearModel, ModelKind.POWER_LAW: PowerLawModel}
 _KERNELS = {KernelFamily.MATERN32: Matern32, KernelFamily.SQUARED_EXPONENTIAL: SquaredExponential}
 
 
 class ReferenceBackend:
-    """The first fixture: ``ampere.core``'s numpy path."""
+    """The first fixture: the shipped ``ampere.backends.reference`` package."""
 
     name = "reference"
     capabilities = BackendCapabilities(
@@ -353,7 +328,7 @@ class ReferenceBackend:
         device="cpu",
         float64=True,
         # QuasisepGP is a declared strategy slot with no implementation
-        # (likelihoods.md §5); Phase 2 fills it in and adds it here.
+        # (likelihoods.md §5); W2.3 fills it in with celerite2 and adds it here.
         solvers=frozenset({SolverKind.DENSE}),
     )
 
@@ -362,9 +337,9 @@ class ReferenceBackend:
 
     def transformation(self, spec: TransformationSpec) -> Transformation:
         if spec.kind is TransformationKind.SCALE:
-            return Scale(label=spec.label)
+            return CalibrationScale(st.lognorm(0.2), label=spec.label)
         if spec.kind is TransformationKind.REBIN:
-            return Rebin(spec.target, label=spec.label)
+            return Resample(spec.target, label=spec.label)
         return Photometry(spec.target, spec.filters, label=spec.label)
 
     def kernel(self, spec: CovarianceSpec) -> Kernel:

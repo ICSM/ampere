@@ -1048,6 +1048,26 @@ check whose message is about axes rather than about arithmetic. This is the
 general form of the instruction `likelihoods.md` §16 gives resampling steps
 ("negotiation should target the observed grid").
 
+A second rule applies to every step in this table whose buffer is tied to
+specific `points=` — synthetic photometry and the RMF/ARF response matrix,
+which share exactly this shape (*added post-freeze with W2.1; approved
+2026-09-03, `spectrum_photometry.md` Gap 1, decision-log entry in
+`DEVELOPMENT_PLAN.md` §2*). Such a step **must** recover its own coordinates
+from the container with `Axis.locate` rather than assume positional alignment:
+
+```python
+index = samples.axis("spectral_axis").locate(self.tabulation())
+response @ samples.values[index]
+```
+
+The assumption that the compiled grid *is* the step's own tabulation holds only
+while the step is the sole requester of its channel. Bind a second instrument to
+that channel — routine for an SED, where 2MASS, WISE and IRAS all read one model
+channel — and the union is the superset of both instruments' points. Reading
+positionally then multiplies the wrong fluxes by the wrong response columns.
+`results_schema.md` §5 specifies `locate`, including why it matches within
+`COORDINATE_RTOL` rather than exactly.
+
 ### The image and 1-D-spatial slots (recorded 2026-09-03; Phase 2+)
 
 The table above is spectral-shaped, because the v1 slice is. Peter's review
