@@ -105,12 +105,17 @@ Benefit, three-fold, made concrete:
    complete, scalable, numpy-only fitting environment: reference backend +
    astropy adapter + emcee/dynesty + the O(N) flexible likelihood. For
    that last clause to be true rather than aspirational, **celerite2's
-   numpy interface is a core dependency of `backends/reference`, not gated
+   numpy interface is a core dependency of the base install, not gated
    behind an extra** — the reference backend's entire point is being a
    complete, scalable environment with no heavy deps, and a base install
    that still has the O(N³) problem would defeat it. (zeus stays an
    extra — it is a genuine alternative sampler, not part of the flagship
-   scaling story.)
+   scaling story.) W2.3 landed it: celerite2 is in `[project.dependencies]`,
+   and `ampere.core.QuasisepGP` imports it lazily, so `ampere.core` keeps the
+   numpy/scipy/astropy/stdlib *import* surface §3 requires while the
+   *dependency* is unconditional. This sentence originally said "a core
+   dependency of `backends/reference`"; the packaging claim is what it was
+   making, and the solver itself is backend-neutral (plan §2, 2026-09-05).
 3. **Execution venue for adapted models.** Astropy-adapted and
    legacy-adapted (black-box) models are not evaluated *by* the reference
    backend in the sense of differentiating through them — they're opaque —
@@ -136,12 +141,18 @@ ampere/
 │   ├── parameter.py      # §4.1 — Parameter, ParameterSet, priors, tying
 │   ├── results_schema.py # §4.2 — ModelResult, named channels, containers
 │   ├── transform.py      # §4.3 — Transformation, Instrument, negotiation
-│   ├── likelihood.py     # §4.4 — Likelihood, NoiseModel strategy
+│   ├── likelihood.py     # §4.4 — Likelihood, NoiseModel strategy, and the
+│   │                     # numpy GP solvers (DenseGP; QuasisepGP over
+│   │                     # celerite2, lazily imported — W2.3, plan §2)
 │   ├── dataset.py        # §4.5/4.7 seed — Dataset, DatasetCollection
 │   ├── exceptions.py     # OptionalDependencyError and friends (§4 below)
 │   └── astropy_compat.py # §4.7 — astropy.modeling adapter
 ├── backends/
-│   ├── reference/   # numpy/scipy. Core dependency: celerite2 (numpy).
+│   ├── reference/   # numpy/scipy. Models and transformations only; the
+│   │                # kernels, GP solvers and families are backend-neutral
+│   │                # and live in core (inference.md §18). celerite2 is a
+│   │                # base dependency of the whole distribution, not an
+│   │                # extra — the packaging claim §2 makes below.
 │   ├── torch/       # requires extra `torch`. May import torch at module
 │   │                # top level WITHIN this subpackage only (see §4).
 │   └── jax/         # requires extra `jax`. Same top-level-import carve-out.

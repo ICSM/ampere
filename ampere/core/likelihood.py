@@ -16,9 +16,9 @@ reuse; ampere factors them and pays for it with this spec):
   residuals (:class:`GaussianProcessNoise`), which is ampere's flexible,
   misspecification-robust likelihood;
 - a :class:`GPSolver` — *how* the GP algebra is done. A swappable strategy:
-  :class:`DenseGP` (exact, O(N³), the correctness anchor implemented here),
-  :class:`QuasisepGP` (exact, O(N), Phase 2) and the approximate strategies
-  for the cases neither covers.
+  :class:`DenseGP` (exact, O(N³), the correctness anchor) and
+  :class:`QuasisepGP` (exact, O(N) on ordered 1D data, over celerite2), plus
+  the approximate strategies for the cases neither covers.
 
 :class:`Likelihood` composes the three and is the object a ``Dataset`` (W1.7)
 holds.
@@ -43,8 +43,11 @@ introduces latent variables").
 
 Nothing here imports torch, jax or any optional dependency
 (``architecture.md`` §4 rule 1): it is numpy, scipy, ``astropy.units`` and
-stdlib. The narrative spec is ``docs/design/contracts/likelihoods.md``, whose
-every example runs as a doctest.
+stdlib. celerite2 — a **base** dependency, not an extra (``architecture.md``
+§2) — is imported lazily inside :class:`QuasisepGP`, so importing this module
+still costs nothing beyond that list. The narrative spec is
+``docs/design/contracts/likelihoods.md``, whose every example runs as a
+doctest.
 """
 
 from __future__ import annotations
@@ -52,6 +55,7 @@ from __future__ import annotations
 import abc
 import dataclasses
 import enum
+import functools
 import math
 from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar
@@ -908,6 +912,151 @@ class DenseGP(GPSolver):
         return lower @ _as_float64(whitened, "whitened latent draws")
 
 
+# ---------------------------------------------------------------------------
+# celerite2 terms: the exact quasiseparable representations (W2.3)
+# ---------------------------------------------------------------------------
+
+
+@functools.cache
+def _matern32_term_type() -> Any:
+    r"""The celerite2 ``Term`` subclass for an **exact** Matérn-3/2.
+
+    Built on first use rather than at import, because it has to subclass
+    ``celerite2.terms.Term`` and ``ampere.core`` does not import celerite2 at
+    module level (see :class:`QuasisepGP`). :func:`functools.cache` makes the
+    class a singleton, so ``isinstance`` and celerite2's own caches behave.
+
+    **Why ampere supplies its own term rather than using
+    ``celerite2.terms.Matern32Term``.** celerite2's is an *approximation*: its
+    own docstring says so, and its coefficients are
+
+    .. math::
+        k_{\epsilon}(\tau) = a^2 e^{-w_0 \tau}
+            \left[\cos(\epsilon\tau) + \frac{w_0}{\epsilon}\sin(\epsilon\tau)
+            \right],\qquad w_0 = \frac{\sqrt3}{\ell},
+
+    which tends to the Matérn-3/2 kernel only as :math:`\epsilon \to 0` — the
+    celerite basis :math:`e^{-c\tau}(a\cos d\tau + b \sin d\tau)` has no
+    :math:`\tau e^{-c\tau}` member. At the default ``eps=0.01`` that costs
+    about 5e-3 in the log-likelihood on a realistic spectrum, three orders of
+    magnitude outside the conformance battery's ``cross_solver`` tolerance.
+
+    The *solver* underneath, though, does not need the celerite basis at all:
+    it factorises any rank-J semiseparable matrix
+
+    .. math::
+        K_{nm} = \sum_j U_{nj} V_{mj} e^{-c_j (t_n - t_m)}\quad (n > m),
+
+    and Matérn-3/2 has an **exact** rank-2 representation in that form. For
+    :math:`t_n > t_m`, writing :math:`f = \sqrt3/\ell` and :math:`\Delta =
+    t_n - t_m`,
+
+    .. math::
+        k(\Delta) = a^2 (1 + f\Delta)e^{-f\Delta}
+                  = e^{-f(t_n - t_m)}
+                    \Big[\underbrace{a^2(1 + f t_n)}_{U_{n0}}
+                         \underbrace{\cdot\, 1}_{V_{m0}}
+                       + \underbrace{(-a^2 f)}_{U_{n1}}
+                         \underbrace{\cdot\, t_m}_{V_{m1}}\Big],
+
+    with :math:`c = (f, f)` and the diagonal :math:`a_n = a^2 +
+    \mathrm{diag}_n`. The bracket is :math:`a^2(1 + f t_n - f t_m) = a^2(1 +
+    f\Delta)`, so the identity is algebraic, not a limit. That is precisely
+    the claim ``likelihoods.md`` §6 makes — "Matérn-3/2 has an exact
+    representation as a sum of celerite/SHO terms, which is what makes
+    ``QuasisepGP`` an *exact* O(N) solve" — and this class is where it is
+    cashed in.
+
+    The generators grow linearly in the coordinate (:math:`U_{n0} \propto f
+    t_n`), so :math:`U_n \cdot V_m` is a difference of two large numbers when
+    :math:`f t \gg 1`. The coordinates are therefore re-referenced to the
+    midpoint of their own range — the products only ever involve differences,
+    so this is exact — which bounds the cancellation by half the number of
+    length scales the data span. Measured against the dense Cholesky: ~5e-12
+    over 10 length scales, ~3e-10 over 10², ~2e-8 over 10⁴. This is a
+    property of the celerite representation of a Matérn kernel, not of
+    ampere, and it is the one place where "exact" means "exact in exact
+    arithmetic".
+    """
+    # Imported here rather than at module level: celerite2 is a base
+    # dependency (architecture.md §2), but ampere.core promises to import
+    # nothing beyond numpy/scipy/astropy/stdlib, and a problem with no
+    # quasiseparable GP in it should not pay ~20 ms to load a C extension it
+    # never calls. Same idiom as the reference backend's pyphot import.
+    import celerite2.terms
+
+    class _ExactMatern32Term(celerite2.terms.Term):
+        """``k(tau) = amplitude**2 (1 + sqrt(3) tau / ell) exp(-sqrt(3) tau / ell)``."""
+
+        def __init__(self, amplitude: float, length_scale: float) -> None:
+            self.amplitude = float(amplitude)
+            self.length_scale = float(length_scale)
+
+        def get_value(self, tau: Any) -> np.ndarray:
+            separation = np.abs(np.atleast_1d(np.asarray(tau, dtype=DTYPE)))
+            scaled = _SQRT3 * separation / self.length_scale
+            return np.asarray(self.amplitude**2 * (1.0 + scaled) * np.exp(-scaled), dtype=DTYPE)
+
+        def get_celerite_matrices(
+            self,
+            x: Any,
+            diag: Any,
+            *,
+            c: Any = None,
+            a: Any = None,
+            U: Any = None,
+            V: Any = None,
+        ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+            points = np.ascontiguousarray(np.atleast_1d(np.asarray(x, dtype=DTYPE)))
+            diagonal = np.ascontiguousarray(np.atleast_1d(np.asarray(diag, dtype=DTYPE)))
+            decay = _SQRT3 / self.length_scale
+            marginal = self.amplitude * self.amplitude
+            # x arrives sorted (QuasisepGP sorts before calling), so the
+            # midpoint of the range is (first + last) / 2.
+            shifted = points - 0.5 * (points[0] + points[-1])
+            return (
+                np.ascontiguousarray([decay, decay], dtype=DTYPE),
+                np.ascontiguousarray(diagonal + marginal, dtype=DTYPE),
+                np.ascontiguousarray(
+                    np.stack(
+                        [
+                            marginal * (1.0 + decay * shifted),
+                            np.full_like(shifted, -marginal * decay),
+                        ],
+                        axis=-1,
+                    ),
+                    dtype=DTYPE,
+                ),
+                np.ascontiguousarray(
+                    np.stack([np.ones_like(shifted), shifted], axis=-1), dtype=DTYPE
+                ),
+            )
+
+    return _ExactMatern32Term
+
+
+def _matern32_term(kernel: Kernel, values: Mapping[str, Any]) -> Any:
+    """Build the exact Matérn-3/2 celerite term from a resolved kernel."""
+    resolved = kernel.resolve(values)
+    amplitude = _positive(resolved["amplitude"], "amplitude", kernel.FAMILY, allow_zero=True)
+    length_scale = _positive(resolved["length_scale"], "length_scale", kernel.FAMILY)
+    if not math.isfinite(amplitude * amplitude):
+        raise LikelihoodError(
+            f"the kernel's marginal variance amplitude**2 = {amplitude!r}**2 overflows float64, "
+            f"so the quasiseparable representation cannot be built. Constrain the amplitude "
+            f"prior to the data's own scale."
+        )
+    return _matern32_term_type()(amplitude, length_scale)
+
+
+#: Kernel family -> the builder for its **exact** celerite representation.
+#: :class:`QuasisepGP` routes a kernel to the O(N) path only through this
+#: table, so a kernel that declares ``QUASISEPARABLE`` without an entry here
+#: is refused by name rather than silently approximated. Sums of SHO terms
+#: (``likelihoods.md`` §12) join by adding one builder and one row.
+_QUASISEPARABLE_TERMS: dict[str, Any] = {Matern32.FAMILY: _matern32_term}
+
+
 class _SolverSlot(GPSolver):
     """Base for the declared-but-unimplemented strategies."""
 
@@ -946,25 +1095,243 @@ class _SolverSlot(GPSolver):
         raise LikelihoodError(self._unimplemented_message())
 
 
-class QuasisepGP(_SolverSlot):
+@dataclasses.dataclass(frozen=True)
+class QuasisepGP(GPSolver):
     """Exact O(N) for ordered 1D data via a quasiseparable (celerite-class) solve.
 
-    The strategy ``DEVELOPMENT_PLAN.md`` §4.4 names as the scaling answer:
-    celerite2 (numpy and jax), ``tinygp.solvers.QuasisepSolver``, GPyTorch or
-    celerite2-torch on the torch side. It is **exact**, not approximate: a
-    Matérn-3/2 kernel has an exact representation as a sum of celerite/SHO
-    terms, so the state-space recursion computes the same marginal likelihood
-    :class:`DenseGP` does, in linear time. That equivalence is a conformance
-    row (§4.6), which is why :class:`DenseGP` exists at all.
+    The strategy ``DEVELOPMENT_PLAN.md`` §4.4 names as the scaling answer, and
+    the reason ``architecture.md`` §2 puts celerite2's numpy interface in the
+    **base** install rather than behind an extra: ``pip install ampere`` with
+    no extras must be a scalable fitting environment, not one that still has
+    the O(N³) problem. It is **exact**, not approximate: a Matérn-3/2 kernel
+    has an exact rank-2 semiseparable representation (see
+    :func:`_matern32_term_type` for the algebra), so this recursion computes
+    the same marginal likelihood :class:`DenseGP` does, in linear time. That
+    equivalence is a conformance row (§4.6), which is why :class:`DenseGP`
+    exists at all.
 
-    Implementation lands in Phase 2, in the backends; the interface is fixed
-    here.
+    A kernel reaches this path only if it declares ``QUASISEPARABLE`` **and**
+    ampere holds an exact celerite representation for its family
+    (:data:`_QUASISEPARABLE_TERMS`); anything else is refused by name at
+    composition time. Coordinates need not arrive sorted — a Gaussian density
+    is invariant under a simultaneous permutation of residuals, variances and
+    coordinates, so this solver sorts internally and undoes the permutation on
+    the way out.
+
+    What is O(N) and what is not, stated plainly:
+
+    * :meth:`log_marginal_likelihood` and :meth:`latent_transform` are O(N),
+      which is what a sampler calls.
+    * :meth:`condition` is O(N·M) for M evaluation points, because the
+      cross-covariance block is dense by construction and each output needs
+      every input. :class:`DenseGP` pays O(N³) for the same answer.
+    * :meth:`conditional_loo` is **deferred** (recorded in
+      ``DEVELOPMENT_PLAN.md`` §2, 2026-09-05) and refuses: the leave-one-out
+      terms need the diagonal of ``(K + diag(sigma²))⁻¹``, and celerite2's
+      public numpy API exposes no O(N) route to it. Use :class:`DenseGP` for
+      ``pointwise_log_prob`` under a GP.
+
+    Parameters
+    ----------
+    jitter
+        A standard deviation, in the data's own units, added in quadrature to
+        the diagonal — the same knob, meaning and default as
+        :class:`DenseGP`'s. Zero by default: a covariance that will not
+        factorise is a fact about the model, not something to hide.
     """
+
+    jitter: float = 0.0
 
     NAME: ClassVar[str] = "QuasisepGP"
     EXACT: ClassVar[bool] = True
     REQUIRES_ORDERED_1D: ClassVar[bool] = True
     REQUIRES_QUASISEPARABLE: ClassVar[bool] = True
+    IMPLEMENTED: ClassVar[bool] = True
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.jitter) or self.jitter < 0.0:
+            raise LikelihoodError(
+                f"QuasisepGP's jitter must be finite and >= 0, got {self.jitter!r}."
+            )
+
+    def check_compatible(self, kernel: Kernel, observed: FunctionSamples) -> None:
+        super().check_compatible(kernel, observed)
+        if kernel.FAMILY not in _QUASISEPARABLE_TERMS:
+            known = ", ".join(sorted(_QUASISEPARABLE_TERMS)) or "(none)"
+            raise LikelihoodError(
+                f"{type(kernel).__name__} declares QUASISEPARABLE = True, but ampere holds no "
+                f"exact celerite representation for the {kernel.FAMILY!r} family, so "
+                f"{self.NAME} has nothing to lower it to. Families with one: {known}. Add a "
+                f"builder to _QUASISEPARABLE_TERMS, or use DenseGP — a wrong representation "
+                f"would be an approximation wearing an exact solver's name."
+            )
+
+    # -- internals -----------------------------------------------------------
+
+    def _axis(self, coordinates: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """The ``(n, 1)`` points, their bare axis, and the sorting permutation."""
+        points = _as_points(coordinates, "data coordinates")
+        if points.shape[1] != 1:
+            raise LikelihoodError(
+                f"{self.NAME} needs one ordered coordinate per sample, but the coordinates have "
+                f"{points.shape[1]} per point. check_compatible refuses this at composition "
+                f"time; a direct solver call reaches it here. Use DenseGP for 2D+ coordinates."
+            )
+        axis = np.ascontiguousarray(points[:, 0])
+        return points, axis, np.argsort(axis, kind="stable")
+
+    def _factorise(
+        self,
+        kernel: Kernel,
+        ordered_axis: np.ndarray,
+        ordered_diagonal: np.ndarray,
+        values: Mapping[str, Any],
+        *,
+        whitening: bool = False,
+    ) -> Any:
+        """A celerite2 ``GaussianProcess`` factorised on sorted coordinates."""
+        # Lazy, for the reason _matern32_term_type() gives.
+        import celerite2
+
+        # celerite2.driver is the compiled extension: no stubs, so pyrefly
+        # cannot resolve it. The name is public and documented.
+        from celerite2.driver import LinAlgError  # type: ignore[missing-import]
+
+        # celerite2's factorisation does not itself notice a diagonal that
+        # cannot belong to a covariance: it returns NaN quietly, where
+        # DenseGP's Cholesky raises. Check the precondition instead, so both
+        # strategies refuse the same inputs with the same kind of message.
+        if not np.all(np.isfinite(ordered_diagonal)):
+            raise LikelihoodError(
+                "the covariance matrix K + diag(sigma^2) contains non-finite entries, so it "
+                "cannot be factorised. The usual cause is a kernel amplitude large enough that "
+                "amplitude**2 overflows float64; constrain the amplitude prior to the data's "
+                "own scale."
+            )
+        if np.any(ordered_diagonal < 0.0):
+            raise LikelihoodError(
+                "the diagonal handed to QuasisepGP contains negative entries, so K + "
+                "diag(sigma^2) is not a covariance matrix at all. Variances are squares; this "
+                "is a caller error rather than an ill-conditioned problem."
+            )
+
+        term = _QUASISEPARABLE_TERMS[kernel.FAMILY](kernel, values)
+        gp = celerite2.GaussianProcess(term, mean=0.0)
+        try:
+            gp.compute(ordered_axis, diag=ordered_diagonal, check_sorted=False)
+        except LinAlgError as error:
+            if whitening:
+                raise LikelihoodError(
+                    f"the kernel matrix K is not positive definite in its quasiseparable "
+                    f"representation, so the whitening transform f = L z is undefined "
+                    f"({error}). Increase the jitter argument, or check the kernel "
+                    f"hyperparameters."
+                ) from error
+            raise LikelihoodError(
+                f"the covariance matrix K + diag(sigma^2) is not positive definite, so its "
+                f"quasiseparable factorisation failed ({error}). Usual causes: a zero or "
+                f"near-duplicate observational uncertainty, coordinates that are closer "
+                f"together than float64 can separate at this length-scale, or a kernel "
+                f"amplitude far above the data scale. Pass QuasisepGP(jitter=...) — a standard "
+                f"deviation in the data's units — if the matrix is merely ill-conditioned "
+                f"rather than wrong."
+            ) from error
+        return gp
+
+    # -- the interface -------------------------------------------------------
+
+    def log_marginal_likelihood(
+        self,
+        kernel: Kernel,
+        coordinates: np.ndarray,
+        residual: np.ndarray,
+        variance: np.ndarray,
+        values: Mapping[str, Any],
+    ) -> float:
+        _, axis, order = self._axis(coordinates)
+        residuals = _as_float64(residual, "residuals")
+        diagonal = _as_float64(variance, "noise variances") + self.jitter**2
+        gp = self._factorise(kernel, axis[order], diagonal[order], values)
+        return float(gp.log_likelihood(residuals[order]))
+
+    def condition(
+        self,
+        kernel: Kernel,
+        coordinates: np.ndarray,
+        residual: np.ndarray,
+        variance: np.ndarray,
+        values: Mapping[str, Any],
+        at: np.ndarray | None = None,
+    ) -> GPConditional:
+        points, axis, order = self._axis(coordinates)
+        residuals = _as_float64(residual, "residuals")
+        diagonal = _as_float64(variance, "noise variances") + self.jitter**2
+        gp = self._factorise(kernel, axis[order], diagonal[order], values)
+
+        alpha = np.empty(order.size, dtype=DTYPE)
+        alpha[order] = gp.apply_inverse(residuals[order])
+        target = points if at is None else _as_points(at, "conditioning grid", dimensions=1)
+        # The cross-covariance is dense whatever the solver: M outputs each
+        # need all N inputs. Only the solve against it is O(N) per column.
+        cross = kernel.matrix(target, points, values)
+        solved = np.empty((order.size, cross.shape[0]), dtype=DTYPE)
+        solved[order, :] = gp.apply_inverse(np.ascontiguousarray(cross.T[order, :]))
+        prior_variance = kernel.diagonal(target, values)
+        return GPConditional(
+            mean=cross @ alpha,
+            variance=prior_variance - np.einsum("ij,ji->i", cross, solved),
+        )
+
+    def latent_transform(
+        self,
+        kernel: Kernel,
+        coordinates: np.ndarray,
+        whitened: np.ndarray,
+        values: Mapping[str, Any],
+        *,
+        jitter: float = 1e-10,
+    ) -> np.ndarray:
+        points, axis, order = self._axis(coordinates)
+        draws = _as_float64(whitened, "whitened latent draws")
+        # The same stabilisation DenseGP applies: a jitter relative to the
+        # kernel's own scale, so the two solvers factorise the same matrix.
+        scale = float(np.mean(kernel.diagonal(points, values))) or 1.0
+        gp = self._factorise(
+            kernel,
+            axis[order],
+            np.full(order.size, jitter * scale, dtype=DTYPE),
+            values,
+            whitening=True,
+        )
+        transformed = np.empty(order.size, dtype=DTYPE)
+        transformed[order] = gp.dot_tril(draws[order])
+        return transformed
+
+    def conditional_loo(
+        self,
+        kernel: Kernel,
+        coordinates: np.ndarray,
+        residual: np.ndarray,
+        variance: np.ndarray,
+        values: Mapping[str, Any],
+    ) -> np.ndarray:
+        """Deferred at W2.3 (``DEVELOPMENT_PLAN.md`` §2, 2026-09-05).
+
+        Every leave-one-out term needs ``A_ii`` for ``A = (K +
+        diag(sigma²))⁻¹``, and celerite2's public numpy interface has no O(N)
+        route to that diagonal — its own ``condition(...).variance`` forms the
+        cross-covariance densely and costs O(N·M). Supplying one means
+        reimplementing celerite2's internal factorisation convention, which is
+        a coupling this contract declined to take on for a decomposition
+        nothing yet stores by default.
+        """
+        raise LikelihoodError(
+            f"{self.NAME} does not implement the leave-one-out conditional terms "
+            f"(GPSolver.conditional_loo): the O(N) recursion for the diagonal of "
+            f"(K + diag(sigma^2))^-1 was deferred at W2.3 and recorded in "
+            f"DEVELOPMENT_PLAN.md §2. DenseGP computes them exactly from its Cholesky — use it "
+            f"for pointwise_log_prob under a GP, or the per-dataset log_likelihood group."
+        )
 
 
 class WindowedSparseGP(_SolverSlot):

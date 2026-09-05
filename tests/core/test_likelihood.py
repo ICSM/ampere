@@ -1157,7 +1157,7 @@ class TestKernelSpecification:
 class TestSolverStrategies:
     @pytest.mark.parametrize(
         "solver",
-        [QuasisepGP(), WindowedSparseGP(), InducingPointGP()],
+        [WindowedSparseGP(), InducingPointGP()],
     )
     def test_the_slots_are_declared_and_refuse_to_pretend(
         self, solver, predicted: Spectrum, observed: Spectrum
@@ -1269,6 +1269,218 @@ class TestSolverStrategies:
             data.values, mean=np.zeros(coordinates.size), cov=covariance
         )
         assert with_jitter.log_prob(model, data) == pytest.approx(float(expected), abs=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# W2.3: the quasiseparable solver on the reference path (celerite2)
+# ---------------------------------------------------------------------------
+
+
+class TestQuasisepGP:
+    """The O(N) strategy, against the anchor it must reproduce exactly.
+
+    The conformance battery owns the cross-solver agreement rows; these hold
+    the pieces specific to *this* implementation — the exact rank-2 celerite
+    representation of Matérn-3/2, the internal sort, the deferred
+    leave-one-out recursion, and the refusals.
+    """
+
+    def test_the_celerite_generators_rebuild_the_kernel_matrix(
+        self, coordinates: np.ndarray
+    ) -> None:
+        """The correspondence itself, not a log-likelihood that hides it.
+
+        ``K[n, m] = sum_j U[n, j] V[m, j] exp(-c[j] (t_n - t_m))`` for
+        ``n > m``, and ``a[n]`` on the diagonal: celerite2's own convention,
+        written out here and compared with ampere's dense Matérn-3/2. If the
+        amplitude/length-scale correspondence were wrong, this fails first and
+        by name.
+        """
+        from ampere.core.likelihood import _QUASISEPARABLE_TERMS
+
+        kernel = Matern32(0.4, 2.0)
+        values = kernel.resolve(None)
+        term = _QUASISEPARABLE_TERMS[kernel.FAMILY](kernel, values)
+        c, a, lower, right = term.get_celerite_matrices(coordinates, np.zeros(coordinates.size))
+        assert c.shape == (2,) and lower.shape == (coordinates.size, 2)
+
+        rebuilt = np.zeros((coordinates.size, coordinates.size))
+        for i in range(coordinates.size):
+            rebuilt[i, i] = a[i]
+            for j in range(i):
+                entry = float(
+                    np.sum(lower[i] * right[j] * np.exp(-c * (coordinates[i] - coordinates[j])))
+                )
+                rebuilt[i, j] = rebuilt[j, i] = entry
+        np.testing.assert_allclose(rebuilt, matern32_matrix(coordinates, 0.4, 2.0), atol=1e-14)
+        # k(0) == amplitude**2: the standard-deviation convention, in the
+        # generator the solver actually factorises.
+        assert a[0] == pytest.approx(0.4**2, abs=1e-15)
+
+    def test_it_reproduces_the_dense_marginal_likelihood(
+        self, predicted: Spectrum, observed: Spectrum
+    ) -> None:
+        dense = Likelihood(GaussianFamily(), GaussianProcessNoise(Matern32(0.4, 2.0), DenseGP()))
+        quasisep = Likelihood(
+            GaussianFamily(), GaussianProcessNoise(Matern32(0.4, 2.0), QuasisepGP())
+        )
+        assert quasisep.log_prob(predicted, observed) == pytest.approx(
+            dense.log_prob(predicted, observed), abs=1e-9
+        )
+
+    def test_the_jitter_matches_the_dense_solver_s(self, coordinates: np.ndarray) -> None:
+        data = Spectrum(
+            coordinates * u.um,
+            np.sin(coordinates) * u.Jy,
+            uncertainty=np.full(coordinates.size, 0.1) * u.Jy,
+        )
+        model = data.with_values(np.zeros(coordinates.size))
+        kernel = Matern32(0.4, 2.0)
+        dense = Likelihood(GaussianFamily(), GaussianProcessNoise(kernel, DenseGP(jitter=0.3)))
+        quasisep = Likelihood(
+            GaussianFamily(), GaussianProcessNoise(Matern32(0.4, 2.0), QuasisepGP(jitter=0.3))
+        )
+        assert quasisep.log_prob(model, data) == pytest.approx(
+            dense.log_prob(model, data), abs=1e-9
+        )
+        with pytest.raises(LikelihoodError, match="jitter must be finite"):
+            QuasisepGP(jitter=-1.0)
+
+    def test_unordered_coordinates_are_sorted_internally(self, coordinates: np.ndarray) -> None:
+        """A Gaussian density is permutation invariant; celerite2 is not.
+
+        ``PhotometricPoints`` declares ``Order.ANY``, so a one-axis container
+        can legitimately arrive unsorted. The solver must permute, solve and
+        permute back rather than hand celerite2 something it will reject.
+        """
+        kernel = Matern32(0.4, 2.0)
+        values = kernel.resolve(None)
+        rng = np.random.default_rng(20260905)
+        residual = rng.normal(0.0, 0.3, coordinates.size)
+        variance = np.full(coordinates.size, 0.1**2)
+        shuffle = rng.permutation(coordinates.size)
+
+        ordered = QuasisepGP().log_marginal_likelihood(
+            kernel, coordinates[:, None], residual, variance, values
+        )
+        shuffled = QuasisepGP().log_marginal_likelihood(
+            kernel,
+            coordinates[shuffle][:, None],
+            residual[shuffle],
+            variance[shuffle],
+            values,
+        )
+        expected = DenseGP().log_marginal_likelihood(
+            kernel, coordinates[:, None], residual, variance, values
+        )
+        assert ordered == pytest.approx(expected, abs=1e-9)
+        assert shuffled == pytest.approx(expected, abs=1e-9)
+
+    def test_the_conditioned_gp_matches_the_dense_one(
+        self, predicted: Spectrum, observed: Spectrum, coordinates: np.ndarray
+    ) -> None:
+        dense = Likelihood(GaussianFamily(), GaussianProcessNoise(Matern32(0.4, 2.0), DenseGP()))
+        quasisep = Likelihood(
+            GaussianFamily(), GaussianProcessNoise(Matern32(0.4, 2.0), QuasisepGP())
+        )
+        at = np.linspace(coordinates[0] - 0.5, coordinates[-1] + 0.5, 23)
+        for kwargs in ({}, {"at": at}):
+            expected = dense.conditional(predicted, observed, **kwargs)
+            got = quasisep.conditional(predicted, observed, **kwargs)
+            np.testing.assert_allclose(got.mean, expected.mean, atol=1e-10)
+            np.testing.assert_allclose(got.variance, expected.variance, atol=1e-10)
+
+    def test_the_whitening_transform_factorises_the_kernel(self, coordinates: np.ndarray) -> None:
+        kernel = Matern32(0.4, 2.0)
+        values = kernel.resolve(None)
+        basis = np.eye(coordinates.size)
+        lower = np.column_stack(
+            [
+                QuasisepGP().latent_transform(kernel, coordinates[:, None], basis[:, i], values)
+                for i in range(coordinates.size)
+            ]
+        )
+        np.testing.assert_allclose(np.triu(lower, k=1), 0.0, atol=1e-15)
+        np.testing.assert_allclose(
+            lower @ lower.T, matern32_matrix(coordinates, 0.4, 2.0), atol=1e-9
+        )
+
+    def test_the_leave_one_out_recursion_is_deferred_and_says_so(self) -> None:
+        """W2.3's recorded deferral, refusing rather than costing O(N**2)."""
+        with pytest.raises(LikelihoodError, match=r"DEVELOPMENT_PLAN\.md"):
+            QuasisepGP().conditional_loo(
+                Matern32(0.3, 1.5), np.array([[1.0]]), np.zeros(1), np.ones(1), {}
+            )
+
+    def test_a_quasiseparable_kernel_with_no_celerite_term_is_refused(
+        self, observed: Spectrum
+    ) -> None:
+        """The declaration is not enough; ampere must hold the representation."""
+
+        class Matern52(Matern32):
+            FAMILY = "matern52"
+
+        noise = GaussianProcessNoise(Matern52(0.3, 1.0), QuasisepGP())
+        with pytest.raises(LikelihoodError, match="no exact celerite representation"):
+            noise.check_compatible(GaussianFamily(), observed)
+
+    def test_two_coordinate_axes_are_refused_at_the_solver_too(self) -> None:
+        """``check_compatible`` catches it at composition; a direct call here."""
+        kernel = Matern32(0.4, 2.0)
+        points = np.array([[1.0, 2.0], [2.0, 3.0], [3.0, 4.0]])
+        with pytest.raises(LikelihoodError, match="one ordered coordinate per sample"):
+            QuasisepGP().log_marginal_likelihood(
+                kernel, points, np.zeros(3), np.full(3, 0.01), kernel.resolve(None)
+            )
+
+    def test_an_indefinite_system_names_its_own_jitter(self) -> None:
+        """Duplicated coordinates: singular in K, and refused rather than NaN."""
+        kernel = Matern32(1.0, 1.0)
+        duplicated = np.array([[1.0], [1.0], [2.0]])
+        with pytest.raises(LikelihoodError, match=r"QuasisepGP\(jitter=\.\.\.\)"):
+            QuasisepGP().log_marginal_likelihood(
+                kernel, duplicated, np.zeros(3), np.zeros(3), kernel.resolve(None)
+            )
+        # And the same system is fine once the jitter separates the rows.
+        assert math.isfinite(
+            QuasisepGP(jitter=0.1).log_marginal_likelihood(
+                kernel, duplicated, np.zeros(3), np.zeros(3), kernel.resolve(None)
+            )
+        )
+
+    def test_a_negative_variance_is_refused_rather_than_returning_nan(self) -> None:
+        """celerite2 returns NaN where a Cholesky raises; the guard is ours."""
+        kernel = Matern32(1.0, 1.0)
+        points = np.array([[1.0], [2.0], [3.0]])
+        with pytest.raises(LikelihoodError, match="not a covariance matrix"):
+            QuasisepGP().log_marginal_likelihood(
+                kernel, points, np.zeros(3), np.full(3, -1.0), kernel.resolve(None)
+            )
+
+    def test_the_spec_records_the_strategy_and_its_configuration(self) -> None:
+        """``to_spec`` must distinguish the two solvers — ``results.md`` §15 R7."""
+        dense = Likelihood(GaussianFamily(), GaussianProcessNoise(Matern32(0.4, 2.0), DenseGP()))
+        quasisep = Likelihood(
+            GaussianFamily(), GaussianProcessNoise(Matern32(0.4, 2.0), QuasisepGP(jitter=0.1))
+        )
+        assert dense.to_spec()["solver"]["name"] == "DenseGP"
+        assert quasisep.to_spec()["solver"] == {
+            "name": "QuasisepGP",
+            "class": "QuasisepGP",
+            "exact": True,
+            "config": {"jitter": 0.1},
+        }
+
+    def test_importing_ampere_core_does_not_import_celerite2(self) -> None:
+        """The lazy-import discipline: celerite2 arrives on use, not on import."""
+        import subprocess
+        import sys
+
+        probe = "import sys; import ampere.core; print('celerite2' in sys.modules)"
+        result = subprocess.run(
+            [sys.executable, "-c", probe], capture_output=True, text=True, check=True
+        )
+        assert result.stdout.strip().endswith("False")
 
 
 # ---------------------------------------------------------------------------
