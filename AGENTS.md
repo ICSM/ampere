@@ -6,8 +6,10 @@ GP-based likelihood providing robustness to model misspecification.
 
 The project is undergoing a major redesign ("v2"). **Phases 0–1 are
 complete: the core contracts are frozen** (`spec-v1.0`, 2026-09-03) and
-Phase 2 — the reference/torch/jax backends and engine drivers, items
-W2.1–W2.11 — is beginning. Before any non-trivial work, read:
+Phase 2 is well under way — **W2.1, W2.2, W2.3 and W2.6 are merged**
+(2026-09-05: the reference backend, the emcee/dynesty/zeus drivers, the
+O(N) QuasisepGP solve, the lowering registry), with the torch/jax
+backend tracks W2.4/W2.5 next. Before any non-trivial work, read:
 
 - **`DEVELOPMENT_PLAN.md`** — the source of truth: decisions taken, target
   architecture (backend-neutral core + reference/torch/jax backends), phased

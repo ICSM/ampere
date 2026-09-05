@@ -80,7 +80,46 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
   the "legacy still works" gate; run it before merging anything that
   touches shared files.
 
-## ⚡ Pick up here (2026-09-05 session — Phase 2 under way, three items in flight)
+## ⚡ Pick up here (end of the 2026-09-05 session — W2.1/W2.2/W2.3/W2.6 MERGED)
+
+**State**: the first Phase-2 block is **merged and integration-verified**.
+Master's merge sequence: W2.1 (`0d8b9a0`), then W2.6 (`152b1fa`), W2.2
+(`cea9413`), W2.3 (`c7eec38`) — each Fable-reviewed pre-merge (records in
+the merge messages and the status table), with the pyproject dependency
+union resolved and `pixi.lock` regenerated once at the W2.3 merge. Gates
+on merged master: **`pixi run test-all` 1342 passed, zero skips** (five
+suites — core, results, conformance, backends, inference — in one
+process), lint/format/pyrefly clean. What now exists: the reference
+backend (detector-aware photometry included), `Axis.locate` +
+`describe()`/neutral model identity (provenance schema 3), the lowering
+registry, emcee/dynesty/zeus drivers emitting DataTrees (arviz + h5netcdf
++ celerite2 are base deps now; the `arviz` extra is gone), and the exact
+O(N) `QuasisepGP` (~57 ms at 10⁵ points; `conditional_loo` deferred with
+the O(N) route recorded). Nothing pushed to origin.
+
+**Next session**: dispatch the backend tracks **W2.4 (torch)** and
+**W2.5 (jax)** — Opus, one agent per track, lockstep via the conformance
+suite, per `docs/orchestration.md`. Fold into their dispatch prompts the
+carried findings (all in the W2.2/W2.3 status rows): a backend identity
+on `FittingProblem` wants settling first or early (drivers currently
+*declare* `Engine(..., backend=)`); celerite2 returns quiet NaN where a
+Cholesky raises — every backend's celerite2 path must guard preconditions
+as core now does; the `eqx.partition`/x64-guard/icdf rulings are already
+in the plan §2. Smaller queued items: W2.7/W2.8 (follow W2.2), W2.9
+(follows W2.1+W2.2), the zeus re-ball helper, the `compile_for` template
+perf gap in the reference hot loop, the `examples/` pyphot touch-up.
+
+**Owed and pending**: the **retroactive terra passes** on all four merged
+ranges when the Codex quota returns (~2026-09-30) — W2.3's GP algebra
+first; **Peter's two rulings** — (a) pyphot 2.1.1's undeclared `requests`
+(one line: add `requests` to deps or pin past it; the minimal-install CI
+job fails at the next push until then) and (b) the chained-LSF
+`configure_from` forward-order under-padding (`ampere/core/transform.py:944`;
+proposed: reverse the call order + a regression test); branch-triage
+approval (`docs/design/harvest/branch_triage.md`); a live-CI verification
+push.
+
+## ⚡ SUPERSEDED session record (2026-09-05, mid-session — kept as history)
 
 **State**: **W2.1 is merged** — master is at `85976da` (merge commit
 `0d8b9a0`; Opus-authored, Fable-reviewed twice per Peter's 2026-09-05
