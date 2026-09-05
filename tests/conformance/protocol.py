@@ -333,10 +333,12 @@ class BackendCapabilities:
 
     ``solvers``
         Which :class:`SolverKind` values :meth:`ConformanceBackend.gp_solver`
-        can actually return an implemented solver for. ``QUASISEP`` is absent
-        for every backend today — ``ampere.core.QuasisepGP`` is a declared slot
-        whose implementation Phase 2 owns — so the ``DenseGP``↔``QuasisepGP``
-        row skips with a reason naming exactly that.
+        can actually return an implemented solver for. ``ampere.core``'s
+        ``QuasisepGP`` has been real since W2.3 (celerite2's numpy solver over
+        an exact rank-2 Matérn-3/2 representation), so the in-repo fixtures
+        declare ``QUASISEP`` and the ``DenseGP``↔``QuasisepGP`` row runs. A
+        backend that has not yet supplied one omits it, and that row skips
+        with a reason naming exactly what is missing.
     ``float64``
         Whether the backend's likelihood linear algebra runs in double
         precision. ``architecture.md`` §5 makes float64 the policy for GP

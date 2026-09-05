@@ -227,14 +227,22 @@ delegating, so every parameter row is also a serialisation row on that fixture.
 
 Run the suite to see it; as of W1.10:
 
-* **`DenseGP`↔`QuasisepGP` agreement on Matérn-3/2** — `DEVELOPMENT_PLAN.md`
+* ~~**`DenseGP`↔`QuasisepGP` agreement on Matérn-3/2** — `DEVELOPMENT_PLAN.md`
   §4.6 names it and `ampere.core.QuasisepGP` is a declared strategy slot with
-  no implementation. Two rows skip with a reason naming what Phase 2 must
-  supply (celerite2 on the numpy and jax sides, `tinygp`'s `QuasisepSolver`,
-  GPyTorch or celerite2-torch on the torch side). A third row runs today and
-  asserts the empty slot *refuses* rather than silently falling back to the
-  dense path — without it the agreement row would be vacuous the day someone
-  forgot to implement it.
+  no implementation.~~ **Discharged by W2.3**: `ampere.core.QuasisepGP` is
+  celerite2's numpy solver over an exact rank-2 representation of Matérn-3/2,
+  the in-repo fixtures declare `SolverKind.QUASISEP`, and the marginal- and
+  conditional-agreement rows run at `tolerances.cross_solver`. The
+  no-fallback row now asserts the positive claim — a declared quasiseparable
+  strategy must be implemented, exact, and a *different* strategy from the
+  dense one, since a backend that declared `QUASISEP` and handed back
+  `DenseGP` would satisfy every agreement row and prove nothing. Its old half
+  (asking for the empty slot and asserting it refused) moved to `tests/core`:
+  that is a property of `ampere.core`'s declared-slot discipline, not of a
+  backend, and `gp_solver` is contractually called only for a kind the
+  backend declares. A backend that has not yet supplied one (torch, jax)
+  skips these rows with a reason naming what to supply (`tinygp`'s
+  `QuasisepSolver`, GPyTorch or celerite2-torch on the torch side).
 * **`ampere_problem_hash` agreement across backends** — a recorded
   contradiction, not a skip. `results.md` §14 promises all three hashes are
   functions of the declaration and the data, "not of the arithmetic", so a
@@ -295,7 +303,10 @@ Added at the freeze (W1.13):
   (`TestStagedAnalyticCombination`): the declaration row runs, the
   composition-refusal row runs, and Phase 4 replaces the refusal with
   agreement rows against the circular closed form.
-* **`GPSolver.conditional_loo`** joins the QuasisepGP debt: `DenseGP`
-  implements the leave-one-out terms and `QuasisepGP` refuses until its
-  O(N) recursion arrives; the eventual agreement row mirrors the marginal
-  one.
+* **`GPSolver.conditional_loo`** outlived the QuasisepGP debt: `DenseGP`
+  implements the leave-one-out terms and `QuasisepGP` refuses, W2.3 having
+  **deferred** the O(N) recursion with a decision-log entry
+  (`DEVELOPMENT_PLAN.md` §2, 2026-09-05) — celerite2's public numpy interface
+  exposes no O(N) route to the diagonal of `(K + diag(σ²))⁻¹`. The refusal is
+  a live row (`TestSolverAgreement`); the eventual agreement row mirrors the
+  marginal one.

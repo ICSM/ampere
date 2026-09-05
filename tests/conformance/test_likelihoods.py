@@ -452,7 +452,7 @@ class TestStagedAnalyticCombination:
 
 
 # ---------------------------------------------------------------------------
-# Skeleton rows: the second GP solver
+# The second GP solver (live for the reference path since W2.3)
 # ---------------------------------------------------------------------------
 
 
@@ -463,7 +463,10 @@ class TestSolverAgreement:
     quasiseparable state-space recursion computes the *same* marginal
     likelihood the dense Cholesky does, in linear time. That equivalence is
     why ``DenseGP`` exists at all, and it is the row that will catch a
-    quasiseparable implementation that is subtly not exact.
+    quasiseparable implementation that is subtly not exact — including one
+    that reached for celerite2's own ``Matern32Term``, whose ``eps``
+    approximation misses ``tolerances.cross_solver`` by three orders of
+    magnitude.
     """
 
     def test_the_quasiseparable_solver_reproduces_the_dense_one(
@@ -472,8 +475,8 @@ class TestSolverAgreement:
         if SolverKind.QUASISEP not in backend.capabilities.solvers:
             pytest.skip(
                 f"backend {backend.name!r} declares no quasiseparable solver. "
-                "Phase 2 must supply one (celerite2 on the numpy and jax sides, "
-                "tinygp's QuasisepSolver, GPyTorch or celerite2-torch on the torch "
+                "Supply one (celerite2 on the numpy and jax sides, tinygp's "
+                "QuasisepSolver, GPyTorch or celerite2-torch on the torch "
                 "side) and add SolverKind.QUASISEP to its capabilities; this row "
                 "then compares it against DenseGP on Matern32 at "
                 "tolerances.cross_solver."
@@ -485,21 +488,55 @@ class TestSolverAgreement:
             dense.log_prob(predicted, observed), abs=tolerances.cross_solver
         )
 
-    def test_an_unimplemented_solver_slot_refuses_rather_than_pretending(
+    def test_the_two_solvers_agree_on_the_conditioned_gp(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """The §4.8 localisation diagnostic must not depend on the strategy."""
+        if SolverKind.QUASISEP not in backend.capabilities.solvers:
+            pytest.skip(f"backend {backend.name!r} declares no quasiseparable solver")
+        predicted, observed = spectra()
+        dense = gp_likelihood(backend, MATERN32, SolverKind.DENSE)
+        quasisep = gp_likelihood(backend, MATERN32, SolverKind.QUASISEP)
+        at = np.linspace(min(GP_GRID) - 0.5, max(GP_GRID) + 0.5, 29)
+        for kwargs in ({}, {"at": at}):
+            expected = dense.conditional(predicted, observed, **kwargs)
+            got = quasisep.conditional(predicted, observed, **kwargs)
+            assert backend.to_numpy(got.mean) == pytest.approx(
+                backend.to_numpy(expected.mean), abs=tolerances.cross_solver
+            )
+            assert backend.to_numpy(got.variance) == pytest.approx(
+                backend.to_numpy(expected.variance), abs=tolerances.cross_solver
+            )
+
+    def test_the_declared_solver_is_not_the_dense_one_in_disguise(
         self, backend: ConformanceBackend
     ) -> None:
-        """Until it exists, asking for it must fail loudly and say what to use.
+        """The agreement rows above are only worth running if this holds.
 
-        The other half of the skeleton row: a declared-but-empty strategy slot
-        that silently fell back to the dense path would make the agreement row
-        above vacuous the day someone forgot to implement it.
+        A backend that declared ``QUASISEP`` and then handed back its dense
+        strategy would satisfy every agreement row perfectly and prove
+        nothing. So the strategy behind the declaration must be a *different*
+        one, must say it is implemented and exact, and must compute.
+
+        Before W2.3 this row's other half ran instead: with no quasiseparable
+        solver anywhere, it asserted that asking for the empty slot refused.
+        That assertion moved to ``tests/core`` when the slot was filled,
+        because it is a property of ``ampere.core``'s declared-slot discipline
+        rather than of a backend — and because ``gp_solver`` is contractually
+        called only for a kind the backend declares (``protocol.py``), so a
+        row must not ask a torch or jax fixture for a solver it has said it
+        does not have.
         """
-        if SolverKind.QUASISEP in backend.capabilities.solvers:
-            pytest.skip(f"backend {backend.name!r} implements the quasiseparable solver")
+        if SolverKind.QUASISEP not in backend.capabilities.solvers:
+            pytest.skip(f"backend {backend.name!r} declares no quasiseparable solver")
         predicted, observed = spectra()
+        solver = backend.gp_solver(SolverKind.QUASISEP)
+        assert solver.IMPLEMENTED
+        assert solver.EXACT
+        assert solver.NAME != backend.gp_solver(SolverKind.DENSE).NAME
+        assert type(solver) is not type(backend.gp_solver(SolverKind.DENSE))
         likelihood = gp_likelihood(backend, MATERN32, SolverKind.QUASISEP)
-        with pytest.raises(LikelihoodError, match="no implementation yet"):
-            likelihood.log_prob(predicted, observed)
+        assert math.isfinite(likelihood.log_prob(predicted, observed))
 
     def test_a_quasiseparable_solver_refuses_a_kernel_that_has_no_such_form(
         self, backend: ConformanceBackend
@@ -511,6 +548,25 @@ class TestSolverAgreement:
         noise = GaussianProcessNoise(kernel, backend.gp_solver(SolverKind.QUASISEP))
         with pytest.raises(LikelihoodError, match="quasiseparable representation"):
             noise.check_compatible(GaussianFamily(), observed)
+
+    def test_the_leave_one_out_terms_are_a_dense_only_decomposition(
+        self, backend: ConformanceBackend
+    ) -> None:
+        """W2.3 deferred ``conditional_loo``'s O(N) recursion; it must say so.
+
+        The refusal is the declared-but-staged discipline again: the O(N)
+        route to the diagonal of ``(K + diag(sigma**2))**-1`` is recorded as
+        deferred in ``DEVELOPMENT_PLAN.md`` §2, and until it exists a
+        quasiseparable strategy refuses rather than quietly costing O(N**2).
+        """
+        if SolverKind.QUASISEP not in backend.capabilities.solvers:
+            pytest.skip(f"backend {backend.name!r} declares no quasiseparable solver")
+        predicted, observed = spectra()
+        dense = gp_likelihood(backend, MATERN32, SolverKind.DENSE)
+        assert dense.pointwise_log_prob(predicted, observed).size == len(GP_GRID)
+        quasisep = gp_likelihood(backend, MATERN32, SolverKind.QUASISEP)
+        with pytest.raises(LikelihoodError, match="conditional_loo"):
+            quasisep.pointwise_log_prob(predicted, observed)
 
 
 # ---------------------------------------------------------------------------

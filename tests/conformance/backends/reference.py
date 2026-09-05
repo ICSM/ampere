@@ -327,9 +327,10 @@ class ReferenceBackend:
         batchable=False,
         device="cpu",
         float64=True,
-        # QuasisepGP is a declared strategy slot with no implementation
-        # (likelihoods.md §5); W2.3 fills it in with celerite2 and adds it here.
-        solvers=frozenset({SolverKind.DENSE}),
+        # W2.3 filled the quasiseparable slot in with celerite2 (an exact
+        # rank-2 representation of Matern-3/2, not celerite2's eps
+        # approximation), so the DenseGP<->QuasisepGP agreement rows run.
+        solvers=frozenset({SolverKind.DENSE, SolverKind.QUASISEP}),
     )
 
     def model(self, spec: ModelSpec) -> Model:

@@ -571,7 +571,7 @@ definition of the right answer.
 | Strategy | Exact? | Applies to | Status |
 |---|---|---|---|
 | `DenseGP` | yes | anything, O(N³) | **implemented** — the correctness anchor |
-| `QuasisepGP` | yes | ordered 1D, quasiseparable kernels, O(N) | slot; Phase 2 |
+| `QuasisepGP` | yes | ordered 1D, quasiseparable kernels, O(N) | **implemented** (W2.3, celerite2) — `conditional_loo` deferred |
 | `WindowedSparseGP` | no | any kernel, any dimension | slot; see below |
 | `InducingPointGP` (SVGP) | no | 2D+ | slot; Phase 5 |
 | `StructuredGridGP` (SKI) | no | gridded 2D+ | slot; Phase 5 |
@@ -583,22 +583,39 @@ definition of the right answer.
 
 ```
 
+The two exact strategies compute the *same* number by genuinely different
+recursions — a dense Cholesky against a rank-2 quasiseparable factorisation —
+which is the equivalence `DenseGP` exists to define, and the conformance
+battery's `DenseGP`↔`QuasisepGP` row:
+
+```pycon
+>>> dense = Likelihood(
+...     GaussianFamily(), GaussianProcessNoise(Matern32(0.3, 2.0), DenseGP())
+... )
+>>> quasisep = Likelihood(
+...     GaussianFamily(), GaussianProcessNoise(Matern32(0.3, 2.0), QuasisepGP())
+... )
+>>> abs(quasisep.log_prob(model, data) - dense.log_prob(model, data)) < 1e-9
+True
+
+```
+
 A slot is a fixed interface with no implementation, and it says so rather than
 pretending:
 
 ```pycon
->>> Likelihood(GaussianFamily(), GaussianProcessNoise(Matern32(0.3, 2.0), QuasisepGP()))\
+>>> Likelihood(GaussianFamily(), GaussianProcessNoise(Matern32(0.3, 2.0), WindowedSparseGP()))\
 ...     .log_prob(model, data)
 Traceback (most recent call last):
     ...
-ampere.core.exceptions.LikelihoodError: QuasisepGP is a declared strategy slot with no implementation yet ...
+ampere.core.exceptions.LikelihoodError: WindowedSparseGP is a declared strategy slot with no implementation yet ...
 
 ```
 
 Applicability is checked at **composition** time, and a permanent
 incompatibility is reported ahead of a temporary one — a user who paired
 `QuasisepGP` with a squared exponential needs to hear about the kernel, not
-about Phase 2's schedule:
+about the schedule:
 
 ```pycon
 >>> GaussianProcessNoise(SquaredExponential(0.3, 2.0), QuasisepGP()).check_compatible(
@@ -614,7 +631,51 @@ A solver **may** branch on `Axis.regular` or `Axis.log_regular` for a fast path
 and **must** have a path when both are false — `results_schema.md` §16's
 instruction, and `architecture.md` §7's general rule that a fast path may be
 taken but never required. `DenseGP` takes no such branch at all, which is the
-trivial way to comply and one more reason it is the oracle.
+trivial way to comply and one more reason it is the oracle. `QuasisepGP` takes
+none either: it sorts the coordinates it is handed (a Gaussian density is
+invariant under a simultaneous permutation of residuals, variances and
+coordinates) and runs the same recursion whether or not the axis is regular.
+
+### `QuasisepGP`: the exact representation, and what it does *not* do (W2.3)
+
+The O(N) path is celerite2's numpy solver, and the term ampere hands it is
+**its own**, not `celerite2.terms.Matern32Term`. celerite2's is an
+approximation and says so: the celerite basis `e^{−cτ}(a cos dτ + b sin dτ)`
+has no `τ e^{−cτ}` member, so its Matérn-3/2 is a limit in a parameter `eps`,
+which at the default `eps=0.01` costs about `5e-3` in the log-likelihood — 
+three orders of magnitude outside `tolerances.cross_solver`.
+
+The *solver* underneath needs no such approximation: it factorises any rank-J
+matrix of the form `K[n,m] = Σ_j U[n,j] V[m,j] exp(−c_j (t_n − t_m))` for
+`n > m`, and Matérn-3/2 has an **exact** rank-2 representation in it. With
+`f = √3/ℓ` and `Δ = t_n − t_m > 0`,
+
+```
+k(Δ) = a²(1 + fΔ)e^{−fΔ} = e^{−f(t_n − t_m)} [ a²(1 + f t_n)·1 + (−a² f)·t_m ]
+```
+
+so `U_n = (a²(1 + f t_n), −a² f)`, `V_m = (1, t_m)`, `c = (f, f)` and the
+diagonal is `a² + σ_n²`. The bracket is `a²(1 + f t_n − f t_m) = a²(1 + fΔ)`:
+an algebraic identity, not a limit. That is the sense in which §6's "exactly
+quasiseparable" is cashed in, and the conformance row is what holds it.
+
+Two honest caveats, both properties of the representation rather than of the
+implementation:
+
+* The generators grow linearly in the coordinate, so `U_n · V_m` is a
+  difference of large numbers when `f t ≫ 1`. ampere re-references the
+  coordinates to the midpoint of their own range (exact, since only
+  differences enter), which bounds the cancellation by half the number of
+  length scales the data span: measured against the dense Cholesky, ~5e-12
+  over 10 length scales, ~3e-10 over 10², ~2e-8 over 10⁴.
+* **`conditional_loo` is deferred** (`DEVELOPMENT_PLAN.md` §2, 2026-09-05).
+  Every leave-one-out term needs `A_ii` for `A = (K + diag(σ²))⁻¹`, and
+  celerite2's public numpy interface exposes no O(N) route to that diagonal —
+  its own conditional variance forms the cross-covariance densely. `QuasisepGP`
+  therefore refuses, naming `DenseGP`, rather than quietly costing O(N²) under
+  an O(N) name. `log_marginal_likelihood` and `latent_transform` are O(N);
+  `condition` is O(N·M) for M evaluation points, because the cross-covariance
+  block is dense by construction whatever the solver.
 
 ### Windowed-sparse truncation: a named slot, and why it is not the default
 
@@ -800,8 +861,9 @@ the name `results.md` §6 reserves for it:
 - **A GP** — `"conditional_loo"`: the leave-one-out conditional terms
   `log N(y_i | μ_i^{-i}, σ_i^{2,-i})`, computed by
   `GPSolver.conditional_loo` from the same Cholesky the marginal likelihood
-  forms (`DenseGP` implements the closed form; `QuasisepGP` owes an O(N)
-  recursion in Phase 2 and refuses until then). These are what
+  forms (`DenseGP` implements the closed form; `QuasisepGP`'s O(N) recursion
+  was deferred at W2.3 — `DEVELOPMENT_PLAN.md` §2, 2026-09-05 — and it
+  refuses until one exists). These are what
   `arviz.loo`/`waic` consume, and they are a *different* decomposition: a
   GP joint has no per-observation factorisation, so the LOO terms
   deliberately do not sum to `log_prob`.
@@ -1325,8 +1387,11 @@ Each is a decision, not an oversight. Each has an extension point.
    refused outright rather than being silently wrong.
 3. **Only Matérn-3/2 and the squared exponential ship.** Matérn-5/2 and the
    celerite SHO term are obvious additions; each is a `_covariance` method and
-   a `QUASISEPARABLE` flag. Matérn-5/2 is *not* exactly quasiseparable, so its
-   flag would be `False` even though celerite approximates it well.
+   a `QUASISEPARABLE` flag — plus, for a quasiseparable one, an exact celerite
+   representation in `QuasisepGP`'s own table, since W2.3 made a declared
+   `QUASISEPARABLE` without a registered representation a loud refusal rather
+   than a silent approximation. Matérn-5/2 is *not* exactly quasiseparable, so
+   its flag would be `False` even though celerite approximates it well.
 4. **`GaussianProcessNoise` only supports `Layout.POINTS`.** A gridded 2D GP is
    the SVGP/SKI/Vecchia slots' business (Phase 5); `IndependentNoise` works on
    any layout.
@@ -1447,7 +1512,7 @@ Each is a decision, not an oversight. Each has an extension point.
   testable here: DenseGP against `scipy.stats.multivariate_normal.logpdf`; the
   zero-amplitude reduction to the i.i.d. Gaussian; mask excision equalling
   deletion of the sample; DenseGP↔QuasisepGP agreement on Matérn-3/2 once the
-  latter exists (§4.6 names it); `L L^T == K` for the whitening transform; the
+  latter exists (§4.6 names it — live since W2.3); `L L^T == K` for the whitening transform; the
   Tobit censored likelihood against `scipy.stats.norm.logcdf`; and the
   marginalisation declaration for every family × noise-model pair. Added at
   the freeze (X-1's three rows, `awkward_instrument.md` §6 point 9): the
