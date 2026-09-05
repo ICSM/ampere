@@ -76,8 +76,11 @@ from ampere.results import (
     hash_container,
     hash_of,
     kind_named,
+    model_fingerprint,
+    model_identity_hash,
     model_result_from_dict,
     model_result_to_dict,
+    neutral_model_identity,
     package_versions,
     plot_anomaly_score,
     plot_corner,
@@ -93,6 +96,7 @@ from ampere.results import (
     training_pair_to_dict,
 )
 from ampere.results.emission import _dimension_names, _index_coordinate
+from ampere.results.provenance import PROVENANCE_SCHEMA_VERSION
 
 arviz = pytest.importorskip("arviz", reason="ampere.results needs ampere[arviz]")
 
@@ -1477,3 +1481,74 @@ class TestDependencyPolicy:
             [sys.executable, "-c", code], capture_output=True, text=True, check=True
         )
         assert result.stdout.strip() == "False"
+
+
+class TestModelIdentity:
+    """``describe()`` in the fingerprint, and the derived neutral identity.
+
+    Both ruled by Peter 2026-09-03 at the freeze's escalations and landed with
+    W2.1 as one mechanism (``results.md`` §13.13 and §14).
+    """
+
+    class Redden(Model):
+        """A model configured by a plain attribute — §13.13's worked example."""
+
+        def __init__(self, law: str) -> None:
+            self.law = law
+            self.register_buffer("wavelength", BLUE, unit=u.micron)
+            self.register_parameter(Parameter("av", st.halfnorm(0.0, 1.0)))
+
+        def describe(self) -> dict[str, str]:
+            return {"law": self.law}
+
+        def evaluate(self, **values: Any) -> ModelResult:
+            ctx = self.context(values)
+            return ModelResult(Spectrum(ctx["wavelength"] * u.micron, ctx["wavelength"] * u.Jy))
+
+    def test_describe_reaches_the_fingerprint(self) -> None:
+        """The cache-key hole §13.13 records, closed."""
+        assert model_fingerprint(self.Redden("ccm89"))["describe"] == {"law": "ccm89"}
+
+    def test_two_configurations_no_longer_share_a_cache_key(self) -> None:
+        """Before the hook these two were indistinguishable to the hash."""
+        assert model_fingerprint(self.Redden("ccm89")) != model_fingerprint(self.Redden("f99"))
+
+    def test_a_model_that_does_not_opt_in_declares_nothing(self) -> None:
+        assert model_fingerprint(Powerlaw(blue=BLUE))["describe"] is None
+
+    def test_the_neutral_identity_drops_class_and_module_and_nothing_else(self) -> None:
+        model = self.Redden("ccm89")
+        fingerprint = model_fingerprint(model)
+        neutral = neutral_model_identity(model)
+        assert set(fingerprint) - set(neutral) == {"class", "module"}
+        assert all(neutral[key] == fingerprint[key] for key in neutral)
+
+    def test_the_neutral_identity_still_sees_the_configuration(self) -> None:
+        """Offering an emulator across backends must not ignore §13.13's gap."""
+        assert model_identity_hash(self.Redden("ccm89")) != model_identity_hash(self.Redden("f99"))
+
+    def test_two_implementations_of_one_declaration_share_the_neutral_identity(self) -> None:
+        """ "Offer": the point of the derived identity.
+
+        Two different classes computing the same declaration agree here, and
+        disagree on the problem hash — which is what makes a cross-backend
+        emulator offerable but never silently servable.
+        """
+
+        class OtherPowerlaw(Powerlaw):
+            """A different class, the same declaration."""
+
+        left, right = Powerlaw(blue=BLUE), OtherPowerlaw(blue=BLUE)
+        assert model_identity_hash(left) == model_identity_hash(right)
+        assert model_fingerprint(left) != model_fingerprint(right)
+
+    def test_the_recorded_attribute_is_netcdf_safe(self) -> None:
+        attrs = provenance_attrs(joint_problem())
+        assert isinstance(attrs["ampere_model_identity_hashes"], str)
+        assert json.loads(attrs["ampere_model_identity_hashes"]) == {
+            "model": model_identity_hash(joint_problem().models["model"])
+        }
+
+    def test_the_schema_version_records_the_change(self) -> None:
+        """Adding a fingerprint key changes every problem hash, so it rides a bump."""
+        assert PROVENANCE_SCHEMA_VERSION >= 3

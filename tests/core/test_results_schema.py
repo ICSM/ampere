@@ -16,7 +16,9 @@ import numpy as np
 import pytest
 
 from ampere.core import (
+    COORDINATE_RTOL,
     DEFAULT_CHANNEL,
+    Axis,
     AxisSpec,
     Cube,
     FunctionSamples,
@@ -1084,3 +1086,70 @@ class TestAnomalyScore:
     def test_two_dimensional_coordinates_are_legal(self) -> None:
         score = self._score(coordinates=np.array([[1.0, 0.0], [2.0, 1.0], [3.0, 2.0]]))
         assert score.coordinates.shape == (3, 2)
+
+
+class TestAxisLocate:
+    """``Axis.locate``: the lookup ``spectrum_photometry.md`` Gap 1 asks for.
+
+    Ruled by Peter 2026-09-03 and landed with W2.1, whose synthetic-photometry
+    step is its first consumer. The rule that matters is the tolerance: the
+    negotiated union collapses coordinates coinciding to within
+    ``COORDINATE_RTOL`` and keeps one representative, so a step's own published
+    coordinate may differ from the survivor by up to that much and must still
+    be found.
+    """
+
+    def spectral(self, values: object = (1.0, 1.25, 1.65, 2.5, 4.0, 10.0)) -> Axis:
+        return Axis.build("spectral_axis", np.asarray(values, dtype=float), u.micron)
+
+    def test_exact_coordinates_are_found_in_the_order_given(self) -> None:
+        axis = self.spectral()
+        assert axis.locate([2.5, 1.0, 10.0]).tolist() == [3, 0, 5]
+
+    def test_the_result_indexes_the_axis(self) -> None:
+        axis = self.spectral()
+        wanted = np.array([4.0, 1.25])
+        assert axis.values[axis.locate(wanted)].tolist() == wanted.tolist()
+
+    def test_a_coordinate_inside_the_tolerance_still_matches(self) -> None:
+        """The whole point: a survivor of the union's dedupe is not bit-identical."""
+        axis = self.spectral()
+        nudged = 1.65 * (1.0 + COORDINATE_RTOL / 2.0)
+        assert axis.locate([nudged]).tolist() == [2]
+
+    def test_a_coordinate_outside_the_tolerance_is_refused(self) -> None:
+        axis = self.spectral()
+        with pytest.raises(SchemaError, match="COORDINATE_RTOL"):
+            axis.locate([1.65 * (1.0 + 1e-6)])
+
+    def test_the_message_names_every_unmatched_value(self) -> None:
+        axis = self.spectral()
+        with pytest.raises(SchemaError, match=r"99\.0"):
+            axis.locate([1.0, 99.0])
+
+    def test_an_unsorted_axis_is_handled(self) -> None:
+        """``PhotometricPoints`` declares ``Order.ANY``, and Gap 1 is about photometry."""
+        axis = Axis.build("spectral_axis", np.array([3.4, 1.25, 22.0, 4.6]), u.micron)
+        assert axis.locate([22.0, 1.25, 3.4]).tolist() == [2, 1, 0]
+
+    def test_locating_nothing_returns_an_empty_index(self) -> None:
+        assert self.spectral().locate([]).shape == (0,)
+
+    def test_the_tolerance_is_the_one_negotiation_collapses_with(self) -> None:
+        """``locate`` must invert ``_dedupe``, or Gap 1 is only half closed.
+
+        Two coordinates that the union would merge into one must both find that
+        survivor; two it would keep apart must not be confused for each other.
+        """
+        from ampere.core.transform import _dedupe
+
+        published = np.array([2.0, 2.0 * (1.0 + COORDINATE_RTOL / 4.0)])
+        survivors = _dedupe(published)
+        assert survivors.size == 1
+        axis = Axis.build("spectral_axis", survivors, u.micron)
+        assert axis.locate(published).tolist() == [0, 0]
+
+    def test_an_empty_axis_refuses_rather_than_returning_nothing(self) -> None:
+        axis = Axis.build("spectral_axis", np.array([]), u.micron)
+        with pytest.raises(SchemaError, match="empty"):
+            axis.locate([1.0])

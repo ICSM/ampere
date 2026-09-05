@@ -238,6 +238,14 @@ conformance = "pytest tests/conformance"
 test-core = "pytest tests/core"
 test-results = "pytest tests/results"
 test-phase1 = "pytest tests/core tests/results tests/conformance"
+# W2.1: unit tests for the shipped backends -- the physics and the steps the
+# backend-neutral conformance battery has no declaration for (the LSF, the
+# real pyphot-backed synthetic photometry). The contract rows stay in
+# tests/conformance, which runs them once per registered backend.
+test-backends = "pytest tests/backends"
+# Everything the new namespaces own, in ONE pytest process, for the same
+# registry-leak reason test-phase1 exists (see tests/core/conftest.py).
+test-all = "pytest tests/core tests/results tests/conformance tests/backends"
 lint = "ruff check ."
 format-check = "ruff format --check . --exclude tests/characterisation"
 # pyrefly is scoped to the new namespaces (AGENTS.md ground rule 8); none

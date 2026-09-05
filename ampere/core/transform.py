@@ -70,7 +70,7 @@ import numpy as np
 
 from .exceptions import CompositionError, TransformationError
 from .parameter import ParameterMapping, ParameterSet, Parameterised, Value
-from .results_schema import DEFAULT_CHANNEL, FunctionSamples, ModelResult
+from .results_schema import COORDINATE_RTOL, DEFAULT_CHANNEL, FunctionSamples, ModelResult
 
 __all__ = [
     "COORDINATE_RTOL",
@@ -83,13 +83,11 @@ __all__ = [
     "propagate_mask",
 ]
 
-#: Relative tolerance used when the union of several requirements produces
-#: coordinates that coincide (routinely, at the edges of adjacent intervals).
-#: Two coordinates closer than this fraction of their magnitude are one
-#: coordinate — a container kind that requires strictly increasing coordinates
-#: would otherwise reject the negotiated grid, and a covariance built on
-#: near-duplicate coordinates is near-singular.
-COORDINATE_RTOL = 1e-12
+# COORDINATE_RTOL is defined in results_schema.py and re-exported here, where
+# negotiation uses it. It moved down a layer with W2.1 so that Axis.locate --
+# the exact inverse of the collapsing _dedupe performs below -- shares the one
+# constant rather than a copy of its value (spectrum_photometry.md Gap 1).
+# Both import paths keep working.
 
 ArrayLike = Any
 

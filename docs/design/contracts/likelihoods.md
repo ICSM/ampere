@@ -440,7 +440,12 @@ The standard library names **`FractionalModelNoise`** —
 missing from legacy ampere's likelihood — the way `transformations.md` §10
 names standard chain steps: the contract fixes the name and semantics here,
 and the ten-line implementation lands with the reference backend in Phase 2
-(with `f` an ordinary fitted parameter). A prediction-dependent σ is still
+(with `f` an ordinary fitted parameter). **Landed W2.1** as
+`ampere.backends.reference.FractionalModelNoise`, with `f` declared through
+`register_parameter` — so a prior fits it and a number holds it fixed — and the
+GP composition below as `FractionalModelGPNoise`. The doctest that follows
+keeps `f` fixed as a plain attribute because it is illustrating the mechanism
+in ten lines; the shipped class does not. A prediction-dependent σ is still
 diagonal, so `GaussianFamily` plus a fractional noise stays `ANALYTIC` — the
 marginalisation machinery never inspects *how* σ was computed — and the GP
 composition ("10 % model error *and* a misspecification GP") is a

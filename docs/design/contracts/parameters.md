@@ -67,7 +67,7 @@ so survives declaration, composition and serialisation.
 | `Tie` | Composition-time instruction to collapse several sites into one free parameter |
 | `Binding`, `ParameterMapping` | The result of `merge`: the joint set plus its wiring |
 | `Bijection`, `Identity`, `Log`, `Logit` | Maps to and from unconstrained space |
-| `Parameterised` | The declaration mixin: `register_parameter` / `register_buffer` / `context` |
+| `Parameterised` | The declaration mixin: `register_parameter` / `register_buffer` / `context`, plus the opt-in `describe()` identity hook (§10) |
 
 ## 3. `Parameter`: three states, and why "fixed" is not a delta prior
 
@@ -915,6 +915,50 @@ Per-backend lowering of buffers (torch `register_buffer`; jax array fields
 excluded from the trainable partition, **never** equinox static fields, which
 hash array contents into the JIT cache key — `DEVELOPMENT_PLAN.md` §7) is
 W1.9's table, not this document's.
+
+### `describe()`: configuration that is neither parameter nor buffer
+
+*Added post-freeze, ruled by Peter 2026-09-03 at the freeze's escalations and
+landed with W2.1; decision-log entry in `DEVELOPMENT_PLAN.md` §2. The
+motivating problem and the provenance half are `results.md` §9/§13.13/§14.*
+
+Parameters and buffers do not exhaust what changes a model's output. A
+`Redden(law="ccm89")` selects its extinction curve with a plain string: not a
+quantity anyone would put a prior on, so not a parameter, and not an array, so
+not a buffer. Provenance therefore cannot see it, and two such fits share a
+cache key while scoring differently.
+
+Hashing an arbitrary `__dict__` is not a safe general answer — it would sweep in
+caches, file handles, open file descriptors and unhashable state — so the
+answer is an **opt-in** declaration instead:
+
+```
+Parameterised.describe() -> Mapping[str, Any] | None
+```
+
+The default returns `None`: nothing extra declared. A class whose behaviour
+depends on something the contracts do not model overrides it:
+
+```python
+def describe(self):
+    return {"law": self.law}
+```
+
+`results.md` §9's `model_fingerprint` folds the result in. Three obligations on
+what a payload may contain:
+
+* it must be **normalisable** by `results.md` §9's recipe — strings, numbers,
+  booleans, `None`, arrays, and lists or mappings of those. Anything else is
+  refused loudly when the hash is taken, never silently omitted;
+* it must be **deterministic**, since it becomes part of a cache key;
+* it must be **backend-neutral**. A device string, a dtype, or an array's
+  backing type does not belong in one: `results.md` §14's derived neutral
+  identity and W1.10's cross-backend equivalence row both compare `describe()`
+  payloads across implementations of the same declaration.
+
+One consequence for §10's namespace rule: `describe` is a class attribute of
+`Parameterised`, so it joins `parameters`, `buffers` and `context` among the
+names a parameter or buffer may not shadow.
 
 ## 11. Decisions and their reasoning
 

@@ -253,6 +253,27 @@ class TestProvenanceAgreement:
         ):
             assert left[key] == right[key], key
 
+    @pytest.mark.parametrize("name", sorted(SPECS))
+    def test_the_neutral_model_identity_agrees_across_backends(
+        self, first: ConformanceBackend, second: ConformanceBackend, name: str
+    ) -> None:
+        """The "offer" half of ``results.md`` §14 (ruled 2026-09-03, landed W2.1).
+
+        ``ampere_problem_hash`` is deliberately backend-variant — the row above
+        asserts that, and it is what stops one backend's trained artefact being
+        *served* to another's fit. The derived neutral identity is the other
+        half: the fingerprint minus class and module, which two backends
+        implementing the same declaration must agree on, so a cross-backend
+        emulator can be **offered** with its provenance shown.
+
+        This is a real assertion on these two fixtures rather than a tautology:
+        ``reference`` and ``mirror`` compute the same closed forms by
+        deliberately different routes, in different classes and modules. They
+        disagree on the problem hash (above) and must agree here.
+        """
+        left, right = self.attrs(first, name), self.attrs(second, name)
+        assert left["ampere_model_identity_hashes"] == right["ampere_model_identity_hashes"]
+
 
 class TestEmissionAgreement:
     """The same draws through the same declaration give the same stored run."""

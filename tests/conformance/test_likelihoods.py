@@ -38,6 +38,8 @@ from ampere.core import (
     list_families,
 )
 
+from ampere.backends.reference import FractionalModelGPNoise, FractionalModelNoise
+
 from .composition import COORDINATE_UNIT, FLUX_UNIT, GP_GRID
 from .oracles import analytic_diagonal_gaussian_log_prob, kernel_matrix, matern32_matrix
 from .protocol import (
@@ -516,48 +518,12 @@ class TestSolverAgreement:
 # ---------------------------------------------------------------------------
 
 
-class _FractionalNoise(IndependentNoise):
-    """In-repo stand-in for Phase 2's ``FractionalModelNoise``.
-
-    ``sigma_eff**2 = sigma_data**2 + (f * predicted)**2`` with ``f`` held
-    fixed — the ten-line implementation ``awkward_instrument.md`` §6 point 10
-    sketches. The shipped class lands with the reference backend in Phase 2
-    (with ``f`` an ordinary fitted parameter); this double exists so the
-    contract rows below run today, and Phase 2 should point them at the real
-    class when it arrives.
-    """
-
-    def __init__(self, fraction: float) -> None:
-        super().__init__()
-        self.fraction = float(fraction)
-
-    def sigma(self, observed, retain, values, *, predicted=None):
-        base = super().sigma(observed, retain, values, predicted=predicted)
-        if predicted is None or base is None:
-            raise LikelihoodError(
-                "a fractional model noise needs the prediction (X-1) and the observed "
-                "uncertainties; one of them is missing."
-            )
-        return np.sqrt(base**2 + (self.fraction * np.abs(predicted)) ** 2)
-
-
-class _FractionalGPNoise(GaussianProcessNoise):
-    """X-1 point 7's composition: the fractional term in quadrature under the kernel."""
-
-    def __init__(self, kernel, solver, fraction: float) -> None:
-        super().__init__(kernel, solver)
-        self.fraction = float(fraction)
-
-    def sigma(self, observed, retain, values, *, predicted=None):
-        base = super().sigma(observed, retain, values, predicted=predicted)
-        if predicted is None or base is None:
-            raise LikelihoodError(
-                "a fractional model noise needs the prediction (X-1) and the observed "
-                "uncertainties; one of them is missing."
-            )
-        return np.sqrt(base**2 + (self.fraction * np.abs(predicted)) ** 2)
-
-
+# W2.1: these rows ran against in-repo doubles until the shipped classes
+# landed. They now exercise ``ampere.backends.reference`` itself, which is what
+# ``likelihoods.md`` §5 and the README's debt entry always intended -- the
+# contract fixes the name and the semantics, and the implementation ships with
+# the reference backend. The doubles are gone: a double that shadows a shipped
+# class only tests itself.
 FRACTION = 0.5
 
 
@@ -574,7 +540,7 @@ class TestPredictionAwareNoise:
     ) -> None:
         """Row (a): sigma_eff from a fractional noise, at fixed theta."""
         predicted, observed = spectra()
-        likelihood = Likelihood(GaussianFamily(), _FractionalNoise(FRACTION))
+        likelihood = Likelihood(GaussianFamily(), FractionalModelNoise(FRACTION))
         mean = np.asarray(predicted.values, dtype=float)
         sigma_eff = np.sqrt(SIGMA**2 + (FRACTION * mean) ** 2)
         expected = analytic_diagonal_gaussian_log_prob(
@@ -594,7 +560,9 @@ class TestPredictionAwareNoise:
         dataset_spec = DatasetSpec()
         observed = observed_container(spec, dataset_spec)
         dataset = Dataset(
-            observed, likelihood=Likelihood(GaussianFamily(), _FractionalNoise(FRACTION)), label="d"
+            observed,
+            likelihood=Likelihood(GaussianFamily(), FractionalModelNoise(FRACTION)),
+            label="d",
         )
         mean = 1.0 + 0.1 * np.arange(observed.n_samples, dtype=float)
         predicted = observed.with_values(mean)
@@ -619,8 +587,8 @@ class TestPredictionAwareNoise:
     ) -> None:
         """Row (c): K + diag(sigma_data**2 + (f*mu)**2), against scipy's own solve."""
         predicted, observed = spectra()
-        noise = _FractionalGPNoise(
-            backend.kernel(MATERN32), backend.gp_solver(SolverKind.DENSE), FRACTION
+        noise = FractionalModelGPNoise(
+            backend.kernel(MATERN32), backend.gp_solver(SolverKind.DENSE), f=FRACTION
         )
         likelihood = Likelihood(GaussianFamily(), noise)
         grid = np.asarray(GP_GRID, dtype=float)

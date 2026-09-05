@@ -67,7 +67,7 @@ Phase 2's code.
 | `Cube` | Two spatial axes plus a spectral axis, separable |
 | `TimeSeries` | A quantity at strictly increasing times |
 | `VisibilitySet` | **Complex** visibilities at scattered (u,v) points |
-| `Axis` | One coordinate axis: values, unit, and *advertised* structure (`regular`, `log_regular`) |
+| `Axis` | One coordinate axis: values, unit, *advertised* structure (`regular`, `log_regular`), and `locate()` (§5) |
 | `AxisSpec`, `Layout`, `Order` | How a container kind declares its axis signature, its layout and its ordering rule |
 | `SchemaError`, `ChannelError` | This contract's errors; `ChannelError` is the binding failure a consumer may want to catch on its own |
 
@@ -380,6 +380,50 @@ state of affairs:
 True
 
 ```
+
+### Locating published coordinates on a negotiated axis
+
+*Added post-freeze, approved by Peter 2026-09-03 and landed with W2.1;
+decision-log entry in `DEVELOPMENT_PLAN.md` §2. The motivating failure is
+`modalities/spectrum_photometry.md` Gap 1.*
+
+```
+Axis.locate(values) -> np.ndarray[intp]
+```
+
+A step whose buffer is tabulated on particular coordinates — a response matrix,
+an RMF/ARF, a filter curve — publishes them as a `points=` requirement and then
+has to find them again in whatever container it is handed. It cannot assume
+positional alignment: as soon as a second instrument binds the same channel,
+`negotiate`'s union hands the step a **larger, possibly reordered** grid, and
+reading `samples.values` against the buffer's own columns is silently wrong (or,
+with luck, a bare `matmul` shape error naming neither channel nor negotiation).
+`locate` is the supported lookup:
+
+```python
+index = samples.axis("spectral_axis").locate(self.tabulation())
+response @ samples.values[index]
+```
+
+Three properties are load-bearing.
+
+**Matching is within `COORDINATE_RTOL`, not exact.** The union collapses
+coordinates that coincide to within that relative tolerance and keeps one
+representative (`transformations.md` §7), so when two instruments publish
+near-coincident but non-identical points, a step's own published value may
+differ from the survivor by up to `COORDINATE_RTOL`. `locate` is the exact
+inverse of that collapsing and shares the constant with it — which is why
+`COORDINATE_RTOL` is defined in this contract and re-exported by
+`transform.py`, rather than the other way round. Where two coordinates are both
+within tolerance, the nearest wins.
+
+**An unmatched value raises `SchemaError`, naming the values.** That indicates a
+negotiation defect rather than a usage error — the grid was built to satisfy the
+very requirement the step published — so it must not return a sentinel or a
+partial index.
+
+**The axis is not assumed sorted.** `PhotometricPoints` and `VisibilitySet`
+declare `Order.ANY` (§5's table), and Gap 1's own scenario is a photometry step.
 
 ## 6. Units: converted once, at construction
 

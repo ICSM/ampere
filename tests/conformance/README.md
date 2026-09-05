@@ -182,7 +182,7 @@ tests/conformance/
   conftest.py            the `backend`, `tolerances` and `backends` fixtures
   backends/
     __init__.py          the registry — the one place a backend is named
-    reference.py         ampere.core's numpy path
+    reference.py         an adapter onto the shipped ampere.backends.reference
     mirror.py            a second fixture (§5)
   test_parameters.py     parameters.md §13's rows
   test_transformations.py transformations.md §14's rows
@@ -272,11 +272,25 @@ Run the suite to see it; as of W1.10:
   unchanged. (W1.13's report carries a
   recommendation; the ruling is Peter's.)
 
+  **Landed W2.1, and the debt is discharged rather than removed.** The
+  equivalence row is untouched, as the ruling required.
+  `test_the_neutral_model_identity_agrees_across_backends` is its
+  counterpart: `ampere_model_identity_hashes` must agree across every
+  registered backend, unconditionally. Together they state the whole rule —
+  the neutral identity is what licenses *offering* a cross-backend emulator,
+  and the backend-variant problem hash is what stops one being served. That
+  the pair is a real assertion rather than a tautology is why `mirror`
+  exists: same declaration, different classes, different modules.
+
 Added at the freeze (W1.13):
 
-* **The X-1 rows run live** against an in-repo fractional-noise double
+* ~~**The X-1 rows run live** against an in-repo fractional-noise double
   (`test_likelihoods.py::TestPredictionAwareNoise`); Phase 2 points them at
-  the shipped reference-backend `FractionalModelNoise` when it lands.
+  the shipped reference-backend `FractionalModelNoise` when it lands.~~
+  **Discharged by W2.1**: the three rows now exercise
+  `ampere.backends.reference.FractionalModelNoise` and
+  `FractionalModelGPNoise` themselves, and the doubles are deleted — a
+  double that shadows a shipped class only tests itself.
 * **`complex_gaussian` + GP is declared `ANALYTIC` and staged**
   (`TestStagedAnalyticCombination`): the declaration row runs, the
   composition-refusal row runs, and Phase 4 replaces the refusal with

@@ -1251,3 +1251,51 @@ class TestPlateBindings:
             )
         with pytest.raises(ParameterError, match="int or a non-empty tuple"):
             PlateBinding("population.objects.theta", "obj0", "t", 1.5)  # type: ignore[arg-type]
+
+
+class TestDescribeHook:
+    """The opt-in ``describe()`` hook (``results.md`` §13.13, landed W2.1).
+
+    Provenance reaches parameters, buffers and class identity, but not a plain
+    Python attribute that changes what a model computes. Hashing an arbitrary
+    ``__dict__`` is not a safe general answer, so this is the declared
+    extension point instead.
+    """
+
+    def test_the_default_declares_nothing(self) -> None:
+        class Plain(Parameterised):
+            pass
+
+        assert Plain().describe() is None
+
+    def test_a_subclass_may_declare_its_configuration(self) -> None:
+        class Redden(Parameterised):
+            def __init__(self, law: str) -> None:
+                self.law = law
+
+            def describe(self) -> dict[str, str]:
+                return {"law": self.law}
+
+        assert Redden("ccm89").describe() == {"law": "ccm89"}
+        assert Redden("f99").describe() != Redden("ccm89").describe()
+
+    def test_describe_may_not_be_used_as_a_parameter_name(self) -> None:
+        """It is a class attribute now, so the shadowing guard covers it.
+
+        The same already holds for ``parameters``, ``buffers`` and ``context``;
+        this row records that ``describe`` joined them, because it is a (small)
+        narrowing of what a model may call its parameters.
+        """
+
+        class Shadowed(Parameterised):
+            pass
+
+        with pytest.raises(ParameterError, match="shadows an attribute"):
+            Shadowed().register_parameter(Parameter("describe", st.norm(0.0, 1.0)))
+
+    def test_describe_may_not_be_used_as_a_buffer_name(self) -> None:
+        class Shadowed(Parameterised):
+            pass
+
+        with pytest.raises(ParameterError, match="shadows an attribute"):
+            Shadowed().register_buffer("describe", np.arange(3.0))
