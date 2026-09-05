@@ -93,20 +93,26 @@ jobs:
       # every matrix leg, not just py3.13 -- the py3.11 core-import break
       # that survived until W1.10's review (fixed a8e6f54, see this item's
       # report) is exactly the failure mode a py3.13-only check would have
-      # missed. tests/results is deliberately NOT run here: it needs the
-      # `arviz` extra (architecture.md §4 rule 2 keeps arviz optional), and
-      # test-py311/312/313 (pyproject.toml [tool.pixi.environments])
-      # deliberately exclude it to avoid tripling the arviz/netCDF download
-      # across the matrix -- see the phase1-suites job below, which runs
-      # all three Phase-1 suites together (including results) in the `dev`
-      # environment, where arviz is present and the suite genuinely runs
-      # rather than skipping.
+      # missed.
+      #
+      # W2.2: tests/results joins them. It used to be excluded here because
+      # arviz was an extra that test-py311/312/313 deliberately left out to
+      # avoid tripling the download; arviz and h5netcdf are base dependencies
+      # now (results.md §15 R1's promotion landed with the engine drivers), so
+      # every matrix leg has them anyway and the suite is free to run rather
+      # than skip. tests/inference joins for the same reason -- it is where
+      # emcee/dynesty/zeus are actually driven, and all three are present in
+      # this environment.
       - name: "phase 1 suite: core (py${{ matrix.python }})"
         run: pixi run -e test-py${{ matrix.python }} test-core
+      - name: "phase 1 suite: results (py${{ matrix.python }})"
+        run: pixi run -e test-py${{ matrix.python }} test-results
       - name: "phase 1 suite: conformance (py${{ matrix.python }})"
         run: pixi run -e test-py${{ matrix.python }} conformance
       - name: "backends suite (py${{ matrix.python }})"
         run: pixi run -e test-py${{ matrix.python }} test-backends
+      - name: "inference suite (py${{ matrix.python }})"
+        run: pixi run -e test-py${{ matrix.python }} test-inference
       - name: upload coverage
         uses: actions/upload-artifact@v7
         with:
@@ -115,7 +121,7 @@ jobs:
           if-no-files-found: ignore
 
   phase1-suites:
-    name: new-namespace suites (core + results + conformance + backends, one process)
+    name: new-namespace suites (core + results + conformance + backends + inference, one process)
     runs-on: ubuntu-latest
     # W0.10: `ci.yml` never ran tests/core, tests/results or
     # tests/conformance before this job -- see this item's report for the
@@ -141,7 +147,8 @@ jobs:
     # W2.1 added tests/backends (the shipped ampere.backends.reference) to the
     # same single process, for the same reason: it is another suite that
     # registers things into ampere.core and must not be allowed to leak into
-    # the conformance battery's registry checks.
+    # the conformance battery's registry checks. W2.2 added tests/inference
+    # (the engine drivers) on the same grounds.
     steps:
       - uses: actions/checkout@v7
       - uses: prefix-dev/setup-pixi@v0.10.2

@@ -261,9 +261,13 @@ test-phase1 = "pytest tests/core tests/results tests/conformance"
 # real pyphot-backed synthetic photometry). The contract rows stay in
 # tests/conformance, which runs them once per registered backend.
 test-backends = "pytest tests/backends"
+# W2.2: the engine drivers. End-to-end sampling runs, so this is the slowest
+# of the new-namespace suites (tens of seconds); the budgets are deliberately
+# small and the seeds fixed -- see the module docstring for the trade-off.
+test-inference = "pytest tests/inference"
 # Everything the new namespaces own, in ONE pytest process, for the same
 # registry-leak reason test-phase1 exists (see tests/core/conftest.py).
-test-all = "pytest tests/core tests/results tests/conformance tests/backends"
+test-all = "pytest tests/core tests/results tests/conformance tests/backends tests/inference"
 lint = "ruff check ."
 format-check = "ruff format --check . --exclude tests/characterisation"
 # pyrefly is scoped to the new namespaces (AGENTS.md ground rule 8); none
