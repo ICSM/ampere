@@ -95,9 +95,34 @@ photon `R dλ/λ` / energy `R dλ/λ²`, `from_library` reads pyphot's
 per-filter `dtype`. Gates at merge: `pixi run test-all` 1133+85 in one
 process, lint/format/pyrefly clean. Nothing pushed to origin.
 
-**Still in flight**: **W2.3** QuasisepGP via celerite2 on
-`w2.3-quasisep-reference` (Opus; adds celerite2 to base deps; its GP
-algebra gets a line-by-line Fable hand-check in lieu of terra).
+**Nothing in flight — the whole W2.2/W2.3/W2.6 block is reviewed and
+MERGE-READY pending Peter.** Proposed merge order: **W2.6 → W2.2 → W2.3**
+(W2.6 touches no dependencies; W2.2 and W2.3 each add base deps in a
+dedicated commit — resolve the trivial `[project.dependencies]` overlap,
+regenerate `pixi.lock` once after the last merge, then re-run the full
+gates on merged master before updating the status table).
+
+**W2.3 (QuasisepGP via celerite2, Opus) is MERGE-READY pending Peter** —
+`w2.3-quasisep-reference` at `7ea71bf` (3 commits). Fable-reviewed with
+the GP algebra hand-checked line by line (in lieu of terra): the shipped
+rank-2 semiseparable Matérn-3/2 representation is an algebraic identity
+(verified on paper and by the test reconstructing the dense kernel matrix
+to 1.7e-16); celerite2's own `Matern32Term` was rightly rejected (ε²-limit
+approximation, misses `tolerances.cross_solver` at its default). Gates
+independently re-verified: test-all 1236 with ZERO skips (the two
+long-standing skips were the W1.10 solver-agreement skeleton, now live
+and passing), conformance 294, lint/format/pyrefly clean; scaling
+reproduced (57 ms at 10⁵ points, exponent ~0.94, >1500× over dense).
+Review dispositions: placement in `ampere.core` accepted (decision-log
+row + honest architecture.md clarifications); the conformance restructure
+accepted (the new "not the dense solver in disguise" row is stronger than
+the refusal it replaced, whose discipline moved to `tests/core`);
+`conditional_loo` deferral properly recorded with the O(N) route named
+for a future item; `tests/scaling/` + `pixi run scaling` outside the
+gates, pending W2.11's benchmark-harness choice. Out-of-scope finding
+worth carrying to W2.4/W2.5: celerite2 returns quiet NaN where a Cholesky
+raises — the core solver now guards its preconditions, and the torch/jax
+celerite2 paths must do the same.
 
 **W2.2 (engine drivers, Opus) is MERGE-READY pending Peter** —
 `w2.2-engine-drivers` at `1b71c10` (4 commits). Fable-reviewed, no fixes
