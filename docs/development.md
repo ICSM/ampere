@@ -80,7 +80,50 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
   the "legacy still works" gate; run it before merging anything that
   touches shared files.
 
-## ⚡ Pick up here (end of the 2026-09-03 session — PHASE 1 COMPLETE)
+## ⚡ Pick up here (2026-09-05 session — Phase 2 under way, three items in flight)
+
+**State**: **W2.1 is merged** — master is at `85976da` (merge commit
+`0d8b9a0`; Opus-authored, Fable-reviewed twice per Peter's 2026-09-05
+ruling, standing in for the cross-model pass while the **Codex quota is
+exhausted until ~2026-09-30** — a retroactive `gpt-5.6-terra` review of
+the merged W2.1 range is **owed** when it returns, before the M2
+milestone). `ampere.backends.reference` is live and is the conformance
+battery's `reference` fixture (adapter onto the shipped package;
+Peter-confirmed, no test-local duplicate). Peter's same-day photometry
+ruling is implemented: detector-aware weighting, `detector=` required,
+photon `R dλ/λ` / energy `R dλ/λ²`, `from_library` reads pyphot's
+per-filter `dtype`. Gates at merge: `pixi run test-all` 1133+85 in one
+process, lint/format/pyrefly clean. Nothing pushed to origin.
+
+**In flight (dispatched 2026-09-05, one agent each, worktrees based on
+`85976da`)**: **W2.2** engine drivers on `w2.2-engine-drivers` (Opus;
+promotes arviz + a netCDF engine to base deps); **W2.3** QuasisepGP via
+celerite2 on `w2.3-quasisep-reference` (Opus; adds celerite2 to base
+deps; its GP algebra gets a line-by-line Fable hand-check in lieu of
+terra); **W2.6** lowering registry on `w2.6-lowering-registry` (Sonnet;
+escalates ambiguity rather than inventing). W2.2 and W2.3 both touch
+pyproject/pixi.lock in dedicated commits — merge them **sequentially**
+and regenerate the lockfile at merge where they collide. Each gets a
+Fable review before Peter merges; all three ranges join the retroactive
+terra queue.
+
+**Awaiting Peter's ruling** (both recorded in the W2.1 status row, small
+enough to land directly on master between merges): (a) pyphot 2.1.1's
+undeclared `requests` dependency breaks the minimal-install CI job — add
+`requests` to `[project.dependencies]` or pin past the broken pyphot;
+(b) `Instrument.__init__` runs `configure_from` in forward chain order
+(`ampere/core/transform.py:944`), under-padding chained same-axis
+convolutions — proposed fix is calling it in reverse order plus a
+regression test. Also still outstanding from Phase 0–1: branch-triage
+approval (`docs/design/harvest/branch_triage.md`); the `examples/`
+scripts' standalone `pyphot.unit` usage (Phase 2 follow-up); a live-CI
+verification push.
+
+**After these three merge**: W2.4 (torch) and W2.5 (jax) backend tracks
+become dispatchable (Opus, one per track, lockstep via the conformance
+suite); W2.7/W2.8 follow W2.2; W2.9 follows W2.1+W2.2.
+
+## ⚡ Pick up here (end of the 2026-09-03 session — PHASE 1 COMPLETE) — SUPERSEDED by the section above
 
 **State**: **Phase 1 is done and the spec is frozen.** W1.13 merged
 2026-09-03 (`a962b09`); the `spec-v1.0` tag sits on the freeze-content

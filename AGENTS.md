@@ -39,6 +39,16 @@ W2.1–W2.11 — is beginning. Before any non-trivial work, read:
 10. End commit messages with:
     `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>` (or the
     equivalent for your agent/tool).
+11. **Handoffs must survive an interruption.** Any session may be cut off
+    without warning, so the resumable state lives in the repository, never
+    only in a conversation. The orchestrating session refreshes
+    `docs/development.md`'s "⚡ Pick up here" section at every state
+    change — a merge, a dispatch, a ruling, a blocker — recording what is
+    in flight (branches, agents, pending reviews, open rulings) and what a
+    clean session should do next; the WORK_ITEMS.md status table is
+    updated at merge as before. Working agents contribute by committing
+    logical units as they complete them and keeping their branch's final
+    report reproducible from the branch alone.
 
 ## Environment
 
