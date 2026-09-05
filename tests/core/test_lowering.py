@@ -19,6 +19,16 @@ W2.6 entry fixes the acceptance criteria this file exercises directly:
 No real backend exists yet (W2.4/W2.5 land the torch/jax rows); every test
 here uses backend names it invents itself (``"stub-*"``), exactly as the item
 brief anticipates, and scipy as the reference-vs-native agreement baseline.
+
+Two findings from the first W2.6 review are addressed and covered here too:
+``_REGISTRY`` is module-global state exactly like
+``ampere.core.likelihood._FAMILIES`` (W0.10 finding (c)'s failure class), so
+``tests/core/conftest.py``'s autouse fixture now snapshots and restores it
+the same way (:class:`TestFixtureRestoresRegistryBetweenTests` below proves
+it); and the bijection slot is keyed on the module-qualified class name, not
+the bare one, so two unrelated same-named classes cannot cross-hit each
+other's row on lookup
+(:meth:`TestBijectionSlot.test_same_named_classes_from_different_modules_do_not_collide`).
 """
 
 from __future__ import annotations
@@ -216,13 +226,39 @@ def _build_doubled_logit_native(bijection: _DoubledLogit) -> dict[str, float]:
     return {"lower": bijection._inner.lower, "upper": bijection._inner.upper}
 
 
+def _make_bijection_class(module_name: str) -> type[Bijection]:
+    """A fresh class named ``_SameName``, "from" a synthetic module.
+
+    Stands in for two unrelated third-party packages that both happen to
+    define a class called ``_SameName`` -- W2.6 review Finding 2's collision
+    scenario -- without needing two real module files. Only ``__module__``
+    is synthetic; the class is otherwise an ordinary, independently created
+    type, so ``is``-identity and qualified-name collision behave exactly as
+    they would for two real packages.
+    """
+    cls = type(
+        "_SameName",
+        (Bijection,),
+        {
+            "__init__": lambda self, tag: setattr(self, "tag", tag),
+            "constrain": lambda self, y: np.asarray(y),
+            "unconstrain": lambda self, x: np.asarray(x),
+            "log_abs_det_jacobian": lambda self, y: np.zeros_like(np.asarray(y, dtype=float)),
+        },
+    )
+    cls.__module__ = module_name
+    return cls
+
+
 class TestBijectionSlot:
     def test_register_and_lookup_by_class_or_instance(self) -> None:
         resolution = register_bijection_lowering(
             _DoubledLogit, "stub-bij", _build_doubled_logit_native
         )
         assert resolution.kind == "bijection"
-        assert resolution.name == "_DoubledLogit"
+        # Keyed (and recorded) on the module-qualified name, not the bare
+        # class name -- W2.6 review Finding 2.
+        assert resolution.name == f"{_DoubledLogit.__module__}.{_DoubledLogit.__qualname__}"
 
         instance = _DoubledLogit(0.0, 1.0)
         by_class = lookup_bijection_lowering(_DoubledLogit, "stub-bij")
@@ -244,6 +280,42 @@ class TestBijectionSlot:
         with pytest.raises(LoweringError) as excinfo:
             lookup_bijection_lowering(_DoubledLogit, "nowhere-bij")
         assert "_DoubledLogit" in str(excinfo.value)
+
+    def test_same_named_classes_from_different_modules_do_not_collide(self) -> None:
+        """W2.6 review Finding 2: a bare-name key would let this lookup for
+        ``package_b``'s ``_SameName`` silently return ``package_a``'s row and
+        hand its constructor the wrong instance. Keying on the module-qualified
+        name means the second registration is not even refused as a duplicate
+        -- the two rows are genuinely independent -- and each lookup finds
+        only its own.
+        """
+        package_a = _make_bijection_class("w26_package_a")
+        package_b = _make_bijection_class("w26_package_b")
+        assert package_a.__name__ == package_b.__name__ == "_SameName"
+        assert package_a is not package_b
+
+        def _build_a(bijection: object) -> str:
+            return "native-a"
+
+        def _build_b(bijection: object) -> str:
+            return "native-b"
+
+        register_bijection_lowering(package_a, "stub-collision", _build_a)
+        # Not a duplicate: different qualified key, so no override needed.
+        register_bijection_lowering(package_b, "stub-collision", _build_b)
+
+        resolution_a = lookup_bijection_lowering(package_a, "stub-collision")
+        resolution_b = lookup_bijection_lowering(package_b, "stub-collision")
+        assert resolution_a.constructor is _build_a
+        assert resolution_b.constructor is _build_b
+        assert resolution_a.name == "w26_package_a._SameName"
+        assert resolution_b.name == "w26_package_b._SameName"
+
+        # Human-facing messages still show the bare, ambiguous name --
+        # that convention is about legibility, not storage.
+        with pytest.raises(LoweringError) as excinfo:
+            lookup_bijection_lowering(_make_bijection_class("w26_package_c"), "nowhere")
+        assert "_SameName" in str(excinfo.value)
 
     def test_register_bijection_lowering_rejects_non_bijection(self) -> None:
         with pytest.raises(ParameterError):
@@ -368,3 +440,36 @@ class TestProvenanceStamping:
         )
         resolution = lookup_lowering("w26_custom_power", "stub-prov-builtin")
         assert provenance_entries([resolution]) == []
+
+
+# ---------------------------------------------------------------------------
+# The autouse registry-restoration fixture (W2.6 review Finding 1)
+# ---------------------------------------------------------------------------
+
+
+class TestFixtureRestoresRegistryBetweenTests:
+    """Proves ``tests/core/conftest.py``'s ``_restore_lowering_registry`` fixture
+    actually restores ``ampere.core.lowering._REGISTRY`` between tests --
+    the same class of leak W0.10 finding (c) found in
+    ``ampere.core.likelihood._FAMILIES`` before that module got its own
+    autouse snapshot/restore fixture.
+
+    Two steps, relying on pytest's default (source-order, non-randomised)
+    collection within one module -- there is no ``pytest-randomly`` or
+    similar in this project's dev dependencies, and the two methods are
+    adjacent and named so nothing reorders them independently of this class.
+    If the fixture in ``conftest.py`` were removed (or only cleared
+    ``_FAMILIES`` and not ``_REGISTRY``), step 2 would fail: it would find
+    step 1's row still registered.
+    """
+
+    def test_step1_registers_a_marker_row(self) -> None:
+        register_lowering("w26_fixture_proof_row", "stub-fixture-proof", _build_native_power_law)
+        assert lookup_lowering("w26_fixture_proof_row", "stub-fixture-proof").constructor is (
+            _build_native_power_law
+        )
+
+    def test_step2_the_marker_row_is_gone_afterwards(self) -> None:
+        assert registered_lowerings(backend="stub-fixture-proof") == ()
+        with pytest.raises(LoweringError):
+            lookup_lowering("w26_fixture_proof_row", "stub-fixture-proof")

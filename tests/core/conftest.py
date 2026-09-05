@@ -14,9 +14,19 @@ table covers exactly the registered set -- W0.10 finding (c): running
 ``tests/core`` and ``tests/conformance`` together in one pytest invocation
 failed that check even though each suite passed alone.
 
-Snapshotting and restoring the registry's underlying mapping from the test
+``ampere.core.lowering`` (W2.6) has the identical shape: ``_REGISTRY`` is
+module-global mutable state, ``register_lowering``/``register_bijection_lowering``
+have no deregistration route (the same one-line, no-import contract), and
+both ``tests/core/test_lowering.py`` and ``ampere.core.lowering``'s own
+module docstring (run as a doctest by ``test_spec_doctests.py``) register
+throwaway rows on invented backend names. Left alone, those rows would leak
+across tests -- and, per Finding 1 of the W2.6 review, across the whole
+``test-all`` process -- the same way an unrestored ``_FAMILIES`` did.
+
+Snapshotting and restoring each registry's underlying mapping from the test
 side, autouse around every test in this directory, closes that gap without
-touching the (frozen, merged) Phase-1 contract module itself.
+touching the (frozen, merged) Phase-1 contract module or the W2.6 registry
+module itself.
 """
 
 from __future__ import annotations
@@ -37,3 +47,16 @@ def _restore_likelihood_family_registry() -> Iterator[None]:
     finally:
         _likelihood_module._FAMILIES.clear()
         _likelihood_module._FAMILIES.update(snapshot)
+
+
+@pytest.fixture(autouse=True)
+def _restore_lowering_registry() -> Iterator[None]:
+    """Snapshot ``ampere.core.lowering._REGISTRY`` and restore it after each test."""
+    from ampere.core import lowering as _lowering_module
+
+    snapshot = dict(_lowering_module._REGISTRY)
+    try:
+        yield
+    finally:
+        _lowering_module._REGISTRY.clear()
+        _lowering_module._REGISTRY.update(snapshot)

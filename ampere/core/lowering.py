@@ -24,10 +24,15 @@ mechanism underneath (see "One store, two slots" below):
   takes the :class:`~ampere.core.parameter.PriorSpec` and returns a
   backend-native distribution object.
 * :func:`register_bijection_lowering` / :func:`lookup_bijection_lowering` —
-  custom :class:`~ampere.core.parameter.Bijection` classes, keyed on the class
-  (``LoweringError``'s docstring already calls this "a bijection class name").
-  A constructor takes the :class:`Bijection` *instance* and returns a
-  backend-native transform object.
+  custom :class:`~ampere.core.parameter.Bijection` classes, keyed on the
+  **module-qualified** class name (``f"{cls.__module__}.{cls.__qualname__}"``)
+  so that two unrelated classes sharing a bare name never cross-hit each
+  other's row on lookup — a silent-wrong-lowering path, which §12.8's
+  hardenings exist to prevent. Messages still show the bare class name
+  (``LoweringError``'s docstring already calls this "a bijection class
+  name" — that convention is about legibility, not storage). A constructor
+  takes the :class:`Bijection` *instance* and returns a backend-native
+  transform object.
 
 Three hardenings, each load-bearing
 ------------------------------------
@@ -183,6 +188,14 @@ class LoweringResolution:
     called with a :class:`~ampere.core.parameter.PriorSpec` for a ``"prior"``
     row or a :class:`~ampere.core.parameter.Bijection` instance for a
     ``"bijection"`` row.
+
+    ``name`` is the registry *key*'s name component: a prior family name
+    unchanged, but for a ``"bijection"`` row the **module-qualified** class
+    name (``f"{cls.__module__}.{cls.__qualname__}"``), not the bare
+    ``cls.__name__`` — so two unrelated classes sharing a bare name are
+    distinguishable here and in :func:`provenance_entries`'s output, even
+    though :class:`~ampere.core.exceptions.LoweringError` messages show the
+    bare name for legibility (see :func:`register_bijection_lowering`).
     """
 
     kind: _Kind
@@ -212,7 +225,8 @@ _REGISTRY: dict[tuple[_Kind, str, str], LoweringResolution] = {}
 
 def _register(
     kind: _Kind,
-    name: str,
+    key_name: str,
+    display_name: str,
     backend: str,
     constructor: Callable[[Any], Any],
     *,
@@ -220,28 +234,39 @@ def _register(
     builtin: bool,
     what: str,
 ) -> LoweringResolution:
-    if not isinstance(name, str) or not name:
-        raise ParameterError(f"a {what} name must be a non-empty string, got {name!r}")
+    """Store one row. ``key_name`` is what the registry (and collision checks)
+    key on; ``display_name`` is what error messages and provenance-adjacent
+    prose show a human. For a prior family the two are identical (the family
+    name is already a flat, global namespace). For a bijection, ``key_name``
+    is the module-qualified class name (collision-proof: two third-party
+    classes sharing a bare name must not silently share a row -- W2.6 review
+    Finding 2) and ``display_name`` is the bare class name
+    (:class:`~ampere.core.exceptions.LoweringError`'s established "a
+    bijection class name" convention, which is about messages, not storage).
+    """
+    if not isinstance(key_name, str) or not key_name:
+        raise ParameterError(f"a {what} name must be a non-empty string, got {key_name!r}")
     if not isinstance(backend, str) or not backend:
         raise ParameterError(f"a backend name must be a non-empty string, got {backend!r}")
     if not callable(constructor):
         raise ParameterError(f"a lowering constructor must be callable, got {constructor!r}")
-    key = (kind, name, backend)
+    key = (kind, key_name, backend)
     existing = _REGISTRY.get(key)
     if existing is not None and not override:
         origin = "a built-in" if existing.builtin else "a user"
         raise LoweringError(
-            name,
+            display_name,
             backend=backend,
             detail=(
-                f"{origin} lowering is already registered for {what} {name!r} on backend "
-                f"{backend!r} ({existing.constructor_module}.{existing.constructor_qualname}); "
+                f"{origin} lowering is already registered for {what} {display_name!r} on "
+                f"backend {backend!r} "
+                f"({existing.constructor_module}.{existing.constructor_qualname}); "
                 f"pass override=True to replace it deliberately."
             ),
         )
     resolution = LoweringResolution(
         kind=kind,
-        name=name,
+        name=key_name,
         backend=backend,
         constructor=constructor,
         builtin=builtin,
@@ -252,14 +277,16 @@ def _register(
     return resolution
 
 
-def _lookup(kind: _Kind, name: str, backend: str, *, what: str) -> LoweringResolution:
+def _lookup(
+    kind: _Kind, key_name: str, display_name: str, backend: str, *, what: str
+) -> LoweringResolution:
     try:
-        return _REGISTRY[(kind, name, backend)]
+        return _REGISTRY[(kind, key_name, backend)]
     except KeyError:
         raise LoweringError(
-            name,
+            display_name,
             backend=backend,
-            detail=f"no lowering is registered for {what} {name!r} on backend {backend!r}",
+            detail=f"no lowering is registered for {what} {display_name!r} on backend {backend!r}",
         ) from None
 
 
@@ -309,6 +336,7 @@ def register_lowering(
     return _register(
         _PRIOR_KIND,
         family,
+        family,
         backend,
         constructor,
         override=override,
@@ -327,7 +355,7 @@ def lookup_lowering(family: str, backend: str) -> LoweringResolution:
         (change the prior, register a lowering, or run on a backend that has
         it — see :class:`~ampere.core.exceptions.LoweringError`).
     """
-    return _lookup(_PRIOR_KIND, family, backend, what="prior family")
+    return _lookup(_PRIOR_KIND, family, family, backend, what="prior family")
 
 
 def _looks_like_bijection(cls: type) -> bool:
@@ -350,11 +378,26 @@ def register_bijection_lowering(
     this closes it for a specific class. ``bijection`` may be the class
     itself or an instance (an instance is a convenience — only its type is
     used as the key, since a :class:`Bijection`'s neutral identity is its
-    class, the same convention
-    :class:`~ampere.core.exceptions.LoweringError`'s docstring already uses
-    ("a bijection class name")). ``constructor`` receives the *instance*
-    being lowered (its ``lower``/``upper`` or other fields may matter) and
-    must return the backend-native transform object.
+    class).
+
+    **Keyed on the module-qualified class name, not the bare one.** Two
+    unrelated third-party classes can share a bare name (``LogitWithTemperature``
+    from two different packages); keying storage on the bare name would let a
+    lookup for one silently return the row registered for the other and hand
+    its constructor the wrong instance -- a silent-wrong-lowering path, which
+    is exactly the failure class §12.8's hardenings exist to prevent (loud
+    refusal on collision is not enough if *lookup* can still cross-hit).
+    :class:`LoweringResolution.name` therefore carries the qualified form
+    (``f"{cls.__module__}.{cls.__qualname__}"``), which is also what
+    :func:`provenance_entries` records — strictly more informative than the
+    bare name would be. Human-facing messages (:class:`LoweringError`'s
+    ``family`` field, whose docstring calls this "a bijection class name")
+    still show the bare ``cls.__name__``, since that convention is about
+    legibility, not storage.
+
+    ``constructor`` receives the *instance* being lowered (its
+    ``lower``/``upper`` or other fields may matter) and must return the
+    backend-native transform object.
 
     Parameters, raises
     -------------------
@@ -367,6 +410,7 @@ def register_bijection_lowering(
         )
     return _register(
         _BIJECTION_KIND,
+        f"{cls.__module__}.{cls.__qualname__}",
         cls.__name__,
         backend,
         constructor,
@@ -381,13 +425,23 @@ def lookup_bijection_lowering(
 ) -> LoweringResolution:
     """The registered resolution for a custom :class:`Bijection` class on ``backend``.
 
+    Looked up by the module-qualified class name (see
+    :func:`register_bijection_lowering`'s docstring) so that two same-named
+    classes from different modules never cross-hit each other's row.
+
     Raises
     ------
     LoweringError
-        Naming the bijection's class and the backend.
+        Naming the bijection's (bare) class name and the backend.
     """
     cls = bijection if isinstance(bijection, type) else type(bijection)
-    return _lookup(_BIJECTION_KIND, cls.__name__, backend, what="bijection class")
+    return _lookup(
+        _BIJECTION_KIND,
+        f"{cls.__module__}.{cls.__qualname__}",
+        cls.__name__,
+        backend,
+        what="bijection class",
+    )
 
 
 def registered_lowerings(
