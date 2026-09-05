@@ -105,6 +105,8 @@ jobs:
         run: pixi run -e test-py${{ matrix.python }} test-core
       - name: "phase 1 suite: conformance (py${{ matrix.python }})"
         run: pixi run -e test-py${{ matrix.python }} conformance
+      - name: "backends suite (py${{ matrix.python }})"
+        run: pixi run -e test-py${{ matrix.python }} test-backends
       - name: upload coverage
         uses: actions/upload-artifact@v7
         with:
@@ -113,7 +115,7 @@ jobs:
           if-no-files-found: ignore
 
   phase1-suites:
-    name: phase 1 suites (core + results + conformance, one process)
+    name: new-namespace suites (core + results + conformance + backends, one process)
     runs-on: ubuntu-latest
     # W0.10: `ci.yml` never ran tests/core, tests/results or
     # tests/conformance before this job -- see this item's report for the
@@ -135,13 +137,18 @@ jobs:
     # each suite passing in its own process never caught. The fix is
     # tests/core/conftest.py's autouse registry-snapshot fixture; this job
     # is what keeps it honest.
+    #
+    # W2.1 added tests/backends (the shipped ampere.backends.reference) to the
+    # same single process, for the same reason: it is another suite that
+    # registers things into ampere.core and must not be allowed to leak into
+    # the conformance battery's registry checks.
     steps:
       - uses: actions/checkout@v7
       - uses: prefix-dev/setup-pixi@v0.10.2
         with:
           environments: dev
           cache: true
-      - run: pixi run -e dev test-phase1
+      - run: pixi run -e dev test-all
 
   minimal-install:
     name: minimal install (no extras)
