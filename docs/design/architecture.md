@@ -158,15 +158,27 @@ ampere/
 
 | Extra | Adds | Gates |
 |---|---|---|
-| *(none)* | reference backend, astropy adapter, emcee/dynesty, celerite2-numpy | the base install; must always work |
+| *(none)* | reference backend, astropy adapter, emcee/dynesty, celerite2-numpy, **arviz + h5netcdf** | the base install; must always work |
 | `zeus` | zeus-mcmc | `inference`'s zeus driver |
-| `arviz` | arviz | legacy postprocessing today; folded into the base install **with Phase 2's engine drivers**, together with a netCDF engine (ruled 2026-09-03, `results.md` §15 R1) — §4.6 of the plan makes ArviZ's format the single results format (`xarray.DataTree` since ArviZ 1.0 retired the `InferenceData` class; same format, corrected wording per R3) |
 | `sbi` | torch, sbi | `inference`'s SBI layer (also unlocks `backends/torch` incidentally, but does not itself require native-model authoring) |
 | `extinction` | dust_extinction | legacy `extinctionModels.F99Extinction` (W0.5) |
 | `torch` | torch, (GP solver library — deferred choice, plan §6) | `backends/torch` |
 | `jax` | jax, (GP solver library — deferred choice, plan §6) | `backends/jax` |
 | `dev` | pytest, ruff, pyrefly, sphinx, … | contributor tooling |
 | `all` | everything above | — |
+
+**The `arviz` extra is gone, and that is the promotion landing.** Ruled
+2026-09-03 (`results.md` §15 R1): arviz joins the base install *with Phase 2's
+engine drivers, together with a netCDF engine, when a user can first emit a
+run*. W2.2 is that moment — `ampere.inference` makes every run emit an ArviZ
+`DataTree` — so `arviz` and `h5netcdf` are in `[project.dependencies]` and the
+extra was removed rather than kept as an empty alias. §4.6 of the plan makes
+ArviZ's format the single results format (`xarray.DataTree` since ArviZ 1.0
+retired the `InferenceData` class; same format, corrected wording per R3).
+`ampere.results` still imports arviz **lazily**: not because it is optional any
+more, but because it is expensive on a path many callers take for provenance
+alone, and because an environment assembled without it should be told which
+package is missing rather than fail three frames down.
 
 ## 4. Extras and lazy-import policy
 
