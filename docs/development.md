@@ -100,12 +100,23 @@ process, lint/format/pyrefly clean. Nothing pushed to origin.
 promotes arviz + a netCDF engine to base deps); **W2.3** QuasisepGP via
 celerite2 on `w2.3-quasisep-reference` (Opus; adds celerite2 to base
 deps; its GP algebra gets a line-by-line Fable hand-check in lieu of
-terra); **W2.6** lowering registry on `w2.6-lowering-registry` (Sonnet;
-escalates ambiguity rather than inventing). W2.2 and W2.3 both touch
-pyproject/pixi.lock in dedicated commits — merge them **sequentially**
-and regenerate the lockfile at merge where they collide. Each gets a
-Fable review before Peter merges; all three ranges join the retroactive
-terra queue.
+terra). W2.2 and W2.3 both touch pyproject/pixi.lock in dedicated
+commits — merge them **sequentially** and regenerate the lockfile at
+merge where they collide. Each gets a Fable review before Peter merges;
+all three ranges join the retroactive terra queue.
+
+**W2.6 (lowering registry, Sonnet) is implemented and Fable-reviewed**
+— `w2.6-lowering-registry` at `6d0f166` (`ampere/core/lowering.py`,
+17 tests, gates green; the shared-store design and the `extra=`
+provenance stamping were accepted at review). Two review findings went
+back to its author 2026-09-05 and a fix commit is awaited: (1) extend
+`tests/core/conftest.py`'s autouse snapshot to restore
+`ampere.core.lowering._REGISTRY` — the module-global registry currently
+leaks across the single-process suite, W0.10 finding (c)'s class again;
+(2) key bijection rows on the module-qualified class name — bare
+`cls.__name__` lets two same-named classes silently resolve to each
+other's lowering on lookup. After the fixes and a re-check it is
+merge-ready pending Peter.
 
 **Awaiting Peter's ruling** (both recorded in the W2.1 status row, small
 enough to land directly on master between merges): (a) pyphot 2.1.1's
