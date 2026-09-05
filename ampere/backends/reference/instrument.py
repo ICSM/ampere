@@ -45,6 +45,7 @@ from ampere.core import (
 from ._declare import as_parameter
 
 __all__ = [
+    "DETECTORS",
     "CalibrationScale",
     "LSFConvolution",
     "Resample",
@@ -54,6 +55,34 @@ __all__ = [
 ]
 
 COORDINATE_UNIT = u.micron
+
+#: The two synthetic-photometry conventions, mapped to the power of lambda
+#: dividing the weight (ruled by Peter 2026-09-05; see
+#: :class:`SyntheticPhotometry`).
+#:
+#: For an ``f_nu`` container on a wavelength axis, both outputs are normalised
+#: weighted means of ``f_nu``, differing only in the weight:
+#:
+#: ``"photon"`` — a detector that counts *photons* (a CCD, a photodiode; most
+#:     optical and near-IR filters). Weight ``R dlambda / lambda``.
+#:
+#:     pyphot's photon convention is the lambda-weighted mean of ``f_lambda``,
+#:     ``<f_lambda> = INT lambda R f_lambda dlambda / INT lambda R dlambda``,
+#:     the extra ``lambda`` being the photon energy ``hc/lambda`` divided out.
+#:     Converting that to ``f_nu`` at the pivot wavelength, whose definition is
+#:     ``lambda_p**2 = INT R lambda dlambda / INT R dlambda / lambda``, collapses
+#:     exactly to ``INT R f_nu dlambda/lambda / INT R dlambda/lambda``. So this
+#:     form is pyphot-consistent by construction rather than by coincidence.
+#:
+#: ``"energy"`` — a detector that measures *energy* (a bolometer; AKARI's
+#:     far-IR bands, IRAS). Weight ``R dlambda / lambda**2``, which is the plain
+#:     ``INT R f_nu dnu / INT R dnu`` written on a wavelength grid, since
+#:     ``dnu = c dlambda / lambda**2``.
+#:
+#: There is deliberately no third option. An earlier draft of this class used a
+#: plain ``R dlambda`` weighting, which is neither convention; it was replaced
+#: before release rather than kept.
+DETECTORS: dict[str, float] = {"photon": 1.0, "energy": 2.0}
 
 #: How far beyond the output range an LSF needs coverage, in kernel sigmas.
 #: Truncating a Gaussian at 5 sigma loses about 6e-7 of its mass, which is well
@@ -391,9 +420,16 @@ class LSFConvolution(_Step):
 class SyntheticPhotometry(_Step):
     """Integrate a spectrum through filter response curves.
 
-    ``Spectrum -> PhotometricPoints``: the kind-changing step. Each output is
-    the response-weighted mean of the spectrum over one filter's support, which
-    for a flux density in Jy is the photometric convention.
+    ``Spectrum -> PhotometricPoints``: the kind-changing step. Each output is a
+    normalised response-weighted mean of the spectrum over one filter's
+    support.
+
+    Which mean depends on **what the detector counts**, and the two answers are
+    different numbers, not different spellings — see :data:`DETECTORS` and the
+    ``detector`` argument. There is no default: ruled by Peter 2026-09-05, a
+    silently chosen convention is exactly the failure this argument exists to
+    prevent, and the reference backend is the conformance oracle, so whatever
+    it computes is what torch and jax must reproduce.
 
     The response curves are **buffers** tabulated on a particular wavelength
     grid, so this class is ``spectrum_photometry.md`` Gap 1's shape exactly: it
@@ -403,8 +439,9 @@ class SyntheticPhotometry(_Step):
     silently changes which flux each response column multiplies.
 
     Build one from ampere's bundled filter library with :meth:`from_library`,
-    which is the pyphot route; the constructor itself takes plain arrays, so a
-    response measured in the lab needs no filter library at all.
+    which is the pyphot route and reads each filter's convention from the
+    library's own metadata; the constructor takes plain arrays, so a response
+    measured in the lab needs no filter library at all.
 
     Parameters
     ----------
@@ -414,9 +451,13 @@ class SyntheticPhotometry(_Step):
         The tabulation grid the responses are given on, micron.
     response
         ``(n_filters, n_wavelength)`` transmission. Need not be normalised.
+    detector
+        **Required.** ``"photon"`` or ``"energy"``, applied to every filter; or
+        one such string per filter, since a real filter set mixes types (2MASS
+        counts photons, AKARI and IRAS measure energy).
     pivots
         Pivot wavelengths, micron, one per filter. Computed from the responses
-        when omitted.
+        when omitted; the pivot is convention-independent.
     label
         Component label for this step.
     """
@@ -430,6 +471,7 @@ class SyntheticPhotometry(_Step):
         wavelength: Any,
         response: Any,
         *,
+        detector: str | Sequence[str],
         pivots: Any = None,
         label: str | None = None,
     ) -> None:
@@ -440,6 +482,7 @@ class SyntheticPhotometry(_Step):
                 f"SyntheticPhotometry was given repeated filter names {sorted(names)}; a filter "
                 f"name is the identity of a photometric point, so they must be unique."
             )
+        kinds = _detector_kinds(detector, names)
         grid = _to_micron(wavelength)
         curves = np.asarray(response, dtype=DTYPE)
         if curves.ndim != 2 or curves.shape != (len(names), grid.size):
@@ -451,8 +494,18 @@ class SyntheticPhotometry(_Step):
             raise TransformationError(
                 "SyntheticPhotometry's response curves must be finite and non-negative."
             )
+        if not bool(np.all(grid > 0.0)):
+            raise TransformationError(
+                "SyntheticPhotometry needs strictly positive wavelengths: both detector "
+                "conventions divide by the wavelength."
+            )
         widths = np.diff(bin_edges(grid))
-        norms = (curves * widths[None, :]).sum(axis=1)
+        # The whole of the convention, in one exponent: 1 for a photon
+        # counter's R dlambda / lambda, 2 for an energy detector's
+        # R dlambda / lambda**2. See DETECTORS for the derivation.
+        exponent = np.array([DETECTORS[kind] for kind in kinds], dtype=DTYPE)
+        raw = curves * widths[None, :] / grid[None, :] ** exponent[:, None]
+        norms = raw.sum(axis=1)
         if not bool(np.all(norms > 0.0)):
             empty = [names[i] for i in np.flatnonzero(norms <= 0.0)]
             raise TransformationError(
@@ -460,14 +513,34 @@ class SyntheticPhotometry(_Step):
                 f"were tabulated on, so no flux could ever be measured through them."
             )
         self._names = names
+        self._detectors = kinds
         self.register_buffer("wavelength", grid, unit=COORDINATE_UNIT)
         self.register_buffer("response", curves)
+        # The weights are registered as constant data in their own right, not
+        # merely derived: two steps with identical responses and *different*
+        # conventions compute different numbers, and `response` alone would
+        # make them indistinguishable to provenance (results.md §13.13).
+        self.register_buffer("weights", raw / norms[:, None])
         self.register_buffer(
             "pivot",
             _to_micron(pivots) if pivots is not None else _pivot(grid, curves, widths),
             unit=COORDINATE_UNIT,
         )
-        self._weights = curves * widths[None, :] / norms[:, None]
+
+    def describe(self) -> dict[str, list[str]]:
+        """The detector convention per filter — configuration, not data.
+
+        ``results.md`` §13.13's hook, for exactly the case it was landed for: a
+        plain Python attribute that changes what this step computes and is
+        neither a parameter nor an array. The ``weights`` buffer already makes
+        the choice visible to a hash; this makes it *legible* in provenance.
+        """
+        return {"detector": list(self._detectors)}
+
+    @property
+    def detectors(self) -> tuple[str, ...]:
+        """The detector convention used for each filter, in output order."""
+        return self._detectors
 
     @property
     def filters(self) -> tuple[str, ...]:
@@ -512,7 +585,7 @@ class SyntheticPhotometry(_Step):
         """
         index = axis.locate(self.tabulation())
         full = np.zeros((len(self._names), int(axis.size)), dtype=DTYPE)
-        full[:, index] = self._weights
+        full[:, index] = self._data("weights")
         return full
 
     def apply(self, samples: Any, values: Any) -> PhotometricPoints:
@@ -531,6 +604,7 @@ class SyntheticPhotometry(_Step):
         filters: Sequence[str],
         wavelength: Any,
         *,
+        detector: str | Sequence[str] | None = None,
         library: Any = None,
         label: str | None = None,
     ) -> SyntheticPhotometry:
@@ -541,6 +615,13 @@ class SyntheticPhotometry(_Step):
         way to attach units to an array for pyphot — never the ``pyphot.unit``
         registry, which pyphot 2 removed.
 
+        Unlike the constructor, ``detector`` is optional here: each pyphot
+        ``Filter`` records its own convention in ``dtype``, and the bundled
+        library genuinely mixes them (2MASS is ``photon``; AKARI and IRAS are
+        ``energy``). Leave it out to use the library's answer per filter. A
+        filter whose metadata is missing or unrecognised is refused rather than
+        guessed at.
+
         Parameters
         ----------
         filters
@@ -549,6 +630,9 @@ class SyntheticPhotometry(_Step):
             The grid to tabulate the responses on, micron. This becomes the
             step's ``points=`` requirement, so choose it to resolve the
             narrowest filter in the set.
+        detector
+            Override the library's own detector types — one string for all
+            filters, or one per filter. Takes precedence when given.
         library
             An open pyphot library, or a path to one. Defaults to ampere's
             bundled ``ampere_allfilters.hd5``.
@@ -568,12 +652,53 @@ class SyntheticPhotometry(_Step):
             library = pyphot.get_library(fname=str(bundled_filter_library()))
         elif isinstance(library, (str, bytes)) or hasattr(library, "__fspath__"):
             library = pyphot.get_library(fname=str(library))
-        curves = library.load_filters(list(filters), interp=True, lamb=grid * get_unit("micron"))
+        names = list(filters)
+        curves = library.load_filters(names, interp=True, lamb=grid * get_unit("micron"))
         response = np.vstack([np.asarray(curve.transmit, dtype=DTYPE) for curve in curves])
         pivots = np.array(
             [float(curve.lpivot.to(get_unit("micron")).value) for curve in curves], dtype=DTYPE
         )
-        return cls(list(filters), grid, response, pivots=pivots, label=label)
+        if detector is None:
+            detector = [
+                _library_detector(name, curve) for name, curve in zip(names, curves, strict=True)
+            ]
+        return cls(names, grid, response, detector=detector, pivots=pivots, label=label)
+
+
+def _library_detector(name: str, curve: Any) -> str:
+    """The convention a pyphot ``Filter`` declares, or a loud refusal."""
+    declared = getattr(curve, "dtype", None)
+    if declared not in DETECTORS:
+        raise TransformationError(
+            f"filter {name!r} does not declare a usable detector type (its pyphot dtype is "
+            f"{declared!r}, expected one of {sorted(DETECTORS)}). The photon and energy "
+            f"conventions give different fluxes, so this is refused rather than guessed; "
+            f"pass detector= explicitly to say which one this filter uses."
+        )
+    return str(declared)
+
+
+def _detector_kinds(detector: str | Sequence[str], names: Sequence[str]) -> tuple[str, ...]:
+    """Normalise *detector* into one convention per filter, refusing anything else."""
+    if isinstance(detector, str):
+        kinds = (detector,) * len(names)
+    else:
+        kinds = tuple(str(kind) for kind in detector)
+        if len(kinds) != len(names):
+            raise TransformationError(
+                f"SyntheticPhotometry was given {len(kinds)} detector type(s) for "
+                f"{len(names)} filter(s). Pass one string to use the same convention for "
+                f"all of them, or exactly one per filter."
+            )
+    unknown = {kind for kind in kinds if kind not in DETECTORS}
+    if unknown:
+        raise TransformationError(
+            f"unknown detector type(s) {sorted(unknown)}. A detector either counts photons "
+            f"('photon': weight R dlambda/lambda) or measures energy ('energy': weight "
+            f"R dlambda/lambda**2), and the two give different numbers, so there is no "
+            f"default and no third option."
+        )
+    return kinds
 
 
 def bundled_filter_library() -> Any:

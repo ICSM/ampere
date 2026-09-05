@@ -367,7 +367,7 @@ class TestSyntheticPhotometry:
         response = np.zeros((2, tabulation.size))
         response[0, (tabulation >= 1.5) & (tabulation <= 2.5)] = 1.0
         response[1, (tabulation >= 3.5) & (tabulation <= 4.5)] = 1.0
-        return SyntheticPhotometry(["A", "B"], tabulation, response)
+        return SyntheticPhotometry(["A", "B"], tabulation, response, detector="photon")
 
     def test_a_flat_spectrum_measures_its_own_value(self) -> None:
         step = self.tophats()
@@ -430,19 +430,25 @@ class TestSyntheticPhotometry:
 
     def test_repeated_filter_names_are_refused(self) -> None:
         with pytest.raises(TransformationError, match="unique"):
-            SyntheticPhotometry(["A", "A"], np.linspace(1.0, 2.0, 5), np.ones((2, 5)))
+            SyntheticPhotometry(
+                ["A", "A"], np.linspace(1.0, 2.0, 5), np.ones((2, 5)), detector="photon"
+            )
 
     def test_a_mis_shaped_response_is_refused(self) -> None:
         with pytest.raises(TransformationError, match="response array"):
-            SyntheticPhotometry(["A"], np.linspace(1.0, 2.0, 5), np.ones((1, 4)))
+            SyntheticPhotometry(["A"], np.linspace(1.0, 2.0, 5), np.ones((1, 4)), detector="photon")
 
     def test_a_filter_with_no_response_is_refused(self) -> None:
         with pytest.raises(TransformationError, match="integrates to zero"):
-            SyntheticPhotometry(["A"], np.linspace(1.0, 2.0, 5), np.zeros((1, 5)))
+            SyntheticPhotometry(
+                ["A"], np.linspace(1.0, 2.0, 5), np.zeros((1, 5)), detector="photon"
+            )
 
     def test_a_negative_response_is_refused(self) -> None:
         with pytest.raises(TransformationError, match="non-negative"):
-            SyntheticPhotometry(["A"], np.linspace(1.0, 2.0, 5), -np.ones((1, 5)))
+            SyntheticPhotometry(
+                ["A"], np.linspace(1.0, 2.0, 5), -np.ones((1, 5)), detector="photon"
+            )
 
 
 class TestSyntheticPhotometryFromLibrary:
@@ -593,3 +599,180 @@ class TestFractionalModelGPNoise:
         likelihood = Likelihood(GaussianFamily(), FractionalModelGPNoise(Matern32(0.4, 2.0), f=0.2))
         conditional = likelihood.conditional(predicted, observed)
         assert conditional.mean.shape == (grid.size,)
+
+
+class TestDetectorConventions:
+    """The two synthetic-photometry weightings (ruled by Peter, 2026-09-05).
+
+    Both are normalised weighted means of ``f_nu``; they differ only in the
+    weight, so a flat spectrum cannot tell them apart and the rows above stay
+    valid under either. A *sloped* spectrum can, and these are the rows that
+    pin which is which -- against integrals done by hand, not against a second
+    copy of the code under test.
+
+    Take a unit tophat over ``[1, 2]`` micron and ``f_nu = lambda``:
+
+    * photon, weight ``R dlambda / lambda``::
+
+          INT_1^2 lambda dlambda/lambda   /  INT_1^2 dlambda/lambda
+              = (2 - 1) / ln 2  =  1.442695...
+
+    * energy, weight ``R dlambda / lambda**2``::
+
+          INT_1^2 lambda dlambda/lambda^2 /  INT_1^2 dlambda/lambda^2
+              = ln 2 / ((2 - 1)/(1*2))  =  2 ln 2  =  1.386294...
+
+    The photon answer is the larger because ``dlambda/lambda`` weights the long
+    end more heavily than ``dlambda/lambda**2`` does, and the spectrum rises
+    with wavelength. The residual disagreement with the closed form is the
+    half-bin overhang ``bin_edges`` leaves at each end of the grid, ~4e-6 here.
+    """
+
+    LOW, HIGH = 1.0, 2.0
+    PHOTON = (HIGH - LOW) / np.log(HIGH / LOW)  # 1.4426950408889634
+    ENERGY = LOW * HIGH * np.log(HIGH / LOW) / (HIGH - LOW)  # 1.3862943611198906
+
+    def tophat(self, detector: object, points: int = 20001) -> SyntheticPhotometry:
+        tabulation = np.linspace(self.LOW, self.HIGH, points)
+        names = ["T"] if isinstance(detector, str) else [f"T{i}" for i in range(len(detector))]
+        response = np.ones((len(names), tabulation.size))
+        return SyntheticPhotometry(names, tabulation, response, detector=detector)
+
+    def sloped(self, step: SyntheticPhotometry) -> Spectrum:
+        """``f_nu = lambda``, so the two conventions must disagree."""
+        grid = step.tabulation()
+        return Spectrum(grid * u.micron, grid * u.Jy)
+
+    def test_the_photon_convention_matches_its_hand_integral(self) -> None:
+        step = self.tophat("photon")
+        assert float(step(self.sloped(step), None).values[0]) == pytest.approx(
+            self.PHOTON, rel=1e-4
+        )
+
+    def test_the_energy_convention_matches_its_hand_integral(self) -> None:
+        step = self.tophat("energy")
+        assert float(step(self.sloped(step), None).values[0]) == pytest.approx(
+            self.ENERGY, rel=1e-4
+        )
+
+    def test_the_two_conventions_differ_in_the_expected_direction(self) -> None:
+        """Not merely "different": photon is the larger, by ln-2 arithmetic."""
+        photon = float(self.tophat("photon")(self.sloped(self.tophat("photon")), None).values[0])
+        energy = float(self.tophat("energy")(self.sloped(self.tophat("energy")), None).values[0])
+        assert photon > energy
+        assert photon / energy == pytest.approx(self.PHOTON / self.ENERGY, rel=1e-4)
+        # The ratio is (lambda2 - lambda1)^2 / (lambda1 lambda2 (ln lambda2/lambda1)^2).
+        assert photon / energy == pytest.approx(1.0407, abs=1e-3)
+
+    def test_a_flat_spectrum_cannot_tell_them_apart(self) -> None:
+        """Both are normalised means, so the flat-spectrum rows hold either way."""
+        for kind in ("photon", "energy"):
+            step = self.tophat(kind)
+            assert step(flat(step.tabulation(), 3.0), None).values == pytest.approx(3.0)
+
+    def test_the_pivot_is_convention_independent(self) -> None:
+        assert self.tophat("photon").pivots() == pytest.approx(self.tophat("energy").pivots())
+
+    def test_detector_types_may_be_mixed_per_filter(self) -> None:
+        """Real filter sets mix them, so one step must be able to."""
+        step = self.tophat(["photon", "energy"])
+        assert step.detectors == ("photon", "energy")
+        measured = step(self.sloped(step), None).values
+        assert float(measured[0]) == pytest.approx(self.PHOTON, rel=1e-4)
+        assert float(measured[1]) == pytest.approx(self.ENERGY, rel=1e-4)
+
+    def test_the_convention_reaches_provenance(self) -> None:
+        """It changes the numbers, so a hash must be able to see it.
+
+        The ``weights`` buffer carries it numerically and ``describe()`` --
+        ``results.md`` §13.13's hook, landed earlier in this same item -- makes
+        it legible.
+        """
+        photon, energy = self.tophat("photon"), self.tophat("energy")
+        assert photon.describe() == {"detector": ["photon"]}
+        assert energy.describe() == {"detector": ["energy"]}
+        assert not np.allclose(photon._data("weights"), energy._data("weights"))
+
+    def test_the_zero_response_check_uses_the_real_weights(self) -> None:
+        """The check must see the weights ``apply`` will use, not a stand-in."""
+        for kind in ("photon", "energy"):
+            with pytest.raises(TransformationError, match="integrates to zero"):
+                SyntheticPhotometry(
+                    ["A"], np.linspace(1.0, 2.0, 5), np.zeros((1, 5)), detector=kind
+                )
+
+    # -- refusals ----------------------------------------------------------
+
+    def test_the_detector_argument_is_required(self) -> None:
+        """No default: a silently chosen convention is the failure being guarded."""
+        with pytest.raises(TypeError, match="detector"):
+            SyntheticPhotometry(["A"], np.linspace(1.0, 2.0, 5), np.ones((1, 5)))
+
+    def test_an_unknown_detector_names_the_two_options(self) -> None:
+        with pytest.raises(TransformationError, match=r"photon.*energy"):
+            self.tophat("bolometer")
+
+    def test_a_wrong_length_detector_sequence_is_refused(self) -> None:
+        tabulation = np.linspace(1.0, 2.0, 9)
+        with pytest.raises(TransformationError, match="2 detector type"):
+            SyntheticPhotometry(
+                ["A", "B", "C"],
+                tabulation,
+                np.ones((3, tabulation.size)),
+                detector=["photon", "energy"],
+            )
+
+    def test_a_non_positive_wavelength_is_refused(self) -> None:
+        """Both conventions divide by the wavelength."""
+        with pytest.raises(TransformationError, match="strictly positive"):
+            SyntheticPhotometry(
+                ["A"], np.array([0.0, 1.0, 2.0]), np.ones((1, 3)), detector="photon"
+            )
+
+
+class TestDetectorTypesFromTheLibrary:
+    """``from_library`` reads each filter's convention from pyphot's metadata."""
+
+    GRID = np.geomspace(0.5, 200.0, 3000)
+
+    def test_the_bundled_library_supplies_the_type_per_filter(self) -> None:
+        """The bundled set genuinely mixes them: 2MASS counts photons, AKARI and
+        IRAS measure energy. Getting this from metadata rather than a default is
+        the point of the ruling.
+        """
+        step = SyntheticPhotometry.from_library(["2MASS_J", "AKARI_S9W", "IRAS_60"], self.GRID)
+        assert step.detectors == ("photon", "energy", "energy")
+
+    def test_an_explicit_detector_overrides_the_library(self) -> None:
+        step = SyntheticPhotometry.from_library(
+            ["2MASS_J", "AKARI_S9W"], self.GRID, detector="energy"
+        )
+        assert step.detectors == ("energy", "energy")
+
+    def test_a_per_filter_override_is_honoured(self) -> None:
+        step = SyntheticPhotometry.from_library(
+            ["2MASS_J", "AKARI_S9W"], self.GRID, detector=["energy", "photon"]
+        )
+        assert step.detectors == ("energy", "photon")
+
+    def test_the_convention_changes_the_measured_flux(self) -> None:
+        """End to end through pyphot: the override is not cosmetic."""
+        model = BlackBody(self.GRID, temperature=200.0, scale=1e-10)
+        emitted = model().single()
+        as_photon = SyntheticPhotometry.from_library(["IRAS_60"], self.GRID, detector="photon")(
+            emitted, None
+        )
+        as_energy = SyntheticPhotometry.from_library(["IRAS_60"], self.GRID, detector="energy")(
+            emitted, None
+        )
+        assert float(as_photon.values[0]) != pytest.approx(float(as_energy.values[0]), rel=1e-6)
+
+    def test_an_unusable_library_type_is_refused_rather_than_guessed(self) -> None:
+        class Nameless:
+            name, dtype = "MYSTERY", None
+            transmit = np.ones(3)
+
+        from ampere.backends.reference.instrument import _library_detector
+
+        with pytest.raises(TransformationError, match="does not declare a usable detector"):
+            _library_detector("MYSTERY", Nameless())

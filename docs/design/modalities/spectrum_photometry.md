@@ -211,7 +211,11 @@ implemented in `ampere/core/results_schema.py`; `COORDINATE_RTOL` moved down to
 that module (re-exported from `transform.py`) so the lookup and the union's
 collapsing cannot drift apart. `transformations.md` §10 now records the pattern
 as required for any step whose buffer is tied to specific `points=`, and the
-reference backend's `SyntheticPhotometry` is the first consumer. The scenario
+reference backend's `SyntheticPhotometry` is the first consumer. That step
+also carries a required `detector=` convention per filter (photon-counting or
+energy), ruled by Peter 2026-09-05 and recorded in `DEVELOPMENT_PLAN.md` §2:
+the reference backend is the conformance oracle, so the weighting it computes
+is the one every other backend must reproduce. The scenario
 below — a second instrument unioning its own points onto a bound channel — is a
 live test in `tests/backends/test_reference.py`. Only the resampling half of the
 original wording turned out not to need the lookup: `Resample` publishes a

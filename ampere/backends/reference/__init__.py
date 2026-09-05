@@ -50,6 +50,7 @@ transformations […] and nothing else".
 from __future__ import annotations
 
 from .instrument import (
+    DETECTORS,
     CalibrationScale,
     LSFConvolution,
     Resample,
@@ -69,6 +70,7 @@ from .noise import FractionalModelGPNoise, FractionalModelNoise
 
 __all__ = [
     "COORDINATE_UNIT",
+    "DETECTORS",
     "FLUX_UNIT",
     "BlackBody",
     "CalibrationScale",
