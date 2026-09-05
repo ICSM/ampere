@@ -95,15 +95,34 @@ photon `R dλ/λ` / energy `R dλ/λ²`, `from_library` reads pyphot's
 per-filter `dtype`. Gates at merge: `pixi run test-all` 1133+85 in one
 process, lint/format/pyrefly clean. Nothing pushed to origin.
 
-**In flight (dispatched 2026-09-05, one agent each, worktrees based on
-`85976da`)**: **W2.2** engine drivers on `w2.2-engine-drivers` (Opus;
-promotes arviz + a netCDF engine to base deps); **W2.3** QuasisepGP via
-celerite2 on `w2.3-quasisep-reference` (Opus; adds celerite2 to base
-deps; its GP algebra gets a line-by-line Fable hand-check in lieu of
-terra). W2.2 and W2.3 both touch pyproject/pixi.lock in dedicated
-commits — merge them **sequentially** and regenerate the lockfile at
-merge where they collide. Each gets a Fable review before Peter merges;
-all three ranges join the retroactive terra queue.
+**Still in flight**: **W2.3** QuasisepGP via celerite2 on
+`w2.3-quasisep-reference` (Opus; adds celerite2 to base deps; its GP
+algebra gets a line-by-line Fable hand-check in lieu of terra).
+
+**W2.2 (engine drivers, Opus) is MERGE-READY pending Peter** —
+`w2.2-engine-drivers` at `1b71c10` (4 commits). Fable-reviewed, no fixes
+needed; gates independently re-verified (test-all 1303/2 skipped — now
+core+results+conformance+backends+inference in one process — lint/format/
+pyrefly clean). Emcee/dynesty/zeus in `ampere.inference` against §4.5
+only (backend neutrality is import-graph-tested); every run emits the
+DataTree with per-dataset log-likelihood decomposition; the R1 promotion
+landed with its decision-log row (arviz + h5netcdf base, `arviz` extra
+REMOVED — loud failure preferred over an empty alias; pixi feature
+renamed `netcdf`). Review dispositions for the PR description: EngineError
+stays in `ampere.inference` (R5 moved ResultsError because the contract
+text names it; no contract names EngineError — re-exported, movable in
+two lines if ruled otherwise); the extras removal, matrix growth and
+~4-minute suite all accepted. Out-of-scope findings worth carrying:
+zeus draws from TWO process-global RNGs (numpy legacy + stdlib `random`)
+— both seeded/restored by the driver, inherited by any future zeus/Pool
+work; zeus needs a burn-in/re-ball helper (small future item); the
+reference hot loop pays ~28% of 4 ms/eval rebuilding Spectrum containers
+when no requirement was published (cheapest visible perf win, W2.1's
+code); no FittingProblem surface names its backend, so `Engine(...,
+backend=)` is declared — wants a small addition before W2.4/W2.5.
+W2.2 and W2.3 both touch pyproject/pixi.lock — merge **sequentially**
+(W2.6 → W2.2 → W2.3 natural), regenerating the lockfile at the collision.
+All three ranges join the retroactive terra queue.
 
 **W2.6 (lowering registry, Sonnet) is MERGE-READY pending Peter** —
 `w2.6-lowering-registry` at `88b16c5` (4 commits; `ampere/core/lowering.py`,
