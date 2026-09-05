@@ -713,13 +713,32 @@ parameters and compute entirely different things, so the class and its module
 are part of the fingerprint too.
 
 What the fingerprint reaches is therefore **parameters, buffers, declared class
-identity, and ampere's own configuration objects**. What it cannot reach is a
-plain Python attribute on a user's model or transformation — a `Redden(law=
-"ccm89")` whose behaviour is set by a string that is neither a parameter nor a
-buffer. Hashing an arbitrary `__dict__` is not a safe general answer (it would
-sweep in caches, file handles and unhashable state), so this is limitation 13 of
-§13 rather than a silent partial guarantee, and the extension point it names is
-a `describe()` hook on `Parameterised`.
+identity, ampere's own configuration objects, and whatever the model declares
+through `describe()`**. Hashing an arbitrary `__dict__` is not a safe general
+answer (it would sweep in caches, file handles and unhashable state), so the
+last of those is opt-in rather than automatic.
+
+**Amended and landed W2.1** (ruled 2026-09-03 at the freeze's escalations;
+decision-log entry in `DEVELOPMENT_PLAN.md` §2). `model_fingerprint` gained a
+`describe` key carrying `Parameterised.describe()`'s return value — `None`
+unless the model overrides it. A `Redden(law="ccm89")` whose behaviour is set by
+a string that is neither a parameter nor a buffer therefore no longer shares a
+cache key with `Redden(law="f99")`, which was limitation 13 of §13. The payload
+must be normalisable by the recipe above; anything else is refused when the hash
+is taken, rather than silently omitted. Because adding a key changes every
+`ampere_problem_hash`, this rode a `PROVENANCE_SCHEMA_VERSION` bump to 3.
+
+Two smaller consequences, recorded rather than left implicit: `describe` is now
+a class attribute of `Parameterised`, so it joins `parameters`, `buffers` and
+`context` as a name a parameter or buffer may not shadow; and a `describe()`
+payload must be **backend-neutral and deterministic**, because §14's neutral
+identity and W1.10's cross-backend equivalence row both compare it across
+implementations. A device string or a dtype does not belong in one.
+
+**The derived neutral identity.** `neutral_model_identity(model)` is this
+fingerprint minus its `class` and `module` keys, and `model_identity_hash` is
+its digest, recorded as `ampere_model_identity_hashes`. §14 states what it
+licenses — and, more importantly, what it does not.
 
 ```pycon
 >>> description = describe_likelihood(joint.datasets["blue"].likelihood)
@@ -954,6 +973,13 @@ Each is a decision, not an oversight. Each has an extension point.
     with the decision-log entry ground rule 9 requires, so the cache-key hole
     is closed before any emulator cache exists to poison.
 
+    **Landed W2.1**, so this is no longer a limitation of the shipped
+    contract: `Parameterised.describe()` returns `None` by default and a
+    normalisable mapping when a model overrides it, and §9 folds it into the
+    fingerprint. What stays deliberately unreached is a plain attribute on a
+    model that does *not* opt in — the author's choice now, rather than the
+    contract's blind spot.
+
 ## 14. What this contract hands to the specs downstream
 
 - **W1.10 (Conformance suite)** — candidate rows already implemented and testable
@@ -985,6 +1011,25 @@ Each is a decision, not an oversight. Each has an extension point.
   neutral identity cannot pin the mathematics, which is why "offer, never
   serve" is the rule. `ampere_problem_hash` itself stays deliberately
   backend-variant.
+
+  **Landed W2.1.** `provenance.neutral_model_identity(model)` is
+  `model_fingerprint` minus `class` and `module` — so the parameter
+  declaration, the buffers and the `describe()` configuration remain — and
+  `model_identity_hash` is its digest, recorded per model as the
+  `ampere_model_identity_hashes` attribute. Two conformance rows now hold
+  the pair together: the pre-existing equivalence row (unchanged) asserts
+  that `ampere_problem_hash` agrees exactly when the recorded model
+  identity does, and a new row asserts that the *neutral* identity agrees
+  across backends unconditionally. Both are real assertions on the in-repo
+  pair, which compute the same closed forms by different routes in
+  different classes and modules.
+
+  Scope, stated because it is narrower than "a backend-neutral problem
+  identity": this is the **model's** identity only. `_describe_instrument`
+  records each chain step's class too, so a neutral identity for a whole
+  `FittingProblem` would need that second site as well. This section words
+  the ruling as "the model fingerprint minus its class/module component",
+  and that is exactly what landed; the instrument case is unclaimed.
 - **W1.12 (Diagnostics)** — the three answers it asked for: the reserved group
   names and the derivation for signed residuals (§7), the ruling that `y_rep` is
   computed on demand rather than stored (§7), and `plot_anomaly_score` as a

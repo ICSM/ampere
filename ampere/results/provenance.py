@@ -102,6 +102,8 @@ __all__ = [
     "hash_container",
     "hash_of",
     "model_fingerprint",
+    "model_identity_hash",
+    "neutral_model_identity",
     "normalise",
     "package_versions",
     "problem_fingerprint",
@@ -113,7 +115,11 @@ __all__ = [
 #: 2 (W1.13): ``describe_likelihood`` now fingerprints family- and
 #: noise-model-owned buffers too (they were invisible before), so
 #: ``ampere_problem_hash`` values differ from schema 1's.
-PROVENANCE_SCHEMA_VERSION = 2
+#: 3 (W2.1): ``model_fingerprint`` gained a ``describe`` key, closing
+#: ``results.md`` §13.13's cache-key hole, and ``ampere_model_identity_hashes``
+#: joined the recorded attributes. Both change ``ampere_problem_hash`` values,
+#: so old artefacts are invalidated rather than silently reused.
+PROVENANCE_SCHEMA_VERSION = 3
 
 #: Every attribute this module writes starts with this, so ampere's provenance
 #: never collides with ArviZ's own (``created_at``, ``creation_library``, ...)
@@ -440,22 +446,63 @@ def dataset_fingerprint(dataset: Dataset) -> dict[str, Any]:
     }
 
 
-def model_fingerprint(model: object) -> dict[str, Any]:
-    """One model's identity: its class, its declaration and its constant data.
+#: Keys of :func:`model_fingerprint` that name the *implementation* rather than
+#: the declaration. :func:`neutral_model_identity` is the fingerprint without
+#: them.
+_IMPLEMENTATION_KEYS = ("class", "module")
 
-    All three are needed and none is implied by another. Two models of
-    *different classes* can declare the same parameters and compute completely
-    different things; the same class with the same parameters can be built on a
-    different wavelength grid; and the declaration itself is what
-    ``lowering.md`` §9.2 makes order-sensitive.
+
+def model_fingerprint(model: object) -> dict[str, Any]:
+    """One model's identity: its class, its declaration, its data, its configuration.
+
+    All are needed and none is implied by another. Two models of *different
+    classes* can declare the same parameters and compute completely different
+    things; the same class with the same parameters can be built on a different
+    wavelength grid; and the declaration itself is what ``lowering.md`` §9.2
+    makes order-sensitive.
+
+    ``describe`` closes the fourth gap (``results.md`` §13.13, ruled
+    2026-09-03, landed W2.1): a plain Python attribute that changes what the
+    model computes — a ``Redden(law="ccm89")`` — is neither a parameter nor a
+    buffer, so without the hook two such fits share a cache key while scoring
+    differently. :meth:`~ampere.core.Parameterised.describe` is opt-in and
+    returns ``None`` unless a model overrides it.
     """
     parameters = getattr(model, "parameters", None)
+    describe = getattr(model, "describe", None)
     return {
         "class": type(model).__name__,
         "module": type(model).__module__,
         "parameters": None if parameters is None else parameters.to_spec(),
         "buffers": buffer_fingerprint(model),
+        "describe": None if describe is None else describe(),
     }
+
+
+def neutral_model_identity(model: object) -> dict[str, Any]:
+    """:func:`model_fingerprint` minus the implementation — what two backends share.
+
+    **Offer, never serve** (ruled by Peter 2026-09-03 at the freeze's
+    escalations; ``results.md`` §14). ``ampere_problem_hash`` stays
+    deliberately backend-variant: it fingerprints the model's class and module
+    precisely so that two differently implemented forward models never share a
+    cache key, and a backend's lowered model *is* a different implementation.
+
+    This derived identity drops exactly those two keys and keeps the rest — the
+    parameter declaration, the buffers, the ``describe()`` configuration — so a
+    reference-backend emulator and a torch fit of the same declaration can be
+    recognised as candidates for one another. What it cannot do is pin the
+    *mathematics*: two implementations of one declaration may legitimately
+    differ. So a match licenses **offering** a cached artefact, with its
+    provenance shown, and never silently serving one.
+    """
+    fingerprint = model_fingerprint(model)
+    return {key: value for key, value in fingerprint.items() if key not in _IMPLEMENTATION_KEYS}
+
+
+def model_identity_hash(model: object) -> str:
+    """A cache key for :func:`neutral_model_identity` — the "offer" key."""
+    return hash_of(neutral_model_identity(model))
 
 
 def problem_fingerprint(problem: FittingProblem) -> dict[str, Any]:
@@ -612,6 +659,14 @@ def provenance_attrs(
         "data_hash": hash_of(data_hashes),
         "data_hashes": canonical_json(data_hashes),
         "problem_hash": hash_of(problem_fingerprint(problem)),
+        # The backend-neutral half, per model (ruled 2026-09-03, results.md
+        # §14). Two backends implementing one declaration agree here and
+        # disagree on problem_hash above, which is the whole point: this is
+        # what licenses *offering* a cross-backend emulator, with its
+        # provenance shown, and problem_hash is what stops one being served.
+        "model_identity_hashes": canonical_json(
+            {label: model_identity_hash(model) for label, model in problem.models.items()}
+        ),
         "capabilities": canonical_json(problem.capabilities.to_dict()),
         "free_size": int(problem.free_size),
         "free_names": canonical_json(list(problem.parameters.free_names)),

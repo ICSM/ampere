@@ -2714,6 +2714,52 @@ class Parameterised:
         self._buffers = self.buffers.with_buffer(buffer)
         return buffer
 
+    # -- identity ----------------------------------------------------------
+
+    def describe(self) -> Mapping[str, Any] | None:
+        """Extra configuration this object's behaviour depends on. **Opt in.**
+
+        Provenance reaches parameters, buffers, declared class identity and
+        ampere's own configuration objects. What it cannot reach is a plain
+        Python attribute: a ``Redden(law="ccm89")`` whose behaviour is set by a
+        string that is neither a parameter nor a buffer. Two such fits then
+        share a cache key while scoring differently — ``results.md`` §13.13's
+        limitation 13, and a real way to poison a trained-artefact cache.
+
+        Hashing an arbitrary ``__dict__`` is not a safe general answer (it
+        would sweep in caches, file handles and unhashable state), so this is
+        the opt-in hook instead: override it to return the configuration that
+        changes what this object computes, and
+        :func:`~ampere.results.provenance.model_fingerprint` folds it in.
+        Ruled by Peter 2026-09-03 at the freeze's escalations; landed W2.1.
+
+        ::
+
+            def describe(self):
+                return {"law": self.law}
+
+        Returns
+        -------
+        Mapping or None
+            ``None`` — the default — declares nothing extra. A returned mapping
+            must be JSON-normalisable by ``ampere.results.provenance``:
+            strings, numbers, booleans, ``None``, arrays, and lists or dicts of
+            those. Anything else is refused loudly when the hash is taken,
+            rather than silently omitted.
+
+            **Keep it backend-neutral and deterministic.** It is folded into a
+            cache key that two backends implementing the same declaration are
+            expected to agree on, so a device string, a dtype, an array's
+            backing type or a wall-clock stamp does not belong here.
+
+        Notes
+        -----
+        Because parameter and buffer names may not shadow a class attribute,
+        declaring ``describe`` as a parameter or buffer name is refused — as it
+        already is for ``parameters``, ``buffers`` and ``context``.
+        """
+        return None
+
     # -- evaluation --------------------------------------------------------
 
     def context(self, values: Mapping[str, Value] | ArrayLike | None = None) -> dict[str, Value]:
