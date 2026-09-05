@@ -123,6 +123,7 @@ import numpy as np
 from .exceptions import ChannelError, SchemaError
 
 __all__ = [
+    "COORDINATE_RTOL",
     "DEFAULT_CHANNEL",
     "REGULARITY_RTOL",
     "AnomalyScore",
@@ -154,6 +155,20 @@ DEFAULT_CHANNEL = "default"
 #: (:attr:`Axis.regular`). Deliberately tight: a false positive would send an
 #: implementation down an FFT path the data do not justify.
 REGULARITY_RTOL = 1e-9
+
+#: Relative tolerance used when the union of several requirements produces
+#: coordinates that coincide (routinely, at the edges of adjacent intervals).
+#: Two coordinates closer than this fraction of their magnitude are one
+#: coordinate — a container kind that requires strictly increasing coordinates
+#: would otherwise reject the negotiated grid, and a covariance built on
+#: near-duplicate coordinates is near-singular.
+#:
+#: It lives here, rather than in ``transform.py`` where negotiation uses it,
+#: because :meth:`Axis.locate` is the exact inverse of that collapsing and the
+#: two must not be able to drift apart (W2.1; ``spectrum_photometry.md``
+#: Gap 1). ``transform.py`` re-exports it, so ``COORDINATE_RTOL`` keeps both of
+#: its established import paths.
+COORDINATE_RTOL = 1e-12
 
 ArrayLike = Any
 
@@ -396,6 +411,95 @@ class Axis:
         return u.Quantity(
             self.values, self.unit if self.unit is not None else u.dimensionless_unscaled
         )
+
+    def locate(self, values: ArrayLike) -> np.ndarray:
+        """Indices of *values* on this axis, matched within :data:`COORDINATE_RTOL`.
+
+        The lookup a step needs when its buffer is tabulated on coordinates it
+        published as ``points=`` (``spectrum_photometry.md`` Gap 1, ruled
+        2026-09-03, landed W2.1). As soon as a second instrument binds the same
+        channel, negotiation's union hands the step a **larger, possibly
+        reordered** grid; a step that reads ``samples.values`` positionally
+        against its own tabulation is then silently wrong, and fails as a bare
+        ``matmul`` shape error naming neither channel nor negotiation. The
+        supported pattern is::
+
+            index = samples.axis("spectral_axis").locate(self.tabulated)
+            response @ samples.values[index]
+
+        Matching is within :data:`COORDINATE_RTOL` rather than exact, and that
+        is the point rather than a convenience. The union collapses coordinates
+        that coincide to within exactly that tolerance and keeps one
+        representative, so a step's own published coordinate may legitimately
+        differ from the one that survived. The predicate here is that
+        collapsing read backwards, sharing the constant so the two cannot
+        drift.
+
+        The axis is not assumed sorted: ``PhotometricPoints`` and
+        ``VisibilitySet`` declare :attr:`Order.ANY`, and Gap 1's own scenario is
+        a photometry step. Where two coordinates are both within tolerance the
+        nearest wins.
+
+        Parameters
+        ----------
+        values
+            Coordinates to look up, in this axis's own unit. Any shape; the
+            result is flat, in the order given.
+
+        Returns
+        -------
+        numpy.ndarray
+            Integer (``intp``) indices into :attr:`values`, one per requested
+            coordinate.
+
+        Raises
+        ------
+        SchemaError
+            If any coordinate has no match within the tolerance. That indicates
+            a negotiation defect rather than a usage error — the grid was built
+            to satisfy the very requirement the step published — so the message
+            names the unmatched values instead of returning a sentinel.
+        """
+        targets = np.asarray(values, dtype=float).reshape(-1)
+        coordinates = np.asarray(self.values, dtype=float).reshape(-1)
+        if targets.size == 0:
+            return np.empty(0, dtype=np.intp)
+        if coordinates.size == 0:
+            raise SchemaError(
+                f"axis {self.name!r} is empty, so none of the {targets.size} requested "
+                f"coordinate(s) can be located on it."
+            )
+        # Nearest neighbour via a sorted view, so an Order.ANY axis is handled
+        # without an O(n*m) scan.
+        order = np.argsort(coordinates, kind="stable")
+        ordered = coordinates[order]
+        upper = np.searchsorted(ordered, targets)
+        right = np.clip(upper, 0, ordered.size - 1)
+        left = np.clip(upper - 1, 0, ordered.size - 1)
+        nearest = np.where(
+            np.abs(ordered[left] - targets) <= np.abs(ordered[right] - targets), left, right
+        )
+        index = order[nearest]
+        matched = coordinates[index]
+        # The same predicate the union's collapsing uses: two coordinates are
+        # one when they differ by no more than COORDINATE_RTOL of the larger
+        # magnitude, with the scale floored at 1 so a pair at zero still works.
+        scale = np.maximum(np.abs(matched), np.abs(targets))
+        tolerance = COORDINATE_RTOL * np.where(scale > 0.0, scale, 1.0)
+        missed = ~(np.abs(matched - targets) <= tolerance)
+        if bool(np.any(missed)):
+            unmatched = targets[missed]
+            shown = ", ".join(repr(float(value)) for value in unmatched[:5])
+            more = "" if unmatched.size <= 5 else f" (and {unmatched.size - 5} more)"
+            raise SchemaError(
+                f"axis {self.name!r} has no coordinate within COORDINATE_RTOL "
+                f"({COORDINATE_RTOL:g}) of {shown}{more}. The axis spans "
+                f"[{coordinates.min():g}, {coordinates.max():g}] over {coordinates.size} "
+                f"point(s). A step should only ask for coordinates it published as a "
+                f"points= requirement, so this is a negotiation defect rather than a "
+                f"usage error."
+            )
+        return index.astype(np.intp, copy=False)
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Axis):
