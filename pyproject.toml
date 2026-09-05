@@ -33,6 +33,7 @@ dependencies = [
     "emcee",
     "dynesty",
     "corner",
+    "celerite2",  # W2.3: the O(N) quasiseparable GP solve. architecture.md §2/§3 make celerite2's numpy interface a base dependency, never an extra -- a base install that still has the O(N^3) problem defeats the reference backend's purpose. Imported lazily, only when QuasisepGP is actually used.
 ]
 
 [[project.authors]]
