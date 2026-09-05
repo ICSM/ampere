@@ -90,15 +90,22 @@ LOG_LIKELIHOOD_DECOMPOSITION = "per_dataset"
 
 
 def _require_arviz() -> Any:
-    """Import arviz on use, never on import (``architecture.md`` §4, rules 2 and 3)."""
+    """Import arviz on use, never on import.
+
+    arviz is a **base dependency** as of W2.2 (``results.md`` §15 R1, ruled
+    2026-09-03), so ``extra=None``: the remedy is ``pip install arviz``, not an
+    ampere extra that no longer exists. The import stays lazy because it is
+    expensive and because a hand-assembled environment missing it should still
+    say so by name — see this package's docstring.
+    """
     try:
         import arviz
     except ImportError as error:  # pragma: no cover - exercised by the minimal-install job
         raise OptionalDependencyError(
             "arviz",
-            extra="arviz",
             context="emitting a run's results (ampere.results uses ArviZ's DataTree as the single "
-            "results format, DEVELOPMENT_PLAN.md §4.6)",
+            "results format, DEVELOPMENT_PLAN.md §4.6). arviz is a base dependency of ampere, so "
+            "this environment is incomplete rather than merely missing an extra",
         ) from error
     return arviz
 
@@ -643,16 +650,19 @@ def _netcdf_dependency_error(error: Exception) -> Exception:
 
     xarray reports a missing netCDF backend as a bare ``ValueError`` naming
     engines, which is not obviously an *installation* problem. arviz does not
-    require an engine of its own, so ``pip install ampere[arviz]`` alone cannot
-    write a file — that is worth saying plainly rather than leaving a user to
+    require an engine of its own — which is why W2.2 promoted ``h5netcdf``
+    into the base install alongside arviz rather than arviz alone
+    (``results.md`` §15 R1: an install that can build a run and not write one
+    is the gap the ruling names). Reaching this branch therefore means the
+    base install is incomplete, and saying so plainly beats leaving a user to
     decode a backend list.
     """
     text = str(error).lower()
     if "engine" in text or "backend" in text or "h5netcdf" in text or "netcdf4" in text:
         return OptionalDependencyError(
             "h5netcdf",
-            extra="arviz",
             context="reading or writing a run as netCDF (any of h5netcdf+h5py or netCDF4 will "
-            "do; arviz itself does not require one)",
+            "do; arviz itself does not require one). h5netcdf is a base dependency of ampere, so "
+            "this environment is incomplete",
         )
     return error

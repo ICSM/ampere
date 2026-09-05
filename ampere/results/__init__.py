@@ -30,17 +30,22 @@ The contract is ``docs/design/contracts/results.md``. In outline:
 
 Dependencies
 ------------
-arviz is an **optional** dependency (``pip install "ampere[arviz]"``) and is
-imported lazily, inside the functions that need it, raising
-:class:`~ampere.core.exceptions.OptionalDependencyError` on use. That is
-``architecture.md`` §4 rule 2 applied literally — it names ``ampere.results``
-among the namespaces that must import optional dependencies lazily — and it is
-what lets ``import ampere.results`` stay clean in the minimal-install job.
-``architecture.md`` §3's extras table anticipates folding arviz into the base
-install "when ``ampere.results`` lands"; ``docs/design/contracts/results.md``
-§10 asks Peter to time that with Phase 2, when emission is actually load-bearing
-and the netCDF engine (which arviz does not itself require) can be pinned with
-it.
+arviz and a netCDF engine (``h5netcdf``) are **base dependencies** as of W2.2,
+which is when ``ampere.inference``'s engine drivers made emission load-bearing:
+Peter's 2026-09-03 ruling on ``results.md`` §15 R1 timed the promotion for
+"Phase 2's engine drivers […] when a user can first emit a run", and that is
+that moment. ``architecture.md`` §3's extras table records the same.
+
+The import stays **lazy** all the same, inside the functions that need it,
+still raising :class:`~ampere.core.exceptions.OptionalDependencyError` on use.
+Two reasons, neither of them the original one. ``import ampere.results`` is on
+the path of anything that touches this namespace at all, and arviz pulls in
+xarray, pandas and its own plotting stack — perhaps a second of import time
+bought for nothing by a caller who only wanted
+:func:`~ampere.results.provenance.hash_container`. And a base dependency can
+still be *absent*: an environment assembled by hand, or a partially installed
+one, should say which package is missing and how to get it rather than fail
+with a bare ``ModuleNotFoundError`` from three frames down.
 """
 
 from __future__ import annotations

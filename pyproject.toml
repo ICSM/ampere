@@ -33,6 +33,20 @@ dependencies = [
     "emcee",
     "dynesty",
     "corner",
+    # W2.2: promoted out of the `arviz` extra, per Peter's 2026-09-03 ruling on
+    # `results.md` §15 R1 -- "arviz joins the base install with Phase 2's engine
+    # drivers, promoted together with a netCDF engine, when a user can first
+    # emit a run". That moment is this item: `ampere.inference` makes every run
+    # emit an ArviZ DataTree through `ampere.results`, so a base install that
+    # could not build one would be a base install that cannot sample.
+    # h5netcdf rather than netCDF4 because arviz requires neither and one is
+    # needed to *write* the run: `pip install "ampere[arviz]"` used to install
+    # something that could build a run and not save it (`results.md` §15 R1
+    # names that gap). h5netcdf is the lighter of the two -- pure Python over
+    # h5py -- and is the engine `ampere.results.emission` already names in its
+    # missing-engine remedy.
+    "arviz",
+    "h5netcdf",
 ]
 
 [[project.authors]]
@@ -78,7 +92,11 @@ torch = ["torch"]
 jax = ["jax"]
 sbi = ["torch", "sbi"]  # W0.9: forward-migrated -- pin lifted (PyPI's latest release is still 0.27.0, the version this was already tested against; see the W0.9 report)
 zeus = ["zeus-mcmc"]
-arviz = ["arviz"]
+# NOTE: there is deliberately no `arviz` extra any more -- arviz and a netCDF
+# engine are base dependencies as of W2.2 (see [project.dependencies] above).
+# The extra is not retained as an empty alias: `pip install "ampere[arviz]"`
+# failing loudly with "does not provide the extra 'arviz'" is a better answer
+# than one that silently succeeds and teaches the wrong mental model.
 # W0.5: replaces the abandoned 'extinction' package (issue #75) for
 # ampere.models.extinctionModels.F99Extinction; imported lazily, so it is
 # optional rather than a core dependency.
@@ -98,7 +116,7 @@ dev = [
 ]
 # Every feature extra (not dev) composed; self-referential extras are
 # supported by pip and setuptools.
-all = ["ampere[torch,jax,sbi,zeus,arviz,extinction]"]
+all = ["ampere[torch,jax,sbi,zeus,extinction]"]
 
 [tool.setuptools]
 include-package-data = false
@@ -281,16 +299,17 @@ ampere = { path = ".", editable = true, extras = ["sbi"] }
 [tool.pixi.feature.extinction.pypi-dependencies]
 ampere = { path = ".", editable = true, extras = ["extinction"] }
 
-# W1.8: `ampere.results` imports arviz lazily behind OptionalDependencyError
-# (architecture.md §4 rule 2), so arviz stays an extra rather than a base
-# dependency -- but the results contract's acceptance criterion is a netCDF
-# round trip, so the daily-use `dev` environment has to be able to run it.
-# netCDF serialisation additionally needs an engine (`h5netcdf`); arviz does
-# not require one, so it is named here explicitly rather than relied upon.
-[tool.pixi.feature.arviz.pypi-dependencies]
-ampere = { path = ".", editable = true, extras = ["arviz"] }
-h5netcdf = "*"
-h5py = "*"
+# W2.2: arviz and h5netcdf are base dependencies now (see
+# [project.dependencies]), so this feature no longer carries the results
+# capability -- every environment has it, including the CI matrix. What is
+# left is the *second* netCDF engine: `tests/results/test_results.py`'s
+# `test_both_netcdf_engines_write_it` asserts that a stored run is readable
+# whichever engine wrote it, and `importorskip`s netCDF4 when it is absent, so
+# without this feature that row would silently skip in the daily-use
+# environment. Named `netcdf` rather than `arviz` because that is now what it
+# is for. (Superseded W1.8's `arviz` feature, which pinned the extra plus all
+# three of h5netcdf/h5py/netcdf4.)
+[tool.pixi.feature.netcdf.pypi-dependencies]
 netcdf4 = "*"
 
 # Backend placeholders (Phase 2): [project.optional-dependencies] already
@@ -325,14 +344,14 @@ ampere = { path = ".", editable = true, extras = ["jax"] }
 # `default` and `dev` solve independently and can drift to different exact
 # builds of the same versions on a future `pixi lock`/`pixi update`, which
 # would quietly contradict "behaves exactly like dev".
-default = { features = ["py313", "dev", "zeus", "extinction", "arviz"], solve-group = "dev" }
+default = { features = ["py313", "dev", "zeus", "extinction", "netcdf"], solve-group = "dev" }
 # Daily-use environment: latest supported Python plus the full non-sbi,
 # non-backend toolchain (mirrors AGENTS.md's conda `ampere` env, which is
 # Python 3.13). Kept as its own named environment (rather than relying on
 # `default` alone) so `pixi run -e dev <task>` -- used throughout ci.yml and
 # AGENTS.md -- keeps working unambiguously even if `default` above ever
 # needs to diverge.
-dev = { features = ["py313", "dev", "zeus", "extinction", "arviz"], solve-group = "dev" }
+dev = { features = ["py313", "dev", "zeus", "extinction", "netcdf"], solve-group = "dev" }
 # CI test matrix: one environment per Python version. Deliberately no
 # `sbi` extra here -- torch is a large download and sbi tests skip cleanly
 # by design (tests/characterisation/conftest.py's `requires_sbi` marker);
