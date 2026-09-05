@@ -1244,7 +1244,20 @@ crashing, which is the criterion for needing a mechanical check.
    what must hold is that a registered constructor returns trace-pure
    objects, the same requirement the built-in table rows meet, and the
    hook's documentation states that as a rule. The plumbing is Phase 2's,
-   beside the backends that consume it. *(Original question follows for
+   beside the backends that consume it.
+
+   ***Landed W2.6:*** `ampere.core.lowering` — `register_lowering`/
+   `lookup_lowering` for prior families and `register_bijection_lowering`/
+   `lookup_bijection_lowering` for the bijection slot, sharing one
+   underlying keyed-by-`(kind, name, backend)` store; `run_registrant_battery`
+   is the opt-in self-certification battery; `provenance_entries` renders
+   the non-built-in rows a run consulted for
+   `ampere.results.provenance.provenance_attrs`'s `extra=`. The module's own
+   docstring carries the worked example (registration, the overwrite
+   refusal and its `override=True` escape, a passing and a failing battery
+   run, and the provenance entry), executed as a doctest by
+   `tests/core/test_spec_doctests.py` — this document stays prose-only, per
+   §0's "a document, not code". *(Original question follows for
    the record.)*
    **Backend-specific lowerings for user-defined cases** (raised by Peter,
    2026-09-01). A duck-typed prior and a custom `Bijection` currently
