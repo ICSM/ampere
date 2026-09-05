@@ -105,18 +105,22 @@ commits — merge them **sequentially** and regenerate the lockfile at
 merge where they collide. Each gets a Fable review before Peter merges;
 all three ranges join the retroactive terra queue.
 
-**W2.6 (lowering registry, Sonnet) is implemented and Fable-reviewed**
-— `w2.6-lowering-registry` at `6d0f166` (`ampere/core/lowering.py`,
-17 tests, gates green; the shared-store design and the `extra=`
-provenance stamping were accepted at review). Two review findings went
-back to its author 2026-09-05 and a fix commit is awaited: (1) extend
-`tests/core/conftest.py`'s autouse snapshot to restore
-`ampere.core.lowering._REGISTRY` — the module-global registry currently
-leaks across the single-process suite, W0.10 finding (c)'s class again;
-(2) key bijection rows on the module-qualified class name — bare
-`cls.__name__` lets two same-named classes silently resolve to each
-other's lowering on lookup. After the fixes and a re-check it is
-merge-ready pending Peter.
+**W2.6 (lowering registry, Sonnet) is MERGE-READY pending Peter** —
+`w2.6-lowering-registry` at `88b16c5` (4 commits; `ampere/core/lowering.py`,
+20 tests). Fable-reviewed; two findings were fixed on the branch and
+independently re-verified (test-all 1239/2 skipped, lint/format/pyrefly
+clean): (1) `tests/core/conftest.py`'s autouse snapshot now restores
+`ampere.core.lowering._REGISTRY` alongside `_FAMILIES` — the module-global
+registry leaked across the single-process suite, W0.10 finding (c)'s class
+again; (2) bijection rows are keyed on the module-qualified class name
+(bare `cls.__name__` let two same-named classes silently resolve to each
+other's lowering on lookup), bare names kept in messages. Accepted at
+review, to record in the PR description: the shared `(kind, name, backend)`
+store behind both slots, and provenance stamping via `provenance_attrs`'s
+existing `extra=` hook — the first-class schema key is deferred until a
+real backend (W2.4/W2.5) drives lowering end-to-end and can populate it
+automatically, with the `PROVENANCE_SCHEMA_VERSION` bump taken then.
+Merges are held for Peter's go-ahead (his "please merge" covered W2.1).
 
 **Awaiting Peter's ruling** (both recorded in the W2.1 status row, small
 enough to land directly on master between merges): (a) pyphot 2.1.1's
