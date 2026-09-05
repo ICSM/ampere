@@ -247,6 +247,10 @@ test-backends = "pytest tests/backends"
 # Everything the new namespaces own, in ONE pytest process, for the same
 # registry-leak reason test-phase1 exists (see tests/core/conftest.py).
 test-all = "pytest tests/core tests/results tests/conformance tests/backends"
+# W2.3: the GP solvers' wall-clock scaling, 10^3-10^5 points. Deliberately
+# outside every gate above -- a dense 3000-point solve alone costs seconds --
+# and run on demand. -s so the measured table reaches the terminal.
+scaling = "pytest tests/scaling -s"
 lint = "ruff check ."
 format-check = "ruff format --check . --exclude tests/characterisation"
 # pyrefly is scoped to the new namespaces (AGENTS.md ground rule 8); none
