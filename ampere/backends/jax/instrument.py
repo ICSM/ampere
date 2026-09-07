@@ -72,7 +72,7 @@ from ampere.backends.reference.instrument import (
 from ampere.backends.reference.instrument import (
     SyntheticPhotometry as _ReferenceSyntheticPhotometry,
 )
-from ampere.core import PhotometricPoints, Spectrum, propagate_mask
+from ampere.core import Axis, PhotometricPoints, Spectrum, propagate_mask
 
 from ._config import BACKEND, require_x64
 
@@ -281,17 +281,26 @@ class SyntheticPhotometry(_JaxStep, _ReferenceSyntheticPhotometry):
     def apply_flux(
         self, flux: jax.Array, grid: jax.Array, values: Any
     ) -> tuple[jax.Array, jax.Array]:
-        """The native surface.
+        """The native surface: the filter integrals, onto the pivot wavelengths.
 
-        Note the asymmetry with :meth:`apply`: here the incoming coordinates are
-        a bare array, so the matrix is built against them directly rather than
-        through ``Axis.locate``. The native path composes one chain on one
-        negotiated grid, which is the grid this step's requirement asked for,
-        so the two agree; a native path that had to serve a *reordered* axis
-        would need the ``Axis`` and is refused rather than approximated (see
-        :mod:`ampere.backends.jax.problem`).
+        The incoming coordinates are a bare array here, and the inherited
+        :meth:`influence` needs an :class:`~ampere.core.Axis` — the lookup is
+        the axis's job (``spectrum_photometry.md`` Gap 1: the columns go where
+        ``Axis.locate`` reports, never where the tabulation happens to sit in a
+        larger or reordered negotiated grid). **So the axis is rebuilt here
+        rather than the lookup being skipped.**
+
+        Slice 1 passed the bare array straight through and was simply broken —
+        ``influence`` called ``axis.locate`` on an ``ndarray``, which has no
+        such method, so every native photometry chain raised
+        ``AttributeError``. It was invisible because no conformance
+        ``ProblemSpec`` had a photometry step; slice 2 adds one (the battery's
+        ``PHOTOMETRIC`` shape) and this method is what it exercises. The torch
+        backend rebuilt the axis from the start, and this is that fix.
         """
-        return self._influence_jax(np.asarray(grid)) @ flux, self.pivot_grid()
+        coordinates = np.asarray(grid, dtype=float)
+        axis = Axis.build("spectral_axis", coordinates, COORDINATE_UNIT)
+        return self._influence_jax(axis) @ flux, self.pivot_grid()
 
     def apply(self, samples: Any, values: Any) -> PhotometricPoints:
         weights = np.asarray(self.influence(samples.spectral_axis), dtype=float)
