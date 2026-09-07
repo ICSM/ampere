@@ -98,7 +98,18 @@ Homepage = "https://github.com/icsm/ampere"
 # Backend extras are placeholders for the Phase 2 backend split; they will
 # grow pinned/qualified requirements as the backends land.
 torch = ["torch"]
-jax = ["jax"]
+# W2.5 (the jax backend track): jax itself, plus the two libraries
+# `docs/design/lowering.md` names for this backend. numpyro supplies the
+# distribution objects and the `biject_to` bijections the §3/§4 lowering
+# tables are written against (and, in `ampere.inference`, the NUTS kernel);
+# equinox supplies `eqx.partition`/`eqx.combine`, the filter-spec mechanism
+# ruled in DEVELOPMENT_PLAN.md §2 ("jax non-trainable mechanism") as the way
+# fixed parameters and buffers stay ordinary array leaves rather than static
+# fields. Nothing speculative beyond those: no tinygp/celerite2.jax until
+# slice 2 has actually chosen between them (DEVELOPMENT_PLAN.md §6). CPU
+# jaxlib is what `jax` resolves to on PyPI without a hardware suffix, which
+# is what CI and the daily-use machines want.
+jax = ["jax", "numpyro", "equinox"]
 sbi = ["torch", "sbi"]  # W0.9: forward-migrated -- pin lifted (PyPI's latest release is still 0.27.0, the version this was already tested against; see the W0.9 report)
 zeus = ["zeus-mcmc"]
 # NOTE: there is deliberately no `arviz` extra any more -- arviz and a netCDF
