@@ -66,14 +66,33 @@ have a ``grad_fn`` (it raises "element 0 of tensors does not require grad"
 otherwise); and the two backends' failure semantics should not differ merely
 because one of them could get away with it.
 
-What this slice lowers
-----------------------
-``inference.md`` §10a's coverage floor, which is jax's floor exactly: this
-backend's models and instrument steps, a ``GaussianFamily``, independent or
-dense-GP noise, masks, plates and hierarchical priors, with native kernels so
-GP hyperparameters are trainable. Everything else is refused by name rather
-than approximated. Widening it — censoring, latent GPs, non-Gaussian
-families, the quasiseparable solver — is slice 2's.
+What this lowers, after slice 2
+-------------------------------
+W2.13 set the floor at ``inference.md`` §10a's minimum — this backend's models
+and instrument steps, a ``GaussianFamily``, independent or dense-GP noise,
+masks, plates and hierarchical priors. Slice 2 widens it to:
+
+* **every likelihood family ``ampere.core`` implements for real data** —
+  ``gaussian``, ``student_t``, ``cauchy`` and ``poisson`` — transcribed into
+  torch in :mod:`ampere.backends.torch._families`;
+* **censoring**, the Tobit form, for the families with a closed log-CDF
+  (``gaussian`` and ``cauchy``). Censored ``student_t`` is refused by name:
+  its CDF is a regularised incomplete beta function and ``torch.special`` has
+  none;
+* **the quasiseparable solver** inside the density, differentiable in the
+  kernel hyperparameters — which is what makes a 10⁵-point flexible
+  likelihood a thing a NUTS run can actually do;
+* **prediction-aware noise**, ``FractionalModelNoise`` and
+  ``FractionalModelGPNoise``, through the ``sigma_tensor`` hook W2.13 left
+  dormant.
+
+Two things stay refused, both by name and both for a stated reason rather
+than for want of time. ``complex_gaussian`` needs complex tensors end to end
+and belongs with the visibility modality (plan §5, Phase 4). **The latent-GP
+path is refused because the numpy path it must agree with does not apply the
+whitening transform** — see the refusal's own message, which states the
+defect and its measurable consequence; lowering it would mean either copying
+the defect or disagreeing with the oracle, and neither is a backend's call.
 """
 
 from __future__ import annotations
@@ -94,7 +113,7 @@ from ampere.core.dataset import INSTRUMENT_COMPONENT, LIKELIHOOD_COMPONENT
 from ampere.core.exceptions import LoweringError
 
 from ._config import BACKEND, DEFAULT_DEVICE, DEFAULT_DTYPE, as_tensor
-from .gp import DenseGP
+from ._families import FamilyInputs, limit_masks, native_log_prob, refuse_family
 from .parameters import TorchParameterSpace
 
 __all__ = ["LoweredProblem", "lower_problem"]
@@ -139,36 +158,48 @@ class _LoweredDataset:
                     f"surface (an `apply_flux` method). Build the chain from "
                     f"ampere.backends.torch's steps.",
                 )
-        if self.likelihood.family.NAME != "gaussian":
-            raise _refuse(
-                self.likelihood.family.NAME,
-                f"dataset {label!r} declares the {self.likelihood.family.NAME!r} likelihood "
-                f"family; this slice of the torch backend lowers the Gaussian family only "
-                f"(inference.md §10a's coverage floor). The gradient-free engines run every "
-                f"family, on this problem as declared.",
-            )
-        if dataset.likelihood.censoring is not None:
-            raise _refuse(
-                "censoring",
-                f"dataset {label!r} declares censored samples. A Tobit limit lowers to the "
-                f"standard normal's log-CDF, which torch has, but the mixed detected/censored "
-                f"decomposition is not written here yet; it is slice 2's, with the "
-                f"quasiseparable solver.",
-            )
+        censoring = dataset.likelihood.censoring
+        refusal = refuse_family(
+            self.likelihood.family,
+            censored=censoring is not None and bool(censoring.any_censored),
+            latent=dataset.latent is not None,
+        )
+        if refusal is not None:
+            raise refusal
         if dataset.latent is not None:
             raise _refuse(
                 "latent",
-                f"dataset {label!r} declares a latent GP. The latent path needs the whitening "
-                f"transform inside the density, which slice 2 supplies together with the "
-                f"quasiseparable solver.",
+                f"dataset {label!r} declares a latent GP, and this backend refuses to lower it "
+                f"**because the numpy path it would have to agree with does not apply the "
+                f"whitening transform**. ampere.core.likelihood.latent_parameter declares that "
+                f"'the covariance enters through f = L(theta) z, a deterministic transform owned "
+                f"by the GPSolver', but no scoring path calls GPSolver.latent_transform: "
+                f"Dataset.log_likelihood_of hands the whitened z straight to "
+                f"Likelihood.log_prob, which hands it to the family as noise.latent, and "
+                f"PoissonFamily.log_prob uses it as f. The measurable consequence is that the "
+                f"kernel hyperparameters do not enter the likelihood at all -- the value is "
+                f"identical for amplitude 0.5, 5 and 50 -- so a latent fit samples them against "
+                f"a flat likelihood. Lowering this here would mean either reproducing the defect "
+                f"or disagreeing with the oracle ampere.core.realise checks against, and "
+                f"neither is a backend's decision to take. Recorded as a W2.4 slice 2 finding; "
+                f"the fix belongs in ampere.core.",
             )
         correlated = bool(getattr(self.noise, "CORRELATED", False))
-        if correlated and not isinstance(self.noise.solver, DenseGP):
+        if correlated and getattr(self.noise.solver, "BACKEND", "reference") != BACKEND:
             raise _refuse(
                 type(self.noise.solver).__name__,
                 f"dataset {label!r} uses the {type(self.noise.solver).__name__} solver, which is "
                 f"not this backend's. A torch problem whose GP solve ran in numpy would not be "
-                f"differentiable; pass ampere.backends.torch.DenseGP.",
+                f"differentiable; pass ampere.backends.torch.DenseGP or "
+                f"ampere.backends.torch.QuasisepGP.",
+            )
+        if correlated and not hasattr(self.noise.solver, "log_marginal_likelihood_native"):
+            raise _refuse(
+                type(self.noise.solver).__name__,
+                f"dataset {label!r} uses the {type(self.noise.solver).__name__} solver, which "
+                f"declares this backend but has no `log_marginal_likelihood_native` -- the "
+                f"non-raising, differentiable surface a realised density needs (inference.md "
+                f"§10a). A user-written solver joins the native path by supplying it.",
             )
         if not isinstance(self.noise, (IndependentNoise, GaussianProcessNoise)):
             raise _refuse(
@@ -196,6 +227,17 @@ class _LoweredDataset:
             if observed.uncertainty is None
             else _tensor(np.asarray(observed.uncertainty, dtype=float)[self.retain])
         )
+        # Which samples are limits is a fact about the data, so the three
+        # groups are resolved once here rather than per evaluation. A limit on
+        # a masked sample is not a limit at all -- likelihoods.md §9's "masking
+        # beats censoring" -- so the declaration is read *through* the
+        # effective mask, exactly as Likelihood._retained_limits does.
+        self.detection, self.upper, self.lower = (None, None, None)
+        if censoring is not None:
+            censoring.check_against(observed)
+            self.detection, self.upper, self.lower = limit_masks(
+                np.asarray(censoring.kinds)[self.retain]
+            )
 
     # -- routing ------------------------------------------------------------
 
@@ -242,17 +284,17 @@ class _LoweredDataset:
 
     # -- the log-likelihood -------------------------------------------------
 
-    def _sigma(self, predicted: torch.Tensor, values: Mapping[str, Any]) -> torch.Tensor | None:
-        """``sigma`` for the retained samples, as a tensor.
+    def _base_sigma(self, values: Mapping[str, Any]) -> torch.Tensor | None:
+        """``sqrt((scale * sigma_data)**2 + jitter**2)`` for the retained samples.
 
-        A prediction-aware noise model supplies its own tensor surface
-        (``sigma_tensor``); the plain ones are ``scale``/``jitter`` applied to
-        the observed uncertainties, transcribed here rather than called,
-        because ``NoiseModel.sigma`` coerces with ``float()``.
+        Transcribed rather than called, because ``NoiseModel.sigma`` coerces
+        with ``float()`` and ``scale`` and ``jitter`` are fitted parameters:
+        calling it would cut their gradient exactly as calling
+        ``Kernel.matrix`` used to cut the GP amplitude's (W2.4 slice 1's
+        finding). ``None`` when there are no uncertainties and no jitter — a
+        family that cannot live without them has already refused at
+        composition through ``NoiseModel.check_compatible``.
         """
-        native = getattr(self.noise, "sigma_tensor", None)
-        if native is not None:
-            return native(self.dataset.observed, self.retain, values, predicted=predicted)
         own = {key: value for key, value in values.items() if key in self.noise.parameters}
         resolved = self.noise.context(own)
         sigma = self.uncertainty
@@ -267,15 +309,42 @@ class _LoweredDataset:
             sigma = torch.sqrt(sigma**2 + floor**2)
         return sigma
 
+    def _sigma(self, predicted: torch.Tensor, values: Mapping[str, Any]) -> torch.Tensor | None:
+        """The effective ``sigma``, prediction-aware noise models included.
+
+        The base quadrature is computed here (once, from the cached
+        uncertainties) and *handed* to a noise model that declares
+        ``sigma_tensor`` — this backend's ``FractionalModelNoise`` and
+        ``FractionalModelGPNoise``, which inflate it by ``f * |predicted|``.
+        The hook takes the base rather than the container and the mask so that
+        the quadrature is written once and every parameter in it keeps its
+        graph; see :mod:`ampere.backends.torch.noise`.
+        """
+        base = self._base_sigma(values)
+        native = getattr(self.noise, "sigma_tensor", None)
+        if native is None:
+            return base
+        return native(base, values, predicted=predicted)
+
     def log_likelihood(self, routed: Mapping[str, Mapping[str, Any]]) -> torch.Tensor:
-        """``log p(data | θ)`` for this dataset alone, as a differentiable scalar."""
+        """``log p(data | θ)`` for this dataset alone, as a differentiable scalar.
+
+        Two branches, and which one applies is settled at composition rather
+        than here. A correlated noise model with a family that marginalises a
+        GP in closed form (the Gaussian one) takes the solver's marginal
+        likelihood; everything else takes its family's own body from
+        :mod:`ampere.backends.torch._families`, censoring included. The
+        combinations that fall in neither — a Student-t with a GP, say — are
+        not refused *here* because ``ampere.core.Likelihood`` refuses them
+        first, at composition, as an unconsumed latent path.
+        """
         predicted = self.predict(routed)
         values = dict(self._dataset_values(routed).get(LIKELIHOOD_COMPONENT, {}))
         # The noise model's own parameters arrive under the likelihood
         # component, flatly -- the same mapping ampere.core hands NoiseModel.
         sigma = self._sigma(predicted, values)
-        residual = self.observed_values - predicted
         if self.correlated:
+            residual = self.observed_values - predicted
             variance = torch.zeros_like(residual) if sigma is None else sigma**2
             value = self.noise.solver.log_marginal_likelihood_native(
                 self.noise.kernel,
@@ -285,13 +354,25 @@ class _LoweredDataset:
                 self.noise.kernel.resolve(values),
             )
         else:
-            if sigma is None:
+            if sigma is None and self.likelihood.family.REQUIRES_UNCERTAINTY:
                 raise _refuse(
                     "uncertainty",
                     f"dataset {self.label!r} has no observed uncertainties and its noise model "
                     f"declares no jitter, so sigma is undefined.",
                 )
-            value = torch.sum(-0.5 * ((residual / sigma) ** 2 + _LOG_2PI) - torch.log(sigma))
+            value = native_log_prob(
+                FamilyInputs(
+                    predicted=predicted,
+                    observed=self.observed_values,
+                    sigma=sigma,
+                    values=values,
+                    detection=self.detection,
+                    upper=self.upper,
+                    lower=self.lower,
+                    latent=None,
+                    family=self.likelihood.family,
+                )
+            )
         return torch.where(torch.isfinite(value), value, torch.full_like(value, -math.inf))
 
 
@@ -414,6 +495,106 @@ class LoweredProblem:
         constrained = self.parameters.constrain_tensor(y)
         total = prior + self.log_likelihood(constrained)
         return torch.where(torch.isfinite(total), total, torch.full_like(total, -math.inf))
+
+    def log_prob_unconstrained_batched(self, unconstrained: Any) -> torch.Tensor:
+        """:meth:`log_prob_unconstrained` over a **stack** of free vectors.
+
+        ``(batch, free_size)`` in, ``(batch,)`` out, in one call, through
+        :func:`torch.func.vmap` — W2.4 slice 2's ``BATCHABLE`` claim, and the
+        surface that makes it a claim about code rather than about intent.
+
+        It is deliberately **not** a loop wearing a batched name. ``vmap``
+        rewrites the whole density as batched operations: one Cholesky over a
+        stack of covariances, one matrix multiply through the instrument chain,
+        one set of ``log_prob`` calls over stacked distribution parameters. A
+        loop would produce the same numbers and none of the benefit, and it
+        would make the capability flag a falsehood — which is why this method
+        refuses rather than falling back when some part of the problem is not
+        batchable.
+
+        Two conditions must hold and both are checked here rather than
+        discovered inside torch:
+
+        * **every part must declare** ``BATCHABLE``. That is
+          ``problem.batchable``, aggregated conjunctively by
+          :func:`~ampere.core.declared_capabilities`, and the refusal names the
+          pieces that said no. The commonest one is
+          :class:`~ampere.backends.torch.QuasisepGP`, whose solve is a compiled
+          extension ``vmap`` cannot see through;
+        * the argument must be two-dimensional. A single vector is
+          :meth:`log_prob_unconstrained`'s job, and silently accepting one here
+          would make the two methods' shapes depend on the input rather than on
+          which was called.
+
+        What makes it work at all is that this density contains **no
+        data-dependent control flow**: every refusal is at construction, every
+        failure is a :func:`torch.where`, and W2.4 slice 2 removed the last
+        Python ``if`` on a tensor value — the prior's ``math.isfinite`` short
+        circuit in
+        :meth:`~ampere.backends.torch.parameters.TorchParameterSpace.log_prior_tensor`.
+        That was already the rule this module was written to
+        (``inference.md`` §10a, ``likelihoods.md`` §17 Q1); batching is the
+        second thing it buys, after tracing.
+
+        Examples
+        --------
+        >>> import numpy as np, scipy.stats as st, astropy.units as u, torch
+        >>> from ampere.backends.torch import IndependentNoise, PowerLaw, lower_problem
+        >>> from ampere.core import (
+        ...     Dataset, FittingProblem, GaussianFamily, Likelihood, Spectrum
+        ... )
+        >>> grid = np.array([1.0, 2.0, 3.0])
+        >>> observed = Spectrum(
+        ...     grid * u.um, [2.0, 1.0, 0.7] * u.Jy, uncertainty=[0.1, 0.1, 0.1] * u.Jy
+        ... )
+        >>> problem = FittingProblem(
+        ...     PowerLaw(grid, norm=st.lognorm(0.3, scale=2.0), index=-1.0),
+        ...     [Dataset(observed, likelihood=Likelihood(GaussianFamily(), IndependentNoise()))],
+        ... )
+        >>> lowered = lower_problem(problem)
+        >>> stack = torch.zeros((4, lowered.free_size), dtype=torch.float64)
+        >>> lowered.log_prob_unconstrained_batched(stack).shape
+        torch.Size([4])
+
+        and it agrees, point for point, with evaluating them one at a time:
+
+        >>> stack = torch.linspace(-1.0, 1.0, 4).reshape(4, 1).to(torch.float64)
+        >>> one_at_a_time = torch.stack([lowered.log_prob_unconstrained(y) for y in stack])
+        >>> bool(torch.allclose(lowered.log_prob_unconstrained_batched(stack), one_at_a_time))
+        True
+        """
+        if not self.problem.batchable:
+            parts = ", ".join(
+                sorted(
+                    {
+                        type(part).__name__
+                        for part in (
+                            *self.problem.models.values(),
+                            *self.problem.datasets.capability_parts,
+                        )
+                        if not bool(getattr(part, "BATCHABLE", False))
+                    }
+                )
+            )
+            raise _refuse(
+                "batching",
+                f"this problem declares batchable=False, so its density cannot be evaluated "
+                f"over a stack of parameter vectors in one call. The piece(s) that cannot: "
+                f"{parts or '(none declared)'}. torch.func.vmap needs every operation in the "
+                f"density to be one it can rewrite, and a compiled extension reached through a "
+                f"torch.autograd.Function is not — QuasisepGP is the usual answer here, and "
+                f"DenseGP is the batchable alternative. Evaluate the vectors one at a time with "
+                f"log_prob_unconstrained.",
+            )
+        stack = as_tensor(unconstrained, dtype=DEFAULT_DTYPE, device=DEFAULT_DEVICE)
+        if stack.ndim != 2 or int(stack.shape[1]) != self.free_size:
+            raise _refuse(
+                "batching",
+                f"log_prob_unconstrained_batched takes a (batch, {self.free_size}) stack, got "
+                f"shape {tuple(stack.shape)}. A single vector belongs to "
+                f"log_prob_unconstrained.",
+            )
+        return torch.func.vmap(self.log_prob_unconstrained)(stack)
 
     def potential(self) -> Callable[[torch.Tensor], torch.Tensor]:
         """The **negative** unconstrained log-density, which is what pyro wants.

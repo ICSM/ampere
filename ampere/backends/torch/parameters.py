@@ -97,6 +97,23 @@ from .lowering import (
 __all__ = ["LoweredParameters", "TorchParameterSpace"]
 
 
+def _finite_or_minus_infinity(total: torch.Tensor) -> torch.Tensor:
+    """*total*, or ``-inf`` where it is not finite, through :func:`torch.where`.
+
+    The branch-free form of ``ParameterSet.lnprior``'s ``math.isfinite`` short
+    circuit (W2.4 slice 2). Three properties matter and all three are the
+    reason it is a ``where`` rather than an ``if``: it keeps the result
+    attached to the autograd graph, which a fresh ``-inf`` constant would not
+    and which pyro's NUTS requires of its potential; it is not data-dependent
+    control flow, so ``torch.func.vmap`` can batch straight through it; and it
+    collapses ``nan`` to ``-inf`` as well as ``+inf``, which is what the short
+    circuit did (a prior contribution is never ``+inf``, so a ``nan`` can only
+    have come from a ``-inf`` meeting something pathological, and "impossible"
+    is the honest reading).
+    """
+    return torch.where(torch.isfinite(total), total, torch.full_like(total, -math.inf))
+
+
 class LoweredParameters(nn.Module):
     """The ``nn.Module`` a :class:`~ampere.core.ParameterSet` lowers to (§6.1).
 
@@ -636,8 +653,24 @@ class TorchParameterSpace:
         prior is i.i.d. across elements, which is what ``Independent(base,
         len(shape))`` would express structurally and what summing computes);
         hierarchical priors are bound to the current values of what they
-        reference, in topological order. ``-inf`` as soon as any contribution
-        is non-finite, exactly as ``ParameterSet.lnprior`` does.
+        reference, in topological order. ``-inf`` if any contribution is
+        non-finite, exactly as ``ParameterSet.lnprior`` reports.
+
+        **Where the short circuit went** (W2.4 slice 2). This used to return
+        early on the first non-finite contribution, mirroring
+        ``ParameterSet.lnprior``'s own ``math.isfinite`` short circuit. The
+        value is unchanged — a prior contribution is never ``+inf``, so the sum
+        of a set containing a ``-inf`` is ``-inf`` or ``nan``, and both become
+        ``-inf`` at the end — but the *mechanism* is now :func:`torch.where`
+        rather than a Python ``if``, for the same reason
+        :mod:`ampere.backends.torch.problem` gives for the density: a Python
+        branch on a tensor's value is data-dependent control flow, and
+        ``torch.func.vmap`` refuses it. That refusal was the only thing
+        standing between this backend and an honest ``BATCHABLE = True``.
+        What the short circuit bought was skipping the *remaining priors* for a
+        rejected point, which costs a handful of ``log_prob`` calls on scalars
+        — nothing beside the model evaluation that follows, and the density
+        already declines to skip that for the same reason.
         """
         resolved = self._resolved(values)
         total = as_tensor(0.0, dtype=self._dtype, device=self._device)
@@ -645,11 +678,8 @@ class TorchParameterSpace:
             if self._declaration[name].is_fixed:
                 continue
             lowered = self.distribution_of(name, resolved)
-            contribution = lowered.log_prob(resolved[name]).sum()
-            if not bool(torch.isfinite(contribution)):
-                return as_tensor(-math.inf, dtype=self._dtype, device=self._device)
-            total = total + contribution
-        return total
+            total = total + lowered.log_prob(resolved[name]).sum()
+        return _finite_or_minus_infinity(total)
 
     def constrain_tensor(self, unconstrained: Any) -> torch.Tensor:
         """:meth:`constrain` as a tensor, differentiable in *unconstrained*."""
@@ -690,14 +720,11 @@ class TorchParameterSpace:
         vector = self._tensor(unconstrained)
         constrained = self.constrain_tensor(vector)
         total = self.log_prior_tensor(constrained)
-        if not bool(torch.isfinite(total)):
-            return as_tensor(-math.inf, dtype=self._dtype, device=self._device)
         for name in self._free:
             where = self._slices[name]
             transform = self._transforms[name]
             total = total + transform.log_abs_det_jacobian(vector[where], constrained[where]).sum()
-        if not bool(torch.isfinite(total)):
-            return as_tensor(-math.inf, dtype=self._dtype, device=self._device)
+        total = _finite_or_minus_infinity(total)
         return total
 
     # -- drawing --------------------------------------------------------------

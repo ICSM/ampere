@@ -314,10 +314,21 @@ Added at the freeze (W1.13):
   (`TestStagedAnalyticCombination`): the declaration row runs, the
   composition-refusal row runs, and Phase 4 replaces the refusal with
   agreement rows against the circular closed form.
-* **`GPSolver.conditional_loo`** outlived the QuasisepGP debt: `DenseGP`
+* ~~**`GPSolver.conditional_loo`** outlived the QuasisepGP debt: `DenseGP`
   implements the leave-one-out terms and `QuasisepGP` refuses, W2.3 having
   **deferred** the O(N) recursion with a decision-log entry
   (`DEVELOPMENT_PLAN.md` §2, 2026-09-05) — celerite2's public numpy interface
   exposes no O(N) route to the diagonal of `(K + diag(σ²))⁻¹`. The refusal is
   a live row (`TestSolverAgreement`); the eventual agreement row mirrors the
-  marginal one.
+  marginal one.~~ **Stated in full by W2.4 slice 2**: the row is now
+  `test_the_leave_one_out_terms_either_agree_exactly_or_refuse_by_name`, and
+  it says the whole contract — a quasiseparable strategy either refuses by
+  name or computes exactly the decomposition `DenseGP` does, at
+  `tolerances.cross_solver`. `ampere.core.QuasisepGP` still refuses (the
+  deferral stands where it was taken: celerite2's *public numpy* interface has
+  no route to that diagonal), and `ampere.backends.torch.QuasisepGP` supplies
+  the terms, because it calls celerite2's compiled kernels directly and
+  therefore already holds the factorisation the O(N) backward recursion needs.
+  The decision-log row of 2026-09-07 records the change of circumstances.
+  Backends are free to differ here, and the row is what keeps a *wrong*
+  implementation from passing for either choice.

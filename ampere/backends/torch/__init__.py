@@ -96,15 +96,33 @@ contract path before anyone samples with it. Two things follow:
   pyro's sampler over this backend's realisation, with no density argument and
   no backend import inside ``ampere.inference``.
 
-What slice 2 owes
------------------
-``QuasisepGP`` on the native path (GPyTorch's structured solvers against
-celerite2's torch interface, *measured* against the conformance suite rather
-than chosen from documentation — ``DEVELOPMENT_PLAN.md`` §6), variational
-inference, batching and GPU, the benchmark rows, and widening the realisation
-past W2.13's coverage floor: censoring, latent GPs and the non-Gaussian
-families, each of which :mod:`ampere.backends.torch.problem` refuses by name
-today.
+What slice 2 added
+------------------
+* :class:`QuasisepGP` — exact O(N), differentiable in the kernel
+  hyperparameters, over celerite2's compiled semiseparable kernels wrapped as
+  ``torch.autograd`` functions (:mod:`ampere.backends.torch._celerite`). That
+  is ``DEVELOPMENT_PLAN.md`` §6's deferred library choice, settled by
+  measurement against GPyTorch rather than from documentation; the
+  decision-log row of 2026-09-07 carries the table. It supplies the O(N)
+  ``conditional_loo`` recursion W2.3 deferred, too.
+* the **prediction-aware noise models**, :class:`FractionalModelNoise` and
+  :class:`FractionalModelGPNoise`, closing W2.13's carried finding that the
+  ``sigma_tensor`` hook was in place and dormant.
+* a **widened realisation**: censoring (the Tobit form), the non-Gaussian
+  families ``ampere.core`` implements, and the quasiseparable solver inside
+  the density. What is still unsupported is refused by name at construction,
+  each with its own reason — see :mod:`ampere.backends.torch.problem`.
+* **batching**, honestly:
+  :meth:`~ampere.backends.torch.LoweredProblem.log_prob_unconstrained_batched`
+  evaluates a stack of free vectors in one ``torch.func.vmap`` call, and
+  ``BATCHABLE`` is ``True`` on every piece that survives it — not on
+  :class:`QuasisepGP`, whose solve is a compiled extension, so a problem
+  carrying it reports ``batchable=False`` and the batched call refuses.
+* **the float64 opt-out**, ``GPSolver.configured(dtype=..., device=...)``:
+  ``architecture.md`` §5's per-run precision choice, recorded through
+  ``provenance_config()`` and deliberately absent from the spec hash.
+* **variational inference** through :class:`ampere.inference.VIEngine`, which
+  reaches this backend the same way ``NUTSEngine`` does.
 
 Examples
 --------
@@ -131,7 +149,7 @@ The tensor entry point is the same computation with the graph intact:
 from __future__ import annotations
 
 from ._config import BACKEND, DEFAULT_DEVICE, DEFAULT_DTYPE, as_tensor, to_numpy
-from .gp import DenseGP, Matern32, SquaredExponential
+from .gp import DenseGP, Matern32, QuasisepGP, SquaredExponential
 from .instrument import (
     DETECTORS,
     CalibrationScale,
@@ -157,7 +175,12 @@ from .models import (
     TorchSpectralModel,
     planck_jy,
 )
-from .noise import GaussianProcessNoise, IndependentNoise
+from .noise import (
+    FractionalModelGPNoise,
+    FractionalModelNoise,
+    GaussianProcessNoise,
+    IndependentNoise,
+)
 from .parameters import LoweredParameters, TorchParameterSpace
 from .problem import LoweredProblem, lower_problem
 from .rng import generator, seed_for
@@ -180,6 +203,8 @@ __all__ = [
     "BlackBody",
     "CalibrationScale",
     "DenseGP",
+    "FractionalModelGPNoise",
+    "FractionalModelNoise",
     "GaussianProcessNoise",
     "IndependentNoise",
     "LSFConvolution",
@@ -190,6 +215,7 @@ __all__ = [
     "Matern32",
     "ModifiedBlackBody",
     "PowerLaw",
+    "QuasisepGP",
     "Resample",
     "SquaredExponential",
     "SyntheticPhotometry",

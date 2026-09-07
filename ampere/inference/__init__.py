@@ -45,6 +45,17 @@ What is here
     imports no backend, dispatches on the problem's own ``backend`` flag
     between the two samplers, and imports the one it needs lazily inside
     ``run``. Needs the ``jax`` or ``torch`` extra.
+:class:`VIEngine`
+    Stochastic variational inference — pyro's SVI on a torch problem, over the
+    same realisation :class:`NUTSEngine` samples. **Approximate**, and the
+    approximation is the guide family the run records in ``vi_guide``:
+    ``"normal"`` assumes the posterior factorises over parameters,
+    ``"multivariate"`` captures their correlations, and neither captures a
+    non-Gaussian posterior. The honest use is a first look at a posterior, or
+    the only tractable route when the space is too large for MCMC. A VI run's
+    single "chain" of i.i.d. guide draws is deliberate: guide draws have no
+    Markov structure, so R-hat has nothing to say about them, and the ELBO
+    trace is what a reader looks at instead. Needs the ``torch`` extra.
 
 The first three are gradient-free, so all three call
 :meth:`~ampere.core.dataset.FittingProblem.check_engine` with
@@ -52,7 +63,8 @@ The first three are gradient-free, so all three call
 likelihood?" rather than "is this problem differentiable?" — and a
 marginalisation no gradient-free engine can deliver is refused before any
 sampling starts. :class:`NUTSEngine` passes ``differentiable=True`` for the
-same reason and in the same spirit: it is stating what the *engine* offers.
+same reason and in the same spirit: it is stating what the *engine* offers,
+and :class:`VIEngine` likewise.
 
 Every run emits the run
 -----------------------
@@ -180,6 +192,7 @@ from __future__ import annotations
 from ._dynesty import DynestyEngine
 from ._emcee import EmceeEngine
 from ._nuts import NUTSEngine
+from ._vi import VIEngine
 from ._zeus import ZeusEngine
 from .engine import DEFAULT_CACHE_SIZE, Engine
 from .exceptions import EngineError, SamplingFailureWarning
@@ -192,5 +205,6 @@ __all__ = [
     "EngineError",
     "NUTSEngine",
     "SamplingFailureWarning",
+    "VIEngine",
     "ZeusEngine",
 ]

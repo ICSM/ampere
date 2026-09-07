@@ -939,3 +939,79 @@ class TestBackendNeutrality:
         run = TINY["emcee"](flaky_problem())
         assert run["posterior"].dataset.sizes["draw"] > 0
         assert run.attrs["ampere_engine"] == "emcee"
+
+
+# ---------------------------------------------------------------------------
+# The supplied-decomposition path (W2.4 slice 2)
+# ---------------------------------------------------------------------------
+
+
+class TestASuppliedDecomposition:
+    """``Engine.finish(log_likelihood_terms=...)``, checked without a backend.
+
+    ``inference.md`` §10a's optional member is supplied by a *realisation*, and
+    the two shipped ones need torch or jax — but what ``Engine.finish`` does
+    with it is backend-neutral, and so is the way it can go wrong. These rows
+    hand a decomposition in by hand, on the reference path, so the emission
+    logic is checked in the environment CI runs everywhere rather than only
+    where an extra is installed.
+    """
+
+    @staticmethod
+    def prepared() -> tuple[Any, Any, np.ndarray]:
+        problem = agreement_problem()
+        engine = EmceeEngine(problem, walkers=8)
+        engine.start()
+        return problem, engine, engine.initial_positions(3)
+
+    def test_supplied_terms_are_used_and_nothing_is_recomputed(self) -> None:
+        """The point of the whole change: no stored draw is scored twice."""
+        problem, engine, draws = self.prepared()
+        terms = [
+            [
+                {
+                    label: float(value)
+                    for label, value in problem.evaluate(theta).contributions.items()
+                }
+                for theta in draws
+            ]
+        ]
+        run = engine.finish(draws[np.newaxis, ...], log_likelihood_terms=terms)
+        assert run.attrs["ampere_engine_draws_recomputed"] == 0
+        label = next(iter(problem.datasets))
+        assert np.asarray(run["log_likelihood"][label]).shape == (1, 3)
+
+    def test_the_supplied_terms_are_what_is_emitted(self) -> None:
+        """Not merely accepted — actually written into the run.
+
+        A driver that had quietly ignored the argument would pass the
+        recomputation row (its cache would hit) and fail this one.
+        """
+        problem, engine, draws = self.prepared()
+        label = next(iter(problem.datasets))
+        sentinel = [-1.0, -2.0, -3.0]
+        run = engine.finish(
+            draws[np.newaxis, ...],
+            log_likelihood_terms=[[{label: value} for value in sentinel]],
+        )
+        assert np.asarray(run["log_likelihood"][label]).ravel() == pytest.approx(sentinel)
+
+    def test_a_decomposition_keyed_wrongly_is_refused_by_name(self) -> None:
+        """A missing label would silently drop a dataset from the emitted run."""
+        _, engine, draws = self.prepared()
+        with pytest.raises(EngineError, match="decomposition keyed"):
+            engine.finish(
+                draws[np.newaxis, ...],
+                log_likelihood_terms=[[{"not-a-dataset": 0.0} for _ in draws]],
+            )
+
+    def test_a_decomposition_of_the_wrong_length_is_refused(self) -> None:
+        _, engine, draws = self.prepared()
+        with pytest.raises(ValueError):
+            engine.finish(draws[np.newaxis, ...], log_likelihood_terms=[[{} for _ in range(2)]])
+
+    def test_omitting_it_leaves_the_cache_behaviour_exactly_as_it_was(self) -> None:
+        """The fallback is the default, and it still counts what it recomputes."""
+        _, engine, draws = self.prepared()
+        run = engine.finish(draws[np.newaxis, ...])
+        assert run.attrs["ampere_engine_draws_recomputed"] == 0  # the start points are cached

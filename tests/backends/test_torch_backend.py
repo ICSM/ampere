@@ -47,13 +47,23 @@ from ampere.backends.torch import (
     LSFConvolution,
     ModifiedBlackBody,
     PowerLaw,
+    QuasisepGP,
     Resample,
     SyntheticPhotometry,
     bin_edges,
     planck_jy,
 )
+from ampere.backends.torch import (
+    Matern32 as TorchMatern32,
+)
+from ampere.backends.torch import (
+    SquaredExponential as TorchSquaredExponential,
+)
 from ampere.core import (
     DenseGP as CoreDenseGP,
+)
+from ampere.core import (
+    QuasisepGP as CoreQuasisepGP,
 )
 from ampere.core import (
     Matern32,
@@ -172,7 +182,8 @@ class TestNativeModels:
             model = build(GRID)
             assert model.BACKEND == BACKEND
             assert model.DIFFERENTIABLE is True
-            assert model.BATCHABLE is False
+            # True since W2.4 slice 2: the realised density is vmap-able.
+            assert model.BATCHABLE is True
             assert model.DEVICE == "cpu"
 
     def test_the_grid_is_a_torch_buffer_and_a_declared_one(self) -> None:
@@ -472,7 +483,8 @@ class TestSyntheticPhotometry:
         ):
             assert step.BACKEND == BACKEND
             assert step.DIFFERENTIABLE is True
-            assert step.BATCHABLE is False
+            # True since W2.4 slice 2, as for the models.
+            assert step.BATCHABLE is True
             assert step.DEVICE == "cpu"
 
 
@@ -592,6 +604,308 @@ class TestDenseGP:
         ]
 
 
+class TestQuasisepGP:
+    """The O(N) solver: exact against the dense one, and differentiable.
+
+    W2.4 slice 2. Every row here compares against something that is *not*
+    another celerite recursion — the dense Cholesky, a closed form, or central
+    differences — because two implementations of one recursion agreeing proves
+    only that they are the same recursion.
+    """
+
+    def test_the_marginal_likelihood_is_the_multivariate_normal(self) -> None:
+        """A closed form, not another solver: a genuinely external oracle."""
+        kernel, coordinates, residual, variance = gp_case()
+        covariance = kernel.matrix(coordinates, coordinates, {}) + np.diag(variance)
+        expected = st.multivariate_normal(cov=covariance).logpdf(residual)
+        got = QuasisepGP().log_marginal_likelihood(kernel, coordinates, residual, variance, {})
+        assert got == pytest.approx(float(expected), abs=1e-6)
+
+    def test_it_agrees_with_the_reference_quasiseparable_solver_to_the_last_bits(self) -> None:
+        """The same factorisation, through a different Python interface.
+
+        ``ampere.core.QuasisepGP`` reaches celerite2 through
+        ``celerite2.GaussianProcess``; this one calls ``celerite2.backprop``
+        directly. Both feed **the same exact rank-2 representation** to the
+        same compiled kernel, so the only thing left to differ is the order the
+        two sum ``alpha**2/d`` and ``log d`` in — numpy's reduction against
+        torch's. The tolerance is therefore an accumulation tolerance, three
+        orders tighter than ``tolerances.linear_algebra`` and eight tighter
+        than ``cross_solver``: anything looser passing here would mean the two
+        term builders had drifted, which is the failure the shared table
+        exists to prevent.
+        """
+        kernel, coordinates, residual, variance = gp_case()
+        assert QuasisepGP().log_marginal_likelihood(
+            kernel, coordinates, residual, variance, {}
+        ) == pytest.approx(
+            CoreQuasisepGP().log_marginal_likelihood(kernel, coordinates, residual, variance, {}),
+            rel=1e-14,
+        )
+
+    def test_it_agrees_with_the_dense_solver_on_unsorted_coordinates(self) -> None:
+        """Permutation invariance: this solver sorts internally and undoes it."""
+        rng = np.random.default_rng(3)
+        coordinates = rng.uniform(0.0, 12.0, 40)  # deliberately unsorted
+        residual = rng.normal(0.0, 0.3, 40)
+        variance = np.full(40, 0.04)
+        kernel = Matern32(0.4, 2.0)
+        assert QuasisepGP().log_marginal_likelihood(
+            kernel, coordinates, residual, variance, {}
+        ) == pytest.approx(
+            CoreDenseGP().log_marginal_likelihood(kernel, coordinates, residual, variance, {}),
+            rel=1e-9,
+        )
+
+    def test_the_marginal_likelihood_is_differentiable_in_the_residual(self) -> None:
+        """``d/dr log N(r; 0, C) = -C**-1 r`` — a closed form, not a difference."""
+        kernel, coordinates, residual, variance = gp_case(20)
+        residuals = torch.tensor(residual, dtype=torch.float64, requires_grad=True)
+        QuasisepGP().log_marginal_likelihood_tensor(
+            kernel, coordinates, residuals, variance, {}
+        ).backward()
+        covariance = kernel.matrix(coordinates, coordinates, {}) + np.diag(variance)
+        expected = -np.linalg.solve(covariance, residual)
+        assert residuals.grad.numpy() == pytest.approx(expected, abs=1e-8)
+
+    def test_the_marginal_likelihood_is_differentiable_in_the_hyperparameters(self) -> None:
+        """W2.4 slice 1's principal finding, closed on the O(N) path too.
+
+        The gradient in the amplitude and the length scale is what a
+        torch-backed NUTS over a flexible likelihood actually needs, and it is
+        the thing celerite2's *numpy* interface cannot give at any speed: it
+        has no reverse pass. Checked against central differences taken through
+        the **dense** solver, so neither the value nor the derivative is
+        confirmed by the recursion under test.
+        """
+        _, coordinates, residual, variance = gp_case(40)
+        kernel = TorchMatern32(0.4, 2.0)
+        amplitude = torch.tensor(0.4, dtype=torch.float64, requires_grad=True)
+        length_scale = torch.tensor(2.0, dtype=torch.float64, requires_grad=True)
+        QuasisepGP().log_marginal_likelihood_tensor(
+            kernel,
+            coordinates,
+            residual,
+            variance,
+            {"amplitude": amplitude, "length_scale": length_scale},
+        ).backward()
+
+        def dense(a: float, ell: float) -> float:
+            k = Matern32(a, ell)
+            return CoreDenseGP().log_marginal_likelihood(
+                k, coordinates, residual, variance, k.resolve(None)
+            )
+
+        step = 1e-6
+        assert float(amplitude.grad) == pytest.approx(
+            (dense(0.4 + step, 2.0) - dense(0.4 - step, 2.0)) / (2 * step), rel=1e-6
+        )
+        assert float(length_scale.grad) == pytest.approx(
+            (dense(0.4, 2.0 + step) - dense(0.4, 2.0 - step)) / (2 * step), rel=1e-6
+        )
+
+    def test_the_leave_one_out_terms_agree_with_the_dense_closed_form(self) -> None:
+        """The O(N) recursion W2.3 deferred, checked against a Cholesky.
+
+        ``DenseGP.conditional_loo`` forms ``(K + diag)**-1`` explicitly and
+        reads its diagonal; this one accumulates it backwards through the
+        semiseparable inverse in O(N). Nothing but agreement would show that
+        the accumulation is right — a wrong ``A_ii`` is still finite, still
+        per-sample and still looks like a leave-one-out term.
+        """
+        kernel, coordinates, residual, variance = gp_case(60)
+        assert QuasisepGP().conditional_loo(
+            kernel, coordinates, residual, variance, {}
+        ) == pytest.approx(
+            CoreDenseGP().conditional_loo(kernel, coordinates, residual, variance, {}), abs=1e-8
+        )
+
+    def test_the_leave_one_out_terms_survive_unsorted_coordinates(self) -> None:
+        rng = np.random.default_rng(19)
+        coordinates = rng.uniform(0.0, 12.0, 45)
+        residual = rng.normal(0.0, 0.3, 45)
+        variance = np.full(45, 0.04)
+        kernel = Matern32(0.4, 2.0)
+        assert QuasisepGP().conditional_loo(
+            kernel, coordinates, residual, variance, {}
+        ) == pytest.approx(
+            CoreDenseGP().conditional_loo(kernel, coordinates, residual, variance, {}), abs=1e-8
+        )
+
+    def test_the_conditional_agrees_with_the_dense_solver(self) -> None:
+        kernel, coordinates, residual, variance = gp_case()
+        at = np.linspace(-1.0, 13.0, 41)
+        got = QuasisepGP().condition(kernel, coordinates, residual, variance, {}, at=at)
+        expected = CoreDenseGP().condition(kernel, coordinates, residual, variance, {}, at=at)
+        assert got.mean == pytest.approx(expected.mean, abs=1e-8)
+        assert got.variance == pytest.approx(expected.variance, abs=1e-8)
+
+    def test_the_whitening_transform_agrees_with_the_reference_quasiseparable_one(self) -> None:
+        """``L`` is not unique, so the comparison is with the same factorisation.
+
+        A dense Cholesky and a celerite ``L√D`` are different square roots of
+        one matrix; they agree on ``L Lᵀ = K``, not on ``L z``. So this row
+        compares with ``ampere.core.QuasisepGP`` — same factorisation, other
+        library — and the *statistical* claim is the next row's.
+        """
+        kernel, coordinates, _, _ = gp_case()
+        whitened = np.random.default_rng(7).normal(size=coordinates.size)
+        assert QuasisepGP().latent_transform(kernel, coordinates, whitened, {}) == pytest.approx(
+            CoreQuasisepGP().latent_transform(kernel, coordinates, whitened, {}), abs=1e-12
+        )
+
+    def test_the_whitening_transform_reproduces_the_kernel_covariance(self) -> None:
+        """``L Lᵀ = K``, which is the property that actually matters."""
+        kernel, coordinates, _, _ = gp_case(12)
+        identity = np.eye(coordinates.size)
+        factor = np.stack(
+            [QuasisepGP().latent_transform(kernel, coordinates, column, {}) for column in identity]
+        ).T
+        assert factor @ factor.T == pytest.approx(
+            kernel.matrix(coordinates, coordinates, {}), abs=1e-8
+        )
+
+    def test_a_singular_covariance_raises_rather_than_returning_a_nan(self) -> None:
+        """W2.3's carried finding: celerite2 returns quiet NaN, so guard first."""
+        from ampere.core import LikelihoodError
+
+        kernel = Matern32(0.4, 2.0)
+        coordinates = np.array([1.0, 1.0, 2.0])
+        with pytest.raises(LikelihoodError, match="positive definite"):
+            QuasisepGP().log_marginal_likelihood(kernel, coordinates, np.zeros(3), np.zeros(3), {})
+
+    def test_a_non_finite_diagonal_raises_by_name(self) -> None:
+        from ampere.core import LikelihoodError
+
+        kernel, coordinates, residual, _ = gp_case(5)
+        with pytest.raises(LikelihoodError, match="non-finite"):
+            QuasisepGP().log_marginal_likelihood(
+                kernel, coordinates, residual, np.full(5, math.inf), {}
+            )
+
+    def test_a_negative_variance_raises_by_name(self) -> None:
+        from ampere.core import LikelihoodError
+
+        kernel, coordinates, residual, _ = gp_case(5)
+        with pytest.raises(LikelihoodError, match="negative entries"):
+            QuasisepGP().log_marginal_likelihood(
+                kernel, coordinates, residual, np.full(5, -1.0), {}
+            )
+
+    @pytest.mark.parametrize(
+        "broken",
+        ["non-finite", "negative", "singular"],
+    )
+    def test_the_native_surface_never_raises_and_says_minus_infinity(self, broken: str) -> None:
+        """``inference.md`` §10a: a realised density returns ``-inf``, never raises.
+
+        The three ways this solver can fail, and each reaches ``-inf`` by a
+        different route: a non-finite or negative diagonal is **sanitised**
+        before the compiled kernel sees it (celerite2 would return quiet NaN),
+        while a genuinely non-positive-definite matrix — duplicated
+        coordinates with no observational noise to separate them — makes
+        celerite2 raise, which :func:`ampere.backends.torch._celerite.factor`
+        converts to a NaN ``d``.
+        """
+        kernel, coordinates, residual, variance = gp_case()
+        if broken == "non-finite":
+            variance = np.full(coordinates.size, math.inf)
+        elif broken == "negative":
+            variance = np.full(coordinates.size, -1.0)
+        else:
+            coordinates = np.repeat(coordinates[: coordinates.size // 2], 2)
+            variance = np.zeros(coordinates.size)
+        value = QuasisepGP().log_marginal_likelihood_native(
+            kernel, coordinates, residual, variance, {}
+        )
+        assert float(value) == -math.inf
+
+    def test_the_native_surface_matches_the_raising_one_where_both_work(self) -> None:
+        kernel, coordinates, residual, variance = gp_case()
+        solver = QuasisepGP()
+        assert float(
+            solver.log_marginal_likelihood_native(kernel, coordinates, residual, variance, {})
+        ) == solver.log_marginal_likelihood(kernel, coordinates, residual, variance, {})
+
+    def test_the_native_surface_keeps_the_graph_on_a_refusal(self) -> None:
+        """pyro's NUTS refuses a potential with no ``grad_fn``.
+
+        A ``torch.where`` keeps the ``-inf`` attached to the graph; a fresh
+        constant would not, and the sampler would fail at the first divergent
+        proposal rather than at the first bad one.
+        """
+        kernel, coordinates, residual, _ = gp_case(10)
+        residuals = torch.tensor(residual, dtype=torch.float64, requires_grad=True)
+        value = QuasisepGP().log_marginal_likelihood_native(
+            kernel, coordinates, residuals, np.full(10, -1.0), {}
+        )
+        assert value.requires_grad
+        assert value.grad_fn is not None
+
+    def test_it_refuses_a_kernel_with_no_exact_representation(self) -> None:
+        from ampere.core import LikelihoodError
+
+        kernel = TorchSquaredExponential(0.4, 2.0)
+        assert not kernel.QUASISEPARABLE
+        with pytest.raises(LikelihoodError, match="quasiseparable representation"):
+            QuasisepGP().check_compatible(kernel, Spectrum(GRID * u.um, np.ones(GRID.size) * u.Jy))
+
+    def test_it_refuses_a_negative_jitter(self) -> None:
+        from ampere.core import LikelihoodError
+
+        with pytest.raises(LikelihoodError, match="jitter"):
+            QuasisepGP(jitter=-1.0)
+
+    def test_it_declares_the_flags_the_compiled_kernels_actually_support(self) -> None:
+        """CPU float64, declared rather than discovered.
+
+        celerite2's kernels are double-precision CPU C++, so an honest
+        ``BATCHABLE``/``DEVICE`` here is ``False``/``"cpu"``. Declaring
+        otherwise would make ``FittingProblem.capabilities`` a promise the
+        solver cannot keep.
+        """
+        solver = QuasisepGP()
+        assert solver.BACKEND == BACKEND
+        assert solver.DIFFERENTIABLE is True
+        assert solver.BATCHABLE is False
+        assert solver.DEVICE == "cpu"
+        assert solver.EXACT is True
+        assert solver.IMPLEMENTED is True
+
+    def test_its_spec_config_matches_the_reference_solver(self) -> None:
+        """Cross-backend spec-hash agreement: the same dataclass fields, exactly."""
+        import dataclasses
+
+        assert [field.name for field in dataclasses.fields(QuasisepGP())] == [
+            field.name for field in dataclasses.fields(CoreQuasisepGP())
+        ]
+
+    def test_the_solver_configuration_is_recorded_but_never_hashed(self) -> None:
+        config = QuasisepGP().provenance_config()
+        assert config["dtype"] == "torch.float64"
+        assert config["device"] == "cpu"
+        assert config["library"] == "celerite2"
+
+    def test_it_scales_linearly_where_the_dense_solver_cannot_run(self) -> None:
+        """The claim that makes this solver worth its existence, measured cheaply.
+
+        Not a benchmark — a shared runner has no business asserting a wall
+        clock — but a *feasibility* assertion: 20 000 points is 3.2 GB of
+        covariance for the dense solver and 480 kB of generators for this one,
+        so a finite answer here is itself the demonstration. Agreement is
+        asserted at a size the dense solver can reach.
+        """
+        rng = np.random.default_rng(2026)
+        size = 20_000
+        coordinates = np.sort(rng.uniform(0.0, size / 10.0, size))
+        residual = rng.normal(0.0, 0.3, size)
+        variance = np.full(size, 0.01)
+        value = QuasisepGP().log_marginal_likelihood(
+            Matern32(0.4, 2.0), coordinates, residual, variance, {}
+        )
+        assert math.isfinite(value)
+
+
 # ---------------------------------------------------------------------------
 # Import discipline and documentation
 # ---------------------------------------------------------------------------
@@ -611,6 +925,10 @@ class TestDocumentation:
             "ampere.backends.torch.models",
             "ampere.backends.torch.instrument",
             "ampere.backends.torch.gp",
+            "ampere.backends.torch._celerite",
+            "ampere.backends.torch._families",
+            "ampere.backends.torch.noise",
+            "ampere.backends.torch.problem",
         ],
     )
     def test_the_module_docstring_examples_run(self, module: str) -> None:

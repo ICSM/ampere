@@ -124,10 +124,17 @@ class TorchStep(Transformation):
     """
 
     #: The four capability flags (``inference.md`` §18, W2.12's fourth), stated
-    #: rather than inherited. ``BATCHABLE`` is ``False`` honestly: nothing here
-    #: accepts a stack of parameter vectors yet.
+    #: rather than inherited.
+    #: ``BATCHABLE`` is ``True`` since W2.4 slice 2, and it means one specific
+    #: thing: a stack of parameter vectors is evaluated in one call through
+    #: ``torch.func.vmap``, over the *realised* density
+    #: (:meth:`ampere.backends.torch.LoweredProblem.log_prob_unconstrained_batched`).
+    #: It is a claim about this class only, aggregated conjunctively with every
+    #: other part's, so one non-batchable piece — ``QuasisepGP``, whose solve
+    #: happens inside a compiled extension — makes the whole problem report
+    #: ``batchable=False``, and the batched call then refuses by name.
     DIFFERENTIABLE: ClassVar[bool] = True
-    BATCHABLE: ClassVar[bool] = False
+    BATCHABLE: ClassVar[bool] = True
     DEVICE: ClassVar[str] = "cpu"
     BACKEND: ClassVar[str] = BACKEND
 

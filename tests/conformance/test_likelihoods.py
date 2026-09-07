@@ -567,24 +567,42 @@ class TestSolverAgreement:
         with pytest.raises(LikelihoodError, match="quasiseparable representation"):
             noise.check_compatible(GaussianFamily(), observed)
 
-    def test_the_leave_one_out_terms_are_a_dense_only_decomposition(
-        self, backend: ConformanceBackend
+    def test_the_leave_one_out_terms_either_agree_exactly_or_refuse_by_name(
+        self, backend: ConformanceBackend, tolerances: Tolerances
     ) -> None:
-        """W2.3 deferred ``conditional_loo``'s O(N) recursion; it must say so.
+        """``conditional_loo`` on the quasiseparable path: agreement, or a refusal.
 
-        The refusal is the declared-but-staged discipline again: the O(N)
-        route to the diagonal of ``(K + diag(sigma**2))**-1`` is recorded as
-        deferred in ``DEVELOPMENT_PLAN.md`` §2, and until it exists a
-        quasiseparable strategy refuses rather than quietly costing O(N**2).
+        This row used to assert only the refusal, because W2.3 **deferred**
+        the O(N) recursion for the diagonal of ``(K + diag(sigma**2))**-1``
+        (``DEVELOPMENT_PLAN.md`` §2, 2026-09-05): celerite2's public numpy
+        interface exposes no route to that diagonal, and shipping an O(N**2)
+        fallback under an O(N) name was rejected outright. W2.4 slice 2
+        changed the circumstances rather than the ruling — the torch backend
+        calls celerite2's compiled kernels directly, so it already knows the
+        factorisation convention the recursion needs, and it supplies the
+        terms (decision-log row, 2026-09-07).
+
+        So the row states the *whole* contract, which is what the README's
+        debt entry always said it would become: a quasiseparable strategy
+        either refuses by name, or computes the same decomposition the dense
+        solver does. The one thing it may not do is return something else —
+        a wrong ``A_ii`` would still be finite, still be per-sample, and
+        still look exactly like a leave-one-out term.
         """
         if SolverKind.QUASISEP not in backend.capabilities.solvers:
             pytest.skip(f"backend {backend.name!r} declares no quasiseparable solver")
         predicted, observed = spectra()
         dense = gp_likelihood(backend, MATERN32, SolverKind.DENSE)
-        assert dense.pointwise_log_prob(predicted, observed).size == len(GP_GRID)
+        expected = dense.pointwise_log_prob(predicted, observed)
+        assert expected.size == len(GP_GRID)
         quasisep = gp_likelihood(backend, MATERN32, SolverKind.QUASISEP)
-        with pytest.raises(LikelihoodError, match="conditional_loo"):
-            quasisep.pointwise_log_prob(predicted, observed)
+        try:
+            got = quasisep.pointwise_log_prob(predicted, observed)
+        except LikelihoodError as refusal:
+            assert "conditional_loo" in str(refusal)
+            return
+        assert got.shape == expected.shape
+        assert np.allclose(got, expected, rtol=tolerances.cross_solver, atol=0.0)
 
 
 # ---------------------------------------------------------------------------
