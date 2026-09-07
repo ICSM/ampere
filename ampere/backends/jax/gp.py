@@ -31,6 +31,41 @@ failure ``tests/conformance``'s "a declared quasiseparable strategy must be a
 fixture therefore declares ``DENSE`` only, and the quasiseparable rows skip
 with a reason naming what is owed.
 
+What slice 1 measured, so slice 2 does not have to start from nothing
+---------------------------------------------------------------------
+The plan asks for the maintenance question to be settled at the track's start,
+so here is the state on 2026-09-07, checked against PyPI and against the
+installed environment rather than recollected:
+
+* **celerite2 0.3.3** (released 2026-07-12) **ships ``celerite2.jax``**, with
+  a ``GaussianProcess``, a ``terms`` module and its own ``ops``. celerite2 is
+  already a **base** dependency of ampere (W2.3 put it there), so choosing it
+  costs no new dependency at all — the strongest argument in its favour, and
+  it would also mean the numpy and jax quasiseparable paths shared one
+  library's arithmetic, which makes the cross-backend row a comparison of
+  ampere's lowering rather than of two third-party solvers.
+* **and it flips ``jax_enable_x64`` as an import side effect.** Importing
+  ``celerite2.jax`` prints "celerite2.jax only works with dtype float64. We're
+  enabling x64 now, but you might run into issues if you've already run some
+  jax code" and calls ``config.update`` itself. That is exactly what
+  ``lowering.md`` §10.2(a) forbids ampere from doing, done to ampere by a
+  dependency: the guard in :mod:`ampere.backends.jax._config` would be
+  satisfied by a flag nobody in the user's program set, and the "supported
+  configurations are exactly two" promise would quietly become three. Slice 2
+  must decide what to do about it — most likely importing it lazily, only
+  after ampere's own guard has already refused or passed, so the side effect
+  can never be what made the guard pass — and it is a point in ``tinygp``'s
+  favour that has nothing to do with either library's numerics.
+* **tinygp 0.3.1** (released 2026-03-15, ``requires-python >= 3.11``) is a
+  live release but is **not** an existing dependency, so adopting it widens the
+  ``jax`` extra. Its ``QuasisepSolver`` is the more idiomatic jax object (a
+  pytree, composable with ``jit``/``vmap`` in the ordinary way), which matters
+  for slice 2's batching work in a way it does not for correctness.
+
+Neither has been benchmarked here and neither has been run against the
+conformance suite; that is slice 2's work, and this note is the starting point
+rather than the answer.
+
 Cholesky failure is quiet on jax, and must not be
 -------------------------------------------------
 W2.3's finding about ``celerite2`` generalises to this backend, in a way worth
