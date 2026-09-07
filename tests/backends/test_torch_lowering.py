@@ -645,6 +645,36 @@ class TestPlatesAndHierarchy:
         expected = -0.4 / 25.0 + float(np.sum(members - 0.4)) / 1.2**2
         assert float(theta.grad[mu][0]) == pytest.approx(expected, abs=1e-9)
 
+    def test_the_prior_transform_agrees_with_the_reference_path(self) -> None:
+        """A hierarchical member's quantile is a function of its hyperparameters.
+
+        The transform resolves in topological order, so ``objects.theta``'s
+        distribution is built from the ``mu`` and ``sigma`` this same cube
+        produced — the same rule ``ParameterSet.prior_transform`` follows, and
+        the reason it is compared against that rather than against a fixed
+        family.
+        """
+        declaration = plated_declaration()
+        space = TorchParameterSpace(declaration)
+        cube = np.linspace(0.13, 0.87, declaration.free_size)
+        assert space.prior_transform(cube) == pytest.approx(
+            declaration.prior_transform(cube), abs=1e-9
+        )
+
+    def test_a_hierarchical_normal_needs_no_reference_fallback(self) -> None:
+        """§3.6, applied to the family rather than to a parametrisation.
+
+        ``Normal.icdf`` exists, so a hierarchical normal is inverted natively
+        and nothing is warned about — which is only true if the availability
+        check lowers the *family* at construction rather than waiting for the
+        first call, when §3.6's decision has already had to be made.
+        """
+        with warnings.catch_warnings(record=True) as recorded:
+            warnings.simplefilter("always")
+            space = TorchParameterSpace(plated_declaration(), strict=True)
+        assert [w for w in recorded if issubclass(w.category, IcdfFallbackWarning)] == []
+        assert space.icdf_fallback_families == frozenset()
+
     def test_an_unresolvable_reference_is_refused_by_name(self) -> None:
         prior = HierarchicalPrior("norm", {"loc": "mu", "scale": "sigma"})
         with pytest.raises(LoweringError, match="not resolved yet"):

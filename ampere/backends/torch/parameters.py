@@ -364,14 +364,38 @@ class TorchParameterSpace:
             )
 
     def _warn_about_icdf(self) -> None:
-        """``lowering.md`` §3.6's contract, applied once at lowering time."""
-        missing = {
-            self._family_of(name)
-            for name in self._free
-            if name in self._priors and not self._priors[name].has_icdf
-        }
+        """``lowering.md`` §3.6's contract, applied once at lowering time.
+
+        A hierarchical prior has no lowered object until its hyperparameters
+        have values, so its ``icdf`` availability is established by lowering
+        the *family* once with placeholder arguments. That is sound because
+        ``icdf`` is implemented (or not) by a ``torch.distributions`` class,
+        not by a particular parametrisation of it — and it is necessary,
+        because the alternative is deciding at the first ``prior_transform``
+        call, which is after the point §3.6 says the decision is made.
+        """
+        missing = {self._family_of(name) for name in self._free if not self._has_native_icdf(name)}
         warn_icdf_fallback(missing, strict=self._strict, where="prior_transform")
         self._icdf_fallback = frozenset(missing)
+
+    def _has_native_icdf(self, name: str) -> bool:
+        lowered = self._priors.get(name)
+        if lowered is not None:
+            return lowered.has_icdf
+        placeholder = {
+            reference: as_tensor(1.0, dtype=self._dtype, device=self._device)
+            for reference in self._hierarchical[name].references
+        }
+        try:
+            return lower_hierarchical(
+                self._hierarchical[name],
+                placeholder,
+                parameter=name,
+                dtype=self._dtype,
+                device=self._device,
+            ).has_icdf
+        except LoweringError:  # pragma: no cover - the family is refused at lowering
+            return False
 
     def _family_of(self, name: str) -> str:
         prior = self._declaration[name].prior
@@ -446,18 +470,22 @@ class TorchParameterSpace:
             if parameter.is_fixed:
                 continue
             chunk = cube[self._slices[name]]
-            lowered = self._priors.get(name)
-            if lowered is not None and lowered.has_icdf:
+            # ``distribution_of`` is the same route the density takes: constant
+            # for an ordinary family, rebuilt from the hyperparameters resolved
+            # so far for a hierarchical one (§8's topological order is what
+            # makes that well defined here).
+            lowered = self.distribution_of(name, resolved)
+            if lowered.has_icdf:
                 drawn = to_numpy(
                     lowered.icdf(as_tensor(chunk, dtype=self._dtype, device=self._device))
                 )
-            elif lowered is not None:
-                drawn = np.asarray(parameter.prior.ppf(chunk), dtype=float)
-            else:
+            elif name in self._hierarchical:
                 bound = self._hierarchical[name].bind(
                     {key: to_numpy(value) for key, value in resolved.items()}
                 )
                 drawn = np.asarray(bound.ppf(chunk), dtype=float)
+            else:
+                drawn = np.asarray(parameter.prior.ppf(chunk), dtype=float)
             flat[self._slices[name]] = drawn.reshape(-1)
             resolved[name] = as_tensor(
                 drawn.reshape(parameter.shape) if parameter.shape else float(drawn.reshape(-1)[0]),
