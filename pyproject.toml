@@ -113,10 +113,16 @@ torch = ["torch", "pyro-ppl"]
 # equinox supplies `eqx.partition`/`eqx.combine`, the filter-spec mechanism
 # ruled in DEVELOPMENT_PLAN.md §2 ("jax non-trainable mechanism") as the way
 # fixed parameters and buffers stay ordinary array leaves rather than static
-# fields. Nothing speculative beyond those: no tinygp/celerite2.jax until
-# slice 2 has actually chosen between them (DEVELOPMENT_PLAN.md §6). CPU
-# jaxlib is what `jax` resolves to on PyPI without a hardware suffix, which
-# is what CI and the daily-use machines want.
+# fields. **Still exactly three, after slice 2 chose the quasiseparable GP
+# library**: the choice was celerite2.jax over tinygp (DEVELOPMENT_PLAN.md §2's
+# "jax quasiseparable GP library" row carries the measured table), and
+# celerite2 has been a *base* dependency since W2.3 -- so the O(N) GP solve
+# costs this extra nothing at all. celerite2.jax is nonetheless imported
+# **lazily**, only after `require_x64` has passed, because it flips
+# `jax_enable_x64` as an import side effect and `lowering.md` §10.2(a) forbids
+# ampere from letting that happen on a user's behalf. CPU jaxlib is what `jax`
+# resolves to on PyPI without a hardware suffix, which is what CI and the
+# daily-use machines want.
 jax = ["jax", "numpyro", "equinox"]
 sbi = ["torch", "sbi"]  # W0.9: forward-migrated -- pin lifted (PyPI's latest release is still 0.27.0, the version this was already tested against; see the W0.9 report)
 zeus = ["zeus-mcmc"]
