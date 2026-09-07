@@ -80,7 +80,47 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
   the "legacy still works" gate; run it before merging anything that
   touches shared files.
 
-## ⚡ Pick up here (end of the 2026-09-05 session — W2.1/W2.2/W2.3/W2.6 MERGED)
+## ⚡ Pick up here (2026-09-07 session — the two W2.1 rulings landed; backend tracks next)
+
+**State**: master is at `8a9534a`, clean, gates green (`pixi run test-all`
+**1344 passed, zero skips**, lint/format/pyrefly clean). Nothing in
+flight, nothing pushed to origin. Peter ruled on 2026-09-07 and both
+rulings are **landed directly on master** (the handoff anticipated this
+— small enough to skip a branch): (a) `requests` is declared in
+`[project.dependencies]` on pyphot 2.1.1's behalf (`a02836d`; the
+pyproject comment notes ampere makes no HTTP requests itself and that
+httpx/aiohttp/niquests would be better if it ever does — drop the line
+when pyphot fixes its metadata; plan pins-row addendum); (b)
+`Instrument.__init__` now calls `configure_from` **last step first**
+(`8a9534a`; `transformations.md` §5 clarified, decision-log row added
+per ground rule 9, regression tests in `tests/core` and
+`tests/backends`, both verified to fail under the old forward walk). The
+minimal-install CI job should pass at the next push. Peter deferred
+branch triage and the push to origin — both stay on the list.
+
+**Next session**: dispatch the backend tracks **W2.4 (torch)** and
+**W2.5 (jax)** — Opus, one agent per track, lockstep via the conformance
+suite, per `docs/orchestration.md`. Settle the small **backend identity on
+`FittingProblem`** addition first or as the tracks' opening step (drivers
+currently *declare* `Engine(..., backend=)`; W2.2's finding). Fold into
+the dispatch prompts: celerite2 returns quiet NaN where a Cholesky
+raises — every backend's celerite2 path must guard preconditions as core
+now does; the `eqx.partition`/x64-guard/icdf rulings in plan §2; a
+backend that overrides chain construction must keep the last-step-first
+`configure_from` order. Dispatchable in parallel to Sonnet: W2.7/W2.8
+(follow W2.2), W2.9 (follows W2.1+W2.2). Smaller queued items: the zeus
+re-ball helper, the `compile_for` template perf gap in the reference hot
+loop, the `examples/` pyphot touch-up.
+
+**Owed and pending**: the **retroactive terra passes** on the four merged
+2026-09-05 ranges when the Codex quota returns (~2026-09-30) — W2.3's GP
+algebra first — before the M2 milestone; branch-triage approval
+(`docs/design/harvest/branch_triage.md`, deferred by Peter 2026-09-07); a
+live-CI verification push (deferred likewise); pruning the stale
+`.claude/worktrees/` checkouts and merged branches once Peter confirms
+nothing on them is wanted.
+
+## ⚡ SUPERSEDED session record (end of the 2026-09-05 session — W2.1/W2.2/W2.3/W2.6 MERGED)
 
 **State**: the first Phase-2 block is **merged and integration-verified**.
 Master's merge sequence: W2.1 (`0d8b9a0`), then W2.6 (`152b1fa`), W2.2
@@ -109,7 +149,7 @@ in the plan §2. Smaller queued items: W2.7/W2.8 (follow W2.2), W2.9
 (follows W2.1+W2.2), the zeus re-ball helper, the `compile_for` template
 perf gap in the reference hot loop, the `examples/` pyphot touch-up.
 
-**Owed and pending**: the **retroactive terra passes** on all four merged
+**Owed and pending** (as recorded then; the two rulings below were given and landed 2026-09-07 — see the section above): the **retroactive terra passes** on all four merged
 ranges when the Codex quota returns (~2026-09-30) — W2.3's GP algebra
 first; **Peter's two rulings** — (a) pyphot 2.1.1's undeclared `requests`
 (one line: add `requests` to deps or pin past it; the minimal-install CI
