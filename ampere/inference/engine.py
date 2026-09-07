@@ -324,6 +324,87 @@ class Engine(abc.ABC):
         """
         self.problem.reset_failures()
 
+    def evaluations_from_terms(
+        self,
+        draws: np.ndarray,
+        terms: Mapping[str, Any],
+    ) -> list[list[Evaluation]]:
+        """One :class:`~ampere.core.dataset.Evaluation` per draw, from a decomposition.
+
+        ``inference.md`` §10a's optional ``log_likelihood_terms``, consumed.
+        A driver that sampled through a backend's realisation already holds
+        the per-dataset log-likelihood of every draw *in the arithmetic that
+        produced the draw*; recomputing it on the numpy contract path would
+        cost one full model evaluation per stored draw and — for a stochastic
+        model — would not even give the same number the sampler accepted on.
+        So the driver hands the decomposition here instead, and
+        ``engine_draws_recomputed`` is zero rather than one per draw.
+
+        The prior is still taken from the problem, and that is not an
+        inconsistency: ``FittingProblem.log_prior`` runs no model, it is the
+        parameter declaration's own ``lnprior``, and it is where §4.5's
+        "``-inf`` outside the support **without evaluating the model**" lives.
+        A draw the prior rules out gets exactly the record
+        :meth:`~ampere.core.dataset.FittingProblem.evaluate` would have given
+        it — ``log_likelihood`` NaN, no contributions — because "not
+        evaluated" and "impossible" are different statements (§10).
+
+        Parameters
+        ----------
+        draws
+            ``(chains, draws, n_dim)`` in the **constrained** space, as
+            :meth:`finish` receives them.
+        terms
+            One entry per dataset label, each broadcastable to
+            ``(chains, draws)``. Every label the problem declares must be
+            present: a partial decomposition would silently under-count the
+            joint log-likelihood, which is the one number a run is read for.
+        """
+        expected = set(self.problem.datasets)
+        supplied = set(terms)
+        if supplied != expected:
+            raise EngineError(
+                f"{self.NAME} was handed a per-dataset log-likelihood decomposition for "
+                f"{sorted(supplied)}, but this problem declares {sorted(expected)}. The terms "
+                f"sum to the joint log-likelihood, so a partial decomposition would record a "
+                f"run whose log_likelihood is quietly wrong."
+            )
+        shape = (draws.shape[0], draws.shape[1])
+        columns = {}
+        for label, values in terms.items():
+            array = np.asarray(values, dtype=float)
+            if array.shape != shape:
+                raise EngineError(
+                    f"{self.NAME}'s decomposition for dataset {label!r} is shaped {array.shape}, "
+                    f"but the run has {shape} (chains, draws)."
+                )
+            columns[label] = array
+        evaluations: list[list[Evaluation]] = []
+        for chain in range(shape[0]):
+            row: list[Evaluation] = []
+            for index in range(shape[1]):
+                log_prior = float(self.problem.log_prior(draws[chain, index]))
+                if not math.isfinite(log_prior):
+                    row.append(
+                        Evaluation(log_prior=-math.inf, log_likelihood=math.nan, log_prob=-math.inf)
+                    )
+                    continue
+                contributions = {
+                    label: float(column[chain, index]) for label, column in columns.items()
+                }
+                total = float(sum(contributions.values()))
+                log_prob = log_prior + total if math.isfinite(total) else -math.inf
+                row.append(
+                    Evaluation(
+                        log_prior=log_prior,
+                        log_likelihood=total,
+                        log_prob=log_prob if math.isfinite(log_prob) else -math.inf,
+                        contributions=contributions,
+                    )
+                )
+            evaluations.append(row)
+        return evaluations
+
     def finish(
         self,
         draws: Any,
@@ -332,6 +413,7 @@ class Engine(abc.ABC):
         coords: Mapping[str, Sequence[Any]] | None = None,
         realised: bool = False,
         registered_lowerings: Sequence[Mapping[str, Any]] | None = None,
+        log_likelihood_terms: Mapping[str, Any] | None = None,
     ) -> Any:
         """Assemble the stored draws into the run's ``DataTree``.
 
@@ -350,6 +432,15 @@ class Engine(abc.ABC):
         fact worth having rather than an absence: it says the draws were
         scored on the numpy contract path.
 
+        *log_likelihood_terms* is the third, added in the slice-2 pass
+        (``inference.md`` §10a, sub-decision 1: "a driver **uses it when it is
+        there**"). Given it, the per-draw records are built by
+        :meth:`evaluations_from_terms` and **no stored draw is re-evaluated**;
+        without it, they come from the evaluation cache and a miss is counted
+        in ``engine_draws_recomputed``. The count is the honest signal either
+        way: zero because nothing needed recomputing, rather than zero because
+        nothing was checked.
+
         The summary is surfaced three ways, because the three have different
         audiences: a :class:`~ampere.inference.exceptions.
         SamplingFailureWarning` for the person watching the run,
@@ -361,7 +452,11 @@ class Engine(abc.ABC):
         array = np.asarray(draws, dtype=float)
         if array.ndim == 2:
             array = array[np.newaxis, ...]
-        evaluations = [[self._cache.lookup(theta) for theta in chain] for chain in array]
+        evaluations = (
+            self.evaluations_from_terms(array, log_likelihood_terms)
+            if log_likelihood_terms is not None
+            else [[self._cache.lookup(theta) for theta in chain] for chain in array]
+        )
 
         summary = self.problem.failure_summary()
         self.last_failure_summary = summary

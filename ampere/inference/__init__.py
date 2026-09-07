@@ -45,6 +45,14 @@ What is here
     imports no backend, dispatches on the problem's own ``backend`` flag
     between the two samplers, and imports the one it needs lazily inside
     ``run``. Needs the ``jax`` or ``torch`` extra.
+:class:`VIEngine`
+    Stochastic variational inference: an autoguide fitted by maximising the
+    ELBO, over the same realisation :class:`NUTSEngine` samples. The fast,
+    approximate answer — and the run records the guide family, the step count
+    and the ELBO trace, because draws from a fitted guide are not draws from
+    the posterior and an archived file has to say so. jax (numpyro) today; the
+    pyro route is one row and one branch away and is not written because
+    nothing on the branch that added this could exercise it.
 
 The first three are gradient-free, so all three call
 :meth:`~ampere.core.dataset.FittingProblem.check_engine` with
@@ -180,6 +188,7 @@ from __future__ import annotations
 from ._dynesty import DynestyEngine
 from ._emcee import EmceeEngine
 from ._nuts import NUTSEngine
+from ._vi import VIEngine
 from ._zeus import ZeusEngine
 from .engine import DEFAULT_CACHE_SIZE, Engine
 from .exceptions import EngineError, SamplingFailureWarning
@@ -192,5 +201,6 @@ __all__ = [
     "EngineError",
     "NUTSEngine",
     "SamplingFailureWarning",
+    "VIEngine",
     "ZeusEngine",
 ]

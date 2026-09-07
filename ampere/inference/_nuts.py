@@ -71,17 +71,21 @@ divergences, tree depth, step size and the accept probability — and, since
 W2.13, ``ampere_realised = 1`` and the user-registered lowering rows the
 realisation consulted (``inference.md`` §10a, "Provenance").
 
-The per-draw evaluations are **recomputed** rather than cached, and the run
-says so in ``engine_draws_recomputed``. The other drivers score every proposal
-through :class:`~ampere.inference.engine.Engine`'s evaluation cache, so a
-stored draw is usually a lookup; this one scores through the *realised*
-density, which returns a scalar rather than an
-:class:`~ampere.core.dataset.Evaluation`, so the decomposition is computed once
-per stored draw on the contract path afterwards. That is honest and it is
-counted. §10a's optional ``log_likelihood_terms`` is what will remove the
-recomputation — both shipped realisations supply it — and consuming it means
+The per-draw evaluations come from the realisation itself, and the run records
+``engine_draws_recomputed = 0``. W2.13 shipped this driver recomputing them:
+the other drivers score every proposal through
+:class:`~ampere.inference.engine.Engine`'s evaluation cache, so a stored draw
+is usually a lookup, while this one scores through the *realised* density,
+which returns a scalar rather than an
+:class:`~ampere.core.dataset.Evaluation` — so every stored draw was
+re-decomposed on the numpy contract path afterwards. That was honest and it
+was counted, and it cost one full model evaluation per draw on top of the ones
+the sampler had already paid for. §10a's optional ``log_likelihood_terms`` is
+what removes it — both shipped realisations supply it — and consuming it meant
 teaching ``Engine.finish`` to accept a decomposition it did not compute, which
-is a change to the emission path rather than to this driver and is not W2.13's.
+is a change to the emission path rather than to this driver. Both halves
+landed in the slice-2 pass: :meth:`NUTSEngine._decomposition` here, and
+``Engine.evaluations_from_terms`` there.
 """
 
 from __future__ import annotations
@@ -95,7 +99,12 @@ import numpy as np
 
 from ampere.core.dataset import FittingProblem
 from ampere.core.exceptions import LoweringError
-from ampere.core.realisation import Realisation, realise, registered_realisations
+from ampere.core.realisation import (
+    Realisation,
+    log_likelihood_terms_of,
+    realise,
+    registered_realisations,
+)
 
 from .engine import DEFAULT_CACHE_SIZE, Engine, _kept
 from .exceptions import EngineError
@@ -452,7 +461,55 @@ class NUTSEngine(Engine):
             extra_attrs=attrs,
             realised=self.realisation is not None,
             registered_lowerings=self._realisation_provenance(),
+            log_likelihood_terms=self._decomposition(drawn),
         )
+
+    def _decomposition(self, unconstrained: np.ndarray) -> dict[str, np.ndarray] | None:
+        """The per-dataset log-likelihood of every stored draw, natively.
+
+        ``inference.md`` §10a's optional ``log_likelihood_terms``, used
+        "when it is there" (sub-decision 1). Until this method existed, every
+        stored draw of a NUTS run was re-decomposed on the numpy contract path
+        by :meth:`~ampere.inference.engine.Engine.finish` — one full model
+        evaluation per draw, on top of the ones the sampler had already paid
+        for, and for a stochastic model not even the same number the sampler
+        accepted on. W2.13 recorded that and left it, because consuming the
+        member is a change to the emission path rather than to this driver;
+        the emission path learned it in the slice-2 pass and this is the
+        driver half.
+
+        The loop is a Python loop over draws rather than a ``vmap``, and
+        deliberately: ``ampere.inference`` may import no backend
+        (``architecture.md`` §4 rule 2), so it cannot reach for jax's or
+        torch's batching, and the realisations' own batched surfaces are not
+        part of §10a's contract. Each call is one traced density evaluation of
+        an already-compiled function — cheap beside the model evaluation it
+        replaces. A realisation that supplies no decomposition returns
+        ``None`` here and the cache-and-recompute path stands.
+
+        Parameters
+        ----------
+        unconstrained
+            ``(chains, draws, n_dim)`` in the **unconstrained** space, which
+            is the argument ``log_likelihood_terms`` takes.
+        """
+        if self.realisation is None:
+            return None
+        terms = log_likelihood_terms_of(self.realisation)
+        if terms is None:
+            return None
+        chains, draws = unconstrained.shape[0], unconstrained.shape[1]
+        collected: dict[str, np.ndarray] = {}
+        for chain in range(chains):
+            for index in range(draws):
+                found = terms(unconstrained[chain, index])
+                for label, value in found.items():
+                    column = collected.get(label)
+                    if column is None:
+                        column = np.empty((chains, draws), dtype=float)
+                        collected[label] = column
+                    column[chain, index] = float(np.asarray(value))
+        return collected
 
     # -- the two sampler routes ----------------------------------------------
 
