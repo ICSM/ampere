@@ -23,26 +23,24 @@ from ``ampere.core``'s containers, which coerce their values with
 contract, both are there for good reasons, and together they mean a gradient
 cannot be taken through the contract path *on any backend*.
 
-So the gradient has to come from the backend's own lowering of the problem, and
-this driver takes it as an argument::
+So the gradient has to come from the backend's own lowering of the problem —
+its **realisation** (``ampere.core.realisation``, the W2.13 prototype). A
+backend registers a factory with ``ampere.core`` at import; this driver calls
+``ampere.core.realise(problem)``, which dispatches on ``problem.backend``
+(W2.12's derived flag) and checks the result against the contract path at one
+point::
 
-    from ampere.backends.jax import lower_problem
+    import ampere.backends.jax        # registers the jax realisation
     from ampere.inference import NUTSEngine
 
-    lowered = lower_problem(problem)
-    run = NUTSEngine(problem, lowered.log_prob_unconstrained).run(draws=1000, warmup=1000)
+    run = NUTSEngine(problem).run(draws=1000, warmup=1000)
 
 That keeps the rule this namespace is built on intact — **nothing under
 ``ampere.inference`` imports ``ampere.backends``**, and this module does not
 either; it imports jax and numpyro lazily, inside ``run``, exactly as
-``_emcee.py`` imports emcee. The driver never asks which backend produced the
-callable: it asks the *problem* what backend it is (``problem.backend``, W2.12's
-derived flag) and refuses by name if the answer is not one it can sample.
-
-The alternative — letting this module import ``ampere.backends.<name>``
-dynamically, or growing §4.5 a traceable-density hook on ``FittingProblem`` —
-is a contract question rather than a driver question, and is routed to review
-rather than taken here.
+``_emcee.py`` imports emcee. The density can still be passed explicitly
+(``NUTSEngine(problem, density)``) for a user's own lowering or a test, in which
+case the same one-point agreement check runs here.
 
 What the run records
 --------------------
@@ -72,8 +70,11 @@ from typing import Any, ClassVar
 import numpy as np
 
 from ampere.core.dataset import FittingProblem
+from ampere.core.realisation import realise
 
 from .engine import DEFAULT_CACHE_SIZE, Engine, _kept
+from ampere.core.exceptions import LoweringError
+
 from .exceptions import EngineError
 
 __all__ = ["NUTSEngine"]
@@ -103,11 +104,14 @@ class NUTSEngine(Engine):
         checked at construction, by name, rather than discovered at the first
         gradient.
     density
-        The backend's lowering of *problem*: a **pure jax function** of the
-        unconstrained free vector returning the log density, change of
-        variables included. On the jax backend that is
-        ``ampere.backends.jax.lower_problem(problem).log_prob_unconstrained``.
-        See this module's docstring for why it is an argument.
+        Optional. The backend's lowering of *problem*: a **pure jax function**
+        of the unconstrained free vector returning the log density, change of
+        variables included. **Omitted, it is obtained through
+        ``ampere.core.realise(problem)``** — the backend's registered
+        realisation (W2.13 prototype), which importing ``ampere.backends.jax``
+        registers; this driver still imports no backend. Passing one
+        explicitly remains possible (a user's own lowering, or a test), in
+        which case it is checked against the contract path at one point here.
     cache_size
         See :class:`~ampere.inference.engine.Engine`. Note that this driver's
         cache is only ever populated by its start-point search, since the
@@ -127,7 +131,7 @@ class NUTSEngine(Engine):
     Examples
     --------
     >>> import numpy as np, scipy.stats as st, astropy.units as u
-    >>> from ampere.backends.jax import PowerLaw, configure_x64, lower_problem
+    >>> from ampere.backends.jax import PowerLaw, configure_x64
     >>> from ampere.core import Dataset, FittingProblem, Spectrum
     >>> from ampere.inference import NUTSEngine
     >>> configure_x64()
@@ -143,10 +147,7 @@ class NUTSEngine(Engine):
     ...     PowerLaw(grid, norm=st.norm(2.0, 0.5), index=-1.0), [Dataset(observed)],
     ...     seed=20260907,
     ... )
-    >>> lowered = lower_problem(problem)
-    >>> run = NUTSEngine(problem, lowered.log_prob_unconstrained).run(
-    ...     draws=300, warmup=300, chains=2
-    ... )
+    >>> run = NUTSEngine(problem).run(draws=300, warmup=300, chains=2)
     >>> run["posterior"]["model.norm"].shape
     (2, 300)
     >>> run.attrs["ampere_engine"], run.attrs["ampere_backend"]
@@ -162,17 +163,17 @@ class NUTSEngine(Engine):
     def __init__(
         self,
         problem: FittingProblem,
-        density: Callable[[Any], Any],
+        density: Callable[[Any], Any] | None = None,
         *,
         cache_size: int = DEFAULT_CACHE_SIZE,
     ) -> None:
         if problem.backend not in SUPPORTED_BACKENDS:
             raise EngineError(
-                f"{self.NAME} cannot sample a problem on the {problem.backend!r} backend: it "
-                f"needs a traceable, differentiable log-density, and only "
-                f"{sorted(SUPPORTED_BACKENDS)} supply one. Build the model and instrument steps "
-                f"from ampere.backends.jax, or use a gradient-free engine (emcee, dynesty, zeus), "
-                f"which run every backend."
+                f"{self.NAME} cannot sample a problem on the {problem.backend!r} backend: this "
+                f"driver runs numpyro's sampler, which needs a jax-traceable log-density, and "
+                f"only {sorted(SUPPORTED_BACKENDS)} supply one. Build the model and instrument "
+                f"steps from ampere.backends.jax, or use a gradient-free engine (emcee, dynesty, "
+                f"zeus), which run every backend."
             )
         if not problem.differentiable:
             raise EngineError(
@@ -182,10 +183,27 @@ class NUTSEngine(Engine):
                 f"enough to make the whole chain non-differentiable — "
                 f"problem.capabilities says which pieces were consulted."
             )
+        if density is None:
+            # W2.13 prototype: the backend's own realisation, reached through
+            # ampere.core rather than by importing the backend -- ``realise``
+            # dispatches on problem.backend and has already checked agreement
+            # with the contract path at the reference point.
+            try:
+                realised = realise(problem)
+            except LoweringError as error:
+                raise EngineError(
+                    f"{self.NAME} could not obtain a differentiable density for this problem: "
+                    f"{error}"
+                ) from error
+            density = realised.log_prob_unconstrained
+            super().__init__(problem, cache_size=cache_size)
+            self.density = density
+            return
         if not callable(density):
             raise EngineError(
                 f"{self.NAME} takes the backend's lowering of the problem as a callable of the "
-                f"unconstrained vector, got {density!r}. On the jax backend that is "
+                f"unconstrained vector, got {density!r}. Omit it to use the backend's registered "
+                f"realisation (ampere.core.realise), or on the jax backend pass "
                 f"ampere.backends.jax.lower_problem(problem).log_prob_unconstrained."
             )
         super().__init__(problem, cache_size=cache_size)

@@ -299,6 +299,50 @@ class TestAgreementWithTheClosedForm:
 # ---------------------------------------------------------------------------
 
 
+class TestTheRegisteredRealisation:
+    """W2.13 prototype: the density comes through ``ampere.core.realise``.
+
+    Importing ``ampere.backends.jax`` registered the jax realisation; the
+    driver asks core for it and never imports the backend itself.
+    """
+
+    def test_importing_the_backend_registered_its_realisation(self) -> None:
+        from ampere.core import registered_realisations
+
+        assert registered_realisations().get("jax") is True
+
+    def test_the_driver_needs_no_density_argument(self) -> None:
+        problem = agreement_problem()
+        engine = NUTSEngine(problem)
+        reference = problem.unconstrain(problem.reference_values)
+        assert float(np.asarray(engine.density(reference))) == pytest.approx(
+            float(problem.log_prob_unconstrained(reference))
+        )
+
+    def test_the_registered_route_samples_the_same_posterior(self) -> None:
+        # Two problems with one seed, as TestReproducibility does: every
+        # stream comes from the problem's seed, so the only difference between
+        # the two runs is where the density came from -- and there is none.
+        explicit = sample(agreement_problem(SEED), draws=30, warmup=30, chains=1)
+        registered = NUTSEngine(agreement_problem(SEED)).run(draws=30, warmup=30, chains=1)
+        assert np.asarray(registered["posterior"]["model.norm"]) == pytest.approx(
+            np.asarray(explicit["posterior"]["model.norm"]), abs=0.0
+        )
+
+    def test_a_backend_without_a_realisation_is_refused_by_name(self) -> None:
+        problem = agreement_problem()
+        from ampere.core import realisation as registry
+
+        saved = dict(registry._REALISATIONS)
+        try:
+            registry._REALISATIONS.clear()
+            with pytest.raises(EngineError, match="no realisation is registered"):
+                NUTSEngine(problem)
+        finally:
+            registry._REALISATIONS.clear()
+            registry._REALISATIONS.update(saved)
+
+
 class TestRefusals:
     def test_a_problem_on_another_backend_is_refused_by_name(self) -> None:
         problem = FittingProblem(

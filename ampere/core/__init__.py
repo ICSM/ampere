@@ -98,6 +98,13 @@ from .lowering import (
     registered_lowerings,
     run_registrant_battery,
 )
+from .realisation import (
+    Realisation,
+    RealisationFactory,
+    realise,
+    register_realisation,
+    registered_realisations,
+)
 from .parameter import (
     SEPARATOR,
     Bijection,
@@ -239,6 +246,8 @@ __all__ = [
     "Prior",
     "PriorSpec",
     "QuasisepGP",
+    "Realisation",
+    "RealisationFactory",
     "RiceFamily",
     "SchemaError",
     "Simulation",
@@ -269,10 +278,13 @@ __all__ = [
     "prior_from_spec",
     "propagate_mask",
     "provenance_entries",
+    "realise",
     "register_bijection_lowering",
     "register_family",
     "register_lowering",
+    "register_realisation",
     "registered_lowerings",
+    "registered_realisations",
     "run_registrant_battery",
     "substream",
 ]

@@ -83,6 +83,14 @@ from .noise import FractionalModelGPNoise, FractionalModelNoise
 from .parameters import LoweredParameterSet, LoweringFallbackWarning, filter_spec
 from .problem import LoweredProblem, lower_problem
 
+# W2.13 prototype: importing this package is the user's opt-in to jax, and it
+# is also the moment the jax realisation becomes reachable through
+# ``ampere.core.realise`` -- which is how ``ampere.inference``'s gradient-based
+# drivers get a differentiable density without importing a backend.
+from ampere.core import register_realisation as _register_realisation
+
+_register_realisation(BACKEND, lower_problem, builtin=True)
+
 __all__ = [
     "BACKEND",
     "COORDINATE_UNIT",

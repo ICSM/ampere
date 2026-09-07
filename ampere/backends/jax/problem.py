@@ -317,6 +317,11 @@ class LoweredProblem:
         self._datasets = tuple(_LoweredDataset(problem, label) for label in problem.datasets)
 
     @property
+    def backend(self) -> str:
+        """This backend's one name — what ``ampere.core.realise`` checks against the problem's."""
+        return BACKEND
+
+    @property
     def free_size(self) -> int:
         return self.parameters.free_size
 
