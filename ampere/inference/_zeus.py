@@ -91,8 +91,10 @@ class ZeusEngine(Engine):
         :class:`~ampere.inference.EmceeEngine` (even, at least ``2 x n_dim``).
     moves
         Passed to ``zeus.EnsembleSampler`` unchanged.
-    backend, cache_size
-        See :class:`~ampere.inference.engine.Engine`.
+    cache_size
+        See :class:`~ampere.inference.engine.Engine`. There is no ``backend=``:
+        W2.12 made the backend §4.5's fourth capability flag, read off the
+        problem's own pieces.
     **sampler_settings
         Anything else ``zeus.EnsembleSampler`` takes — ``tune``, ``tolerance``,
         ``maxsteps``, ``maxiter``, ``mu`` — forwarded untouched. ampere has no
@@ -143,12 +145,18 @@ class ZeusEngine(Engine):
         *,
         walkers: int | None = None,
         moves: Any = None,
-        backend: str = "reference",
         cache_size: int = DEFAULT_CACHE_SIZE,
         **sampler_settings: Any,
     ) -> None:
+        if "backend" in sampler_settings:
+            raise EngineError(
+                "zeus takes no backend= setting, and neither does this driver any more: since "
+                "W2.12 the backend is a capability flag the problem's own models and "
+                "transformations declare, so ampere_backend is derived rather than asserted. "
+                "Drop the argument; compose the problem from the backend you meant instead."
+            )
         self._zeus = _require_zeus()
-        super().__init__(problem, backend=backend, cache_size=cache_size)
+        super().__init__(problem, cache_size=cache_size)
         chosen = _default_walkers(problem.free_size) if walkers is None else int(walkers)
         self.walkers = _check_ensemble(self.NAME, chosen, problem.free_size)
         self.moves = moves

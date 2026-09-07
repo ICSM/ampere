@@ -137,7 +137,10 @@ The run is the ArviZ format, with the per-draw split every run stores:
 >>> sorted(run["sample_stats"].dataset.data_vars)
 ['failed', 'failure_reason', 'failure_where', 'log_likelihood', 'log_prior', 'lp']
 
-and it knows what it was a run of:
+and it knows what it was a run of. ``ampere_backend`` is *derived*, not
+declared: since W2.12 the backend is §4.5's fourth capability flag, so this
+hand-written model's own ``Model.BACKEND`` default is what put ``'reference'``
+there, and no driver takes a ``backend=`` argument to say otherwise.
 
 >>> run.attrs["ampere_engine"], run.attrs["ampere_backend"]
 ('emcee', 'reference')

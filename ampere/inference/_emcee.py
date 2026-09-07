@@ -41,12 +41,13 @@ class EmceeEngine(Engine):
     moves
         Passed to ``emcee.EnsembleSampler`` unchanged — ampere has no opinion
         about the move mixture and does not interpose one.
-    backend, cache_size
-        See :class:`~ampere.inference.engine.Engine`. Note that ``backend``
-        here is ampere's provenance record of which rung of the capability
-        ladder ran, **not** emcee's own ``backend=`` (its HDF5 store), which
-        this driver does not use: the run is emitted as an ArviZ ``DataTree``
-        through ``ampere.results``, which is the single results format.
+    cache_size
+        See :class:`~ampere.inference.engine.Engine`. Note that this driver
+        takes no ``backend=`` at all — neither ampere's (W2.12 made that
+        §4.5's fourth capability flag, read off the problem) nor emcee's own
+        (its HDF5 store), which this driver does not use: the run is emitted
+        as an ArviZ ``DataTree`` through ``ampere.results``, which is the
+        single results format.
 
     Examples
     --------
@@ -81,10 +82,9 @@ class EmceeEngine(Engine):
         *,
         walkers: int | None = None,
         moves: Any = None,
-        backend: str = "reference",
         cache_size: int = DEFAULT_CACHE_SIZE,
     ) -> None:
-        super().__init__(problem, backend=backend, cache_size=cache_size)
+        super().__init__(problem, cache_size=cache_size)
         chosen = _default_walkers(problem.free_size) if walkers is None else int(walkers)
         self.walkers = _check_ensemble(self.NAME, chosen, problem.free_size)
         self.moves = moves

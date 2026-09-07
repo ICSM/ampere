@@ -159,6 +159,12 @@ class _CountingModel(_SpectralModel):
     override rather than a flag on the installed class.
     """
 
+    #: W2.12 item 4: every part a fixture composes declares the fixture's own
+    #: ``name`` as its backend, so the row asserting ``problem.backend ==
+    #: backend.name`` is a real assertion. Stated here rather than inherited
+    #: from ``Model`` so that the tie to :data:`BACKEND` is visible.
+    BACKEND: ClassVar[str] = "reference"
+
     def __init__(self, spec: ModelSpec, **kwargs: Any) -> None:
         super().__init__(spec.coordinates, channels=spec.channels, **kwargs)
         self.spec = spec
@@ -245,6 +251,8 @@ class Photometry(Transformation):
 
     ACCEPTS: ClassVar[tuple[type, ...]] = (Spectrum,)
     PRODUCES: ClassVar[type] = PhotometricPoints
+    #: W2.12 item 4, as on :class:`_CountingModel`.
+    BACKEND: ClassVar[str] = "reference"
 
     def __init__(self, target: Any, filters: Any, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -319,7 +327,11 @@ _KERNELS = {KernelFamily.MATERN32: Matern32, KernelFamily.SQUARED_EXPONENTIAL: S
 
 
 class ReferenceBackend:
-    """The first fixture: the shipped ``ampere.backends.reference`` package."""
+    """The first fixture: the shipped ``ampere.backends.reference`` package.
+
+    Its ``name`` is the shipped backend's own ``BACKEND`` string, and W2.12
+    fixed that these are the same thing: one name per backend, everywhere.
+    """
 
     name = "reference"
     capabilities = BackendCapabilities(

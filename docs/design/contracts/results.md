@@ -575,6 +575,28 @@ component's declaration instead of the whole run's — which would quietly break
 every property below and Phase 5's "may these two archived fits be reweighted
 together?".
 
+**The backend is derived, not declared** *(W2.12, decided by Fable 2026-09-07;
+the decision-log row is in `DEVELOPMENT_PLAN.md` §2)*. `ampere_backend` used to
+be whatever the engine driver was told to write down — `Engine(problem,
+backend=...)` — which made it a claim rather than a record, and would have let
+two lockstep backend tracks each invent their own spelling. The backend is now
+`inference.md`'s **fourth capability flag**: models and transformations declare
+`BACKEND` beside `DIFFERENTIABLE`/`BATCHABLE`/`DEVICE`, `declared_capabilities`
+aggregates it by the device rule (all parts agree, or it raises), and
+`provenance_attrs` reads it off `problem.capabilities`. `backend=` survives as
+an optional **cross-check**: an explicit value that disagrees with the problem
+raises rather than being recorded, because writing it down would be writing
+down a falsehood and silently preferring either side would hide a real
+configuration mistake. It is one name per backend everywhere — the same string
+`lowering.md` §12.8's registry is keyed on, and the same string that ids that
+backend's conformance fixture.
+
+The same change put a `backend` key into `Capabilities.to_dict()`, so the
+`ampere_capabilities` payload changed shape and **`PROVENANCE_SCHEMA_VERSION`
+is now 4**, per the rule below. `capabilities` is not an input to
+`problem_fingerprint` — but the schema constant is, so every
+`ampere_problem_hash` moved at this bump exactly as at the previous ones.
+
 **Failures travel.** `ampere_failure_counts` is the unbounded count per
 `FailureReason`; `ampere_failures` is the bounded history, each entry
 `Failure.to_dict()`. `inference.md` limitation 17.7 notes that the history is
@@ -727,6 +749,10 @@ cache key with `Redden(law="f99")`, which was limitation 13 of §13. The payload
 must be normalisable by the recipe above; anything else is refused when the hash
 is taken, rather than silently omitted. Because adding a key changes every
 `ampere_problem_hash`, this rode a `PROVENANCE_SCHEMA_VERSION` bump to 3.
+*(And then to 4 at W2.12, when `Capabilities.to_dict()` gained its `backend`
+key — see §9. Adding a key to the recorded `capabilities` payload does not
+change the fingerprint's inputs, but the schema constant is one of them, so the
+hash values moved anyway.)*
 
 Two smaller consequences, recorded rather than left implicit: `describe` is now
 a class attribute of `Parameterised`, so it joins `parameters`, `buffers` and

@@ -591,6 +591,9 @@ class TestProvenanceAttrs:
             "differentiable": False,
             "batchable": False,
             "device": "cpu",
+            # W2.12's fourth flag. Adding this key is what bumped
+            # PROVENANCE_SCHEMA_VERSION to 4.
+            "backend": "reference",
         }
 
     def test_component_spec_hashes_locate_the_change(self) -> None:
@@ -1552,3 +1555,43 @@ class TestModelIdentity:
     def test_the_schema_version_records_the_change(self) -> None:
         """Adding a fingerprint key changes every problem hash, so it rides a bump."""
         assert PROVENANCE_SCHEMA_VERSION >= 3
+
+
+class TestTheBackendIsDerived:
+    """W2.12: ``ampere_backend`` is a fact about the problem, not a claim.
+
+    The backend joined ``differentiable``/``batchable``/``device`` as §4.5's
+    fourth capability flag, so the problem's pieces declare it and this module
+    reads it off them. ``backend=`` survives only as a cross-check.
+    """
+
+    def test_it_is_read_off_the_problem_by_default(self) -> None:
+        attrs = provenance_attrs(joint_problem(), engine="emcee")
+        assert attrs["ampere_backend"] == joint_problem().backend == "reference"
+
+    def test_an_agreeing_explicit_value_is_accepted(self) -> None:
+        attrs = provenance_attrs(joint_problem(), backend="reference")
+        assert attrs["ampere_backend"] == "reference"
+
+    def test_a_disagreeing_explicit_value_raises_rather_than_being_recorded(self) -> None:
+        # Recording it would be recording a falsehood, and silently preferring
+        # either side would hide a real configuration mistake.
+        with pytest.raises(ResultsError) as excinfo:
+            provenance_attrs(joint_problem(), backend="torch")
+        message = str(excinfo.value)
+        assert "'torch'" in message and "'reference'" in message
+
+    def test_emit_refuses_the_same_disagreement(self) -> None:
+        pytest.importorskip("arviz")
+        problem = joint_problem()
+        draws = np.zeros((1, 1, problem.free_size))
+        evaluations = [[problem.evaluate(draws[0, 0])]]
+        with pytest.raises(ResultsError, match="'jax'"):
+            emit(problem, draws, evaluations, engine="emcee", backend="jax")
+
+    def test_the_capabilities_payload_carries_the_fourth_flag(self) -> None:
+        # This key is what bumped PROVENANCE_SCHEMA_VERSION to 4: the shape of
+        # ampere_capabilities changed, so schema-3 artefacts are not comparable.
+        payload = json.loads(provenance_attrs(joint_problem())["ampere_capabilities"])
+        assert payload["backend"] == "reference"
+        assert PROVENANCE_SCHEMA_VERSION == 4

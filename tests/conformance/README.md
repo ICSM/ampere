@@ -42,13 +42,24 @@ Seven members.
 The pytest fixture id. Short, lower-case, stable across runs — it appears in
 every test id and in cross-backend row names (`reference-vs-mirror`).
 
+**It is also the backend's name in the sense W2.12 fixed**: one name per
+backend, everywhere. Every model and instrument step this fixture builds must
+declare `BACKEND` equal to this string, because `TestBackendIdentity` in
+`test_inference.py` asserts that a composed problem reports it — and because
+that is the same string `lowering.md` §12.8's registry is keyed on and the same
+string a run records as `ampere_backend`. A fixture that reuses another
+backend's classes must subclass to change the declaration (`MirrorResample` and
+its siblings are the worked example); reusing them under a different fixture
+name would make the row a tautology and would put a name in provenance that
+nothing else in the project answers to.
+
 ### `capabilities: BackendCapabilities`
 
 A frozen record:
 
 | field | meaning |
 |---|---|
-| `differentiable`, `batchable`, `device` | the three flags `inference.md` §18 says a backend declares. Mirror `ampere.core.Capabilities`. |
+| `differentiable`, `batchable`, `device` | three of the four flags `inference.md` §18 says a backend declares. Mirror `ampere.core.Capabilities`. The fourth, `backend`, is not repeated here: it *is* `name` above. |
 | `float64` | whether the likelihood linear algebra runs in double precision. `architecture.md` §5 makes float64 the policy for GP solves; a backend that opts out for GPU throughput says so here and widens `tolerances.cross_backend`. |
 | `solvers` | the `SolverKind`s `gp_solver` can return an *implemented* solver for. Rows for absent kinds skip with a reason naming what is owed. |
 | `tolerances` | the per-comparison table (§3). |

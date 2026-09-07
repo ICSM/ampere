@@ -1246,6 +1246,14 @@ crashing, which is the criterion for needing a mechanical check.
    hook's documentation states that as a rule. The plumbing is Phase 2's,
    beside the backends that consume it.
 
+   ***Amended W2.12:*** the `backend` this registry is keyed on is the
+   backend's **one name everywhere** — the `BACKEND` capability flag its
+   models and transformations declare (`inference.md`'s capability-flags
+   section), the `backend` a composed `FittingProblem` reports, the
+   `ampere_backend` in a run's provenance, and the `name` of that backend's
+   conformance fixture. There is no translation table between them, and a
+   backend wanting two spellings would be introducing one.
+
    ***Landed W2.6:*** `ampere.core.lowering` — `register_lowering`/
    `lookup_lowering` for prior families and `register_bijection_lowering`/
    `lookup_bijection_lowering` for the bijection slot, sharing one

@@ -186,6 +186,11 @@ class BlackBody(_SpectralModel):
         :class:`~ampere.core.Spectrum` appears under.
     """
 
+    #: The fourth capability flag (W2.12), declared rather than inherited:
+    #: this class is part of the reference backend, and every piece of the
+    #: backend says so for itself.
+    BACKEND: ClassVar[str] = "reference"
+
     def __init__(
         self,
         wavelength: Any,
@@ -227,6 +232,9 @@ class ModifiedBlackBody(_SpectralModel):
     channels
         Name (or names) of the emitted channel.
     """
+
+    #: The fourth capability flag (W2.12), declared rather than inherited.
+    BACKEND: ClassVar[str] = "reference"
 
     def __init__(
         self,
@@ -275,6 +283,9 @@ class PowerLaw(_SpectralModel):
     channels
         Name (or names) of the emitted channel.
     """
+
+    #: The fourth capability flag (W2.12), declared rather than inherited.
+    BACKEND: ClassVar[str] = "reference"
 
     def __init__(
         self,

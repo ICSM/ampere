@@ -119,7 +119,14 @@ __all__ = [
 #: ``results.md`` §13.13's cache-key hole, and ``ampere_model_identity_hashes``
 #: joined the recorded attributes. Both change ``ampere_problem_hash`` values,
 #: so old artefacts are invalidated rather than silently reused.
-PROVENANCE_SCHEMA_VERSION = 3
+#: 4 (W2.12): the backend became §4.5's fourth capability flag, so
+#: ``Capabilities.to_dict()`` — and with it the ``ampere_capabilities``
+#: payload — gained a ``backend`` key, and ``ampere_backend`` changed meaning
+#: from a caller's declaration to a fact derived from the problem's pieces.
+#: ``capabilities`` is not itself an input to ``problem_fingerprint``, but
+#: this constant is, so ``ampere_problem_hash`` values differ from schema 3's
+#: as they did at every previous bump.
+PROVENANCE_SCHEMA_VERSION = 4
 
 #: Every attribute this module writes starts with this, so ampere's provenance
 #: never collides with ArviZ's own (``created_at``, ``creation_library``, ...)
@@ -577,7 +584,7 @@ def provenance_attrs(
     problem: FittingProblem,
     *,
     engine: str | None = None,
-    backend: str = "reference",
+    backend: str | None = None,
     extra: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     """The ``ampere_*`` attributes every emitted run carries.
@@ -596,7 +603,13 @@ def provenance_attrs(
     engine
         The sampler or optimiser that produced the draws, e.g. ``"emcee"``.
     backend
-        Which rung of the capability ladder executed it.
+        Which rung of the capability ladder executed it. **Optional since
+        W2.12**, and normally omitted: the backend is §4.5's fourth capability
+        flag, so ``problem.backend`` already knows, and ``ampere_backend`` is
+        therefore a fact about the problem rather than a claim by the caller.
+        Passing a value that disagrees with the problem raises: recording it
+        would be recording a falsehood, and silently preferring one of the two
+        would hide a real configuration mistake.
     extra
         Further entries, JSON-normalised and prefixed like the rest. Use it for
         engine-specific settings (step size, number of live points).
@@ -645,13 +658,22 @@ def provenance_attrs(
     >>> provenance_attrs(shifted)["ampere_data_hash"] == attrs["ampere_data_hash"]
     False
     """
+    declared = problem.capabilities.backend
+    if backend is not None and str(backend) != declared:
+        raise ResultsError(
+            f"this run was told it ran on backend {str(backend)!r}, but the problem's pieces "
+            f"declare {declared!r}. Since W2.12 the backend is a capability flag rather than "
+            f"something a caller asserts, so ampere_backend is a fact and there is nothing to "
+            f"reconcile here: drop the backend= argument, or compose the problem from the "
+            f"backend you meant (or pass capabilities=Capabilities(backend=...) to it)."
+        )
     data_hashes = {
         label: hash_container(problem.datasets[label].observed) for label in problem.datasets
     }
     hashes = spec_hashes(problem)
     attrs: dict[str, Any] = {
         "schema_version": PROVENANCE_SCHEMA_VERSION,
-        "backend": backend,
+        "backend": declared,
         "engine": "" if engine is None else str(engine),
         "library_versions": canonical_json(package_versions()),
         "spec_hash": hashes["spec"],

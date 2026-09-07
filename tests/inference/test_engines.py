@@ -386,6 +386,8 @@ class TestProvenance:
     def test_the_run_says_what_produced_it(self, engine: str, joint_runs: dict[str, Any]) -> None:
         attrs = joint_runs[engine].attrs
         assert attrs["ampere_engine"] == engine
+        # W2.12: derived from the problem's own pieces, not declared by the
+        # driver -- ampere_backend is a fact about the run.
         assert attrs["ampere_backend"] == "reference"
         assert attrs["ampere_seed"] == SEED
         assert attrs["ampere_seed_source"] == "explicit"
@@ -429,6 +431,59 @@ class TestProvenance:
             for name in ENGINES
         }
         assert len(set(hashes.values())) == 1
+
+
+class TestBackendIdentity:
+    """W2.12: the driver reads the backend off the problem and cannot assert one.
+
+    Before W2.12 ``Engine(problem, backend=...)`` declared it, so
+    ``ampere_backend`` recorded whatever the caller typed. The argument is gone
+    (pre-release, so no shim), and the flag is aggregated from what the models
+    and instrument steps declare.
+    """
+
+    @pytest.mark.parametrize("engine", ENGINES)
+    def test_a_driver_refuses_a_declared_backend(self, engine: str) -> None:
+        # emcee and dynesty simply have no such keyword, so Python refuses it.
+        # zeus forwards **sampler_settings to its sampler, which would have
+        # swallowed the name silently, so it refuses explicitly and says why.
+        with pytest.raises((TypeError, EngineError), match="backend"):
+            FACTORIES[engine](joint_problem(), backend="torch")
+
+    @pytest.mark.parametrize("engine", ENGINES)
+    def test_the_driver_reports_what_the_problem_declares(self, engine: str) -> None:
+        problem = joint_problem()
+        assert FACTORIES[engine](problem).backend == problem.backend == "reference"
+
+    def test_the_emitted_attrs_follow_the_problem_not_the_driver(self) -> None:
+        # A problem whose pieces declare a different backend emits that one,
+        # with nothing said anywhere in the driver: the derivation is the whole
+        # mechanism.
+        class NativeCalibrationScale(CalibrationScale):
+            BACKEND = "mirror"
+
+        class NativePowerLaw(PowerLaw):
+            BACKEND = "mirror"
+
+        model = NativePowerLaw(
+            FINE,
+            norm=st.lognorm(0.4, scale=2.0),
+            index=st.norm(-1.2, 0.3),
+            reference_wavelength=REFERENCE_WAVELENGTH,
+        )
+        problem = FittingProblem(
+            model,
+            [
+                Dataset(
+                    BLUE_DATA,
+                    Instrument([NativeCalibrationScale(st.lognorm(0.05), label="calibration")]),
+                )
+            ],
+            seed=SEED,
+        )
+        assert problem.backend == "mirror"
+        run = EmceeEngine(problem, walkers=8).run(steps=20, burn_in=5)
+        assert run.attrs["ampere_backend"] == "mirror"
 
 
 class TestNetcdfRoundTrip:

@@ -81,6 +81,50 @@ def joint(backend: ConformanceBackend) -> FittingProblem:
     return build_problem(backend, JOINT)
 
 
+class TestBackendIdentity:
+    """W2.12 item 4: one name per backend, everywhere.
+
+    The string a backend's models and transformations declare as ``BACKEND``
+    is the same string as its conformance fixture's ``name``, the same string
+    ``lowering.md`` §12.8's registry is keyed on, and the same string a run's
+    ``ampere_backend`` carries. A fixture whose parts declared anything else
+    would be composing a problem that reports a backend nobody can look up.
+    """
+
+    def test_a_composed_problem_reports_this_fixture_name_as_its_backend(
+        self, backend: ConformanceBackend
+    ) -> None:
+        # Every ProblemSpec in this module, so a fixture cannot pass by
+        # declaring the flag on its models and forgetting its instrument steps.
+        for spec in (SINGLE, JOINT, CORRELATED):
+            problem = build_problem(backend, spec)
+            assert problem.backend == backend.name
+            assert problem.capabilities.backend == backend.name
+
+    def test_every_part_declares_it_rather_than_inheriting_the_default(
+        self, backend: ConformanceBackend
+    ) -> None:
+        # The point of the row above is lost if it passes because everything
+        # silently inherited "reference": check the parts themselves, which is
+        # what ``declared_capabilities`` reads.
+        problem = build_problem(backend, JOINT)
+        parts = (*problem.models.values(), *problem.datasets.capability_parts)
+        assert parts, "a composed problem with no capability parts proves nothing"
+        assert {part.BACKEND for part in parts} == {backend.name}
+
+    def test_the_declared_flags_match_what_the_fixture_claims(
+        self, backend: ConformanceBackend
+    ) -> None:
+        # The other three flags, checked at the same time and for the same
+        # reason: BackendCapabilities is the fixture's claim about itself, and
+        # the composed problem is what the parts actually declare.
+        problem = build_problem(backend, SINGLE)
+        claimed = backend.capabilities
+        assert problem.differentiable == claimed.differentiable
+        assert problem.batchable == claimed.batchable
+        assert problem.device == claimed.device
+
+
 class TestTheDecomposition:
     """``log_prob``, ``log_prior``, ``log_likelihood`` and ``contributions``."""
 

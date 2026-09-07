@@ -146,12 +146,6 @@ class Engine(abc.ABC):
         The composed :class:`~ampere.core.dataset.FittingProblem`. Its
         ``check_engine`` is called immediately, so a likelihood this class of
         engine cannot run is refused here rather than thousands of draws later.
-    backend
-        Which rung of the capability ladder supplies the problem's models,
-        recorded in the provenance attrs. A driver cannot ask the problem this
-        — no §4 contract has a problem name its backend, and this namespace may
-        not import ``ampere.backends`` to guess — so it is declared, and the
-        default matches the one backend the base install ships.
     cache_size
         Entries in the evaluation cache; see :data:`DEFAULT_CACHE_SIZE`. Zero
         disables it, at the cost of re-evaluating every stored draw.
@@ -214,7 +208,6 @@ class Engine(abc.ABC):
         self,
         problem: FittingProblem,
         *,
-        backend: str = "reference",
         cache_size: int = DEFAULT_CACHE_SIZE,
     ) -> None:
         if problem.free_size == 0:
@@ -227,12 +220,24 @@ class Engine(abc.ABC):
         # against a gradient-free engine (inference.md §10).
         problem.check_engine(self.NAME, differentiable=self.OFFERS_GRADIENTS)
         self.problem = problem
-        self.backend = str(backend)
         self.sampler: Any = None
         self.last_failure_summary: str = ""
         self._cache = _EvaluationCache(problem, cache_size)
 
     # -- the §4.5 surface, and nothing else -----------------------------------
+
+    @property
+    def backend(self) -> str:
+        """Which rung of the capability ladder supplies this problem's pieces.
+
+        Read from the problem, never declared here (W2.12): the backend is
+        §4.5's fourth capability flag, aggregated from what the models and
+        transformations themselves say, so ``ampere_backend`` in the emitted
+        provenance is a fact about the run rather than an assertion by whoever
+        constructed the driver. A driver that disagreed with its problem used
+        to be able to say so and be believed; now it cannot say anything.
+        """
+        return self.problem.backend
 
     def log_prob(self, theta: Any) -> float:
         """log p(θ) + log p(data | θ) — what an MCMC engine's callback wants."""
@@ -363,7 +368,6 @@ class Engine(abc.ABC):
             array,
             evaluations,
             engine=self.NAME,
-            backend=self.backend,
             coords=coords,
             extra_attrs=attrs,
         )

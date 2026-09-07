@@ -705,6 +705,10 @@ class Transformation(Parameterised, abc.ABC):
     BATCHABLE: ClassVar[bool] = False
     #: Device this step's arrays live on: ``"cpu"``, ``"cuda"``, ``"cuda:0"``, ...
     DEVICE: ClassVar[str] = "cpu"
+    #: Backend this step belongs to (the fourth flag, W2.12). ``"reference"``
+    #: is the conservative default: a hand-written numpy step runs on the
+    #: reference path, which is the base install's whole toolkit.
+    BACKEND: ClassVar[str] = "reference"
 
     _label: str
 
@@ -1250,6 +1254,10 @@ class Model(Parameterised, abc.ABC):
     BATCHABLE: ClassVar[bool] = False
     #: Device this model's arrays live on.
     DEVICE: ClassVar[str] = "cpu"
+    #: Backend this model belongs to (the fourth flag, W2.12). ``"reference"``
+    #: is the conservative default: a model written by hand in numpy runs on
+    #: the reference path.
+    BACKEND: ClassVar[str] = "reference"
 
     @abc.abstractmethod
     def evaluate(self, **values: Value) -> Any:

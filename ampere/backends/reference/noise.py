@@ -34,7 +34,7 @@ it, or a number to hold it fixed.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 
@@ -138,6 +138,13 @@ class FractionalModelNoise(IndependentNoise):
     Both arrays are indexed by ``retain``, which is what makes that work.
     """
 
+    #: The fourth capability flag (W2.12). A noise model is not one of
+    #: ``Dataset.capability_parts`` today — only the instrument steps and the
+    #: models are — but every piece the reference backend ships declares which
+    #: backend it belongs to, so the answer is here rather than assumed if the
+    #: set of parts ever widens.
+    BACKEND: ClassVar[str] = "reference"
+
     def __init__(self, f: Any, *, scale: Any = None, jitter: Any = None) -> None:
         super().__init__(scale=scale, jitter=jitter)
         self.register_parameter(as_parameter("f", f))
@@ -182,6 +189,9 @@ class FractionalModelGPNoise(GaussianProcessNoise):
         As for :class:`~ampere.core.GaussianProcessNoise`, applied to the
         data's uncertainties inside the quadrature.
     """
+
+    #: The fourth capability flag (W2.12), declared rather than inherited.
+    BACKEND: ClassVar[str] = "reference"
 
     def __init__(
         self,

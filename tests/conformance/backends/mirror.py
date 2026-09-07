@@ -25,6 +25,15 @@ supply of its own is exactly the two things a real backend owns:
   ``to_spec``/``from_spec`` before delegating, so every parameter row is also
   a serialisation row on this fixture.
 
+Since W2.12 it also supplies **instrument steps of its own**, which it did not
+before. The reason is item 4 of that work item: the backend string is one name
+everywhere, so every part a fixture composes must declare
+``BACKEND == fixture.name``, and the ``test_capabilities`` row that asserts it
+would be a tautology if this fixture composed reference-backend steps under the
+name ``"mirror"``. The steps are one-line subclasses that change the
+declaration and nothing else — the arithmetic is still the reference
+backend's, honestly, because there is nothing different to offer there.
+
 Delete this module the day a real second backend registers, or keep it: it
 costs one fixture and it is the only thing standing between the battery and
 silently degenerating to a single-backend suite again.
@@ -33,27 +42,46 @@ silently degenerating to a single-backend suite again.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, ClassVar
 
 import astropy.units as u
 import numpy as np
 import scipy.stats as st
 
-from ampere.core import Model, Parameter, ParameterSet
+from ampere.backends.reference import CalibrationScale, Resample
+from ampere.core import Model, Parameter, ParameterSet, Transformation
 
-from ..protocol import BackendCapabilities, ModelKind, ModelSpec
-from .reference import ReferenceBackend, _CountingModel
+from ..protocol import (
+    BackendCapabilities,
+    ModelKind,
+    ModelSpec,
+    TransformationKind,
+    TransformationSpec,
+)
+from .reference import Photometry, ReferenceBackend, _CountingModel
+
+#: This fixture's one name, in the sense W2.12 fixed: ``ConformanceBackend.name``,
+#: the ``BACKEND`` every part it composes declares, ``FittingProblem.backend``,
+#: ``ampere_backend`` in a run's provenance, and the key ``lowering.md`` §12.8's
+#: registry would be consulted with. One string, defined once here.
+BACKEND = "mirror"
 
 __all__ = [
+    "BACKEND",
     "MirrorBackend",
+    "MirrorCalibrationScale",
     "MirrorLinearModel",
     "MirrorParameterSpace",
+    "MirrorPhotometry",
     "MirrorPowerLawModel",
+    "MirrorResample",
 ]
 
 
 class MirrorLinearModel(_CountingModel):
     """``offset + slope * x`` by Horner's rule rather than as written."""
+
+    BACKEND: ClassVar[str] = BACKEND
 
     def __init__(self, spec: ModelSpec) -> None:
         super().__init__(spec)
@@ -66,6 +94,8 @@ class MirrorLinearModel(_CountingModel):
 
 class MirrorPowerLawModel(_CountingModel):
     """``norm * (x / x_ref) ** index`` through the logarithm."""
+
+    BACKEND: ClassVar[str] = BACKEND
 
     def __init__(self, spec: ModelSpec) -> None:
         super().__init__(spec)
@@ -129,13 +159,31 @@ class MirrorParameterSpace:
         return self._declaration.lnprior_unconstrained(unconstrained)
 
 
+class MirrorCalibrationScale(CalibrationScale):
+    """The shipped calibration step, declared as this backend's (W2.12)."""
+
+    BACKEND: ClassVar[str] = BACKEND
+
+
+class MirrorResample(Resample):
+    """The shipped resampling step, declared as this backend's (W2.12)."""
+
+    BACKEND: ClassVar[str] = BACKEND
+
+
+class MirrorPhotometry(Photometry):
+    """The battery's kind-changing step, declared as this backend's (W2.12)."""
+
+    BACKEND: ClassVar[str] = BACKEND
+
+
 _MODELS = {ModelKind.LINEAR: MirrorLinearModel, ModelKind.POWER_LAW: MirrorPowerLawModel}
 
 
 class MirrorBackend(ReferenceBackend):
     """The second fixture. Same contracts, different arithmetic."""
 
-    name = "mirror"
+    name = BACKEND
     capabilities = BackendCapabilities(
         differentiable=False,
         batchable=False,
@@ -147,6 +195,13 @@ class MirrorBackend(ReferenceBackend):
 
     def model(self, spec: ModelSpec) -> Model:
         return _MODELS[spec.kind](spec)
+
+    def transformation(self, spec: TransformationSpec) -> Transformation:
+        if spec.kind is TransformationKind.SCALE:
+            return MirrorCalibrationScale(st.lognorm(0.2), label=spec.label)
+        if spec.kind is TransformationKind.REBIN:
+            return MirrorResample(spec.target, label=spec.label)
+        return MirrorPhotometry(spec.target, spec.filters, label=spec.label)
 
     def parameter_space(self, declaration: ParameterSet) -> MirrorParameterSpace:
         return MirrorParameterSpace(declaration)

@@ -448,7 +448,7 @@ def emit(
     evaluations: Sequence[Any],
     *,
     engine: str | None = None,
-    backend: str = "reference",
+    backend: str | None = None,
     coords: Mapping[str, Sequence[Any]] | None = None,
     observed: bool = True,
     extra_attrs: Mapping[str, object] | None = None,
@@ -470,8 +470,13 @@ def emit(
         when there is more than one. ``FittingProblem.evaluate`` produces
         everything needed in one pass, which is why it, and not ``log_prob``,
         is what a driver should call.
-    engine, backend
+    engine
         Recorded in the provenance attrs.
+    backend
+        Also recorded there, but **optional since W2.12** and normally omitted:
+        the backend is §4.5's fourth capability flag, so the problem already
+        knows which one built it. An explicit value that disagrees with the
+        problem raises rather than being written down.
     coords
         Coordinate values for named dimensions, e.g. ``{"objects": labels}`` for
         a plate. A plate routed element by element gets its coordinate from the
