@@ -82,12 +82,12 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
 
 ## ⚡ Pick up here (2026-09-07 session — the two W2.1 rulings landed; backend tracks next)
 
-**In flight (2026-09-07)**: **W2.12 (backend identity on `FittingProblem`)** written at `6862756` and dispatched to an Opus agent (branch `w2.12-backend-identity`, base `6862756`, isolated worktree); Peter's sequencing is W2.12 → then W2.4 and W2.5 in parallel; W2.7/W2.8/W2.9 wait until the backends are ready. On W2.12's return: Fable review, merge, then dispatch the two backend tracks from the merged tip.
+**In flight (2026-09-07)**: **W2.4 (torch)** and **W2.5 (jax)** dispatched in parallel to Opus agents from master's tip after the W2.12 merge (branches `w2.4-torch-backend` and `w2.5-jax-backend`, isolated worktrees; slice 1 each — package, lowering through the registry, declaration forms, icdf fallback, RNG, dtype policy, native model trio + four steps, native `DenseGP`, the registered conformance fixture green, a NUTS driver; `QuasisepGP`/VI/batching are slice 2). Both add to their extras and regenerate `pixi.lock` in a dedicated commit — expect a lockfile collision at the second merge, resolve by regenerating once. On return: Fable review each, merge sequentially, re-run gates in the `torch`, `jax` and `dev` environments. W2.7/W2.8/W2.9 wait until the backends are ready (Peter, 2026-09-07).
 
-**State**: master is at `6862756` (W2.12 item text on top of `8a9534a`), clean, gates green (`pixi run test-all`
-**1344 passed, zero skips**, lint/format/pyrefly clean). Nothing in
-flight, nothing pushed to origin. Peter ruled on 2026-09-07 and both
-rulings are **landed directly on master** (the handoff anticipated this
+**Open ruling for Peter (from W2.12)**: `Dataset.capability_parts` covers the instrument steps and the compiled models only — the likelihood, its family and its noise model contribute nothing to any aggregated flag, so a problem could report `backend="torch"` while its GP solver ran in numpy. Widening the parts set is a §4 change; proposed: widen to include the noise model and the GP solver once W2.4/W2.5 show what a native one declares.
+
+**State**: master has **W2.12 merged** (`53973cc`; the backend is §4.5's fourth capability flag, schema 4 — Peter ratifies at review), clean, gates green (`pixi run test-all` **1368 passed, zero skips**), lint/format/pyrefly clean. Nothing pushed. Earlier the same day (at 1344 tests) Peter ruled on the two
+W2.1 findings and both rulings were **landed directly on master** (the handoff anticipated this
 — small enough to skip a branch): (a) `requests` is declared in
 `[project.dependencies]` on pyphot 2.1.1's behalf (`a02836d`; the
 pyproject comment notes ampere makes no HTTP requests itself and that
@@ -143,8 +143,7 @@ the O(N) route recorded). Nothing pushed to origin.
 **W2.5 (jax)** — Opus, one agent per track, lockstep via the conformance
 suite, per `docs/orchestration.md`. Fold into their dispatch prompts the
 carried findings (all in the W2.2/W2.3 status rows): a backend identity
-on `FittingProblem` wants settling first or early (drivers currently
-*declare* `Engine(..., backend=)`); celerite2 returns quiet NaN where a
+on `FittingProblem` — **done, W2.12**; celerite2 returns quiet NaN where a
 Cholesky raises — every backend's celerite2 path must guard preconditions
 as core now does; the `eqx.partition`/x64-guard/icdf rulings are already
 in the plan §2. Smaller queued items: W2.7/W2.8 (follow W2.2), W2.9
