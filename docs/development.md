@@ -82,7 +82,9 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
 
 ## ⚡ Pick up here (2026-09-07 session — the two W2.1 rulings landed; backend tracks next)
 
-**State**: master is at `8a9534a`, clean, gates green (`pixi run test-all`
+**In flight (2026-09-07)**: **W2.12 (backend identity on `FittingProblem`)** written at `6862756` and dispatched to an Opus agent (branch `w2.12-backend-identity`, base `6862756`, isolated worktree); Peter's sequencing is W2.12 → then W2.4 and W2.5 in parallel; W2.7/W2.8/W2.9 wait until the backends are ready. On W2.12's return: Fable review, merge, then dispatch the two backend tracks from the merged tip.
+
+**State**: master is at `6862756` (W2.12 item text on top of `8a9534a`), clean, gates green (`pixi run test-all`
 **1344 passed, zero skips**, lint/format/pyrefly clean). Nothing in
 flight, nothing pushed to origin. Peter ruled on 2026-09-07 and both
 rulings are **landed directly on master** (the handoff anticipated this
