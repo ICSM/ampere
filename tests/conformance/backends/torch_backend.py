@@ -33,17 +33,18 @@ this fixture returns, so no row in the battery runs numpy arithmetic under the
 The counting wrapper is likewise test-only: ``protocol.py``'s ``CountingModel``
 is the battery's requirement, not something a shipped model should carry.
 
-What this fixture does **not** declare, and why
-------------------------------------------------
-``SolverKind.QUASISEP``. ``ampere.core.QuasisepGP`` is celerite2's numpy solver
-over an exact rank-2 Matérn-3/2 representation (W2.3); the torch equivalent has
-two candidate libraries — GPyTorch's structured solvers and celerite2's own
-torch interface — and ``DEVELOPMENT_PLAN.md`` §6 asks for them to be measured
-against this suite rather than chosen from documentation. That measurement is
-W2.4 slice 2. Until it is made, declaring ``QUASISEP`` and handing back a dense
-solver would satisfy every agreement row and prove nothing, which is exactly
-what ``tests/conformance/README.md`` §6 says the no-fallback row exists to
-catch. So the quasiseparable rows skip here, with a reason naming what is owed.
+``SolverKind.QUASISEP`` is declared since W2.4 slice 2
+------------------------------------------------------
+It was not in slice 1, and the reason it was not is worth keeping: declaring
+``QUASISEP`` and handing back a dense solver would satisfy every agreement row
+and prove nothing, which is what ``tests/conformance/README.md`` §6 says the
+no-fallback row exists to catch. Slice 2 made the measurement
+``DEVELOPMENT_PLAN.md`` §6 asked for — GPyTorch's structured solvers against
+celerite2's compiled kernels — and :class:`~ampere.backends.torch.QuasisepGP`
+is the result: celerite2's semiseparable factorisation under
+``torch.autograd``, exact and differentiable in the hyperparameters. So the
+five rows that skipped here now run, against a solver that really is a
+different recursion from the dense one.
 """
 
 from __future__ import annotations
@@ -64,6 +65,7 @@ from ampere.backends.torch import (
     IndependentNoise,
     Matern32,
     PowerLaw,
+    QuasisepGP,
     Resample,
     SquaredExponential,
     TorchParameterSpace,
@@ -294,8 +296,8 @@ class TorchBackend:
         # architecture.md §5's policy, not a preference: every tensor is built
         # float64 and torch's global default dtype is never touched.
         float64=True,
-        # No QUASISEP: see the module docstring.
-        solvers=frozenset({SolverKind.DENSE}),
+        # Both, since W2.4 slice 2: see the module docstring.
+        solvers=frozenset({SolverKind.DENSE, SolverKind.QUASISEP}),
     )
 
     def model(self, spec: ModelSpec) -> Model:
@@ -318,12 +320,7 @@ class TorchBackend:
         return _KERNELS[spec.family](spec.amplitude, spec.length_scale)
 
     def gp_solver(self, kind: SolverKind) -> GPSolver:
-        if kind is not SolverKind.DENSE:
-            raise NotImplementedError(
-                f"the torch backend declares only {SolverKind.DENSE!r}; {kind!r} is W2.4 slice 2 "
-                f"(GPyTorch vs celerite2's torch interface, measured against this suite)."
-            )
-        return DenseGP()
+        return DenseGP() if kind is SolverKind.DENSE else QuasisepGP()
 
     def independent_noise(self) -> NoiseModel:
         # This backend's own, since W2.13: a noise model is a capability part

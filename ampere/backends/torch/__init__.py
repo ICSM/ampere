@@ -96,15 +96,20 @@ contract path before anyone samples with it. Two things follow:
   pyro's sampler over this backend's realisation, with no density argument and
   no backend import inside ``ampere.inference``.
 
-What slice 2 owes
------------------
-``QuasisepGP`` on the native path (GPyTorch's structured solvers against
-celerite2's torch interface, *measured* against the conformance suite rather
-than chosen from documentation — ``DEVELOPMENT_PLAN.md`` §6), variational
-inference, batching and GPU, the benchmark rows, and widening the realisation
-past W2.13's coverage floor: censoring, latent GPs and the non-Gaussian
-families, each of which :mod:`ampere.backends.torch.problem` refuses by name
-today.
+What slice 2 added
+------------------
+* :class:`QuasisepGP` — exact O(N), differentiable in the kernel
+  hyperparameters, over celerite2's compiled semiseparable kernels wrapped as
+  ``torch.autograd`` functions (:mod:`ampere.backends.torch._celerite`). That
+  is ``DEVELOPMENT_PLAN.md`` §6's deferred library choice, settled by
+  measurement against GPyTorch rather than from documentation; the
+  decision-log row of 2026-09-07 carries the table. It supplies the O(N)
+  ``conditional_loo`` recursion W2.3 deferred, too.
+
+Still owed by slice 2: the prediction-aware noise models, a realisation
+widened past W2.13's coverage floor (censoring, latent GPs, the non-Gaussian
+families and the quasiseparable solver inside the density), variational
+inference, and batching/device.
 
 Examples
 --------
@@ -131,7 +136,7 @@ The tensor entry point is the same computation with the graph intact:
 from __future__ import annotations
 
 from ._config import BACKEND, DEFAULT_DEVICE, DEFAULT_DTYPE, as_tensor, to_numpy
-from .gp import DenseGP, Matern32, SquaredExponential
+from .gp import DenseGP, Matern32, QuasisepGP, SquaredExponential
 from .instrument import (
     DETECTORS,
     CalibrationScale,
@@ -190,6 +195,7 @@ __all__ = [
     "Matern32",
     "ModifiedBlackBody",
     "PowerLaw",
+    "QuasisepGP",
     "Resample",
     "SquaredExponential",
     "SyntheticPhotometry",
