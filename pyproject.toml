@@ -299,7 +299,15 @@ format-check = "ruff format --check . --exclude tests/characterisation"
 # ampere/inference ampere/results` errors ("No Python files matched
 # pattern ...") when a given directory is missing, so this must check
 # which of the four exist and exit 0 cleanly when none do.
-typecheck = "bash -c 'dirs=\"\"; for d in ampere/core ampere/backends ampere/inference ampere/results; do [ -d \"$d\" ] && dirs=\"$dirs $d\"; done; if [ -z \"$dirs\" ]; then echo \"typecheck: none of ampere/{core,backends,inference,results} exist yet -- nothing to check\"; else pyrefly check $dirs; fi'"
+# W2.5: it must also check which of them can be *imported*. A backend
+# subpackage is the one place in ampere that imports its array library at
+# module top level (architecture.md §4 rule 2), so `ampere/backends/jax`
+# in the `dev` environment -- which deliberately has no jax -- is a pile of
+# unresolvable imports rather than a pile of type errors. Excluding a
+# backend whose library is absent keeps the daily-use gate meaningful
+# instead of permanently red, and the backend is still checked in the
+# environment that has its dependencies: `pixi run -e jax typecheck`.
+typecheck = "bash -c 'dirs=\"\"; excludes=\"\"; for d in ampere/core ampere/backends ampere/inference ampere/results; do [ -d \"$d\" ] && dirs=\"$dirs $d\"; done; for b in torch jax; do if [ -d \"ampere/backends/$b\" ] && ! python -c \"import $b\" >/dev/null 2>&1; then echo \"typecheck: skipping ampere/backends/$b -- $b is not installed here; run pixi run -e $b typecheck\"; excludes=\"$excludes --project-excludes=ampere/backends/$b/**\"; fi; done; if [ -z \"$dirs\" ]; then echo \"typecheck: none of ampere/{core,backends,inference,results} exist yet -- nothing to check\"; else pyrefly check $excludes $dirs; fi'"
 docs = "sphinx-build -b html docs/source docs/_build/html"
 
 # --- One feature per Python interpreter, driving the CI matrix (W0.3
@@ -397,4 +405,12 @@ sbi = { features = ["py313", "dev", "zeus", "extinction", "sbi"] }
 # just prove the torch/jax extras solve and stay installable until a real
 # backend lands and needs them for something).
 torch = { features = ["py313", "dev", "torch"] }
-jax = { features = ["py313", "dev", "jax"] }
+# W2.5: `zeus`, `extinction` and `netcdf` alongside `jax`, so this
+# environment is `dev` plus the backend rather than a narrower thing. Both
+# reasons are about the gates meaning the same in both places:
+# `pixi run -e jax typecheck` would otherwise report
+# `ampere/inference/_zeus.py`'s lazy `import zeus` as unresolvable and
+# never reach a real finding, and `pixi run -e jax test-all` would
+# silently skip the zeus engine rows and the second-netCDF-engine row, so
+# a count taken here would not be comparable with one taken in `dev`.
+jax = { features = ["py313", "dev", "jax", "zeus", "extinction", "netcdf"] }
