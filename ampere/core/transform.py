@@ -941,8 +941,18 @@ class Instrument:
         # Chain-internal negotiation (ruled 2026-09-03, §15 Q2 — gap I-3):
         # each step reads its successors' declarations once, here, before the
         # hot loop. The default configure_from is a no-op.
-        for position, step in enumerate(self.steps):
-            step.configure_from(self.steps[position + 1 :])
+        #
+        # Last step first (ruled 2026-09-07): a step's declarations may
+        # themselves depend on what *its* successors asked for — a convolution
+        # publishes nothing until it has learned the range downstream of it,
+        # and then publishes that range padded. Configuring in forward order
+        # handed each step successors that had not been configured yet, so a
+        # convolution before another convolution read only the resampler's
+        # range and never the second kernel's padding: chained same-axis
+        # convolutions were under-padded. Walking the chain from the end
+        # guarantees every step reads successors in their final state.
+        for position in reversed(range(len(self.steps))):
+            self.steps[position].configure_from(self.steps[position + 1 :])
 
         self._frozen_mapping: ParameterMapping | None = None
         self._frozen_declarations: tuple[tuple[str, tuple[int, ...]], ...] | None = None

@@ -1158,6 +1158,54 @@ class TestFreezeAndConfigureFrom:
         )
         assert seen == {"first": ("second", "third"), "second": ("third",), "third": ()}
 
+    def test_configure_from_runs_last_step_first(self) -> None:
+        """Regression (ruled 2026-09-07): successors are configured before a step reads them.
+
+        A step's declarations may depend on its own successors' — the reference
+        backend's LSF publishes the range downstream of it, padded. In forward
+        order the step before such a step read it *unconfigured* and so missed
+        its padding; chained same-axis convolutions were under-padded. The
+        backend suite has the convolution case; this is the contract-level
+        statement, with a step whose requirement is derived from its successors'.
+        """
+        order: list[str] = []
+
+        class Relay(CalibrationScale):
+            """Publishes one point past whatever its successors publish."""
+
+            def __init__(self, label: str) -> None:
+                super().__init__(label=label)
+                self.reach: float | None = None
+
+            def configure_from(self, downstream) -> None:
+                order.append(self.label)
+                reaches = [
+                    float(max(requirement.points))
+                    for step in downstream
+                    for requirement in step.requirements()
+                    if requirement.points is not None
+                ]
+                self.reach = max(reaches) + 1.0 if reaches else None
+
+            def requirements(self) -> tuple[AxisRequirement, ...]:
+                if self.reach is None:
+                    return ()
+                return (AxisRequirement("spectral_axis", points=[self.reach]),)
+
+        class Anchor(CalibrationScale):
+            def configure_from(self, downstream) -> None:
+                order.append(self.label)
+
+            def requirements(self) -> tuple[AxisRequirement, ...]:
+                return (AxisRequirement("spectral_axis", points=[10.0]),)
+
+        first, second = Relay("first"), Relay("second")
+        Instrument([first, second, Anchor(label="anchor")], input_kind=Spectrum)
+        assert order == ["anchor", "second", "first"]
+        # Each step read its successor already configured: the reach compounds.
+        assert second.reach == 11.0
+        assert first.reach == 12.0
+
     def test_the_default_configure_from_is_a_no_op(self) -> None:
         # The simple path must stay simple: no step is obliged to override it.
         assert Transformation.configure_from(CalibrationScale(), ()) is None

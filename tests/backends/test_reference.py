@@ -358,6 +358,34 @@ class TestLSFConvolution:
         assert high - 20.0 == pytest.approx(5.0 * sigma)
         assert max_step is not None and max_step < 0.5
 
+    def test_chained_convolutions_pad_for_both_kernels(self) -> None:
+        """Regression (ruled 2026-09-07): the padding compounds along the chain.
+
+        Two LSFs in a row — a broad instrumental profile followed by a narrow
+        one, say — each need their input to reach beyond what the step after
+        them wants. ``Instrument.__init__`` used to configure steps in forward
+        order, so the first convolution read the second *before* the second
+        had learned the resampler's range: it saw only the resampler's own
+        requirement and padded for a single kernel. The outermost samples of
+        the second convolution's output were then convolved against an edge.
+        """
+        first = LSFConvolution(fwhm=0.4, label="broad")
+        second = LSFConvolution(fwhm=0.2, label="narrow")
+        Instrument([first, second, Resample(np.linspace(10.0, 20.0, 5))], channel="sed")
+        second_low, second_high, _, _ = second.requirements()[0].segments()[0]
+        first_low, first_high, _, _ = first.requirements()[0].segments()[0]
+        sigma_first = float(first.sigma(np.array([10.0]))[0])
+        sigma_second = float(second.sigma(np.array([10.0]))[0])
+        # The second pads the resampler's range by its own kernel ...
+        assert 10.0 - second_low == pytest.approx(5.0 * sigma_second)
+        assert second_high - 20.0 == pytest.approx(5.0 * sigma_second)
+        # ... and the first pads the *second's padded range* by its own kernel,
+        # not the resampler's bare range (the under-padded value would be
+        # 10.0 - 5 * sigma_first).
+        assert 10.0 - first_low == pytest.approx(5.0 * (sigma_first + sigma_second))
+        assert first_high - 20.0 == pytest.approx(5.0 * (sigma_first + sigma_second))
+        assert first_low < second_low < 10.0 < 20.0 < second_high < first_high
+
 
 class TestSyntheticPhotometry:
     """The real step, and Gap 1's scenario."""

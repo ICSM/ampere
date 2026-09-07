@@ -435,7 +435,13 @@ statements about the *channel's* coordinates (§7), so a step downstream of a
 kind-changing step cannot publish at all; what it can do is tell the step
 before it what it needs. `Instrument.__init__` calls each step's
 `configure_from` once, with the tuple of its successors, before the hot
-loop; the default is a no-op, so the simple path stays simple. The first
+loop; the default is a no-op, so the simple path stays simple. The calls
+run **from the last step to the first** (clarified 2026-09-07), so that
+every step reads successors that have already been configured themselves:
+a step's declarations may depend on its own successors' — a convolution
+publishes the range downstream of it, padded — and a forward walk would
+hand the step before it a successor still in its unconfigured state
+(chained same-axis convolutions were under-padded that way). The first
 real instances — interferometric bandwidth and time smearing, which want
 extra (u, v) samples that are the Fourier step's own buffer — are Phase 4's.
 The posture is push-forward-and-raise: ampere never infers requirements
