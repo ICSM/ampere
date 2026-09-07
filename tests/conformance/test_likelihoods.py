@@ -541,7 +541,20 @@ class TestSolverAgreement:
     def test_a_quasiseparable_solver_refuses_a_kernel_that_has_no_such_form(
         self, backend: ConformanceBackend
     ) -> None:
-        """The declaration is checked before the implementation is."""
+        """The declaration is checked before the implementation is.
+
+        W2.5 finding: this row was missing the guard both of its siblings
+        carry, and the row above states the rule it was breaking — "``gp_solver``
+        is contractually called only for a kind the backend declares
+        (``protocol.py``), so a row must not ask a torch or jax fixture for a
+        solver it has said it does not have". It went unnoticed while every
+        registered fixture declared ``QUASISEP``; the first backend that does
+        not (the jax one, until slice 2 chooses between tinygp's
+        ``QuasisepSolver`` and celerite2.jax) turns it into a failure whose
+        message is about the fixture rather than about the contract.
+        """
+        if SolverKind.QUASISEP not in backend.capabilities.solvers:
+            pytest.skip(f"backend {backend.name!r} declares no quasiseparable solver")
         _, observed = spectra()
         kernel = backend.kernel(SQUARED_EXPONENTIAL)
         assert not kernel.QUASISEPARABLE

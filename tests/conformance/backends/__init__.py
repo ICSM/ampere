@@ -37,12 +37,26 @@ def _optional(factory: Callable[[], ConformanceBackend]) -> ConformanceBackend |
         return None
 
 
+def _jax_backend() -> ConformanceBackend:
+    """The jax fixture (W2.5), built only where the ``jax`` extra is installed.
+
+    The module is called ``jaxbackend`` rather than ``jax`` deliberately: a
+    ``tests/conformance/backends/jax.py`` would sit one directory away from the
+    real package it imports, and while absolute imports make that safe in
+    principle, unambiguous names make it safe in practice (the same reasoning
+    ``ampere/inference/_emcee.py`` records for its own leading underscore).
+    """
+    from .jaxbackend import JaxBackend
+
+    return JaxBackend()
+
+
 _REGISTRY: tuple[ConformanceBackend | None, ...] = (
     ReferenceBackend(),
     MirrorBackend(),
     # Phase 2:
     #   _optional(lambda: TorchBackend()),
-    #   _optional(lambda: JaxBackend()),
+    _optional(_jax_backend),
 )
 
 
