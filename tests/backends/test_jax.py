@@ -839,6 +839,70 @@ class TestTheNativePath:
         assert float(compiled(jnp.asarray([1e3, 1e3, 1e3]))) == -np.inf
 
 
+class TestLoweringProvenance:
+    """§12.8's hardening: a user-registered row is stamped, a built-in one is not."""
+
+    def test_a_run_on_amperes_own_table_stamps_nothing(self) -> None:
+        """The signal is "did this depend on something outside the conformance
+        suite's guarantees?", so ten ordinary rows must not bury it."""
+        lowered = LoweredParameterSet(ParameterSet([Parameter("t", st.uniform(100.0, 9900.0))]))
+        assert lowered.lowering_provenance() == []
+        # ...but the rows themselves are introspectable, both slots.
+        kinds = {row.kind for row in lowered.lowering_resolutions}
+        assert kinds == {"prior", "bijection"}
+        assert all(row.builtin for row in lowered.lowering_resolutions)
+
+    def test_a_user_registered_row_is_stamped(self) -> None:
+        from ampere.core.lowering import register_lowering
+
+        import numpyro.distributions as npd
+
+        def cauchy(spec: Any) -> Any:
+            return npd.Cauchy(spec.kwds.get("loc", 0.0), spec.kwds.get("scale", 1.0))
+
+        register_lowering("cauchy", BACKEND, cauchy, override=True)
+        try:
+            lowered = LoweredParameterSet(ParameterSet([Parameter("t", st.cauchy(0.0, 1.0))]))
+            stamped = lowered.lowering_provenance()
+            assert [entry["name"] for entry in stamped] == ["cauchy"]
+            assert stamped[0]["backend"] == BACKEND
+            assert stamped[0]["builtin"] is False
+        finally:
+            from ampere.core import lowering as _lowering
+
+            _lowering._REGISTRY.pop(("prior", "cauchy", BACKEND), None)
+
+    def test_the_lowered_problem_exposes_it_too(self) -> None:
+        assert lower_problem(jax_joint_problem()).lowering_provenance() == []
+
+
+class TestTheWorkedExamples:
+    """The docstring examples, run as written.
+
+    ``ampere.backends.reference`` has no doctest runner because its examples
+    are prose; this package's are not — ``lower_problem``'s builds a problem,
+    lowers it and differentiates it, which is the one claim in the whole
+    package that is easiest to let drift into pseudocode.
+    """
+
+    @pytest.mark.parametrize(
+        "module",
+        ["ampere.backends.jax", "ampere.backends.jax.problem"],
+        ids=["package", "problem"],
+    )
+    def test_the_examples_run(self, module: str) -> None:
+        import doctest
+        import importlib
+
+        results = doctest.testmod(
+            importlib.import_module(module),
+            optionflags=doctest.ELLIPSIS | doctest.NORMALIZE_WHITESPACE,
+            verbose=False,
+        )
+        assert results.failed == 0
+        assert results.attempted > 0
+
+
 class TestTheDenseSolver:
     """The jax Cholesky against the closed form, and its quiet-NaN guard."""
 

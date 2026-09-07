@@ -78,6 +78,12 @@ import numpyro.distributions as npd
 from numpyro.distributions.transforms import Transform
 
 from ampere.core.exceptions import LoweringError
+from ampere.core.lowering import (
+    LoweringResolution,
+    lookup_bijection_lowering,
+    lookup_lowering,
+    provenance_entries,
+)
 from ampere.core.parameter import (
     HierarchicalPrior,
     Parameter,
@@ -144,6 +150,11 @@ class _Site:
     #: Whether numpyro can invert this family's CDF **in this environment**.
     native_icdf: bool
     family: str
+    #: The two registry rows this site was lowered through -- its prior family
+    #: and its bijection class. Kept so a run can stamp the *user-registered*
+    #: ones in provenance (``lowering.md`` §12.8's hardening: "every registered
+    #: row is stamped user-registered in provenance").
+    resolutions: tuple[LoweringResolution, ...]
 
     @property
     def name(self) -> str:
@@ -348,6 +359,42 @@ class LoweredParameterSet:
     def sites(self) -> tuple[_Site, ...]:
         """The lowered free parameters, in declaration order."""
         return self._sites
+
+    # -- §12.8's provenance hardening --------------------------------------
+
+    @property
+    def lowering_resolutions(self) -> tuple[LoweringResolution, ...]:
+        """Every registry row this lowering consulted, de-duplicated.
+
+        Both slots: the prior family of each site and the class of each site's
+        bijection. Built-in rows included — filtering them is
+        :func:`~ampere.core.lowering.provenance_entries`'s job, and a caller
+        introspecting what was used should see everything.
+        """
+        seen: dict[tuple[str, str, str], LoweringResolution] = {}
+        for site in self._sites:
+            for resolution in site.resolutions:
+                seen[(resolution.kind, resolution.name, resolution.backend)] = resolution
+        return tuple(seen.values())
+
+    def lowering_provenance(self) -> list[dict[str, Any]]:
+        """The **user-registered** rows this lowering consulted, netCDF-safe.
+
+        ``lowering.md`` §12.8's hardening, ready for
+        ``ampere.results.provenance.provenance_attrs``'s ``extra=``::
+
+            provenance_attrs(problem, extra={"registered_lowerings": lowered.lowering_provenance()})
+
+        Empty for a run that used only ampere's own table, which is the point:
+        the signal a reviewer wants is "did this run depend on something
+        outside the conformance suite's guarantees?", and stamping ten built-in
+        rows would bury it. Nothing in ``ampere.inference`` reads this yet —
+        W2.6 deferred the *first-class* provenance key "until a real backend
+        drives lowering end-to-end", and this backend does, but every row it
+        uses is built-in so the key would always be empty today. See this
+        branch's report.
+        """
+        return provenance_entries(self.lowering_resolutions)
 
     # -- pack / unpack ------------------------------------------------------
 
@@ -605,13 +652,18 @@ def _lower_site(parameter: Parameter, declaration: ParameterSet) -> _Site | None
         family = spec.family
         distribution = lower_prior(spec, parameter=parameter.name)
         probe = distribution
+    bijection = parameter.unconstraining_bijection()
     return _Site(
         parameter=parameter,
         where=declaration.free_slice(parameter.name),
         fixed_distribution=distribution,
-        transform=lower_bijection(parameter.unconstraining_bijection()),
+        transform=lower_bijection(bijection),
         native_icdf=has_native_icdf(probe),
         family=family,
+        resolutions=(
+            lookup_lowering(family, BACKEND),
+            lookup_bijection_lowering(type(bijection), BACKEND),
+        ),
     )
 
 

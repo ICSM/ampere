@@ -320,6 +320,16 @@ class LoweredProblem:
     def free_size(self) -> int:
         return self.parameters.free_size
 
+    def lowering_provenance(self) -> list[dict[str, Any]]:
+        """The user-registered lowering rows this problem consulted.
+
+        See :meth:`~ampere.backends.jax.parameters.LoweredParameterSet.lowering_provenance`
+        — ``lowering.md`` §12.8's "every registered row is stamped
+        user-registered in provenance", ready for ``provenance_attrs``'s
+        ``extra=``.
+        """
+        return self.parameters.lowering_provenance()
+
     def _route(self, theta: jax.Array) -> dict[str, dict[str, Any]]:
         """The constrained free vector, routed to each component's local names.
 

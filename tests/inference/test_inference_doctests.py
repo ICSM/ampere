@@ -25,6 +25,7 @@ import pytest
 import ampere.inference
 import ampere.inference._dynesty
 import ampere.inference._emcee
+import ampere.inference._nuts
 import ampere.inference._zeus
 import ampere.inference.engine
 import ampere.inference.exceptions
@@ -57,3 +58,21 @@ def test_prose_only_modules_have_no_failing_examples(module: object) -> None:
     """The two modules that are declaration rather than demonstration."""
     results = doctest.testmod(module, optionflags=OPTIONS, verbose=False)  # type: ignore[arg-type]
     assert results.failed == 0
+
+
+def test_the_nuts_example_runs() -> None:
+    """Separate, and skipped where the ``jax`` extra is absent (W2.5).
+
+    The other three drivers' examples run everywhere, because emcee and
+    dynesty are base dependencies and zeus's import is lazy enough that the
+    *docstring* still runs. NUTS is different: its example must build a jax
+    model to have a gradient at all, so the example is a real fit on a real
+    backend and can only run where that backend is installed. Skipping is the
+    honest answer -- pretending otherwise would mean either a pseudocode
+    example or a red suite in the daily-use environment.
+    """
+    pytest.importorskip("jax")
+    pytest.importorskip("numpyro")
+    results = doctest.testmod(ampere.inference._nuts, optionflags=OPTIONS, verbose=False)
+    assert results.failed == 0
+    assert results.attempted > 0

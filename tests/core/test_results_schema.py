@@ -1024,14 +1024,36 @@ class TestCoreDependencyFloor:
     """``architecture.md`` §3-4: core is numpy/scipy/astropy/stdlib only."""
 
     def test_module_imports_no_optional_dependency(self) -> None:
+        """In a **fresh interpreter**, which is the only place the claim holds.
+
+        W2.5 finding. This row used to import the module and then inspect
+        ``sys.modules`` in-process, which asserts something stronger and less
+        useful than it says: not "importing this module pulls in jax" but "jax
+        has never been imported in this process". That was true while every
+        registered conformance fixture was numpy-only, and stopped being true
+        the moment one of them imported ``ampere.backends.jax`` at collection —
+        so ``pixi run -e jax test-all`` failed here on a row about
+        ``ampere.core``, for a reason that had nothing to do with
+        ``ampere.core``. The torch track would have hit it next.
+
+        A subprocess says what was meant, in any environment. The idiom is
+        already used a few files away, in
+        ``tests/core/test_likelihood.py::test_importing_ampere_core_does_not_import_celerite2``.
+        """
+        import subprocess
         import sys
 
-        import ampere.core.results_schema  # noqa: F401
-
-        for forbidden in ("torch", "jax", "numpyro", "paramax", "equinox"):
-            assert forbidden not in sys.modules, (
-                f"importing ampere.core.results_schema pulled in {forbidden}"
-            )
+        forbidden = ("torch", "jax", "numpyro", "paramax", "equinox")
+        probe = (
+            "import sys; import ampere.core.results_schema; "
+            f"print([name for name in {forbidden!r} if name in sys.modules])"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", probe], capture_output=True, text=True, check=True
+        )
+        assert result.stdout.strip().endswith("[]"), (
+            f"importing ampere.core.results_schema pulled in {result.stdout.strip()}"
+        )
 
 
 class TestAnomalyScore:

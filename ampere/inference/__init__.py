@@ -5,11 +5,17 @@
 ``log_likelihood``/``log_prior`` split, ``prior_transform``, ``simulate`` and
 the capability flags, and ``inference.md`` §10 claims that an engine consuming
 only those "works with the reference backend, with torch, with jax, and with a
-legacy black-box model behind a thin adapter, and never knows which". The three
-drivers here are the first test of that claim, and they are written to make it
-checkable rather than merely asserted: **this namespace does not import
-``ampere.backends``**, in any module, at any depth. Its only ampere imports are
-``ampere.core`` and ``ampere.results``.
+legacy black-box model behind a thin adapter, and never knows which". The
+gradient-free drivers here are the first test of that claim, and they are
+written to make it checkable rather than merely asserted: **this namespace does
+not import ``ampere.backends``**, in any module, at any depth. Its only ampere
+imports are ``ampere.core`` and ``ampere.results``.
+
+W2.5 found the claim's one limit, and :class:`NUTSEngine` below is where it
+shows: §4.5's surface is not *traceable*, so a gradient-based engine cannot be
+written against it alone. The rule above is unchanged — that driver imports no
+backend either — but the density it differentiates is handed to it rather than
+read off the problem.
 
 What is here
 ------------
@@ -24,13 +30,24 @@ What is here
     Ensemble slice sampling. Needs the ``zeus`` extra
     (``pip install "ampere[zeus]"``); the import is lazy and the refusal names
     the extra.
+:class:`NUTSEngine`
+    The No-U-Turn sampler, through numpyro. The first **gradient-based** engine
+    here, and the only one that cannot be written against §4.5's surface alone:
+    ``FittingProblem.log_prob_unconstrained`` is not traceable (the containers
+    coerce with ``numpy.asarray``, and ``lnprior`` short-circuits on
+    ``math.isfinite``), so the density comes from the backend's own lowering of
+    the problem and is passed in. The driver still imports no backend, and
+    still asks the problem what backend it is rather than being told —
+    ``ampere.backends.jax.lower_problem`` is what supplies the callable. Needs
+    the ``jax`` extra; the import is lazy.
 
-All three are gradient-free, so all three call
+The first three are gradient-free, so all three call
 :meth:`~ampere.core.dataset.FittingProblem.check_engine` with
 ``differentiable=False`` at construction — asking "can this engine run this
 likelihood?" rather than "is this problem differentiable?" — and a
 marginalisation no gradient-free engine can deliver is refused before any
-sampling starts.
+sampling starts. :class:`NUTSEngine` passes ``differentiable=True`` for the
+same reason and in the same spirit: it is stating what the *engine* offers.
 
 Every run emits the run
 -----------------------
@@ -157,6 +174,7 @@ from __future__ import annotations
 
 from ._dynesty import DynestyEngine
 from ._emcee import EmceeEngine
+from ._nuts import NUTSEngine
 from ._zeus import ZeusEngine
 from .engine import DEFAULT_CACHE_SIZE, Engine
 from .exceptions import EngineError, SamplingFailureWarning
@@ -167,6 +185,7 @@ __all__ = [
     "EmceeEngine",
     "Engine",
     "EngineError",
+    "NUTSEngine",
     "SamplingFailureWarning",
     "ZeusEngine",
 ]
