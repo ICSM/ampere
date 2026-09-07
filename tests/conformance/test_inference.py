@@ -83,6 +83,21 @@ CORRELATED = ProblemSpec(
     datasets=(DatasetSpec(noise=NoiseKind.GP, covariance=CovarianceSpec()),),
 )
 
+#: The same problem through the O(N) solver rather than the dense one.
+#: Skipped by any backend that does not declare ``SolverKind.QUASISEP``, so it
+#: is additive: a track that has not yet made ``DEVELOPMENT_PLAN.md`` §6's
+#: measurement is unaffected. It exists because a realisation is a *whole*
+#: lowering, and the GP solve is the part of it most likely to differ between
+#: the differentiable and the numpy path — the two run genuinely different
+#: recursions, which the marginal-agreement rows check in isolation and this
+#: one checks inside the composed density.
+CORRELATED_QUASISEP = ProblemSpec(
+    model=ModelSpec(kind=ModelKind.LINEAR, coordinates=GP_GRID),
+    datasets=(
+        DatasetSpec(noise=NoiseKind.GP, covariance=CovarianceSpec(), solver=SolverKind.QUASISEP),
+    ),
+)
+
 #: A chain that **changes kind**: a spectrum integrated through filters, fitted
 #: against ``PhotometricPoints``.
 #:
@@ -90,7 +105,7 @@ CORRELATED = ProblemSpec(
 #: ends in a kind-preserving step, so a backend's native photometry path —
 #: ``apply_flux``, the one a realised density actually calls — was composed
 #: into no problem at all: the jax implementation of it raised
-#: ``AttributeError`` on its first evaluation and had done since it was
+#: ``AttributeError`` on its first evaluation, and had done since it was
 #: written, because nothing ever evaluated it. The photometry step the battery
 #: declares is the fixture-local one (bare pivots and filter names,
 #: ``protocol.py``'s "a chain whose kinds do not compose"), so what this shape
@@ -114,9 +129,10 @@ PHOTOMETRIC = ProblemSpec(
     ),
 )
 
-#: Readable pytest ids for the shapes above, used where a row is parametrised
-#: over all of them.
-SPEC_IDS = ("single", "joint", "correlated", "photometric")
+#: Readable pytest ids for the three shapes above, used where a row is
+#: parametrised over all of them. The two shapes each slice 2 added carry
+#: their own ids at the one row that takes all five.
+SPEC_IDS = ("single", "joint", "correlated")
 
 
 @pytest.fixture
@@ -391,11 +407,21 @@ class TestTheRealisation:
         assert realised.backend == problem.backend
         assert int(realised.free_size) == problem.free_size
 
-    @pytest.mark.parametrize("spec", [SINGLE, JOINT, CORRELATED, PHOTOMETRIC], ids=SPEC_IDS)
+    @pytest.mark.parametrize(
+        "spec",
+        [SINGLE, JOINT, CORRELATED, CORRELATED_QUASISEP, PHOTOMETRIC],
+        ids=(*SPEC_IDS, "correlated-quasisep", "photometric"),
+    )
     def test_the_realised_density_agrees_with_the_numpy_path(
         self, backend: ConformanceBackend, tolerances: Tolerances, spec: ProblemSpec
     ) -> None:
         """Many points, every declared shape, against the oracle."""
+        needed = {dataset.solver for dataset in spec.datasets if dataset.noise is NoiseKind.GP}
+        if not needed <= backend.capabilities.solvers:
+            pytest.skip(
+                f"backend {backend.name!r} declares no "
+                f"{sorted(kind.name for kind in needed - backend.capabilities.solvers)} solver"
+            )
         problem = build_problem(backend, spec)
         realised = self.realised(problem)
         for y in self.points(problem):

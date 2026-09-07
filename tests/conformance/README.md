@@ -314,10 +314,41 @@ Added at the freeze (W1.13):
   (`TestStagedAnalyticCombination`): the declaration row runs, the
   composition-refusal row runs, and Phase 4 replaces the refusal with
   agreement rows against the circular closed form.
-* **`GPSolver.conditional_loo`** outlived the QuasisepGP debt: `DenseGP`
+* ~~**`GPSolver.conditional_loo`** outlived the QuasisepGP debt: `DenseGP`
   implements the leave-one-out terms and `QuasisepGP` refuses, W2.3 having
   **deferred** the O(N) recursion with a decision-log entry
   (`DEVELOPMENT_PLAN.md` §2, 2026-09-05) — celerite2's public numpy interface
   exposes no O(N) route to the diagonal of `(K + diag(σ²))⁻¹`. The refusal is
   a live row (`TestSolverAgreement`); the eventual agreement row mirrors the
-  marginal one.
+  marginal one.~~ **Stated in full by W2.4 slice 2**: the row is now
+  `test_the_leave_one_out_terms_either_agree_exactly_or_refuse_by_name`, and
+  it says the whole contract — a quasiseparable strategy either refuses by
+  name or computes exactly the decomposition `DenseGP` does, at
+  `tolerances.cross_solver`. `ampere.core.QuasisepGP` still refuses (the
+  deferral stands where it was taken: celerite2's *public numpy* interface has
+  no route to that diagonal), and `ampere.backends.torch.QuasisepGP` supplies
+  the terms, because it calls celerite2's compiled kernels directly and
+  therefore already holds the factorisation the O(N) backward recursion needs.
+  The decision-log row of 2026-09-07 records the change of circumstances.
+  Backends are free to differ here, and the row is what keeps a *wrong*
+  implementation from passing for either choice.
+
+  **All three implemented solvers have now made that choice** (W2.5 slice 2
+  completes the entry). `ampere.core.QuasisepGP` refuses;
+  `ampere.backends.torch.QuasisepGP` supplies the terms;
+  `ampere.backends.jax.QuasisepGP` **refuses**, and the reason is worth
+  recording rather than leaving as a gap, because it is not the same reason
+  the numpy path gives. The jax solver goes through `celerite2.jax`'s public
+  `GaussianProcess`, whose surface is `log_likelihood`, `apply_inverse`,
+  `dot_tril`, `predict`, `condition` and `sample`: the two members that could
+  give the diagonal form the cross-covariance densely and cost O(N·M), and the
+  O(N) route would need the private `_d`/`_W` — the coupling the torch backend
+  already pays for and tests, and which would be a *new* coupling here. The
+  alternative was measured rather than assumed: tinygp's quasiseparable factor
+  exposes the diagonal exactly (`L.inv().transpose() @ L.inv()`, matching a
+  dense inverse to 7e-15), and tinygp was rejected on a factor of 200 in the
+  marginal likelihood itself. So the debt is closed as a *statement* — every
+  shipped solver either supplies the terms or refuses by name, and the row
+  asserts exactly that — with one open path recorded: a jax
+  `conditional_loo` becomes cheap the day this backend calls celerite2's
+  kernels directly, as torch does.

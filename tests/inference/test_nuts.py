@@ -516,3 +516,74 @@ class TestReproducibility:
             np.asarray(first["posterior"]["model.norm"]),
             np.asarray(other["posterior"]["model.norm"]),
         )
+
+
+# ---------------------------------------------------------------------------
+# 5. The realisation's own decomposition (W2.4 slice 2)
+# ---------------------------------------------------------------------------
+
+
+class TestTheDecompositionComesFromTheRealisation:
+    """``inference.md`` §10a's optional ``log_likelihood_terms``, consumed.
+
+    W2.13 shipped the member on both realisations and left its consumption to
+    whichever backend track reached it first, because it is a change to
+    ``Engine.finish`` rather than to this driver. Consuming it removes a full
+    model evaluation per stored draw — on the *numpy* path, of a quantity the
+    backend had already computed — and the observable consequence is that
+    ``engine_draws_recomputed`` is zero on a realised run.
+    """
+
+    def test_the_realisation_offers_the_optional_member(self, kit: Kit) -> None:
+        from ampere.core.realisation import log_likelihood_terms_of
+
+        engine = NUTSEngine(agreement_problem(kit))
+        assert engine.realisation is not None
+        assert log_likelihood_terms_of(engine.realisation) is not None
+
+    def test_a_realised_run_recomputes_nothing(self, agreement_run: Any) -> None:
+        assert agreement_run.attrs["ampere_engine_draws_recomputed"] == 0
+        assert agreement_run.attrs["ampere_nuts_decomposition"] == "realisation"
+
+    def test_the_decomposition_still_sums_to_the_joint_log_likelihood(self, joint_run: Any) -> None:
+        """Two datasets, so the sum is a real assertion rather than an identity."""
+        groups = sorted(joint_run["log_likelihood"].data_vars)
+        assert groups == ["blue", "red"]
+        total = sum(np.asarray(joint_run["log_likelihood"][name]) for name in groups)
+        joint = np.asarray(joint_run["sample_stats"]["lp"]) - np.asarray(
+            joint_run["sample_stats"]["log_prior"]
+        )
+        assert total == pytest.approx(joint, abs=1e-8)
+
+    def test_the_decomposition_agrees_with_the_numpy_path(self, kit: Kit) -> None:
+        """The realisation's terms are the contract path's, computed elsewhere.
+
+        Checked here rather than left to the conformance suite because this is
+        the *driver's* use of them: a decomposition that agreed with the
+        realisation's own density but not with ``Dataset.log_likelihood``
+        would produce a run whose per-dataset group described a different
+        model from its posterior.
+        """
+        problem = joint_problem(kit)
+        realisation = kit.module.lower_problem(problem)
+        y = problem.unconstrain(problem.reference_values)
+        terms = {
+            label: float(np.asarray(value))
+            for label, value in realisation.log_likelihood_terms(y).items()
+        }
+        expected = problem.evaluate(problem.constrain(y)).contributions
+        assert sorted(terms) == sorted(expected)
+        for label, value in terms.items():
+            assert value == pytest.approx(float(expected[label]), rel=1e-9)
+
+    def test_a_driver_without_a_decomposition_falls_back_and_says_so(self, kit: Kit) -> None:
+        """The other half of §10a's sentence, still live.
+
+        A realisation that does not offer the member — here, a bare density
+        passed explicitly — makes the driver recompute the split for stored
+        draws on the numpy path, and the run records how many. Both halves
+        matter: the fallback is what makes the member genuinely optional.
+        """
+        run = sample(agreement_problem(kit), kit, draws=20, warmup=20, chains=1)
+        assert run.attrs["ampere_engine_draws_recomputed"] == 20
+        assert "ampere_nuts_decomposition" not in run.attrs

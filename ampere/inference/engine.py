@@ -52,6 +52,17 @@ float64 vector, and looks them up again when the run is assembled. Hits are the
 normal case; a miss (the cache is bounded, so a long run evicts) falls back to
 re-evaluating that draw, which is the honest thing and is counted in the
 provenance attrs.
+
+A **gradient-based** driver cannot use that cache at all, and the reason is the
+same one that made ``inference.md`` §10a necessary: it scores through the
+backend's realisation, which returns a scalar in the backend's own array type
+rather than an :class:`~ampere.core.dataset.Evaluation`. So the cache is never
+populated by the sampler, and every stored draw used to be decomposed
+afterwards on the numpy contract path — a full model evaluation per draw, of a
+quantity the backend had just computed. §10a's optional
+``log_likelihood_terms`` is the answer, and :meth:`Engine.finish` consumes it
+(W2.4 slice 2): a driver that has it hands the decomposition straight in and
+``engine_draws_recomputed`` is zero.
 """
 
 from __future__ import annotations
@@ -324,86 +335,67 @@ class Engine(abc.ABC):
         """
         self.problem.reset_failures()
 
-    def evaluations_from_terms(
+    def _evaluations_from_terms(
         self,
         draws: np.ndarray,
-        terms: Mapping[str, Any],
+        terms: Sequence[Sequence[Mapping[str, float]]],
     ) -> list[list[Evaluation]]:
-        """One :class:`~ampere.core.dataset.Evaluation` per draw, from a decomposition.
+        """Per-draw evaluations from a decomposition the driver supplied.
 
-        ``inference.md`` §10a's optional ``log_likelihood_terms``, consumed.
-        A driver that sampled through a backend's realisation already holds
-        the per-dataset log-likelihood of every draw *in the arithmetic that
-        produced the draw*; recomputing it on the numpy contract path would
-        cost one full model evaluation per stored draw and — for a stochastic
-        model — would not even give the same number the sampler accepted on.
-        So the driver hands the decomposition here instead, and
-        ``engine_draws_recomputed`` is zero rather than one per draw.
+        ``inference.md`` §10a's optional ``log_likelihood_terms``, consumed —
+        W2.13 shipped it on both realisations and left the consumption to
+        whichever slice 2 got there first (W2.4).
 
-        The prior is still taken from the problem, and that is not an
-        inconsistency: ``FittingProblem.log_prior`` runs no model, it is the
-        parameter declaration's own ``lnprior``, and it is where §4.5's
-        "``-inf`` outside the support **without evaluating the model**" lives.
-        A draw the prior rules out gets exactly the record
-        :meth:`~ampere.core.dataset.FittingProblem.evaluate` would have given
-        it — ``log_likelihood`` NaN, no contributions — because "not
-        evaluated" and "impossible" are different statements (§10).
+        What it buys is not a shortcut. The three gradient-free drivers score
+        every proposal through :class:`_EvaluationCache`, so a stored draw is
+        usually a lookup; a gradient-based driver scores through the *realised*
+        density, which returns a scalar rather than an ``Evaluation``, so
+        without this the per-dataset split had to be recomputed for every
+        stored draw **on the numpy contract path** — a full model evaluation
+        per draw, in the slowest available arithmetic, of a quantity the
+        backend had just computed. The realisation's own decomposition is the
+        same quantity in the backend's own array library, and it is the one the
+        sampler actually used.
 
-        Parameters
-        ----------
-        draws
-            ``(chains, draws, n_dim)`` in the **constrained** space, as
-            :meth:`finish` receives them.
-        terms
-            One entry per dataset label, each broadcastable to
-            ``(chains, draws)``. Every label the problem declares must be
-            present: a partial decomposition would silently under-count the
-            joint log-likelihood, which is the one number a run is read for.
+        The prior is still taken from the declaration, through
+        :meth:`~ampere.core.parameter.ParameterSet.lnprior`. That is deliberate
+        and it is cheap: a prior evaluation touches no model and no data, so
+        there is nothing to save by asking a realisation for it — and §10a's
+        mandatory surface does not include a prior/likelihood split, so a
+        driver that demanded one would be requiring more of a backend than the
+        contract does.
+
+        Every label is checked against the problem's own datasets. A
+        realisation whose keys had drifted would otherwise emit a
+        ``log_likelihood`` group that silently omitted a dataset, which is a
+        quieter failure than it should be.
         """
         expected = set(self.problem.datasets)
-        supplied = set(terms)
-        if supplied != expected:
-            raise EngineError(
-                f"{self.NAME} was handed a per-dataset log-likelihood decomposition for "
-                f"{sorted(supplied)}, but this problem declares {sorted(expected)}. The terms "
-                f"sum to the joint log-likelihood, so a partial decomposition would record a "
-                f"run whose log_likelihood is quietly wrong."
-            )
-        shape = (draws.shape[0], draws.shape[1])
-        columns = {}
-        for label, values in terms.items():
-            array = np.asarray(values, dtype=float)
-            if array.shape != shape:
-                raise EngineError(
-                    f"{self.NAME}'s decomposition for dataset {label!r} is shaped {array.shape}, "
-                    f"but the run has {shape} (chains, draws)."
-                )
-            columns[label] = array
-        evaluations: list[list[Evaluation]] = []
-        for chain in range(shape[0]):
+        built: list[list[Evaluation]] = []
+        for chain, chain_terms in zip(draws, terms, strict=True):
             row: list[Evaluation] = []
-            for index in range(shape[1]):
-                log_prior = float(self.problem.log_prior(draws[chain, index]))
-                if not math.isfinite(log_prior):
-                    row.append(
-                        Evaluation(log_prior=-math.inf, log_likelihood=math.nan, log_prob=-math.inf)
+            for theta, contributions in zip(chain, chain_terms, strict=True):
+                labels = set(contributions)
+                if labels != expected:
+                    raise EngineError(
+                        f"{self.NAME}'s realisation supplied a per-dataset decomposition keyed "
+                        f"{sorted(labels)}, but this problem's datasets are "
+                        f"{sorted(expected)}. The two must agree exactly: a missing label would "
+                        f"be a dataset silently dropped from the run's log_likelihood group, and "
+                        f"an extra one a group with no data behind it."
                     )
-                    continue
-                contributions = {
-                    label: float(column[chain, index]) for label, column in columns.items()
-                }
-                total = float(sum(contributions.values()))
-                log_prob = log_prior + total if math.isfinite(total) else -math.inf
+                log_prior = float(self.problem.parameters.lnprior(theta))
+                log_likelihood = float(sum(contributions.values()))
                 row.append(
                     Evaluation(
                         log_prior=log_prior,
-                        log_likelihood=total,
-                        log_prob=log_prob if math.isfinite(log_prob) else -math.inf,
-                        contributions=contributions,
+                        log_likelihood=log_likelihood,
+                        log_prob=log_prior + log_likelihood,
+                        contributions=dict(contributions),
                     )
                 )
-            evaluations.append(row)
-        return evaluations
+            built.append(row)
+        return built
 
     def finish(
         self,
@@ -413,7 +405,7 @@ class Engine(abc.ABC):
         coords: Mapping[str, Sequence[Any]] | None = None,
         realised: bool = False,
         registered_lowerings: Sequence[Mapping[str, Any]] | None = None,
-        log_likelihood_terms: Mapping[str, Any] | None = None,
+        log_likelihood_terms: Sequence[Sequence[Mapping[str, float]]] | None = None,
     ) -> Any:
         """Assemble the stored draws into the run's ``DataTree``.
 
@@ -432,14 +424,13 @@ class Engine(abc.ABC):
         fact worth having rather than an absence: it says the draws were
         scored on the numpy contract path.
 
-        *log_likelihood_terms* is the third, added in the slice-2 pass
-        (``inference.md`` §10a, sub-decision 1: "a driver **uses it when it is
-        there**"). Given it, the per-draw records are built by
-        :meth:`evaluations_from_terms` and **no stored draw is re-evaluated**;
-        without it, they come from the evaluation cache and a miss is counted
-        in ``engine_draws_recomputed``. The count is the honest signal either
-        way: zero because nothing needed recomputing, rather than zero because
-        nothing was checked.
+        *log_likelihood_terms* is §10a's optional third, added at W2.4 slice 2:
+        the per-dataset decomposition **the realisation computed**, shaped
+        ``(chains, draws)`` and keyed by dataset label. Supplied, it replaces
+        the evaluation cache entirely for this run and
+        ``engine_draws_recomputed`` is zero, because nothing was recomputed —
+        see :meth:`_evaluations_from_terms`. Omitted, the cache behaves exactly
+        as it always has.
 
         The summary is surfaced three ways, because the three have different
         audiences: a :class:`~ampere.inference.exceptions.
@@ -452,11 +443,10 @@ class Engine(abc.ABC):
         array = np.asarray(draws, dtype=float)
         if array.ndim == 2:
             array = array[np.newaxis, ...]
-        evaluations = (
-            self.evaluations_from_terms(array, log_likelihood_terms)
-            if log_likelihood_terms is not None
-            else [[self._cache.lookup(theta) for theta in chain] for chain in array]
-        )
+        if log_likelihood_terms is None:
+            evaluations = [[self._cache.lookup(theta) for theta in chain] for chain in array]
+        else:
+            evaluations = self._evaluations_from_terms(array, log_likelihood_terms)
 
         summary = self.problem.failure_summary()
         self.last_failure_summary = summary

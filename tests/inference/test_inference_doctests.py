@@ -80,15 +80,20 @@ def test_the_nuts_example_runs() -> None:
 
 
 def test_the_vi_example_runs() -> None:
-    """Same arrangement as the NUTS example, and skipped for the same reason.
+    """Separate, and skipped where the ``torch`` extra is absent (W2.4 slice 2).
 
-    ``VIEngine``'s example is a real optimisation on a real backend -- there is
-    no gradient without one -- so it can only run where the ``jax`` extra is
-    installed. It is deliberately a *fit*, not a construction: the number a
-    reader should take from a VI example is whether the guide found the truth.
+    The same reasoning the NUTS row states, one library along: the example is
+    a real variational fit on a real backend, so it can only run where that
+    backend is installed. ``VIEngine``'s docstring demonstrates the *driver*
+    rather than a library, and it has to name *some* backend to build a
+    problem at all, so it names torch and this row is gated on torch — even
+    though ``VARIATIONAL_LIBRARIES`` gained numpyro at W2.5 slice 2. The jax
+    route is covered by ``tests/inference/test_vi.py``, which is parametrised
+    over every installed backend the driver supports; a second, jax-flavoured
+    copy of the same example would be a duplicate rather than coverage.
     """
-    pytest.importorskip("jax")
-    pytest.importorskip("numpyro")
+    pytest.importorskip("torch")
+    pytest.importorskip("pyro")
     results = doctest.testmod(ampere.inference._vi, optionflags=OPTIONS, verbose=False)
     assert results.failed == 0
     assert results.attempted > 0

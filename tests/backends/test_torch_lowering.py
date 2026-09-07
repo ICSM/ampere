@@ -48,7 +48,22 @@ pytest.importorskip("torch", reason="the torch backend needs ampere[torch]")
 import torch
 from torch.distributions import biject_to
 
-from ampere.backends.torch import BACKEND
+from typing import Any
+
+import astropy.units as u
+
+from ampere.backends.torch import (
+    BACKEND,
+    DenseGP,
+    FractionalModelGPNoise,
+    FractionalModelNoise,
+    GaussianProcessNoise,
+    IndependentNoise,
+    Matern32,
+    PowerLaw,
+    QuasisepGP,
+    lower_problem,
+)
 from ampere.backends.torch.lowering import (
     LoweringFallbackWarning,
     lower_bijection,
@@ -58,16 +73,32 @@ from ampere.backends.torch.lowering import (
 from ampere.backends.torch.parameters import TorchParameterSpace
 from ampere.backends.torch.rng import generator, seed_for
 from ampere.core import (
+    CauchyFamily,
+    Censoring,
+    Dataset,
+    FittingProblem,
+    GaussianFamily,
     HierarchicalPrior,
     Identity,
+    Likelihood,
+    LimitKind,
     Log,
     Logit,
     Parameter,
     ParameterError,
     ParameterSet,
     Plate,
+    PoissonFamily,
+    Spectrum,
+    StudentTFamily,
     describe_prior,
 )
+from ampere.backends import reference as ref
+from ampere.backends.torch._families import FamilyInputs, native_log_prob
+from ampere.core import DenseGP as CoreDenseGP
+from ampere.core import GaussianProcessNoise as CoreGaussianProcessNoise
+from ampere.core import Matern32 as CoreMatern32
+from ampere.core import QuasisepGP as CoreQuasisepGP
 from ampere.core.exceptions import LoweringError
 from ampere.core.lowering import (
     lookup_bijection_lowering,
@@ -787,3 +818,491 @@ class TestRegistration:
         assert float(
             lower_prior(describe_prior(st.norm(0.0, 1.0))).distribution.mean
         ) == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# The widened realisation (W2.4 slice 2)
+# ---------------------------------------------------------------------------
+
+GRID = np.geomspace(1.0, 10.0, 24)
+_TRUTH = 2.0 * GRID**-1.0
+_VALUES = _TRUTH + np.random.default_rng(7).normal(0.0, 0.05, GRID.size)
+_UNCERTAINTY = np.full(GRID.size, 0.05)
+
+
+def observed_spectrum(values: np.ndarray | None = None, uncertainty: bool = True) -> Spectrum:
+    return Spectrum(
+        GRID * u.um,
+        (_VALUES if values is None else values) * u.Jy,
+        uncertainty=(_UNCERTAINTY * u.Jy) if uncertainty else None,
+    )
+
+
+def power_law() -> PowerLaw:
+    return PowerLaw(GRID, norm=st.lognorm(0.3, scale=2.0), index=st.norm(-1.0, 0.3))
+
+
+def lowered_for(likelihood: Likelihood, observed: Spectrum | None = None) -> Any:
+    problem = FittingProblem(
+        power_law(),
+        [Dataset(observed if observed is not None else observed_spectrum(), likelihood=likelihood)],
+        seed=11,
+    )
+    return problem, lower_problem(problem)
+
+
+def worst_disagreement(problem: FittingProblem, lowered: Any, points: int = 24) -> float:
+    """The largest relative disagreement with the numpy path over *points* draws."""
+    rng = np.random.default_rng(4)
+    worst = 0.0
+    for _ in range(points):
+        y = rng.normal(0.0, 1.2, lowered.free_size)
+        expected = problem.log_prob_unconstrained(y)
+        got = float(lowered.log_prob_unconstrained(y))
+        if not math.isfinite(expected) and not math.isfinite(got):
+            continue
+        worst = max(worst, abs(got - expected) / max(1.0, abs(expected)))
+    return worst
+
+
+def gp_case(size: int = 30) -> tuple[CoreMatern32, np.ndarray, np.ndarray, np.ndarray]:
+    """A small, well-conditioned 1-D GP problem. The same shape ``test_torch_backend.py`` uses."""
+    rng = np.random.default_rng(20260907)
+    coordinates = np.sort(rng.uniform(0.0, 12.0, size))
+    return (
+        CoreMatern32(0.4, 2.0),
+        coordinates,
+        rng.normal(0.0, 0.3, size),
+        np.full(size, 0.04),
+    )
+
+
+CENSORING = Censoring(
+    np.where(
+        np.arange(GRID.size) % 5 == 0,
+        int(LimitKind.UPPER_LIMIT),
+        np.where(np.arange(GRID.size) % 7 == 2, int(LimitKind.LOWER_LIMIT), 0),
+    )
+)
+
+_COUNTS = np.round(np.clip(_VALUES * 10.0, 0.5, None))
+
+
+class TestTheWidenedRealisation:
+    """Everything slice 2 added to the density, against the numpy oracle.
+
+    ``ampere.core`` is the definition of every quantity here, so each row is
+    the same assertion — the realised density agrees with
+    ``FittingProblem.log_prob_unconstrained`` at many points — applied to a
+    combination W2.13 refused. The tolerance is an accumulation tolerance,
+    not a modelling one: these are two transcriptions of one closed form, so
+    anything above 1e-12 means they are not the same formula.
+    """
+
+    @pytest.mark.parametrize(
+        ("name", "build"),
+        [
+            ("student_t", lambda: Likelihood(StudentTFamily(4.0), IndependentNoise())),
+            (
+                "student_t-fitted-nu",
+                lambda: Likelihood(StudentTFamily(st.loguniform(2.0, 30.0)), IndependentNoise()),
+            ),
+            ("cauchy", lambda: Likelihood(CauchyFamily(), IndependentNoise())),
+        ],
+    )
+    def test_each_non_gaussian_family_agrees_with_the_numpy_path(
+        self, name: str, build: Any
+    ) -> None:
+        problem, lowered = lowered_for(build())
+        assert worst_disagreement(problem, lowered) < 1e-12
+
+    def test_the_poisson_family_agrees_with_the_numpy_path(self) -> None:
+        """Counts, and no uncertainties at all — ``REQUIRES_UNCERTAINTY`` is False."""
+        problem, lowered = lowered_for(
+            Likelihood(PoissonFamily(), IndependentNoise()),
+            observed=Spectrum(GRID * u.um, _COUNTS * u.Jy),
+        )
+        assert worst_disagreement(problem, lowered) < 1e-12
+
+    def test_a_non_positive_poisson_rate_is_minus_infinity_and_not_a_raise(self) -> None:
+        """``inference.md`` §10a: the realised density never raises.
+
+        ``ampere.core``'s ``PoissonFamily.log_prob`` raises a
+        ``LikelihoodError`` for a rate ``<= 0`` — right on the contract path,
+        where §11 turns it into a recorded failure. A realised density has no
+        such route (nothing can be recorded inside a trace), so the same
+        condition must arrive as a bare ``-inf``, still attached to the graph.
+        The family body is exercised directly because the composed density
+        cannot easily be driven to a non-positive rate: a lognormal norm
+        underflows towards zero without reaching it.
+        """
+        inputs = FamilyInputs(
+            predicted=torch.zeros(3, dtype=torch.float64, requires_grad=True),
+            observed=torch.ones(3, dtype=torch.float64),
+            sigma=None,
+            values={},
+            family=PoissonFamily(),
+        )
+        value = native_log_prob(inputs)
+        assert value.grad_fn is not None
+        assert float(value.detach()) == -math.inf
+
+    @pytest.mark.parametrize("family", ["gaussian", "cauchy"])
+    def test_censoring_agrees_with_the_numpy_path(self, family: str) -> None:
+        """The Tobit form: ``log F(z)`` for an upper limit, ``log(1-F(z))`` below.
+
+        Compared against ``scipy``'s ``logcdf``/``logsf`` through the contract
+        path, which is the point — ``torch.special.log_ndtr`` and the
+        ``atan2`` form of the Cauchy CDF are different implementations of the
+        same two functions, chosen for their tails.
+        """
+        base = GaussianFamily() if family == "gaussian" else CauchyFamily()
+        problem, lowered = lowered_for(Likelihood(base, IndependentNoise(), censoring=CENSORING))
+        assert worst_disagreement(problem, lowered) < 1e-12
+
+    def test_a_censored_gaussian_far_into_the_tail_keeps_its_precision(self) -> None:
+        """Why ``log_ndtr`` rather than ``log(Phi(z))``.
+
+        ``Phi(z)`` underflows float64 near ``z = -38``, and the log of the
+        underflow is ``-inf`` rather than the ``-725`` it should be. A limit
+        *lives* in that tail — a strongly discrepant upper limit is exactly the
+        case a user needs the fit to handle — so the naive form would turn a
+        merely improbable model into an impossible one and stop the sampler.
+        """
+        problem, lowered = lowered_for(
+            Likelihood(GaussianFamily(), IndependentNoise(), censoring=CENSORING)
+        )
+        # A norm far above the data makes every upper limit violently violated.
+        y = np.array([6.0, 0.0])
+        got = float(lowered.log_prob_unconstrained(y))
+        assert math.isfinite(got)
+        assert got == pytest.approx(problem.log_prob_unconstrained(y), rel=1e-12)
+
+    @pytest.mark.parametrize("solver", ["dense", "quasisep"], ids=["dense", "quasisep"])
+    def test_the_gp_solvers_both_lower_and_agree_with_the_numpy_path(self, solver: str) -> None:
+        problem, lowered = lowered_for(
+            Likelihood(
+                GaussianFamily(),
+                GaussianProcessNoise(
+                    Matern32(st.halfnorm(0.0, 0.5), 2.0),
+                    DenseGP() if solver == "dense" else QuasisepGP(),
+                ),
+            )
+        )
+        assert worst_disagreement(problem, lowered) < 1e-12
+
+    def test_the_quasiseparable_density_is_differentiable_in_every_parameter(self) -> None:
+        """The claim that makes the O(N) solver worth putting in a density.
+
+        A gradient of exactly zero in the amplitude or the length scale is the
+        signature of W2.4 slice 1's finding — a covariance built in numpy —
+        and it would be invisible in any value-agreement row, because the
+        *value* was always right.
+        """
+        _, lowered = lowered_for(
+            Likelihood(
+                GaussianFamily(),
+                GaussianProcessNoise(
+                    Matern32(st.halfnorm(0.0, 0.5), st.loguniform(0.5, 10.0)), QuasisepGP()
+                ),
+            )
+        )
+        y = torch.zeros(lowered.free_size, dtype=torch.float64, requires_grad=True)
+        lowered.log_prob_unconstrained(y).backward()
+        assert y.grad is not None
+        assert np.all(np.isfinite(y.grad.numpy()))
+        assert np.all(np.abs(y.grad.numpy()) > 0.0)
+
+    @pytest.mark.parametrize(
+        ("name", "build"),
+        [
+            (
+                "diagonal",
+                lambda: Likelihood(GaussianFamily(), FractionalModelNoise(f=st.halfnorm(0.0, 0.2))),
+            ),
+            (
+                "diagonal-with-scale-and-jitter",
+                lambda: Likelihood(
+                    GaussianFamily(),
+                    FractionalModelNoise(
+                        f=st.halfnorm(0.0, 0.2),
+                        scale=st.lognorm(0.2),
+                        jitter=st.halfnorm(0.0, 0.02),
+                    ),
+                ),
+            ),
+            (
+                "gp-dense",
+                lambda: Likelihood(
+                    GaussianFamily(),
+                    FractionalModelGPNoise(
+                        Matern32(st.halfnorm(0.0, 0.5), 2.0), f=st.halfnorm(0.0, 0.2)
+                    ),
+                ),
+            ),
+            (
+                "gp-quasiseparable",
+                lambda: Likelihood(
+                    GaussianFamily(),
+                    FractionalModelGPNoise(
+                        Matern32(st.halfnorm(0.0, 0.5), 2.0),
+                        QuasisepGP(),
+                        f=st.halfnorm(0.0, 0.2),
+                    ),
+                ),
+            ),
+        ],
+    )
+    def test_prediction_aware_noise_agrees_with_the_numpy_path(self, name: str, build: Any) -> None:
+        """W2.13's carried finding, closed: ``sigma_tensor`` is live."""
+        problem, lowered = lowered_for(build())
+        assert worst_disagreement(problem, lowered) < 1e-12
+
+    def test_the_model_uncertainty_fraction_takes_a_gradient(self) -> None:
+        """``f`` multiplies the *prediction*, so its gradient runs through it.
+
+        The check that ``sigma_tensor`` really is on the tensor path: a
+        version that rebuilt the base sigma by calling ``NoiseModel.sigma``
+        would coerce ``f`` with ``float()`` and this gradient would be exactly
+        zero.
+        """
+        _, lowered = lowered_for(
+            Likelihood(
+                GaussianFamily(),
+                FractionalModelNoise(f=st.halfnorm(0.0, 0.2), scale=st.lognorm(0.2)),
+            )
+        )
+        y = torch.zeros(lowered.free_size, dtype=torch.float64, requires_grad=True)
+        lowered.log_prob_unconstrained(y).backward()
+        assert np.all(np.abs(y.grad.numpy()) > 0.0)
+
+    def test_the_prediction_aware_classes_keep_the_core_names_and_declare_torch(self) -> None:
+        """``Likelihood.to_spec`` records ``type(noise).__name__`` across backends."""
+        for built in (
+            FractionalModelNoise(f=0.1),
+            FractionalModelGPNoise(Matern32(0.3, 2.0), f=0.1),
+        ):
+            assert type(built).__name__ in {"FractionalModelNoise", "FractionalModelGPNoise"}
+            assert built.BACKEND == BACKEND
+            assert built.DIFFERENTIABLE is True
+
+    def test_a_fractional_noise_model_defaults_to_this_backends_solver(self) -> None:
+        assert isinstance(FractionalModelGPNoise(Matern32(0.3, 2.0), f=0.1).solver, DenseGP)
+
+    def test_a_hand_set_negative_fraction_is_refused_on_the_contract_path(self) -> None:
+        from ampere.core import LikelihoodError
+
+        noise = FractionalModelNoise(f=-0.1)
+        observed = observed_spectrum()
+        with pytest.raises(LikelihoodError, match="non-negative"):
+            noise.sigma(
+                observed,
+                np.ones(GRID.size, dtype=bool),
+                {"f": -0.1},
+                predicted=np.ones(GRID.size),
+            )
+
+
+class TestBatchingAndPrecision:
+    """W2.4 slice 2's ``BATCHABLE`` claim and the float64 policy's opt-out."""
+
+    def test_the_batched_density_equals_evaluating_one_at_a_time(self) -> None:
+        """The whole content of ``BATCHABLE``: same numbers, one call.
+
+        Compared against the loop rather than against a closed form, because
+        the claim under test is not "the density is right" — every other row
+        here checks that — but "``vmap`` rewrote it without changing it".
+        """
+        _, lowered = lowered_for(Likelihood(GaussianFamily(), IndependentNoise()))
+        stack = torch.as_tensor(
+            np.random.default_rng(5).normal(0.0, 0.9, (7, lowered.free_size)),
+            dtype=torch.float64,
+        )
+        one_at_a_time = torch.stack([lowered.log_prob_unconstrained(row) for row in stack])
+        assert lowered.log_prob_unconstrained_batched(stack) == pytest.approx(
+            one_at_a_time, abs=0.0
+        )
+
+    @pytest.mark.parametrize(
+        ("name", "build"),
+        [
+            ("dense-gp", lambda: GaussianProcessNoise(Matern32(st.halfnorm(0.0, 0.5), 2.0))),
+            ("fractional", lambda: FractionalModelNoise(f=st.halfnorm(0.0, 0.2))),
+        ],
+    )
+    def test_the_batched_density_survives_the_richer_noise_models(
+        self, name: str, build: Any
+    ) -> None:
+        _, lowered = lowered_for(Likelihood(GaussianFamily(), build()))
+        stack = torch.as_tensor(
+            np.random.default_rng(6).normal(0.0, 0.7, (4, lowered.free_size)),
+            dtype=torch.float64,
+        )
+        one_at_a_time = torch.stack([lowered.log_prob_unconstrained(row) for row in stack])
+        assert lowered.log_prob_unconstrained_batched(stack) == pytest.approx(
+            one_at_a_time, abs=1e-12
+        )
+
+    def test_a_quasiseparable_problem_refuses_batching_by_name(self) -> None:
+        """The measured price of the library choice, surfaced rather than hidden.
+
+        celerite2's kernels are a compiled extension reached through a
+        ``torch.autograd.Function``; ``vmap`` cannot rewrite either. Evaluating
+        the stack one member at a time under a batched name would give the
+        right numbers and a false cost model, so the solver declares
+        ``BATCHABLE = False`` and this refuses.
+        """
+        problem, lowered = lowered_for(
+            Likelihood(
+                GaussianFamily(),
+                GaussianProcessNoise(Matern32(st.halfnorm(0.0, 0.5), 2.0), QuasisepGP()),
+            )
+        )
+        assert problem.batchable is False
+        stack = torch.zeros((3, lowered.free_size), dtype=torch.float64)
+        with pytest.raises(LoweringError, match="QuasisepGP"):
+            lowered.log_prob_unconstrained_batched(stack)
+
+    def test_a_single_vector_is_refused_by_the_batched_surface(self) -> None:
+        """Two methods, two shapes, decided by which was called."""
+        _, lowered = lowered_for(Likelihood(GaussianFamily(), IndependentNoise()))
+        with pytest.raises(LoweringError, match="stack"):
+            lowered.log_prob_unconstrained_batched(torch.zeros(lowered.free_size))
+
+    def test_the_prior_short_circuit_became_a_where_without_changing_the_answer(self) -> None:
+        """The change that made batching possible, held to the contract path.
+
+        ``log_prior_tensor`` used to return early on the first non-finite
+        contribution; it now sums and converts through ``torch.where``. The
+        value must be identical — including at a point outside the support,
+        which is the only place the two could differ.
+        """
+        problem, lowered = lowered_for(Likelihood(GaussianFamily(), IndependentNoise()))
+        for y in (np.zeros(lowered.free_size), np.full(lowered.free_size, 400.0)):
+            assert float(lowered.log_prob_unconstrained(y)) == pytest.approx(
+                problem.log_prob_unconstrained(y), abs=1e-9, nan_ok=False
+            )
+
+    def test_the_dense_solver_can_be_configured_into_float32(self) -> None:
+        """``architecture.md`` §5's per-run opt-out, and its cost, both visible."""
+        kernel, coordinates, residual, variance = gp_case()
+        exact = DenseGP().log_marginal_likelihood(kernel, coordinates, residual, variance, {})
+        reduced = DenseGP().configured(dtype=torch.float32)
+        got = reduced.log_marginal_likelihood(kernel, coordinates, residual, variance, {})
+        assert reduced.provenance_config()["dtype"] == "torch.float32"
+        # Right to about single precision, and no better -- which is the point
+        # of the trap DEVELOPMENT_PLAN.md §7 records. Asserted both ways so the
+        # row fails if the opt-out silently did nothing.
+        assert got == pytest.approx(exact, rel=1e-4)
+        assert got != exact
+
+    def test_configuring_a_solver_leaves_its_declaration_alone(self) -> None:
+        """Why dtype and device are not dataclass fields.
+
+        ``Likelihood.to_spec`` records a dataclass solver's fields as its
+        config and ``results.md`` §14 requires the spec hash to agree across
+        backends — so a configured solver must still declare exactly what the
+        reference one does.
+        """
+        import dataclasses
+
+        configured = DenseGP(jitter=1e-8).configured(dtype=torch.float32, device="cpu")
+        assert [field.name for field in dataclasses.fields(configured)] == ["jitter"]
+        assert configured.jitter == 1e-8
+        assert DenseGP().provenance_config()["dtype"] == "torch.float64"
+
+    def test_configuring_a_device_is_an_opt_in_never_a_detection(self) -> None:
+        """CPU stays CPU unless a caller says otherwise (``architecture.md`` §5)."""
+        assert DenseGP().provenance_config()["device"] == "cpu"
+        assert DenseGP().configured(device="cpu").provenance_config()["device"] == "cpu"
+
+    def test_a_nonsense_dtype_is_refused_by_name(self) -> None:
+        from ampere.core import LikelihoodError
+
+        with pytest.raises(LikelihoodError, match=r"torch\.dtype"):
+            DenseGP().configured(dtype="not-a-dtype-at-all")
+        with pytest.raises(LikelihoodError, match="floating-point"):
+            DenseGP().configured(dtype=torch.int64)
+
+    def test_the_quasiseparable_solver_refuses_to_be_reconfigured(self) -> None:
+        """celerite2's kernels are float64 CPU; saying otherwise would be a lie."""
+        from ampere.core import LikelihoodError
+
+        assert QuasisepGP().configured() is not None
+        with pytest.raises(LikelihoodError, match=r"float64 on the CPU"):
+            QuasisepGP().configured(dtype=torch.float32)
+
+    def test_the_solver_configuration_reaches_the_runs_attrs(self) -> None:
+        """``ampere_solver_config``: recorded, never hashed (W2.13 fold-in 10)."""
+        from ampere.results.provenance import provenance_attrs
+
+        problem, _ = lowered_for(
+            Likelihood(
+                GaussianFamily(),
+                GaussianProcessNoise(
+                    Matern32(st.halfnorm(0.0, 0.5), 2.0), DenseGP().configured(dtype=torch.float32)
+                ),
+            )
+        )
+        attrs = provenance_attrs(problem)
+        assert "float32" in attrs["ampere_solver_config"]
+
+
+class TestWhatTheRealisationStillRefuses:
+    """Every remaining gap is refused **by name**, at construction, with a reason."""
+
+    def test_a_censored_student_t_names_the_missing_library_function(self) -> None:
+        with pytest.raises(LoweringError, match="incomplete beta"):
+            lowered_for(Likelihood(StudentTFamily(4.0), IndependentNoise(), censoring=CENSORING))
+
+    def test_the_latent_path_names_the_core_defect_that_blocks_it(self) -> None:
+        """W2.4 slice 2's blocking finding, stated where a user will meet it.
+
+        ``ampere.core`` never calls ``GPSolver.latent_transform`` on the
+        scoring path, so the kernel hyperparameters do not enter a latent
+        likelihood at all. A realisation must agree with that path; lowering
+        this would mean copying the defect or contradicting the oracle.
+        """
+        counts = Spectrum(GRID * u.um, _COUNTS * u.Jy)
+        likelihood = Likelihood(
+            PoissonFamily(), GaussianProcessNoise(Matern32(0.3, 2.0), DenseGP())
+        )
+        with pytest.raises(LoweringError, match="whitening transform"):
+            lowered_for(likelihood, observed=counts)
+
+    def test_the_core_defect_the_latent_refusal_names_is_real(self) -> None:
+        """The evidence for the refusal above, asserted rather than described.
+
+        If ``ampere.core`` is fixed, this row fails — which is exactly what
+        should happen, because the refusal it justifies must then be lifted.
+        """
+        counts = Spectrum(GRID * u.um, _COUNTS * u.Jy)
+        values: list[float] = []
+        for amplitude in (0.5, 5.0, 50.0):
+            # An all-reference problem: the defect is ampere.core's, and
+            # composing it out of torch pieces would be refused as a backend
+            # disagreement before the point could be made.
+            likelihood = Likelihood(
+                PoissonFamily(),
+                CoreGaussianProcessNoise(CoreMatern32(amplitude, 1.0), CoreDenseGP()),
+            )
+            problem = FittingProblem(
+                ref.PowerLaw(GRID, norm=4.0, index=0.0),
+                [Dataset(counts, likelihood=likelihood)],
+                seed=1,
+            )
+            theta = problem.parameters.pack(problem.sample_prior(np.random.default_rng(2)))
+            values.append(problem.log_likelihood(theta))
+        assert values[0] == values[1] == values[2]
+
+    def test_another_backends_gp_solver_is_refused_by_name(self) -> None:
+        """A numpy solve in a differentiable problem is a backend disagreement."""
+        from ampere.core import DatasetError
+
+        with pytest.raises((LoweringError, DatasetError)):
+            lowered_for(
+                Likelihood(
+                    GaussianFamily(),
+                    GaussianProcessNoise(Matern32(0.3, 2.0), CoreQuasisepGP()),
+                )
+            )

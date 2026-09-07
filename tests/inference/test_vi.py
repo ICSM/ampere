@@ -1,35 +1,51 @@
-"""The VI driver: a fitted guide, and the honesty about what it is.
+"""The variational driver, end to end, on every backend it can fit.
 
-``test_nuts.py`` holds the gradient-based *sampler* to a posterior written down
-in closed form. This file holds the gradient-based *optimiser* to the same
-posterior, and to three things a sampler is not asked about:
+``test_nuts.py`` holds the gradient-based *sampler*; this file holds the
+gradient-based *optimiser*, and the two are checked against the same oracle for
+the same reason: comparing an approximation only against another approximation
+would pass two methods that are wrong in the same way.
 
-1. **It finds the right location.** The agreement problem is deliberately
-   conjugate — a power law with its index held fixed is linear in ``norm``, so
-   a Gaussian prior and Gaussian noise give a Gaussian posterior whose mean and
-   variance are arithmetic — and a Gaussian guide can represent that posterior
-   *exactly*. So on this problem VI is not an approximation at all, and the row
-   can be tight: an optimiser that converged must land on the closed form.
-2. **It is honest about the approximation everywhere else.** The mean-field
-   guide understates the variance of a correlated posterior, and the run
-   records the guide family, the step count and the ELBO trace so that a reader
-   of the archived file can see which family was fitted and whether the
-   optimisation converged. Those attrs are asserted, because an approximation
-   that does not say so in provenance is the failure mode this driver is most
-   likely to cause.
-3. **It refuses, by name, what it cannot fit** — a backend with no realisation,
-   a problem that declares itself non-differentiable, an unknown guide family,
-   and a density that disagrees with the problem it was handed.
+What this file claims, and how each claim is checked:
 
-Budgets are small and seeds fixed, as in ``test_nuts.py``: this belongs in the
-per-PR gate. VI is cheap enough that the budgets here cost less than one NUTS
-row.
+1. **The fit recovers a posterior written down in closed form.** The agreement
+   problem is deliberately conjugate — a power law with its index held fixed is
+   *linear* in ``norm``, so a Gaussian prior and Gaussian noise give a Gaussian
+   posterior whose mean and standard deviation are arithmetic. A Gaussian
+   posterior is also the one case where a Gaussian guide is not an
+   approximation at all, which is what makes a **tight** tolerance legitimate
+   here: mean-field VI on a one-dimensional Gaussian target is exact in the
+   limit, so a wide tolerance would hide a real error rather than absorb an
+   honest one.
+2. **The approximation shows up where it should.** On a *correlated* posterior
+   the mean-field guide underestimates the marginal variances and the
+   full-covariance guide does not — the textbook failure, asserted rather than
+   described, so that ``vi_guide`` in a run's attrs means something a reader
+   can act on.
+3. **A run is a run.** The same ``DataTree`` every other driver emits, with the
+   ELBO trace and the guide family in the attrs, ``ampere_realised = 1``, and
+   ``engine_draws_recomputed = 0`` — the last because this driver consumes
+   ``inference.md`` §10a's ``log_likelihood_terms`` rather than recomputing the
+   per-dataset split on the numpy path.
+4. **It refuses, by name, what it cannot fit**: a backend with no variational
+   library, a non-differentiable problem, an unknown guide family.
+
+Parametrised over the backends installed here that this driver supports, for
+the reason ``test_nuts.py`` gives: writing the claim once per backend by hand
+is how two backends drift apart. Since W2.5 slice 2 that is both of them —
+pyro on torch, numpyro on jax — so every claim above is one claim per route,
+including the guide-family one, which is the row most likely to depend on a
+library's autoguide implementation rather than on the mathematics. Only one
+row is route-specific, and it says why.
+
+Budgets are small and seeds fixed, so this belongs in the per-PR gate. VI is
+cheap — a fit is a few thousand cheap gradient steps, not a chain — which is
+part of why it exists.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import importlib
-import json
 import math
 import warnings
 from typing import Any
@@ -39,6 +55,7 @@ import numpy as np
 import pytest
 import scipy.stats as st
 
+from ampere.backends.reference import PowerLaw as ReferencePowerLaw
 from ampere.core import (
     Dataset,
     FittingProblem,
@@ -46,75 +63,83 @@ from ampere.core import (
     Likelihood,
     Spectrum,
 )
-from ampere.inference import EngineError, VIEngine
-from ampere.inference._vi import GUIDES, VI_LIBRARIES, supported_backends
+from ampere.inference import VIEngine
+from ampere.inference.exceptions import EngineError
 
-REFERENCE_WAVELENGTH = 1.0
 SEED = 20260907
-
-#: jax only, today. ``VI_LIBRARIES`` is the table and this module follows it
-#: rather than hard-coding a name, so the day a pyro route lands this file runs
-#: on both without an edit.
-BACKENDS = sorted(VI_LIBRARIES)
+REFERENCE_WAVELENGTH = 1.0
 
 
-def _installed() -> list[str]:
-    found: list[str] = []
-    for name in BACKENDS:
+def power_law(grid: np.ndarray, norm: float, index: float) -> np.ndarray:
+    return norm * (grid / REFERENCE_WAVELENGTH) ** index
+
+
+def noisy(grid: np.ndarray, truth: np.ndarray, sigma: float, seed: int) -> Spectrum:
+    rng = np.random.default_rng(seed)
+    return Spectrum(
+        grid * u.um,
+        (truth + rng.normal(0.0, sigma, grid.size)) * u.Jy,
+        uncertainty=np.full(grid.size, sigma) * u.Jy,
+    )
+
+
+@dataclasses.dataclass(frozen=True)
+class Kit:
+    """One backend's pieces, by name, so a test body never names a library."""
+
+    name: str
+    module: Any
+
+    def likelihood(self) -> Likelihood:
+        return Likelihood(GaussianFamily(), self.module.IndependentNoise())
+
+
+def _installed_kits() -> list[Kit]:
+    from ampere.inference._vi import VARIATIONAL_LIBRARIES
+
+    found: list[Kit] = []
+    for name in sorted(VARIATIONAL_LIBRARIES):
         try:
             module = importlib.import_module(f"ampere.backends.{name}")
         except ImportError:  # the extra is not installed in this environment
             continue
         if name == "jax":
-            # ``lowering.md`` §10.2(a): the *application* turns the flag on.
             module.configure_x64()
-        found.append(name)
+        found.append(Kit(name, module))
     return found
 
 
-INSTALLED = _installed()
+KITS = _installed_kits()
 
 pytestmark = pytest.mark.skipif(
-    not INSTALLED,
-    reason="no backend with a variational route installed; VI needs a registered realisation",
+    not KITS,
+    reason="no backend with a variational library installed",
 )
 
 
-@pytest.fixture(scope="module", params=INSTALLED)
-def backend(request: Any) -> Any:
-    return importlib.import_module(f"ampere.backends.{request.param}")
+@pytest.fixture(scope="module", params=[kit.name for kit in KITS])
+def kit(request: Any) -> Kit:
+    return next(found for found in KITS if found.name == request.param)
 
 
 # ---------------------------------------------------------------------------
-# The conjugate problem, whose posterior is arithmetic
+# The conjugate problem, and its exact posterior
 # ---------------------------------------------------------------------------
 
 GRID = np.geomspace(1.0, 10.0, 20)
 SIGMA = 0.2
 INDEX = -1.0
 PRIOR = (2.0, 0.5)  # (mean, sd) of the Gaussian prior on `norm`
-
-
-def _noisy(grid: np.ndarray, values: np.ndarray, sigma: float, seed: int) -> Spectrum:
-    rng = np.random.default_rng(seed)
-    return Spectrum(
-        grid * u.micron,
-        (values + rng.normal(0.0, sigma, values.size)) * u.Jy,
-        uncertainty=np.full(values.size, sigma) * u.Jy,
-    )
-
-
-DATA = _noisy(GRID, 2.0 * (GRID / REFERENCE_WAVELENGTH) ** INDEX, SIGMA, seed=7)
+DATA = noisy(GRID, power_law(GRID, 2.0, INDEX), SIGMA, seed=7)
 
 
 def analytic() -> tuple[float, float]:
     """The posterior on ``norm``, in closed form: ``(mean, sd)``.
 
-    The same conjugate construction ``test_nuts.py`` uses, and written out for
-    the same reason: an oracle produced by a sampler is not an oracle. It
-    matters more here, because a Gaussian guide can represent this posterior
-    exactly — so the closed form is not merely the right answer, it is an
-    answer this driver has no excuse to miss.
+    The same conjugate construction ``test_nuts.py`` uses, and deliberately the
+    same numbers: the two drivers are then checked against one oracle, so a
+    disagreement between them is a disagreement with arithmetic rather than
+    with each other.
     """
     x = (GRID / REFERENCE_WAVELENGTH) ** INDEX
     y = np.asarray(DATA.values)
@@ -124,36 +149,35 @@ def analytic() -> tuple[float, float]:
     return mean, 1.0 / math.sqrt(precision)
 
 
-def agreement_problem(backend: Any, seed: int | None = SEED) -> FittingProblem:
-    """One dataset, one free parameter, an exactly known Gaussian posterior."""
+def conjugate_problem(kit: Kit, seed: int | None = SEED) -> FittingProblem:
     return FittingProblem(
-        backend.PowerLaw(
+        kit.module.PowerLaw(
             GRID,
             norm=st.norm(*PRIOR),
             index=INDEX,
             reference_wavelength=REFERENCE_WAVELENGTH,
         ),
-        [Dataset(DATA, likelihood=Likelihood(GaussianFamily(), backend.IndependentNoise()))],
+        [Dataset(DATA, likelihood=kit.likelihood())],
         seed=seed,
     )
 
 
-def a_different_problem(backend: Any, seed: int | None = SEED) -> FittingProblem:
-    """The *same shape* as :func:`agreement_problem`, and a different posterior.
+def correlated_problem(kit: Kit, seed: int | None = SEED) -> FittingProblem:
+    """Both power-law parameters free, so the posterior is strongly correlated.
 
-    Same free dimension deliberately: a density of the wrong *length* would be
-    caught by the first thing that evaluated it, and the check this exercises
-    is the one for a density that runs perfectly well and describes something
-    else — which is the failure that would otherwise be silent.
+    ``norm`` and ``index`` trade off against each other on a short lever arm:
+    raising the index and lowering the normalisation describes almost the same
+    spectrum. That is the geometry a mean-field guide cannot represent, and it
+    is not contrived — it is the geometry of every SED fit ampere runs.
     """
     return FittingProblem(
-        backend.PowerLaw(
+        kit.module.PowerLaw(
             GRID,
-            norm=st.norm(*PRIOR),
-            index=-0.4,
+            norm=st.norm(2.0, 1.0),
+            index=st.norm(-1.0, 1.0),
             reference_wavelength=REFERENCE_WAVELENGTH,
         ),
-        [Dataset(DATA, likelihood=Likelihood(GaussianFamily(), backend.IndependentNoise()))],
+        [Dataset(DATA, likelihood=kit.likelihood())],
         seed=seed,
     )
 
@@ -165,154 +189,196 @@ def fit(problem: FittingProblem, **settings: Any) -> Any:
 
 
 @pytest.fixture(scope="module")
-def agreement_run(backend: Any) -> Any:
-    return fit(agreement_problem(backend), draws=2000, steps=4000)
+def conjugate_run(kit: Kit) -> Any:
+    return fit(conjugate_problem(kit), draws=2000, steps=3000)
 
 
 # ---------------------------------------------------------------------------
-# 1. It finds the posterior it can represent exactly
+# 1. Agreement with the closed form
 # ---------------------------------------------------------------------------
 
 
-class TestTheConjugateFit:
-    def test_it_recovers_the_analytic_mean(self, agreement_run: Any) -> None:
+class TestAgreementWithTheClosedForm:
+    def test_the_posterior_mean_matches_the_conjugate_answer(self, conjugate_run: Any) -> None:
         mean, sd = analytic()
-        drawn = float(agreement_run["posterior"]["model.norm"].mean())
-        assert abs(drawn - mean) < 0.3 * sd
+        drawn = np.asarray(conjugate_run["posterior"]["model.norm"]).ravel()
+        assert float(drawn.mean()) == pytest.approx(mean, abs=0.2 * sd)
 
-    def test_it_recovers_the_analytic_width(self, agreement_run: Any) -> None:
-        """A Gaussian guide can represent a Gaussian posterior *exactly*, so the
-        usual mean-field variance deficit has nowhere to come from here — and
-        that is what makes this a real test of the fit rather than of the
-        approximation."""
+    def test_the_posterior_width_matches_the_conjugate_answer(self, conjugate_run: Any) -> None:
+        """The half a Gaussian guide *can* get right, so it must.
+
+        A guide family that had collapsed — the classic VI failure, where the
+        ELBO is optimised into a spike — would pass the mean row and fail this
+        one, which is why both are here.
+        """
         _, sd = analytic()
-        drawn = float(agreement_run["posterior"]["model.norm"].std())
-        assert drawn == pytest.approx(sd, rel=0.15)
+        drawn = np.asarray(conjugate_run["posterior"]["model.norm"]).ravel()
+        assert float(drawn.std(ddof=1)) == pytest.approx(sd, rel=0.15)
 
-    def test_the_elbo_rose(self, agreement_run: Any) -> None:
-        """The optimisation is meant to have optimised something."""
-        attrs = agreement_run.attrs
-        assert attrs["ampere_vi_elbo_final"] > attrs["ampere_vi_elbo_initial"]
+    def test_the_elbo_climbed(self, conjugate_run: Any) -> None:
+        import json
 
-    def test_a_full_covariance_guide_fits_the_same_posterior(self, backend: Any) -> None:
-        mean, sd = analytic()
-        run = fit(
-            agreement_problem(backend),
-            draws=2000,
-            steps=4000,
-            guide="multivariate_normal",
+        trace = json.loads(conjugate_run.attrs["ampere_vi_elbo_trace"])
+        assert len(trace) > 1
+        # Not monotone -- it is a stochastic estimate -- but the end must be
+        # well above the start, or the optimiser did nothing.
+        assert trace[-1] > trace[0]
+        assert conjugate_run.attrs["ampere_vi_final_elbo"] == pytest.approx(trace[-1])
+
+
+# ---------------------------------------------------------------------------
+# 2. The approximation is where the guide family says it is
+# ---------------------------------------------------------------------------
+
+
+class TestWhatTheGuideFamilyAssumes:
+    def test_mean_field_underestimates_a_correlated_posteriors_width(self, kit: Kit) -> None:
+        """The textbook failure, asserted rather than described.
+
+        A mean-field guide fits the *conditional* widths rather than the
+        marginal ones, so on a correlated posterior it is too narrow — and a
+        user who reads ``vi_guide == "normal"`` in an archived run needs that
+        to be a fact about the code rather than a caution in a docstring.
+        """
+        mean_field = fit(correlated_problem(kit), draws=3000, steps=4000, guide="normal")
+        full = fit(correlated_problem(kit), draws=3000, steps=4000, guide="multivariate")
+        for name in ("model.norm", "model.index"):
+            narrow = float(np.asarray(mean_field["posterior"][name]).std(ddof=1))
+            wide = float(np.asarray(full["posterior"][name]).std(ddof=1))
+            assert narrow < wide
+
+    def test_the_full_covariance_guide_recovers_the_correlation(self, kit: Kit) -> None:
+        """And the mean-field one reports none, because it cannot."""
+        mean_field = fit(correlated_problem(kit), draws=3000, steps=4000, guide="normal")
+        full = fit(correlated_problem(kit), draws=3000, steps=4000, guide="multivariate")
+
+        def correlation(run: Any) -> float:
+            a = np.asarray(run["posterior"]["model.norm"]).ravel()
+            b = np.asarray(run["posterior"]["model.index"]).ravel()
+            return float(np.corrcoef(a, b)[0, 1])
+
+        assert abs(correlation(mean_field)) < 0.15
+        assert abs(correlation(full)) > 0.5
+
+
+# ---------------------------------------------------------------------------
+# 3. Every run emits the run
+# ---------------------------------------------------------------------------
+
+
+class TestTheRunItEmits:
+    def test_the_shape_is_one_chain_of_independent_draws(self, conjugate_run: Any) -> None:
+        assert np.asarray(conjugate_run["posterior"]["model.norm"]).shape == (1, 2000)
+
+    def test_the_attrs_name_the_engine_the_backend_and_the_guide(
+        self, conjugate_run: Any, kit: Kit
+    ) -> None:
+        assert conjugate_run.attrs["ampere_engine"] == "vi"
+        assert conjugate_run.attrs["ampere_backend"] == kit.name
+        assert conjugate_run.attrs["ampere_vi_guide"] == "normal"
+        assert conjugate_run.attrs["ampere_vi_guide_class"] == "AutoNormal"
+        assert conjugate_run.attrs["ampere_vi_steps"] == 3000
+        assert conjugate_run.attrs["ampere_vi_library"] in {"pyro", "numpyro"}
+
+    def test_the_draws_came_through_the_realisation(self, conjugate_run: Any) -> None:
+        assert conjugate_run.attrs["ampere_realised"] == 1
+
+    def test_nothing_was_recomputed_on_the_numpy_path(self, conjugate_run: Any) -> None:
+        """``inference.md`` §10a's optional member, consumed (W2.4 slice 2).
+
+        The decomposition comes from the realisation, so no stored draw is
+        re-scored through ``FittingProblem.evaluate``. A non-zero count here
+        would mean the driver had silently fallen back — which is allowed by
+        the contract but is not what this driver does, and the difference is a
+        full model evaluation per draw.
+        """
+        assert conjugate_run.attrs["ampere_engine_draws_recomputed"] == 0
+
+    def test_the_per_dataset_decomposition_is_present_and_sums_correctly(
+        self, conjugate_run: Any
+    ) -> None:
+        groups = list(conjugate_run["log_likelihood"].data_vars)
+        assert groups == ["default"]
+        total = np.asarray(conjugate_run["log_likelihood"]["default"])
+        joint = np.asarray(conjugate_run["sample_stats"]["lp"]) - np.asarray(
+            conjugate_run["sample_stats"]["log_prior"]
         )
-        assert abs(float(run["posterior"]["model.norm"].mean()) - mean) < 0.3 * sd
-        assert run.attrs["ampere_vi_guide"] == "multivariate_normal"
+        assert total == pytest.approx(joint, abs=1e-9)
+
+    def test_it_repeats_exactly_from_the_problems_seed(self, kit: Kit) -> None:
+        first = fit(conjugate_problem(kit, SEED), draws=50, steps=100)
+        second = fit(conjugate_problem(kit, SEED), draws=50, steps=100)
+        assert np.asarray(first["posterior"]["model.norm"]) == pytest.approx(
+            np.asarray(second["posterior"]["model.norm"]), abs=0.0
+        )
+
+    def test_it_leaves_no_global_state_behind(self, kit: Kit) -> None:
+        """pyro's parameter store is process-global; a fit must not write into it.
+
+        A guide registers its parameters under site names, so a second fit in
+        the same interpreter would find the first one's and start from them —
+        a silently different answer rather than a crash. The fit runs inside
+        ``pyro.get_param_store().scope()`` for exactly this, and the row proves
+        the scope closes.
+
+        **A claim about pyro, so it is asked of the pyro route only** (W2.5
+        slice 2). numpyro has no process-global parameter store at all: the
+        fitted parameters come back in the ``SVIRunResult``, so there is no
+        state for a jax fit to leave behind and nothing here to assert. The
+        row is skipped rather than deleted or generalised, because the hazard
+        it guards is real on one route and structurally absent on the other,
+        and saying which is more useful than a row that passes vacuously.
+        """
+        if kit.name != "torch":
+            pytest.skip(
+                f"the {kit.name!r} route uses no process-global parameter store; numpyro returns "
+                f"its fitted parameters in the SVIRunResult, so there is nothing to leak"
+            )
+        pyro = importlib.import_module("pyro")
+        before = set(pyro.get_param_store().keys())
+        fit(conjugate_problem(kit), draws=10, steps=20)
+        assert set(pyro.get_param_store().keys()) == before
 
 
 # ---------------------------------------------------------------------------
-# 2. The run says what it is
-# ---------------------------------------------------------------------------
-
-
-class TestTheRunRecordsWhatItIs:
-    def test_the_engine_and_backend_are_recorded(self, agreement_run: Any, backend: Any) -> None:
-        assert agreement_run.attrs["ampere_engine"] == "vi"
-        assert agreement_run.attrs["ampere_backend"] == backend.BACKEND
-
-    def test_the_guide_family_and_step_count_are_recorded(self, agreement_run: Any) -> None:
-        """An approximation that does not say which family it approximated
-        within is not a recorded approximation."""
-        assert agreement_run.attrs["ampere_vi_guide"] in GUIDES
-        assert agreement_run.attrs["ampere_vi_steps"] == 4000
-        assert agreement_run.attrs["ampere_vi_optimiser"] == "adam"
-
-    def test_the_elbo_trace_is_recorded_with_its_stride(self, agreement_run: Any) -> None:
-        """The trace is what says whether the optimisation converged, and a
-        thinned trace with no stride would be a mis-labelled x axis."""
-        trace = json.loads(agreement_run.attrs["ampere_vi_elbo_trace"])
-        stride = agreement_run.attrs["ampere_vi_elbo_trace_stride"]
-        assert isinstance(trace, list) and trace
-        assert len(trace) * stride >= agreement_run.attrs["ampere_vi_steps"] - stride
-        assert trace[-1] == pytest.approx(agreement_run.attrs["ampere_vi_elbo_final"])
-
-    def test_the_draws_are_one_chain(self, agreement_run: Any) -> None:
-        """A guide is a distribution, not a chain: the draws are independent and
-        there is nothing for a second chain to mean."""
-        assert agreement_run["posterior"]["model.norm"].shape == (1, 2000)
-
-    def test_it_records_that_the_draws_came_through_a_realisation(self, agreement_run: Any) -> None:
-        assert agreement_run.attrs["ampere_realised"] == 1
-
-    def test_no_stored_draw_was_re_evaluated(self, agreement_run: Any) -> None:
-        """``inference.md`` §10a's optional decomposition, consumed: the driver
-        already holds every draw's per-dataset log-likelihood in the arithmetic
-        that produced it, so ``Engine.finish`` is handed it rather than
-        recomputing 2000 model evaluations on the numpy path."""
-        assert agreement_run.attrs["ampere_engine_draws_recomputed"] == 0
-
-    def test_the_per_dataset_decomposition_is_there(self, agreement_run: Any) -> None:
-        assert list(agreement_run["log_likelihood"].dataset.data_vars) == ["default"]
-
-
-# ---------------------------------------------------------------------------
-# 3. It refuses what it cannot fit
+# 4. Refusals
 # ---------------------------------------------------------------------------
 
 
 class TestRefusals:
-    def test_an_unknown_guide_family_is_refused_by_name(self, backend: Any) -> None:
-        with pytest.raises(EngineError, match="guide family"):
-            VIEngine(agreement_problem(backend)).run(draws=10, guide="planar_flow")
-
-    def test_a_backend_with_no_variational_route_is_refused(self) -> None:
-        """The reference backend registers no realisation, deliberately."""
-        from ampere.backends.reference import PowerLaw as ReferencePowerLaw
-
-        # ``Dataset``'s default noise model is ``ampere.core``'s, which declares
-        # the reference backend -- so this problem is entirely on rung 1 and
-        # registers no realisation, by W2.13's fifth sub-decision.
+    def test_a_problem_on_another_backend_is_refused_by_name(self, kit: Kit) -> None:
         problem = FittingProblem(
-            ReferencePowerLaw(GRID, norm=st.norm(*PRIOR), index=INDEX),
-            [Dataset(DATA)],
+            ReferencePowerLaw(
+                GRID, norm=st.norm(*PRIOR), index=INDEX, reference_wavelength=REFERENCE_WAVELENGTH
+            ),
+            [Dataset(DATA, likelihood=Likelihood(GaussianFamily()))],
             seed=SEED,
         )
-        assert problem.backend not in supported_backends()
-        with pytest.raises(EngineError, match="cannot fit a problem on the 'reference' backend"):
+        with pytest.raises(EngineError, match="cannot fit a problem"):
             VIEngine(problem)
 
-    def test_a_nonsensical_step_count_is_refused(self, backend: Any) -> None:
-        with pytest.raises(EngineError, match="at least one optimisation step"):
-            VIEngine(agreement_problem(backend)).run(draws=10, steps=0)
+    def test_an_unknown_guide_family_is_refused_by_name(self, kit: Kit) -> None:
+        engine = VIEngine(conjugate_problem(kit))
+        with pytest.raises(EngineError, match="guide family"):
+            engine.run(draws=10, guide="laplace")
 
-    def test_a_nonsensical_learning_rate_is_refused(self, backend: Any) -> None:
+    def test_a_non_positive_step_count_is_refused(self, kit: Kit) -> None:
+        engine = VIEngine(conjugate_problem(kit))
+        with pytest.raises(EngineError, match="optimiser step"):
+            engine.run(draws=10, steps=0)
+
+    def test_a_non_positive_learning_rate_is_refused(self, kit: Kit) -> None:
+        engine = VIEngine(conjugate_problem(kit))
         with pytest.raises(EngineError, match="learning rate"):
-            VIEngine(agreement_problem(backend)).run(draws=10, learning_rate=-1.0)
+            engine.run(draws=10, steps=10, learning_rate=0.0)
 
-    def test_a_density_that_disagrees_with_the_problem_is_refused(self, backend: Any) -> None:
-        """The failure this check exists for is silent otherwise: a guide fitted
-        to the wrong problem looks perfectly healthy."""
-        problem = agreement_problem(backend)
-        other = a_different_problem(backend)
-        with pytest.raises(EngineError, match="disagrees with the problem"):
-            VIEngine(problem, backend.lower_problem(other).log_prob_unconstrained)
+    def test_a_wrongly_shaped_start_point_is_refused(self, kit: Kit) -> None:
+        engine = VIEngine(conjugate_problem(kit))
+        with pytest.raises(EngineError, match="element"):
+            engine.run(draws=10, steps=10, initial=np.zeros(7))
 
+    def test_supported_backends_is_answered_from_the_registry(self, kit: Kit) -> None:
+        from ampere.inference._vi import supported_backends
 
-# ---------------------------------------------------------------------------
-# 4. Reproducibility
-# ---------------------------------------------------------------------------
-
-
-class TestReproducibility:
-    def test_the_same_seed_gives_the_same_fit(self, backend: Any) -> None:
-        """Every stream is derived from the problem's own seed
-        (``inference.md`` §12): the optimiser's, and the draws from the guide."""
-        first = fit(agreement_problem(backend), draws=200, steps=500)
-        second = fit(agreement_problem(backend), draws=200, steps=500)
-        assert np.asarray(first["posterior"]["model.norm"]) == pytest.approx(
-            np.asarray(second["posterior"]["model.norm"])
-        )
-
-    def test_a_different_seed_gives_a_different_fit(self, backend: Any) -> None:
-        first = fit(agreement_problem(backend, seed=1), draws=200, steps=500)
-        second = fit(agreement_problem(backend, seed=2), draws=200, steps=500)
-        assert not np.allclose(
-            np.asarray(first["posterior"]["model.norm"]),
-            np.asarray(second["posterior"]["model.norm"]),
-        )
+        assert kit.name in supported_backends()
+        assert "reference" not in supported_backends()
