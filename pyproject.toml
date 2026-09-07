@@ -404,8 +404,25 @@ test-py313 = { features = ["py313", "dev", "zeus", "extinction"] }
 # default test-py3* matrix -- see ci.yml's non-blocking
 # sbi-characterisation job.
 sbi = { features = ["py313", "dev", "zeus", "extinction", "sbi"] }
-# Standalone backend placeholder environments (Phase 2 not started; these
-# just prove the torch/jax extras solve and stay installable until a real
-# backend lands and needs them for something).
-torch = { features = ["py313", "dev", "torch"] }
+# Backend environments. `jax` is still the placeholder W0.10 created -- it
+# just proves the extra solves and stays installable until W2.5's backend
+# lands and needs it for something.
+#
+# `torch` is a real environment as of W2.4, and it is the daily-use `dev`
+# feature set plus the torch extra rather than a bare `dev + torch`. The
+# item's gate is `pixi run -e torch test-all`, which runs all five
+# new-namespace suites in one process, and `tests/inference` exercises all
+# three engine drivers -- including zeus, which is an extra. Without it, 48 of
+# that suite's rows error on `OptionalDependencyError` for a reason that has
+# nothing to do with the backend under test, and the gate cannot tell a torch
+# regression from a missing extra. `netcdf` is here for the same reason at one
+# remove: `tests/results`'s `test_both_netcdf_engines_write_it` importorskips
+# netCDF4, so without the feature that row would silently skip in the very
+# environment a backend author works in. `extinction` completes the match with
+# `dev`, so "the daily-use environment plus this backend" is a true
+# description rather than an approximate one.
+#
+# Deliberately not sharing `dev`'s solve group: the point of the split is that
+# `dev` never resolves torch at all (`architecture.md` §4 rule 2).
+torch = { features = ["py313", "dev", "zeus", "extinction", "netcdf", "torch"] }
 jax = { features = ["py313", "dev", "jax"] }

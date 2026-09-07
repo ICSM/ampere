@@ -1024,14 +1024,40 @@ class TestCoreDependencyFloor:
     """``architecture.md`` §3-4: core is numpy/scipy/astropy/stdlib only."""
 
     def test_module_imports_no_optional_dependency(self) -> None:
+        """Run in a fresh interpreter, so nothing else in the session can pollute it.
+
+        The claim is about what ``import ampere.core.results_schema`` *pulls
+        in*, and asking ``sys.modules`` in the current process cannot answer
+        it: the answer includes everything any other test has imported. That
+        was invisible while no test in the repository imported torch, and
+        became a false failure the moment W2.4's conformance fixture did —
+        ``pixi run test-all`` runs every suite in one process on purpose (see
+        ``tests/core/conftest.py``), so ``tests/conformance`` and
+        ``tests/backends`` import torch long before this row runs.
+
+        The subprocess form is the one
+        ``tests/core/test_parameter.py::TestLoweringExtensionPoint::
+        test_core_imports_no_optional_dependency`` already uses, for the same
+        reason and with the same wording; this row was simply its un-hardened
+        twin. Making it a real check rather than an order-dependent one
+        *strengthens* it: it now fails when the import discipline is broken and
+        only then.
+        """
+        import subprocess
         import sys
 
-        import ampere.core.results_schema  # noqa: F401
-
-        for forbidden in ("torch", "jax", "numpyro", "paramax", "equinox"):
-            assert forbidden not in sys.modules, (
-                f"importing ampere.core.results_schema pulled in {forbidden}"
-            )
+        script = (
+            "import sys, ampere.core.results_schema; "
+            "bad = [m for m in ('torch', 'jax', 'numpyro', 'paramax', 'equinox') "
+            "if m in sys.modules]; "
+            "print(','.join(bad))"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script], capture_output=True, text=True, check=True
+        )
+        assert result.stdout.strip() == "", (
+            f"importing ampere.core.results_schema pulled in {result.stdout.strip()}"
+        )
 
 
 class TestAnomalyScore:

@@ -73,11 +73,11 @@ Examples
 >>> import scipy.stats as st
 >>> from ampere.core import describe_prior
 >>> from ampere.backends.torch.lowering import lower_prior
->>> lowered = lower_prior(describe_prior(st.norm(1.0, 2.0)))
->>> float(lowered.distribution.log_prob(torch.tensor(1.0, dtype=torch.float64)))
--1.6120857137389566
->>> float(st.norm(1.0, 2.0).logpdf(1.0))
--1.6120857137389566
+>>> prior = st.norm(1.0, 2.0)
+>>> lowered = lower_prior(describe_prior(prior))
+>>> native = float(lowered.log_prob(torch.tensor(1.0, dtype=torch.float64)))
+>>> abs(native - float(prior.logpdf(1.0))) < 1e-12
+True
 
 A family torch cannot express is refused by name, never approximated:
 
