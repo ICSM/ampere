@@ -332,3 +332,23 @@ Added at the freeze (W1.13):
   The decision-log row of 2026-09-07 records the change of circumstances.
   Backends are free to differ here, and the row is what keeps a *wrong*
   implementation from passing for either choice.
+
+  **All three implemented solvers have now made that choice** (W2.5 slice 2
+  completes the entry). `ampere.core.QuasisepGP` refuses;
+  `ampere.backends.torch.QuasisepGP` supplies the terms;
+  `ampere.backends.jax.QuasisepGP` **refuses**, and the reason is worth
+  recording rather than leaving as a gap, because it is not the same reason
+  the numpy path gives. The jax solver goes through `celerite2.jax`'s public
+  `GaussianProcess`, whose surface is `log_likelihood`, `apply_inverse`,
+  `dot_tril`, `predict`, `condition` and `sample`: the two members that could
+  give the diagonal form the cross-covariance densely and cost O(N·M), and the
+  O(N) route would need the private `_d`/`_W` — the coupling the torch backend
+  already pays for and tests, and which would be a *new* coupling here. The
+  alternative was measured rather than assumed: tinygp's quasiseparable factor
+  exposes the diagonal exactly (`L.inv().transpose() @ L.inv()`, matching a
+  dense inverse to 7e-15), and tinygp was rejected on a factor of 200 in the
+  marginal likelihood itself. So the debt is closed as a *statement* — every
+  shipped solver either supplies the terms or refuses by name, and the row
+  asserts exactly that — with one open path recorded: a jax
+  `conditional_loo` becomes cheap the day this backend calls celerite2's
+  kernels directly, as torch does.

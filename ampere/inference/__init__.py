@@ -46,16 +46,18 @@ What is here
     between the two samplers, and imports the one it needs lazily inside
     ``run``. Needs the ``jax`` or ``torch`` extra.
 :class:`VIEngine`
-    Stochastic variational inference — pyro's SVI on a torch problem, over the
-    same realisation :class:`NUTSEngine` samples. **Approximate**, and the
-    approximation is the guide family the run records in ``vi_guide``:
-    ``"normal"`` assumes the posterior factorises over parameters,
-    ``"multivariate"`` captures their correlations, and neither captures a
-    non-Gaussian posterior. The honest use is a first look at a posterior, or
-    the only tractable route when the space is too large for MCMC. A VI run's
-    single "chain" of i.i.d. guide draws is deliberate: guide draws have no
-    Markov structure, so R-hat has nothing to say about them, and the ELBO
-    trace is what a reader looks at instead. Needs the ``torch`` extra.
+    Stochastic variational inference — pyro's SVI on a torch problem,
+    numpyro's on a jax one, over the same realisation :class:`NUTSEngine`
+    samples and dispatched on the problem's own ``backend`` flag in the same
+    way. **Approximate**, and the approximation is the guide family the run
+    records in ``vi_guide``: ``"normal"`` assumes the posterior factorises
+    over parameters, ``"multivariate"`` captures their correlations, and
+    neither captures a non-Gaussian posterior. The honest use is a first look
+    at a posterior, or the only tractable route when the space is too large
+    for MCMC. A VI run's single "chain" of i.i.d. guide draws is deliberate:
+    guide draws have no Markov structure, so R-hat has nothing to say about
+    them, and the ELBO trace is what a reader looks at instead. Needs the
+    ``torch`` or ``jax`` extra.
 
 The first three are gradient-free, so all three call
 :meth:`~ampere.core.dataset.FittingProblem.check_engine` with

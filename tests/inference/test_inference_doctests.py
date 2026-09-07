@@ -26,6 +26,7 @@ import ampere.inference
 import ampere.inference._dynesty
 import ampere.inference._emcee
 import ampere.inference._nuts
+import ampere.inference._vi
 import ampere.inference._zeus
 import ampere.inference.engine
 import ampere.inference.exceptions
@@ -83,15 +84,16 @@ def test_the_vi_example_runs() -> None:
 
     The same reasoning the NUTS row states, one library along: the example is
     a real variational fit on a real backend, so it can only run where that
-    backend is installed. ``VARIATIONAL_LIBRARIES`` is torch-only today; when
-    the jax track adds numpyro's ``SVI`` the example stays as it is and this
-    row stays as it is, because the docstring demonstrates the *driver* rather
-    than a library.
+    backend is installed. ``VIEngine``'s docstring demonstrates the *driver*
+    rather than a library, and it has to name *some* backend to build a
+    problem at all, so it names torch and this row is gated on torch — even
+    though ``VARIATIONAL_LIBRARIES`` gained numpyro at W2.5 slice 2. The jax
+    route is covered by ``tests/inference/test_vi.py``, which is parametrised
+    over every installed backend the driver supports; a second, jax-flavoured
+    copy of the same example would be a duplicate rather than coverage.
     """
     pytest.importorskip("torch")
     pytest.importorskip("pyro")
-    import ampere.inference._vi
-
     results = doctest.testmod(ampere.inference._vi, optionflags=OPTIONS, verbose=False)
     assert results.failed == 0
     assert results.attempted > 0

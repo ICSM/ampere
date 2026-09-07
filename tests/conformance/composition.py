@@ -33,10 +33,12 @@ from ampere.core import (
     Censoring,
     Dataset,
     FittingProblem,
+    FunctionSamples,
     Instrument,
     Likelihood,
     LimitKind,
     NoiseModel,
+    PhotometricPoints,
     Spectrum,
     Tie,
     family_named,
@@ -67,6 +69,7 @@ __all__ = [
     "observed_grid",
     "observed_mask",
     "observed_values",
+    "terminal_photometry",
     "truth",
 ]
 
@@ -113,9 +116,11 @@ class CensoringKind(enum.StrEnum):
 class DatasetSpec:
     """One dataset's declaration.
 
-    The observed container is a ``Spectrum`` in every case: the battery's
-    per-kind coverage lives in ``test_schema.py``, which needs no problem, and
-    keeping one kind here keeps ``build_problem`` honest about alignment.
+    The observed container is a ``Spectrum`` unless the instrument chain ends
+    in a ``PHOTOMETRY`` step, in which case it is a ``PhotometricPoints``,
+    because that step changes kind and ``Likelihood.check_alignment`` compares
+    like with like. Those are the only two: the battery's per-kind coverage
+    lives in ``test_schema.py``, which needs no problem.
 
     ``censoring`` may only be combined with :attr:`NoiseKind.IID`. Censored
     data under a correlated noise model is a multivariate-normal orthant
@@ -241,15 +246,52 @@ def censoring_codes(dataset: DatasetSpec, size: int) -> np.ndarray | None:
     return codes
 
 
-def observed_container(spec: ProblemSpec, dataset: DatasetSpec) -> Spectrum:
-    """The observed ``Spectrum`` for *dataset*, identical in every backend."""
+def terminal_photometry(dataset: DatasetSpec) -> TransformationSpec | None:
+    """The photometry step a chain *ends* with, or ``None``.
+
+    Which container kind the observed data must be is decided by the last
+    kind-changing step, and ``PHOTOMETRY`` is the only one the battery
+    declares: a chain ending in it predicts ``PhotometricPoints``, and
+    ``Likelihood.check_alignment`` compares like with like, so the observed
+    side has to be one too.
+    """
+    for step in reversed(dataset.instrument):
+        if step.kind is TransformationKind.PHOTOMETRY:
+            return step
+        if step.kind is TransformationKind.REBIN:
+            return None
+    return None
+
+
+def observed_container(spec: ProblemSpec, dataset: DatasetSpec) -> FunctionSamples:
+    """The observed container for *dataset*, identical in every backend.
+
+    A ``Spectrum`` in every case but one: a chain ending in ``PHOTOMETRY``
+    produces :class:`~ampere.core.PhotometricPoints`, so the data must be
+    those too (W2.5 slice 2, adding the battery's first end-to-end photometry
+    shape). The values, the seed and the uncertainties are the same function
+    of the grid either way, so the two shapes stay comparable and
+    ``ampere_data_hash`` still depends on the declaration rather than on the
+    arithmetic under test.
+    """
     grid = observed_grid(spec, dataset)
     values = observed_values(spec, dataset, grid)
+    uncertainty = np.full(grid.size, dataset.uncertainty) * FLUX_UNIT
+    mask = observed_mask(dataset, grid.size)
+    photometry = terminal_photometry(dataset)
+    if photometry is not None:
+        return PhotometricPoints(
+            photometry.filters,
+            grid * COORDINATE_UNIT,
+            values * FLUX_UNIT,
+            uncertainty=uncertainty,
+            mask=mask,
+        )
     return Spectrum(
         grid * COORDINATE_UNIT,
         values * FLUX_UNIT,
-        uncertainty=np.full(grid.size, dataset.uncertainty) * FLUX_UNIT,
-        mask=observed_mask(dataset, grid.size),
+        uncertainty=uncertainty,
+        mask=mask,
     )
 
 
@@ -275,7 +317,7 @@ def build_noise(backend: ConformanceBackend, dataset: DatasetSpec) -> NoiseModel
 
 
 def build_likelihood(
-    backend: ConformanceBackend, dataset: DatasetSpec, observed: Spectrum
+    backend: ConformanceBackend, dataset: DatasetSpec, observed: FunctionSamples
 ) -> Likelihood:
     """The likelihood *dataset* declares."""
     codes = censoring_codes(dataset, observed.n_samples)

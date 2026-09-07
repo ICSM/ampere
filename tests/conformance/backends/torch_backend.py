@@ -259,6 +259,22 @@ class Photometry(Transformation):
     def influence(self, source: Any) -> np.ndarray:
         return to_numpy(influence_matrix(as_tensor(source), self.target))
 
+    def apply_flux(self, flux: Any, grid: Any, values: Any) -> tuple[Any, Any]:
+        """The native surface: the same matrix as :meth:`apply`, on bare tensors.
+
+        Added at W2.5 slice 2, because the battery gained a shape that needs it
+        (``PHOTOMETRIC`` in ``test_inference.py``). Until then no
+        ``ProblemSpec`` ended in a kind-changing step, so this fixture's step
+        was never composed into a problem and never reached a realisation —
+        which is exactly the hole that shape closes, and why the jax backend's
+        shipped photometry could be broken for a whole slice without anything
+        noticing.
+
+        The coordinates come back as this step's own target rather than the
+        incoming grid, because photometry changes the axis as well as the kind.
+        """
+        return influence_matrix(as_tensor(grid), self.target) @ flux, self.target
+
     def apply(self, samples: Any, values: Any) -> PhotometricPoints:
         weights = influence_matrix(as_tensor(samples.spectral_axis.values), self.target)
         return PhotometricPoints(

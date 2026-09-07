@@ -131,10 +131,17 @@ class _SpectralModel(Model):
     #: declared rather than inherited: every piece of this backend says what it
     #: is for itself.
     DIFFERENTIABLE: ClassVar[bool] = True
-    #: Not yet: a batched evaluation over a stack of parameter vectors is
-    #: slice 2's ``vmap`` work, and a flag claiming it today would be a promise
-    #: this class does not keep.
-    BATCHABLE: ClassVar[bool] = False
+    #: **True since slice 2** (W2.5). The flag means one thing on this
+    #: backend: ``jax.vmap`` over the realised density
+    #: (:meth:`~ampere.backends.jax.problem.LoweredProblem.log_prob_unconstrained_batched`)
+    #: evaluates a stack of parameter vectors in one call, and it is measured
+    #: rather than asserted -- ``tests/backends/test_jax.py`` compares a vmapped
+    #: density against the same density in a loop. It is true here because every
+    #: operation in this class is whole-array ``jax.numpy``: nothing branches on
+    #: a value, nothing indexes by one, so vmap maps it as it maps any pure
+    #: function. ``QuasisepGP`` is the one part of this backend that still says
+    #: False, and says why.
+    BATCHABLE: ClassVar[bool] = True
     #: CPU by default and never auto-detected (``architecture.md`` §5): a
     #: machine with a GPU present must not silently take a different code path
     #: from CI. GPU placement is slice 2's, with an explicit ``device_put``.

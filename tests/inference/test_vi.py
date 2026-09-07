@@ -31,7 +31,11 @@ What this file claims, and how each claim is checked:
 
 Parametrised over the backends installed here that this driver supports, for
 the reason ``test_nuts.py`` gives: writing the claim once per backend by hand
-is how two backends drift apart.
+is how two backends drift apart. Since W2.5 slice 2 that is both of them —
+pyro on torch, numpyro on jax — so every claim above is one claim per route,
+including the guide-family one, which is the row most likely to depend on a
+library's autoguide implementation rather than on the mathematics. Only one
+row is route-specific, and it says why.
 
 Budgets are small and seeds fixed, so this belongs in the per-PR gate. VI is
 cheap — a fit is a few thousand cheap gradient steps, not a chain — which is
@@ -316,7 +320,20 @@ class TestTheRunItEmits:
         a silently different answer rather than a crash. The fit runs inside
         ``pyro.get_param_store().scope()`` for exactly this, and the row proves
         the scope closes.
+
+        **A claim about pyro, so it is asked of the pyro route only** (W2.5
+        slice 2). numpyro has no process-global parameter store at all: the
+        fitted parameters come back in the ``SVIRunResult``, so there is no
+        state for a jax fit to leave behind and nothing here to assert. The
+        row is skipped rather than deleted or generalised, because the hazard
+        it guards is real on one route and structurally absent on the other,
+        and saying which is more useful than a row that passes vacuously.
         """
+        if kit.name != "torch":
+            pytest.skip(
+                f"the {kit.name!r} route uses no process-global parameter store; numpyro returns "
+                f"its fitted parameters in the SVIRunResult, so there is nothing to leak"
+            )
         pyro = importlib.import_module("pyro")
         before = set(pyro.get_param_store().keys())
         fit(conjugate_problem(kit), draws=10, steps=20)

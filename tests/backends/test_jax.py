@@ -40,6 +40,9 @@ anything in ``ampere`` (``lowering.md`` §10.2(a)).
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from collections.abc import Iterator
 from typing import Any
 
@@ -68,19 +71,29 @@ from ampere.backends.jax import (  # noqa: E402
     LoweringFallbackWarning,
     Matern32,
     PowerLaw,
+    QuasisepGP,
     Resample,
+    SquaredExponential,
+    SyntheticPhotometry,
     configure_x64,
     filter_spec,
     lower_bijection,
     lower_problem,
 )
 from ampere.backends.jax.distributions import has_native_icdf, lower_prior  # noqa: E402
+from ampere.backends.jax.families import lower_family  # noqa: E402
 from ampere.backends.jax.rng import fold, key  # noqa: E402
 from ampere.core import (  # noqa: E402
+    CauchyFamily,
+    Censoring,
     Dataset,
     DatasetCollection,
     FittingProblem,
     GaussianFamily,
+    LimitKind,
+    PoissonFamily,
+    RiceFamily,
+    StudentTFamily,
     HierarchicalPrior,
     Identity,
     Instrument,
@@ -904,8 +917,8 @@ class TestTheWorkedExamples:
 
     @pytest.mark.parametrize(
         "module",
-        ["ampere.backends.jax", "ampere.backends.jax.problem"],
-        ids=["package", "problem"],
+        ["ampere.backends.jax", "ampere.backends.jax.problem", "ampere.backends.jax.gp"],
+        ids=["package", "problem", "gp"],
     )
     def test_the_examples_run(self, module: str) -> None:
         import doctest
@@ -966,3 +979,652 @@ class TestTheDenseSolver:
 
         assert dataclasses.is_dataclass(DenseGP())
         assert [field.name for field in dataclasses.fields(DenseGP())] == ["jitter"]
+
+
+# ---------------------------------------------------------------------------
+# The quasiseparable solver (W2.5 slice 2)
+# ---------------------------------------------------------------------------
+
+
+QUASISEP_GRID = np.sort(np.random.default_rng(20260907).uniform(0.0, 40.0, 250))
+QUASISEP_RESIDUAL = np.random.default_rng(5).normal(0.0, 0.3, QUASISEP_GRID.size)
+QUASISEP_VARIANCE = np.full(QUASISEP_GRID.size, 0.04)
+
+
+def _fitted_matern() -> Matern32:
+    """A Matérn-3/2 whose hyperparameters are *free*, so a gradient has somewhere to go."""
+    return Matern32(st.lognorm(0.5, scale=0.7), st.lognorm(0.5, scale=2.0))
+
+
+QUASISEP_VALUES = {"amplitude": 0.7, "length_scale": 2.0}
+
+
+def _quasisep_observed() -> Spectrum:
+    """An ordered 1-D container for the ``check_compatible`` rows."""
+    return Spectrum(
+        QUASISEP_GRID * u.micron,
+        QUASISEP_RESIDUAL * u.Jy,
+        uncertainty=np.full(QUASISEP_GRID.size, 0.2) * u.Jy,
+    )
+
+
+class TestTheQuasiseparableSolver:
+    """``QuasisepGP``: the same number as ``DenseGP``, in linear time, in jax.
+
+    The neutral battery already compares the two strategies at
+    ``tolerances.cross_solver`` once the fixture declares ``QUASISEP``. What it
+    cannot say is anything about *celerite2* — that the import is deferred,
+    that its quiet NaN is caught, that its missing batching rule is declared
+    rather than discovered inside a trace, and that the representation used is
+    ampere's exact rank-2 one rather than celerite2's approximate
+    ``Matern32Term``. Those rows are here.
+    """
+
+    def test_the_marginal_likelihood_matches_scipy(self) -> None:
+        """Against ``multivariate_normal``, not against ``DenseGP``.
+
+        The oracle has to be outside ampere or the row proves only that two
+        ampere code paths agree. This is also what says the representation is
+        the *exact* Matérn-3/2: celerite2's own ``Matern32Term`` is an
+        approximation and would miss by ~5e-3.
+        """
+        kernel = Matern32(0.7, 2.0)
+        covariance = np.asarray(kernel.matrix(QUASISEP_GRID, QUASISEP_GRID, kernel.resolve(None)))
+        expected = st.multivariate_normal(
+            mean=np.zeros(QUASISEP_GRID.size), cov=covariance + np.diag(QUASISEP_VARIANCE)
+        ).logpdf(QUASISEP_RESIDUAL)
+        got = QuasisepGP().log_marginal_likelihood(
+            kernel, QUASISEP_GRID, QUASISEP_RESIDUAL, QUASISEP_VARIANCE, kernel.resolve(None)
+        )
+        assert got == pytest.approx(expected, abs=1e-6)
+
+    def test_it_agrees_with_the_dense_solver(self) -> None:
+        kernel = _fitted_matern()
+        dense = DenseGP().log_marginal_likelihood(
+            kernel, QUASISEP_GRID, QUASISEP_RESIDUAL, QUASISEP_VARIANCE, QUASISEP_VALUES
+        )
+        quasisep = QuasisepGP().log_marginal_likelihood(
+            kernel, QUASISEP_GRID, QUASISEP_RESIDUAL, QUASISEP_VARIANCE, QUASISEP_VALUES
+        )
+        assert quasisep == pytest.approx(dense, abs=1e-6)
+
+    def test_the_gradient_agrees_with_the_dense_solver(self) -> None:
+        """The reason this class exists at all: an O(N) solve a sampler can differentiate."""
+        kernel = _fitted_matern()
+
+        def density(solver: Any, parameters: Any) -> Any:
+            return solver.log_marginal_likelihood_jax(
+                kernel,
+                QUASISEP_GRID,
+                QUASISEP_RESIDUAL,
+                QUASISEP_VARIANCE,
+                {"amplitude": parameters[0], "length_scale": parameters[1]},
+            )
+
+        point = jnp.array([0.7, 2.0])
+        quasisep = jax.grad(lambda p: density(QuasisepGP(), p))(point)
+        dense = jax.grad(lambda p: density(DenseGP(), p))(point)
+        assert np.asarray(quasisep) == pytest.approx(np.asarray(dense), abs=1e-6)
+        assert np.all(np.isfinite(np.asarray(quasisep)))
+
+    def test_unordered_coordinates_give_the_same_answer(self) -> None:
+        """A Gaussian density is invariant under a simultaneous permutation.
+
+        The solver sorts internally and undoes the permutation on the way out,
+        so a caller need not know that celerite2 requires ordered coordinates.
+        """
+        kernel = _fitted_matern()
+        order = np.random.default_rng(2).permutation(QUASISEP_GRID.size)
+        solver = QuasisepGP()
+        ordered = solver.log_marginal_likelihood(
+            kernel, QUASISEP_GRID, QUASISEP_RESIDUAL, QUASISEP_VARIANCE, QUASISEP_VALUES
+        )
+        shuffled = solver.log_marginal_likelihood(
+            kernel,
+            QUASISEP_GRID[order],
+            QUASISEP_RESIDUAL[order],
+            QUASISEP_VARIANCE[order],
+            QUASISEP_VALUES,
+        )
+        assert shuffled == pytest.approx(ordered, abs=1e-9)
+
+    def test_conditioning_and_whitening_agree_with_the_dense_solver(self) -> None:
+        kernel = _fitted_matern()
+        quasisep, dense = QuasisepGP(), DenseGP()
+        left = quasisep.condition(
+            kernel, QUASISEP_GRID, QUASISEP_RESIDUAL, QUASISEP_VARIANCE, QUASISEP_VALUES
+        )
+        right = dense.condition(
+            kernel, QUASISEP_GRID, QUASISEP_RESIDUAL, QUASISEP_VARIANCE, QUASISEP_VALUES
+        )
+        assert left.mean == pytest.approx(right.mean, abs=1e-6)
+        assert left.variance == pytest.approx(right.variance, abs=1e-6)
+
+        whitened = np.random.default_rng(9).normal(size=QUASISEP_GRID.size)
+        assert quasisep.latent_transform(
+            kernel, QUASISEP_GRID, whitened, QUASISEP_VALUES
+        ) == pytest.approx(
+            dense.latent_transform(kernel, QUASISEP_GRID, whitened, QUASISEP_VALUES), abs=1e-6
+        )
+
+    def test_a_quiet_nan_becomes_a_loud_refusal_on_the_contract_path(self) -> None:
+        """celerite2 returns NaN where a Cholesky raises — measured, not assumed."""
+        from ampere.core.exceptions import LikelihoodError
+
+        kernel = Matern32(0.4, 2.0)
+        grid = np.array([1.0, 1.0, 1.0])  # duplicate coordinates: K is singular
+        with pytest.raises(LikelihoodError, match="positive definite"):
+            QuasisepGP().log_marginal_likelihood(
+                kernel, grid, np.zeros(3), np.zeros(3), kernel.resolve(None)
+            )
+
+    def test_a_negative_variance_is_refused_before_celerite2_sees_it(self) -> None:
+        from ampere.core.exceptions import LikelihoodError
+
+        kernel = Matern32(0.4, 2.0)
+        grid = np.linspace(1.0, 4.0, 4)
+        with pytest.raises(LikelihoodError, match="negative entries"):
+            QuasisepGP().log_marginal_likelihood(
+                kernel,
+                grid,
+                np.zeros(4),
+                np.array([0.1, -1.0, 0.1, 0.1]),
+                kernel.resolve(None),
+            )
+
+    def test_the_traced_surface_returns_minus_infinity_instead(self) -> None:
+        kernel = Matern32(0.4, 2.0)
+        grid = np.array([1.0, 1.0, 1.0])
+        values = kernel.resolve(None)
+        got = jax.jit(
+            lambda r: QuasisepGP().log_marginal_likelihood_jax(
+                kernel, grid, r, jnp.zeros(3), values
+            )
+        )(jnp.zeros(3))
+        assert float(got) == -np.inf
+
+    def test_a_negative_variance_is_minus_infinity_on_the_traced_surface(self) -> None:
+        kernel = Matern32(0.4, 2.0)
+        grid = np.linspace(1.0, 4.0, 4)
+        values = kernel.resolve(None)
+        got = QuasisepGP().log_marginal_likelihood_jax(
+            kernel, grid, jnp.zeros(4), jnp.array([0.1, -1.0, 0.1, 0.1]), values
+        )
+        assert float(got) == -np.inf
+
+    def test_a_non_quasiseparable_kernel_is_refused_by_the_core_check(self) -> None:
+        from ampere.core.exceptions import LikelihoodError
+
+        with pytest.raises(LikelihoodError, match="quasiseparable representation"):
+            QuasisepGP().check_compatible(SquaredExponential(0.4, 2.0), _quasisep_observed())
+
+    def test_a_kernel_with_no_builder_here_is_refused_by_name(self) -> None:
+        """The table is what routes a kernel to the O(N) path, so a family with
+        no entry is refused rather than silently approximated. Declaring
+        ``QUASISEPARABLE`` is a claim about the *mathematics*; holding an exact
+        representation is a claim about this backend, and they are different."""
+        from ampere.core.exceptions import LikelihoodError
+
+        class Undeclared(Matern32):
+            FAMILY = "not_in_the_table"
+
+        with pytest.raises(LikelihoodError, match="no exact celerite representation"):
+            QuasisepGP().check_compatible(Undeclared(0.4, 2.0), _quasisep_observed())
+
+    def test_the_leave_one_out_terms_are_refused_naming_what_is_missing(self) -> None:
+        """The deferral, restated on this backend and for the same reason."""
+        from ampere.core.exceptions import LikelihoodError
+
+        kernel = Matern32(0.4, 2.0)
+        with pytest.raises(LikelihoodError, match=r"O\(N\) route"):
+            QuasisepGP().conditional_loo(
+                kernel, QUASISEP_GRID, QUASISEP_RESIDUAL, QUASISEP_VARIANCE, kernel.resolve(None)
+            )
+
+    def test_provenance_records_which_library_produced_the_numbers(self) -> None:
+        """``inference.md`` §10a fold-in 10, and the question an archive will ask.
+
+        The numpy and jax quasiseparable paths are the same *representation*
+        through different builds of the same library; nothing else in a run
+        distinguishes them.
+        """
+        config = dict(QuasisepGP().provenance_config())
+        assert config["library"] == "celerite2.jax"
+        assert config["dtype"] == "float64"
+        assert config["x64_policy_opt_out"] is False
+
+    def test_it_declares_the_batching_it_cannot_do(self) -> None:
+        """Not a limitation of jax: celerite2's primitives have no batching rule."""
+        assert QuasisepGP().BATCHABLE is False
+        assert DenseGP().BATCHABLE is True
+
+    def test_it_is_a_frozen_dataclass_with_only_jitter_in_the_spec(self) -> None:
+        """``device`` is an ``InitVar``, so it stays out of the spec hash.
+
+        ``Likelihood.describe()`` records a dataclass solver's *fields*, and
+        ``results.md`` §14 requires the spec hash to agree across backends, so
+        a field this solver had and ``ampere.core.QuasisepGP`` did not would
+        make two backends' declaration of one problem differ.
+        """
+        import dataclasses
+
+        assert dataclasses.is_dataclass(QuasisepGP())
+        assert [field.name for field in dataclasses.fields(QuasisepGP())] == ["jitter"]
+
+    def test_celerite2_jax_is_not_imported_until_it_is_used(self) -> None:
+        """``lowering.md`` §10.2(a), enforced against a dependency's side effect.
+
+        ``celerite2.jax`` turns ``jax_enable_x64`` **on** at import. If ampere
+        imported it eagerly, ``require_x64`` — the guard that is supposed to
+        *refuse* when the flag is off — would be satisfied by a flag nobody in
+        the user's program set. A subprocess is the only honest way to check
+        it: within this session the module has long since been imported.
+        """
+        script = (
+            "import sys\n"
+            "import ampere.backends.jax\n"
+            "assert 'celerite2.jax' not in sys.modules, 'imported eagerly'\n"
+            "from jax import config\n"
+            "assert not config.read('jax_enable_x64'), 'x64 was flipped by an import'\n"
+            "print('ok')\n"
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**os.environ, "JAX_ENABLE_X64": "0"},
+        )
+        assert completed.returncode == 0, completed.stderr
+        assert "ok" in completed.stdout
+
+
+class TestPrecisionAndDevice:
+    """``architecture.md`` §5's float32 opt-out and the ``device=`` opt-in."""
+
+    def test_float64_is_the_default_and_is_recorded(self) -> None:
+        config = dict(DenseGP().provenance_config())
+        assert config["dtype"] == "float64"
+        assert config["device"] == "cpu"
+        assert config["x64_policy_opt_out"] is False
+
+    def test_the_float32_opt_out_is_recorded_as_a_departure_from_the_policy(self) -> None:
+        config = dict(DenseGP(precision="float32").provenance_config())
+        assert config["dtype"] == "float32"
+        assert config["x64_policy_opt_out"] is True
+
+    def test_the_float32_opt_out_actually_changes_the_arithmetic(self) -> None:
+        """Not merely a label: the solve runs in single precision.
+
+        The two answers agree to about float32's own precision and disagree by
+        far more than float64's, which is exactly what an opt-out for
+        throughput means and exactly why it is opt-in and recorded.
+        """
+        kernel = Matern32(0.4, 2.0)
+        grid = np.linspace(1.0, 10.0, 40)
+        residual = np.random.default_rng(4).normal(0.0, 0.2, grid.size)
+        variance = np.full(grid.size, 0.05)
+        values = kernel.resolve(None)
+        exact = DenseGP().log_marginal_likelihood(kernel, grid, residual, variance, values)
+        reduced = DenseGP(precision="float32").log_marginal_likelihood(
+            kernel, grid, residual, variance, values
+        )
+        assert reduced == pytest.approx(exact, rel=1e-4)
+        assert reduced != exact
+
+    def test_precision_is_not_a_declaration(self) -> None:
+        """It is configuration, so it must not reach the spec hash."""
+        import dataclasses
+
+        assert [f.name for f in dataclasses.fields(DenseGP(precision="float32"))] == ["jitter"]
+        assert DenseGP(precision="float32") == DenseGP()
+
+    def test_an_unknown_precision_is_refused_by_name(self) -> None:
+        from ampere.core.exceptions import LikelihoodError
+
+        with pytest.raises(LikelihoodError, match="float32"):
+            DenseGP(precision="float16")
+
+    def test_the_quasiseparable_solver_offers_no_precision_argument(self) -> None:
+        """celerite2.jax is float64-only; offering the argument and ignoring it
+        would be worse than not offering it."""
+        with pytest.raises(TypeError):
+            QuasisepGP(precision="float32")  # type: ignore[call-arg]
+
+    def test_the_cpu_device_is_accepted_and_recorded(self) -> None:
+        solver = DenseGP(device="cpu")
+        assert solver.DEVICE == "cpu"
+        assert dict(solver.provenance_config())["device"] == "cpu"
+
+    def test_a_device_this_process_does_not_have_is_refused_rather_than_ignored(self) -> None:
+        """Never a silent fallback: a fit asked for a GPU that quietly ran on the
+        CPU is a fit whose timings mean nothing."""
+        from ampere.core.exceptions import LikelihoodError
+
+        with pytest.raises(LikelihoodError, match="no such platform"):
+            DenseGP(device="definitely-not-a-platform")
+
+
+class TestBatching:
+    """``BATCHABLE``: ``vmap`` over the realised density, measured not asserted."""
+
+    def test_a_vmapped_density_equals_the_same_density_in_a_loop(self) -> None:
+        problem = jax_joint_problem()
+        lowered = lower_problem(problem)
+        assert lowered.batchable is True
+        stack = np.random.default_rng(17).normal(size=(6, problem.free_size))
+        batched = np.asarray(lowered.log_prob_unconstrained_batched(stack))
+        loop = np.array([float(np.asarray(lowered.log_prob_unconstrained(row))) for row in stack])
+        # One ulp of a log-density of order 1e4 is ~2e-12, and vmap is free to
+        # accumulate in a different order; the claim is that it is the same
+        # function, not that XLA reassociates identically.
+        assert batched == pytest.approx(loop, rel=1e-12)
+
+    def test_a_quasiseparable_problem_refuses_batching_by_name(self) -> None:
+        """The refusal exists because the alternative is a message about a
+        celerite2 primitive the user never named, raised from inside a trace."""
+        problem = _gp_problem(QuasisepGP())
+        lowered = lower_problem(problem)
+        assert lowered.batchable is False
+        with pytest.raises(LoweringError, match="QuasisepGP"):
+            lowered.log_prob_unconstrained_batched(np.zeros((3, problem.free_size)))
+
+    def test_a_non_stack_is_refused(self) -> None:
+        lowered = lower_problem(jax_joint_problem())
+        with pytest.raises(LoweringError, match="batch, n_dim"):
+            lowered.log_prob_unconstrained_batched(np.zeros(3))
+
+
+# ---------------------------------------------------------------------------
+# The widened realised path (W2.5 slice 2)
+# ---------------------------------------------------------------------------
+
+
+def _gp_problem(solver: Any) -> FittingProblem:
+    """One dataset under the flexible likelihood, on *solver*."""
+    return FittingProblem(
+        PowerLaw(
+            AGREEMENT_GRID,
+            norm=st.lognorm(0.4, scale=2.0),
+            index=st.norm(-1.2, 0.3),
+            reference_wavelength=REFERENCE_WAVELENGTH,
+        ),
+        [
+            Dataset(
+                FINE_DATA,
+                likelihood=Likelihood(
+                    GaussianFamily(), GaussianProcessNoise(_fitted_matern(), solver)
+                ),
+            )
+        ],
+        seed=20260907,
+    )
+
+
+def _family_problem(
+    family: Any,
+    *,
+    censoring: Any = None,
+    solver: Any = None,
+    counts: bool = False,
+) -> FittingProblem:
+    """A one-dataset problem under *family*, built entirely from this backend."""
+    noise = IndependentNoise() if solver is None else GaussianProcessNoise(_fitted_matern(), solver)
+    if counts:
+        observed = Spectrum(
+            AGREEMENT_GRID * u.micron,
+            np.round(_power_law(AGREEMENT_GRID, 8.0, -0.5)) * u.Jy,
+        )
+        model = PowerLaw(
+            AGREEMENT_GRID,
+            norm=st.lognorm(0.3, scale=8.0),
+            index=st.norm(-0.5, 0.2),
+            reference_wavelength=REFERENCE_WAVELENGTH,
+        )
+    else:
+        observed = FINE_DATA
+        model = PowerLaw(
+            AGREEMENT_GRID,
+            norm=st.lognorm(0.4, scale=2.0),
+            index=st.norm(-1.2, 0.3),
+            reference_wavelength=REFERENCE_WAVELENGTH,
+        )
+    return FittingProblem(
+        model,
+        [Dataset(observed, likelihood=Likelihood(family, noise, censoring=censoring))],
+        seed=20260907,
+    )
+
+
+def _limit_codes(size: int) -> Censoring:
+    codes = np.zeros(size, dtype=np.int8)
+    codes[3] = int(LimitKind.UPPER_LIMIT)
+    codes[11] = int(LimitKind.LOWER_LIMIT)
+    return Censoring(codes)
+
+
+def _agrees(problem: FittingProblem, *, points: int = 12, tolerance: float = 1e-9) -> None:
+    """The realised density equals the numpy contract path at many points."""
+    lowered = lower_problem(problem)
+    rng = np.random.default_rng(20260907)
+    compared = 0
+    for _ in range(points):
+        y = rng.normal(0.0, 1.0, problem.free_size)
+        expected = problem.log_prob_unconstrained(y)
+        got = float(np.asarray(lowered.log_prob_unconstrained(y)))
+        if not np.isfinite(expected):
+            assert not np.isfinite(got)
+            continue
+        assert got == pytest.approx(expected, abs=tolerance)
+        compared += 1
+    assert compared > 0, "every sampled point was outside the support; the row proved nothing"
+
+
+class TestTheWidenedRealisedPath:
+    """Slice 1 lowered a Gaussian with dense-GP or i.i.d. noise. This is the rest.
+
+    Every row is the same claim — the realised density agrees with
+    ``FittingProblem.log_prob_unconstrained``, which is the oracle — applied to
+    a declaration slice 1 refused by name. The neutral battery makes the same
+    comparison for the shapes it declares; these are the shapes it does not.
+    """
+
+    def test_the_quasiseparable_solver_lowers(self) -> None:
+        _agrees(_gp_problem(QuasisepGP()), tolerance=1e-6)
+
+    def test_the_two_solvers_give_the_same_realised_density(self) -> None:
+        dense, quasisep = (
+            lower_problem(_gp_problem(DenseGP())),
+            lower_problem(_gp_problem(QuasisepGP())),
+        )
+        y = np.array([0.3, -0.4, 0.2, 0.1])[: dense.free_size]
+        assert float(np.asarray(quasisep.log_prob_unconstrained(y))) == pytest.approx(
+            float(np.asarray(dense.log_prob_unconstrained(y))), abs=1e-6
+        )
+
+    def test_censored_gaussian_lowers(self) -> None:
+        _agrees(
+            _family_problem(GaussianFamily(), censoring=_limit_codes(AGREEMENT_GRID.size)),
+            tolerance=1e-8,
+        )
+
+    @pytest.mark.parametrize("family", [StudentTFamily(nu=4.0), CauchyFamily()])
+    def test_the_heavy_tailed_families_lower(self, family: Any) -> None:
+        _agrees(_family_problem(family))
+
+    @pytest.mark.parametrize("family", [StudentTFamily(nu=4.0), CauchyFamily()])
+    def test_the_heavy_tailed_families_lower_with_censoring(self, family: Any) -> None:
+        """The CDFs jax has no ``logcdf`` for, written out and checked here."""
+        _agrees(_family_problem(family, censoring=_limit_codes(AGREEMENT_GRID.size)))
+
+    def test_a_fitted_degrees_of_freedom_keeps_its_gradient(self) -> None:
+        """``nu`` is an ordinary parameter, so the density must be differentiable in it."""
+        problem = _family_problem(StudentTFamily(nu=st.lognorm(0.4, scale=6.0)))
+        lowered = lower_problem(problem)
+        gradient = np.asarray(jax.grad(lowered.log_prob_unconstrained)(np.zeros(problem.free_size)))
+        assert gradient.shape == (problem.free_size,)
+        assert np.all(np.isfinite(gradient))
+        assert gradient[-1] != 0.0
+
+    def test_a_censored_gradient_survives_an_exactly_zero_residual(self) -> None:
+        """The NaN this backend would otherwise produce, and the reason the
+        Student-t log-CDF carries a hand-written derivative.
+
+        ``betainc``'s derivative in ``x`` diverges as ``x -> 1``, and
+        ``x = nu / (nu + z**2)`` *is* 1 when a residual is exactly zero. The
+        chain rule then multiplies infinity by zero, jax reports NaN, and one
+        such sample poisons that term's gradient. The composite derivative is
+        elementary and finite (``f(z)/F(z)``), so it is supplied rather than
+        differentiated — and this row is what says so.
+        """
+        from ampere.backends.jax.families import lower_family as _lower
+
+        family = StudentTFamily(nu=4.0)
+        lowered = _lower(family, "sed", censored=True)
+        observed = jnp.asarray([1.0, 2.0, 0.5, 3.0])
+        sigma = jnp.full(4, 0.2)
+        limits = jnp.asarray(
+            [0, int(LimitKind.UPPER_LIMIT), int(LimitKind.LOWER_LIMIT), 0], dtype=jnp.int32
+        )
+
+        def density(predicted: Any) -> Any:
+            return lowered(predicted, observed, sigma, family, {}, limits, None)
+
+        # Every residual exactly zero: the worst case, not a random one.
+        gradient = np.asarray(jax.grad(density)(observed))
+        assert np.all(np.isfinite(gradient))
+
+    def test_the_censored_student_t_derivatives_match_scipy(self) -> None:
+        """The hand-written rule is checked against the definition it replaces."""
+        from ampere.backends.jax.families import _student_t_logcdf, _student_t_logsf
+
+        z = np.array([-3.0, -1.0, -0.2, 0.0, 0.5, 2.0, 4.0])
+        nu = 4.0
+        assert np.asarray(_student_t_logcdf(jnp.asarray(z), nu)) == pytest.approx(
+            st.t.logcdf(z, nu), abs=1e-12
+        )
+        assert np.asarray(_student_t_logsf(jnp.asarray(z), nu)) == pytest.approx(
+            st.t.logsf(z, nu), abs=1e-12
+        )
+        slope = np.asarray(
+            jax.vmap(jax.grad(lambda value: _student_t_logcdf(value, nu)))(jnp.asarray(z))
+        )
+        assert slope == pytest.approx(st.t.pdf(z, nu) / st.t.cdf(z, nu), abs=1e-12)
+        survival = np.asarray(
+            jax.vmap(jax.grad(lambda value: _student_t_logsf(value, nu)))(jnp.asarray(z))
+        )
+        assert survival == pytest.approx(-st.t.pdf(z, nu) / st.t.sf(z, nu), abs=1e-12)
+
+    def test_a_fitted_nu_under_censoring_is_refused_rather_than_faked(self) -> None:
+        """jax supplies no derivative of ``betainc`` in its parameters, so there
+        is no gradient in ``nu`` to be had — and a fabricated zero would be a
+        fit that ran, converged and never moved ``nu``."""
+        from ampere.backends.jax.families import lower_family as _lower
+
+        with pytest.raises(LoweringError, match="no gradient in `nu`"):
+            _lower(StudentTFamily(nu=st.lognorm(0.4, scale=6.0)), "sed", censored=True)
+
+    def test_a_fitted_nu_without_censoring_is_fine(self) -> None:
+        """The refusal is narrow: only the *censored* term needs the CDF."""
+        from ampere.backends.jax.families import lower_family as _lower
+
+        assert _lower(StudentTFamily(nu=st.lognorm(0.4, scale=6.0)), "sed") is not None
+
+    def test_the_poisson_family_lowers(self) -> None:
+        _agrees(_family_problem(PoissonFamily(), counts=True))
+
+    def test_the_latent_gp_poisson_combination_lowers(self) -> None:
+        """``DEVELOPMENT_PLAN.md`` §4.4's singled-out case, and the one no
+        gradient-free engine can run: the latent block is a sampler dimension
+        per retained sample, so the problem is N + k dimensional."""
+        problem = _family_problem(PoissonFamily(), solver=QuasisepGP(), counts=True)
+        assert problem.datasets["default"].latent is not None
+        assert problem.free_size > AGREEMENT_GRID.size
+        _agrees(problem, points=6)
+
+    def test_the_terms_sum_to_the_joint_likelihood_on_a_widened_shape(self) -> None:
+        problem = _family_problem(CauchyFamily(), censoring=_limit_codes(AGREEMENT_GRID.size))
+        lowered = lower_problem(problem)
+        y = np.zeros(problem.free_size)
+        terms = lowered.log_likelihood_terms(y)
+        evaluation = problem.evaluate(problem.constrain(y))
+        assert float(sum(float(np.asarray(v)) for v in terms.values())) == pytest.approx(
+            evaluation.log_likelihood, abs=1e-9
+        )
+
+    def test_a_family_ampere_core_does_not_implement_is_refused_by_name(self) -> None:
+        """``rice`` is a declared slot whose own ``log_prob`` raises, so there is
+        nothing here to agree with — and the refusal says so rather than
+        pretending this backend is the limitation.
+
+        Reached directly rather than through a problem, because ``ampere.core``
+        refuses the composition *first* (``Likelihood`` will not take an
+        unimplemented family at all). That is the right order and this row is
+        the second line of defence: a family implemented on the reference path
+        but not transcribed here must be refused by name too, and the two
+        branches share the message.
+        """
+        with pytest.raises(LoweringError, match="rice"):
+            lower_family(RiceFamily(), "sed")
+
+    def test_another_backends_solver_is_still_refused(self) -> None:
+        """W2.13's loud consequence, unchanged by the widening: a numpy solve in
+        a jax problem gets no gradient at all."""
+        from ampere.core import QuasisepGP as CoreQuasisepGP
+
+        with pytest.raises(Exception, match=r"backend|QuasisepGP"):
+            _gp_problem(CoreQuasisepGP())
+
+
+class TestSyntheticPhotometryNatively:
+    """The native photometry chain, which slice 1 shipped broken.
+
+    ``apply_flux`` handed the inherited ``influence`` a bare array where it
+    needs an :class:`~ampere.core.Axis` — the lookup is the axis's job
+    (``spectrum_photometry.md`` Gap 1) — so the first evaluation of any
+    realised chain ending in photometry raised ``AttributeError``. Nothing
+    caught it because no conformance ``ProblemSpec`` had a photometry step;
+    slice 2 adds one, and these rows pin the shipped step's own behaviour.
+    """
+
+    @staticmethod
+    def _step() -> SyntheticPhotometry:
+        wavelength = np.linspace(2.0, 8.0, 25)
+        response = np.exp(-0.5 * ((wavelength[None, :] - np.array([[3.5], [6.0]])) / 0.6) ** 2)
+        return SyntheticPhotometry(
+            ["A", "B"], wavelength, response, detector="photon", label="synphot"
+        )
+
+    def test_the_native_surface_agrees_with_the_contract_surface(self) -> None:
+        step = self._step()
+        grid = np.linspace(2.0, 8.0, 25)
+        flux = 2.0 * grid**-1.0
+        spectrum = Spectrum(grid * u.micron, flux * u.Jy)
+        contract = np.asarray(step.apply(spectrum, {}).values)
+        native, pivots = step.apply_flux(jnp.asarray(flux), jnp.asarray(grid), {})
+        assert np.asarray(native) == pytest.approx(contract, abs=1e-12)
+        assert np.asarray(pivots) == pytest.approx(step.pivots(), abs=1e-12)
+
+    def test_it_places_its_columns_by_lookup_on_a_larger_grid(self) -> None:
+        """The whole point of rebuilding the axis: negotiation hands a step a
+        grid larger than the one it tabulated on, and reading the values
+        positionally would be silently wrong."""
+        step = self._step()
+        tabulated = np.linspace(2.0, 8.0, 25)
+        wider = np.unique(np.concatenate([np.linspace(0.5, 12.0, 40), tabulated]))
+        flux = 2.0 * wider**-1.0
+        spectrum = Spectrum(wider * u.micron, flux * u.Jy)
+        contract = np.asarray(step.apply(spectrum, {}).values)
+        native, _ = step.apply_flux(jnp.asarray(flux), jnp.asarray(wider), {})
+        assert np.asarray(native) == pytest.approx(contract, abs=1e-12)
+
+    def test_it_is_differentiable_through_the_flux(self) -> None:
+        step = self._step()
+        grid = jnp.asarray(np.linspace(2.0, 8.0, 25))
+
+        def total(scale: Any) -> Any:
+            flux = scale * (2.0 * grid**-1.0)
+            return jnp.sum(step.apply_flux(flux, grid, {})[0])
+
+        gradient = float(jax.grad(total)(jnp.asarray(1.0)))
+        assert np.isfinite(gradient) and gradient != 0.0

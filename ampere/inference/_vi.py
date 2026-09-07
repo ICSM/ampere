@@ -33,19 +33,39 @@ and nothing else, so the gradient comes from the backend's **realisation**
 (``inference.md`` §10a) obtained through :func:`ampere.core.realise`, and the
 variational library is imported lazily inside :meth:`VIEngine.run`.
 
-Turning a density into a model pyro can guide
-----------------------------------------------
-This is the one piece of real work, and it is worth stating plainly because it
-looks like a trick. ``pyro.infer.SVI`` takes a *model* — a probabilistic
-program with sample sites — while a realisation is a bare log density of one
-flat unconstrained vector, with no site structure at all (``inference.md``
-§10a fixes it that way, so that ampere's own ``ParameterMapping`` stays the
-only thing that routes names). MCMC has ``potential_fn=`` for exactly this;
-SVI has no equivalent.
+Two libraries, one driver
+-------------------------
+The *density* is backend-neutral by the time this driver has it, but the
+optimiser is not: pyro's ``SVI`` wants a torch model and numpyro's wants a jax
+one, and neither will consume the other's array. So :meth:`VIEngine.run`
+dispatches on ``problem.backend`` between :meth:`VIEngine._fit_pyro` and
+:meth:`VIEngine._fit_numpyro`, exactly as ``_nuts.py`` dispatches between the
+two NUTS kernels, and imports the one it needs lazily.
+:data:`VARIATIONAL_LIBRARIES` is that table, and
+:func:`supported_backends` is the registry intersected with it.
 
-So the model declares one site over the whole unconstrained vector — a
-standard normal, whose support is all of ``R**d`` — and then adds a
-:func:`pyro.factor` of ``density(theta) - base.log_prob(theta)``. The log
+The two routes emit the **same** provenance keys — ``vi_guide``,
+``vi_guide_class``, ``vi_steps``, ``vi_draws``, ``vi_optimiser``,
+``vi_learning_rate``, ``vi_library``, ``vi_final_elbo``, ``vi_elbo_trace`` —
+plus their own library versions. That is not tidiness: a reader of an archived
+run should not have to know which library fitted it in order to know what was
+fitted, and a key that existed on one backend only would make every
+cross-backend comparison of VI runs a special case.
+
+Turning a density into a model SVI can guide
+---------------------------------------------
+This is the one piece of real work, and it is worth stating plainly because it
+looks like a trick. ``SVI`` takes a *model* — a probabilistic program with
+sample sites — while a realisation is a bare log density of one flat
+unconstrained vector, with no site structure at all (``inference.md`` §10a
+fixes it that way, so that ampere's own ``ParameterMapping`` stays the only
+thing that routes names). MCMC has ``potential_fn=`` for exactly this; SVI has
+no equivalent, in either library.
+
+So the model declares one site over the whole unconstrained vector. On the
+pyro route that site is a standard normal, whose support is all of ``R**d``,
+and the model then adds a :func:`pyro.factor` of
+``density(theta) - base.log_prob(theta)``. The log
 joint is therefore ``log N(theta; 0, I) + density(theta) - log N(theta; 0, I)``
 = ``density(theta)``, exactly, and the standard normal is a *carrier* for the
 site rather than a prior: it cancels identically, term by term, at every point.
@@ -53,6 +73,13 @@ Any distribution with full real support would do; the standard normal is
 chosen because it is cheap and because its scale matches the unconstrained
 coordinates a well-behaved bijection produces, which keeps the subtraction from
 being a difference of two large numbers.
+
+numpyro can do better, and does: it ships an ``ImproperUniform``, whose
+contribution to the log-density is *identically* zero, so the jax route
+declares its site under that and adds ``numpyro.factor("ampere_density",
+density(theta))`` with nothing to subtract. Same target, one fewer
+cancellation. The two routes therefore differ in the carrier and agree in the
+density, which is the right place for a library difference to live.
 
 The autoguides then see a single unconstrained real site of the right shape,
 which is what they are best at. ``AutoNormal`` gives a diagonal Gaussian in
@@ -95,16 +122,20 @@ __all__ = ["GUIDE_FAMILIES", "VARIATIONAL_LIBRARIES", "VIEngine", "supported_bac
 #: imports, for the reason ``_nuts.py``'s :data:`SAMPLER_LIBRARIES` gives: this
 #: module imports no backend and no library at module level.
 #:
-#: Only torch today. numpyro's ``SVI`` is the jax counterpart and joins by
-#: adding a row here *and* a route in :meth:`VIEngine._fit`; the jax track owns
-#: that, and a row here with no route would make ``supported_backends()`` claim
-#: a capability that does not exist.
-VARIATIONAL_LIBRARIES: dict[str, str] = {"torch": "pyro"}
+#: Both, since W2.5 slice 2 added the numpyro route the torch track's comment
+#: reserved. A row here without a route in :meth:`VIEngine.run` would make
+#: ``supported_backends()`` claim a capability that does not exist, so the two
+#: land together — the same discipline ``_nuts.py``'s
+#: :data:`~ampere.inference._nuts.SAMPLER_LIBRARIES` keeps.
+VARIATIONAL_LIBRARIES: dict[str, str] = {"torch": "pyro", "jax": "numpyro"}
 
 #: The guide families a user may name, and what each assumes. The **names** are
 #: ampere's, not pyro's, because the same two families exist in numpyro under
 #: the same names and a run's ``vi_guide`` attribute has to mean one thing
-#: across backends — the same discipline W2.12 applied to backend names.
+#: across backends — the same discipline W2.12 applied to backend names. The
+#: values happen to be the class names both libraries use, which is why one
+#: table serves both routes; that is a convenience, not the contract. The
+#: contract is the *key*.
 GUIDE_FAMILIES: dict[str, str] = {
     "normal": "AutoNormal",
     "multivariate": "AutoMultivariateNormal",
@@ -233,8 +264,10 @@ class VIEngine(Engine):
                 f"were consulted."
             )
         self.realisation: Realisation | None = None
-        #: pyro's ``SVI`` object after a run, and the fitted guide, for anything
-        #: this driver does not expose — the guide's own ``quantiles``, say.
+        #: The fitted guide after a run — pyro's or numpyro's, whichever route
+        #: ran — for anything this driver does not expose: the guide's own
+        #: ``quantiles``, say. :attr:`sampler` holds the ``SVI`` object beside
+        #: it, as it holds the ``MCMC`` object for the other drivers.
         self.guide: Any = None
         if density is None:
             try:
@@ -292,8 +325,11 @@ class VIEngine(Engine):
             joint prior on this engine's own initialisation stream, so a run
             repeats exactly from the problem's seed.
         progress
-            Print the ELBO every tenth of the run. Off by default: a driver
-            that prints by default is unusable inside a loop or a test suite.
+            Report progress while optimising — the ELBO every tenth of the
+            run on the pyro route, numpyro's own progress bar on the jax one,
+            because each library's idiom is what a user of that library
+            expects to see. Off by default either way: a driver that prints by
+            default is unusable inside a loop or a test suite.
 
         Returns
         -------
@@ -327,7 +363,11 @@ class VIEngine(Engine):
             learning_rate=float(learning_rate),
             progress=bool(progress),
         )
-        drawn, attrs = self._fit_pyro(unconstrained, settings)
+        library = VARIATIONAL_LIBRARIES[self.problem.backend]
+        if library == "pyro":
+            drawn, attrs = self._fit_pyro(unconstrained, settings)
+        else:
+            drawn, attrs = self._fit_numpyro(unconstrained, settings)
 
         chain = np.stack([[self.problem.constrain(y) for y in drawn]])
         attrs.update(
@@ -338,7 +378,7 @@ class VIEngine(Engine):
                 "vi_guide_class": GUIDE_FAMILIES[settings.guide],
                 "vi_optimiser": "adam",
                 "vi_learning_rate": settings.learning_rate,
-                "vi_library": VARIATIONAL_LIBRARIES[self.problem.backend],
+                "vi_library": library,
             }
         )
         decomposition = self._decomposition(np.asarray([drawn]))
@@ -435,6 +475,93 @@ class VIEngine(Engine):
             "vi_elbo_trace": _thinned(elbo),
             "pyro_version": pyro.__version__,
             "torch_version": torch.__version__,
+        }
+        return drawn, attrs
+
+    # -- the numpyro route ----------------------------------------------------
+
+    def _fit_numpyro(
+        self, unconstrained: np.ndarray, settings: _Settings
+    ) -> tuple[np.ndarray, dict[str, object]]:
+        """numpyro's SVI over a jax realisation.
+
+        The same three steps as the pyro route, in numpyro's spelling, and
+        emitting the same provenance keys — ``vi_final_elbo``,
+        ``vi_elbo_trace`` and a pair of library versions — because a reader of
+        an archived run should not have to know which library fitted it to
+        know what was fitted.
+
+        Lazy imports, exactly as ``_nuts.py`` imports numpyro: ``import
+        ampere.inference`` must not require jax (``architecture.md`` §4
+        rule 2). The suppressions are the price of that rule — ``dev``, the
+        environment CI typechecks in, deliberately has no jax — and the real
+        check is ``pixi run -e jax typecheck``.
+
+        Two differences from the pyro route, both forced by the library rather
+        than chosen.
+
+        * **The carrier is an improper uniform, not a standard normal.** pyro
+          needs a proper site and subtracts its ``log_prob`` back off; numpyro
+          offers ``ImproperUniform``, whose contribution to the log-density is
+          *identically* zero, so the correction has nothing to cancel and is
+          simply absent. That is the better of the two — there is no
+          difference of two large numbers to lose precision to — and it is
+          available here only because numpyro ships the distribution. The
+          support is ``real_vector``, so the autoguide's own ``biject_to`` is
+          the identity and the guide is fitted in exactly the coordinates the
+          realisation takes, which is the property the pyro route obtains from
+          the standard normal.
+        * **Nothing is scoped or forked.** numpyro has no process-global
+          parameter store and no global RNG: the fitted parameters come back
+          in the ``SVIRunResult`` and every stream is an explicit key. So the
+          two guards the pyro route needs — ``get_param_store().scope()`` and
+          ``fork_rng`` — have no counterpart, and their absence is a property
+          of the library rather than an omission. The seed still comes from
+          this engine's own sub-stream, so a run repeats from the problem's
+          seed exactly as every other driver's does.
+        """
+        import jax  # pyrefly: ignore[missing-import]
+        import numpyro  # pyrefly: ignore[missing-import]
+        import numpyro.distributions as dist  # pyrefly: ignore[missing-import]
+        from numpyro import optim  # pyrefly: ignore[missing-import]
+        from numpyro.infer import SVI, Trace_ELBO, autoguide  # pyrefly: ignore[missing-import]
+        from numpyro.infer.initialization import (  # pyrefly: ignore[missing-import]
+            init_to_value,
+        )
+
+        size = int(self.problem.free_size)
+        density = self.density
+        start = jax.numpy.asarray(unconstrained, dtype=jax.numpy.float64)
+
+        def model() -> None:
+            theta = numpyro.sample(
+                _SITE, dist.ImproperUniform(dist.constraints.real_vector, (), (size,))
+            )
+            numpyro.factor("ampere_density", density(theta))
+
+        builder = getattr(autoguide, GUIDE_FAMILIES[settings.guide])
+        # The same start point the pyro route uses, and for the same reason:
+        # a guide left at zero in unconstrained space can begin far enough
+        # from the mass that the ELBO's gradient is numerically flat.
+        guide = builder(model, init_loc_fn=init_to_value(values={_SITE: start}))
+        svi = SVI(model, guide, optim.Adam(settings.learning_rate), loss=Trace_ELBO())
+        keys = jax.random.split(jax.random.key(self.integer_seed("optimiser")), 2)
+        result = svi.run(keys[0], settings.steps, progress_bar=settings.progress)
+        self.guide = guide
+        self.sampler = svi
+
+        posterior = guide.sample_posterior(keys[1], result.params, sample_shape=(settings.draws,))
+        drawn = np.asarray(posterior[_SITE], dtype=float).reshape(settings.draws, size)
+
+        # numpyro's SVI *minimises* the negative ELBO, so its losses are -ELBO.
+        # Recorded as the ELBO itself, which is what the pyro route records and
+        # what a reader expects to see climbing towards a plateau.
+        elbo = [-float(value) for value in np.asarray(result.losses, dtype=float)]
+        attrs: dict[str, object] = {
+            "vi_final_elbo": elbo[-1],
+            "vi_elbo_trace": _thinned(elbo),
+            "numpyro_version": numpyro.__version__,
+            "jax_version": jax.__version__,
         }
         return drawn, attrs
 

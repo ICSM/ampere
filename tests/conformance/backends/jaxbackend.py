@@ -33,13 +33,14 @@ row 11 and is asserted directly in ``tests/backends/test_jax.py``.
 
 Solvers
 -------
-``DENSE`` only. ``ampere.core.QuasisepGP`` is celerite2's *numpy* solver, and
-handing it back here would satisfy every agreement row while proving nothing —
-which is exactly what ``TestSolverAgreement``'s "a declared quasiseparable
-strategy must be a different strategy from the dense one" row exists to catch.
-Slice 2 of W2.5 chooses between ``tinygp``'s ``QuasisepSolver`` and
-``celerite2.jax`` by measuring both against this battery; until then the
-quasiseparable rows skip, with the suite's own reason naming what is owed.
+``DENSE`` and ``QUASISEP``, both this backend's own since W2.5 slice 2. The
+quasiseparable one is :class:`ampere.backends.jax.QuasisepGP` — celerite2's
+*jax* interface over ampere's own exact rank-2 Matérn-3/2 representation, not
+``ampere.core.QuasisepGP``, which is celerite2's numpy solver and would
+satisfy every agreement row while proving nothing (which is exactly what
+``TestSolverAgreement``'s "a declared quasiseparable strategy must be a
+different strategy from the dense one" row exists to catch, and what its
+backend flag now catches too).
 """
 
 from __future__ import annotations
@@ -59,6 +60,7 @@ from ampere.backends.jax import (
     IndependentNoise,
     Matern32,
     PowerLaw,
+    QuasisepGP,
     Resample,
     SquaredExponential,
     configure_x64,
@@ -265,14 +267,20 @@ class JaxBackend:
         # part declares, and `ampere.backends.jax.lower_problem` is what cashes
         # it: a pure jax log-density a NUTS kernel can differentiate.
         differentiable=True,
-        # Slice 2's `vmap` work; claiming it today would be a promise unkept.
-        batchable=False,
+        # Slice 2's `vmap` work, landed: every model, step, kernel, noise
+        # model and the dense solver is whole-array `jax.numpy`, so
+        # `jax.vmap` over the realised density maps as it maps any pure
+        # function -- and `LoweredProblem.log_prob_unconstrained_batched` is
+        # the surface. `QuasisepGP` is the one part that still says False
+        # (celerite2 registers no batching rule), which is why this claim is
+        # about `SINGLE` -- the shape the flags row composes -- and why a
+        # quasiseparable problem honestly reports `batchable=False`.
+        batchable=True,
         device="cpu",
         # `configure_x64()` below, and every class raises without it.
         float64=True,
-        # See this module's docstring: DENSE only until slice 2 has chosen
-        # between tinygp's QuasisepSolver and celerite2.jax.
-        solvers=frozenset({SolverKind.DENSE}),
+        # Both, since W2.5 slice 2 chose celerite2.jax for the O(N) solve.
+        solvers=frozenset({SolverKind.DENSE, SolverKind.QUASISEP}),
     )
 
     def __init__(self) -> None:
@@ -296,12 +304,11 @@ class JaxBackend:
         return _KERNELS[spec.family](spec.amplitude, spec.length_scale)
 
     def gp_solver(self, kind: SolverKind) -> GPSolver:
-        if kind is not SolverKind.DENSE:
-            raise NotImplementedError(
-                f"the {BACKEND!r} backend declares no {kind.value} solver; see this module's "
-                f"docstring for what slice 2 owes."
-            )
-        return DenseGP()
+        if kind is SolverKind.DENSE:
+            return DenseGP()
+        if kind is SolverKind.QUASISEP:
+            return QuasisepGP()
+        raise NotImplementedError(f"the {BACKEND!r} backend declares no {kind.value} solver.")
 
     def independent_noise(self) -> NoiseModel:
         # This backend's own, since W2.13: a noise model is a capability part
