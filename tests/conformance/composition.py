@@ -33,8 +33,6 @@ from ampere.core import (
     Censoring,
     Dataset,
     FittingProblem,
-    GaussianProcessNoise,
-    IndependentNoise,
     Instrument,
     Likelihood,
     LimitKind,
@@ -261,12 +259,19 @@ def observed_container(spec: ProblemSpec, dataset: DatasetSpec) -> Spectrum:
 
 
 def build_noise(backend: ConformanceBackend, dataset: DatasetSpec) -> NoiseModel:
-    """The noise model *dataset* declares, with the backend's kernel and solver."""
+    """The noise model *dataset* declares, from the backend's own noise classes.
+
+    The noise model and the solver were ``ampere.core``'s here until W2.13,
+    when the capability flags widened to cover both (``inference.md`` §10a,
+    fold-in 7). They carry a ``BACKEND`` now, and
+    ``Likelihood.capability_parts`` puts them on the composed problem, so a
+    fixture composing the core classes under its own name would declare two
+    backends and be refused — which is the point of the widening, not a
+    casualty of it.
+    """
     if dataset.noise is NoiseKind.IID:
-        return IndependentNoise()
-    return GaussianProcessNoise(
-        backend.kernel(dataset.covariance), backend.gp_solver(dataset.solver)
-    )
+        return backend.independent_noise()
+    return backend.gp_noise(backend.kernel(dataset.covariance), backend.gp_solver(dataset.solver))
 
 
 def build_likelihood(

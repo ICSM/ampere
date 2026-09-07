@@ -913,8 +913,47 @@ class Dataset:
 
     @property
     def capability_parts(self) -> tuple[object, ...]:
-        """The objects whose capability declarations this dataset depends on."""
-        return tuple(self.instrument.steps)
+        """The objects whose capability declarations this dataset depends on.
+
+        The instrument steps, and — **since W2.13** (ruled 2026-09-07,
+        ``inference.md`` §10a, fold-in 7) — the likelihood's own parts: its
+        noise model, and its GP solver when a GP is declared. Before that
+        widening a problem could report ``backend="jax"`` and
+        ``differentiable=True`` while its GP solve factorised in scipy, which
+        both backend tracks recorded as a finding; the flags now cover the
+        whole of what one evaluation passes through.
+        """
+        return (*self.instrument.steps, *self.likelihood.capability_parts)
+
+    @property
+    def effective_mask(self) -> np.ndarray | None:
+        """Which samples this dataset excludes, resolved once at construction.
+
+        The union of the observed and predicted containers' masks, as a boolean
+        array that is ``True`` where a sample is **excluded**; ``None`` when
+        nothing is excluded, which is the common case and lets a caller skip
+        the indexing entirely.
+
+        Public since **W2.13** (ruled 2026-09-07, fold-in 9). It was private,
+        and both backend tracks reached past the underscore for it anyway,
+        because a native path needs exactly this: the mask is resolved at
+        composition and is evaluation-invariant by declaration
+        (:meth:`_resolve_mask` explains why that is contract rather than
+        optimisation), so which samples are retained is a constant a
+        differentiable log-density can close over rather than a value it must
+        recompute inside the trace.
+
+        Returns
+        -------
+        numpy.ndarray or None
+            Read-only. A copy is returned rather than the stored array, so a
+            caller cannot make the effective mask mutable state.
+        """
+        if self._effective_mask is None:
+            return None
+        mask = np.array(self._effective_mask, dtype=bool)
+        mask.flags.writeable = False
+        return mask
 
     # -- evaluation -----------------------------------------------------------
 

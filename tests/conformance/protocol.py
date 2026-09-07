@@ -40,6 +40,7 @@ from ampere.core import (
     GPSolver,
     Kernel,
     Model,
+    NoiseModel,
     ParameterSet,
     Transformation,
 )
@@ -363,7 +364,7 @@ class BackendCapabilities:
 class ConformanceBackend(Protocol):
     """Everything the conformance battery asks of a backend.
 
-    Seven members. Implement them and every row in ``tests/conformance/``
+    Nine members. Implement them and every row in ``tests/conformance/``
     runs against your backend; register the instance in
     ``tests/conformance/backends/__init__.py`` and nothing else changes —
     which is W1.10's acceptance criterion ("adding a backend requires only a
@@ -418,6 +419,27 @@ class ConformanceBackend(Protocol):
 
         Only called for a kind present in ``capabilities.solvers``; a backend
         may raise for anything else.
+        """
+
+    def independent_noise(self) -> NoiseModel:
+        """This backend's uncorrelated noise model, with no scale or jitter.
+
+        **Added at W2.13.** A :class:`~ampere.core.NoiseModel` carries the four
+        capability flags from that item on (``inference.md`` §10a, fold-in 7)
+        and :attr:`ampere.core.Likelihood.capability_parts` puts it on the
+        composed problem, so a fixture that kept composing
+        ``ampere.core.IndependentNoise`` under its own name would be declaring
+        two backends and refused at composition — correctly, because a
+        nominally native problem whose noise arithmetic ran in numpy is
+        exactly what that widening exists to catch.
+        """
+
+    def gp_noise(self, kernel: Kernel, solver: GPSolver) -> NoiseModel:
+        """This backend's GP noise composition over *kernel* and *solver*.
+
+        **Added at W2.13**, for the reason :meth:`independent_noise` gives.
+        *kernel* and *solver* are this fixture's own, from :meth:`kernel` and
+        :meth:`gp_solver`.
         """
 
     def parameter_space(self, declaration: ParameterSet) -> ParameterSpace:

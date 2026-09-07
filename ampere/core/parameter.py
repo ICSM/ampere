@@ -1783,6 +1783,42 @@ class ParameterSet:
                 raise KeyError(f"parameter {name!r} is fixed and occupies no free slice") from None
             raise KeyError(f"no parameter named {name!r}") from None
 
+    def evaluation_order(self) -> tuple[str, ...]:
+        """Every parameter's name, ordered so a hyperparameter precedes its dependants.
+
+        The topological order this set's own ``lnprior`` and ``sample`` walk:
+        a parameter whose prior is a :class:`HierarchicalPrior` referencing
+        others appears after all of them, and declaration order is preserved
+        among independent parameters, so the result is deterministic. The
+        **flat-vector layout is not reordered** — :meth:`free_slice` is
+        unaffected; this is the order in which *priors are evaluated*, which
+        is a different question and the reason the two are separate.
+
+        Public since **W2.13** (ruled 2026-09-07, ``DEVELOPMENT_PLAN.md`` §2's
+        realisation row, fold-in 9). W2.4 asked for it: a backend lowering a
+        merged set has to walk the same order to bind a hierarchical prior's
+        arguments before using them, and with nothing public it either reached
+        for the private ``_order`` (as jax did) or recomputed the topological
+        sort itself (as torch did) — two copies of one contract, free to
+        drift, for a tuple the set has already built.
+
+        Examples
+        --------
+        >>> import scipy.stats as st
+        >>> spread = Parameter("spread", st.halfnorm(scale=1.0))
+        >>> offset = Parameter("offset", HierarchicalPrior("norm", {"scale": "spread"}))
+        >>> ParameterSet([offset, spread]).evaluation_order()
+        ('spread', 'offset')
+
+        Declaration order survives where nothing depends on anything:
+
+        >>> a = Parameter("a", st.norm())
+        >>> b = Parameter("b", st.norm())
+        >>> ParameterSet([b, a]).evaluation_order()
+        ('b', 'a')
+        """
+        return self._order
+
     def free_labels(self) -> tuple[str, ...]:
         """One label per flat-vector entry: ``"offset[2]"`` for array elements.
 

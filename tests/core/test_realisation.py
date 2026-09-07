@@ -27,6 +27,7 @@ from ampere.core import (
     ParameterError,
     Realisation,
     Spectrum,
+    log_likelihood_terms_of,
     realise,
     register_realisation,
     registered_realisations,
@@ -149,3 +150,48 @@ class TestTheChecksOnUse:
         register_realisation("fake", Broken)
         with pytest.raises(LoweringError, match="could not be evaluated"):
             realise(_problem(capabilities=Capabilities(backend="fake")))
+
+
+class TestTheOptionalDecomposition:
+    """``log_likelihood_terms`` (``inference.md`` §10a, "The surface").
+
+    Optional by ruling (sub-decision 1): present, a driver uses it to emit the
+    per-dataset decomposition natively; absent, it recomputes the split on the
+    numpy path for stored draws only and says so. ``log_likelihood_terms_of``
+    is the one place that question is asked, so a driver and a backend cannot
+    spell the member differently.
+    """
+
+    def test_the_minimal_surface_still_satisfies_the_protocol(self) -> None:
+        # The reason the member is fetched rather than declared: declaring it
+        # on a runtime_checkable Protocol would make every minimal realisation
+        # fail the isinstance check ``realise`` uses for its legible error.
+        realised = _Fake(_problem())
+        assert isinstance(realised, Realisation)
+        assert log_likelihood_terms_of(realised) is None
+
+    def test_a_realisation_that_supplies_it_is_found(self) -> None:
+        class Decomposing(_Fake):
+            def log_likelihood_terms(self, theta: Any) -> dict[str, Any]:
+                return {"data": self._problem.log_likelihood(self._problem.constrain(theta))}
+
+        realised = Decomposing(_problem())
+        terms = log_likelihood_terms_of(realised)
+        assert terms is not None
+        reference = realised._problem.unconstrain(realised._problem.reference_values)
+        assert set(terms(reference)) == {"data"}
+
+    def test_a_non_callable_attribute_of_that_name_is_not_mistaken_for_it(self) -> None:
+        class Confusing(_Fake):
+            log_likelihood_terms = "not a method"
+
+        assert log_likelihood_terms_of(Confusing(_problem())) is None
+
+    def test_it_is_still_reachable_through_realise(self) -> None:
+        class Decomposing(_Fake):
+            def log_likelihood_terms(self, theta: Any) -> dict[str, Any]:
+                return {"data": 0.0}
+
+        register_realisation("fake", Decomposing)
+        realised = realise(_problem(capabilities=Capabilities(backend="fake")))
+        assert log_likelihood_terms_of(realised) is not None

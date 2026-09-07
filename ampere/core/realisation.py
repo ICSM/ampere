@@ -1,8 +1,10 @@
 """Realisation: a composed problem as one backend-native, differentiable density.
 
-**Prototype (W2.13, 2026-09-07).** This module is the registry half of the
-realisation surface proposed to close the gap both Phase 2 backend tracks found
-independently: ``DEVELOPMENT_PLAN.md`` §4.5's engine-facing surface —
+**The contract this module implements is ``inference.md`` §10a** (added by
+W2.13, ruled 2026-09-07; the decision-log row "Realisation surface (W2.13)" in
+``DEVELOPMENT_PLAN.md`` §2 is the record). It closes the gap both Phase 2
+backend tracks found independently: ``DEVELOPMENT_PLAN.md`` §4.5's
+engine-facing surface —
 ``FittingProblem.log_prob_unconstrained`` and friends — is **not traceable**
 on any backend, because every ``ampere.core`` container coerces its values
 with ``numpy.asarray`` (``results_schema.py``) and
@@ -59,6 +61,7 @@ if TYPE_CHECKING:
 __all__ = [
     "Realisation",
     "RealisationFactory",
+    "log_likelihood_terms_of",
     "realise",
     "register_realisation",
     "registered_realisations",
@@ -69,10 +72,30 @@ __all__ = [
 class Realisation(Protocol):
     """What a backend hands back from its realisation factory.
 
-    The surface a gradient-based engine needs and nothing more. ``theta``
-    is the unconstrained free vector in the backend's own array type (a numpy
-    array is always acceptable input — the backend converts); the return is a
-    native scalar the backend's autodiff can differentiate.
+    ``inference.md`` §10a, "The surface". The three members below are
+    **mandatory** and are the whole of what a gradient-based engine needs;
+    ``theta`` is the unconstrained free vector in the backend's own array type
+    (a numpy array is always acceptable input — the backend converts), and the
+    return is a native scalar the backend's autodiff can differentiate.
+
+    Deliberately minimal, because every member is a member three backends must
+    implement in lockstep: this Protocol is the whole of the obligation a new
+    backend takes on to unlock NUTS, and §10a fixes it at the point where
+    ``ampere.inference`` stops needing anything more.
+
+    One member is **optional** and is looked for with ``getattr`` rather than
+    declared here, so that a realisation supplying only the mandatory three
+    still satisfies :func:`isinstance` against this runtime-checkable
+    Protocol: see :func:`log_likelihood_terms_of`.
+
+    Failure signalling narrows ``inference.md`` §11 on this path, and §10a
+    says so explicitly: inside a trace nothing can raise and no ``Failure``
+    record can be built, so :meth:`log_prob_unconstrained` returns a **bare**
+    ``-inf`` (computed with the backend's ``where``) and the reasons §11
+    promises are recovered afterwards, by re-evaluating stored draws on the
+    numpy path. ``strict=True`` on a realised problem means the *factory*
+    refuses at construction, by name; a runtime evaluation failure is always
+    ``-inf``.
     """
 
     @property
@@ -85,6 +108,31 @@ class Realisation(Protocol):
 
     def log_prob_unconstrained(self, theta: Any) -> Any:
         """``log p(θ) + log p(data | θ)`` plus the change of variables, natively."""
+
+
+def log_likelihood_terms_of(realised: Realisation) -> Callable[[Any], Mapping[str, Any]] | None:
+    """*realised*'s optional per-dataset decomposition, or ``None``.
+
+    ``inference.md`` §10a's optional member::
+
+        log_likelihood_terms(theta) -> mapping of dataset label to native scalar
+
+    A driver **uses it when it is there**, to emit
+    ``results.md``'s per-dataset decomposition natively and for every draw the
+    sampler took; **absent, the driver recomputes the split on the numpy path
+    for stored draws only** and records that it did, in
+    ``engine_draws_recomputed``. Both halves of that sentence are the ruling
+    (sub-decision 1), and this function is the one place the "is it there?"
+    question is asked, so a driver cannot spell the member's name differently
+    from the backend that supplies it.
+
+    It is fetched rather than declared on :class:`Realisation` because
+    ``runtime_checkable`` Protocols check *presence*: declaring it would make
+    every minimal realisation fail ``isinstance``, which is exactly the check
+    :func:`realise` uses to give a backend a legible error.
+    """
+    terms = getattr(realised, "log_likelihood_terms", None)
+    return terms if callable(terms) else None
 
 
 #: ``FittingProblem -> Realisation``. Must refuse, by name, at construction —
@@ -115,6 +163,12 @@ def register_realisation(
     builtin: bool = False,
 ) -> None:
     """Register *factory* as the way problems on *backend* are realised.
+
+    ``inference.md`` §10a, "The registry": one slot per backend, keyed on the
+    backend's one name, no silent overwrites, built-in rows distinguished. A
+    backend registers **at import**, so that importing
+    ``ampere.backends.jax`` is both the user's opt-in to jax and the moment
+    the jax realisation becomes reachable.
 
     Parameters
     ----------
@@ -158,17 +212,30 @@ def register_realisation(
 
 
 def registered_realisations() -> Mapping[str, bool]:
-    """``{backend: builtin}`` for every registered row, for provenance and tests."""
+    """``{backend: builtin}`` for every registered row.
+
+    ``inference.md`` §10a lists this as the registry's third member, "for
+    provenance and tests": a run's attrs record whether it sampled through a
+    realisation, and a conformance row is generated per registered backend.
+    """
     return {name: row.builtin for name, row in _REALISATIONS.items()}
 
 
 def realise(problem: FittingProblem) -> Realisation:
     """The backend-native, differentiable form of *problem*.
 
-    Dispatches on ``problem.backend`` (W2.12's derived flag) to the registered
-    factory, then checks the result the way an engine would otherwise have to:
-    it names the same backend, has the problem's ``free_size``, and agrees with
-    the contract path at the problem's reference values.
+    ``inference.md`` §10a, "The registry": dispatches on ``problem.backend``
+    (W2.12's derived flag) to the registered factory, then **checks the result
+    on use**, the way an engine would otherwise have to — it names the same
+    backend, has the problem's ``free_size``, and agrees with the contract path
+    at the problem's reference values.
+
+    The one-point agreement check is a **guard, not the proof** (sub-decision
+    4): the numpy path stays the oracle, and ``tests/conformance`` compares
+    the two at many points, including near a support boundary, once per
+    registered realisation. What one point buys is that a driver handed a
+    realisation which had drifted from its own contract path fails here rather
+    than sampling a healthy-looking posterior of a different problem.
 
     Raises
     ------
