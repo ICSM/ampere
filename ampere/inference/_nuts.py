@@ -71,17 +71,21 @@ divergences, tree depth, step size and the accept probability — and, since
 W2.13, ``ampere_realised = 1`` and the user-registered lowering rows the
 realisation consulted (``inference.md`` §10a, "Provenance").
 
-The per-draw evaluations are **recomputed** rather than cached, and the run
-says so in ``engine_draws_recomputed``. The other drivers score every proposal
-through :class:`~ampere.inference.engine.Engine`'s evaluation cache, so a
-stored draw is usually a lookup; this one scores through the *realised*
-density, which returns a scalar rather than an
-:class:`~ampere.core.dataset.Evaluation`, so the decomposition is computed once
-per stored draw on the contract path afterwards. That is honest and it is
-counted. §10a's optional ``log_likelihood_terms`` is what will remove the
-recomputation — both shipped realisations supply it — and consuming it means
-teaching ``Engine.finish`` to accept a decomposition it did not compute, which
-is a change to the emission path rather than to this driver and is not W2.13's.
+The per-draw decomposition comes from the **realisation**, when it offers one
+(§10a's optional ``log_likelihood_terms``), and the run then records
+``engine_draws_recomputed = 0`` because nothing was recomputed. That is W2.4
+slice 2's; W2.13 shipped the member on both realisations and left the
+consumption to whichever backend track got there first, because it is a change
+to the emission path (``Engine.finish``) rather than to this driver.
+
+The alternative is still live and still honest, for a realisation that does not
+offer the member: the other drivers score every proposal through
+:class:`~ampere.inference.engine.Engine`'s evaluation cache, so a stored draw
+is usually a lookup, while this one scores through the realised density, which
+returns a scalar rather than an :class:`~ampere.core.dataset.Evaluation`. With
+no decomposition to hand, the split is recomputed once per stored draw on the
+numpy contract path — a full model evaluation each, of a quantity the backend
+had just computed — and ``engine_draws_recomputed`` says how many times.
 """
 
 from __future__ import annotations
@@ -95,7 +99,12 @@ import numpy as np
 
 from ampere.core.dataset import FittingProblem
 from ampere.core.exceptions import LoweringError
-from ampere.core.realisation import Realisation, realise, registered_realisations
+from ampere.core.realisation import (
+    Realisation,
+    log_likelihood_terms_of,
+    realise,
+    registered_realisations,
+)
 
 from .engine import DEFAULT_CACHE_SIZE, Engine, _kept
 from .exceptions import EngineError
@@ -447,12 +456,47 @@ class NUTSEngine(Engine):
                 "nuts_sampler": library,
             }
         )
+        decomposition = self._decomposition(drawn)
+        if decomposition is not None:
+            attrs["nuts_decomposition"] = "realisation"
         return self.finish(
             chain,
             extra_attrs=attrs,
             realised=self.realisation is not None,
             registered_lowerings=self._realisation_provenance(),
+            log_likelihood_terms=decomposition,
         )
+
+    def _decomposition(self, unconstrained: np.ndarray) -> list[list[dict[str, float]]] | None:
+        """§10a's optional per-dataset split, from the realisation, for the stored draws.
+
+        ``None`` when the realisation does not offer one (or when the caller
+        supplied a bare density), in which case :meth:`Engine.finish` falls
+        back to the numpy contract path and counts what it recomputed.
+
+        The argument is the **unconstrained** chain, because that is the
+        parameterisation ``log_likelihood_terms`` takes — the same vector this
+        driver already has for every draw, so nothing is transformed back and
+        forth to obtain it.
+
+        Two things are deliberate. It is fetched with ``getattr`` rather than
+        required, because §10a makes the member optional and a realisation is a
+        Protocol rather than a base class; and a realisation that *has* the
+        member but raises while computing it is not caught here — a
+        decomposition that cannot be computed for a point the sampler accepted
+        is a real inconsistency between the density and its own parts, and
+        turning it into a silent fallback would hide exactly the kind of bug
+        this decomposition exists to expose.
+        """
+        if self.realisation is None:
+            return None
+        terms = log_likelihood_terms_of(self.realisation)
+        if terms is None:
+            return None
+        return [
+            [{label: float(np.asarray(value)) for label, value in terms(y).items()} for y in chain]
+            for chain in unconstrained
+        ]
 
     # -- the two sampler routes ----------------------------------------------
 
