@@ -20,6 +20,9 @@ vocabulary that knows nothing about torch, jax, numpyro or paramax
 (`architecture.md` §3–4). **Lowering** is the one-way translation of those
 declarations into a specific backend's objects. It happens once, when a
 `FittingProblem` is realised on a backend — never per evaluation.
+*(What "realised" means was left unspecified at the freeze; `inference.md`
+§10a specifies it — W2.13, 2026-09-07 — as the backend's registered,
+differentiable native form of the whole problem.)*
 
 Three targets, and the jax column is really two:
 
