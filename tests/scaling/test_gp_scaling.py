@@ -26,6 +26,7 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 import pytest
@@ -161,4 +162,119 @@ def test_the_two_solvers_still_agree_at_the_largest_dense_size() -> None:
         # Absolute, and scaled by N: both solvers accumulate rounding over the
         # whole problem, and a fixed absolute bound would be a claim about the
         # dense path's own error rather than about their agreement.
+        assert got == pytest.approx(expected, abs=1e-9 * n)
+
+
+# ---------------------------------------------------------------------------
+# The jax backend's quasiseparable solver (W2.5 slice 2)
+# ---------------------------------------------------------------------------
+#
+# The same claim, on the backend that has to keep it under a *gradient*. W2.5
+# slice 2 chose celerite2.jax over tinygp on exactly this measurement — tinygp's
+# jax-native `lax.scan` recursions are quadratic in practice on XLA's CPU
+# backend, which no amount of asymptotic argument makes linear — so the row that
+# decided it belongs beside the row it mirrors, and runs on demand for the same
+# reason.
+#
+# Skipped where the `jax` extra is absent: `pixi run scaling` uses the daily-use
+# environment, which deliberately has no jax. Run it as
+# `pixi run -e jax scaling`.
+
+
+def _jax_pieces() -> tuple[Any, Any, Any, Any]:
+    """This backend's kernel and two solvers, or a skip."""
+    pytest.importorskip("jax")
+    jax = pytest.importorskip("jax")
+    from ampere.backends.jax import DenseGP as JaxDenseGP
+    from ampere.backends.jax import Matern32 as JaxMatern32
+    from ampere.backends.jax import QuasisepGP as JaxQuasisepGP
+    from ampere.backends.jax import configure_x64
+
+    # `lowering.md` §10.2(a): the *application* turns the flag on, and a test
+    # module is an application. Every class below raises without it.
+    configure_x64()
+    return jax, JaxMatern32, JaxDenseGP, JaxQuasisepGP
+
+
+def measure_jax(solver: Any, kernel: Any, sizes: tuple[int, ...], repeats: int) -> dict[int, float]:
+    """Wall-clock seconds per size for the **jitted, differentiated** density.
+
+    Deliberately the value *and* gradient, not the value alone: this backend
+    exists to feed a gradient-based sampler, so the number that matters is
+    what one NUTS leapfrog step costs. Compilation is excluded — it is paid
+    once per shape, and a sampler pays it once per run.
+    """
+    import jax
+
+    values = kernel.resolve(None)
+    timings: dict[int, float] = {}
+    for n in sizes:
+        coordinates, residual, variance = problem(n)
+        flat = np.ascontiguousarray(coordinates[:, 0])
+
+        def density(
+            amplitude: Any,
+            coordinates: np.ndarray = flat,
+            residual: np.ndarray = residual,
+            variance: np.ndarray = variance,
+        ) -> Any:
+            return solver.log_marginal_likelihood_jax(
+                kernel,
+                coordinates,
+                residual,
+                variance,
+                {**values, "amplitude": amplitude},
+            )
+
+        compiled = jax.jit(jax.value_and_grad(density))
+        amplitude = jax.numpy.asarray(AMPLITUDE)
+        value, _ = compiled(amplitude)  # compile, and check the answer is real
+        jax.block_until_ready(value)
+        assert math.isfinite(float(value)), f"{solver.NAME} returned {value!r} at n={n}"
+
+        best = math.inf
+        for _ in range(repeats):
+            started = time.perf_counter()
+            jax.block_until_ready(compiled(amplitude))
+            best = min(best, time.perf_counter() - started)
+        timings[n] = best
+    return timings
+
+
+def test_the_jax_quasiseparable_solver_scales_linearly(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """10³ → 10⁵ points, value **and** gradient, measured.
+
+    This is the row that chose the library. A solver whose per-point cost grows
+    with N — which is what tinygp's `lax.scan` recursions do on XLA's CPU
+    backend — cannot pass it, however linear its published complexity.
+    """
+    _jax, JaxMatern32, JaxDenseGP, JaxQuasisepGP = _jax_pieces()
+    kernel = JaxMatern32(AMPLITUDE, LENGTH_SCALE)
+    quasisep = measure_jax(JaxQuasisepGP(), kernel, QUASISEP_SIZES, repeats=5)
+    dense = measure_jax(JaxDenseGP(), kernel, DENSE_SIZES, repeats=1)
+    with capsys.disabled():
+        print("\njax backend (value and gradient, jitted):")
+        print(table(quasisep, dense))
+
+    exponent = slope(quasisep)
+    assert exponent < 1.5, f"jax QuasisepGP scaled as N**{exponent:.2f}, which is not linear"
+    largest = max(DENSE_SIZES)
+    assert dense[largest] / quasisep[largest] > 10.0
+
+
+def test_the_jax_solvers_agree_at_the_largest_dense_size() -> None:
+    """Speed is worthless if it is speed at the wrong answer — on this backend too."""
+    _jax, JaxMatern32, JaxDenseGP, JaxQuasisepGP = _jax_pieces()
+    kernel = JaxMatern32(AMPLITUDE, LENGTH_SCALE)
+    values = kernel.resolve(None)
+    for n in DENSE_SIZES:
+        coordinates, residual, variance = problem(n)
+        expected = JaxDenseGP().log_marginal_likelihood(
+            kernel, coordinates, residual, variance, values
+        )
+        got = JaxQuasisepGP().log_marginal_likelihood(
+            kernel, coordinates, residual, variance, values
+        )
         assert got == pytest.approx(expected, abs=1e-9 * n)

@@ -621,33 +621,6 @@ class DenseGP(GPSolver):
             )
         return np.asarray(lower @ jnp.asarray(whitened, dtype=jnp.float64))
 
-    def latent_transform_jax(
-        self,
-        kernel: Kernel,
-        coordinates: Any,
-        whitened: Any,
-        values: Mapping[str, Any],
-        *,
-        jitter: float = 1e-10,
-    ) -> jax.Array:
-        """:meth:`latent_transform` without the exception control flow.
-
-        The native surface a latent-GP dataset needs *inside* the traced
-        density: :mod:`ampere.backends.jax.problem` samples the whitened
-        vector ``z`` as an ordinary i.i.d. standard-normal block and this
-        turns it into ``f = L(θ) z``, so the correlation is imposed where a
-        gradient can still reach the hyperparameters. A factorisation that
-        fails gives NaN, which propagates to the log-density and is mapped to
-        ``-inf`` there — the same §4.5 answer by the only means a trace has.
-        """
-        points = _points(coordinates)
-        covariance = jnp.asarray(kernel.matrix(points, points, values), dtype=jnp.float64)
-        scale = jnp.mean(jnp.diag(covariance))
-        scale = jnp.where(scale > 0.0, scale, 1.0)
-        stabilised = covariance + jnp.eye(covariance.shape[0], dtype=jnp.float64) * (jitter * scale)
-        lower = self._factor_jax(self.place(stabilised))
-        return jnp.asarray(lower @ self.place(whitened), dtype=jnp.float64)
-
 
 # ---------------------------------------------------------------------------
 # The quasiseparable solve: celerite2.jax, over ampere's own exact term
@@ -788,6 +761,24 @@ def _matern32_term(kernel: Kernel, values: Mapping[str, Any]) -> Any:
 _QUASISEPARABLE_TERMS: dict[str, Any] = {_CoreMatern32.FAMILY: _matern32_term}
 
 
+def _bare_coordinates(coordinates: Any) -> Any:
+    """An ``(n,)`` numpy view of concrete coordinates, refusing 2D+ as the core does.
+
+    The numpy twin of :meth:`QuasisepGP._axis`, used only where the
+    coordinates are already concrete.
+    """
+    array = np.asarray(coordinates, dtype=float)
+    if array.ndim == 1:
+        return array
+    if array.ndim == 2 and array.shape[1] == 1:
+        return array[:, 0]
+    raise LikelihoodError(
+        f"QuasisepGP needs one ordered coordinate per sample, but the coordinates have shape "
+        f"{array.shape}. check_compatible refuses this at composition time; a direct solver "
+        f"call reaches it here. Use DenseGP for 2D+ coordinates."
+    )
+
+
 @dataclasses.dataclass(frozen=True)
 class QuasisepGP(GPSolver):
     """Exact O(N) for ordered 1D data, in jax, over ``celerite2.jax``.
@@ -811,9 +802,8 @@ class QuasisepGP(GPSolver):
 
     What is O(N) and what is not, stated plainly, as the core's is:
 
-    * :meth:`log_marginal_likelihood`, :meth:`log_marginal_likelihood_jax`,
-      :meth:`latent_transform` and :meth:`latent_transform_jax` are O(N),
-      which is what a sampler calls;
+    * :meth:`log_marginal_likelihood`, :meth:`log_marginal_likelihood_jax`
+      and :meth:`latent_transform` are O(N), which is what a sampler calls;
     * :meth:`condition` is O(N·M) for M evaluation points, because the
       cross-covariance block is dense by construction;
     * :meth:`conditional_loo` is **refused**, exactly as on the reference path
@@ -939,9 +929,33 @@ class QuasisepGP(GPSolver):
         return jax.device_put(jnp.asarray(array, dtype=jnp.float64), getattr(self, "_device", None))
 
     def _sorted(self, coordinates: Any) -> tuple[jax.Array, jax.Array]:
-        """The coordinate axis and the permutation that sorts it."""
-        axis = self._axis(coordinates)
-        return axis, jnp.argsort(axis, stable=True)
+        """The coordinate axis and the permutation that sorts it.
+
+        Sorted in **numpy** when the coordinates are concrete, which in
+        ampere they always are: a dataset's coordinates come from its observed
+        container and cannot depend on θ (``Dataset`` resolves the effective
+        mask once and forbids a parameter-dependent one). Leaving the sort to
+        ``jnp.argsort`` was correct but not free — XLA constant-folds it at
+        *compile* time, which at 3e4 points takes over a second and prints
+        its own slow-operation alarm at the user. numpy does the same sort in
+        milliseconds, once, at lowering time.
+
+        The traced branch is kept rather than assumed away: a caller may hand
+        this solver a traced coordinate array (a fitted grid offset, say), and
+        refusing one merely because ampere does not do it today would be a
+        limitation invented here. ``stable=True`` in both branches, so the two
+        agree on ties.
+        """
+        if isinstance(coordinates, jax.core.Tracer):
+            axis = self._axis(coordinates)
+            return axis, jnp.argsort(axis, stable=True)
+        # The *argument* is tested, not the converted axis: jax stages
+        # operations on a captured constant into the jaxpr, so by the time
+        # `_axis` has run `jnp.asarray` the value looks traced whether or not
+        # it ever was. Asking the caller's own object is the only test that
+        # distinguishes "this is data" from "this is being traced".
+        raw = np.asarray(_bare_coordinates(coordinates), dtype=float)
+        return jnp.asarray(raw, dtype=jnp.float64), jnp.asarray(np.argsort(raw, kind="stable"))
 
     def _factorise(
         self,
@@ -996,29 +1010,6 @@ class QuasisepGP(GPSolver):
         value = jnp.asarray(gp.log_likelihood(jnp.take(r, order)), dtype=jnp.float64)
         usable = jnp.all(jnp.isfinite(ordered)) & jnp.all(ordered >= 0.0) & jnp.isfinite(value)
         return jnp.where(usable, value, -jnp.inf)
-
-    def latent_transform_jax(
-        self,
-        kernel: Kernel,
-        coordinates: Any,
-        whitened: Any,
-        values: Mapping[str, Any],
-        *,
-        jitter: float = 1e-10,
-    ) -> jax.Array:
-        """``f = L(θ) z`` in O(N), traceable. See :meth:`DenseGP.latent_transform_jax`."""
-        axis, order = self._sorted(coordinates)
-        draws = self.place(whitened)
-        scale = jnp.mean(jnp.asarray(kernel.diagonal(axis, values), dtype=jnp.float64))
-        scale = jnp.where(scale > 0.0, scale, 1.0)
-        gp = self._factorise(
-            kernel,
-            jnp.take(axis, order),
-            jnp.full(draws.shape, jitter, dtype=jnp.float64) * scale,
-            values,
-        )
-        transformed = jnp.asarray(gp.dot_tril(jnp.take(draws, order)), dtype=jnp.float64)
-        return self._unsort(transformed, order)
 
     # -- the contract surface -----------------------------------------------
 

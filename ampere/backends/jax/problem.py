@@ -94,7 +94,6 @@ capabilities everywhere else too.
 
 from __future__ import annotations
 
-import math
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -119,8 +118,6 @@ from .families import lower_family
 from .parameters import LoweredParameterSet
 
 __all__ = ["LoweredProblem", "lower_problem"]
-
-_LOG_2PI = math.log(2.0 * math.pi)
 
 
 def _refuse(what: str, detail: str) -> LoweringError:
@@ -344,12 +341,24 @@ class _LoweredDataset:
         """The dataset's latent block, or ``None`` when it declares none.
 
         The whitened values ``z`` arrive as one array-valued parameter under
-        the ``latent`` component (``Dataset.route``), exactly as they do on
-        the numpy path, and are handed to the family unchanged — which is what
-        ``Dataset.log_likelihood_of`` does. The correlation would enter through
-        ``GPSolver.latent_transform``; the reference path does not apply it and
-        neither does this one, because the two must agree and the numpy path is
-        the oracle. See :meth:`LoweredProblem.log_likelihood_terms`' note.
+        the ``latent`` component (``Dataset.route``) and are handed to the
+        family **unchanged**, which is exactly what
+        ``Dataset.log_likelihood_of`` does on the numpy path.
+
+        That is worth stating plainly, because ``latent_parameter``'s own
+        docstring says the correlation "enters through ``f = L(θ) z``, a
+        deterministic transform owned by the ``GPSolver``" — and nothing on
+        the contract path applies it. ``Likelihood.log_prob`` passes ``latent``
+        straight into ``NoiseParams``, ``PoissonFamily`` reads it as ``f``, and
+        ``GPSolver.latent_transform`` is called only by
+        ``GaussianFamily.sample``. So a latent-GP likelihood currently scores
+        as though the block were white noise, and its kernel hyperparameters
+        enter the likelihood nowhere. This backend mirrors that deliberately:
+        the numpy path is the oracle by ruling (``inference.md`` §10a
+        sub-decision 4), and a realisation that "fixed" it here would simply
+        disagree with the contract path and fail its own conformance row. The
+        gap is ``ampere.core``'s, and is recorded as a finding rather than
+        patched from a backend.
         """
         if self.latent_name is None:
             return None
