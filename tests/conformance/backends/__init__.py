@@ -51,12 +51,25 @@ def _torch_backend() -> ConformanceBackend:
     return TorchBackend()
 
 
+def _jax_backend() -> ConformanceBackend:
+    """The jax fixture (W2.5), built only where the ``jax`` extra is installed.
+
+    The module is called ``jaxbackend`` rather than ``jax`` deliberately: a
+    ``tests/conformance/backends/jax.py`` would sit one directory away from the
+    real package it imports, and while absolute imports make that safe in
+    principle, unambiguous names make it safe in practice (the same reasoning
+    ``ampere/inference/_emcee.py`` records for its own leading underscore).
+    """
+    from .jaxbackend import JaxBackend
+
+    return JaxBackend()
+
+
 _REGISTRY: tuple[ConformanceBackend | None, ...] = (
     ReferenceBackend(),
     MirrorBackend(),
     _optional(_torch_backend),
-    # Phase 2:
-    #   _optional(_jax_backend),
+    _optional(_jax_backend),
 )
 
 

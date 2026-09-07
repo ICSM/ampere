@@ -106,7 +106,18 @@ Homepage = "https://github.com/icsm/ampere"
 # only then does its requirement land here. CPU wheels are fine; no
 # CUDA-specific pins.
 torch = ["torch", "pyro-ppl"]
-jax = ["jax"]
+# W2.5 (the jax backend track): jax itself, plus the two libraries
+# `docs/design/lowering.md` names for this backend. numpyro supplies the
+# distribution objects and the `biject_to` bijections the §3/§4 lowering
+# tables are written against (and, in `ampere.inference`, the NUTS kernel);
+# equinox supplies `eqx.partition`/`eqx.combine`, the filter-spec mechanism
+# ruled in DEVELOPMENT_PLAN.md §2 ("jax non-trainable mechanism") as the way
+# fixed parameters and buffers stay ordinary array leaves rather than static
+# fields. Nothing speculative beyond those: no tinygp/celerite2.jax until
+# slice 2 has actually chosen between them (DEVELOPMENT_PLAN.md §6). CPU
+# jaxlib is what `jax` resolves to on PyPI without a hardware suffix, which
+# is what CI and the daily-use machines want.
+jax = ["jax", "numpyro", "equinox"]
 sbi = ["torch", "sbi"]  # W0.9: forward-migrated -- pin lifted (PyPI's latest release is still 0.27.0, the version this was already tested against; see the W0.9 report)
 zeus = ["zeus-mcmc"]
 # NOTE: there is deliberately no `arviz` extra any more -- arviz and a netCDF
@@ -297,20 +308,18 @@ format-check = "ruff format --check . --exclude tests/characterisation"
 # pattern ...") when a given directory is missing, so this must check
 # which of the four exist and exit 0 cleanly when none do.
 #
-# W2.4: `--ignore-missing-imports` names the *optional* dependencies a
-# backend subpackage imports at module level. CI runs this task in the `dev`
-# environment (ci.yml's typecheck job), which deliberately has neither the
-# torch nor the jax extra -- architecture.md §4 rule 2 is that `import
-# ampere` must never require either -- so `import torch` in
-# ampere/backends/torch/ is a missing module there and nowhere else. The flag
-# is conditional by design ("if the specified imported module can't be found,
-# replace it with typing.Any"): in `pixi run -e torch typecheck` torch *is*
-# found and its real types are checked, so this does not weaken the check
-# where the check can be made, only where it cannot. `zeus` is listed for the
-# same reason from the other direction: ampere/inference/_zeus.py imports it
-# lazily inside a function, and the zeus extra is in `dev` but not in the
-# backend environments.
-typecheck = "bash -c 'dirs=\"\"; for d in ampere/core ampere/backends ampere/inference ampere/results; do [ -d \"$d\" ] && dirs=\"$dirs $d\"; done; if [ -z \"$dirs\" ]; then echo \"typecheck: none of ampere/{core,backends,inference,results} exist yet -- nothing to check\"; else pyrefly check --ignore-missing-imports torch --ignore-missing-imports \"torch.*\" --ignore-missing-imports pyro --ignore-missing-imports \"pyro.*\" --ignore-missing-imports zeus $dirs; fi'"
+# W2.4/W2.5: it must also check which of them can be *imported*. A backend
+# subpackage is the one place in ampere that imports its array library at
+# module top level (architecture.md §4 rule 2), so `ampere/backends/torch` or
+# `ampere/backends/jax` in the `dev` environment -- which deliberately has
+# neither extra -- is a pile of unresolvable imports rather than a pile of type
+# errors. Excluding a backend whose library is absent keeps the daily-use gate
+# meaningful instead of permanently red, and the backend is still checked with
+# its real types in the environment that has its dependencies:
+# `pixi run -e torch typecheck` / `pixi run -e jax typecheck`. (W2.4 had used
+# `--ignore-missing-imports` per library for the same purpose; the exclude form
+# needs no per-library list and was kept at the merge.)
+typecheck = "bash -c 'dirs=\"\"; excludes=\"\"; for d in ampere/core ampere/backends ampere/inference ampere/results; do [ -d \"$d\" ] && dirs=\"$dirs $d\"; done; for b in torch jax; do if [ -d \"ampere/backends/$b\" ] && ! python -c \"import $b\" >/dev/null 2>&1; then echo \"typecheck: skipping ampere/backends/$b -- $b is not installed here; run pixi run -e $b typecheck\"; excludes=\"$excludes --project-excludes=ampere/backends/$b/**\"; fi; done; if [ -z \"$dirs\" ]; then echo \"typecheck: none of ampere/{core,backends,inference,results} exist yet -- nothing to check\"; else pyrefly check $excludes $dirs; fi'"
 docs = "sphinx-build -b html docs/source docs/_build/html"
 
 # --- One feature per Python interpreter, driving the CI matrix (W0.3
@@ -404,25 +413,19 @@ test-py313 = { features = ["py313", "dev", "zeus", "extinction"] }
 # default test-py3* matrix -- see ci.yml's non-blocking
 # sbi-characterisation job.
 sbi = { features = ["py313", "dev", "zeus", "extinction", "sbi"] }
-# Backend environments. `jax` is still the placeholder W0.10 created -- it
-# just proves the extra solves and stays installable until W2.5's backend
-# lands and needs it for something.
-#
-# `torch` is a real environment as of W2.4, and it is the daily-use `dev`
-# feature set plus the torch extra rather than a bare `dev + torch`. The
-# item's gate is `pixi run -e torch test-all`, which runs all five
+# Backend environments (W2.4 for torch, W2.5 for jax): each is the daily-use
+# `dev` feature set plus its backend extra, not a bare `dev + backend`. The
+# items' gate is `pixi run -e <backend> test-all`, which runs all five
 # new-namespace suites in one process, and `tests/inference` exercises all
-# three engine drivers -- including zeus, which is an extra. Without it, 48 of
+# the engine drivers -- including zeus, which is an extra: without it, 48 of
 # that suite's rows error on `OptionalDependencyError` for a reason that has
-# nothing to do with the backend under test, and the gate cannot tell a torch
-# regression from a missing extra. `netcdf` is here for the same reason at one
-# remove: `tests/results`'s `test_both_netcdf_engines_write_it` importorskips
-# netCDF4, so without the feature that row would silently skip in the very
-# environment a backend author works in. `extinction` completes the match with
-# `dev`, so "the daily-use environment plus this backend" is a true
-# description rather than an approximate one.
+# nothing to do with the backend under test. `netcdf` is here for the same
+# reason at one remove (`tests/results`' both-engines row importorskips
+# netCDF4), and `extinction` completes the match with `dev`, so a count taken
+# here is comparable with one taken in `dev`. `pixi run -e <backend>
+# typecheck` likewise sees `ampere/inference/_zeus.py`'s lazy import resolved.
 #
 # Deliberately not sharing `dev`'s solve group: the point of the split is that
-# `dev` never resolves torch at all (`architecture.md` §4 rule 2).
+# `dev` never resolves torch or jax at all (`architecture.md` §4 rule 2).
 torch = { features = ["py313", "dev", "zeus", "extinction", "netcdf", "torch"] }
-jax = { features = ["py313", "dev", "jax"] }
+jax = { features = ["py313", "dev", "zeus", "extinction", "netcdf", "jax"] }

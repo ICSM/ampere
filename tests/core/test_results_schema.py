@@ -1042,6 +1042,8 @@ class TestCoreDependencyFloor:
         twin. Making it a real check rather than an order-dependent one
         *strengthens* it: it now fails when the import discipline is broken and
         only then.
+        (W2.4 and W2.5 each hit and fixed this independently; the two
+        rewrites were equivalent and W2.4's was kept at the merge.)
         """
         import subprocess
         import sys

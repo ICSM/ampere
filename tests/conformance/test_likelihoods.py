@@ -555,6 +555,8 @@ class TestSolverAgreement:
         ``GPSolver.check_compatible``'s declarative refusal, which
         ``tests/core`` also exercises on ``ampere.core``'s own solver, so
         nothing goes unchecked for a backend that skips here.
+        (Found independently by W2.4 and W2.5: both tracks' fixtures skip
+        here until slice 2 supplies a quasiseparable solver.)
         """
         if SolverKind.QUASISEP not in backend.capabilities.solvers:
             pytest.skip(f"backend {backend.name!r} declares no quasiseparable solver")

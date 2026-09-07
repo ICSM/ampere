@@ -67,9 +67,39 @@ ALL_MODULES = _iter_ampere_modules()
 # ---------------------------------------------------------------------------
 # Optional-extra-gated modules: ordinary ``ampere[extra]`` gating.
 # ---------------------------------------------------------------------------
+#: What each Phase-2 backend subpackage needs, keyed on its own name. A
+#: backend subpackage is the one place in ampere that imports its array library
+#: at module top level (``architecture.md`` §4 rule 2), so the whole subtree is
+#: extra-gated rather than any single module in it.
+BACKEND_EXTRA_DEPENDENCIES = {
+    "ampere.backends.torch": ("torch",),  # ampere[torch]
+    "ampere.backends.jax": ("jax", "numpyro", "equinox"),  # ampere[jax]  (W2.5)
+}
+
+
+def _backend_extra_modules() -> dict[str, tuple[str, ...]]:
+    """Every discovered module under an extra-gated backend, with its deps.
+
+    Derived from discovery rather than listed by hand, because *what is
+    discovered depends on the environment*: ``pkgutil.walk_packages`` cannot
+    descend into a package whose import fails, so in an environment without jax
+    only ``ampere.backends.jax`` itself is found, while in one with jax the
+    whole subtree is. A hand-written list would be wrong in one of the two, and
+    ``test_every_ampere_module_is_classified`` compares against exactly the set
+    that was discovered.
+    """
+    gated: dict[str, tuple[str, ...]] = {}
+    for root, dependencies in BACKEND_EXTRA_DEPENDENCIES.items():
+        for name in ALL_MODULES:
+            if name == root or name.startswith(f"{root}."):
+                gated[name] = dependencies
+    return gated
+
+
 OPTIONAL_EXTRA_MODULES = {
     "ampere.infer.sbi": ("torch", "sbi"),  # ampere[sbi]
     "ampere.infer.zeussearch": ("zeus",),  # ampere[zeus]
+    **_backend_extra_modules(),
 }
 
 # ---------------------------------------------------------------------------
