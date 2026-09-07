@@ -104,7 +104,7 @@ multiplicative scale factor, which is what legacy ampere's `scaleFac` was.
 | `Dataset` | One observed container, the `Instrument` that predicts it, the `Likelihood` that scores it |
 | `DatasetCollection` | Several datasets fitted jointly, plus the `shared` hyperprior extension point |
 | `FittingProblem` | Model(s) + collection + ties. Owns the one merge, the lifecycle, and §4.5's surface |
-| `Capabilities`, `Capable` | `differentiable` / `batchable` / `device`, and what a backend declares them on |
+| `Capabilities`, `Capable` | `differentiable` / `batchable` / `device` / `backend`, and what a backend declares them on |
 | `Evaluation` | One `log_prob` call's full result: the split, the per-dataset terms, the failure |
 | `Failure`, `FailureReason` | §4.5's "recorded reason", as a counted vocabulary rather than free text |
 | `Simulation` | `simulate`'s result: (θ, ModelResult, prediction, optional observation), or a flagged failure |
@@ -959,16 +959,17 @@ have an oracle to agree with rather than each rediscovering the Jacobian
 
 ### Capability flags
 
-`differentiable`, `batchable` and `device` are properties of the *pieces*: a
-problem is differentiable exactly when everything a gradient would have to pass
-through is. On the reference path the honest answers are `False`, `False` and
-`"cpu"`:
+`differentiable`, `batchable`, `device` and `backend` are properties of the
+*pieces*: a problem is differentiable exactly when everything a gradient would
+have to pass through is, and it is a torch problem exactly when every piece of
+it is. On the reference path the honest answers are `False`, `False`, `"cpu"`
+and `"reference"`:
 
 ```pycon
 >>> problem.capabilities
-Capabilities(differentiable=False, batchable=False, device='cpu')
->>> problem.differentiable, problem.batchable, problem.device
-(False, False, 'cpu')
+Capabilities(differentiable=False, batchable=False, device='cpu', backend='reference')
+>>> problem.differentiable, problem.batchable, problem.device, problem.backend
+(False, False, 'cpu', 'reference')
 
 ```
 
@@ -977,36 +978,73 @@ Capabilities(differentiable=False, batchable=False, device='cpu')
 `DEVICE` as class attributes whose conservative defaults reproduce the
 earlier `getattr` semantics exactly, so every piece a problem composes
 declares them — silence inherits the reference answers — and
-`declared_capabilities` reads the attributes directly:
+`declared_capabilities` reads the attributes directly. **`BACKEND` joined them
+at W2.12** (decided by Fable 2026-09-07, `DEVELOPMENT_PLAN.md` §4.5 and its
+decision log), for the same reason and with the same conservative default: the
+base install's whole toolkit *is* the reference backend, and a hand-written
+numpy model runs on the reference path.
 
 ```pycon
->>> Model.DIFFERENTIABLE, Model.BATCHABLE, Model.DEVICE
-(False, False, 'cpu')
+>>> Model.DIFFERENTIABLE, Model.BATCHABLE, Model.DEVICE, Model.BACKEND
+(False, False, 'cpu', 'reference')
 >>> from ampere.core import Transformation
 >>> (Transformation.DIFFERENTIABLE, Transformation.BATCHABLE, Transformation.DEVICE)
 (False, False, 'cpu')
+>>> Transformation.BACKEND
+'reference'
 
 ```
 
-Derivation is **conjunctive**, and an empty collection of parts is *not*
-differentiable — `all([])` is `True`, and silently promising gradients for a
-problem with nothing in it is the silent capability upgrade this architecture
-forbids:
+**One name per backend, everywhere.** The string a piece declares is *the*
+name of that backend across the whole project: it is what
+`declared_capabilities` aggregates onto `FittingProblem.backend`, what
+`ampere.results` records as `ampere_backend`, the `backend` key
+`lowering.md` §12.8's registry is consulted with, and the `name` of that
+backend's fixture in `tests/conformance/`. There is no translation table
+anywhere, and a backend that wanted two spellings would be introducing one.
+
+Derivation of the two booleans is **conjunctive**, and an empty collection of
+parts is *not* differentiable — `all([])` is `True`, and silently promising
+gradients for a problem with nothing in it is the silent capability upgrade
+this architecture forbids:
 
 ```pycon
 >>> class Native:
 ...     DIFFERENTIABLE = True
 ...     BATCHABLE = True
 ...     DEVICE = "cpu"
+...     BACKEND = "reference"
 >>> class Conservative(Transformation):
 ...     def apply(self, samples, values):
 ...         return samples
 >>> declared_capabilities([Native(), Native()])
-Capabilities(differentiable=True, batchable=True, device='cpu')
+Capabilities(differentiable=True, batchable=True, device='cpu', backend='reference')
 >>> declared_capabilities([Native(), Conservative()])
-Capabilities(differentiable=False, batchable=False, device='cpu')
+Capabilities(differentiable=False, batchable=False, device='cpu', backend='reference')
 >>> declared_capabilities([])
-Capabilities(differentiable=False, batchable=False, device='cpu')
+Capabilities(differentiable=False, batchable=False, device='cpu', backend='reference')
+
+```
+
+`device` and `backend` derive by a different rule, because neither is a
+promise that can be weakened: all the parts must **agree**, and a disagreement
+raises rather than being resolved. Ampere moves arrays between neither devices
+nor array libraries on the user's behalf — the first turns a configuration
+mistake into a silent performance collapse, the second into a run that fails
+two steps later inside a backend, or that quietly has no gradients. The error
+names the values it found and the `capabilities=Capabilities(backend=...)`
+override for a caller who genuinely means one of them:
+
+```pycon
+>>> class NativeTorch:
+...     DIFFERENTIABLE = True
+...     BATCHABLE = True
+...     DEVICE = "cpu"
+...     BACKEND = "torch"
+>>> declared_capabilities([NativeTorch(), Native()])
+Traceback (most recent call last):
+    ...
+ampere.core.exceptions.DatasetError: the pieces of this problem declare different backends...
 
 ```
 
@@ -1696,9 +1734,13 @@ Each is a decision, not an oversight. Each has an extension point.
   and landed then; the carried pair were ruled 2026-09-03 and landed at the
   freeze — §19's preamble is the record.)*
 - **Phase 2 (backends)** — a backend supplies models and transformations that
-  declare `DIFFERENTIABLE`, `BATCHABLE` and `DEVICE`, and nothing else: the
-  whole of this contract is reused unchanged, which is the claim
-  `DEVELOPMENT_PLAN.md` §3 makes for it. The reference implementations of
+  declare the **four** flags `DIFFERENTIABLE`, `BATCHABLE`, `DEVICE` and
+  `BACKEND` *(the fourth added W2.12)*, and nothing else: the whole of this
+  contract is reused unchanged, which is the claim `DEVELOPMENT_PLAN.md` §3
+  makes for it. `BACKEND` is the backend's one name everywhere — the key
+  `lowering.md` §12.8's registry uses and the `name` of its conformance
+  fixture — and it is what makes a run's `ampere_backend` a fact rather than
+  a declaration by whoever built the engine. The reference implementations of
   `log_prob_unconstrained` and of `simulate`'s Gaussian draw are the oracles the
   native paths must agree with.
 - **Phase 3 (SBI)** — `simulate` returns `Simulation`, whose `theta` is already

@@ -13,7 +13,10 @@ self-certification step (§12.8's *opt-in* battery, :func:`run_registrant_batter
 below) that stands in for the shared conformance suite's guarantee.
 
 This module is the plumbing, not a backend. It knows nothing about torch,
-jax, numpyro or paramax — a *backend* is just a string key here — and it is
+jax, numpyro or paramax — a *backend* is just a string key here, and since
+W2.12 it is the *same* string the backend's models and transformations declare
+as their ``BACKEND`` capability flag, so a registered row and a run's
+``ampere_backend`` are directly comparable — and it is
 consulted by backends (W2.4/W2.5, ``tests/conformance``'s in-repo fixtures)
 the same way a third party's own code would consult it. Two slots, one
 mechanism underneath (see "One store, two slots" below):

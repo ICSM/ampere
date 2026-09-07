@@ -372,7 +372,14 @@ class ConformanceBackend(Protocol):
 
     @property
     def name(self) -> str:
-        """The pytest fixture id. Short, lower-case, stable across runs."""
+        """The pytest fixture id. Short, lower-case, stable across runs.
+
+        **And the backend's name everywhere else** (W2.12): every model and
+        instrument step :meth:`model` and :meth:`transformation` return must
+        declare ``BACKEND`` equal to this string, so that a composed problem
+        reports it, a run's ``ampere_backend`` carries it, and ``lowering.md``
+        §12.8's registry is keyed on it. ``TestBackendIdentity`` asserts it.
+        """
 
     @property
     def capabilities(self) -> BackendCapabilities:
