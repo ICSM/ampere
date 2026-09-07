@@ -8,7 +8,8 @@ surface, verbatim:
     A fitting problem (model + instruments + datasets) exposes:
     ``log_prob(params) -> float`` and ``log_likelihood`` / ``log_prior`` split;
     ``prior_transform(u)`` for nested sampling; ``simulate(params) -> data`` for
-    SBI; capability flags: ``differentiable``, ``batchable``, ``device``.
+    SBI; capability flags: ``differentiable``, ``batchable``, ``device``,
+    ``backend``.
     ... Failure signalling ... RNG policy.
 
 Three objects, three jobs
@@ -111,7 +112,7 @@ The simple path, end to end:
 >>> round(problem.log_likelihood({"model.slope": 2.0}), 6)
 4.15094
 >>> problem.capabilities
-Capabilities(differentiable=False, batchable=False, device='cpu')
+Capabilities(differentiable=False, batchable=False, device='cpu', backend='reference')
 """
 
 from __future__ import annotations
@@ -267,6 +268,14 @@ class Capable(Protocol):
     torch and jax backends override them on their own subclasses; this
     Protocol remains the statement of the surface for anything duck-typed
     into :attr:`Dataset.capability_parts`.
+
+    **A fourth flag joined them at W2.12** (decided by Fable 2026-09-07,
+    ``DEVELOPMENT_PLAN.md`` §4.5): ``BACKEND``, the name of the rung of the
+    capability ladder this piece runs on. It behaves exactly like ``DEVICE``
+    — every part must agree, and disagreement is a configuration mistake
+    rather than something ampere silently repairs — and it is what makes
+    ``ampere_backend`` in a run's provenance a fact about the problem rather
+    than a declaration by whoever constructed the engine.
     """
 
     #: Whether a gradient can be taken through this object's evaluation.
@@ -275,13 +284,17 @@ class Capable(Protocol):
     BATCHABLE: bool
     #: Device its arrays live on: ``"cpu"``, ``"cuda"``, ``"cuda:0"``, ...
     DEVICE: str
+    #: Backend that supplies it: ``"reference"``, ``"torch"``, ``"jax"``, ...
+    #: One name per backend — the same string keys ``lowering.md`` §12.8's
+    #: registry and ids the conformance fixtures.
+    BACKEND: str
 
 
 @dataclasses.dataclass(frozen=True)
 class Capabilities:
     """What an engine may assume about a :class:`FittingProblem`.
 
-    ``DEVELOPMENT_PLAN.md`` §4.5's three flags, in one immutable record so that
+    ``DEVELOPMENT_PLAN.md`` §4.5's flags, in one immutable record so that
     an engine driver takes them as a unit and a run's provenance records them as
     one.
 
@@ -298,22 +311,32 @@ class Capabilities:
         unlocks vectorised ensemble samplers and batched SBI budgets.
     device
         Where the arrays live. ``"cpu"`` on the reference path, always.
+    backend
+        Which rung of the capability ladder supplies the pieces:
+        ``"reference"``, and in Phase 2 ``"torch"`` or ``"jax"``. **One name
+        per backend, everywhere** — the same string keys ``lowering.md``
+        §12.8's registry and ids the conformance fixtures, so a run's
+        ``ampere_backend`` and a registered lowering's ``backend`` are
+        comparable without a translation table.
 
     Examples
     --------
     >>> Capabilities()
-    Capabilities(differentiable=False, batchable=False, device='cpu')
+    Capabilities(differentiable=False, batchable=False, device='cpu', backend='reference')
     """
 
     differentiable: bool = False
     batchable: bool = False
     device: str = "cpu"
+    backend: str = "reference"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "differentiable", bool(self.differentiable))
         object.__setattr__(self, "batchable", bool(self.batchable))
         if not isinstance(self.device, str) or not self.device:
             raise DatasetError(f"a device must be a non-empty string, got {self.device!r}")
+        if not isinstance(self.backend, str) or not self.backend:
+            raise DatasetError(f"a backend must be a non-empty string, got {self.backend!r}")
 
     def to_dict(self) -> dict[str, Any]:
         """A plain-data form for a run's provenance attrs (W1.8)."""
@@ -332,9 +355,14 @@ def declared_capabilities(parts: Sequence[object]) -> Capabilities:
     The flags are read directly (ruled 2026-09-03, ``inference.md`` §19.6):
     :class:`~ampere.core.transform.Model` and
     :class:`~ampere.core.transform.Transformation` carry ``DIFFERENTIABLE``,
-    ``BATCHABLE`` and ``DEVICE`` as class attributes with the conservative
-    defaults, so every part a problem composes declares them — a duck-typed
-    part must too (:class:`Capable` is the surface).
+    ``BATCHABLE``, ``DEVICE`` and — since W2.12 — ``BACKEND`` as class
+    attributes with the conservative defaults, so every part a problem
+    composes declares them — a duck-typed part must too (:class:`Capable` is
+    the surface).
+
+    ``BACKEND`` aggregates by the **device rule** rather than the conjunctive
+    one, because it is an identity and not a promise: there is no
+    conservative answer to "half of this problem is torch and half is jax".
 
     Parameters
     ----------
@@ -344,9 +372,10 @@ def declared_capabilities(parts: Sequence[object]) -> Capabilities:
     Raises
     ------
     DatasetError
-        If the parts declare more than one device. Ampere will not choose one
-        for you, because moving arrays between devices silently is how a run
-        becomes mysteriously slow.
+        If the parts declare more than one device, or more than one backend.
+        Ampere will not choose either for you: moving arrays between devices
+        silently is how a run becomes mysteriously slow, and converting them
+        between array libraries silently is how a run loses its gradients.
 
     Examples
     --------
@@ -354,31 +383,49 @@ def declared_capabilities(parts: Sequence[object]) -> Capabilities:
     ...     DIFFERENTIABLE = True
     ...     BATCHABLE = True
     ...     DEVICE = "cuda"
+    ...     BACKEND = "torch"
     >>> declared_capabilities([Native(), Native()])
-    Capabilities(differentiable=True, batchable=True, device='cuda')
+    Capabilities(differentiable=True, batchable=True, device='cuda', backend='torch')
 
     One conservative part withdraws the whole conjunctive claim — the ABCs'
-    defaults are ``False``/``False``/``"cpu"``, so a subclass that stays
-    silent inherits the reference answers rather than promising anything —
-    and a CPU part beside a GPU one is a device disagreement rather than a
-    quiet round trip:
+    defaults are ``False``/``False``/``"cpu"``/``"reference"``, so a subclass
+    that stays silent inherits the reference answers rather than promising
+    anything — and a CPU part beside a GPU one is a device disagreement rather
+    than a quiet round trip:
 
     >>> class NativeOnCpu:
     ...     DIFFERENTIABLE = True
     ...     BATCHABLE = True
     ...     DEVICE = "cpu"
+    ...     BACKEND = "reference"
     >>> class SilentOnCpu:
     ...     DIFFERENTIABLE = False
     ...     BATCHABLE = False
     ...     DEVICE = "cpu"
+    ...     BACKEND = "reference"
     >>> declared_capabilities([NativeOnCpu(), SilentOnCpu()])
-    Capabilities(differentiable=False, batchable=False, device='cpu')
+    Capabilities(differentiable=False, batchable=False, device='cpu', backend='reference')
     >>> declared_capabilities([])
-    Capabilities(differentiable=False, batchable=False, device='cpu')
+    Capabilities(differentiable=False, batchable=False, device='cpu', backend='reference')
     >>> declared_capabilities([Native(), SilentOnCpu()])
     Traceback (most recent call last):
         ...
     ampere.core.exceptions.DatasetError: the pieces of this problem declare different devices...
+
+    A backend disagreement is refused the same way, and for the sharper
+    reason: ampere does not convert arrays between libraries on the user's
+    behalf, so a mixed problem would otherwise fail two steps later inside a
+    backend, or silently drop the gradients it was assembled to provide.
+
+    >>> class TorchOnCpu:
+    ...     DIFFERENTIABLE = True
+    ...     BATCHABLE = True
+    ...     DEVICE = "cpu"
+    ...     BACKEND = "torch"
+    >>> declared_capabilities([TorchOnCpu(), SilentOnCpu()])
+    Traceback (most recent call last):
+        ...
+    ampere.core.exceptions.DatasetError: the pieces of this problem declare different backends...
     """
     if not parts:
         return Capabilities()
@@ -390,10 +437,20 @@ def declared_capabilities(parts: Sequence[object]) -> Capabilities:
             f"into a silent performance collapse. Put every model and transformation on one "
             f"device, or pass capabilities=Capabilities(device=...) to state which one is meant."
         )
+    backends = {str(part.BACKEND) for part in parts}  # type: ignore[attr-defined]
+    if len(backends) > 1:
+        raise DatasetError(
+            f"the pieces of this problem declare different backends {sorted(backends)}. Ampere "
+            f"does not convert arrays between libraries on your behalf — a mixed problem is a "
+            f"configuration mistake that would otherwise fail two steps later inside a backend, "
+            f"or silently drop gradients. Build every model and transformation on one backend, "
+            f"or pass capabilities=Capabilities(backend=...) to state which one is meant."
+        )
     return Capabilities(
         differentiable=all(bool(part.DIFFERENTIABLE) for part in parts),  # type: ignore[attr-defined]
         batchable=all(bool(part.BATCHABLE) for part in parts),  # type: ignore[attr-defined]
         device=devices.pop(),
+        backend=backends.pop(),
     )
 
 
@@ -1464,7 +1521,8 @@ class FittingProblem:
     capabilities
         Override the flags derived from what the models and transformations
         declare. Pass this when an adapter knows something the pieces cannot say
-        for themselves.
+        for themselves, or to settle a deliberate device or backend
+        disagreement the pieces cannot settle between them.
     reference_values
         The θ used for composition-time validation. Defaults to the **prior
         median** — ``prior_transform`` at the centre of the unit cube — which is
@@ -1966,6 +2024,17 @@ class FittingProblem:
     def device(self) -> str:
         """Where this problem's arrays live."""
         return self.capabilities.device
+
+    @property
+    def backend(self) -> str:
+        """Which backend supplies this problem's pieces (W2.12).
+
+        Derived from what the models and transformations declare, never
+        asserted by whoever runs the fit: it is what
+        :class:`~ampere.inference.engine.Engine` records as
+        ``ampere_backend``, which is why that attribute is a fact.
+        """
+        return self.capabilities.backend
 
     def check_engine(
         self, engine: str = "this engine", *, differentiable: bool | None = None
