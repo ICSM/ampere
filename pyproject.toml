@@ -97,7 +97,15 @@ Homepage = "https://github.com/icsm/ampere"
 [project.optional-dependencies]
 # Backend extras are placeholders for the Phase 2 backend split; they will
 # grow pinned/qualified requirements as the backends land.
-torch = ["torch"]
+# W2.4: the torch backend track. `torch` itself for the lowering/model path;
+# `pyro-ppl` for the NUTS driver in `ampere.inference` (pyro's NUTS/HMC is the
+# gradient-based sampler the differentiable backends exist to feed -- see
+# WORK_ITEMS.md W2.4 and DEVELOPMENT_PLAN.md §5). Deliberately nothing
+# speculative beyond those two: the quasiseparable GP library (GPyTorch vs
+# celerite2's torch interface) is chosen in slice 2, against measurements, and
+# only then does its requirement land here. CPU wheels are fine; no
+# CUDA-specific pins.
+torch = ["torch", "pyro-ppl"]
 jax = ["jax"]
 sbi = ["torch", "sbi"]  # W0.9: forward-migrated -- pin lifted (PyPI's latest release is still 0.27.0, the version this was already tested against; see the W0.9 report)
 zeus = ["zeus-mcmc"]
