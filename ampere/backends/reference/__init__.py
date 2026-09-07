@@ -41,6 +41,13 @@ Instrument steps (``transformations.md`` §10's table):
 Noise (``likelihoods.md`` §5, X-1): :class:`FractionalModelNoise` and its GP
 composition :class:`FractionalModelGPNoise`.
 
+**Every piece here declares ``BACKEND = "reference"``** (W2.12) beside
+``DIFFERENTIABLE``, ``BATCHABLE`` and ``DEVICE``, explicitly rather than by
+inheriting the ABCs' default. The name is this backend's one name everywhere:
+it is what ``ampere.core.declared_capabilities`` aggregates onto a problem, what
+a run's ``ampere_backend`` records, the key ``lowering.md`` §12.8's registry is
+consulted with, and the conformance fixture's id.
+
 Kernels, GP solvers, families, containers and the fitting problem itself are
 **not** here: they are backend-neutral and live in ``ampere.core``, which is
 the claim ``inference.md`` §18 makes — "a backend supplies models and

@@ -142,6 +142,10 @@ class CalibrationScale(_Step):
     """
 
     ACCEPTS: ClassVar[tuple[type, ...]] = (Spectrum,)
+    #: The fourth capability flag (W2.12), declared rather than inherited:
+    #: this class is part of the reference backend, and every piece of the
+    #: backend says so for itself.
+    BACKEND: ClassVar[str] = "reference"
 
     def __init__(self, scale: Any = 1.0, *, label: str | None = None) -> None:
         super().__init__(label=label)
@@ -179,6 +183,8 @@ class Resample(_Step):
     """
 
     ACCEPTS: ClassVar[tuple[type, ...]] = (Spectrum,)
+    #: The fourth capability flag (W2.12), declared rather than inherited.
+    BACKEND: ClassVar[str] = "reference"
 
     def __init__(self, target: Any, *, label: str | None = None) -> None:
         super().__init__(label=label)
@@ -273,6 +279,8 @@ class LSFConvolution(_Step):
     """
 
     ACCEPTS: ClassVar[tuple[type, ...]] = (Spectrum,)
+    #: The fourth capability flag (W2.12), declared rather than inherited.
+    BACKEND: ClassVar[str] = "reference"
 
     #: FWHM of a Gaussian in units of its standard deviation.
     FWHM_PER_SIGMA: ClassVar[float] = 2.0 * np.sqrt(2.0 * np.log(2.0))
@@ -464,6 +472,8 @@ class SyntheticPhotometry(_Step):
 
     ACCEPTS: ClassVar[tuple[type, ...]] = (Spectrum,)
     PRODUCES: ClassVar[type] = PhotometricPoints
+    #: The fourth capability flag (W2.12), declared rather than inherited.
+    BACKEND: ClassVar[str] = "reference"
 
     def __init__(
         self,
