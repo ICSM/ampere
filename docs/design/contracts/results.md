@@ -593,9 +593,39 @@ backend's conformance fixture.
 
 The same change put a `backend` key into `Capabilities.to_dict()`, so the
 `ampere_capabilities` payload changed shape and **`PROVENANCE_SCHEMA_VERSION`
-is now 4**, per the rule below. `capabilities` is not an input to
+went to 4**, per the rule below. `capabilities` is not an input to
 `problem_fingerprint` — but the schema constant is, so every
-`ampere_problem_hash` moved at this bump exactly as at the previous ones.
+`ampere_problem_hash` moved at that bump exactly as at the previous ones.
+
+**Three attributes joined at W2.13, and the constant is now 5** *(`inference.md`
+§10a; the decision-log row "Realisation surface (W2.13)" in
+`DEVELOPMENT_PLAN.md` §2, sub-decisions 10 and 11)*.
+
+- **`ampere_realised`** — whether the draws were scored through the backend's
+  **realisation**, its differentiable native form, rather than through the
+  numpy contract path. Written on every run as `1`/`0` (netCDF has no boolean
+  attribute type), including the gradient-free ones, because "this run's
+  gradients were real" and "this run had no gradients" are the two answers a
+  reader must be able to tell apart and silence distinguishes neither.
+- **`ampere_registered_lowerings`** — the *user-registered* rows the run's
+  lowering consulted, from `ampere.core.lowering.provenance_entries`. This is
+  `lowering.md` §12.8's stamping, promoted from an `extra=` convention to a
+  first-class key: W2.6 deferred that "until a real backend drives lowering end
+  to end", and a realisation is exactly that. Empty for a run that used only
+  ampere's own table, which is the signal — the question is "did this depend on
+  something outside the conformance suite's guarantees?".
+- **`ampere_solver_config`** — each dataset's `GPSolver.provenance_config()`,
+  by dataset label. **Recorded and never hashed.** A solver's `jitter` is a
+  *declaration* (it changes the number a given θ scores) and belongs in the
+  spec and the spec hash; its dtype, its device and a future deliberate float32
+  opt-out are *configuration* — two backends legitimately differ on them, and
+  folding them into the spec hash would break §14's cross-backend agreement,
+  which is the cheapest detector of a lowering bug this contract has. This
+  attribute is what makes `architecture.md` §5's "a reduced-precision run must
+  be visible in provenance" satisfiable without that cost.
+
+None of the three is an input to `problem_fingerprint`, but the schema constant
+is, so `ampere_problem_hash` moved again at this bump as at every previous one.
 
 **Failures travel.** `ampere_failure_counts` is the unbounded count per
 `FailureReason`; `ampere_failures` is the bounded history, each entry

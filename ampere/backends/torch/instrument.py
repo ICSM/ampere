@@ -56,6 +56,7 @@ import torch
 
 from ampere.core import (
     DTYPE,
+    Axis,
     AxisRequirement,
     PhotometricPoints,
     Spectrum,
@@ -162,6 +163,32 @@ class TorchStep(Transformation):
         """
         return np.asarray(self.buffers[name].value, dtype=DTYPE)
 
+    # -- the native surface a realisation composes (W2.13) --------------------
+
+    def apply_flux(
+        self, flux: torch.Tensor, grid: torch.Tensor, values: Any
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """This step, applied to bare fluxes on bare coordinates.
+
+        ``(flux, grid) -> (flux, grid)``: the form
+        :mod:`ampere.backends.torch.problem` walks a chain in, and the same
+        signature :mod:`ampere.backends.jax.problem` walks jax's in. It exists
+        beside :meth:`apply` rather than replacing it because the two answer
+        different questions: ``apply`` produces a *container*, which is what
+        makes a heterogeneous joint fit checkable and what the contract path
+        needs, and which cannot hold a tensor carrying a graph; this produces
+        the numbers, with the graph intact, which is what a gradient needs.
+
+        The coordinates are returned as well as the fluxes because a
+        kind-changing step moves them: :class:`Resample` onto its declared
+        target, :class:`SyntheticPhotometry` onto its pivots. A step that
+        leaves them alone returns *grid* unchanged.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} has no native surface; it cannot be composed into a "
+            f"differentiable log-density."
+        )
+
 
 class CalibrationScale(TorchStep):
     """A multiplicative calibration factor: ``flux -> scale * flux``.
@@ -197,6 +224,13 @@ class CalibrationScale(TorchStep):
     def apply_tensor(self, values: torch.Tensor, factor: torch.Tensor) -> torch.Tensor:
         """The differentiable step: one multiply, gradient in both arguments."""
         return values * factor
+
+    def apply_flux(
+        self, flux: torch.Tensor, grid: torch.Tensor, values: Any
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Scale the fluxes; leave the coordinates alone."""
+        factor = as_tensor(self.context(values)["scale"], dtype=self.dtype, device=self.device)
+        return self.apply_tensor(flux, factor), grid
 
     def apply(self, samples: Any, values: Any) -> Any:
         factor = as_tensor(self.context(values)["scale"], dtype=self.dtype, device=self.device)
@@ -301,6 +335,16 @@ class Resample(TorchStep):
     def apply_tensor(self, weights: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
         """The differentiable step: the binning integral as one ``matmul``."""
         return weights @ values
+
+    def target_grid(self) -> torch.Tensor:
+        """The declared output coordinates, micron, as a tensor."""
+        return self._tensor("target")
+
+    def apply_flux(
+        self, flux: torch.Tensor, grid: torch.Tensor, values: Any
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """``W @ flux`` onto the declared target grid, which becomes the new one."""
+        return self.apply_tensor(self.influence_tensor(grid), flux), self.target_grid()
 
     def apply(self, samples: Any, values: Any) -> Spectrum:
         source = as_tensor(samples.spectral_axis.values, dtype=self.dtype, device=self.device)
@@ -489,6 +533,12 @@ class LSFConvolution(TorchStep):
         """The differentiable step: the convolution as one ``matmul``."""
         return weights @ values
 
+    def apply_flux(
+        self, flux: torch.Tensor, grid: torch.Tensor, values: Any
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Convolve on the incoming grid, which the convolution does not move."""
+        return self.apply_tensor(self.influence_tensor(grid), flux), grid
+
     def apply(self, samples: Any, values: Any) -> Spectrum:
         source = as_tensor(samples.spectral_axis.values, dtype=self.dtype, device=self.device)
         weights = self.influence_tensor(source)
@@ -661,6 +711,28 @@ class SyntheticPhotometry(TorchStep):
     def apply_tensor(self, weights: torch.Tensor, values: torch.Tensor) -> torch.Tensor:
         """The differentiable step: the filter integrals as one ``matmul``."""
         return weights @ values
+
+    def pivot_grid(self) -> torch.Tensor:
+        """Pivot wavelengths, micron, as a tensor — the output coordinates."""
+        return as_tensor(self.pivots(), dtype=self.dtype, device=self.device)
+
+    def apply_flux(
+        self, flux: torch.Tensor, grid: torch.Tensor, values: Any
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """The filter integrals, onto this step's pivot wavelengths.
+
+        The incoming coordinates are a bare tensor here, and
+        :meth:`influence_tensor` needs an :class:`~ampere.core.Axis` — the
+        lookup is the axis's job (``spectrum_photometry.md`` Gap 1: the
+        columns go where ``Axis.locate`` reports, never where the tabulation
+        happens to sit in a reordered negotiated grid). So the axis is rebuilt
+        here rather than the lookup being skipped: reading the incoming values
+        positionally would be silently wrong on exactly the grids negotiation
+        produces.
+        """
+        coordinates = to_numpy(grid).astype(DTYPE, copy=False)
+        axis = Axis.build("spectral_axis", coordinates, COORDINATE_UNIT)
+        return self.apply_tensor(self.influence_tensor(axis), flux), self.pivot_grid()
 
     def apply(self, samples: Any, values: Any) -> PhotometricPoints:
         weights = self.influence_tensor(samples.spectral_axis)

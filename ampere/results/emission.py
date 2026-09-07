@@ -449,6 +449,8 @@ def emit(
     *,
     engine: str | None = None,
     backend: str | None = None,
+    realised: bool = False,
+    registered_lowerings: Sequence[Mapping[str, Any]] | None = None,
     coords: Mapping[str, Sequence[Any]] | None = None,
     observed: bool = True,
     extra_attrs: Mapping[str, object] | None = None,
@@ -477,6 +479,15 @@ def emit(
         the backend is §4.5's fourth capability flag, so the problem already
         knows which one built it. An explicit value that disagrees with the
         problem raises rather than being written down.
+    realised
+        Whether the draws were scored through the backend's realisation
+        (``inference.md`` §10a) rather than the numpy contract path. Passed
+        straight to :func:`~ampere.results.provenance.provenance_attrs`, which
+        records it as ``ampere_realised``. **W2.13.**
+    registered_lowerings
+        The user-registered lowering rows the run consulted, from a
+        realisation's ``lowering_provenance()``. Also passed straight through;
+        recorded as ``ampere_registered_lowerings``. **W2.13.**
     coords
         Coordinate values for named dimensions, e.g. ``{"objects": labels}`` for
         a plate. A plate routed element by element gets its coordinate from the
@@ -528,7 +539,16 @@ def emit(
             for name, child in data.children.items():
                 tree[name] = child
             _apply_units(tree, groups, units)
-    tree.attrs.update(provenance_attrs(problem, engine=engine, backend=backend, extra=extra_attrs))
+    tree.attrs.update(
+        provenance_attrs(
+            problem,
+            engine=engine,
+            backend=backend,
+            realised=realised,
+            registered_lowerings=registered_lowerings,
+            extra=extra_attrs,
+        )
+    )
     tree.attrs[f"{ATTR_PREFIX}chains"] = chains
     tree.attrs[f"{ATTR_PREFIX}draws"] = count
     return tree

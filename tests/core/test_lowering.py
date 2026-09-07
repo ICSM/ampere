@@ -439,7 +439,12 @@ class TestProvenanceStamping:
 
         problem = _toy_problem()
         entries = provenance_entries([resolution])
-        attrs = provenance_attrs(problem, extra={"registered_lowerings": entries})
+        # W2.13 made this a first-class parameter of ``provenance_attrs``,
+        # ending W2.6's deferral ("until a real backend drives lowering end to
+        # end"). It used to travel through ``extra=``, which now collides with
+        # the key ampere writes itself -- and that collision is the mechanism
+        # working, not a regression.
+        attrs = provenance_attrs(problem, registered_lowerings=entries)
 
         assert "ampere_registered_lowerings" in attrs
         import json

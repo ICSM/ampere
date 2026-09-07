@@ -48,15 +48,22 @@ Instrument steps (``transformations.md`` §10's table):
 :class:`CalibrationScale`, :class:`Resample`, :class:`LSFConvolution`,
 :class:`SyntheticPhotometry`.
 
-Noise (``likelihoods.md`` §5, X-1): :class:`FractionalModelNoise` and its GP
-composition :class:`FractionalModelGPNoise`.
-
 Kernels and solvers: :class:`Matern32`, :class:`SquaredExponential` and
 :class:`DenseGP` — the neutral ``ampere.core`` declarations with their linear
 algebra done in jax. ``QuasisepGP`` is **not** here yet: slice 2 chooses
 between tinygp's ``QuasisepSolver`` and celerite2.jax after evaluating both
 against the conformance suite (``DEVELOPMENT_PLAN.md`` §6), and shipping a
 solver slot that quietly delegated to numpy would defeat the point.
+
+Noise (``likelihoods.md`` §5): the prediction-aware
+:class:`FractionalModelNoise` and its GP composition
+:class:`FractionalModelGPNoise` (X-1), plus :class:`IndependentNoise` and
+:class:`GaussianProcessNoise` — this backend's declarations of the two core
+compositions, same names, same declarations, ``BACKEND = "jax"``. The last
+two exist because **W2.13** widened the capability flags to ``NoiseModel``
+and ``GPSolver`` (``inference.md`` §10a, fold-in 7), so composing
+``ampere.core.IndependentNoise`` into a jax problem is now a backend
+disagreement rather than a silent numpy island.
 
 Lowering: :func:`~ampere.backends.jax.parameters.LoweredParameterSet` is
 ``lowering.md`` §5's declaration-form table made executable — numpyro sample
@@ -79,12 +86,17 @@ from .distributions import lower_prior
 from .gp import DenseGP, Matern32, SquaredExponential
 from .instrument import CalibrationScale, LSFConvolution, Resample, SyntheticPhotometry
 from .models import COORDINATE_UNIT, FLUX_UNIT, BlackBody, ModifiedBlackBody, PowerLaw, planck_jy
-from .noise import FractionalModelGPNoise, FractionalModelNoise
+from .noise import (
+    FractionalModelGPNoise,
+    FractionalModelNoise,
+    GaussianProcessNoise,
+    IndependentNoise,
+)
 from .parameters import LoweredParameterSet, LoweringFallbackWarning, filter_spec
 from .problem import LoweredProblem, lower_problem
 
-# W2.13 prototype: importing this package is the user's opt-in to jax, and it
-# is also the moment the jax realisation becomes reachable through
+# ``inference.md`` §10a: importing this package is the user's opt-in to jax,
+# and it is also the moment the jax realisation becomes reachable through
 # ``ampere.core.realise`` -- which is how ``ampere.inference``'s gradient-based
 # drivers get a differentiable density without importing a backend.
 from ampere.core import register_realisation as _register_realisation
@@ -100,6 +112,8 @@ __all__ = [
     "DenseGP",
     "FractionalModelGPNoise",
     "FractionalModelNoise",
+    "GaussianProcessNoise",
+    "IndependentNoise",
     "LSFConvolution",
     "LoweredParameterSet",
     "LoweredProblem",

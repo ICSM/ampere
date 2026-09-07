@@ -198,6 +198,30 @@ class TorchSpectralModel(Model):
         buffer = self.tensors.get_buffer("wavelength")
         return buffer
 
+    # -- the native surface a realisation composes (W2.13) --------------------
+
+    def grid(self, channel: str) -> torch.Tensor:
+        """:meth:`grid_tensor` under the name the realisation looks for.
+
+        :mod:`ampere.backends.torch.problem` walks a chain through
+        ``model.grid`` / ``model.flux`` / ``step.apply_flux``, and so does
+        :mod:`ampere.backends.jax.problem`. The two spellings are the same
+        surface deliberately: the two lowered problems are the same walk in
+        two libraries, and a reviewer reading them side by side should see
+        that rather than have to establish it.
+        """
+        return self.grid_tensor(channel)
+
+    def flux(self, channel: str, values: Mapping[str, Any] | None = None) -> torch.Tensor:
+        """This model's flux on *channel*, in Jy, as a differentiable tensor.
+
+        The surface a realisation composes, and the one the gradient passes
+        through. :meth:`evaluate_tensor` is the same computation for every
+        declared channel at once, which is what the contract path wants; this
+        is one channel, which is what a lowered chain wants.
+        """
+        return self._flux(self.grid_tensor(channel), self._context_tensors(values))
+
     def _emit(self, channel: str, grid: torch.Tensor, flux: torch.Tensor) -> Spectrum:
         values = to_numpy(flux).astype(DTYPE, copy=False)
         template = self.templates.get(channel)

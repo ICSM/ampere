@@ -439,12 +439,26 @@ def declared_capabilities(parts: Sequence[object]) -> Capabilities:
         )
     backends = {str(part.BACKEND) for part in parts}  # type: ignore[attr-defined]
     if len(backends) > 1:
+        # Name the offending pieces by class, grouped by the backend each
+        # declares. W2.13 widened the parts to include noise models and GP
+        # solvers, and the commonest way to reach this message is now a
+        # native problem left with the core (numpy) IndependentNoise or
+        # DenseGP -- which the old wording, about "models and transformations",
+        # did not help anyone find.
+        culprits = "; ".join(
+            f"{name}: "
+            + ", ".join(
+                sorted({type(part).__name__ for part in parts if str(part.BACKEND) == name})  # type: ignore[attr-defined]
+            )
+            for name in sorted(backends)
+        )
         raise DatasetError(
-            f"the pieces of this problem declare different backends {sorted(backends)}. Ampere "
-            f"does not convert arrays between libraries on your behalf — a mixed problem is a "
-            f"configuration mistake that would otherwise fail two steps later inside a backend, "
-            f"or silently drop gradients. Build every model and transformation on one backend, "
-            f"or pass capabilities=Capabilities(backend=...) to state which one is meant."
+            f"the pieces of this problem declare different backends {sorted(backends)} "
+            f"({culprits}). Ampere does not convert arrays between libraries on your behalf — a "
+            f"mixed problem is a configuration mistake that would otherwise fail two steps later "
+            f"inside a backend, or silently drop gradients. Build every model, transformation, "
+            f"noise model and GP solver on one backend, or pass "
+            f"capabilities=Capabilities(backend=...) to state which one is meant."
         )
     return Capabilities(
         differentiable=all(bool(part.DIFFERENTIABLE) for part in parts),  # type: ignore[attr-defined]

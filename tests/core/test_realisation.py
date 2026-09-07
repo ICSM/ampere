@@ -91,7 +91,10 @@ class TestTheRegistry:
         assert isinstance(realised, Realisation)
         assert realised.backend == "fake"
         assert realised.free_size == problem.free_size
-        assert registered_realisations() == {"fake": False}
+        # Not an equality: in an environment where a backend is installed,
+        # another test module's import will already have registered its own
+        # row, and this suite's claim is about *this* row.
+        assert registered_realisations()["fake"] is False
 
     def test_a_second_registration_is_refused_without_override(self) -> None:
         register_realisation("fake", _Fake)
@@ -101,7 +104,7 @@ class TestTheRegistry:
 
     def test_builtin_rows_are_distinguished(self) -> None:
         register_realisation("fake", _Fake, builtin=True)
-        assert registered_realisations() == {"fake": True}
+        assert registered_realisations()["fake"] is True
         with pytest.raises(LoweringError, match="ampere's own"):
             register_realisation("fake", _Fake)
 

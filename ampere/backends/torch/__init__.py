@@ -8,8 +8,8 @@ differentiability unlocks". Kernels, containers, likelihood families, datasets
 and the fitting problem itself are **not** here — they are backend-neutral and
 live in ``ampere.core``.
 
-What is shipped (W2.4 slice 1)
--------------------------------
+What is shipped (W2.4 slice 1, plus W2.13's realisation)
+---------------------------------------------------------
 :mod:`~ampere.backends.torch.lowering`
     ``lowering.md`` §3 and §4 — the prior-family and bijection tables,
     registered as built-in rows in ``ampere.core.lowering``'s registry under
@@ -34,7 +34,20 @@ What is shipped (W2.4 slice 1)
     torch.
 :mod:`~ampere.backends.torch.gp`
     :class:`DenseGP` — the exact dense solve through torch's own Cholesky, and
-    therefore differentiable.
+    therefore differentiable — with :class:`Matern32` and
+    :class:`SquaredExponential`, the core kernel declarations with their
+    covariances built in torch (W2.13), so a GP hyperparameter is trainable
+    rather than merely declared.
+:mod:`~ampere.backends.torch.noise`
+    :class:`IndependentNoise` and :class:`GaussianProcessNoise` — the core
+    compositions declared as this backend's, which W2.13's capability
+    widening makes necessary rather than decorative.
+:mod:`~ampere.backends.torch.problem`
+    :func:`lower_problem` — a composed :class:`~ampere.core.FittingProblem` as
+    one differentiable function of the unconstrained free vector
+    (``inference.md`` §10a). Registered with ``ampere.core`` at import, which
+    is how :class:`ampere.inference.NUTSEngine` reaches it without importing
+    this package.
 
 **Every piece here declares ``BACKEND = "torch"``** beside ``DIFFERENTIABLE``,
 ``BATCHABLE`` and ``DEVICE``, explicitly rather than by inheriting the ABCs'
@@ -50,50 +63,48 @@ float64, on the CPU, threaded explicitly through every construction;
 process state (``lowering.md`` §10.1). GPU execution and batching are W2.4
 slice 2 and are declared ``False``/``"cpu"`` honestly until they exist.
 
-How far differentiability currently reaches — read this before relying on it
-----------------------------------------------------------------------------
-``DIFFERENTIABLE = True`` on the models and steps here is a claim about the
-*pieces*, and it is true of them: each has a tensor-valued entry point
+How far differentiability reaches — and how W2.13 closed the gap
+-----------------------------------------------------------------
+``DIFFERENTIABLE = True`` on the pieces here is a claim about the *pieces*,
+and it is true of them: each has a tensor-valued entry point
 (``Model.evaluate_tensor``, ``Transformation.apply_tensor``,
 ``DenseGP.log_marginal_likelihood_tensor``,
 ``TorchParameterSpace.log_prior_unconstrained_tensor``) that is a
 differentiable function of tensor inputs, and ``tests/backends/`` takes the
 gradient of each to prove it.
 
-What does **not** yet exist is an end-to-end ``d log_prob / dθ`` on a composed
-:class:`~ampere.core.FittingProblem`, and the reason is structural rather than
-an omission here. ``FittingProblem.log_prob`` runs the chain through
-``ampere.core``'s containers — :class:`~ampere.core.Spectrum` and its siblings
-— which hold **numpy** arrays and validate their axes in numpy; a tensor
-carrying an autograd graph cannot be put in one (it raises
-``RuntimeError: Can't call numpy() on Tensor that requires grad``). So the
-graph is cut at the first container, and every backend's gradient stops there,
-not just this one.
+W2.4 slice 1 shipped without an end-to-end ``d log_prob / dθ`` on a composed
+:class:`~ampere.core.FittingProblem`, and recorded why: ``log_prob`` runs the
+chain through ``ampere.core``'s containers, which hold **numpy** arrays, and a
+tensor carrying an autograd graph cannot be put in one. So the graph is cut at
+the first container, on every backend.
 
-Two consequences, both stated rather than worked around:
+**That is what a realisation is for.** ``inference.md`` §10a (ruled
+2026-09-07) makes the differentiable form of a problem a first-class,
+registered object rather than a property the contract path was supposed to
+have: :mod:`ampere.backends.torch.problem` composes the same quantity out of
+the native surfaces above and hands back a differentiable function of the
+unconstrained vector, and ``ampere.core.realise`` checks it against the
+contract path before anyone samples with it. Two things follow:
 
-* **the aggregated ``differentiable`` flag is about the pieces, not the
-  composition.** That is what ``inference.md`` §10 says it is ("properties of
-  the *pieces*"), and it is consistent — but a consumer reading
-  ``problem.differentiable is True`` as "``torch.autograd.grad`` works on
-  ``problem.log_prob``" would be wrong today. This is W2.4's principal finding
-  and it is recorded as such;
-* **no NUTS driver ships in slice 1.** A gradient-based sampler over a
-  potential whose gradient does not exist is not a sampler, and neither
-  finite-differencing it nor differentiating the prior alone would be honest.
-  What the driver needs is a decision — Peter's — about where a
-  tensor-valued evaluation path lives: a container that can hold a backend
-  array, a backend-supplied evaluation route beside the numpy one, or a
-  narrowing of what ``differentiable`` promises. The pieces above are written
-  so that any of the three is a small amount of further work rather than a
-  rewrite.
+* the aggregated ``differentiable`` flag still means what ``inference.md`` §10
+  says it means — a property of the pieces — but it now covers **all** of
+  them, since W2.13 widened the parts to include noise models and GP solvers.
+  A problem reporting ``differentiable=True`` on this backend is one
+  :func:`~ampere.core.realise` will lower;
+* the NUTS driver ships. ``NUTSEngine(problem)`` on a torch problem runs
+  pyro's sampler over this backend's realisation, with no density argument and
+  no backend import inside ``ampere.inference``.
 
 What slice 2 owes
 -----------------
 ``QuasisepGP`` on the native path (GPyTorch's structured solvers against
 celerite2's torch interface, *measured* against the conformance suite rather
 than chosen from documentation — ``DEVELOPMENT_PLAN.md`` §6), variational
-inference, batching and GPU, and the benchmark rows.
+inference, batching and GPU, the benchmark rows, and widening the realisation
+past W2.13's coverage floor: censoring, latent GPs and the non-Gaussian
+families, each of which :mod:`ampere.backends.torch.problem` refuses by name
+today.
 
 Examples
 --------
@@ -120,7 +131,7 @@ The tensor entry point is the same computation with the graph intact:
 from __future__ import annotations
 
 from ._config import BACKEND, DEFAULT_DEVICE, DEFAULT_DTYPE, as_tensor, to_numpy
-from .gp import DenseGP
+from .gp import DenseGP, Matern32, SquaredExponential
 from .instrument import (
     DETECTORS,
     CalibrationScale,
@@ -133,6 +144,7 @@ from .instrument import (
 from .lowering import (
     IcdfFallbackWarning,
     LoweredPrior,
+    LoweringFallbackWarning,
     lower_bijection,
     lower_hierarchical,
     lower_prior,
@@ -146,8 +158,18 @@ from .models import (
     TorchSpectralModel,
     planck_jy,
 )
+from .noise import GaussianProcessNoise, IndependentNoise
 from .parameters import LoweredParameters, TorchParameterSpace
+from .problem import LoweredProblem, lower_problem
 from .rng import generator, seed_for
+
+# ``inference.md`` §10a: importing this package is the user's opt-in to torch,
+# and it is also the moment the torch realisation becomes reachable through
+# ``ampere.core.realise`` -- which is how ``ampere.inference``'s gradient-based
+# drivers get a differentiable density without importing a backend.
+from ampere.core import register_realisation as _register_realisation
+
+_register_realisation(BACKEND, lower_problem, builtin=True)
 
 __all__ = [
     "BACKEND",
@@ -159,13 +181,19 @@ __all__ = [
     "BlackBody",
     "CalibrationScale",
     "DenseGP",
+    "GaussianProcessNoise",
     "IcdfFallbackWarning",
+    "IndependentNoise",
     "LSFConvolution",
     "LoweredParameters",
     "LoweredPrior",
+    "LoweredProblem",
+    "LoweringFallbackWarning",
+    "Matern32",
     "ModifiedBlackBody",
     "PowerLaw",
     "Resample",
+    "SquaredExponential",
     "SyntheticPhotometry",
     "TorchParameterSpace",
     "TorchSpectralModel",
@@ -176,6 +204,7 @@ __all__ = [
     "lower_bijection",
     "lower_hierarchical",
     "lower_prior",
+    "lower_problem",
     "planck_jy",
     "seed_for",
     "to_numpy",

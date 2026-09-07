@@ -98,7 +98,7 @@ import torch
 import torch.distributions as dist
 from torch.distributions import biject_to, constraints, transforms
 
-from ampere.core.exceptions import LoweringError
+from ampere.core.exceptions import LoweringError, LoweringFallbackWarning
 from ampere.core.lowering import (
     LoweringResolution,
     lookup_bijection_lowering,
@@ -120,6 +120,7 @@ from ._config import BACKEND, DEFAULT_DEVICE, DEFAULT_DTYPE, as_tensor
 __all__ = [
     "IcdfFallbackWarning",
     "LoweredPrior",
+    "LoweringFallbackWarning",
     "consulted_resolutions",
     "lower_bijection",
     "lower_hierarchical",
@@ -128,22 +129,16 @@ __all__ = [
 ]
 
 
-class IcdfFallbackWarning(UserWarning):
-    """A native run computed its prior transform on the reference (scipy) path.
-
-    ``lowering.md`` §3.6, ruled 2026-09-03 and pinned at the freeze: a family
-    with no native ``icdf`` is *allowed* to take the reference fallback,
-    because ``prior_transform`` has one mathematical definition and computing
-    the same quantity in numpy changes nothing about the posterior — but it
-    must be loud, so that "a nominally torch-backed run that computes its
-    prior transform in numpy is never a surprise discovered later".
-
-    Warned **once per run**, not once per call, because the decision is made
-    once at lowering time, before any sampling. ``FittingProblem(strict=True)``
-    turns it into a :class:`~ampere.core.exceptions.LoweringError` instead —
-    one flag with one meaning, the run-level "I would rather fail than have
-    anything smoothed over".
-    """
+#: The shared warning, under the name W2.4 gave it.
+#:
+#: **W2.13 replaced this backend-local class** (fold-in 8, ruled 2026-09-07):
+#: it lives in :mod:`ampere.core.exceptions` as
+#: :class:`~ampere.core.exceptions.LoweringFallbackWarning`, so ``pytest.warns``
+#: on one type catches whichever backend raised it — which is what both slice-1
+#: docstrings asked for. The old name is kept as an alias because it is the one
+#: a torch user has seen, and because the two backends' warnings were never
+#: different things.
+IcdfFallbackWarning = LoweringFallbackWarning
 
 
 # ---------------------------------------------------------------------------

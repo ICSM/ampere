@@ -165,7 +165,8 @@ class _LoweredDataset:
         # union of the observed and predicted masks there and forbids a
         # parameter-dependent one, so which samples are retained is a fact
         # about the problem rather than about theta and can be a constant here.
-        excluded = dataset._effective_mask
+        # Public since W2.13 (fold-in 9) precisely because this line read it.
+        excluded = dataset.effective_mask
         if excluded is None:
             excluded = ~np.asarray(observed.valid, dtype=bool).ravel()
         self.retain = ~np.asarray(excluded, dtype=bool).ravel()
@@ -351,12 +352,35 @@ class LoweredProblem:
 
     def log_likelihood(self, theta: Any) -> jax.Array:
         """``log p(data | θ)``, summed over datasets."""
+        total = jnp.asarray(0.0, dtype=jnp.float64)
+        for value in self._likelihood_terms(theta).values():
+            total = total + value
+        return jnp.where(jnp.isfinite(total), total, -jnp.inf)
+
+    def _likelihood_terms(self, theta: Any) -> dict[str, jax.Array]:
+        """Each dataset's own ``log p(data | θ)``, in the **constrained** space."""
         vector = jnp.asarray(theta, dtype=jnp.float64).reshape(-1)
         routed = self._route(vector)
-        total = jnp.asarray(0.0, dtype=jnp.float64)
-        for dataset in self._datasets:
-            total = total + dataset.log_likelihood(routed)
-        return jnp.where(jnp.isfinite(total), total, -jnp.inf)
+        return {dataset.label: dataset.log_likelihood(routed) for dataset in self._datasets}
+
+    def log_likelihood_terms(self, unconstrained: Any) -> dict[str, jax.Array]:
+        """``inference.md`` §10a's optional member: the per-dataset decomposition.
+
+        Keyed by dataset label, in the **unconstrained** parameterisation —
+        the same argument :meth:`log_prob_unconstrained` takes, because that
+        is the vector a NUTS driver has in hand for every draw. The terms sum
+        to :meth:`log_likelihood` at the corresponding constrained point, and
+        that identity is what ``ampere.results.emit``'s per-dataset
+        ``log_likelihood`` group records.
+
+        Supplying it is optional by ruling (sub-decision 1). Supplying it here
+        is worth it because it costs nothing: the joint likelihood is already
+        a sum over exactly these terms, so returning them instead of the sum
+        is a change of return type rather than a second evaluation — and it
+        spares a driver recomputing every stored draw on the numpy path.
+        """
+        y = jnp.asarray(unconstrained, dtype=jnp.float64).reshape(-1)
+        return self._likelihood_terms(self.parameters.constrain_jax(y))
 
     def log_prob(self, theta: Any) -> jax.Array:
         """``log p(θ) + log p(data | θ)`` — the number a sampler maximises."""
@@ -418,15 +442,23 @@ def lower_problem(problem: FittingProblem) -> LoweredProblem:
     Examples
     --------
     >>> import numpy as np, scipy.stats as st, astropy.units as u
-    >>> from ampere.backends.jax import PowerLaw, configure_x64, lower_problem
-    >>> from ampere.core import Dataset, FittingProblem, Spectrum
+    >>> from ampere.backends.jax import (
+    ...     IndependentNoise, PowerLaw, configure_x64, lower_problem
+    ... )
+    >>> from ampere.core import (
+    ...     Dataset, FittingProblem, GaussianFamily, Likelihood, Spectrum
+    ... )
     >>> configure_x64()
     >>> grid = np.array([1.0, 2.0, 3.0])
     >>> observed = Spectrum(
     ...     grid * u.um, [2.0, 1.0, 0.7] * u.Jy, uncertainty=[0.1, 0.1, 0.1] * u.Jy
     ... )
+    >>> # This backend's noise model, not ampere.core's: since W2.13 a noise
+    >>> # model declares a backend, and Dataset's default declares "reference".
+    >>> likelihood = Likelihood(GaussianFamily(), IndependentNoise())
     >>> problem = FittingProblem(
-    ...     PowerLaw(grid, norm=st.lognorm(0.3, scale=2.0), index=-1.0), [Dataset(observed)]
+    ...     PowerLaw(grid, norm=st.lognorm(0.3, scale=2.0), index=-1.0),
+    ...     [Dataset(observed, likelihood=likelihood)],
     ... )
     >>> lowered = lower_problem(problem)
     >>> y = np.zeros(lowered.free_size)
@@ -438,6 +470,17 @@ def lower_problem(problem: FittingProblem) -> LoweredProblem:
     >>> import jax
     >>> gradient = jax.grad(lowered.log_prob_unconstrained)(y)
     >>> gradient.shape == (lowered.free_size,)
+    True
+
+    and it supplies §10a's optional per-dataset decomposition, which sums to
+    the joint log-likelihood:
+
+    >>> terms = lowered.log_likelihood_terms(y)
+    >>> sorted(terms)
+    ['default']
+    >>> float(sum(terms.values())) == float(
+    ...     lowered.log_likelihood(lowered.parameters.constrain_jax(y))
+    ... )
     True
     """
     return LoweredProblem(problem)
