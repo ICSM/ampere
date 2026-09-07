@@ -11,11 +11,14 @@ written to make it checkable rather than merely asserted: **this namespace does
 not import ``ampere.backends``**, in any module, at any depth. Its only ampere
 imports are ``ampere.core`` and ``ampere.results``.
 
-W2.5 found the claim's one limit, and :class:`NUTSEngine` below is where it
-shows: §4.5's surface is not *traceable*, so a gradient-based engine cannot be
-written against it alone. The rule above is unchanged — that driver imports no
-backend either — but the density it differentiates is handed to it rather than
-read off the problem.
+Both Phase 2 backend tracks found the claim's one limit, and
+:class:`NUTSEngine` below is where it shows: §4.5's surface is not
+*traceable*, so a gradient-based engine cannot be written against it alone.
+``inference.md`` §10a (W2.13) is the answer — a **realisation**, the backend's
+registered differentiable native form of the problem — and the rule above is
+unchanged by it: that driver still imports no backend, and reaches the density
+through :func:`ampere.core.realise`, which dispatches on the problem's own
+``backend`` flag.
 
 What is here
 ------------
@@ -31,15 +34,17 @@ What is here
     (``pip install "ampere[zeus]"``); the import is lazy and the refusal names
     the extra.
 :class:`NUTSEngine`
-    The No-U-Turn sampler, through numpyro. The first **gradient-based** engine
-    here, and the only one that cannot be written against §4.5's surface alone:
-    ``FittingProblem.log_prob_unconstrained`` is not traceable (the containers
-    coerce with ``numpy.asarray``, and ``lnprior`` short-circuits on
-    ``math.isfinite``), so the density comes from the backend's own lowering of
-    the problem and is passed in. The driver still imports no backend, and
-    still asks the problem what backend it is rather than being told —
-    ``ampere.backends.jax.lower_problem`` is what supplies the callable. Needs
-    the ``jax`` extra; the import is lazy.
+    The No-U-Turn sampler — numpyro's on a jax problem, pyro's on a torch one.
+    The first **gradient-based** engine here, and the only one that cannot be
+    written against §4.5's surface alone: ``FittingProblem.log_prob_unconstrained``
+    is not traceable (the containers coerce with ``numpy.asarray``, and
+    ``lnprior`` short-circuits on ``math.isfinite``), so the density comes
+    from the backend's **realisation** (``inference.md`` §10a) — obtained
+    through :func:`ampere.core.realise`, which importing the backend
+    registered. ``NUTSEngine(problem)`` takes no density argument; the driver
+    imports no backend, dispatches on the problem's own ``backend`` flag
+    between the two samplers, and imports the one it needs lazily inside
+    ``run``. Needs the ``jax`` or ``torch`` extra.
 
 The first three are gradient-free, so all three call
 :meth:`~ampere.core.dataset.FittingProblem.check_engine` with

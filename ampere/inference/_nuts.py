@@ -541,11 +541,16 @@ class NUTSEngine(Engine):
           comparable reason, so the two agree in behaviour as well as in
           shape, and a chain here starts from this engine's own seeded draw
           from the prior.
-        * ``torch.manual_seed`` is set once from this engine's ``sampler``
-          sub-stream, so a run repeats from the problem's seed. pyro's kernel
-          draws its momenta from torch's global generator and offers no
-          ``generator=``; seeding it is the only route available, and it is
-          the one ``lowering.md`` §9.1 calls route (1).
+        * **the seed is forked, not simply set.** pyro's kernel draws its
+          momenta from torch's *global* generator and offers no ``generator=``,
+          so ``lowering.md`` §9.1's route (1) — seed the global stream from
+          this engine's own ``sampler`` sub-stream — is the only one available,
+          and it is what makes a run repeat from the problem's seed. It is done
+          inside ``torch.random.fork_rng``, so the host process's RNG state is
+          restored afterwards: this backend's rule is that ampere does not
+          leave global torch state changed behind it (``lowering.md`` §10.1's
+          objection to ``set_default_dtype``, applied to the other piece of
+          global state a library can disturb).
         """
         import pyro  # pyrefly: ignore[missing-import]
         import torch  # pyrefly: ignore[missing-import]
@@ -554,38 +559,41 @@ class NUTSEngine(Engine):
         def potential(params: dict[str, Any]) -> Any:
             return -self.density(params[_PYRO_SITE])
 
-        torch.manual_seed(self.integer_seed("sampler"))
         chains: list[np.ndarray] = []
         divergences = 0
         accepted: list[float] = []
         step_sizes: list[float] = []
-        for index in range(settings.chains):
-            start = torch.as_tensor(unconstrained[index], dtype=torch.float64)
-            kernel = NUTS(
-                potential_fn=potential,
-                max_tree_depth=settings.max_tree_depth,
-                target_accept_prob=settings.target_accept_prob,
-                full_mass=settings.dense_mass,
-            )
-            mcmc = MCMC(
-                kernel,
-                num_samples=settings.draws,
-                warmup_steps=settings.warmup,
-                initial_params={_PYRO_SITE: start},
-                num_chains=1,
-                disable_progbar=not settings.progress,
-            )
-            mcmc.run()
-            self.sampler = mcmc
-            chains.append(
-                np.asarray(mcmc.get_samples()[_PYRO_SITE].detach().cpu().numpy(), dtype=float)
-            )
-            diagnostics = mcmc.diagnostics()
-            divergences += sum(
-                len(found) for found in dict(diagnostics.get("divergences", {})).values()
-            )
-            accepted.extend(float(v) for v in dict(diagnostics.get("acceptance rate", {})).values())
-            step_sizes.append(float(kernel.step_size))
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(self.integer_seed("sampler"))
+            for index in range(settings.chains):
+                start = torch.as_tensor(unconstrained[index], dtype=torch.float64)
+                kernel = NUTS(
+                    potential_fn=potential,
+                    max_tree_depth=settings.max_tree_depth,
+                    target_accept_prob=settings.target_accept_prob,
+                    full_mass=settings.dense_mass,
+                )
+                mcmc = MCMC(
+                    kernel,
+                    num_samples=settings.draws,
+                    warmup_steps=settings.warmup,
+                    initial_params={_PYRO_SITE: start},
+                    num_chains=1,
+                    disable_progbar=not settings.progress,
+                )
+                mcmc.run()
+                self.sampler = mcmc
+                chains.append(
+                    np.asarray(mcmc.get_samples()[_PYRO_SITE].detach().cpu().numpy(), dtype=float)
+                )
+                diagnostics = mcmc.diagnostics()
+                divergences += sum(
+                    len(found) for found in dict(diagnostics.get("divergences", {})).values()
+                )
+                accepted.extend(
+                    float(value) for value in dict(diagnostics.get("acceptance rate", {})).values()
+                )
+                step_sizes.append(float(kernel.step_size))
 
         attrs: dict[str, object] = {
             "nuts_divergences": int(divergences),
