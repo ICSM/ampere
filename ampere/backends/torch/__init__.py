@@ -142,7 +142,6 @@ from .instrument import (
     bundled_filter_library,
 )
 from .lowering import (
-    IcdfFallbackWarning,
     LoweredPrior,
     LoweringFallbackWarning,
     lower_bijection,
@@ -182,7 +181,6 @@ __all__ = [
     "CalibrationScale",
     "DenseGP",
     "GaussianProcessNoise",
-    "IcdfFallbackWarning",
     "IndependentNoise",
     "LSFConvolution",
     "LoweredParameters",

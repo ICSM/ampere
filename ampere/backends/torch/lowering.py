@@ -118,7 +118,6 @@ from ampere.core.parameter import (
 from ._config import BACKEND, DEFAULT_DEVICE, DEFAULT_DTYPE, as_tensor
 
 __all__ = [
-    "IcdfFallbackWarning",
     "LoweredPrior",
     "LoweringFallbackWarning",
     "consulted_resolutions",
@@ -127,18 +126,6 @@ __all__ = [
     "lower_prior",
     "warn_icdf_fallback",
 ]
-
-
-#: The shared warning, under the name W2.4 gave it.
-#:
-#: **W2.13 replaced this backend-local class** (fold-in 8, ruled 2026-09-07):
-#: it lives in :mod:`ampere.core.exceptions` as
-#: :class:`~ampere.core.exceptions.LoweringFallbackWarning`, so ``pytest.warns``
-#: on one type catches whichever backend raised it — which is what both slice-1
-#: docstrings asked for. The old name is kept as an alias because it is the one
-#: a torch user has seen, and because the two backends' warnings were never
-#: different things.
-IcdfFallbackWarning = LoweringFallbackWarning
 
 
 # ---------------------------------------------------------------------------
@@ -978,7 +965,7 @@ def warn_icdf_fallback(families: set[str], *, strict: bool, where: str) -> None:
                 f"reference (scipy) prior transform with a warning."
             ),
         )
-    warnings.warn(message, IcdfFallbackWarning, stacklevel=3)
+    warnings.warn(message, LoweringFallbackWarning, stacklevel=3)
 
 
 def consulted_resolutions(families: set[str]) -> tuple[LoweringResolution, ...]:
