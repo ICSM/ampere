@@ -926,6 +926,9 @@ class TestDocumentation:
             "ampere.backends.torch.instrument",
             "ampere.backends.torch.gp",
             "ampere.backends.torch._celerite",
+            "ampere.backends.torch._families",
+            "ampere.backends.torch.noise",
+            "ampere.backends.torch.problem",
         ],
     )
     def test_the_module_docstring_examples_run(self, module: str) -> None:

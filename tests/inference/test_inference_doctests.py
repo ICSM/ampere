@@ -76,3 +76,22 @@ def test_the_nuts_example_runs() -> None:
     results = doctest.testmod(ampere.inference._nuts, optionflags=OPTIONS, verbose=False)
     assert results.failed == 0
     assert results.attempted > 0
+
+
+def test_the_vi_example_runs() -> None:
+    """Separate, and skipped where the ``torch`` extra is absent (W2.4 slice 2).
+
+    The same reasoning the NUTS row states, one library along: the example is
+    a real variational fit on a real backend, so it can only run where that
+    backend is installed. ``VARIATIONAL_LIBRARIES`` is torch-only today; when
+    the jax track adds numpyro's ``SVI`` the example stays as it is and this
+    row stays as it is, because the docstring demonstrates the *driver* rather
+    than a library.
+    """
+    pytest.importorskip("torch")
+    pytest.importorskip("pyro")
+    import ampere.inference._vi
+
+    results = doctest.testmod(ampere.inference._vi, optionflags=OPTIONS, verbose=False)
+    assert results.failed == 0
+    assert results.attempted > 0
