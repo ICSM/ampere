@@ -105,11 +105,24 @@ What slice 2 added
   measurement against GPyTorch rather than from documentation; the
   decision-log row of 2026-09-07 carries the table. It supplies the O(N)
   ``conditional_loo`` recursion W2.3 deferred, too.
-
-Still owed by slice 2: the prediction-aware noise models, a realisation
-widened past W2.13's coverage floor (censoring, latent GPs, the non-Gaussian
-families and the quasiseparable solver inside the density), variational
-inference, and batching/device.
+* the **prediction-aware noise models**, :class:`FractionalModelNoise` and
+  :class:`FractionalModelGPNoise`, closing W2.13's carried finding that the
+  ``sigma_tensor`` hook was in place and dormant.
+* a **widened realisation**: censoring (the Tobit form), the non-Gaussian
+  families ``ampere.core`` implements, and the quasiseparable solver inside
+  the density. What is still unsupported is refused by name at construction,
+  each with its own reason — see :mod:`ampere.backends.torch.problem`.
+* **batching**, honestly:
+  :meth:`~ampere.backends.torch.LoweredProblem.log_prob_unconstrained_batched`
+  evaluates a stack of free vectors in one ``torch.func.vmap`` call, and
+  ``BATCHABLE`` is ``True`` on every piece that survives it — not on
+  :class:`QuasisepGP`, whose solve is a compiled extension, so a problem
+  carrying it reports ``batchable=False`` and the batched call refuses.
+* **the float64 opt-out**, ``GPSolver.configured(dtype=..., device=...)``:
+  ``architecture.md`` §5's per-run precision choice, recorded through
+  ``provenance_config()`` and deliberately absent from the spec hash.
+* **variational inference** through :class:`ampere.inference.VIEngine`, which
+  reaches this backend the same way ``NUTSEngine`` does.
 
 Examples
 --------
@@ -162,7 +175,12 @@ from .models import (
     TorchSpectralModel,
     planck_jy,
 )
-from .noise import GaussianProcessNoise, IndependentNoise
+from .noise import (
+    FractionalModelGPNoise,
+    FractionalModelNoise,
+    GaussianProcessNoise,
+    IndependentNoise,
+)
 from .parameters import LoweredParameters, TorchParameterSpace
 from .problem import LoweredProblem, lower_problem
 from .rng import generator, seed_for
@@ -185,6 +203,8 @@ __all__ = [
     "BlackBody",
     "CalibrationScale",
     "DenseGP",
+    "FractionalModelGPNoise",
+    "FractionalModelNoise",
     "GaussianProcessNoise",
     "IndependentNoise",
     "LSFConvolution",

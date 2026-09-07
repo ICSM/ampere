@@ -144,7 +144,10 @@ class _TorchKernel(Kernel):
 
     BACKEND: ClassVar[str] = BACKEND
     DIFFERENTIABLE: ClassVar[bool] = True
-    BATCHABLE: ClassVar[bool] = False
+    #: Batchable since W2.4 slice 2: a kernel's covariance is elementwise
+    #: arithmetic over a fixed separation matrix, which ``vmap`` maps over a
+    #: stack of hyperparameters without any special handling.
+    BATCHABLE: ClassVar[bool] = True
     DEVICE: ClassVar[str] = "cpu"
 
     def _covariance(self, separation: Any, values: Mapping[str, Any]) -> torch.Tensor:
@@ -260,7 +263,12 @@ class DenseGP(GPSolver):
     #: problem left with ``ampere.core.DenseGP`` a refusal rather than a
     #: silently non-differentiable GP.
     DIFFERENTIABLE: ClassVar[bool] = True
-    BATCHABLE: ClassVar[bool] = False
+    #: Batchable since W2.4 slice 2. ``torch.linalg.cholesky_ex`` and
+    #: ``cholesky_solve`` are batched operations in torch, so ``vmap`` maps a
+    #: stack of covariances onto a stack of factorisations natively — which is
+    #: the one place batching actually buys something, because a dense solve is
+    #: where the arithmetic is.
+    BATCHABLE: ClassVar[bool] = True
     DEVICE: ClassVar[str] = "cpu"
     BACKEND: ClassVar[str] = BACKEND
 
@@ -401,11 +409,68 @@ class DenseGP(GPSolver):
         those, and ``results.md`` §14 requires the spec hash to agree across
         backends, so a dtype in the spec would make two backends' declaration
         of one problem differ. They are still worth recording, because
-        ``architecture.md`` §5 says a float32 opt-out must be visible in a
-        run's provenance, and this is where it will be visible when slice 2
-        offers one.
+        ``architecture.md`` §5 requires a float32 opt-out to be visible in a
+        run's provenance, and :meth:`configured` is that opt-out.
         """
         return {"dtype": str(self.TENSOR_DTYPE), "device": str(self.TENSOR_DEVICE)}
+
+    def configured(self, *, dtype: Any = None, device: Any = None) -> DenseGP:
+        """A copy of this solver that computes in a different precision or place.
+
+        ``architecture.md`` §5's **per-run opt-out** from the float64 policy,
+        and the ``device=`` opt-in, in the one form that does not disturb
+        anything else (W2.4 slice 2).
+
+        Why a copy with shadowed class attributes rather than constructor
+        arguments: ``Likelihood.to_spec`` records a dataclass solver's
+        ``dataclasses.fields`` as its ``config``, and ``results.md`` §14
+        requires ``ampere_spec_hash`` to agree across backends — so a ``dtype``
+        field here would make the torch *declaration* of a problem differ from
+        the reference one, and the cross-backend hash row would fail on a
+        difference that is not a difference in the model. Set as instance
+        attributes, they shadow the :class:`~typing.ClassVar` policy for this
+        solver only, ``dataclasses.fields`` still reports ``jitter`` alone, and
+        :meth:`provenance_config` reports what actually happened. Visible,
+        never hashed.
+
+        **float32 is a real choice with a real cost**, which is why it is an
+        opt-out rather than an option. ``DEVELOPMENT_PLAN.md`` §7 lists it
+        among the known traps: "GP Cholesky / quasiseparable solves in float32
+        fail in ways that look like science problems". A float32 Cholesky of a
+        well-conditioned 10³-point Matérn covariance loses roughly seven digits
+        relative to float64, which is larger than every tolerance in the
+        conformance table; the reason to take it anyway is GPU throughput,
+        where the memory bandwidth saved is the whole point. Nothing here
+        stops you; the run says what you did.
+
+        Parameters
+        ----------
+        dtype
+            A ``torch.dtype``, or a name torch understands (``"float32"``).
+            ``None`` leaves the policy alone.
+        device
+            A ``torch.device``, or anything ``torch.device`` accepts
+            (``"cpu"``, ``"cuda:0"``). ``None`` leaves it alone. **Never
+            auto-detected** (``architecture.md`` §5): a machine with a GPU
+            present takes the same path as CI unless a caller says otherwise.
+
+        Examples
+        --------
+        >>> import torch
+        >>> from ampere.backends.torch import DenseGP
+        >>> fast = DenseGP(jitter=1e-6).configured(dtype=torch.float32)
+        >>> fast.provenance_config()["dtype"]
+        'torch.float32'
+        >>> fast.jitter
+        1e-06
+
+        and the declaration is untouched, which is the point:
+
+        >>> import dataclasses
+        >>> [f.name for f in dataclasses.fields(fast)]
+        ['jitter']
+        """
+        return _configured(self, dtype, device)
 
     def conditional_loo(
         self,
@@ -491,6 +556,35 @@ class DenseGP(GPSolver):
             )
         drawn = factor @ self._tensor(whitened).reshape(-1)
         return to_numpy(drawn).astype(DTYPE, copy=False)
+
+
+def _configured(solver: Any, dtype: Any, device: Any) -> Any:
+    """A copy of *solver* whose dtype/device shadow the class policy.
+
+    Shared by :meth:`DenseGP.configured` so that "a copy, with instance
+    attributes, leaving ``dataclasses.fields`` alone" is written once. The
+    dataclass is frozen, so the copy is built by ``dataclasses.replace`` and
+    the shadows are set through ``object.__setattr__`` — the same route
+    ``__post_init__`` would take.
+    """
+    copy = dataclasses.replace(solver)
+    if dtype is not None:
+        resolved = getattr(torch, dtype, None) if isinstance(dtype, str) else dtype
+        if not isinstance(resolved, torch.dtype):
+            raise LikelihoodError(
+                f"{type(solver).__name__}.configured(dtype=...) takes a torch.dtype or the name "
+                f"of one, got {dtype!r}."
+            )
+        if not resolved.is_floating_point:
+            raise LikelihoodError(
+                f"{type(solver).__name__}.configured(dtype={dtype!r}) was given a "
+                f"non-floating-point dtype. A covariance is a real matrix; an integer one "
+                f"cannot be factorised."
+            )
+        object.__setattr__(copy, "TENSOR_DTYPE", resolved)
+    if device is not None:
+        object.__setattr__(copy, "TENSOR_DEVICE", torch.device(device))
+    return copy
 
 
 def _as_points(coordinates: Any, what: str, dimensions: int | None = None) -> np.ndarray:
@@ -650,6 +744,15 @@ class QuasisepGP(GPSolver):
     IMPLEMENTED: ClassVar[bool] = True
 
     DIFFERENTIABLE: ClassVar[bool] = True
+    #: **Not** batchable, and this is the measured price of the library choice
+    #: rather than an omission: the solve happens inside ``celerite2.backprop``,
+    #: a compiled extension reached through a :class:`torch.autograd.Function`
+    #: that converts to numpy, and ``torch.func.vmap`` cannot see through
+    #: either. A problem carrying this solver reports ``batchable=False`` and
+    #: :meth:`ampere.backends.torch.LoweredProblem.log_prob_unconstrained_batched`
+    #: refuses it by name — which is the honest outcome, since evaluating a
+    #: stack one member at a time under a batched name would be a lie about the
+    #: cost.
     BATCHABLE: ClassVar[bool] = False
     DEVICE: ClassVar[str] = "cpu"
     BACKEND: ClassVar[str] = BACKEND
@@ -899,6 +1002,30 @@ class QuasisepGP(GPSolver):
             "device": str(self.TENSOR_DEVICE),
             "library": "celerite2",
         }
+
+    def configured(self, *, dtype: Any = None, device: Any = None) -> QuasisepGP:
+        """Refuses, by name: celerite2's compiled kernels are float64 CPU.
+
+        :meth:`DenseGP.configured` exists because a dense Cholesky genuinely
+        runs in another precision and on another device. This solver's
+        arithmetic happens inside ``celerite2.backprop``, a double-precision
+        CPU C++ extension, so a float32 or GPU request here has no
+        implementation to reach — and silently ignoring it would make
+        ``provenance_config`` record a policy the run did not follow, which is
+        worse than refusing. ``DenseGP`` is the solver to reach for; the
+        decision-log row of 2026-09-07 records this as the measured price of
+        the library choice.
+        """
+        if dtype is None and device is None:
+            return self
+        raise LikelihoodError(
+            f"{self.NAME} on the torch backend computes inside celerite2's compiled kernels, "
+            f"which are float64 on the CPU, so it has no float32 or non-CPU implementation to "
+            f"configure (asked for dtype={dtype!r}, device={device!r}). Use DenseGP().configured"
+            f"(...) if reduced precision or another device matters more than the O(N) solve, or "
+            f"leave this solver as it is — provenance_config() records that the run factorised "
+            f"in float64 on the CPU whatever the rest of the problem did."
+        )
 
     # -- the rest of the GPSolver interface -----------------------------------
 

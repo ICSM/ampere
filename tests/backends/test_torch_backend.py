@@ -182,7 +182,8 @@ class TestNativeModels:
             model = build(GRID)
             assert model.BACKEND == BACKEND
             assert model.DIFFERENTIABLE is True
-            assert model.BATCHABLE is False
+            # True since W2.4 slice 2: the realised density is vmap-able.
+            assert model.BATCHABLE is True
             assert model.DEVICE == "cpu"
 
     def test_the_grid_is_a_torch_buffer_and_a_declared_one(self) -> None:
@@ -482,7 +483,8 @@ class TestSyntheticPhotometry:
         ):
             assert step.BACKEND == BACKEND
             assert step.DIFFERENTIABLE is True
-            assert step.BATCHABLE is False
+            # True since W2.4 slice 2, as for the models.
+            assert step.BATCHABLE is True
             assert step.DEVICE == "cpu"
 
 

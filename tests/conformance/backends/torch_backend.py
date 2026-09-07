@@ -244,7 +244,9 @@ class Photometry(Transformation):
     ACCEPTS: ClassVar[tuple[type, ...]] = (Spectrum,)
     PRODUCES: ClassVar[type] = PhotometricPoints
     DIFFERENTIABLE: ClassVar[bool] = True
-    BATCHABLE: ClassVar[bool] = False
+    #: As the shipped steps, since W2.4 slice 2; see the fixture's
+    #: ``capabilities``.
+    BATCHABLE: ClassVar[bool] = True
     DEVICE: ClassVar[str] = "cpu"
     #: W2.12 item 4, as on :class:`_CountingModel`.
     BACKEND: ClassVar[str] = BACKEND
@@ -289,9 +291,14 @@ class TorchBackend:
         # ``ampere.core``'s numpy containers do not admit; see the package
         # docstring, and W2.4's report.
         differentiable=True,
-        # Honest: nothing here accepts a stack of parameter vectors yet.
-        # Batching is W2.4 slice 2.
-        batchable=False,
+        # Honest, and it changed at W2.4 slice 2: every piece this fixture
+        # returns declares BATCHABLE, and the realised density is evaluated
+        # over a stack in one call through ``torch.func.vmap``
+        # (``LoweredProblem.log_prob_unconstrained_batched``). The claim is
+        # conjunctive, so a problem carrying ``QuasisepGP`` — a compiled
+        # extension vmap cannot see through — still reports False, which the
+        # row asserting problem.batchable == this value would catch.
+        batchable=True,
         device="cpu",
         # architecture.md §5's policy, not a preference: every tensor is built
         # float64 and torch's global default dtype is never touched.
