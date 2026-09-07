@@ -1466,6 +1466,70 @@ class TestTheWidenedRealisedPath:
         assert np.all(np.isfinite(gradient))
         assert gradient[-1] != 0.0
 
+    def test_a_censored_gradient_survives_an_exactly_zero_residual(self) -> None:
+        """The NaN this backend would otherwise produce, and the reason the
+        Student-t log-CDF carries a hand-written derivative.
+
+        ``betainc``'s derivative in ``x`` diverges as ``x -> 1``, and
+        ``x = nu / (nu + z**2)`` *is* 1 when a residual is exactly zero. The
+        chain rule then multiplies infinity by zero, jax reports NaN, and one
+        such sample poisons that term's gradient. The composite derivative is
+        elementary and finite (``f(z)/F(z)``), so it is supplied rather than
+        differentiated — and this row is what says so.
+        """
+        from ampere.backends.jax.families import lower_family as _lower
+
+        family = StudentTFamily(nu=4.0)
+        lowered = _lower(family, "sed", censored=True)
+        observed = jnp.asarray([1.0, 2.0, 0.5, 3.0])
+        sigma = jnp.full(4, 0.2)
+        limits = jnp.asarray(
+            [0, int(LimitKind.UPPER_LIMIT), int(LimitKind.LOWER_LIMIT), 0], dtype=jnp.int32
+        )
+
+        def density(predicted: Any) -> Any:
+            return lowered(predicted, observed, sigma, family, {}, limits, None)
+
+        # Every residual exactly zero: the worst case, not a random one.
+        gradient = np.asarray(jax.grad(density)(observed))
+        assert np.all(np.isfinite(gradient))
+
+    def test_the_censored_student_t_derivatives_match_scipy(self) -> None:
+        """The hand-written rule is checked against the definition it replaces."""
+        from ampere.backends.jax.families import _student_t_logcdf, _student_t_logsf
+
+        z = np.array([-3.0, -1.0, -0.2, 0.0, 0.5, 2.0, 4.0])
+        nu = 4.0
+        assert np.asarray(_student_t_logcdf(jnp.asarray(z), nu)) == pytest.approx(
+            st.t.logcdf(z, nu), abs=1e-12
+        )
+        assert np.asarray(_student_t_logsf(jnp.asarray(z), nu)) == pytest.approx(
+            st.t.logsf(z, nu), abs=1e-12
+        )
+        slope = np.asarray(
+            jax.vmap(jax.grad(lambda value: _student_t_logcdf(value, nu)))(jnp.asarray(z))
+        )
+        assert slope == pytest.approx(st.t.pdf(z, nu) / st.t.cdf(z, nu), abs=1e-12)
+        survival = np.asarray(
+            jax.vmap(jax.grad(lambda value: _student_t_logsf(value, nu)))(jnp.asarray(z))
+        )
+        assert survival == pytest.approx(-st.t.pdf(z, nu) / st.t.sf(z, nu), abs=1e-12)
+
+    def test_a_fitted_nu_under_censoring_is_refused_rather_than_faked(self) -> None:
+        """jax supplies no derivative of ``betainc`` in its parameters, so there
+        is no gradient in ``nu`` to be had — and a fabricated zero would be a
+        fit that ran, converged and never moved ``nu``."""
+        from ampere.backends.jax.families import lower_family as _lower
+
+        with pytest.raises(LoweringError, match="no gradient in `nu`"):
+            _lower(StudentTFamily(nu=st.lognorm(0.4, scale=6.0)), "sed", censored=True)
+
+    def test_a_fitted_nu_without_censoring_is_fine(self) -> None:
+        """The refusal is narrow: only the *censored* term needs the CDF."""
+        from ampere.backends.jax.families import lower_family as _lower
+
+        assert _lower(StudentTFamily(nu=st.lognorm(0.4, scale=6.0)), "sed") is not None
+
     def test_the_poisson_family_lowers(self) -> None:
         _agrees(_family_problem(PoissonFamily(), counts=True))
 

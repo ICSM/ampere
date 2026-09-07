@@ -118,26 +118,75 @@ def _tobit(
 
 
 def _student_t_tail(standardised: jax.Array, nu: jax.Array) -> jax.Array:
-    """``I_x(nu/2, 1/2)`` with ``x = nu / (nu + z²)`` — twice the smaller tail.
+    """``I_x(nu/2, 1/2)`` with ``x = nu / (nu + z**2)`` — twice the smaller tail.
 
     Student's t has no ``logcdf`` in ``jax.scipy.stats``, and this is the
     regularised incomplete beta function ``scipy``'s own ``t.cdf`` is built
     from, so writing it out is transcription rather than approximation. The
-    identity is ``F(z) = I_x(nu/2, 1/2) / 2`` for ``z <= 0`` and ``1 - I_x / 2`` for
-    ``z > 0``; measured against ``scipy.stats.t.logcdf`` it agrees to 1.1e-15.
+    identity is ``F(z) = I_x(nu/2, 1/2) / 2`` for ``z <= 0`` and
+    ``1 - I_x / 2`` for ``z > 0``; measured against ``scipy.stats.t.logcdf``
+    it agrees to 1.1e-15.
     """
     z = jnp.asarray(standardised, dtype=jnp.float64)
     return betainc(0.5 * nu, 0.5, nu / (nu + z * z))
 
 
-def _student_t_logcdf(standardised: jax.Array, nu: jax.Array) -> jax.Array:
+def _student_t_logcdf_value(standardised: jax.Array, nu: jax.Array) -> jax.Array:
     tail = _student_t_tail(standardised, nu)
     return jnp.where(standardised <= 0.0, jnp.log(0.5 * tail), jnp.log1p(-0.5 * tail))
 
 
-def _student_t_logsf(standardised: jax.Array, nu: jax.Array) -> jax.Array:
+def _student_t_logsf_value(standardised: jax.Array, nu: jax.Array) -> jax.Array:
     tail = _student_t_tail(standardised, nu)
     return jnp.where(standardised >= 0.0, jnp.log(0.5 * tail), jnp.log1p(-0.5 * tail))
+
+
+@jax.custom_jvp
+def _student_t_logcdf(standardised: jax.Array, nu: jax.Array) -> jax.Array:
+    """``log F(z; nu)``, with the derivative supplied rather than differentiated.
+
+    The **value** is :func:`_student_t_logcdf_value`; the reason for a custom
+    rule is the derivative, and there are two separate reasons.
+
+    First, ``betainc``'s own derivative in ``x`` is
+    ``x**(a-1) (1-x)**(b-1) / B(a, b)``, which with ``b = 1/2`` diverges as
+    ``x -> 1`` — and ``x = nu / (nu + z**2)`` *is* 1 at ``z = 0``. The chain
+    rule multiplies that infinity by ``dx/dz = 0`` and jax reports NaN, so a
+    sample whose residual happens to be exactly zero would poison the gradient
+    of the whole fit. The composite derivative is perfectly finite, and it is
+    elementary: ``d/dz log F = f(z)/F(z)``, computed here from ``logpdf``
+    minus the value.
+
+    Second, ``jax.scipy.special.betainc`` supports **no** derivative with
+    respect to ``a`` or ``b`` at all ("Betainc gradient with respect to a and
+    b not supported"), so a *fitted* ``nu`` under censoring would raise from
+    inside the traced density. :func:`lower_family` refuses that combination
+    by name at lowering time, which is why this rule may leave the ``nu``
+    tangent alone: on every path that reaches here, ``nu`` is a constant.
+    """
+    return _student_t_logcdf_value(standardised, nu)
+
+
+@_student_t_logcdf.defjvp
+def _student_t_logcdf_jvp(primals: Any, tangents: Any) -> Any:
+    standardised, nu = primals
+    tangent, _ = tangents
+    value = _student_t_logcdf_value(standardised, nu)
+    return value, jnp.exp(jst.t.logpdf(standardised, nu) - value) * tangent
+
+
+@jax.custom_jvp
+def _student_t_logsf(standardised: jax.Array, nu: jax.Array) -> jax.Array:
+    """``log (1 - F(z; nu))``. See :func:`_student_t_logcdf` for the rule's two reasons."""
+    return _student_t_logsf_value(standardised, nu)
+
+
+@_student_t_logsf.defjvp
+def _student_t_logsf_jvp(primals: Any, tangents: Any) -> Any:
+    standardised, nu = primals
+    tangent, _ = tangents
+    value = _student_t_logsf_value(standardised, nu)
+    return value, -jnp.exp(jst.t.logpdf(standardised, nu) - value) * tangent
 
 
 def _own_values(family: LikelihoodFamily, values: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -301,7 +350,42 @@ _FAMILIES: dict[str, Any] = {
 SUPPORTED_FAMILIES: frozenset[str] = frozenset(_FAMILIES)
 
 
-def lower_family(family: LikelihoodFamily, label: str) -> Any:
+def _refuse_fitted_nu_under_censoring(family: LikelihoodFamily, label: str) -> None:
+    """The one combination this backend cannot differentiate, refused by name.
+
+    A censored Student-t needs ``log F(z; nu)``, which is built from the
+    regularised incomplete beta — and ``jax.scipy.special.betainc`` supports
+    no derivative with respect to its ``a`` or ``b`` parameters, which is
+    where ``nu`` enters. There is no correct gradient to be had, so a *fitted*
+    ``nu`` on a censored dataset is refused here rather than allowed to raise
+    from inside a trace, or (worse) served a fabricated zero.
+
+    Two remedies, both stated in the message. Neither is an approximation: a
+    fixed ``nu`` is the commoner declaration anyway, and the gradient-free
+    engines fit ``nu`` under censoring on the contract path with no trouble at
+    all, because ``scipy.stats.t.logcdf`` needs no derivative.
+    """
+    if family.NAME != "student_t":
+        return
+    nu = family.parameters["nu"]
+    if getattr(nu, "fixed", False):
+        return
+    raise LoweringError(
+        "student_t.nu",
+        backend=BACKEND,
+        detail=(
+            f"dataset {label!r} fits the Student-t degrees of freedom `nu` *and* declares "
+            f"censored samples. A censored Student-t term is log F(z; nu), whose only closed "
+            f"form goes through the regularised incomplete beta, and jax supplies no derivative "
+            f"of that function with respect to its parameters — so there is no gradient in `nu` "
+            f"to be had here, and returning a fabricated one would be worse than refusing. Hold "
+            f"`nu` fixed (the commoner declaration), drop the censoring, or fit this dataset on "
+            f"a gradient-free engine, which computes the same likelihood on the contract path."
+        ),
+    )
+
+
+def lower_family(family: LikelihoodFamily, label: str, *, censored: bool = False) -> Any:
     """The jax evaluation of *family*, or a :class:`LoweringError` naming it.
 
     Called once, when a problem is realised — never per evaluation, and never
@@ -314,9 +398,16 @@ def lower_family(family: LikelihoodFamily, label: str) -> Any:
     label
         The dataset's label, so the refusal says *which* dataset is the
         problem rather than only which family.
+    censored
+        Whether the dataset declares a censoring block. Only one refusal
+        depends on it — see :func:`_refuse_fitted_nu_under_censoring` — but it
+        is a *declaration*, known at lowering time, so it is checked here
+        rather than discovered inside a trace.
     """
     lowered = _FAMILIES.get(family.NAME)
     if lowered is not None:
+        if censored:
+            _refuse_fitted_nu_under_censoring(family, label)
         return lowered
     known = ", ".join(sorted(SUPPORTED_FAMILIES))
     if not family.IMPLEMENTED:

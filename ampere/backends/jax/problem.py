@@ -177,7 +177,9 @@ class _LoweredDataset:
         #: The family's own closed form, in jax (:mod:`ampere.backends.jax.families`).
         #: Refuses by name, here, for anything ``ampere.core`` does not implement
         #: or this backend has not transcribed.
-        self.family_log_prob = lower_family(family, label)
+        self.family_log_prob = lower_family(
+            family, label, censored=self.likelihood.censoring is not None
+        )
         correlated = bool(getattr(self.noise, "CORRELATED", False))
         if correlated and not _is_native_solver(self.noise.solver):
             raise _refuse(
