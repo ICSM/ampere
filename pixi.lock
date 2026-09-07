@@ -1580,6 +1580,7 @@ packages:
   - spectres
   - tqdm
   - pyphot
+  - requests
   - emcee
   - dynesty
   - corner

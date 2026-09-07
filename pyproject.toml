@@ -30,6 +30,14 @@ dependencies = [
     "spectres",
     "tqdm",
     "pyphot",  # W0.9: forward-migrated onto pyphot >= 2's unit-adapter API via ampere/utils/pyphot_compat.py (pyphot < 2 still works through the same compat layer)
+    # pyphot 2.1.1 imports `requests` at module level without declaring it, so
+    # a bare `pip install ampere` could not `import pyphot` (the minimal-install
+    # CI job caught it; W2.1's out-of-scope finding). Declared here on pyphot's
+    # behalf (ruled by Peter 2026-09-07) until pyphot fixes its own metadata --
+    # ampere itself makes no HTTP requests. If ampere ever needs an HTTP client
+    # of its own, httpx, aiohttp or niquests would be better choices than
+    # requests; revisit this line rather than building on it.
+    "requests",
     "emcee",
     "dynesty",
     "corner",
