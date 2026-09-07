@@ -33,6 +33,8 @@ other's row on lookup
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import astropy.units as u
 import numpy as np
 import pytest
@@ -377,6 +379,12 @@ class TestRegistrantBattery:
 
 
 class _PowerLawModel(Model):
+    # W2.12: the backend is a capability flag the *pieces* declare, so a
+    # problem that ran on "stub-prov" is one whose model says so. Asserting it
+    # through ``provenance_attrs(backend=...)`` is no longer possible, and that
+    # is the point: ``ampere_backend`` is a fact now.
+    BACKEND: ClassVar[str] = "stub-prov"
+
     def __init__(self) -> None:
         self.register_buffer("grid", np.array([0.2, 0.5, 0.8]), unit=u.um)
         self.register_parameter(Parameter("norm", _custom_power_law()))
@@ -409,9 +417,7 @@ class TestProvenanceStamping:
 
         problem = _toy_problem()
         entries = provenance_entries([resolution])
-        attrs = provenance_attrs(
-            problem, backend="stub-prov", extra={"registered_lowerings": entries}
-        )
+        attrs = provenance_attrs(problem, extra={"registered_lowerings": entries})
 
         assert "ampere_registered_lowerings" in attrs
         import json

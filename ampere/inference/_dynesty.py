@@ -56,8 +56,10 @@ class DynestyEngine(Engine):
         estimate.
     bound, sample
         Passed to dynesty unchanged.
-    backend, cache_size
-        See :class:`~ampere.inference.engine.Engine`.
+    cache_size
+        See :class:`~ampere.inference.engine.Engine`. There is no ``backend=``:
+        W2.12 made the backend §4.5's fourth capability flag, read off the
+        problem's own pieces.
 
     Notes
     -----
@@ -109,10 +111,9 @@ class DynestyEngine(Engine):
         dynamic: bool = False,
         bound: str = "multi",
         sample: str = "auto",
-        backend: str = "reference",
         cache_size: int = DEFAULT_CACHE_SIZE,
     ) -> None:
-        super().__init__(problem, backend=backend, cache_size=cache_size)
+        super().__init__(problem, cache_size=cache_size)
         chosen = (
             _default_live_points(problem.free_size) if live_points is None else int(live_points)
         )

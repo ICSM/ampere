@@ -289,10 +289,10 @@ class TestEmissionAgreement:
         draws = np.array([left.prior_transform(sample_cube(left.free_size))])
         tolerance = shared_tolerance(first, second, "cross_backend")
 
-        trees = [
-            emit(problem, draws, [problem.evaluate(draws[0])], backend=backend.name)
-            for problem, backend in ((left, first), (right, second))
-        ]
+        # No ``backend=``: since W2.12 ``emit`` derives it from the problem's
+        # own pieces, so the final assertion below proves the *derivation*
+        # tells the two fixtures apart, not that the caller remembered to.
+        trees = [emit(problem, draws, [problem.evaluate(draws[0])]) for problem in (left, right)]
         assert set(trees[0].children) == set(trees[1].children)
         for name in trees[0][POSTERIOR_GROUP]:
             assert trees[0][POSTERIOR_GROUP][name].values == pytest.approx(
@@ -302,4 +302,6 @@ class TestEmissionAgreement:
             assert trees[0][SAMPLE_STATS_GROUP][name].values == pytest.approx(
                 trees[1][SAMPLE_STATS_GROUP][name].values, abs=tolerance
             )
+        assert trees[0].attrs["ampere_backend"] == first.name
+        assert trees[1].attrs["ampere_backend"] == second.name
         assert trees[0].attrs["ampere_backend"] != trees[1].attrs["ampere_backend"]

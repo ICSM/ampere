@@ -858,6 +858,10 @@ class TestCapabilities:
         assert not problem.differentiable
         assert not problem.batchable
         assert problem.device == "cpu"
+        # W2.12's fourth flag. A hand-written numpy model runs on the reference
+        # path, which is why "reference" is the conservative default rather
+        # than an empty string or a refusal.
+        assert problem.backend == "reference"
 
     def test_conjunctive_over_the_parts(self) -> None:
         # Promoted at the freeze (ruled 2026-09-03, inference.md §19.6): the
@@ -901,12 +905,77 @@ class TestCapabilities:
     def test_disagreeing_devices_are_refused(self) -> None:
         class OnCpu:
             DEVICE = "cpu"
+            BACKEND = "reference"
 
         class OnGpu:
             DEVICE = "cuda"
+            BACKEND = "reference"
 
         with pytest.raises(DatasetError, match="different devices"):
             declared_capabilities([OnCpu(), OnGpu()])
+
+    # -- W2.12: the backend, the fourth flag ----------------------------------
+
+    def test_agreeing_backends_aggregate_onto_the_problem(self) -> None:
+        class NativeFlat(Flat):
+            BACKEND = "torch"
+
+        class NativeCalibrate(Calibrate):
+            BACKEND = "torch"
+
+        problem = FittingProblem(
+            NativeFlat(WAVELENGTH),
+            [Dataset(flat_spectrum(), Instrument([NativeCalibrate()]))],
+        )
+        assert problem.backend == "torch"
+        assert problem.capabilities.backend == "torch"
+
+    def test_disagreeing_backends_are_refused_naming_both(self) -> None:
+        # The device rule, not the conjunctive one: a backend is an identity,
+        # and there is no conservative answer to "half of this is torch".
+        # Ampere does not convert arrays between libraries on the user's
+        # behalf, so the mistake is caught here rather than two steps later
+        # inside a backend -- or not at all, with the gradients quietly gone.
+        class NativeFlat(Flat):
+            BACKEND = "torch"
+
+        with pytest.raises(DatasetError) as excinfo:
+            FittingProblem(
+                NativeFlat(WAVELENGTH),
+                [Dataset(flat_spectrum(), Instrument([Calibrate()]))],
+            )
+        message = str(excinfo.value)
+        assert "different backends" in message
+        assert "'reference'" in message and "'torch'" in message
+        assert "capabilities=Capabilities(backend=...)" in message
+
+    def test_an_inherited_reference_default_disagrees_with_a_native_part(self) -> None:
+        class NativeStep(Calibrate):
+            BACKEND = "jax"
+
+        with pytest.raises(DatasetError, match="different backends"):
+            declared_capabilities([NativeStep(), Calibrate()])
+
+    def test_the_override_settles_a_deliberate_disagreement(self) -> None:
+        class NativeFlat(Flat):
+            BACKEND = "torch"
+
+        problem = FittingProblem(
+            NativeFlat(WAVELENGTH),
+            [Dataset(flat_spectrum(), Instrument([Calibrate()]))],
+            capabilities=Capabilities(backend="torch"),
+        )
+        assert problem.backend == "torch"
+
+    def test_an_empty_backend_is_refused_like_an_empty_device(self) -> None:
+        with pytest.raises(DatasetError, match="a backend must be a non-empty string"):
+            Capabilities(backend="")
+        with pytest.raises(DatasetError, match="a backend must be a non-empty string"):
+            Capabilities(backend=None)  # type: ignore[arg-type]
+
+    def test_the_abcs_default_to_the_reference_backend(self) -> None:
+        assert Model.BACKEND == "reference"
+        assert Transformation.BACKEND == "reference"
 
     def test_a_differentiable_model_and_step_lift_the_problem(self) -> None:
         class NativeFlat(Flat):
@@ -2051,10 +2120,13 @@ class TestRepresentations:
         assert "Simulation" in repr(problem.simulate())
 
     def test_capabilities_serialise(self) -> None:
-        assert Capabilities(True, False, "cuda").to_dict() == {
+        assert Capabilities(True, False, "cuda", "torch").to_dict() == {
             "differentiable": True,
             "batchable": False,
             "device": "cuda",
+            # W2.12: the fourth flag, so the provenance payload gained a key
+            # and PROVENANCE_SCHEMA_VERSION was bumped to 4.
+            "backend": "torch",
         }
 
     def test_bindings_and_requirements_are_inspectable(self) -> None:
