@@ -456,6 +456,60 @@ benchmark half can trail with W2.10.
 **Accept:** a deliberately broken backend row fails only its own job; the
 no-extras job is green; benchmark results appear as artefacts on a PR.
 
+### W2.12 — Backend identity on `FittingProblem` [M; Opus]
+W2.2's carried finding: no §4 surface names a problem's backend, so
+`Engine(problem, backend=...)` *declares* it and `ampere_backend` in a run's
+provenance records a declaration rather than a fact — and two lockstep
+tracks would each invent their own answer. **Decided by Fable 2026-09-07,
+Peter to ratify at merge review** (a §4.5 addition — ground rule 9: this PR
+carries the decision-log row): the backend is a **fourth capability flag**,
+following the three existing ones exactly.
+1. `Capable`, `Model` and `Transformation` gain `BACKEND: ClassVar[str] =
+   "reference"` — the conservative default, since the base install's whole
+   toolkit *is* the reference backend and a hand-written numpy model runs
+   on the reference path. Every piece `ampere.backends.reference` ships
+   declares it explicitly rather than inheriting. Every other capability
+   part that carries the three flags (follow `Dataset.capability_parts`)
+   carries the fourth.
+2. `Capabilities.backend: str = "reference"`, validated non-empty like
+   `device`; `declared_capabilities` aggregates by the **device rule**:
+   all parts must agree, and disagreement raises `DatasetError` naming
+   the backends and the override, `capabilities=Capabilities(backend=...)`.
+   Ampere does not convert arrays between libraries on the user's behalf —
+   a mixed problem is a configuration mistake that would otherwise fail
+   two steps later inside a backend, or silently drop gradients.
+3. `FittingProblem.backend` property beside `differentiable`/`batchable`/
+   `device`.
+4. **One name per backend, everywhere**: the string is the key
+   `lowering.md` §12.8's registry uses for `backend`, and the conformance
+   fixtures' `name`. Say so in the spec; a conformance row asserts each
+   fixture's composed problem reports that fixture's `name`.
+5. `Engine.__init__` **drops** `backend=` (pre-release; no shim) and reads
+   `problem.capabilities.backend`. `ampere.results.emit` /
+   `provenance_attrs`' `backend=` becomes optional, defaulting to the
+   problem's own; an explicit value that disagrees with the problem
+   raises rather than being recorded. `ampere_backend` is then a fact.
+6. `Capabilities.to_dict` gains the key, so the `capabilities` payload in
+   the provenance attrs changes shape: bump `PROVENANCE_SCHEMA_VERSION`
+   to 4 per `results.md`'s rule. W2.6's deferred first-class lowering
+   provenance key is **not** this bump — it stays deferred to W2.4/W2.5.
+   Check whether `capabilities` feeds `ampere_problem_hash`; do not change
+   the hash inputs, and state in the report what you found.
+Spec amendments in the same PR: `inference.md` (the `Capabilities` row,
+§18's Phase 2 bullet — a backend declares the *four* flags), `results.md`
+(`ampere_backend` derived, schema version 4), `DEVELOPMENT_PLAN.md` §4.5's
+capability-flags bullet, plus the decision-log row.
+**Depends:** W2.1, W2.2, W2.6. **Blocks** W2.4/W2.5.
+**Accept:** `pixi run test-all` green with new rows in `tests/core`
+(agreement, disagreement raise naming the backends, the override, the
+property), `tests/conformance` (item 4, per backend fixture — including
+the in-repo third-backend demonstration), `tests/inference` (`Engine`
+refuses `backend=`; the emitted attrs come from the problem) and
+`tests/results` (the schema version; the disagreeing explicit value
+raises); `grep -rn "backend" ampere/inference` shows no declared default;
+the executed example in `ampere/inference/__init__.py` still prints
+`ampere_engine`/`ampere_backend`; lint/format/pyrefly clean.
+
 ## Status
 
 | Item | Status |
