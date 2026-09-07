@@ -2672,6 +2672,11 @@ class Likelihood(Parameterised):
         The kernel is absent for the same reason plus one more: it is
         consumed *by* the solver, which is the piece that decides whether the
         covariance is built in numpy or natively, and which is already here.
+
+        One consequence recorded deliberately, as W2.1 recorded the same one
+        for ``describe``: this is a class attribute of a
+        :class:`~ampere.core.parameter.Parameterised`, so ``capability_parts``
+        joins the names a family's or noise model's parameter may not shadow.
         """
         if isinstance(self._noise, GaussianProcessNoise):
             return (self._noise, self._noise.solver)
