@@ -48,12 +48,16 @@ Instrument steps (``transformations.md`` §10's table):
 :class:`CalibrationScale`, :class:`Resample`, :class:`LSFConvolution`,
 :class:`SyntheticPhotometry`.
 
-Kernels and solvers: :class:`Matern32`, :class:`SquaredExponential` and
-:class:`DenseGP` — the neutral ``ampere.core`` declarations with their linear
-algebra done in jax. ``QuasisepGP`` is **not** here yet: slice 2 chooses
-between tinygp's ``QuasisepSolver`` and celerite2.jax after evaluating both
-against the conformance suite (``DEVELOPMENT_PLAN.md`` §6), and shipping a
-solver slot that quietly delegated to numpy would defeat the point.
+Kernels and solvers: :class:`Matern32`, :class:`SquaredExponential`,
+:class:`DenseGP` and :class:`QuasisepGP` — the neutral ``ampere.core``
+declarations with their linear algebra done in jax. ``QuasisepGP`` is the
+exact O(N) quasiseparable solve, over **celerite2.jax**, chosen in slice 2 by
+measuring it against tinygp's ``QuasisepSolver``
+(``DEVELOPMENT_PLAN.md`` §6, and §2's "jax quasiseparable GP library" row):
+celerite2 is linear where tinygp's jax-native ``lax.scan`` recursions are
+quadratic in practice on XLA's CPU backend, by a factor of 200 at 10⁴ points.
+:mod:`ampere.backends.jax.gp`'s docstring carries the table and the three
+things that choice cost.
 
 Noise (``likelihoods.md`` §5): the prediction-aware
 :class:`FractionalModelNoise` and its GP composition
@@ -83,7 +87,7 @@ from __future__ import annotations
 from ._config import BACKEND, configure_x64, require_x64, x64_enabled
 from .bijections import log_abs_det_jacobian, lower_bijection
 from .distributions import lower_prior
-from .gp import DenseGP, Matern32, SquaredExponential
+from .gp import DEVICE, PRECISIONS, DenseGP, Matern32, QuasisepGP, SquaredExponential
 from .instrument import CalibrationScale, LSFConvolution, Resample, SyntheticPhotometry
 from .models import COORDINATE_UNIT, FLUX_UNIT, BlackBody, ModifiedBlackBody, PowerLaw, planck_jy
 from .noise import (
@@ -106,7 +110,9 @@ _register_realisation(BACKEND, lower_problem, builtin=True)
 __all__ = [
     "BACKEND",
     "COORDINATE_UNIT",
+    "DEVICE",
     "FLUX_UNIT",
+    "PRECISIONS",
     "BlackBody",
     "CalibrationScale",
     "DenseGP",
@@ -121,6 +127,7 @@ __all__ = [
     "Matern32",
     "ModifiedBlackBody",
     "PowerLaw",
+    "QuasisepGP",
     "Resample",
     "SquaredExponential",
     "SyntheticPhotometry",
