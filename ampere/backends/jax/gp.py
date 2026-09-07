@@ -247,8 +247,18 @@ class _JaxKernel(Kernel):
 
     BACKEND: ClassVar[str] = BACKEND
     DIFFERENTIABLE: ClassVar[bool] = True
-    BATCHABLE: ClassVar[bool] = False
-    DEVICE: ClassVar[str] = "cpu"
+    #: **True since slice 2** (W2.5). The flag means one thing on this
+    #: backend: ``jax.vmap`` over the realised density
+    #: (:meth:`~ampere.backends.jax.problem.LoweredProblem.log_prob_unconstrained_batched`)
+    #: evaluates a stack of parameter vectors in one call, and it is measured
+    #: rather than asserted -- ``tests/backends/test_jax.py`` compares a vmapped
+    #: density against the same density in a loop. It is true here because every
+    #: operation in this class is whole-array ``jax.numpy``: nothing branches on
+    #: a value, nothing indexes by one, so vmap maps it as it maps any pure
+    #: function. ``QuasisepGP`` is the one part of this backend that still says
+    #: False, and says why.
+    BATCHABLE: ClassVar[bool] = True
+    DEVICE: ClassVar[str] = DEVICE
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         require_x64(f"a jax {type(self).__name__}")

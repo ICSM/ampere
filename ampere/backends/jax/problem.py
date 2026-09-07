@@ -45,21 +45,51 @@ Trace purity
 ------------
 No Python exception is raised on the traced path (``likelihoods.md`` §17 Q1's
 ruling, and the reason it exists). Every refusal this module makes — a model
-that is not this backend's, a censored dataset, a latent GP, a likelihood
-family that is not Gaussian — is made **at lowering time**, once, with a
-:class:`~ampere.core.exceptions.LoweringError` naming what is unsupported.
-Inside the traced function a failure is ``-inf``, computed with
-``jnp.where``, which is §4.5's answer arrived at by the only means a trace
-allows.
+that is not this backend's, a family neither ``ampere.core`` nor this backend
+implements, a solver from another rung of the ladder — is made **at lowering
+time**, once, with a :class:`~ampere.core.exceptions.LoweringError` naming
+what is unsupported. Inside the traced function a failure is ``-inf``,
+computed with ``jnp.where``, which is §4.5's answer arrived at by the only
+means a trace allows.
 
-What slice 1 lowers
--------------------
-Enough to sample the joint fits ``inference.md`` §15 describes: this backend's
-models and instrument steps, a ``GaussianFamily``, and independent or
-GP (dense) noise, with masks. Everything else is refused by name rather than
-approximated — a censored dataset, a latent-GP declaration, a non-Gaussian
-family, a solver that is not this backend's. Widening it is slice 2's, beside
-the quasiseparable solver.
+What this lowers
+----------------
+Everything ``ampere.core`` implements, bar the pieces named below:
+
+* this backend's models and instrument steps, on any number of jointly fitted
+  datasets, with ties, plates and hierarchical priors;
+* every **implemented** likelihood family — ``gaussian``, ``student_t``,
+  ``cauchy``, ``complex_gaussian``, ``poisson`` — through
+  :mod:`ampere.backends.jax.families`, which transcribes ``ampere.core``'s
+  closed forms and refuses by name anything it does not hold;
+* **censoring**: the Tobit decomposition, for every family that declares
+  ``SUPPORTS_CENSORING``, with the CDFs written out where ``jax.scipy.stats``
+  has none;
+* **latent GPs**: a dataset declaring one hands its whitened block to the
+  family that consumes it (``CONSUMES_LATENT_GP``), which today is Poisson —
+  the combination ``DEVELOPMENT_PLAN.md`` §4.4 singles out, and the one no
+  gradient-free engine can run at all;
+* both GP solves, **dense and quasiseparable**, differentiable in the kernel
+  hyperparameters. ``QuasisepGP`` is what makes the flexible likelihood
+  tractable at 10⁵ to 10⁶ samples, and it lowers here exactly as ``DenseGP``
+  does because the solver interface is the strategy the noise model holds.
+
+Refused, by name, at lowering time: a model or step from another backend, a
+GP solver from another backend, a family ``ampere.core`` itself does not
+implement (``rice``, ``von_mises``), and the analytic-GP combinations
+``ampere.core`` declares but has not implemented (``complex_gaussian`` with a
+GP, Phase 4's).
+
+Batching
+--------
+:meth:`LoweredProblem.log_prob_unconstrained_batched` is ``jax.vmap`` of the
+same function, and it is offered **only when the problem declares
+``batchable``** — which it does when every part does. That is not caution for
+its own sake: ``celerite2.jax``'s primitives register no batching rule, so a
+``vmap`` over a quasiseparable density fails *inside* the trace with a message
+about a primitive the user never named. Asking the declaration first turns
+that into a refusal by name, which is this architecture's rule about
+capabilities everywhere else too.
 """
 
 from __future__ import annotations
@@ -77,11 +107,15 @@ from ampere.core import (
     GaussianProcessNoise,
     IndependentNoise,
 )
-from ampere.core.dataset import INSTRUMENT_COMPONENT, LIKELIHOOD_COMPONENT
+from ampere.core.dataset import (
+    INSTRUMENT_COMPONENT,
+    LATENT_COMPONENT,
+    LIKELIHOOD_COMPONENT,
+)
 from ampere.core.exceptions import LoweringError
 
 from ._config import BACKEND, require_x64
-from .gp import DenseGP
+from .families import lower_family
 from .parameters import LoweredParameterSet
 
 __all__ = ["LoweredProblem", "lower_problem"]
@@ -91,6 +125,23 @@ _LOG_2PI = math.log(2.0 * math.pi)
 
 def _refuse(what: str, detail: str) -> LoweringError:
     return LoweringError(what, backend=BACKEND, detail=detail)
+
+
+def _is_native_solver(solver: Any) -> bool:
+    """Whether *solver* is one of this backend's, by declaration.
+
+    Two conditions, and both matter. ``BACKEND`` is W2.12's identity flag, so
+    a solver from another rung of the ladder is caught even if it happens to
+    offer the right method name; ``log_marginal_likelihood_jax`` is the native
+    surface this module actually calls, so a jax solver that had not supplied
+    it would be caught before the trace rather than inside it. Checked by
+    declaration rather than by ``isinstance`` so that a user's own jax solver
+    — the strategy interface exists to be extended — composes here without
+    subclassing one of ours.
+    """
+    return getattr(solver, "BACKEND", None) == BACKEND and callable(
+        getattr(solver, "log_marginal_likelihood_jax", None)
+    )
 
 
 class _LoweredDataset:
@@ -122,35 +173,19 @@ class _LoweredDataset:
                     f"surface (an `apply_flux` method). Build the chain from "
                     f"ampere.backends.jax's steps.",
                 )
-        if self.likelihood.family.NAME != "gaussian":
-            raise _refuse(
-                self.likelihood.family.NAME,
-                f"dataset {label!r} declares the {self.likelihood.family.NAME!r} likelihood "
-                f"family; slice 1 of the jax backend lowers the Gaussian family only. The "
-                f"gradient-free engines run every family, on this problem as declared.",
-            )
-        if dataset.likelihood.censoring is not None:
-            raise _refuse(
-                "censoring",
-                f"dataset {label!r} declares censored samples. A Tobit limit lowers to "
-                f"`norm.logcdf`, which is available in jax, but the mixed detected/censored "
-                f"decomposition is not written here yet; it is slice 2's, with the "
-                f"quasiseparable solver.",
-            )
-        if dataset.latent is not None:
-            raise _refuse(
-                "latent",
-                f"dataset {label!r} declares a latent GP. The latent path needs the whitening "
-                f"transform inside the traced function, which slice 2 supplies together with the "
-                f"quasiseparable solver.",
-            )
+        family = self.likelihood.family
+        #: The family's own closed form, in jax (:mod:`ampere.backends.jax.families`).
+        #: Refuses by name, here, for anything ``ampere.core`` does not implement
+        #: or this backend has not transcribed.
+        self.family_log_prob = lower_family(family, label)
         correlated = bool(getattr(self.noise, "CORRELATED", False))
-        if correlated and not isinstance(self.noise.solver, DenseGP):
+        if correlated and not _is_native_solver(self.noise.solver):
             raise _refuse(
                 type(self.noise.solver).__name__,
                 f"dataset {label!r} uses the {type(self.noise.solver).__name__} solver, which is "
                 f"not this backend's. A jax problem whose GP solve ran in numpy would not be "
-                f"differentiable; pass ampere.backends.jax.DenseGP.",
+                f"differentiable; pass ampere.backends.jax.DenseGP or "
+                f"ampere.backends.jax.QuasisepGP.",
             )
         if not isinstance(self.noise, (IndependentNoise, GaussianProcessNoise)):
             raise _refuse(
@@ -159,6 +194,38 @@ class _LoweredDataset:
                 f"compose natively.",
             )
         self.correlated = correlated
+        # Which of the two correlated stories this dataset tells. A family
+        # whose GP marginalises in closed form (Gaussian) hands the whole
+        # covariance to the solver; one that does not (Poisson) needs the
+        # latent block instead. The *declaration* decides, not a name check,
+        # so a family added to ampere.core lands on the right branch here.
+        self.gp_marginal = correlated and family.ANALYTIC_WITH_GP
+        if self.gp_marginal and not family.GP_ANALYTIC_IMPLEMENTED:
+            raise _refuse(
+                family.NAME,
+                f"dataset {label!r} composes the {family.NAME!r} family with a correlated noise "
+                f"model. That marginalisation is declared analytic but is unimplemented on the "
+                f"reference path too (GP_ANALYTIC_IMPLEMENTED = False), so there is nothing for "
+                f"this backend to agree with. ampere.core refuses the same composition.",
+            )
+        censoring = self.likelihood.censoring
+        if censoring is not None and not family.SUPPORTS_CENSORING:
+            raise _refuse(
+                "censoring",
+                f"dataset {label!r} declares censored samples under the {family.NAME!r} family, "
+                f"which cannot consume a censoring declaration. ampere.core refuses the same "
+                f"composition at construction.",
+            )
+        self.latent_name: str | None = None
+        if dataset.latent is not None:
+            if not family.CONSUMES_LATENT_GP:
+                raise _refuse(
+                    "latent",
+                    f"dataset {label!r} declares a latent GP that the {family.NAME!r} family "
+                    f"does not consume. ampere.core refuses this composition at construction "
+                    f"(Likelihood._refuse_unconsumed_latent); reaching it here is a bug.",
+                )
+            self.latent_name = dataset.latent.parameter.name
 
         observed = dataset.observed
         # The effective mask, resolved once at composition: Dataset takes the
@@ -170,8 +237,14 @@ class _LoweredDataset:
         if excluded is None:
             excluded = ~np.asarray(observed.valid, dtype=bool).ravel()
         self.retain = ~np.asarray(excluded, dtype=bool).ravel()
+        # Complex for a complex family, real otherwise, taken from the
+        # container rather than assumed: `check_alignment` has already refused
+        # a complex observation under a real family, so the container's own
+        # dtype is the declaration.
+        raw = np.asarray(observed.values)
         self.observed_values = jnp.asarray(
-            np.asarray(observed.values, dtype=float)[self.retain], dtype=jnp.float64
+            raw[self.retain],
+            dtype=jnp.complex128 if raw.dtype.kind == "c" else jnp.float64,
         )
         self.observed_coordinates = jnp.asarray(
             np.asarray(observed.axes[0].values, dtype=float)[self.retain], dtype=jnp.float64
@@ -182,6 +255,15 @@ class _LoweredDataset:
             else jnp.asarray(
                 np.asarray(observed.uncertainty, dtype=float)[self.retain], dtype=jnp.float64
             )
+        )
+        #: The Tobit codes for the **retained** samples, or ``None``.
+        #: ``Likelihood._retained_limits`` computes exactly this on the numpy
+        #: path, once per evaluation; a censoring declaration cannot depend on
+        #: theta, so here it is a constant resolved at lowering time.
+        self.limits = (
+            None
+            if censoring is None
+            else jnp.asarray(np.asarray(censoring.kinds)[self.retain], dtype=jnp.int32)
         )
 
     # -- routing ------------------------------------------------------------
@@ -256,6 +338,22 @@ class _LoweredDataset:
             sigma = jnp.sqrt(sigma**2 + floor**2)
         return sigma
 
+    def _latent(self, routed: Mapping[str, Mapping[str, Any]]) -> jax.Array | None:
+        """The dataset's latent block, or ``None`` when it declares none.
+
+        The whitened values ``z`` arrive as one array-valued parameter under
+        the ``latent`` component (``Dataset.route``), exactly as they do on
+        the numpy path, and are handed to the family unchanged — which is what
+        ``Dataset.log_likelihood_of`` does. The correlation would enter through
+        ``GPSolver.latent_transform``; the reference path does not apply it and
+        neither does this one, because the two must agree and the numpy path is
+        the oracle. See :meth:`LoweredProblem.log_likelihood_terms`' note.
+        """
+        if self.latent_name is None:
+            return None
+        block = self._dataset_values(routed).get(LATENT_COMPONENT, {})
+        return jnp.asarray(block[self.latent_name], dtype=jnp.float64).reshape(-1)
+
     def log_likelihood(self, routed: Mapping[str, Mapping[str, Any]]) -> jax.Array:
         """``log p(data | θ)`` for this dataset, as a traceable jax scalar."""
         predicted = self.predict(routed)
@@ -263,8 +361,11 @@ class _LoweredDataset:
         # The noise model's own parameters arrive under the likelihood
         # component, flatly -- the same mapping ampere.core hands NoiseModel.
         sigma = self._sigma(predicted, values)
-        residual = self.observed_values - predicted
-        if self.correlated:
+        if self.gp_marginal:
+            # The whole covariance goes to the solver: this is the flexible
+            # likelihood, and the branch GaussianFamily.log_prob takes when
+            # `noise.correlated`.
+            residual = self.observed_values - predicted
             variance = jnp.zeros_like(residual) if sigma is None else sigma**2
             value = self.noise.solver.log_marginal_likelihood_jax(
                 self.noise.kernel,
@@ -274,13 +375,21 @@ class _LoweredDataset:
                 self.noise.kernel.resolve(values),
             )
         else:
-            if sigma is None:
+            if sigma is None and self.likelihood.family.REQUIRES_UNCERTAINTY:
                 raise _refuse(
                     "uncertainty",
                     f"dataset {self.label!r} has no observed uncertainties and its noise model "
                     f"declares no jitter, so sigma is undefined.",
                 )
-            value = jnp.sum(-0.5 * ((residual / sigma) ** 2 + _LOG_2PI) - jnp.log(sigma))
+            value = self.family_log_prob(
+                predicted,
+                self.observed_values,
+                sigma,
+                self.likelihood.family,
+                values,
+                self.limits,
+                self._latent(routed),
+            )
         return jnp.where(jnp.isfinite(value), value, -jnp.inf)
 
 
@@ -403,6 +512,59 @@ class LoweredProblem:
         constrained = self.parameters.constrain_jax(y)
         total = prior + self.log_likelihood(constrained)
         return jnp.where(jnp.isfinite(total), total, -jnp.inf)
+
+    @property
+    def batchable(self) -> bool:
+        """Whether :meth:`log_prob_unconstrained_batched` is offered.
+
+        Read off the *problem*, which aggregates it from what the models,
+        instrument steps, noise models and GP solvers declare
+        (``ampere.core.declared_capabilities``, conjunctively). One part that
+        cannot be batched withdraws the claim for the whole density, which is
+        the right answer: a ``vmap`` is over the composed function.
+        """
+        return bool(self.problem.batchable)
+
+    def log_prob_unconstrained_batched(self, unconstrained: Any) -> jax.Array:
+        """:meth:`log_prob_unconstrained` over a ``(batch, n_dim)`` stack.
+
+        ``architecture.md`` §1's ``BATCHABLE`` rung, cashed: one traced
+        function evaluated for many parameter vectors at once, which is what
+        an ensemble sampler, a population-based optimiser or a vectorised
+        importance-sampling step wants, and what a GPU would want even for a
+        single chain.
+
+        It is ``jax.vmap`` of the same function and nothing else — there is no
+        second implementation to drift, which is the whole reason a jax
+        backend can offer batching cheaply where the reference path cannot.
+
+        Refused, by name, when the problem declares ``batchable = False``.
+        That refusal is load-bearing rather than defensive: ``celerite2.jax``
+        registers no batching rule for its primitives, so a ``vmap`` over a
+        quasiseparable density raises ``NotImplementedError: Batching rule for
+        'celerite2_factor' not implemented`` from inside the trace — a message
+        about a primitive the user never named, at a point that says nothing
+        about which part of their problem is at fault. Asking
+        :attr:`batchable` first turns it into a sentence naming the solver.
+        """
+        if not self.batchable:
+            raise _refuse(
+                "batching",
+                f"this problem declares batchable = False, so its density cannot be vmapped. "
+                f"The flag is aggregated from what every part declares "
+                f"({self.problem.capabilities}), conjunctively, so one part is enough to "
+                f"withdraw it — ampere.backends.jax.QuasisepGP is the one that does, because "
+                f"celerite2's primitives register no jax batching rule. Use DenseGP if the "
+                f"problem is small enough, or evaluate the density in a loop.",
+            )
+        stacked = jnp.asarray(unconstrained, dtype=jnp.float64)
+        if stacked.ndim != 2:
+            raise _refuse(
+                "batching",
+                f"a batched density takes a (batch, n_dim) stack of unconstrained vectors, got "
+                f"shape {tuple(stacked.shape)}.",
+            )
+        return jax.vmap(self.log_prob_unconstrained)(stacked)
 
     def potential(self) -> Callable[[jax.Array], jax.Array]:
         """The **negative** unconstrained log-density, which is what numpyro wants.

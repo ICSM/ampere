@@ -98,8 +98,17 @@ class _JaxStep:
     #: :meth:`apply_flux`; see this module's docstring for what the flag means
     #: and where it stops.
     DIFFERENTIABLE: ClassVar[bool] = True
-    #: Slice 2's ``vmap`` work. Claiming it today would be a promise unkept.
-    BATCHABLE: ClassVar[bool] = False
+    #: **True since slice 2** (W2.5). The flag means one thing on this
+    #: backend: ``jax.vmap`` over the realised density
+    #: (:meth:`~ampere.backends.jax.problem.LoweredProblem.log_prob_unconstrained_batched`)
+    #: evaluates a stack of parameter vectors in one call, and it is measured
+    #: rather than asserted -- ``tests/backends/test_jax.py`` compares a vmapped
+    #: density against the same density in a loop. It is true here because every
+    #: operation in this class is whole-array ``jax.numpy``: nothing branches on
+    #: a value, nothing indexes by one, so vmap maps it as it maps any pure
+    #: function. ``QuasisepGP`` is the one part of this backend that still says
+    #: False, and says why.
+    BATCHABLE: ClassVar[bool] = True
     #: Never auto-detected (``architecture.md`` §5).
     DEVICE: ClassVar[str] = "cpu"
     BACKEND: ClassVar[str] = BACKEND
@@ -308,7 +317,11 @@ class SyntheticPhotometry(_JaxStep, _ReferenceSyntheticPhotometry):
             samples.values, dtype=jnp.float64
         )
         return PhotometricPoints(
-            self.filters(),
+            # `filters` is a property on the reference class, not a method;
+            # calling it raised `'tuple' object is not callable`. Same cause as
+            # `apply_flux`'s own defect above -- nothing composed this step
+            # into a problem, so neither surface had ever been evaluated.
+            self.filters,
             self.pivots() * COORDINATE_UNIT,
             np.asarray(integrated),
             unit=samples.unit,
