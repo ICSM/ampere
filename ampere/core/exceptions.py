@@ -31,6 +31,7 @@ __all__ = [
     "DatasetError",
     "LikelihoodError",
     "LoweringError",
+    "LoweringFallbackWarning",
     "OptionalDependencyError",
     "ParameterError",
     "ResultsError",
@@ -313,6 +314,41 @@ class LoweringError(AmpereError):
             f"your own lowering for it (register_lowering, Phase 2), or run on a backend "
             f"that has it. Ampere never substitutes an approximation silently."
         )
+
+
+class LoweringFallbackWarning(UserWarning):
+    """A native run is computing part of itself on the reference (numpy) path.
+
+    **Landed at W2.13** (ruled 2026-09-07, ``DEVELOPMENT_PLAN.md`` §2's
+    "Realisation surface (W2.13)" row, fold-in 8), replacing the two
+    backend-local classes W2.4 and W2.5 each invented independently
+    (``ampere.backends.torch.lowering.IcdfFallbackWarning`` and
+    ``ampere.backends.jax.parameters.LoweringFallbackWarning``). One class, in
+    the core, for the reason the backends' own docstrings gave when they asked
+    for it: the fallback is a property of the *lowering contract*, not of a
+    library, and a test that wants to assert "no native run silently computed
+    in numpy" must be able to ``pytest.warns`` on one type across every
+    backend.
+
+    Warned when ``lowering.md`` §3.6's sanctioned fallback is taken — a prior
+    family with no usable native ``icdf``, whose ``prior_transform`` therefore
+    goes through ``scipy``'s ``ppf``. That is **not** the silent substitution
+    §3.4 forbids: ``prior_transform`` has one mathematical definition and the
+    reference path computes it exactly, so nothing about the posterior
+    changes. It is warned about because a nominally torch- or jax-backed run
+    that computes part of itself in numpy should never be a surprise
+    discovered later.
+
+    Warned **once per lowering** rather than once per call: the decision is
+    made once, when the problem is lowered, before any sampling.
+    ``FittingProblem(strict=True)`` turns it into a :class:`LoweringError`
+    instead — one flag with one meaning, the run-level "I would rather fail
+    than have anything smoothed over".
+
+    A warning rather than an exception because it is not an error: this is a
+    :class:`UserWarning` subclass and not an :class:`AmpereError`, and the two
+    hierarchies are deliberately separate.
+    """
 
 
 class OptionalDependencyError(AmpereError, ImportError):

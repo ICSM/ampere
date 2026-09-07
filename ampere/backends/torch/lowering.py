@@ -98,7 +98,7 @@ import torch
 import torch.distributions as dist
 from torch.distributions import biject_to, constraints, transforms
 
-from ampere.core.exceptions import LoweringError
+from ampere.core.exceptions import LoweringError, LoweringFallbackWarning
 from ampere.core.lowering import (
     LoweringResolution,
     lookup_bijection_lowering,
@@ -118,32 +118,14 @@ from ampere.core.parameter import (
 from ._config import BACKEND, DEFAULT_DEVICE, DEFAULT_DTYPE, as_tensor
 
 __all__ = [
-    "IcdfFallbackWarning",
     "LoweredPrior",
+    "LoweringFallbackWarning",
     "consulted_resolutions",
     "lower_bijection",
     "lower_hierarchical",
     "lower_prior",
     "warn_icdf_fallback",
 ]
-
-
-class IcdfFallbackWarning(UserWarning):
-    """A native run computed its prior transform on the reference (scipy) path.
-
-    ``lowering.md`` §3.6, ruled 2026-09-03 and pinned at the freeze: a family
-    with no native ``icdf`` is *allowed* to take the reference fallback,
-    because ``prior_transform`` has one mathematical definition and computing
-    the same quantity in numpy changes nothing about the posterior — but it
-    must be loud, so that "a nominally torch-backed run that computes its
-    prior transform in numpy is never a surprise discovered later".
-
-    Warned **once per run**, not once per call, because the decision is made
-    once at lowering time, before any sampling. ``FittingProblem(strict=True)``
-    turns it into a :class:`~ampere.core.exceptions.LoweringError` instead —
-    one flag with one meaning, the run-level "I would rather fail than have
-    anything smoothed over".
-    """
 
 
 # ---------------------------------------------------------------------------
@@ -983,7 +965,7 @@ def warn_icdf_fallback(families: set[str], *, strict: bool, where: str) -> None:
                 f"reference (scipy) prior transform with a warning."
             ),
         )
-    warnings.warn(message, IcdfFallbackWarning, stacklevel=3)
+    warnings.warn(message, LoweringFallbackWarning, stacklevel=3)
 
 
 def consulted_resolutions(families: set[str]) -> tuple[LoweringResolution, ...]:

@@ -1097,6 +1097,90 @@ requires, sized by the number of *retained* samples:
 
 ```
 
+## 10a. Realisation: the differentiable native form of a problem
+
+*(Added by W2.13, decided 2026-09-07 — a post-freeze §4.5 addition; the
+decision-log row in `DEVELOPMENT_PLAN.md` §2 is the record. Prototyped on
+`w2.13-realisation-prototype` before the text was written, so every sentence
+here has run.)*
+
+**Why this section exists.** §10's surface is written against numpy and it is
+**not traceable** on any backend, for three reasons that are each deliberate:
+every `results_schema.md` container coerces its values with `numpy.asarray`
+(a torch tensor that requires grad cannot enter a `Spectrum`; a jax tracer
+raises `TracerArrayConversionError` at the same line); `ParameterSet.lnprior`
+short-circuits on `math.isfinite`, which is Python control flow on a value;
+and `Kernel.matrix` builds covariances in numpy. So a gradient-based engine
+cannot be written against §10 alone, and `ampere.inference` — which may
+import nothing but `ampere.core` and `ampere.results` — cannot reach a
+backend's native evaluations by import. Both Phase 2 tracks found this
+independently (W2.4, W2.5). `lowering.md` §0 already names the step that
+closes the gap — lowering "happens once, when a `FittingProblem` is
+*realised* on a backend" — and this section specifies it.
+
+**Definition.** A **realisation** is a backend's one-way translation of a
+composed `FittingProblem` into a native object that exposes the log density
+as a pure function of the unconstrained free vector, built from the
+backend's own model, step, noise, kernel and solver evaluations — never from
+core containers in the hot loop. It is the *differentiable* form of the
+problem; the numpy path of §10 remains the definition of the quantity.
+
+**The registry** (`ampere.core.realisation`), with the shape of
+`lowering.md` §12.8's:
+
+- `register_realisation(backend, factory, *, override=False, builtin=False)`
+  — one slot per backend, keyed on the backend's one name (the `BACKEND`
+  capability flag); no silent overwrites; built-in rows distinguished.
+  A backend registers at import: importing `ampere.backends.jax` is the
+  user's opt-in to jax, and it is also the moment the jax realisation
+  becomes reachable.
+- `realise(problem) -> Realisation` — dispatches on `problem.backend` and
+  **checks the result on use**: it names the same backend, its `free_size`
+  is the problem's, and it agrees with `problem.log_prob_unconstrained` at
+  the problem's reference values. A backend with nothing registered (the
+  reference backend, which has no differentiable path) is refused by name
+  with the remedy: import the backend that supplies one, or use a
+  gradient-free engine.
+- `registered_realisations()` for provenance and tests.
+
+**The surface** (`Realisation`, a runtime-checkable Protocol). Mandatory:
+`backend: str`, `free_size: int`, `log_prob_unconstrained(theta) -> native
+scalar` (log prior + log likelihood + the change of variables, exactly §10's
+`log_prob_unconstrained`, in the backend's array type). Optional:
+`log_likelihood_terms(theta) -> mapping of dataset label to native scalar`,
+consumed by a driver when present to emit the per-dataset decomposition
+natively; absent, the driver recomputes the split for **stored draws only**
+on the numpy path and records that it did (`engine_draws_recomputed`).
+
+**Failure signalling on the native path** narrows §11 deliberately: inside a
+trace nothing can raise and no `Failure` record can be built, so a realised
+density returns a bare `-inf` (computed with the backend's `where`), and the
+reasons §11 promises are recovered post hoc by re-evaluating stored draws on
+the numpy path. `strict=True` on a realised problem means the **factory
+refuses at construction**, by name, anything it cannot lower exactly (a
+family, a noise model, a censoring declaration); runtime evaluation failures
+are always `-inf`. This is the trace-purity ruling (`likelihoods.md` §17 Q1)
+applied to the whole problem.
+
+**Coverage.** W2.13 fixes the floor both backends must meet: Gaussian
+families with independent or dense-GP noise, masks, plates and hierarchical
+priors, with native kernels so GP hyperparameters are trainable; anything
+else refused by name at construction. Widening (censoring, latent GPs,
+non-Gaussian families, the quasiseparable solver) is each track's slice 2.
+
+**What the conformance suite owes** (`tests/conformance`): for every
+registered realisation, agreement with the numpy path at many points
+including near a support boundary, at `tolerances.cross_backend`; the
+one-point check in `realise` is a guard, not the proof.
+
+**Provenance.** A run sampled through a realisation records
+`ampere_realised = True` and the registered lowering rows it consulted
+(`lowering.md` §12.8's stamping, populated automatically for the first time
+— W2.6's deferral ends here, with `PROVENANCE_SCHEMA_VERSION` 5).
+
+**The gradient-free engines are unchanged.** They consume §10 and run on
+every backend; the reference backend registers no realisation in v1.
+
 ## 11. Failure signalling
 
 `DEVELOPMENT_PLAN.md` §4.5: "external simulators crash and return NaNs; the
@@ -1740,7 +1824,9 @@ Each is a decision, not an oversight. Each has an extension point.
   makes for it. `BACKEND` is the backend's one name everywhere — the key
   `lowering.md` §12.8's registry uses and the `name` of its conformance
   fixture — and it is what makes a run's `ampere_backend` a fact rather than
-  a declaration by whoever built the engine. The reference implementations of
+  a declaration by whoever built the engine. A backend that offers gradients
+  also registers its **realisation** (§10a) at import; that is the whole of
+  what a gradient-based engine needs from it. The reference implementations of
   `log_prob_unconstrained` and of `simulate`'s Gaussian draw are the oracles the
   native paths must agree with.
 - **Phase 3 (SBI)** — `simulate` returns `Simulation`, whose `theta` is already

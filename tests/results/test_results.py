@@ -96,7 +96,7 @@ from ampere.results import (
     training_pair_to_dict,
 )
 from ampere.results.emission import _dimension_names, _index_coordinate
-from ampere.results.provenance import PROVENANCE_SCHEMA_VERSION
+from ampere.results.provenance import PROVENANCE_SCHEMA_VERSION, solver_configs
 
 arviz = pytest.importorskip("arviz", reason="ampere.results needs ampere[arviz]")
 
@@ -1591,7 +1591,102 @@ class TestTheBackendIsDerived:
 
     def test_the_capabilities_payload_carries_the_fourth_flag(self) -> None:
         # This key is what bumped PROVENANCE_SCHEMA_VERSION to 4: the shape of
-        # ampere_capabilities changed, so schema-3 artefacts are not comparable.
+        # ampere_capabilities changed, so schema-3 artefacts are not
+        # comparable. The constant has moved on to 5 (W2.13's three new
+        # attributes) and this row asserts the payload, not the number.
         payload = json.loads(provenance_attrs(joint_problem())["ampere_capabilities"])
         assert payload["backend"] == "reference"
-        assert PROVENANCE_SCHEMA_VERSION == 4
+        assert PROVENANCE_SCHEMA_VERSION >= 4
+
+
+def _gp_problem(solver: DenseGP) -> FittingProblem:
+    """One GP dataset, so the solver has somewhere to report configuration from."""
+    return FittingProblem(
+        Powerlaw(blue=BLUE),
+        DatasetCollection(
+            {
+                "gp": Dataset(
+                    blue_data(),
+                    Instrument([Calibrate()], channel="blue"),
+                    Likelihood(
+                        GaussianFamily(), GaussianProcessNoise(Matern32(0.3, 1.0), solver=solver)
+                    ),
+                )
+            }
+        ),
+        seed=20260907,
+    )
+
+
+class TestSchemaFiveAttributes:
+    """W2.13: ``ampere_realised``, ``ampere_registered_lowerings``, ``ampere_solver_config``.
+
+    All three are written on **every** run, including the gradient-free ones,
+    because "this run's gradients were real" and "this run had none" are the
+    two answers a reader must be able to tell apart, and silence distinguishes
+    neither.
+    """
+
+    def test_the_schema_version_is_five(self) -> None:
+        assert PROVENANCE_SCHEMA_VERSION == 5
+
+    def test_a_contract_path_run_records_realised_zero(self) -> None:
+        attrs = provenance_attrs(joint_problem(), engine="emcee")
+        # An int, not a bool: netCDF has no boolean attribute type, and both
+        # netCDF engines refuse one outright.
+        assert attrs["ampere_realised"] == 0
+        assert isinstance(attrs["ampere_realised"], int)
+
+    def test_a_realised_run_says_so(self) -> None:
+        attrs = provenance_attrs(joint_problem(), engine="nuts", realised=True)
+        assert attrs["ampere_realised"] == 1
+
+    def test_registered_lowerings_is_an_empty_list_by_default(self) -> None:
+        attrs = provenance_attrs(joint_problem())
+        assert json.loads(attrs["ampere_registered_lowerings"]) == []
+
+    def test_registered_lowerings_records_what_it_is_given(self) -> None:
+        rows = [
+            {
+                "kind": "prior",
+                "name": "custom",
+                "backend": "stub",
+                "builtin": False,
+                "constructor": "pkg.build",
+            }
+        ]
+        attrs = provenance_attrs(joint_problem(), registered_lowerings=rows)
+        assert json.loads(attrs["ampere_registered_lowerings"]) == rows
+
+    def test_the_solver_config_is_empty_on_the_reference_path(self) -> None:
+        problem = joint_problem()
+        assert solver_configs(problem) == {}
+        assert json.loads(provenance_attrs(problem)["ampere_solver_config"]) == {}
+
+    def test_a_solver_with_configuration_is_recorded_and_not_hashed(self) -> None:
+        """Fold-in 10: visible in the attrs, invisible to every hash."""
+
+        class ConfiguredDenseGP(DenseGP):
+            def provenance_config(self) -> dict[str, Any]:
+                return {"dtype": "float64", "device": "cpu"}
+
+        plain = _gp_problem(DenseGP())
+        configured = _gp_problem(ConfiguredDenseGP())
+        stored = json.loads(provenance_attrs(configured)["ampere_solver_config"])
+        assert stored == {"gp": {"dtype": "float64", "device": "cpu"}}
+        # The declaration is unchanged, so the spec hash is too -- which is
+        # exactly what results.md §14 requires of two backends implementing one
+        # declaration with different precision policies.
+        assert (
+            provenance_attrs(configured)["ampere_spec_hash"]
+            == provenance_attrs(plain)["ampere_spec_hash"]
+        )
+        assert json.loads(
+            provenance_attrs(configured)["ampere_component_spec_hashes"]
+        ) == json.loads(provenance_attrs(plain)["ampere_component_spec_hashes"])
+        assert "dtype" not in provenance_attrs(configured)["ampere_likelihoods"]
+
+    def test_an_emitted_run_carries_all_three(self) -> None:
+        run = recorded(joint_problem())
+        for key in ("ampere_realised", "ampere_registered_lowerings", "ampere_solver_config"):
+            assert key in run.attrs

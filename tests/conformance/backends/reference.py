@@ -55,9 +55,12 @@ from ampere.backends.reference import (
 from ampere.backends.reference.models import _SpectralModel
 from ampere.core import (
     DenseGP,
+    GaussianProcessNoise,
     GPSolver,
     HierarchicalPrior,
+    IndependentNoise,
     Kernel,
+    NoiseModel,
     Matern32,
     Model,
     ModelResult,
@@ -360,6 +363,15 @@ class ReferenceBackend:
 
     def gp_solver(self, kind: SolverKind) -> GPSolver:
         return DenseGP() if kind is SolverKind.DENSE else QuasisepGP()
+
+    def independent_noise(self) -> NoiseModel:
+        # The core classes, unmodified: since W2.13 they declare
+        # ``BACKEND = "reference"`` (the ABC's default), which is the truth
+        # here and the reason this fixture alone keeps them.
+        return IndependentNoise()
+
+    def gp_noise(self, kernel: Kernel, solver: GPSolver) -> NoiseModel:
+        return GaussianProcessNoise(kernel, solver)
 
     def parameter_space(self, declaration: ParameterSet) -> ReferenceParameterSpace:
         return ReferenceParameterSpace(declaration)

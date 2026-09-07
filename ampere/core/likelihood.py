@@ -631,6 +631,16 @@ class GPSolver(abc.ABC):
     composition time, loudly. It may branch on ``Axis.regular`` or
     ``Axis.log_regular`` for a fast path but must have a path when both are
     false (``results_schema.md`` §16).
+
+    **The four capability flags reach here at W2.13** (ruled 2026-09-07,
+    ``DEVELOPMENT_PLAN.md`` §2's "Realisation surface (W2.13)" row, fold-in 7;
+    ``inference.md`` §10a), with the reference path's honest defaults. The
+    consequence is deliberate and loud: a problem built from a native backend's
+    models and steps but left with ``ampere.core.DenseGP`` — which factorises
+    in scipy — now reports two backends and is refused at composition, because
+    a nominally differentiable problem whose GP solve runs in numpy is a
+    problem whose GP hyperparameters get no gradient at all. Pass the
+    backend's own solver.
     """
 
     #: Neutral strategy name, for provenance and error messages.
@@ -644,6 +654,43 @@ class GPSolver(abc.ABC):
     REQUIRES_QUASISEPARABLE: ClassVar[bool] = False
     #: Whether an implementation exists in the reference (numpy) path.
     IMPLEMENTED: ClassVar[bool] = False
+
+    #: Whether a gradient can be taken through this solver's linear algebra.
+    DIFFERENTIABLE: ClassVar[bool] = False
+    #: Whether it solves a batch of parameter vectors in one call.
+    BATCHABLE: ClassVar[bool] = False
+    #: Device its arrays live on. Never auto-detected (``architecture.md`` §5).
+    DEVICE: ClassVar[str] = "cpu"
+    #: Which rung of the capability ladder supplies it (W2.12's fourth flag).
+    BACKEND: ClassVar[str] = "reference"
+
+    def provenance_config(self) -> Mapping[str, Any]:
+        """Backend-specific solver configuration, for the run's attrs only.
+
+        **W2.13, fold-in 10** (ruled 2026-09-07), answering the question W2.4
+        carried out of its slice 1: where does a torch solver record its dtype
+        and device — and, later, a deliberate float32 opt-out — given that
+        :meth:`Likelihood.to_spec` records a *dataclass* solver's fields and
+        the cross-backend conformance rows compare component spec hashes?
+
+        The answer is: not in the spec. A solver's ``jitter`` is a
+        **declaration** — it changes the model, so it belongs in the spec and
+        in the hash — while its dtype, its device and its precision policy are
+        **configuration**: they change how the same declared model is computed,
+        two backends legitimately differ on them, and folding them into the
+        spec hash would break the one promise ``results.md`` §14 makes about
+        two backends implementing one declaration. So they are class-level
+        policy on the backend's solver (never dataclass fields), returned from
+        here, and recorded by ``ampere.results.provenance.provenance_attrs``
+        under ``ampere_solver_config`` — visible, never hashed.
+
+        Returns
+        -------
+        Mapping[str, Any]
+            JSON-normalisable values. Empty by default: the reference solvers
+            have no configuration beyond what they declare.
+        """
+        return {}
 
     def check_compatible(self, kernel: Kernel, observed: FunctionSamples) -> None:
         """Composition-time check that this strategy can run this problem."""
@@ -1453,10 +1500,31 @@ class NoiseModel(Parameterised, abc.ABC):
     (:class:`IndependentNoise`, :class:`GaussianProcessNoise`) simply ignores
     it; the noise model sees the prediction but never the model's *parameters*
     beyond those the likelihood declares.
+
+    **The four capability flags reach here at W2.13** (ruled 2026-09-07,
+    ``DEVELOPMENT_PLAN.md`` §2's "Realisation surface (W2.13)" row, fold-in 7;
+    ``inference.md`` §10a). Until then only models and instrument steps
+    declared them, so a problem could report ``backend="jax"`` while its noise
+    model computed in numpy — W2.5 recorded exactly that as a finding. The
+    defaults are the reference path's honest answers, the same ones
+    :class:`~ampere.core.transform.Model` takes: not differentiable, not
+    batchable, on the CPU, supplied by the reference backend. A backend that
+    ships a native noise model overrides all four, and
+    :attr:`Likelihood.capability_parts` is what carries them onto the composed
+    problem.
     """
 
     #: Whether this model induces correlations between samples.
     CORRELATED: ClassVar[bool] = False
+
+    #: Whether a gradient can be taken through this noise model's evaluation.
+    DIFFERENTIABLE: ClassVar[bool] = False
+    #: Whether it evaluates a batch of parameter vectors in one call.
+    BATCHABLE: ClassVar[bool] = False
+    #: Device its arrays live on. Never auto-detected (``architecture.md`` §5).
+    DEVICE: ClassVar[str] = "cpu"
+    #: Which rung of the capability ladder supplies it (W2.12's fourth flag).
+    BACKEND: ClassVar[str] = "reference"
 
     @abc.abstractmethod
     def sigma(
@@ -2579,6 +2647,40 @@ class Likelihood(Parameterised):
     def censoring(self) -> Censoring | None:
         """The censoring declaration, if any."""
         return self._censoring
+
+    @property
+    def capability_parts(self) -> tuple[object, ...]:
+        """The objects whose capability declarations this likelihood depends on.
+
+        **W2.13, fold-in 7** (ruled 2026-09-07; ``inference.md`` §10a). The
+        noise model always, and the GP solver as well when a GP is declared —
+        the two pieces a log-likelihood's arithmetic actually goes through
+        beyond the family. :attr:`Dataset.capability_parts` appends these to
+        the instrument steps, so
+        :func:`~ampere.core.dataset.declared_capabilities` sees them and
+        ``FittingProblem.differentiable``/``.backend`` become true statements
+        about the whole evaluation rather than about its first half.
+
+        The **family is deliberately absent**, and that is the ruling rather
+        than an oversight: a :class:`LikelihoodFamily` is a declaration of a
+        sampling distribution, evaluated by whichever path the problem is on
+        (the reference path in numpy, a backend's realisation natively from
+        the same closed form), so it has no backend of its own to declare. A
+        flag on it would either be a fiction or force every user family to
+        pick a backend before it could be composed.
+
+        The kernel is absent for the same reason plus one more: it is
+        consumed *by* the solver, which is the piece that decides whether the
+        covariance is built in numpy or natively, and which is already here.
+
+        One consequence recorded deliberately, as W2.1 recorded the same one
+        for ``describe``: this is a class attribute of a
+        :class:`~ampere.core.parameter.Parameterised`, so ``capability_parts``
+        joins the names a family's or noise model's parameter may not shadow.
+        """
+        if isinstance(self._noise, GaussianProcessNoise):
+            return (self._noise, self._noise.solver)
+        return (self._noise,)
 
     @property
     def marginalisation(self) -> Marginalisation:

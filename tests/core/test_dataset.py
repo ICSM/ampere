@@ -34,6 +34,7 @@ from ampere.core import (
     FittingProblem,
     GaussianFamily,
     GaussianProcessNoise,
+    GPSolver,
     IndependentNoise,
     Instrument,
     LikelihoodError,
@@ -42,10 +43,12 @@ from ampere.core import (
     Matern32,
     Model,
     ModelResult,
+    NoiseModel,
     Parameter,
     ParameterSet,
     PhotometricPoints,
     PoissonFamily,
+    QuasisepGP,
     Spectrum,
     Tie,
     Transformation,
@@ -917,15 +920,30 @@ class TestCapabilities:
     # -- W2.12: the backend, the fourth flag ----------------------------------
 
     def test_agreeing_backends_aggregate_onto_the_problem(self) -> None:
+        # W2.13 widened the parts to include the likelihood's noise model, so
+        # the dataset's *default* IndependentNoise -- which declares
+        # "reference" -- has to be replaced here too. That is the widening
+        # working, not a wrinkle in the test: a problem whose models and steps
+        # are torch but whose noise arithmetic is numpy's is exactly what it
+        # exists to name.
         class NativeFlat(Flat):
             BACKEND = "torch"
 
         class NativeCalibrate(Calibrate):
             BACKEND = "torch"
 
+        class NativeNoise(IndependentNoise):
+            BACKEND = "torch"
+
         problem = FittingProblem(
             NativeFlat(WAVELENGTH),
-            [Dataset(flat_spectrum(), Instrument([NativeCalibrate()]))],
+            [
+                Dataset(
+                    flat_spectrum(),
+                    Instrument([NativeCalibrate()]),
+                    Likelihood(GaussianFamily(), NativeNoise()),
+                )
+            ],
         )
         assert problem.backend == "torch"
         assert problem.capabilities.backend == "torch"
@@ -977,7 +995,98 @@ class TestCapabilities:
         assert Model.BACKEND == "reference"
         assert Transformation.BACKEND == "reference"
 
+    # -- W2.13: the parts widen to the noise model and the GP solver ----------
+
+    def test_the_noise_model_and_solver_abcs_take_the_reference_defaults(self) -> None:
+        for owner in (NoiseModel, GPSolver):
+            assert owner.DIFFERENTIABLE is False
+            assert owner.BATCHABLE is False
+            assert owner.DEVICE == "cpu"
+            assert owner.BACKEND == "reference"
+
+    def test_a_plain_likelihood_contributes_its_noise_model(self) -> None:
+        likelihood = Likelihood(GaussianFamily(), IndependentNoise())
+        assert likelihood.capability_parts == (likelihood.noise,)
+
+    def test_a_gp_likelihood_contributes_its_solver_as_well(self) -> None:
+        solver = DenseGP()
+        likelihood = Likelihood(GaussianFamily(), GaussianProcessNoise(Matern32(0.5, 2.0), solver))
+        assert likelihood.capability_parts == (likelihood.noise, solver)
+
+    def test_the_family_is_deliberately_not_a_capability_part(self) -> None:
+        # Ruled: a LikelihoodFamily declares a sampling distribution, which
+        # every path evaluates from the same closed form, so it has no backend
+        # of its own. A flag on it would be a fiction.
+        likelihood = Likelihood(GaussianFamily(), IndependentNoise())
+        assert likelihood.family not in likelihood.capability_parts
+        assert not hasattr(GaussianFamily, "BACKEND")
+
+    def test_the_dataset_appends_the_likelihoods_parts_to_its_steps(self) -> None:
+        dataset = Dataset(flat_spectrum(), Instrument([Calibrate()]))
+        assert dataset.capability_parts == (
+            *dataset.instrument.steps,
+            *dataset.likelihood.capability_parts,
+        )
+
+    def test_a_numpy_solver_in_a_native_problem_is_a_backend_disagreement(self) -> None:
+        """The loud consequence the widening exists for (W2.13, fold-in 7)."""
+
+        class NativeFlat(Flat):
+            BACKEND = "native"
+
+        class NativeNoise(GaussianProcessNoise):
+            BACKEND = "native"
+
+        with pytest.raises(DatasetError) as excinfo:
+            FittingProblem(
+                NativeFlat(WAVELENGTH),
+                [
+                    Dataset(
+                        flat_spectrum(),
+                        likelihood=Likelihood(
+                            GaussianFamily(),
+                            # The core (scipy) solver: a problem whose GP solve
+                            # runs in numpy is not the differentiable problem
+                            # the rest of these declarations claim.
+                            NativeNoise(Matern32(0.5, 2.0), DenseGP()),
+                        ),
+                    )
+                ],
+            )
+        message = str(excinfo.value)
+        assert "different backends" in message
+        assert "'native'" in message and "'reference'" in message
+
+    def test_a_native_solver_settles_it(self) -> None:
+        class NativeFlat(Flat):
+            BACKEND = "native"
+
+        class NativeNoise(GaussianProcessNoise):
+            BACKEND = "native"
+
+        class NativeDenseGP(DenseGP):
+            BACKEND = "native"
+
+        problem = FittingProblem(
+            NativeFlat(WAVELENGTH),
+            [
+                Dataset(
+                    flat_spectrum(),
+                    likelihood=Likelihood(
+                        GaussianFamily(), NativeNoise(Matern32(0.5, 2.0), NativeDenseGP())
+                    ),
+                )
+            ],
+        )
+        assert problem.backend == "native"
+
+    def test_provenance_config_is_empty_by_default(self) -> None:
+        assert DenseGP().provenance_config() == {}
+        assert dict(QuasisepGP().provenance_config()) == {}
+
     def test_a_differentiable_model_and_step_lift_the_problem(self) -> None:
+        # The noise model is a part too since W2.13, and the conjunctive rule
+        # means the default (non-differentiable) one would withdraw the claim.
         class NativeFlat(Flat):
             DIFFERENTIABLE = True
             BATCHABLE = True
@@ -986,9 +1095,19 @@ class TestCapabilities:
             DIFFERENTIABLE = True
             BATCHABLE = True
 
+        class NativeNoise(IndependentNoise):
+            DIFFERENTIABLE = True
+            BATCHABLE = True
+
         problem = FittingProblem(
             NativeFlat(WAVELENGTH),
-            [Dataset(flat_spectrum(), Instrument([NativeCalibrate()]))],
+            [
+                Dataset(
+                    flat_spectrum(),
+                    Instrument([NativeCalibrate()]),
+                    Likelihood(GaussianFamily(), NativeNoise()),
+                )
+            ],
         )
         assert problem.differentiable
         assert problem.batchable
@@ -2024,14 +2143,33 @@ class TestEffectiveMaskIsResolvedOnce:
         dataset = Dataset(observed, label="d")
         problem = FittingProblem(Flat(WAVELENGTH), [dataset])
         assert dataset._retained_reference == 2
-        assert dataset._effective_mask is not None
-        assert dataset._effective_mask.tolist() == [False, False, True]
+        assert dataset.effective_mask is not None
+        assert dataset.effective_mask.tolist() == [False, False, True]
         # And the score matches excision of exactly that sample.
         full = FittingProblem(Flat(WAVELENGTH), [Dataset(flat_spectrum(), label="d")])
         theta = {"model.level": 1.0}
         assert problem.log_likelihood(theta) == pytest.approx(
             2.0 * full.log_likelihood(theta) / 3.0
         )
+
+    def test_effective_mask_is_public_and_none_when_nothing_is_excluded(self) -> None:
+        """W2.13, fold-in 9: both backends were reaching past the underscore."""
+        dataset = Dataset(flat_spectrum(), label="d")
+        FittingProblem(Flat(WAVELENGTH), [dataset])
+        assert dataset.effective_mask is None
+
+    def test_effective_mask_hands_out_a_read_only_copy(self) -> None:
+        # The mask is a construction-time constant a native path closes over;
+        # handing out the stored array would let a caller make it mutable
+        # state and silently change which samples a run scored.
+        dataset = Dataset(flat_spectrum(mask=[False, False, True]), label="d")
+        FittingProblem(Flat(WAVELENGTH), [dataset])
+        mask = dataset.effective_mask
+        assert mask is not None
+        assert not mask.flags.writeable
+        with pytest.raises(ValueError):
+            mask[0] = True
+        assert dataset.effective_mask is not mask
 
     def test_the_latent_size_is_a_construction_time_constant(self) -> None:
         # The ruling makes explicit what was implicit: latent_declaration(n)

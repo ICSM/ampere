@@ -50,7 +50,7 @@ from torch.distributions import biject_to
 
 from ampere.backends.torch import BACKEND
 from ampere.backends.torch.lowering import (
-    IcdfFallbackWarning,
+    LoweringFallbackWarning,
     lower_bijection,
     lower_hierarchical,
     lower_prior,
@@ -384,7 +384,7 @@ class TestIcdfFallback:
     """``lowering.md`` §3.6, ruled 2026-09-03 and pinned at the freeze."""
 
     def test_the_warning_names_the_families_and_the_backend(self) -> None:
-        with pytest.warns(IcdfFallbackWarning) as recorded:
+        with pytest.warns(LoweringFallbackWarning) as recorded:
             TorchParameterSpace(gamma_beta_declaration())
         assert len(recorded) == 1
         message = str(recorded[0].message)
@@ -400,13 +400,13 @@ class TestIcdfFallback:
         once at lowering time, before any sampling." A per-call warning would
         bury the output of a nested-sampling run under a million copies.
         """
-        with pytest.warns(IcdfFallbackWarning):
+        with pytest.warns(LoweringFallbackWarning):
             space = TorchParameterSpace(gamma_beta_declaration())
         with warnings.catch_warnings(record=True) as later:
             warnings.simplefilter("always")
             for _ in range(5):
                 space.prior_transform(np.array([0.3, 0.6, 0.2]))
-        assert [w for w in later if issubclass(w.category, IcdfFallbackWarning)] == []
+        assert [w for w in later if issubclass(w.category, LoweringFallbackWarning)] == []
 
     def test_strict_raises_instead_naming_the_same_families(self) -> None:
         with pytest.raises(LoweringError) as raised:
@@ -426,7 +426,7 @@ class TestIcdfFallback:
         this row asserts, against ``ParameterSet.prior_transform``.
         """
         declaration = gamma_beta_declaration()
-        with pytest.warns(IcdfFallbackWarning):
+        with pytest.warns(LoweringFallbackWarning):
             space = TorchParameterSpace(declaration)
         cube = np.array([0.17, 0.43, 0.81])
         assert space.prior_transform(cube) == pytest.approx(
@@ -447,7 +447,7 @@ class TestIcdfFallback:
         with warnings.catch_warnings(record=True) as recorded:
             warnings.simplefilter("always")
             space = TorchParameterSpace(declaration, strict=True)
-        assert [w for w in recorded if issubclass(w.category, IcdfFallbackWarning)] == []
+        assert [w for w in recorded if issubclass(w.category, LoweringFallbackWarning)] == []
         assert space.icdf_fallback_families == frozenset()
 
 
@@ -672,7 +672,7 @@ class TestPlatesAndHierarchy:
         with warnings.catch_warnings(record=True) as recorded:
             warnings.simplefilter("always")
             space = TorchParameterSpace(plated_declaration(), strict=True)
-        assert [w for w in recorded if issubclass(w.category, IcdfFallbackWarning)] == []
+        assert [w for w in recorded if issubclass(w.category, LoweringFallbackWarning)] == []
         assert space.icdf_fallback_families == frozenset()
 
     def test_an_unresolvable_reference_is_refused_by_name(self) -> None:

@@ -108,6 +108,7 @@ __all__ = [
     "package_versions",
     "problem_fingerprint",
     "provenance_attrs",
+    "solver_configs",
     "spec_hashes",
 ]
 
@@ -126,7 +127,21 @@ __all__ = [
 #: ``capabilities`` is not itself an input to ``problem_fingerprint``, but
 #: this constant is, so ``ampere_problem_hash`` values differ from schema 3's
 #: as they did at every previous bump.
-PROVENANCE_SCHEMA_VERSION = 4
+#: 5 (W2.13): three attributes joined, and W2.6's deferral ended.
+#: ``ampere_realised`` records whether the run sampled through a backend's
+#: **realisation** (``inference.md`` §10a) rather than the numpy contract
+#: path — which is the difference between a run whose gradients were real and
+#: one that could not have had any. ``ampere_registered_lowerings`` is
+#: ``lowering.md`` §12.8's first-class key, deferred at W2.6 "until a real
+#: backend drives lowering end to end" and landing here because one now does.
+#: ``ampere_solver_config`` carries each GP solver's
+#: :meth:`~ampere.core.GPSolver.provenance_config` — dtype, device, a future
+#: float32 opt-out — which is **recorded and never hashed**, so that
+#: ``architecture.md`` §5's "a reduced-precision run must be visible in
+#: provenance" and ``results.md`` §14's cross-backend spec-hash agreement can
+#: both hold. None of the three is an input to ``problem_fingerprint``, but
+#: this constant is, so ``ampere_problem_hash`` moves as at every bump.
+PROVENANCE_SCHEMA_VERSION = 5
 
 #: Every attribute this module writes starts with this, so ampere's provenance
 #: never collides with ArviZ's own (``created_at``, ``creation_library``, ...)
@@ -580,11 +595,40 @@ def package_versions(extra: Sequence[str] = ()) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
+def solver_configs(problem: FittingProblem) -> dict[str, Any]:
+    """Each dataset's GP solver configuration, by label. Recorded, never hashed.
+
+    ``inference.md`` §10a fold-in 10 (W2.13). A solver's *declaration* — the
+    jitter that changes the number a given θ scores — is in the spec and in
+    the spec hash, where ``results.md`` §14 requires two backends to agree.
+    Its *configuration* — the dtype and device it factorises in, and a future
+    deliberate float32 opt-out — is not: two backends legitimately differ on
+    it, and folding it into the hash would break the one cross-backend promise
+    that section makes. So it travels here instead, and nothing hashes this
+    function's output.
+
+    Datasets with no GP, and solvers with nothing to report (the reference
+    ones), are omitted, so the common case records an empty mapping.
+    """
+    configs: dict[str, Any] = {}
+    for label in problem.datasets:
+        noise = problem.datasets[label].likelihood.noise
+        solver = getattr(noise, "solver", None)
+        if solver is None:
+            continue
+        config = dict(solver.provenance_config())
+        if config:
+            configs[label] = config
+    return configs
+
+
 def provenance_attrs(
     problem: FittingProblem,
     *,
     engine: str | None = None,
     backend: str | None = None,
+    realised: bool = False,
+    registered_lowerings: Sequence[Mapping[str, Any]] | None = None,
     extra: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     """The ``ampere_*`` attributes every emitted run carries.
@@ -610,6 +654,23 @@ def provenance_attrs(
         Passing a value that disagrees with the problem raises: recording it
         would be recording a falsehood, and silently preferring one of the two
         would hide a real configuration mistake.
+    realised
+        Whether the draws were scored through the backend's **realisation** —
+        the differentiable native form of the problem (``inference.md`` §10a)
+        — rather than through the numpy contract path. Recorded as
+        ``ampere_realised`` (``1``/``0``: netCDF has no boolean attribute
+        type) on every run, including the gradient-free ones, because "this
+        run's gradients were real" and "this run had no gradients" are the two
+        answers a reader needs to tell apart and silence distinguishes
+        neither.
+    registered_lowerings
+        The **user-registered** lowering rows the run consulted, from
+        :func:`ampere.core.lowering.provenance_entries`. ``lowering.md``
+        §12.8's stamping, first-class since W2.13: W2.6 deferred the key
+        "until a real backend drives lowering end to end", and a realisation
+        is that. Empty for a run that used only ampere's own table, which is
+        the signal — the question a reviewer is asking is "did this depend on
+        something outside the conformance suite's guarantees?".
     extra
         Further entries, JSON-normalised and prefixed like the rest. Use it for
         engine-specific settings (step size, number of live points).
@@ -712,6 +773,12 @@ def provenance_attrs(
         ),
         "failures": canonical_json([failure.to_dict() for failure in problem.failures]),
         "log_likelihood_decomposition": "per_dataset",
+        # W2.13's three (schema 5). All are recorded and none is hashed.
+        "realised": int(bool(realised)),
+        "registered_lowerings": canonical_json(
+            [] if registered_lowerings is None else [dict(row) for row in registered_lowerings]
+        ),
+        "solver_config": canonical_json(solver_configs(problem)),
     }
     if problem.seed is None:
         attrs["seed_source"] = "entropy"

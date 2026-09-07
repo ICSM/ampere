@@ -7,6 +7,14 @@ quantity ``ampere.core.DenseGP`` computes — the Gaussian marginal
 log-likelihood of the residuals under ``K(θ) + diag(σ²)`` — through torch's own
 Cholesky rather than scipy's.
 
+:class:`Matern32` and :class:`SquaredExponential` are here too, **since
+W2.13**. They were not in slice 1, and their absence was that slice's
+principal carried finding: the solver built its covariance through
+``ampere.core.Kernel.matrix``, which computes in numpy, so the Cholesky was
+differentiable and the kernel hyperparameters were not. W2.5 had already
+solved it on jax the same way — native kernels subclassing the core
+declarations — and this is the mirror of that.
+
 Why a torch dense solver is worth having at all
 ------------------------------------------------
 It is not for speed: a dense ``O(N³)`` Cholesky is a dense ``O(N³)`` Cholesky
@@ -60,13 +68,125 @@ import numpy as np
 import torch
 
 from ampere.core import DTYPE, GPConditional, GPSolver, Kernel
+from ampere.core import Matern32 as _CoreMatern32
+from ampere.core import SquaredExponential as _CoreSquaredExponential
 from ampere.core.exceptions import LikelihoodError
 
 from ._config import BACKEND, DEFAULT_DEVICE, DEFAULT_DTYPE, as_tensor, to_numpy
 
-__all__ = ["DenseGP"]
+__all__ = ["DenseGP", "Matern32", "SquaredExponential"]
 
 _LOG_2PI = math.log(2.0 * math.pi)
+_SQRT3 = math.sqrt(3.0)
+
+
+def _points(coordinates: Any) -> torch.Tensor:
+    """``(n, d)`` coordinates from an ``(n,)`` or ``(n, d)`` array or tensor.
+
+    A bare one-dimensional input is read as a column of ``n`` one-dimensional
+    points, matching ``ampere.core.Kernel.matrix``'s own convention.
+    """
+    tensor = as_tensor(coordinates, dtype=DEFAULT_DTYPE, device=DEFAULT_DEVICE)
+    return tensor[:, None] if tensor.ndim == 1 else tensor
+
+
+def _separation(left: Any, right: Any) -> torch.Tensor:
+    """Euclidean separation between two coordinate sets, ``(n, m)``.
+
+    Euclidean in the coordinate space, which is why
+    :meth:`~ampere.core.GPSolver.check_compatible` requires every coordinate
+    axis to share one unit — a single isotropic length scale is meaningless
+    across mixed units.
+    """
+    a, b = _points(left), _points(right)
+    difference = a[:, None, :] - b[None, :, :]
+    return torch.sqrt(torch.sum(difference * difference, dim=-1))
+
+
+class _TorchKernel(Kernel):
+    """Shared plumbing for the torch kernels: torch separations, torch covariances.
+
+    **W2.13.** W2.4 slice 1 shipped a torch :class:`DenseGP` that built its
+    covariance by calling ``ampere.core.Kernel.matrix`` — which computes in
+    numpy and coerces every hyperparameter with ``float()``. The Cholesky was
+    differentiable and the *hyperparameters were not*: the graph was cut at the
+    covariance, so a fitted amplitude or length scale received no gradient at
+    all. That was slice 1's principal carried finding, and W2.5 had already
+    solved it the same way on jax. These classes are the fix.
+
+    They **subclass the core kernels** rather than redeclaring them, exactly as
+    jax's do: same ``FAMILY``, same ``HYPERPARAMETERS``, same
+    ``QUASISEPARABLE`` flag, same ``NAME``, so a problem's declaration — and
+    therefore its spec hash — is unchanged by which backend computes it.
+    ``matrix`` and ``diagonal`` are overridden because the core's build their
+    separations in numpy; nothing else is.
+
+    The core's ``_positive`` check on the hyperparameters is not reproduced,
+    and its absence is not silent: a non-positive length scale gives a
+    non-finite covariance, the Cholesky then fails, and :class:`DenseGP`'s two
+    surfaces turn that into the failure §4.5 asks for (an exception on the
+    contract path, ``-inf`` on the traced one). The declaration is what keeps
+    it from arising: a kernel hyperparameter is declared with a prior on the
+    positive half-line and a ``Log`` bijection, so no sampler proposes one.
+    """
+
+    BACKEND: ClassVar[str] = BACKEND
+    DIFFERENTIABLE: ClassVar[bool] = True
+    BATCHABLE: ClassVar[bool] = False
+    DEVICE: ClassVar[str] = "cpu"
+
+    def _covariance(self, separation: Any, values: Mapping[str, Any]) -> torch.Tensor:
+        raise NotImplementedError
+
+    def matrix(self, left: Any, right: Any, values: Mapping[str, Any]) -> torch.Tensor:
+        """Dense covariance between two coordinate sets, ``(n, m)``, in torch."""
+        return self._covariance(_separation(left, right), self.resolve(values))
+
+    def diagonal(self, coordinates: Any, values: Mapping[str, Any]) -> torch.Tensor:
+        """The prior variance at each coordinate; ``k(0)`` for a stationary kernel."""
+        n = int(_points(coordinates).shape[0])
+        zeros = torch.zeros(n, dtype=DEFAULT_DTYPE, device=DEFAULT_DEVICE)
+        return self._covariance(zeros, self.resolve(values))
+
+
+class Matern32(_TorchKernel, _CoreMatern32):
+    r"""Matérn-3/2 in torch: ampere's canonical flexible-likelihood kernel.
+
+    .. math::
+        k(r) = a^2 \left(1 + \frac{\sqrt{3}\,r}{\ell}\right)
+               \exp\!\left(-\frac{\sqrt{3}\,r}{\ell}\right)
+
+    ``amplitude`` is the marginal **standard deviation** — ``k(0) ==
+    amplitude²`` — so a prior on it is a prior in the data's own units. The
+    declaration, ``QUASISEPARABLE = True`` included, is inherited from
+    ``ampere.core.Matern32``: this kernel does have an exact rank-2
+    quasiseparable representation, and saying otherwise here would be a lie
+    about the mathematics merely because this backend has not yet shipped a
+    solver that exploits it.
+    """
+
+    def _covariance(self, separation: Any, values: Mapping[str, Any]) -> torch.Tensor:
+        amplitude = as_tensor(values["amplitude"], dtype=DEFAULT_DTYPE, device=DEFAULT_DEVICE)
+        length_scale = as_tensor(values["length_scale"], dtype=DEFAULT_DTYPE, device=DEFAULT_DEVICE)
+        scaled = _SQRT3 * as_tensor(separation) / length_scale
+        return amplitude * amplitude * (1.0 + scaled) * torch.exp(-scaled)
+
+
+class SquaredExponential(_TorchKernel, _CoreSquaredExponential):
+    r"""Squared exponential (RBF) in torch: legacy's kernel, kept for comparison.
+
+    .. math::
+        k(r) = a^2 \exp\!\left(-\frac{r^2}{2\ell^2}\right)
+
+    Not quasiseparable, and inherits that declaration too, so a quasiseparable
+    solver refuses it by name — the asymmetry that made Matérn the default.
+    """
+
+    def _covariance(self, separation: Any, values: Mapping[str, Any]) -> torch.Tensor:
+        amplitude = as_tensor(values["amplitude"], dtype=DEFAULT_DTYPE, device=DEFAULT_DEVICE)
+        length_scale = as_tensor(values["length_scale"], dtype=DEFAULT_DTYPE, device=DEFAULT_DEVICE)
+        scaled = as_tensor(separation) / length_scale
+        return amplitude * amplitude * torch.exp(-0.5 * scaled * scaled)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -87,7 +207,9 @@ class DenseGP(GPSolver):
     The solver interface (``likelihoods.md`` §7) is numpy in and numpy out,
     because it is called from ``ampere.core``'s backend-neutral likelihood.
     :meth:`log_marginal_likelihood_tensor` is the same computation without the
-    conversion, for a caller that wants the gradient.
+    conversion, for a caller that wants the gradient;
+    :meth:`log_marginal_likelihood_native` is that one again without exception
+    control flow, which is what a realised density needs.
 
     **``jitter`` is the only dataclass field, and that is a constraint rather
     than a simplification.** ``Likelihood.to_spec`` records a dataclass
@@ -98,12 +220,13 @@ class DenseGP(GPSolver):
     disagreement §14 calls "the cheapest possible detector" of a lowering bug.
     Precision and device are therefore :class:`~typing.ClassVar` policy
     (:data:`TENSOR_DTYPE`, :data:`TENSOR_DEVICE`), not configuration: they are
-    how this backend computes, not part of what the user declared. Making them
-    per-instance is a slice-2 question that arrives with GPU support, and it
-    needs an answer about whether a chosen precision belongs in the spec —
-    ``architecture.md`` §5 says a float32 opt-in must be recorded in
-    provenance, which suggests it does, and that is a §4 decision rather than
-    this module's.
+    how this backend computes, not part of what the user declared.
+    **W2.13 ruled the question slice 1 left open** (``inference.md`` §10a,
+    fold-in 10): they stay out of the spec and are reported from
+    :meth:`provenance_config`, which a run records under
+    ``ampere_solver_config`` and no hash reads. A float32 opt-out — which
+    ``architecture.md`` §5 requires to be visible in provenance — has a home
+    now without disturbing cross-backend spec-hash agreement.
     """
 
     jitter: float = 0.0
@@ -118,11 +241,12 @@ class DenseGP(GPSolver):
     EXACT: ClassVar[bool] = True
     IMPLEMENTED: ClassVar[bool] = True
 
-    #: The four capability flags, declared here too even though
-    #: ``Dataset.capability_parts`` does not yet aggregate a solver's (W2.12's
-    #: finding). Declaring them anyway is what makes the gap *visible* — a
-    #: problem can report ``backend="torch"`` today while its GP solve ran in
-    #: numpy, and widening the parts set is a §4 change awaiting a ruling.
+    #: The four capability flags. W2.4 declared them against a parts set that
+    #: did not yet include a solver and recorded the gap; **W2.13 closed it**
+    #: (``inference.md`` §10a, fold-in 7), so these are now what makes a
+    #: composed problem report ``backend="torch"`` — and what makes the same
+    #: problem left with ``ampere.core.DenseGP`` a refusal rather than a
+    #: silently non-differentiable GP.
     DIFFERENTIABLE: ClassVar[bool] = True
     BATCHABLE: ClassVar[bool] = False
     DEVICE: ClassVar[str] = "cpu"
@@ -140,12 +264,22 @@ class DenseGP(GPSolver):
     def _covariance(
         self,
         kernel: Kernel,
-        coordinates: np.ndarray,
-        variance: np.ndarray,
+        coordinates: Any,
+        variance: Any,
         values: Mapping[str, Any],
     ) -> torch.Tensor:
+        """``K(θ) + diag(variance + jitter²)``, with every graph intact.
+
+        Both arguments may carry a gradient now: the covariance because a
+        native kernel (:class:`Matern32` here, not ``ampere.core``'s) builds
+        it in torch, and the diagonal because a prediction-aware noise model's
+        sigma depends on θ. ``as_tensor`` is used for both rather than
+        ``np.asarray``, which would have detached them — the numpy coercion
+        this line used to do is precisely why W2.4's GP hyperparameters got no
+        gradient.
+        """
         matrix = self._tensor(kernel.matrix(coordinates, coordinates, values))
-        diagonal = self._tensor(np.asarray(variance, dtype=DTYPE) + self.jitter**2)
+        diagonal = self._tensor(variance) + self.jitter**2
         return matrix + torch.diag(diagonal)
 
     def _cholesky(self, total: torch.Tensor) -> torch.Tensor:
@@ -204,6 +338,37 @@ class DenseGP(GPSolver):
         quadratic = residuals @ alpha
         return -0.5 * (quadratic + log_determinant + residuals.numel() * _LOG_2PI)
 
+    def log_marginal_likelihood_native(
+        self,
+        kernel: Kernel,
+        coordinates: Any,
+        residual: Any,
+        variance: Any,
+        values: Mapping[str, Any],
+    ) -> torch.Tensor:
+        """The same quantity, **without exception control flow** (W2.13).
+
+        The surface :mod:`ampere.backends.torch.problem` composes, and the
+        counterpart of jax's ``log_marginal_likelihood_jax``. A realised
+        density must not raise — ``inference.md`` §10a narrows §11 for exactly
+        this reason — so a factorisation that fails becomes ``-inf`` through
+        :func:`torch.where` rather than a :class:`LikelihoodError`.
+
+        Note that :func:`torch.linalg.cholesky_ex` is what makes this possible
+        at all: the plain ``cholesky`` raises, and catching the exception would
+        put Python control flow back in the middle of the hot loop. ``info``
+        is read as a value.
+        """
+        total = self._covariance(kernel, coordinates, variance, values)
+        factor, info = torch.linalg.cholesky_ex(total)
+        residuals = self._tensor(residual).reshape(-1)
+        alpha = self._solve(factor, residuals)
+        log_determinant = 2.0 * torch.log(torch.diagonal(factor)).sum()
+        quadratic = residuals @ alpha
+        value = -0.5 * (quadratic + log_determinant + residuals.numel() * _LOG_2PI)
+        failed = torch.logical_or(info != 0, torch.logical_not(torch.isfinite(value)))
+        return torch.where(failed, torch.full_like(value, -math.inf), value)
+
     def log_marginal_likelihood(
         self,
         kernel: Kernel,
@@ -215,6 +380,20 @@ class DenseGP(GPSolver):
         return float(
             self.log_marginal_likelihood_tensor(kernel, coordinates, residual, variance, values)
         )
+
+    def provenance_config(self) -> Mapping[str, Any]:
+        """``inference.md`` §10a fold-in 10: how this solver computes, for the attrs.
+
+        The precision and device this backend factorises in. They are
+        deliberately **not** dataclass fields — ``Likelihood.to_spec`` records
+        those, and ``results.md`` §14 requires the spec hash to agree across
+        backends, so a dtype in the spec would make two backends' declaration
+        of one problem differ. They are still worth recording, because
+        ``architecture.md`` §5 says a float32 opt-out must be visible in a
+        run's provenance, and this is where it will be visible when slice 2
+        offers one.
+        """
+        return {"dtype": str(self.TENSOR_DTYPE), "device": str(self.TENSOR_DEVICE)}
 
     def conditional_loo(
         self,

@@ -72,7 +72,9 @@ from ampere.core import (
     Dataset,
     DatasetCollection,
     FittingProblem,
+    GaussianFamily,
     GaussianProcessNoise,
+    IndependentNoise,
     Instrument,
     Likelihood,
     Matern32,
@@ -465,6 +467,12 @@ class TestBackendIdentity:
         class NativePowerLaw(PowerLaw):
             BACKEND = "mirror"
 
+        class NativeNoise(IndependentNoise):
+            # W2.13: the noise model is a capability part too, so the
+            # dataset's default (which declares "reference") would make this
+            # a two-backend problem rather than a "mirror" one.
+            BACKEND = "mirror"
+
         model = NativePowerLaw(
             FINE,
             norm=st.lognorm(0.4, scale=2.0),
@@ -477,6 +485,7 @@ class TestBackendIdentity:
                 Dataset(
                     BLUE_DATA,
                     Instrument([NativeCalibrationScale(st.lognorm(0.05), label="calibration")]),
+                    Likelihood(GaussianFamily(), NativeNoise()),
                 )
             ],
             seed=SEED,

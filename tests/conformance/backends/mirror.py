@@ -49,12 +49,25 @@ import numpy as np
 import scipy.stats as st
 
 from ampere.backends.reference import CalibrationScale, Resample
-from ampere.core import Model, Parameter, ParameterSet, Transformation
+from ampere.core import DenseGP as _CoreDenseGP
+from ampere.core import GaussianProcessNoise as _CoreGaussianProcessNoise
+from ampere.core import IndependentNoise as _CoreIndependentNoise
+from ampere.core import QuasisepGP as _CoreQuasisepGP
+from ampere.core import (
+    GPSolver,
+    Kernel,
+    Model,
+    NoiseModel,
+    Parameter,
+    ParameterSet,
+    Transformation,
+)
 
 from ..protocol import (
     BackendCapabilities,
     ModelKind,
     ModelSpec,
+    SolverKind,
     TransformationKind,
     TransformationSpec,
 )
@@ -68,6 +81,9 @@ BACKEND = "mirror"
 
 __all__ = [
     "BACKEND",
+    "DenseGP",
+    "GaussianProcessNoise",
+    "IndependentNoise",
     "MirrorBackend",
     "MirrorCalibrationScale",
     "MirrorLinearModel",
@@ -75,6 +91,7 @@ __all__ = [
     "MirrorPhotometry",
     "MirrorPowerLawModel",
     "MirrorResample",
+    "QuasisepGP",
 ]
 
 
@@ -177,6 +194,53 @@ class MirrorPhotometry(Photometry):
     BACKEND: ClassVar[str] = BACKEND
 
 
+# The noise models and solvers, declared as this fixture's. Needed since
+# **W2.13**: the four capability flags widened to ``NoiseModel`` and
+# ``GPSolver`` (``inference.md`` §10a, fold-in 7) and
+# ``Likelihood.capability_parts`` puts them on the composed problem, so a
+# fixture named ``"mirror"`` that composed the core classes — which now
+# declare ``"reference"`` — would be a two-backend problem and refused. Like
+# the instrument steps above, these change the declaration and nothing else:
+# the arithmetic is still the reference path's, honestly, because a fixture
+# that exists to prove the parametrisation has nothing different to offer in
+# a Cholesky.
+
+
+# These four keep the **core classes' own names**, unlike the steps above,
+# and that is load-bearing rather than stylistic: ``Likelihood.to_spec``
+# records ``type(noise).__name__`` and the solver's ``type(...).__name__``,
+# and ``test_cross_backend``'s ``ampere_likelihoods`` row compares that
+# declaration across backends. A backend's noise model and solver are the
+# same *declaration* as the core's — what differs is which library computes
+# it — so they must present the same name. The real backends do this
+# naturally; here the core classes are imported under private aliases so
+# that the shadowing is deliberate and visible.
+
+
+class IndependentNoise(_CoreIndependentNoise):
+    """Uncorrelated noise, declared as this backend's (W2.13)."""
+
+    BACKEND: ClassVar[str] = BACKEND
+
+
+class GaussianProcessNoise(_CoreGaussianProcessNoise):
+    """The GP noise composition, declared as this backend's (W2.13)."""
+
+    BACKEND: ClassVar[str] = BACKEND
+
+
+class DenseGP(_CoreDenseGP):
+    """The dense solver, declared as this backend's (W2.13)."""
+
+    BACKEND: ClassVar[str] = BACKEND
+
+
+class QuasisepGP(_CoreQuasisepGP):
+    """The quasiseparable solver, declared as this backend's (W2.13)."""
+
+    BACKEND: ClassVar[str] = BACKEND
+
+
 _MODELS = {ModelKind.LINEAR: MirrorLinearModel, ModelKind.POWER_LAW: MirrorPowerLawModel}
 
 
@@ -202,6 +266,15 @@ class MirrorBackend(ReferenceBackend):
         if spec.kind is TransformationKind.REBIN:
             return MirrorResample(spec.target, label=spec.label)
         return MirrorPhotometry(spec.target, spec.filters, label=spec.label)
+
+    def gp_solver(self, kind: SolverKind) -> GPSolver:
+        return DenseGP() if kind is SolverKind.DENSE else QuasisepGP()
+
+    def independent_noise(self) -> NoiseModel:
+        return IndependentNoise()
+
+    def gp_noise(self, kernel: Kernel, solver: GPSolver) -> NoiseModel:
+        return GaussianProcessNoise(kernel, solver)
 
     def parameter_space(self, declaration: ParameterSet) -> MirrorParameterSpace:
         return MirrorParameterSpace(declaration)

@@ -78,6 +78,7 @@ import numpyro.distributions as npd
 from numpyro.distributions.transforms import Transform
 
 from ampere.core.exceptions import LoweringError
+from ampere.core.exceptions import LoweringFallbackWarning as _LoweringFallbackWarning
 from ampere.core.lowering import (
     LoweringResolution,
     lookup_bijection_lowering,
@@ -105,29 +106,14 @@ __all__ = [
 _NEGATIVE_INFINITY = -jnp.inf
 
 
-class LoweringFallbackWarning(UserWarning):
-    """A native run is computing something on the reference (numpy) path.
-
-    Raised once per lowering by :class:`LoweredParameterSet` when a prior family
-    has no usable native ``icdf`` and the prior transform therefore falls back
-    to ``scipy``'s ``ppf`` (``lowering.md`` §3.6, ruled 2026-09-03: "sanctioned
-    on these terms, but loud"). It is not the silent substitution §3.4 forbids —
-    nothing about the posterior changes, because ``prior_transform`` has one
-    mathematical definition and the reference path computes it exactly — but a
-    nominally jax-backed run that computes part of itself in numpy should never
-    be a surprise discovered later.
-
-    ``FittingProblem(strict=True)`` turns this warning into a
-    :class:`~ampere.core.exceptions.LoweringError`. One flag, one meaning:
-    ``strict`` already says "I would rather fail than have anything smoothed
-    over".
-
-    A backend-local class in slice 1. A shared
-    ``ampere.core.exceptions.LoweringFallbackWarning`` would be better — the
-    torch backend owes the identical warning, and tests should be able to
-    ``pytest.warns`` on one type across backends — but adding it is a change to
-    a frozen §4 contract's surface, so it is proposed rather than taken.
-    """
+#: The shared warning, re-exported for the backwards-compatible import path.
+#:
+#: **W2.13 took the proposal slice 1 recorded here** (fold-in 8, ruled
+#: 2026-09-07): the class this module used to define lives in
+#: :mod:`ampere.core.exceptions` now, so ``pytest.warns`` on one type catches
+#: whichever backend raised it. The name stays importable from here because
+#: this is where a jax user looks for it.
+LoweringFallbackWarning = _LoweringFallbackWarning
 
 
 # ---------------------------------------------------------------------------
@@ -280,8 +266,10 @@ class LoweredParameterSet:
         #: Emission order: the core's topological order, reused rather than
         #: recomputed (§8). Fixed parameters are in it and are skipped.
         # §8 says explicitly to reuse the order the core already computes
-        # rather than recompute it; there is no public view of it.
-        self._order: tuple[str, ...] = tuple(declaration._order)
+        # rather than recompute it. W2.13 made it public
+        # (``ParameterSet.evaluation_order()``, fold-in 9) precisely because
+        # this line used to reach past the underscore for it.
+        self._order: tuple[str, ...] = tuple(declaration.evaluation_order())
         self._fallback_families = tuple(
             sorted({site.family for site in self._sites if not site.native_icdf})
         )

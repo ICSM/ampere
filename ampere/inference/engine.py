@@ -330,6 +330,8 @@ class Engine(abc.ABC):
         *,
         extra_attrs: Mapping[str, object] | None = None,
         coords: Mapping[str, Sequence[Any]] | None = None,
+        realised: bool = False,
+        registered_lowerings: Sequence[Mapping[str, Any]] | None = None,
     ) -> Any:
         """Assemble the stored draws into the run's ``DataTree``.
 
@@ -340,6 +342,13 @@ class Engine(abc.ABC):
         attrs are all :func:`ampere.results.emit`'s to write; what this method
         adds is the evaluations, the engine's own settings, and the failure
         summary.
+
+        *realised* and *registered_lowerings* are the two a driver that
+        sampled through a backend's realisation supplies (``inference.md``
+        §10a's "Provenance", W2.13). The three gradient-free drivers leave
+        them alone and their runs record ``ampere_realised = 0``, which is a
+        fact worth having rather than an absence: it says the draws were
+        scored on the numpy contract path.
 
         The summary is surfaced three ways, because the three have different
         audiences: a :class:`~ampere.inference.exceptions.
@@ -369,6 +378,8 @@ class Engine(abc.ABC):
             evaluations,
             engine=self.NAME,
             coords=coords,
+            realised=realised,
+            registered_lowerings=registered_lowerings,
             extra_attrs=attrs,
         )
         if summary:

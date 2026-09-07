@@ -60,3 +60,21 @@ def _restore_lowering_registry() -> Iterator[None]:
     finally:
         _lowering_module._REGISTRY.clear()
         _lowering_module._REGISTRY.update(snapshot)
+
+
+@pytest.fixture(autouse=True)
+def _restore_realisation_registry() -> Iterator[None]:
+    """Snapshot ``ampere.core.realisation._REALISATIONS`` and restore it after each test.
+
+    The same leak class as the lowering registry above (W0.10 finding (c)):
+    a test that registers a realisation for a fake backend must not leave it
+    behind for the single-process ``test-all`` run.
+    """
+    from ampere.core import realisation as _realisation_module
+
+    snapshot = dict(_realisation_module._REALISATIONS)
+    try:
+        yield
+    finally:
+        _realisation_module._REALISATIONS.clear()
+        _realisation_module._REALISATIONS.update(snapshot)

@@ -20,6 +20,9 @@ vocabulary that knows nothing about torch, jax, numpyro or paramax
 (`architecture.md` §3–4). **Lowering** is the one-way translation of those
 declarations into a specific backend's objects. It happens once, when a
 `FittingProblem` is realised on a backend — never per evaluation.
+*(What "realised" means was left unspecified at the freeze; `inference.md`
+§10a specifies it — W2.13, 2026-09-07 — as the backend's registered,
+differentiable native form of the whole problem.)*
 
 Three targets, and the jax column is really two:
 
@@ -428,17 +431,34 @@ gap is a real constraint rather than a detail:
 |---|---|---|
 | `norm`, `uniform`, `halfnorm` | implemented | implemented |
 | `lognorm`, `loguniform` | inherited from the base via `TransformedDistribution` | inherited the same way (both *are* `TransformedDistribution`s of `Normal`/`Uniform`) |
-| `gamma` | **absent** (`cdf` exists, `icdf` does not) | implemented |
-| `beta` | **absent** (neither `cdf` nor `icdf`) | implemented |
+| `gamma` | **absent** (`cdf` exists, `icdf` does not) | present, but **needs TensorFlow Probability** — see below |
+| `beta` | **absent** (neither `cdf` nor `icdf`) | present, but **needs TensorFlow Probability** — see below |
 | `poisson` | **absent** | **absent** (`cdf` only) |
 
 Both libraries declare `icdf` on the base `Distribution` and raise
 `NotImplementedError` unless a family overrides it, so the failure is loud
-rather than silent. **The gap is largely torch's**: numpyro implements `icdf`
-for `Gamma` and `Beta` where torch does not, so a jax-backed nested-sampling
-run has broader native coverage than a torch-backed one. That asymmetry is
-worth knowing before anyone concludes from a torch experiment that the
-backends are equivalent here.
+rather than silent.
+
+***Amended W2.13*** *(2026-09-07; the "Realisation surface (W2.13)" row in
+`DEVELOPMENT_PLAN.md` §2, spec correction 1).* The original table read
+"implemented" for numpyro's `Gamma` and `Beta`, and that is true of the
+*method* and false of the *environment*. Both are implemented by delegating to
+`gammaincinv`/`betaincinv`, which numpyro does not have and imports from
+TensorFlow Probability on use; with the `jax` extra as ampere ships it —
+jax, numpyro, equinox, no TFP — calling either raises `ImportError: Please
+install 'tensorflow_probability>=0.18' for gammaincinv` (measured on numpyro
+0.21.0). So the asymmetry the original paragraph drew between the two backends
+is not there in a default install: **neither backend has a native `icdf` for
+`gamma` or `beta`**, and both take §3.6's sanctioned reference fallback for
+them.
+
+Two consequences, both deliberate. A backend must decide `icdf` availability
+by **asking the environment**, not by consulting a table — `has_native_icdf`
+in `ampere.backends.jax.distributions` probes the call — because whether these
+two rows are available depends on a dependency ampere neither requires nor
+forbids. And a user who installs TFP alongside the `jax` extra silently gains
+native coverage for them, which is exactly why the fallback is warned about
+rather than silent: the run says which path it took.
 
 **Rule: a nested-sampling run whose priors lack a native `icdf` evaluates its
 prior transform on the reference path.** This is legitimate and cheap — the
@@ -507,6 +527,15 @@ Notes that decide implementations:
   `AffineTransform` (`constraints.positive` or `constraints.unit_interval`).
   This matters only if a lowering builds the chain by hand — which the next
   note says it should not.
+
+  ***Amended W2.13*** *(spec correction 3).* Read this as "numpyro's own
+  composed forms state a `domain=` and a lowering that builds one by hand must
+  too", because `AffineTransform`'s constructor **defaults `domain` to
+  `constraints.real`**. An `AffineTransform(loc, scale)` written without it is
+  therefore declared to accept the whole line, and the composed
+  distribution's `support` — which is derived from the outermost transform's
+  codomain, itself derived from that domain — comes back wrong. W2.5 hit this
+  building the shifted-family rows.
 - **Prefer `biject_to(dist.support)` over reconstructing the transform.** When
   a parameter's bijection is the *inferred default* (`Parameter.bijection is
   None`), the correct lowering is to ask the target library for
@@ -516,6 +545,21 @@ Notes that decide implementations:
   constraint registry, and the two agree because ampere adopted its rule.
   Build by hand **only** when the user declared a bijection explicitly, in
   which case `biject_to` would give the wrong answer.
+
+  ***Amended W2.13*** *(spec correction 2, from W2.4).* This advice holds only
+  where `lowered.support` is the distribution's *real* support, and on torch
+  it often is not: `torch.distributions.TransformedDistribution.support` is
+  **the last transform's codomain**, not the support of the composition. For
+  the two rows §3.2/§3.3 need it — `loguniform`, and any shifted family
+  lowered as an affine composition — that codomain is strictly larger than the
+  distribution's actual support, so `biject_to` of it yields a bijection onto
+  the wrong set and an unconstrained sample can land where the density is
+  zero. A torch lowering must therefore **declare the support it actually
+  has** rather than read it off the composed object; W2.4 does this with a
+  `TransformedDistribution` subclass overriding `support`, and the advice
+  above then applies to the declared value. numpyro's composed forms do not
+  have the problem, because they carry the explicit `domain=` the note above
+  now insists on.
 - **The rule does agree, and `loguniform` is the check worth citing.** Ampere
   infers `Logit(lower=a, upper=b)` for `loguniform(a, b)` — from its support,
   which is the bounded interval `[a, b]`, not from its log-shaped density.

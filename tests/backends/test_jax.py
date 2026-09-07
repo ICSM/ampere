@@ -62,6 +62,8 @@ from ampere.backends.jax import (  # noqa: E402
     BACKEND,
     CalibrationScale,
     DenseGP,
+    GaussianProcessNoise,
+    IndependentNoise,
     LoweredParameterSet,
     LoweringFallbackWarning,
     Matern32,
@@ -78,9 +80,11 @@ from ampere.core import (  # noqa: E402
     Dataset,
     DatasetCollection,
     FittingProblem,
+    GaussianFamily,
     HierarchicalPrior,
     Identity,
     Instrument,
+    Likelihood,
     Log,
     Logit,
     Parameter,
@@ -665,10 +669,21 @@ def _agreement_problem(norm: Any = None, *, strict: bool = False) -> FittingProb
             index=st.norm(-1.2, 0.3),
             reference_wavelength=REFERENCE_WAVELENGTH,
         ),
-        [Dataset(FINE_DATA)],
+        [Dataset(FINE_DATA, likelihood=jax_likelihood())],
         seed=20260907,
         strict=strict,
     )
+
+
+def jax_likelihood() -> Likelihood:
+    """Gaussian, this backend's uncorrelated noise.
+
+    Since W2.13 the noise model is a capability part (``inference.md`` §10a,
+    fold-in 7), so ``Dataset``'s default — ``ampere.core``'s
+    ``IndependentNoise``, which declares ``"reference"`` — would make every
+    problem here a two-backend problem. Spelled once.
+    """
+    return Likelihood(GaussianFamily(), IndependentNoise())
 
 
 def jax_joint_problem(seed: int | None = 20260907) -> FittingProblem:
@@ -695,6 +710,7 @@ def jax_joint_problem(seed: int | None = 20260907) -> FittingProblem:
                     Instrument(
                         [CalibrationScale(st.lognorm(0.05), label="calibration")], channel="blue"
                     ),
+                    jax_likelihood(),
                 ),
                 "red": Dataset(
                     COARSE_DATA,
@@ -705,6 +721,7 @@ def jax_joint_problem(seed: int | None = 20260907) -> FittingProblem:
                         ],
                         channel="red",
                     ),
+                    jax_likelihood(),
                 ),
             }
         ),
@@ -791,7 +808,7 @@ class TestTheNativePath:
 
     def test_a_gp_dataset_lowers_and_agrees(self) -> None:
         """The flexible likelihood on the native path, dense solver."""
-        from ampere.core import GaussianProcessNoise, Likelihood, family_named
+        from ampere.core import family_named
 
         noise = GaussianProcessNoise(Matern32(0.4, 2.0), DenseGP())
         problem = FittingProblem(

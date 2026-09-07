@@ -33,6 +33,7 @@ other's row on lookup
 
 from __future__ import annotations
 
+import warnings
 from typing import ClassVar
 
 import astropy.units as u
@@ -40,8 +41,22 @@ import numpy as np
 import pytest
 import scipy.stats as st
 
-from ampere.core import Dataset, FittingProblem, Model, Parameter, Spectrum
-from ampere.core.exceptions import LoweringError, ParameterError
+from ampere.core import (
+    Dataset,
+    FittingProblem,
+    GaussianFamily,
+    IndependentNoise,
+    Likelihood,
+    Model,
+    Parameter,
+    Spectrum,
+)
+from ampere.core.exceptions import (
+    AmpereError,
+    LoweringError,
+    LoweringFallbackWarning,
+    ParameterError,
+)
 from ampere.core.lowering import (
     BatteryReport,
     LoweringResolution,
@@ -394,11 +409,18 @@ class _PowerLawModel(Model):
         return Spectrum(ctx["grid"] * u.um, ctx["norm"] * ctx["grid"] * u.Jy)
 
 
+class _StubNoise(IndependentNoise):
+    # W2.13: a noise model is a capability part now, so the dataset's default
+    # (which declares "reference") would make this a two-backend problem.
+    BACKEND: ClassVar[str] = "stub-prov"
+
+
 def _toy_problem() -> FittingProblem:
     model = _PowerLawModel()
     grid = np.array([0.2, 0.5, 0.8])
     observed = Spectrum(grid * u.um, [0.1, 0.25, 0.4] * u.Jy, uncertainty=[0.05, 0.05, 0.05] * u.Jy)
-    return FittingProblem(model, [Dataset(observed)], seed=20260906)
+    dataset = Dataset(observed, likelihood=Likelihood(GaussianFamily(), _StubNoise()))
+    return FittingProblem(model, [dataset], seed=20260906)
 
 
 class TestProvenanceStamping:
@@ -417,7 +439,12 @@ class TestProvenanceStamping:
 
         problem = _toy_problem()
         entries = provenance_entries([resolution])
-        attrs = provenance_attrs(problem, extra={"registered_lowerings": entries})
+        # W2.13 made this a first-class parameter of ``provenance_attrs``,
+        # ending W2.6's deferral ("until a real backend drives lowering end to
+        # end"). It used to travel through ``extra=``, which now collides with
+        # the key ampere writes itself -- and that collision is the mechanism
+        # working, not a regression.
+        attrs = provenance_attrs(problem, registered_lowerings=entries)
 
         assert "ampere_registered_lowerings" in attrs
         import json
@@ -479,3 +506,34 @@ class TestFixtureRestoresRegistryBetweenTests:
         assert registered_lowerings(backend="stub-fixture-proof") == ()
         with pytest.raises(LoweringError):
             lookup_lowering("w26_fixture_proof_row", "stub-fixture-proof")
+
+
+class TestTheSharedFallbackWarning:
+    """W2.13, fold-in 8: one class, in the core, for both backends.
+
+    W2.4 and W2.5 each invented their own (``IcdfFallbackWarning`` and a
+    backend-local ``LoweringFallbackWarning``) and each said in its own
+    docstring that a shared core class would be better, because a test that
+    wants to assert "no native run silently computed in numpy" must be able to
+    ``pytest.warns`` on one type across every backend. It lives here.
+    """
+
+    def test_it_is_a_warning_and_not_an_ampere_error(self) -> None:
+        # Deliberately separate hierarchies: the sanctioned §3.6 fallback is
+        # not an error, and ``except AmpereError`` must not swallow it.
+        assert issubclass(LoweringFallbackWarning, UserWarning)
+        assert not issubclass(LoweringFallbackWarning, AmpereError)
+
+    def test_it_is_exported_from_ampere_core(self) -> None:
+        import ampere.core as core
+
+        assert core.LoweringFallbackWarning is LoweringFallbackWarning
+        assert "LoweringFallbackWarning" in core.__all__
+
+    def test_one_pytest_warns_catches_whatever_a_backend_raises(self) -> None:
+        with pytest.warns(LoweringFallbackWarning, match="ppf"):
+            warnings.warn(
+                "prior_transform for 'gamma' falls back to scipy's ppf",
+                LoweringFallbackWarning,
+                stacklevel=1,
+            )

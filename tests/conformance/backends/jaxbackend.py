@@ -55,6 +55,8 @@ import scipy.stats as st
 from ampere.backends.jax import (
     CalibrationScale,
     DenseGP,
+    GaussianProcessNoise,
+    IndependentNoise,
     Matern32,
     PowerLaw,
     Resample,
@@ -67,6 +69,7 @@ from ampere.core import (
     GPSolver,
     Kernel,
     Model,
+    NoiseModel,
     ModelResult,
     Parameter,
     ParameterSet,
@@ -299,6 +302,14 @@ class JaxBackend:
                 f"docstring for what slice 2 owes."
             )
         return DenseGP()
+
+    def independent_noise(self) -> NoiseModel:
+        # This backend's own, since W2.13: a noise model is a capability part
+        # now, so composing ampere.core's would declare two backends.
+        return IndependentNoise()
+
+    def gp_noise(self, kernel: Kernel, solver: GPSolver) -> NoiseModel:
+        return GaussianProcessNoise(kernel, solver)
 
     def parameter_space(self, declaration: ParameterSet) -> LoweredParameterSet:
         return LoweredParameterSet(declaration)

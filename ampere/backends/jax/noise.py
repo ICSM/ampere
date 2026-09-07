@@ -23,16 +23,27 @@ as the models' ``evaluate`` does. :meth:`FractionalModelNoise.sigma_jax` is the
 traced surface that :mod:`ampere.backends.jax.problem` composes, and it is
 where the gradient with respect to ``f`` actually flows.
 
-The capability flag, and a gap worth naming
--------------------------------------------
-Both classes declare ``BACKEND = "jax"``. They are **not** among
-``Dataset.capability_parts`` today — only the instrument steps and the compiled
-models are — so nothing here contributes to the flag a composed problem
-reports. W2.12 recorded that as a finding: a problem could report
-``backend="jax"`` while its noise model and GP solver ran in numpy. Declaring
-it anyway is what makes the answer already correct if that parts set is ever
-widened, and widening it is a §4 change awaiting a ruling, not this item's to
-take.
+The capability flags, and the gap they closed
+--------------------------------------------
+Every class here declares ``BACKEND = "jax"`` beside the other three flags.
+W2.5 declared them against a set of ``Dataset.capability_parts`` that did not
+yet include noise models, and recorded the gap: a problem could report
+``backend="jax"`` while its noise model and GP solver ran in numpy. **W2.13
+closed it** (ruled 2026-09-07, ``inference.md`` §10a, fold-in 7) — a
+``NoiseModel`` and a ``GPSolver`` carry the four flags now, and
+``Likelihood.capability_parts`` puts them on the composed problem.
+
+That is why :class:`IndependentNoise` and :class:`GaussianProcessNoise` are
+here at all. They add no arithmetic to ``ampere.core``'s: a plain noise model
+declares ``scale`` and ``jitter`` and the native path transcribes the
+quadrature (:mod:`ampere.backends.jax.problem`), and a GP noise model
+delegates entirely to its kernel and solver. What they add is the
+**declaration** — this is jax's — without which composing the core class into
+a jax problem is now a backend disagreement. They keep the core classes' own
+names deliberately: ``Likelihood.to_spec`` records
+``type(noise).__name__`` and the conformance suite compares that string
+across backends, so the same declaration must present the same name
+everywhere.
 """
 
 from __future__ import annotations
@@ -50,12 +61,19 @@ from ampere.backends.reference.noise import (
 from ampere.backends.reference.noise import (
     FractionalModelNoise as _ReferenceFractionalModelNoise,
 )
+from ampere.core import GaussianProcessNoise as _CoreGaussianProcessNoise
+from ampere.core import IndependentNoise as _CoreIndependentNoise
 from ampere.core import FunctionSamples, GPSolver, Kernel, LikelihoodError, NoiseModel
 
 from ._config import BACKEND, require_x64
 from .gp import DenseGP
 
-__all__ = ["FractionalModelGPNoise", "FractionalModelNoise"]
+__all__ = [
+    "FractionalModelGPNoise",
+    "FractionalModelNoise",
+    "GaussianProcessNoise",
+    "IndependentNoise",
+]
 
 
 def _fraction(noise: NoiseModel, values: Mapping[str, Any]) -> Any:
@@ -253,3 +271,62 @@ class FractionalModelGPNoise(_ReferenceFractionalModelGPNoise):
         )
         fraction = _check_fraction(_fraction(self, values), type(self).__name__)
         return np.asarray(_inflate(base, fraction, predicted, type(self).__name__))
+
+
+class IndependentNoise(_CoreIndependentNoise):
+    """Uncorrelated noise, declared as this backend's.
+
+    Identical to ``ampere.core.IndependentNoise`` in every respect but the
+    capability flags: the declaration (``scale``, ``jitter``, their priors and
+    bijections) is backend-neutral, and the quadrature
+    ``sigma_eff² = (s·sigma_data)² + jitter²`` is transcribed into jax by
+    :mod:`ampere.backends.jax.problem` rather than computed here, because the
+    core's own :meth:`~ampere.core.NoiseModel.sigma` coerces with ``float()``.
+
+    It exists because W2.13 made a noise model a capability part
+    (``inference.md`` §10a, fold-in 7): a jax problem carrying
+    ``ampere.core.IndependentNoise`` declares two backends and is refused at
+    composition. Pass this one.
+    """
+
+    DIFFERENTIABLE: ClassVar[bool] = True
+    BATCHABLE: ClassVar[bool] = False
+    DEVICE: ClassVar[str] = "cpu"
+    BACKEND: ClassVar[str] = BACKEND
+
+    def __init__(self, *, scale: Any = None, jitter: Any = None) -> None:
+        require_x64(f"a jax {type(self).__name__}")
+        super().__init__(scale=scale, jitter=jitter)
+
+
+class GaussianProcessNoise(_CoreGaussianProcessNoise):
+    """The misspecification GP, declared as this backend's.
+
+    The declaration is the core's — a kernel and a solve strategy — and all
+    the arithmetic belongs to those two, so there is nothing to reimplement
+    here. What this class adds is the flags, and one default that matters:
+    *solver* falls back to **this backend's** :class:`~ampere.backends.jax.DenseGP`
+    rather than ``ampere.core``'s, so the obvious two-argument call cannot
+    quietly put a scipy Cholesky in the middle of a jax problem. Passing the
+    core solver explicitly is still refused, by
+    :func:`~ampere.core.declared_capabilities`, as a backend disagreement.
+
+    Parameters
+    ----------
+    kernel
+        The covariance kernel; its hyperparameters become this noise model's.
+        Use one of this backend's (:class:`~ampere.backends.jax.Matern32`,
+        :class:`~ampere.backends.jax.SquaredExponential`) so the covariance is
+        built in jax and the hyperparameters are trainable.
+    solver
+        GP solve strategy. Defaults to this backend's ``DenseGP()``.
+    """
+
+    DIFFERENTIABLE: ClassVar[bool] = True
+    BATCHABLE: ClassVar[bool] = False
+    DEVICE: ClassVar[str] = "cpu"
+    BACKEND: ClassVar[str] = BACKEND
+
+    def __init__(self, kernel: Kernel, solver: GPSolver | None = None) -> None:
+        require_x64(f"a jax {type(self).__name__}")
+        super().__init__(kernel, DenseGP() if solver is None else solver)

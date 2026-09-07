@@ -484,6 +484,35 @@ class TestPlates:
         )
         assert math.isclose(population.lnprior(values), expected)
 
+    def test_evaluation_order_is_the_public_topological_order(self) -> None:
+        """W2.13, fold-in 9: what both backends were reaching past ``_order`` for."""
+        population = _population_plate(size=5).to_parameter_set()
+        order = population.evaluation_order()
+        assert set(order) == set(population.names)
+        # The hyperparameters come first, which is the whole content of the
+        # promise: a hierarchical prior cannot be bound before what it
+        # references has a value.
+        assert order.index("objects.mu") < order.index("objects.theta")
+        assert order.index("objects.sigma") < order.index("objects.theta")
+
+    def test_evaluation_order_leaves_the_flat_layout_alone(self) -> None:
+        # Two different questions, deliberately kept separate: reordering the
+        # free vector to match the evaluation order would silently permute
+        # every stored posterior. Here the declaration is already topological,
+        # so the two agree; the point is that the layout is untouched, and the
+        # case where they *differ* is the row below.
+        spread = Parameter("spread", st.halfnorm(scale=1.0))
+        offset = Parameter("offset", HierarchicalPrior("norm", {"scale": "spread"}))
+        declared = ParameterSet([offset, spread])
+        assert declared.evaluation_order() == ("spread", "offset")
+        assert declared.free_names == ("offset", "spread")
+        assert declared.free_slice("offset").start == 0
+
+    def test_evaluation_order_preserves_declaration_order_where_free(self) -> None:
+        first = Parameter("first", st.norm())
+        second = Parameter("second", st.norm())
+        assert ParameterSet([second, first]).evaluation_order() == ("second", "first")
+
     def test_sampling_respects_dependency_order(self) -> None:
         population = _population_plate(size=5).to_parameter_set()
         drawn = population.sample(np.random.default_rng(0))

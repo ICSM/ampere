@@ -60,8 +60,12 @@ from ampere.backends.torch import (
     BACKEND,
     CalibrationScale,
     DenseGP,
+    GaussianProcessNoise,
+    IndependentNoise,
+    Matern32,
     PowerLaw,
     Resample,
+    SquaredExponential,
     TorchParameterSpace,
     TorchSpectralModel,
     as_tensor,
@@ -71,14 +75,13 @@ from ampere.core import (
     GPSolver,
     HierarchicalPrior,
     Kernel,
-    Matern32,
     Model,
+    NoiseModel,
     Parameter,
     ParameterSet,
     PhotometricPoints,
     Plate,
     Spectrum,
-    SquaredExponential,
     Transformation,
     propagate_mask,
 )
@@ -306,10 +309,12 @@ class TorchBackend:
         return Photometry(spec.target, spec.filters, label=spec.label)
 
     def kernel(self, spec: CovarianceSpec) -> Kernel:
-        # Kernels are backend-neutral (``inference.md`` §18: a backend supplies
-        # "models and transformations […] and nothing else"), so these are
-        # ``ampere.core``'s own. What differs is the *solver* that consumes
-        # them, which is this backend's.
+        # This backend's own since W2.13. The *declaration* is still
+        # ``ampere.core``'s -- these subclass it, so same FAMILY, same
+        # HYPERPARAMETERS, same QUASISEPARABLE flag and therefore the same spec
+        # hash -- but the covariance is built in torch, which is what makes a
+        # GP hyperparameter differentiable. With the core kernels the Cholesky
+        # had a gradient and the amplitude did not: W2.4's carried finding.
         return _KERNELS[spec.family](spec.amplitude, spec.length_scale)
 
     def gp_solver(self, kind: SolverKind) -> GPSolver:
@@ -319,6 +324,14 @@ class TorchBackend:
                 f"(GPyTorch vs celerite2's torch interface, measured against this suite)."
             )
         return DenseGP()
+
+    def independent_noise(self) -> NoiseModel:
+        # This backend's own, since W2.13: a noise model is a capability part
+        # now, so composing ampere.core's would declare two backends.
+        return IndependentNoise()
+
+    def gp_noise(self, kernel: Kernel, solver: GPSolver) -> NoiseModel:
+        return GaussianProcessNoise(kernel, solver)
 
     def parameter_space(self, declaration: ParameterSet) -> TorchParameterSpace:
         return TorchParameterSpace(declaration)

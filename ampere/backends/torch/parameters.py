@@ -416,6 +416,29 @@ class TorchParameterSpace:
         return self._declaration.free_size
 
     @property
+    def families(self) -> frozenset[str]:
+        """The neutral prior-family names this lowering consulted the registry for."""
+        return frozenset(self._family_of(name) for name in self._free)
+
+    def lowering_provenance(self) -> list[dict[str, Any]]:
+        """The **user-registered** rows this lowering consulted, netCDF-safe.
+
+        ``lowering.md`` §12.8's hardening, ready for
+        ``ampere.results.provenance.provenance_attrs``'s ``extra=``. Empty for
+        a lowering that used only ampere's own table, which is the point: the
+        signal a reviewer wants is "did this run depend on something outside
+        the conformance suite's guarantees?", and stamping ten built-in rows
+        would bury it. W2.6 deferred the first-class provenance key until a
+        backend drove lowering end to end; W2.13 is where that happens, and
+        ``ampere.inference``'s drivers read this through the realisation.
+        """
+        from ampere.core.lowering import provenance_entries
+
+        from .lowering import consulted_resolutions
+
+        return provenance_entries(consulted_resolutions(set(self.families)))
+
+    @property
     def icdf_fallback_families(self) -> frozenset[str]:
         """Families whose ``prior_transform`` runs on the reference path (§3.6)."""
         return self._icdf_fallback

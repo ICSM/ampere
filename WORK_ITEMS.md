@@ -511,6 +511,58 @@ raises); `grep -rn "backend" ampere/inference` shows no declared default;
 the executed example in `ampere/inference/__init__.py` still prints
 `ampere_engine`/`ampere_backend`; lint/format/pyrefly clean.
 
+### W2.13 — The realisation surface, and the fold-ins [L; Opus]
+`inference.md` §10a and its decision-log row (ruled 2026-09-07) turned into
+code, from the prototype on `w2.13-realisation-prototype` (`ampere/core/
+realisation.py`, the jax registration, `NUTSEngine(problem)` with no density
+argument — keep all of it, extend it). In scope, in this order:
+1. **Core**: `Realisation` gains the optional `log_likelihood_terms`; the
+   Protocol and registry docstrings cite §10a; `ampere.core.exceptions.
+   LoweringFallbackWarning` replaces `ampere.backends.torch.lowering.
+   IcdfFallbackWarning` and `ampere.backends.jax.parameters.
+   LoweringFallbackWarning` (both backends import the shared one);
+   `ParameterSet.evaluation_order()` and `Dataset.effective_mask` public,
+   both backends switched to them; the four capability ClassVars on
+   `NoiseModel` and `GPSolver` (defaults `False, False, "cpu", "reference"`),
+   `Likelihood.capability_parts` → its noise model and, when a GP is declared,
+   its solver, `Dataset.capability_parts` appending them; `GPSolver.
+   provenance_config()` (default `{}`) recorded by `provenance_attrs` under
+   `ampere_solver_config`, never hashed.
+2. **torch**: `ampere.backends.torch.problem.LoweredProblem`/`lower_problem`
+   built from the tensor twins W2.4 shipped, at jax's coverage floor
+   (Gaussian family, independent/dense-GP noise, masks, plates, hierarchical
+   priors), refusing the rest by name at construction; native kernels
+   (`Matern32`, `SquaredExponential` subclassing core's) so the torch
+   `DenseGP` differentiates in the hyperparameters; `BACKEND`/flags on the
+   torch `DenseGP`; registration at import. A pyro-backed `NUTSEngine`
+   route: extend `ampere.inference._nuts` to dispatch on `problem.backend`
+   between numpyro (jax) and pyro (torch) — both lazily imported inside
+   `run`, both via a potential function; `SUPPORTED_BACKENDS` becomes
+   "whatever is registered".
+3. **jax**: adopt the shared warning, the public accessors, the flags on
+   `DenseGP`/kernels/noise; `log_likelihood_terms` on `LoweredProblem`.
+4. **Provenance**: `PROVENANCE_SCHEMA_VERSION` → 5; `ampere_realised` and
+   the consulted registered lowering rows (`provenance_entries`) stamped by
+   the drivers that sample through a realisation.
+5. **Conformance**: a row per registered realisation comparing
+   `log_prob_unconstrained` with the numpy path at many points including
+   near a boundary (`tolerances.cross_backend`), and the identity rows
+   extended to the widened parts set; `tests/core` rows for every new core
+   surface.
+6. **Specs**: the three corrections in the decision-log row (`lowering.md`
+   §3.6, §4, and the `AffineTransform` domain note), each marked *Amended
+   W2.13*.
+**Depends:** W2.4 slice 1, W2.5 slice 1, the prototype. **Blocks** both
+slice 2s.
+**Accept:** `pixi run -e torch test-all`, `-e jax test-all` and `-e dev
+test-all` green (the dev run proving neither backend is imported); NUTS
+recovers the toy joint posterior on **both** backends with
+`NUTSEngine(problem)` and no density argument; the per-realisation
+conformance row runs for both; a numpy `DenseGP` in a native problem is
+refused as a backend disagreement; the two fallback-warning classes are
+gone; schema 5 with `ampere_realised` in an emitted run; lint/format clean,
+pyrefly 0 errors in all three environments.
+
 ## Status
 
 | Item | Status |
