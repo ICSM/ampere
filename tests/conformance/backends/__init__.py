@@ -37,12 +37,26 @@ def _optional(factory: Callable[[], ConformanceBackend]) -> ConformanceBackend |
         return None
 
 
+def _torch_backend() -> ConformanceBackend:
+    """W2.4's fixture, imported only when the ``torch`` extra is installed.
+
+    The import is inside the factory rather than at module scope for the reason
+    :func:`_optional` exists: this module is imported by every conformance run,
+    including the ones in the dependency-free ``dev`` environment, and a
+    top-level ``import torch`` would turn a missing extra into a collection
+    error instead of an absent column.
+    """
+    from .torch_backend import TorchBackend
+
+    return TorchBackend()
+
+
 _REGISTRY: tuple[ConformanceBackend | None, ...] = (
     ReferenceBackend(),
     MirrorBackend(),
+    _optional(_torch_backend),
     # Phase 2:
-    #   _optional(lambda: TorchBackend()),
-    #   _optional(lambda: JaxBackend()),
+    #   _optional(_jax_backend),
 )
 
 

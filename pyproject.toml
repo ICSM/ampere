@@ -296,7 +296,21 @@ format-check = "ruff format --check . --exclude tests/characterisation"
 # ampere/inference ampere/results` errors ("No Python files matched
 # pattern ...") when a given directory is missing, so this must check
 # which of the four exist and exit 0 cleanly when none do.
-typecheck = "bash -c 'dirs=\"\"; for d in ampere/core ampere/backends ampere/inference ampere/results; do [ -d \"$d\" ] && dirs=\"$dirs $d\"; done; if [ -z \"$dirs\" ]; then echo \"typecheck: none of ampere/{core,backends,inference,results} exist yet -- nothing to check\"; else pyrefly check $dirs; fi'"
+#
+# W2.4: `--ignore-missing-imports` names the *optional* dependencies a
+# backend subpackage imports at module level. CI runs this task in the `dev`
+# environment (ci.yml's typecheck job), which deliberately has neither the
+# torch nor the jax extra -- architecture.md §4 rule 2 is that `import
+# ampere` must never require either -- so `import torch` in
+# ampere/backends/torch/ is a missing module there and nowhere else. The flag
+# is conditional by design ("if the specified imported module can't be found,
+# replace it with typing.Any"): in `pixi run -e torch typecheck` torch *is*
+# found and its real types are checked, so this does not weaken the check
+# where the check can be made, only where it cannot. `zeus` is listed for the
+# same reason from the other direction: ampere/inference/_zeus.py imports it
+# lazily inside a function, and the zeus extra is in `dev` but not in the
+# backend environments.
+typecheck = "bash -c 'dirs=\"\"; for d in ampere/core ampere/backends ampere/inference ampere/results; do [ -d \"$d\" ] && dirs=\"$dirs $d\"; done; if [ -z \"$dirs\" ]; then echo \"typecheck: none of ampere/{core,backends,inference,results} exist yet -- nothing to check\"; else pyrefly check --ignore-missing-imports torch --ignore-missing-imports \"torch.*\" --ignore-missing-imports pyro --ignore-missing-imports \"pyro.*\" --ignore-missing-imports zeus $dirs; fi'"
 docs = "sphinx-build -b html docs/source docs/_build/html"
 
 # --- One feature per Python interpreter, driving the CI matrix (W0.3

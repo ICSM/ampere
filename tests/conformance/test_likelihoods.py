@@ -541,7 +541,23 @@ class TestSolverAgreement:
     def test_a_quasiseparable_solver_refuses_a_kernel_that_has_no_such_form(
         self, backend: ConformanceBackend
     ) -> None:
-        """The declaration is checked before the implementation is."""
+        """The declaration is checked before the implementation is.
+
+        Guarded on the declared solver set like every other row in this class.
+        ``protocol.py`` says ``gp_solver`` is "only called for a kind present
+        in ``capabilities.solvers``; a backend may raise for anything else",
+        and the row above says the same in prose — "a row must not ask a torch
+        or jax fixture for a solver it has said it does not have". This row was
+        asking anyway, which was invisible while both in-repo fixtures declared
+        ``QUASISEP`` and became a spurious failure the moment W2.4's torch
+        fixture registered without one. Restoring the guard is a correction to
+        this suite, not a relaxation of it: the claim being checked is
+        ``GPSolver.check_compatible``'s declarative refusal, which
+        ``tests/core`` also exercises on ``ampere.core``'s own solver, so
+        nothing goes unchecked for a backend that skips here.
+        """
+        if SolverKind.QUASISEP not in backend.capabilities.solvers:
+            pytest.skip(f"backend {backend.name!r} declares no quasiseparable solver")
         _, observed = spectra()
         kernel = backend.kernel(SQUARED_EXPONENTIAL)
         assert not kernel.QUASISEPARABLE
