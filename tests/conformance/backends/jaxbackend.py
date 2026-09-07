@@ -267,8 +267,15 @@ class JaxBackend:
         # part declares, and `ampere.backends.jax.lower_problem` is what cashes
         # it: a pure jax log-density a NUTS kernel can differentiate.
         differentiable=True,
-        # Slice 2's `vmap` work; claiming it today would be a promise unkept.
-        batchable=False,
+        # Slice 2's `vmap` work, landed: every model, step, kernel, noise
+        # model and the dense solver is whole-array `jax.numpy`, so
+        # `jax.vmap` over the realised density maps as it maps any pure
+        # function -- and `LoweredProblem.log_prob_unconstrained_batched` is
+        # the surface. `QuasisepGP` is the one part that still says False
+        # (celerite2 registers no batching rule), which is why this claim is
+        # about `SINGLE` -- the shape the flags row composes -- and why a
+        # quasiseparable problem honestly reports `batchable=False`.
+        batchable=True,
         device="cpu",
         # `configure_x64()` below, and every class raises without it.
         float64=True,

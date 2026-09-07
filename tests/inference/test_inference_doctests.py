@@ -26,6 +26,7 @@ import ampere.inference
 import ampere.inference._dynesty
 import ampere.inference._emcee
 import ampere.inference._nuts
+import ampere.inference._vi
 import ampere.inference._zeus
 import ampere.inference.engine
 import ampere.inference.exceptions
@@ -74,5 +75,20 @@ def test_the_nuts_example_runs() -> None:
     pytest.importorskip("jax")
     pytest.importorskip("numpyro")
     results = doctest.testmod(ampere.inference._nuts, optionflags=OPTIONS, verbose=False)
+    assert results.failed == 0
+    assert results.attempted > 0
+
+
+def test_the_vi_example_runs() -> None:
+    """Same arrangement as the NUTS example, and skipped for the same reason.
+
+    ``VIEngine``'s example is a real optimisation on a real backend -- there is
+    no gradient without one -- so it can only run where the ``jax`` extra is
+    installed. It is deliberately a *fit*, not a construction: the number a
+    reader should take from a VI example is whether the guide found the truth.
+    """
+    pytest.importorskip("jax")
+    pytest.importorskip("numpyro")
+    results = doctest.testmod(ampere.inference._vi, optionflags=OPTIONS, verbose=False)
     assert results.failed == 0
     assert results.attempted > 0

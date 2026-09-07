@@ -34,6 +34,7 @@ from ampere.core import (
 )
 
 from .composition import (
+    COARSE_GRID,
     GP_GRID,
     DatasetSpec,
     NoiseKind,
@@ -82,9 +83,40 @@ CORRELATED = ProblemSpec(
     datasets=(DatasetSpec(noise=NoiseKind.GP, covariance=CovarianceSpec()),),
 )
 
-#: Readable pytest ids for the three shapes above, used where a row is
-#: parametrised over all of them.
-SPEC_IDS = ("single", "joint", "correlated")
+#: A chain that **changes kind**: a spectrum integrated through filters, fitted
+#: against ``PhotometricPoints``.
+#:
+#: Added at W2.5 slice 2, and it closed a real hole. Every other shape here
+#: ends in a kind-preserving step, so a backend's native photometry path —
+#: ``apply_flux``, the one a realised density actually calls — was composed
+#: into no problem at all: the jax implementation of it raised
+#: ``AttributeError`` on its first evaluation and had done since it was
+#: written, because nothing ever evaluated it. The photometry step the battery
+#: declares is the fixture-local one (bare pivots and filter names,
+#: ``protocol.py``'s "a chain whose kinds do not compose"), so what this shape
+#: proves is that a backend's *chain* survives a kind change with its gradient
+#: and its numbers intact; the shipped ``SyntheticPhotometry``'s own response
+#: integrals stay ``tests/backends``'.
+PHOTOMETRIC = ProblemSpec(
+    model=ModelSpec(kind=ModelKind.POWER_LAW, coordinates=GP_GRID),
+    datasets=(
+        DatasetSpec(
+            instrument=(
+                CALIBRATION,
+                TransformationSpec(
+                    TransformationKind.PHOTOMETRY,
+                    label="synphot",
+                    target=COARSE_GRID,
+                    filters=("W1", "W2", "W3", "W4"),
+                ),
+            ),
+        ),
+    ),
+)
+
+#: Readable pytest ids for the shapes above, used where a row is parametrised
+#: over all of them.
+SPEC_IDS = ("single", "joint", "correlated", "photometric")
 
 
 @pytest.fixture
@@ -359,7 +391,7 @@ class TestTheRealisation:
         assert realised.backend == problem.backend
         assert int(realised.free_size) == problem.free_size
 
-    @pytest.mark.parametrize("spec", [SINGLE, JOINT, CORRELATED], ids=SPEC_IDS)
+    @pytest.mark.parametrize("spec", [SINGLE, JOINT, CORRELATED, PHOTOMETRIC], ids=SPEC_IDS)
     def test_the_realised_density_agrees_with_the_numpy_path(
         self, backend: ConformanceBackend, tolerances: Tolerances, spec: ProblemSpec
     ) -> None:
