@@ -131,6 +131,7 @@ from .parameter import (
     log_density,
     prior_from_spec,
 )
+from ._pickling import register as _register_pickle_support
 from .rng import (
     generator,
     substream,
@@ -152,6 +153,17 @@ from .results_schema import (
     TimeSeries,
     VisibilitySet,
 )
+from .simulate import (
+    ChunkHook,
+    ContainerBatch,
+    ExecutionFailure,
+    Executor,
+    ProcessExecutor,
+    SerialExecutor,
+    SimulationBatch,
+    ThreadExecutor,
+    chunk_bounds,
+)
 from .transform import (
     COORDINATE_RTOL,
     AxisRequirement,
@@ -162,6 +174,12 @@ from .transform import (
     negotiate,
     propagate_mask,
 )
+
+# ``mappingproxy`` has no pickle reduction of its own, and every frozen mapping
+# in this package is one, so without this nothing here could be sent to a worker
+# process — which is what W3.1's process-pool executor does with a whole
+# FittingProblem. Registered on import, once.
+_register_pickle_support()
 
 __all__ = [
     "COORDINATE_RTOL",
@@ -193,8 +211,10 @@ __all__ = [
     "Censoring",
     "ChannelError",
     "ChannelRequirements",
+    "ChunkHook",
     "ComplexGaussianFamily",
     "CompositionError",
+    "ContainerBatch",
     "ContractError",
     "Cube",
     "Dataset",
@@ -202,6 +222,8 @@ __all__ = [
     "DatasetError",
     "DenseGP",
     "Evaluation",
+    "ExecutionFailure",
+    "Executor",
     "Failure",
     "FailureReason",
     "FittingProblem",
@@ -248,16 +270,20 @@ __all__ = [
     "PoissonFamily",
     "Prior",
     "PriorSpec",
+    "ProcessExecutor",
     "QuasisepGP",
     "Realisation",
     "RealisationFactory",
     "RiceFamily",
     "SchemaError",
+    "SerialExecutor",
     "Simulation",
+    "SimulationBatch",
     "Spectrum",
     "SquaredExponential",
     "StructuredGridGP",
     "StudentTFamily",
+    "ThreadExecutor",
     "Tie",
     "TimeSeries",
     "Transformation",
@@ -267,6 +293,7 @@ __all__ = [
     "VisibilitySet",
     "VonMisesFamily",
     "WindowedSparseGP",
+    "chunk_bounds",
     "declared_capabilities",
     "default_bijection_for",
     "describe_prior",

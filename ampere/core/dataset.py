@@ -118,13 +118,15 @@ Capabilities(differentiable=False, batchable=False, device='cpu', backend='refer
 from __future__ import annotations
 
 import collections
+import contextlib
 import dataclasses
 import enum
 import math
+import pickle
 import types
 import warnings
-from collections.abc import Iterable, Iterator, Mapping, Sequence
-from typing import Any, Protocol, runtime_checkable
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from typing import Any, Literal, Protocol, overload, runtime_checkable
 
 import numpy as np
 
@@ -152,6 +154,16 @@ from .parameter import (
 from .results_schema import FunctionSamples, ModelResult
 from .rng import SEED_BYTES
 from .rng import generator as _generator
+from .simulate import (
+    ChunkHook,
+    ExecutionFailure,
+    Executor,
+    ProcessExecutor,
+    SerialExecutor,
+    SimulationBatch,
+    chunk_bounds,
+    worker_shared,
+)
 from .transform import Instrument, Model, negotiate
 
 __all__ = [
@@ -500,6 +512,13 @@ class FailureReason(enum.StrEnum):
     #: The likelihood returned NaN. Distinct from ``-inf``, which is a perfectly
     #: good answer meaning "impossible", and from an exception.
     NON_FINITE_LOG_LIKELIHOOD = "non_finite_log_likelihood"
+    #: The draw never ran to completion: a per-simulation timeout expired, or
+    #: the worker process running it died (W3.1). Its own code, not folded into
+    #: ``MODEL_FAILED``, because "the simulator said no" and "the executor lost
+    #: the simulator" call for different remedies — a wider prior in the first
+    #: case, a longer timeout or a fixed cluster in the second — and a single
+    #: count could not tell a user which they had.
+    EXECUTION_FAILED = "execution_failed"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1701,6 +1720,11 @@ class FittingProblem:
         )
         self._failures: collections.deque[Failure] = collections.deque(maxlen=int(failure_history))
         self._failure_counts: collections.Counter[FailureReason] = collections.Counter()
+        # simulate_many suspends recording while a chunk runs and then records
+        # every draw here, in draw order, whichever process produced it — so a
+        # pooled budget's counts are the parent's rather than scattered across
+        # workers (inference.md limitation 17.7's aggregation, for this path).
+        self._recording = True
 
         # (2)-(3) Negotiate, then compile — once, before anything is merged, so
         # that a model which reconfigures itself for its instruments is the one
@@ -2175,7 +2199,7 @@ class FittingProblem:
         self._failure_counts.clear()
 
     def _record(self, failure: Failure | None) -> None:
-        if failure is None:
+        if failure is None or not self._recording:
             return
         self._failures.append(failure)
         self._failure_counts[failure.reason] += 1
@@ -2240,6 +2264,25 @@ class FittingProblem:
             if values is None
             else self._resolve(values)
         )
+        return self._run_simulation(resolved, generator, observe=observe)
+
+    def _run_simulation(
+        self,
+        resolved: Mapping[str, Value],
+        generator: np.random.Generator,
+        *,
+        observe: bool,
+        results: Mapping[str, ModelResult] | None = None,
+    ) -> Simulation:
+        """:meth:`simulate` from a θ that has already been resolved.
+
+        Split out for :meth:`simulate_many`, which resolves every draw's θ in
+        the parent process before any work is handed out (so a draw whose
+        worker is killed still records the θ it died on) and which, on the
+        batched path, has already evaluated the models for the whole chunk in
+        one call.
+        """
+        resolved = dict(resolved)
         theta = self._mapping.merged.pack(resolved)
         routed = self._mapping.distribute(resolved)
 
@@ -2248,25 +2291,28 @@ class FittingProblem:
         # model and the instrument chain together would report every chain
         # failure as MODEL_FAILED with no dataset named, which is exactly the
         # unhelpful half of "-inf with a recorded reason".
-        results: dict[str, ModelResult] = {}
+        evaluated: dict[str, ModelResult] = {}
         predicted: dict[str, FunctionSamples] = {}
-        try:
-            results = self._evaluate_models(routed)
-        except self._failure_types as error:
-            failure = _failure_from(_reason_for(error), error, _where(error))
-            self._record(failure)
-            return Simulation(parameters=resolved, theta=theta, failure=failure)
+        if results is None:
+            try:
+                evaluated = self._evaluate_models(routed)
+            except self._failure_types as error:
+                failure = _failure_from(_reason_for(error), error, _where(error))
+                self._record(failure)
+                return Simulation(parameters=resolved, theta=theta, failure=failure)
+        else:
+            evaluated = dict(results)
 
         for label, dataset in self.datasets.items():
             try:
                 predicted[label] = dataset.predict(
-                    results[self._bindings[label]], routed.get(label)
+                    evaluated[self._bindings[label]], routed.get(label)
                 )
             except self._failure_types as error:
                 failure = _failure_from(FailureReason.INSTRUMENT_FAILED, error, label)
                 self._record(failure)
                 return Simulation(
-                    parameters=resolved, theta=theta, results=results, failure=failure
+                    parameters=resolved, theta=theta, results=evaluated, failure=failure
                 )
 
         observations: dict[str, FunctionSamples] | None = None
@@ -2283,7 +2329,7 @@ class FittingProblem:
                     return Simulation(
                         parameters=resolved,
                         theta=theta,
-                        results=results,
+                        results=evaluated,
                         predicted=predicted,
                         failure=failure,
                     )
@@ -2291,10 +2337,370 @@ class FittingProblem:
         return Simulation(
             parameters=resolved,
             theta=theta,
-            results=results,
+            results=evaluated,
             predicted=predicted,
             observations=observations,
         )
+
+    # -- batched simulation (W3.1) --------------------------------------------
+
+    @overload
+    def simulate_many(
+        self,
+        count: int,
+        *,
+        values: ArrayLike | Sequence[Mapping[str, Value] | ArrayLike] | None = ...,
+        observe: bool = ...,
+        rng: np.random.Generator | None = ...,
+        stream: str = ...,
+        executor: Executor | None = ...,
+        chunk_size: int | None = ...,
+        as_chunks: Literal[False] = ...,
+        on_chunk: ChunkHook | None = ...,
+    ) -> SimulationBatch: ...
+
+    @overload
+    def simulate_many(
+        self,
+        count: int,
+        *,
+        values: ArrayLike | Sequence[Mapping[str, Value] | ArrayLike] | None = ...,
+        observe: bool = ...,
+        rng: np.random.Generator | None = ...,
+        stream: str = ...,
+        executor: Executor | None = ...,
+        chunk_size: int | None = ...,
+        as_chunks: Literal[True],
+        on_chunk: ChunkHook | None = ...,
+    ) -> Iterator[SimulationBatch]: ...
+
+    def simulate_many(
+        self,
+        count: int,
+        *,
+        values: ArrayLike | Sequence[Mapping[str, Value] | ArrayLike] | None = None,
+        observe: bool = False,
+        rng: np.random.Generator | None = None,
+        stream: str = "simulate",
+        executor: Executor | None = None,
+        chunk_size: int | None = None,
+        as_chunks: bool = False,
+        on_chunk: ChunkHook | None = None,
+    ) -> SimulationBatch | Iterator[SimulationBatch]:
+        """Run the forward model *count* times: an SBI budget, in one call.
+
+        Closes ``inference.md`` limitation 17.5 ("``simulate`` is one draw").
+        The loop is the reference semantics and every executor must reproduce
+        it exactly:
+
+            ``simulate_many(n, stream=s)`` returns, in order, exactly what
+            ``[simulate(rng=child) for child in rng(s).spawn(n)]`` returns.
+
+        The per-draw generators are :meth:`numpy.random.Generator.spawn`
+        children of the batch sub-stream, derived **by index**, so draw *i* is
+        the same draw whether it ran in chunk 1 or chunk 7, serially or in a
+        worker process. ``simulate``'s own advance-the-stream behaviour could
+        not give that: it makes draw *i* depend on how many draws preceded it
+        *in this process*, which is precisely what a partitioned budget cannot
+        promise.
+
+        Parameters
+        ----------
+        count
+            How many draws. ``0`` gives an empty batch rather than an error.
+        values
+            ``None`` draws each θ from the joint prior on the batch sub-stream
+            — the SBI budget idiom. An array of shape ``(count, free_size)``,
+            or a sequence of *count* mappings or vectors, simulates at given θ:
+            the simulation-based-calibration idiom, where the θ are the ones
+            whose rank statistics are being checked.
+        observe
+            Also draw noisy observations for every draw
+            (:meth:`Dataset.draw_observation`).
+        rng
+            Override the batch sub-stream with a generator of your own. It is
+            spawned from, never drawn from directly, so partition independence
+            survives the override.
+        stream
+            Batch sub-stream name; see :meth:`rng`.
+        executor
+            Anything with :class:`~ampere.core.simulate.Executor`'s ``map``.
+            ``None`` is :class:`~ampere.core.simulate.SerialExecutor`.
+            :class:`~ampere.core.simulate.ProcessExecutor` is the route for a
+            slow external simulator; a
+            :class:`~ampere.core.simulate.ThreadExecutor` suits an I/O-bound
+            wrapper; dask, ray and ``MPIPoolExecutor`` satisfy the protocol as
+            they stand.
+        chunk_size
+            How many simulations may exist at once. ``None`` is one chunk.
+        as_chunks
+            Return an iterator of :class:`~ampere.core.simulate.SimulationBatch`
+            chunks instead of one batch, so a budget larger than memory can be
+            written straight to a training set
+            (:func:`~ampere.results.training.write_training_set` takes the
+            iterator). The chunks are produced lazily: nothing is simulated,
+            and the sub-stream is not advanced, until the iterator is consumed.
+        on_chunk
+            Called with each chunk's index *before* that chunk is simulated —
+            the device-placement hook (``ChunkHook``). With ``chunk_size=1`` it
+            is what guarantees a model-parallel simulator is never asked to
+            hold two simulations at once.
+
+        Returns
+        -------
+        SimulationBatch or Iterator[SimulationBatch]
+            Every draw, failures included: ``inference.md`` §13's
+            reject-and-record needs the record. ``batch[i]`` is the *i*-th
+            :class:`Simulation`, so every consumer of the single-draw contract
+            keeps working.
+
+        Notes
+        -----
+        **Failure accounting is the parent's.** Draws are recorded on *this*
+        problem, in draw order, whichever process ran them — so
+        :attr:`failure_counts` is right after a pooled budget, which
+        ``inference.md`` limitation 17.7 says it would not otherwise be. A
+        draw the executor lost entirely (a timeout, a dead worker) is recorded
+        as :attr:`FailureReason.EXECUTION_FAILED`, distinct from a simulator
+        that said no, and it still carries its θ because θ is drawn here
+        before the work goes out.
+
+        Examples
+        --------
+        >>> import numpy as np, astropy.units as u, scipy.stats as st
+        >>> from ampere.core import Model, Parameter, Spectrum
+        >>> class Line(Model):
+        ...     def __init__(self, grid):
+        ...         self.register_buffer("grid", grid, unit=u.micron)
+        ...         self.register_parameter(Parameter("slope", st.uniform(0.0, 4.0)))
+        ...     def evaluate(self, **values):
+        ...         ctx = self.context(values)
+        ...         return Spectrum(ctx["grid"] * u.micron, ctx["grid"] * ctx["slope"] * u.Jy)
+        >>> grid = np.array([1.0, 2.0, 3.0])
+        >>> observed = Spectrum(grid * u.um, [2.0, 4.0, 6.0] * u.Jy, uncertainty=[0.1] * 3 * u.Jy)
+        >>> problem = FittingProblem(Line(grid), [Dataset(observed)], seed=20260902)
+        >>> batch = problem.simulate_many(4, observe=True)
+        >>> batch.theta.shape, bool(batch.failed.any())
+        ((4, 1), False)
+        >>> batch.observations['default'].values.shape
+        (4, 3)
+        >>> batch[2].observations['default'].values.tolist() == (
+        ...     batch.observations['default'].values[2].tolist()
+        ... )
+        True
+        """
+        chunks = self._simulate_chunks(
+            count,
+            values=values,
+            observe=observe,
+            rng=rng,
+            stream=stream,
+            executor=executor,
+            chunk_size=chunk_size,
+            on_chunk=on_chunk,
+        )
+        if as_chunks:
+            return chunks
+        collected = list(chunks)
+        if not collected:
+            return SimulationBatch((), stream=stream)
+        return SimulationBatch.concatenate(collected)
+
+    def _simulate_chunks(
+        self,
+        count: int,
+        *,
+        values: ArrayLike | Sequence[Mapping[str, Value] | ArrayLike] | None,
+        observe: bool,
+        rng: np.random.Generator | None,
+        stream: str,
+        executor: Executor | None,
+        chunk_size: int | None,
+        on_chunk: ChunkHook | None,
+    ) -> Iterator[SimulationBatch]:
+        """The generator behind :meth:`simulate_many`; one chunk at a time."""
+        if isinstance(count, bool) or not isinstance(count, (int, np.integer)):
+            raise DatasetError(f"a simulation budget must be an integer, got {count!r}.")
+        count = int(count)
+        bounds = chunk_bounds(count, chunk_size)
+        rows = self._batch_values(values, count)
+        runner: Executor = SerialExecutor() if executor is None else executor
+        if not callable(getattr(runner, "map", None)):
+            raise DatasetError(
+                f"executor= needs a map(fn, items) returning results in item order, and "
+                f"{type(runner).__name__} has none. concurrent.futures.Executor's shape is the "
+                f"protocol (ampere.core.simulate.Executor), which dask's Client.get_executor(), "
+                f"ray's executor wrappers and mpi4py's MPIPoolExecutor already satisfy."
+            )
+        task = self._batch_task(runner)
+        batched = isinstance(runner, SerialExecutor) and self._batch_evaluable()
+        parent = self.rng(stream) if rng is None else rng
+
+        for index, (start, stop) in enumerate(bounds):
+            if on_chunk is not None:
+                on_chunk(index)
+            children = _spawn(parent, stop - start, stream)
+            requests: list[_DrawRequest] = []
+            for position, child in enumerate(children):
+                draw = start + position
+                resolved = (
+                    dict(self._mapping.merged.sample(child))
+                    if rows is None
+                    else self._resolve(rows[draw])
+                )
+                requests.append(_DrawRequest(draw, resolved, child, observe))
+            with self._suspend_recording():
+                outcomes = (
+                    self._run_batched(requests) if batched else list(runner.map(task, requests))
+                )
+            yield SimulationBatch(
+                tuple(self._collect(requests, outcomes)), stream=stream, offset=start
+            )
+
+    def _batch_values(
+        self,
+        values: ArrayLike | Sequence[Mapping[str, Value] | ArrayLike] | None,
+        count: int,
+    ) -> list[Any] | None:
+        """One θ per draw, or ``None`` for "draw them from the prior"."""
+        if values is None:
+            return None
+        if isinstance(values, Mapping):
+            raise DatasetError(
+                f"simulate_many's values= is one θ per draw — an array of shape "
+                f"({count}, {self.free_size}), or a sequence of {count} mappings or vectors — "
+                f"not one mapping. Pass [values] * {count} if every draw really is at the same "
+                f"θ; simulating one point repeatedly is a deliberate thing to ask for and not "
+                f"something to arrive at by accident."
+            )
+        if isinstance(values, np.ndarray):
+            if values.ndim != 2 or values.shape != (count, self.free_size):
+                raise DatasetError(
+                    f"simulate_many's values= array has shape {values.shape}, but this problem "
+                    f"has {self.free_size} free dimension(s) and the budget is {count}, so it "
+                    f"must be {(count, self.free_size)}."
+                )
+            return list(values)
+        rows = list(values)
+        if len(rows) != count:
+            raise DatasetError(
+                f"simulate_many(count={count}) was given {len(rows)} θ; values= carries one per "
+                f"draw."
+            )
+        return rows
+
+    def _batch_task(self, runner: Executor) -> Callable[[_DrawRequest], Any]:
+        """The picklable callable the executor maps, and where the problem travels.
+
+        A :class:`~ampere.core.simulate.ProcessExecutor` is told to broadcast
+        this problem, so it is pickled **once per worker** at pool start-up
+        rather than once per draw; every other executor gets a task that
+        carries the problem with it. The picklability check happens here, with
+        a message that names the problem, rather than as an opaque
+        ``PicklingError`` from inside a worker's bootstrap.
+        """
+        if isinstance(runner, ProcessExecutor):
+            self._assert_picklable()
+            runner.broadcast(self)
+            return _simulate_shared
+        return _SimulateTask(self)
+
+    def _assert_picklable(self) -> None:
+        try:
+            pickle.dumps(self)
+        except Exception as error:
+            raise DatasetError(
+                f"this fitting problem cannot be sent to a worker process: {error}. A process "
+                f"pool pickles the problem once per worker, so every model, instrument, "
+                f"likelihood and prior in it must pickle — the usual culprit is a lambda, a "
+                f"local class, or an open file or device handle held on a model. Define the "
+                f"model at module scope, or run the budget with the serial or thread executor."
+            ) from error
+
+    def _batch_evaluable(self) -> bool:
+        """Whether every compiled model can evaluate a table of θ in one call."""
+        return bool(self._compiled) and all(
+            _supports_batch_evaluation(instance) for instance in self._compiled.values()
+        )
+
+    def _run_batched(self, requests: Sequence[_DrawRequest]) -> list[Simulation]:
+        """The chunk through every model's :meth:`~ampere.core.transform.Model.evaluate_batch`.
+
+        A batch call is **one** call: if it raises a declared simulator failure,
+        every draw in the chunk is flagged with it, because a table that came
+        back broken says nothing about which row broke it. A simulator whose
+        failures are per row should return per-row NaNs, which are classified
+        per draw exactly as they are on the loop.
+        """
+        routed = [self._mapping.distribute(request.values) for request in requests]
+        per_model: dict[str, Sequence[ModelResult]] = {}
+        try:
+            for label, instance in self._compiled.items():
+                per_model[label] = instance.call_batch([dict(one.get(label, {})) for one in routed])
+        except self._failure_types as error:
+            failure = _failure_from(_reason_for(error), error, _where(error))
+            return [
+                Simulation(
+                    parameters=request.values,
+                    theta=self._mapping.merged.pack(request.values),
+                    failure=failure,
+                )
+                for request in requests
+            ]
+        return [
+            self._run_simulation(
+                request.values,
+                request.generator,
+                observe=request.observe,
+                results={label: produced[position] for label, produced in per_model.items()},
+            )
+            for position, request in enumerate(requests)
+        ]
+
+    def _collect(
+        self, requests: Sequence[_DrawRequest], outcomes: Sequence[Any]
+    ) -> list[Simulation]:
+        """Turn what the executor returned into draws, recording failures in order."""
+        if len(outcomes) != len(requests):
+            raise DatasetError(
+                f"the executor returned {len(outcomes)} result(s) for {len(requests)} draw(s). "
+                f"An Executor's map must return one result per item, in item order."
+            )
+        draws: list[Simulation] = []
+        for request, outcome in zip(requests, outcomes, strict=True):
+            if isinstance(outcome, Simulation):
+                draw = outcome
+            elif isinstance(outcome, ExecutionFailure):
+                draw = Simulation(
+                    parameters=request.values,
+                    theta=self._mapping.merged.pack(request.values),
+                    failure=Failure(
+                        reason=FailureReason.EXECUTION_FAILED,
+                        message=outcome.message,
+                        where="executor",
+                        exception_type=outcome.exception_type,
+                        values=_scalars(request.values),
+                    ),
+                )
+            else:
+                raise DatasetError(
+                    f"the executor returned {type(outcome).__name__} for draw {request.index}; "
+                    f"an Executor's map returns whatever the mapped callable returned, and "
+                    f"ampere's returns a Simulation."
+                )
+            self._record(draw.failure)
+            draws.append(draw)
+        return draws
+
+    @contextlib.contextmanager
+    def _suspend_recording(self) -> Iterator[None]:
+        """Stop :meth:`_record` while a batch runs, so the parent records once, in order."""
+        previous = self._recording
+        self._recording = False
+        try:
+            yield
+        finally:
+            self._recording = previous
 
     # -- composition-time validation ------------------------------------------
 
@@ -2525,3 +2931,96 @@ def _classify_likelihood_failure(dataset: Dataset, predicted: FunctionSamples) -
     if retained.size and not bool(np.all(np.isfinite(retained))):
         return FailureReason.NON_FINITE_PREDICTION
     return FailureReason.LIKELIHOOD_FAILED
+
+
+# ---------------------------------------------------------------------------
+# Batched simulation: the work item, the task, the spawn rule
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass(frozen=True)
+class _DrawRequest:
+    """One draw's work, as it travels to whatever will run it.
+
+    θ is already resolved and the generator has already been advanced past the
+    prior draw, so a worker does no randomness of its own beyond drawing the
+    observation — which is what makes the result independent of where the work
+    ran, and what lets a draw killed by a timeout still report its θ.
+    """
+
+    index: int
+    values: Mapping[str, Value]
+    generator: np.random.Generator
+    observe: bool
+
+
+class _SimulateTask:
+    """A picklable callable running one draw of *problem*.
+
+    Carries the problem, so it works with any executor — including a plain
+    ``concurrent.futures.ProcessPoolExecutor`` a user passes in, which cannot be
+    told to broadcast. :class:`~ampere.core.simulate.ProcessExecutor` is told,
+    and uses :func:`_simulate_shared` instead.
+    """
+
+    __slots__ = ("_problem",)
+
+    def __init__(self, problem: FittingProblem) -> None:
+        self._problem = problem
+
+    def __call__(self, request: _DrawRequest) -> Simulation:
+        return self._problem._run_simulation(
+            request.values, request.generator, observe=request.observe
+        )
+
+
+def _simulate_shared(request: _DrawRequest) -> Simulation | ExecutionFailure:
+    """Run one draw against the problem this worker was given at start-up."""
+    problem = worker_shared()
+    if problem is None:  # pragma: no cover - only if a pool is reused unbroadcast
+        return ExecutionFailure(
+            message=(
+                "this worker process was never given a fitting problem; "
+                "ProcessExecutor.broadcast was not called before map"
+            ),
+            exception_type="RuntimeError",
+        )
+    return problem._run_simulation(request.values, request.generator, observe=request.observe)
+
+
+def _spawn(generator: np.random.Generator, count: int, stream: str) -> list[np.random.Generator]:
+    """*count* independent children of *generator*, derived by index.
+
+    numpy's spawning is cumulative — ``spawn(a)`` followed by ``spawn(b)`` gives
+    the children ``spawn(a + b)`` would — which is exactly what partition
+    independence needs: a chunk's children do not depend on the chunk size, only
+    on how many draws precede them.
+    """
+    if count == 0:
+        return []
+    try:
+        return list(generator.spawn(count))
+    except (AttributeError, TypeError) as error:
+        raise DatasetError(
+            f"the {stream!r} sub-stream's generator cannot spawn independent children "
+            f"({error}), so a batch cannot be derived from it by index. Every generator numpy "
+            f"builds from a seed can spawn; one built directly from a bit generator that was "
+            f"jumped rather than seeded cannot. Pass rng=numpy.random.default_rng(seed) instead."
+        ) from error
+
+
+def _supports_batch_evaluation(model: Model) -> bool:
+    """Whether *model* declares **and implements** the reference backend's batch form.
+
+    Both halves are required, and the reason is that ``BATCHABLE`` means one
+    thing said in two dialects: "this part can take a stack of θ". On torch and
+    jax that is ``log_prob_unconstrained_batched`` through ``vmap``, which a
+    backend model declares without implementing anything here; on the reference
+    backend it is :meth:`~ampere.core.transform.Model.evaluate_batch`, the form
+    an external code that takes a *table* of parameter sets in one call already
+    has. A torch model that declares the flag but has no ``evaluate_batch`` must
+    therefore fall to the loop rather than be called in a way it never claimed.
+    """
+    return bool(getattr(type(model), "BATCHABLE", False)) and (
+        type(model).evaluate_batch is not Model.evaluate_batch
+    )

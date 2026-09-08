@@ -1196,7 +1196,7 @@ the sentence a user needs and free text cannot be counted:
 ```pycon
 >>> [str(reason) for reason in FailureReason]
 ['model_failed', 'instrument_failed', 'non_finite_prediction', 'likelihood_failed',
- 'non_finite_log_likelihood']
+ 'non_finite_log_likelihood', 'execution_failed']
 
 ```
 

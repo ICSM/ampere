@@ -1309,6 +1309,121 @@ class Model(Parameterised, abc.ABC):
             )
         return produced if produced.parameters is not None else produced.with_parameters(resolved)
 
+    def evaluate_batch(self, batch: Sequence[Mapping[str, Value]]) -> Sequence[Any]:
+        """Compute this model's output for a **table** of parameter sets, in one call.
+
+        The reference backend's reading of ``BATCHABLE`` (W3.1), and the same
+        sentence as torch's and jax's: *this part can take a stack of θ*. The
+        dialects differ because the batching does. On torch and jax a batchable
+        model is one ``vmap`` can push a stack of θ through, and declaring the
+        flag is all a backend model does. On the reference backend the case is
+        an external code — a Fortran or C simulator, a grid interpolator, a
+        vectorised analytic form — that is far cheaper called once with a table
+        of *n* parameter sets than *n* times with one, and this is the method
+        that offers it the table.
+
+        Implement it **and** set ``BATCHABLE = True``;
+        :meth:`~ampere.core.dataset.FittingProblem.simulate_many` uses it, under
+        the serial executor, for a chunk at a time. It is not used under a
+        process or thread pool, and the reason is not an oversight: a table
+        evaluated in one call is by definition not partitioned across workers,
+        so the two are alternative ways of spending the same batch. Nothing else
+        in ampere calls it, so a model may implement it for
+        ``simulate_many`` alone.
+
+        Parameters
+        ----------
+        batch
+            One complete set of parameter values per row, in draw order, every
+            declared parameter present — exactly what :meth:`evaluate` receives,
+            *n* times over.
+
+        Returns
+        -------
+        Sequence
+            One :class:`~ampere.core.results_schema.ModelResult` (or bare
+            container) per row, **in the same order**. Order is the contract:
+            row *i* out is row *i* in.
+
+        Raises
+        ------
+        NotImplementedError
+            By default. The base implementation exists so
+            :meth:`~ampere.core.dataset.FittingProblem.simulate_many` can tell
+            "declared and implemented" from "declared", never as a hook to call
+            speculatively.
+
+        Examples
+        --------
+        >>> import numpy as np, astropy.units as u, scipy.stats as st
+        >>> from ampere.core import Parameter, Spectrum
+        >>> class BatchedPowerlaw(Model):
+        ...     BATCHABLE = True
+        ...     def __init__(self, wavelength):
+        ...         self.register_buffer("wavelength", wavelength, unit=u.micron)
+        ...         self.register_parameter(Parameter("index", st.norm(-1.0, 0.5)))
+        ...     def evaluate(self, **values):
+        ...         ctx = self.context(values)
+        ...         return Spectrum(
+        ...             ctx["wavelength"] * u.micron,
+        ...             ctx["wavelength"] ** ctx["index"] * u.Jy,
+        ...         )
+        ...     def evaluate_batch(self, batch):
+        ...         grid = self.context(batch[0])["wavelength"]
+        ...         indices = np.asarray([row["index"] for row in batch])[:, None]
+        ...         table = grid[None, :] ** indices          # one vectorised call
+        ...         return [
+        ...             Spectrum(grid * u.micron, row * u.Jy) for row in table
+        ...         ]
+        >>> model = BatchedPowerlaw(np.array([1.0, 2.0, 4.0]))
+        >>> [result.single().values.tolist() for result in model.call_batch(
+        ...     [{"index": -1.0}, {"index": -2.0}]
+        ... )]
+        [[1.0, 0.5, 0.25], [1.0, 0.25, 0.0625]]
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement evaluate_batch(). A model that declares "
+            f"BATCHABLE on the reference backend implements it to take a table of parameter "
+            f"sets in one call; one that does not is simulated by the loop instead."
+        )
+
+    def call_batch(
+        self, batch: Sequence[Mapping[str, Value] | ArrayLike | None]
+    ) -> list[ModelResult]:
+        """:meth:`__call__` for a table of θ: normalise in, check what comes back.
+
+        The batched twin of :meth:`__call__`, and it does the same two jobs —
+        completing each row against the declared parameters, and turning a bare
+        container into a :class:`~ampere.core.results_schema.ModelResult` with
+        its θ attached — so an implementer of :meth:`evaluate_batch` writes the
+        interesting part and nothing else.
+        """
+        rows = [self.parameters.complete(_supplied(self, values)) for values in batch]
+        produced = self.evaluate_batch(rows)
+        results = list(produced)
+        if len(results) != len(rows):
+            raise TransformationError(
+                f"{type(self).__name__}.evaluate_batch was given {len(rows)} parameter set(s) "
+                f"and returned {len(results)} result(s). A batch call returns one result per "
+                f"row, in row order — a shorter or longer sequence would silently misalign θ "
+                f"with the outputs it produced."
+            )
+        normalised: list[ModelResult] = []
+        for resolved, outcome in zip(rows, results, strict=True):
+            if isinstance(outcome, FunctionSamples):
+                normalised.append(ModelResult(outcome, parameters=resolved))
+            elif isinstance(outcome, ModelResult):
+                normalised.append(
+                    outcome if outcome.parameters is not None else outcome.with_parameters(resolved)
+                )
+            else:
+                raise TransformationError(
+                    f"{type(self).__name__}.evaluate_batch returned {outcome!r} for one row. "
+                    f"Each row returns a ModelResult, or a single container which is filed "
+                    f"under {DEFAULT_CHANNEL!r}."
+                )
+        return normalised
+
     def compile_for(self, requirements: Mapping[str, ChannelRequirements]) -> Model:
         """One-off configuration from the instruments' published requirements.
 
@@ -1338,3 +1453,24 @@ class Model(Parameterised, abc.ABC):
         with the *unconfigured* model used instead.
         """
         return self
+
+
+def _supplied(
+    model: Model, values: Mapping[str, Value] | ArrayLike | None
+) -> Mapping[str, Value] | ArrayLike:
+    """One row of :meth:`Model.call_batch`'s table, normalised as ``__call__`` does it.
+
+    A mapping (or nothing at all) falls back to the parameters' own declared
+    values for anything it does not supply; a flat free-parameter vector already
+    fixes every free parameter and is passed through untouched.
+    """
+    if values is None or isinstance(values, Mapping):
+        resolved: dict[str, Value] = {
+            parameter.name: parameter.value
+            for parameter in model.parameters
+            if parameter.value is not None
+        }
+        if values is not None:
+            resolved.update(values)
+        return resolved
+    return values
