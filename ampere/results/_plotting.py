@@ -1,0 +1,321 @@
+"""Rendering and run-reading helpers shared by the diagnostic plots.
+
+Private on purpose, and separate from :mod:`ampere.results.plots` on purpose.
+``plots.py`` is the frozen surface ``results.md`` §8 fixes, and **two** work
+items write bodies into it — W2.7's three diagnostic renderers
+(:func:`~ampere.results.plots.plot_residuals`,
+:func:`~ampere.results.plots.plot_gp_localisation`,
+:func:`~ampere.results.plots.plot_anomaly_score`) and W2.8's three
+general-purpose ones. Anything both would otherwise define at the top of that
+one module lives here instead, so that neither item has to move the other's
+code to land.
+
+Nothing here is part of the contract. The two pieces that *are* contract, and
+that this module only supplies the mechanism for, are:
+
+* the GP-localisation caveat must survive ``show_caveat=False`` on the returned
+  figure (``results.md`` §8), which :func:`attach_metadata` /
+  :func:`figure_metadata` are how; and
+* two anomaly scores of different provenance drawn on one axes may never have
+  their provenance suppressed (``diagnostics.md`` §5), which
+  :func:`register_score` is how — it is the axes, not the call, that knows a
+  second score has arrived.
+"""
+
+from __future__ import annotations
+
+import json
+import weakref
+from collections.abc import Sequence
+from typing import Any
+
+import numpy as np
+
+from ampere.core.exceptions import OptionalDependencyError, ResultsError
+
+from .provenance import ATTR_PREFIX
+
+__all__ = [
+    "attach_metadata",
+    "axis_label",
+    "coordinate_of",
+    "dataset_units",
+    "distinct_provenances",
+    "figure_metadata",
+    "gp_datasets",
+    "likelihood_specs",
+    "new_axes",
+    "register_score",
+    "require_group",
+    "require_matplotlib",
+    "run_seed",
+    "select_datasets",
+    "wrap",
+]
+
+#: Where :func:`attach_metadata` hangs its dictionary on a figure.
+_METADATA_ATTRIBUTE = "_ampere_metadata"
+
+#: Per-axes record of which provenances have been drawn on it, and by which
+#: artists, so that a second score of a *different* provenance can force the
+#: labels back on — including on the first score, which was drawn before
+#: anybody knew a second one was coming. Weak, so holding a figure open is the
+#: caller's business and closing one frees this.
+_SCORES_ON_AXES: weakref.WeakKeyDictionary[Any, list[tuple[str, list[Any]]]] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def require_matplotlib() -> Any:
+    """Import matplotlib's pyplot on use, never on import.
+
+    matplotlib is a **base** dependency of ampere, so ``extra=None``: an
+    environment without it is incomplete rather than missing an extra. The
+    import stays lazy for the same two reasons arviz's does
+    (:mod:`ampere.results`): it is expensive, and it is on the path of anyone
+    who merely wanted :func:`~ampere.results.provenance.hash_container`.
+    """
+    try:
+        import matplotlib.pyplot as pyplot
+    except ImportError as error:  # pragma: no cover - exercised by a minimal install
+        raise OptionalDependencyError(
+            "matplotlib",
+            context="drawing a diagnostic plot (ampere.results is where all plotting lives, "
+            "DEVELOPMENT_PLAN.md §4.6). matplotlib is a base dependency of ampere, so this "
+            "environment is incomplete rather than merely missing an extra",
+        ) from error
+    return pyplot
+
+
+def new_axes(ax: Any = None, *, nrows: int = 1, size: tuple[float, float] = (8.0, 3.0)) -> Any:
+    """``(figure, axes_array)``, either fresh or wrapped around a caller's axes.
+
+    A caller who passes ``ax`` gets it back as a one-element array and owns the
+    figure; otherwise a figure of *nrows* stacked panels is created here.
+    Passing ``ax`` with ``nrows > 1`` is refused rather than silently drawing
+    two panels' worth of content into one.
+    """
+    pyplot = require_matplotlib()
+    if ax is not None:
+        if nrows != 1:
+            raise ResultsError(
+                f"this plot draws {nrows} panels, so it cannot be given a single ax=; let it "
+                f"create its own figure, or ask for the panels you want individually."
+            )
+        return ax.get_figure(), np.array([ax], dtype=object)
+    figure, axes = pyplot.subplots(nrows=nrows, figsize=(size[0], size[1] * nrows), squeeze=False)
+    return figure, axes[:, 0]
+
+
+def attach_metadata(figure: Any, key: str, value: str) -> None:
+    """Record *value* on *figure* under *key*, whatever was drawn on it.
+
+    ``results.md`` §8 requires ``show_caveat=False`` to suppress only the drawn
+    annotation and "still leave the caveat on the returned figure's metadata" —
+    a caption a user can crop out of a screenshot is not durable protection
+    against over-interpretation (``diagnostics.md`` §4.3), and neither is one a
+    keyword argument can delete.
+    """
+    metadata = getattr(figure, _METADATA_ATTRIBUTE, None)
+    if metadata is None:
+        metadata = {}
+        setattr(figure, _METADATA_ATTRIBUTE, metadata)
+    metadata[key] = value
+
+
+def figure_metadata(figure: Any) -> dict[str, str]:
+    """What :func:`attach_metadata` recorded on *figure*, as a plain dictionary.
+
+    Empty for a figure ampere did not draw. This is the programmatic half of
+    the caveat requirement: a user extracting numbers rather than reading a
+    caption still gets the warning, from the same object the numbers came on.
+    """
+    return dict(getattr(figure, _METADATA_ATTRIBUTE, None) or {})
+
+
+def require_group(tree: Any, group: str, *, remedy: str) -> Any:
+    """The named group's dataset, or a refusal that names the remedy.
+
+    ``results.md`` §8 is explicit that a missing derived group must be reported
+    as "you have not computed this yet", naming the function that computes it,
+    "rather than reporting a missing group" — the second is a fact about
+    xarray and the first is an answer.
+    """
+    children = getattr(tree, "children", None)
+    if children is None or group not in children:
+        raise ResultsError(
+            f"this run has no {group!r} group. It is not stored by default — the cost is "
+            f"N_draws x N_obs per dataset (results.md §7) — so it is computed on demand: "
+            f"{remedy}"
+        )
+    return tree[group].dataset
+
+
+def likelihood_specs(tree: Any) -> dict[str, dict[str, Any]]:
+    """Each dataset's likelihood declaration, read back off the run's own attrs.
+
+    ``ampere_likelihoods`` is written by
+    :func:`~ampere.results.provenance.provenance_attrs` from
+    :meth:`ampere.core.likelihood.Likelihood.to_spec`, so a stored run knows
+    what noise model it was fitted with without the problem being at hand.
+    That is what lets :func:`~ampere.results.plots.plot_residuals` obey
+    ``diagnostics.md`` §3.1 from the run alone.
+    """
+    raw = getattr(tree, "attrs", {}).get(f"{ATTR_PREFIX}likelihoods")
+    if not isinstance(raw, str):
+        return {}
+    try:
+        decoded = json.loads(raw)
+    except json.JSONDecodeError:  # pragma: no cover - a corrupted run
+        return {}
+    if not isinstance(decoded, dict):  # pragma: no cover - a corrupted run
+        return {}
+    return {str(label): spec for label, spec in decoded.items() if isinstance(spec, dict)}
+
+
+def gp_datasets(tree: Any) -> tuple[str, ...]:
+    """Labels whose likelihood declared a :class:`GaussianProcessNoise` model.
+
+    The test family B is scoped away from (``diagnostics.md`` §3.1) and family
+    C is scoped to (§4.1) — one predicate, so the two cannot drift apart.
+    """
+    return tuple(
+        label
+        for label, spec in sorted(likelihood_specs(tree).items())
+        if spec.get("noise") == "GaussianProcessNoise"
+    )
+
+
+def select_datasets(
+    available: Sequence[str], datasets: Sequence[str] | None, *, what: str
+) -> tuple[str, ...]:
+    """Which labels to act on: all of *available*, or the caller's subset.
+
+    An unknown label is an error rather than an empty panel — asking for a
+    dataset a run does not hold is a typo far more often than it is a
+    deliberate no-op.
+    """
+    if datasets is None:
+        chosen = tuple(available)
+    else:
+        unknown = [label for label in datasets if label not in available]
+        if unknown:
+            raise ResultsError(
+                f"this run has no {what} for dataset(s) {sorted(unknown)}; it has "
+                f"{sorted(available)}."
+            )
+        chosen = tuple(datasets)
+    if not chosen:
+        raise ResultsError(f"this run holds no {what} to plot.")
+    return chosen
+
+
+def coordinate_of(dataset: Any, variable: str) -> tuple[str, np.ndarray]:
+    """The single coordinate axis a dataset variable is indexed by.
+
+    Point kinds with one axis carry it as ``<label>_<axis>``; the diagnostics
+    of families B and C are 1-D by scope (``diagnostics.md`` §9 limitation 1;
+    ``DEVELOPMENT_PLAN.md`` §4.8's "1D implementation lands with Phase 2"), so
+    anything else is refused here, once, rather than producing a figure whose
+    x-axis means nothing.
+    """
+    data = dataset[variable]
+    spatial = [name for name in data.dims if name not in ("chain", "draw")]
+    if len(spatial) != 1:
+        raise ResultsError(
+            f"dataset {variable!r} is indexed by {spatial}, and the 1-D diagnostics of "
+            f"diagnostics.md families B and C need exactly one ordered coordinate axis. "
+            f"Gridded and multi-axis kinds are the Phase 5 staging (DEVELOPMENT_PLAN.md §4.4)."
+        )
+    name = str(spatial[0])
+    if name.endswith("_index"):
+        raise ResultsError(
+            f"dataset {variable!r} is indexed by {name!r}, the joint sample dimension a point "
+            f"kind with several axes takes (results.md §4) — its integers are not a coordinate, "
+            f"and a separation-binned statistic computed against them would be meaningless. "
+            f"The 1-D diagnostics need one ordered coordinate axis."
+        )
+    if name not in data.coords:
+        raise ResultsError(
+            f"dataset {variable!r} has no coordinate values on its {name!r} axis, so there is "
+            f"nothing to measure separations against."
+        )
+    return name, np.asarray(data.coords[name].values, dtype=float)
+
+
+def dataset_units(tree: Any, label: str, axis: str) -> tuple[str, str]:
+    """``(coordinate unit, value unit)`` for one dataset, from the run's attrs.
+
+    Empty strings where a container carried no unit, which is legitimate: the
+    axis label then simply says the name.
+    """
+    coordinate_unit = ""
+    value_unit = ""
+    children = getattr(tree, "children", {})
+    if "observed_data" in children:
+        observed = tree["observed_data"].dataset
+        if label in observed.variables:
+            value_unit = str(observed[label].attrs.get("units", ""))
+        if axis in observed.coords:
+            coordinate_unit = str(observed.coords[axis].attrs.get("units", ""))
+    return coordinate_unit, value_unit
+
+
+def axis_label(name: str, unit: str) -> str:
+    """``"wavelength [um]"``, or just the name where there is no unit."""
+    return f"{name} [{unit}]" if unit else name
+
+
+def run_seed(tree: Any) -> int | None:
+    """The run's recorded seed, or ``None`` for an entropy-seeded run.
+
+    A diagnostic that draws its own randomness (family B's permutation
+    calibration) derives a named sub-stream from this, so re-running the check
+    on a stored run reproduces the same p-value.
+    """
+    seed = getattr(tree, "attrs", {}).get(f"{ATTR_PREFIX}seed")
+    return None if seed is None else int(seed)
+
+
+def register_score(
+    axes: Any, provenance: str, artists: Sequence[Any]
+) -> list[tuple[str, list[Any]]]:
+    """Record that *artists* on *axes* carry *provenance*; return everything on it.
+
+    ``diagnostics.md`` §5 polices the comparability risk of a shared visual
+    grammar with metadata rather than with visual distinctness, and
+    ``results.md`` §8 turns that into a rule about this function's caller:
+    ``show_provenance=False`` "may not suppress them when two scores of
+    different provenance are drawn together". Two scores are drawn *together*
+    when they share an axes, and only the axes knows that — the second call
+    cannot see the first's arguments. So the record lives here, and the caller
+    labels every artist on the axes, not only its own, as soon as the returned
+    list holds more than one distinct provenance.
+    """
+    drawn = _SCORES_ON_AXES.setdefault(axes, [])
+    drawn.append((provenance, list(artists)))
+    return drawn
+
+
+def distinct_provenances(drawn: Sequence[tuple[str, Sequence[Any]]]) -> tuple[str, ...]:
+    """The distinct provenances in a :func:`register_score` record, in order."""
+    seen: dict[str, None] = {}
+    for provenance, _ in drawn:
+        seen.setdefault(provenance, None)
+    return tuple(seen)
+
+
+def wrap(text: str, width: int = 96) -> str:
+    """Hard-wrap a caption so a long caveat does not run off the figure."""
+    words = text.split()
+    lines: list[str] = []
+    current: list[str] = []
+    for word in words:
+        if current and sum(len(piece) + 1 for piece in current) + len(word) > width:
+            lines.append(" ".join(current))
+            current = [word]
+        else:
+            current.append(word)
+    if current:
+        lines.append(" ".join(current))
+    return "\n".join(lines)

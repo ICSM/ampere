@@ -1426,14 +1426,29 @@ class TestPlottingSurface:
             lambda: plot_corner(None),
             lambda: plot_trace(None),
             lambda: plot_posterior_predictive(None),
+        ],
+        ids=["corner", "trace", "ppc"],
+    )
+    def test_the_undelivered_plots_are_declared_and_refuse_clearly(self, call: Any) -> None:
+        with pytest.raises(NotImplementedError, match="Phase 2"):
+            call()
+
+    @pytest.mark.parametrize(
+        "call",
+        [
             lambda: plot_residuals(None),
             lambda: plot_gp_localisation(None),
             lambda: plot_anomaly_score(None),
         ],
-        ids=["corner", "trace", "ppc", "residuals", "gp_localisation", "anomaly"],
+        ids=["residuals", "gp_localisation", "anomaly"],
     )
-    def test_every_plot_is_declared_and_refuses_clearly(self, call: Any) -> None:
-        with pytest.raises(NotImplementedError, match="Phase 2"):
+    def test_the_diagnostic_plots_are_implemented_and_refuse_a_non_run(self, call: Any) -> None:
+        # W2.7 landed diagnostics.md's families B and C (tests/results/
+        # test_diagnostics.py holds them end to end); what is asserted here is
+        # that they now refuse *as results errors* rather than as unimplemented
+        # surface, which is what tells a caller the difference between "not
+        # written yet" and "you passed the wrong thing".
+        with pytest.raises(ResultsError):
             call()
 
     def test_the_gp_localisation_caveat_is_mandatory_and_reachable(self) -> None:
@@ -1451,17 +1466,25 @@ class TestPlottingSurface:
 
 
 class TestDerivedGroups:
+    def test_posterior_predictive_replicates_are_declared_but_not_implemented(self) -> None:
+        # The one derived group W2.7 deliberately left alone: it lands beside
+        # plot_posterior_predictive, which is not this item's to write.
+        with pytest.raises(NotImplementedError, match="Phase 2"):
+            add_posterior_predictive(None, joint_problem())
+
     @pytest.mark.parametrize(
         "call",
         [
-            lambda: add_posterior_predictive(None, joint_problem()),
             lambda: add_residuals(None, joint_problem()),
             lambda: gp_localisation(None, joint_problem()),
         ],
-        ids=["posterior_predictive", "residuals", "gp_localisation"],
+        ids=["residuals", "gp_localisation"],
     )
-    def test_declared_but_not_implemented(self, call: Any) -> None:
-        with pytest.raises(NotImplementedError, match="Phase 2"):
+    def test_the_landed_derived_groups_refuse_a_run_they_cannot_check(self, call: Any) -> None:
+        # W2.7 implemented both. Handed something that is not a run, they say
+        # so — deriving a residual against the wrong problem is undetectable
+        # downstream, so the provenance check comes before the arithmetic.
+        with pytest.raises(ResultsError, match="provenance"):
             call()
 
     def test_they_are_absent_from_a_default_emission(self) -> None:

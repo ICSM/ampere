@@ -34,10 +34,19 @@ Two obligations that are contract, not style
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Sequence
 from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
+import scipy.stats as st
+
+from ampere.core.exceptions import ResultsError
+
+from . import _plotting as _p
+from .derived import GP_LOCALISATION_GROUP, RESIDUALS_GROUP
+from .diagnostics import residual_whiteness
+from .provenance import ATTR_PREFIX
 
 __all__ = [
     "GP_LOCALISATION_CAVEAT",
@@ -206,8 +215,100 @@ def plot_residuals(
     for whiteness is close to circular. This function is therefore required to
     warn when the run's likelihood provenance says a GP was fitted, and to point
     at :func:`plot_gp_localisation` instead.
+
+    Each dataset gets a residual panel — the across-draw median with a 68 %
+    band, on the data's own coordinate axis, masked samples left as gaps — and,
+    unless ``whiteness=False``, a second panel holding the separation-binned
+    autocorrelation with its permutation envelope and the ``(Q, p)`` the test
+    reports. The statistic is defined in :mod:`ampere.results.diagnostics`;
+    ``**kwargs`` are its knobs (``bins``, ``n_permutations``, ``max_separation``,
+    ``max_draws``, ``seed``), so the figure and the number can never disagree
+    about what was computed.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+        With :func:`~ampere.results.figure_metadata` carrying each dataset's
+        ``(statistic, p_value)``, so a caller reading numbers off the figure
+        does not have to re-run the test to get them.
     """
-    raise NotImplementedError(f"plot_residuals is not implemented yet. {_PHASE_2}")
+    group = _p.require_group(
+        tree,
+        RESIDUALS_GROUP,
+        remedy="call ampere.results.add_residuals(tree, problem) first, which derives the "
+        "signed standardised residuals from the stored draws and the problem "
+        "(results.md §7).",
+    )
+    available = [str(name) for name in group.data_vars]
+    labels = _p.select_datasets(available, datasets, what=RESIDUALS_GROUP)
+    fitted_with_gp = [label for label in labels if label in _p.gp_datasets(tree)]
+    if fitted_with_gp:
+        warnings.warn(
+            f"dataset(s) {sorted(fitted_with_gp)} were fitted with a Gaussian-process noise "
+            f"model, and diagnostics.md §3.1 scopes the residual-whiteness family to "
+            f"standard-likelihood fits: a GP-augmented fit's residuals are whitened by "
+            f"construction, so testing them for whiteness is close to circular. The question "
+            f"'where is this model deficient?' is answered for a GP fit by "
+            f"ampere.results.plot_gp_localisation instead.",
+            UserWarning,
+            stacklevel=2,
+        )
+    panels = 2 if whiteness else 1
+    figure, axes = _p.new_axes(nrows=panels * len(labels))
+    for index, label in enumerate(labels):
+        axis_name, coordinates = _p.coordinate_of(group, label)
+        coordinate_unit, value_unit = _p.dataset_units(tree, label, axis_name)
+        values = np.asarray(group[label].values, dtype=float)
+        flat = values.reshape(-1, values.shape[-1])
+        panel = axes[panels * index]
+        with warnings.catch_warnings():
+            # An all-masked sample is NaN in every draw by construction; that is
+            # a gap in the plot, not a numerical problem worth a warning.
+            warnings.simplefilter("ignore", RuntimeWarning)
+            centre = np.nanmedian(flat, axis=0)
+            lower = np.nanpercentile(flat, 16.0, axis=0)
+            upper = np.nanpercentile(flat, 84.0, axis=0)
+        panel.axhline(0.0, color="0.6", linewidth=0.8)
+        panel.fill_between(coordinates, lower, upper, alpha=0.3, label="68 % of draws")
+        panel.plot(coordinates, centre, marker=".", linewidth=1.0, label="posterior median")
+        panel.set_xlabel(_p.axis_label(axis_name, coordinate_unit))
+        panel.set_ylabel(
+            "standardised residual"
+            if int(group.attrs.get(f"{ATTR_PREFIX}standardised", 1))
+            else _p.axis_label("residual", value_unit)
+        )
+        panel.set_title(f"{label}: signed residuals")
+        panel.legend(loc="best", fontsize="small")
+        if not whiteness:
+            continue
+        test = residual_whiteness(tree, dataset=label, **kwargs)
+        _draw_whiteness(axes[panels * index + 1], test, coordinate_unit)
+        _p.attach_metadata(figure, f"{label}.whiteness_statistic", f"{test.statistic:.6g}")
+        _p.attach_metadata(figure, f"{label}.whiteness_p_value", f"{test.p_value:.6g}")
+    figure.tight_layout()
+    return figure
+
+
+def _draw_whiteness(panel: Any, test: Any, coordinate_unit: str) -> None:
+    """The autocorrelation panel: rho_b, its pair counts, and the verdict.
+
+    The permutation resolution is drawn on the caption rather than implied: a
+    p-value of ``1 / (1 + n_permutations)`` is the *floor*, not evidence of
+    extraordinary structure, and a reader who cannot see how many permutations
+    were run cannot tell the two apart.
+    """
+    panel.axhline(0.0, color="0.6", linewidth=0.8)
+    width = float(np.min(np.diff(test.separations))) * 0.6 if test.separations.size > 1 else None
+    panel.bar(test.separations, test.autocorrelation, width=width, alpha=0.7)
+    panel.set_xlabel(_p.axis_label("separation", coordinate_unit))
+    panel.set_ylabel("binned autocorrelation")
+    verdict = "structure detected" if test.p_value < 0.05 else "consistent with white"
+    panel.set_title(
+        f"{test.dataset}: Q = {test.statistic:.3g}, p = {test.p_value:.3g} — {verdict} "
+        f"({test.n_permutations} permutations, floor p = {test.resolution:.3g}; "
+        f"{test.n_pairs} pairs, {test.n_draws} draw(s))",
+        fontsize="small",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -236,6 +337,11 @@ def plot_gp_localisation(
     must still leave the caveat on the returned figure's metadata and in this
     function's own docstring, and only suppresses the drawn annotation.
 
+    The band combines both sources of uncertainty by the law of total variance
+    — the mean of the conditional variances plus the variance of the
+    conditional means across draws — because either alone understates what the
+    posterior actually says about the GP's amplitude here.
+
     Caveat rendered on every such plot
     ----------------------------------
     A large fitted GP amplitude localises where the model is deficient; it does
@@ -245,7 +351,53 @@ def plot_gp_localisation(
     the kernel's smooth global component is under-amplitude and compensating
     locally. See :data:`GP_LOCALISATION_CAVEAT`.
     """
-    raise NotImplementedError(f"plot_gp_localisation is not implemented yet. {_PHASE_2}")
+    if not 0.0 < band < 1.0:
+        raise ResultsError(f"band is a credible-interval mass in (0, 1), got {band!r}.")
+    group = _p.require_group(
+        tree,
+        GP_LOCALISATION_GROUP,
+        remedy="call ampere.results.gp_localisation(tree, problem) first, which evaluates "
+        "Likelihood.conditional across the stored draws (results.md §7).",
+    )
+    available = sorted({str(name).rsplit("_", 1)[0] for name in group.data_vars})
+    labels = _p.select_datasets(available, datasets, what=GP_LOCALISATION_GROUP)
+    figure, axes = _p.new_axes(nrows=len(labels))
+    z = float(st.norm.ppf(0.5 + band / 2.0))
+    for index, label in enumerate(labels):
+        axis_name, coordinates = _p.coordinate_of(group, f"{label}_mean")
+        coordinate_unit, value_unit = _p.dataset_units(tree, label, axis_name)
+        means = np.asarray(group[f"{label}_mean"].values, dtype=float)
+        variances = np.asarray(group[f"{label}_variance"].values, dtype=float)
+        flat_mean = means.reshape(-1, means.shape[-1])
+        flat_variance = variances.reshape(-1, variances.shape[-1])
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            centre = np.nanmedian(flat_mean, axis=0)
+            total = np.nanmean(flat_variance, axis=0) + np.nanvar(flat_mean, axis=0)
+        spread = z * np.sqrt(np.clip(total, 0.0, None))
+        panel = axes[index]
+        panel.axhline(0.0, color="0.6", linewidth=0.8)
+        panel.fill_between(
+            coordinates,
+            centre - spread,
+            centre + spread,
+            alpha=0.3,
+            label=f"{band:.0%} credible band",
+        )
+        panel.plot(coordinates, centre, linewidth=1.2, label="conditioned GP mean")
+        panel.set_xlabel(_p.axis_label(axis_name, coordinate_unit))
+        panel.set_ylabel(_p.axis_label("GP mean", value_unit))
+        panel.set_title(f"{label}: GP localisation")
+        panel.legend(loc="best", fontsize="small")
+    # The caveat travels with the figure whatever the caller asked for. Only the
+    # drawn annotation is optional — diagnostics.md §4.3's "a caption a user can
+    # silently crop out of a screenshot is not durable protection".
+    _p.attach_metadata(figure, "gp_localisation_caveat", GP_LOCALISATION_CAVEAT)
+    figure.tight_layout()
+    if show_caveat:
+        figure.subplots_adjust(bottom=0.28)
+        figure.text(0.01, 0.01, _p.wrap(GP_LOCALISATION_CAVEAT), fontsize="x-small", va="bottom")
+    return figure
 
 
 def plot_anomaly_score(
@@ -267,8 +419,88 @@ def plot_anomaly_score(
     ``show_provenance=False`` is not permitted to suppress them when two scores
     of different provenance are drawn together.
 
+    "Drawn together" means "on one axes", and only the axes can know: the
+    second call cannot see the first call's arguments. So the axes keeps the
+    record, and the moment a second provenance lands on it the labels come back
+    on — **for both scores**, including the one already drawn under
+    ``show_provenance=False``.
+
     This function deliberately does not import :mod:`ampere.diagnostics`: family
     A's namespace carries a JAX dependency, and rendering a score somebody hands
     over must not drag it in.
+
+    Parameters
+    ----------
+    score
+        Anything matching :class:`AnomalyScoreLike` —
+        :class:`ampere.core.AnomalyScore` or a caller's own shape.
+    ax
+        Draw on this axes rather than a new figure. Passing the same axes twice
+        is how two scores are compared, and is what triggers the rule above.
+    show_provenance
+        Draw the provenance label and the interpretation notes. Ignored — with
+        a warning — as soon as the axes holds two provenances.
+    **kwargs
+        Forwarded to the line artist.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+        The axes drawn on, with :func:`~ampere.results.figure_metadata` on its
+        figure carrying every drawn score's provenance and interpretation
+        notes, whatever ``show_provenance`` was.
     """
-    raise NotImplementedError(f"plot_anomaly_score is not implemented yet. {_PHASE_2}")
+    if not isinstance(score, AnomalyScoreLike):
+        raise ResultsError(
+            f"plot_anomaly_score needs an AnomalyScoreLike — coordinates, values, mask, "
+            f"provenance and interpretation_notes — and got a {type(score).__name__}. "
+            f"ampere.core.AnomalyScore is the class; anything with those attributes will do."
+        )
+    coordinates = np.asarray(score.coordinates, dtype=float)
+    if coordinates.ndim == 2 and coordinates.shape[1] != 1:
+        raise ResultsError(
+            f"this renderer draws a 1-D deficiency map, and the score is indexed by "
+            f"{coordinates.shape[1]} coordinates. Multi-axis and gridded scores are the Phase 5 "
+            f"staging (diagnostics.md §9 limitation 1)."
+        )
+    coordinates = coordinates.reshape(coordinates.shape[0])
+    values = np.asarray(score.values, dtype=float)
+    mask = None if score.mask is None else np.asarray(score.mask, dtype=bool)
+    drawn = np.where(mask, np.nan, values) if mask is not None else values
+
+    figure, axes = _p.new_axes(ax)
+    panel = axes[0]
+    line = panel.plot(coordinates, drawn, linewidth=1.2, **kwargs)[0]
+    fill = panel.fill_between(coordinates, 0.0, np.nan_to_num(drawn), alpha=0.25)
+    on_axes = _p.register_score(panel, score.provenance, [line, fill])
+    provenances = _p.distinct_provenances(on_axes)
+    forced = len(provenances) > 1
+    if forced and not show_provenance:
+        warnings.warn(
+            "show_provenance=False was ignored: this axes now holds anomaly scores of "
+            f"{len(provenances)} different provenances {list(provenances)}, and diagnostics.md "
+            "§5 does not permit two differently-computed scores to be drawn together without "
+            "their provenance shown — the shared visual grammar would otherwise imply a "
+            "comparability the statistics do not have.",
+            UserWarning,
+            stacklevel=2,
+        )
+    if show_provenance or forced:
+        for provenance, artists in on_axes:
+            artists[0].set_label(provenance)
+        panel.legend(loc="best", fontsize="small", title="provenance")
+    panel.set_ylabel("anomaly score (higher = worse)")
+    panel.set_xlabel("coordinate")
+    if float(np.nanmin(values)) >= 0.0:
+        panel.set_ylim(bottom=0.0)
+    # Whatever was drawn, the notes reach a programmatic consumer.
+    _p.attach_metadata(figure, f"anomaly_score.{score.provenance}", score.interpretation_notes)
+    if show_provenance or forced:
+        notes = "\n\n".join(
+            f"{provenance}: {score.interpretation_notes}"
+            if provenance == score.provenance
+            else provenance
+            for provenance in provenances
+        )
+        panel.set_title(_p.wrap(notes, width=110), fontsize="xx-small", loc="left")
+    return panel

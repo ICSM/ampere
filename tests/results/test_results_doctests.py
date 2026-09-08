@@ -21,6 +21,7 @@ import pytest
 pytest.importorskip("arviz", reason="the results contract's examples need ampere[arviz]")
 
 import ampere.results.derived
+import ampere.results.diagnostics
 import ampere.results.emission
 import ampere.results.exceptions
 import ampere.results.plots
@@ -61,8 +62,9 @@ def test_results_spec_examples_run() -> None:
         ampere.results.serialisation,
         ampere.results.plots,
         ampere.results.exceptions,
+        ampere.results.diagnostics,
     ],
-    ids=["provenance", "serialisation", "plots", "exceptions"],
+    ids=["provenance", "serialisation", "plots", "exceptions", "diagnostics"],
 )
 def test_module_docstring_examples_run(module: object) -> None:
     results = doctest.testmod(module, optionflags=OPTIONS, verbose=False)  # type: ignore[arg-type]

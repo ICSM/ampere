@@ -25,6 +25,12 @@ The contract is ``docs/design/contracts/results.md``. In outline:
 ``derived``
     The groups a run does *not* store by default (posterior-predictive
     replicates, signed residuals) and the documented rule for computing them.
+``diagnostics``
+    ``diagnostics.md``'s post-fit families, as numbers rather than pictures:
+    family B's separation-binned, permutation-calibrated residual-whiteness
+    test and its chi-square posterior-predictive p-value, and family C's
+    conversion of the conditioned GP mean into the shared
+    :class:`~ampere.core.AnomalyScore`.
 ``plots``
     The plotting surface, including ``diagnostics.md``'s families B and C.
 
@@ -50,6 +56,7 @@ with a bare ``ModuleNotFoundError`` from three frames down.
 
 from __future__ import annotations
 
+from ._plotting import figure_metadata
 from .derived import (
     GP_LOCALISATION_GROUP,
     POINTWISE_LOG_LIKELIHOOD_GROUP,
@@ -58,6 +65,17 @@ from .derived import (
     add_posterior_predictive,
     add_residuals,
     gp_localisation,
+)
+from .diagnostics import (
+    GP_LOCALISATION_PROVENANCE,
+    WHITENESS_STREAM,
+    ChiSquareCheck,
+    WhitenessTest,
+    chi_square_pvalue,
+    gp_localisation_datasets,
+    gp_localisation_score,
+    residual_whiteness,
+    separation_binned_autocorrelation,
 )
 from .emission import (
     CHAIN_DIM,
@@ -125,6 +143,7 @@ __all__ = [
     "DRAW_DIM",
     "GP_LOCALISATION_CAVEAT",
     "GP_LOCALISATION_GROUP",
+    "GP_LOCALISATION_PROVENANCE",
     "LOG_LIKELIHOOD_DECOMPOSITION",
     "LOG_LIKELIHOOD_GROUP",
     "OBSERVED_DATA_GROUP",
@@ -134,13 +153,17 @@ __all__ = [
     "PROVENANCE_SCHEMA_VERSION",
     "RESIDUALS_GROUP",
     "SAMPLE_STATS_GROUP",
+    "WHITENESS_STREAM",
     "AnomalyScoreLike",
+    "ChiSquareCheck",
     "DrawRecorder",
     "ResultsError",
+    "WhitenessTest",
     "add_posterior_predictive",
     "add_residuals",
     "buffer_fingerprint",
     "canonical_json",
+    "chi_square_pvalue",
     "container_fingerprint",
     "container_from_dict",
     "container_to_dict",
@@ -148,9 +171,12 @@ __all__ = [
     "describe_likelihood",
     "digest",
     "emit",
+    "figure_metadata",
     "from_netcdf",
     "gp_localisation",
     "gp_localisation_caveat",
+    "gp_localisation_datasets",
+    "gp_localisation_score",
     "hash_array",
     "hash_container",
     "hash_of",
@@ -171,6 +197,8 @@ __all__ = [
     "provenance_attrs",
     "register_kind",
     "registered_kinds",
+    "residual_whiteness",
+    "separation_binned_autocorrelation",
     "spec_hashes",
     "to_netcdf",
     "training_pair_to_dict",
