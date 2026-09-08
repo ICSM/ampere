@@ -58,10 +58,23 @@ consulted with, and the id of this backend's conformance fixture.
 
 Precision and device
 --------------------
-float64, on the CPU, threaded explicitly through every construction;
-``torch.set_default_dtype`` is **never** called, because it is global mutable
-process state (``lowering.md`` §10.1). GPU execution and batching are W2.4
-slice 2 and are declared ``False``/``"cpu"`` honestly until they exist.
+float64, on the CPU by default, threaded explicitly through every
+construction; ``torch.set_default_dtype`` is **never** called, because it is
+global mutable process state (``lowering.md`` §10.1).
+
+**Since W2.4 slice 3 the device is a per-instance choice.** Every model,
+instrument step, kernel, noise model and solver here takes a ``device=``
+keyword beside its ``dtype=``, defaults to ``"cpu"``, and reports what it was
+given back as its own ``DEVICE`` capability flag — an instance attribute
+shadowing the class default, which is all
+:func:`~ampere.core.declared_capabilities` needs, since it reads
+``part.DEVICE``. So a whole problem is composed on one named device or refused
+at composition with both devices named, ``.to(...)`` moves a piece's buffers
+and re-declares it, and nothing is ever auto-detected: a machine with a GPU
+present takes CI's path unless a caller says otherwise (``architecture.md``
+§5). ``tests/gpu/`` is the API-level proof, skipped without CUDA;
+``tests/backends/test_torch_device.py`` proves the declaration and composition
+rules on the CPU, using ``torch.device("meta")`` as a stand-in second device.
 
 How far differentiability reaches — and how W2.13 closed the gap
 -----------------------------------------------------------------
@@ -123,6 +136,24 @@ What slice 2 added
   ``provenance_config()`` and deliberately absent from the spec hash.
 * **variational inference** through :class:`ampere.inference.VIEngine`, which
   reaches this backend the same way ``NUTSEngine`` does.
+
+What slice 3 added
+------------------
+* the **per-instance device** described above, and the GPU smoke suite;
+* **``complex_gaussian``**: the circular complex Gaussian, transcribed into
+  :mod:`ampere.backends.torch._families` and composing in the realised path
+  with complex tensors end to end. Its *correlated* form — the circular
+  complex GP, which ``likelihoods.md`` §4 declares analytic — is refused by
+  name, because ``ampere.core`` declares ``GP_ANALYTIC_IMPLEMENTED = False``
+  and refuses it first: a realisation with no numpy oracle would be this
+  backend inventing a likelihood. Phase 4 implements both together.
+* the last **``sigma_tensor`` consumer gap**: a noise model that overrides
+  ``sigma`` without supplying the native hook used to fall back silently to
+  the base quadrature in the realised density — a different likelihood from
+  the contract path's, arrived at without a word. It is refused by name now,
+  and ``|predicted|`` is taken as a modulus rather than through a float cast,
+  so a complex prediction inflates by its amplitude rather than by the
+  magnitude of its real part.
 
 Examples
 --------
