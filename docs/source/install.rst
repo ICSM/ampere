@@ -11,6 +11,11 @@ clone.
    modelling package). ``pip install ampere`` will install **that**, not this.
    Install from the repository.
 
+   Ampere's own docstrings and its ``OptionalDependencyError`` messages name
+   extras in the short form — ``pip install "ampere[jax]"`` — because that is
+   what they will be once ampere is published. Until then, read them as
+   ``pip install -e ".[jax]"`` from your clone.
+
 .. code-block:: console
 
     $ git clone https://github.com/ICSM/ampere.git
