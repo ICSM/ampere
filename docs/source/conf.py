@@ -65,13 +65,98 @@ exclude_patterns = ['pyphot*', 'test*', "old*"]
 #
 html_theme = 'alabaster'
 
-# Add any paths that contain custom static files (such as style sheets) here,
-# relative to this directory. They are copied after the builtin static files,
-# so a file named "default.css" will overwrite the builtin "default.css".
-html_static_path = ['_static']
+# No custom static files. This entry was `['_static']`, a directory that has
+# never existed in this repository, so every build emitted
+# "html_static_path entry '_static' does not exist" (W2.15). Restore the entry
+# together with the directory, when there is a stylesheet to put in it.
+html_static_path = []
 
 
-autodoc_mock_imports = ['bs4', 'requests', 'astropy', 'emcee']
+# -- autodoc: what is faked, and why (W2.15) ---------------------------------
+#
+# The documentation is built in the `dev` environment, which deliberately
+# carries neither the `torch` nor the `jax` extra (pyproject.toml's
+# [tool.pixi.environments]; `architecture.md` §4 rule 2 is why -- `dev` must
+# never resolve either array library). A backend subpackage is the one place
+# in ampere that imports its array library at module top level, so without
+# mocks `ampere.backends.torch` and `ampere.backends.jax` cannot be imported
+# here at all, and their API pages would be two autodoc "failed to import"
+# warnings rather than documentation.
+#
+# The alternative -- rendering those two pages only under
+# `pixi run -e torch docs` / `pixi run -e jax docs`, with a "needs the extra"
+# note otherwise -- was rejected. No single environment has both libraries, so
+# the *published* site, which CI builds in `dev`, would then carry no API
+# reference at all for the two flagship Phase 2 backends. Mocking costs
+# nothing here, because these pages document signatures and docstrings rather
+# than runtime values.
+#
+# `bs4`, `requests`, `astropy` and `emcee` used to be on this list and are all
+# gone. astropy and emcee are base dependencies and genuinely installed, and
+# mocking an installed package replaces it wholesale -- which would have
+# rendered `ampere.core`'s astropy.units-typed signatures as mock objects the
+# moment those pages existed; bs4 and requests are imported nowhere in the
+# package.
+autodoc_mock_imports = [
+    'torch',
+    'pyro',
+    'jax',
+    'jaxlib',
+    'numpyro',
+    'equinox',
+]
+
+
+def _teach_mock_unary_operators() -> None:
+    """Let a mocked module's attributes survive a unary ``-``.
+
+    Sphinx's mock object implements ``__getattr__``, ``__getitem__`` and
+    ``__call__`` but no numeric protocol, so a module-level constant such as
+    ``ampere/backends/jax/parameters.py``'s ``_NEGATIVE_INFINITY = -jnp.inf``
+    raises ``TypeError`` at import time under mocks and takes the whole jax
+    API page down with it. Absorbing the three unary operators is enough, and
+    it belongs here rather than in the package: nothing in `ampere` should be
+    shaped by how its documentation happens to be built.
+
+    The class is private to Sphinx, so this is best-effort and guarded. If a
+    future Sphinx moves it, the jax page degrades to the import warning it
+    would have had anyway rather than breaking the build.
+    """
+    import importlib
+
+    for module_name in (
+        'sphinx.ext.autodoc._dynamic._mock',  # Sphinx >= 9
+        'sphinx.ext.autodoc.mock',  # Sphinx < 9
+    ):
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        mock_object = getattr(module, '_MockObject', None)
+        if mock_object is None:
+            continue
+        for operator in ('__neg__', '__pos__', '__abs__'):
+            if not hasattr(mock_object, operator):
+                setattr(mock_object, operator, lambda self: self)
+        return
+
+
+_teach_mock_unary_operators()
+
+# Methods and attributes in the order their module declares them. The new
+# namespaces' `__all__` lists are already alphabetical, so this only affects
+# the inside of a class, where the order it was written in is the order it is
+# meant to be read in.
+autodoc_member_order = 'bysource'
+
+# Render a numpydoc `Attributes` section as `:ivar:` fields rather than as
+# standalone `.. attribute::` directives (W2.15). Without this, every
+# documented dataclass field and every property that is also listed in its
+# class's Attributes section is described twice -- once by napoleon and once
+# by autodoc -- which Sphinx reports as "duplicate object description of ...".
+# The v2 namespaces document their dataclasses that way throughout, so this
+# accounts for several dozen warnings on its own.
+napoleon_use_ivar = True
 
 # W2.11: notebooks are rendered from what they contain; the docs build never
 # executes them. nbsphinx's default ('auto') executes any notebook with no

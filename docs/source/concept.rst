@@ -32,14 +32,16 @@ to mis-specification, and get less-biased posterior estimates of the parameters 
    will still break your inference, in this case by increasing the correlated noise component to arbitrary large levels so that the likelihood remains
    reasonable, just like a sufficiently energetic earthquake will bring down any building.
 
+AMPERE achieves this by modelling the covariance matrix of the data as the sum of the identity matrix and an additional correlation matrix [#1]_, all multiplied by the variances of the data.
+The correlation matrix is composed from a set of *stationary* kernel functions, as in a Gaussian Process.
+This provides a high degree of flexibility in the types of noise that get generated, without adding large numbers of additional free parameters.
 
- 
- AMPERE achieves this modelling the covariance matrix of the data as the sum of the identity matrix and an additional correlation matrix [#1]_, all multiplied by the variances of the data.
- The correlation matrix is composed from a set of *stationary* kernel functions, as in a Gaussian Process.
- This provides a high degree of flexibility in the types of noise that get generated, without adding large numbers of additional free parameters.
+The default kernel is Matérn-3/2 rather than the squared exponential more familiar from the Gaussian-process literature, for two independent reasons.
+A Matérn-3/2 sample path is once differentiable rather than analytic, which is a better description of a real model deficiency than infinite smoothness.
+And it is *exactly* quasiseparable, which is what makes :class:`ampere.core.QuasisepGP` an **exact** O(N) solve rather than an approximation - the difference between fitting two hundred points and fitting twenty thousand.
 
- A more detailed mathematical description will be added soon!
+:doc:`m2_misspecification` measures all of this on a controlled problem, and :doc:`overview` shows how to compose it.
 
+.. rubric:: Footnotes
 
- .. rubric:: Footnotes
- ..  [#1] This effectively separates the noise into a correlated and an uncorrelated component.
+.. [#1] This effectively separates the noise into a correlated and an uncorrelated component.
