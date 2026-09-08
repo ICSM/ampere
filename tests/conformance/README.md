@@ -355,22 +355,22 @@ Added at the freeze (W1.13):
   Backends are free to differ here, and the row is what keeps a *wrong*
   implementation from passing for either choice.
 
-  **All three implemented solvers have now made that choice** (W2.5 slice 2
-  completes the entry). `ampere.core.QuasisepGP` refuses;
-  `ampere.backends.torch.QuasisepGP` supplies the terms;
-  `ampere.backends.jax.QuasisepGP` **refuses**, and the reason is worth
-  recording rather than leaving as a gap, because it is not the same reason
-  the numpy path gives. The jax solver goes through `celerite2.jax`'s public
-  `GaussianProcess`, whose surface is `log_likelihood`, `apply_inverse`,
-  `dot_tril`, `predict`, `condition` and `sample`: the two members that could
-  give the diagonal form the cross-covariance densely and cost O(N·M), and the
-  O(N) route would need the private `_d`/`_W` — the coupling the torch backend
-  already pays for and tests, and which would be a *new* coupling here. The
-  alternative was measured rather than assumed: tinygp's quasiseparable factor
-  exposes the diagonal exactly (`L.inv().transpose() @ L.inv()`, matching a
-  dense inverse to 7e-15), and tinygp was rejected on a factor of 200 in the
-  marginal likelihood itself. So the debt is closed as a *statement* — every
-  shipped solver either supplies the terms or refuses by name, and the row
-  asserts exactly that — with one open path recorded: a jax
-  `conditional_loo` becomes cheap the day this backend calls celerite2's
-  kernels directly, as torch does.
+  **All three implemented solvers have now made that choice.** Slice 2 left
+  `ampere.backends.jax.QuasisepGP` refusing, and recorded the one open path
+  that would change the answer: "a jax `conditional_loo` becomes cheap the day
+  this backend calls celerite2's kernels directly, as torch does". **W2.5
+  slice 3 took that path**, and it turned out to need no private attribute at
+  all — `celerite2.jax.ops` is the public entry point to the very kernels
+  `celerite2.backprop` exposes to the torch backend, so `factor` hands over
+  `d` and `W` beside the term's own `c` and `U`, and the O(N) backward
+  recursion W2.4 slice 2 derived transcribes into one `jax.lax.scan`. So the
+  standing position is: `ampere.core.QuasisepGP` **refuses** (the numpy path's
+  circumstances are unchanged — its public interface still exposes no route to
+  the diagonal, and it does not call the compiled kernels itself), while both
+  differentiable backends **supply the terms** and are checked against
+  `DenseGP` at `tolerances.cross_solver`. Backends remain free to differ here;
+  the row is what keeps a *wrong* implementation from passing for either
+  choice. tinygp, whose factor exposes the diagonal exactly
+  (`L.inv().transpose() @ L.inv()`, matching a dense inverse to 7e-15), is
+  still not needed: it was rejected on a factor of 200 in the marginal
+  likelihood, and that argument is untouched.

@@ -80,12 +80,14 @@ from ampere.backends.jax import (  # noqa: E402
     lower_bijection,
     lower_problem,
 )
+from ampere.backends.jax._declare import as_parameter  # noqa: E402
 from ampere.backends.jax.distributions import has_native_icdf, lower_prior  # noqa: E402
 from ampere.backends.jax.families import lower_family  # noqa: E402
 from ampere.backends.jax.rng import fold, key  # noqa: E402
 from ampere.core import (  # noqa: E402
     CauchyFamily,
     Censoring,
+    ComplexGaussianFamily,
     Dataset,
     DatasetCollection,
     FittingProblem,
@@ -100,11 +102,15 @@ from ampere.core import (  # noqa: E402
     Likelihood,
     Log,
     Logit,
+    Model,
+    ModelResult,
     Parameter,
     ParameterSet,
     Plate,
     Spectrum,
     Tie,
+    VisibilitySet,
+    negotiate,
 )
 from ampere.core.exceptions import LoweringError  # noqa: E402
 from ampere.core.parameter import describe_prior  # noqa: E402
@@ -1171,15 +1177,97 @@ class TestTheQuasiseparableSolver:
         with pytest.raises(LikelihoodError, match="no exact celerite representation"):
             QuasisepGP().check_compatible(Undeclared(0.4, 2.0), _quasisep_observed())
 
-    def test_the_leave_one_out_terms_are_refused_naming_what_is_missing(self) -> None:
-        """The deferral, restated on this backend and for the same reason."""
+    def test_the_leave_one_out_terms_agree_with_the_dense_closed_form(self) -> None:
+        """The refusal is lifted (W2.5 slice 3), and this is what replaces it.
+
+        ``DenseGP.conditional_loo`` forms ``(K + diag)**-1`` explicitly and
+        reads its diagonal; this one accumulates the same diagonal backwards
+        through the semiseparable inverse in O(N), over ``celerite2.jax.ops``'s
+        own ``factor``. Nothing but agreement would show that the accumulation
+        is right — a wrong ``A_ii`` is still finite, still per-sample and still
+        looks exactly like a leave-one-out term.
+        """
+        kernel = Matern32(0.4, 2.0)
+        values = kernel.resolve(None)
+        got = QuasisepGP().conditional_loo(
+            kernel, QUASISEP_GRID, QUASISEP_RESIDUAL, QUASISEP_VARIANCE, values
+        )
+        expected = DenseGP().conditional_loo(
+            kernel, QUASISEP_GRID, QUASISEP_RESIDUAL, QUASISEP_VARIANCE, values
+        )
+        assert got.shape == expected.shape
+        assert got == pytest.approx(expected, abs=1e-8)
+
+    def test_the_leave_one_out_terms_survive_unsorted_coordinates(self) -> None:
+        """The permutation is undone on the way out, as it is for the density."""
+        rng = np.random.default_rng(19)
+        coordinates = rng.uniform(0.0, 12.0, 45)
+        residual = rng.normal(0.0, 0.3, 45)
+        variance = np.full(45, 0.04)
+        kernel = Matern32(0.4, 2.0)
+        values = kernel.resolve(None)
+        assert QuasisepGP().conditional_loo(
+            kernel, coordinates, residual, variance, values
+        ) == pytest.approx(
+            DenseGP().conditional_loo(kernel, coordinates, residual, variance, values), abs=1e-8
+        )
+
+    def test_the_leave_one_out_terms_honour_the_jitter(self) -> None:
+        """The jitter is part of the matrix, so both solvers must add it."""
+        kernel = Matern32(0.4, 2.0)
+        values = kernel.resolve(None)
+        assert QuasisepGP(jitter=0.05).conditional_loo(
+            kernel, QUASISEP_GRID, QUASISEP_RESIDUAL, QUASISEP_VARIANCE, values
+        ) == pytest.approx(
+            DenseGP(jitter=0.05).conditional_loo(
+                kernel, QUASISEP_GRID, QUASISEP_RESIDUAL, QUASISEP_VARIANCE, values
+            ),
+            abs=1e-8,
+        )
+
+    def test_a_single_sample_is_the_degenerate_case_and_is_still_right(self) -> None:
+        """N = 1 has no recursion at all; the scan would have nothing to scan."""
+        kernel = Matern32(0.4, 2.0)
+        values = kernel.resolve(None)
+        one = np.array([2.0])
+        assert QuasisepGP().conditional_loo(
+            kernel, one, np.array([0.3]), np.array([0.04]), values
+        ) == pytest.approx(
+            DenseGP().conditional_loo(kernel, one, np.array([0.3]), np.array([0.04]), values),
+            abs=1e-10,
+        )
+
+    def test_a_diagonal_that_cannot_be_a_covariance_is_refused(self) -> None:
+        """The contract path's preconditions apply here too."""
         from ampere.core.exceptions import LikelihoodError
 
         kernel = Matern32(0.4, 2.0)
-        with pytest.raises(LikelihoodError, match=r"O\(N\) route"):
+        broken = QUASISEP_VARIANCE.copy()
+        broken[3] = -1.0
+        with pytest.raises(LikelihoodError, match="negative entries"):
             QuasisepGP().conditional_loo(
-                kernel, QUASISEP_GRID, QUASISEP_RESIDUAL, QUASISEP_VARIANCE, kernel.resolve(None)
+                kernel, QUASISEP_GRID, QUASISEP_RESIDUAL, broken, kernel.resolve(None)
             )
+
+    def test_the_pointwise_group_can_now_be_emitted_under_this_solver(self) -> None:
+        """What lifting the refusal actually buys (``results.md`` §6).
+
+        ``add_pointwise_log_likelihood`` refuses by name under a solver with no
+        ``conditional_loo`` and never falls back to a dense solve. Under this
+        one it no longer has to.
+        """
+        kernel = Matern32(0.4, 2.0)
+        likelihood = Likelihood(GaussianFamily(), GaussianProcessNoise(kernel, QuasisepGP()))
+        observed = _quasisep_observed()
+        predicted = Spectrum(
+            QUASISEP_GRID * u.micron,
+            (np.asarray(observed.values) - QUASISEP_RESIDUAL) * u.Jy,
+        )
+        terms = likelihood.pointwise_log_prob(predicted, observed)
+        dense = Likelihood(
+            GaussianFamily(), GaussianProcessNoise(kernel, DenseGP())
+        ).pointwise_log_prob(predicted, observed)
+        assert terms == pytest.approx(dense, abs=1e-8)
 
     def test_provenance_records_which_library_produced_the_numbers(self) -> None:
         """``inference.md`` §10a fold-in 10, and the question an archive will ask.
@@ -1655,3 +1743,328 @@ class TestSyntheticPhotometryNatively:
 
         gradient = float(jax.grad(total)(jnp.asarray(1.0)))
         assert np.isfinite(gradient) and gradient != 0.0
+
+
+# ---------------------------------------------------------------------------
+# Per-instance ``device=`` (W2.5 slice 3)
+# ---------------------------------------------------------------------------
+
+
+class TestPerInstanceDevice:
+    """``architecture.md`` §5's placement rule, on every kind of piece.
+
+    Slice 2 gave the two GP solvers a ``device=`` ``InitVar``. Slice 3 extends
+    the same shape to the models, the instrument steps, the kernels and the
+    noise models, because the flag is only useful if *every* part declares it:
+    ``ampere.core.declared_capabilities`` aggregates ``DEVICE`` as "all parts
+    agree or refuse", so one part that could not say where it computed would
+    make that agreement unenforceable.
+    """
+
+    def _pieces(self) -> dict[str, Any]:
+        grid = np.linspace(1.0, 5.0, 6)
+        return {
+            "PowerLaw": PowerLaw(grid),
+            "Matern32": Matern32(0.4, 2.0),
+            "CalibrationScale": CalibrationScale(1.0),
+            "DenseGP": DenseGP(),
+            "QuasisepGP": QuasisepGP(),
+            "IndependentNoise": IndependentNoise(),
+            "GaussianProcessNoise": GaussianProcessNoise(Matern32(0.4, 2.0), DenseGP()),
+        }
+
+    def test_every_piece_declares_the_cpu_by_default(self) -> None:
+        """Never auto-detected: the machine this runs on may well have a GPU."""
+        for name, piece in self._pieces().items():
+            assert piece.DEVICE == "cpu", name
+
+    def test_the_cpu_can_be_asked_for_by_name_on_every_piece(self) -> None:
+        grid = np.linspace(1.0, 5.0, 6)
+        asked = [
+            PowerLaw(grid, device="cpu"),
+            Matern32(0.4, 2.0, device="cpu"),
+            CalibrationScale(1.0, device="cpu"),
+            DenseGP(device="cpu"),
+            QuasisepGP(device="cpu"),
+            IndependentNoise(device="cpu"),
+            GaussianProcessNoise(Matern32(0.4, 2.0), DenseGP(), device="cpu"),
+        ]
+        assert [piece.DEVICE for piece in asked] == ["cpu"] * len(asked)
+
+    def test_a_device_this_process_lacks_is_refused_by_every_piece(self) -> None:
+        """Never a silent fallback, and the refusal names what is present.
+
+        The exception class follows the contract the piece belongs to — a model
+        or a step is ``ampere.core.transform``'s, a kernel, a noise model or a
+        solver is ``ampere.core.likelihood``'s — so the refusal reads like
+        every other refusal that piece can make.
+        """
+        from ampere.core.exceptions import LikelihoodError, TransformationError
+
+        grid = np.linspace(1.0, 5.0, 6)
+        absent = "definitely-not-a-platform"
+        for build, error in (
+            (lambda: PowerLaw(grid, device=absent), TransformationError),
+            (lambda: CalibrationScale(1.0, device=absent), TransformationError),
+            (lambda: Matern32(0.4, 2.0, device=absent), LikelihoodError),
+            (lambda: IndependentNoise(device=absent), LikelihoodError),
+            (
+                lambda: GaussianProcessNoise(Matern32(0.4, 2.0), DenseGP(), device=absent),
+                LikelihoodError,
+            ),
+            (lambda: DenseGP(device=absent), LikelihoodError),
+            (lambda: QuasisepGP(device=absent), LikelihoodError),
+        ):
+            with pytest.raises(error, match="no such platform"):
+                build()
+
+    def test_the_model_grids_are_placed_on_the_chosen_device(self) -> None:
+        """The flag is not merely a label: ``device_put`` actually ran."""
+        model = PowerLaw(np.linspace(1.0, 5.0, 6), device="cpu")
+        assert {d.platform for d in model.grid("default").devices()} == {"cpu"}
+
+    def test_a_negotiated_grid_stays_on_the_chosen_device(self) -> None:
+        """``compile_for`` rebuilds the jax grid, so it must place it too."""
+        model = PowerLaw(np.linspace(1.0, 5.0, 6), device="cpu")
+        instrument = Instrument([Resample(np.linspace(1.5, 4.5, 4))], channel="default")
+        compiled = model.compile_for(negotiate([instrument]))
+        assert {d.platform for d in compiled.grid("default").devices()} == {"cpu"}
+
+    def test_a_step_places_its_influence_matrix(self) -> None:
+        step = Resample(np.linspace(1.5, 4.5, 4), device="cpu")
+        matrix = step._influence_jax(np.linspace(1.0, 5.0, 6))
+        assert {d.platform for d in matrix.devices()} == {"cpu"}
+
+    def test_a_kernel_places_its_covariance(self) -> None:
+        grid = np.linspace(1.0, 5.0, 6)
+        kernel = Matern32(0.4, 2.0, device="cpu")
+        assert {d.platform for d in kernel.matrix(grid, grid, {}).devices()} == {"cpu"}
+        assert {d.platform for d in kernel.diagonal(grid, {}).devices()} == {"cpu"}
+
+    def test_a_problem_whose_pieces_disagree_about_the_device_is_refused(self) -> None:
+        """The reason the flag is per instance at all.
+
+        Faked by shadowing the flag on one solver, which is exactly what a real
+        ``device="cuda"`` does on a machine that has one — the refusal is the
+        same, and it happens at composition rather than inside a trace.
+        """
+        from ampere.core.exceptions import DatasetError
+
+        grid = np.linspace(1.0, 5.0, 6)
+        observed = Spectrum(grid * u.micron, np.ones(6) * u.Jy, uncertainty=np.full(6, 0.1) * u.Jy)
+        solver = DenseGP()
+        object.__setattr__(solver, "DEVICE", "cuda")
+        with pytest.raises(DatasetError, match="different devices"):
+            FittingProblem(
+                PowerLaw(grid, norm=st.lognorm(0.4, scale=2.0)),
+                [
+                    Dataset(
+                        observed,
+                        likelihood=Likelihood(
+                            GaussianFamily(),
+                            GaussianProcessNoise(Matern32(0.4, 2.0), solver),
+                        ),
+                    )
+                ],
+                seed=1,
+            )
+
+    def test_an_explicit_jax_device_is_taken_as_given(self) -> None:
+        """*Which* accelerator is the caller's business; ampere chooses among none."""
+        device = jax.devices()[0]
+        model = PowerLaw(np.linspace(1.0, 5.0, 6), device=device)
+        assert model.DEVICE == device.platform
+
+    def test_the_device_is_configuration_and_not_declaration(self) -> None:
+        """It must not reach the spec hash: two runs of one declaration on two
+        machines describe the same posterior. ``provenance_config`` is where it
+        is recorded, and ``dataclasses.fields`` is what the hash reads."""
+        import dataclasses
+
+        assert [f.name for f in dataclasses.fields(DenseGP(device="cpu"))] == ["jitter"]
+        assert DenseGP(device="cpu") == DenseGP()
+
+
+# ---------------------------------------------------------------------------
+# The complex Gaussian, end to end on the realised path (W2.5 slice 3)
+# ---------------------------------------------------------------------------
+
+VIS_U = np.array([0.5, 1.5, 2.5, 3.5, 4.5, 5.5])
+VIS_V = np.array([-1.0, 0.0, 1.0, 2.0, 3.0, 4.0])
+
+
+class _PointSource(Model):
+    """A shifted point source, ``V(u,v) = A exp(-2 pi i s (u + v))``, in jax.
+
+    Written here rather than shipped because ``ampere.backends.jax``'s models
+    are the spectral three and the visibility modality is Phase 4's. What it
+    exercises is exactly what the shipped models cannot: a **complex**
+    prediction reaching the family through the realised path, with a gradient
+    in both parameters.
+
+    The parameter is ``amplitude`` and not ``flux`` because ``flux`` is the
+    name of this backend's native evaluation surface, and
+    ``Parameterised.register_parameter`` refuses a parameter that would shadow
+    an attribute of its own class — which is the check working, not a
+    limitation.
+    """
+
+    DIFFERENTIABLE = True
+    BATCHABLE = True
+    DEVICE = "cpu"
+    BACKEND = BACKEND
+
+    def __init__(self, u_coord: Any, v_coord: Any, *, amplitude: Any = 1.0, shift: Any = 0.0):
+        self.register_buffer("u", np.asarray(u_coord, dtype=float))
+        self.register_buffer("v", np.asarray(v_coord, dtype=float))
+        self.register_parameter(as_parameter("amplitude", amplitude))
+        self.register_parameter(as_parameter("shift", shift))
+
+    def _visibility(self, context: Any) -> Any:
+        phase = (
+            -2.0
+            * jnp.pi
+            * jnp.asarray(context["shift"])
+            * (jnp.asarray(context["u"]) + jnp.asarray(context["v"]))
+        )
+        return jnp.asarray(context["amplitude"]) * jnp.exp(1j * phase)
+
+    def grid(self, channel: str) -> Any:
+        return jnp.asarray(self.buffers["u"].value, dtype=jnp.float64)
+
+    def flux(self, channel: str, values: Any = None) -> Any:
+        return self._visibility(self.context(values))
+
+    def evaluate(self, **values: Any) -> ModelResult:
+        ctx = self.context(values)
+        return ModelResult(VisibilitySet(ctx["u"], ctx["v"], np.asarray(self._visibility(ctx))))
+
+
+def _visibilities() -> VisibilitySet:
+    exact = _PointSource(VIS_U, VIS_V, amplitude=2.0, shift=0.1).evaluate().single()
+    truth = np.asarray(exact.values)
+    rng = np.random.default_rng(20260908)
+    noise = rng.normal(0.0, 0.05, VIS_U.size) + 1j * rng.normal(0.0, 0.05, VIS_U.size)
+    return VisibilitySet(VIS_U, VIS_V, truth + noise, uncertainty=np.full(VIS_U.size, 0.05))
+
+
+VISIBILITIES = _visibilities()
+
+
+def _visibility_problem(noise: Any = None) -> FittingProblem:
+    return FittingProblem(
+        _PointSource(VIS_U, VIS_V, amplitude=st.lognorm(0.3, scale=2.0), shift=st.norm(0.1, 0.05)),
+        [
+            Dataset(
+                VISIBILITIES,
+                likelihood=Likelihood(
+                    ComplexGaussianFamily(),
+                    IndependentNoise() if noise is None else noise,
+                ),
+            )
+        ],
+        seed=20260908,
+    )
+
+
+class _GridlessPointSource(_PointSource):
+    """A native model that supplies ``flux`` and forgets ``grid``.
+
+    ``predict`` needs both, so the refusal must name both; before slice 3 it
+    named only ``flux`` and a model like this died on an ``AttributeError``
+    from inside the composition instead. The attribute is hidden rather than
+    deleted because the inherited one is a plain method and there is no other
+    way to make ``hasattr`` say no.
+    """
+
+    def __getattribute__(self, name: str) -> Any:
+        if name == "grid":
+            raise AttributeError(name)
+        return super().__getattribute__(name)
+
+
+class TestTheComplexGaussianPath:
+    """``complex_gaussian`` composes into the realised density (W2.5 slice 3).
+
+    The transcription itself landed in slice 2, in
+    :mod:`ampere.backends.jax.families`. What was never shown is the thing that
+    matters — that a **complex** container survives the whole realised path:
+    the lowered dataset keeps ``complex128`` where every other array is
+    ``float64``, the residual reaches the family as a complex difference, the
+    modulus makes it real again, and a gradient comes back out. A family whose
+    closed form is right and whose composition drops the imaginary part would
+    pass a unit test of the closed form and fit the wrong data.
+    """
+
+    def test_the_realised_density_agrees_with_the_contract_path(self) -> None:
+        _agrees(_visibility_problem(), tolerance=1e-9)
+
+    def test_the_observed_values_keep_their_complex_dtype(self) -> None:
+        """``results_schema.md``: the dtype is the declaration, so the lowering
+        may not quietly make it real."""
+        lowered = lower_problem(_visibility_problem())
+        observed = lowered._datasets[0].observed_values
+        assert observed.dtype == jnp.complex128
+
+    def test_the_density_is_differentiable_in_both_parameters(self) -> None:
+        """The whole reason the family is transcribed rather than called."""
+        problem = _visibility_problem()
+        lowered = lower_problem(problem)
+        point = jnp.asarray(problem.unconstrain(problem.reference_values))
+        gradient = np.asarray(jax.grad(lowered.log_prob_unconstrained)(point))
+        assert gradient.shape == (problem.free_size,)
+        assert np.all(np.isfinite(gradient))
+        assert np.any(gradient != 0.0)
+
+    def test_the_family_matches_ampere_core_at_the_same_point(self) -> None:
+        """The numpy path is the oracle, here as everywhere else."""
+        problem = _visibility_problem()
+        theta = problem.parameters.pack(problem.reference_values)
+        contract = problem.evaluate(theta)
+        lowered = lower_problem(problem)
+        terms = lowered.log_likelihood_terms(problem.unconstrain(theta))
+        assert float(np.asarray(terms["default"])) == pytest.approx(
+            contract.log_likelihood, abs=1e-9
+        )
+
+    def test_a_scaled_uncertainty_still_composes(self) -> None:
+        """The noise model's ``scale`` reaches a complex family like any other."""
+        _agrees(
+            _visibility_problem(IndependentNoise(scale=st.lognorm(0.2, scale=1.0))),
+            tolerance=1e-9,
+        )
+
+    def test_the_gp_combination_is_refused_by_name_as_the_numpy_path_refuses_it(
+        self,
+    ) -> None:
+        """``complex_gaussian`` + GP is declared ANALYTIC and unimplemented on
+        both paths (Phase 4's circular closed form), so this backend refuses
+        the composition rather than inventing one."""
+        from ampere.core.exceptions import LikelihoodError
+
+        with pytest.raises(LikelihoodError):
+            Likelihood(ComplexGaussianFamily(), GaussianProcessNoise(Matern32(0.4, 2.0), DenseGP()))
+
+    def test_a_model_without_a_native_grid_is_refused_by_name(self) -> None:
+        """``predict`` calls ``flux`` *and* ``grid``; the refusal now says so.
+
+        It used to name only ``flux``, which was true of the shipped spectral
+        models and misleading for anything else: a model supplying ``flux``
+        alone reached ``predict`` and died on an ``AttributeError`` about
+        ``grid`` from inside the composition.
+        """
+
+        problem = FittingProblem(
+            _GridlessPointSource(
+                VIS_U, VIS_V, amplitude=st.lognorm(0.3, scale=2.0), shift=st.norm(0.1, 0.05)
+            ),
+            [
+                Dataset(
+                    VISIBILITIES,
+                    likelihood=Likelihood(ComplexGaussianFamily(), IndependentNoise()),
+                )
+            ],
+            seed=1,
+        )
+        with pytest.raises(LoweringError, match="grid"):
+            lower_problem(problem)

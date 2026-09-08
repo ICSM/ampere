@@ -302,7 +302,12 @@ class NUTSEngine(Engine):
                     f"{self.NAME} could not obtain a differentiable density for this problem: "
                     f"{error}"
                 ) from error
-            super().__init__(problem, cache_size=cache_size)
+            # `use_realisation=False`: this driver already holds the
+            # realisation and scores every proposal through it. The base
+            # class's gradient-free fast path (W2.5 slice 3) would lower
+            # the same problem a second time for the start-point search
+            # alone, which is a lowering and a compilation for nothing.
+            super().__init__(problem, cache_size=cache_size, use_realisation=False)
             self.density = self.realisation.log_prob_unconstrained
             return
         if not callable(density):
@@ -312,7 +317,7 @@ class NUTSEngine(Engine):
                 f"realisation (ampere.core.realise), or pass this backend's own — e.g. "
                 f"ampere.backends.jax.lower_problem(problem).log_prob_unconstrained."
             )
-        super().__init__(problem, cache_size=cache_size)
+        super().__init__(problem, cache_size=cache_size, use_realisation=False)
         self.density = density
         self._check_density_agrees()
 

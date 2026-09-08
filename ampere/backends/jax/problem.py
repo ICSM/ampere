@@ -157,11 +157,16 @@ class _LoweredDataset:
         self.noise = dataset.likelihood.noise
         self.steps = tuple(dataset.instrument.steps)
 
-        if not hasattr(self.model, "flux"):
+        missing = ", ".join(
+            f"`{name}`" for name in ("flux", "grid") if not hasattr(self.model, name)
+        )
+        if missing:
             raise _refuse(
                 type(self.model).__name__,
-                f"model {self.model_label!r} has no native jax surface (a `flux` method), so it "
-                f"cannot be composed into a differentiable log-density. Build the problem from "
+                f"model {self.model_label!r} has no native jax surface ({missing} missing), so "
+                f"it cannot be composed into a differentiable log-density. The two go together: "
+                f"`flux` supplies the values and `grid` the coordinates the instrument chain "
+                f"transforms them on, and `predict` calls both. Build the problem from "
                 f"ampere.backends.jax's models, or run it on a gradient-free engine.",
             )
         for step in self.steps:
@@ -454,6 +459,10 @@ class LoweredProblem:
         self.parameters = LoweredParameterSet(problem.parameters, strict=problem.strict)
         self._mapping = problem.mapping
         self._datasets = tuple(_LoweredDataset(problem, label) for label in problem.datasets)
+        #: ``jax.jit`` of :meth:`_terms_unconstrained`, built on first use. See
+        #: :meth:`log_likelihood_terms` for why this one member is compiled
+        #: here rather than left to whatever transformation the caller applies.
+        self._terms_compiled: Callable[[Any], dict[str, jax.Array]] | None = None
 
     @property
     def backend(self) -> str:
@@ -501,6 +510,11 @@ class LoweredProblem:
         routed = self._route(vector)
         return {dataset.label: dataset.log_likelihood(routed) for dataset in self._datasets}
 
+    def _terms_unconstrained(self, unconstrained: Any) -> dict[str, jax.Array]:
+        """:meth:`log_likelihood_terms`, uncompiled. The pure function jit wraps."""
+        y = jnp.asarray(unconstrained, dtype=jnp.float64).reshape(-1)
+        return self._likelihood_terms(self.parameters.constrain_jax(y))
+
     def log_likelihood_terms(self, unconstrained: Any) -> dict[str, jax.Array]:
         """``inference.md`` §10a's optional member: the per-dataset decomposition.
 
@@ -516,9 +530,27 @@ class LoweredProblem:
         a sum over exactly these terms, so returning them instead of the sum
         is a change of return type rather than a second evaluation — and it
         spares a driver recomputing every stored draw on the numpy path.
+
+        **Compiled, since W2.5 slice 3.** This member used to be the only part
+        of the realised surface a caller might invoke many times *without* a
+        surrounding transformation: NUTS reaches the density through
+        :meth:`potential`, which numpyro jits, but a driver asking for the
+        decomposition — or, since slice 3, ``ampere.inference``'s gradient-free
+        fast path asking for it once per proposal — got jax's eager,
+        op-at-a-time dispatch. Measured on a 400-point quasiseparable problem
+        that is 28.8 ms a call against 0.14 ms compiled, a factor of two
+        hundred, and it is the whole of what made the jax contract path
+        (26.5 ms) look like a pessimisation for emcee, dynesty and zeus.
+
+        :func:`jax.jit` is applied to the *uncompiled* pure function and cached
+        on the instance, so the compilation happens once per lowered problem
+        and shapes are fixed by ``free_size``. It composes as everything else
+        in jax does: called inside another trace it is an ordinary nested jit,
+        and :func:`jax.grad` through it still differentiates.
         """
-        y = jnp.asarray(unconstrained, dtype=jnp.float64).reshape(-1)
-        return self._likelihood_terms(self.parameters.constrain_jax(y))
+        if self._terms_compiled is None:
+            self._terms_compiled = jax.jit(self._terms_unconstrained)
+        return self._terms_compiled(unconstrained)
 
     def log_prob(self, theta: Any) -> jax.Array:
         """``log p(θ) + log p(data | θ)`` — the number a sampler maximises."""

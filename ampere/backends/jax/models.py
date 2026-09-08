@@ -56,9 +56,11 @@ from ampere.core import (
     ModelResult,
     Spectrum,
 )
+from ampere.core.exceptions import TransformationError
 
 from ._config import BACKEND, require_x64
 from ._declare import as_parameter
+from ._device import DEVICE, device_flag, place_on, resolve_device
 
 __all__ = [
     "COORDINATE_UNIT",
@@ -144,11 +146,21 @@ class _SpectralModel(Model):
     BATCHABLE: ClassVar[bool] = True
     #: CPU by default and never auto-detected (``architecture.md`` §5): a
     #: machine with a GPU present must not silently take a different code path
-    #: from CI. GPU placement is slice 2's, with an explicit ``device_put``.
-    DEVICE: ClassVar[str] = "cpu"
+    #: from CI. **Per instance since slice 3** (W2.5): ``device=`` shadows this
+    #: class default and the evaluation grids are moved with an explicit
+    #: :func:`jax.device_put`, so a model placed on an accelerator beside a
+    #: CPU solver is a device disagreement ``ampere.core.declared_capabilities``
+    #: refuses at composition. See :mod:`ampere.backends.jax._device`.
+    DEVICE: ClassVar[str] = DEVICE
     BACKEND: ClassVar[str] = BACKEND
 
-    def __init__(self, wavelength: Any, *, channels: str | Sequence[str] = "default") -> None:
+    def __init__(
+        self,
+        wavelength: Any,
+        *,
+        channels: str | Sequence[str] = "default",
+        device: Any = DEVICE,
+    ) -> None:
         require_x64(f"a jax {type(self).__name__}")
         grid = _to_micron(wavelength)
         if grid.ndim != 1 or grid.size == 0:
@@ -162,6 +174,9 @@ class _SpectralModel(Model):
                 f"a spectral model needs distinct, non-empty channel names, got {names!r}."
             )
         self.channels = names
+        resolved = resolve_device(device, f"a jax {type(self).__name__}", error=TransformationError)
+        object.__setattr__(self, "_device", resolved)
+        object.__setattr__(self, "DEVICE", device_flag(device, resolved))
         self.register_buffer("wavelength", grid, unit=COORDINATE_UNIT)
         self.templates: dict[str, Spectrum] = {}
         #: The evaluation grids as jax arrays, one per channel, converted once.
@@ -170,7 +185,7 @@ class _SpectralModel(Model):
         #: pytree structure and so into every JIT cache key (``lowering.md``
         #: §7). Changing one of these changes leaves, never structure.
         self.grids: dict[str, jax.Array] = {
-            channel: jnp.asarray(grid, dtype=jnp.float64) for channel in names
+            channel: place_on(jnp.asarray(grid, dtype=jnp.float64), resolved) for channel in names
         }
 
     def compile_for(self, requirements: Mapping[str, ChannelRequirements]) -> Model:
@@ -191,7 +206,9 @@ class _SpectralModel(Model):
             self.templates[channel] = Spectrum(
                 grid * COORDINATE_UNIT, np.zeros(grid.size, dtype=DTYPE), unit=FLUX_UNIT
             )
-            self.grids[channel] = jnp.asarray(grid, dtype=jnp.float64)
+            self.grids[channel] = place_on(
+                jnp.asarray(grid, dtype=jnp.float64), getattr(self, "_device", None)
+            )
         return self
 
     # -- the native surface -------------------------------------------------
@@ -251,6 +268,11 @@ class BlackBody(_SpectralModel):
     channels
         Name (or names) of the channel the emitted
         :class:`~ampere.core.Spectrum` appears under.
+    device
+        Platform name (``"cpu"``, the default) or an explicit ``jax.Device``.
+        **Never auto-detected** (``architecture.md`` §5); it moves this model's
+        evaluation grids and sets its ``DEVICE`` capability flag, so every
+        other part of the problem has to agree.
     """
 
     def __init__(
@@ -260,8 +282,9 @@ class BlackBody(_SpectralModel):
         temperature: Any = 1000.0,
         scale: Any = 1.0,
         channels: str | Sequence[str] = "default",
+        device: Any = DEVICE,
     ) -> None:
-        super().__init__(wavelength, channels=channels)
+        super().__init__(wavelength, channels=channels, device=device)
         self.register_parameter(as_parameter("temperature", temperature, unit=u.K))
         self.register_parameter(as_parameter("scale", scale))
 
@@ -293,6 +316,9 @@ class ModifiedBlackBody(_SpectralModel):
         the definition of one's own normalisation.
     channels
         Name (or names) of the emitted channel.
+    device
+        Platform name (``"cpu"``, the default) or an explicit ``jax.Device``.
+        Never auto-detected; see :class:`BlackBody`.
     """
 
     def __init__(
@@ -304,8 +330,9 @@ class ModifiedBlackBody(_SpectralModel):
         scale: Any = 1.0,
         reference_wavelength: float = 250.0,
         channels: str | Sequence[str] = "default",
+        device: Any = DEVICE,
     ) -> None:
-        super().__init__(wavelength, channels=channels)
+        super().__init__(wavelength, channels=channels, device=device)
         reference = float(_to_micron(reference_wavelength))
         if not np.isfinite(reference) or reference <= 0.0:
             raise ValueError(
@@ -343,6 +370,9 @@ class PowerLaw(_SpectralModel):
         Micron. A buffer.
     channels
         Name (or names) of the emitted channel.
+    device
+        Platform name (``"cpu"``, the default) or an explicit ``jax.Device``.
+        Never auto-detected; see :class:`BlackBody`.
     """
 
     def __init__(
@@ -353,8 +383,9 @@ class PowerLaw(_SpectralModel):
         index: Any = -1.0,
         reference_wavelength: float = 1.0,
         channels: str | Sequence[str] = "default",
+        device: Any = DEVICE,
     ) -> None:
-        super().__init__(wavelength, channels=channels)
+        super().__init__(wavelength, channels=channels, device=device)
         reference = float(_to_micron(reference_wavelength))
         if not np.isfinite(reference) or reference <= 0.0:
             raise ValueError(

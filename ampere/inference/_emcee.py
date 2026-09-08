@@ -41,6 +41,14 @@ class EmceeEngine(Engine):
     moves
         Passed to ``emcee.EnsembleSampler`` unchanged — ampere has no opinion
         about the move mixture and does not interpose one.
+    use_realisation
+        See :class:`~ampere.inference.engine.Engine`. ``True`` by default: on a
+        backend with a registered realisation this driver scores every proposal
+        through it rather than through the numpy contract path, which on a jax
+        quasiseparable problem is the difference between 27 ms and 0.6 ms a
+        proposal. It changes no number and one record — a failure loses its
+        reason there (``inference.md`` §10a) — so pass ``False``, or declare
+        ``strict=True`` on the problem, to keep the reasons.
     cache_size
         See :class:`~ampere.inference.engine.Engine`. Note that this driver
         takes no ``backend=`` at all — neither ampere's (W2.12 made that
@@ -83,8 +91,9 @@ class EmceeEngine(Engine):
         walkers: int | None = None,
         moves: Any = None,
         cache_size: int = DEFAULT_CACHE_SIZE,
+        use_realisation: bool = True,
     ) -> None:
-        super().__init__(problem, cache_size=cache_size)
+        super().__init__(problem, cache_size=cache_size, use_realisation=use_realisation)
         chosen = _default_walkers(problem.free_size) if walkers is None else int(walkers)
         self.walkers = _check_ensemble(self.NAME, chosen, problem.free_size)
         self.moves = moves

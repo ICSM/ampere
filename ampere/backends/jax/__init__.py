@@ -85,9 +85,10 @@ consulted with, and the conformance fixture's id.
 from __future__ import annotations
 
 from ._config import BACKEND, configure_x64, require_x64, x64_enabled
+from ._device import DEVICE
 from .bijections import log_abs_det_jacobian, lower_bijection
 from .distributions import lower_prior
-from .gp import DEVICE, PRECISIONS, DenseGP, Matern32, QuasisepGP, SquaredExponential
+from .gp import PRECISIONS, DenseGP, Matern32, QuasisepGP, SquaredExponential
 from .instrument import CalibrationScale, LSFConvolution, Resample, SyntheticPhotometry
 from .models import COORDINATE_UNIT, FLUX_UNIT, BlackBody, ModifiedBlackBody, PowerLaw, planck_jy
 from .noise import (
