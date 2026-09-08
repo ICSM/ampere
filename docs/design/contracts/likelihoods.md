@@ -571,7 +571,7 @@ definition of the right answer.
 | Strategy | Exact? | Applies to | Status |
 |---|---|---|---|
 | `DenseGP` | yes | anything, O(N³) | **implemented** — the correctness anchor |
-| `QuasisepGP` | yes | ordered 1D, quasiseparable kernels, O(N) | **implemented** (W2.3, celerite2) — `conditional_loo` deferred |
+| `QuasisepGP` | yes | ordered 1D, quasiseparable kernels, O(N) | **implemented** (W2.3, celerite2) — `conditional_loo` deferred on the numpy solver; supplied by both differentiable backends' own |
 | `WindowedSparseGP` | no | any kernel, any dimension | slot; see below |
 | `InducingPointGP` (SVGP) | no | 2D+ | slot; Phase 5 |
 | `StructuredGridGP` (SKI) | no | gridded 2D+ | slot; Phase 5 |
@@ -668,14 +668,26 @@ implementation:
   differences enter), which bounds the cancellation by half the number of
   length scales the data span: measured against the dense Cholesky, ~5e-12
   over 10 length scales, ~3e-10 over 10², ~2e-8 over 10⁴.
-* **`conditional_loo` is deferred** (`DEVELOPMENT_PLAN.md` §2, 2026-09-05).
-  Every leave-one-out term needs `A_ii` for `A = (K + diag(σ²))⁻¹`, and
-  celerite2's public numpy interface exposes no O(N) route to that diagonal —
-  its own conditional variance forms the cross-covariance densely. `QuasisepGP`
-  therefore refuses, naming `DenseGP`, rather than quietly costing O(N²) under
-  an O(N) name. `log_marginal_likelihood` and `latent_transform` are O(N);
-  `condition` is O(N·M) for M evaluation points, because the cross-covariance
-  block is dense by construction whatever the solver.
+* **`conditional_loo` is deferred on this (numpy) solver**
+  (`DEVELOPMENT_PLAN.md` §2, 2026-09-05). Every leave-one-out term needs
+  `A_ii` for `A = (K + diag(σ²))⁻¹`, and celerite2's public numpy interface
+  exposes no O(N) route to that diagonal — its own conditional variance forms
+  the cross-covariance densely. `ampere.core.QuasisepGP` therefore refuses,
+  naming `DenseGP`, rather than quietly costing O(N²) under an O(N) name.
+  `log_marginal_likelihood` and `latent_transform` are O(N); `condition` is
+  O(N·M) for M evaluation points, because the cross-covariance block is dense
+  by construction whatever the solver.
+
+  **A backend that calls celerite2's compiled kernels directly is not bound by
+  that deferral, and neither differentiable backend is** — the torch solver
+  since W2.4 slice 2 (`celerite2.backprop`) and the jax one since W2.5 slice 3
+  (`celerite2.jax.ops`), both by the same O(N) backward accumulation over the
+  factorisation, both checked against `DenseGP`'s Cholesky. The deferral was
+  always about a coupling to celerite2's internal factorisation convention
+  rather than about the mathematics, and a backend that already holds `c, U,
+  d, W` has paid it. A solver is free either way: the conformance row states
+  the whole contract as "refuses by name **or** agrees with `DenseGP` at
+  `tolerances.cross_solver`".
 
 ### Windowed-sparse truncation: a named slot, and why it is not the default
 

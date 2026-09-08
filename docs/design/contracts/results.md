@@ -1001,8 +1001,10 @@ Each is a decision, not an oversight. Each has an extension point.
    landed with it; **W2.8** added `ampere.results.add_pointwise_log_likelihood`,
    which writes the group on an explicit call and never by default. What stays
    deliberately unreached is a solver that does not implement
-   `conditional_loo` — `QuasisepGP` and its jax twin — where the emission
-   refuses by name rather than falling back to a dense solve.)*
+   `conditional_loo` — `ampere.core.QuasisepGP`, the numpy one — where the
+   emission refuses by name rather than falling back to a dense solve. The
+   torch and jax quasiseparable solvers supply the terms (W2.4 slice 2, W2.5
+   slice 3), so the group is emittable under them.)*
 2. **No engine drivers.** Nothing in ampere currently produces the draws `emit`
    consumes; `DrawRecorder` is the shape a driver will use, exercised here by the
    test suite rather than by a sampler. Phase 2's drivers are the consumers.
