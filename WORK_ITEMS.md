@@ -695,7 +695,7 @@ restructures `docs/development.md` and `CLAUDE.md` for Phase 3.
 namespaces; README install routes verified by running them in a scratch
 environment; the annotation list in the report; all three gates unchanged.
 
-## Phase 3 — The SBI layer (drafted 2026-09-08 by Fable, W3.8–W3.9 added the same day from Peter's rulings; **awaiting Peter's approval of the breakdown before any dispatch beyond W3.0**)
+## Phase 3 — The SBI layer (drafted 2026-09-08 by Fable; **approved by Peter 2026-09-08** with W3.1 revised into two slices from his three notes, and W3.8–W3.10 added from his rulings; dispatch open — W3.1 slice 1 held for his look at the revised text)
 
 Written from `DEVELOPMENT_PLAN.md` §5 Phase 3, its §6 deferred choices and
 §7's trained-artefact trap, `inference.md` §13 and limitation 17.5,
@@ -760,43 +760,106 @@ realised GP problem with zero uncertainties refuses by name at construction;
 (counts unchanged apart from the new rows); lint/format clean, pyrefly 0
 errors in all three.
 
-### W3.1 — `simulate_many`: the batched forward model [M; Opus]
-`inference.md` limitation 17.5 discharged, on the numpy path first and
-natively where a backend can. **Core** (`ampere/core/dataset.py`):
-`FittingProblem.simulate_many(count, *, values=None, observe=False, rng=None,
-stream="simulate")` returning a `SimulationBatch` — the natural stacking of
-`Simulation`: `theta` as `(count, free_size)`, `predicted`/`observations` as
-per-dataset `FunctionSamples` batches with a leading sample axis (the
-`(θ, ModelResult)` pairs kept per draw for design horizon (c)), a `failed`
-boolean mask and the per-draw `Failure` records, and `__getitem__` yielding
-the i-th `Simulation` so every consumer written against §13 still works.
-`values=None` draws the batch from the joint prior on the named sub-stream;
-an array of shape `(count, free_size)` simulates at given θ (the SBC idiom).
-Failures are flagged per draw, never raised, and the loop is the reference
-semantics: `simulate_many(n)` must equal `n` calls of `simulate` under the
-same sub-stream (a conformance row asserts it). **Native**: where every part
-declares `BATCHABLE` and a realisation is registered, the torch and jax
-`LoweredProblem`s gain `simulate_batched(theta)` for the **noise-free
-prediction** through `torch.func.vmap`/`jax.vmap` — the observation draw stays
-on the numpy path through `LikelihoodFamily.sample`, because that is where
-§13's refusal semantics live and a second sampling path would be a second
-place to get the noise model wrong. `simulate_many` uses the native path when
-`problem` is realised and batchable, with the same one-point agreement check
-`realise` already makes; `QuasisepGP` and non-batchable parts fall back to
-the loop, honestly (a `provenance`-visible `ampere_simulate_batched` flag on
-training sets written from a batch). **Training sets**:
-`ampere.results.training.write_training_set`/`append_training_set` accept a
-`SimulationBatch` directly. **Spec**: §13 gains a "batched form" subsection
-and limitation 17.5 is closed, each marked *Amended W3.1*; one decision-log
-row (this is a §4.5 surface addition). **Depends:** nothing merged; W3.0 may
-run alongside. **Blocks** W3.2, W3.5, W3.6.
+### W3.1 slice 1 — `simulate_many`: the batched forward model, the executor, external simulators [M; Opus]
+Revised 2026-09-08 from Peter's three notes on the first draft (decision-log
+row of the same date): (a) `vmap` is one device, so the design must be ready
+for simulations distributed across devices or machines and for single
+simulations that exceed one device's memory; (b) slow external simulators —
+Fortran/C/C++/Rust routines behind a Python call — are a major SBI case and
+must be first class, not a fallback; (c) every backend supports observation
+sampling natively (slice 2). **Core** (`ampere/core/dataset.py`, a new
+`ampere/core/simulate.py`): `FittingProblem.simulate_many(count, *,
+values=None, observe=False, rng=None, stream="simulate", executor=None,
+chunk_size=None)` → `SimulationBatch` — `theta` as `(count, free_size)`,
+per-dataset `predicted`/`observations` as `FunctionSamples` batches with a
+leading sample axis, the per-draw `ModelResult`s kept for design horizon
+(c), a `failed` mask and the per-draw `Failure` records, `__getitem__`
+yielding the i-th `Simulation` so every §13 consumer still works, and
+iteration by chunk. `values=None` draws the batch from the joint prior on
+the named sub-stream; an array `(count, free_size)` simulates at given θ
+(the SBC idiom). **The loop is the reference semantics and the contract
+every executor must satisfy**: `simulate_many(n)` equals `n` calls of
+`simulate` under the same sub-stream, order preserved, with the per-draw
+sub-stream derived from the batch sub-stream by *index* so the result is
+independent of how the work was partitioned. **The executor protocol**
+(`ampere.core.simulate.Executor`: `map(fn, items)` → results in order),
+three shipped: `SerialExecutor` (default), a `concurrent.futures` process
+pool (the route for external simulators — one process per simulation, the
+problem pickled once per worker, so `FittingProblem` picklability is asserted
+or supplied via its spec), a thread pool for I/O-bound wrappers; plus the
+documented adapter shape for user-supplied mappers (dask, mpi4py's
+`MPIPoolExecutor`, a queue-driven cluster array) — anything with `map` in
+that shape. `timeout=` per simulation on the pool executors; an expiry or a
+crashed worker is a flagged `Failure`, never an exception. **Chunking**:
+`chunk_size` bounds how many simulations are in memory at once;
+`simulate_many(..., as_chunks=True)` yields `SimulationBatch` chunks and
+`write_training_set`/`append_training_set` accept the iterator, so a budget
+larger than memory is written without ever being held — which makes
+`results.md` 13.9's `O(existing + new)` append the bottleneck for very large
+budgets; the item measures the append time at 10⁴ and 10⁵ tiny simulations
+and reports it (the trigger for the deferred unlimited-dimension append). A
+single simulation larger than one device is not partitioned by the framework
+— a model-parallel simulator is a `Model` whose `__call__` does its own
+placement — but `chunk_size=1` with a per-chunk device-placement hook
+guarantees such a model is never asked to hold two simulations at once.
+**External simulators, first class**: a black-box `Model` on the reference
+backend whose `__call__` calls compiled code is the canonical SBI simulator.
+The item ships `examples/sbi/external_simulator.py` — a subprocess-based toy
+standing in for a compiled routine (argument marshalling, a working directory
+per worker, stdout/stderr capture into the `Failure` detail) run through the
+process pool — and `tests/examples` runs it. **`BATCHABLE` on the reference
+backend** acquires a meaning: a `Model` may implement `evaluate_batch(thetas)`
+(many external codes take a table of parameter sets in one call) and declare
+`BATCHABLE = True`; `simulate_many` uses it under the serial executor. **Spec**:
+§13 gains "batched form" and "execution" subsections, limitation 17.5 is
+closed, each *Amended W3.1*; the decision-log row is amended with the landed
+text (a §4.5 surface addition). **Depends:** nothing merged; W3.0 may run
+alongside. **Blocks** W3.1 slice 2, W3.2, W3.5, W3.6, W3.8.
 **Accept:** conformance row `simulate_many(n) == [simulate() × n]` on every
-registered backend fixture; native `simulate_batched` agrees with the loop to
-`tolerances.cross_backend` on torch and jax and is refused by name on a
-non-batchable problem; a batch with an injected 2 % crash rate reports the
-count and the usable pairs; `write_training_set(batch)` round-trips; all
-three backend gates plus `dev` green; lint/format/pyrefly clean ×3;
-decision-log row present.
+registered backend fixture and under every shipped executor (serial; process
+pool with two workers; thread pool) — order and values; partition
+independence — `chunk_size` 1 and 7 give identical batches; an injected 2 %
+crash rate plus one timeout are counted and the usable pairs are correct; the
+external-simulator example runs under the process pool in `tests/examples`;
+writing from chunks equals writing the whole batch; `FittingProblem`
+picklability asserted; the append-time table in the report; `dev` gate green
+(this slice is numpy-only) with `torch`/`jax` gates unchanged;
+lint/format/pyrefly clean ×3.
+
+### W3.1 slice 2 — Native batched prediction and native observation sampling on torch and jax [M; Opus; two-track possible]
+(a) `LoweredProblem.simulate_batched(theta)` for the **noise-free
+prediction** through `torch.func.vmap`/`jax.vmap` where every part declares
+`BATCHABLE` and a realisation is registered — **per chunk**: `vmap` over a
+chunk with chunks looped, never over the whole budget (that is exactly the
+single-device memory trap Peter's note names); device placement per the
+slice-3 `device=` plumbing; `QuasisepGP` and non-batchable parts fall back to
+the loop honestly; `simulate_many` uses the native path when the problem is
+realised and batchable, with the same one-point agreement check `realise`
+makes, and training sets written from it carry `ampere_simulate_batched`.
+(b) **Native observation sampling** (Peter's ruling 2026-09-08): every
+`LikelihoodFamily.sample` the core implements gets a native twin — torch
+over `torch.distributions`, jax over `jax.random` and numpyro's
+distributions — for `gaussian` (independent noise, and GP noise through the
+backend solver's own `latent_transform`), `student_t`, `cauchy` and
+`complex_gaussian`; `poisson` keeps §13's refusal on every backend unless the
+user overrides. RNG derived from the problem's seed sub-stream
+(`integer_seed(stream)` → `torch.Generator` / `PRNGKey`), the backend that
+drew recorded as `ampere_sample_backend`. **The numpy path stays the oracle**
+and is compared *distributionally* — mean and covariance of 4 000 draws
+within the tolerances §13's numpy test uses — because RNG streams differ by
+backend; the masked-samples rule and the refusal texts match exactly. Spec:
+§13's "what can be sampled" gains the native paragraph, *Amended W3.1*.
+**Depends:** W3.1 slice 1; W3.0 (it touches the jax `problem.py`).
+**Blocks** nothing hard — W3.2 works from slice 1; this slice is throughput
+and native parity.
+**Accept:** native batched prediction agrees with the loop to
+`tolerances.cross_backend` on both backends and refuses by name on a
+non-batchable problem; `chunk_size` 1, 7 and the whole budget give identical
+predictions; native Gaussian draws' empirical covariance matches
+`K + diag(σ²)` within §13's tolerances on both backends, off-diagonals
+non-zero, variances exceeding `K`'s (the same two mutation-tested
+assertions); Poisson refuses by name on both; `torch`, `jax` and `dev` gates
+green; lint/format/pyrefly clean ×3.
 
 ### W3.2 — `SBIEngine`: NPE/NLE/NRE through the `sbi` package [L; Opus]
 The one SBI module `DEVELOPMENT_PLAN.md` §5 asks for, as an
@@ -831,7 +894,7 @@ parity**: the embedding-network conveniences of `ampere/infer/sbi.py`
 (`"FC"`, `"CNN"`, a user `nn.Module`, a dict of hyperparameters) are carried
 over as the `embedding=` vocabulary — frozen legacy is **read, not
 modified**. **Not in this item**: swyft (W3.4), caching (W3.5), SBC (W3.6),
-multi-round truncation beyond `sbi`'s own `rounds` loop. **Depends:** W3.1.
+multi-round truncation beyond `sbi`'s own `rounds` loop. **Depends:** W3.1 slice 1 (slice 2 is throughput; the engine's `executor=` and `chunk_size=` pass straight through to `simulate_many`, which is how an external simulator is run under the process pool).
 **Blocks** W3.4, W3.5, W3.6.
 **Accept:** in the `sbi` environment, `SBIEngine` recovers the
 `tests/inference` toy joint posterior with NPE at a small budget (thresholds
@@ -946,7 +1009,7 @@ likelihood itself, as §11 anticipates for M2. Plots: `plot_sbc_ranks` and
 `plot_coverage` in `ampere.results.plots`, following the six existing plots'
 conventions. **Spec**: §11 is marked landed with the placement decision,
 *Amended W3.6*; `results.md` gains the `calibration` group in its schema
-table — a §4.6 addition, so a decision-log row. **Depends:** W3.1, W3.2.
+table — a §4.6 addition, so a decision-log row. **Depends:** W3.1 slice 1, W3.2.
 **Blocks** nothing.
 **Accept:** on the toy problem, an NPE posterior's rank histogram is
 uniform within `check_sbc`'s own thresholds at the smoke budget and a
@@ -994,8 +1057,8 @@ realisation can still call the foreign part cheaply for the fast path
 the item, not assumed, and the report says which. Conformance: a row per
 backend that the default refuses, the opt-in accepts and samples with emcee
 to the same posterior as the all-native problem, and the gradient routes
-refuse. **Depends:** W3.1 merged (it owns `dataset.py` first). **Blocks**
-nothing.
+refuse. **Depends:** W3.1 slice 1 merged (it owns `dataset.py` first).
+**Blocks** nothing.
 **Accept:** the default refusal names the part and the remedy; an opt-in
 run's provenance carries the flag and the part names; `NUTSEngine`,
 `VIEngine` and `realise(strict=True)` refuse by name under the opt-in; the
@@ -1027,6 +1090,23 @@ page sits in the API reference toctree beside the legacy section; every
 legacy name on the page is either an explicit `:doc:` link to its page or a
 plain literal (no dangling cross-references); British English.
 
+### W3.10 — Automatic paging above the plot caps, with a loud warning [S; Sonnet; not urgent]
+Ruled by Peter 2026-09-08 (on W2.8's confirmed caps): above
+`MAX_CORNER_VARIABLES`/`MAX_TRACE_VARIABLES`, `plot_corner` and `plot_trace`
+**page** — a list of figures each within the cap, in merged-name order,
+array blocks kept whole where they fit — and emit a loud `ResultsWarning`
+naming the page count, the cap and the `var_names=` route, instead of
+refusing. `var_names=` and `max_variables=` keep their meanings;
+`paginate=False` restores today's refusal for a caller who needs one figure;
+`figure_metadata` records "page i of n" on each. `results.md` §8's "refused
+loudly rather than attempted" sentence is amended to "paged, with a warning"
+(*Amended W3.10*) and W2.8's decision-log row gains the note. Not on the
+Phase 3 critical path — dispatch when convenient. **Depends:** nothing.
+**Blocks** nothing.
+**Accept:** 25 scalar parameters give two corner pages and one warning; a
+200-element plate gives ten; `paginate=False` refuses exactly as today; the
+metadata round-trips; `dev` gate green; lint/format/pyrefly clean.
+
 ### Deferred from Phase 3 (recorded so they are not re-derived)
 - **jax-native SBI** (sbijax/flowjax): plan §6 says "if and when maturity
   warrants"; nothing above needs it, and `simulate_many`'s native
@@ -1046,11 +1126,12 @@ plain literal (no dangling cross-references); British English.
   as a Phase 5 bullet in the plan's §5.
 
 ### Dispatch order and parallelism
-W3.0 ∥ W3.1 first (disjoint files: W3.0 owns `exceptions.py`, `emission.py`/
-`training.py`'s constant, torch `instrument.py`, jax `problem.py`; W3.1 owns
-`dataset.py`, both `problem.py`s' new methods — the jax `problem.py` overlap
-is resolved by W3.0 merging first, W3.1 rebasing). Then W3.2 alone (it
-defines the engine every later item extends). Then W3.3 ∥ W3.5 (disjoint:
+W3.0 ∥ W3.1 slice 1 ∥ W3.9 first (disjoint files: W3.0 owns `exceptions.py`,
+`emission.py`/`training.py`'s constant, torch `instrument.py`, jax
+`problem.py`; slice 1 owns `dataset.py` and the new `simulate.py`; W3.9 is
+docs-only). Then W3.2 ∥ W3.1 slice 2 (disjoint: `_sbi.py` vs both
+`problem.py`s and the backends' families) — W3.2 defines the engine every
+later item extends. Then W3.3 ∥ W3.5 (disjoint:
 encoding vs cache; both add arguments to `SBIEngine` — one owner of
 `_sbi.py` at a time, so W3.3 first and W3.5 appends). Then W3.6, with W3.4's
 maturity note written any time after W3.2 and its code only on Peter's
@@ -1058,7 +1139,7 @@ ruling. W3.8 after W3.1 merges (it touches `dataset.py`'s capability
 check and both backends' `problem.py`; disjoint from W3.2's `_sbi.py`).
 W3.9 is docs-only and can run any time after approval. W3.7 last.
 Cross-model review via terra when the quota returns
-(~2026-09-30) for W3.1 (the batched-equals-loop claim), W3.2 (the prior
+(~2026-09-30) for W3.1 slice 1 (the batched-equals-loop and partition-independence claims), W3.1 slice 2 (native sampling), W3.2 (the prior
 coordinates and the scoring of draws) and W3.6 (the calibration statistics).
 
 ## Status
@@ -1100,7 +1181,7 @@ coordinates and the scoring of draws) and W3.6 (the calibration statistics).
 | W2.7 | merged 2026-09-08 at `f57c72f` (Opus-authored, Fable-reviewed; one wording fix on the decision-log row — the RHMF re-verification is the agent's, confirmed at review, and W2.5 *has* merged; dev gate re-run independently: 1472/69, lint/format clean, pyrefly 0 errors). Families B and C in `ampere.results`: `add_residuals`/`gp_localisation` per `results.md` §7 (thinned, `draw` coordinate of retained indices, prior-rejected draws NaN, hash-checked before any arithmetic); `diagnostics.py` — a separation-binned autocorrelation native to irregular coordinates that reduces exactly to the lag autocorrelation on an even grid, `Q = Σ n_b ρ_b²`, permutation-calibrated (`(1+#{Q_perm ≥ Q})/(1+n_perm)`) from a named `substream` of the run's seed, O(N·m) windowed pair search with a pair budget, per-draw kept and median reported; the χ² Bayesian p-value where the stored log-likelihood makes it free, refused by reason otherwise; `gp_localisation_score` → `AnomalyScore` standardised by the law of total variance (the across-draw spread alone dropped the correlation with an injected deviation from 0.88 to 0.30); `plot_residuals` (warns on a GP fit), `plot_gp_localisation` (caveat attached to the figure unconditionally, readable via `figure_metadata`), `plot_anomaly_score` (provenance forced on for both when two provenances share an axes); shared helpers in `_plotting.py`; matplotlib lazy behind `OptionalDependencyError`. Whiteness fires on structure (p = 0.005 floor) and not on noise (p = 0.71). **RHMF deferred** with a decision-log row: licence (MIT) and API hold; maturity does not (no CI — only a publish-on-tag workflow; one stale 0.0.2 release from 2025-11; README TODOs; `Robusta.mse` unimplemented) — revisit at a ≥0.1 release with a test job. No dependencies added. Carried: `results.md` §8's 'every plotting function raises' sentence is stale (W2.8 may amend); `Dataset` gives a bare `TypeError` on `channel=`; ruled 2026-09-08 (Peter): across-draw *median* pooling of the per-draw permutation test, `gp_localisation(datasets=None)` meaning 'every GP dataset', and `plot_anomaly_score` returning the Axes — all three confirmed |
 | W2.9 | merged 2026-09-08 at `196b48f` (Sonnet-authored, Fable-reviewed; the profile MLE re-derived by hand — the positive root of ρ(ρ+1)b² − [ρ(S+B) − m(ρ+1)]b − Bm = 0 — and brute-force checked in the tests; `tests/examples` 13 passed, lint/format/pyrefly clean). `examples/wstat_comparison.py`: `ProfiledCashWithBackground` as a registered user family (`wstat_example`; excises its background buffer with `NoiseParams.retain`; `sample()` refuses with the profiling-specific reason; per-sample terms declared not predictive), `XraySource`/`XraySourceAndBackground` toy models, both routes run through emcee, `compare()` from the run's own numbers; `docs/source/wstat_comparison.rst` as a literal script page in the tutorials toctree; `tests/examples/` as the end-to-end gate (with a `_FAMILIES` snapshot). The recommendation is structural (a proper marginal likelihood with valid predictive densities) rather than an asserted seed-dependent direction. Also fixed: `docs/source/conf.py` read `version('pgmuvi')`. **Carried to W2.11**: `pixi run docs` is broken on master for pre-existing reasons (no `pandoc`, no registered Jupyter kernel for two legacy notebooks; many legacy-docstring Sphinx warnings; autodoc of the non-existent `ampere.infer.ptemceesearch`) — the docs task needs its dependencies declared and `tests/examples` should join a gate. Open for Peter: a repeated-trial coverage study demonstrating the low-count profile bias (out of scope here; W2.10-adjacent) |
 | W2.14 | merged 2026-09-08 (Opus-authored, Fable-reviewed; no fixes needed — gates re-run independently: dev 1431/71, jax 1822/21, torch see the merge commit, lint/format clean, pyrefly 0 errors ×3). **The latent-GP likelihood sees its kernel**: `GaussianProcessNoise.noise_params` applies `f = solver.latent_transform(kernel, coordinates, z, values)` via `_realised_latent` (both arrays already the retained block — `Likelihood.log_prob` excises first and problem validation pins the latent size to the effective mask; shape and missing-coordinates refusals named), so `NoiseParams.latent` *is* `f`; no family changed. Regression rows in `tests/core` (9 of 10 fail on the unfixed core — bit-identical log-likelihood across amplitudes and length scales; closed-form Poisson and Gaussian-at-`f = L z` checks). Both backends gained native whitening surfaces (`latent_transform_native` on torch, `latent_transform_jax` on jax, no-exception, NaN-through-`where`, the stabiliser scale as a `where` on a value so a traced amplitude survives), the torch blanket refusal and jax's deliberate mirroring removed, and a positive refusal for a solver lacking the native surface. **A second latent defect exposed and fixed**: torch's `log_likelihood` branched on `self.correlated` alone, so a Poisson+GP dataset would have scored the Gaussian *marginal*; it now branches on `correlated and family.ANALYTIC_WITH_GP` as jax already did (never reachable on master, behind the refusal). New conformance shape `LATENT_GP` (Poisson counts over dense-GP noise; `DatasetSpec` derives integer counts from `family == "poisson"`), realised-vs-oracle rows per backend and a gradient-non-zero row in each backend suite. `likelihoods.md` §17 limitation 6 amended, §10's latent doctest corrected, decision-log row, plan §4.4 clarified. Carried: `latent_transform`'s stabiliser falls back to 1.0 at exactly zero amplitude (documented, not wrong); the neutral battery's latent shape uses `DENSE` only (a one-line second spec would add `QUASISEP`); §10a could list the native surfaces a backend owes (`latent_transform_native`/`_jax`) — small follow-up |
-| W2.8 | merged 2026-09-08 at `71b2e96` (Opus-authored, Fable-reviewed; no fixes needed — dev gate re-run independently 1530/69 on the branch, 1542/71 on merged master; lint/format clean; pyrefly 0 errors). `plot_corner` (merged names; array blocks one column per element; prior-rejected draws excluded; refuses above `MAX_CORNER_VARIABLES = 20` with `max_variables=` override), `plot_trace` (NaN gaps for prior-rejected draws; `lp` its own row; cap 40), `plot_posterior_predictive` (refusal names `add_posterior_predictive`; σ-standardised discrepancy by default, `statistic=` for a θ-dependent one); `add_posterior_predictive` via `simulate(observe=True)` on the `posterior_predictive` substream, masked samples NaN, complex refused by name; `add_pointwise_log_likelihood` as the only writer of §6's group (per-variable `ampere_decomposition`, `"mixed"` at group level on a heterogeneous joint fit; refuses by name where the solver lacks `conditional_loo` — never a dense fallback); `pointwise_as_log_likelihood` bridging to `arviz.loo`; θ dtype preserved (`CONTAINER_SCHEMA_VERSION` 2, old form still read), `training_pair_from_dict`, `observations` + `Failure` carried; `ampere/results/training.py` — the §11 layer-2 netCDF training set (root provenance attrs + `ampere_training_set_version` 1, `theta` per merged name, one group per `<model>.<channel>`, `coordinates` once, `sample_stats` with the whole `Failure`, `observations/<label>`), `append_training_set` checking `ampere_spec_hash` before writing and growing `sample` by read-concatenate-rewrite (O(existing+new); the unlimited-dimension writer is §13.9's extension point). `PROVENANCE_SCHEMA_VERSION` stays 5 (no mapping changed meaning; every problem hash unchanged — conformance-checked). Three §4 amendments in one decision-log row (§8's stale 'every plot raises', §11's table gains `observations`/`Failure`, §6's landed paragraph). One netCDF engine per file after a real deadlock (mixing h5netcdf and netCDF4 on one file with a leaked handle). No dependencies added. Carried: `tests/results/test_results.py::test_both_netcdf_engines_write_it` leaks a netCDF4 handle (close it); W2.7's `add_residuals`/`gp_localisation` do not handle complex containers; `plot_corner` on a constant column surfaces `corner`'s own error. Ruled 2026-09-08 (Peter): all five confirmed — the 20/40 caps (the two routes past them are `var_names=` selection and the `max_variables=` override, both named in the refusal; no automatic paging), the corner exclusion, `pointwise_as_log_likelihood` public, `"mixed"`, and the append deferred until a Phase 3 budget outgrows memory |
+| W2.8 | merged 2026-09-08 at `71b2e96` (Opus-authored, Fable-reviewed; no fixes needed — dev gate re-run independently 1530/69 on the branch, 1542/71 on merged master; lint/format clean; pyrefly 0 errors). `plot_corner` (merged names; array blocks one column per element; prior-rejected draws excluded; refuses above `MAX_CORNER_VARIABLES = 20` with `max_variables=` override), `plot_trace` (NaN gaps for prior-rejected draws; `lp` its own row; cap 40), `plot_posterior_predictive` (refusal names `add_posterior_predictive`; σ-standardised discrepancy by default, `statistic=` for a θ-dependent one); `add_posterior_predictive` via `simulate(observe=True)` on the `posterior_predictive` substream, masked samples NaN, complex refused by name; `add_pointwise_log_likelihood` as the only writer of §6's group (per-variable `ampere_decomposition`, `"mixed"` at group level on a heterogeneous joint fit; refuses by name where the solver lacks `conditional_loo` — never a dense fallback); `pointwise_as_log_likelihood` bridging to `arviz.loo`; θ dtype preserved (`CONTAINER_SCHEMA_VERSION` 2, old form still read), `training_pair_from_dict`, `observations` + `Failure` carried; `ampere/results/training.py` — the §11 layer-2 netCDF training set (root provenance attrs + `ampere_training_set_version` 1, `theta` per merged name, one group per `<model>.<channel>`, `coordinates` once, `sample_stats` with the whole `Failure`, `observations/<label>`), `append_training_set` checking `ampere_spec_hash` before writing and growing `sample` by read-concatenate-rewrite (O(existing+new); the unlimited-dimension writer is §13.9's extension point). `PROVENANCE_SCHEMA_VERSION` stays 5 (no mapping changed meaning; every problem hash unchanged — conformance-checked). Three §4 amendments in one decision-log row (§8's stale 'every plot raises', §11's table gains `observations`/`Failure`, §6's landed paragraph). One netCDF engine per file after a real deadlock (mixing h5netcdf and netCDF4 on one file with a leaked handle). No dependencies added. Carried: `tests/results/test_results.py::test_both_netcdf_engines_write_it` leaks a netCDF4 handle (close it); W2.7's `add_residuals`/`gp_localisation` do not handle complex containers; `plot_corner` on a constant column surfaces `corner`'s own error. Ruled 2026-09-08 (Peter): all five confirmed — the 20/40 caps (the two routes past them are `var_names=` selection and the `max_variables=` override, both named in the refusal; **automatic paging with a loud warning is wanted later — W3.10**), the corner exclusion, `pointwise_as_log_likelihood` public, `"mixed"`, and the append deferred until a Phase 3 budget outgrows memory |
 | W2.11 | merged 2026-09-08 at `dbbc172` (Opus-authored, Fable-reviewed; no fixes needed — YAML validated, dev gate 1555/71 with `tests/examples` joined, lint/format clean, pyrefly 0 errors, `pixi run docs` succeeds (15 legacy warnings), `bench` 3 rows). CI: one job per environment — `lint`, `typecheck` (dev), `test` (py3.11–3.13 matrix), `suites` (dev `test-all` + `bench`), `backend-suites` (torch|jax: typecheck + `test-all` + `bench`, `fail-fast: false`), `docs`, `minimal-install` (bare pip), `sbi-characterisation` (schedule/manual); `benchmark.json` uploaded as `benchmarks-{dev,torch,jax}`; setup-pixi caching everywhere. **CPU wheels**: torch pinned to PyTorch's CPU index in the `torch` and `sbi` pixi features only (pip users unchanged); 15 nvidia wheels gone from the lock. **Docs build repaired**: conda `pandoc` + `ipykernel` in `dev`, the dead `ampere.infer.ptemceesearch` autodoc entry removed, `nbsphinx_execute = 'never'` with the two unrunnable legacy notebooks explained; the job fails on errors, `-W` deferred to the Phase 6 docs rebuild (a recorded deviation from plan §5's Phase-1 line). **Benchmark harness: pytest-benchmark** (decision-log row; §6 struck): pixi owns the environments, PR artefacts are the requirement, the rows reuse the fixtures; no regression history — revisit if a benchmark server is wanted. `tests/benchmarks/test_gp_solvers.py` new; torch scaling rows added (p = 0.71 over 10³–10⁵). Carried: `docs/source/_static` missing (warning every build); `Embedding_nets.ipynb` in no toctree; `ampere.infer.sbi`'s API page empty in the dev docs build; `tests/examples/conftest.py` reaches `_FAMILIES` privately. Ruled 2026-09-08 (Peter): the CPU-index pin, the `tests/examples` placement and the `-W` deferral confirmed; the branch-protection rename remains Peter's action on GitHub |
 | W2.10 (M2) | **merged 2026-09-08 at `956e1ab` — milestone M2 reached** (Opus-authored, Fable-reviewed as the adversarial pass; gates re-run independently: dev 1614/95, jax 2012/38, torch 2131/38, lint/format clean, pyrefly 0 errors ×3). `examples/m2_misspecification/` (generators keeping truth/deviation/observed; the toy model as a hand-written `Model` per backend sharing one declaration — the realised paths lower any model exposing `grid`/`flux`, asserted on both backends; the study driver with every threshold as a named constant; figures; CLI), `tests/m2` (83 rows, in `test-all`), `tests/benchmarks/test_m2_*` (the table as a CI artefact), `docs/source/m2_misspecification.rst`, the `m2_full` marker. **Result**: Matérn-3/2 reproduction; standard likelihood confidently wrong under misspecification (worst |median−truth| 2.83/7.39/4.71 widths at 200 points, 11.2 → 36.3 → 113 up the ladder, truth excluded) while the flexible one stays calibrated (≤ 0.98 widths, 0.70/0.51/0.57 up the ladder, truth covered everywhere); whiteness p = 0.005 (floor) on every misspecified scenario vs 0.185 control; localisation peaks 0.33 grid spacings from the injected line at 45× the control; three backends agree on the density to 1e-10 and on the posterior to 0.072/0.109 widths against 0.20/0.30 milestone tolerances derived from measured scatter; benchmarks: O(N) solvers 2–8 ms at 20 000 points (torch 4.0 ms contract / 8.2 ms with gradient; jax 0.6 ms jitted with gradient at 2 000), dense infeasible there; legacy 352 ms at 2 000. Adversarial review dispositions (Fable, 2026-09-08, standing in for the cross-model pass while Codex is quota-blocked; a retroactive terra pass is owed on this range): 1. Seed dependence of the science claim — PROBED: the study re-run at the CI budget under two seeds never used on the branch (7, 20260908); standard worst bias 3.67/10.8/5.06 and 3.67/10.9/4.62 widths (mild/strong_smooth/strong_sharp), flexible worst 0.76–0.88 with the truth covered everywhere, control flexible ≤ 0.58; every headline assertion holds. Not tuned to the seed. 2. Threshold margins — CHECKED: STANDARD_MIN 2.0 vs worst-case 2.83 at milestone budget and 3.67 at CI budget; FLEXIBLE_MAX 1.5 vs worst 0.98/0.88; localisation contrast 5 vs 45 observed. Margins are wide except the mild/standard one, which is the physically weakest scenario by design. 3. Bias statistic — ACCEPTED: |median − truth| over half the 68% interval is the calibration statistic the claim needs; the report says plainly the flexible likelihood does not give better point estimates. 4. Backend tolerances — ACCEPTED: derived from measured three-seed scatter on the worst-conditioned parameter, stated at 3–5× the Monte Carlo error of a difference; worst observed 0.072/0.109 widths at the milestone budget against 0.20/0.30. 5. Legacy comparability — ACCEPTED as stated: legacy's covariance is a truncated (I + w·M)σσ form, not K(θ)+diag(σ²), so only costs are compared; the RBF cross-check at 200 points reaches the same conclusion. 6. Toy model location — ACCEPTED: the realised paths lower any model exposing grid/flux, asserted on both backends; nothing added to the shipped backends. 7. Findings carried: the jax contract path costs ~28 ms flat on a QuasisepGP problem (dispatch through the numpy boundary, uncompiled) — a gradient-free engine on jax is a pessimisation; torch NUTS ~2.6× slower than jax NUTS at the milestone budget; tests/m2 costs 5:30 in torch; pyproject now carries [tool.pytest.ini_options] (markers only); examples/ imported as a namespace package via sys.path in conftest (a third import idiom). Ruled 2026-09-08 (Peter): the Matérn validation note on the plan's kernel row ratified; the retroactive terra pass on this range when quota returns |
 | W2.4 (slice 3) | merged 2026-09-08 at `d6d9d01` (Opus-authored, Fable-reviewed; no fixes needed — dev 1616/98 and torch 2209/40 re-run on the branch, lint/format clean, pyrefly 0 errors ×2). **Per-instance `device=`** on every shipped torch piece via `_config.place`/`move` (an instance attribute shadowing the class flag — no core change; buffers move with `.to()`; kernels stop copying GPU coordinates back per evaluation; a GPU-configured `DenseGP` now declares its device; the GP noise models refuse a kernel or solver on another device since a kernel is not a capability part); `LoweredProblem` builds every tensor on `problem.device`. **`complex_gaussian`** transcribed and composing in the realised path (a complex observed container stays complex); **the circular complex GP is refused by name** — the core declares `GP_ANALYTIC_IMPLEMENTED = False` and refuses the composition, so there is no oracle (accepted at review; Phase 4 implements it in core first). The prediction-aware `sigma_tensor` hook's last silent fallback is a named refusal; `|predicted|` taken before any dtype cast. Conformance: `ModelKind.COMPLEX` behind a `complex_models` capability flag (torch declares it; the others skip). `tests/gpu/test_torch_gpu.py` at API level (13 rows, skipped here); `tests/backends/test_torch_device.py` (74 rows, using the meta device as a second device). `TorchParameterSpace.sample` fixed (CPU draw then move). Carried: `tests/gpu` is outside `test-all` by design (`pixi run gpu`); `LSFConvolution.sigma_tensor` shares a name with the noise hook (rename to `lsf_sigma_tensor`); a core numpy `Kernel` inside a torch GP noise is still accepted (amplitude gets no gradient). Ruled 2026-09-08 (Peter): refuse by default, accept under an explicit opt-in when no gradient is needed, always refuse where a gradient is required — W3.8 (decision-log row recorded); the rename is W3.0 |
