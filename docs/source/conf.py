@@ -26,7 +26,12 @@ author = 'Peter Scicluna, Francisca Kemper, Sundar Srinivasan, Jonathan'\
          ' Marshall, Sacha Hony, Sascha Zeegers, Lapo Fanciullo'
 
 from importlib.metadata import version
-release = version('pgmuvi')
+# 'pgmuvi' was another project's package name, left over from when this
+# configuration was templated from it; it has never been installable here, so
+# `pixi run docs` failed at configuration time regardless of content
+# (W2.9's docs-build gate found this). The distribution actually installed
+# for this documentation build is 'ampere' (pyproject.toml's [project].name).
+release = version('ampere')
 # for example take major/minor
 version = '.'.join(release.split('.')[:2])
 
