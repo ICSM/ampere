@@ -76,6 +76,8 @@ def test_the_shipped_renderers_all_run(
         assert f"corner_{key}_standard" in stems
         assert f"corner_{key}_flexible" in stems
         assert f"trace_{key}_standard" in stems
+        assert f"posterior_predictive_{key}_standard" in stems
+        assert f"posterior_predictive_{key}_flexible" in stems
         assert f"residuals_{key}_standard" in stems
         assert f"localisation_{key}_flexible" in stems
         assert f"anomaly_{key}_flexible" in stems

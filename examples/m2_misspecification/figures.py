@@ -42,6 +42,7 @@ from ampere.results import (
     plot_anomaly_score,
     plot_corner,
     plot_gp_localisation,
+    plot_posterior_predictive,
     plot_residuals,
     plot_trace,
 )
@@ -346,17 +347,25 @@ def save_result_figures(
     *,
     suffix: str = "png",
     scenarios: tuple[str, ...] | None = None,
+    thin: int = 20,
 ) -> list[pathlib.Path]:
     """Render W2.8's shipped plotting surface, one figure per run.
 
-    Each renderer is called on the runs it is *for*: the corner and trace plots
-    on every run, ``plot_residuals`` on the standard fits (its whiteness family
-    is scoped to them), ``plot_gp_localisation`` and ``plot_anomaly_score`` on
-    the flexible ones. That scoping is the point rather than a convenience —
-    ``diagnostics.md`` §3.1 and §4 say which question each answers, and running
-    the wrong one produces a figure that means something else.
+    Each renderer is called on the runs it is *for*: corner, trace and
+    posterior-predictive on every run, ``plot_residuals`` on the standard fits
+    (its whiteness family is scoped to them), ``plot_gp_localisation`` and
+    ``plot_anomaly_score`` on the flexible ones. That scoping is the point
+    rather than a convenience — ``diagnostics.md`` §3.1 and §4 say which
+    question each answers, and running the wrong one produces a figure that
+    means something else.
+
+    The posterior-predictive group is derived here rather than assumed, because
+    ``results.md`` §7 keeps ``N_draws x N_obs`` groups out of the default
+    emission; *thin* is what keeps that affordable, and it is the same
+    thinning :func:`~examples.m2_misspecification.study.prepare` uses for the
+    residual and localisation groups.
     """
-    from ampere.results import gp_localisation_score
+    from ampere.results import add_posterior_predictive, gp_localisation_score
 
     plt = _pyplot()
     target = pathlib.Path(directory)
@@ -379,6 +388,11 @@ def save_result_figures(
             f"corner_{key}_{kind}",
         )
         _save(plot_trace(run, var_names=list(PHYSICAL_NAMES)), f"trace_{key}_{kind}")
+        entry["run"] = run = add_posterior_predictive(run, entry["problem"], thin=thin)
+        _save(
+            plot_posterior_predictive(run, datasets=[label]),
+            f"posterior_predictive_{key}_{kind}",
+        )
         if kind == "standard":
             _save(plot_residuals(run, datasets=[label]), f"residuals_{key}_{kind}")
         else:
