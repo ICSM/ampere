@@ -22,6 +22,7 @@ import math
 import astropy.units as u
 import numpy as np
 import pytest
+import scipy.linalg
 import scipy.stats as st
 from scipy.stats import multivariate_normal
 
@@ -633,7 +634,19 @@ class TestLatentPathDeclaration:
             model = data.with_values([0.0, 0.0])
             like = Likelihood(TestLatentAware(), GaussianProcessNoise(Matern32(0.3, 1.0)))
             assert like.marginalisation is Marginalisation.LATENT
-            assert like.log_prob(model, data, latent=np.array([1.0, 1.0])) == pytest.approx(5.0)
+            # ``latent=`` is the whitened ``z``; the noise model applies
+            # ``f = L z`` before the family sees it (W2.14), so the offset the
+            # family adds is the sum of the *correlated* values.
+            whitened = np.array([1.0, 1.0])
+            realised = DenseGP().latent_transform(
+                Matern32(0.3, 1.0),
+                np.array([[1.0], [2.0]]),
+                whitened,
+                {"amplitude": 0.3, "length_scale": 1.0},
+            )
+            assert like.log_prob(model, data, latent=whitened) == pytest.approx(
+                3.0 + float(np.sum(realised))
+            )
         finally:
             from ampere.core import likelihood as module
 
@@ -685,13 +698,19 @@ class TestLatentPathDeclaration:
         assert np.allclose(np.triu(lower, k=1), 0.0)
 
     def test_the_latent_poisson_likelihood_is_conditional_on_f(self, counts: Spectrum) -> None:
-        like = Likelihood(PoissonFamily(), GaussianProcessNoise(Matern32(0.3, 1.0)))
+        """``latent=`` is ``z``; the family scores at ``f = L(theta) z`` (W2.14)."""
+        kernel = Matern32(0.3, 1.0)
+        like = Likelihood(PoissonFamily(), GaussianProcessNoise(kernel))
         rate = counts.with_values([3.5, 6.0, 2.5, 8.0])
         with pytest.raises(LikelihoodError, match="latent-variable model"):
             like.log_prob(rate, counts)
-        latent = np.array([0.1, -0.2, 0.05, 0.0])
-        assert like.log_prob(rate, counts, latent=latent) == pytest.approx(
-            float(np.sum(st.poisson.logpmf(counts.values, rate.values * np.exp(latent)))),
+        whitened = np.array([0.1, -0.2, 0.05, 0.0])
+        points = np.asarray(counts.axes[0].values, dtype=float).reshape(-1, 1)
+        realised = DenseGP().latent_transform(
+            kernel, points, whitened, {"amplitude": 0.3, "length_scale": 1.0}
+        )
+        assert like.log_prob(rate, counts, latent=whitened) == pytest.approx(
+            float(np.sum(st.poisson.logpmf(counts.values, rate.values * np.exp(realised)))),
             abs=1e-12,
         )
 
@@ -719,6 +738,248 @@ class TestLatentPathDeclaration:
     def test_latent_parameter_rejects_a_nonsense_size(self) -> None:
         with pytest.raises(LikelihoodError, match="positive number of latent values"):
             latent_parameter("latent", 0)
+
+
+# ---------------------------------------------------------------------------
+# W2.14: the latent path sees its kernel
+# ---------------------------------------------------------------------------
+
+
+def cholesky_factor(x: np.ndarray, amplitude: float, length_scale: float) -> np.ndarray:
+    """``L`` with ``L Lt = K + jitter``, written out from scipy, not from ampere.
+
+    The stabiliser is ``GPSolver.latent_transform``'s documented default — a
+    relative ``1e-10`` on the diagonal, scaled by the kernel's own mean
+    variance — so this really is the same matrix and the comparison is exact
+    rather than approximate.
+    """
+    covariance = matern32_matrix(x, amplitude, length_scale)
+    stabilised = covariance + np.eye(x.size) * (1e-10 * float(np.mean(np.diag(covariance))))
+    return scipy.linalg.cholesky(stabilised, lower=True)
+
+
+class TestTheLatentPathSeesItsKernel:
+    """W2.14: ``noise.latent`` is ``f = L(theta) z``, not the whitened ``z``.
+
+    The defect this class exists for was found independently by both Phase-2
+    backend tracks and reproduced on master: ``latent_parameter`` declares
+    ``z`` whitened and says the correlation "enters through ``f = L(theta) z``,
+    a deterministic transform owned by the ``GPSolver``", and *nothing on the
+    scoring path applied it*. ``Dataset.log_likelihood_of`` handed ``z``
+    straight to the family, which read it as ``f``, so the kernel
+    hyperparameters entered the likelihood nowhere at all and a latent fit
+    sampled the amplitude and the length scale against a flat likelihood while
+    reporting nothing wrong.
+
+    Every row here fails on the pre-W2.14 code, which is the point: the rows
+    that assert *movement* fail because the values were bit-identical, and the
+    rows that assert a closed form fail because the value scored was the one
+    at ``f = z``.
+    """
+
+    @pytest.fixture
+    def counts(self) -> Spectrum:
+        return Spectrum([1.0, 2.0, 3.0, 4.0] * u.um, [4.0, 7.0, 2.0, 9.0])
+
+    @pytest.fixture
+    def rate(self, counts: Spectrum) -> Spectrum:
+        return counts.with_values([3.5, 6.0, 2.5, 8.0])
+
+    @pytest.fixture
+    def whitened(self) -> np.ndarray:
+        return np.array([0.4, -1.1, 0.25, 0.9])
+
+    @staticmethod
+    def grid(counts: Spectrum) -> np.ndarray:
+        return np.asarray(counts.axes[0].values, dtype=float)
+
+    # -- the transform itself, where the fix lives --------------------------
+
+    def test_noise_params_returns_f_not_z(
+        self, counts: Spectrum, rate: Spectrum, whitened: np.ndarray
+    ) -> None:
+        """The one line the fix is: ``noise.latent`` is the correlated draw.
+
+        Checked against ``scipy.linalg.cholesky`` of the same stabilised
+        kernel matrix, so nothing in the comparison came from the solver under
+        test.
+        """
+        noise = GaussianProcessNoise(Matern32(0.7, 1.5), DenseGP())
+        retain = np.ones(counts.n_samples, dtype=bool)
+        points = self.grid(counts).reshape(-1, 1)
+        params = noise.noise_params(
+            counts,
+            retain,
+            {"amplitude": 0.7, "length_scale": 1.5},
+            predicted=np.asarray(rate.values, dtype=float),
+            coordinates=points,
+            latent=whitened,
+        )
+        assert params.latent is not None
+        expected = cholesky_factor(self.grid(counts), 0.7, 1.5) @ whitened
+        assert params.latent == pytest.approx(expected, abs=1e-12)
+        # And it is genuinely a different vector from the one handed in, which
+        # is what the pre-W2.14 code returned.
+        assert not np.allclose(params.latent, whitened)
+
+    def test_the_gaussian_closed_form_at_f_equals_l_z(
+        self, counts: Spectrum, rate: Spectrum, whitened: np.ndarray
+    ) -> None:
+        """The whitened-``z`` Gaussian statement, written out.
+
+        With ``f = L(theta) z`` the conditional density of ``y`` is
+        ``N(y; mu + f, sigma)``. This row scores that closed form off the
+        ``f`` the noise model produced, against one built entirely from
+        ``scipy.linalg.cholesky``, at three amplitudes — so the two track each
+        other rather than agreeing by accident at one point.
+        """
+        sigma = np.full(counts.n_samples, 0.4)
+        observed = np.asarray(counts.values, dtype=float)
+        mean = np.asarray(rate.values, dtype=float)
+        points = self.grid(counts).reshape(-1, 1)
+        retain = np.ones(counts.n_samples, dtype=bool)
+        scored = []
+        for amplitude in (0.3, 0.9, 2.5):
+            noise = GaussianProcessNoise(Matern32(amplitude, 1.5), DenseGP())
+            params = noise.noise_params(
+                counts,
+                retain,
+                {"amplitude": amplitude, "length_scale": 1.5},
+                predicted=mean,
+                coordinates=points,
+                latent=whitened,
+            )
+            assert params.latent is not None
+            reference = cholesky_factor(self.grid(counts), amplitude, 1.5) @ whitened
+            got = float(np.sum(st.norm.logpdf(observed, loc=mean + params.latent, scale=sigma)))
+            expected = float(np.sum(st.norm.logpdf(observed, loc=mean + reference, scale=sigma)))
+            assert got == pytest.approx(expected, abs=1e-12)
+            scored.append(got)
+        assert len(set(scored)) == 3
+
+    # -- the consequence: the likelihood moves ------------------------------
+
+    def test_the_log_likelihood_moves_with_the_amplitude(
+        self, counts: Spectrum, rate: Spectrum, whitened: np.ndarray
+    ) -> None:
+        """Bit-identical for 0.5, 5 and 50 before W2.14; three numbers now."""
+        like = Likelihood(
+            PoissonFamily(), GaussianProcessNoise(Matern32(st.halfnorm(0.0, 5.0), 1.5), DenseGP())
+        )
+        values = [
+            like.log_prob(rate, counts, {"amplitude": amplitude}, latent=whitened)
+            for amplitude in (0.5, 5.0, 50.0)
+        ]
+        assert len(set(values)) == 3
+        assert all(math.isfinite(value) for value in values)
+
+    def test_the_log_likelihood_moves_with_the_length_scale(
+        self, counts: Spectrum, rate: Spectrum, whitened: np.ndarray
+    ) -> None:
+        """The same statement for the other free hyperparameter."""
+        like = Likelihood(
+            PoissonFamily(),
+            GaussianProcessNoise(Matern32(0.7, st.loguniform(0.01, 1e3)), DenseGP()),
+        )
+        values = [
+            like.log_prob(rate, counts, {"length_scale": length_scale}, latent=whitened)
+            for length_scale in (0.1, 1.0, 100.0)
+        ]
+        assert len(set(values)) == 3
+        assert all(math.isfinite(value) for value in values)
+
+    def test_it_equals_the_poisson_closed_form_at_f(
+        self, counts: Spectrum, rate: Spectrum, whitened: np.ndarray
+    ) -> None:
+        """``sum log Poisson(y; rate e^(L z))``, from scipy end to end."""
+        like = Likelihood(PoissonFamily(), GaussianProcessNoise(Matern32(0.7, 1.5), DenseGP()))
+        realised = cholesky_factor(self.grid(counts), 0.7, 1.5) @ whitened
+        expected = float(np.sum(st.poisson.logpmf(counts.values, rate.values * np.exp(realised))))
+        assert like.log_prob(rate, counts, latent=whitened) == pytest.approx(expected, abs=1e-12)
+
+    def test_the_zero_amplitude_limit_is_the_uncorrelated_likelihood(
+        self, counts: Spectrum, rate: Spectrum, whitened: np.ndarray
+    ) -> None:
+        """``K = 0`` means ``f = 0``: the sanity check at the edge of the family.
+
+        Not *exactly* zero, and the reason is worth recording rather than
+        hiding behind a loose tolerance: ``latent_transform`` scales its
+        relative jitter by the kernel's own mean variance and falls back to
+        ``1.0`` when that is zero, so a zero-amplitude kernel factorises
+        ``1e-10 * I`` and ``f`` is ``1e-5 z`` rather than ``0``. The
+        uncorrelated limit is therefore approached to about ``1e-5`` in ``f``,
+        which is what this asserts.
+        """
+        like = Likelihood(PoissonFamily(), GaussianProcessNoise(Matern32(0.0, 1.5), DenseGP()))
+        assert like.log_prob(rate, counts, latent=whitened) == pytest.approx(
+            float(np.sum(st.poisson.logpmf(counts.values, rate.values))), abs=1e-4
+        )
+
+    def test_the_two_solvers_agree_on_the_realised_likelihood(
+        self, counts: Spectrum, rate: Spectrum, whitened: np.ndarray
+    ) -> None:
+        """§4.6's DenseGP-QuasisepGP row, now reachable on the latent path too."""
+        dense = Likelihood(PoissonFamily(), GaussianProcessNoise(Matern32(0.7, 1.5), DenseGP()))
+        quasisep = Likelihood(
+            PoissonFamily(), GaussianProcessNoise(Matern32(0.7, 1.5), QuasisepGP())
+        )
+        assert quasisep.log_prob(rate, counts, latent=whitened) == pytest.approx(
+            dense.log_prob(rate, counts, latent=whitened), abs=1e-9
+        )
+
+    # -- the failures the transform makes possible ---------------------------
+
+    def test_a_mis_sized_latent_block_is_refused_by_name(self, counts: Spectrum) -> None:
+        """Named before a solver produces a matrix-shape error instead."""
+        noise = GaussianProcessNoise(Matern32(0.7, 1.5), DenseGP())
+        with pytest.raises(LikelihoodError, match="One latent value per retained sample"):
+            noise.noise_params(
+                counts,
+                np.ones(counts.n_samples, dtype=bool),
+                {"amplitude": 0.7, "length_scale": 1.5},
+                coordinates=self.grid(counts).reshape(-1, 1),
+                latent=np.zeros(counts.n_samples + 1),
+            )
+
+    def test_latent_values_without_coordinates_are_refused_by_name(self, counts: Spectrum) -> None:
+        """A direct caller that forgets them is told what is missing."""
+        noise = GaussianProcessNoise(Matern32(0.7, 1.5), DenseGP())
+        with pytest.raises(LikelihoodError, match="without the coordinates"):
+            noise.noise_params(
+                counts,
+                np.ones(counts.n_samples, dtype=bool),
+                {"amplitude": 0.7, "length_scale": 1.5},
+                latent=np.zeros(counts.n_samples),
+            )
+
+    def test_a_masked_sample_shrinks_the_transform_with_the_block(
+        self, rate: Spectrum, whitened: np.ndarray
+    ) -> None:
+        """The transform runs on the *retained* coordinates, not on all of them.
+
+        Masking is excision (``likelihoods.md`` §9), so a masked sample leaves
+        the covariance entirely — its row and column never enter ``L``. The
+        oracle is therefore the Cholesky of the sub-matrix, which is a
+        different factor from any three rows of the full one.
+        """
+        masked = Spectrum(
+            [1.0, 2.0, 3.0, 4.0] * u.um,
+            [4.0, 7.0, 2.0, 9.0],
+            mask=np.array([False, True, False, False]),
+        )
+        like = Likelihood(PoissonFamily(), GaussianProcessNoise(Matern32(0.7, 1.5), DenseGP()))
+        kept = [0, 2, 3]
+        realised = cholesky_factor(np.array([1.0, 3.0, 4.0]), 0.7, 1.5) @ whitened[kept]
+        expected = float(
+            np.sum(
+                st.poisson.logpmf(
+                    np.asarray(masked.values)[kept],
+                    np.asarray(rate.values)[kept] * np.exp(realised),
+                )
+            )
+        )
+        got = like.log_prob(rate, masked, latent=whitened[kept])
+        assert got == pytest.approx(expected, abs=1e-12)
 
 
 # ---------------------------------------------------------------------------
