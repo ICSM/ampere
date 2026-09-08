@@ -51,6 +51,7 @@ from ampere.backends.torch import (  # noqa: E402
     QuasisepGP,
     Resample,
     SquaredExponential,
+    SyntheticPhotometry,
     lower_problem,
 )
 from ampere.backends.torch._config import (  # noqa: E402
@@ -91,11 +92,32 @@ def a_model(**kwargs: Any) -> PowerLaw:
 # ---------------------------------------------------------------------------
 
 
+def _synthetic_photometry(device: Any) -> SyntheticPhotometry:
+    """The one shipped step that cannot be built on the meta device.
+
+    Not a gap in its ``device=`` keyword: its ``__init__`` *validates the
+    response curves* — finite, non-negative, non-degenerate — which is a
+    ``bool()`` of a tensor, and a meta tensor has no data to read. That is
+    right for a step whose whole content is a tabulated filter set (a bad curve
+    should be refused where it is declared, not discovered in a fit), and it
+    means this one piece is exercised on the CPU here rather than against the
+    meta stand-in. On a real accelerator it takes the keyword like any other.
+    """
+    return SyntheticPhotometry(
+        ["W1", "W2"],
+        GRID,
+        np.array([[0.0, 1.0, 1.0, 0.0], [1.0, 1.0, 0.0, 0.0]]),
+        detector="photon",
+        device=device,
+    )
+
+
 def _pieces(device: Any) -> dict[str, Any]:
     """One of every shipped kind, built on *device*.
 
     Written as a mapping rather than a list so a failure names the class that
-    dropped the keyword rather than an index.
+    dropped the keyword rather than an index. :class:`SyntheticPhotometry` is
+    the one omission and has its own row; see :func:`_synthetic_photometry`.
     """
     return {
         "PowerLaw": a_model(device=device),
@@ -146,6 +168,14 @@ class TestEveryPieceTakesTheKeyword:
         piece = _pieces(OTHER)[name]
         assert type(piece).DEVICE == "cpu"
         assert piece.DEVICE == OTHER
+
+    def test_synthetic_photometry_takes_it_too(self) -> None:
+        """The step ``_pieces`` leaves out, on a device it can validate itself on."""
+        assert _synthetic_photometry("cpu").DEVICE == "cpu"
+        assert type(_synthetic_photometry("cpu")).DEVICE == "cpu"
+        assert all(
+            tensor.device.type == "cpu" for tensor in _synthetic_photometry("cpu").tensors.buffers()
+        )
 
     def test_the_quasiseparable_solver_still_refuses_to_be_moved(self) -> None:
         """celerite2's kernels are compiled float64 CPU; the refusal is the truth."""
