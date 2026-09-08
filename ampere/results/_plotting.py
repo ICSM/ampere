@@ -43,13 +43,19 @@ __all__ = [
     "distinct_provenances",
     "figure_metadata",
     "gp_datasets",
+    "grid_axes",
     "likelihood_specs",
     "new_axes",
+    "parameter_columns",
     "register_score",
+    "require_corner",
     "require_group",
     "require_matplotlib",
+    "require_sampling_group",
     "run_seed",
+    "scored_draws",
     "select_datasets",
+    "select_names",
     "wrap",
 ]
 
@@ -87,6 +93,28 @@ def require_matplotlib() -> Any:
     return pyplot
 
 
+def require_corner() -> Any:
+    """Import ``corner`` on use, never on import.
+
+    ``corner`` is a **base** dependency (``pyproject.toml``), so ``extra=None``
+    exactly as for matplotlib: an environment without it is incomplete rather
+    than missing an extra. It is what draws the pairwise grid — the library
+    every astronomer already reads — rather than a grid hand-rolled here, which
+    is the same argument ``DEVELOPMENT_PLAN.md`` §4.6 makes for ArviZ being the
+    single results format.
+    """
+    try:
+        import corner
+    except ImportError as error:  # pragma: no cover - exercised by a minimal install
+        raise OptionalDependencyError(
+            "corner",
+            context="drawing the pairwise marginal grid (ampere.results.plot_corner). corner is "
+            "a base dependency of ampere, so this environment is incomplete rather than merely "
+            "missing an extra",
+        ) from error
+    return corner
+
+
 def new_axes(ax: Any = None, *, nrows: int = 1, size: tuple[float, float] = (8.0, 3.0)) -> Any:
     """``(figure, axes_array)``, either fresh or wrapped around a caller's axes.
 
@@ -105,6 +133,21 @@ def new_axes(ax: Any = None, *, nrows: int = 1, size: tuple[float, float] = (8.0
         return ax.get_figure(), np.array([ax], dtype=object)
     figure, axes = pyplot.subplots(nrows=nrows, figsize=(size[0], size[1] * nrows), squeeze=False)
     return figure, axes[:, 0]
+
+
+def grid_axes(nrows: int, ncols: int, size: tuple[float, float] = (5.0, 2.2)) -> Any:
+    """``(figure, axes)`` for a fresh ``nrows x ncols`` grid, never squeezed.
+
+    :func:`new_axes` is the one-column form the diagnostic panels want;
+    :func:`~ampere.results.plots.plot_trace` wants two columns (a marginal and
+    a trace) per variable, and squeezing a 1-row grid into a bare axes is the
+    kind of shape surprise that makes a loop over panels wrong only sometimes.
+    """
+    pyplot = require_matplotlib()
+    figure, axes = pyplot.subplots(
+        nrows=nrows, ncols=ncols, figsize=(size[0] * ncols, size[1] * nrows), squeeze=False
+    )
+    return figure, axes
 
 
 def attach_metadata(figure: Any, key: str, value: str) -> None:
@@ -149,6 +192,132 @@ def require_group(tree: Any, group: str, *, remedy: str) -> Any:
             f"{remedy}"
         )
     return tree[group].dataset
+
+
+def require_sampling_group(tree: Any, group: str) -> Any:
+    """A group every emitted run carries, or a refusal that says what is wrong.
+
+    Distinct from :func:`require_group`, whose message explains that a
+    *derived* group is not stored by default and names the function that
+    computes it. ``posterior`` and ``sample_stats`` are not derived: a tree
+    without them was not produced by :func:`~ampere.results.emit`, and telling
+    a user to "compute it on demand" would send them the wrong way.
+    """
+    children = getattr(tree, "children", None)
+    if children is None or group not in children:
+        raise ResultsError(
+            f"this run has no {group!r} group. Every run ampere.results.emit produces carries "
+            f"it, so this is not an emitted run — the plotting surface takes the emitted run "
+            f"and nothing else (results.md §8)."
+        )
+    return tree[group].dataset
+
+
+def select_names(
+    available: Sequence[str], requested: Sequence[str] | None, *, what: str
+) -> tuple[str, ...]:
+    """Which named variables to draw: all of *available*, or the caller's subset.
+
+    The sibling of :func:`select_datasets` for things that are not datasets —
+    posterior variables, whose names are the **merged** parameter names, which
+    is what makes an unknown one worth reporting with the full list beside it:
+    ``model.index`` versus ``index`` is the commonest way to get this wrong,
+    and the merged name is exactly what ``inference.md`` §4.5 says a user
+    types.
+    """
+    if requested is None:
+        chosen = tuple(available)
+    else:
+        unknown = [name for name in requested if name not in available]
+        if unknown:
+            raise ResultsError(
+                f"this run has no {what} named {sorted(unknown)}; it has {sorted(available)}. "
+                f"Variables are keyed by merged parameter name (results.md §4)."
+            )
+        chosen = tuple(requested)
+    if not chosen:
+        raise ResultsError(f"no {what} was selected, so there is nothing to draw.")
+    return chosen
+
+
+def parameter_columns(
+    group: Any, names: Sequence[str], *, limit: int, what: str
+) -> list[tuple[str, np.ndarray]]:
+    """``(label, values)`` per scalar column, expanding array-valued blocks.
+
+    ``results.md`` §4: an array-valued parameter — a plate member, a latent GP
+    block — is **one variable with a named dimension**, never ``N`` scalar
+    names. A pairwise grid or a trace stack is nevertheless per scalar, so the
+    block is expanded here, and its element labels come from the dimension's
+    own coordinate when it has one (a plate's coordinate is the dataset labels,
+    ``hierarchical_population.md`` §10.2) and from the integer index when it
+    does not.
+
+    *limit* is where the expansion is **refused rather than attempted**:
+    ``likelihoods.md`` §16(a)'s 10⁵-element latent block is exactly the input a
+    corner plot must decline, and declining it with the count and the offending
+    variable named is the difference between a refusal and a hung process.
+    ``values`` are ``(chain, draw)``.
+    """
+    columns: list[tuple[str, np.ndarray]] = []
+    for name in names:
+        data = group[name]
+        extra = [dim for dim in data.dims if dim not in ("chain", "draw")]
+        values = np.asarray(data.values)
+        if not extra:
+            columns.append((str(name), values.astype(float)))
+            continue
+        block = values.reshape(values.shape[0], values.shape[1], -1)
+        size = block.shape[-1]
+        if size > limit:
+            raise ResultsError(
+                f"parameter {name!r} is one array-valued block of {size} elements (dimension(s) "
+                f"{extra}), and {what} of it would be {size} panels. results.md §8 requires this "
+                f"to be refused loudly rather than attempted. Select the variables you want with "
+                f"var_names=, or raise max_variables= if you really mean it."
+            )
+        labels = _element_labels(data, extra, size)
+        for index in range(size):
+            columns.append((f"{name}[{labels[index]}]", block[:, :, index].astype(float)))
+    if len(columns) > limit:
+        raise ResultsError(
+            f"{what} of {len(columns)} variables was asked for, and the limit is {limit}. "
+            f"A grid that large is not readable and is usually a selection mistake; narrow it "
+            f"with var_names=, or raise max_variables= deliberately."
+        )
+    return columns
+
+
+def _element_labels(data: Any, extra: Sequence[str], size: int) -> list[str]:
+    """One label per element of an array-valued block, coordinates preferred."""
+    if len(extra) == 1 and extra[0] in data.coords:
+        return [str(value) for value in np.asarray(data.coords[extra[0]].values).ravel()]
+    shape = tuple(int(data.sizes[dim]) for dim in extra)
+    if len(shape) == 1:
+        return [str(index) for index in range(size)]
+    return [", ".join(str(part) for part in index) for index in np.ndindex(*shape)]
+
+
+def scored_draws(tree: Any) -> np.ndarray | None:
+    """``(chain, draw)`` boolean: which draws the prior did not reject.
+
+    ``inference.md`` §18(c) and ``results.md`` §5: a prior-rejected draw stores
+    ``lp = -inf`` and a **NaN** log-likelihood, and the two are different
+    statements that must not be flattened. What that means for a plot is that
+    such a draw is not a posterior sample: it belongs in a trace as a *gap*,
+    and it does not belong in a marginal at all.
+
+    ``None`` when the run carries no ``sample_stats`` — the honest answer for a
+    tree that was not emitted by ampere, and the caller then treats every draw
+    as scored.
+    """
+    children = getattr(tree, "children", None)
+    if children is None or "sample_stats" not in children:
+        return None
+    stats = tree["sample_stats"].dataset
+    if "lp" not in stats.variables:  # pragma: no cover - a hand-built run
+        return None
+    return np.isfinite(np.asarray(stats["lp"].values, dtype=float))
 
 
 def likelihood_specs(tree: Any) -> dict[str, dict[str, Any]]:

@@ -129,7 +129,8 @@ observed containers with different coordinates and different units.
 | `canonical_json`, `hash_of`, `hash_container`, `problem_fingerprint` | The hashing recipe (§9) |
 | `describe_likelihood` | Family + noise + solver + kernel + censoring, which no other spec serialises (§12, Q8) |
 | `container_to_dict` / `model_result_to_dict` and their inverses | `results_schema.md` §17.6's unclaimed serialisation (§11) |
-| `add_posterior_predictive`, `add_residuals`, `gp_localisation` | Groups computed on demand, never stored by default (§7) |
+| `add_posterior_predictive`, `add_residuals`, `gp_localisation`, `add_pointwise_log_likelihood` | Groups computed on demand, never stored by default (§7; the last of the four is §6's, added W2.8) |
+| `write_training_set` / `append_training_set` / `read_training_set` | §11 layer 2's on-disk training set (added W2.8) |
 | `plot_*` | The plotting surface (§8) |
 | `ResultsError` | This contract's error; a `ContractError`, hence a `ValueError` |
 
@@ -421,6 +422,20 @@ not-stored-by-default rule is unchanged: emitting the group remains an
 explicit call, and the emission helper itself is Phase 2's, beside the
 engine drivers that produce runs worth decomposing.)*
 
+*(Landed W2.8.* `ampere.results.add_pointwise_log_likelihood(tree, problem)`
+is that helper, and it is the only thing that writes the group. It stores one
+term per retained observation on the container's own coordinate axis, masked
+samples as NaN; it declares the decomposition per variable as well as on the
+group, since a joint fit that mixes an independent-noise dataset with a GP one
+has two of them and no single honest answer; and where the solver does not
+implement `conditional_loo` it **refuses by name rather than falling back to a
+dense solve**, because at the sizes `QuasisepGP` exists for that substitution
+is a different program and not a slower answer.
+`ampere.results.pointwise_as_log_likelihood(tree)` is the one-line bridge to
+`arviz.loo`, which reads the group *named* `log_likelihood` — where ampere
+deliberately keeps the per-dataset split (§15 R6), so the swap has to be
+explicit rather than discovered by experiment.*)
+
 ## 7. Groups a run does not store, and the rule for getting them
 
 `diagnostics.md` §7 puts two questions to this contract.
@@ -520,6 +535,11 @@ Every plotting function is a declared signature that raises `NotImplementedError
 naming Phase 2. That is deliberate: the surface is what two backend tracks and
 three diagnostic families need agreed *before* they are written, and a
 half-implemented plot would be a worse commitment than an honest refusal.
+*(Amended W2.8: none of the six does any longer — W2.7 landed `plot_residuals`,
+`plot_gp_localisation` and `plot_anomaly_score`, W2.8 `plot_corner`, `plot_trace`
+and `plot_posterior_predictive`, and the surface above was not moved to make
+either possible. What they raise now is `ResultsError`, on an input that is not
+an emitted run.)*
 
 ## 9. Provenance: the recipe, stated once
 
@@ -919,7 +939,11 @@ itself once with `register_kind`, the same way it already registers with
 `ampere.core`'s other extension points.
 
 **Layer 2 — the on-disk training-set format: netCDF, the same as everything
-else.** Specified here, not implemented:
+else.** Specified here, and **implemented at W2.8** in `ampere.results.training`
+(`write_training_set` / `append_training_set` / `read_training_set`); the two
+rows marked below are that item's additions, which
+`serialisation_review.md` §4 asked the writer for and which this table, written
+before the review, does not otherwise have a home for:
 
 | Group | Contents | Dims |
 |---|---|---|
@@ -927,7 +951,8 @@ else.** Specified here, not implemented:
 | `theta` | one variable per merged parameter name | `(sample,)`, plus the parameter's own dimensions |
 | `<model>.<channel>` | one group per model channel: `values`, and `uncertainty`/`mask` where present | `(sample,)` + the channel's coordinate dimensions |
 | `coordinates` | each channel's coordinate arrays, with units as attributes | the channel's dimensions |
-| `sample_stats` | `failed`, `failure_reason` per draw | `(sample,)` |
+| `sample_stats` | `failed`, and the whole `Failure` record — `failure_reason`, `failure_message`, `failure_where`, `failure_exception_type`, `failure_values` *(the last four amended W2.8)* | `(sample,)` |
+| `observations` *(added W2.8)* | one subgroup per dataset label, holding the noisy draws `simulate(observe=True)` produced: `values`, and `uncertainty`/`mask` where present. Absent from a set whose budget drew none | `(sample,)` + the dataset's coordinate dimensions |
 
 Three properties, each of which is why the format is netCDF and not JSON or a
 pickle. NaN is native, so a masked or crashed sample needs no sentinel. The
@@ -960,7 +985,7 @@ training set and is what the composed problem is for.
 | Non-finite floats become sentinel strings, so `allow_nan=False` stays on | JSON has no `NaN`; the alternative is a non-portable token in a netCDF attribute |
 | An unrecognised object is refused rather than dropped from a record | A record missing a field it did not understand compares equal to a run that lacked it |
 | arviz is lazily imported and stays an extra for now | `architecture.md` §4 rule 2 names this namespace; and this item lands the namespace, not the capability (§10) |
-| Every plot is a declared signature raising `NotImplementedError` | The surface is what two backend tracks and three diagnostic families need agreed first; a half-drawn plot is a worse commitment than a refusal |
+| Every plot is a declared signature raising `NotImplementedError` | The surface is what two backend tracks and three diagnostic families need agreed first; a half-drawn plot is a worse commitment than a refusal. *(Amended W2.8: all six are drawn now, against the surface fixed here and unchanged by the drawing — see §8)* |
 | The GP-localisation caveat is a constant, a docstring and a function | `diagnostics.md` §4.3 requires it to reach a programmatic consumer, not only a viewer |
 | Container serialisation is functions in `ampere.results`, not methods on the containers | A hot-loop object should not carry the one method no evaluation calls; and `results_schema.py` is a merged contract (§15 R5) |
 | Training sets are netCDF | NaN is native, coordinates are stored once, and the spec hash sits in the attributes where invalidation can see it |
@@ -972,10 +997,17 @@ Each is a decision, not an oversight. Each has an extension point.
 
 1. **No per-observation log-likelihood.** §6 names the decomposition and the
    group; what is missing is a method on `Likelihood`. Extension point: R2.
+   *(Closed: R2 was granted at the freeze and `Likelihood.pointwise_log_prob`
+   landed with it; **W2.8** added `ampere.results.add_pointwise_log_likelihood`,
+   which writes the group on an explicit call and never by default. What stays
+   deliberately unreached is a solver that does not implement
+   `conditional_loo` — `QuasisepGP` and its jax twin — where the emission
+   refuses by name rather than falling back to a dense solve.)*
 2. **No engine drivers.** Nothing in ampere currently produces the draws `emit`
    consumes; `DrawRecorder` is the shape a driver will use, exercised here by the
    test suite rather than by a sampler. Phase 2's drivers are the consumers.
 3. **The plotting functions are signatures.** They raise; Phase 2 draws.
+   *(Closed: W2.7 drew three and W2.8 the other three.)*
 4. **`warmup_*` groups are not emitted.** ArviZ has a convention for them and
    ampere has no sampler to produce them yet. The group names are ArviZ's and
    cost nothing to adopt when a driver has warmup to store.
@@ -994,7 +1026,16 @@ Each is a decision, not an oversight. Each has an extension point.
    mode this refuses.
 9. **The training-set writer is specified, not implemented.** §11's layer 2 is a
    table and a rationale; the writer lands with Phase 2's SBI and emulator work,
-   against the format fixed here.
+   against the format fixed here. *(Closed at **W2.8**:
+   `ampere.results.training` writes, appends to and reads the format, and
+   `training_pair_from_dict` completes the in-memory round trip.
+   `serialisation_review.md` §4's two named losses are closed with it — θ keeps
+   its dtype (`CONTAINER_SCHEMA_VERSION` 2) and `Simulation.observations` and
+   the `Failure` detail are carried. One limitation is created and recorded in
+   its place: **append is read-concatenate-rewrite**, `O(existing + new)` per
+   call, because an in-place unlimited-dimension resize is a second
+   serialisation path through h5netcdf rather than xarray. That is the
+   extension point when a budget outgrows memory.)*
 10. **`AnomalyScore` is a `Protocol`, not a class.** *(Closed at the freeze:
     R4 was granted and `ampere.core.AnomalyScore` landed 2026-09-03. The
     renderer stays typed against the shape, which the class satisfies.)*

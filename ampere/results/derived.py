@@ -39,14 +39,38 @@ a variance *on the full coordinate axis, masked samples included* — because
 excluded region. :func:`gp_localisation` evaluates it across posterior draws;
 the caveat that must travel with the answer is in :mod:`ampere.results.plots`.
 
-W1.8 declared all three surfaces without implementing them. **W2.7 lands two of
+W1.8 declared all three surfaces without implementing them. **W2.7 landed two of
 them** — :func:`add_residuals` and :func:`gp_localisation`, the inputs
 ``diagnostics.md``'s families B and C actually consume — leaving
 :func:`add_posterior_predictive` for the item that lands
-``plot_posterior_predictive`` beside it. Nothing about the shapes, the group
-names or the cost policy has moved: they are what W1.8 fixed, which is the
-point of having fixed them before two backend tracks and three diagnostic
-families wrote against them.
+``plot_posterior_predictive`` beside it. **W2.8 lands that one**, and with it
+the fourth on-demand group: :func:`add_pointwise_log_likelihood`, ArviZ's
+per-*observation* convention over
+:meth:`ampere.core.likelihood.Likelihood.pointwise_log_prob`. Nothing about the
+shapes, the group names or the cost policy has moved: they are what W1.8 fixed,
+which is the point of having fixed them before two backend tracks and three
+diagnostic families wrote against them.
+
+The per-observation group, and why it is still an explicit call
+---------------------------------------------------------------
+``results.md`` §6 reserved :data:`POINTWISE_LOG_LIKELIHOOD_GROUP` and its
+``ampere_decomposition`` attribute — ``"factorised"`` for independent noise,
+``"conditional_loo"`` for a GP — and ruled (2026-09-03, §15 R2) that the terms
+are "granted at the freeze but **not stored by default**". The three reasons
+are unchanged by having a computation available: the group is
+``N_draws x N_obs`` per dataset where the per-dataset one is
+``N_draws x N_datasets``; a run that does not need LOO should not carry it;
+and two decompositions must not share a group name, or ``arviz.loo`` would
+mean three different things depending on the fit. So it is written by
+:func:`add_pointwise_log_likelihood` and by nothing else.
+
+Where the solver cannot supply the decomposition, this module **refuses by
+name and never falls back to a dense solve**:
+:meth:`ampere.core.likelihood.QuasisepGP.conditional_loo` is deferred (W2.3),
+as is the jax one, and silently substituting :class:`DenseGP` would turn an
+``O(N)`` fit's diagnostic into an ``O(N^3)`` one behind the user's back —
+which for the 20 000-point spectra the quasiseparable solve exists to serve is
+not a slower answer but a different program.
 """
 
 from __future__ import annotations
@@ -57,13 +81,14 @@ from typing import Any
 import numpy as np
 
 from ampere.core.dataset import LIKELIHOOD_COMPONENT, Dataset, FittingProblem
-from ampere.core.exceptions import ResultsError
-from ampere.core.likelihood import GaussianProcessNoise
+from ampere.core.exceptions import LikelihoodError, ResultsError
+from ampere.core.likelihood import GaussianProcessNoise, Marginalisation
 from ampere.core.results_schema import FunctionSamples
 
 from .emission import (
     CHAIN_DIM,
     DRAW_DIM,
+    LOG_LIKELIHOOD_GROUP,
     POSTERIOR_GROUP,
     _container_dims,
     _require_arviz,
@@ -71,13 +96,17 @@ from .emission import (
 from .provenance import ATTR_PREFIX, hash_of, problem_fingerprint
 
 __all__ = [
+    "CONDITIONAL_LOO_DECOMPOSITION",
+    "FACTORISED_DECOMPOSITION",
     "GP_LOCALISATION_GROUP",
     "POINTWISE_LOG_LIKELIHOOD_GROUP",
     "POSTERIOR_PREDICTIVE_GROUP",
     "RESIDUALS_GROUP",
+    "add_pointwise_log_likelihood",
     "add_posterior_predictive",
     "add_residuals",
     "gp_localisation",
+    "pointwise_as_log_likelihood",
 ]
 
 #: Replicate observations ``y_rep ~ p(y | θ_k)``, one variable per dataset,
@@ -93,21 +122,23 @@ RESIDUALS_GROUP = "residuals"
 #: default; family C's input.
 GP_LOCALISATION_GROUP = "gp_localisation"
 
-#: ArviZ's per-**observation** ``log_likelihood`` convention, reserved but not
-#: written: computing it needs a method on ``Likelihood`` that does not exist
-#: (``results.md`` §6 and its ruling request R2). It is a distinct group from
-#: ``log_likelihood`` precisely so the two decompositions cannot be confused —
-#: a variable here carries an ``ampere_decomposition`` of ``"factorised"``
-#: (independent noise; exact) or ``"conditional_loo"`` (a GP's leave-one-out
-#: conditional terms). Reserved now so a run emitted today is
-#: forward-compatible with one emitted after it lands.
+#: ArviZ's per-**observation** ``log_likelihood`` convention. Reserved by
+#: ``results.md`` §6 and written since W2.8, by :func:`add_pointwise_log_likelihood`
+#: and by nothing else. It is a distinct group from ``log_likelihood`` precisely
+#: so the two decompositions cannot be confused — a variable here carries an
+#: ``ampere_decomposition`` of ``"factorised"`` (independent noise; exact) or
+#: ``"conditional_loo"`` (a GP's leave-one-out conditional terms).
 POINTWISE_LOG_LIKELIHOOD_GROUP = "pointwise_log_likelihood"
 
-_PHASE_2 = (
-    "Its shape, group name and cost policy are fixed by W1.8 "
-    "(docs/design/contracts/results.md §7); the computation lands in Phase 2, "
-    "which is when a backend exists to make it cheap."
-)
+#: The independent-noise decomposition: the family's own ``log_prob`` evaluated
+#: pointwise. Exact, and the terms sum to the dataset's joint log-likelihood.
+FACTORISED_DECOMPOSITION = "factorised"
+
+#: The GP decomposition: ``log N(y_i | mu_i^{-i}, sigma_i^{2,-i})``, the
+#: leave-one-out conditional terms. These are what ``arviz.loo`` consumes, and
+#: they deliberately do **not** sum to the joint value — a GP likelihood has no
+#: per-observation factorisation (``likelihoods.md`` §16).
+CONDITIONAL_LOO_DECOMPOSITION = "conditional_loo"
 
 
 def add_posterior_predictive(
@@ -141,9 +172,85 @@ def add_posterior_predictive(
         The named RNG sub-stream (``lowering.md`` §9.2) the draws come from.
         Separate from ``"simulate"`` on purpose: adding a predictive check must
         not change an SBI budget's draws.
+
+    Raises
+    ------
+    ampere.core.exceptions.ResultsError
+        If the problem is not the one the run was over, if a requested dataset
+        is not in it, or if a requested dataset's observed container is
+        complex-valued (a replicate of a visibility set is two real arrays, and
+        this group's one-variable-per-dataset shape has nowhere to put the
+        second — see ``results.md`` §4's real/imag splitting, which the derived
+        groups do not yet mirror).
+
+    Notes
+    -----
+    Masked samples are **NaN**, not the observed value.
+    :meth:`~ampere.core.dataset.Dataset.draw_observation` deliberately leaves a
+    masked sample's observed value in place — it draws no noise for a sample
+    nobody measured — and copying that into a group named "replicate" would
+    invent a replicate that is exactly the datum, giving a discrepancy
+    statistic a free perfect fit at every gap. The mask convention is
+    ``add_residuals``', for the same reason it is there.
+
+    A draw the forward model could not complete (a prior-rejected θ, a
+    simulator crash) leaves its whole row NaN, exactly as the residual group
+    does: ``simulate`` flags rather than raises, so one bad draw costs one row
+    rather than the group.
     """
-    raise NotImplementedError(
-        f"posterior-predictive replicates are not implemented yet. {_PHASE_2}"
+    _require_same_problem(tree, problem)
+    labels = _requested(problem, datasets)
+    for label in labels:
+        observed = problem.datasets[label].observed
+        if np.asarray(observed.values).dtype.kind == "c":
+            raise ResultsError(
+                f"dataset {label!r} is complex-valued, and a posterior-predictive group holds "
+                f"one real variable per dataset. results.md §4 splits a complex observed "
+                f"container into <label>_real and <label>_imag; the derived groups do not do "
+                f"that yet. Replicate the real datasets by name, or draw the replicates "
+                f"yourself with FittingProblem.simulate(observe=True)."
+            )
+    thetas, kept = _stored_thetas(tree, problem, thin)
+    chains, draws = thetas.shape[0], thetas.shape[1]
+    variables = {
+        label: np.full(
+            (chains, draws, problem.datasets[label].observed.n_samples), np.nan, dtype=float
+        )
+        for label in labels
+    }
+    for chain in range(chains):
+        for draw in range(draws):
+            simulation = problem.simulate(
+                thetas[chain, draw], observe=True, stream=str(seed_stream)
+            )
+            if simulation.failed or simulation.observations is None:
+                continue
+            for label in labels:
+                drawn = simulation.observations.get(label)
+                if drawn is None:  # pragma: no cover - a failure short-circuits above
+                    continue
+                replicate = np.asarray(drawn.values, dtype=float).ravel()
+                excluded = problem.datasets[label].effective_mask
+                if excluded is not None:
+                    replicate = np.where(np.asarray(excluded).ravel(), np.nan, replicate)
+                variables[label][chain, draw] = replicate
+    dims, coords = _observed_axes(problem, labels)
+    return _attach(
+        tree,
+        POSTERIOR_PREDICTIVE_GROUP,
+        variables,
+        dims,
+        coords,
+        kept,
+        {
+            f"{ATTR_PREFIX}seed_stream": str(seed_stream),
+            f"{ATTR_PREFIX}derivation": (
+                "y_rep ~ p(y | theta_k) through FittingProblem.simulate(observe=True), so the "
+                "replicates come from the same LikelihoodFamily.sample the likelihood scores "
+                "with (inference.md §13); masked samples are NaN, never dropped "
+                "(results.md §7)."
+            ),
+        },
     )
 
 
@@ -385,6 +492,231 @@ def gp_localisation(
             ),
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# ArviZ's per-observation convention, on an explicit call
+# ---------------------------------------------------------------------------
+
+
+def add_pointwise_log_likelihood(
+    tree: Any,
+    problem: FittingProblem,
+    *,
+    datasets: Sequence[str] | None = None,
+    thin: int = 1,
+) -> Any:
+    """Compute the per-**observation** log-likelihood terms into the reserved group.
+
+    ``results.md`` §6 names two decompositions and forbids their sharing one
+    group, so the terms land in :data:`POINTWISE_LOG_LIKELIHOOD_GROUP` rather
+    than in ``log_likelihood`` (which stays the per-*dataset* split), and each
+    variable declares which decomposition it is:
+
+    * :data:`FACTORISED_DECOMPOSITION` — independent noise. The family's own
+      ``log_prob`` evaluated pointwise; exact, and the terms sum to the
+      dataset's stored joint log-likelihood.
+    * :data:`CONDITIONAL_LOO_DECOMPOSITION` — a GP. The leave-one-out
+      conditional terms ``log N(y_i | mu_i^{-i}, sigma_i^{2,-i})``, from the
+      same factorisation the marginal likelihood forms. They are what
+      ``arviz.loo`` consumes and they deliberately do **not** sum to the joint
+      value.
+
+    Not written by default, and this is the only thing that writes it (§6's
+    ruling of 2026-09-03, unchanged by the computation becoming available): the
+    group is ``N_draws x N_obs`` per dataset, and a run that will never be
+    asked for LOO should not carry it.
+
+    Where the dataset's solver does not supply ``conditional_loo`` — today
+    :class:`~ampere.core.likelihood.QuasisepGP` on the reference path and its
+    jax twin — this **refuses by name and does not fall back to a dense
+    solve**. Substituting :class:`~ampere.core.likelihood.DenseGP` would turn
+    an ``O(N)`` fit's diagnostic into an ``O(N^3)`` one silently, which at the
+    sizes the quasiseparable solve exists for is a different program rather
+    than a slower answer.
+
+    Parameters
+    ----------
+    tree
+        The run, as :func:`ampere.results.emit` produced it. Returned with the
+        group attached; the tree is modified in place.
+    problem
+        The problem the run was over; its ``problem_hash`` must match.
+    datasets
+        Which datasets to decompose; all of them by default.
+    thin
+        Take every ``thin``-th draw; the retained indices become the group's
+        own ``draw`` coordinate.
+
+    Returns
+    -------
+    xarray.DataTree
+        *tree*, with :data:`POINTWISE_LOG_LIKELIHOOD_GROUP` attached. Masked
+        samples are NaN on the container's own coordinate axis, and a draw the
+        forward model could not complete is a NaN row —
+        :func:`pointwise_as_log_likelihood` is how the group is handed to
+        ``arviz.loo``, which has no use for either.
+
+    Raises
+    ------
+    ampere.core.exceptions.ResultsError
+        If the problem is not the one the run was over, if a requested dataset
+        is not in it, if its likelihood marginalises over latent values (whose
+        per-observation terms are conditional on values inference owns), or if
+        its solver does not implement the leave-one-out conditionals.
+    """
+    _require_same_problem(tree, problem)
+    labels = _requested(problem, datasets)
+    decompositions = {label: _decomposition_of(problem, label) for label in labels}
+    thetas, kept = _stored_thetas(tree, problem, thin)
+    chains, draws = thetas.shape[0], thetas.shape[1]
+    variables = {
+        label: np.full(
+            (chains, draws, problem.datasets[label].observed.n_samples), np.nan, dtype=float
+        )
+        for label in labels
+    }
+    for chain in range(chains):
+        for draw in range(draws):
+            simulation = problem.simulate(thetas[chain, draw])
+            if simulation.failed:
+                continue
+            routed = problem.mapping.distribute(simulation.parameters)
+            for label in labels:
+                dataset = problem.datasets[label]
+                predicted = simulation.predicted.get(label)
+                if predicted is None:  # pragma: no cover - a failure short-circuits above
+                    continue
+                split = dataset.route(routed.get(label, {}))
+                variables[label][chain, draw] = _pointwise_of(
+                    dataset, predicted, split.get(LIKELIHOOD_COMPONENT)
+                )
+    dims, coords = _observed_axes(problem, labels)
+    distinct = sorted(set(decompositions.values()))
+    attached = _attach(
+        tree,
+        POINTWISE_LOG_LIKELIHOOD_GROUP,
+        variables,
+        dims,
+        coords,
+        kept,
+        {
+            # One value where the run is unanimous, which is the case §6
+            # describes. A joint fit that mixes an independent-noise dataset
+            # with a GP one has two decompositions and no single honest answer,
+            # so the group says "mixed" and the per-variable attribute — always
+            # written — is where a consumer reads which is which. Reporting one
+            # of the two would be reporting a falsehood about the other.
+            f"{ATTR_PREFIX}decomposition": distinct[0] if len(distinct) == 1 else "mixed",
+            f"{ATTR_PREFIX}decomposition_note": (
+                "one term per retained observation, on the observed container's own coordinate "
+                "axis with masked samples as NaN. 'factorised' terms sum to the dataset's joint "
+                "log-likelihood; 'conditional_loo' terms deliberately do not, because a GP "
+                "likelihood has no per-observation factorisation (results.md §6)."
+            ),
+        },
+    )
+    for label in labels:
+        attached[POINTWISE_LOG_LIKELIHOOD_GROUP][label].attrs[f"{ATTR_PREFIX}decomposition"] = (
+            decompositions[label]
+        )
+    return attached
+
+
+def _decomposition_of(problem: FittingProblem, label: str) -> str:
+    """Which of §6's two decompositions this dataset's likelihood supplies.
+
+    Refuses the latent case up front rather than after a full pass of forward
+    models: ``pointwise_log_prob`` has no unconditional answer there, and
+    finding that out on the last draw of a long run is a worse way to be told.
+    """
+    likelihood = problem.datasets[label].likelihood
+    if likelihood.marginalisation is Marginalisation.LATENT:
+        raise ResultsError(
+            f"dataset {label!r} is fitted with a latent-variable likelihood, whose "
+            f"per-observation terms are conditional on latent values inference owns rather "
+            f"than this contract (likelihoods.md §7). Use the per-dataset log_likelihood group "
+            f"every run already carries."
+        )
+    if isinstance(likelihood.noise, GaussianProcessNoise):
+        return CONDITIONAL_LOO_DECOMPOSITION
+    return FACTORISED_DECOMPOSITION
+
+
+def _pointwise_of(
+    dataset: Dataset, predicted: FunctionSamples, values: Mapping[str, Any] | None
+) -> np.ndarray:
+    """One draw's per-observation terms for one dataset, masked samples NaN.
+
+    :meth:`~ampere.core.likelihood.Likelihood.pointwise_log_prob` returns one
+    term per *retained* sample, which is the shortened axis a likelihood works
+    on. The group's axis is the container's own, so the terms are scattered
+    back into it — the same rule the residual group follows, and the reason
+    a plot of either lines up with ``observed_data`` without an alignment step.
+
+    A refusal from the likelihood is re-raised as this contract's error, with
+    the solver's own message kept: "QuasisepGP does not implement the
+    leave-one-out conditional terms" is the sentence a user needs, and burying
+    it under "could not compute the pointwise group" would lose it.
+    """
+    observed = dataset.observed
+    weights = np.asarray(observed.weights()).ravel() * np.asarray(predicted.weights()).ravel()
+    retain = weights > 0.0
+    row = np.full(retain.size, np.nan, dtype=float)
+    if not np.any(retain):
+        return row
+    try:
+        terms = np.asarray(
+            dataset.likelihood.pointwise_log_prob(predicted, observed, values), dtype=float
+        ).ravel()
+    except LikelihoodError as error:
+        raise ResultsError(
+            f"dataset {dataset.label!r} cannot supply the per-observation decomposition: {error}"
+        ) from error
+    if terms.size != int(np.count_nonzero(retain)):  # pragma: no cover - a contract violation
+        raise ResultsError(
+            f"dataset {dataset.label!r}'s likelihood returned {terms.size} per-observation "
+            f"term(s) for {int(np.count_nonzero(retain))} retained sample(s); "
+            f"Likelihood.pointwise_log_prob returns one term per retained sample."
+        )
+    row[retain] = terms
+    return row
+
+
+def pointwise_as_log_likelihood(tree: Any) -> Any:
+    """A view of *tree* whose ``log_likelihood`` group is the per-observation one.
+
+    ``arviz.loo`` and ``arviz.waic`` read the group **named**
+    ``log_likelihood``, and ampere deliberately keeps its per-*dataset*
+    decomposition there (``results.md`` §15 R6): calling ``arviz.loo`` on a run
+    straight out of :func:`~ampere.results.emit` computes
+    leave-one-*dataset*-out, which is meaningful for a joint fit and useless
+    for a single-dataset fit of 10⁵ points. This function is the one-line
+    bridge, so that getting per-observation LOO is an explicit swap rather than
+    a hand-edited tree — and so that nobody has to discover by experiment which
+    of the two ``arviz.loo`` just gave them.
+
+    The returned tree is a shallow copy: the original run keeps its own
+    ``log_likelihood`` group, and both trees share the underlying arrays.
+
+    Raises
+    ------
+    ampere.core.exceptions.ResultsError
+        If the run has no ``pointwise_log_likelihood`` group, naming
+        :func:`add_pointwise_log_likelihood` as the precondition.
+    """
+    children = getattr(tree, "children", None)
+    if children is None or POINTWISE_LOG_LIKELIHOOD_GROUP not in children:
+        raise ResultsError(
+            f"this run has no {POINTWISE_LOG_LIKELIHOOD_GROUP!r} group, so there is nothing to "
+            f"hand to arviz.loo as a per-observation decomposition. It is not stored by default "
+            f"— the cost is N_draws x N_obs per dataset (results.md §6) — so compute it first: "
+            f"ampere.results.add_pointwise_log_likelihood(tree, problem)."
+        )
+    view = tree.copy()
+    view[LOG_LIKELIHOOD_GROUP] = tree[POINTWISE_LOG_LIKELIHOOD_GROUP].dataset
+    view[LOG_LIKELIHOOD_GROUP].attrs.update(dict(tree[POINTWISE_LOG_LIKELIHOOD_GROUP].attrs))
+    return view
 
 
 # ---------------------------------------------------------------------------

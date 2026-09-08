@@ -9,12 +9,17 @@ that **every function here takes the emitted run and nothing else** — no
 sampler, no problem-specific state, no per-engine variant. A function that
 needed to know which sampler produced its input would be reintroducing the bug.
 
-Every function below is a declared signature with no implementation. Phase 2
-lands them; W1.8's job is to fix the surface, its arguments and its obligations
-first, so two backend tracks and the diagnostics families all write against one
-already-agreed API. ``diagnostics.md`` §6 places families B (residual whiteness,
-posterior-predictive checks) and C (GP localisation) in this namespace, and
-their entry points are here beside the general-purpose ones.
+W1.8 declared every function below as a signature with no implementation, so
+that two backend tracks and the diagnostics families could write against one
+already-agreed API before anything drew a line. Phase 2 filled them in: **W2.7**
+landed ``diagnostics.md``'s families B and C (:func:`plot_residuals`,
+:func:`plot_gp_localisation`, :func:`plot_anomaly_score`) and **W2.8** the three
+general-purpose ones (:func:`plot_corner`, :func:`plot_trace`,
+:func:`plot_posterior_predictive`). Nothing in the surface moved to make that
+possible, which is the whole point of having fixed it first. ``diagnostics.md``
+§6 places families B (residual whiteness, posterior-predictive checks) and C
+(GP localisation) in this namespace, and their entry points are here beside the
+general-purpose ones.
 
 Two obligations that are contract, not style
 --------------------------------------------
@@ -35,7 +40,7 @@ Two obligations that are contract, not style
 from __future__ import annotations
 
 import warnings
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
@@ -44,12 +49,14 @@ import scipy.stats as st
 from ampere.core.exceptions import ResultsError
 
 from . import _plotting as _p
-from .derived import GP_LOCALISATION_GROUP, RESIDUALS_GROUP
+from .derived import GP_LOCALISATION_GROUP, POSTERIOR_PREDICTIVE_GROUP, RESIDUALS_GROUP
 from .diagnostics import residual_whiteness
 from .provenance import ATTR_PREFIX
 
 __all__ = [
     "GP_LOCALISATION_CAVEAT",
+    "MAX_CORNER_VARIABLES",
+    "MAX_TRACE_VARIABLES",
     "AnomalyScoreLike",
     "gp_localisation_caveat",
     "plot_anomaly_score",
@@ -59,6 +66,23 @@ __all__ = [
     "plot_residuals",
     "plot_trace",
 ]
+
+#: How many scalar columns :func:`plot_corner` will draw before refusing.
+#:
+#: ``results.md`` §8 requires "a corner plot of a 10⁵-element latent block" to
+#: be "refused loudly rather than attempted" and leaves the threshold to the
+#: implementation. Twenty is where a pairwise grid stops being readable — 400
+#: panels — long before it stops being *drawable*, and the refusal names
+#: ``max_variables=`` so a user who genuinely wants thirty gets thirty by
+#: saying so. There is no defensible value here that is not a judgement; what
+#: is not a judgement is that the default must be small enough to catch the
+#: mistake and overridable enough not to be an obstacle.
+MAX_CORNER_VARIABLES = 20
+
+#: The same guard for :func:`plot_trace`, where the cost is linear rather than
+#: quadratic in the column count — so the threshold is higher, and it is still
+#: a threshold: a figure of 200 stacked panels is not a diagnostic.
+MAX_TRACE_VARIABLES = 40
 
 #: The mandatory interpretation caveat on every GP-localisation output.
 #:
@@ -73,11 +97,6 @@ GP_LOCALISATION_CAVEAT = (
     "process are all consistent with the same posterior shape, and a large amplitude at a short "
     "length-scale may equally mean that the kernel's smooth global component is under-amplitude "
     "and compensating locally."
-)
-
-_PHASE_2 = (
-    "Its signature and obligations are fixed by W1.8 "
-    "(docs/design/contracts/results.md §8); the drawing lands in Phase 2."
 )
 
 
@@ -130,6 +149,7 @@ def plot_corner(
     group: str = "posterior",
     labels: Sequence[str] | None = None,
     truths: Any = None,
+    max_variables: int = MAX_CORNER_VARIABLES,
     **kwargs: Any,
 ) -> Any:
     """The pairwise marginal grid.
@@ -142,11 +162,140 @@ def plot_corner(
 
     An array-valued parameter (a plate member, a latent GP block) is one
     variable with a named dimension, not ``N`` scalars, so selecting it selects
-    the whole block; pass an ArviZ selection to narrow it. A corner plot of a
-    10⁵-element latent block is a mistake this function should refuse loudly
-    rather than attempt.
+    the whole block; its elements are labelled from the dimension's own
+    coordinate where it has one — a plate's coordinate is the dataset labels
+    (``hierarchical_population.md`` §10.2) — and by integer index where it does
+    not. A corner plot of a 10⁵-element latent block is a mistake this function
+    refuses loudly rather than attempts: the refusal names the variable, its
+    size and ``max_variables``, which is the deliberate override.
+
+    Prior-rejected draws are **excluded**, not plotted. Their θ is a perfectly
+    good number and stored as one (``results.md`` §5), but the point carries
+    zero prior mass and is not a posterior sample; leaving it in would put mass
+    where the posterior has none, and silently.
+
+    Parameters
+    ----------
+    tree
+        The run, and nothing else (``results.md`` §8).
+    var_names
+        Merged parameter names to draw; all of the group's by default.
+    group
+        Which group to read. ``"posterior"`` normally; ``"prior"`` for a run
+        that stored one.
+    labels
+        Axis labels, one per **column** after array-valued blocks have been
+        expanded. The merged names are the default and are usually the right
+        answer; a mismatched length is refused rather than silently truncated.
+    truths
+        Reference values: a mapping of merged name to value (arrays allowed,
+        matching the block), or a sequence in column order. ``None`` draws no
+        reference lines.
+    max_variables
+        The refusal threshold above. Raising it is a deliberate act.
+    **kwargs
+        Forwarded to :func:`corner.corner`.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+        With :func:`~ampere.results.figure_metadata` carrying the column labels
+        and the number of draws actually used, so a caller can tell a thinned
+        or prior-rejected-heavy run from a full one without re-reading it.
     """
-    raise NotImplementedError(f"plot_corner is not implemented yet. {_PHASE_2}")
+    corner = _p.require_corner()
+    dataset = _p.require_sampling_group(tree, group)
+    names = _p.select_names(
+        [str(name) for name in dataset.data_vars], var_names, what=f"{group} variable"
+    )
+    columns = _p.parameter_columns(dataset, names, limit=max_variables, what="a corner plot")
+    keep = _p.scored_draws(tree)
+    samples = np.column_stack(
+        [(values if keep is None else values[keep]).ravel() for _, values in columns]
+    )
+    if samples.shape[0] == 0:
+        raise ResultsError(
+            "every stored draw was rejected by the prior (lp = -inf), so there is no posterior "
+            "to draw. That is a statement about the run, not about this plot: check the priors "
+            "and the sampler's initialisation."
+        )
+    drawn_labels = [label for label, _ in columns]
+    if labels is not None:
+        if len(labels) != len(drawn_labels):
+            raise ResultsError(
+                f"{len(labels)} label(s) were given for {len(drawn_labels)} column(s) "
+                f"{drawn_labels}. An array-valued parameter is one variable and several "
+                f"columns (results.md §4), so the labels are per column, not per variable."
+            )
+        drawn_labels = [str(label) for label in labels]
+    figure = corner.corner(
+        samples,
+        labels=drawn_labels,
+        truths=_corner_truths(truths, columns),
+        **kwargs,
+    )
+    _p.attach_metadata(figure, "corner.variables", ", ".join(label for label, _ in columns))
+    _p.attach_metadata(figure, "corner.draws", str(int(samples.shape[0])))
+    return figure
+
+
+def _corner_truths(truths: Any, columns: Sequence[tuple[str, np.ndarray]]) -> Any:
+    """Reference values in column order, from a mapping or a sequence.
+
+    A mapping keyed by merged name is the form a user has to hand — it is what
+    ``FittingProblem.simulate`` took and what ``Simulation.parameters`` gives
+    back — and turning it into corner's positional list here is the difference
+    between "plot the truth" and "count the columns of an expanded plate by
+    hand". A name the run does not hold is refused: a truth silently dropped is
+    a recovery plot that looks better than the fit was.
+    """
+    if truths is None or not isinstance(truths, Mapping):
+        return truths
+    values: list[float | None] = []
+    for label, _ in columns:
+        name, _, element = label.partition("[")
+        if name not in truths:
+            values.append(None)
+            continue
+        entry = np.asarray(truths[name], dtype=float)
+        if not element:
+            values.append(float(entry.reshape(())))
+            continue
+        flat = entry.ravel()
+        index = _element_position(label, element.rstrip("]"), flat.size)
+        values.append(float(flat[index]))
+    unknown = sorted(set(truths) - {label.partition("[")[0] for label, _ in columns})
+    if unknown:
+        raise ResultsError(
+            f"truths were given for {unknown}, which are not columns of this plot; the columns "
+            f"are {[label for label, _ in columns]}. A truth quietly dropped is a recovery plot "
+            f"that flatters the fit."
+        )
+    return values
+
+
+def _element_position(label: str, element: str, size: int) -> int:
+    """Which element of a block a column label refers to.
+
+    The label is the coordinate value where the dimension had one, so an
+    integer index is tried first and a positional fallback is not attempted:
+    a plate coordinate of dataset labels has no numeric reading, and guessing
+    one would attach a truth to the wrong object.
+    """
+    try:
+        index = int(element)
+    except ValueError:
+        raise ResultsError(
+            f"column {label!r} is element {element!r} of an array-valued block whose dimension "
+            f"carries named coordinates, so a truth for it cannot be positioned by name. Pass "
+            f"truths as a sequence in column order instead."
+        ) from None
+    if not 0 <= index < size:
+        raise ResultsError(
+            f"the truth given for column {label!r} has {size} element(s), which does not reach "
+            f"index {index}."
+        )
+    return index
 
 
 def plot_trace(
@@ -155,6 +304,7 @@ def plot_trace(
     var_names: Sequence[str] | None = None,
     group: str = "posterior",
     combined: bool = False,
+    max_variables: int = MAX_TRACE_VARIABLES,
     **kwargs: Any,
 ) -> Any:
     """Per-chain traces and marginals, the convergence eyeball.
@@ -163,9 +313,107 @@ def plot_trace(
     prior-rejected points shows them: those have ``lp = -inf`` and a **NaN**
     ``log_likelihood``, and rendering NaN as a gap rather than as zero is the
     visible half of ``inference.md`` §18(c)'s distinction between "not
-    evaluated" and "impossible".
+    evaluated" and "impossible". A zero would be a value the parameter took;
+    a gap is the truth, which is that nothing was evaluated there.
+
+    Each variable gets a row of two panels — the marginal on the left, the
+    trace against draw index on the right — and ``lp`` from ``sample_stats``
+    gets a row of its own at the bottom, because a trace of the parameters
+    without the log-density beside it hides the commonest failure a trace plot
+    exists to catch.
+
+    Parameters
+    ----------
+    tree
+        The run, and nothing else.
+    var_names
+        Merged parameter names to draw; all of the group's by default.
+    group
+        Which group to read.
+    combined
+        Pool the chains into one trace and one marginal rather than drawing
+        each chain separately. The default is per chain, because chains that
+        disagree are exactly what this plot is looked at for.
+    max_variables
+        Refuse rather than stack more rows than this — the same guard, and the
+        same reason, as :func:`plot_corner`'s.
+    **kwargs
+        Forwarded to the trace line artist.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+        With :func:`~ampere.results.figure_metadata` carrying the number of
+        prior-rejected draws, so the gaps are countable as well as visible.
     """
-    raise NotImplementedError(f"plot_trace is not implemented yet. {_PHASE_2}")
+    dataset = _p.require_sampling_group(tree, group)
+    names = _p.select_names(
+        [str(name) for name in dataset.data_vars], var_names, what=f"{group} variable"
+    )
+    columns = _p.parameter_columns(dataset, names, limit=max_variables, what="a trace plot")
+    keep = _p.scored_draws(tree)
+    rejected = 0 if keep is None else int(np.count_nonzero(~keep))
+    rows: list[tuple[str, np.ndarray]] = list(columns)
+    stats = tree["sample_stats"].dataset if keep is not None else None
+    if stats is not None and "lp" in stats.variables:
+        rows.append(("lp", np.asarray(stats["lp"].values, dtype=float)))
+    figure, axes = _p.grid_axes(len(rows), 2)
+    for row, (label, values) in enumerate(rows):
+        # A prior-rejected draw is a gap, never a zero and never a level line
+        # joining the points either side of it: NaN is what matplotlib breaks
+        # a line at, and it is also what keeps the draw out of the marginal.
+        if keep is None:
+            gapped = np.where(np.isfinite(values), values, np.nan)
+        else:
+            gapped = np.where(keep, values, np.nan)
+        _draw_marginal(axes[row, 0], gapped, combined=combined)
+        _draw_trace(axes[row, 1], gapped, combined=combined, **kwargs)
+        axes[row, 0].set_ylabel(label)
+        axes[row, 0].set_xlabel(label)
+        axes[row, 1].set_xlabel("draw")
+        if row == 0:
+            axes[row, 0].set_title("marginal", fontsize="small")
+            axes[row, 1].set_title(
+                "trace (gaps are prior-rejected draws)" if rejected else "trace", fontsize="small"
+            )
+    _p.attach_metadata(figure, "trace.rejected_draws", str(rejected))
+    figure.tight_layout()
+    return figure
+
+
+def _draw_marginal(panel: Any, values: np.ndarray, *, combined: bool) -> None:
+    """A histogram per chain, or one over the pool.
+
+    A histogram rather than a kernel density: a KDE of a handful of draws
+    invents a shape, and a run small enough for that to matter is exactly the
+    run a user is squinting at to decide whether to run more.
+    """
+    series = [values.ravel()] if combined else [values[chain] for chain in range(values.shape[0])]
+    for index, chain in enumerate(series):
+        finite = chain[np.isfinite(chain)]
+        if finite.size == 0:
+            continue
+        panel.hist(
+            finite,
+            bins=min(30, max(5, finite.size // 4)),
+            histtype="step",
+            density=True,
+            label=None if combined else f"chain {index}",
+        )
+    if not combined and values.shape[0] > 1:
+        panel.legend(loc="best", fontsize="xx-small")
+    panel.set_ylabel("density")
+
+
+def _draw_trace(panel: Any, values: np.ndarray, *, combined: bool, **kwargs: Any) -> None:
+    """The trace itself: one line per chain, NaN left as a break."""
+    style = {"linewidth": 0.8, **kwargs}
+    if combined:
+        panel.plot(np.arange(values.size), values.ravel(), **style)
+        return
+    draws = np.arange(values.shape[1])
+    for chain in range(values.shape[0]):
+        panel.plot(draws, values[chain], **style)
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +426,7 @@ def plot_posterior_predictive(
     *,
     datasets: Sequence[str] | None = None,
     statistic: Any = None,
+    band: float = 0.68,
     **kwargs: Any,
 ) -> Any:
     """Replicate data against the observations — ``diagnostics.md`` family B.
@@ -192,8 +441,227 @@ def plot_posterior_predictive(
     predictive p-value is reported; the default is a standardised-residual sum,
     and the Ljung-Box statistic of :func:`plot_residuals` is a legitimate
     alternative, which is the tie between the two halves of family B.
+
+    Each dataset gets two panels: the observations with their uncertainties
+    against the replicate median and its credible band, and the replicates'
+    distribution of ``T`` with the observed value marked and the p-value
+    reported.
+
+    What the default statistic is, precisely
+    ----------------------------------------
+    ``T(y) = sum_i ((y_i - m_i) / sigma_i)^2``, with ``m_i`` the replicate mean
+    at sample *i* and ``sigma_i`` the observed container's own uncertainty (or
+    1 where there is none, which the axis label says). It is a function of
+    ``y`` alone rather than of ``(y, θ)``, because the group stores replicate
+    observations and not the per-draw prediction that produced them — the
+    posterior-predictive group's shape is one variable per dataset
+    (``results.md`` §7), and it is not this plot's business to widen it. A
+    caller who wants a genuinely θ-dependent discrepancy passes one:
+    ``statistic(values, sigma) -> float``, applied to the observations and to
+    every replicate alike.
+
+    Parameters
+    ----------
+    tree
+        The run, with the ``posterior_predictive`` group attached.
+    datasets
+        Which datasets to draw; all of the group's by default.
+    statistic
+        ``statistic(values, sigma) -> float``. ``sigma`` is ``None`` where the
+        dataset carries no uncertainties.
+    band
+        Credible-interval mass of the replicate band, in ``(0, 1)``.
+    **kwargs
+        Forwarded to the replicate-median line artist.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+        With :func:`~ampere.results.figure_metadata` carrying each dataset's
+        p-value and observed statistic, so the number on the figure is
+        reachable without reading it off the title.
     """
-    raise NotImplementedError(f"plot_posterior_predictive is not implemented yet. {_PHASE_2}")
+    if not 0.0 < band < 1.0:
+        raise ResultsError(f"band is a credible-interval mass in (0, 1), got {band!r}.")
+    group = _p.require_group(
+        tree,
+        POSTERIOR_PREDICTIVE_GROUP,
+        remedy="call ampere.results.add_posterior_predictive(tree, problem) first, which draws "
+        "y_rep through FittingProblem.simulate(observe=True) at the stored draws "
+        "(results.md §7).",
+    )
+    observed_group = _p.require_group(
+        tree,
+        "observed_data",
+        remedy="emit the run with observed=True (the default), which stores each dataset's "
+        "observations; a predictive check has nothing to check against without them.",
+    )
+    available = [str(name) for name in group.data_vars]
+    labels = _p.select_datasets(available, datasets, what=POSTERIOR_PREDICTIVE_GROUP)
+    measure = _standardised_sum_of_squares if statistic is None else statistic
+    figure, axes = _p.grid_axes(len(labels), 2, size=(6.0, 2.6))
+    lower, upper = 50.0 * (1.0 - band), 50.0 * (1.0 + band)
+    for index, label in enumerate(labels):
+        if label not in observed_group.variables:
+            raise ResultsError(
+                f"this run holds replicates for dataset {label!r} but no observations of it, so "
+                f"there is nothing to compare them against."
+            )
+        axis_name, coordinates = _p.coordinate_of(group, label)
+        coordinate_unit, value_unit = _p.dataset_units(tree, label, axis_name)
+        replicates = np.asarray(group[label].values, dtype=float)
+        flat = replicates.reshape(-1, replicates.shape[-1])
+        observations = np.asarray(observed_group[label].values, dtype=float).ravel()
+        sigma = _stored_uncertainty(tree, label)
+        _draw_replicates(
+            axes[index, 0],
+            coordinates,
+            observations,
+            sigma,
+            flat,
+            band=(lower, upper, band),
+            labels=(_p.axis_label(axis_name, coordinate_unit), _p.axis_label(label, value_unit)),
+            **kwargs,
+        )
+        check = _predictive_pvalue(measure, observations, sigma, flat, label)
+        _draw_discrepancy(axes[index, 1], check, label)
+        _p.attach_metadata(figure, f"{label}.posterior_predictive_p_value", f"{check[0]:.6g}")
+        _p.attach_metadata(figure, f"{label}.observed_statistic", f"{check[1]:.6g}")
+    figure.tight_layout()
+    return figure
+
+
+def _stored_uncertainty(tree: Any, label: str) -> np.ndarray | None:
+    """One dataset's uncertainties from ``constant_data``, or ``None``.
+
+    Read off the run rather than asked of a problem, because ``results.md`` §8
+    is that every function here takes the emitted run and nothing else. Masked
+    samples are left alone: the replicate group already carries NaN there, and
+    NaN times anything stays NaN.
+    """
+    children = getattr(tree, "children", {})
+    if "constant_data" not in children:
+        return None
+    constant = tree["constant_data"].dataset
+    name = f"{label}_uncertainty"
+    if name not in constant.variables:
+        return None
+    return np.asarray(constant[name].values, dtype=float).ravel()
+
+
+def _standardised_sum_of_squares(values: np.ndarray, sigma: np.ndarray | None) -> float:
+    """``sum_i (y_i / sigma_i)^2`` over the samples that are not gaps.
+
+    Centring is the caller's — :func:`_predictive_pvalue` subtracts the
+    replicate mean before calling, so that this is the same function of the
+    observations and of every replicate. NaN samples (masked, or a draw the
+    forward model could not complete) take no part, which is the same rule the
+    whiteness statistic follows.
+    """
+    finite = np.isfinite(values)
+    if sigma is not None:
+        scaled = np.where(finite, values, 0.0) / np.where(np.isfinite(sigma), sigma, np.inf)
+    else:
+        scaled = np.where(finite, values, 0.0)
+    return float(np.sum(scaled[finite] ** 2))
+
+
+def _predictive_pvalue(
+    measure: Callable[[np.ndarray, np.ndarray | None], float],
+    observations: np.ndarray,
+    sigma: np.ndarray | None,
+    replicates: np.ndarray,
+    label: str,
+) -> tuple[float, float, np.ndarray]:
+    """``(p, T(y), T(y_rep))`` — the Bayesian p-value and what it came from.
+
+    ``p = mean_k [T(y_rep_k) >= T(y)]``: the probability that a replicate is at
+    least as discrepant as the data. Near 0 means the fit is worse than the
+    model can explain; near 1 means it is *better*, which usually means the
+    uncertainties are overstated — the same reading
+    :class:`~ampere.results.diagnostics.ChiSquareCheck` documents, and
+    deliberately the same convention, so the cheap check and the replicate one
+    cannot be read in opposite directions.
+
+    The standard caveat applies and is not a defect of this implementation: the
+    replicates are drawn from a posterior conditioned on the same data the
+    statistic is evaluated at, so a posterior-predictive p-value is
+    *conservative* — it is pulled towards 0.5 relative to a p-value from
+    held-out data, and a value near 0.5 is therefore weaker evidence of a good
+    fit than it looks. It is a screening device, not a test.
+    """
+    usable = np.array([row for row in replicates if np.any(np.isfinite(row))])
+    if usable.size == 0:
+        raise ResultsError(
+            f"every replicate of dataset {label!r} is NaN, so there is no predictive "
+            f"distribution to compare against. That happens when no stored draw could be "
+            f"simulated — check the run's sample_stats for failures."
+        )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        centre = np.nanmean(usable, axis=0)
+    observed = float(measure(observations - centre, sigma))
+    drawn = np.array([float(measure(row - centre, sigma)) for row in usable])
+    return float(np.mean(drawn >= observed)), observed, drawn
+
+
+def _draw_replicates(
+    panel: Any,
+    coordinates: np.ndarray,
+    observations: np.ndarray,
+    sigma: np.ndarray | None,
+    replicates: np.ndarray,
+    *,
+    band: tuple[float, float, float],
+    labels: tuple[str, str],
+    **kwargs: Any,
+) -> None:
+    """Observations with their errors, against the replicate median and band."""
+    lower, upper, mass = band
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        centre = np.nanmedian(replicates, axis=0)
+        low = np.nanpercentile(replicates, lower, axis=0)
+        high = np.nanpercentile(replicates, upper, axis=0)
+    panel.fill_between(coordinates, low, high, alpha=0.3, label=f"{mass:.0%} of replicates")
+    panel.plot(coordinates, centre, linewidth=1.2, label="replicate median", **kwargs)
+    panel.errorbar(
+        coordinates,
+        observations,
+        yerr=None if sigma is None else sigma,
+        fmt=".",
+        color="k",
+        markersize=4,
+        linewidth=0.8,
+        label="observed",
+    )
+    panel.set_xlabel(labels[0])
+    panel.set_ylabel(labels[1])
+    panel.legend(loc="best", fontsize="small")
+
+
+def _draw_discrepancy(panel: Any, check: tuple[float, float, np.ndarray], label: str) -> None:
+    """The replicates' distribution of ``T`` with the observed value marked.
+
+    The p-value's own resolution is the draw count, and it is on the title for
+    the same reason the permutation floor is on the whiteness panel: a p of
+    ``0`` computed from eight replicates is not evidence of anything, and a
+    reader who cannot see the count cannot tell that from a real rejection.
+    """
+    p_value, observed, drawn = check
+    panel.hist(drawn, bins=min(25, max(5, drawn.size // 3)), histtype="step", density=True)
+    panel.axvline(observed, color="k", linewidth=1.2, label="observed T")
+    verdict = (
+        "replicates disagree with the data" if p_value < 0.05 or p_value > 0.95 else "consistent"
+    )
+    panel.set_title(
+        f"{label}: T = {observed:.4g}, p = {p_value:.3g} — {verdict} "
+        f"({drawn.size} replicate(s); resolution 1/{drawn.size})",
+        fontsize="small",
+    )
+    panel.set_xlabel("discrepancy T")
+    panel.set_ylabel("density")
+    panel.legend(loc="best", fontsize="small")
 
 
 def plot_residuals(
