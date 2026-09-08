@@ -66,6 +66,7 @@ from ampere.core import IndependentNoise as _CoreIndependentNoise
 from ampere.core import FunctionSamples, GPSolver, Kernel, LikelihoodError, NoiseModel
 
 from ._config import BACKEND, require_x64
+from ._device import DEVICE, device_flag, resolve_device
 from .gp import DenseGP
 
 __all__ = [
@@ -159,6 +160,10 @@ class FractionalModelNoise(_ReferenceFractionalModelNoise):
         quadrature.
     jitter
         Optional noise floor added in quadrature to ``sigma_data``.
+    device
+        Platform name (``"cpu"``, the default) or an explicit ``jax.Device``.
+        Never auto-detected; it sets the ``DEVICE`` capability flag and nothing
+        else here — see the flag's own note.
     """
 
     DIFFERENTIABLE: ClassVar[bool] = True
@@ -173,12 +178,25 @@ class FractionalModelNoise(_ReferenceFractionalModelNoise):
     #: function. ``QuasisepGP`` is the one part of this backend that still says
     #: False, and says why.
     BATCHABLE: ClassVar[bool] = True
-    DEVICE: ClassVar[str] = "cpu"
+    #: Where this noise model declares itself to compute. **Per instance since
+    #: slice 3** (W2.5): ``device=`` shadows the class default so that a
+    #: composition mixing devices is refused at composition time. A noise model
+    #: owns no arrays of its own -- every number it reports comes from the
+    #: data container, the kernel and the solver -- so the keyword sets the
+    #: capability flag and performs no ``device_put``; the pieces that do own
+    #: arrays are the ones that move. Never auto-detected
+    #: (``architecture.md`` §5); see :mod:`ampere.backends.jax._device`.
+    DEVICE: ClassVar[str] = DEVICE
     BACKEND: ClassVar[str] = BACKEND
 
-    def __init__(self, f: Any, *, scale: Any = None, jitter: Any = None) -> None:
+    def __init__(
+        self, f: Any, *, scale: Any = None, jitter: Any = None, device: Any = DEVICE
+    ) -> None:
         require_x64(f"a jax {type(self).__name__}")
         super().__init__(f, scale=scale, jitter=jitter)
+        resolved = resolve_device(device, f"a jax {type(self).__name__}")
+        object.__setattr__(self, "_device", resolved)
+        object.__setattr__(self, "DEVICE", device_flag(device, resolved))
 
     def sigma_jax(
         self,
@@ -247,7 +265,15 @@ class FractionalModelGPNoise(_ReferenceFractionalModelGPNoise):
     #: function. ``QuasisepGP`` is the one part of this backend that still says
     #: False, and says why.
     BATCHABLE: ClassVar[bool] = True
-    DEVICE: ClassVar[str] = "cpu"
+    #: Where this noise model declares itself to compute. **Per instance since
+    #: slice 3** (W2.5): ``device=`` shadows the class default so that a
+    #: composition mixing devices is refused at composition time. A noise model
+    #: owns no arrays of its own -- every number it reports comes from the
+    #: data container, the kernel and the solver -- so the keyword sets the
+    #: capability flag and performs no ``device_put``; the pieces that do own
+    #: arrays are the ones that move. Never auto-detected
+    #: (``architecture.md`` §5); see :mod:`ampere.backends.jax._device`.
+    DEVICE: ClassVar[str] = DEVICE
     BACKEND: ClassVar[str] = BACKEND
 
     def __init__(
@@ -258,11 +284,15 @@ class FractionalModelGPNoise(_ReferenceFractionalModelGPNoise):
         f: Any,
         scale: Any = None,
         jitter: Any = None,
+        device: Any = DEVICE,
     ) -> None:
         require_x64(f"a jax {type(self).__name__}")
         super().__init__(
             kernel, DenseGP() if solver is None else solver, f=f, scale=scale, jitter=jitter
         )
+        resolved = resolve_device(device, f"a jax {type(self).__name__}")
+        object.__setattr__(self, "_device", resolved)
+        object.__setattr__(self, "DEVICE", device_flag(device, resolved))
 
     def sigma_jax(
         self,
@@ -321,12 +351,23 @@ class IndependentNoise(_CoreIndependentNoise):
     #: function. ``QuasisepGP`` is the one part of this backend that still says
     #: False, and says why.
     BATCHABLE: ClassVar[bool] = True
-    DEVICE: ClassVar[str] = "cpu"
+    #: Where this noise model declares itself to compute. **Per instance since
+    #: slice 3** (W2.5): ``device=`` shadows the class default so that a
+    #: composition mixing devices is refused at composition time. A noise model
+    #: owns no arrays of its own -- every number it reports comes from the
+    #: data container, the kernel and the solver -- so the keyword sets the
+    #: capability flag and performs no ``device_put``; the pieces that do own
+    #: arrays are the ones that move. Never auto-detected
+    #: (``architecture.md`` §5); see :mod:`ampere.backends.jax._device`.
+    DEVICE: ClassVar[str] = DEVICE
     BACKEND: ClassVar[str] = BACKEND
 
-    def __init__(self, *, scale: Any = None, jitter: Any = None) -> None:
+    def __init__(self, *, scale: Any = None, jitter: Any = None, device: Any = DEVICE) -> None:
         require_x64(f"a jax {type(self).__name__}")
         super().__init__(scale=scale, jitter=jitter)
+        resolved = resolve_device(device, f"a jax {type(self).__name__}")
+        object.__setattr__(self, "_device", resolved)
+        object.__setattr__(self, "DEVICE", device_flag(device, resolved))
 
 
 class GaussianProcessNoise(_CoreGaussianProcessNoise):
@@ -350,6 +391,10 @@ class GaussianProcessNoise(_CoreGaussianProcessNoise):
         built in jax and the hyperparameters are trainable.
     solver
         GP solve strategy. Defaults to this backend's ``DenseGP()``.
+    device
+        Platform name (``"cpu"``, the default) or an explicit ``jax.Device``.
+        Never auto-detected; it sets the ``DEVICE`` capability flag and nothing
+        else here — the kernel and the solver own the arrays that move.
     """
 
     DIFFERENTIABLE: ClassVar[bool] = True
@@ -364,9 +409,22 @@ class GaussianProcessNoise(_CoreGaussianProcessNoise):
     #: function. ``QuasisepGP`` is the one part of this backend that still says
     #: False, and says why.
     BATCHABLE: ClassVar[bool] = True
-    DEVICE: ClassVar[str] = "cpu"
+    #: Where this noise model declares itself to compute. **Per instance since
+    #: slice 3** (W2.5): ``device=`` shadows the class default so that a
+    #: composition mixing devices is refused at composition time. A noise model
+    #: owns no arrays of its own -- every number it reports comes from the
+    #: data container, the kernel and the solver -- so the keyword sets the
+    #: capability flag and performs no ``device_put``; the pieces that do own
+    #: arrays are the ones that move. Never auto-detected
+    #: (``architecture.md`` §5); see :mod:`ampere.backends.jax._device`.
+    DEVICE: ClassVar[str] = DEVICE
     BACKEND: ClassVar[str] = BACKEND
 
-    def __init__(self, kernel: Kernel, solver: GPSolver | None = None) -> None:
+    def __init__(
+        self, kernel: Kernel, solver: GPSolver | None = None, *, device: Any = DEVICE
+    ) -> None:
         require_x64(f"a jax {type(self).__name__}")
         super().__init__(kernel, DenseGP() if solver is None else solver)
+        resolved = resolve_device(device, f"a jax {type(self).__name__}")
+        object.__setattr__(self, "_device", resolved)
+        object.__setattr__(self, "DEVICE", device_flag(device, resolved))

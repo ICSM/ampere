@@ -346,6 +346,12 @@ test-m2 = "pytest tests/m2"
 # whichever backend the environment has, so running it in the same process as
 # `tests/conformance` is what proves the study registers nothing global.
 test-all = "pytest tests/core tests/results tests/conformance tests/backends tests/inference tests/examples tests/m2"
+# W2.5/W2.4 slice 3: the GPU smoke tests. Skipped wherever `jax.devices()`
+# (or torch's CUDA/MPS query) reports no accelerator, which is every ordinary
+# machine and all of CI -- CI is CPU-only by ruling and W2.11 pins CPU wheels
+# to keep it that way. Outside every gate for that reason: a suite that can
+# only skip in CI belongs where somebody runs it deliberately, on hardware.
+gpu = "pytest tests/gpu"
 # W2.3: the GP solvers' wall-clock scaling, 10^3-10^5 points. Deliberately
 # outside every gate above -- a dense 3000-point solve alone costs seconds --
 # and run on demand. -s so the measured table reaches the terminal.

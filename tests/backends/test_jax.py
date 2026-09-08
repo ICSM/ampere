@@ -105,6 +105,7 @@ from ampere.core import (  # noqa: E402
     Plate,
     Spectrum,
     Tie,
+    negotiate,
 )
 from ampere.core.exceptions import LoweringError  # noqa: E402
 from ampere.core.parameter import describe_prior  # noqa: E402
@@ -1655,3 +1656,143 @@ class TestSyntheticPhotometryNatively:
 
         gradient = float(jax.grad(total)(jnp.asarray(1.0)))
         assert np.isfinite(gradient) and gradient != 0.0
+
+
+# ---------------------------------------------------------------------------
+# Per-instance ``device=`` (W2.5 slice 3)
+# ---------------------------------------------------------------------------
+
+
+class TestPerInstanceDevice:
+    """``architecture.md`` §5's placement rule, on every kind of piece.
+
+    Slice 2 gave the two GP solvers a ``device=`` ``InitVar``. Slice 3 extends
+    the same shape to the models, the instrument steps, the kernels and the
+    noise models, because the flag is only useful if *every* part declares it:
+    ``ampere.core.declared_capabilities`` aggregates ``DEVICE`` as "all parts
+    agree or refuse", so one part that could not say where it computed would
+    make that agreement unenforceable.
+    """
+
+    def _pieces(self) -> dict[str, Any]:
+        grid = np.linspace(1.0, 5.0, 6)
+        return {
+            "PowerLaw": PowerLaw(grid),
+            "Matern32": Matern32(0.4, 2.0),
+            "CalibrationScale": CalibrationScale(1.0),
+            "DenseGP": DenseGP(),
+            "QuasisepGP": QuasisepGP(),
+            "IndependentNoise": IndependentNoise(),
+            "GaussianProcessNoise": GaussianProcessNoise(Matern32(0.4, 2.0), DenseGP()),
+        }
+
+    def test_every_piece_declares_the_cpu_by_default(self) -> None:
+        """Never auto-detected: the machine this runs on may well have a GPU."""
+        for name, piece in self._pieces().items():
+            assert piece.DEVICE == "cpu", name
+
+    def test_the_cpu_can_be_asked_for_by_name_on_every_piece(self) -> None:
+        grid = np.linspace(1.0, 5.0, 6)
+        asked = [
+            PowerLaw(grid, device="cpu"),
+            Matern32(0.4, 2.0, device="cpu"),
+            CalibrationScale(1.0, device="cpu"),
+            DenseGP(device="cpu"),
+            QuasisepGP(device="cpu"),
+            IndependentNoise(device="cpu"),
+            GaussianProcessNoise(Matern32(0.4, 2.0), DenseGP(), device="cpu"),
+        ]
+        assert [piece.DEVICE for piece in asked] == ["cpu"] * len(asked)
+
+    def test_a_device_this_process_lacks_is_refused_by_every_piece(self) -> None:
+        """Never a silent fallback, and the refusal names what is present.
+
+        The exception class follows the contract the piece belongs to — a model
+        or a step is ``ampere.core.transform``'s, a kernel, a noise model or a
+        solver is ``ampere.core.likelihood``'s — so the refusal reads like
+        every other refusal that piece can make.
+        """
+        from ampere.core.exceptions import LikelihoodError, TransformationError
+
+        grid = np.linspace(1.0, 5.0, 6)
+        absent = "definitely-not-a-platform"
+        for build, error in (
+            (lambda: PowerLaw(grid, device=absent), TransformationError),
+            (lambda: CalibrationScale(1.0, device=absent), TransformationError),
+            (lambda: Matern32(0.4, 2.0, device=absent), LikelihoodError),
+            (lambda: IndependentNoise(device=absent), LikelihoodError),
+            (
+                lambda: GaussianProcessNoise(Matern32(0.4, 2.0), DenseGP(), device=absent),
+                LikelihoodError,
+            ),
+            (lambda: DenseGP(device=absent), LikelihoodError),
+            (lambda: QuasisepGP(device=absent), LikelihoodError),
+        ):
+            with pytest.raises(error, match="no such platform"):
+                build()
+
+    def test_the_model_grids_are_placed_on_the_chosen_device(self) -> None:
+        """The flag is not merely a label: ``device_put`` actually ran."""
+        model = PowerLaw(np.linspace(1.0, 5.0, 6), device="cpu")
+        assert {d.platform for d in model.grid("default").devices()} == {"cpu"}
+
+    def test_a_negotiated_grid_stays_on_the_chosen_device(self) -> None:
+        """``compile_for`` rebuilds the jax grid, so it must place it too."""
+        model = PowerLaw(np.linspace(1.0, 5.0, 6), device="cpu")
+        instrument = Instrument([Resample(np.linspace(1.5, 4.5, 4))], channel="default")
+        compiled = model.compile_for(negotiate([instrument]))
+        assert {d.platform for d in compiled.grid("default").devices()} == {"cpu"}
+
+    def test_a_step_places_its_influence_matrix(self) -> None:
+        step = Resample(np.linspace(1.5, 4.5, 4), device="cpu")
+        matrix = step._influence_jax(np.linspace(1.0, 5.0, 6))
+        assert {d.platform for d in matrix.devices()} == {"cpu"}
+
+    def test_a_kernel_places_its_covariance(self) -> None:
+        grid = np.linspace(1.0, 5.0, 6)
+        kernel = Matern32(0.4, 2.0, device="cpu")
+        assert {d.platform for d in kernel.matrix(grid, grid, {}).devices()} == {"cpu"}
+        assert {d.platform for d in kernel.diagonal(grid, {}).devices()} == {"cpu"}
+
+    def test_a_problem_whose_pieces_disagree_about_the_device_is_refused(self) -> None:
+        """The reason the flag is per instance at all.
+
+        Faked by shadowing the flag on one solver, which is exactly what a real
+        ``device="cuda"`` does on a machine that has one — the refusal is the
+        same, and it happens at composition rather than inside a trace.
+        """
+        from ampere.core.exceptions import DatasetError
+
+        grid = np.linspace(1.0, 5.0, 6)
+        observed = Spectrum(grid * u.micron, np.ones(6) * u.Jy, uncertainty=np.full(6, 0.1) * u.Jy)
+        solver = DenseGP()
+        object.__setattr__(solver, "DEVICE", "cuda")
+        with pytest.raises(DatasetError, match="different devices"):
+            FittingProblem(
+                PowerLaw(grid, norm=st.lognorm(0.4, scale=2.0)),
+                [
+                    Dataset(
+                        observed,
+                        likelihood=Likelihood(
+                            GaussianFamily(),
+                            GaussianProcessNoise(Matern32(0.4, 2.0), solver),
+                        ),
+                    )
+                ],
+                seed=1,
+            )
+
+    def test_an_explicit_jax_device_is_taken_as_given(self) -> None:
+        """*Which* accelerator is the caller's business; ampere chooses among none."""
+        device = jax.devices()[0]
+        model = PowerLaw(np.linspace(1.0, 5.0, 6), device=device)
+        assert model.DEVICE == device.platform
+
+    def test_the_device_is_configuration_and_not_declaration(self) -> None:
+        """It must not reach the spec hash: two runs of one declaration on two
+        machines describe the same posterior. ``provenance_config`` is where it
+        is recorded, and ``dataclasses.fields`` is what the hash reads."""
+        import dataclasses
+
+        assert [f.name for f in dataclasses.fields(DenseGP(device="cpu"))] == ["jitter"]
+        assert DenseGP(device="cpu") == DenseGP()

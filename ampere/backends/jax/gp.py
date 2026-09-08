@@ -139,17 +139,13 @@ from ampere.core import SquaredExponential as _CoreSquaredExponential
 from ampere.core.exceptions import LikelihoodError
 
 from ._config import BACKEND, require_x64, x64_enabled
+from ._device import DEVICE, device_flag, place_on, resolve_device
 
-__all__ = ["DenseGP", "Matern32", "QuasisepGP", "SquaredExponential"]
+__all__ = ["DEVICE", "DenseGP", "Matern32", "QuasisepGP", "SquaredExponential"]
 
 _LOG_2PI = math.log(2.0 * math.pi)
 _SQRT3 = math.sqrt(3.0)
 
-#: The default device for every part of this backend. **Chosen, never
-#: detected** (``architecture.md`` §5): a library that silently moved a fit
-#: onto whatever accelerator it found would make "why is this run slow?" and
-#: "why did this run give a different answer?" both unanswerable.
-DEVICE = "cpu"
 
 #: The precisions :func:`_solve_dtype` accepts, mapped to their jax dtypes.
 #:
@@ -176,32 +172,6 @@ def _solve_dtype(precision: str, owner: str) -> Any:
             f"throughput — a GP factorisation in float32 fails in ways that look like science "
             f"problems, so it is never a default."
         ) from None
-
-
-def _resolve_device(device: str, owner: str) -> Any:
-    """A jax device for *device*, by platform name. Never auto-detected.
-
-    ``architecture.md`` §5: ampere chooses nothing here. The name is looked up
-    among the devices jax actually has in this process, and an absent platform
-    is a refusal naming what is present rather than a silent fallback to the
-    CPU — a fit the user asked to run on a GPU and which quietly did not is
-    the failure this rule exists to prevent.
-
-    Returns the first device of that platform. Picking *which* GPU is the
-    user's business, and is done by passing a ``jax.Device`` straight through.
-    """
-    if not isinstance(device, str):
-        return device  # an explicit jax.Device, used as given
-    available = jax.devices()
-    for found in available:
-        if found.platform == device:
-            return found
-    platforms = ", ".join(sorted({d.platform for d in available}))
-    raise LikelihoodError(
-        f"{owner} was asked for device {device!r}, but this jax process has no such platform. "
-        f"Available: {platforms}. ampere never falls back to another device — a fit that was "
-        f"asked for a GPU and quietly ran on the CPU is a fit whose timings mean nothing."
-    )
 
 
 def _points(coordinates: Any) -> jax.Array:
@@ -258,23 +228,37 @@ class _JaxKernel(Kernel):
     #: function. ``QuasisepGP`` is the one part of this backend that still says
     #: False, and says why.
     BATCHABLE: ClassVar[bool] = True
+    #: Where this kernel's covariance is built. **Per instance since slice 3**
+    #: (W2.5): the class default is the CPU and a ``device=`` keyword shadows
+    #: it, so a kernel placed on an accelerator beside CPU models is a device
+    #: disagreement ``ampere.core.declared_capabilities`` refuses at
+    #: composition rather than a mixed-device failure inside a trace. Never
+    #: auto-detected (``architecture.md`` §5); see :mod:`ampere.backends.jax._device`.
     DEVICE: ClassVar[str] = DEVICE
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         require_x64(f"a jax {type(self).__name__}")
+        device = kwargs.pop("device", DEVICE)
         super().__init__(*args, **kwargs)
+        resolved = resolve_device(device, f"a jax {type(self).__name__}")
+        object.__setattr__(self, "_device", resolved)
+        object.__setattr__(self, "DEVICE", device_flag(device, resolved))
+
+    def place(self, array: Any) -> jax.Array:
+        """*array* as float64 on this kernel's device."""
+        return place_on(jnp.asarray(array, dtype=jnp.float64), getattr(self, "_device", None))
 
     def _covariance(self, separation: Any, values: Mapping[str, Any]) -> jax.Array:
         raise NotImplementedError
 
     def matrix(self, left: Any, right: Any, values: Mapping[str, Any]) -> jax.Array:
         """Dense covariance between two coordinate sets, ``(n, m)``, in jax."""
-        return self._covariance(_separation(left, right), self.resolve(values))
+        return self.place(self._covariance(_separation(left, right), self.resolve(values)))
 
     def diagonal(self, coordinates: Any, values: Mapping[str, Any]) -> jax.Array:
         """The prior variance at each coordinate; ``k(0)`` for a stationary kernel."""
         n = int(_points(coordinates).shape[0])
-        return self._covariance(jnp.zeros(n, dtype=jnp.float64), self.resolve(values))
+        return self.place(self._covariance(jnp.zeros(n, dtype=jnp.float64), self.resolve(values)))
 
 
 class Matern32(_JaxKernel, _CoreMatern32):
@@ -390,14 +374,12 @@ class DenseGP(GPSolver):
             raise LikelihoodError(f"DenseGP's jitter must be finite and >= 0, got {self.jitter!r}.")
         object.__setattr__(self, "_dtype", _solve_dtype(precision, self.NAME))
         object.__setattr__(self, "_precision", str(precision))
-        resolved = _resolve_device(device, self.NAME)
+        resolved = resolve_device(device, self.NAME)
         object.__setattr__(self, "_device", resolved)
         # The capability flag is per *instance* here rather than per class, so
         # that a solver placed on an accelerator says so and
         # `declared_capabilities` can catch it beside CPU models.
-        object.__setattr__(
-            self, "DEVICE", device if isinstance(device, str) else str(resolved.platform)
-        )
+        object.__setattr__(self, "DEVICE", device_flag(device, resolved))
 
     @property
     def precision_name(self) -> str:
@@ -411,7 +393,7 @@ class DenseGP(GPSolver):
 
     def place(self, array: Any) -> jax.Array:
         """*array* on this solver's device, as its solve dtype."""
-        return jax.device_put(jnp.asarray(array, dtype=self.dtype), getattr(self, "_device", None))
+        return place_on(jnp.asarray(array, dtype=self.dtype), getattr(self, "_device", None))
 
     def provenance_config(self) -> Mapping[str, Any]:
         """``inference.md`` §10a fold-in 10: how this solver computes, for the attrs.
@@ -911,11 +893,9 @@ class QuasisepGP(GPSolver):
             raise LikelihoodError(
                 f"QuasisepGP's jitter must be finite and >= 0, got {self.jitter!r}."
             )
-        resolved = _resolve_device(device, self.NAME)
+        resolved = resolve_device(device, self.NAME)
         object.__setattr__(self, "_device", resolved)
-        object.__setattr__(
-            self, "DEVICE", device if isinstance(device, str) else str(resolved.platform)
-        )
+        object.__setattr__(self, "DEVICE", device_flag(device, resolved))
 
     def check_compatible(self, kernel: Kernel, observed: Any) -> None:
         super().check_compatible(kernel, observed)
@@ -960,7 +940,7 @@ class QuasisepGP(GPSolver):
 
     def place(self, array: Any) -> jax.Array:
         """*array* as float64 on this solver's device."""
-        return jax.device_put(jnp.asarray(array, dtype=jnp.float64), getattr(self, "_device", None))
+        return place_on(jnp.asarray(array, dtype=jnp.float64), getattr(self, "_device", None))
 
     def _sorted(self, coordinates: Any) -> tuple[jax.Array, jax.Array]:
         """The coordinate axis and the permutation that sorts it.

@@ -73,8 +73,10 @@ from ampere.backends.reference.instrument import (
     SyntheticPhotometry as _ReferenceSyntheticPhotometry,
 )
 from ampere.core import Axis, PhotometricPoints, Spectrum, propagate_mask
+from ampere.core.exceptions import TransformationError
 
 from ._config import BACKEND, require_x64
+from ._device import DEVICE, device_flag, place_on, resolve_device
 
 __all__ = [
     "COORDINATE_UNIT",
@@ -109,13 +111,26 @@ class _JaxStep:
     #: function. ``QuasisepGP`` is the one part of this backend that still says
     #: False, and says why.
     BATCHABLE: ClassVar[bool] = True
-    #: Never auto-detected (``architecture.md`` §5).
-    DEVICE: ClassVar[str] = "cpu"
+    #: Never auto-detected (``architecture.md`` §5). **Per instance since
+    #: slice 3** (W2.5): every step here takes a ``device=`` keyword which
+    #: shadows this class default and moves the step's influence matrix with
+    #: an explicit :func:`jax.device_put`, so a step placed on an accelerator
+    #: beside CPU models is a device disagreement
+    #: ``ampere.core.declared_capabilities`` refuses at composition. See
+    #: :mod:`ampere.backends.jax._device`.
+    DEVICE: ClassVar[str] = DEVICE
     BACKEND: ClassVar[str] = BACKEND
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         require_x64(f"a jax {type(self).__name__}")
+        # Popped before the reference constructor sees it: `device=` is this
+        # backend's placement keyword and means nothing to the numpy step
+        # whose declaration is inherited wholesale.
+        device = kwargs.pop("device", DEVICE)
         super().__init__(*args, **kwargs)
+        resolved = resolve_device(device, f"a jax {type(self).__name__}", error=TransformationError)
+        self._device = resolved
+        object.__setattr__(self, "DEVICE", device_flag(device, resolved))
         self._cached_influence: tuple[bytes, jax.Array] | None = None
 
     def _influence_jax(self, source: Any) -> jax.Array:
@@ -135,7 +150,10 @@ class _JaxStep:
         cached = self._cached_influence
         if cached is not None and cached[0] == key:
             return cached[1]
-        matrix = jnp.asarray(self.influence(source), dtype=jnp.float64)  # type: ignore[attr-defined]
+        matrix = place_on(
+            jnp.asarray(self.influence(source), dtype=jnp.float64),  # type: ignore[attr-defined]
+            getattr(self, "_device", None),
+        )
         self._cached_influence = (key, matrix)
         return matrix
 
