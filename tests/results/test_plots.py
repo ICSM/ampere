@@ -1,0 +1,451 @@
+"""W2.8: the general-purpose plots and the per-observation group, end to end.
+
+``results.md`` §8's acceptance criterion for this item is that "each plot
+renders from a stored run with merged names as labels", and §6's that "a run
+with the pointwise group survives netCDF and ``arviz.loo`` consumes it". Both
+are asserted here against a real emitted run rather than a hand-built tree,
+because a plotting function that took the emitted run and nothing else is the
+whole of §8 and a fixture that skipped emission would not be testing it.
+
+The toy problem is deliberately the smallest one that exercises what the plots
+have to get right: two free parameters (so a corner plot has a grid), one
+array-valued block behind a separate fixture (so the refusal threshold has
+something to refuse), a prior-rejected draw (so a trace has a gap to draw), and
+one dataset with uncertainties (so a predictive check has a scale).
+
+Figures are rendered on the Agg backend into memory and never written: no
+binary artefact belongs in this repository (``AGENTS.md`` ground rule 7).
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import astropy.units as u
+import matplotlib
+import numpy as np
+import pytest
+import scipy.stats as st
+
+matplotlib.use("Agg")
+
+from ampere.core import (
+    ComplexGaussianFamily,
+    Dataset,
+    DatasetCollection,
+    DenseGP,
+    FittingProblem,
+    GaussianFamily,
+    GaussianProcessNoise,
+    Likelihood,
+    Matern32,
+    Model,
+    ModelResult,
+    Parameter,
+    QuasisepGP,
+    Spectrum,
+    VisibilitySet,
+)
+from ampere.core.exceptions import ResultsError
+from ampere.results import (
+    CONDITIONAL_LOO_DECOMPOSITION,
+    FACTORISED_DECOMPOSITION,
+    LOG_LIKELIHOOD_GROUP,
+    POINTWISE_LOG_LIKELIHOOD_GROUP,
+    POSTERIOR_PREDICTIVE_GROUP,
+    DrawRecorder,
+    add_pointwise_log_likelihood,
+    add_posterior_predictive,
+    figure_metadata,
+    from_netcdf,
+    plot_corner,
+    plot_posterior_predictive,
+    plot_trace,
+    pointwise_as_log_likelihood,
+    to_netcdf,
+)
+
+pytest.importorskip("arviz", reason="ampere.results needs arviz")
+
+pyplot = pytest.importorskip("matplotlib.pyplot")
+
+GRID = np.linspace(1.0, 9.0, 24)
+SIGMA = 0.05
+TRUTH = {"model.index": -1.0, "model.norm": 1.0}
+
+
+class Powerlaw(Model):
+    """``norm * x ** index`` on a fixed grid."""
+
+    def __init__(self, grid: np.ndarray) -> None:
+        self.register_buffer("grid", np.asarray(grid, dtype=float), unit=u.micron)
+        self.register_parameter(Parameter("index", st.norm(-1.0, 0.3)))
+        self.register_parameter(Parameter("norm", st.loguniform(0.5, 2.0)))
+
+    def evaluate(self, **values: Any) -> ModelResult:
+        ctx = self.context(values)
+        return ModelResult(
+            Spectrum(
+                ctx["grid"] * u.micron,
+                ctx["norm"] * ctx["grid"] ** ctx["index"] * u.Jy,
+            )
+        )
+
+
+def observed(mask: np.ndarray | None = None) -> Spectrum:
+    rng = np.random.default_rng(20260908)
+    return Spectrum(
+        GRID * u.micron,
+        (1.0 * GRID**-1.0 + rng.normal(0.0, SIGMA, GRID.size)) * u.Jy,
+        uncertainty=np.full(GRID.size, SIGMA) * u.Jy,
+        mask=mask,
+    )
+
+
+def toy(likelihood: Likelihood | None = None, mask: np.ndarray | None = None) -> FittingProblem:
+    return FittingProblem(
+        Powerlaw(GRID),
+        DatasetCollection(
+            {"sed": Dataset(observed(mask), label="sed", likelihood=likelihood)}
+        ),
+        seed=20260908,
+    )
+
+
+def gp_toy(solver: Any) -> FittingProblem:
+    return toy(
+        Likelihood(
+            GaussianFamily(),
+            GaussianProcessNoise(
+                Matern32(length_scale=st.loguniform(0.2, 5.0), amplitude=st.loguniform(0.01, 1.0)),
+                solver=solver,
+            ),
+        )
+    )
+
+
+class PointSource(Model):
+    """A flat complex visibility — the smallest complex-valued channel there is."""
+
+    def __init__(self, u_axis: np.ndarray, v_axis: np.ndarray) -> None:
+        self.register_buffer("u", np.asarray(u_axis, dtype=float))
+        self.register_buffer("v", np.asarray(v_axis, dtype=float))
+        self.register_parameter(Parameter("flux", st.loguniform(0.5, 2.0)))
+
+    def evaluate(self, **values: Any) -> ModelResult:
+        ctx = self.context(values)
+        return ModelResult(
+            VisibilitySet(
+                ctx["u"], ctx["v"], ctx["flux"] * np.ones(ctx["u"].size, dtype=complex)
+            )
+        )
+
+
+def visibility_problem() -> FittingProblem:
+    axes = (np.array([1.0, 2.0]), np.array([3.0, 4.0]))
+    return FittingProblem(
+        PointSource(*axes),
+        DatasetCollection(
+            {
+                "vis": Dataset(
+                    VisibilitySet(
+                        axes[0],
+                        axes[1],
+                        np.array([1 + 0j, 1 + 0j]),
+                        uncertainty=np.array([0.1, 0.1]),
+                    ),
+                    label="vis",
+                    likelihood=Likelihood(ComplexGaussianFamily()),
+                )
+            }
+        ),
+        seed=1,
+    )
+
+
+def run(problem: FittingProblem, *, chains: int = 2, draws: int = 30, reject: bool = False) -> Any:
+    """A small genuine run near the truth, through the driver-facing recorder."""
+    recorder = DrawRecorder(problem, chains=chains)
+    rng = np.random.default_rng(4242)
+    for chain in range(chains):
+        for draw in range(draws):
+            values = {
+                "model.index": -1.0 + rng.normal(0.0, 0.02),
+                "model.norm": 1.0 + rng.normal(0.0, 0.02),
+            }
+            for name in problem.parameters.free_names:
+                if name.endswith("length_scale"):
+                    values[name] = 0.4
+                elif name.endswith("amplitude"):
+                    values[name] = 0.05
+            if reject and chain == 0 and draw == 1:
+                # Outside the loguniform support: -inf prior, NaN likelihood,
+                # no failure (results.md §5). This is the draw a trace must
+                # show as a gap.
+                values["model.norm"] = 1e9
+            recorder.record(values, chain=chain)
+    return recorder.emit(engine="fixture")
+
+
+# ---------------------------------------------------------------------------
+# plot_corner
+# ---------------------------------------------------------------------------
+
+
+class TestCorner:
+    def test_it_renders_from_a_stored_run_with_merged_names_as_labels(self) -> None:
+        figure = plot_corner(run(toy()))
+        assert figure_metadata(figure)["corner.variables"] == "model.index, model.norm"
+
+    def test_a_subset_is_selected_by_merged_name(self) -> None:
+        figure = plot_corner(run(toy()), var_names=["model.index"])
+        assert figure_metadata(figure)["corner.variables"] == "model.index"
+
+    def test_an_unknown_name_is_refused_with_the_list_beside_it(self) -> None:
+        with pytest.raises(ResultsError, match="merged parameter name"):
+            plot_corner(run(toy()), var_names=["index"])
+
+    def test_prior_rejected_draws_are_excluded(self) -> None:
+        # They are stored (results.md §5) and they are not posterior samples.
+        full = plot_corner(run(toy(), reject=False))
+        rejected = plot_corner(run(toy(), reject=True))
+        assert int(figure_metadata(full)["corner.draws"]) == 60
+        assert int(figure_metadata(rejected)["corner.draws"]) == 59
+
+    def test_labels_must_be_one_per_column(self) -> None:
+        with pytest.raises(ResultsError, match="per column, not per variable"):
+            plot_corner(run(toy()), labels=["only one"])
+
+    def test_truths_may_be_a_mapping_of_merged_names(self) -> None:
+        # A user has theta as a mapping — it is what simulate() took and what
+        # Simulation.parameters gives back — not as a positional list.
+        assert plot_corner(run(toy()), truths=dict(TRUTH)) is not None
+
+    def test_a_truth_for_a_column_that_is_not_drawn_is_refused(self) -> None:
+        with pytest.raises(ResultsError, match="flatters the fit"):
+            plot_corner(run(toy()), var_names=["model.index"], truths=dict(TRUTH))
+
+    def test_an_oversized_block_is_refused_loudly_rather_than_attempted(self) -> None:
+        # results.md §8: "a corner plot of a 10^5-element latent block must be
+        # refused loudly rather than attempted". The refusal names the variable,
+        # its size and the override.
+        tree = run(toy())
+        block = np.zeros((2, 30, 500))
+        tree["posterior"] = tree["posterior"].dataset.assign(
+            {"latent.z": (("chain", "draw", "latent.z_dim_0"), block)}
+        )
+        with pytest.raises(ResultsError, match="refused loudly rather than attempted"):
+            plot_corner(tree, var_names=["latent.z"])
+        with pytest.raises(ResultsError, match="max_variables"):
+            plot_corner(tree, var_names=["latent.z"])
+
+    def test_the_threshold_is_an_override_and_not_a_wall(self) -> None:
+        tree = run(toy())
+        block = np.random.default_rng(1).normal(size=(2, 30, 3))
+        tree["posterior"] = tree["posterior"].dataset.assign(
+            {"block": (("chain", "draw", "block_dim_0"), block)}
+        )
+        figure = plot_corner(tree, var_names=["block"], max_variables=3)
+        assert figure_metadata(figure)["corner.variables"] == "block[0], block[1], block[2]"
+
+    def test_it_refuses_a_tree_that_is_not_a_run(self) -> None:
+        with pytest.raises(ResultsError, match="not an emitted run"):
+            plot_corner(None)
+
+
+# ---------------------------------------------------------------------------
+# plot_trace
+# ---------------------------------------------------------------------------
+
+
+class TestTrace:
+    def test_it_renders_and_counts_the_gaps(self) -> None:
+        figure = plot_trace(run(toy(), reject=True))
+        assert figure_metadata(figure)["trace.rejected_draws"] == "1"
+
+    def test_a_prior_rejected_draw_is_a_gap_and_not_a_zero(self) -> None:
+        # inference.md §18(c)'s distinction, made visible: the trace line must
+        # break at the rejected draw rather than dropping to zero, which is a
+        # value the parameter never took.
+        figure = plot_trace(run(toy(), reject=True))
+        trace = figure.axes[1]
+        drawn = np.concatenate([line.get_ydata() for line in trace.get_lines()])
+        assert np.isnan(drawn).sum() == 1
+        assert not np.any(drawn == 0.0)
+
+    def test_it_reads_sample_stats_and_draws_lp_beside_the_parameters(self) -> None:
+        figure = plot_trace(run(toy()))
+        # Two parameters plus lp, two panels each.
+        assert len(figure.axes) == 6
+
+    def test_combined_pools_the_chains(self) -> None:
+        separate = plot_trace(run(toy()))
+        combined = plot_trace(run(toy()), combined=True)
+        assert len(separate.axes[1].get_lines()) == 2
+        assert len(combined.axes[1].get_lines()) == 1
+
+    def test_it_refuses_a_tree_that_is_not_a_run(self) -> None:
+        with pytest.raises(ResultsError, match="not an emitted run"):
+            plot_trace(None)
+
+
+# ---------------------------------------------------------------------------
+# add_posterior_predictive and plot_posterior_predictive
+# ---------------------------------------------------------------------------
+
+
+class TestPosteriorPredictive:
+    def test_replicates_are_derived_on_demand_and_not_stored_by_default(self) -> None:
+        problem = toy()
+        tree = run(problem, draws=8)
+        assert POSTERIOR_PREDICTIVE_GROUP not in tree.children
+        add_posterior_predictive(tree, problem)
+        replicates = tree[POSTERIOR_PREDICTIVE_GROUP].dataset
+        assert replicates["sed"].dims == ("chain", "draw", "sed_spectral_axis")
+        values = np.asarray(replicates["sed"].values)
+        assert np.all(np.isfinite(values))
+        # They are *drawn*, not the observations copied: the scatter about the
+        # observations is of order sigma.
+        spread = float(np.std(values - np.asarray(tree["observed_data"]["sed"].values)))
+        assert 0.3 * SIGMA < spread < 3.0 * SIGMA
+
+    def test_the_named_sub_stream_is_recorded_and_is_not_simulate(self) -> None:
+        # lowering.md §9.2: adding a predictive check must not change an SBI
+        # budget's draws, which is why the stream is separate by default.
+        problem = toy()
+        tree = add_posterior_predictive(run(problem, draws=4), problem)
+        attrs = tree[POSTERIOR_PREDICTIVE_GROUP].attrs
+        assert attrs["ampere_seed_stream"] == "posterior_predictive"
+
+    def test_masked_samples_are_nan_rather_than_the_observed_value(self) -> None:
+        mask = np.zeros(GRID.size, dtype=bool)
+        mask[5:8] = True
+        problem = toy(mask=mask)
+        tree = add_posterior_predictive(run(problem, draws=4), problem)
+        values = np.asarray(tree[POSTERIOR_PREDICTIVE_GROUP]["sed"].values)
+        assert values.shape[-1] == GRID.size
+        assert np.all(np.isnan(values[..., 5:8]))
+        assert np.all(np.isfinite(values[..., :5]))
+
+    def test_thinning_keeps_the_draw_correspondence(self) -> None:
+        problem = toy()
+        tree = add_posterior_predictive(run(problem, draws=6), problem, thin=3)
+        assert tree[POSTERIOR_PREDICTIVE_GROUP]["draw"].values.tolist() == [0, 3]
+
+    def test_the_plot_names_its_precondition_rather_than_a_missing_group(self) -> None:
+        # results.md §8, literally: the refusal must say "you have not computed
+        # this yet", naming the function.
+        with pytest.raises(ResultsError, match="add_posterior_predictive"):
+            plot_posterior_predictive(run(toy(), draws=4))
+
+    def test_it_renders_and_reports_a_p_value(self) -> None:
+        problem = toy()
+        tree = add_posterior_predictive(run(problem, draws=20), problem)
+        figure = plot_posterior_predictive(tree)
+        metadata = figure_metadata(figure)
+        assert 0.0 <= float(metadata["sed.posterior_predictive_p_value"]) <= 1.0
+        assert float(metadata["sed.observed_statistic"]) > 0.0
+
+    def test_a_caller_may_supply_the_discrepancy(self) -> None:
+        problem = toy()
+        tree = add_posterior_predictive(run(problem, draws=8), problem)
+        figure = plot_posterior_predictive(
+            tree, statistic=lambda values, sigma: float(np.nanmax(np.abs(values)))
+        )
+        assert "sed.posterior_predictive_p_value" in figure_metadata(figure)
+
+    def test_a_complex_dataset_is_refused_by_name(self) -> None:
+        # The derived groups do not mirror results.md §4's real/imag split yet,
+        # and inventing half a replicate would be worse than saying so.
+        problem = visibility_problem()
+        recorder = DrawRecorder(problem, chains=1)
+        for _ in range(2):
+            recorder.record({"model.flux": 1.0})
+        tree = recorder.emit(engine="fixture")
+        with pytest.raises(ResultsError, match="complex-valued"):
+            add_posterior_predictive(tree, problem)
+
+
+# ---------------------------------------------------------------------------
+# The per-observation log-likelihood group (results.md §6)
+# ---------------------------------------------------------------------------
+
+
+class TestPointwiseLogLikelihood:
+    def test_the_factorised_terms_sum_to_the_stored_joint(self) -> None:
+        # results.md §6: for independent noise the decomposition is exact.
+        problem = toy()
+        tree = add_pointwise_log_likelihood(run(problem, draws=6), problem)
+        group = tree[POINTWISE_LOG_LIKELIHOOD_GROUP]
+        assert group.attrs["ampere_decomposition"] == FACTORISED_DECOMPOSITION
+        assert group["sed"].attrs["ampere_decomposition"] == FACTORISED_DECOMPOSITION
+        terms = np.asarray(group["sed"].values)
+        joint = np.asarray(tree[LOG_LIKELIHOOD_GROUP]["sed"].values)
+        assert np.allclose(np.sum(terms, axis=-1), joint)
+
+    def test_a_gp_declares_the_conditional_loo_decomposition(self) -> None:
+        # And it deliberately does NOT sum to the joint: a GP likelihood has no
+        # per-observation factorisation (likelihoods.md §16).
+        problem = gp_toy(DenseGP())
+        tree = add_pointwise_log_likelihood(run(problem, draws=4), problem)
+        group = tree[POINTWISE_LOG_LIKELIHOOD_GROUP]
+        assert group["sed"].attrs["ampere_decomposition"] == CONDITIONAL_LOO_DECOMPOSITION
+        terms = np.asarray(group["sed"].values)
+        joint = np.asarray(tree[LOG_LIKELIHOOD_GROUP]["sed"].values)
+        assert not np.allclose(np.sum(terms, axis=-1), joint)
+
+    def test_a_solver_that_refuses_conditional_loo_refuses_by_name(self) -> None:
+        # W2.3 deferred QuasisepGP's O(N) recursion. The refusal must carry the
+        # solver's own sentence and must NOT fall back to a dense solve.
+        problem = gp_toy(QuasisepGP())
+        tree = run(problem, draws=2)
+        with pytest.raises(ResultsError, match="QuasisepGP"):
+            add_pointwise_log_likelihood(tree, problem)
+        assert POINTWISE_LOG_LIKELIHOOD_GROUP not in tree.children
+
+    def test_masked_samples_are_nan_on_the_container_axis(self) -> None:
+        mask = np.zeros(GRID.size, dtype=bool)
+        mask[2:4] = True
+        problem = toy(mask=mask)
+        tree = add_pointwise_log_likelihood(run(problem, draws=4), problem)
+        terms = np.asarray(tree[POINTWISE_LOG_LIKELIHOOD_GROUP]["sed"].values)
+        assert terms.shape[-1] == GRID.size
+        assert np.all(np.isnan(terms[..., 2:4]))
+        assert np.all(np.isfinite(terms[..., :2]))
+
+    def test_it_survives_netcdf_with_its_hashes(self, tmp_path: Path) -> None:
+        problem = toy()
+        tree = add_pointwise_log_likelihood(run(problem, draws=6), problem)
+        written = to_netcdf(tree, tmp_path / "run.nc")
+        back = from_netcdf(written)
+        assert POINTWISE_LOG_LIKELIHOOD_GROUP in back.children
+        assert back.attrs["ampere_spec_hash"] == tree.attrs["ampere_spec_hash"]
+        assert back.attrs["ampere_problem_hash"] == tree.attrs["ampere_problem_hash"]
+        assert (
+            back[POINTWISE_LOG_LIKELIHOOD_GROUP].attrs["ampere_decomposition"]
+            == FACTORISED_DECOMPOSITION
+        )
+        assert np.allclose(
+            np.asarray(back[POINTWISE_LOG_LIKELIHOOD_GROUP]["sed"].values),
+            np.asarray(tree[POINTWISE_LOG_LIKELIHOOD_GROUP]["sed"].values),
+            equal_nan=True,
+        )
+
+    def test_arviz_loo_consumes_it(self) -> None:
+        # results.md §6: "these are what arviz.loo consumes". The bridge is
+        # explicit because the run's own log_likelihood group is per dataset
+        # (§15 R6) and calling loo on it computes leave-one-DATASET-out.
+        import arviz
+
+        problem = toy()
+        tree = add_pointwise_log_likelihood(run(problem, chains=2, draws=40), problem)
+        view = pointwise_as_log_likelihood(tree)
+        result = arviz.loo(view, var_name="sed")
+        assert np.isfinite(float(result.elpd))
+        # The original run is untouched: its log_likelihood is still per dataset.
+        assert tree[LOG_LIKELIHOOD_GROUP]["sed"].dims == ("chain", "draw")
+
+    def test_the_bridge_names_its_precondition(self) -> None:
+        with pytest.raises(ResultsError, match="add_pointwise_log_likelihood"):
+            pointwise_as_log_likelihood(run(toy(), draws=2))

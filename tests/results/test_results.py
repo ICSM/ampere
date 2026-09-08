@@ -55,13 +55,17 @@ from ampere.core import (
     Transformation,
     VisibilitySet,
 )
+from ampere.core.dataset import Failure, FailureReason
 from ampere.core.exceptions import SchemaError
 from ampere.results import (
     ATTR_PREFIX,
+    CONTAINER_SCHEMA_VERSION,
     GP_LOCALISATION_CAVEAT,
     LOG_LIKELIHOOD_DECOMPOSITION,
+    POINTWISE_LOG_LIKELIHOOD_GROUP,
     DrawRecorder,
     ResultsError,
+    add_pointwise_log_likelihood,
     add_posterior_predictive,
     add_residuals,
     canonical_json,
@@ -93,6 +97,7 @@ from ampere.results import (
     register_kind,
     spec_hashes,
     to_netcdf,
+    training_pair_from_dict,
     training_pair_to_dict,
 )
 from ampere.results.emission import _dimension_names, _index_coordinate
@@ -1356,7 +1361,7 @@ class TestContainerSerialisation:
 
     def test_an_unknown_kind_names_the_remedy(self) -> None:
         with pytest.raises(ResultsError, match="register_kind"):
-            container_from_dict({"version": 1, "kind": "Nope"})
+            container_from_dict({"version": CONTAINER_SCHEMA_VERSION, "kind": "Nope"})
 
     def test_a_future_version_is_refused(self) -> None:
         encoded = container_to_dict(Spectrum(BLUE * u.micron, [1.0] * 3 * u.Jy))
@@ -1409,13 +1414,56 @@ class TestModelResultSerialisation:
         assert set(rebuilt) == {"blue", "red"}
         assert np.allclose(rebuilt["blue"].values, simulation.results["model"]["blue"].values)
 
+    def test_a_training_pair_round_trips_by_value(self) -> None:
+        # serialisation_review.md §4: "training_pair_from_dict completes the
+        # round trip when the first consumer lands". W2.8 is that consumer.
+        problem = joint_problem()
+        simulation = problem.simulate(TRUTH, observe=True)
+        pair = training_pair_to_dict(
+            simulation.parameters,
+            simulation.results["model"],
+            failed=simulation.failed,
+            observations=simulation.observations,
+        )
+        back = training_pair_from_dict(pair)
+        assert back["theta"] == dict(simulation.parameters)
+        assert back["result"] == simulation.results["model"]
+        assert back["observations"]["blue"] == simulation.observations["blue"]
+
+    def test_theta_keeps_its_dtype(self) -> None:
+        # The first of serialisation_review.md §4's two named losses: theta
+        # array values went through .tolist() and came back as Python floats.
+        pair = training_pair_to_dict(
+            {"population.objects.theta": np.arange(3, dtype=np.int32)},
+            ModelResult(Spectrum(BLUE * u.micron, [1.0] * 3 * u.Jy)),
+        )
+        theta = training_pair_from_dict(pair)["theta"]["population.objects.theta"]
+        assert theta.dtype == np.dtype("int32")
+        assert theta.tolist() == [0, 1, 2]
+
+    def test_a_failure_travels_with_its_detail(self) -> None:
+        # The second loss: only the flag was carried, so an archived budget
+        # said *that* a draw was rejected and never why.
+        failure = Failure(FailureReason.MODEL_FAILED, "the RT code exited 1", where="blue")
+        pair = training_pair_to_dict(
+            {"model.index": -1.0},
+            ModelResult(Spectrum(BLUE * u.micron, [1.0] * 3 * u.Jy)),
+            failed=True,
+            failure=failure,
+        )
+        back = training_pair_from_dict(pair)
+        assert back["failed"] is True
+        assert back["failure"]["reason"] == "model_failed"
+        assert back["failure"]["message"] == "the RT code exited 1"
+        assert back["failure"]["where"] == "blue"
+
     def test_a_dotted_channel_name_survives(self) -> None:
         result = ModelResult({"co.j3_2": Spectrum(BLUE * u.micron, [1.0] * 3 * u.Jy)})
         assert set(model_result_from_dict(model_result_to_dict(result))) == {"co.j3_2"}
 
 
 # ---------------------------------------------------------------------------
-# Declared-but-unimplemented surfaces
+# The declared surfaces, now that Phase 2 has filled them in
 # ---------------------------------------------------------------------------
 
 
@@ -1426,30 +1474,37 @@ class TestPlottingSurface:
             lambda: plot_corner(None),
             lambda: plot_trace(None),
             lambda: plot_posterior_predictive(None),
-        ],
-        ids=["corner", "trace", "ppc"],
-    )
-    def test_the_undelivered_plots_are_declared_and_refuse_clearly(self, call: Any) -> None:
-        with pytest.raises(NotImplementedError, match="Phase 2"):
-            call()
-
-    @pytest.mark.parametrize(
-        "call",
-        [
             lambda: plot_residuals(None),
             lambda: plot_gp_localisation(None),
             lambda: plot_anomaly_score(None),
         ],
-        ids=["residuals", "gp_localisation", "anomaly"],
+        ids=["corner", "trace", "ppc", "residuals", "gp_localisation", "anomaly"],
     )
-    def test_the_diagnostic_plots_are_implemented_and_refuse_a_non_run(self, call: Any) -> None:
-        # W2.7 landed diagnostics.md's families B and C (tests/results/
-        # test_diagnostics.py holds them end to end); what is asserted here is
-        # that they now refuse *as results errors* rather than as unimplemented
-        # surface, which is what tells a caller the difference between "not
-        # written yet" and "you passed the wrong thing".
+    def test_every_plot_is_implemented_and_refuses_a_non_run(self, call: Any) -> None:
+        # W2.7 landed diagnostics.md's families B and C and W2.8 the three
+        # general-purpose ones (tests/results/test_diagnostics.py and
+        # test_plots.py hold them end to end); what is asserted here is that
+        # results.md §8's surface is complete — every one of the six refuses
+        # *as a results error* rather than as unimplemented surface, which is
+        # what tells a caller the difference between "not written yet" and
+        # "you passed the wrong thing".
         with pytest.raises(ResultsError):
             call()
+
+    def test_none_of_them_raises_not_implemented_any_more(self) -> None:
+        # results.md §8's closing paragraph said "every plotting function is a
+        # declared signature that raises NotImplementedError"; amended at W2.8,
+        # and pinned here so the sentence and the code cannot drift apart again.
+        for plot in (
+            plot_corner,
+            plot_trace,
+            plot_posterior_predictive,
+            plot_residuals,
+            plot_gp_localisation,
+            plot_anomaly_score,
+        ):
+            with pytest.raises(ResultsError):
+                plot(None)
 
     def test_the_gp_localisation_caveat_is_mandatory_and_reachable(self) -> None:
         # diagnostics.md §4.3: the caveat must reach a programmatic consumer,
@@ -1466,19 +1521,15 @@ class TestPlottingSurface:
 
 
 class TestDerivedGroups:
-    def test_posterior_predictive_replicates_are_declared_but_not_implemented(self) -> None:
-        # The one derived group W2.7 deliberately left alone: it lands beside
-        # plot_posterior_predictive, which is not this item's to write.
-        with pytest.raises(NotImplementedError, match="Phase 2"):
-            add_posterior_predictive(None, joint_problem())
-
     @pytest.mark.parametrize(
         "call",
         [
             lambda: add_residuals(None, joint_problem()),
             lambda: gp_localisation(None, joint_problem()),
+            lambda: add_posterior_predictive(None, joint_problem()),
+            lambda: add_pointwise_log_likelihood(None, joint_problem()),
         ],
-        ids=["residuals", "gp_localisation"],
+        ids=["residuals", "gp_localisation", "posterior_predictive", "pointwise"],
     )
     def test_the_landed_derived_groups_refuse_a_run_they_cannot_check(self, call: Any) -> None:
         # W2.7 implemented both. Handed something that is not a run, they say
@@ -1489,9 +1540,13 @@ class TestDerivedGroups:
 
     def test_they_are_absent_from_a_default_emission(self) -> None:
         # The cost policy, asserted: N_draws x N_obs is not paid unless asked.
+        # results.md §6's "never by default" for the pointwise group is the
+        # same rule and is asserted with the rest of them, because having a
+        # computation available is exactly when the rule stops enforcing itself.
         tree = recorded(joint_problem(), chains=1, draws=2)
         assert "posterior_predictive" not in tree.children
         assert "residuals" not in tree.children
+        assert POINTWISE_LOG_LIKELIHOOD_GROUP not in tree.children
 
 
 class TestDependencyPolicy:

@@ -73,7 +73,7 @@ True
 
 A kind ampere does not know is refused by name, with the remedy:
 
->>> container_from_dict({"version": 1, "kind": "Polarimetry"})
+>>> container_from_dict({"version": CONTAINER_SCHEMA_VERSION, "kind": "Polarimetry"})
 Traceback (most recent call last):
     ...
 ampere.core.exceptions.ResultsError: no container kind named 'Polarimetry' is registered...
@@ -130,11 +130,23 @@ __all__ = [
     "model_result_to_dict",
     "register_kind",
     "registered_kinds",
+    "training_pair_from_dict",
     "training_pair_to_dict",
 ]
 
 #: Bumped whenever the meaning of a key below changes.
-CONTAINER_SCHEMA_VERSION = 1
+#:
+#: **2 (W2.8)**: an array-valued θ entry — in a training pair's ``theta`` and in
+#: a ``ModelResult``'s ``parameters`` — is now the ``{dtype, data}`` record
+#: :func:`_array_to_dict` writes, where it used to be a bare
+#: ``ndarray.tolist()``. That is the first of the two losses
+#: ``serialisation_review.md`` §4 told the training-set writer to fix: a plate's
+#: integer index or a float32 latent block came back as a list of Python floats,
+#: and the emulator trained on it never knew. The reader accepts both forms —
+#: a bare list still decodes, since a list *is* a plain-data value and refusing
+#: one would be pedantry — but the meaning of what ampere **writes** changed,
+#: and §5's versioning policy is that this bumps in the same commit.
+CONTAINER_SCHEMA_VERSION = 2
 
 _KINDS: dict[str, type[FunctionSamples]] = {}
 
@@ -222,6 +234,44 @@ def _array_from_dict(encoded: Mapping[str, Any], what: str) -> np.ndarray:
         return np.asarray(encoded["data"], dtype=dtype)
     except KeyError:
         raise ResultsError(f"{what} carries no 'data' entry.") from None
+
+
+def _values_to_dict(values: Mapping[str, Any]) -> dict[str, Any]:
+    """A θ mapping in plain data, **keeping each array's dtype**.
+
+    ``serialisation_review.md`` §4 names this as one of the two losses the
+    training-set writer must fix: "θ array values go through ``.tolist()``
+    (dtype lost)". A plate's integer index, a boolean indicator or a float32
+    latent block all came back as lists of Python floats, and nothing
+    downstream could tell. Scalars stay scalars — a Python ``float`` is its own
+    plain form and wrapping it in a dtype record would make every record wider
+    for nothing.
+    """
+    encoded: dict[str, Any] = {}
+    for name, value in values.items():
+        if isinstance(value, np.ndarray):
+            encoded[str(name)] = _array_to_dict(value)
+        elif isinstance(value, np.generic):
+            encoded[str(name)] = _array_to_dict(np.asarray(value))
+        else:
+            encoded[str(name)] = value
+    return encoded
+
+
+def _values_from_dict(encoded: Mapping[str, Any], what: str) -> dict[str, Any]:
+    """The inverse of :func:`_values_to_dict`, tolerant of the pre-W2.8 form.
+
+    A bare list is still decoded — as a list, which is what it was written as —
+    because a record that merely stated less than it could is not a corrupt
+    record. A ``{dtype, ...}`` mapping is rebuilt as the array it was.
+    """
+    values: dict[str, Any] = {}
+    for name, value in encoded.items():
+        if isinstance(value, Mapping) and "dtype" in value:
+            values[str(name)] = _array_from_dict(value, f"{what} entry {name!r}")
+        else:
+            values[str(name)] = value
+    return values
 
 
 def _unit_name(unit: u.UnitBase | None) -> str | None:
@@ -369,10 +419,7 @@ def model_result_to_dict(result: ModelResult) -> dict[str, Any]:
         "channels": {name: container_to_dict(result[name]) for name in result},
     }
     if result.parameters is not None:
-        encoded["parameters"] = {
-            name: (value.tolist() if isinstance(value, np.ndarray) else value)
-            for name, value in result.parameters.items()
-        }
+        encoded["parameters"] = _values_to_dict(result.parameters)
     if result.meta:
         encoded["meta"] = _plain_meta(result.meta, "ModelResult")
     return encoded
@@ -387,15 +434,23 @@ def model_result_from_dict(encoded: Mapping[str, Any]) -> ModelResult:
             f"version {CONTAINER_SCHEMA_VERSION}."
         )
     channels = {name: container_from_dict(payload) for name, payload in encoded["channels"].items()}
+    parameters = encoded.get("parameters")
     return ModelResult(
         channels,
         meta=encoded.get("meta"),
-        parameters=encoded.get("parameters"),
+        parameters=(
+            None if parameters is None else _values_from_dict(parameters, "ModelResult parameters")
+        ),
     )
 
 
 def training_pair_to_dict(
-    theta: Mapping[str, Any], result: ModelResult, *, failed: bool = False
+    theta: Mapping[str, Any],
+    result: ModelResult,
+    *,
+    failed: bool = False,
+    observations: Mapping[str, FunctionSamples] | None = None,
+    failure: Any = None,
 ) -> dict[str, Any]:
     """One ``(θ, ModelResult)`` training pair, as design horizon (c) wants it.
 
@@ -403,6 +458,16 @@ def training_pair_to_dict(
     an emulator training set records the rejected draws instead of losing them —
     ``inference.md`` §13's "reject-and-record rather than train on garbage" is
     only useful if the record survives to the file.
+
+    ``observations`` and ``failure`` close the second of the two losses
+    ``serialisation_review.md`` §4 named: the flag alone said *that* a draw was
+    rejected and never *why*, and a budget with a 2 % crash rate is worth
+    debugging from its own file rather than by re-running it. ``failure`` is a
+    :class:`~ampere.core.dataset.Failure` (anything with ``to_dict``);
+    ``observations`` are the noisy draws
+    :meth:`~ampere.core.dataset.FittingProblem.simulate` produces with
+    ``observe=True``, which an SBI budget needs and an emulator budget does not,
+    so they are carried when they exist and absent otherwise.
 
     >>> import numpy as np, astropy.units as u
     >>> from ampere.core import ModelResult, Spectrum
@@ -412,13 +477,88 @@ def training_pair_to_dict(
     ... )
     >>> sorted(pair), pair["failed"]
     (['failed', 'result', 'theta', 'version'], False)
+
+    θ keeps its dtype, which it did not before W2.8:
+
+    >>> pair = training_pair_to_dict(
+    ...     {"population.objects.theta": np.array([1, 2], dtype=np.int16)},
+    ...     ModelResult(Spectrum([1.0, 2.0] * u.um, [2.0, 4.0] * u.Jy)),
+    ... )
+    >>> back = training_pair_from_dict(pair)
+    >>> back["theta"]["population.objects.theta"].dtype
+    dtype('int16')
     """
-    return {
+    encoded: dict[str, Any] = {
         "version": CONTAINER_SCHEMA_VERSION,
-        "theta": {
-            name: (value.tolist() if isinstance(value, np.ndarray) else value)
-            for name, value in theta.items()
-        },
+        "theta": _values_to_dict(theta),
         "result": model_result_to_dict(result),
         "failed": bool(failed),
     }
+    if observations is not None:
+        encoded["observations"] = {
+            str(label): container_to_dict(container) for label, container in observations.items()
+        }
+    if failure is not None:
+        encoded["failure"] = _failure_to_dict(failure)
+    return encoded
+
+
+def _failure_to_dict(failure: Any) -> dict[str, Any]:
+    """A :class:`~ampere.core.dataset.Failure` as plain data, by its own method.
+
+    ``Failure.to_dict`` already exists and is already what a run's provenance
+    records (``results.md`` §9), so a training set uses it rather than inventing
+    a second encoding of the same five fields. Anything else with a ``to_dict``
+    is accepted on the same terms; anything without one is refused, because a
+    silently stringified failure record is a failure record nobody can count.
+    """
+    if not hasattr(failure, "to_dict"):
+        raise ResultsError(
+            f"a training pair's failure must be an ampere Failure (or anything with to_dict()), "
+            f"got {type(failure).__name__}. FittingProblem.simulate puts one on "
+            f"Simulation.failure."
+        )
+    return dict(failure.to_dict())
+
+
+def training_pair_from_dict(encoded: Mapping[str, Any]) -> dict[str, Any]:
+    """Rebuild a training pair from :func:`training_pair_to_dict`'s output.
+
+    The round trip ``serialisation_review.md`` §4 said was owed "when the first
+    consumer — the SBI layer or an emulator trainer — lands". Returns a plain
+    mapping rather than a class, because that is what the writer consumes and
+    what a trainer iterates: ``theta`` (by value, dtypes intact), ``result`` (a
+    real :class:`~ampere.core.results_schema.ModelResult`), ``failed``, and —
+    where the record carries them — ``observations`` (containers, by value) and
+    ``failure`` (the plain-data record; a ``Failure`` is deliberately *not*
+    reconstructed, since ``FailureReason`` is a closed vocabulary this module
+    would have to import and a record is not a live error).
+
+    >>> import astropy.units as u
+    >>> from ampere.core import ModelResult, Spectrum
+    >>> spectrum = Spectrum([1.0, 2.0] * u.um, [2.0, 4.0] * u.Jy)
+    >>> pair = training_pair_to_dict({"model.slope": 2.0}, ModelResult(spectrum))
+    >>> back = training_pair_from_dict(pair)
+    >>> back["theta"], back["result"]["default"] == spectrum
+    ({'model.slope': 2.0}, True)
+    """
+    version = encoded.get("version", CONTAINER_SCHEMA_VERSION)
+    if version != CONTAINER_SCHEMA_VERSION:
+        raise ResultsError(
+            f"unsupported training-pair record version {version!r}; this ampere writes and "
+            f"reads version {CONTAINER_SCHEMA_VERSION}."
+        )
+    pair: dict[str, Any] = {
+        "theta": _values_from_dict(encoded.get("theta", {}), "training pair theta"),
+        "result": model_result_from_dict(encoded["result"]),
+        "failed": bool(encoded.get("failed", False)),
+    }
+    observations = encoded.get("observations")
+    if observations is not None:
+        pair["observations"] = {
+            str(label): container_from_dict(payload) for label, payload in observations.items()
+        }
+    failure = encoded.get("failure")
+    if failure is not None:
+        pair["failure"] = dict(failure)
+    return pair
