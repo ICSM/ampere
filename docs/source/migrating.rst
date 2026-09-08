@@ -3,9 +3,9 @@ Migrating to the new API
 
 Ampere has two APIs, and this page is about the gap between them: what maps
 to what, what "frozen" means for the old one, and the same small fit shown
-both ways. It is a seed, not the guide — Peter's 2026-09-08 ruling keeps the
-legacy API **linked**, not removed, precisely because a full migration guide
-and a deprecation timetable are Phase 6 work, not this item's. See
+both ways. It is a seed, not the guide: the legacy API stays **linked**, not
+removed, and a full migration guide and a deprecation timetable are planned
+for a later phase. See
 :doc:`overview` for how the v2 pieces fit together and :doc:`ampere` for the
 legacy reference.
 
