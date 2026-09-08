@@ -14,7 +14,8 @@ how the pieces fit together; these pages are the reference.
 **Legacy ampere** is the v1 code that produced the published science —
 ``ampere.data``, ``ampere.models``, ``ampere.infer``. It is **frozen**: it
 still runs, and nothing in it is being changed. It implements none of the v2
-contracts and is not interoperable with them.
+contracts and is not interoperable with them. See :doc:`migrating` for how
+the two APIs relate.
 
 Ampere v2
 ---------
@@ -26,6 +27,14 @@ Ampere v2
    ampere.backends
    ampere.inference
    ampere.results
+
+Migrating
+---------
+
+.. toctree::
+   :maxdepth: 2
+
+   migrating
 
 Legacy (frozen)
 ---------------
