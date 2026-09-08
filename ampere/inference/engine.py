@@ -265,10 +265,14 @@ class _EvaluationCache:
                 log_prob=-math.inf,
                 contributions=contributions,
             )
+        log_prob = log_prior + total
         return Evaluation(
             log_prior=log_prior,
             log_likelihood=total,
-            log_prob=log_prior + total,
+            # The contract path's own guard, kept identical: two finite halves
+            # can still overflow to -inf, and an Evaluation must never carry a
+            # log_prob its two halves do not imply.
+            log_prob=log_prob if math.isfinite(log_prob) else -math.inf,
             contributions=contributions,
         )
 
