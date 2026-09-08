@@ -95,6 +95,14 @@ class ZeusEngine(Engine):
         See :class:`~ampere.inference.engine.Engine`. There is no ``backend=``:
         W2.12 made the backend §4.5's fourth capability flag, read off the
         problem's own pieces.
+    use_realisation
+        See :class:`~ampere.inference.engine.Engine`. ``True`` by default: on a
+        backend with a registered realisation this driver scores every proposal
+        through it rather than through the numpy contract path, which on a jax
+        quasiseparable problem is the difference between 27 ms and 0.6 ms a
+        proposal. It changes no number and one record — a failure loses its
+        reason there (``inference.md`` §10a) — so pass ``False``, or declare
+        ``strict=True`` on the problem, to keep the reasons.
     **sampler_settings
         Anything else ``zeus.EnsembleSampler`` takes — ``tune``, ``tolerance``,
         ``maxsteps``, ``maxiter``, ``mu`` — forwarded untouched. ampere has no
