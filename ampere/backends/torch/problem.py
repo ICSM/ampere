@@ -51,8 +51,8 @@ compares them at many, including near a support boundary, which is the proof
 No exception control flow on the hot path
 ------------------------------------------
 Every refusal this module makes — a model that is not this backend's, a
-censored dataset, a latent GP, a non-Gaussian family, another backend's GP
-solver — is made **at construction**, once, with a
+censored Student-t, a complex family, another backend's GP solver — is made
+**at construction**, once, with a
 :class:`~ampere.core.exceptions.LoweringError` naming what is unsupported.
 That is ``inference.md`` §10a's reading of ``strict=True`` on the native path
 and ``likelihoods.md`` §17 Q1's trace-purity ruling.
@@ -84,15 +84,18 @@ masks, plates and hierarchical priors. Slice 2 widens it to:
   likelihood a thing a NUTS run can actually do;
 * **prediction-aware noise**, ``FractionalModelNoise`` and
   ``FractionalModelGPNoise``, through the ``sigma_tensor`` hook W2.13 left
-  dormant.
+  dormant;
+* **the latent-GP path** (W2.14): the whitened block ``z`` goes through the
+  solver's ``latent_transform_native`` and the family body scores at
+  ``f = L(θ) z``. Slice 2 refused this, and said why — ``ampere.core``'s own
+  scoring path applied no whitening transform, so the kernel hyperparameters
+  entered a latent likelihood nowhere at all, and lowering it here would have
+  meant copying that defect or disagreeing with the oracle. W2.14 fixed the
+  oracle; this backend follows it rather than leading it.
 
-Two things stay refused, both by name and both for a stated reason rather
-than for want of time. ``complex_gaussian`` needs complex tensors end to end
-and belongs with the visibility modality (plan §5, Phase 4). **The latent-GP
-path is refused because the numpy path it must agree with does not apply the
-whitening transform** — see the refusal's own message, which states the
-defect and its measurable consequence; lowering it would mean either copying
-the defect or disagreeing with the oracle, and neither is a backend's call.
+One thing stays refused, by name and for a stated reason rather than for want
+of time: ``complex_gaussian`` needs complex tensors end to end and belongs
+with the visibility modality (plan §5, Phase 4).
 """
 
 from __future__ import annotations
@@ -109,7 +112,11 @@ from ampere.core import (
     GaussianProcessNoise,
     IndependentNoise,
 )
-from ampere.core.dataset import INSTRUMENT_COMPONENT, LIKELIHOOD_COMPONENT
+from ampere.core.dataset import (
+    INSTRUMENT_COMPONENT,
+    LATENT_COMPONENT,
+    LIKELIHOOD_COMPONENT,
+)
 from ampere.core.exceptions import LoweringError
 
 from ._config import BACKEND, DEFAULT_DEVICE, DEFAULT_DTYPE, as_tensor
@@ -166,24 +173,18 @@ class _LoweredDataset:
         )
         if refusal is not None:
             raise refusal
-        if dataset.latent is not None:
-            raise _refuse(
-                "latent",
-                f"dataset {label!r} declares a latent GP, and this backend refuses to lower it "
-                f"**because the numpy path it would have to agree with does not apply the "
-                f"whitening transform**. ampere.core.likelihood.latent_parameter declares that "
-                f"'the covariance enters through f = L(theta) z, a deterministic transform owned "
-                f"by the GPSolver', but no scoring path calls GPSolver.latent_transform: "
-                f"Dataset.log_likelihood_of hands the whitened z straight to "
-                f"Likelihood.log_prob, which hands it to the family as noise.latent, and "
-                f"PoissonFamily.log_prob uses it as f. The measurable consequence is that the "
-                f"kernel hyperparameters do not enter the likelihood at all -- the value is "
-                f"identical for amplitude 0.5, 5 and 50 -- so a latent fit samples them against "
-                f"a flat likelihood. Lowering this here would mean either reproducing the defect "
-                f"or disagreeing with the oracle ampere.core.realise checks against, and "
-                f"neither is a backend's decision to take. Recorded as a W2.4 slice 2 finding; "
-                f"the fix belongs in ampere.core.",
-            )
+        # The latent block's local name, resolved once at composition. Until
+        # W2.14 this was a blanket refusal: ampere.core scored a latent
+        # likelihood at the whitened z rather than at f = L(theta) z, so the
+        # kernel hyperparameters entered it nowhere, and lowering the path
+        # here would have meant either copying that defect or disagreeing with
+        # the oracle a realisation is checked against. The core applies the
+        # transform now (GaussianProcessNoise.noise_params), so this backend
+        # applies its own native one and the conformance row holds the two
+        # together.
+        self.latent_name: str | None = (
+            None if dataset.latent is None else dataset.latent.parameter.name
+        )
         correlated = bool(getattr(self.noise, "CORRELATED", False))
         if correlated and getattr(self.noise.solver, "BACKEND", "reference") != BACKEND:
             raise _refuse(
@@ -201,6 +202,19 @@ class _LoweredDataset:
                 f"non-raising, differentiable surface a realised density needs (inference.md "
                 f"§10a). A user-written solver joins the native path by supplying it.",
             )
+        if self.latent_name is not None and not callable(
+            getattr(self.noise.solver, "latent_transform_native", None)
+        ):
+            raise _refuse(
+                type(self.noise.solver).__name__,
+                f"dataset {label!r} declares a latent GP, but the "
+                f"{type(self.noise.solver).__name__} solver has no `latent_transform_native` -- "
+                f"the non-raising, differentiable form of `f = L(theta) z`. Since W2.14 the "
+                f"contract path applies that transform on every latent evaluation, so a "
+                f"realisation without it would disagree with its own oracle and would give the "
+                f"kernel hyperparameters no gradient. A user-written solver joins the latent "
+                f"path by supplying it.",
+            )
         if not isinstance(self.noise, (IndependentNoise, GaussianProcessNoise)):
             raise _refuse(
                 type(self.noise).__name__,
@@ -208,6 +222,14 @@ class _LoweredDataset:
                 f"compose natively.",
             )
         self.correlated = correlated
+        # Which of the two correlated stories this dataset tells, decided by
+        # the family's own declaration rather than by its name. A family whose
+        # GP marginalises in closed form (the Gaussian one) hands the whole
+        # covariance to the solver; one that does not (Poisson) needs the
+        # latent block instead, and takes its own body with `noise.latent`
+        # supplied. Before W2.14 the branch below tested `correlated` alone,
+        # which was right only because a latent dataset never got this far.
+        self.gp_marginal = correlated and self.likelihood.family.ANALYTIC_WITH_GP
 
         observed = dataset.observed
         # The effective mask, resolved once at composition: Dataset takes the
@@ -326,6 +348,33 @@ class _LoweredDataset:
             return base
         return native(base, values, predicted=predicted)
 
+    def _latent(
+        self, routed: Mapping[str, Mapping[str, Any]], values: Mapping[str, Any]
+    ) -> torch.Tensor | None:
+        """The dataset's latent function ``f``, or ``None`` when it declares none.
+
+        The whitened values ``z`` arrive as one array-valued parameter under
+        the ``latent`` component (``Dataset.route``); the correlation is
+        imposed here by the solver's own **native** whitening transform, so
+        what the family body receives is ``f = L(θ) z`` on the retained
+        coordinates — which is what ``PoissonFamily`` has always read
+        ``noise.latent`` as, and what ``ampere.core`` now supplies.
+
+        ``latent_transform_native`` rather than ``latent_transform`` for the
+        usual reason: the contract surface returns numpy and would cut the
+        gradient in exactly the hyperparameters this path exists to fit.
+        """
+        if self.latent_name is None:
+            return None
+        block = self._dataset_values(routed).get(LATENT_COMPONENT, {})
+        whitened = _tensor(block[self.latent_name]).reshape(-1)
+        return self.noise.solver.latent_transform_native(
+            self.noise.kernel,
+            self.observed_coordinates,
+            whitened,
+            self.noise.kernel.resolve(values),
+        )
+
     def log_likelihood(self, routed: Mapping[str, Mapping[str, Any]]) -> torch.Tensor:
         """``log p(data | θ)`` for this dataset alone, as a differentiable scalar.
 
@@ -343,7 +392,7 @@ class _LoweredDataset:
         # The noise model's own parameters arrive under the likelihood
         # component, flatly -- the same mapping ampere.core hands NoiseModel.
         sigma = self._sigma(predicted, values)
-        if self.correlated:
+        if self.gp_marginal:
             residual = self.observed_values - predicted
             variance = torch.zeros_like(residual) if sigma is None else sigma**2
             value = self.noise.solver.log_marginal_likelihood_native(
@@ -369,7 +418,7 @@ class _LoweredDataset:
                     detection=self.detection,
                     upper=self.upper,
                     lower=self.lower,
-                    latent=None,
+                    latent=self._latent(routed, values),
                     family=self.likelihood.family,
                 )
             )

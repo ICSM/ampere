@@ -65,10 +65,12 @@ Everything ``ampere.core`` implements, bar the pieces named below:
 * **censoring**: the Tobit decomposition, for every family that declares
   ``SUPPORTS_CENSORING``, with the CDFs written out where ``jax.scipy.stats``
   has none;
-* **latent GPs**: a dataset declaring one hands its whitened block to the
-  family that consumes it (``CONSUMES_LATENT_GP``), which today is Poisson —
-  the combination ``DEVELOPMENT_PLAN.md`` §4.4 singles out, and the one no
-  gradient-free engine can run at all;
+* **latent GPs**: a dataset declaring one pushes its whitened block ``z``
+  through the solver's native whitening transform and hands ``f = L(θ) z`` to
+  the family that consumes it (``CONSUMES_LATENT_GP``), which today is Poisson
+  — the combination ``DEVELOPMENT_PLAN.md`` §4.4 singles out, and the one no
+  gradient-free engine can run at all. The transform is applied here since
+  W2.14, when ``ampere.core`` began applying it too;
 * both GP solves, **dense and quasiseparable**, differentiable in the kernel
   hyperparameters. ``QuasisepGP`` is what makes the flexible likelihood
   tractable at 10⁵ to 10⁶ samples, and it lowers here exactly as ``DenseGP``
@@ -224,6 +226,17 @@ class _LoweredDataset:
                     f"does not consume. ampere.core refuses this composition at construction "
                     f"(Likelihood._refuse_unconsumed_latent); reaching it here is a bug.",
                 )
+            if not callable(getattr(self.noise.solver, "latent_transform_jax", None)):
+                raise _refuse(
+                    type(self.noise.solver).__name__,
+                    f"dataset {label!r} declares a latent GP, but the "
+                    f"{type(self.noise.solver).__name__} solver has no `latent_transform_jax` — "
+                    f"the traceable, differentiable form of `f = L(theta) z`. Since W2.14 the "
+                    f"contract path applies that transform on every latent evaluation, so a "
+                    f"realisation without it would disagree with its own oracle and give the "
+                    f"kernel hyperparameters no gradient. A user-written solver joins the "
+                    f"latent path by supplying it.",
+                )
             self.latent_name = dataset.latent.parameter.name
 
         observed = dataset.observed
@@ -337,33 +350,38 @@ class _LoweredDataset:
             sigma = jnp.sqrt(sigma**2 + floor**2)
         return sigma
 
-    def _latent(self, routed: Mapping[str, Mapping[str, Any]]) -> jax.Array | None:
-        """The dataset's latent block, or ``None`` when it declares none.
+    def _latent(
+        self, routed: Mapping[str, Mapping[str, Any]], values: Mapping[str, Any]
+    ) -> jax.Array | None:
+        """The dataset's latent function ``f``, or ``None`` when it declares none.
 
         The whitened values ``z`` arrive as one array-valued parameter under
-        the ``latent`` component (``Dataset.route``) and are handed to the
-        family **unchanged**, which is exactly what
-        ``Dataset.log_likelihood_of`` does on the numpy path.
+        the ``latent`` component (``Dataset.route``); the correlation is then
+        imposed here by the solver's own **native** whitening transform, so
+        what the family receives is ``f = L(θ) z`` on the retained
+        coordinates.
 
-        That is worth stating plainly, because ``latent_parameter``'s own
-        docstring says the correlation "enters through ``f = L(θ) z``, a
-        deterministic transform owned by the ``GPSolver``" — and nothing on
-        the contract path applies it. ``Likelihood.log_prob`` passes ``latent``
-        straight into ``NoiseParams``, ``PoissonFamily`` reads it as ``f``, and
-        ``GPSolver.latent_transform`` is called only by
-        ``GaussianFamily.sample``. So a latent-GP likelihood currently scores
-        as though the block were white noise, and its kernel hyperparameters
-        enter the likelihood nowhere. This backend mirrors that deliberately:
-        the numpy path is the oracle by ruling (``inference.md`` §10a
-        sub-decision 4), and a realisation that "fixed" it here would simply
-        disagree with the contract path and fail its own conformance row. The
-        gap is ``ampere.core``'s, and is recorded as a finding rather than
-        patched from a backend.
+        Until W2.14 this method handed the block over unchanged, and said so
+        at length, because the numpy path did the same: nothing on the scoring
+        path called ``GPSolver.latent_transform``, and a realisation that
+        "fixed" it from a backend would have disagreed with the oracle it is
+        checked against (``inference.md`` §10a sub-decision 4). The oracle is
+        fixed now — ``GaussianProcessNoise.noise_params`` applies the
+        transform — so this applies it too, and the conformance row holds the
+        two together. ``latent_transform_jax`` rather than ``latent_transform``
+        for the usual reason: the contract surface returns numpy and would cut
+        the gradient in exactly the hyperparameters this path exists to fit.
         """
         if self.latent_name is None:
             return None
         block = self._dataset_values(routed).get(LATENT_COMPONENT, {})
-        return jnp.asarray(block[self.latent_name], dtype=jnp.float64).reshape(-1)
+        whitened = jnp.asarray(block[self.latent_name], dtype=jnp.float64).reshape(-1)
+        return self.noise.solver.latent_transform_jax(
+            self.noise.kernel,
+            self.observed_coordinates,
+            whitened,
+            self.noise.kernel.resolve(values),
+        )
 
     def log_likelihood(self, routed: Mapping[str, Mapping[str, Any]]) -> jax.Array:
         """``log p(data | θ)`` for this dataset, as a traceable jax scalar."""
@@ -399,7 +417,7 @@ class _LoweredDataset:
                 self.likelihood.family,
                 values,
                 self.limits,
-                self._latent(routed),
+                self._latent(routed, values),
             )
         return jnp.where(jnp.isfinite(value), value, -jnp.inf)
 
