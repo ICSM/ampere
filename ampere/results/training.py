@@ -70,7 +70,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -79,6 +79,7 @@ import numpy as np
 from ampere.core.dataset import FittingProblem, Simulation
 from ampere.core.exceptions import OptionalDependencyError, ResultsError
 from ampere.core.results_schema import FunctionSamples, ModelResult
+from ampere.core.simulate import SimulationBatch
 
 from .emission import SAMPLE_STATS_GROUP, _container_dims
 from .provenance import ATTR_PREFIX, provenance_attrs
@@ -270,9 +271,50 @@ def _check_slot(slot: _Slot, container: FunctionSamples, index: int) -> None:
 # ---------------------------------------------------------------------------
 
 
+#: What the writers accept: loose simulations, one batch, or an iterator of
+#: chunks. ``simulate_many(..., as_chunks=True)`` produces the third, which is
+#: the form a budget larger than memory arrives in.
+Budget = Iterable[Simulation] | SimulationBatch | Iterable[SimulationBatch]
+
+
+def _chunks_of(simulations: Budget) -> Iterator[list[Simulation]]:
+    """Normalise a budget into chunks, holding one chunk at a time.
+
+    Three shapes reach the writers and all three mean the same thing —
+    "these draws, in this order". A bare
+    :class:`~ampere.core.simulate.SimulationBatch` is one chunk; an iterator of
+    them (what ``simulate_many(as_chunks=True)`` yields) is one chunk each,
+    pulled only when the previous one has been written, which is the whole
+    point: nothing before the current chunk is still in memory. Anything else
+    is a plain iterable of :class:`~ampere.core.dataset.Simulation`, and is one
+    chunk, because a caller holding a list already holds it all.
+    """
+    if isinstance(simulations, SimulationBatch):
+        yield list(simulations)
+        return
+    iterator = iter(simulations)
+    first = next(iterator, None)
+    if first is None:
+        return
+    if isinstance(first, SimulationBatch):
+        yield list(first)
+        for chunk in iterator:
+            if not isinstance(chunk, SimulationBatch):
+                raise ResultsError(
+                    f"this budget mixes SimulationBatch chunks with "
+                    f"{type(chunk).__name__}; pass either the chunks "
+                    f"simulate_many(as_chunks=True) yields or a flat sequence of Simulations, "
+                    f"not both."
+                )
+            yield list(chunk)
+        return
+    first_draw: Simulation = first
+    yield [first_draw, *iterator]
+
+
 def write_training_set(
     path: str | Path,
-    simulations: Iterable[Simulation],
+    simulations: Budget,
     problem: FittingProblem,
     *,
     engine: str | None = None,
@@ -290,6 +332,16 @@ def write_training_set(
         "reject-and-record rather than train on garbage" is only useful if the
         record reaches the file, and a budget's failure rate is a property of
         the prior worth measuring.
+
+        Since W3.1 this also takes a
+        :class:`~ampere.core.simulate.SimulationBatch`, or the **iterator of
+        chunks** ``simulate_many(..., as_chunks=True)`` yields. The chunked form
+        is written a chunk at a time — the first chunk written, the rest
+        appended — so a budget larger than memory reaches the file without ever
+        being held. That makes §13's limitation 9 append the cost of a very
+        large budget rather than the peak memory: each chunk after the first
+        pays ``O(existing + new)``, which is quadratic in the number of chunks.
+        Prefer few large chunks over many small ones.
     problem
         The problem the budget was over. Its hashes go in the root attributes,
         and its ``ampere_spec_hash`` is what invalidates a stale artefact.
@@ -308,9 +360,27 @@ def write_training_set(
         known and there is nothing to train on), or if the channels are not one
         shape on one grid throughout.
     """
-    batch = list(simulations)
-    if not batch:
+    written: str | None = None
+    for chunk in _chunks_of(simulations):
+        if not chunk:
+            continue
+        if written is None:
+            written = _write_first(path, chunk, problem, engine=engine)
+        else:
+            written = append_training_set(path, chunk, problem, engine=engine)
+    if written is None:
         raise ResultsError("a training set needs at least one simulation; none was given.")
+    return written
+
+
+def _write_first(
+    path: str | Path,
+    batch: Sequence[Simulation],
+    problem: FittingProblem,
+    *,
+    engine: str | None,
+) -> str:
+    """The first (or only) chunk: the file is created, replacing anything there."""
     slots = _slots_from(batch)
     if not slots:
         raise ResultsError(
@@ -325,7 +395,7 @@ def write_training_set(
 
 def append_training_set(
     path: str | Path,
-    simulations: Iterable[Simulation],
+    simulations: Budget,
     problem: FittingProblem,
     *,
     engine: str | None = None,
@@ -345,9 +415,15 @@ def append_training_set(
         If the file's spec hash differs from the problem's, if the file is not
         a training set, or if the batch's channels do not match the file's.
     """
-    batch = list(simulations)
-    if not batch:
+    chunks = [chunk for chunk in _chunks_of(simulations) if chunk]
+    if not chunks:
         raise ResultsError("nothing to append; the batch is empty.")
+    if len(chunks) > 1:
+        written = path
+        for chunk in chunks:
+            written = append_training_set(path, chunk, problem, engine=engine)
+        return str(written)
+    batch = chunks[0]
     xarray = _require_xarray()
     existing = _open(path)
     stored = existing.attrs.get(f"{ATTR_PREFIX}spec_hash")
