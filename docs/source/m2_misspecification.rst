@@ -207,10 +207,27 @@ data.
 The consequence is the reason misspecification matters more, not less, for real
 spectra. The posterior narrows as :math:`\sqrt{N}`; the unmodelled 7 % ripple
 does not shrink at all. So the standard likelihood's error, measured in its own
-standard deviations, *grows* along the ladder — a fit that was seven widths
-wrong at 200 points is tens of widths wrong at 20 000 — while the flexible
-likelihood stays inside one width throughout. ``tests/m2/test_ladder.py``
-asserts both halves of that under ``-m m2_full``.
+standard deviations, *grows* along the ladder. Measured, on ``strong_smooth``,
+at the milestone budget — the worst of the four parameters at each rung:
+
+========== ================================= ==============================
+N          standard: worst offset (widths)   flexible: worst offset (widths)
+========== ================================= ==============================
+200        11.2 (``d2``), truth excluded     0.70, truth covered
+2 000      36.3 (``d2``), truth excluded     0.51, truth covered
+20 000     113.0 (``d2``), truth excluded    0.57, truth covered
+========== ================================= ==============================
+
+The standard likelihood's error grows almost exactly as :math:`\sqrt{N}`
+(11.2 → 36.3 → 113.0 against a predicted 11.2 → 35.4 → 112.0), which is what it
+must do if the bias is fixed and the posterior is shrinking. At 20 000 points
+the fit reports ``d2`` with an error bar a hundred times too small to contain
+the right answer. The flexible likelihood's offset does **not** grow: it is
+0.7, 0.5 and 0.6 widths, and its 68 % interval contains the truth at every
+rung. That is the claim that matters for real spectra, which have thousands of
+pixels rather than two hundred, and it is asserted by
+``tests/m2/test_ladder.py`` under ``-m m2_full`` — which prints exactly the
+table above.
 
 The ladder is only reachable because of the O(N) solver. A dense Gaussian
 process at 20 000 points is a 20 000 × 20 000 Cholesky factorisation per
@@ -224,8 +241,10 @@ pytest-benchmark (``pixi run -e <env> bench``), which writes ``benchmark.json``
 as a CI artefact per environment; the table below is a transcription of one such
 artefact rather than a hand-timed number. **One log-density evaluation of this
 study's own problem** at a fixed parameter vector, in milliseconds, median of
-the timed rounds on one developer machine (an eight-core x86-64 laptop; absolute
-values are machine-dependent, ratios much less so).
+the timed rounds on one x86-64 development machine. Absolute values are
+machine-dependent and the ratios much less so, which is why the paragraphs
+below quote ratios; ``benchmark.json`` from your own ``pixi run bench`` carries
+the machine and the interpreter alongside the numbers.
 
 The contract path — :meth:`ampere.core.FittingProblem.log_prob`, the only
 comparison legacy and all three backends can all run:
@@ -271,11 +290,17 @@ v2 jax, ``QuasisepGP`` (jitted)         0.28       0.61       4.70
 ================================= ========== ========== ==========
 
 The jax O(N) row is the headline number of the whole redesign: **a value and a
-gradient of a 20 000-point Gaussian-process likelihood in under 5 ms**, where
-legacy ampere needed 350 ms for a value alone at 2 000 points and could not
-reach 20 000 at all. It is also 25 times faster than the same backend's
-contract path at that size, which is the measurement that says why the realised
-path exists.
+gradient of a 20 000-point Gaussian-process likelihood in 4.7 ms**, where legacy
+ampere needed 350 ms for a value alone at 2 000 points and could not reach
+20 000 at all. It is also seven times faster than the same backend's contract
+path at that size, and a hundred times faster at 200 points, which is the
+measurement that says why the realised path exists at all: the dispatch cost
+that dominates the contract row is paid once at trace time and never again.
+
+The dense rows in this table are the same :math:`O(N^3)` wall the contract path
+hit, now with a gradient attached — 560 ms per leapfrog step at 2 000 points, on
+both backends, against 3 ms for the quasiseparable solve. A NUTS run takes
+hundreds of those steps per draw.
 
 A short sampling run per backend is tracked alongside
 (``tests/benchmarks/test_m2_sampling.py``), because a sampler's cost is the

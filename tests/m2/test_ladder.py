@@ -9,11 +9,15 @@ hundred times the paper's data size, and the interesting thing that happens
 along the ladder is not that the fits get slower. It is that the *cost of being
 wrong* grows: the posterior narrows as :math:`\\sqrt{N}` while the unmodelled
 7 % ripple does not shrink at all, so the standard likelihood's error, measured
-in its own standard deviations, grows roughly as :math:`\\sqrt{N}` — from about
-seven widths at 200 points to tens at 20 000 — while the flexible likelihood
-stays inside one. That is the claim asserted here, and it is the one that
-matters for real spectra, which have thousands of pixels rather than two
-hundred.
+in its own standard deviations, grows as :math:`\\sqrt{N}`. Measured on
+``strong_smooth`` at the milestone budget, the worst of the four parameters is
+**11.2, 36.3 and 113.0** posterior widths from the truth at 200, 2 000 and
+20 000 points — against 11.2, 35.4 and 112.0 predicted by a fixed bias and a
+shrinking posterior — and the truth is outside the 68 % interval at every rung.
+The flexible likelihood's worst offset does not grow at all: **0.70, 0.51 and
+0.57** widths, truth covered throughout. That is the claim asserted here, and
+it is the one that matters for real spectra, which have thousands of pixels
+rather than two hundred.
 
 **The tight agreement.** At the milestone budget the cross-backend disagreement
 is a measurement of the two posteriors rather than of the two samplers'
@@ -38,6 +42,22 @@ from examples.m2_misspecification.generators import SIZES, generate
 pytestmark = pytest.mark.m2_full
 
 
+def _report(label: str, size: int, summaries: dict[str, study.Summary]) -> None:
+    """Print the row, so ``pytest -m m2_full -s`` produces the table as well as the verdict.
+
+    ``tests/scaling`` established the convention: a suite whose whole purpose is
+    a measurement should hand the measurement to the reader rather than only
+    assert something about it, because the number is what goes into
+    ``docs/source/m2_misspecification.rst`` and into the work item's report.
+    """
+    offsets = " ".join(
+        f"{name.split('.')[-1]}={summary.bias_in_widths:7.2f}"
+        for name, summary in summaries.items()
+    )
+    covers = all(summary.covers_truth for summary in summaries.values())
+    print(f"  [ladder] {label:9s} n={size:6d}  {offsets}  covers={covers}")
+
+
 @pytest.mark.parametrize("size", SIZES)
 def test_the_flexible_likelihood_stays_honest_at_every_rung(size: int) -> None:
     """Every parameter within the stated tolerance of the truth, at 200 to 20 000."""
@@ -46,6 +66,7 @@ def test_the_flexible_likelihood_stays_honest_at_every_rung(size: int) -> None:
     summaries = study.summarise(
         study.run(problem, study.MILESTONE_EMCEE), names=study.PHYSICAL_NAMES
     )
+    _report("flexible", size, summaries)
     for name, summary in summaries.items():
         assert summary.bias_in_widths <= study.FLEXIBLE_MAX_BIAS_WIDTHS, (
             f"n={size} {name}: {summary!r}"
@@ -68,6 +89,7 @@ def test_the_standard_likelihoods_error_grows_with_the_data() -> None:
         summaries = study.summarise(
             study.run(problem, study.MILESTONE_EMCEE), names=study.PHYSICAL_NAMES
         )
+        _report("standard", size, summaries)
         worst.append(max(summary.bias_in_widths for summary in summaries.values()))
     assert worst[0] < worst[1] < worst[2], dict(zip(SIZES, worst, strict=True))
     assert worst[-1] > 3.0 * worst[0]
