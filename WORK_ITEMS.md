@@ -456,6 +456,25 @@ results tracked as CI artefacts. GPU tests stay nightly/manual.
 benchmark half can trail with W2.10.
 **Accept:** a deliberately broken backend row fails only its own job; the
 no-extras job is green; benchmark results appear as artefacts on a PR.
+**Implemented 2026-09-08 on `w2.11-ci-phase2`** (Peter to review and merge).
+The job graph is now: `lint` and `typecheck` on `dev`; `test` (the py3.11/12/13
+matrix, unchanged); `suites` (`dev`); `backend-suites`, a `fail-fast: false`
+matrix over `torch` and `jax` running that environment's `typecheck`,
+`test-all` and `bench`; `docs` (`dev`); `minimal-install` (bare
+`pip install -e .`, the no-extras leg); and the unchanged schedule/manual
+`sbi-characterisation`. One environment per job, never two — GitHub's runners
+have 7 GB and one five-suite gate is what fits. **The benchmark harness is
+pytest-benchmark** (`tests/benchmarks/`, `pixi run bench`, `benchmark.json`
+uploaded per environment); the reasoning is the decision-log row in
+`DEVELOPMENT_PLAN.md` §2 and §6's bullet is struck. Also landed here because
+they were blocking: `pixi run docs` now builds (`pandoc` and `ipykernel`
+declared in the `dev` pixi feature; `nbsphinx_execute = 'never'` with a
+per-notebook note; the dead `ampere.infer.ptemceesearch` autodoc entry
+removed) though **without `-W`**, since the residual warnings are legacy
+docstrings under frozen paths; `tests/examples` joined `test-all`; the `torch`
+and `sbi` pixi features resolve torch from PyTorch's CPU index, removing all
+fifteen `nvidia-*` wheels from `pixi.lock`; and `tests/scaling` gained the
+torch rows it was missing. GPU rows are still nothing — a later item.
 
 ### W2.12 — Backend identity on `FittingProblem` [M; Opus]
 W2.2's carried finding: no §4 surface names a problem's backend, so
