@@ -157,11 +157,16 @@ class _LoweredDataset:
         self.noise = dataset.likelihood.noise
         self.steps = tuple(dataset.instrument.steps)
 
-        if not hasattr(self.model, "flux"):
+        missing = ", ".join(
+            f"`{name}`" for name in ("flux", "grid") if not hasattr(self.model, name)
+        )
+        if missing:
             raise _refuse(
                 type(self.model).__name__,
-                f"model {self.model_label!r} has no native jax surface (a `flux` method), so it "
-                f"cannot be composed into a differentiable log-density. Build the problem from "
+                f"model {self.model_label!r} has no native jax surface ({missing} missing), so "
+                f"it cannot be composed into a differentiable log-density. The two go together: "
+                f"`flux` supplies the values and `grid` the coordinates the instrument chain "
+                f"transforms them on, and `predict` calls both. Build the problem from "
                 f"ampere.backends.jax's models, or run it on a gradient-free engine.",
             )
         for step in self.steps:

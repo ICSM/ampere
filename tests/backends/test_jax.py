@@ -80,12 +80,14 @@ from ampere.backends.jax import (  # noqa: E402
     lower_bijection,
     lower_problem,
 )
+from ampere.backends.jax._declare import as_parameter  # noqa: E402
 from ampere.backends.jax.distributions import has_native_icdf, lower_prior  # noqa: E402
 from ampere.backends.jax.families import lower_family  # noqa: E402
 from ampere.backends.jax.rng import fold, key  # noqa: E402
 from ampere.core import (  # noqa: E402
     CauchyFamily,
     Censoring,
+    ComplexGaussianFamily,
     Dataset,
     DatasetCollection,
     FittingProblem,
@@ -100,11 +102,14 @@ from ampere.core import (  # noqa: E402
     Likelihood,
     Log,
     Logit,
+    Model,
+    ModelResult,
     Parameter,
     ParameterSet,
     Plate,
     Spectrum,
     Tie,
+    VisibilitySet,
     negotiate,
 )
 from ampere.core.exceptions import LoweringError  # noqa: E402
@@ -1878,3 +1883,188 @@ class TestPerInstanceDevice:
 
         assert [f.name for f in dataclasses.fields(DenseGP(device="cpu"))] == ["jitter"]
         assert DenseGP(device="cpu") == DenseGP()
+
+
+# ---------------------------------------------------------------------------
+# The complex Gaussian, end to end on the realised path (W2.5 slice 3)
+# ---------------------------------------------------------------------------
+
+VIS_U = np.array([0.5, 1.5, 2.5, 3.5, 4.5, 5.5])
+VIS_V = np.array([-1.0, 0.0, 1.0, 2.0, 3.0, 4.0])
+
+
+class _PointSource(Model):
+    """A shifted point source, ``V(u,v) = A exp(-2 pi i s (u + v))``, in jax.
+
+    Written here rather than shipped because ``ampere.backends.jax``'s models
+    are the spectral three and the visibility modality is Phase 4's. What it
+    exercises is exactly what the shipped models cannot: a **complex**
+    prediction reaching the family through the realised path, with a gradient
+    in both parameters.
+
+    The parameter is ``amplitude`` and not ``flux`` because ``flux`` is the
+    name of this backend's native evaluation surface, and
+    ``Parameterised.register_parameter`` refuses a parameter that would shadow
+    an attribute of its own class — which is the check working, not a
+    limitation.
+    """
+
+    DIFFERENTIABLE = True
+    BATCHABLE = True
+    DEVICE = "cpu"
+    BACKEND = BACKEND
+
+    def __init__(self, u_coord: Any, v_coord: Any, *, amplitude: Any = 1.0, shift: Any = 0.0):
+        self.register_buffer("u", np.asarray(u_coord, dtype=float))
+        self.register_buffer("v", np.asarray(v_coord, dtype=float))
+        self.register_parameter(as_parameter("amplitude", amplitude))
+        self.register_parameter(as_parameter("shift", shift))
+
+    def _visibility(self, context: Any) -> Any:
+        phase = (
+            -2.0
+            * jnp.pi
+            * jnp.asarray(context["shift"])
+            * (jnp.asarray(context["u"]) + jnp.asarray(context["v"]))
+        )
+        return jnp.asarray(context["amplitude"]) * jnp.exp(1j * phase)
+
+    def grid(self, channel: str) -> Any:
+        return jnp.asarray(self.buffers["u"].value, dtype=jnp.float64)
+
+    def flux(self, channel: str, values: Any = None) -> Any:
+        return self._visibility(self.context(values))
+
+    def evaluate(self, **values: Any) -> ModelResult:
+        ctx = self.context(values)
+        return ModelResult(VisibilitySet(ctx["u"], ctx["v"], np.asarray(self._visibility(ctx))))
+
+
+def _visibilities() -> VisibilitySet:
+    exact = _PointSource(VIS_U, VIS_V, amplitude=2.0, shift=0.1).evaluate().single()
+    truth = np.asarray(exact.values)
+    rng = np.random.default_rng(20260908)
+    noise = rng.normal(0.0, 0.05, VIS_U.size) + 1j * rng.normal(0.0, 0.05, VIS_U.size)
+    return VisibilitySet(VIS_U, VIS_V, truth + noise, uncertainty=np.full(VIS_U.size, 0.05))
+
+
+VISIBILITIES = _visibilities()
+
+
+def _visibility_problem(noise: Any = None) -> FittingProblem:
+    return FittingProblem(
+        _PointSource(VIS_U, VIS_V, amplitude=st.lognorm(0.3, scale=2.0), shift=st.norm(0.1, 0.05)),
+        [
+            Dataset(
+                VISIBILITIES,
+                likelihood=Likelihood(
+                    ComplexGaussianFamily(),
+                    IndependentNoise() if noise is None else noise,
+                ),
+            )
+        ],
+        seed=20260908,
+    )
+
+
+class _GridlessPointSource(_PointSource):
+    """A native model that supplies ``flux`` and forgets ``grid``.
+
+    ``predict`` needs both, so the refusal must name both; before slice 3 it
+    named only ``flux`` and a model like this died on an ``AttributeError``
+    from inside the composition instead. The attribute is hidden rather than
+    deleted because the inherited one is a plain method and there is no other
+    way to make ``hasattr`` say no.
+    """
+
+    def __getattribute__(self, name: str) -> Any:
+        if name == "grid":
+            raise AttributeError(name)
+        return super().__getattribute__(name)
+
+
+class TestTheComplexGaussianPath:
+    """``complex_gaussian`` composes into the realised density (W2.5 slice 3).
+
+    The transcription itself landed in slice 2, in
+    :mod:`ampere.backends.jax.families`. What was never shown is the thing that
+    matters — that a **complex** container survives the whole realised path:
+    the lowered dataset keeps ``complex128`` where every other array is
+    ``float64``, the residual reaches the family as a complex difference, the
+    modulus makes it real again, and a gradient comes back out. A family whose
+    closed form is right and whose composition drops the imaginary part would
+    pass a unit test of the closed form and fit the wrong data.
+    """
+
+    def test_the_realised_density_agrees_with_the_contract_path(self) -> None:
+        _agrees(_visibility_problem(), tolerance=1e-9)
+
+    def test_the_observed_values_keep_their_complex_dtype(self) -> None:
+        """``results_schema.md``: the dtype is the declaration, so the lowering
+        may not quietly make it real."""
+        lowered = lower_problem(_visibility_problem())
+        observed = lowered._datasets[0].observed_values
+        assert observed.dtype == jnp.complex128
+
+    def test_the_density_is_differentiable_in_both_parameters(self) -> None:
+        """The whole reason the family is transcribed rather than called."""
+        problem = _visibility_problem()
+        lowered = lower_problem(problem)
+        point = jnp.asarray(problem.unconstrain(problem.reference_values))
+        gradient = np.asarray(jax.grad(lowered.log_prob_unconstrained)(point))
+        assert gradient.shape == (problem.free_size,)
+        assert np.all(np.isfinite(gradient))
+        assert np.any(gradient != 0.0)
+
+    def test_the_family_matches_ampere_core_at_the_same_point(self) -> None:
+        """The numpy path is the oracle, here as everywhere else."""
+        problem = _visibility_problem()
+        theta = problem.parameters.pack(problem.reference_values)
+        contract = problem.evaluate(theta)
+        lowered = lower_problem(problem)
+        terms = lowered.log_likelihood_terms(problem.unconstrain(theta))
+        assert float(np.asarray(terms["default"])) == pytest.approx(
+            contract.log_likelihood, abs=1e-9
+        )
+
+    def test_a_scaled_uncertainty_still_composes(self) -> None:
+        """The noise model's ``scale`` reaches a complex family like any other."""
+        _agrees(
+            _visibility_problem(IndependentNoise(scale=st.lognorm(0.2, scale=1.0))),
+            tolerance=1e-9,
+        )
+
+    def test_the_gp_combination_is_refused_by_name_as_the_numpy_path_refuses_it(
+        self,
+    ) -> None:
+        """``complex_gaussian`` + GP is declared ANALYTIC and unimplemented on
+        both paths (Phase 4's circular closed form), so this backend refuses
+        the composition rather than inventing one."""
+        from ampere.core.exceptions import LikelihoodError
+
+        with pytest.raises(LikelihoodError):
+            Likelihood(ComplexGaussianFamily(), GaussianProcessNoise(Matern32(0.4, 2.0), DenseGP()))
+
+    def test_a_model_without_a_native_grid_is_refused_by_name(self) -> None:
+        """``predict`` calls ``flux`` *and* ``grid``; the refusal now says so.
+
+        It used to name only ``flux``, which was true of the shipped spectral
+        models and misleading for anything else: a model supplying ``flux``
+        alone reached ``predict`` and died on an ``AttributeError`` about
+        ``grid`` from inside the composition.
+        """
+
+        problem = FittingProblem(
+            _GridlessPointSource(
+                VIS_U, VIS_V, amplitude=st.lognorm(0.3, scale=2.0), shift=st.norm(0.1, 0.05)
+            ),
+            [
+                Dataset(
+                    VISIBILITIES,
+                    likelihood=Likelihood(ComplexGaussianFamily(), IndependentNoise()),
+                )
+            ],
+            seed=1,
+        )
+        with pytest.raises(LoweringError, match="grid"):
+            lower_problem(problem)
