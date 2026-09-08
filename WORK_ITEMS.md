@@ -695,6 +695,308 @@ restructures `docs/development.md` and `CLAUDE.md` for Phase 3.
 namespaces; README install routes verified by running them in a scratch
 environment; the annotation list in the report; all three gates unchanged.
 
+## Phase 3 — The SBI layer (drafted 2026-09-08 by Fable; **awaiting Peter's approval of the breakdown before any dispatch**)
+
+Written from `DEVELOPMENT_PLAN.md` §5 Phase 3, its §6 deferred choices and
+§7's trained-artefact trap, `inference.md` §13 and limitation 17.5,
+`results.md` limitation 13.9, `diagnostics.md` §11, and the swyft harvest
+(`docs/design/harvest/swyft/README.md`). The sequencing principle is the one
+Phase 2 used: the backend-neutral core surface first (W3.1), then the
+package integration that consumes it (W3.2), then what the integration
+makes possible (W3.3–W3.6). Everything here lives **above** the backends —
+`ampere.inference` still imports no backend; the SBI module imports torch
+and `sbi` lazily inside the call that needs them, exactly as `_nuts.py` and
+`_vi.py` do, and a jax-native route is not scheduled (plan §6: "if and when
+maturity warrants" — nothing below closes the door).
+
+Shared facts for every item: the `sbi` extra resolves to **sbi 0.27.0 with
+a CPU torch 2.13** in the `sbi` pixi environment (`pixi install -e sbi`,
+verified 2026-09-08); sbi 0.27 spells the trainers `NPE`/`NLE`/`NRE`
+(`sbi.inference`), ships `run_sbc`/`check_sbc`/`run_tarp`/`check_tarp` in
+`sbi.diagnostics`, and `FCEmbedding`/`CNNEmbedding`/
+`PermutationInvariantEmbedding`/`TransformerEmbedding` in
+`sbi.neural_nets.embedding_nets`. The environments are `dev` (no torch),
+`torch`, `jax` and `sbi` (= `dev` + the `sbi` extra; **no pyro**, so the
+`torch` backend imports but its NUTS/VI engines do not — `architecture.md`
+§3's post-W2.15 note). The gate for a Phase 3 item is `pixi run -e sbi
+test-all` plus the `dev` gate proving nothing new leaks into the base
+install; the `torch`/`jax` gates are re-run only by items that touch a
+backend. Phase 2's operations notes hold: one five-suite gate at a time.
+
+### W3.0 — Phase 2 carry-over housekeeping [S; Sonnet]
+The four findings the Phase 2 handoff lists, none of them a contract change.
+(1) The name `ampere` on PyPI is an unrelated battery-modelling package, so
+`OptionalDependencyError`'s remedy line (`ampere/core/exceptions.py`) must
+not print `pip install "ampere[...]"` as if it worked today: make the remedy
+name the extra and route to the install page (`pip install "ampere[<extra>]"
+from a checkout, or see the install documentation`) — one wording, chosen in
+the item, applied to the runtime string, the class docstring's doctest, and
+every docstring in the new namespaces that quotes a `pip install ampere…`
+line (`ampere/backends/{reference,torch,jax}/__init__.py`,
+`ampere/inference/__init__.py`, `ampere/inference/_zeus.py`,
+`ampere/core/likelihood.py`, `ampere/results/emission.py` — enumerate by
+grep, the list here may be incomplete). (2) `SAMPLE_STATS_GROUP` is defined
+twice, identically, in `ampere/results/emission.py` and
+`ampere/results/training.py`: one definition, imported by the other. (3)
+Rename torch's `LSFConvolution.sigma_tensor`
+(`ampere/backends/torch/instrument.py`) so it cannot be mistaken for the
+`NoiseModel.sigma_tensor` hook — `width_tensor` or similar; update its
+numpy-side wrapper, callers, tests and the module docstring that mentions the
+hook. (4) Add a native zero-uncertainty precondition to the jax realised GP
+path (`ampere/backends/jax/problem.py`): `GaussianProcessNoise` on the
+contract path refuses a dataset with zero uncertainties and no jitter, the
+`realise` agreement check catches the disagreement today, but a `strict`
+NUTS run would sample a density the contract refuses — mirror the torch
+path's construction-time refusal (`REQUIRES_UNCERTAINTY` / the sigma-is-None
+check around line 507 of `ampere/backends/torch/problem.py`) with a test
+that the refusal names the dataset. No behaviour change beyond the four.
+**Depends:** nothing. **Blocks** nothing; may run in parallel with W3.1.
+**Accept:** `grep -rn "pip install ampere" ampere/core ampere/backends
+ampere/inference ampere/results` shows only the chosen wording; the
+`OptionalDependencyError` doctest passes; one `SAMPLE_STATS_GROUP`
+definition; no `sigma_tensor` on any torch `Transformation`; a jax
+realised GP problem with zero uncertainties refuses by name at construction;
+`pixi run -e dev test-all`, `-e torch test-all` and `-e jax test-all` green
+(counts unchanged apart from the new rows); lint/format clean, pyrefly 0
+errors in all three.
+
+### W3.1 — `simulate_many`: the batched forward model [M; Opus]
+`inference.md` limitation 17.5 discharged, on the numpy path first and
+natively where a backend can. **Core** (`ampere/core/dataset.py`):
+`FittingProblem.simulate_many(count, *, values=None, observe=False, rng=None,
+stream="simulate")` returning a `SimulationBatch` — the natural stacking of
+`Simulation`: `theta` as `(count, free_size)`, `predicted`/`observations` as
+per-dataset `FunctionSamples` batches with a leading sample axis (the
+`(θ, ModelResult)` pairs kept per draw for design horizon (c)), a `failed`
+boolean mask and the per-draw `Failure` records, and `__getitem__` yielding
+the i-th `Simulation` so every consumer written against §13 still works.
+`values=None` draws the batch from the joint prior on the named sub-stream;
+an array of shape `(count, free_size)` simulates at given θ (the SBC idiom).
+Failures are flagged per draw, never raised, and the loop is the reference
+semantics: `simulate_many(n)` must equal `n` calls of `simulate` under the
+same sub-stream (a conformance row asserts it). **Native**: where every part
+declares `BATCHABLE` and a realisation is registered, the torch and jax
+`LoweredProblem`s gain `simulate_batched(theta)` for the **noise-free
+prediction** through `torch.func.vmap`/`jax.vmap` — the observation draw stays
+on the numpy path through `LikelihoodFamily.sample`, because that is where
+§13's refusal semantics live and a second sampling path would be a second
+place to get the noise model wrong. `simulate_many` uses the native path when
+`problem` is realised and batchable, with the same one-point agreement check
+`realise` already makes; `QuasisepGP` and non-batchable parts fall back to
+the loop, honestly (a `provenance`-visible `ampere_simulate_batched` flag on
+training sets written from a batch). **Training sets**:
+`ampere.results.training.write_training_set`/`append_training_set` accept a
+`SimulationBatch` directly. **Spec**: §13 gains a "batched form" subsection
+and limitation 17.5 is closed, each marked *Amended W3.1*; one decision-log
+row (this is a §4.5 surface addition). **Depends:** nothing merged; W3.0 may
+run alongside. **Blocks** W3.2, W3.5, W3.6.
+**Accept:** conformance row `simulate_many(n) == [simulate() × n]` on every
+registered backend fixture; native `simulate_batched` agrees with the loop to
+`tolerances.cross_backend` on torch and jax and is refused by name on a
+non-batchable problem; a batch with an injected 2 % crash rate reports the
+count and the usable pairs; `write_training_set(batch)` round-trips; all
+three backend gates plus `dev` green; lint/format/pyrefly clean ×3;
+decision-log row present.
+
+### W3.2 — `SBIEngine`: NPE/NLE/NRE through the `sbi` package [L; Opus]
+The one SBI module `DEVELOPMENT_PLAN.md` §5 asks for, as an
+`ampere.inference` engine beside `EmceeEngine`/`NUTSEngine`/`VIEngine`,
+consuming `simulate_many` from **any** backend — a legacy black-box model
+composed on the reference backend is the first-class case, not an
+afterthought. `ampere/inference/_sbi.py`: `SBIEngine(problem, *,
+method="npe" | "nle" | "nre", budget, embedding=None, density_estimator=
+None, rounds=1, device="cpu")`; `sbi` and torch imported lazily inside
+`run`, `OptionalDependencyError(extra="sbi")` on use, so `dev`'s import-graph
+test is untouched. **Prior**: sbi wants a torch `Distribution` with
+`sample`/`log_prob` over the flat free vector — build it from
+`FittingProblem.parameters` in the **unconstrained** coordinates
+(`unconstrain`/`constrain` and `log_prob_unconstrained`'s prior part), so
+bounded priors need no `RestrictedPrior` and the density estimator sees ℝⁿ;
+record the choice in the attrs. **Simulator**: `simulate_many` with
+`observe=True`, failed draws dropped and counted (§4.5's reject-and-record),
+the pairs written to a training set on request (`training_set=` path), and
+the summary tensor built by the encoding W3.3 defines — until W3.3 merges,
+the fixed-layout concatenation of each dataset's observed values in
+`datasets` order, which is what a single fitting problem needs. **Posterior
+→ run**: the trained posterior is sampled at the observed data (`draws`
+i.i.d., **one chain**, as `VIEngine` does and for the same reason), and every
+stored draw is scored on the numpy path through `Engine.finish` — so the run
+carries the *true* `log_prob` per draw beside the estimator's own `log_prob`
+(attr-named `ampere_sbi_log_prob`), which is what makes the SBC/coverage
+item and importance reweighting possible later. Attrs: `ampere_engine =
+"sbi"`, the method, the estimator architecture, the budget, the round count,
+the failure count, the embedding's name and output dimension, the training
+loss trace (thinned, stride recorded), the `sbi`/torch versions. **Legacy
+parity**: the embedding-network conveniences of `ampere/infer/sbi.py`
+(`"FC"`, `"CNN"`, a user `nn.Module`, a dict of hyperparameters) are carried
+over as the `embedding=` vocabulary — frozen legacy is **read, not
+modified**. **Not in this item**: swyft (W3.4), caching (W3.5), SBC (W3.6),
+multi-round truncation beyond `sbi`'s own `rounds` loop. **Depends:** W3.1.
+**Blocks** W3.4, W3.5, W3.6.
+**Accept:** in the `sbi` environment, `SBIEngine` recovers the
+`tests/inference` toy joint posterior with NPE at a small budget (thresholds
+on posterior mean and width against the emcee reference, seeded; the smoke
+budget small enough for CI — plan §5's "SBI smoke tests with tiny simulation
+budgets"); NLE and NRE run end-to-end on the same problem (shape and
+finiteness, not accuracy, at CI budgets); the same engine runs a legacy
+black-box `Model` wrapped on the reference backend; `pixi run -e dev
+test-all` proves torch/sbi are not imported; the emitted `DataTree`
+validates against the results contract with schema 5 and the new attrs;
+`pixi run -e sbi test-all` green; lint/format clean, pyrefly 0 errors in
+`dev` and `sbi`; a `tests/inference/test_sbi.py` that skips cleanly without
+the extra.
+
+### W3.3 — The coordinate–value–mask encoding for embedding networks [M; Opus]
+The plan's Phase 3 second bullet: a canonical tensor encoding of a
+`DatasetCollection`'s observed containers so **set-based** embeddings can
+consume any modality, irregular sampling and missing data included, and so
+amortisation across differently-sampled datasets becomes possible. In
+`ampere/core/encoding.py` (backend-neutral, numpy): `encode_observations
+(datasets, *, layout) -> Encoded` where each dataset contributes rows of
+`[coordinates…, value(s), uncertainty?, mask]` — the coordinate columns
+from the container's axes in declared order, complex values as two columns,
+the mask from `Dataset.effective_mask` — and a **dataset-id column** so one
+tensor carries the whole collection; `layout` is a frozen description
+(column names, per-dataset row counts, dtypes) hashed into the training
+set's attrs so a network trained on one layout refuses another by name;
+padding to a common row count with the mask column zero on padded rows;
+`decode` for the round trip in tests. The fixed-size summary of W3.2
+becomes one `layout` among others (`layout="flat"`), the default for a
+single fitting problem where the data layout is fixed anyway. **On the sbi
+side** (`ampere/inference/_sbi.py`): `embedding="set"` builds
+`PermutationInvariantEmbedding` over the encoding, `embedding="transformer"`
+the `TransformerEmbedding`, both masked by the mask column; `layout=` is an
+`SBIEngine` argument. **Spec**: a short `docs/design/contracts/encoding.md`
+(pipeline stage, inputs/outputs in contract vocabulary, the layout hash,
+what is and is not stable across `CONTAINER_SCHEMA_VERSION`s) — an addition
+to §4, so a decision-log row. **Depends:** W3.2. **Blocks** nothing hard;
+W3.6 uses it if merged.
+**Accept:** encode/decode round trip on every container fixture in
+`tests/core` including a masked, an irregular and a complex one; two
+datasets of different lengths encode into one padded tensor whose mask
+column is exact; a layout mismatch is refused by name; `SBIEngine(...,
+embedding="set")` trains and samples on a two-dataset toy problem in the
+`sbi` environment; `dev` and `sbi` gates green; lint/format/pyrefly clean.
+
+### W3.4 — TMNRE: reviving the swyft implementation [M; Opus; conditional]
+Plan §5: "revive the swyft TMNRE implementation from
+`docs/design/harvest/swyft/`". **Gate first**: the item begins with a
+one-page maturity note — does swyft install alongside sbi 0.27 and torch
+2.13 in the `sbi` environment today (it is a PyTorch-Lightning package,
+last seen active 2024), what its truncation offers that `sbi`'s `NRE` +
+`RestrictedPrior` rounds do not, and whether the answer is "revive",
+"express TMNRE through sbi's own NRE rounds" or "drop". Peter rules on the
+note before the code is written; if the ruling is revive: `swyft` becomes
+an optional extra (`ampere[swyft]`, pixi feature `swyft`, CI non-blocking
+like the legacy `sbi-characterisation` job), `SBIEngine(method="tmnre")`
+routes to a `swyft.SwyftTrainer` path in `ampere/inference/_swyft.py`
+consuming the same `simulate_many` and encoding, and the harvest's
+**latent bug is fixed in the revival**: the `SwyftNetwork*` classes
+referenced the bare `swyft` name at class-definition time, so the lazy
+guard never protected them — the revived classes are defined inside the
+lazily-imported path or behind a factory. **Depends:** W3.2 (and W3.3 for
+set embeddings). **Blocks** nothing.
+**Accept (if revived):** the maturity note in the PR; `import
+ampere.inference` succeeds without swyft; `method="tmnre"` refuses with
+`OptionalDependencyError(extra="swyft")` without it and recovers the toy
+posterior with it at a smoke budget; the emitted run carries the truncation
+history in its attrs; `dev` and `sbi` gates unchanged.
+
+### W3.5 — Trained-artefact caching keyed on the spec hash [M; Sonnet or Opus]
+Plan §7's trap, stated there with evidence ("the recent SBI caching bugs on
+master"): an SBI posterior, embedding net or emulator reused against a
+problem it was not trained on is silently wrong. `ampere/inference/_cache.py`
+(or `ampere.results.artefacts`, decided in the item by §8's placement logic
+and recorded): `ArtefactStore(root)` whose key hashes, together: the problem's joint
+spec hash (`ampere.results.provenance.spec_hashes`' `"spec"` entry), the
+observed-data hash, the encoding layout hash, the method, the estimator
+architecture, the budget, the seed, and the sbi/torch versions; `store.get(key)`/`store.put(key,
+artefact, attrs)` persisting the torch state dict plus a JSON sidecar of the
+key's ingredients, so a miss can say **which** ingredient changed; a hit
+that fails to load is a miss, never an error. `SBIEngine(cache=store)` uses
+it around training; the training set itself is the existing
+`ampere.results.training` format (W2.8) keyed the same way, so a budget can
+be reused for a different estimator. **Refusals**: a partial key is never
+accepted; there is no "force" that skips the spec-hash comparison; a cache
+hit is recorded in the run's attrs (`ampere_sbi_cache_hit`, the key). No
+binary artefacts in git — the store lives outside the repository and tests
+use `tmp_path`. **Depends:** W3.2. **Blocks** nothing.
+**Accept:** a second `SBIEngine.run` with an identical problem and settings
+trains nothing and emits an identical posterior (seeded); changing any one
+of prior, data, model, layout, method, architecture, budget or seed is a
+miss whose report names the ingredient; a corrupted stored artefact is a
+silent miss with a warning; `dev` and `sbi` gates green; lint/format/pyrefly
+clean.
+
+### W3.6 — Family D: simulation-based calibration and coverage [M; Opus]
+`diagnostics.md` §11 turned into code, placed per that section's own rule:
+it consumes `InferenceData`s and `simulate`, and brings no new dependency
+for the SBI path, so it lives in `ampere.results.calibration` with the
+`sbi`-specific fast path inside the engine. Two routes. (1) **For an
+`SBIEngine` posterior**: `run_sbc`/`check_sbc` and `run_tarp`/`check_tarp`
+from `sbi.diagnostics` over a fresh batch from `simulate_many` (prior draws,
+`observe=True`), the rank statistics and the coverage curve returned as a
+small xarray `Dataset` and written into the run's `DataTree` as a
+`calibration` group (not `AnomalyScore`: §11 declines the convention, for
+the reason family B did). (2) **For any engine**: `sbc(problem, engine_
+factory, *, count, draws)` — the Talts et al. loop over `simulate` and a
+full fit per simulated dataset, expensive by design and budget-controlled,
+returning the same `Dataset`; this is what validates the flexible-GP
+likelihood itself, as §11 anticipates for M2. Plots: `plot_sbc_ranks` and
+`plot_coverage` in `ampere.results.plots`, following the six existing plots'
+conventions. **Spec**: §11 is marked landed with the placement decision,
+*Amended W3.6*; `results.md` gains the `calibration` group in its schema
+table — a §4.6 addition, so a decision-log row. **Depends:** W3.1, W3.2.
+**Blocks** nothing.
+**Accept:** on the toy problem, an NPE posterior's rank histogram is
+uniform within `check_sbc`'s own thresholds at the smoke budget and a
+deliberately narrowed posterior (temperature-scaled draws) fails the check;
+route (2) runs with `EmceeEngine` on a two-parameter problem at a tiny
+budget; the `calibration` group validates and round-trips through netCDF;
+the two plots render headless; `dev` and `sbi` gates green;
+lint/format/pyrefly clean; decision-log row present.
+
+### W3.7 — CI/CD Phase 3 expansion [S; Sonnet]
+Plan §5's cross-cutting line: "SBI smoke tests with tiny simulation
+budgets". Promote the `sbi` environment from the non-blocking weekly
+`sbi-characterisation` job to a **blocking** `suites` leg running `pixi run
+-e sbi test-all` on every PR, with the smoke budgets W3.2 and W3.6 chose;
+`pixi run -e sbi typecheck` beside it; the sbi environment's install cached
+like torch's. Keep the legacy characterisation job as it is. Update the
+`suites` matrix documentation in `docs/development.md` and the workflow
+comments. **Depends:** W3.2. **Blocks** nothing.
+**Accept:** `ci.yml` YAML-validated; the `sbi` leg runs the five suites in
+one process; the job's wall time is under the torch leg's; the branch-
+protection note in the handoff lists the new leg name.
+
+### Deferred from Phase 3 (recorded so they are not re-derived)
+- **jax-native SBI** (sbijax/flowjax): plan §6 says "if and when maturity
+  warrants"; nothing above needs it, and `simulate_many`'s native
+  `simulate_batched` is the jax half that would matter.
+- **Unlimited-dimension append** on the training-set writer (`results.md`
+  13.9's extension point): the append is read-concatenate-rewrite,
+  `O(existing + new)`. Scheduled only when a Phase 3 budget outgrows memory
+  in practice — W3.2's report is to state the largest budget it wrote and
+  the append time, and this becomes an item if that number is a problem.
+- **Multi-fidelity and hierarchical SBI** (design horizons (a), (d)): the
+  hooks stay reserved; `simulate_many` over a `Plate` is the first thing to
+  check when (d) is scheduled.
+- **Emulators** (design horizon (c)): a `Model` trained on the training set
+  W3.1 writes; Phase 5 or later.
+
+### Dispatch order and parallelism
+W3.0 ∥ W3.1 first (disjoint files: W3.0 owns `exceptions.py`, `emission.py`/
+`training.py`'s constant, torch `instrument.py`, jax `problem.py`; W3.1 owns
+`dataset.py`, both `problem.py`s' new methods — the jax `problem.py` overlap
+is resolved by W3.0 merging first, W3.1 rebasing). Then W3.2 alone (it
+defines the engine every later item extends). Then W3.3 ∥ W3.5 (disjoint:
+encoding vs cache; both add arguments to `SBIEngine` — one owner of
+`_sbi.py` at a time, so W3.3 first and W3.5 appends). Then W3.6, with W3.4's
+maturity note written any time after W3.2 and its code only on Peter's
+ruling. W3.7 last. Cross-model review via terra when the quota returns
+(~2026-09-30) for W3.1 (the batched-equals-loop claim), W3.2 (the prior
+coordinates and the scoring of draws) and W3.6 (the calibration statistics).
+
 ## Status
 
 | Item | Status |
