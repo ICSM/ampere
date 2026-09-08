@@ -60,18 +60,30 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
   are reproducible; `.pixi/` (the installed environments themselves) is
   not, and is gitignored.
   - Common tasks: `pixi run test` (fast: `tests/test_imports.py`),
-    `pixi run test-phase1` (core + results + conformance in one pytest
-    process — the main gate since W0.10; also `test-core`,
-    `test-results` and `conformance` individually),
+    `pixi run test-all` (every new-namespace suite — core, results,
+    conformance, backends, inference and, since W2.11, examples — in ONE
+    pytest process; **this is the main gate**, and `test-phase1` remains
+    the older core+results+conformance subset; the individual `test-core`,
+    `test-results`, `test-backends`, `test-inference`, `test-examples` and
+    `conformance` tasks exist too),
     `pixi run test-characterisation` (legacy still works),
     `pixi run lint`, `pixi run format-check`, `pixi run typecheck`,
-    `pixi run docs`. Since W0.10, plain `pixi run <task>` equals
-    `-e dev`.
+    `pixi run docs` (repaired at W2.11 — it builds), `pixi run bench` (the
+    tracked benchmarks; writes `benchmark.json`, which CI uploads as a run
+    artefact) and `pixi run scaling` (the on-demand 10³–10⁵ GP scaling
+    demonstration, deliberately in no gate). Since W0.10, plain
+    `pixi run <task>` equals `-e dev`.
   - Other environments (`pixi run -e <env> <task>`): `test-py311` /
     `test-py312` / `test-py313` (the CI matrix, one Python each); `sbi`
-    (adds the `sbi` extra — torch is a large download, so it is not part
-    of `dev` or the `test-py3*` environments); `torch` / `jax` (Phase 2
-    backend placeholders, not exercised by anything yet).
+    (adds the `sbi` extra); `torch` / `jax` (the backend environments —
+    real gates since W2.4/W2.5: `pixi run -e torch test-all`,
+    `pixi run -e jax test-all`, and each backend package is typechecked
+    with its real types only in its own environment). Since W2.11 both
+    `torch` and `sbi` resolve torch from PyTorch's **CPU** index, so
+    neither pulls ~2 GB of CUDA runtime onto a CPU-only runner; this
+    changes nothing about what `pip install "ampere[torch]"` gives a user.
+    **Run five-suite gates one at a time** — two concurrently exhaust a
+    13 GB machine.
 - Plain-pip alternative: `pip install -e ".[dev]"`, Python ≥ 3.11.
 - Conda env `ampere` (Python 3.13) has an editable install pointing at the
   main checkout — worktree-based work that needs importing its own changes
@@ -90,7 +102,9 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
 
 **2026-09-08 midday: W2.7, W2.9, W2.14 and W2.8 are ALL MERGED** (`f57c72f`, `c5b4915`, `4bf1164`, `71b2e96`; status rows). Master gates at `4ec855a`: **dev 1542/71, jax 1933/21, torch 2052/21**, lint/format clean, pyrefly 0 errors ×3. **In flight: W2.11** (`w2.11-ci-phase2`, Opus, from `4ec855a`: one CI job per environment, CPU wheels, caching, the docs build repaired, `tests/examples` in the gate, the benchmark-harness decision-log row). After it: **W2.10 (M2)** is dispatchable — its scoping note is on the item; both backends have QuasisepGP, the plots and diagnostics exist, and the harness will be chosen. Nothing pushed.
 
-**Next session**: (1) Peter's confirmations — the noise-model papercut (below), W2.7's pooling/`datasets=None` readings, the RHMF deferral row. (2) W2.8 (in flight) then **W2.11** (prompt drafted in this session's scratchpad: three-environment CI jobs, CPU wheels, the docs build repaired, `tests/examples` in a gate, the benchmark-harness choice). (3) Then W2.11 (CI: torch/jax/no-extras jobs — the three environments exist; the benchmark harness choice) and W2.10 (M2). Slice 3 of the backend tracks (latent GPs once W2.14 lands, per-instance `device=` with the GPU smoke-test item, a torch/jax `conditional_loo` parity decision, `complex_gaussian` in Phase 4) waits behind those.
+**2026-09-08 afternoon: W2.11 is IMPLEMENTED and awaiting review** on branch `w2.11-ci-phase2` (from `4ec855a`; nothing pushed, nothing merged). What is on it: `ci.yml` grew a `backend-suites` matrix (`torch`, `jax`, `fail-fast: false`, each running that environment's `typecheck` + `test-all` + `bench`), a `docs` job, and a `suites` job on `dev` — one environment per job, never two, on memory grounds as well as isolation; `minimal-install` stays a bare `pip install -e .` and now asserts that torch and jax are genuinely absent, so its import check proves something. `pixi run docs` **builds** (the `dev` pixi feature declares `pandoc` and `ipykernel`; `nbsphinx_execute = 'never'` with a per-notebook note; the dead `ampere.infer.ptemceesearch` autodoc entry is gone) — without `-W`, because the 21 residual warnings are legacy docstrings under frozen paths; that deviation from §5's Phase-1 line is in the decision-log row. `tests/examples` joined `test-all`. **The benchmark harness is pytest-benchmark, not asv** (decision-log row; §6's bullet struck): `tests/benchmarks/`, `pixi run bench`, `benchmark.json` uploaded per environment. Both `torch` and `sbi` now resolve torch from PyTorch's CPU index — all fifteen `nvidia-*` wheels are gone from `pixi.lock`. `tests/scaling` gained the torch rows it was missing. Branch gates: dev 1555/71, jax 1946/21, torch 2065/21; lint, format, `pixi run docs` and all three typechecks clean; the `minimal-install` job reproduced in a fresh venv. **For Peter at the merge review**: the `phase1-suites` job was renamed to `suites`, so any branch-protection required-check entry naming the old job needs updating.
+
+**Next session**: (1) Peter's confirmations — the noise-model papercut (below), W2.7's pooling/`datasets=None` readings, the RHMF deferral row, and W2.11's benchmark-harness and docs-`-W` rows. (2) Review and merge **W2.11**. (3) Then **W2.10** (M2 — the misspecification study; its item notes name W2.11's harness choice as a prerequisite, now taken). Slice 3 of the backend tracks (per-instance `device=` with the GPU smoke-test item — CI is CPU-only by ruling and W2.11 now enforces that with CPU wheels — a torch/jax `conditional_loo` parity decision, `complex_gaussian` in Phase 4) waits behind those.
 
 **The latent-GP science bug is FIXED — W2.14 merged 2026-09-08** (status row): `GaussianProcessNoise.noise_params` applies the whitening transform, both backends' native latent paths are live, and the conformance battery has a latent shape held to the corrected oracle. The earlier ruling text is superseded.
 

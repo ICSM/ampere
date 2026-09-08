@@ -278,3 +278,107 @@ def test_the_jax_solvers_agree_at_the_largest_dense_size() -> None:
             kernel, coordinates, residual, variance, values
         )
         assert got == pytest.approx(expected, abs=1e-9 * n)
+
+
+# ---------------------------------------------------------------------------
+# The torch backend's quasiseparable solver (W2.4 slice 2)
+# ---------------------------------------------------------------------------
+#
+# W2.11 added these rows. The numpy section at the top had one and the jax
+# section above had one; this backend did not — which left the one backend
+# whose ``QuasisepGP`` is a hand-written autograd shim over celerite2's
+# compiled forward *and reverse* passes
+# (:mod:`ampere.backends.torch._celerite`) as the one backend whose scaling
+# was asserted nowhere, which is precisely the wrong place for the gap. W2.4
+# slice 2's decision-log table measured it once, against GPyTorch, at two
+# sizes; this is the standing check that it stays linear across the decades.
+#
+# Same shape as the jax rows and for the same reason: the measured quantity is
+# the value **and** gradient, because this backend exists to feed pyro's NUTS
+# and one leapfrog step costs both. Nothing is excluded from the timing here —
+# torch's autograd is eager, so there is no compilation to pay for once.
+#
+# Skipped where the `torch` extra is absent: `pixi run scaling` uses the
+# daily-use environment, which deliberately has no torch. Run it as
+# `pixi run -e torch scaling`.
+
+
+def _torch_pieces() -> tuple[Any, Any, Any, Any]:
+    """This backend's kernel and two solvers, or a skip."""
+    torch = pytest.importorskip("torch")
+    from ampere.backends.torch import DenseGP as TorchDenseGP
+    from ampere.backends.torch import Matern32 as TorchMatern32
+    from ampere.backends.torch import QuasisepGP as TorchQuasisepGP
+
+    return torch, TorchMatern32, TorchDenseGP, TorchQuasisepGP
+
+
+def measure_torch(
+    solver: Any, kernel: Any, sizes: tuple[int, ...], repeats: int
+) -> dict[int, float]:
+    """Wall-clock seconds per size for the **differentiated** density."""
+    import torch
+
+    timings: dict[int, float] = {}
+    for n in sizes:
+        coordinates, residual, variance = problem(n)
+
+        def step(
+            coordinates: np.ndarray = coordinates,
+            residual: np.ndarray = residual,
+            variance: np.ndarray = variance,
+        ) -> float:
+            amplitude = torch.tensor(AMPLITUDE, dtype=torch.float64, requires_grad=True)
+            length_scale = torch.tensor(LENGTH_SCALE, dtype=torch.float64, requires_grad=True)
+            value = solver.log_marginal_likelihood_tensor(
+                kernel,
+                coordinates,
+                residual,
+                variance,
+                {"amplitude": amplitude, "length_scale": length_scale},
+            )
+            value.backward()
+            assert amplitude.grad is not None and length_scale.grad is not None
+            return float(value.detach())
+
+        elapsed, value = fastest(step, repeats)
+        assert math.isfinite(value), f"{solver.NAME} returned {value!r} at n={n}"
+        timings[n] = elapsed
+    return timings
+
+
+def test_the_torch_quasiseparable_solver_scales_linearly(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """10³ → 10⁵ points, value **and** gradient, measured."""
+    _torch, TorchMatern32, TorchDenseGP, TorchQuasisepGP = _torch_pieces()
+    kernel = TorchMatern32(AMPLITUDE, LENGTH_SCALE)
+    quasisep = measure_torch(TorchQuasisepGP(), kernel, QUASISEP_SIZES, repeats=5)
+    dense = measure_torch(TorchDenseGP(), kernel, DENSE_SIZES, repeats=1)
+    with capsys.disabled():
+        print("\ntorch backend (value and gradient):")
+        print(table(quasisep, dense))
+
+    exponent = slope(quasisep)
+    assert exponent < 1.5, f"torch QuasisepGP scaled as N**{exponent:.2f}, which is not linear"
+    largest = max(DENSE_SIZES)
+    # A lower bar than the numpy row's 100x, and the same as jax's: both sides
+    # here carry autograd's bookkeeping, a fixed cost the dense side amortises
+    # over a very much larger solve.
+    assert dense[largest] / quasisep[largest] > 10.0
+
+
+def test_the_torch_solvers_agree_at_the_largest_dense_size() -> None:
+    """Speed is worthless if it is speed at the wrong answer — on this backend too."""
+    _torch, TorchMatern32, TorchDenseGP, TorchQuasisepGP = _torch_pieces()
+    kernel = TorchMatern32(AMPLITUDE, LENGTH_SCALE)
+    values = kernel.resolve(None)
+    for n in DENSE_SIZES:
+        coordinates, residual, variance = problem(n)
+        expected = TorchDenseGP().log_marginal_likelihood(
+            kernel, coordinates, residual, variance, values
+        )
+        got = TorchQuasisepGP().log_marginal_likelihood(
+            kernel, coordinates, residual, variance, values
+        )
+        assert got == pytest.approx(expected, abs=1e-9 * n)

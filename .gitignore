@@ -113,3 +113,10 @@ ampere/utils/ALMA/ALMA.B7.csv
 ampere/utils/ALMA/ALMA.B8.csv
 ampere/utils/ALMA/ALMA.B9.csv
 .claude/worktrees/
+
+# W2.11: `pixi run bench` writes the machine-readable benchmark record here;
+# CI uploads it as a run artefact. Measurements are run output, so they are
+# never committed (AGENTS.md ground rule 7). pytest-benchmark's own storage
+# directory is ignored for the same reason.
+benchmark.json
+.benchmarks/
