@@ -30,7 +30,28 @@ last did to torch's global default.
 
 **CPU by default; a device is chosen, never detected** (``architecture.md``
 §5). :data:`DEFAULT_DEVICE` is CPU, and a machine with a GPU present takes the
-same code path as CI. GPU execution is W2.4 slice 2.
+same code path as CI.
+
+W2.4 slice 3 makes that choice **per instance**. Every model, instrument step,
+kernel, noise model and solver in this package takes a ``device=`` keyword
+threaded exactly as ``dtype`` already was, and reports it back as its own
+``DEVICE`` capability flag — an *instance* attribute shadowing the class
+default, which is all ``ampere.core.declared_capabilities`` needs, since it
+reads ``part.DEVICE`` by attribute access. The aggregation rule is the one
+that contract already states: every part of a problem must name the same
+device or composition is refused, so a whole problem is composed on one device
+and nothing is moved on the user's behalf.
+
+The string is :func:`device_name`'s, which is ``str(torch.device(...))``:
+``"cpu"``, ``"cuda"``, ``"cuda:1"``. ``"cuda"`` and ``"cuda:0"`` are therefore
+*different* declarations, and mixing them in one problem is refused rather than
+silently reconciled — torch's own two spellings mean different things the
+moment a second GPU exists, and guessing which was meant is exactly the
+"silent performance collapse" ``declared_capabilities`` refuses to risk.
+
+:func:`place` and :func:`move` are the two verbs, written once here so that
+"a piece knows where it lives, and can be moved" is not re-implemented five
+times.
 """
 
 from __future__ import annotations
@@ -45,6 +66,12 @@ __all__ = [
     "DEFAULT_DEVICE",
     "DEFAULT_DTYPE",
     "as_tensor",
+    "complex_dtype",
+    "device_name",
+    "move",
+    "place",
+    "resolve_device",
+    "resolve_dtype",
     "to_numpy",
 ]
 
@@ -105,3 +132,108 @@ def to_numpy(value: Any) -> np.ndarray:
     if isinstance(value, torch.Tensor):
         return value.detach().cpu().numpy()
     return np.asarray(value)
+
+
+def resolve_device(device: Any) -> torch.device:
+    """*device* as a :class:`torch.device`, without ever detecting one.
+
+    Accepts what ``torch.device`` accepts — a string (``"cpu"``, ``"cuda"``,
+    ``"cuda:1"``), a ``torch.device``, or an integer CUDA ordinal — and nothing
+    else. ``None`` is **not** accepted and does not mean "pick one":
+    ``architecture.md`` §5 makes the device an explicit choice, so the absence
+    of a choice is :data:`DEFAULT_DEVICE`, decided at the call site by the
+    keyword's default rather than here by a probe of the machine.
+    """
+    if isinstance(device, torch.device):
+        return device
+    if isinstance(device, str):
+        return torch.device(device)
+    if isinstance(device, int) and not isinstance(device, bool):
+        return torch.device("cuda", device)
+    raise TypeError(
+        f"device= takes a torch.device, a device string ('cpu', 'cuda', 'cuda:1') or a CUDA "
+        f"ordinal, got {device!r}. ampere never detects a device for you (architecture.md §5): "
+        f"leave it out for the CPU, or name the one you mean."
+    )
+
+
+def device_name(device: Any) -> str:
+    """The ``DEVICE`` capability string for *device*.
+
+    ``str(torch.device(...))`` exactly, so the flag says what torch says. See
+    the module docstring for why ``"cuda"`` and ``"cuda:0"`` stay distinct.
+    """
+    return str(resolve_device(device))
+
+
+def resolve_dtype(dtype: Any) -> torch.dtype:
+    """*dtype* as a floating-point :class:`torch.dtype`, by object or by name."""
+    resolved = getattr(torch, dtype, None) if isinstance(dtype, str) else dtype
+    if not isinstance(resolved, torch.dtype):
+        raise TypeError(f"dtype= takes a torch.dtype or the name of one, got {dtype!r}.")
+    return resolved
+
+
+#: The complex dtype paired with each real one. A circular complex Gaussian's
+#: residual is complex and its variance is real, so the two travel together
+#: through the realised path and neither may be guessed from the other at the
+#: point of use (``likelihoods.md`` §4).
+_COMPLEX_OF: dict[torch.dtype, torch.dtype] = {
+    torch.float32: torch.complex64,
+    torch.float64: torch.complex128,
+}
+
+
+def complex_dtype(dtype: torch.dtype) -> torch.dtype:
+    """The complex dtype whose components are *dtype*.
+
+    float64 pairs with complex128, float32 with complex64. A dtype with no
+    complex partner is an error rather than a silent promotion: it would mean
+    a complex family had been asked to compute in a precision torch cannot
+    represent its own residuals in.
+    """
+    found = _COMPLEX_OF.get(dtype)
+    if found is None:
+        raise TypeError(
+            f"there is no complex dtype whose components are {dtype}; a complex likelihood "
+            f"needs float32 or float64 arithmetic."
+        )
+    return found
+
+
+def place(owner: Any, dtype: Any, device: Any) -> None:
+    """Record *owner*'s precision and device, and declare the latter.
+
+    Three attributes, set together because they are one fact: ``dtype`` and
+    ``device`` are what every tensor *owner* builds is built with, and
+    ``DEVICE`` is the capability flag ``ampere.core.declared_capabilities``
+    reads. Setting it here makes it an **instance** attribute shadowing the
+    class-level default W2.12 gave every piece — which is the whole mechanism
+    by which a device becomes per-instance without a line changing in
+    ``ampere.core``.
+    """
+    owner.dtype = resolve_dtype(dtype)
+    owner.device = resolve_device(device)
+    owner.DEVICE = device_name(owner.device)
+
+
+def move(owner: Any, *, dtype: Any = None, device: Any = None) -> Any:
+    """Move *owner*'s registered tensors, and re-declare where they live.
+
+    ``architecture.md`` §5's "buffers move with parameters under ``.to(...)``",
+    discharged in one place: *owner* keeps its constants in a
+    :class:`~ampere.backends.torch.parameters.LoweredParameters`, which is an
+    ``nn.Module``, so torch's own recursion does the moving and this function
+    only has to keep :func:`place`'s three attributes honest afterwards.
+
+    In place and returning *owner*, as ``nn.Module.to`` is — a piece is a
+    declaration a problem already holds by identity, so handing back a copy
+    would leave the problem pointing at the unmoved one.
+    """
+    resolved_dtype = owner.dtype if dtype is None else resolve_dtype(dtype)
+    resolved_device = owner.device if device is None else resolve_device(device)
+    tensors = getattr(owner, "tensors", None)
+    if tensors is not None:
+        tensors.to(dtype=resolved_dtype, device=resolved_device)
+    place(owner, resolved_dtype, resolved_device)
+    return owner
