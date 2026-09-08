@@ -1,12 +1,13 @@
 """The torch backend: rung 2 of ``architecture.md`` §1's capability ladder.
 
-``pip install "ampere[torch]"``. Everything here is written against the frozen
-contracts of ``ampere.core`` and adds exactly what ``DEVELOPMENT_PLAN.md`` §3
-says a backend is: "an array library for writing models and transformations, a
-set of GP solver implementations, and the extra inference engines its
-differentiability unlocks". Kernels, containers, likelihood families, datasets
-and the fitting problem itself are **not** here — they are backend-neutral and
-live in ``ampere.core``.
+Install the ``torch`` extra -- ``pip install ".[torch]"`` from a checkout
+(PyPI's ``ampere`` package is unrelated). Everything here is written against
+the frozen contracts of ``ampere.core`` and adds exactly what
+``DEVELOPMENT_PLAN.md`` §3 says a backend is: "an array library for writing
+models and transformations, a set of GP solver implementations, and the extra
+inference engines its differentiability unlocks". Kernels, containers,
+likelihood families, datasets and the fitting problem itself are **not**
+here — they are backend-neutral and live in ``ampere.core``.
 
 What is shipped (W2.4 slice 1, plus W2.13's realisation)
 ---------------------------------------------------------

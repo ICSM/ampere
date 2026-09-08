@@ -80,7 +80,8 @@ class ZeusEngine(Engine):
     emcee on a correlated posterior, at the cost of several ``log_prob``
     evaluations per walker per step rather than one.
 
-    Requires the ``zeus`` extra: ``pip install "ampere[zeus]"``.
+    Requires the ``zeus`` extra -- ``pip install ".[zeus]"`` from a checkout
+    (PyPI's ``ampere`` package is unrelated).
 
     Parameters
     ----------

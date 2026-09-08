@@ -15,7 +15,8 @@ and importing it is the user's explicit opt-in::
 
     from ampere.backends import jax as ampere_jax   # needs the `jax` extra
 
-The extra is ``pip install "ampere[jax]"``: jax, numpyro (the distributions,
+Install the ``jax`` extra -- ``pip install ".[jax]"`` from a checkout
+(PyPI's ``ampere`` package is unrelated): jax, numpyro (the distributions,
 the ``biject_to`` registry and the NUTS kernel) and equinox (the
 ``partition``/``combine`` filter-spec mechanism). CPU jaxlib is what that
 resolves to and is what CI wants.

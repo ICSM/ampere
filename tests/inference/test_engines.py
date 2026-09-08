@@ -860,7 +860,7 @@ class TestTheZeusExtra:
             ZeusEngine(agreement_problem())
         assert raised.value.package == "zeus"
         assert raised.value.extra == "zeus"
-        assert 'pip install "ampere[zeus]"' in str(raised.value)
+        assert 'pip install ".[zeus]"' in str(raised.value)
 
     def test_the_refusal_comes_before_any_work(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """At construction, not mid-run: the user has not pressed go yet."""

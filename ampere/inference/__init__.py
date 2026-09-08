@@ -30,9 +30,9 @@ What is here
     Multimodal posteriors, and the only one of the three that yields a marginal
     likelihood. Also a base dependency.
 :class:`ZeusEngine`
-    Ensemble slice sampling. Needs the ``zeus`` extra
-    (``pip install "ampere[zeus]"``); the import is lazy and the refusal names
-    the extra.
+    Ensemble slice sampling. Needs the ``zeus`` extra -- ``pip install
+    ".[zeus]"`` from a checkout (PyPI's ``ampere`` package is unrelated); the
+    import is lazy and the refusal names the extra.
 :class:`NUTSEngine`
     The No-U-Turn sampler — numpyro's on a jax problem, pyro's on a torch one.
     The first **gradient-based** engine here, and the only one that cannot be
