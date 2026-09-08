@@ -400,13 +400,17 @@ class TestResidualWhiteness:
         assert first.p_value == second.p_value
         assert np.array_equal(first.statistics, second.statistics)
 
-    def test_a_different_seed_gives_a_different_null_draw(self) -> None:
+    def test_only_the_calibration_is_random_not_the_statistic(self) -> None:
         problem = structured_problem()
         tree = add_residuals(near_truth(problem), problem)
         one = residual_whiteness(tree, n_permutations=39, seed=1)
         two = residual_whiteness(tree, n_permutations=39, seed=2)
-        assert one.statistic == pytest.approx(two.statistic), "the statistic is not random"
-        assert one.seed != two.seed
+        assert one.statistic == pytest.approx(two.statistic)
+        assert np.array_equal(one.autocorrelation, two.autocorrelation)
+        # An explicit seed overrides the run's own, and is recorded, so the
+        # number can be reproduced from the result alone.
+        assert (one.seed, two.seed) == (1, 2)
+        assert residual_whiteness(tree, n_permutations=39).seed == problem.seed
 
     def test_the_p_value_cannot_beat_its_own_resolution(self) -> None:
         problem = structured_problem()
