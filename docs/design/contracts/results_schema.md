@@ -939,6 +939,15 @@ coordinates. `ampere.diagnostics` (pre-fit RHMF) and `ampere.results`
 `ampere.results.plots.AnomalyScoreLike` remains the structural type its
 renderer accepts, and the class satisfies it.
 
+*(**Amended W2.15**, 2026-09-08: only the second producer exists. W2.7
+deferred `ampere.diagnostics` and its `diagnostics` extra — the decision-log
+row of 2026-09-08 in `DEVELOPMENT_PLAN.md` §2 carries the assessment and the
+revisit trigger — so the pre-fit RHMF half has not landed. The type is
+unchanged, and nothing about it forecloses that half: `AnomalyScore` and
+`ampere.results.plot_anomaly_score` already accept and render
+`provenance="rhmf_prefit"`, which is exactly the independence this paragraph
+claims, demonstrated one side at a time.)*
+
 ```pycon
 >>> from ampere.core import AnomalyScore
 >>> AnomalyScore(
@@ -1122,6 +1131,10 @@ cross-contract review at W1.13 (with `likelihoods.md` §17 Q8 and
 `docs/design/serialisation_review.md` — containers round-trip by value
 through `ampere.results.serialisation`, the training-pair format is
 pinned in its §4, and the writer is a named Phase 2 obligation.)*
+*(**Amended W2.15**: that obligation is discharged — W2.8 landed
+`write_training_set`, `append_training_set` and `read_training_set` in
+`ampere.results.training`, with `ampere_training_set_version` 1 and the
+container schema at 2.)*
 
 1. **`DEFAULT_CHANNEL` is the string `"default"`.** It is short and obvious, but
    it is also a name a user might plausibly want for a real channel. Reserving

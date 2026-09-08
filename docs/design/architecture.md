@@ -191,6 +191,113 @@ more, but because it is expensive on a path many callers take for provenance
 alone, and because an environment assembled without it should be told which
 package is missing rather than fail three frames down.
 
+### The tree and the table as built (*Amended W2.15*, 2026-09-08)
+
+The diagram and the extras table above are Phase 1's plan, and they are kept
+as written. This subsection records where the repository at milestone M2
+differs from them; nothing here changes a policy, and where a difference is a
+*decision* rather than a detail, the decision-log row is named.
+
+**Namespace tree.**
+
+* `core/` has three modules the diagram does not list, all Phase 2 landings:
+  `lowering.py` (the lowering and bijection registries — W2.6, `lowering.md`
+  §12.8), `realisation.py` (`register_realisation`/`realise` — W2.13,
+  `inference.md` §10a), and `rng.py` (`substream`, `lowering.md` §9.2). All
+  three are backend-neutral, so §4 rule 1 applies to them unchanged.
+* `core/astropy_compat.py` **does not exist yet**. §4.7 of the plan puts the
+  astropy adapter in Phase 4, which is also what `ampere/core/__init__.py`'s
+  docstring says. The parenthesis in the `core/` comment above ("and
+  astropy_compat.py below is core") is a statement about where it will live,
+  not about where it is.
+* `backends/reference/` is not "models and transformations only": it also
+  ships `noise.py` (`FractionalModelNoise` and `FractionalModelGPNoise`,
+  `likelihoods.md` §5 X-1) and, since **W2.13 fold-in 7**, every backend
+  *declares* its own noise models and GP solvers, because those two are the
+  pieces a log-likelihood's arithmetic goes through and they now carry the
+  capability flags (`Likelihood.capability_parts`). `backends/torch/gp.py`
+  and `backends/jax/gp.py` are that: the neutral `ampere.core` kernel and
+  solver declarations with their linear algebra done natively. The neutral
+  half of the claim still holds — the kernels, the families, the containers
+  and the fitting problem are in `core` and are not duplicated.
+* `inference/` ships five drivers, not three: emcee, dynesty and zeus (W2.2)
+  plus `NUTSEngine` and `VIEngine` (W2.4/W2.5/W2.13), which reach a backend
+  through `ampere.core.realise` rather than by importing one. **The SBI layer
+  and the optimisers named in the comment are not here**: SBI is Phase 3 and
+  optimisers Phase 5. There is deliberately no multiprocessing pool
+  (`inference.md` limitation 17.7).
+* **`diagnostics/` did not land in Phase 2, and that is a ruled deferral
+  rather than a slippage.** The decision-log row of 2026-09-08
+  (`ampere.diagnostics` and the RHMF pre-fit family, W2.7) records it in
+  full: the namespace and the `diagnostics` extra exist for family A, the
+  JAX-carrying RHMF pre-fit screen, and W1.12 §2.2 made them conditional on
+  the recorded adoptability assessment still holding at implementation time.
+  It no longer holds on its maturity axis, so nothing ships. **The placement
+  in the diagram above stays correct** — that row says so explicitly; what is
+  deferred is the landing. `diagnostics.md` §6's reservation stands, unspent,
+  with a named revisit trigger.
+  The same item's **post-fit** families did land, in `ampere.results` where
+  a diagnostic computed from a stored run belongs: `residual_whiteness`,
+  `separation_binned_autocorrelation` and `chi_square_pvalue` in
+  `results/diagnostics.py` (family B), `gp_localisation` in
+  `results/derived.py` with its scoring helpers beside family B's (family C),
+  and both renderers in `results/plots.py`.
+* The legacy line is `data/, models/, infer/, utils/, examples/,
+  logger.py` — `ampere/examples/` (bundled example data) and
+  `ampere/logger.py` are legacy too and are excluded from lint and typing
+  alongside the rest. One exception inside it: `utils/pyphot_compat.py` is
+  **current, supported code** (W0.9), and is what all new code must use to
+  build pyphot quantities.
+
+**Extras table.**
+
+* *(none)* — the "astropy adapter" in that row has not landed (Phase 4, as
+  above). Everything else in the row has: the reference backend, emcee,
+  dynesty, celerite2's numpy interface, arviz and h5netcdf. The row's real
+  contents are `[project.dependencies]`, which also carries matplotlib,
+  spectres, tqdm, corner, pyphot and — on pyphot's behalf, ruled 2026-09-07 —
+  `requests`.
+* `torch` = `["torch", "pyro-ppl"]`, and `jax` = `["jax", "numpyro",
+  "equinox"]`. **The "(GP solver library — deferred choice, plan §6)" in both
+  rows is spent**: the choice was made by measurement in W2.4/W2.5 slice 2
+  (plan §2, 2026-09-07), and it was celerite2 on both — wrapped through
+  `torch.autograd` for torch, `celerite2.jax` for jax. celerite2 has been a
+  *base* dependency since W2.3, so the O(N) solve costs neither extra
+  anything, and neither extra gained a package.
+* `sbi` = `["torch", "sbi"]`. It installs torch but **not** pyro-ppl, so it
+  unlocks importing `backends/torch` without unlocking `NUTSEngine` or
+  `VIEngine` on a torch problem; the parenthetical "also unlocks
+  `backends/torch` incidentally" is true only in that narrower sense.
+* `all` = `ampere[torch,jax,sbi,zeus,extinction]` — every *feature* extra, and
+  deliberately **not** `dev`. "Everything above" in that row should be read as
+  "everything above except the contributor tooling".
+* `dev` additionally needs two things that are not Python packages and so
+  cannot be in an extra at all: `pandoc` (nbsphinx shells out to it) and
+  `ipykernel`. Both are conda dependencies of the pixi `dev` feature (W2.11).
+
+**pixi, which the table predates.** `pyproject.toml`'s `[tool.pixi.*]` tables
+wrap the extras above rather than duplicating them: one feature per extra,
+each pulling `ampere` as an editable install with that extra's name. The
+environments are `default` and `dev` (aliases of each other — W0.10 finding
+(b) — Python 3.13 plus `dev`, `zeus`, `extinction`, `netcdf`), the CI matrix
+`test-py311`/`test-py312`/`test-py313`, `sbi`, and the two backend
+environments `torch` and `jax`, which are the `dev` feature set *plus* their
+backend extra so that a suite count taken in one is comparable with one taken
+in `dev`. There is a `netcdf` feature carrying netCDF4 — the second engine
+`tests/results` round-trips through — which is what is left of W1.8's `arviz`
+feature after the base-install promotion above.
+
+**The CPU torch pin, and why it is not in the extras table.** The pixi `torch`
+and `sbi` features pin the `torch` *package* to PyTorch's CPU wheel index
+(ruled 2026-09-07, W2.11): from PyPI's default index, `torch` on linux-64
+resolves to the CUDA build, which drags in about 2 GB of CUDA runtime that
+nothing in this project uses, into every CI cache and every developer's
+`.pixi/`. Hosted CI runners are CPU-only, so it is pure cost. This changes
+only what *this project's* environments install; `[project.optional-dependencies]`
+is untouched, so `pip install "ampere[torch]"` still gives a user whatever
+their platform's default wheel is, GPU included. A GPU environment is a new
+pixi feature that omits the pin, not an edit to it.
+
 ## 4. Extras and lazy-import policy
 
 Rules, binding on all new code:
@@ -346,7 +453,15 @@ structure are exactly the two things that negotiation reconciles.
   table, this document's §5 amended to match, analysis in
   `docs/design/lowering.md` §10.2. No longer open.
 - **GP solver library per backend** — already an open deferred choice in
-  `DEVELOPMENT_PLAN.md` §6; unaffected by this document.
+  `DEVELOPMENT_PLAN.md` §6; unaffected by this document. *Resolved in Phase 2
+  (**Amended W2.15**): celerite2 on all three backends, chosen by measurement
+  rather than from documentation each time — the numpy interface at W2.3, a
+  `torch.autograd` wrapper round its compiled kernels at W2.4 slice 2 (GPyTorch
+  and linear_operator were measured and ship no quasiseparable operator), and
+  `celerite2.jax` at W2.5 slice 2 (tinygp measured and rejected: linear against
+  quadratic in practice on XLA's CPU backend, a factor of 200 at 10⁴ points).
+  The three decision-log rows carry the tables. Because celerite2 became a base
+  dependency at W2.3, neither backend extra gained a package. No longer open.*
 - **`OptionalDependencyError` exact shape** (fields, message format) —
   pinned by W1.3 in `ampere/core/exceptions.py` as this section asked;
   **ratified in place at the freeze** (ruled 2026-09-03 with
