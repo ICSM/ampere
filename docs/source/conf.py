@@ -73,6 +73,43 @@ html_static_path = ['_static']
 
 autodoc_mock_imports = ['bs4', 'requests', 'astropy', 'emcee']
 
+# W2.11: notebooks are rendered from what they contain; the docs build never
+# executes them. nbsphinx's default ('auto') executes any notebook with no
+# stored outputs, and this repository stores none by policy (AGENTS.md ground
+# rule 7 — no run outputs or figures in git), so 'auto' means "execute every
+# notebook here except Ampere_MBB_Example.ipynb". Neither of the two it would
+# reach can run, and both were part of why `pixi run docs` was red before this
+# item:
+#
+#   * notebooks/quickstart.ipynb reads
+#     'PGQuasars/PG1011-040/cassis_yaaar_spcfw_14191360t.fits' relative to the
+#     *working directory*. No such file is in the repository (it is a Spitzer
+#     CASSIS spectrum, i.e. exactly the kind of binary artefact that is not
+#     committed), so the notebook cannot run from a clean clone anywhere. It
+#     then fits it with a 100-walker emcee run and calls postProcess(), which
+#     writes figures.
+#   * notebooks/Embedding_nets.ipynb imports torch and sbi — neither is in the
+#     `dev` environment the docs are built in, deliberately (pyproject.toml's
+#     [tool.pixi.environments]) — and trains an SNPE posterior on 10 000
+#     simulations.
+#
+# So this is the "explicitly excluded, with a note" half of that repair rather
+# than a claim that they work. The gate that actually proves ampere's shipped
+# example code runs is tests/examples (W2.9), which is in `pixi run test-all`
+# as of W2.11 — a real pytest run, not a docs build that
+# `nbsphinx_allow_errors` would let pass regardless.
+#
+# `ipykernel` is nonetheless declared in the `dev` pixi feature alongside
+# `pandoc`: without a registered `python3` kernelspec the failure mode for any
+# notebook that *is* executed is a build-aborting NoSuchKernel rather than a
+# cell error, and this line is one word away from being turned back on for a
+# notebook that earns it.
+nbsphinx_execute = 'never'
+
+# Belt and braces with the line above: a cell that raises is reported, not
+# fatal. tests/examples/test_wstat_comparison.py's docstring cites this
+# setting as the reason the docs build is not a trustworthy gate for example
+# code — that reasoning stands.
 nbsphinx_allow_errors = True
 
 # imgmath_latex = "latex"

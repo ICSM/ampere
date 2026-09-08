@@ -57,14 +57,6 @@ ampere.infer.nestedsearch module
     :undoc-members:
     :show-inheritance:
 
-ampere.infer.ptemceesearch module
----------------------------------
-
-.. automodule:: ampere.infer.ptemceesearch
-    :members:
-    :undoc-members:
-    :show-inheritance:
-
 ampere.infer.sbi module
 -----------------------
 
