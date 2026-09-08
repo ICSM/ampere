@@ -80,7 +80,7 @@ from ampere.core.dataset import FittingProblem, Simulation
 from ampere.core.exceptions import OptionalDependencyError, ResultsError
 from ampere.core.results_schema import FunctionSamples, ModelResult
 
-from .emission import _container_dims
+from .emission import SAMPLE_STATS_GROUP, _container_dims
 from .provenance import ATTR_PREFIX, provenance_attrs
 from .serialisation import CONTAINER_SCHEMA_VERSION, container_from_dict
 
@@ -106,8 +106,9 @@ THETA_GROUP = "theta"
 #: Every channel's coordinate arrays, stored once for the whole set.
 COORDINATES_GROUP = "coordinates"
 
-#: ``failed`` and the failure record, per draw.
-SAMPLE_STATS_GROUP = "sample_stats"
+# SAMPLE_STATS_GROUP ("failed" and the failure record, per draw) is defined
+# once in ampere.results.emission and imported above, so the two run-record
+# formats cannot drift apart on the group name.
 
 #: The parent of one subgroup per dataset label, for a budget drawn with
 #: ``observe=True``. Added W2.8 (``serialisation_review.md`` §4's second loss);
