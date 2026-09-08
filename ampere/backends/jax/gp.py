@@ -343,9 +343,9 @@ class DenseGP(GPSolver):
         is what a later GPU item does; the shape it has to fit is this one.
         Also an ``InitVar``, for the same spec-hash reason as *precision*.
 
-    Batching
-    --------
-    ``BATCHABLE = True`` since slice 2: every operation here is
+    Notes
+    -----
+    **Batching.** ``BATCHABLE = True`` since slice 2: every operation here is
     ``jnp``/``jax.scipy`` on whole arrays, so ``jax.vmap`` over a batch of
     parameter vectors maps the factorisation as it maps everything else, and
     :func:`~ampere.backends.jax.problem.lower_problem`'s

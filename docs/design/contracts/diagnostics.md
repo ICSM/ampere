@@ -77,6 +77,17 @@ here because W1.12's acceptance criterion asks for it explicitly.
 adoptable" condition in `DEVELOPMENT_PLAN.md` §5 Phase 2 scope is satisfied —
 this family is in scope for Phase 2 (1D case only; see §2.6).
 
+*(**Amended W2.15**, 2026-09-08. §2.2 made that verdict conditional on
+re-verification "at implementation time (licence, maturity, API)", and W2.7
+re-verified it: **licence and API hold; maturity does not.** The CI credited
+above does not exist (the sole workflow is publish-on-tag), the released
+artefact is 0.0.2 from 2025-11-24, and two sequencing obligations of §2.5 and
+§2.7 cannot yet be discharged. Family A is therefore **deferred, not
+cancelled** — the decision-log row of 2026-09-08 in `DEVELOPMENT_PLAN.md` §2
+carries the full assessment and a named revisit trigger. Every §2.4 reason
+for a peer namespace is unaffected; what moved is the landing, not the
+placement.)*
+
 ### 2.3 Inputs / outputs, in §4.2 vocabulary
 
 **Input.** A collection of §4.2 containers sharing a comparable coordinate
@@ -179,6 +190,17 @@ Phase 1 one.
   matrix-factorisation formulation would need a genuinely different
   flattening/alignment strategy that has not been designed; no commitment is
   made here about whether or when that happens.
+
+*(**Amended W2.15**, 2026-09-08: none of the three family-A deliverables in
+the first bullet landed in Phase 2 — see the amendment to §2.2. **Families B
+and C did land in full**, at W2.7, and in `ampere.results` rather than in a
+`diagnostics` namespace: `residual_whiteness`,
+`separation_binned_autocorrelation` and `chi_square_pvalue` in
+`ampere/results/diagnostics.py`, `gp_localisation` in
+`ampere/results/derived.py` with its scoring helpers beside family B's, and
+both renderers in `ampere/results/plots.py`. That placement follows from what
+they consume — a stored run — and is not a revision of §2.4, which is about
+family A's pre-fit screen and its JAX-carrying dependency.)*
 
 ### 2.7 Dependency / extras story
 
@@ -494,7 +516,10 @@ about, applied to a case where it genuinely does not fit.
   renderer, both provenances, the mandatory provenance/caveat display
   requirement from §4.3 and §5 built in from the start, not bolted on.
 
-**On Phase 2** (recorded here as a checklist, not resolved here):
+**On Phase 2** (recorded here as a checklist, not resolved here)
+*(**W2.15**: Phase 2 has closed. Families B and C are done — see the
+amendments to §2.6 and to limitation 9.3 — and family A's three items are
+deferred with the namespace itself; see the amendment to §2.2.)*:
 - Family A: the alignment/resampling adapter (§2.3), the expert-opt-in
   hyperparameter API (§2.5), the JAX-pin compatibility check against
   `ampere[jax]` (§2.7), and — later, not at Phase-2 landing — the validation
@@ -557,6 +582,14 @@ Each of these is a decision, not an oversight. Each has an extension point.
    informed by whatever the `NoiseModel`/solver contract already does for
    irregular 1D coordinates (quasiseparable solvers handle this natively —
    the whiteness test should reuse that thinking, not invent its own).
+   *(Closed, noted **W2.15**: `likelihoods.md` §12 chose option (b), the
+   separation-binned statistic, and named permutation calibration as its
+   price; W2.7 implemented both as
+   `ampere.results.separation_binned_autocorrelation` and
+   `ampere.results.residual_whiteness`. The statistic reduces to the ordinary
+   lag autocorrelation on an even grid, and the dependency question in §7's
+   family-B checklist is answered by the same code: hand-rolled, no
+   statsmodels.)*
 4. **`AnomalyScore` is a container shape, not a frozen API.** This document
    fixes what fields it must carry (coordinates, values, mask, provenance,
    interpretation notes) and where it lives, not its exact class definition

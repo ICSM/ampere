@@ -30,7 +30,7 @@ Three targets, and the jax column is really two:
 |---|---|---|
 | **reference** | `scipy.stats` (the declaration *is* the implementation) | plain numpy arrays, no module system |
 | **torch** | `torch.distributions` | `torch.nn.Module` (`register_parameter` / `register_buffer`) |
-| **jax** | **numpyro** (`numpyro.distributions`, `numpyro.sample`, `numpyro.plate`) | **equinox** `Module` pytrees, with **paramax** wrappers for the trainable/non-trainable split |
+| **jax** | **numpyro** (`numpyro.distributions`, `numpyro.sample`, `numpyro.plate`) | **equinox** `Module` pytrees, with **paramax** wrappers for the trainable/non-trainable split. *(**Amended W2.15**: no paramax. §6.2 ranked `eqx.partition` first and the plan's "jax non-trainable mechanism" row ruled for it on 2026-09-01; W2.5 implemented an `eqx.partition` **filter spec** — `ampere/backends/jax/parameters.py` — and the `jax` extra is `jax`, `numpyro`, `equinox` and nothing else.)* |
 
 Splitting the jax column matters: a jax-backed fit that runs NUTS goes through
 numpyro's sample sites, while a jax-backed fit that runs a gradient optimiser
@@ -282,6 +282,17 @@ relying on it.
 | `expon` | `loc`, `scale` | identity | `Exponential(rate=1/scale)`, **`loc` must be 0** — otherwise shift | `Exponential(rate=1/scale)`, **`loc` must be 0** — otherwise shift |
 | `gamma` | `a`, `loc`, `scale` | identity | `Gamma(concentration=a, rate=1/scale)`, **`loc` must be 0** | `Gamma(concentration=a, rate=1/scale)`, **`loc` must be 0** |
 | `beta` | `a`, `b`, `loc`, `scale` | identity | `Beta(concentration1=a, concentration0=b)`, **`loc`=0, `scale`=1** | `Beta(concentration1=a, concentration0=b)`, **`loc`=0, `scale`=1** |
+
+*(**Amended W2.15**, 2026-09-08: "must be 0" describes what the *target
+library's* constructor takes, and both backends now do what §3.3 rule 1 says
+to do about it rather than refusing. W2.4 and W2.5 compose the affine map away
+for `lognorm`, `expon`, `gamma` and `beta` alike — a shifted `gamma` lowers,
+and a `beta` on `[loc, loc+scale]` lowers to a `Beta` under an affine
+transform whose support is the interval scipy's has. What is still refused is
+a family with no exact construction from the target's primitives, which is
+rule 2. The rows are unchanged as statements about the libraries;
+`ampere/backends/torch/lowering.py` and
+`ampere/backends/jax/distributions.py` are the implementations.)*
 
 ### 3.3 The parametrisation traps, spelled out
 
@@ -718,6 +729,14 @@ statistics), not PyTorch-style buffers. Three documented mechanisms exist for
 
 **Recommendation: (1), the `eqx.partition` filter spec**, with paramax
 available as an interop layer if Phase 2's GP library choice demands it.
+
+*(**Amended W2.15**, 2026-09-08: the recommendation was implemented — W2.5's
+`ampere/backends/jax/parameters.py` builds an `eqx.partition` filter spec —
+and **the interop caveat lapsed unspent**. The jax GP library was chosen by
+measurement at W2.5 slice 2 and is `celerite2.jax`, not GPJax, so no
+paramax-founded library sits at ampere's boundary and paramax is not a
+dependency of the `jax` extra. The ruling therefore stands unconditionally
+rather than pending a revisit.)*
 
 This reverses the reading one might take from `DEVELOPMENT_PLAN.md` §4.1,
 which names `paramax.NonTrainable` and an `eqx.partition` filter spec as
@@ -1196,7 +1215,12 @@ crashing, which is the criterion for needing a mechanical check.
 2. ***Ruled 2026-09-01: `eqx.partition` wins.*** Recorded in
    `DEVELOPMENT_PLAN.md` §2's decision table with §4.1 amended to match.
    The Phase 2 revisit noted below still applies if the GP library choice
-   (GPJax) puts paramax-wrapped leaves at ampere's boundary. *(Original
+   (GPJax) puts paramax-wrapped leaves at ampere's boundary.
+   ***Revisit discharged W2.15 (2026-09-08):*** the choice was made at W2.5
+   slice 2 by measuring celerite2.jax against tinygp, and it was
+   `celerite2.jax`. GPJax was not adopted, paramax is in neither extra, and
+   no wrapped leaf reaches ampere's boundary — so the ruling is now
+   unconditional. *(Original
    question follows for the record.)* `DEVELOPMENT_PLAN.md` §4.1 named
    `paramax.NonTrainable` and an `eqx.partition` filter spec as
    alternatives without ranking them. §6.2 ranks them, and comes down on

@@ -45,6 +45,16 @@ in the same hash.
 It is **backend-neutral**, and its one dependency is optional: `ampere.results`
 imports arviz lazily and never at module import (§10).
 
+*(**Amended W2.15**, 2026-09-08: arviz has not been optional since W2.2.
+Peter's ruling on §15 R1 promoted arviz **and** h5netcdf into
+`[project.dependencies]` at the moment the engine drivers made emission
+load-bearing, and the `arviz` extra was deleted rather than kept as an empty
+alias. Backend neutrality is unchanged, and so is the mechanism — the import
+is still lazy and still raises `OptionalDependencyError` on use. What changed
+is the reason for the laziness: import cost on the provenance-only path many
+callers take, and a legible failure in a hand-assembled environment, rather
+than optionality.)*
+
 ### Setup for the examples
 
 ```pycon
@@ -479,6 +489,15 @@ the backends that make them computable; W1.8's job is that their group names,
 their inputs and their cost policy are settled first, so two backend tracks and
 three diagnostic families write against one already-agreed answer.
 
+*(**Amended W2.15**, 2026-09-08: all three landed, with the group names, the
+inputs and the cost policy exactly as fixed here — `add_residuals` and
+`gp_localisation` at W2.7, `add_posterior_predictive` at W2.8, all in
+`ampere.results.derived`. One correction of expectation rather than of
+contract: they landed **on the numpy path in `ampere.results`**, not behind a
+backend. They consume a stored run and a problem through the contract
+surfaces, which every backend already satisfies, so there was nothing for a
+backend to supply.)*
+
 ## 8. The plotting surface
 
 Six functions, each taking the emitted run and nothing else.
@@ -898,6 +917,20 @@ currently mention:
 > re-raises it as `OptionalDependencyError` naming the remedy, and the pixi
 > `dev` environment installs both engines so this document's round trip runs.
 
+*(**Amended W2.15**, 2026-09-08 — R1 was answered and executed at W2.2, so the
+two paragraphs above are the historical case rather than the current state.
+Peter ruled on 2026-09-03 that arviz joins the base install *with* Phase 2's
+engine drivers and *together with* a netCDF engine, and W2.2 is that moment:
+`arviz` and `h5netcdf` are in `[project.dependencies]`, h5netcdf rather than
+netCDF4 because it is the lighter of the two and the one this namespace
+already names in its missing-engine remedy. The `arviz` extra was **deleted**
+rather than kept as an empty alias, so `pip install "ampere[arviz]"` now fails
+loudly instead of teaching the wrong mental model. Everything else here
+stands: the lazy import, `OptionalDependencyError` on use, the minimal-install
+CI job, and the `dev` environment carrying both engines — the second one
+through the pixi `netcdf` feature, which is what is left of W1.8's `arviz`
+feature.)*
+
 ## 11. Serialising containers, results and training sets
 
 `results_schema.md` §15.7 and §17.6 leave container serialisation unclaimed and
@@ -984,7 +1017,7 @@ training set and is what the composed problem is for.
 | `hashlib.blake2b`, never `hash()` | Salted per process; the same argument `ampere.core.rng` makes for seeds |
 | Non-finite floats become sentinel strings, so `allow_nan=False` stays on | JSON has no `NaN`; the alternative is a non-portable token in a netCDF attribute |
 | An unrecognised object is refused rather than dropped from a record | A record missing a field it did not understand compares equal to a run that lacked it |
-| arviz is lazily imported and stays an extra for now | `architecture.md` §4 rule 2 names this namespace; and this item lands the namespace, not the capability (§10) |
+| arviz is lazily imported and stays an extra for now | `architecture.md` §4 rule 2 names this namespace; and this item lands the namespace, not the capability (§10). *(Superseded W2.2, noted **W2.15**: arviz and h5netcdf are base dependencies and the extra is gone; the lazy import stands, for cost rather than optionality — §10.)* |
 | Every plot is a declared signature raising `NotImplementedError` | The surface is what two backend tracks and three diagnostic families need agreed first; a half-drawn plot is a worse commitment than a refusal. *(Amended W2.8: all six are drawn now, against the surface fixed here and unchanged by the drawing — see §8)* |
 | The GP-localisation caveat is a constant, a docstring and a function | `diagnostics.md` §4.3 requires it to reach a programmatic consumer, not only a viewer |
 | Container serialisation is functions in `ampere.results`, not methods on the containers | A hot-loop object should not carry the one method no evaluation calls; and `results_schema.py` is a merged contract (§15 R5) |
@@ -1008,11 +1041,20 @@ Each is a decision, not an oversight. Each has an extension point.
 2. **No engine drivers.** Nothing in ampere currently produces the draws `emit`
    consumes; `DrawRecorder` is the shape a driver will use, exercised here by the
    test suite rather than by a sampler. Phase 2's drivers are the consumers.
+   *(Closed, noted **W2.15**: W2.2 landed `EmceeEngine`, `DynestyEngine` and `ZeusEngine`, and
+   `NUTSEngine`/`VIEngine` followed at W2.4/W2.5/W2.13. `ampere.inference.engine`
+   emits through this contract unchanged — there is no way to sample through a
+   driver and not get a stored run.)*
 3. **The plotting functions are signatures.** They raise; Phase 2 draws.
    *(Closed: W2.7 drew three and W2.8 the other three.)*
 4. **`warmup_*` groups are not emitted.** ArviZ has a convention for them and
    ampere has no sampler to produce them yet. The group names are ArviZ's and
    cost nothing to adopt when a driver has warmup to store.
+   *(**Amended W2.15**: the limitation stands, but its reason has expired.
+   Samplers that produce discardable adaptation draws exist — `NUTSEngine`'s
+   `warmup=`, the ensemble drivers' `burn_in=` — and none of them stores them.
+   Not emitting the groups is now a driver's choice rather than the absence of
+   a sampler.)*
 5. **`prior` and `prior_predictive` groups are not emitted.**
    `FittingProblem.sample_prior` and `simulate` make them cheap, but they are a
    driver's choice of what to spend a budget on, not this contract's.
@@ -1176,7 +1218,10 @@ promotion: `Likelihood.to_spec()` landed, `describe_likelihood` composes
 it and keeps the content fingerprints, and the review found and fixed
 one provenance hole: family- and noise-model-owned buffers were
 invisible to `buffer_fingerprint(likelihood)`;
-`PROVENANCE_SCHEMA_VERSION` is now 2.)* The original
+`PROVENANCE_SCHEMA_VERSION` is now 2.)* *(**Amended W2.15**: 2 is what that
+bump made it, not what it is now — the constant went on to 3 (§8's `config`
+payload), 4 at W2.12 and 5 at W2.13. §9 carries the sequence;
+`ampere/results/provenance.py` is the authority.)* The original
 requests are kept below for the record.
 
 **R1 — when does arviz join the base install, and with which netCDF engine?**

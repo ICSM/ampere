@@ -12,6 +12,7 @@ from astropy import constants as const
 from astropy import units as u
 from spectres import spectres
 import pyphot
+from ampere.utils.pyphot_compat import get_unit
 
 
 
@@ -48,7 +49,7 @@ if __name__=="__main__":
     libDir = '/home/peter/pythonlibs/ampere/ampere/'
     libname = libDir + 'ampere_allfilters.hd5'
     filterLibrary = pyphot.get_library(fname=libname)
-    filters = filterLibrary.load_filters(filterName, interp=True, lamb = wavelengths*pyphot.unit['micron'])
+    filters = filterLibrary.load_filters(filterName, interp=True, lamb = wavelengths*get_unit('micron'))
     filts, modSed = pyphot.extractPhotometry(wavelengths,
                                              model_flux,
                                              filters,

@@ -65,6 +65,8 @@ frozen at its initial-value hyperparameters.
 
 from __future__ import annotations
 
+import math
+
 import dataclasses
 import warnings
 from collections.abc import Mapping, Sequence
@@ -103,7 +105,9 @@ __all__ = [
     "filter_spec",
 ]
 
-_NEGATIVE_INFINITY = -jnp.inf
+_NEGATIVE_INFINITY = (
+    -math.inf
+)  # a plain float, as jnp.inf is; spelt so that autodoc's import mocks need no unary operator
 
 
 #: The shared warning, re-exported for the backwards-compatible import path.

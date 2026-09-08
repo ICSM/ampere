@@ -45,6 +45,19 @@ torch or jax import, lazily or otherwise (`architecture.md` §4 rule 1). Turning
 these declarations into celerite2 terms, `torch.distributions` or numpyro sites
 is W1.9's table and Phase 2's code.
 
+*(**Amended W2.15**, 2026-09-08. The "no torch or jax import" half is
+unchanged and is import-graph-tested. Two additions of fact. First, the
+dependency list is now numpy, scipy, `astropy.units`, stdlib **and
+celerite2** — which W2.3 made a base dependency of the whole distribution
+rather than an extra, precisely so that the base install is not left with the
+O(N³) problem, and which `ampere/core/likelihood.py` imports **lazily**,
+inside `QuasisepGP`, so the module's import surface is exactly as described
+above. Second, the `KernelSpec` → celerite2-term half of the last sentence
+did **not** go to a backend: it landed here, in `ampere.core.QuasisepGP`,
+at W2.3, over ampere's own exact rank-2 Matérn-3/2 representation. Only the
+`torch.distributions` and numpyro halves are a backend's, and both landed at
+W2.4/W2.5 through `ampere.core.lowering`'s registry.)*
+
 ### Setup for the examples
 
 ```pycon

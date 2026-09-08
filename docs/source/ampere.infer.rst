@@ -1,10 +1,17 @@
-ampere.infer package
-====================
+ampere.infer package (legacy, frozen)
+=====================================
+
+.. warning::
+
+   Legacy v1 code, frozen in place — see :doc:`ampere`. The v2 replacement is
+   :mod:`ampere.inference` (the engines) plus :mod:`ampere.results` (emission,
+   diagnostics and plotting, which the legacy searches did themselves).
 
 .. automodule:: ampere.infer
     :members:
     :undoc-members:
     :show-inheritance:
+    :no-index:
 
 Submodules
 ----------
@@ -16,6 +23,7 @@ ampere.infer.basesearch module
     :members:
     :undoc-members:
     :show-inheritance:
+    :no-index:
 
 ampere.infer.dynestysearch module
 ---------------------------------
@@ -24,6 +32,7 @@ ampere.infer.dynestysearch module
     :members:
     :undoc-members:
     :show-inheritance:
+    :no-index:
 
 ampere.infer.emceesearch module
 -------------------------------
@@ -32,6 +41,7 @@ ampere.infer.emceesearch module
     :members:
     :undoc-members:
     :show-inheritance:
+    :no-index:
 
 ampere.infer.mcmcsearch module
 ------------------------------
@@ -40,6 +50,7 @@ ampere.infer.mcmcsearch module
     :members:
     :undoc-members:
     :show-inheritance:
+    :no-index:
 
 ampere.infer.mixins module
 --------------------------
@@ -48,6 +59,7 @@ ampere.infer.mixins module
     :members:
     :undoc-members:
     :show-inheritance:
+    :no-index:
 
 ampere.infer.nestedsearch module
 --------------------------------
@@ -56,6 +68,7 @@ ampere.infer.nestedsearch module
     :members:
     :undoc-members:
     :show-inheritance:
+    :no-index:
 
 ampere.infer.sbi module
 -----------------------
@@ -64,6 +77,7 @@ ampere.infer.sbi module
     :members:
     :undoc-members:
     :show-inheritance:
+    :no-index:
 
 ampere.infer.zeussearch module
 ------------------------------
@@ -72,5 +86,6 @@ ampere.infer.zeussearch module
     :members:
     :undoc-members:
     :show-inheritance:
+    :no-index:
 
 

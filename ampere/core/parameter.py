@@ -1488,6 +1488,16 @@ class PlateBinding:
 class ParameterMapping:
     """The result of :meth:`ParameterSet.merge`: a joint set plus its wiring.
 
+    The public :attr:`bindings` view **composes** :attr:`routing` through
+    :attr:`inner`, so it enumerates the ultimate leaves: a consumer walking
+    ``bindings`` for provenance or labelling sees a parameter collapsed by an
+    inner merge as the several leaf sites it really drives, not as the single
+    local name the routing table needs. Routing and introspection are thereby
+    two views of one structure — value flow stays level-by-level (each
+    component receives its immediate-level names, so an inner composite
+    re-distributes with its own retained mapping), while introspection tells
+    the leaf-level truth.
+
     Attributes
     ----------
     merged
@@ -1501,16 +1511,6 @@ class ParameterMapping:
         The retained :class:`ParameterMapping` of every component that was
         merged *as a mapping* (lossless nesting, ruled 2026-09-02). Empty for
         components merged as plain sets.
-
-    The public :attr:`bindings` view **composes** :attr:`routing` through
-    :attr:`inner`, so it enumerates the ultimate leaves: a consumer walking
-    ``bindings`` for provenance or labelling sees a parameter collapsed by an
-    inner merge as the several leaf sites it really drives, not as the single
-    local name the routing table needs. Routing and introspection are thereby
-    two views of one structure — value flow stays level-by-level (each
-    component receives its immediate-level names, so an inner composite
-    re-distributes with its own retained mapping), while introspection tells
-    the leaf-level truth.
     """
 
     merged: ParameterSet

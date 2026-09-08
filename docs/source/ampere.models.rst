@@ -1,10 +1,17 @@
-ampere.models package
-=====================
+ampere.models package (legacy, frozen)
+======================================
+
+.. warning::
+
+   Legacy v1 code, frozen in place — see :doc:`ampere`. The v2 replacement is
+   :class:`ampere.core.Model` plus a backend's model library, e.g.
+   :mod:`ampere.backends.reference`.
 
 .. automodule:: ampere.models
     :members:
     :undoc-members:
     :show-inheritance:
+    :no-index:
 
 Submodules
 ----------
@@ -16,6 +23,7 @@ ampere.models.blackbodies module
     :members:
     :undoc-members:
     :show-inheritance:
+    :no-index:
 
 ampere.models.models module
 ---------------------------
@@ -24,6 +32,7 @@ ampere.models.models module
     :members:
     :undoc-members:
     :show-inheritance:
+    :no-index:
 
 ampere.models.powerlaws module
 ------------------------------
@@ -32,6 +41,7 @@ ampere.models.powerlaws module
     :members:
     :undoc-members:
     :show-inheritance:
+    :no-index:
 
 ampere.models.results module
 ----------------------------
@@ -40,5 +50,6 @@ ampere.models.results module
     :members:
     :undoc-members:
     :show-inheritance:
+    :no-index:
 
 

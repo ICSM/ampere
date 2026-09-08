@@ -9,6 +9,7 @@ from ampere.infer.sbi import SBI_SNPE
 from ampere.models import Model
 from spectres import spectres
 import pyphot
+from ampere.utils.pyphot_compat import get_unit
 from emcee import moves
 
 #First we will define a rather simple model
@@ -107,14 +108,14 @@ if __name__ == "__main__":
     libDir = ampere.__file__.strip('__init__.py') # '/home/peter/pythonlibs/ampere/ampere/'
     libname = libDir + 'ampere_allfilters.hd5'
     filterLibrary = pyphot.get_library(fname=libname)
-    filters = filterLibrary.load_filters(filterName, interp=True, lamb = wavelengths*pyphot.unit['micron'])
+    filters = filterLibrary.load_filters(filterName, interp=True, lamb = wavelengths*get_unit('micron'))
     #Now we need to extract the photometry with pyphot
     #first we need to convert the flux from Fnu to Flambda
     flam = model_flux / wavelengths**2
     modSed = []
     for i, f in enumerate(filters):
         lp = f.lpivot.to("micron").value
-        fphot = f.get_flux(wavelengths*pyphot.unit['micron'], flam*pyphot.unit['flam'], axis=-1).value
+        fphot = f.get_flux(wavelengths*get_unit('micron'), flam*get_unit('flam'), axis=-1).value
         print(fphot)
         modSed.append(fphot*lp**2)
     print(modSed)

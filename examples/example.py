@@ -12,6 +12,7 @@ from astropy import constants as const
 from astropy import units as u
 from spectres import spectres
 import pyphot
+from ampere.utils.pyphot_compat import get_unit
 
 if __name__=="__main__":
     """
@@ -70,7 +71,7 @@ if __name__=="__main__":
     libname = libDir + 'ampere_allfilters.hd5'
     print(libname)
     filterLib = pyphot.Library.from_hd5(libname)
-    filts = filterLib.load_filters(filters, interp=True, lamb = modwaves*pyphot.unit['micron'])
+    filts = filterLib.load_filters(filters, interp=True, lamb = modwaves*get_unit('micron'))
     f, sed =  pyphot.extractPhotometry(modwaves, TestData.modelFlux, filts, Fnu = True, absFlux = False)
     lamCen = np.array([b.magnitude for b in f])
     print(lamCen, sed)
