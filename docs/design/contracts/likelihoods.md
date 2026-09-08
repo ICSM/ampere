@@ -1128,8 +1128,13 @@ True
 
 ```
 
-Given `f`, the family evaluates the *conditional* likelihood, which is what an
-HMC/VI backend computes per gradient step:
+`latent=` is the **whitened** `z`, and `GaussianProcessNoise.noise_params`
+applies the transform on the retained coordinates before the family ever sees
+it (W2.14): the family reads `noise.latent` as `f`, so `f = L(θ) z` is imposed
+once, in the one place that holds the solver, the kernel and the coordinates.
+That is why the value below moves when the hyperparameters move — before
+W2.14 it did not, and a latent fit sampled the amplitude and the length scale
+against a flat likelihood.
 
 ```pycon
 >>> rate = counts.with_values([3.5, 6.0, 2.5, 8.0])
@@ -1137,11 +1142,28 @@ HMC/VI backend computes per gradient step:
 Traceback (most recent call last):
     ...
 ampere.core.exceptions.LikelihoodError: a Poisson likelihood with a GaussianProcessNoise model is a latent-variable model: ...
->>> f = np.array([0.1, -0.2, 0.05, 0.0])
+>>> z = np.array([0.1, -0.2, 0.05, 0.0])
+>>> points = np.asarray(counts.axes[0].values).reshape(-1, 1)
+>>> f = DenseGP().latent_transform(
+...     Matern32(0.3, 2.0), points, z, {"amplitude": 0.3, "length_scale": 2.0}
+... )
 >>> bool(np.isclose(
-...     latent_poisson.log_prob(rate, counts, latent=f),
+...     latent_poisson.log_prob(rate, counts, latent=z),
 ...     np.sum(st.poisson.logpmf(counts.values, rate.values * np.exp(f))),
 ... ))
+True
+
+```
+
+The same `z` under a wider kernel is a different number, which is the whole
+content of the fix:
+
+```pycon
+>>> wider = Likelihood(PoissonFamily(), GaussianProcessNoise(Matern32(3.0, 2.0)))
+>>> bool(
+...     latent_poisson.log_prob(rate, counts, latent=z)
+...     != wider.log_prob(rate, counts, latent=z)
+... )
 True
 
 ```
@@ -1410,11 +1432,22 @@ Each is a decision, not an oversight. Each has an extension point.
    Gaussian left this list at the freeze: under a GP it now declares a
    *staged* `ANALYTIC` — §4 — refused until Phase 4 implements the circular
    closed form.)
-6. **The latent path has no inference.** `latent_declaration` and
-   `latent_transform` are the declaration and the transform; sampling `f` is
-   Phase 2's, on the torch/jax rungs. `DenseGP.latent_transform` exists so the
-   declaration is testable and so a small-N Laplace-type reference fallback
-   (§4.4's "possible later fallback") is not blocked.
+6. **The latent path has no inference.** *(Amended W2.14, 2026-09-08.)* As
+   written, this limitation also described a **defect**: `latent_transform`
+   was "the transform" and nothing on the scoring path applied it, so
+   `Likelihood.log_prob` read the whitened `z` as `f` and a latent
+   log-likelihood was exactly flat in the kernel hyperparameters. That is
+   fixed — `GaussianProcessNoise.noise_params` applies
+   `f = solver.latent_transform(kernel, coordinates, z, values)` on the
+   retained block, so `noise.latent` *is* `f` as every family already read it
+   (§10; `DEVELOPMENT_PLAN.md` §2, 2026-09-08, a §4.4 clarification). What
+   remains a limitation is only the inference: `ampere.core` supplies the
+   declaration, the transform and the conditional density, and the *engines*
+   that can sample an `N + k`-dimensional latent posterior are the torch and
+   jax rungs' (both now lower the corrected path, and the conformance battery
+   holds them to it). `DenseGP.latent_transform` still exists so the
+   declaration is testable at small N and so a Laplace-type reference
+   fallback (§4.4's "possible later fallback") is not blocked.
 7. **Censoring is interval-free.** `LimitKind` has no `INTERVAL` member for a
    datum known only to lie between two values. Adding one is a code plus a
    second value array; nothing in the design forbids it, and nothing in the

@@ -1533,14 +1533,41 @@ class TestTheWidenedRealisedPath:
     def test_the_poisson_family_lowers(self) -> None:
         _agrees(_family_problem(PoissonFamily(), counts=True))
 
-    def test_the_latent_gp_poisson_combination_lowers(self) -> None:
+    @pytest.mark.parametrize("solver", ["dense", "quasisep"])
+    def test_the_latent_gp_poisson_combination_lowers(self, solver: str) -> None:
         """``DEVELOPMENT_PLAN.md`` §4.4's singled-out case, and the one no
         gradient-free engine can run: the latent block is a sampler dimension
-        per retained sample, so the problem is N + k dimensional."""
-        problem = _family_problem(PoissonFamily(), solver=QuasisepGP(), counts=True)
+        per retained sample, so the problem is N + k dimensional.
+
+        Both solves since W2.14, because the whitening transform ``f = L(θ) z``
+        is now applied on this path and it is where the two representations
+        differ most — a dense Cholesky against celerite's ``L √D``.
+        """
+        chosen = DenseGP() if solver == "dense" else QuasisepGP()
+        problem = _family_problem(PoissonFamily(), solver=chosen, counts=True)
         assert problem.datasets["default"].latent is not None
         assert problem.free_size > AGREEMENT_GRID.size
         _agrees(problem, points=6)
+
+    def test_the_latent_path_gives_the_kernel_hyperparameters_a_gradient(self) -> None:
+        """The point of lowering it at all, asserted rather than assumed (W2.14).
+
+        Until W2.14 the contract path scored a latent likelihood at the
+        whitened ``z``, so the GP hyperparameters had no influence on the
+        density and therefore no gradient to give, and this backend mirrored
+        that deliberately. A NUTS chain on such a problem moves the amplitude
+        and the length scale by prior draws alone. Evaluated away from
+        ``z = 0``, where the derivative of ``f = L(θ) z`` in ``θ`` is zero for
+        the honest reason that ``f`` is zero whatever ``L`` is.
+        """
+        problem = _family_problem(PoissonFamily(), solver=DenseGP(), counts=True)
+        lowered = lower_problem(problem)
+        names = list(problem.parameters.free_names)
+        y = np.random.default_rng(20260908).normal(0.0, 0.6, problem.free_size)
+        gradient = np.asarray(jax.grad(lowered.log_prob_unconstrained)(jnp.asarray(y)))
+        assert np.all(np.isfinite(gradient))
+        for name in ("default.likelihood.amplitude", "default.likelihood.length_scale"):
+            assert abs(float(gradient[names.index(name)])) > 1e-6
 
     def test_the_terms_sum_to_the_joint_likelihood_on_a_widened_shape(self) -> None:
         problem = _family_problem(CauchyFamily(), censoring=_limit_codes(AGREEMENT_GRID.size))

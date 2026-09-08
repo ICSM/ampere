@@ -56,6 +56,7 @@ from .protocol import (
 
 __all__ = [
     "COARSE_GRID",
+    "COUNT_EXPOSURE",
     "GP_GRID",
     "CensoringKind",
     "DatasetSpec",
@@ -127,6 +128,17 @@ class DatasetSpec:
     probability with no closed form, and ``GaussianFamily`` refuses it by
     design (``likelihoods.md`` §9); a spec that asks for both is a bug in the
     row, not a backend failure.
+
+    ``family`` also decides the *shape of the data*, and one family changes it:
+    ``"poisson"`` needs non-negative integer counts and no uncertainties at
+    all (``PoissonFamily`` defines its own dispersion, and
+    ``REQUIRES_UNCERTAINTY`` is ``False``). That is derived from the family
+    rather than declared separately so the two cannot disagree — a Poisson
+    spec carrying Gaussian uncertainties would be refused at composition, and
+    a flag able to express it buys nothing. Combined with
+    :attr:`NoiseKind.GP` it is the **latent-GP** shape (W2.14): the dataset
+    declares one whitened latent value per retained sample, and the family
+    scores at ``f = L(θ) z``.
     """
 
     label: str = "sed"
@@ -210,6 +222,13 @@ def observed_grid(spec: ProblemSpec, dataset: DatasetSpec) -> np.ndarray:
     return np.asarray(spec.model.coordinates, dtype=float)
 
 
+#: How many counts a unit of the oracle's flux is worth, for the Poisson
+#: shapes. Chosen so the smallest count on ``GP_GRID`` is still comfortably
+#: above one — a shape whose counts were mostly zero would make every row that
+#: uses it a test of the ``k = 0`` term rather than of the composition.
+COUNT_EXPOSURE = 20.0
+
+
 def observed_values(spec: ProblemSpec, dataset: DatasetSpec, grid: np.ndarray) -> np.ndarray:
     """Fixed, deterministic pseudo-data on *grid*.
 
@@ -219,9 +238,16 @@ def observed_values(spec: ProblemSpec, dataset: DatasetSpec, grid: np.ndarray) -
     a backend's model: the data are then identical in every backend, which is
     what makes ``ampere_data_hash`` comparable across them and keeps the data
     from being a function of the arithmetic under test.
+
+    A Poisson dataset gets **counts** instead: the same oracle mean, scaled by
+    :data:`COUNT_EXPOSURE` and drawn from a Poisson. Still seeded, still
+    computed here rather than in a backend, so the two claims above hold
+    unchanged.
     """
     rng = np.random.default_rng(seed=dataset.data_seed)
     mean = analytic_flux(spec.model, truth(spec.model), grid)
+    if dataset.family == "poisson":
+        return rng.poisson(np.clip(mean, 1e-6, None) * COUNT_EXPOSURE).astype(float)
     return mean + rng.normal(0.0, dataset.uncertainty, grid.size)
 
 
@@ -276,7 +302,12 @@ def observed_container(spec: ProblemSpec, dataset: DatasetSpec) -> FunctionSampl
     """
     grid = observed_grid(spec, dataset)
     values = observed_values(spec, dataset, grid)
-    uncertainty = np.full(grid.size, dataset.uncertainty) * FLUX_UNIT
+    # Counts carry no uncertainties: the family supplies its own dispersion,
+    # and attaching a Gaussian sigma to them would be a statement about the
+    # data that is not true.
+    uncertainty = (
+        None if dataset.family == "poisson" else np.full(grid.size, dataset.uncertainty) * FLUX_UNIT
+    )
     mask = observed_mask(dataset, grid.size)
     photometry = terminal_photometry(dataset)
     if photometry is not None:

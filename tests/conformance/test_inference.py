@@ -13,6 +13,7 @@ seed gives the same simulation; ``substream`` is stable across processes."
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import subprocess
 import sys
@@ -125,6 +126,30 @@ PHOTOMETRIC = ProblemSpec(
                     filters=("W1", "W2", "W3", "W4"),
                 ),
             ),
+        ),
+    ),
+)
+
+#: A **latent** GP: Poisson counts whose rate is modulated by ``exp(f)``, with
+#: ``f`` a GP draw reached through the whitened block the dataset declares.
+#:
+#: Added at W2.14, and it closed a hole the battery could not see. Every other
+#: GP shape here is a Gaussian family, whose covariance is marginalised in
+#: closed form by the solver; the latent path is the *other* correlated story
+#: — ``DEVELOPMENT_PLAN.md`` §4.4's flexible likelihood for non-Gaussian data,
+#: and the one no gradient-free engine can run — and until W2.14 nothing on
+#: the scoring path applied ``GPSolver.latent_transform`` at all, so the
+#: kernel hyperparameters entered the likelihood nowhere and both backends
+#: were left to refuse or to mirror a wrong oracle. ``SolverKind.DENSE``
+#: because every backend declares it; the quasiseparable latent path is
+#: exercised in each backend's own suite.
+LATENT_GP = ProblemSpec(
+    model=ModelSpec(kind=ModelKind.POWER_LAW, coordinates=GP_GRID),
+    datasets=(
+        DatasetSpec(
+            family="poisson",
+            noise=NoiseKind.GP,
+            covariance=CovarianceSpec(amplitude=0.3, length_scale=2.0),
         ),
     ),
 )
@@ -434,6 +459,92 @@ class TestTheRealisation:
                 assert not np.isfinite(got)
                 continue
             assert got == pytest.approx(expected, abs=tolerances.cross_backend)
+
+    def test_the_latent_gp_realisation_agrees_with_the_numpy_path(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """W2.14: the latent path's realised density, against the fixed oracle.
+
+        Its own row rather than a sixth entry in the parametrised list above,
+        because the interesting points are different. :meth:`points` includes
+        two vectors a long way out, which is right for a bijected
+        hyperparameter and wrong for a latent block: the block is ``Identity``
+        bijected, so ``y = ±8`` is a whitened draw eight standard deviations
+        from its prior mean at *every* one of its elements, and ``rate *
+        exp(f)`` there is a number about which the two paths can only agree
+        that it is not finite. The interior grid is the whole of what this row
+        needs, and it is where a sampler lives.
+        """
+        problem = build_problem(backend, LATENT_GP)
+        assert problem.datasets["sed"].latent is not None
+        assert problem.free_size > len(GP_GRID)
+        realised = self.realised(problem)
+        compared = 0
+        for y in self.points(problem)[:-2]:
+            expected = problem.log_prob_unconstrained(y)
+            got = float(np.asarray(backend.to_numpy(realised.log_prob_unconstrained(y))))
+            if not np.isfinite(expected):
+                assert not np.isfinite(got)
+                continue
+            assert got == pytest.approx(expected, abs=tolerances.cross_backend)
+            compared += 1
+        assert compared > 0, "every point was outside the support; the row proved nothing"
+
+    def test_the_latent_numpy_path_moves_with_the_kernel_hyperparameters(
+        self, backend: ConformanceBackend
+    ) -> None:
+        """The claim the row above is only worth making because of.
+
+        A realisation is checked against the numpy path, so an oracle that is
+        flat in the GP hyperparameters makes a *perfect* conformance score out
+        of a likelihood that cannot fit them. That is exactly what happened
+        before W2.14, on every backend at once. This row holds the oracle
+        itself: with the whitened block fixed, moving the amplitude and then
+        the length scale must move the log-likelihood.
+
+        It runs on **every** backend, the reference one included, because the
+        noise model and the solver are the backend's own since W2.13 — so this
+        is a statement about each backend's ``latent_transform``, not only
+        about ``ampere.core``'s.
+        """
+        # A fixed, non-zero whitened block. At z = 0 the latent path is flat
+        # in the hyperparameters for the honest reason that f = L(theta) 0 is
+        # zero whatever L is, so a row evaluated at the prior median would
+        # pass against the defect it exists to catch.
+        whitened = np.linspace(-1.2, 1.2, len(GP_GRID))
+        declared = LATENT_GP.datasets[0]
+
+        def scored(amplitude: float, length_scale: float) -> float:
+            spec = dataclasses.replace(
+                LATENT_GP,
+                datasets=(
+                    dataclasses.replace(
+                        declared,
+                        covariance=CovarianceSpec(
+                            family=declared.covariance.family,
+                            amplitude=amplitude,
+                            length_scale=length_scale,
+                        ),
+                    ),
+                ),
+            )
+            problem = build_problem(backend, spec)
+            latent = problem.datasets["sed"].latent
+            assert latent is not None
+            theta = dict(problem.reference_values)
+            name = next(key for key in theta if key.endswith(f".{latent.parameter.name}"))
+            theta[name] = whitened
+            return problem.log_likelihood(theta)
+
+        base = declared.covariance
+        assert np.isfinite(scored(base.amplitude, base.length_scale))
+        amplitudes = [scored(a, base.length_scale) for a in (0.1, 0.3, 1.2)]
+        lengths = [scored(base.amplitude, ell) for ell in (0.5, 2.0, 8.0)]
+        for name, values in (("amplitude", amplitudes), ("length_scale", lengths)):
+            assert len(set(values)) == 3, (
+                f"the latent log-likelihood is flat in {name!r}: {values}. The whitening "
+                f"transform f = L(theta) z is not reaching the family (W2.14)."
+            )
 
     def test_the_optional_decomposition_sums_to_the_joint_likelihood(
         self, backend: ConformanceBackend, tolerances: Tolerances

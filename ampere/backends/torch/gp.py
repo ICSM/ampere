@@ -525,6 +525,43 @@ class DenseGP(GPSolver):
             variance=to_numpy(posterior).astype(DTYPE, copy=False),
         )
 
+    def latent_transform_native(
+        self,
+        kernel: Kernel,
+        coordinates: Any,
+        whitened: Any,
+        values: Mapping[str, Any],
+        *,
+        jitter: float = 1e-10,
+    ) -> torch.Tensor:
+        """``f = L(θ) z`` as a **differentiable tensor**, without exceptions (W2.14).
+
+        The counterpart of :meth:`log_marginal_likelihood_native`, and needed
+        for the same two reasons. :meth:`latent_transform` returns numpy, so a
+        realised density that called it would cut the gradient in exactly the
+        hyperparameters the latent path exists to fit — W2.4 slice 1's finding
+        arriving a second time, on a second surface. And a realised density
+        must not raise (``inference.md`` §10a), so a factorisation that fails
+        comes back as NaN through :func:`torch.where` and becomes ``-inf`` at
+        the one guard the lowered dataset ends with, rather than as a
+        :class:`LikelihoodError` in the middle of a NUTS step.
+
+        ``torch.linalg.cholesky_ex`` is again what makes it possible: ``info``
+        is read as a value rather than caught as an exception.
+        """
+        covariance = self._tensor(kernel.matrix(coordinates, coordinates, values))
+        # The reference solver's ``float(...) or 1.0``, kept as a value so a
+        # fitted amplitude survives it.
+        mean_variance = torch.diagonal(covariance).mean()
+        scale = torch.where(mean_variance != 0.0, mean_variance, torch.ones_like(mean_variance))
+        stabilised = covariance + torch.eye(
+            covariance.shape[0], dtype=self.TENSOR_DTYPE, device=self.TENSOR_DEVICE
+        ) * (jitter * scale)
+        factor, info = torch.linalg.cholesky_ex(stabilised)
+        drawn = factor @ self._tensor(whitened).reshape(-1)
+        failed = torch.logical_or(info != 0, torch.logical_not(torch.isfinite(drawn).all()))
+        return torch.where(failed, torch.full_like(drawn, math.nan), drawn)
+
     def latent_transform(
         self,
         kernel: Kernel,
@@ -534,7 +571,11 @@ class DenseGP(GPSolver):
         *,
         jitter: float = 1e-10,
     ) -> np.ndarray:
-        """``f = L z`` — the deterministic half of the latent-GP declaration."""
+        """``f = L z`` — the deterministic half of the latent-GP declaration.
+
+        The contract surface, so it raises where
+        :meth:`latent_transform_native` returns NaN.
+        """
         points = _as_points(coordinates, "data coordinates")
         covariance = self._tensor(kernel.matrix(points, points, values))
         if not bool(torch.all(torch.isfinite(covariance))):
@@ -543,18 +584,13 @@ class DenseGP(GPSolver):
                 "f = L z is undefined. The usual cause is a kernel amplitude large enough that "
                 "amplitude**2 overflows float64."
             )
-        scale = float(torch.diagonal(covariance).mean()) or 1.0
-        stabilised = covariance + torch.eye(
-            covariance.shape[0], dtype=self.TENSOR_DTYPE, device=self.TENSOR_DEVICE
-        ) * (jitter * scale)
-        factor, info = torch.linalg.cholesky_ex(stabilised)
-        if int(info) != 0:
+        drawn = self.latent_transform_native(kernel, points, whitened, values, jitter=jitter)
+        if not bool(torch.all(torch.isfinite(drawn))):
             raise LikelihoodError(
-                f"the kernel matrix K is not positive definite, so the whitening transform "
-                f"f = L z is undefined (leading minor {int(info)}). Increase the jitter "
-                f"argument, or check the kernel hyperparameters."
+                "the kernel matrix K is not positive definite, so the whitening transform "
+                "f = L z is undefined. Increase the jitter argument, or check the kernel "
+                "hyperparameters."
             )
-        drawn = factor @ self._tensor(whitened).reshape(-1)
         return to_numpy(drawn).astype(DTYPE, copy=False)
 
 
@@ -1189,6 +1225,67 @@ class QuasisepGP(GPSolver):
             ),
         )
 
+    def latent_transform_native(
+        self,
+        kernel: Kernel,
+        coordinates: Any,
+        whitened: Any,
+        values: Mapping[str, Any],
+        *,
+        jitter: float = 1e-10,
+    ) -> torch.Tensor:
+        """``f = L(θ) z`` in O(N), as a differentiable tensor (W2.14).
+
+        The quasiseparable counterpart of
+        :meth:`DenseGP.latent_transform_native`, and the one that matters at
+        the scale the latent path is sized for: forming ``L`` densely is
+        O(N³), so a 10⁵-sample latent fit reaches its correlation through this
+        recursion or not at all.
+
+        No exception control flow, and the same sanitise-then-force discipline
+        :meth:`log_marginal_likelihood_native` uses: celerite's compiled
+        kernels are handed values they can factorise whatever the
+        hyperparameters were, and a NaN is then forced back in through one
+        :func:`torch.where`, which keeps the result attached to the graph.
+        """
+        axis, order = self._axis(coordinates)
+        points = axis.reshape(-1, 1)
+        draws = self._tensor(whitened).reshape(-1)
+        # The reference solver's ``float(...) or 1.0``, kept as a value so a
+        # fitted amplitude survives it.
+        mean_variance = torch.mean(self._tensor(kernel.diagonal(points, values)))
+        scale = torch.where(mean_variance != 0.0, mean_variance, torch.ones_like(mean_variance))
+        sorted_axis = axis[order]
+        stabiliser = torch.ones_like(sorted_axis) * (jitter * scale)
+        usable = torch.isfinite(stabiliser) & (stabiliser >= 0.0)
+        safe_stabiliser = torch.where(usable, stabiliser, torch.zeros_like(stabiliser))
+        refused = torch.logical_not(usable.all())
+
+        c, a, U, V = self._matrices(kernel, sorted_axis, safe_stabiliser, values)
+        finite = (
+            torch.isfinite(a).all()
+            & torch.isfinite(U).all()
+            & torch.isfinite(V).all()
+            & torch.isfinite(c).all()
+        )
+        refused = refused | torch.logical_not(finite)
+        a = torch.where(finite, a, torch.ones_like(a))
+        U = torch.where(finite, U, torch.zeros_like(U))
+        V = torch.where(finite, V, torch.zeros_like(V))
+        c = torch.where(finite, c, torch.ones_like(c))
+
+        d, W = _celerite.factor(sorted_axis, c, a, U, V)
+        refused = refused | torch.logical_not(torch.isfinite(d).all()) | (d <= 0.0).any()
+        safe_d = torch.where(torch.isfinite(d) & (d > 0.0), d, torch.ones_like(d))
+        safe_W = torch.where(torch.isfinite(W), W, torch.zeros_like(W))
+
+        scaled = (draws[order] * torch.sqrt(safe_d)).reshape(-1, 1)
+        transformed = (scaled + _celerite.matmul_lower(sorted_axis, c, U, safe_W, scaled))[:, 0]
+        restored = torch.empty_like(transformed)
+        restored[order] = transformed
+        failed = refused | torch.logical_not(torch.isfinite(restored).all())
+        return torch.where(failed, torch.full_like(restored, math.nan), restored)
+
     def latent_transform(
         self,
         kernel: Kernel,
@@ -1206,6 +1303,10 @@ class QuasisepGP(GPSolver):
         solvers therefore factorise the same matrix. celerite's ``L D Lᵀ``
         gives it as ``f = L √D z`` with ``L`` unit lower triangular, which is
         one ``matmul_lower`` rather than a triangular multiply.
+
+        The contract surface: it takes the *guarded* factorisation, so
+        celerite's quiet NaN becomes the reference path's loud refusal, which
+        :meth:`latent_transform_native` may not raise.
         """
         axis, order = self._axis(coordinates)
         points = axis.reshape(-1, 1)

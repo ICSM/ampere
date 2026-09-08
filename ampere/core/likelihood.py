@@ -1447,8 +1447,13 @@ class NoiseParams:
     coordinates: np.ndarray | None = None
     kernel: Kernel | None = None
     solver: GPSolver | None = None
-    #: Latent function values, when the combination is
-    #: :attr:`Marginalisation.LATENT` and inference supplied them.
+    #: Latent function values ``f``, when the combination is
+    #: :attr:`Marginalisation.LATENT` and inference supplied them. Already
+    #: **correlated**: the engine samples the whitened ``z`` a
+    #: :func:`latent_parameter` declares and
+    #: :meth:`GaussianProcessNoise.noise_params` applies
+    #: :meth:`GPSolver.latent_transform` to it, so a family reads ``f`` and
+    #: needs to know nothing about the kernel (W2.14).
     latent: np.ndarray | None = None
     #: :class:`LimitKind` codes for the retained samples, or ``None``.
     limits: np.ndarray | None = None
@@ -1805,16 +1810,70 @@ class GaussianProcessNoise(NoiseModel):
         latent: np.ndarray | None = None,
         limits: np.ndarray | None = None,
     ) -> NoiseParams:
+        """The GP's own record, with the **whitening transform applied**.
+
+        ``latent`` arrives whitened — ``latent_parameter`` declares ``z`` with
+        an i.i.d. standard-normal prior and says in as many words that "the
+        covariance enters through ``f = L(θ) z``, a deterministic transform
+        owned by the ``GPSolver``" — and every family reads ``noise.latent``
+        as ``f``. This is where the two meet, and it is the only place they
+        can meet without a family knowing about kernels: the solver, the
+        kernel, the retained coordinates and the resolved hyperparameters are
+        all in hand here, and nothing downstream has them.
+
+        Applying it anywhere else was tried and is wrong. Leaving it to the
+        family means every latent-consuming family reimplements the transform;
+        leaving it to ``Dataset.log_likelihood_of`` means the *dataset* forming
+        the retained coordinates, which is ``Likelihood.log_prob``'s excision;
+        leaving it out altogether is what this contract did until W2.14, and
+        the measurable consequence was a log-likelihood **exactly flat in the
+        kernel hyperparameters** — a latent fit that sampled the amplitude and
+        the length scale against the prior alone and reported nothing wrong
+        (``DEVELOPMENT_PLAN.md`` §2, 2026-09-08; §4.4 clarification).
+        """
         return NoiseParams(
             sigma=self.sigma(observed, retain, values, predicted=predicted),
             values=values,
             coordinates=coordinates,
             kernel=self._kernel,
             solver=self._solver,
-            latent=latent,
+            latent=self._realised_latent(coordinates, latent, values),
             limits=limits,
             retain=retain,
         )
+
+    def _realised_latent(
+        self,
+        coordinates: np.ndarray | None,
+        latent: np.ndarray | None,
+        values: Mapping[str, Any],
+    ) -> np.ndarray | None:
+        """``f = L(θ) z`` on the retained coordinates, or ``None``.
+
+        Both arrays are already the **retained** block: ``Likelihood.log_prob``
+        excises before it calls this, and ``FittingProblem`` validation refuses
+        a latent declaration whose size disagrees with the effective mask, so
+        one latent value per retained coordinate is an invariant rather than a
+        hope. It is checked anyway, because the failure it would otherwise
+        produce is a matrix-shape error from inside a solver.
+        """
+        if latent is None:
+            return None
+        whitened = _as_float64(latent, "whitened latent GP values")
+        if coordinates is None:
+            raise LikelihoodError(
+                "whitened latent GP values were supplied without the coordinates they live on, "
+                "so the whitening transform f = L(theta) z cannot be applied. A correlated "
+                "noise model is always handed coordinates by Likelihood.log_prob; a direct "
+                "caller of noise_params must pass them too."
+            )
+        points = _as_points(coordinates, "data coordinates")
+        if whitened.shape != (points.shape[0],):
+            raise LikelihoodError(
+                f"the whitened latent GP values have shape {whitened.shape} but there are "
+                f"{points.shape[0]} retained sample(s). One latent value per retained sample."
+            )
+        return self._solver.latent_transform(self._kernel, points, whitened, values)
 
 
 # ---------------------------------------------------------------------------

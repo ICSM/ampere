@@ -93,10 +93,7 @@ from ampere.core import (
     StudentTFamily,
     describe_prior,
 )
-from ampere.backends import reference as ref
 from ampere.backends.torch._families import FamilyInputs, native_log_prob
-from ampere.core import DenseGP as CoreDenseGP
-from ampere.core import GaussianProcessNoise as CoreGaussianProcessNoise
 from ampere.core import Matern32 as CoreMatern32
 from ampere.core import QuasisepGP as CoreQuasisepGP
 from ampere.core.exceptions import LoweringError
@@ -924,6 +921,65 @@ class TestTheWidenedRealisation:
         )
         assert worst_disagreement(problem, lowered) < 1e-12
 
+    @pytest.mark.parametrize("solver", ["dense", "quasisep"], ids=["dense", "quasisep"])
+    def test_the_latent_gp_poisson_path_agrees_with_the_numpy_path(self, solver: str) -> None:
+        """W2.14: the combination slice 2 refused, now held to the fixed oracle.
+
+        ``DEVELOPMENT_PLAN.md`` §4.4's singled-out case — ``counts ~
+        Poisson(rate · exp(f))``, ``f ~ GP`` — and the one no gradient-free
+        engine can run, because the latent block is a sampler dimension per
+        retained sample. Both solves, because the whitening transform is where
+        the two representations differ most: a dense Cholesky against
+        celerite's ``L √D``.
+        """
+        chosen = DenseGP() if solver == "dense" else QuasisepGP()
+        problem, lowered = lowered_for(
+            Likelihood(
+                PoissonFamily(),
+                GaussianProcessNoise(
+                    Matern32(st.halfnorm(0.0, 1.0), st.loguniform(0.5, 5.0)), chosen
+                ),
+            ),
+            observed=Spectrum(GRID * u.um, _COUNTS * u.Jy),
+        )
+        assert problem.free_size > GRID.size
+        assert worst_disagreement(problem, lowered) < 1e-9
+
+    @pytest.mark.parametrize("solver", ["dense", "quasisep"], ids=["dense", "quasisep"])
+    def test_the_latent_path_gives_the_kernel_hyperparameters_a_gradient(self, solver: str) -> None:
+        """The point of lowering it at all, asserted rather than assumed.
+
+        Before W2.14 the *contract* path scored a latent likelihood at the
+        whitened ``z``, so the amplitude and the length scale had no influence
+        on the density and therefore no gradient to give. A realisation that
+        merely reproduced that would run a NUTS chain that moved both
+        parameters by prior draws alone. This row asks the realised density
+        for the gradient and requires it to be non-zero in both.
+        """
+        chosen = DenseGP() if solver == "dense" else QuasisepGP()
+        problem, lowered = lowered_for(
+            Likelihood(
+                PoissonFamily(),
+                GaussianProcessNoise(
+                    Matern32(st.halfnorm(0.0, 1.0), st.loguniform(0.5, 5.0)), chosen
+                ),
+            ),
+            observed=Spectrum(GRID * u.um, _COUNTS * u.Jy),
+        )
+        names = list(problem.parameters.free_names)
+        # Away from z = 0, where the derivative of f = L(theta) z in theta is
+        # zero for the honest reason that f is zero whatever the kernel is.
+        draw = np.random.default_rng(20260908).normal(0.0, 0.6, lowered.free_size)
+        y = torch.as_tensor(draw, dtype=torch.float64).requires_grad_(True)
+        value = lowered.log_prob_unconstrained(y)
+        value.backward()
+        assert y.grad is not None
+        gradient = y.grad.detach().numpy()
+        assert np.all(np.isfinite(gradient))
+        for name in ("default.likelihood.amplitude", "default.likelihood.length_scale"):
+            index = names.index(name)
+            assert abs(float(gradient[index])) > 1e-6
+
     def test_a_non_positive_poisson_rate_is_minus_infinity_and_not_a_raise(self) -> None:
         """``inference.md`` §10a: the realised density never raises.
 
@@ -1255,45 +1311,32 @@ class TestWhatTheRealisationStillRefuses:
         with pytest.raises(LoweringError, match="incomplete beta"):
             lowered_for(Likelihood(StudentTFamily(4.0), IndependentNoise(), censoring=CENSORING))
 
-    def test_the_latent_path_names_the_core_defect_that_blocks_it(self) -> None:
-        """W2.4 slice 2's blocking finding, stated where a user will meet it.
+    def test_a_latent_gp_solver_without_the_native_transform_is_refused_by_name(self) -> None:
+        """The latent path's own native-surface requirement (W2.14).
 
-        ``ampere.core`` never calls ``GPSolver.latent_transform`` on the
-        scoring path, so the kernel hyperparameters do not enter a latent
-        likelihood at all. A realisation must agree with that path; lowering
-        this would mean copying the defect or contradicting the oracle.
+        The blanket latent refusal this class used to carry is gone — it named
+        a defect in ``ampere.core`` (a scoring path that applied no whitening
+        transform, so the kernel hyperparameters entered a latent likelihood
+        nowhere at all), and W2.14 fixed the defect. The surface requirement it
+        leaves behind is real: a solver that declares this backend and supplies
+        ``log_marginal_likelihood_native`` still cannot lower a *latent*
+        dataset unless it also supplies ``latent_transform_native``, because a
+        realised density that reached for the numpy contract surface would cut
+        the gradient in exactly the hyperparameters the latent path exists to
+        fit.
         """
+
+        class NoWhitening(DenseGP):
+            """This backend's dense solver, minus the one native method."""
+
+            latent_transform_native = None
+
         counts = Spectrum(GRID * u.um, _COUNTS * u.Jy)
         likelihood = Likelihood(
-            PoissonFamily(), GaussianProcessNoise(Matern32(0.3, 2.0), DenseGP())
+            PoissonFamily(), GaussianProcessNoise(Matern32(0.3, 2.0), NoWhitening())
         )
-        with pytest.raises(LoweringError, match="whitening transform"):
+        with pytest.raises(LoweringError, match="latent_transform_native"):
             lowered_for(likelihood, observed=counts)
-
-    def test_the_core_defect_the_latent_refusal_names_is_real(self) -> None:
-        """The evidence for the refusal above, asserted rather than described.
-
-        If ``ampere.core`` is fixed, this row fails — which is exactly what
-        should happen, because the refusal it justifies must then be lifted.
-        """
-        counts = Spectrum(GRID * u.um, _COUNTS * u.Jy)
-        values: list[float] = []
-        for amplitude in (0.5, 5.0, 50.0):
-            # An all-reference problem: the defect is ampere.core's, and
-            # composing it out of torch pieces would be refused as a backend
-            # disagreement before the point could be made.
-            likelihood = Likelihood(
-                PoissonFamily(),
-                CoreGaussianProcessNoise(CoreMatern32(amplitude, 1.0), CoreDenseGP()),
-            )
-            problem = FittingProblem(
-                ref.PowerLaw(GRID, norm=4.0, index=0.0),
-                [Dataset(counts, likelihood=likelihood)],
-                seed=1,
-            )
-            theta = problem.parameters.pack(problem.sample_prior(np.random.default_rng(2)))
-            values.append(problem.log_likelihood(theta))
-        assert values[0] == values[1] == values[2]
 
     def test_another_backends_gp_solver_is_refused_by_name(self) -> None:
         """A numpy solve in a differentiable problem is a backend disagreement."""

@@ -587,6 +587,41 @@ class DenseGP(GPSolver):
         posterior = prior_variance - jnp.einsum("ij,ji->i", cross, solved)
         return GPConditional(mean=np.asarray(mean), variance=np.asarray(posterior))
 
+    def latent_transform_jax(
+        self,
+        kernel: Kernel,
+        coordinates: Any,
+        whitened: Any,
+        values: Mapping[str, Any],
+        *,
+        jitter: float = 1e-10,
+    ) -> jax.Array:
+        """``f = L(θ) z`` as a **traceable, differentiable** jax array (W2.14).
+
+        The counterpart of :meth:`log_marginal_likelihood_jax`, and needed for
+        the same reason: :meth:`latent_transform` returns numpy, so a realised
+        density that called it would cut the gradient in exactly the
+        hyperparameters the latent path exists to fit. Since W2.14 the
+        contract path applies this transform on every latent evaluation
+        (``GaussianProcessNoise.noise_params``), so the realised path has to
+        apply it too, natively, or disagree with its own oracle.
+
+        No exception control flow (``inference.md`` §10a): a kernel matrix
+        that will not factorise leaves ``jnp.linalg.cholesky`` as NaN, which
+        propagates into the family's term and becomes ``-inf`` at the one
+        ``jnp.where`` the lowered dataset ends with.
+        """
+        points = _points(coordinates)
+        covariance = jnp.asarray(kernel.matrix(points, points, values), dtype=jnp.float64)
+        # The reference solver's ``float(...) or 1.0``, written as a value so
+        # a traced amplitude survives it: a zero-variance kernel would give a
+        # zero stabiliser and no factorisation at all.
+        mean_variance = jnp.mean(jnp.diag(covariance))
+        scale = jnp.where(mean_variance != 0.0, mean_variance, 1.0)
+        stabilised = covariance + jnp.eye(covariance.shape[0], dtype=jnp.float64) * (jitter * scale)
+        lower = self._factor_jax(stabilised)
+        return lower @ jnp.asarray(whitened, dtype=jnp.float64)
+
     def latent_transform(
         self,
         kernel: Kernel,
@@ -600,7 +635,8 @@ class DenseGP(GPSolver):
 
         The deterministic half of the latent-GP declaration: the *prior* stays
         i.i.d. standard normal and all the correlation lives here, where the
-        solver can impose it in whatever representation it uses.
+        solver can impose it in whatever representation it uses. The contract
+        surface, so it raises where :meth:`latent_transform_jax` returns NaN.
         """
         points = _points(coordinates)
         covariance = jnp.asarray(kernel.matrix(points, points, values), dtype=jnp.float64)
@@ -610,16 +646,14 @@ class DenseGP(GPSolver):
                 "f = L z is undefined. The usual cause is a kernel amplitude large enough that "
                 "amplitude**2 overflows float64."
             )
-        scale = float(jnp.mean(jnp.diag(covariance))) or 1.0
-        stabilised = covariance + jnp.eye(covariance.shape[0], dtype=jnp.float64) * (jitter * scale)
-        lower = self._factor_jax(stabilised)
-        if not bool(jnp.all(jnp.isfinite(lower))):
+        realised = self.latent_transform_jax(kernel, points, whitened, values, jitter=jitter)
+        if not bool(jnp.all(jnp.isfinite(realised))):
             raise LikelihoodError(
                 "the kernel matrix K is not positive definite, so the whitening transform "
                 "f = L z is undefined (jax reports this as NaN rather than by raising). "
                 "Increase the jitter argument, or check the kernel hyperparameters."
             )
-        return np.asarray(lower @ jnp.asarray(whitened, dtype=jnp.float64))
+        return np.asarray(realised)
 
 
 # ---------------------------------------------------------------------------
@@ -1114,6 +1148,42 @@ class QuasisepGP(GPSolver):
             variance=np.asarray(prior_variance - jnp.einsum("ij,ji->i", cross, solved)),
         )
 
+    def latent_transform_jax(
+        self,
+        kernel: Kernel,
+        coordinates: Any,
+        whitened: Any,
+        values: Mapping[str, Any],
+        *,
+        jitter: float = 1e-10,
+    ) -> jax.Array:
+        """``f = L(θ) z`` in O(N), traceable and differentiable (W2.14).
+
+        The quasiseparable counterpart of :meth:`DenseGP.latent_transform_jax`,
+        and the one that matters at the scale the latent path is sized for:
+        forming ``L`` densely is O(N³), so a 10⁵-sample latent fit reaches its
+        correlation through this recursion or not at all. celerite2's
+        ``dot_tril`` carries its own differentiation rules, so the amplitude
+        and the length scale keep their gradients through it.
+        """
+        axis, order = self._sorted(coordinates)
+        draws = self.place(whitened)
+        points = _points(coordinates)
+        # The same stabilisation DenseGP applies: a jitter relative to the
+        # kernel's own scale, so the two solvers factorise the same matrix.
+        # Kept as a *value* rather than a Python float, so a traced amplitude
+        # survives it (the reference path's ``float(...) or 1.0``).
+        mean_variance = jnp.mean(jnp.asarray(kernel.diagonal(points, values), dtype=jnp.float64))
+        scale = jnp.where(mean_variance != 0.0, mean_variance, 1.0)
+        gp = self._factorise(
+            kernel,
+            jnp.take(axis, order),
+            jnp.full(int(order.size), jitter, dtype=jnp.float64) * scale,
+            values,
+        )
+        transformed = jnp.asarray(gp.dot_tril(jnp.take(draws, order)), dtype=jnp.float64)
+        return self._unsort(transformed, order)
+
     def latent_transform(
         self,
         kernel: Kernel,
@@ -1123,22 +1193,14 @@ class QuasisepGP(GPSolver):
         *,
         jitter: float = 1e-10,
     ) -> np.ndarray:
-        """Map whitened latent draws ``z`` to a GP draw ``f = L(θ) z``, in O(N)."""
-        axis, order = self._sorted(coordinates)
-        draws = self.place(whitened)
-        points = _points(coordinates)
-        # The same stabilisation DenseGP applies: a jitter relative to the
-        # kernel's own scale, so the two solvers factorise the same matrix.
-        scale = float(jnp.mean(jnp.asarray(kernel.diagonal(points, values)))) or 1.0
-        gp = self._factorise(
-            kernel,
-            jnp.take(axis, order),
-            jnp.full(int(order.size), jitter * scale, dtype=jnp.float64),
-            values,
-        )
-        transformed = jnp.asarray(gp.dot_tril(jnp.take(draws, order)), dtype=jnp.float64)
-        self._refuse_nan(transformed, whitening=True)
-        return np.asarray(self._unsort(transformed, order))
+        """Map whitened latent draws ``z`` to a GP draw ``f = L(θ) z``, in O(N).
+
+        The contract surface: celerite2's quiet NaN becomes the reference
+        path's loud refusal, which :meth:`latent_transform_jax` cannot do.
+        """
+        realised = self.latent_transform_jax(kernel, coordinates, whitened, values, jitter=jitter)
+        self._refuse_nan(realised, whitening=True)
+        return np.asarray(realised)
 
     def conditional_loo(
         self,
