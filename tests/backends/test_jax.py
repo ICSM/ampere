@@ -846,6 +846,70 @@ class TestTheNativePath:
             problem.log_likelihood(theta), abs=1e-8
         )
 
+    def test_a_zero_uncertainty_gp_dataset_refuses_by_name_at_construction(self) -> None:
+        """W3.0's finding: the GP-marginal branch must refuse what the contract refuses.
+
+        ``ampere.core.likelihood``'s ``GaussianProcessNoise.sigma`` (via
+        ``_observed_sigma``) refuses a dataset with a retained uncertainty
+        that is zero or negative -- "an infinitely precise measurement, which
+        no likelihood can normalise" -- the moment the contract path
+        evaluates it. Before this fix that refusal reached a jax problem only
+        by accident, through ``ampere.core.realise``'s one-point agreement
+        check (itself calling the contract path to get the reference
+        log-probability); a NUTS run samples every other point too, so the
+        refusal belongs on this backend's own construction path, named,
+        mirroring the ``REQUIRES_UNCERTAINTY``/sigma-is-None check the non-GP
+        branch already makes.
+        """
+        from ampere.core import family_named
+
+        noise = GaussianProcessNoise(Matern32(0.4, 2.0), DenseGP())
+        data = Spectrum(
+            AGREEMENT_GRID * u.micron,
+            _power_law(AGREEMENT_GRID, 2.0, -1.2) * u.Jy,
+            uncertainty=np.zeros(AGREEMENT_GRID.size) * u.Jy,
+        )
+        problem = FittingProblem(
+            PowerLaw(
+                AGREEMENT_GRID,
+                norm=st.lognorm(0.4, scale=2.0),
+                index=st.norm(-1.2, 0.3),
+                reference_wavelength=REFERENCE_WAVELENGTH,
+            ),
+            [Dataset(data, likelihood=Likelihood(family_named("gaussian")(), noise))],
+            seed=20260907,
+        )
+        with pytest.raises(LoweringError, match="zero or negative uncertainties") as raised:
+            lower_problem(problem)
+        assert "'default'" in str(raised.value)
+
+    def test_a_gp_dataset_with_jitter_and_real_uncertainty_does_not_refuse(self) -> None:
+        """The new check is narrow: a legitimate jittered GP dataset still lowers.
+
+        ``ampere.backends.jax.GaussianProcessNoise`` has no ``jitter=``
+        constructor keyword yet (unlike the torch backend's -- a gap outside
+        this item's scope), so the parameter is registered directly; what
+        matters here is that declaring one alongside real, positive
+        uncertainties does not trip the new construction-time check.
+        """
+        from ampere.core import Parameter, family_named
+
+        noise = GaussianProcessNoise(Matern32(0.4, 2.0), DenseGP())
+        noise.register_parameter(Parameter("jitter", value=0.1, fixed=True))
+        problem = FittingProblem(
+            PowerLaw(
+                AGREEMENT_GRID,
+                norm=st.lognorm(0.4, scale=2.0),
+                index=st.norm(-1.2, 0.3),
+                reference_wavelength=REFERENCE_WAVELENGTH,
+            ),
+            [Dataset(FINE_DATA, likelihood=Likelihood(family_named("gaussian")(), noise))],
+            seed=20260907,
+        )
+        lowered = lower_problem(problem)
+        theta = problem.prior_transform(np.array([0.4, 0.6]))
+        assert np.isfinite(float(lowered.log_likelihood(theta)))
+
     def test_a_refusal_names_what_it_cannot_lower(self) -> None:
         """Refusals happen at lowering time, never inside a trace."""
         from ampere.backends.reference import PowerLaw as ReferencePowerLaw

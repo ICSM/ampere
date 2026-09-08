@@ -273,6 +273,8 @@ class _LoweredDataset:
                 np.asarray(observed.uncertainty, dtype=float)[self.retain], dtype=jnp.float64
             )
         )
+        if self.gp_marginal and family.REQUIRES_UNCERTAINTY:
+            self._check_gp_uncertainty(observed, label)
         #: The Tobit codes for the **retained** samples, or ``None``.
         #: ``Likelihood._retained_limits`` computes exactly this on the numpy
         #: path, once per evaluation; a censoring declaration cannot depend on
@@ -282,6 +284,44 @@ class _LoweredDataset:
             if censoring is None
             else jnp.asarray(np.asarray(censoring.kinds)[self.retain], dtype=jnp.int32)
         )
+
+    def _check_gp_uncertainty(self, observed: Any, label: str) -> None:
+        """Refuse, at construction, a GP-marginal dataset the contract path cannot normalise.
+
+        ``GaussianProcessNoise.sigma`` (``ampere.core.likelihood``) refuses a
+        dataset with no observed uncertainty at all, or with a retained
+        uncertainty that is zero or negative -- "an infinitely precise
+        measurement, which no likelihood can normalise" -- for any family
+        that ``REQUIRES_UNCERTAINTY``. On the contract path that surfaces
+        only when the density is actually evaluated; ``ampere.core.realise``'s
+        one-point agreement check happens to catch it today, because the
+        contract path itself raises while computing the reference
+        log-probability, but that is incidental to which one point gets
+        checked, not a refusal this backend makes by name. A NUTS run
+        evaluates every other sampled point too, so the refusal belongs here,
+        at construction -- mirroring the ``REQUIRES_UNCERTAINTY``/sigma-is-None
+        check :meth:`log_likelihood` already makes for the non-GP branch
+        (this module's docstring, "No exception control flow on the hot
+        path").
+        """
+        if observed.uncertainty is None:
+            if "jitter" not in self.noise.parameters:
+                raise _refuse(
+                    "uncertainty",
+                    f"dataset {label!r} has no observed uncertainties and its noise model "
+                    f"declares no jitter, so sigma is undefined.",
+                )
+            return
+        retained = np.asarray(observed.uncertainty, dtype=float).ravel()[self.retain]
+        bad = retained <= 0.0
+        if np.any(bad):
+            raise _refuse(
+                "uncertainty",
+                f"dataset {label!r} was given zero or negative uncertainties on "
+                f"{int(np.sum(bad))} retained sample(s). A zero uncertainty is an "
+                f"infinitely precise measurement, which no likelihood can normalise; "
+                f"mask the sample, or give it a real error bar.",
+            )
 
     # -- routing ------------------------------------------------------------
 
