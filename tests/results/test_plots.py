@@ -106,9 +106,7 @@ def observed(mask: np.ndarray | None = None) -> Spectrum:
 def toy(likelihood: Likelihood | None = None, mask: np.ndarray | None = None) -> FittingProblem:
     return FittingProblem(
         Powerlaw(GRID),
-        DatasetCollection(
-            {"sed": Dataset(observed(mask), label="sed", likelihood=likelihood)}
-        ),
+        DatasetCollection({"sed": Dataset(observed(mask), label="sed", likelihood=likelihood)}),
         seed=20260908,
     )
 
@@ -136,9 +134,7 @@ class PointSource(Model):
     def evaluate(self, **values: Any) -> ModelResult:
         ctx = self.context(values)
         return ModelResult(
-            VisibilitySet(
-                ctx["u"], ctx["v"], ctx["flux"] * np.ones(ctx["u"].size, dtype=complex)
-            )
+            VisibilitySet(ctx["u"], ctx["v"], ctx["flux"] * np.ones(ctx["u"].size, dtype=complex))
         )
 
 

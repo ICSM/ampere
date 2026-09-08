@@ -695,15 +695,20 @@ class TrainingSet:
         return container_from_dict(_record_at(self._groups[path], self._coordinates, index))
 
 
-def read_training_set(path: str | Path) -> TrainingSet:
+def read_training_set(path: str | Path, *, engine: str | None = None) -> TrainingSet:
     """Read a training set written by :func:`write_training_set`.
 
     Everything is loaded eagerly and the file is closed, because the alternative
     — a lazy tree holding an open handle — makes
     :func:`append_training_set`'s rewrite of the same path fail on Windows and
     succeed confusingly everywhere else.
+
+    ``engine`` selects the netCDF backend; ``None`` lets xarray choose, which is
+    what the writer does too — and reading a file through a different HDF5
+    binding from the one that wrote it is a deadlock rather than an error (see
+    :func:`_open`).
     """
-    tree = _open(path)
+    tree = _open(path, engine=engine)
     groups = {
         str(name): tree[name].dataset
         for name in tree.children
@@ -844,13 +849,28 @@ def _write(tree: Any, path: str | Path, *, engine: str | None) -> str:
     return target
 
 
-def _open(path: str | Path) -> Any:
-    """Read a training set into memory and close the file behind us."""
+def _open(path: str | Path, *, engine: str | None = None) -> Any:
+    """Read a training set into memory and close the file behind us.
+
+    ``engine=None`` — xarray's own choice, which is what
+    :func:`~ampere.results.emission.from_netcdf` does too, and it matters here
+    for a reason beyond consistency. Forcing ``"h5netcdf"`` on the read while
+    the write took xarray's default meant one file written through netCDF4's
+    HDF5 and reopened through h5py's, and HDF5's file locking will *deadlock*
+    that pair rather than fail it — a hang with no traceback, seen once in a
+    full-suite run and not reproducible on the suite alone. One engine per
+    file, chosen the same way at both ends, is the fix; the parameter is still
+    there for a caller who has a reason.
+
+    Everything is loaded eagerly and the file closed, because a lazy tree
+    holding an open handle is what :func:`append_training_set` would then have
+    to rewrite underneath itself.
+    """
     xarray = _require_xarray()
     target = Path(path)
     if not target.exists():
         raise ResultsError(f"no training set at {str(target)!r}.")
-    opened = xarray.open_datatree(str(target), engine="h5netcdf")
+    opened = xarray.open_datatree(str(target), engine=engine)
     try:
         tree = opened.load()
     finally:

@@ -123,7 +123,7 @@ class TestRoundTrip:
             original = simulation.results["model"]
             for channel in original:
                 assert result[channel] == original[channel], channel
-            assert result[list(original)[0]].fidelity == "cheap"
+            assert result[next(iter(original))].fidelity == "cheap"
 
     def test_theta_comes_back_by_merged_name(self, tmp_path: Path) -> None:
         problem = toy()
@@ -182,9 +182,7 @@ class TestRoundTrip:
         assert len(stored.attrs[f"{ATTR_PREFIX}problem_hash"]) == 32
         assert len(stored.attrs[f"{ATTR_PREFIX}data_hash"]) == 32
         assert stored.attrs[f"{ATTR_PREFIX}seed"] == 20260908
-        assert (
-            stored.attrs[f"{ATTR_PREFIX}training_set_version"] == TRAINING_SET_SCHEMA_VERSION
-        )
+        assert stored.attrs[f"{ATTR_PREFIX}training_set_version"] == TRAINING_SET_SCHEMA_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -202,7 +200,7 @@ class TestAppend:
         stored = read_training_set(tmp_path / "budget.nc")
         assert len(stored) == 5
         assert stored.attrs[f"{ATTR_PREFIX}samples"] == 5
-        channel = list(first[0].results["model"])[0]
+        channel = next(iter(first[0].results["model"]))
         assert stored.result(0)[channel] == first[0].results["model"][channel]
         assert stored.result(3)[channel] == second[0].results["model"][channel]
         assert np.allclose(
@@ -218,9 +216,7 @@ class TestAppend:
         with pytest.raises(ResultsError, match="different declaration"):
             append_training_set(tmp_path / "budget.nc", budget(changed, 1), changed)
 
-    def test_appending_to_a_run_rather_than_a_training_set_refuses(
-        self, tmp_path: Path
-    ) -> None:
+    def test_appending_to_a_run_rather_than_a_training_set_refuses(self, tmp_path: Path) -> None:
         from ampere.results import DrawRecorder, to_netcdf
 
         problem = toy()
@@ -300,7 +296,7 @@ class TestFailures:
         finally:
             Crashing.fail = False
         write_training_set(tmp_path / "budget.nc", [*good, *bad], problem)
-        tree = xarray.open_datatree(tmp_path / "budget.nc", engine="h5netcdf").load()
+        tree = xarray.open_datatree(tmp_path / "budget.nc").load()
         values = np.asarray(tree["model.default"]["values"].values)
         assert np.all(np.isfinite(values[0]))
         assert np.all(np.isnan(values[1]))
@@ -319,9 +315,7 @@ class TestFailures:
         stored = read_training_set(tmp_path / "budget.nc")
         assert stored.failed.tolist() == [False, False, True, True]
 
-    def test_a_budget_of_nothing_but_failures_refuses_to_be_written(
-        self, tmp_path: Path
-    ) -> None:
+    def test_a_budget_of_nothing_but_failures_refuses_to_be_written(self, tmp_path: Path) -> None:
         problem = toy(Crashing)
         Crashing.fail = True
         try:
@@ -341,7 +335,7 @@ class TestFormatProperties:
 
         problem = toy()
         write_training_set(tmp_path / "budget.nc", budget(problem, 5), problem)
-        tree = xarray.open_datatree(tmp_path / "budget.nc", engine="h5netcdf").load()
+        tree = xarray.open_datatree(tmp_path / "budget.nc").load()
         coordinates = tree["coordinates"].dataset
         assert "model.default_spectral_axis" in coordinates.variables
         assert coordinates["model.default_spectral_axis"].shape == (GRID.size,)
@@ -376,9 +370,9 @@ class TestFormatProperties:
 
         problem = toy()
         write_training_set(tmp_path / "budget.nc", budget(problem, 1), problem)
-        tree = xarray.open_datatree(tmp_path / "budget.nc", engine="h5netcdf").load()
+        tree = xarray.open_datatree(tmp_path / "budget.nc").load()
         tree.attrs[f"{ATTR_PREFIX}training_set_version"] = 99
-        tree.to_netcdf(tmp_path / "future.nc", engine="h5netcdf")
+        tree.to_netcdf(tmp_path / "future.nc")
         with pytest.raises(ResultsError, match="unsupported training-set version"):
             read_training_set(tmp_path / "future.nc")
 
