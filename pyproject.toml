@@ -140,6 +140,12 @@ dev = [
     "pytest",
     "pytest-cov",
     "coverage",
+    # W2.11: the benchmark harness (DEVELOPMENT_PLAN.md §2's "benchmark
+    # harness" row records the choice of pytest-benchmark over asv and why).
+    # A pytest plugin, so `tests/benchmarks` reuses the same environments,
+    # fixtures and skip logic as every other suite, and `--benchmark-json`
+    # writes the machine-readable artefact CI uploads.
+    "pytest-benchmark",
     # lint/format + types
     "ruff",
     "pyrefly",
@@ -299,13 +305,31 @@ test-backends = "pytest tests/backends"
 # of the new-namespace suites (tens of seconds); the budgets are deliberately
 # small and the seeds fixed -- see the module docstring for the trade-off.
 test-inference = "pytest tests/inference"
+# W2.9: the shipped examples actually run. W2.11 puts it in a gate (below):
+# an example that only the docs build exercises is an example that
+# `nbsphinx_allow_errors = True` lets rot silently.
+test-examples = "pytest tests/examples"
 # Everything the new namespaces own, in ONE pytest process, for the same
 # registry-leak reason test-phase1 exists (see tests/core/conftest.py).
-test-all = "pytest tests/core tests/results tests/conformance tests/backends tests/inference"
+# W2.11 added tests/examples: it loads `examples/wstat_comparison.py`, which
+# registers a likelihood family at module scope exactly as a user's module
+# would, so it is precisely the kind of suite that must be proved not to leak
+# into tests/conformance's registered-family check rather than kept apart from
+# it. tests/examples/conftest.py already snapshots and restores the registry
+# for that reason; this is what keeps that honest.
+test-all = "pytest tests/core tests/results tests/conformance tests/backends tests/inference tests/examples"
 # W2.3: the GP solvers' wall-clock scaling, 10^3-10^5 points. Deliberately
 # outside every gate above -- a dense 3000-point solve alone costs seconds --
 # and run on demand. -s so the measured table reaches the terminal.
 scaling = "pytest tests/scaling -s"
+# W2.11: the tracked benchmark suite. One command locally, and the same
+# command in CI, which uploads `benchmark.json` as the run's artefact.
+# `--benchmark-json` is what makes a run comparable with another run rather
+# than a number that scrolls past; `--benchmark-columns` keeps the terminal
+# table to the statistics that mean anything on a shared runner.
+# tests/benchmarks/test_gp_solvers.py's module docstring carries the harness
+# choice, and what is deliberately not measured here.
+bench = "pytest tests/benchmarks --benchmark-json=benchmark.json --benchmark-columns=min,median,stddev,rounds"
 lint = "ruff check ."
 format-check = "ruff format --check . --exclude tests/characterisation"
 # pyrefly is scoped to the new namespaces (AGENTS.md ground rule 8); none
@@ -344,11 +368,32 @@ python = "3.13.*"
 [tool.pixi.feature.dev.pypi-dependencies]
 ampere = { path = ".", editable = true, extras = ["dev"] }
 
+# W2.11: the docs build's two environment-level requirements, declared here
+# rather than assumed to be on the machine. `pixi run docs` was red on master
+# for exactly these two reasons, which is worse than having no docs gate at
+# all -- a task nobody can run is a task nobody trusts.
+#
+# `pandoc` is a binary nbsphinx shells out to for every notebook it renders
+# (Markdown cells -> reStructuredText); it is not a Python package, so it can
+# only come from the conda side. `ipykernel` installs the `python3` kernelspec
+# under the environment prefix, which is what nbsphinx needs to *execute* a
+# notebook that carries no stored outputs -- and this repository commits no
+# run outputs (AGENTS.md ground rule 7), so every notebook here that is not
+# excluded is executed at build time by construction.
+[tool.pixi.feature.dev.dependencies]
+pandoc = "*"
+ipykernel = "*"
+
 [tool.pixi.feature.zeus.pypi-dependencies]
 ampere = { path = ".", editable = true, extras = ["zeus"] }
 
 [tool.pixi.feature.sbi.pypi-dependencies]
 ampere = { path = ".", editable = true, extras = ["sbi"] }
+# Same CPU-wheel pin, same reason, as the `torch` feature below: the `sbi`
+# extra depends on torch, so without this line the weekly
+# `sbi-characterisation` job downloads the ~2 GB CUDA build too, to run on a
+# CPU-only hosted runner.
+torch = { version = "*", index = "https://download.pytorch.org/whl/cpu" }
 
 [tool.pixi.feature.extinction.pypi-dependencies]
 ampere = { path = ".", editable = true, extras = ["extinction"] }
@@ -371,6 +416,26 @@ netcdf4 = "*"
 # up now means the eventual backend split doesn't also need a pixi change.
 [tool.pixi.feature.torch.pypi-dependencies]
 ampere = { path = ".", editable = true, extras = ["torch"] }
+# W2.11 (ruled 2026-09-07): `torch` from PyPI's default index resolves, on
+# linux-64, to the CUDA build -- 2.13.0+cu130 here, which drags in fifteen
+# `nvidia-*` wheels and roughly 2 GB of CUDA runtime that nothing in this
+# project uses. Hosted CI runners are CPU-only (DEVELOPMENT_PLAN.md §5's
+# "GPU tests are nightly/manual" is a statement about that), so the download
+# is pure cost: it is the single largest item in the torch environment and it
+# would sit in every CI cache and every developer's `.pixi/`.
+#
+# Pinning the *package* to PyTorch's CPU index (rather than adding it as an
+# extra index) is deliberate: with an extra index, uv's default first-match
+# strategy still prefers PyPI, so the CUDA wheel would win anyway. Everything
+# else in this feature -- `pyro-ppl`, and the base dependencies via the
+# editable `ampere` above -- keeps resolving from PyPI as usual.
+#
+# This changes only what *this project's* torch environment installs. It does
+# not touch [project.optional-dependencies]'s `torch = ["torch", "pyro-ppl"]`,
+# so `pip install "ampere[torch]"` still gives a user whatever their platform's
+# default wheel is, GPU included. A GPU environment, when the GPU smoke-test
+# item arrives, is a new pixi feature that omits this line -- not an edit to it.
+torch = { version = "*", index = "https://download.pytorch.org/whl/cpu" }
 
 [tool.pixi.feature.jax.pypi-dependencies]
 ampere = { path = ".", editable = true, extras = ["jax"] }
