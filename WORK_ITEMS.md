@@ -563,6 +563,39 @@ refused as a backend disagreement; the two fallback-warning classes are
 gone; schema 5 with `ampere_realised` in an emitted run; lint/format clean,
 pyrefly 0 errors in all three environments.
 
+### W2.14 — The latent-GP likelihood must see its kernel [S; Opus]
+Found independently by W2.4 and W2.5 slice 2, reproduced on master
+(`docs/development.md`, 2026-09-07): on a Poisson + `GaussianProcessNoise`
+problem `problem.log_likelihood` is bit-identical for amplitude 0.5/5/50 and
+length scale 0.1/1/100 although both are free parameters. Nothing on the
+scoring path applies `GPSolver.latent_transform`: `Dataset.log_likelihood_of`
+passes the whitened `z` through `GaussianProcessNoise.noise_params(latent=)`
+to the family, which reads it as `f`; the only caller of `latent_transform` is
+`GaussianFamily.sample`. `likelihoods.md` §17's limitation 6 ("the latent path
+has no inference") explains the omission, but the numpy path is the oracle
+every backend is held to, and it silently scores a wrong number.
+**Fix (ruled 2026-09-08)**: `GaussianProcessNoise.noise_params` applies
+`latent = self.solver.latent_transform(self.kernel, coordinates, latent,
+values)` when `latent` is given, so `noise.latent` *is* `f = L(θ) z` as
+every family already reads it — the solver and coordinates are already in
+hand there and no family changes. Then: (1) a `tests/core` regression row
+asserting the log-likelihood *moves* with amplitude and length scale and
+equals the closed form for a Gaussian family (whitened-`z` Gaussian likelihood
+with `f = L z`); (2) `likelihoods.md` §17 limitation 6 amended (*Amended
+W2.14*) and a decision-log row (a §4.4 clarification); (3) both backends'
+realised latent paths — torch refuses today with a test asserting the
+flatness (`test_the_core_defect_the_latent_refusal_names_is_real`), jax
+mirrors the flat oracle deliberately (`_LoweredDataset._latent`) — updated to
+apply their native `latent_transform` and the refusal/mirroring removed;
+(4) a conformance row: a latent-GP problem's realised density agrees with the
+corrected numpy path at many points, and the numpy path's own likelihood
+changes with the hyperparameters, per backend.
+**Depends:** W2.4/W2.5 slice 2 (merged). **Blocks** both tracks' slice 3.
+**Accept:** the regression row fails on the pre-fix code and passes after;
+`pixi run -e torch test-all`, `-e jax test-all`, `-e dev test-all` green with
+the new rows; the torch flatness test is gone; lint/format clean; pyrefly 0
+errors in all three environments.
+
 ## Status
 
 | Item | Status |
