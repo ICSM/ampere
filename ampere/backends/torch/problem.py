@@ -288,10 +288,12 @@ class _LoweredDataset:
         self.retain = ~np.asarray(excluded, dtype=bool).ravel()
         # Complex data stay complex (W2.4 slice 3). ``dtype=float`` here was
         # what made ``complex_gaussian`` unreachable, and it would not have
-        # failed loudly: numpy raises on the cast, so the family was refused
-        # by name at construction instead and nothing downstream was ever
-        # asked to hold a complex residual. Both are true now, so the
-        # container's own dtype kind decides, once, here.
+        # failed loudly if it had been reached: numpy 2.5 *warns*
+        # (ComplexWarning) and discards the imaginary part rather than raising,
+        # so the density would have been the one for the real projection of the
+        # data. What kept that from happening was the family refusal at
+        # construction, which is exactly why the refusal came first and the
+        # dtype second. The container's own dtype kind decides now, once, here.
         values = np.asarray(observed.values)
         self.complex_valued = values.dtype.kind == "c"
         self.observed_values = as_tensor(

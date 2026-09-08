@@ -139,12 +139,12 @@ def _amplitude(
 
     The modulus is taken **before** the dtype is imposed, and that ordering is
     the whole of W2.4 slice 3's fix here. Coercing a complex prediction to
-    float64 first is not a conversion at all: ``Tensor.to(torch.float64)`` on a
-    complex tensor drops the imaginary part with a warning, and
-    ``np.asarray(z, dtype=float)`` raises. Either way the amplitude a
-    prediction-aware noise model inflates by would have been the *real part's*
-    magnitude, which is a different — and wrong — noise model. Slice 3 is the
-    first slice in which a complex prediction can reach here at all
+    float64 first is not a conversion at all: both
+    ``Tensor.to(torch.float64)`` and ``np.asarray(z, dtype=float)`` drop the
+    imaginary part with a warning rather than an error, so the amplitude a
+    prediction-aware noise model inflates by would silently have been the
+    *real part's* magnitude — a different, and wrong, noise model. Slice 3 is
+    the first slice in which a complex prediction can reach here at all
     (``complex_gaussian`` in the realised path), so this is the fix arriving
     with the caller that needs it.
     """
