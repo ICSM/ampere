@@ -4,12 +4,14 @@ Ampere is a Bayesian fitting environment for heterogeneous astronomical data
 (SEDs, spectra, and more), whose distinguishing feature is a flexible,
 GP-based likelihood providing robustness to model misspecification.
 
-The project is undergoing a major redesign ("v2"). **Phases 0–1 are
-complete: the core contracts are frozen** (`spec-v1.0`, 2026-09-03) and
-Phase 2 is well under way — **W2.1, W2.2, W2.3 and W2.6 are merged**
-(2026-09-05: the reference backend, the emcee/dynesty/zeus drivers, the
-O(N) QuasisepGP solve, the lowering registry), with the torch/jax
-backend tracks W2.4/W2.5 next. Before any non-trivial work, read:
+The project is undergoing a major redesign ("v2"). **Phases 0–2 are
+complete** (closed 2026-09-08): the core contracts are frozen
+(`spec-v1.0`, 2026-09-03), both modern backends (`ampere.backends.torch`,
+`.jax`) implement them alongside the numpy reference backend, milestone M2
+(the flagship misspecification validation) is reached, and the
+documentation reflects what landed. **Phase 3 (the SBI layer) begins in
+clean sessions** — the procedure is in `docs/development.md`'s "⚡ Pick up
+here". Before any non-trivial work, read:
 
 - **`DEVELOPMENT_PLAN.md`** — the source of truth: decisions taken, target
   architecture (backend-neutral core + reference/torch/jax backends), phased
@@ -39,7 +41,7 @@ backend tracks W2.4/W2.5 next. Before any non-trivial work, read:
    same PR, and must keep the conformance suite green or update it in the
    same PR with justification.
 10. End commit messages with:
-    `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>` (or the
+    `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>` (or the
     equivalent for your agent/tool).
 11. **Handoffs must survive an interruption.** Any session may be cut off
     without warning, so the resumable state lives in the repository, never
@@ -55,21 +57,26 @@ backend tracks W2.4/W2.5 next. Before any non-trivial work, read:
 ## Environment
 
 - **pixi is the supported route** (W0.8): `pixi install -e dev` sets up the
-  daily-use environment (Python 3.13 + `dev`, `zeus`, `extinction` extras)
-  from a clean clone with only `pixi` installed; pyproject.toml's
-  `[tool.pixi.*]` tables wrap `[project.dependencies]` /
-  `[project.optional-dependencies]` rather than duplicating them —
-  `pixi.lock` is committed, `.pixi/` is not. Common tasks: `pixi run test`
-  (fast: `tests/test_imports.py`), `pixi run test-phase1` (the three
-  Phase-1 suites — core, results, conformance — in ONE pytest process;
-  the main gate), `pixi run test-core` / `test-results` / `conformance`
-  individually, `pixi run test-characterisation` (legacy still works),
-  `pixi run lint`, `pixi run format-check`, `pixi run typecheck`,
-  `pixi run docs`. Since W0.10, plain `pixi run <task>` equals
-  `pixi run -e dev <task>`. Other environments: `test-py311`/`test-py312`/
-  `test-py313` (the CI matrix), `sbi` (adds the `sbi` extra — torch is a
-  large download, not part of `dev`), `torch`/`jax` (backend placeholders).
-  Select one with `pixi run -e <env> <task>`.
+  daily-use environment (Python 3.13 + `dev`, `zeus`, `extinction`,
+  `netcdf` features; pandoc and ipykernel for the docs build) from a clean
+  clone with only `pixi` installed; pyproject.toml's `[tool.pixi.*]`
+  tables wrap `[project.dependencies]` / `[project.optional-dependencies]`
+  rather than duplicating them — `pixi.lock` is committed, `.pixi/` is not.
+  **Three real environments**: `dev` (no torch, no jax), `torch` and `jax`
+  (each the `dev` feature set plus its backend; torch resolves from
+  PyTorch's CPU index in pixi only). The gate is `pixi run -e <env>
+  test-all` — core, results, conformance, backends, inference, examples
+  and m2 in ONE pytest process — in **each** environment; a backend
+  package is typechecked with its real types only in its own environment
+  (`pixi run -e torch typecheck`), and excluded from the `dev` typecheck.
+  Other tasks: `pixi run test` (fast import sweep), `test-core` /
+  `test-results` / `conformance` / `test-inference` / `test-examples` /
+  `test-m2` individually, `bench` (pytest-benchmark → `benchmark.json`),
+  `scaling`, `test-characterisation` (legacy still works), `lint`,
+  `format-check`, `typecheck`, `docs`. Plain `pixi run <task>` equals
+  `pixi run -e dev <task>`. `test-py311`/`test-py312`/`test-py313` are the
+  CI matrix; `sbi` adds the `sbi` extra. **Run five-suite gates one at a
+  time** — two at once exhaust a 13 GB machine; torch's takes ~9 minutes.
 - Plain-pip alternative: `pip install -e ".[dev]"` (Python ≥ 3.11; CI
   targets 3.11–3.13).
 - Conda env **`ampere`** (`~/miniforge3/envs/ampere`, Python 3.13):
@@ -112,15 +119,32 @@ pushes.
 ## Repository map
 
 - `DEVELOPMENT_PLAN.md`, `WORK_ITEMS.md` — plan + items (see above).
-- `docs/development.md` — human-facing onboarding/handoff notes.
+- `docs/development.md` — onboarding + the live "⚡ Pick up here" restart
+  point; `docs/handoff-archive.md` — superseded session records.
+- `examples/m2_misspecification/` — the M2 study (generators, models per
+  backend, driver, figures); `examples/wstat_comparison.py` — the WStat
+  example; `docs/source/` — the Sphinx site (`pixi run docs`).
 - `docs/design/` — Phase 1 output, **frozen at `spec-v1.0`**: architecture
   spec, per-contract specs (`contracts/`), lowering rules, the
   serialisation review, modality sketches, prior-art memo, harvest of old
   branches.
-- `ampere/` — the package. Legacy: `data/`, `models/`, `infer/`, `utils/`.
-  Landed in Phase 1: `core/` (the frozen contracts, implemented) and
-  `results/`. Landing in Phase 2+: `backends/{reference,torch,jax}/`,
-  `inference/`.
+- `ampere/` — the package. Legacy (frozen): `data/`, `models/`, `infer/`,
+  `utils/`. v2: `core/` (the frozen contracts, implemented — parameters,
+  containers, transformations, likelihoods with `DenseGP`/`QuasisepGP`,
+  datasets and `FittingProblem`, the lowering and realisation registries),
+  `backends/{reference,torch,jax}/` (one name per backend everywhere; a
+  native problem is composed entirely from one backend's pieces, noise
+  models and solvers included), `inference/` (emcee/dynesty/zeus on the
+  numpy path; NUTS and VI through `ampere.core.realise`; imports no
+  backend), `results/` (ArviZ `DataTree` emission with provenance schema
+  5, derived groups, diagnostics, the six plots, training sets).
+  `ampere.diagnostics` (RHMF pre-fit screening) is deferred, not landed.
+- `tests/` — `core`, `results`, `conformance` (the lockstep battery: one
+  column per registered backend fixture, `backends/__init__.py` is the one
+  place a backend is named), `backends`, `inference`, `examples`, `m2`
+  (the M2 study's assertions), `benchmarks`, `scaling`, `gpu` (API-level
+  smoke tests, skipped without an accelerator), `characterisation`
+  (legacy).
 - `examples/` — legacy examples; `minimal_working_example*.py` are the
   characterisation-test anchors. `examples/examples_paper/` is
   paper-revision work in progress — leave it alone.
