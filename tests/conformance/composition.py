@@ -41,6 +41,7 @@ from ampere.core import (
     PhotometricPoints,
     Spectrum,
     Tie,
+    VisibilitySet,
     family_named,
 )
 
@@ -52,6 +53,7 @@ from .protocol import (
     SolverKind,
     TransformationKind,
     TransformationSpec,
+    complex_axes,
 )
 
 __all__ = [
@@ -181,11 +183,22 @@ def analytic_flux(spec: ModelSpec, values: Mapping[str, Any], grid: np.ndarray) 
     """
     if spec.kind is ModelKind.LINEAR:
         return float(values["offset"]) + float(values["slope"]) * grid
+    if spec.kind is ModelKind.COMPLEX:
+        # V(x) = norm * exp(i * index * x): constant modulus, winding phase.
+        # Written this way on purpose -- ``index`` moves the *phase only*, so a
+        # backend that quietly dropped the imaginary part would compute a
+        # density independent of it and disagree with this oracle at every
+        # point rather than in the last digit.
+        return float(values["norm"]) * np.exp(1j * float(values["index"]) * grid)
     return float(values["norm"]) * (grid / spec.reference_coordinate) ** float(values["index"])
 
 
 def truth(spec: ModelSpec) -> dict[str, float]:
-    """A well-inside-the-prior parameter vector for *spec*'s model."""
+    """A well-inside-the-prior parameter vector for *spec*'s model.
+
+    ``COMPLEX`` shares ``POWER_LAW``'s, because it shares its parameter names
+    and priors — see :class:`~tests.conformance.protocol.ModelKind`.
+    """
     if spec.kind is ModelKind.LINEAR:
         return {"offset": 0.2, "slope": 1.0}
     return {"norm": 1.5, "index": -1.0}
@@ -248,6 +261,15 @@ def observed_values(spec: ProblemSpec, dataset: DatasetSpec, grid: np.ndarray) -
     mean = analytic_flux(spec.model, truth(spec.model), grid)
     if dataset.family == "poisson":
         return rng.poisson(np.clip(mean, 1e-6, None) * COUNT_EXPOSURE).astype(float)
+    if dataset.family == "complex_gaussian":
+        # The circular complex Gaussian is exactly this draw: independent
+        # Normal(0, sigma) on each component, one real ``uncertainty`` for
+        # both (``results_schema.md`` §16). Generating the data the way the
+        # family defines them keeps the residuals the size of the error bars
+        # here as everywhere else.
+        real = rng.normal(0.0, dataset.uncertainty, grid.size)
+        imaginary = rng.normal(0.0, dataset.uncertainty, grid.size)
+        return mean + real + 1j * imaginary
     return mean + rng.normal(0.0, dataset.uncertainty, grid.size)
 
 
@@ -309,6 +331,19 @@ def observed_container(spec: ProblemSpec, dataset: DatasetSpec) -> FunctionSampl
         None if dataset.family == "poisson" else np.full(grid.size, dataset.uncertainty) * FLUX_UNIT
     )
     mask = observed_mask(dataset, grid.size)
+    if np.iscomplexobj(values):
+        # W2.4 slice 3. ``VisibilitySet`` is the only container kind that takes
+        # complex values (``results_schema.md`` §16), and its uncertainty is
+        # real: the per-component standard deviation of the circular complex
+        # Gaussian, which is the noise model the family is.
+        u_axis, v_axis = complex_axes(grid)
+        return VisibilitySet(
+            u_axis,
+            v_axis,
+            values * FLUX_UNIT,
+            uncertainty=uncertainty,
+            mask=mask,
+        )
     photometry = terminal_photometry(dataset)
     if photometry is not None:
         return PhotometricPoints(
@@ -359,11 +394,19 @@ def build_likelihood(
 
 
 def build_instrument(backend: ConformanceBackend, dataset: DatasetSpec) -> Instrument:
-    """The instrument chain *dataset* declares, from the backend's steps."""
+    """The instrument chain *dataset* declares, from the backend's steps.
+
+    ``input_kind`` is the kind the model emits, so a complex dataset declares
+    :class:`~ampere.core.VisibilitySet` rather than ``Spectrum``. The battery
+    declares no step that accepts one — the instrument vocabulary is
+    spectrum-shaped, and Phase 4's is where a visibility chain belongs — so a
+    complex dataset's chain is always empty and the declaration is only there
+    to keep ``Instrument``'s own kind check truthful.
+    """
     return Instrument(
         tuple(backend.transformation(step) for step in dataset.instrument),
         channel=dataset.channel,
-        input_kind=Spectrum,
+        input_kind=VisibilitySet if dataset.family == "complex_gaussian" else Spectrum,
         label=dataset.label,
     )
 

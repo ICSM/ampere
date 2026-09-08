@@ -154,6 +154,28 @@ LATENT_GP = ProblemSpec(
     ),
 )
 
+#: A **complex** dataset: circular complex Gaussian visibilities.
+#:
+#: Added at W2.4 slice 3. Every other shape here is real, so a backend's
+#: realised path could — and on torch did — carry ``dtype=float`` from the
+#: observed container to the residual and refuse the ``complex_gaussian``
+#: family by name rather than admit it. The family is one of the five
+#: ``ampere.core`` implements and the one ``results_schema.md`` §16's
+#: :class:`~ampere.core.VisibilitySet` exists for, so a realisation that cannot
+#: score it is a realisation the Phase-4 modality cannot be built on.
+#:
+#: The model is :attr:`ModelKind.COMPLEX`, whose modulus is ``norm`` and whose
+#: phase winds with ``index``; the noise is i.i.d., because the correlated case
+#: is declared analytic in ``likelihoods.md`` §4 and **not implemented in
+#: ``ampere.core``** (``GP_ANALYTIC_IMPLEMENTED`` is ``False``), so there is no
+#: oracle for a realisation to be checked against and every backend refuses it
+#: by name. Skipped by a backend that declares no complex model, exactly as the
+#: quasiseparable shape is skipped by one that declares no ``QUASISEP`` solver.
+COMPLEX = ProblemSpec(
+    model=ModelSpec(kind=ModelKind.COMPLEX, coordinates=GP_GRID),
+    datasets=(DatasetSpec(family="complex_gaussian"),),
+)
+
 #: Readable pytest ids for the three shapes above, used where a row is
 #: parametrised over all of them. The two shapes each slice 2 added carry
 #: their own ids at the one row that takes all five.
@@ -459,6 +481,71 @@ class TestTheRealisation:
                 assert not np.isfinite(got)
                 continue
             assert got == pytest.approx(expected, abs=tolerances.cross_backend)
+
+    def test_the_complex_realisation_agrees_with_the_numpy_path(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """W2.4 slice 3: ``complex_gaussian``, realised, against the oracle.
+
+        Its own row rather than a sixth entry in the parametrised list, because
+        the *precondition* is different: this shape needs a complex-valued
+        model, which is a fixture capability rather than a solver one.
+
+        The check is the usual one — the realised density against the numpy
+        contract path at every interior point, at
+        ``tolerances.cross_backend`` — and it is worth stating what a failure
+        would mean here specifically. ``ModelKind.COMPLEX`` has a constant
+        modulus, so ``index`` enters the likelihood **only** through the phase:
+        a backend that dropped the imaginary part anywhere between the model's
+        ``flux`` and the residual would score a density independent of one of
+        its own two parameters, and would disagree with this oracle by whole
+        nats rather than in the last digit.
+        """
+        if not backend.capabilities.complex_models:
+            pytest.skip(
+                f"backend {backend.name!r} declares no complex model "
+                f"(BackendCapabilities.complex_models), so ModelKind.COMPLEX cannot be built"
+            )
+        problem = build_problem(backend, COMPLEX)
+        observed = problem.datasets["sed"].observed
+        assert np.asarray(observed.values).dtype.kind == "c"
+        realised = self.realised(problem)
+        compared = 0
+        for y in self.points(problem):
+            expected = problem.log_prob_unconstrained(y)
+            got = float(np.asarray(backend.to_numpy(realised.log_prob_unconstrained(y))))
+            if not np.isfinite(expected):
+                assert not np.isfinite(got)
+                continue
+            assert got == pytest.approx(expected, abs=tolerances.cross_backend)
+            compared += 1
+        assert compared > 0, "every point was outside the support; the row proved nothing"
+
+    def test_a_complex_gp_is_refused_by_name_on_every_path(
+        self, backend: ConformanceBackend
+    ) -> None:
+        """The other half of W2.4 slice 3's complex item, and it is a refusal.
+
+        ``ComplexGaussianFamily`` declares ``ANALYTIC_WITH_GP = True`` — the
+        circular complex GP does marginalise in closed form — and
+        ``GP_ANALYTIC_IMPLEMENTED = False``, because ``ampere.core`` has not
+        written it (``likelihoods.md`` §4; the implementation lands with the
+        visibility modality in Phase 4). This row holds the invariant that
+        makes that pair safe: the *contract* path refuses the composition, so
+        no backend can be quietly computing something for it, and the refusal
+        names the family.
+
+        It runs on every fixture, complex model or not, because it composes
+        nothing but a likelihood.
+        """
+        from ampere.core import ComplexGaussianFamily
+        from ampere.core.exceptions import LikelihoodError
+
+        noise = backend.gp_noise(
+            backend.kernel(CovarianceSpec()), backend.gp_solver(SolverKind.DENSE)
+        )
+        with pytest.raises(LikelihoodError, match="complex_gaussian"):
+            Likelihood(ComplexGaussianFamily(), noise)
 
     def test_the_latent_gp_realisation_agrees_with_the_numpy_path(
         self, backend: ConformanceBackend, tolerances: Tolerances
