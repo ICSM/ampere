@@ -45,7 +45,7 @@ backend-neutral core plus modern computational backends, targeting:
 | Modern backends | **torch and jax in lockstep**, implemented in parallel against a frozen interface spec by separate agent tracks. The shared conformance test suite (§4.6) is the synchronisation mechanism. |
 | Legacy compatibility | **Frozen in place.** `ampere.data`, `ampere.models`, `ampere.infer` keep working as-is where they are; only critical bugfixes land there. New code grows in new namespaces alongside. |
 | Astropy's role | **Interop adapter in the core, not a peer backend.** The objective is: a user defines their model with `astropy.modeling` and ampere handles it. The adapter translates astropy parameter metadata automatically (§4.7). Astropy-defined models are black-box to torch/jax (gradient-free inference + SBI, not NUTS/VI), with a curated-translation escape hatch for common analytic models. |
-| Flexible-likelihood kernel | **Matérn-class (Matérn-3/2 / sums of SHO terms) becomes the default throughout**, replacing the legacy RBF — it represents structured residuals better and is exactly O(N) via quasiseparable solvers. Validated against the misspecification study in milestone M2. |
+| Flexible-likelihood kernel | **Matérn-class (Matérn-3/2 / sums of SHO terms) becomes the default throughout**, replacing the legacy RBF — it represents structured residuals better and is exactly O(N) via quasiseparable solvers. Validated against the misspecification study in milestone M2 — **done, W2.10 merged 2026-09-08**: the flexible likelihood stays within one posterior width of the truth with the truth covered on every scenario and every rung of the 200→20 000 ladder while the standard likelihood's bias grows as √N to 113 widths; see the W2.10 status row and `docs/source/m2_misspecification.rst`. |
 | Packaging | **Single distribution with extras** (`ampere[torch]`, `ampere[jax]`, `ampere[sbi]`, …), lazy imports; split distributions are not pursued. |
 | Phase-4 modality proof | **Interferometric visibilities** — complex-valued data and Fourier sampling stress the result schema and transformation chains hardest; other modalities follow the template it establishes. |
 | CI/CD | **Full CI/CD is in scope**, as a cross-cutting workstream (§5) growing from lint+tests (Phase 0) through conformance/backend matrices and benchmark tracking (Phases 1–2) to automated PyPI releases and versioned docs (Phase 6). Includes pyrefly type checking scoped to the new namespaces. |
@@ -504,6 +504,8 @@ the frozen spec, both gated by the conformance suite. v1 slice scope:
 `flexible_likelihood_comparison` misspecification study on both backends at
 10–100× the current data size, with wall-clock benchmarks vs legacy. This is
 paper-grade evidence the redesign delivers its central promise.
+
+**M2 REACHED 2026-09-08 (W2.10, `956e1ab`).** Reproduced on all three backends over 200 → 2 000 → 20 000 points with the science claim asserted as thresholds, posterior agreement across backends at stated tolerances, and the benchmark table as a CI artefact. The adversarial pass was Fable's (Codex quota-blocked; a retroactive `gpt-5.6-terra` pass is owed on the merged range, along with the earlier ones).
 
 ### Phase 3 — SBI layer (backend-spanning)
 - One SBI module in `ampere.inference` consuming `simulate()` from any
