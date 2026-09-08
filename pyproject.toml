@@ -250,8 +250,22 @@ ignore = ["UP004", "B007"]  # ["E501", "W503"]
 # which was never wired into CI/pre-commit and had drifted -- py38/py39
 # target versions predating the >=3.11 packaging floor set in W0.3).
 
-# [tool.pytest]
-# TBD
+# ---------------------------------------------------------------------------
+# pytest (W2.10). Markers only: no `testpaths`, no `addopts`, so every
+# invocation in this file's [tool.pixi.tasks] and in CI behaves exactly as it
+# did before this section existed. What it buys is a registered marker, and
+# therefore no `PytestUnknownMarkWarning` on the one suite that needs one.
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+markers = [
+    # W2.10, milestone M2. The full size ladder (2 000 and 20 000 points) and
+    # the cross-backend comparison at the milestone budget: tens of minutes,
+    # so it is deliberately NOT in the PR gate. `tests/m2/conftest.py` skips
+    # these unless `-m m2_full` asks for them, which is why no `addopts`
+    # deselection is needed here -- and why `pytest tests/m2` stays fast for
+    # anyone who runs it without reading this file first.
+    "m2_full: milestone M2's full size ladder; run with `pytest -m m2_full`",
+]
 
 # ---------------------------------------------------------------------------
 # pixi (W0.8): environment management wraps pyproject.toml rather than
@@ -309,6 +323,16 @@ test-inference = "pytest tests/inference"
 # an example that only the docs build exercises is an example that
 # `nbsphinx_allow_errors = True` lets rot silently.
 test-examples = "pytest tests/examples"
+# W2.10, milestone M2: the misspecification study's CI-runnable assertions.
+# About 100 s in `dev` (eight short emcee runs, shared by a session fixture)
+# and about five minutes in `torch` or `jax`, where the cross-backend
+# comparison adds four more. Its own task as well as a member of `test-all`
+# below, because it is the one suite somebody re-runs on its own while
+# changing a threshold.
+#
+# The full size ladder (2 000 and 20 000 points, milestone budgets) is
+# deliberately NOT here: `pytest tests/m2 -m m2_full`, tens of minutes.
+test-m2 = "pytest tests/m2"
 # Everything the new namespaces own, in ONE pytest process, for the same
 # registry-leak reason test-phase1 exists (see tests/core/conftest.py).
 # W2.11 added tests/examples: it loads `examples/wstat_comparison.py`, which
@@ -317,7 +341,11 @@ test-examples = "pytest tests/examples"
 # into tests/conformance's registered-family check rather than kept apart from
 # it. tests/examples/conftest.py already snapshots and restores the registry
 # for that reason; this is what keeps that honest.
-test-all = "pytest tests/core tests/results tests/conformance tests/backends tests/inference tests/examples"
+# W2.10 added tests/m2 for the same reason, and for one more: `tests/m2`
+# imports `examples/m2_misspecification`, which composes problems from
+# whichever backend the environment has, so running it in the same process as
+# `tests/conformance` is what proves the study registers nothing global.
+test-all = "pytest tests/core tests/results tests/conformance tests/backends tests/inference tests/examples tests/m2"
 # W2.3: the GP solvers' wall-clock scaling, 10^3-10^5 points. Deliberately
 # outside every gate above -- a dense 3000-point solve alone costs seconds --
 # and run on demand. -s so the measured table reaches the terminal.
