@@ -7,6 +7,7 @@ Tutorials
 
    notebooks/Ampere_MBB_Example
    wstat_comparison
+   m2_misspecification
 
 
 
