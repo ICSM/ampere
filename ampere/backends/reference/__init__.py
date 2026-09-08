@@ -7,10 +7,11 @@ third is not an afterthought:
 1. **The conformance oracle.** The battery in ``tests/conformance/`` computes
    reference values here and holds every other backend to them. That is what
    stops two lockstep backends drifting (``DEVELOPMENT_PLAN.md`` §7).
-2. **A useful base install.** ``pip install ampere``, with no extras at all, is
-   a complete numpy-only fitting environment: these models and instrument
-   steps, ``ampere.core``'s flexible GP likelihood, and the gradient-free
-   engines.
+2. **A useful base install.** ampere's base install -- ``pip install .`` from
+   a checkout (PyPI's ``ampere`` package is unrelated) -- with no extras at
+   all, is a complete numpy-only fitting environment: these models and
+   instrument steps, ``ampere.core``'s flexible GP likelihood, and the
+   gradient-free engines.
 3. **The execution venue for adapted models.** A black-box or astropy-adapted
    model is not differentiated by this backend, but the numpy-side
    ``Instrument``/``Likelihood``/``Dataset`` machinery wrapping its raw output

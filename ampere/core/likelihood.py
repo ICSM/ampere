@@ -1148,9 +1148,11 @@ class QuasisepGP(GPSolver):
 
     The strategy ``DEVELOPMENT_PLAN.md`` §4.4 names as the scaling answer, and
     the reason ``architecture.md`` §2 puts celerite2's numpy interface in the
-    **base** install rather than behind an extra: ``pip install ampere`` with
-    no extras must be a scalable fitting environment, not one that still has
-    the O(N³) problem. It is **exact**, not approximate: a Matérn-3/2 kernel
+    **base** install rather than behind an extra: ampere's base install --
+    ``pip install .`` from a checkout (PyPI's ``ampere`` package is
+    unrelated) -- with no extras, must be a scalable fitting environment, not
+    one that still has the O(N³) problem. It is **exact**, not approximate: a
+    Matérn-3/2 kernel
     has an exact rank-2 semiseparable representation (see
     :func:`_matern32_term_type` for the algebra), so this recursion computes
     the same marginal likelihood :class:`DenseGP` does, in linear time. That

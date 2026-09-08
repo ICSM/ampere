@@ -457,8 +457,13 @@ class LSFConvolution(TorchStep):
             return None
         return float(self.buffers["fwhm"].value)
 
-    def sigma_tensor(self, wavelength: torch.Tensor) -> torch.Tensor:
-        """Kernel standard deviation, micron, at each of *wavelength*."""
+    def width_tensor(self, wavelength: torch.Tensor) -> torch.Tensor:
+        """Kernel standard deviation, micron, at each of *wavelength*.
+
+        Named for the LSF *kernel width* it computes, not to be mistaken for
+        :meth:`~ampere.core.NoiseModel.sigma_tensor` -- an unrelated hook on
+        noise models, several capability rungs away from an instrument step.
+        """
         power = self.power()
         if power is not None:
             widths = wavelength / self._tensor("resolving_power")
@@ -467,9 +472,9 @@ class LSFConvolution(TorchStep):
         return widths / self.FWHM_PER_SIGMA
 
     def sigma(self, wavelength: Any) -> np.ndarray:
-        """:meth:`sigma_tensor` on the numpy side of the boundary."""
+        """:meth:`width_tensor` on the numpy side of the boundary."""
         return to_numpy(
-            self.sigma_tensor(as_tensor(wavelength, dtype=self.dtype, device=self.device))
+            self.width_tensor(as_tensor(wavelength, dtype=self.dtype, device=self.device))
         )
 
     def configure_from(self, downstream: Sequence[Transformation]) -> None:
@@ -538,7 +543,7 @@ class LSFConvolution(TorchStep):
 
     def influence_tensor(self, source: torch.Tensor) -> torch.Tensor:
         """The normalised ``(n, n)`` convolution matrix on the grid *source*."""
-        sigma = self.sigma_tensor(source)
+        sigma = self.width_tensor(source)
         separation = source[:, None] - source[None, :]
         kernel = torch.exp(-0.5 * (separation / sigma[:, None]) ** 2)
         # Integrate against the input's own bin widths, so an unevenly sampled
