@@ -290,10 +290,11 @@ def _complex_gaussian(inputs: FamilyInputs) -> torch.Tensor:
 
     ``-|y - mu|**2 / (2 sigma**2) - log(2 pi) - log(sigma**2)``.
 
-    Censoring never reaches here — a limit on a complex value is not defined,
-    and ``ampere.core``'s ``Likelihood.check_alignment`` refuses the
-    declaration — so, unlike the real Gaussian, there is no Tobit branch and no
-    ``detection`` mask to consult.
+    Censoring never reaches here: a limit on a complex value is not defined, so
+    the family declares ``SUPPORTS_CENSORING = False`` and ``ampere.core``
+    refuses the declaration when the ``Likelihood`` is built. Unlike the real
+    Gaussian, then, there is no Tobit branch and no ``detection`` mask to
+    consult.
     """
     sigma = inputs.sigma
     if sigma is None:  # pragma: no cover - composition refuses this first
