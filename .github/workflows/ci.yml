@@ -5,6 +5,14 @@ name: CI
 # (`pixi run <task>`) rather than duplicated as ad-hoc pip/apt steps here.
 # pyproject.toml's [tool.pixi.*] tables are the actual environment
 # definitions; this file only decides which environment/task runs where.
+#
+# W2.11 states that as a rule rather than a habit: **every job below runs a
+# named pixi task**, never an inline command line. If a step needs different
+# arguments, the pixi task changes and local runs change with it; a flag that
+# exists only in this file is a way for CI and a developer's machine to
+# disagree, which is the failure mode this workflow is supposed to prevent.
+# The one deliberate exception is `minimal-install`, whose entire point is to
+# be the plainest possible pip install (see its own comment).
 
 on:
   push:
@@ -49,10 +57,12 @@ jobs:
         with:
           environments: dev
           cache: true
-      # ampere/core, ampere/backends, ampere/inference, ampere/results
-      # don't exist yet (AGENTS.md ground rule 8) -- the task itself
-      # detects this and exits 0 cleanly; see pyproject.toml
-      # [tool.pixi.tasks].typecheck.
+      # W2.4/W2.5: this is the `dev` half of the typecheck, and `dev` has
+      # neither backend extra -- so the task itself excludes
+      # ampere/backends/torch and ampere/backends/jax here (they are piles of
+      # unresolvable imports without their libraries, not piles of type
+      # errors). Each is checked with its *real* types in the backend-suites
+      # job below, which runs the same task in the environment that has them.
       - run: pixi run -e dev typecheck
 
   test:
@@ -103,6 +113,15 @@ jobs:
       # than skip. tests/inference joins for the same reason -- it is where
       # emcee/dynesty/zeus are actually driven, and all three are present in
       # this environment.
+      #
+      # W2.11: tests/examples is deliberately NOT here. It is a ~16 s
+      # end-to-end emcee run whose subject (examples/wstat_comparison.py) is
+      # pure `ampere.core` + `ampere.inference` and has no version-dependent
+      # surface of its own, so a second and third copy of it buys nothing that
+      # tests/core and tests/inference do not already buy on these legs. It
+      # runs once per environment in `suites` and `backend-suites` below,
+      # where it also serves its other purpose (registry-leak containment in a
+      # shared pytest process).
       - name: "phase 1 suite: core (py${{ matrix.python }})"
         run: pixi run -e test-py${{ matrix.python }} test-core
       - name: "phase 1 suite: results (py${{ matrix.python }})"
@@ -120,35 +139,35 @@ jobs:
           path: coverage.xml
           if-no-files-found: ignore
 
-  phase1-suites:
-    name: new-namespace suites (core + results + conformance + backends + inference, one process)
+  suites:
+    name: new-namespace suites (dev)
     runs-on: ubuntu-latest
     # W0.10: `ci.yml` never ran tests/core, tests/results or
-    # tests/conformance before this job -- see this item's report for the
+    # tests/conformance before this job -- see that item's report for the
     # py3.11 core-import break (fixed a8e6f54) that only W1.10's manual
     # review caught. Runs on every PR, not on a schedule: locally this is
-    # ~1060 tests in ~30s in the `dev` environment (this item's
-    # calibration), well inside the per-PR budget the `test` job's own
-    # characterisation step already sets. Uses `dev` specifically (not one
-    # of the test-py3* environments) so `arviz` is present and
-    # tests/results actually runs rather than skipping everywhere -- a
-    # results suite that silently skipped on every CI leg would satisfy the
-    # letter of this item and be worthless. Deliberately a single pytest
-    # invocation (`test-phase1`, not three separate `pixi run` calls): that
-    # is what exposed finding (c) in the first place -- a likelihood-family
-    # registration in tests/core (or in the docs/design/contracts/
-    # likelihoods.md worked example, run via tests/core/test_spec_
-    # doctests.py) leaking into tests/conformance's check that the
-    # marginalisation table covers exactly the registered family set, which
-    # each suite passing in its own process never caught. The fix is
-    # tests/core/conftest.py's autouse registry-snapshot fixture; this job
-    # is what keeps it honest.
+    # ~1500 tests in well under a minute in the `dev` environment, inside the
+    # per-PR budget the `test` job's own characterisation step already sets.
+    # Uses `dev` specifically (not one of the test-py3* environments) so
+    # `arviz` and `netCDF4` are present and tests/results actually runs rather
+    # than skipping everywhere -- a results suite that silently skipped on
+    # every CI leg would satisfy the letter of this item and be worthless.
+    # Deliberately a single pytest invocation (`test-all`, not six separate
+    # `pixi run` calls): that is what exposed W0.10 finding (c) in the first
+    # place -- a likelihood-family registration in tests/core (or in the
+    # docs/design/contracts/likelihoods.md worked example, run via
+    # tests/core/test_spec_doctests.py) leaking into tests/conformance's check
+    # that the marginalisation table covers exactly the registered family set,
+    # which each suite passing in its own process never caught. The fix is
+    # tests/core/conftest.py's autouse registry-snapshot fixture; this job is
+    # what keeps it honest.
     #
     # W2.1 added tests/backends (the shipped ampere.backends.reference) to the
-    # same single process, for the same reason: it is another suite that
-    # registers things into ampere.core and must not be allowed to leak into
-    # the conformance battery's registry checks. W2.2 added tests/inference
-    # (the engine drivers) on the same grounds.
+    # same single process, for the same reason. W2.2 added tests/inference
+    # (the engine drivers) on the same grounds. W2.11 added tests/examples,
+    # which is the sharpest case of all: it *loads a user-style module* that
+    # registers a likelihood family at import, which is the exact shape of the
+    # leak this job exists to catch.
     steps:
       - uses: actions/checkout@v7
       - uses: prefix-dev/setup-pixi@v0.10.2
@@ -156,6 +175,109 @@ jobs:
           environments: dev
           cache: true
       - run: pixi run -e dev test-all
+      # W2.11, DEVELOPMENT_PLAN.md §5 Phase 2: "benchmark suite ... with
+      # results tracked as CI artefacts". The reference backend's row. Runs
+      # after the suites, in the same job, so the environment is set up once
+      # and the two never contend for the runner's memory (see
+      # backend-suites' note on that).
+      - run: pixi run -e dev bench
+      - name: upload benchmark results
+        # `if: always()` so a red suite still publishes whatever the
+        # benchmark step managed -- but note the step above is skipped when
+        # `test-all` fails, so in practice this uploads nothing then. It is
+        # here for the opposite case: a benchmark row that fails still leaves
+        # its partial JSON attached to the PR, which is when a reviewer most
+        # wants it.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmarks-dev
+          path: benchmark.json
+          if-no-files-found: ignore
+
+  backend-suites:
+    name: new-namespace suites (${{ matrix.environment }})
+    runs-on: ubuntu-latest
+    # W2.11, and DEVELOPMENT_PLAN.md §5's Phase 2 line ("separate torch, jax
+    # and no-extras jobs"). One job per backend environment, and one backend
+    # environment per job:
+    #
+    #  * `fail-fast: false` is load-bearing, not decoration. A broken torch
+    #    row must fail the torch leg and leave the jax leg to report its own
+    #    result; with fail-fast on (the default) GitHub cancels the sibling
+    #    leg the moment one fails, and the answer to "did jax survive this
+    #    change?" would be "cancelled". Together with `suites` above being a
+    #    separate job on `dev`, this is what makes a backend failure a
+    #    single-job failure: the three environments never share a runner, a
+    #    step or a process.
+    #  * Never two environments in one job. `pixi run -e <env> test-all` is a
+    #    five-suite, one-process gate; two of them running concurrently
+    #    exhausted a 13 GB development machine during this item, and GitHub's
+    #    hosted runners have 7 GB. Sequential steps in one job would be safe
+    #    on memory and wrong on isolation, which is the criterion that
+    #    decides it.
+    #  * `cache: true` matters most here: these are the two large
+    #    environments (torch ~1.9 GB installed, jax ~0.5 GB). The torch one
+    #    would be several gigabytes larger still without pyproject.toml's
+    #    CPU-index pin on `torch` -- see [tool.pixi.feature.torch.
+    #    pypi-dependencies]. Hosted runners are CPU-only; GPU tests are a
+    #    later, nightly/manual item and add no rows here.
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [torch, jax]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          environments: ${{ matrix.environment }}
+          cache: true
+      # The backend's own types, with its real library present. The `dev`
+      # typecheck job above cannot do this -- it excludes both backends
+      # precisely because neither library is installed there -- so this step
+      # is the only place ampere/backends/${{ matrix.environment }} is
+      # actually type-checked.
+      - run: pixi run -e ${{ matrix.environment }} typecheck
+      - run: pixi run -e ${{ matrix.environment }} test-all
+      - run: pixi run -e ${{ matrix.environment }} bench
+      - name: upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmarks-${{ matrix.environment }}
+          path: benchmark.json
+          if-no-files-found: ignore
+
+  docs:
+    name: docs build
+    runs-on: ubuntu-latest
+    # W2.11. DEVELOPMENT_PLAN.md §5 asked for this at Phase 1 ("Sphinx docs
+    # build check with warnings-as-errors") and it never landed, because
+    # `pixi run docs` was red on master for four environment reasons that had
+    # nothing to do with any change under review: no `pandoc` for nbsphinx, no
+    # registered Jupyter kernel for the two legacy notebooks that carry no
+    # stored outputs, an autodoc entry for a module (ampere.infer.ptemcee
+    # search) that does not exist, and a pile of legacy-docstring warnings.
+    # The first three are fixed at their source (pyproject.toml's dev feature
+    # declares pandoc and ipykernel; docs/source/conf.py sets
+    # nbsphinx_execute = 'never' and says why for each notebook; the dead
+    # automodule entry is gone).
+    #
+    # The fourth is why this job runs **without** `-W`. The remaining
+    # warnings are legacy docstrings in ampere/{data,models,infer} -- frozen
+    # by AGENTS.md ground rule 1, and editing them to silence a warning would
+    # be touching frozen code for a cosmetic reason. Warnings-as-errors is
+    # therefore deferred until the Phase 6 docs rebuild retires those pages;
+    # what this job asserts today is the stronger half of the original intent
+    # anyway: the documentation *builds*, from a clean clone, in a declared
+    # environment, on every PR.
+    steps:
+      - uses: actions/checkout@v7
+      - uses: prefix-dev/setup-pixi@v0.10.2
+        with:
+          environments: dev
+          cache: true
+      - run: pixi run -e dev docs
 
   minimal-install:
     name: minimal install (no extras)
@@ -166,6 +288,13 @@ jobs:
     # exactly the environment W0.5's quarantine work targets. Using pixi
     # here would exercise the pypi-dependencies/editable-install path
     # instead of a bare pip install, defeating the point.
+    #
+    # W2.11: this is also the no-extras leg DEVELOPMENT_PLAN.md §5's Phase 2
+    # line names -- "`import ampere` must never require torch or jax". It
+    # already was one, and the value of saying so is that nobody later
+    # "improves" it into a pixi job. The three import lines below are the
+    # assertion: none of ampere.core, ampere.inference or ampere.results may
+    # reach an array library that is not installed here.
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -173,6 +302,10 @@ jobs:
           python-version: "3.13"
       - run: pip install -e .
       - run: python -c "import ampere"
+      - name: the new namespaces import without torch or jax
+        run: python -c "import ampere.core, ampere.inference, ampere.results"
+      - name: torch and jax are genuinely absent, so the step above proves something
+        run: python -c "import importlib.util as u; assert u.find_spec('torch') is None and u.find_spec('jax') is None, 'this job must have neither backend library installed'"
       - run: pip install pytest
       - run: pytest tests/test_imports.py
 
@@ -183,8 +316,10 @@ jobs:
     # most of what the `test` job's characterisation step already covers
     # (emcee/dynesty/zeus), adding only the sbi flow itself. Run on a
     # schedule and on demand rather than on every push/PR, so the sbi
-    # extra's weight never sits on the PR-gate critical path. See this
-    # item's report for the full rationale.
+    # extra's weight never sits on the PR-gate critical path. See W0.6's
+    # report for the full rationale. (W2.11 pinned this environment's torch
+    # to the CPU index too, so the weekly run no longer downloads ~2 GB of
+    # CUDA runtime to a CPU-only hosted runner.)
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v7
