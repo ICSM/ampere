@@ -281,9 +281,15 @@ class LoweringError(AmpereError):
 
     Attributes
     ----------
-    family, parameter, backend, detail
-        As above, kept as fields so tooling asserts on the cause without
-        parsing the message.
+    family
+        As in *Parameters* above, kept as a field so that tooling asserts on
+        the cause without parsing the message.
+    parameter
+        As in *Parameters* above.
+    backend
+        As in *Parameters* above.
+    detail
+        As in *Parameters* above.
 
     Examples
     --------

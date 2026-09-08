@@ -73,14 +73,25 @@ __all__ = [
     "to_netcdf",
 ]
 
-#: ArviZ's two sampling dimensions, in its own order.
+#: The first of ArviZ's two sampling dimensions, in its own order.
 CHAIN_DIM = "chain"
+#: The second of ArviZ's two sampling dimensions.
 DRAW_DIM = "draw"
 
+#: The group holding the posterior draws, one variable per merged parameter.
 POSTERIOR_GROUP = "posterior"
+#: The group holding the per-draw sampler statistics -- ``lp``, the
+#: ``log_prior``/``log_likelihood`` split, and the failure record.
 SAMPLE_STATS_GROUP = "sample_stats"
+#: The group holding the log-likelihood decomposition, one variable per
+#: dataset (see :data:`LOG_LIKELIHOOD_DECOMPOSITION`).
 LOG_LIKELIHOOD_GROUP = "log_likelihood"
+#: The group holding the observed values a run was fitted to, one variable per
+#: dataset (two, real and imaginary, for a complex container).
 OBSERVED_DATA_GROUP = "observed_data"
+#: The group holding everything else a container carried and nothing was
+#: fitted to: uncertainties, masks, extra coordinates, and any axis that could
+#: not be stored as a shared coordinate.
 CONSTANT_DATA_GROUP = "constant_data"
 
 #: What the ``log_likelihood`` group's variables are a decomposition *into*.
