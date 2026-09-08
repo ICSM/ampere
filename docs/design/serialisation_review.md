@@ -106,6 +106,18 @@ training sets be pinned before Phase 2. They are, as follows:
   `.tolist()` (dtype lost), and `Simulation.observations`/`Failure` detail
   are not carried (only the `failed` flag).
 
+  **Discharged at W2.8** (decision-log row in `DEVELOPMENT_PLAN.md` §2).
+  `ampere.results.training` writes, appends to and reads §11's format;
+  `training_pair_from_dict` completes the in-memory round trip; θ keeps its
+  dtype, which bumped `CONTAINER_SCHEMA_VERSION` to **2** under §5's rule
+  below; and `Simulation.observations` and the whole `Failure` record travel,
+  for which `results.md` §11's table gained two rows. Append is a real
+  operation on an existing file — the `sample` dimension grows and the spec
+  hash is checked, so §7's stale-artefact trap refuses rather than mixing two
+  simulators in one file — implemented as read-concatenate-rewrite, which is
+  the one limitation the item created and recorded in place of the two it
+  closed.
+
 ## 5. Versioning policy, restated as the contract
 
 Three version stamps exist and each guards its own layer:
