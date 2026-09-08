@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import dataclasses
 import os
+import pickle
 import subprocess
 import sys
 from typing import Any
@@ -26,6 +27,10 @@ from ampere.core import (
     Dataset,
     FittingProblem,
     Likelihood,
+    ProcessExecutor,
+    SerialExecutor,
+    SimulationBatch,
+    ThreadExecutor,
     Tie,
     family_named,
     log_likelihood_terms_of,
@@ -823,6 +828,119 @@ class TestSimulation:
     def test_the_stream_advances_between_draws(self, backend: ConformanceBackend) -> None:
         problem = build_problem(backend, SINGLE)
         assert problem.simulate().theta.tolist() != problem.simulate().theta.tolist()
+
+
+class TestBatchedSimulation:
+    """W3.1: ``simulate_many`` is the loop, on every backend and every executor.
+
+    ``inference.md`` §13's *batched form* is a statement about equality with a
+    sequence of ``simulate`` calls, so that is what these rows assert — order
+    and values, not shapes and plausibility. The batch's right-hand side is
+    built on a *second* problem with the same seed, because reading
+    ``rng("simulate")`` in the test would advance the very stream the batch is
+    about to spawn from.
+    """
+
+    COUNT = 6
+
+    @staticmethod
+    def loop(backend: ConformanceBackend, count: int, *, observe: bool) -> SimulationBatch:
+        """``n`` calls of ``simulate`` on the batch sub-stream's spawned children."""
+        problem = build_problem(backend, SINGLE)
+        children = problem.rng("simulate").spawn(count)
+        return SimulationBatch(
+            tuple(problem.simulate(observe=observe, rng=child) for child in children)
+        )
+
+    @staticmethod
+    def identical(left: SimulationBatch, right: SimulationBatch) -> bool:
+        if len(left) != len(right) or not np.array_equal(left.theta, right.theta):
+            return False
+        for one, other in zip(left, right, strict=True):
+            for label in one.predicted:
+                if not np.array_equal(
+                    np.asarray(one.predicted[label].values),
+                    np.asarray(other.predicted[label].values),
+                ):
+                    return False
+            if (one.observations is None) != (other.observations is None):
+                return False
+            if one.observations is not None and other.observations is not None:
+                for label in one.observations:
+                    if not np.array_equal(
+                        np.asarray(one.observations[label].values),
+                        np.asarray(other.observations[label].values),
+                    ):
+                        return False
+        return True
+
+    @pytest.mark.parametrize("observe", [False, True], ids=["predicted", "observed"])
+    def test_the_batch_is_n_calls_of_simulate(
+        self, backend: ConformanceBackend, observe: bool
+    ) -> None:
+        batch = build_problem(backend, SINGLE).simulate_many(self.COUNT, observe=observe)
+        assert self.identical(batch, self.loop(backend, self.COUNT, observe=observe))
+
+    @pytest.mark.parametrize(
+        "executor",
+        [SerialExecutor(), ThreadExecutor(2), ProcessExecutor(2)],
+        ids=["serial", "thread-2", "process-2"],
+    )
+    def test_every_shipped_executor_gives_the_same_batch(
+        self, backend: ConformanceBackend, executor: Any
+    ) -> None:
+        batch = build_problem(backend, SINGLE).simulate_many(
+            self.COUNT, observe=True, executor=executor, chunk_size=4
+        )
+        assert self.identical(batch, self.loop(backend, self.COUNT, observe=True))
+
+    @pytest.mark.parametrize("chunk_size", [1, 7, None], ids=["chunk-1", "chunk-7", "whole"])
+    def test_the_partition_does_not_change_the_answer(
+        self, backend: ConformanceBackend, chunk_size: int | None
+    ) -> None:
+        batch = build_problem(backend, SINGLE).simulate_many(
+            self.COUNT, observe=True, chunk_size=chunk_size
+        )
+        assert self.identical(batch, self.loop(backend, self.COUNT, observe=True))
+
+    def test_a_composed_problem_can_be_sent_to_a_worker(self, backend: ConformanceBackend) -> None:
+        """The precondition for the process pool, asserted rather than assumed."""
+        problem = build_problem(backend, SINGLE)
+        restored = pickle.loads(pickle.dumps(problem))
+        assert restored.free_size == problem.free_size
+        assert restored.backend == problem.backend
+
+    def test_the_stacked_views_agree_with_the_per_draw_simulations(
+        self, backend: ConformanceBackend
+    ) -> None:
+        batch = build_problem(backend, SINGLE).simulate_many(4, observe=True)
+        assert batch.theta.shape == (4, build_problem(backend, SINGLE).free_size)
+        assert batch.observations is not None
+        for index, draw in enumerate(batch):
+            assert np.array_equal(np.asarray(draw.theta), batch.theta[index])
+            for label, stack in batch.predicted.items():
+                assert np.array_equal(
+                    np.asarray(draw.predicted[label].values), np.asarray(stack.values[index])
+                )
+                rebuilt = stack[index]
+                assert rebuilt is not None
+                assert rebuilt.axes == draw.predicted[label].axes
+
+    def test_a_given_theta_table_is_simulated_row_by_row(self, backend: ConformanceBackend) -> None:
+        """The SBC idiom: θ chosen outside, in the order they were given."""
+        problem = build_problem(backend, SINGLE)
+        table = np.stack(
+            [problem.prior_transform(np.full(problem.free_size, q)) for q in (0.3, 0.7)]
+        )
+        batch = problem.simulate_many(2, values=table)
+        assert np.allclose(batch.theta, table)
+        for index in range(2):
+            expected = problem.simulate(table[index])
+            for label in expected.predicted:
+                assert np.array_equal(
+                    np.asarray(batch[index].predicted[label].values),
+                    np.asarray(expected.predicted[label].values),
+                )
 
 
 class TestSubstreams:
