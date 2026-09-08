@@ -80,6 +80,7 @@ SCENARIO = "strong_smooth"
 SIZES: tuple[int, ...] = (200, 2_000, 20_000)
 DENSE_SIZES: tuple[int, ...] = (200, 2_000)
 
+
 def _run(
     benchmark: Any,
     call: Callable[[], float],
