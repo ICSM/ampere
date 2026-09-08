@@ -83,8 +83,9 @@ class EmceeEngine(Engine):
         walkers: int | None = None,
         moves: Any = None,
         cache_size: int = DEFAULT_CACHE_SIZE,
+        use_realisation: bool = True,
     ) -> None:
-        super().__init__(problem, cache_size=cache_size)
+        super().__init__(problem, cache_size=cache_size, use_realisation=use_realisation)
         chosen = _default_walkers(problem.free_size) if walkers is None else int(walkers)
         self.walkers = _check_ensemble(self.NAME, chosen, problem.free_size)
         self.moves = moves

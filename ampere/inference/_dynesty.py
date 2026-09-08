@@ -112,8 +112,9 @@ class DynestyEngine(Engine):
         bound: str = "multi",
         sample: str = "auto",
         cache_size: int = DEFAULT_CACHE_SIZE,
+        use_realisation: bool = True,
     ) -> None:
-        super().__init__(problem, cache_size=cache_size)
+        super().__init__(problem, cache_size=cache_size, use_realisation=use_realisation)
         chosen = (
             _default_live_points(problem.free_size) if live_points is None else int(live_points)
         )

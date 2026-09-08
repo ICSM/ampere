@@ -63,6 +63,52 @@ quantity the backend had just computed. §10a's optional
 ``log_likelihood_terms`` is the answer, and :meth:`Engine.finish` consumes it
 (W2.4 slice 2): a driver that has it hands the decomposition straight in and
 ``engine_draws_recomputed`` is zero.
+
+The gradient-free fast path (W2.5 slice 3)
+------------------------------------------
+The same optional member answers a second question, and this one is about
+*scoring* rather than about bookkeeping. ``problem.evaluate`` is the numpy
+contract path, and on a backend whose arithmetic is not numpy it pays that
+backend's per-operation dispatch on every proposal: W2.10 measured the jax
+contract path at about 28 ms flat per ``log_prob``, whatever the problem, which
+turns emcee, dynesty and zeus on a jax problem into a pessimisation — the
+gradient-free engines were slower on the backend built for speed.
+
+So :class:`_EvaluationCache` grows a second route. When a realisation is
+registered for the problem's backend **and** it supplies
+``log_likelihood_terms``, the cache scores through it: the prior from
+:meth:`~ampere.core.parameter.ParameterSet.lnprior` (which touches no model and
+no data, so there is nothing to save by asking a backend for it, and §10a's
+mandatory surface does not offer a prior/likelihood split anyway), the
+per-dataset terms from the realisation, and the same
+:class:`~ampere.core.dataset.Evaluation` record out. Measured on a 400-point
+quasiseparable jax problem: 26.5 ms a proposal on the contract path, 0.5 ms on
+this one.
+
+Four things about it are deliberate.
+
+* **Nothing here imports a backend.** ``ampere.core.realise`` dispatches on
+  ``problem.backend``, so the rule this module opens with is untouched; a
+  problem whose backend has no realisation registered simply keeps the contract
+  path.
+* **The numpy path stays the oracle and the fallback.** ``realise`` checks the
+  realised density against ``problem.log_prob_unconstrained`` at the reference
+  point before this cache will use it, the labels are checked once at
+  attachment, and any exception from the realisation at *evaluation* time falls
+  back to ``problem.evaluate`` for that θ rather than failing the run.
+* **The failure reason is lost, and that is §10a's own ruling** (sub-decision
+  2): inside a realised density nothing can raise and no ``Failure`` record can
+  be built, so a point the model cannot score is a bare ``-inf``.
+  ``problem.failure_counts`` therefore stays empty on this path and
+  ``ampere_failure_summary`` says nothing. A problem declaring
+  ``strict=True`` — the declaration that says "do not hide a failure from me" —
+  keeps the contract path for exactly that reason, and ``use_realisation=False``
+  restores it for anyone else who would rather have the reasons than the speed.
+* **The run says which path it took**: ``engine_realised_evaluations`` counts
+  the proposals scored through the realisation, beside ``engine_evaluations``,
+  and ``ampere_realised`` is 1 for a run that used it — which is what that
+  attribute has always meant ("whether the draws were scored through the
+  backend's realisation"), now answered by a gradient-free engine too.
 """
 
 from __future__ import annotations
@@ -70,12 +116,18 @@ from __future__ import annotations
 import abc
 import math
 import warnings
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, ClassVar
 
 import numpy as np
 
 from ampere.core.dataset import Evaluation, FittingProblem
+from ampere.core.exceptions import LoweringError
+from ampere.core.realisation import (
+    log_likelihood_terms_of,
+    realise,
+    registered_realisations,
+)
 from ampere.results import emit
 
 from .exceptions import EngineError, SamplingFailureWarning
@@ -104,16 +156,121 @@ class _EvaluationCache:
     the same reasoning ``inference.md`` §11 applies to the failure history.
     """
 
-    def __init__(self, problem: FittingProblem, maximum: int) -> None:
+    def __init__(
+        self,
+        problem: FittingProblem,
+        maximum: int,
+        *,
+        use_realisation: bool = True,
+    ) -> None:
         if maximum < 0:
             raise EngineError(f"the evaluation cache cannot hold {maximum} entries.")
         self._problem = problem
         self._maximum = int(maximum)
         self._entries: dict[bytes, Evaluation] = {}
-        #: How many times the problem was actually evaluated.
+        #: How many times the problem was actually scored, by either route.
         self.calls = 0
         #: How many stored draws had to be evaluated a second time.
         self.recomputed = 0
+        #: How many of :attr:`calls` went through the backend's realisation
+        #: rather than the numpy contract path. ``engine_realised_evaluations``.
+        self.realised_calls = 0
+        #: The realisation this cache scores through, and its per-dataset
+        #: decomposition; both ``None`` on the contract path.
+        self.realisation: Any = None
+        self._terms: Callable[[Any], Mapping[str, Any]] | None = None
+        if use_realisation:
+            self._attach(problem)
+
+    # -- the fast path -------------------------------------------------------
+
+    def _attach(self, problem: FittingProblem) -> None:
+        """Take the backend's realisation, if this problem has a usable one.
+
+        Every "no" here is a silent fall back to the contract path, because
+        every one of them is a legitimate configuration rather than a mistake:
+        the reference backend registers no realisation, a jax problem using a
+        family this backend does not lower cannot be realised at all, and a
+        realisation is free by ruling not to offer ``log_likelihood_terms``.
+
+        ``strict=True`` is the one deliberate refusal. It is the declaration
+        that says "do not turn a failure into a number" — and a realised
+        density can do nothing else (``inference.md`` §10a sub-decision 2:
+        inside a trace nothing raises and no ``Failure`` can be built), so
+        honouring the flag means declining the speed.
+        """
+        if getattr(problem, "strict", False):
+            return
+        if problem.backend not in registered_realisations():
+            return
+        try:
+            realisation = realise(problem)
+        except LoweringError:
+            return
+        terms = log_likelihood_terms_of(realisation)
+        if terms is None:
+            return
+        # One evaluation at the reference point, which checks the labels and
+        # also pays whatever compilation the backend does before the sampler
+        # starts rather than on its first proposal.
+        try:
+            supplied = set(terms(problem.unconstrain(problem.reference_values)))
+        except Exception:
+            return
+        expected = set(problem.datasets)
+        if supplied != expected:
+            raise EngineError(
+                f"the realisation registered for backend {problem.backend!r} supplied a "
+                f"per-dataset decomposition keyed {sorted(supplied)}, but this problem's "
+                f"datasets are {sorted(expected)}. The two must agree exactly: a missing label "
+                f"would be a dataset silently dropped from the run's log_likelihood group, and "
+                f"an extra one a group with no data behind it."
+            )
+        self.realisation = realisation
+        self._terms = terms
+
+    @property
+    def realised(self) -> bool:
+        """Whether this cache scores through a realisation (``ampere_realised``)."""
+        return self._terms is not None
+
+    def _score(self, vector: np.ndarray) -> Evaluation:
+        """One θ, through whichever route this cache has."""
+        self.calls += 1
+        if self._terms is None:
+            return self._problem.evaluate(vector)
+        log_prior = float(self._problem.parameters.lnprior(vector))
+        if not math.isfinite(log_prior):
+            # Zero prior mass is an answer, not a failure, and no model runs
+            # for it on either path. NaN rather than -inf for the likelihood,
+            # because "not evaluated" is not "impossible" — the contract path
+            # says exactly this, and the two must agree.
+            return Evaluation(log_prior=-math.inf, log_likelihood=math.nan, log_prob=-math.inf)
+        try:
+            supplied = self._terms(self._problem.unconstrain(vector))
+            contributions = {str(label): float(value) for label, value in supplied.items()}
+        except Exception:
+            # The oracle is also the fallback: a realisation that cannot score
+            # this point hands it back to numpy rather than failing the run.
+            return self._problem.evaluate(vector)
+        self.realised_calls += 1
+        total = math.fsum(contributions.values())
+        if not math.isfinite(total):
+            # A bare -inf, with no reason: §10a sub-decision 2 says the reason
+            # is unrecoverable on this path, and inventing one would be worse
+            # than admitting it. `use_realisation=False` is where the reasons are.
+            return Evaluation(
+                log_prior=log_prior,
+                log_likelihood=-math.inf,
+                log_prob=-math.inf,
+                contributions=contributions,
+            )
+        return Evaluation(
+            log_prior=log_prior,
+            log_likelihood=total,
+            log_prob=log_prior + total,
+            contributions=contributions,
+        )
 
     @staticmethod
     def _key(theta: Any) -> tuple[np.ndarray, bytes]:
@@ -123,8 +280,7 @@ class _EvaluationCache:
     def evaluate(self, theta: Any) -> Evaluation:
         """Score θ, remembering the result. What the sampler's callback calls."""
         vector, key = self._key(theta)
-        evaluation = self._problem.evaluate(vector)
-        self.calls += 1
+        evaluation = self._score(vector)
         if self._maximum:
             if len(self._entries) >= self._maximum and key not in self._entries:
                 del self._entries[next(iter(self._entries))]
@@ -138,8 +294,7 @@ class _EvaluationCache:
         if found is not None:
             return found
         self.recomputed += 1
-        self.calls += 1
-        return self._problem.evaluate(vector)
+        return self._score(vector)
 
 
 class Engine(abc.ABC):
@@ -160,6 +315,22 @@ class Engine(abc.ABC):
     cache_size
         Entries in the evaluation cache; see :data:`DEFAULT_CACHE_SIZE`. Zero
         disables it, at the cost of re-evaluating every stored draw.
+    use_realisation
+        Whether to score proposals through the backend's **realisation** when
+        one is registered for this problem's backend and supplies
+        ``log_likelihood_terms`` (W2.5 slice 3; this module's docstring has the
+        shape and the measurement). ``True`` by default, because on a
+        differentiable backend the numpy contract path costs that backend's
+        per-operation dispatch on every proposal and there is nothing to be
+        gained by paying it. It changes no number: ``ampere.core.realise``
+        checks the realised density against the contract path before this
+        driver will use it, and the conformance suite compares the two at many
+        points. It changes one *record*: a proposal the model cannot score
+        becomes ``-inf`` with **no recorded reason**, so
+        ``problem.failure_counts`` and ``ampere_failure_summary`` stay empty
+        (``inference.md`` §10a sub-decision 2). Pass ``False`` to keep the
+        reasons; a problem declaring ``strict=True`` keeps them anyway, since
+        that flag means precisely "do not hide a failure from me".
 
     Attributes
     ----------
@@ -220,6 +391,7 @@ class Engine(abc.ABC):
         problem: FittingProblem,
         *,
         cache_size: int = DEFAULT_CACHE_SIZE,
+        use_realisation: bool = True,
     ) -> None:
         if problem.free_size == 0:
             raise EngineError(
@@ -233,7 +405,7 @@ class Engine(abc.ABC):
         self.problem = problem
         self.sampler: Any = None
         self.last_failure_summary: str = ""
-        self._cache = _EvaluationCache(problem, cache_size)
+        self._cache = _EvaluationCache(problem, cache_size, use_realisation=use_realisation)
 
     # -- the §4.5 surface, and nothing else -----------------------------------
 
@@ -403,7 +575,7 @@ class Engine(abc.ABC):
         *,
         extra_attrs: Mapping[str, object] | None = None,
         coords: Mapping[str, Sequence[Any]] | None = None,
-        realised: bool = False,
+        realised: bool | None = None,
         registered_lowerings: Sequence[Mapping[str, Any]] | None = None,
         log_likelihood_terms: Sequence[Sequence[Mapping[str, float]]] | None = None,
     ) -> Any:
@@ -419,10 +591,13 @@ class Engine(abc.ABC):
 
         *realised* and *registered_lowerings* are the two a driver that
         sampled through a backend's realisation supplies (``inference.md``
-        §10a's "Provenance", W2.13). The three gradient-free drivers leave
-        them alone and their runs record ``ampere_realised = 0``, which is a
-        fact worth having rather than an absence: it says the draws were
-        scored on the numpy contract path.
+        §10a's "Provenance", W2.13). Left alone (``None``), *realised* is
+        answered by the evaluation cache: it is ``True`` exactly when the
+        gradient-free fast path scored this run's proposals through the
+        realisation, and ``False`` when they went through the numpy contract
+        path. Until W2.5 slice 3 the three gradient-free drivers could only
+        record ``0``; now the attribute says which of the two actually
+        happened, which is what ``ampere_realised`` has always meant.
 
         *log_likelihood_terms* is §10a's optional third, added at W2.4 slice 2:
         the per-dataset decomposition **the realisation computed**, shaped
@@ -453,17 +628,21 @@ class Engine(abc.ABC):
         attrs: dict[str, object] = {
             "engine_evaluations": self._cache.calls,
             "engine_draws_recomputed": self._cache.recomputed,
+            "engine_realised_evaluations": self._cache.realised_calls,
         }
         attrs.update(extra_attrs or {})
         if summary:
             attrs["failure_summary"] = summary
+        if registered_lowerings is None and self._cache.realisation is not None:
+            provenance = getattr(self._cache.realisation, "lowering_provenance", None)
+            registered_lowerings = provenance() if callable(provenance) else None
         tree = emit(
             self.problem,
             array,
             evaluations,
             engine=self.NAME,
             coords=coords,
-            realised=realised,
+            realised=self._cache.realised if realised is None else realised,
             registered_lowerings=registered_lowerings,
             extra_attrs=attrs,
         )
