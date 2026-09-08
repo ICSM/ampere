@@ -20,21 +20,54 @@ What is here and what is refused
 W2.13 fixed the coverage floor at the Gaussian family alone. **W2.4 slice 2
 widens it to every family ``ampere.core`` implements for real data**:
 
-===================  ====================================================
-``gaussian``         uncensored and censored (the Tobit form)
-``student_t``        uncensored; censored is refused, see below
-``cauchy``           uncensored and censored
-``poisson``          counts, and the **latent** form ``rate * exp(f)``
-===================  ====================================================
+====================  ====================================================
+``gaussian``          uncensored and censored (the Tobit form)
+``student_t``         uncensored; censored is refused, see below
+``cauchy``            uncensored and censored
+``poisson``           counts, and the **latent** form ``rate * exp(f)``
+``complex_gaussian``  circular complex, uncorrelated (W2.4 slice 3)
+====================  ====================================================
+
+``complex_gaussian`` and the circular complex GP
+------------------------------------------------
+W2.4 slice 2 refused this family outright, on the grounds that the realised
+path carried real tensors from the model's ``flux`` to the observed values.
+Slice 3 makes both ends complex — :mod:`ampere.backends.torch.problem` keeps a
+complex observed tensor where the container is complex, and a model whose
+``flux`` returns a complex tensor composes — so the family is a transcription
+like any other:
+
+``log p = sum[ -|y - mu|**2 / (2 sigma**2) - log(2 pi) - log(sigma**2) ]``,
+
+``ampere.core.ComplexGaussianFamily.log_prob``'s closed form line for line,
+with ``torch.abs`` doing the work ``np.abs`` does there. ``sigma`` stays
+**real**: it is the per-component standard deviation of a circular complex
+Gaussian, which is what ``results_schema.md`` §16 says a
+:class:`~ampere.core.VisibilitySet`'s real-valued uncertainty encodes. The
+normalisation looks as though it is missing a half and is not — two
+independent real Gaussians contribute ``-log(2 pi sigma**2)/2`` each, which is
+the ``-log(2 pi) - log(sigma**2)`` written above.
+
+**The correlated case is refused by name, because ``ampere.core`` refuses it
+first.** ``likelihoods.md`` §4 and the family's own
+:attr:`~ampere.core.ComplexGaussianFamily.ANALYTIC_WITH_GP` declare that a
+circular complex GP *does* marginalise in closed form — one real kernel
+applied independently to the real and imaginary parts, equal component
+covariances and zero pseudo-covariance, so the marginal likelihood is the sum
+of two real Gaussian marginals over the same ``K + diag(σ²)``. That is a
+three-line addition to this module. It is not made, and the reason is a rule
+rather than a shortage of time: the family declares
+``GP_ANALYTIC_IMPLEMENTED = False``, so composing it with a
+:class:`~ampere.core.GaussianProcessNoise` raises at composition on the
+contract path — there is no oracle. ``inference.md`` §10a makes the numpy path
+the thing a realisation is checked against, so a native path with no
+counterpart would be a backend inventing a likelihood, which is exactly what
+:func:`refuse_family` exists to prevent. When Phase 4 implements it in
+``ampere.core`` the refusal below lifts and the reduction above is what
+replaces it.
 
 Two families stay refused, by name, at construction:
 
-``complex_gaussian``
-    Its data are complex, and the realised path carries real tensors from the
-    model's ``flux`` to the observed values. Making it complex end to end is
-    the visibility modality's work (plan §5, Phase 4), not a line in this
-    module; ``ampere.core`` itself declares ``GP_ANALYTIC_IMPLEMENTED =
-    False`` for the same combination and for the same reason.
 ``rice``, ``von_mises``
     Declared slots with no implementation anywhere yet, including the
     reference path. A backend that implemented one first would be inventing
@@ -108,6 +141,12 @@ class FamilyInputs:
     latent: torch.Tensor | None = None
     #: The family object, for its own parameters.
     family: Any = None
+    #: Where a scalar this body needs to build (a Student-t ``nu``, a ``-inf``)
+    #: is built. The lowering's own, so a problem composed on a GPU never
+    #: silently materialises a CPU constant in the middle of its density
+    #: (W2.4 slice 3).
+    dtype: torch.dtype = DEFAULT_DTYPE
+    device: torch.device = DEFAULT_DEVICE
 
 
 def _own_values(inputs: FamilyInputs) -> Mapping[str, Any]:
@@ -124,8 +163,9 @@ def _own_values(inputs: FamilyInputs) -> Mapping[str, Any]:
     return family.context(own)
 
 
-def _scalar(value: Any) -> torch.Tensor:
-    return as_tensor(value, dtype=DEFAULT_DTYPE, device=DEFAULT_DEVICE)
+def _scalar(inputs: FamilyInputs, value: Any) -> torch.Tensor:
+    """*value* as a tensor where this evaluation's arithmetic is happening."""
+    return as_tensor(value, dtype=inputs.dtype, device=inputs.device)
 
 
 def _censored_total(
@@ -186,7 +226,7 @@ def _gaussian(inputs: FamilyInputs) -> torch.Tensor:
 def _student_t(inputs: FamilyInputs) -> torch.Tensor:
     """``StudentTFamily.log_prob``, uncensored (see the module docstring)."""
     z, log_sigma = _standardise(inputs)
-    nu = _scalar(_own_values(inputs)["nu"])
+    nu = _scalar(inputs, _own_values(inputs)["nu"])
     density = (
         torch.lgamma(0.5 * (nu + 1.0))
         - torch.lgamma(0.5 * nu)
@@ -240,6 +280,33 @@ def _poisson(inputs: FamilyInputs) -> torch.Tensor:
     return torch.where(positive.all(), terms.sum(), torch.full_like(terms.sum(), -math.inf))
 
 
+def _complex_gaussian(inputs: FamilyInputs) -> torch.Tensor:
+    """``ComplexGaussianFamily.log_prob``, transcribed. The circular complex model.
+
+    The residual is complex and its modulus is what enters the exponent;
+    ``sigma`` is real, and is the standard deviation of *each* component. Both
+    facts are ``likelihoods.md`` §4's, and the density is the core's expression
+    with ``torch.abs`` in place of ``np.abs``:
+
+    ``-|y - mu|**2 / (2 sigma**2) - log(2 pi) - log(sigma**2)``.
+
+    Censoring never reaches here — a limit on a complex value is not defined,
+    and ``ampere.core``'s ``Likelihood.check_alignment`` refuses the
+    declaration — so, unlike the real Gaussian, there is no Tobit branch and no
+    ``detection`` mask to consult.
+    """
+    sigma = inputs.sigma
+    if sigma is None:  # pragma: no cover - composition refuses this first
+        raise LoweringError(
+            "uncertainty",
+            backend=BACKEND,
+            detail="the complex_gaussian family needs per-sample uncertainties.",
+        )
+    residual = torch.abs(inputs.observed - inputs.predicted)
+    variance = sigma * sigma
+    return torch.sum(-(residual * residual) / (2.0 * variance) - _LOG_2PI - torch.log(variance))
+
+
 #: Family neutral name -> its torch body. The table a lowering consults, and
 #: the one place a new family joins the realised path: add a body, add a row,
 #: and the conformance suite compares it against ``ampere.core``'s at every
@@ -249,6 +316,7 @@ NATIVE_FAMILIES: dict[str, Any] = {
     "student_t": _student_t,
     "cauchy": _cauchy,
     "poisson": _poisson,
+    "complex_gaussian": _complex_gaussian,
 }
 
 #: Families whose torch body cannot consume a censoring declaration, and the
@@ -265,15 +333,40 @@ _CENSORING_REFUSALS: dict[str, str] = {
 }
 
 
-def refuse_family(family: Any, *, censored: bool, latent: bool) -> LoweringError | None:
+def refuse_family(
+    family: Any, *, censored: bool, latent: bool, correlated: bool = False
+) -> LoweringError | None:
     """Whether this backend can lower *family*, and why not when it cannot.
 
     Returns the refusal rather than raising it, so the caller —
     :class:`ampere.backends.torch.problem._LoweredDataset` — raises every one
     of its refusals from one place, at construction, in the order that gives
     the most useful first message.
+
+    *correlated* says whether the dataset's noise model induces correlations.
+    It exists for one family: a ``complex_gaussian`` under a
+    :class:`~ampere.core.GaussianProcessNoise` is declared analytic and is not
+    yet implemented in ``ampere.core``, so this backend refuses it by name
+    rather than inventing the one likelihood the conformance suite could not
+    check. See the module docstring.
     """
     name = family.NAME
+    if correlated and not bool(getattr(family, "GP_ANALYTIC_IMPLEMENTED", True)):
+        return LoweringError(
+            name,
+            backend=BACKEND,
+            detail=(
+                f"the {name!r} family declares that it marginalises a Gaussian process "
+                f"analytically (ANALYTIC_WITH_GP) but that the closed form is not implemented "
+                f"yet (GP_ANALYTIC_IMPLEMENTED is False), so ampere.core has no numpy path for "
+                f"this combination. A realisation is checked against that path (inference.md "
+                f"§10a), so lowering it here would be this backend inventing a likelihood "
+                f"nothing could check. For the complex_gaussian family the closed form is the "
+                f"circular complex GP -- one real kernel on the real and imaginary parts "
+                f"independently -- and it lands with the visibility modality in Phase 4; use "
+                f"IndependentNoise until then."
+            ),
+        )
     if name not in NATIVE_FAMILIES:
         known = ", ".join(sorted(NATIVE_FAMILIES))
         return LoweringError(
@@ -315,15 +408,21 @@ def native_log_prob(inputs: FamilyInputs) -> torch.Tensor:
     return NATIVE_FAMILIES[inputs.family.NAME](inputs)
 
 
-def limit_masks(kinds: Any) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
+def limit_masks(
+    kinds: Any, *, device: torch.device = DEFAULT_DEVICE
+) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
     """The three constant index masks a censoring declaration reduces to.
 
     ``None`` for a group with no members, so a dataset whose limits were all
     masked away costs nothing and takes the uncensored path — ``likelihoods.md``
     §9's "masking beats censoring", arriving here as a shape rather than as a
     branch.
+
+    *device* is the lowering's, because these masks index tensors that live
+    there: a CPU mask against a CUDA density is an error torch raises once per
+    evaluation rather than once at composition.
     """
-    codes = torch.as_tensor(kinds, dtype=torch.int64, device=DEFAULT_DEVICE)
+    codes = torch.as_tensor(kinds, dtype=torch.int64, device=device)
 
     def group(kind: LimitKind) -> torch.Tensor | None:
         mask = codes == int(kind)
