@@ -58,6 +58,7 @@ __all__ = [
     "Tolerances",
     "TransformationKind",
     "TransformationSpec",
+    "complex_axes",
 ]
 
 
@@ -138,7 +139,7 @@ class KernelFamily(enum.StrEnum):
 class ModelKind(enum.StrEnum):
     """The analytic model forms the battery composes problems from.
 
-    Both are closed forms, so every likelihood row has an oracle that never
+    All are closed forms, so every likelihood row has an oracle that never
     calls ampere. Between them they cover the three bijections
     ``default_bijection_for`` can pick.
 
@@ -150,10 +151,26 @@ class ModelKind(enum.StrEnum):
         ``f(x) = norm * (x / x_ref) ** index``, with
         ``norm ~ LogUniform(0.1, 10)`` (bounded below and above, so ``Logit``)
         and ``index ~ Normal(-1, 0.5)`` (``Identity``).
+    ``COMPLEX``
+        ``V(x) = norm * exp(2 pi i * index * x)`` — a **complex**-valued
+        channel, emitted as a :class:`~ampere.core.VisibilitySet` rather than a
+        ``Spectrum``. Added at W2.4 slice 3, for the ``complex_gaussian``
+        family: it is the smallest form whose values are complex and whose
+        parameters still move both the modulus and the phase, so a backend that
+        dropped the imaginary part somewhere would disagree with the oracle
+        rather than merely lose precision. The parameter names and priors are
+        deliberately ``POWER_LAW``'s, so nothing else in the battery has to
+        learn a third vocabulary.
+
+        Only backends declaring
+        :attr:`BackendCapabilities.complex_models` are asked for one; every
+        row that uses it skips elsewhere, so it is additive in exactly the way
+        :attr:`BackendCapabilities.solvers` is.
     """
 
     LINEAR = "linear"
     POWER_LAW = "power_law"
+    COMPLEX = "complex"
 
 
 class TransformationKind(enum.StrEnum):
@@ -345,6 +362,13 @@ class BackendCapabilities:
         precision. ``architecture.md`` §5 makes float64 the policy for GP
         solves; a backend that opts out for GPU throughput declares it here
         and widens ``tolerances.cross_backend`` accordingly.
+    ``complex_models``
+        Whether :meth:`ConformanceBackend.model` can realise
+        :attr:`ModelKind.COMPLEX` — a channel of complex values, which the
+        ``complex_gaussian`` rows need. ``False`` by default, so a backend that
+        has not written one is unaffected and those rows skip with a reason;
+        the alternative, a required fixture method, would have made a
+        Phase-2 track's own slice a change to every other track's fixture.
     ``tolerances``
         The per-comparison table (:class:`Tolerances`). It lives on the
         backend, not in a module constant, because a float32 or
@@ -356,6 +380,7 @@ class BackendCapabilities:
     batchable: bool = False
     device: str = "cpu"
     float64: bool = True
+    complex_models: bool = False
     solvers: frozenset[SolverKind] = frozenset({SolverKind.DENSE})
     tolerances: Tolerances = DEFAULT_TOLERANCES
 
@@ -452,6 +477,26 @@ class ConformanceBackend(Protocol):
         numpy. A backend working in torch or jax arrays converts here — and
         only here, so no row has to know.
         """
+
+
+def complex_axes(coordinates: Any) -> tuple[np.ndarray, np.ndarray]:
+    """The ``(u, v)`` point set a :attr:`ModelKind.COMPLEX` channel lives on.
+
+    A :class:`~ampere.core.VisibilitySet` has two coordinate axes and a
+    ``ModelSpec`` declares one sequence of coordinates, so the second has to
+    come from somewhere. It comes from here rather than from either side,
+    because ``Likelihood.check_alignment`` compares the predicted and observed
+    axes for equality: the fixture's model and the battery's observed container
+    must derive them by the *same* rule, and a rule written twice is a rule
+    that eventually differs.
+
+    ``v = u / 2`` is arbitrary and deliberately so — the battery's complex rows
+    are about the family's arithmetic, not about (u,v) coverage — but it is
+    distinct from ``u``, which keeps the two axes from being accidentally
+    interchangeable in a comparison.
+    """
+    u_axis = np.asarray(coordinates, dtype=float)
+    return u_axis, 0.5 * u_axis
 
 
 def solver_kinds(capabilities: BackendCapabilities) -> tuple[SolverKind, ...]:

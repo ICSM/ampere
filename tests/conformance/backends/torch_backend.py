@@ -17,7 +17,7 @@ What the battery therefore exercises for real, on every row:
 * :class:`~ampere.backends.torch.DenseGP` — the GP rows, through torch's
   Cholesky rather than scipy's.
 
-Two pieces stay local, for the same reasons they do in the reference fixture.
+Three pieces stay local, for the same reasons they do in the reference fixture.
 ``LinearModel`` realises ``ModelKind.LINEAR``, which is a *test* construct — a
 straight line in wavelength is not on ``DEVELOPMENT_PLAN.md`` §5's list of
 models a backend ships, and shipping one only to satisfy a fixture would put
@@ -26,9 +26,13 @@ test scaffolding in the installed package. ``Photometry`` realises
 whose kinds do not compose" and is declared by bare pivots and names; the
 shipped :class:`~ampere.backends.torch.SyntheticPhotometry` is the physics,
 takes tabulated response curves and publishes ``points=``, which the battery's
-declaration cannot supply. Both are written in torch here, like everything else
-this fixture returns, so no row in the battery runs numpy arithmetic under the
-``torch`` id.
+declaration cannot supply. ``PointSourceModel`` realises ``ModelKind.COMPLEX``
+(W2.4 slice 3): a flat complex visibility with a winding phase, which is what
+the ``complex_gaussian`` rows need a channel of. A real visibility model
+belongs with the modality it serves — plan §5 puts that in Phase 4 — so the
+battery's is the battery's, exactly as its straight line is. All three are
+written in torch here, like everything else this fixture returns, so no row in
+the battery runs numpy arithmetic under the ``torch`` id.
 
 The counting wrapper is likewise test-only: ``protocol.py``'s ``CountingModel``
 is the battery's requirement, not something a shipped model should carry.
@@ -78,6 +82,7 @@ from ampere.core import (
     HierarchicalPrior,
     Kernel,
     Model,
+    ModelResult,
     NoiseModel,
     Parameter,
     ParameterSet,
@@ -85,6 +90,7 @@ from ampere.core import (
     Plate,
     Spectrum,
     Transformation,
+    VisibilitySet,
     propagate_mask,
 )
 
@@ -97,12 +103,14 @@ from ..protocol import (
     SolverKind,
     TransformationKind,
     TransformationSpec,
+    complex_axes,
 )
 
 __all__ = [
     "BACKEND",
     "LinearModel",
     "Photometry",
+    "PointSourceModel",
     "PowerLawModel",
     "TorchBackend",
 ]
@@ -232,6 +240,88 @@ class PowerLawModel(_CountingModel, PowerLaw):
         )
 
 
+class PointSourceModel(Model):
+    """``V(x) = norm * exp(i * index * x)`` — the battery's ``COMPLEX`` kind.
+
+    Local to the battery, and complex all the way through: the buffer is real
+    (the ``u`` axis), the flux is a ``torch.complex128`` tensor, and
+    :meth:`evaluate` emits a :class:`~ampere.core.VisibilitySet`, which is the
+    only container kind ``results_schema.md`` §16 allows complex values in.
+
+    It does not subclass :class:`~ampere.backends.torch.TorchSpectralModel`,
+    and that is the point rather than an omission: that class is spectrum
+    shaped — a micron axis, a Jy ``Spectrum`` per channel, a real ``_flux`` —
+    and a visibility model shares none of it but the parameter plumbing. What
+    it does share is the **native surface** a realisation walks (``grid`` and
+    ``flux``), which is written out here so that a reviewer can see the whole
+    of what :mod:`ampere.backends.torch.problem` requires of a model in one
+    screen.
+
+    The second (``v``) axis comes from
+    :func:`~tests.conformance.protocol.complex_axes`, the same rule the
+    observed container uses; see that function for why it is not written twice.
+    """
+
+    DIFFERENTIABLE: ClassVar[bool] = True
+    BATCHABLE: ClassVar[bool] = True
+    DEVICE: ClassVar[str] = "cpu"
+    BACKEND: ClassVar[str] = BACKEND
+
+    def __init__(self, spec: ModelSpec) -> None:
+        u_axis, v_axis = complex_axes(spec.coordinates)
+        self.spec = spec
+        self.evaluations = 0
+        self.channels = tuple(spec.channels)
+        self.dtype = torch.complex128
+        self.device = torch.device("cpu")
+        self.register_buffer("u", u_axis)
+        self.register_buffer("v", v_axis)
+        self._u = as_tensor(u_axis)
+        self._v = as_tensor(v_axis)
+        self.register_parameter(Parameter("norm", st.loguniform(0.1, 10.0)))
+        self.register_parameter(Parameter("index", st.norm(-1.0, 0.5)))
+
+    def reset_evaluations(self) -> None:
+        self.evaluations = 0
+
+    # -- the native surface a realisation composes ---------------------------
+
+    def grid(self, channel: str) -> torch.Tensor:
+        """The ``u`` axis. One channel, so *channel* is only validated."""
+        if channel not in self.channels:
+            raise KeyError(channel)
+        return self._u
+
+    def flux(self, channel: str, values: Any = None) -> torch.Tensor:
+        """``norm * exp(i * index * u)`` as a complex tensor, gradient intact.
+
+        ``torch.polar`` rather than ``exp(1j * phase)``: it takes a real
+        modulus and a real angle and builds the complex number from them, so
+        both parameters stay real leaves of the graph and autograd never has to
+        differentiate through a complex-valued exponential. The value is the
+        same; the derivative is the one a real-parameter model should have.
+        """
+        context = self.context({} if values is None else values)
+        norm = as_tensor(context["norm"])
+        index = as_tensor(context["index"])
+        return torch.polar(norm.expand(self._u.shape), index * self._u)
+
+    # -- the contract surface -------------------------------------------------
+
+    def evaluate(self, **values: Any) -> ModelResult:
+        self.evaluations += 1
+        emitted = {
+            channel: VisibilitySet(
+                to_numpy(self._u),
+                to_numpy(self._v),
+                to_numpy(self.flux(channel, values)).astype(np.complex128, copy=False),
+                unit=FLUX_UNIT,
+            )
+            for channel in self.channels
+        }
+        return ModelResult(emitted)
+
+
 class Photometry(Transformation):
     """``Spectrum -> PhotometricPoints``: the battery's kind-changing step.
 
@@ -286,7 +376,11 @@ class Photometry(Transformation):
         )
 
 
-_MODELS = {ModelKind.LINEAR: LinearModel, ModelKind.POWER_LAW: PowerLawModel}
+_MODELS = {
+    ModelKind.LINEAR: LinearModel,
+    ModelKind.POWER_LAW: PowerLawModel,
+    ModelKind.COMPLEX: PointSourceModel,
+}
 _KERNELS = {KernelFamily.MATERN32: Matern32, KernelFamily.SQUARED_EXPONENTIAL: SquaredExponential}
 
 
@@ -319,6 +413,9 @@ class TorchBackend:
         # architecture.md §5's policy, not a preference: every tensor is built
         # float64 and torch's global default dtype is never touched.
         float64=True,
+        # W2.4 slice 3: ``PointSourceModel`` realises ModelKind.COMPLEX, so the
+        # ``complex_gaussian`` rows run here rather than skipping.
+        complex_models=True,
         # Both, since W2.4 slice 2: see the module docstring.
         solvers=frozenset({SolverKind.DENSE, SolverKind.QUASISEP}),
     )

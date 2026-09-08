@@ -57,7 +57,7 @@ from ampere.core import (
     ModelResult,
     Spectrum,
 )
-from ._config import BACKEND, DEFAULT_DEVICE, DEFAULT_DTYPE, as_tensor, to_numpy
+from ._config import BACKEND, DEFAULT_DEVICE, DEFAULT_DTYPE, as_tensor, move, place, to_numpy
 from ._declare import as_parameter
 from .parameters import LoweredParameters
 
@@ -145,6 +145,12 @@ class TorchSpectralModel(Model):
     #: ``batchable=False``, and the batched call then refuses by name.
     DIFFERENTIABLE: ClassVar[bool] = True
     BATCHABLE: ClassVar[bool] = True
+    #: The class-level default only. Since W2.4 slice 3 ``__init__`` sets an
+    #: **instance** attribute of the same name from its ``device=`` keyword, so
+    #: a model built on ``"cuda"`` declares ``"cuda"`` and
+    #: :func:`~ampere.core.declared_capabilities` — which reads ``part.DEVICE``
+    #: by attribute access — composes the whole problem on that device or
+    #: refuses. Never auto-detected (``architecture.md`` §5).
     DEVICE: ClassVar[str] = "cpu"
     BACKEND: ClassVar[str] = BACKEND
 
@@ -168,15 +174,17 @@ class TorchSpectralModel(Model):
                 f"a spectral model needs distinct, non-empty channel names, got {names!r}."
             )
         self.channels = names
-        self.dtype = dtype
-        self.device = device
+        # dtype, device and the DEVICE capability flag, set together: see
+        # ``_config.place``. This is the line that makes the device a property
+        # of the instance rather than of the class.
+        place(self, dtype, device)
         #: The torch-side home for this model's constant arrays (``lowering.md``
         #: §7). Buffers rather than parameters: no gradient, but they move with
         #: ``.to()`` and they are in the ``state_dict``.
         self.tensors = LoweredParameters()
         self.register_buffer("wavelength", grid, unit=COORDINATE_UNIT)
         self.tensors.register_buffer(
-            "wavelength", as_tensor(grid, dtype=dtype, device=device), persistent=True
+            "wavelength", as_tensor(grid, dtype=self.dtype, device=self.device), persistent=True
         )
         self.templates: dict[str, Spectrum] = {}
         self._grids: dict[str, torch.Tensor] = {}
@@ -194,6 +202,23 @@ class TorchSpectralModel(Model):
                 grid * COORDINATE_UNIT, np.zeros(grid.size, dtype=DTYPE), unit=FLUX_UNIT
             )
             self._grids[channel] = as_tensor(grid, dtype=self.dtype, device=self.device)
+        return self
+
+    def to(self, *, dtype: Any = None, device: Any = None) -> TorchSpectralModel:
+        """Move this model's buffers, and re-declare where they live.
+
+        ``architecture.md`` §5's "buffers move with parameters under
+        ``.to(...)``". Every constant this model owns is registered on
+        :attr:`tensors`, an ``nn.Module``, so torch's own recursion does the
+        move; the negotiated per-channel grids :meth:`compile_for` cached are
+        moved beside them, because they are the same kind of thing under a
+        different owner. In place, returning ``self``.
+        """
+        move(self, dtype=dtype, device=device)
+        self._grids = {
+            channel: grid.to(dtype=self.dtype, device=self.device)
+            for channel, grid in self._grids.items()
+        }
         return self
 
     def grid_tensor(self, channel: str) -> torch.Tensor:

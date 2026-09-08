@@ -62,6 +62,7 @@ A frozen record:
 | `differentiable`, `batchable`, `device` | three of the four flags `inference.md` §18 says a backend declares. Mirror `ampere.core.Capabilities`. The fourth, `backend`, is not repeated here: it *is* `name` above. |
 | `float64` | whether the likelihood linear algebra runs in double precision. `architecture.md` §5 makes float64 the policy for GP solves; a backend that opts out for GPU throughput says so here and widens `tolerances.cross_backend`. |
 | `solvers` | the `SolverKind`s `gp_solver` can return an *implemented* solver for. Rows for absent kinds skip with a reason naming what is owed. |
+| `complex_models` | whether `model()` can realise `ModelKind.COMPLEX` — a channel of complex values, which the `complex_gaussian` rows need. `False` by default; those rows then skip with a reason. Added at W2.4 slice 3, and made a capability rather than a required protocol member so that one track's slice is not a change to every other track's fixture. |
 | `tolerances` | the per-comparison table (§3). |
 
 ### `model(spec: ModelSpec) -> Model`
@@ -75,18 +76,26 @@ way to assert that from outside without the model saying so.)
 
 `ModelSpec` carries:
 
-* **`kind`** — one of two closed forms, so every downstream oracle is
+* **`kind`** — one of three closed forms, so every downstream oracle is
   analytic:
   * `LINEAR`: `f(x) = offset + slope * x`, with `offset ~ Normal(0, 1)` and
     `slope ~ Normal(1, 0.5)` — both unbounded, so both lower to `Identity`.
   * `POWER_LAW`: `f(x) = norm * (x / x_ref) ** index`, with
     `norm ~ LogUniform(0.1, 10)` (bounded both ways → `Logit`) and
     `index ~ Normal(-1, 0.5)` (`Identity`).
+  * `COMPLEX`: `V(x) = norm * exp(i * index * x)`, the same two parameters
+    under the same priors, emitted as a **`VisibilitySet`** whose second (`v`)
+    axis comes from `protocol.complex_axes` — the same rule the observed
+    container uses, because `check_alignment` compares the two for equality.
+    Optional: only asked for if you declare `capabilities.complex_models`. Note
+    that the modulus does not depend on `index`, deliberately — a backend that
+    dropped the imaginary part would score a density independent of one of its
+    own parameters, which the row then catches by nats rather than by digits.
   Declare exactly those parameters, under exactly those names. The `lnprior`,
   `prior_transform` and spec-hash rows compare by name across backends, so a
   renamed parameter is a failure, not a detail.
 * **`channels`** — one `Spectrum` per named channel in the returned
-  `ModelResult`.
+  `ModelResult` (a `VisibilitySet` for `COMPLEX`).
 * **`coordinates`** — the model's own grid, in **micron**; emitted flux is in
   **Jy**. Units are fixed here so containers stay comparable across backends
   without making unit negotiation a backend author's problem.
@@ -314,6 +323,19 @@ Added at the freeze (W1.13):
   (`TestStagedAnalyticCombination`): the declaration row runs, the
   composition-refusal row runs, and Phase 4 replaces the refusal with
   agreement rows against the circular closed form.
+
+  **The uncorrelated half landed at W2.4 slice 3** and the staged half is
+  unchanged. `ModelKind.COMPLEX` and the `COMPLEX` shape in
+  `test_inference.py` give the family a *realised* row —
+  `test_the_complex_realisation_agrees_with_the_numpy_path`, at
+  `tolerances.cross_backend`, on any backend declaring
+  `capabilities.complex_models` — and
+  `test_a_complex_gp_is_refused_by_name_on_every_path` pins the invariant that
+  makes the staging safe: the contract path refuses the composition, so no
+  backend can be quietly computing something for it. When Phase 4 implements
+  the circular complex GP in `ampere.core`, that refusal row becomes the
+  agreement row and each backend's `refuse_family` drops its `correlated`
+  branch.
 * ~~**`GPSolver.conditional_loo`** outlived the QuasisepGP debt: `DenseGP`
   implements the leave-one-out terms and `QuasisepGP` refuses, W2.3 having
   **deferred** the O(N) recursion with a decision-log entry

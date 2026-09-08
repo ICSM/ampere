@@ -161,6 +161,23 @@ class LoweredParameters(nn.Module):
         return created
 
 
+def _fork_devices(device: torch.device) -> list[torch.device]:
+    """Which device RNGs :meth:`TorchParameterSpace.sample`'s route (1) must fork.
+
+    ``torch.random.fork_rng`` saves and restores the CPU generator always and
+    the *accelerator* generators only for the devices it is given.
+    ``devices=[]`` — the spelling this package used while it was CPU-only —
+    therefore leaves a CUDA draw's global state advanced after the ``with``
+    block, which is exactly the process-global mutation route (2) exists to
+    avoid and route (1) can at least be made to clean up after.
+
+    Only CUDA devices are listed, because that is the accelerator ``fork_rng``
+    knows how to save by default; a CPU space forks nothing extra, which is the
+    behaviour every existing row pins.
+    """
+    return [device] if device.type == "cuda" else []
+
+
 def _place(root: LoweredParameters, name: str) -> tuple[LoweredParameters, str]:
     """The module a merged *name* belongs on, and the leaf name it takes there.
 
@@ -738,6 +755,18 @@ class TorchParameterSpace:
         preferred because it is the only one that never touches process-global
         state and the only one that is safe under threading; its limitation is
         exactly the ``icdf`` gap, so a backend needs both.
+
+        **The uniforms are drawn on the CPU whatever device this space is on**
+        (W2.4 slice 3). A ``torch.Generator`` is per-device — torch refuses a
+        CPU generator for a CUDA draw outright — so this had two possible
+        fixes, and the other one was wrong: a CUDA generator seeded from
+        ``seed_for(seed, label)`` produces a *different* stream from the CPU
+        one, which would break the promise :func:`~ampere.backends.torch.rng.seed_for`
+        makes in as many words, that "``(seed, label)`` gives the same stream in
+        this process, the next one, and on another machine". A prior draw is a
+        handful of scalars, so the transfer costs nothing and reproducibility
+        is worth more than it. Route (1) cannot make the same promise — see
+        below.
         """
         from .rng import generator  # local: keeps the import graph acyclic
 
@@ -753,12 +782,23 @@ class TorchParameterSpace:
             shape = parameter.shape if parameter.shape else ()
             lowered = self.distribution_of(name, tensors)
             if lowered.has_icdf:
+                # On the CPU, then moved: see the method docstring for why the
+                # alternative -- a generator on this space's own device --
+                # would have been a reproducibility regression rather than an
+                # optimisation.
                 uniforms = torch.rand(
-                    shape, generator=stream, dtype=self._dtype, device=self._device
-                )
+                    shape, generator=stream, dtype=self._dtype, device=DEFAULT_DEVICE
+                ).to(device=self._device)
                 drawn = lowered.icdf(uniforms)
             else:
-                with torch.random.fork_rng(devices=[]):
+                # Route (1) draws from the *global* RNG of whichever device the
+                # lowered distribution's parameters live on, because that is
+                # what ``Distribution.sample`` does and it takes no generator.
+                # So the fork has to cover that device or the draw would leave
+                # the process's CUDA stream advanced behind the caller's back;
+                # ``devices=[]`` saves and restores nothing, which was right
+                # while this package was CPU-only and is not now.
+                with torch.random.fork_rng(devices=_fork_devices(self._device)):
                     torch.manual_seed(int(torch.randint(0, 2**31 - 1, (), generator=stream)))
                     drawn = lowered.distribution.sample(torch.Size(shape))
             tensors[name] = drawn

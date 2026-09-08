@@ -93,9 +93,30 @@ masks, plates and hierarchical priors. Slice 2 widens it to:
   meant copying that defect or disagreeing with the oracle. W2.14 fixed the
   oracle; this backend follows it rather than leading it.
 
-One thing stays refused, by name and for a stated reason rather than for want
-of time: ``complex_gaussian`` needs complex tensors end to end and belongs
-with the visibility modality (plan §5, Phase 4).
+What slice 3 added
+------------------
+* **``complex_gaussian``**, and with it complex tensors end to end. A dataset
+  whose observed container holds complex values (a
+  :class:`~ampere.core.VisibilitySet`) keeps them complex here, and a model
+  whose ``flux`` returns a complex tensor composes; the residual is complex,
+  the sigma is real, and the density is real. What is *still* refused is the
+  correlated case, because ``ampere.core`` refuses it first —
+  :mod:`ampere.backends.torch._families` carries the reasoning and the closed
+  form Phase 4 will implement.
+* **a device**. Every tensor this module builds is built on the device the
+  composed problem declares (``problem.device``, aggregated by
+  :func:`~ampere.core.declared_capabilities` from parts that now declare it per
+  instance), rather than on :data:`~ampere.backends.torch._config.DEFAULT_DEVICE`.
+  A realisation therefore lives entirely where its pieces said they do, and a
+  problem assembled half on a GPU is refused at composition rather than
+  discovered inside a Cholesky.
+* **a refusal for a prediction-aware noise model with no native surface.**
+  ``_sigma`` consults ``noise.sigma_tensor`` and fell back to the base
+  quadrature when there was none — which is right for
+  :class:`~ampere.core.IndependentNoise`, whose sigma *is* the base, and
+  silently wrong for anything that overrides ``sigma`` to depend on the
+  prediction. Such a noise model is refused by name at construction now; see
+  :meth:`_LoweredDataset._check_noise_surface`.
 """
 
 from __future__ import annotations
@@ -119,7 +140,14 @@ from ampere.core.dataset import (
 )
 from ampere.core.exceptions import LoweringError
 
-from ._config import BACKEND, DEFAULT_DEVICE, DEFAULT_DTYPE, as_tensor
+from ._config import (
+    BACKEND,
+    DEFAULT_DEVICE,
+    DEFAULT_DTYPE,
+    as_tensor,
+    complex_dtype,
+    resolve_device,
+)
 from ._families import FamilyInputs, limit_masks, native_log_prob, refuse_family
 from .parameters import TorchParameterSpace
 
@@ -132,15 +160,31 @@ def _refuse(what: str, detail: str) -> LoweringError:
     return LoweringError(what, backend=BACKEND, detail=detail)
 
 
-def _tensor(value: Any) -> torch.Tensor:
-    return as_tensor(value, dtype=DEFAULT_DTYPE, device=DEFAULT_DEVICE)
+def _tensor(value: Any, *, device: torch.device = DEFAULT_DEVICE) -> torch.Tensor:
+    return as_tensor(value, dtype=DEFAULT_DTYPE, device=device)
+
+
+#: The noise models whose ``sigma`` this module transcribes in
+#: :meth:`_LoweredDataset._base_sigma`. A subclass that overrides ``sigma`` is
+#: computing something else, and unless it also supplies ``sigma_tensor`` the
+#: realised density would quietly use the base quadrature instead — a different
+#: likelihood from the contract path's, arrived at without a word. See
+#: :meth:`_LoweredDataset._check_noise_surface`.
+_TRANSCRIBED_SIGMA = (IndependentNoise.sigma, GaussianProcessNoise.sigma)
 
 
 class _LoweredDataset:
     """One dataset's forward chain and log-likelihood, as torch."""
 
-    def __init__(self, problem: FittingProblem, label: str) -> None:
+    def __init__(
+        self,
+        problem: FittingProblem,
+        label: str,
+        *,
+        device: torch.device = DEFAULT_DEVICE,
+    ) -> None:
         dataset = problem.datasets[label]
+        self.device = device
         self.label = label
         self.model_label = problem.bindings[label]
         self.model = problem.models[self.model_label]
@@ -170,6 +214,7 @@ class _LoweredDataset:
             self.likelihood.family,
             censored=censoring is not None and bool(censoring.any_censored),
             latent=dataset.latent is not None,
+            correlated=bool(getattr(self.noise, "CORRELATED", False)),
         )
         if refusal is not None:
             raise refusal
@@ -221,6 +266,7 @@ class _LoweredDataset:
                 f"dataset {label!r} uses a noise model this backend does not know how to "
                 f"compose natively.",
             )
+        self._check_noise_surface()
         self.correlated = correlated
         # Which of the two correlated stories this dataset tells, decided by
         # the family's own declaration rather than by its name. A family whose
@@ -240,14 +286,28 @@ class _LoweredDataset:
         if excluded is None:
             excluded = ~np.asarray(observed.valid, dtype=bool).ravel()
         self.retain = ~np.asarray(excluded, dtype=bool).ravel()
-        self.observed_values = _tensor(np.asarray(observed.values, dtype=float)[self.retain])
+        # Complex data stay complex (W2.4 slice 3). ``dtype=float`` here was
+        # what made ``complex_gaussian`` unreachable, and it would not have
+        # failed loudly if it had been reached: numpy 2.5 *warns*
+        # (ComplexWarning) and discards the imaginary part rather than raising,
+        # so the density would have been the one for the real projection of the
+        # data. What kept that from happening was the family refusal at
+        # construction, which is exactly why the refusal came first and the
+        # dtype second. The container's own dtype kind decides now, once, here.
+        values = np.asarray(observed.values)
+        self.complex_valued = values.dtype.kind == "c"
+        self.observed_values = as_tensor(
+            values[self.retain],
+            dtype=complex_dtype(DEFAULT_DTYPE) if self.complex_valued else DEFAULT_DTYPE,
+            device=device,
+        )
         self.observed_coordinates = _tensor(
-            np.asarray(observed.axes[0].values, dtype=float)[self.retain]
+            np.asarray(observed.axes[0].values, dtype=float)[self.retain], device=device
         )
         self.uncertainty = (
             None
             if observed.uncertainty is None
-            else _tensor(np.asarray(observed.uncertainty, dtype=float)[self.retain])
+            else _tensor(np.asarray(observed.uncertainty, dtype=float)[self.retain], device=device)
         )
         # Which samples are limits is a fact about the data, so the three
         # groups are resolved once here rather than per evaluation. A limit on
@@ -258,8 +318,45 @@ class _LoweredDataset:
         if censoring is not None:
             censoring.check_against(observed)
             self.detection, self.upper, self.lower = limit_masks(
-                np.asarray(censoring.kinds)[self.retain]
+                np.asarray(censoring.kinds)[self.retain], device=device
             )
+
+    def _check_noise_surface(self) -> None:
+        """Refuse a prediction-aware noise model with no ``sigma_tensor``.
+
+        W2.4 slice 3, item 4: the hook's last consumer gap. :meth:`_sigma`
+        computes the base quadrature and hands it to ``noise.sigma_tensor``
+        where there is one; where there is not, it used to return the base —
+        correct for the two noise models this module transcribes, and silently
+        *wrong* for any subclass that overrides ``sigma`` to depend on the
+        prediction, because the realised density would then be a different
+        likelihood from the contract path's with nothing said.
+
+        ``ampere.core`` has no "prediction-aware" flag to test, and inventing
+        one would be a contract change; what it does have is the two ``sigma``
+        implementations this module reproduces, so the test is whether the
+        noise model still uses one of them. A subclass that overrides ``sigma``
+        and supplies ``sigma_tensor`` — this backend's
+        :class:`~ampere.backends.torch.FractionalModelNoise` and
+        :class:`~ampere.backends.torch.FractionalModelGPNoise` — passes; one
+        that overrides it and does not is refused by name, with the remedy in
+        the message.
+        """
+        if hasattr(self.noise, "sigma_tensor"):
+            return
+        if type(self.noise).sigma in _TRANSCRIBED_SIGMA:
+            return
+        raise _refuse(
+            type(self.noise).__name__,
+            f"dataset {self.label!r} uses a noise model that overrides sigma() but supplies no "
+            f"native `sigma_tensor`. A realised density transcribes the base quadrature "
+            f"sqrt((scale*sigma_data)**2 + jitter**2) in torch and hands it to sigma_tensor; "
+            f"with no such method it would silently score the base instead of whatever sigma() "
+            f"computes -- a different likelihood from the contract path's. Add sigma_tensor(base, "
+            f"values, *, predicted) returning a tensor (see "
+            f"ampere.backends.torch.FractionalModelNoise), or run this problem on a "
+            f"gradient-free engine, which uses sigma() directly.",
+        )
 
     # -- routing ------------------------------------------------------------
 
@@ -323,11 +420,15 @@ class _LoweredDataset:
         if sigma is None:
             if "jitter" not in resolved:
                 return None
-            return _tensor(resolved["jitter"]).expand(int(self.retain.sum())).clone()
+            return (
+                _tensor(resolved["jitter"], device=self.device)
+                .expand(int(self.retain.sum()))
+                .clone()
+            )
         if "scale" in resolved:
-            sigma = sigma * _tensor(resolved["scale"])
+            sigma = sigma * _tensor(resolved["scale"], device=self.device)
         if "jitter" in resolved:
-            floor = _tensor(resolved["jitter"])
+            floor = _tensor(resolved["jitter"], device=self.device)
             sigma = torch.sqrt(sigma**2 + floor**2)
         return sigma
 
@@ -367,7 +468,7 @@ class _LoweredDataset:
         if self.latent_name is None:
             return None
         block = self._dataset_values(routed).get(LATENT_COMPONENT, {})
-        whitened = _tensor(block[self.latent_name]).reshape(-1)
+        whitened = _tensor(block[self.latent_name], device=self.device).reshape(-1)
         return self.noise.solver.latent_transform_native(
             self.noise.kernel,
             self.observed_coordinates,
@@ -420,6 +521,8 @@ class _LoweredDataset:
                     lower=self.lower,
                     latent=self._latent(routed, values),
                     family=self.likelihood.family,
+                    dtype=DEFAULT_DTYPE,
+                    device=self.device,
                 )
             )
         return torch.where(torch.isfinite(value), value, torch.full_like(value, -math.inf))
@@ -457,9 +560,18 @@ class LoweredProblem:
                 f"pieces cannot be lowered here — build it from ampere.backends.torch's.",
             )
         self.problem = problem
-        self.parameters = TorchParameterSpace(problem.parameters, strict=problem.strict)
+        # Where this realisation lives (W2.4 slice 3). ``problem.device`` is
+        # ``declared_capabilities``' aggregate over every part, which refuses a
+        # problem whose pieces name two devices -- so by the time we are here
+        # there is exactly one answer and every tensor below is built on it.
+        self.device = resolve_device(problem.device)
+        self.parameters = TorchParameterSpace(
+            problem.parameters, strict=problem.strict, device=self.device
+        )
         self._mapping = problem.mapping
-        self._datasets = tuple(_LoweredDataset(problem, label) for label in problem.datasets)
+        self._datasets = tuple(
+            _LoweredDataset(problem, label, device=self.device) for label in problem.datasets
+        )
 
     @property
     def backend(self) -> str:
@@ -503,7 +615,7 @@ class LoweredProblem:
 
     def log_likelihood(self, theta: Any) -> torch.Tensor:
         """``log p(data | θ)``, summed over datasets."""
-        total = _tensor(0.0)
+        total = _tensor(0.0, device=self.device)
         for value in self._likelihood_terms(theta).values():
             total = total + value
         return torch.where(torch.isfinite(total), total, torch.full_like(total, -math.inf))
@@ -635,7 +747,7 @@ class LoweredProblem:
                 f"DenseGP is the batchable alternative. Evaluate the vectors one at a time with "
                 f"log_prob_unconstrained.",
             )
-        stack = as_tensor(unconstrained, dtype=DEFAULT_DTYPE, device=DEFAULT_DEVICE)
+        stack = as_tensor(unconstrained, dtype=DEFAULT_DTYPE, device=self.device)
         if stack.ndim != 2 or int(stack.shape[1]) != self.free_size:
             raise _refuse(
                 "batching",
@@ -661,7 +773,8 @@ class LoweredProblem:
     def __repr__(self) -> str:
         return (
             f"<LoweredProblem {self.free_size} free dimension(s), "
-            f"{len(self._datasets)} dataset(s), backend={BACKEND!r}>"
+            f"{len(self._datasets)} dataset(s), backend={BACKEND!r}, "
+            f"device={str(self.device)!r}>"
         )
 
 

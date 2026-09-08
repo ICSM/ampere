@@ -65,7 +65,7 @@ from ampere.core import (
     propagate_mask,
 )
 
-from ._config import BACKEND, DEFAULT_DEVICE, DEFAULT_DTYPE, as_tensor, to_numpy
+from ._config import BACKEND, DEFAULT_DEVICE, DEFAULT_DTYPE, as_tensor, move, place, to_numpy
 from ._declare import as_parameter
 from .parameters import LoweredParameters
 
@@ -135,6 +135,10 @@ class TorchStep(Transformation):
     #: ``batchable=False``, and the batched call then refuses by name.
     DIFFERENTIABLE: ClassVar[bool] = True
     BATCHABLE: ClassVar[bool] = True
+    #: The class-level default only; ``__init__`` shadows it with an instance
+    #: attribute taken from ``device=`` (W2.4 slice 3), which is what makes
+    #: ``ampere.core.declared_capabilities`` compose a whole chain on one
+    #: named device. Never auto-detected (``architecture.md`` §5).
     DEVICE: ClassVar[str] = "cpu"
     BACKEND: ClassVar[str] = BACKEND
 
@@ -146,9 +150,22 @@ class TorchStep(Transformation):
         device: torch.device = DEFAULT_DEVICE,
     ) -> None:
         super().__init__(label=label)
-        self.dtype = dtype
-        self.device = device
+        # dtype, device and the DEVICE capability flag, set together; see
+        # ``_config.place``.
+        place(self, dtype, device)
         self.tensors = LoweredParameters()
+
+    def to(self, *, dtype: Any = None, device: Any = None) -> TorchStep:
+        """Move this step's buffers, and re-declare where they live.
+
+        ``architecture.md`` §5's "buffers move with parameters under
+        ``.to(...)``": every constant a step owns is registered on
+        :attr:`tensors`, so torch's own recursion moves them and this only has
+        to keep the three declaration attributes honest. In place, returning
+        ``self`` — a step is held by identity by the instrument chain that
+        composed it, so a copy would leave the chain behind.
+        """
+        return move(self, dtype=dtype, device=device)
 
     def _declare(self, name: str, value: Any, *, unit: u.UnitBase | None = None) -> torch.Tensor:
         """Register one constant array as both a declared buffer and a torch buffer."""

@@ -84,7 +84,17 @@ from ampere.core import SquaredExponential as _CoreSquaredExponential
 from ampere.core.exceptions import LikelihoodError
 
 from . import _celerite
-from ._config import BACKEND, DEFAULT_DEVICE, DEFAULT_DTYPE, as_tensor, to_numpy
+from ._config import (
+    BACKEND,
+    DEFAULT_DEVICE,
+    DEFAULT_DTYPE,
+    as_tensor,
+    device_name,
+    place,
+    resolve_device,
+    resolve_dtype,
+    to_numpy,
+)
 
 __all__ = ["DenseGP", "Matern32", "QuasisepGP", "SquaredExponential"]
 
@@ -92,17 +102,34 @@ _LOG_2PI = math.log(2.0 * math.pi)
 _SQRT3 = math.sqrt(3.0)
 
 
-def _points(coordinates: Any) -> torch.Tensor:
+def _points(
+    coordinates: Any,
+    *,
+    dtype: torch.dtype = DEFAULT_DTYPE,
+    device: torch.device = DEFAULT_DEVICE,
+) -> torch.Tensor:
     """``(n, d)`` coordinates from an ``(n,)`` or ``(n, d)`` array or tensor.
 
     A bare one-dimensional input is read as a column of ``n`` one-dimensional
     points, matching ``ampere.core.Kernel.matrix``'s own convention.
+
+    *dtype* and *device* are threaded rather than defaulted at the call site
+    (W2.4 slice 3): a kernel or solver placed on a GPU handed coordinates that
+    were already there must not have them silently copied back to the CPU,
+    which is exactly what a hard-wired :data:`DEFAULT_DEVICE` here would do —
+    once per evaluation, invisibly.
     """
-    tensor = as_tensor(coordinates, dtype=DEFAULT_DTYPE, device=DEFAULT_DEVICE)
+    tensor = as_tensor(coordinates, dtype=dtype, device=device)
     return tensor[:, None] if tensor.ndim == 1 else tensor
 
 
-def _separation(left: Any, right: Any) -> torch.Tensor:
+def _separation(
+    left: Any,
+    right: Any,
+    *,
+    dtype: torch.dtype = DEFAULT_DTYPE,
+    device: torch.device = DEFAULT_DEVICE,
+) -> torch.Tensor:
     """Euclidean separation between two coordinate sets, ``(n, m)``.
 
     Euclidean in the coordinate space, which is why
@@ -110,7 +137,8 @@ def _separation(left: Any, right: Any) -> torch.Tensor:
     axis to share one unit — a single isotropic length scale is meaningless
     across mixed units.
     """
-    a, b = _points(left), _points(right)
+    a = _points(left, dtype=dtype, device=device)
+    b = _points(right, dtype=dtype, device=device)
     difference = a[:, None, :] - b[None, :, :]
     return torch.sqrt(torch.sum(difference * difference, dim=-1))
 
@@ -148,19 +176,37 @@ class _TorchKernel(Kernel):
     #: arithmetic over a fixed separation matrix, which ``vmap`` maps over a
     #: stack of hyperparameters without any special handling.
     BATCHABLE: ClassVar[bool] = True
+    #: The class-level default only; :meth:`_place` shadows it per instance
+    #: from the ``device=`` keyword (W2.4 slice 3).
     DEVICE: ClassVar[str] = "cpu"
+
+    def _place(self, dtype: Any, device: Any) -> None:
+        """Record where this kernel's covariance is built. Called from ``__init__``.
+
+        A kernel holds no buffers -- its hyperparameters are
+        :class:`~ampere.core.Parameter` objects, which are neutral
+        declarations -- so there is nothing to move and no ``to()``. What it
+        does hold is a *place to build in*: every tensor :meth:`matrix` and
+        :meth:`diagonal` create is created there, and the separation matrix is
+        the largest array in an ordinary dense GP evaluation.
+        """
+        place(self, dtype, device)
 
     def _covariance(self, separation: Any, values: Mapping[str, Any]) -> torch.Tensor:
         raise NotImplementedError
 
+    def _scalar(self, value: Any) -> torch.Tensor:
+        return as_tensor(value, dtype=self.dtype, device=self.device)
+
     def matrix(self, left: Any, right: Any, values: Mapping[str, Any]) -> torch.Tensor:
         """Dense covariance between two coordinate sets, ``(n, m)``, in torch."""
-        return self._covariance(_separation(left, right), self.resolve(values))
+        separation = _separation(left, right, dtype=self.dtype, device=self.device)
+        return self._covariance(separation, self.resolve(values))
 
     def diagonal(self, coordinates: Any, values: Mapping[str, Any]) -> torch.Tensor:
         """The prior variance at each coordinate; ``k(0)`` for a stationary kernel."""
-        n = int(_points(coordinates).shape[0])
-        zeros = torch.zeros(n, dtype=DEFAULT_DTYPE, device=DEFAULT_DEVICE)
+        n = int(_points(coordinates, dtype=self.dtype, device=self.device).shape[0])
+        zeros = torch.zeros(n, dtype=self.dtype, device=self.device)
         return self._covariance(zeros, self.resolve(values))
 
 
@@ -180,10 +226,28 @@ class Matern32(_TorchKernel, _CoreMatern32):
     solver that exploits it.
     """
 
+    def __init__(
+        self,
+        amplitude: Any,
+        length_scale: Any,
+        *,
+        amplitude_unit: Any = None,
+        length_scale_unit: Any = None,
+        dtype: torch.dtype = DEFAULT_DTYPE,
+        device: torch.device = DEFAULT_DEVICE,
+    ) -> None:
+        super().__init__(
+            amplitude,
+            length_scale,
+            amplitude_unit=amplitude_unit,
+            length_scale_unit=length_scale_unit,
+        )
+        self._place(dtype, device)
+
     def _covariance(self, separation: Any, values: Mapping[str, Any]) -> torch.Tensor:
-        amplitude = as_tensor(values["amplitude"], dtype=DEFAULT_DTYPE, device=DEFAULT_DEVICE)
-        length_scale = as_tensor(values["length_scale"], dtype=DEFAULT_DTYPE, device=DEFAULT_DEVICE)
-        scaled = _SQRT3 * as_tensor(separation) / length_scale
+        amplitude = self._scalar(values["amplitude"])
+        length_scale = self._scalar(values["length_scale"])
+        scaled = _SQRT3 * self._scalar(separation) / length_scale
         return amplitude * amplitude * (1.0 + scaled) * torch.exp(-scaled)
 
 
@@ -197,10 +261,28 @@ class SquaredExponential(_TorchKernel, _CoreSquaredExponential):
     solver refuses it by name — the asymmetry that made Matérn the default.
     """
 
+    def __init__(
+        self,
+        amplitude: Any,
+        length_scale: Any,
+        *,
+        amplitude_unit: Any = None,
+        length_scale_unit: Any = None,
+        dtype: torch.dtype = DEFAULT_DTYPE,
+        device: torch.device = DEFAULT_DEVICE,
+    ) -> None:
+        super().__init__(
+            amplitude,
+            length_scale,
+            amplitude_unit=amplitude_unit,
+            length_scale_unit=length_scale_unit,
+        )
+        self._place(dtype, device)
+
     def _covariance(self, separation: Any, values: Mapping[str, Any]) -> torch.Tensor:
-        amplitude = as_tensor(values["amplitude"], dtype=DEFAULT_DTYPE, device=DEFAULT_DEVICE)
-        length_scale = as_tensor(values["length_scale"], dtype=DEFAULT_DTYPE, device=DEFAULT_DEVICE)
-        scaled = as_tensor(separation) / length_scale
+        amplitude = self._scalar(values["amplitude"])
+        length_scale = self._scalar(values["length_scale"])
+        scaled = self._scalar(separation) / length_scale
         return amplitude * amplitude * torch.exp(-0.5 * scaled * scaled)
 
 
@@ -454,6 +536,18 @@ class DenseGP(GPSolver):
             auto-detected** (``architecture.md`` §5): a machine with a GPU
             present takes the same path as CI unless a caller says otherwise.
 
+        Notes
+        -----
+        **The device moves the capability flag with it** (W2.4 slice 3). Until
+        slice 3 this method shadowed :data:`TENSOR_DEVICE` alone, so a solver
+        configured onto a GPU went on *declaring* ``DEVICE = "cpu"`` and
+        composed silently into a problem whose every other part really was on
+        the CPU — precisely the mixed-device problem
+        :func:`~ampere.core.declared_capabilities` exists to refuse, made
+        invisible to it. ``DEVICE`` is now shadowed beside it, so composing a
+        GPU solver with CPU models is a composition-time refusal naming both
+        devices.
+
         Examples
         --------
         >>> import torch
@@ -469,6 +563,11 @@ class DenseGP(GPSolver):
         >>> import dataclasses
         >>> [f.name for f in dataclasses.fields(fast)]
         ['jitter']
+
+        while the device it says it is on is the device it was put on:
+
+        >>> DenseGP().configured(device="cpu").DEVICE
+        'cpu'
         """
         return _configured(self, dtype, device)
 
@@ -605,12 +704,13 @@ def _configured(solver: Any, dtype: Any, device: Any) -> Any:
     """
     copy = dataclasses.replace(solver)
     if dtype is not None:
-        resolved = getattr(torch, dtype, None) if isinstance(dtype, str) else dtype
-        if not isinstance(resolved, torch.dtype):
+        try:
+            resolved = resolve_dtype(dtype)
+        except TypeError as error:
             raise LikelihoodError(
                 f"{type(solver).__name__}.configured(dtype=...) takes a torch.dtype or the name "
                 f"of one, got {dtype!r}."
-            )
+            ) from error
         if not resolved.is_floating_point:
             raise LikelihoodError(
                 f"{type(solver).__name__}.configured(dtype={dtype!r}) was given a "
@@ -619,7 +719,15 @@ def _configured(solver: Any, dtype: Any, device: Any) -> Any:
             )
         object.__setattr__(copy, "TENSOR_DTYPE", resolved)
     if device is not None:
-        object.__setattr__(copy, "TENSOR_DEVICE", torch.device(device))
+        placed = resolve_device(device)
+        object.__setattr__(copy, "TENSOR_DEVICE", placed)
+        # And the *capability* flag beside it (W2.4 slice 3). The two were
+        # separate until slice 3, which meant a solver configured onto a GPU
+        # went on declaring ``DEVICE = "cpu"`` and composed happily into a
+        # problem every other part of which was on the CPU -- a device
+        # disagreement that ``declared_capabilities`` exists to refuse and
+        # could not see. They move together now.
+        object.__setattr__(copy, "DEVICE", device_name(placed))
     return copy
 
 

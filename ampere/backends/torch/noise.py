@@ -80,7 +80,7 @@ from ampere.core import GaussianProcessNoise as _CoreGaussianProcessNoise
 from ampere.core import IndependentNoise as _CoreIndependentNoise
 from ampere.core import DTYPE, FunctionSamples, GPSolver, Kernel, LikelihoodError, NoiseModel
 
-from ._config import BACKEND, DEFAULT_DEVICE, DEFAULT_DTYPE, as_tensor, to_numpy
+from ._config import BACKEND, DEFAULT_DEVICE, DEFAULT_DTYPE, as_tensor, place, to_numpy
 from .gp import DenseGP
 
 __all__ = [
@@ -128,12 +128,25 @@ def _check_fraction(fraction: Any, owner: str) -> float:
     return value
 
 
-def _inflate(base: Any, fraction: Any, predicted: Any, owner: str) -> torch.Tensor:
-    """``sqrt(base**2 + (fraction * |predicted|)**2)``, in torch, float64.
+def _amplitude(
+    predicted: Any, *, dtype: torch.dtype, device: torch.device, owner: str
+) -> torch.Tensor:
+    """``|predicted|`` as a real tensor of *dtype*, complex predictions included.
 
     ``torch.abs`` rather than the raw tensor: a complex family's prediction is
     complex, and ``likelihoods.md`` §5 leaves projecting it to an amplitude to
     the noise model rather than doing it on the model's behalf.
+
+    The modulus is taken **before** the dtype is imposed, and that ordering is
+    the whole of W2.4 slice 3's fix here. Coercing a complex prediction to
+    float64 first is not a conversion at all: both
+    ``Tensor.to(torch.float64)`` and ``np.asarray(z, dtype=float)`` drop the
+    imaginary part with a warning rather than an error, so the amplitude a
+    prediction-aware noise model inflates by would silently have been the
+    *real part's* magnitude — a different, and wrong, noise model. Slice 3 is
+    the first slice in which a complex prediction can reach here at all
+    (``complex_gaussian`` in the realised path), so this is the fix arriving
+    with the caller that needs it.
     """
     if predicted is None:
         raise LikelihoodError(
@@ -142,8 +155,31 @@ def _inflate(base: Any, fraction: Any, predicted: Any, owner: str) -> torch.Tens
             f"and Dataset.draw_observation all pass predicted= (likelihoods.md §5, X-1) — so a "
             f"caller invoking sigma() by hand must pass it too."
         )
-    scaled = as_tensor(fraction, dtype=DEFAULT_DTYPE, device=DEFAULT_DEVICE) * torch.abs(
-        as_tensor(predicted, dtype=DEFAULT_DTYPE, device=DEFAULT_DEVICE)
+    if isinstance(predicted, torch.Tensor):
+        return torch.abs(predicted).to(dtype=dtype, device=device)
+    array = np.asarray(predicted)
+    if array.dtype.kind == "c":
+        return as_tensor(np.abs(array), dtype=dtype, device=device)
+    return torch.abs(as_tensor(array, dtype=dtype, device=device))
+
+
+def _inflate(
+    base: Any,
+    fraction: Any,
+    predicted: Any,
+    owner: str,
+    *,
+    dtype: torch.dtype = DEFAULT_DTYPE,
+    device: torch.device = DEFAULT_DEVICE,
+) -> torch.Tensor:
+    """``sqrt(base**2 + (fraction * |predicted|)**2)``, in torch.
+
+    *dtype* and *device* are the owning noise model's own (W2.4 slice 3), so a
+    noise model placed on a GPU inflates there rather than dragging the
+    prediction back to the CPU once per evaluation.
+    """
+    scaled = as_tensor(fraction, dtype=dtype, device=device) * _amplitude(
+        predicted, dtype=dtype, device=device, owner=owner
     )
     if base is None:
         # No per-sample uncertainties to combine with: the model error is the
@@ -151,7 +187,35 @@ def _inflate(base: Any, fraction: Any, predicted: Any, owner: str) -> torch.Tens
         # without observed uncertainties has already refused at composition
         # time via NoiseModel.check_compatible.
         return scaled
-    return torch.sqrt(as_tensor(base, dtype=DEFAULT_DTYPE, device=DEFAULT_DEVICE) ** 2 + scaled**2)
+    return torch.sqrt(as_tensor(base, dtype=dtype, device=device) ** 2 + scaled**2)
+
+
+def _check_one_device(noise: NoiseModel) -> None:
+    """Refuse a GP noise model whose kernel or solver lives somewhere else.
+
+    ``ampere.core.Likelihood.capability_parts`` puts the noise model and the
+    solver on the composed problem, so a *solver* on the wrong device is caught
+    by :func:`~ampere.core.declared_capabilities`. A **kernel** is deliberately
+    not a capability part (it is a declaration; the solver is what computes),
+    so a kernel left on the CPU inside a GPU problem would be found only by
+    torch, per evaluation, deep inside a Cholesky — or, worse, not found at
+    all, because torch will happily broadcast a CPU scalar against a CUDA
+    matrix. Refusing here, at composition, is the earliest honest point.
+    """
+    where = noise.DEVICE
+    mismatched = {
+        f"{type(part).__name__} on {part.DEVICE!r}"
+        for part in (noise.kernel, noise.solver)
+        if str(getattr(part, "DEVICE", where)) != where
+    }
+    if mismatched:
+        raise LikelihoodError(
+            f"{type(noise).__name__} is on {where!r} but {', '.join(sorted(mismatched))}. Ampere "
+            f"does not move arrays between devices on your behalf (architecture.md §5), so a "
+            f"kernel or solver placed elsewhere than the noise model that owns it is a mistake "
+            f"rather than a plan: pass the same device= to the kernel, to the solver "
+            f"(GPSolver.configured(device=...)) and to this noise model."
+        )
 
 
 class IndependentNoise(_CoreIndependentNoise):
@@ -168,12 +232,30 @@ class IndependentNoise(_CoreIndependentNoise):
         underestimates its error bars". A prior to fit it, or a number.
     jitter
         Optional noise floor, added in quadrature.
+    dtype, device
+        Where this noise model's arithmetic happens, threaded exactly as on
+        every other piece of this backend (W2.4 slice 3). Reported back as the
+        instance's ``DEVICE`` capability flag, which is what makes
+        :func:`~ampere.core.declared_capabilities` compose a whole problem on
+        one device. Never auto-detected.
     """
 
     DIFFERENTIABLE: ClassVar[bool] = True
     BATCHABLE: ClassVar[bool] = True
+    #: Class-level default; ``__init__`` shadows it per instance.
     DEVICE: ClassVar[str] = "cpu"
     BACKEND: ClassVar[str] = BACKEND
+
+    def __init__(
+        self,
+        *,
+        scale: Any = None,
+        jitter: Any = None,
+        dtype: torch.dtype = DEFAULT_DTYPE,
+        device: torch.device = DEFAULT_DEVICE,
+    ) -> None:
+        super().__init__(scale=scale, jitter=jitter)
+        place(self, dtype, device)
 
 
 class GaussianProcessNoise(_CoreGaussianProcessNoise):
@@ -204,6 +286,7 @@ class GaussianProcessNoise(_CoreGaussianProcessNoise):
 
     DIFFERENTIABLE: ClassVar[bool] = True
     BATCHABLE: ClassVar[bool] = True
+    #: Class-level default; ``__init__`` shadows it per instance.
     DEVICE: ClassVar[str] = "cpu"
     BACKEND: ClassVar[str] = BACKEND
 
@@ -214,10 +297,14 @@ class GaussianProcessNoise(_CoreGaussianProcessNoise):
         *,
         scale: Any = None,
         jitter: Any = None,
+        dtype: torch.dtype = DEFAULT_DTYPE,
+        device: torch.device = DEFAULT_DEVICE,
     ) -> None:
         super().__init__(
             kernel, DenseGP() if solver is None else solver, scale=scale, jitter=jitter
         )
+        place(self, dtype, device)
+        _check_one_device(self)
 
 
 class FractionalModelNoise(_ReferenceFractionalModelNoise):
@@ -243,12 +330,27 @@ class FractionalModelNoise(_ReferenceFractionalModelNoise):
         ``sigma_data`` only, inside the quadrature, exactly as §5 writes it.
     jitter
         Optional noise floor added in quadrature to ``sigma_data``.
+    dtype, device
+        Where the quadrature happens (W2.4 slice 3), reported as ``DEVICE``.
     """
 
     DIFFERENTIABLE: ClassVar[bool] = True
     BATCHABLE: ClassVar[bool] = True
+    #: Class-level default; ``__init__`` shadows it per instance.
     DEVICE: ClassVar[str] = "cpu"
     BACKEND: ClassVar[str] = BACKEND
+
+    def __init__(
+        self,
+        f: Any,
+        *,
+        scale: Any = None,
+        jitter: Any = None,
+        dtype: torch.dtype = DEFAULT_DTYPE,
+        device: torch.device = DEFAULT_DEVICE,
+    ) -> None:
+        super().__init__(f, scale=scale, jitter=jitter)
+        place(self, dtype, device)
 
     def sigma_tensor(
         self,
@@ -263,7 +365,14 @@ class FractionalModelNoise(_ReferenceFractionalModelNoise):
         own uncertainties, computed in torch by the lowering; see this module's
         docstring for why it arrives rather than being rebuilt here.
         """
-        return _inflate(base, _fraction(self, values), predicted, type(self).__name__)
+        return _inflate(
+            base,
+            _fraction(self, values),
+            predicted,
+            type(self).__name__,
+            dtype=self.dtype,
+            device=self.device,
+        )
 
     def sigma(
         self,
@@ -278,9 +387,15 @@ class FractionalModelNoise(_ReferenceFractionalModelNoise):
             observed, retain, values, predicted=predicted
         )
         fraction = _check_fraction(_fraction(self, values), type(self).__name__)
-        return to_numpy(_inflate(base, fraction, predicted, type(self).__name__)).astype(
-            DTYPE, copy=False
+        inflated = _inflate(
+            base,
+            fraction,
+            predicted,
+            type(self).__name__,
+            dtype=self.dtype,
+            device=self.device,
         )
+        return to_numpy(inflated).astype(DTYPE, copy=False)
 
 
 class FractionalModelGPNoise(_ReferenceFractionalModelGPNoise):
@@ -317,6 +432,7 @@ class FractionalModelGPNoise(_ReferenceFractionalModelGPNoise):
 
     DIFFERENTIABLE: ClassVar[bool] = True
     BATCHABLE: ClassVar[bool] = True
+    #: Class-level default; ``__init__`` shadows it per instance.
     DEVICE: ClassVar[str] = "cpu"
     BACKEND: ClassVar[str] = BACKEND
 
@@ -328,10 +444,14 @@ class FractionalModelGPNoise(_ReferenceFractionalModelGPNoise):
         f: Any,
         scale: Any = None,
         jitter: Any = None,
+        dtype: torch.dtype = DEFAULT_DTYPE,
+        device: torch.device = DEFAULT_DEVICE,
     ) -> None:
         super().__init__(
             kernel, DenseGP() if solver is None else solver, f=f, scale=scale, jitter=jitter
         )
+        place(self, dtype, device)
+        _check_one_device(self)
 
     def sigma_tensor(
         self,
@@ -341,7 +461,14 @@ class FractionalModelGPNoise(_ReferenceFractionalModelGPNoise):
         predicted: torch.Tensor,
     ) -> torch.Tensor:
         """The native surface: ``sigma_eff`` as a tensor, gradient intact."""
-        return _inflate(base, _fraction(self, values), predicted, type(self).__name__)
+        return _inflate(
+            base,
+            _fraction(self, values),
+            predicted,
+            type(self).__name__,
+            dtype=self.dtype,
+            device=self.device,
+        )
 
     def sigma(
         self,
@@ -355,6 +482,12 @@ class FractionalModelGPNoise(_ReferenceFractionalModelGPNoise):
             observed, retain, values, predicted=predicted
         )
         fraction = _check_fraction(_fraction(self, values), type(self).__name__)
-        return to_numpy(_inflate(base, fraction, predicted, type(self).__name__)).astype(
-            DTYPE, copy=False
+        inflated = _inflate(
+            base,
+            fraction,
+            predicted,
+            type(self).__name__,
+            dtype=self.dtype,
+            device=self.device,
         )
+        return to_numpy(inflated).astype(DTYPE, copy=False)
