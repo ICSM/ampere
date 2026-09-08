@@ -18,24 +18,29 @@ from datetime import date
 
 # -- Project information -----------------------------------------------------
 
-project = 'AMPERE'
-copyright = f'{date.today().year}, Peter Scicluna, Francisca Kemper, Sundar'\
-             ' Srinivasan, Jonathan Marshall, Sacha Hony, Sascha Zeegers, '\
-             'Lapo Fanciullo'
-author = 'Peter Scicluna, Francisca Kemper, Sundar Srinivasan, Jonathan'\
-         ' Marshall, Sacha Hony, Sascha Zeegers, Lapo Fanciullo'
+project = "AMPERE"
+copyright = (
+    f"{date.today().year}, Peter Scicluna, Francisca Kemper, Sundar"
+    " Srinivasan, Jonathan Marshall, Sacha Hony, Sascha Zeegers, "
+    "Lapo Fanciullo"
+)
+author = (
+    "Peter Scicluna, Francisca Kemper, Sundar Srinivasan, Jonathan"
+    " Marshall, Sacha Hony, Sascha Zeegers, Lapo Fanciullo"
+)
 
 from importlib.metadata import version
+
 # 'pgmuvi' was another project's package name, left over from when this
 # configuration was templated from it; it has never been installable here, so
 # `pixi run docs` failed at configuration time regardless of content
 # (W2.9's docs-build gate found this). The distribution actually installed
 # for this documentation build is 'ampere' (pyproject.toml's [project].name).
-release = version('ampere')
+release = version("ampere")
 # for example take major/minor
-version = '.'.join(release.split('.')[:2])
+version = ".".join(release.split(".")[:2])
 
-master_doc = 'index'
+master_doc = "index"
 
 
 # -- General configuration ---------------------------------------------------
@@ -43,19 +48,20 @@ master_doc = 'index'
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
-extensions = ['sphinx.ext.autodoc',
-              'sphinx.ext.napoleon',
-              'sphinx.ext.mathjax',
-              'nbsphinx'  # 'sphinx.ext.imgmath'
-              ]
+extensions = [
+    "sphinx.ext.autodoc",
+    "sphinx.ext.napoleon",
+    "sphinx.ext.mathjax",
+    "nbsphinx",  # 'sphinx.ext.imgmath'
+]
 
 # Add any paths that contain templates here, relative to this directory.
-templates_path = ['_templates']
+templates_path = ["_templates"]
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This pattern also affects html_static_path and html_extra_path.
-exclude_patterns = ['pyphot*', 'test*', "old*"]
+exclude_patterns = ["pyphot*", "test*", "old*"]
 
 
 # -- Options for HTML output -------------------------------------------------
@@ -63,7 +69,7 @@ exclude_patterns = ['pyphot*', 'test*', "old*"]
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
 #
-html_theme = 'alabaster'
+html_theme = "alabaster"
 
 # No custom static files. This entry was `['_static']`, a directory that has
 # never existed in this repository, so every build emitted
@@ -98,56 +104,20 @@ html_static_path = []
 # moment those pages existed; bs4 and requests are imported nowhere in the
 # package.
 autodoc_mock_imports = [
-    'torch',
-    'pyro',
-    'jax',
-    'jaxlib',
-    'numpyro',
-    'equinox',
+    "torch",
+    "pyro",
+    "jax",
+    "jaxlib",
+    "numpyro",
+    "equinox",
 ]
 
-
-def _teach_mock_unary_operators() -> None:
-    """Let a mocked module's attributes survive a unary ``-``.
-
-    Sphinx's mock object implements ``__getattr__``, ``__getitem__`` and
-    ``__call__`` but no numeric protocol, so a module-level constant such as
-    ``ampere/backends/jax/parameters.py``'s ``_NEGATIVE_INFINITY = -jnp.inf``
-    raises ``TypeError`` at import time under mocks and takes the whole jax
-    API page down with it. Absorbing the three unary operators is enough, and
-    it belongs here rather than in the package: nothing in `ampere` should be
-    shaped by how its documentation happens to be built.
-
-    The class is private to Sphinx, so this is best-effort and guarded. If a
-    future Sphinx moves it, the jax page degrades to the import warning it
-    would have had anyway rather than breaking the build.
-    """
-    import importlib
-
-    for module_name in (
-        'sphinx.ext.autodoc._dynamic._mock',  # Sphinx >= 9
-        'sphinx.ext.autodoc.mock',  # Sphinx < 9
-    ):
-        try:
-            module = importlib.import_module(module_name)
-        except ImportError:
-            continue
-        mock_object = getattr(module, '_MockObject', None)
-        if mock_object is None:
-            continue
-        for operator in ('__neg__', '__pos__', '__abs__'):
-            if not hasattr(mock_object, operator):
-                setattr(mock_object, operator, lambda self: self)
-        return
-
-
-_teach_mock_unary_operators()
 
 # Methods and attributes in the order their module declares them. The new
 # namespaces' `__all__` lists are already alphabetical, so this only affects
 # the inside of a class, where the order it was written in is the order it is
 # meant to be read in.
-autodoc_member_order = 'bysource'
+autodoc_member_order = "bysource"
 
 # Render a numpydoc `Attributes` section as `:ivar:` fields rather than as
 # standalone `.. attribute::` directives (W2.15). Without this, every
@@ -189,7 +159,7 @@ napoleon_use_ivar = True
 # notebook that *is* executed is a build-aborting NoSuchKernel rather than a
 # cell error, and this line is one word away from being turned back on for a
 # notebook that earns it.
-nbsphinx_execute = 'never'
+nbsphinx_execute = "never"
 
 # Belt and braces with the line above: a cell that raises is reported, not
 # fatal. tests/examples/test_wstat_comparison.py's docstring cites this
