@@ -76,13 +76,22 @@ Three things celerite2.jax costs, all recorded here rather than hidden:
   ``BATCHABLE = False`` where the rest of the backend declares ``True``, and
   ``ampere.core.declared_capabilities`` aggregates that down to a problem
   which honestly says it cannot be batched. tinygp, being ordinary jax, vmaps.
-* **it exposes no O(N) route to the diagonal of ``(K + diag(σ²))⁻¹``**, so
-  :meth:`QuasisepGP.conditional_loo` stays refused here exactly as it is on
-  the reference path (``DEVELOPMENT_PLAN.md`` §2, 2026-09-05). tinygp *does*:
-  ``L = solver.factor``, ``L.inv().transpose() @ L.inv()`` is a quasiseparable
-  matrix whose ``.diag.d`` is that diagonal, measured here exact to 7e-15
-  against a dense inverse. That is a real loss, and it is the price of the
-  factor of 200.
+* **its high-level surface exposes no O(N) route to the diagonal of
+  ``(K + diag(σ²))⁻¹``**, which is what every leave-one-out term needs. Slice 2
+  read that as a loss and left :meth:`QuasisepGP.conditional_loo` refused, as
+  the reference path leaves it (``DEVELOPMENT_PLAN.md`` §2, 2026-09-05), while
+  noting that tinygp *does* supply one — ``L = solver.factor``,
+  ``L.inv().transpose() @ L.inv()`` is a quasiseparable matrix whose
+  ``.diag.d`` matched a dense inverse to 7e-15. **Slice 3 closes that loss
+  without the swap**: ``celerite2.jax.ops`` is the public entry point to the
+  same compiled kernels the torch backend calls through
+  ``celerite2.backprop``, so this backend can hold ``c, U, d, W`` in hand and
+  run the O(N) backward recursion W2.3 deferred — see
+  :meth:`QuasisepGP._precision_diagonal`, which derives it, and W2.4 slice 2's
+  decision-log row, where it was derived. The deferral was always about a
+  coupling to celerite2's factorisation convention rather than about the
+  mathematics; a backend that calls the kernels directly has paid that coupling
+  already.
 
 **Cost as a dependency.** celerite2 is already a *base* dependency (W2.3), so
 choosing it adds nothing at all to the ``jax`` extra; tinygp would have added
@@ -822,11 +831,11 @@ class QuasisepGP(GPSolver):
       and :meth:`latent_transform` are O(N), which is what a sampler calls;
     * :meth:`condition` is O(N·M) for M evaluation points, because the
       cross-covariance block is dense by construction;
-    * :meth:`conditional_loo` is **refused**, exactly as on the reference path
-      (``DEVELOPMENT_PLAN.md`` §2, 2026-09-05): celerite2 exposes no O(N)
-      route to the diagonal of ``(K + diag(σ²))⁻¹`` in either interface. See
-      that method, and this module's docstring for what tinygp would have
-      given here and why it was not taken.
+    * :meth:`conditional_loo` is O(N J³) since slice 3 — the recursion W2.3
+      deferred and W2.4 slice 2 derived, over ``celerite2.jax.ops``'s own
+      ``factor``, so the terms agree with :meth:`DenseGP.conditional_loo`
+      exactly rather than approximately. ``ampere.core.QuasisepGP`` keeps its
+      refusal: the numpy path's circumstances are unchanged.
 
     Parameters
     ----------
@@ -1182,6 +1191,147 @@ class QuasisepGP(GPSolver):
         self._refuse_nan(realised, whitening=True)
         return np.asarray(realised)
 
+    # -- the leave-one-out decomposition, in O(N) (W2.5 slice 3) --------------
+
+    def _celerite_arrays(
+        self,
+        kernel: Kernel,
+        ordered_axis: jax.Array,
+        ordered_diagonal: jax.Array,
+        values: Mapping[str, Any],
+    ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
+        r"""``(c, U, d, W)`` — celerite2's own factorisation, without the wrapper.
+
+        :meth:`_factorise` builds a ``celerite2.jax.GaussianProcess``, which is
+        the right surface for a density: it holds the arrays, does the solves
+        and carries the differentiation rules. :meth:`conditional_loo` needs
+        the arrays *themselves*, because the recursion below walks the
+        factorisation rather than solving against it, and reading them off a
+        constructed ``GaussianProcess``'s ``_c``/``_U``/``_d``/``_W`` would be
+        a coupling to private attributes where ``celerite2.jax.ops`` is the
+        public entry point to the same compiled kernels.
+
+        So this calls ``ops.factor`` directly, exactly as the torch backend
+        calls ``celerite2.backprop.factor`` through
+        :mod:`ampere.backends.torch._celerite`. The convention is celerite2's:
+        ``K + diag(a) = L D Lᵀ`` with ``L`` **unit** lower triangular,
+        ``L_{nm} = U_n · W_m Π_{n>k>m} p_k``.
+        """
+        term = _QUASISEPARABLE_TERMS[kernel.FAMILY](kernel, values)
+        c, a, U, V = term.get_celerite_matrices(ordered_axis, ordered_diagonal)
+        d, W = _celerite2_jax().ops.factor(ordered_axis, c, a, U, V)
+        return c, U, d, W
+
+    def _apply_inverse(
+        self,
+        axis: jax.Array,
+        c: jax.Array,
+        U: jax.Array,
+        d: jax.Array,
+        W: jax.Array,
+        right: jax.Array,
+    ) -> jax.Array:
+        """``(K + diag)⁻¹ right`` for an ``(n,)`` right-hand side, in O(N).
+
+        celerite2's own ``_do_solve``, written out over the raw arrays: a
+        forward substitution, a division by ``D``, a back substitution.
+        """
+        z = _celerite2_jax().ops.solve_lower(axis, c, U, W, right[:, None])
+        return _celerite2_jax().ops.solve_upper(axis, c, U, W, z / d[:, None])[:, 0]
+
+    @staticmethod
+    def _precision_diagonal(
+        axis: jax.Array,
+        c: jax.Array,
+        U: jax.Array,
+        d: jax.Array,
+        W: jax.Array,
+    ) -> jax.Array:
+        r"""``diag((K + diag(σ²))⁻¹)`` in O(N J³) — the recursion W2.3 deferred.
+
+        **This is what lifts the refusal on this backend** (W2.5 slice 3,
+        mirroring the torch path's W2.4 slice 2; ``DEVELOPMENT_PLAN.md`` §2).
+        W2.3's reason was precise and was about a *coupling*, not about the
+        mathematics: the leave-one-out terms need ``A_ii`` for
+        ``A = (K + diag(σ²))⁻¹``; celerite2's public **numpy** interface
+        exposes no O(N) route to it; and the route that exists "reimplements
+        celerite2's internal factorisation convention". This backend pays that
+        coupling anyway — :meth:`_celerite_arrays` calls ``celerite2.jax.ops``
+        directly — and the coupling is *tested*, against
+        :meth:`DenseGP.conditional_loo`'s Cholesky, both here and in the
+        conformance row.
+
+        The derivation, so a reader need not rebuild it. With
+        ``K + diag = L D Lᵀ`` and ``M = L⁻¹`` (unit lower triangular),
+        ``A = L⁻ᵀ D⁻¹ L⁻¹`` gives
+
+        .. math:: A_{ii} = \sum_{k \ge i} M_{ki}^2 / d_k .
+
+        Column *i* of ``M`` solves ``L z = e_i``, and celerite's forward
+        substitution — ``f_k = p_k ⊙ (f_{k-1} + W_{k-1} z_{k-1})``,
+        ``z_k = y_k - U_k · f_k``, ``p_k = e^{-c(t_k - t_{k-1})}`` — becomes,
+        once ``y = e_i`` is substituted in,
+
+        .. math::
+            f^{(i)}_{i+1} = p_{i+1} ⊙ W_i,\qquad
+            f^{(i)}_k = G_k f^{(i)}_{k-1},\quad
+            G_k = \mathrm{diag}(p_k)\,(I - W_{k-1} U_{k-1}^\top),
+
+        and ``G_k`` **does not depend on i**. That is the whole trick: every
+        column of ``M`` is the same linear recursion started from a different
+        vector, so the sum over columns collapses into one backward
+        accumulation of a ``J x J`` matrix,
+
+        .. math::
+            A_{ii} = 1/d_i + w_i^\top R_i w_i,\qquad w_i = p_{i+1} ⊙ W_i,
+            \qquad R_i = \frac{U_{i+1} U_{i+1}^\top}{d_{i+1}}
+                       + G_{i+2}^\top R_{i+1} G_{i+2},
+
+        with ``R_{N-1} = 0``. No inverses appear, so it is as stable as the
+        factorisation itself.
+
+        Written as one :func:`jax.lax.scan` rather than the torch path's
+        Python loop, which is the one thing that had to change in the
+        transcription: an N-step Python loop over ``jnp`` operations stages N
+        copies of the body into the jaxpr, and at 10⁵ points that is a trace
+        long enough to be the dominant cost. ``scan`` stages the body once.
+        The ``reverse=True`` scan runs ``i = N-2 … 0`` and stores each term at
+        its own index, so no ``.at[].set()`` bookkeeping is needed either.
+
+        It is a post-processing surface (``results.md`` §15 R2 stores this
+        decomposition only on request), never part of a density — but it is
+        pure ``jnp`` and traceable all the same, because writing it any other
+        way would have meant a second implementation to keep in step.
+        """
+        size, rank = U.shape
+        if size == 1:
+            return 1.0 / d
+        gaps = axis[1:] - axis[:-1]
+        # decays[j] = p_{j+1}; transitions[j] = G_{j+1}; starts[i] = w_i.
+        decays = jnp.exp(-c[None, :] * gaps[:, None])
+        identity = jnp.eye(rank, dtype=U.dtype)
+        transitions = decays[:, :, None] * (
+            identity[None, :, :] - W[:-1, :, None] * U[:-1, None, :]
+        )
+        starts = decays * W[:-1, :]
+        # steps[i] = G_{i+2}. The final entry is the identity: it multiplies
+        # R = 0 on the first (i = N-2) step, so it stands in for the G that
+        # would be out of range without a branch inside the scan.
+        steps = jnp.concatenate([transitions, identity[None, :, :]], axis=0)[1:]
+
+        def step(carry: jax.Array, row: Any) -> tuple[jax.Array, jax.Array]:
+            transition, u_next, d_next, start, d_here = row
+            accumulated = transition.T @ carry @ transition + jnp.outer(u_next, u_next) / d_next
+            return accumulated, 1.0 / d_here + start @ accumulated @ start
+
+        _, terms = jax.lax.scan(
+            step,
+            jnp.zeros((rank, rank), dtype=U.dtype),
+            (steps, U[1:], d[1:], starts, d[:-1]),
+            reverse=True,
+        )
+        return jnp.concatenate([terms, 1.0 / d[-1:]])
+
     def conditional_loo(
         self,
         kernel: Kernel,
@@ -1190,31 +1340,34 @@ class QuasisepGP(GPSolver):
         variance: Any,
         values: Mapping[str, Any],
     ) -> np.ndarray:
-        """Refused, as on the reference path, and for the same missing primitive.
+        """The leave-one-out conditional terms, in O(N) (W2.5 slice 3).
 
-        Every leave-one-out term needs ``A_ii`` for ``A = (K + diag(σ²))⁻¹``,
-        and neither of celerite2's interfaces exposes an O(N) route to that
-        diagonal: the public surface is ``log_likelihood``, ``apply_inverse``,
-        ``dot_tril``, ``predict``, ``condition`` and ``sample``, and the two
-        that could give the diagonal — ``predict(..., return_var=True)`` and
-        ``condition`` — form the cross-covariance densely and cost O(N·M).
-        Supplying one means reimplementing celerite2's internal factorisation
-        convention on top of its private ``_d``/``_W``, which is a coupling
-        this backend declined for a decomposition nothing stores by default.
+        The same closed form :meth:`DenseGP.conditional_loo` uses
+        (Sundararajan & Keerthi 2001) over the same matrix, so the two agree
+        exactly rather than approximately: with
+        ``A = (K + diag(variance + jitter²))⁻¹``,
+        ``sigma_i^{2,-i} = 1 / A_ii``, ``mu_i^{-i} = y_i - [A r]_i / A_ii`` and
 
-        This is the *same* refusal ``ampere.core.QuasisepGP`` makes (W2.3,
-        ``DEVELOPMENT_PLAN.md`` §2, 2026-09-05), so the conformance refusal row
-        is one row and not two. The alternative was real and was measured:
-        tinygp's quasiseparable factor exposes an exact O(N) inverse
-        (``L.inv().transpose() @ L.inv()``, whose ``.diag.d`` matched a dense
-        inverse to 7e-15), and it was rejected on the factor of 200 in the
-        marginal likelihood itself — see this module's docstring.
+            ``log p_i = ½ log A_ii - [A r]_i² / (2 A_ii) - ½ log 2π``.
+
+        What this solver supplies that the reference one still cannot is
+        ``A_ii`` in linear time — see :meth:`_precision_diagonal`, which
+        records the recursion and why this backend is entitled to it where
+        ``ampere.core.QuasisepGP`` is not.
+
+        A contract surface, so it raises where celerite2 goes quietly NaN.
         """
-        raise LikelihoodError(
-            f"{self.NAME} does not implement the leave-one-out conditional terms "
-            f"(GPSolver.conditional_loo): neither celerite2's numpy nor its jax interface "
-            f"exposes an O(N) route to the diagonal of (K + diag(sigma^2))^-1, so this was "
-            f"deferred at W2.3 and stays deferred on the jax path for the same reason "
-            f"(DEVELOPMENT_PLAN.md §2). DenseGP computes them exactly from its Cholesky — use "
-            f"it for pointwise_log_prob under a GP, or the per-dataset log_likelihood group."
-        )
+        axis, order = self._sorted(coordinates)
+        r = self.place(residual)
+        diagonal = self.place(variance) + self.jitter**2
+        self._check_diagonal(diagonal)
+        sorted_axis = jnp.take(axis, order)
+        c, U, d, W = self._celerite_arrays(kernel, sorted_axis, jnp.take(diagonal, order), values)
+        # celerite2 signals a failed factorisation as a non-positive or
+        # non-finite D, quietly, exactly as it does for the log-likelihood.
+        if not bool(jnp.all(jnp.isfinite(d)) & jnp.all(d > 0.0)):
+            self._refuse_nan(jnp.asarray(jnp.nan))
+        alpha = self._apply_inverse(sorted_axis, c, U, d, W, jnp.take(r, order))
+        precision = self._precision_diagonal(sorted_axis, c, U, d, W)
+        terms = 0.5 * jnp.log(precision) - alpha**2 / (2.0 * precision) - 0.5 * _LOG_2PI
+        return np.asarray(self._unsort(terms, order))

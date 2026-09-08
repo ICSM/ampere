@@ -1172,15 +1172,97 @@ class TestTheQuasiseparableSolver:
         with pytest.raises(LikelihoodError, match="no exact celerite representation"):
             QuasisepGP().check_compatible(Undeclared(0.4, 2.0), _quasisep_observed())
 
-    def test_the_leave_one_out_terms_are_refused_naming_what_is_missing(self) -> None:
-        """The deferral, restated on this backend and for the same reason."""
+    def test_the_leave_one_out_terms_agree_with_the_dense_closed_form(self) -> None:
+        """The refusal is lifted (W2.5 slice 3), and this is what replaces it.
+
+        ``DenseGP.conditional_loo`` forms ``(K + diag)**-1`` explicitly and
+        reads its diagonal; this one accumulates the same diagonal backwards
+        through the semiseparable inverse in O(N), over ``celerite2.jax.ops``'s
+        own ``factor``. Nothing but agreement would show that the accumulation
+        is right — a wrong ``A_ii`` is still finite, still per-sample and still
+        looks exactly like a leave-one-out term.
+        """
+        kernel = Matern32(0.4, 2.0)
+        values = kernel.resolve(None)
+        got = QuasisepGP().conditional_loo(
+            kernel, QUASISEP_GRID, QUASISEP_RESIDUAL, QUASISEP_VARIANCE, values
+        )
+        expected = DenseGP().conditional_loo(
+            kernel, QUASISEP_GRID, QUASISEP_RESIDUAL, QUASISEP_VARIANCE, values
+        )
+        assert got.shape == expected.shape
+        assert got == pytest.approx(expected, abs=1e-8)
+
+    def test_the_leave_one_out_terms_survive_unsorted_coordinates(self) -> None:
+        """The permutation is undone on the way out, as it is for the density."""
+        rng = np.random.default_rng(19)
+        coordinates = rng.uniform(0.0, 12.0, 45)
+        residual = rng.normal(0.0, 0.3, 45)
+        variance = np.full(45, 0.04)
+        kernel = Matern32(0.4, 2.0)
+        values = kernel.resolve(None)
+        assert QuasisepGP().conditional_loo(
+            kernel, coordinates, residual, variance, values
+        ) == pytest.approx(
+            DenseGP().conditional_loo(kernel, coordinates, residual, variance, values), abs=1e-8
+        )
+
+    def test_the_leave_one_out_terms_honour_the_jitter(self) -> None:
+        """The jitter is part of the matrix, so both solvers must add it."""
+        kernel = Matern32(0.4, 2.0)
+        values = kernel.resolve(None)
+        assert QuasisepGP(jitter=0.05).conditional_loo(
+            kernel, QUASISEP_GRID, QUASISEP_RESIDUAL, QUASISEP_VARIANCE, values
+        ) == pytest.approx(
+            DenseGP(jitter=0.05).conditional_loo(
+                kernel, QUASISEP_GRID, QUASISEP_RESIDUAL, QUASISEP_VARIANCE, values
+            ),
+            abs=1e-8,
+        )
+
+    def test_a_single_sample_is_the_degenerate_case_and_is_still_right(self) -> None:
+        """N = 1 has no recursion at all; the scan would have nothing to scan."""
+        kernel = Matern32(0.4, 2.0)
+        values = kernel.resolve(None)
+        one = np.array([2.0])
+        assert QuasisepGP().conditional_loo(
+            kernel, one, np.array([0.3]), np.array([0.04]), values
+        ) == pytest.approx(
+            DenseGP().conditional_loo(kernel, one, np.array([0.3]), np.array([0.04]), values),
+            abs=1e-10,
+        )
+
+    def test_a_diagonal_that_cannot_be_a_covariance_is_refused(self) -> None:
+        """The contract path's preconditions apply here too."""
         from ampere.core.exceptions import LikelihoodError
 
         kernel = Matern32(0.4, 2.0)
-        with pytest.raises(LikelihoodError, match=r"O\(N\) route"):
+        broken = QUASISEP_VARIANCE.copy()
+        broken[3] = -1.0
+        with pytest.raises(LikelihoodError, match="negative entries"):
             QuasisepGP().conditional_loo(
-                kernel, QUASISEP_GRID, QUASISEP_RESIDUAL, QUASISEP_VARIANCE, kernel.resolve(None)
+                kernel, QUASISEP_GRID, QUASISEP_RESIDUAL, broken, kernel.resolve(None)
             )
+
+    def test_the_pointwise_group_can_now_be_emitted_under_this_solver(self) -> None:
+        """What lifting the refusal actually buys (``results.md`` §6).
+
+        ``add_pointwise_log_likelihood`` refuses by name under a solver with no
+        ``conditional_loo`` and never falls back to a dense solve. Under this
+        one it no longer has to.
+        """
+        kernel = Matern32(0.4, 2.0)
+        likelihood = Likelihood(GaussianFamily(), GaussianProcessNoise(kernel, QuasisepGP()))
+        observed = _quasisep_observed()
+        predicted = Spectrum(
+            QUASISEP_GRID * u.micron,
+            (np.asarray(observed.values) - QUASISEP_RESIDUAL) * u.Jy,
+        )
+        terms = likelihood.pointwise_log_prob(predicted, observed)
+        dense = Likelihood(
+            GaussianFamily(), GaussianProcessNoise(kernel, DenseGP())
+        ).pointwise_log_prob(predicted, observed)
+        assert terms == pytest.approx(dense, abs=1e-8)
 
     def test_provenance_records_which_library_produced_the_numbers(self) -> None:
         """``inference.md`` §10a fold-in 10, and the question an archive will ask.
