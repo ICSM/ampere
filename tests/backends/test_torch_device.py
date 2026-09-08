@@ -310,6 +310,51 @@ class TestTheDeviceRuleComposesAProblem:
         assert lowered._datasets[0].observed_values.device.type == "cpu"
 
 
+class TestThePriorDrawIsDeviceAware:
+    """``lowering.md`` §9's two routes, and the device each of them draws on.
+
+    Both were CPU-only by accident: route (2) asked ``torch.rand`` for a draw
+    on the space's device with a **CPU** generator (torch refuses that
+    outright), and route (1) forked ``devices=[]``, which saves and restores
+    the CPU generator and nothing else. Nothing in the gate could see either,
+    because ``FittingProblem.sample_prior`` goes through ``ampere.core``'s numpy
+    path and the only caller of this surface is the conformance parameter
+    battery, on the CPU.
+
+    Only the *mechanism* can be pinned here. The CPU-generator choice is
+    invisible on a CPU space by construction — the two candidate
+    implementations agree there — and the meta stand-in cannot help either,
+    because building a ``TorchParameterSpace`` on it fails earlier
+    (``lower_prior`` takes ``float()`` of a support bound, and a meta tensor
+    has no data). ``tests/gpu`` holds the behaviour, on a device that has a
+    generator of its own.
+    """
+
+    def test_a_cpu_space_forks_no_extra_device(self) -> None:
+        from ampere.backends.torch.parameters import _fork_devices
+
+        assert _fork_devices(torch.device("cpu")) == []
+        assert _fork_devices(torch.device("meta")) == []
+
+    def test_a_cuda_space_forks_its_own_generator(self) -> None:
+        from ampere.backends.torch.parameters import _fork_devices
+
+        assert _fork_devices(torch.device("cuda")) == [torch.device("cuda")]
+        assert _fork_devices(torch.device("cuda:1")) == [torch.device("cuda:1")]
+
+    def test_the_draw_is_still_reproducible_on_the_cpu(self) -> None:
+        """The property the change must not have moved."""
+        from ampere.backends.torch import TorchParameterSpace
+
+        problem = _problem("cpu", "cpu", "cpu")
+        space = TorchParameterSpace(problem.parameters)
+        first = space.sample(4242)
+        second = space.sample(4242)
+        assert set(first) == set(problem.parameters.names)
+        for name, value in first.items():
+            assert np.array_equal(value, second[name])
+
+
 # ---------------------------------------------------------------------------
 # 4. The sigma_tensor hook has no silent consumers left
 # ---------------------------------------------------------------------------

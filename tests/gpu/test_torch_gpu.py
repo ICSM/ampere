@@ -54,6 +54,7 @@ from ampere.backends.torch import (  # noqa: E402  (after the importorskip, deli
     Matern32,
     PowerLaw,
     Resample,
+    TorchParameterSpace,
     lower_problem,
 )
 from ampere.core import (  # noqa: E402
@@ -300,6 +301,56 @@ class TestTheRealisedDensityRunsOnTheGpu:
         assert batched.device.type == "cuda"
         one_at_a_time = torch.stack([lowered.log_prob_unconstrained(row) for row in stack])
         assert torch.allclose(batched, one_at_a_time)
+
+
+class TestThePriorDrawOnTheGpu:
+    """``lowering.md`` §9's two routes, on a device that has its own generator.
+
+    Both were CPU-only by accident until W2.4 slice 3. Route (2) asked
+    ``torch.rand`` for a draw on this space's device with a **CPU** generator,
+    which torch refuses outright ("Expected a 'cuda' device type for
+    generator"); route (1) forked ``devices=[]``, which saves and restores the
+    CPU generator and nothing else, so a CUDA draw would have left the
+    process's global CUDA stream advanced behind the caller's back.
+
+    Nothing in the gate could see either: ``FittingProblem.sample_prior`` goes
+    through ``ampere.core``'s numpy path, so this backend surface is reached
+    only by ``tests/conformance/test_parameters.py`` — on the CPU, where both
+    bugs are invisible. These are the rows that would have caught them.
+    """
+
+    def test_a_prior_draw_succeeds_and_is_reproducible(self) -> None:
+        problem = joint_problem()
+        space = TorchParameterSpace(problem.parameters, device=DEVICE)
+        first = space.sample(SEED)
+        second = space.sample(SEED)
+        assert set(first) == set(problem.parameters.names)
+        for name, value in first.items():
+            assert np.all(np.isfinite(value))
+            assert np.array_equal(value, second[name])
+
+    def test_it_gives_the_same_stream_as_the_cpu(self) -> None:
+        """The promise ``rng.seed_for`` makes, kept across devices.
+
+        "``(seed, label)`` gives the same stream in this process, the next one,
+        and on another machine" — so the uniforms are drawn on the CPU and
+        moved, rather than from a CUDA generator seeded the same way, which
+        would produce a different stream and quietly make a GPU run
+        irreproducible on a CPU.
+        """
+        problem = joint_problem()
+        on_gpu = TorchParameterSpace(problem.parameters, device=DEVICE).sample(SEED)
+        on_cpu = TorchParameterSpace(problem.parameters, device="cpu").sample(SEED)
+        for name, value in on_cpu.items():
+            assert np.allclose(on_gpu[name], value)
+
+    def test_the_global_cuda_stream_is_left_where_it_was(self) -> None:
+        """Route (1)'s fork must cover the device it actually draws on."""
+        problem = joint_problem()
+        space = TorchParameterSpace(problem.parameters, device=DEVICE)
+        before = torch.cuda.get_rng_state()
+        space.sample(SEED)
+        assert torch.equal(torch.cuda.get_rng_state(), before)
 
 
 class TestNutsDraws:
