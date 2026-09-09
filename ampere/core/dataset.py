@@ -250,6 +250,25 @@ def _empty_mapping() -> Mapping[str, Any]:
     return types.MappingProxyType({})
 
 
+def _draw_dtype(observed: FunctionSamples, predicted: FunctionSamples) -> np.dtype[Any]:
+    """The dtype an observation draw is assembled in (*W3.14*).
+
+    ``float64`` for every real container — the one this module assumed until
+    :class:`~ampere.core.ComplexGaussianFamily` acquired a ``sample`` — and
+    ``complex128`` when either side of the pair is complex. Both sides are
+    consulted rather than only the observed container because a complex family
+    predicts complex values, and casting them down to float would not fail
+    loudly: numpy *warns* and discards the imaginary part, so the drawn
+    visibilities would be the real projection of the model with nothing said.
+    ``Likelihood.check_alignment`` has already refused a complex container
+    under a real family, so the wider of the two is always the family's own.
+    """
+    for container in (observed, predicted):
+        if np.asarray(container.values).dtype.kind == "c":
+            return np.dtype(np.complex128)
+    return np.dtype(DTYPE)
+
+
 def _check_label(name: object, kind: str) -> str:
     """Labels become merge components, so they must be bare identifiers."""
     if not isinstance(name, str) or not name.isidentifier():
@@ -1447,27 +1466,59 @@ class Dataset:
                 f"simulate(observe=False) and draw your own observations from the predicted "
                 f"containers."
             )
-        drawn = np.array(np.asarray(observed.values).ravel(), dtype=DTYPE, copy=True)
+        dtype = _draw_dtype(observed, predicted)
+        drawn = np.array(np.asarray(observed.values).ravel(), dtype=dtype, copy=True)
         if not np.any(retain):
             return observed.with_values(drawn.reshape(observed.shape))
 
         coordinates = np.column_stack(
             [np.asarray(axis.values, dtype=DTYPE) for axis in observed.axes]
         )[retain]
-        realisation = np.asarray(predicted.values, dtype=DTYPE).ravel()[retain]
+        realisation = np.asarray(predicted.values, dtype=dtype).ravel()[retain]
         # The NoiseParams are built from the noiseless prediction *before* noise
         # is added (ruled 2026-09-03, X-1 point 4): a prediction-dependent noise
         # scales with the true curve — the standard generative reading — and the
         # draw is then consistent with the density that will score it.
         params = noise.noise_params(
-            observed, retain, resolved, predicted=realisation, coordinates=coordinates
+            observed,
+            retain,
+            resolved,
+            predicted=realisation,
+            coordinates=coordinates,
+            latent=self._whitened_latent(routed),
         )
         try:
             realisation = family.sample(realisation, params, rng)
         except LikelihoodError as error:
             raise DatasetError(f"dataset {self.label!r}: {error}") from error
-        drawn[retain] = np.asarray(realisation, dtype=DTYPE)
+        drawn[retain] = np.asarray(realisation, dtype=dtype)
         return observed.with_values(drawn.reshape(observed.shape))
+
+    def _whitened_latent(self, routed: Mapping[str, Mapping[str, Value]]) -> np.ndarray | None:
+        """The whitened ``z`` this dataset's θ carries, or ``None`` (*W3.14*).
+
+        The generative half of what :meth:`log_likelihood_of` already does on
+        the scoring side. A latent-consuming family (``CONSUMES_LATENT_GP``)
+        must draw at the rate its own ``log_prob`` scores, so the ``f = L(θ) z``
+        the two of them use has to come from the **same** ``z`` — the one in θ.
+        Read it here and hand it to ``noise_params``, which owns the whitening
+        transform, and a ``simulate(observe=True)`` draw is a draw from the
+        joint model rather than from a model whose latent block θ records and
+        the data then ignore.
+
+        ``None`` when the dataset declares no latent block, and also when the
+        caller passed no values at all; a family that wants a latent and is
+        given none draws its own marginal realisation, which is
+        :meth:`~ampere.core.GaussianFamily.sample`'s GP branch's rule applied
+        one family along.
+        """
+        if self._latent is None:
+            return None
+        block = routed.get(LATENT_COMPONENT)
+        if not block:
+            return None
+        whitened = block.get(self._latent.parameter.name)
+        return None if whitened is None else np.asarray(whitened, dtype=DTYPE)
 
     def __setstate__(self, state: Mapping[str, Any]) -> None:
         """Re-freeze the instrument after unpickling, because ``id()`` does not survive.
@@ -1539,8 +1590,9 @@ class Dataset:
                 f"simulate(observe=False) and draw your own observations from the predicted "
                 f"containers."
             )
-        drawn = np.array(np.asarray(observed.values).ravel(), dtype=DTYPE, copy=True)
-        values = np.asarray(realisation, dtype=DTYPE).ravel()
+        dtype = _draw_dtype(observed, predicted)
+        drawn = np.array(np.asarray(observed.values).ravel(), dtype=dtype, copy=True)
+        values = np.asarray(realisation, dtype=dtype).ravel()
         expected = int(np.count_nonzero(retain))
         if values.size != expected:
             raise DatasetError(

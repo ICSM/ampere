@@ -2100,6 +2100,24 @@ class LikelihoodFamily(Parameterised, abc.ABC):
         observation process is well defined overrides this with it; a user
         family may do the same, which is the supported route to
         ``observe=True`` draws for an exotic observation process.
+
+        **Amended W3.14.** The refusal was the default for every family but
+        the Gaussian one until Peter's ruling of 2026-09-09 (its use case
+        arrived in W3.6: a counting experiment could not
+        ``simulate(observe=True)``, so neither SBC nor SBI on count data
+        worked without the user subclassing :class:`PoissonFamily`). It was
+        written for families whose observation process is *genuinely
+        ambiguous*, and three of the shipped families are not:
+        :class:`PoissonFamily`, :class:`StudentTFamily` and
+        :class:`ComplexGaussianFamily` each have exactly one generative form,
+        and their own ``log_prob`` already fixes which one. Those three — and
+        only those three, the ruling being a list rather than a principle
+        applied by each implementer — override ``sample``. Every other family
+        keeps the refusal below **word for word**, :class:`CauchyFamily`
+        included, and a user who wants one of them to draw supplies the
+        observation process by subclassing, exactly as before. The rule the
+        refusal states is unchanged; what changed is the list of families the
+        contract can honestly say it knows the answer for.
         """
         raise LikelihoodError(
             f"the {self.NAME or type(self).__name__} family does not implement sample(): its "
@@ -2355,6 +2373,51 @@ class StudentTFamily(LikelihoodFamily):
         standardised = (observed - predicted) / sigma
         return _location_scale_log_prob(st.t, standardised, sigma, noise.limits, nu)
 
+    def sample(
+        self,
+        predicted: np.ndarray,
+        noise: NoiseParams,
+        rng: np.random.Generator,
+    ) -> np.ndarray:
+        """A draw from the same distribution :meth:`log_prob` scores (*W3.14*).
+
+        Location-scale, with the family's own degrees of freedom and the noise
+        model's ``sigma`` as the **scale** — the same two quantities
+        :meth:`log_prob` standardises by, read the same way, so a fitted
+        ``scale`` or ``jitter`` is in the draw exactly as it is in the
+        density::
+
+            x = mu + sigma * t_nu
+
+        ``sigma`` is the scale, not the standard deviation: a Student-t's
+        variance is ``sigma**2 * nu / (nu - 2)`` for ``nu > 2`` and is
+        undefined below that. That is not an approximation to correct for
+        here — it is what ``log_prob``'s ``logpdf(z, nu) - log(sigma)`` means,
+        and a draw that matched the *variance* instead would be a draw from a
+        different density from the one that will score it.
+
+        A correlated (GP) noise model is refused **by name**: a Student-t is a
+        scale mixture of Gaussians, that mixture does not commute with a GP
+        covariance, and the marginal of the combination is not a Student-t at
+        all. ``ampere.core.Likelihood`` already refuses the composition at
+        construction (the family declares no ``CONSUMES_LATENT_GP``), so this
+        guard is for a caller assembling :class:`NoiseParams` directly.
+        """
+        if noise.correlated:
+            raise LikelihoodError(
+                "the student_t family cannot draw an observation under a correlated (GP) noise "
+                "model: a Student-t is a scale mixture of Gaussians, the mixture does not "
+                "commute with a GP covariance, and the marginal of the two together is not a "
+                "Student-t — so there is no location-scale draw to make. Compose this family "
+                "with IndependentNoise, or subclass StudentTFamily and override "
+                "sample(predicted, noise, rng) with the observation process you mean."
+            )
+        sigma = _independent_sigma(noise, self.NAME)
+        resolved = self.context({k: v for k, v in noise.values.items() if k in self.parameters})
+        nu = _positive(resolved["nu"], "nu", self.NAME)
+        location = np.asarray(predicted, dtype=DTYPE)
+        return location + sigma * rng.standard_t(nu, size=location.shape)
+
 
 @register_family
 class CauchyFamily(LikelihoodFamily):
@@ -2425,6 +2488,45 @@ class ComplexGaussianFamily(LikelihoodFamily):
         residual = np.abs(observed - predicted)
         variance = sigma**2
         return float(np.sum(-(residual**2) / (2.0 * variance) - _LOG_2PI - np.log(variance)))
+
+    def sample(
+        self,
+        predicted: np.ndarray,
+        noise: NoiseParams,
+        rng: np.random.Generator,
+    ) -> np.ndarray:
+        """A draw from the same distribution :meth:`log_prob` scores (*W3.14*).
+
+        Circular symmetry is the whole content of the family, so it is the
+        whole content of the draw: the real and the imaginary parts each get
+        an independent ``Normal(0, sigma**2)``, with no correlation between
+        them and no difference in their variances::
+
+            x = mu + sigma * (z_re + i z_im)
+
+        **``sigma`` is the per-component standard deviation, not the total**,
+        and that convention is read off :meth:`log_prob` rather than assumed.
+        Its density is ``-|y - mu|**2 / (2 sigma**2) - log(2 pi) - log(sigma**2)``,
+        which is exactly the joint density of two independent
+        ``Normal(0, sigma**2)`` components — ``(2 pi sigma**2)**-1
+        exp(-(r_re**2 + r_im**2) / (2 sigma**2))``. The total variance
+        ``E|x - mu|**2`` is therefore ``2 sigma**2``. Halving the scale here
+        to make ``sigma`` the total would draw from a distribution the
+        library's own density does not score, and the error would look like a
+        factor nobody could see in an amplitude plot.
+
+        A correlated noise model is refused by the same message the density
+        refuses it with: the circular complex GP is declared analytic and its
+        implementation is Phase 4's (:attr:`GP_ANALYTIC_IMPLEMENTED`), so
+        there is no marginal here to draw from either.
+        """
+        if noise.correlated:
+            raise self._gp_analytic_unimplemented()
+        sigma = _independent_sigma(noise, self.NAME)
+        mean = np.asarray(predicted, dtype=np.complex128)
+        real = rng.standard_normal(mean.shape)
+        imaginary = rng.standard_normal(mean.shape)
+        return mean + sigma * (real + 1j * imaginary)
 
 
 @register_family
@@ -2520,6 +2622,71 @@ class PoissonFamily(LikelihoodFamily):
                 "predicted a value <= 0."
             )
         return float(np.sum(st.poisson.logpmf(counts, rate)))
+
+    def sample(
+        self,
+        predicted: np.ndarray,
+        noise: NoiseParams,
+        rng: np.random.Generator,
+    ) -> np.ndarray:
+        """A draw from the same distribution :meth:`log_prob` scores (*W3.14*).
+
+        ``rng.poisson(rate)``, returned as float because that is the dtype the
+        containers hold — the values are integral, and
+        :meth:`check_observed` will hold them to that when they are scored.
+
+        **What ``predicted`` means here is what it means in**
+        :meth:`log_prob`: the expected count *before* the latent is applied.
+
+        * :class:`IndependentNoise` — the rate is ``predicted`` itself, and
+          the draw is ``counts ~ Poisson(predicted)``. Mean and variance are
+          both ``predicted``, which is what the conformance rows assert.
+        * :class:`GaussianProcessNoise` — the family's model is
+          ``counts ~ Poisson(predicted * exp(f))``, so the rate is
+          ``predicted * exp(f)``. ``f`` is the latent the caller supplied, if
+          one was: that is the **conditional** draw, at the same ``f``
+          ``log_prob`` scores at, which is what ``simulate(observe=True)``
+          needs for the whitened ``z`` in θ and the observation to describe
+          one model rather than two. With no latent supplied, a fresh GP
+          realisation is drawn through :meth:`GPSolver.latent_transform` —
+          the same whitening the latent declaration uses, exactly as
+          :meth:`GaussianFamily.sample`'s GP branch draws its own. The
+          marginal of *that* draw is over-dispersed relative to a Poisson
+          (mean ``predicted * exp(K_ii / 2)``), and correctly so: it is a
+          log-normal mixture of Poissons, which is what the model says.
+
+        A negative rate is refused **by name** rather than left to numpy,
+        whose message for it names neither the family nor the prediction. Note
+        that ``log_prob`` guards ``rate <= 0`` while this guards ``rate < 0``:
+        a rate of exactly zero is a well-defined draw (a point mass at zero
+        counts) even though the density declines to score it.
+        """
+        rate = np.asarray(predicted, dtype=DTYPE)
+        if noise.correlated:
+            latent = noise.latent
+            if latent is None:
+                assert noise.solver is not None and noise.kernel is not None  # .correlated
+                assert noise.coordinates is not None
+                whitened = rng.standard_normal(rate.shape)
+                latent = noise.solver.latent_transform(
+                    noise.kernel, noise.coordinates, whitened, noise.values
+                )
+            values = _as_float64(latent, "latent GP values")
+            if values.shape != rate.shape:
+                raise LikelihoodError(
+                    f"the latent GP values have shape {values.shape} but there are {rate.shape} "
+                    f"retained samples. One latent value per retained sample."
+                )
+            rate = rate * np.exp(values)
+        if not np.all(np.isfinite(rate)) or np.any(rate < 0.0):
+            raise LikelihoodError(
+                "the poisson family needs a finite, non-negative expected count to draw from; "
+                "the model predicted a value that is negative or not finite. A count is a "
+                "count: constrain the prediction to the positive half-line (a Log bijection on "
+                "the norm, or a positive-support prior) rather than clipping the rate here, "
+                "which would draw from a distribution log_prob does not score."
+            )
+        return np.asarray(rng.poisson(rate), dtype=DTYPE)
 
 
 @register_family
