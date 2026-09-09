@@ -93,6 +93,7 @@ from ampere.inference._tmnre import (
     pair_labels,
     pair_mesh,
 )
+from ampere.results import PROVENANCE_SCHEMA_VERSION
 
 
 class _Observed:
@@ -598,7 +599,7 @@ class TestTheRunItEmits:
         attrs = npe_run.attrs
         assert attrs["ampere_engine"] == "sbi"
         assert attrs["ampere_backend"] == "reference"
-        assert attrs["ampere_schema_version"] == 5
+        assert attrs["ampere_schema_version"] == PROVENANCE_SCHEMA_VERSION
         assert attrs["ampere_sbi_method"] == "npe"
         assert attrs["ampere_sbi_trainer"].startswith("NPE")
         assert attrs["ampere_sbi_density_estimator"] == "maf"
