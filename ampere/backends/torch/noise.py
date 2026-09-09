@@ -193,14 +193,15 @@ def _inflate(
 def _check_one_device(noise: NoiseModel) -> None:
     """Refuse a GP noise model whose kernel or solver lives somewhere else.
 
-    ``ampere.core.Likelihood.capability_parts`` puts the noise model and the
-    solver on the composed problem, so a *solver* on the wrong device is caught
-    by :func:`~ampere.core.declared_capabilities`. A **kernel** is deliberately
-    not a capability part (it is a declaration; the solver is what computes),
-    so a kernel left on the CPU inside a GPU problem would be found only by
-    torch, per evaluation, deep inside a Cholesky — or, worse, not found at
-    all, because torch will happily broadcast a CPU scalar against a CUDA
-    matrix. Refusing here, at composition, is the earliest honest point.
+    ``ampere.core.Likelihood.capability_parts`` puts the noise model, the
+    solver and — since W3.8 — the kernel on the composed problem, so all three
+    are caught by :func:`~ampere.core.declared_capabilities` once there is a
+    :class:`~ampere.core.Dataset` to attach them to. This check stays, and is
+    not redundant: it fires at the moment the noise model is *built*, before
+    any dataset exists, and a kernel left on the CPU inside a GPU problem is
+    otherwise found only by torch, per evaluation, deep inside a Cholesky — or,
+    worse, not found at all, because torch will happily broadcast a CPU scalar
+    against a CUDA matrix. Refusing here is the earliest honest point.
     """
     where = noise.DEVICE
     mismatched = {

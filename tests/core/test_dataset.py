@@ -54,6 +54,8 @@ from ampere.core import (
     Transformation,
     TransformationError,
     declared_capabilities,
+    foreign_parts,
+    part_name,
     generator,
     substream,
 )
@@ -153,6 +155,82 @@ WAVELENGTH = np.array([1.0, 2.0, 4.0])
 def flat_spectrum(values: Any = (1.0, 1.0, 1.0), **kwargs: Any) -> Spectrum:
     kwargs.setdefault("uncertainty", [0.1, 0.1, 0.1] * u.Jy)
     return Spectrum(WAVELENGTH * u.micron, np.asarray(values, dtype=float) * u.Jy, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# A fictional backend, for the capability rows (W2.12, W2.13, W3.8)
+#
+# "native" rather than "torch" or "jax" quite deliberately: these rows are
+# about the aggregation rule, and ampere.core must be testable for it in an
+# environment where neither extra is installed. Subclasses of the core pieces,
+# so the arithmetic is the core's and only the declaration differs — which is
+# precisely the substitution W3.8's opt-in has to accept and its gradient
+# routes have to refuse.
+# ---------------------------------------------------------------------------
+
+
+class _NativeFlat(Flat):
+    DIFFERENTIABLE = True
+    BATCHABLE = True
+    BACKEND = "native"
+
+
+class _NativeCalibrate(Calibrate):
+    DIFFERENTIABLE = True
+    BATCHABLE = True
+    BACKEND = "native"
+
+
+class _NativeGPNoise(GaussianProcessNoise):
+    DIFFERENTIABLE = True
+    BATCHABLE = True
+    BACKEND = "native"
+
+
+class _NativeDenseGP(DenseGP):
+    DIFFERENTIABLE = True
+    BATCHABLE = True
+    BACKEND = "native"
+
+
+class _NativeMatern32(Matern32):
+    DIFFERENTIABLE = True
+    BATCHABLE = True
+    BACKEND = "native"
+
+
+def _native_gp_problem(**kwargs: Any) -> FittingProblem:
+    """A wholly ``"native"`` GP problem — the all-native side of W3.8's rows."""
+    return FittingProblem(
+        _NativeFlat(WAVELENGTH),
+        [
+            Dataset(
+                flat_spectrum(),
+                Instrument([_NativeCalibrate()]),
+                Likelihood(
+                    GaussianFamily(), _NativeGPNoise(_NativeMatern32(0.5, 2.0), _NativeDenseGP())
+                ),
+                label="sed",
+            )
+        ],
+        **kwargs,
+    )
+
+
+def _foreign_kernel_problem(**kwargs: Any) -> FittingProblem:
+    """The same problem with the core (numpy) kernel — one foreign part."""
+    return FittingProblem(
+        _NativeFlat(WAVELENGTH),
+        [
+            Dataset(
+                flat_spectrum(),
+                Instrument([_NativeCalibrate()]),
+                Likelihood(GaussianFamily(), _NativeGPNoise(Matern32(0.5, 2.0), _NativeDenseGP())),
+                label="sed",
+            )
+        ],
+        **kwargs,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1008,10 +1086,14 @@ class TestCapabilities:
         likelihood = Likelihood(GaussianFamily(), IndependentNoise())
         assert likelihood.capability_parts == (likelihood.noise,)
 
-    def test_a_gp_likelihood_contributes_its_solver_as_well(self) -> None:
+    def test_a_gp_likelihood_contributes_its_solver_and_kernel(self) -> None:
+        # The kernel joined at W3.8: a solver builds the covariance by calling
+        # Kernel.matrix, so a numpy kernel inside a native solver returns a
+        # numpy array and the conversion detaches the graph.
         solver = DenseGP()
-        likelihood = Likelihood(GaussianFamily(), GaussianProcessNoise(Matern32(0.5, 2.0), solver))
-        assert likelihood.capability_parts == (likelihood.noise, solver)
+        kernel = Matern32(0.5, 2.0)
+        likelihood = Likelihood(GaussianFamily(), GaussianProcessNoise(kernel, solver))
+        assert likelihood.capability_parts == (likelihood.noise, solver, kernel)
 
     def test_the_family_is_deliberately_not_a_capability_part(self) -> None:
         # Ruled: a LikelihoodFamily declares a sampling distribution, which
@@ -1057,28 +1139,131 @@ class TestCapabilities:
         assert "different backends" in message
         assert "'native'" in message and "'reference'" in message
 
-    def test_a_native_solver_settles_it(self) -> None:
-        class NativeFlat(Flat):
-            BACKEND = "native"
-
-        class NativeNoise(GaussianProcessNoise):
-            BACKEND = "native"
-
-        class NativeDenseGP(DenseGP):
-            BACKEND = "native"
-
+    def test_a_native_solver_and_kernel_settle_it(self) -> None:
         problem = FittingProblem(
-            NativeFlat(WAVELENGTH),
+            _NativeFlat(WAVELENGTH),
             [
                 Dataset(
                     flat_spectrum(),
                     likelihood=Likelihood(
-                        GaussianFamily(), NativeNoise(Matern32(0.5, 2.0), NativeDenseGP())
+                        GaussianFamily(),
+                        _NativeGPNoise(_NativeMatern32(0.5, 2.0), _NativeDenseGP()),
                     ),
                 )
             ],
         )
         assert problem.backend == "native"
+
+    # -- W3.8: a foreign part, refused by default and opted into by name -----
+
+    def test_a_numpy_kernel_in_a_native_problem_is_refused_by_default(self) -> None:
+        """W2.4 slice 3's carried finding, now loud (ruled by Peter 2026-09-08).
+
+        It used to compose happily: the kernel was not a capability part, so
+        the problem declared ``differentiable=True`` while its amplitude and
+        length scale got no gradient at all — the solver called
+        ``Kernel.matrix``, got numpy back, and converted it.
+        """
+        with pytest.raises(DatasetError) as excinfo:
+            _foreign_kernel_problem()
+        message = str(excinfo.value)
+        assert "different backends" in message
+        # By name, and *qualified*: "Matern32: Matern32" would have named
+        # nothing, because both kernels are called Matern32.
+        assert "ampere.core.likelihood.Matern32" in message
+        # With the remedy, both halves of it.
+        assert "allow_foreign_parts=True" in message
+        assert "gradient-free" in message
+
+    def test_the_opt_in_accepts_it_and_charges_the_gradient(self) -> None:
+        problem = _foreign_kernel_problem(allow_foreign_parts=True)
+        # The backend is the native one -- "reference" is the name a piece
+        # inherits by silence, so it never identifies the problem.
+        assert problem.backend == "native"
+        # False even though every other part declares True, and even though a
+        # foreign part might itself declare True: the gradient is exactly what
+        # the conversion destroys.
+        assert not problem.differentiable
+        assert problem.allow_foreign_parts
+        assert [type(part).__name__ for part in problem.foreign_parts] == ["Matern32"]
+        assert problem.foreign_part_names == ("sed: ampere.core.likelihood.Matern32",)
+
+    def test_the_all_native_twin_has_no_foreign_parts(self) -> None:
+        problem = _native_gp_problem()
+        assert problem.foreign_parts == ()
+        assert problem.foreign_part_names == ()
+        assert problem.differentiable
+        assert not problem.allow_foreign_parts
+
+    def test_the_opt_in_changes_nothing_for_a_problem_that_needs_it(self) -> None:
+        # The flag is inert where there is nothing foreign, so leaving it on in
+        # a script that composes several problems cannot quietly weaken one.
+        opted = _native_gp_problem(allow_foreign_parts=True)
+        assert opted.capabilities == _native_gp_problem().capabilities
+
+    def test_the_opt_in_does_not_resolve_two_native_backends(self) -> None:
+        # Structural, and the structure is "the parts declare one backend that
+        # is not the silent default". Two of them is a plain configuration
+        # mistake with no foreign/native split to find.
+        class OtherNativeCalibrate(Calibrate):
+            BACKEND = "other"
+
+        with pytest.raises(DatasetError) as excinfo:
+            FittingProblem(
+                _NativeFlat(WAVELENGTH),
+                [Dataset(flat_spectrum(), Instrument([OtherNativeCalibrate()]))],
+                allow_foreign_parts=True,
+            )
+        message = str(excinfo.value)
+        assert "different backends" in message
+        assert "does not resolve this one" in message
+
+    def test_a_capabilities_override_still_reports_the_foreign_part(self) -> None:
+        # The override skips the aggregation, so nothing refuses -- but the
+        # question "does a gradient have to cross a library boundary?" is a
+        # fact about the composition, so foreign_parts answers it anyway and
+        # the gradient routes keep refusing.
+        problem = _foreign_kernel_problem(
+            capabilities=Capabilities(differentiable=True, backend="native")
+        )
+        assert problem.differentiable
+        assert problem.foreign_part_names == ("sed: ampere.core.likelihood.Matern32",)
+
+    def test_foreign_parts_names_the_dataset_it_found_them_in(self) -> None:
+        # A six-dataset joint fit needs "which one", not "a Matern32".
+        problem = FittingProblem(
+            _NativeFlat(WAVELENGTH),
+            [
+                Dataset(
+                    flat_spectrum(),
+                    Instrument([_NativeCalibrate()], label="a"),
+                    Likelihood(
+                        GaussianFamily(),
+                        _NativeGPNoise(_NativeMatern32(0.5, 2.0), _NativeDenseGP()),
+                    ),
+                    label="clean",
+                ),
+                Dataset(
+                    flat_spectrum(),
+                    Instrument([_NativeCalibrate()], label="b"),
+                    Likelihood(
+                        GaussianFamily(), _NativeGPNoise(Matern32(0.5, 2.0), _NativeDenseGP())
+                    ),
+                    label="tabulated",
+                ),
+            ],
+            allow_foreign_parts=True,
+        )
+        assert problem.foreign_part_names == ("tabulated: ampere.core.likelihood.Matern32",)
+
+    def test_part_name_is_qualified(self) -> None:
+        assert part_name(Matern32(0.5, 2.0)) == "ampere.core.likelihood.Matern32"
+
+    def test_foreign_parts_is_empty_without_a_single_native_backend(self) -> None:
+        # The helper answers "nothing resolvable here" rather than guessing,
+        # which is what lets declared_capabilities keep refusing.
+        assert foreign_parts([]) == ()
+        assert foreign_parts([Calibrate(), Calibrate()]) == ()
 
     def test_provenance_config_is_empty_by_default(self) -> None:
         assert DenseGP().provenance_config() == {}

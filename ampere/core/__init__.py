@@ -35,6 +35,8 @@ from .dataset import (
     FittingProblem,
     Simulation,
     declared_capabilities,
+    foreign_parts,
+    part_name,
 )
 from .encoding import (
     COLUMN_GROUPS,
@@ -121,6 +123,7 @@ from .lowering import (
 from .realisation import (
     Realisation,
     RealisationFactory,
+    foreign_parts_refusal,
     log_likelihood_terms_of,
     realise,
     register_realisation,
@@ -339,6 +342,8 @@ __all__ = [
     "encode",
     "encode_observations",
     "family_named",
+    "foreign_parts",
+    "foreign_parts_refusal",
     "generator",
     "latent_parameter",
     "list_families",
@@ -347,6 +352,7 @@ __all__ = [
     "lookup_bijection_lowering",
     "lookup_lowering",
     "negotiate",
+    "part_name",
     "prior_from_spec",
     "propagate_mask",
     "provenance_entries",

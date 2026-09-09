@@ -188,6 +188,8 @@ __all__ = [
     "FittingProblem",
     "Simulation",
     "declared_capabilities",
+    "foreign_parts",
+    "part_name",
 ]
 
 ArrayLike = Any
@@ -359,7 +361,84 @@ class Capabilities:
         return dataclasses.asdict(self)
 
 
-def declared_capabilities(parts: Sequence[object]) -> Capabilities:
+#: The backend name every piece inherits by silence — the ``BACKEND`` default
+#: on :class:`Capable`'s implementers and on :class:`Capabilities` itself. It is
+#: load-bearing in one place beyond the default: :func:`foreign_parts` uses it to
+#: tell "this piece is plain Python and says so" apart from "this piece belongs
+#: to a different array library", which is the whole of W3.8's structural check.
+_SILENT_BACKEND = "reference"
+
+
+def part_name(part: object) -> str:
+    """A composed piece's fully qualified class name, for messages and provenance.
+
+    Qualified rather than bare, because the bare name is *not* discriminating
+    where it matters most: ``ampere.core.likelihood.Matern32`` and
+    ``ampere.backends.torch.gp.Matern32`` are both ``Matern32``, and a refusal
+    reading "Matern32: Matern32" would tell a user nothing about which of the
+    two they had composed by mistake (W3.8).
+
+    >>> part_name(Capabilities())
+    'ampere.core.dataset.Capabilities'
+    """
+    kind = type(part)
+    module = getattr(kind, "__module__", "")
+    qualname = getattr(kind, "__qualname__", kind.__name__)
+    return f"{module}.{qualname}" if module else str(qualname)
+
+
+def foreign_parts(parts: Sequence[object]) -> tuple[object, ...]:
+    """The pieces of *parts* that do not belong to the backend the rest declare.
+
+    **W3.8** (ruled by Peter 2026-09-08 on W2.4 slice 3's carried finding). The
+    check is deliberately **structural** — a part whose ``BACKEND`` is not the
+    problem's — rather than a list of the pieces known to be substitutable, so
+    that it keeps telling the truth as core grows ``sample`` implementations and
+    backends grow native twins: a part stops being foreign on the day it declares
+    the backend, and nothing here has to be edited.
+
+    "The problem's backend" needs resolving before the question can be asked, and
+    it is resolved by the one asymmetry that is real: ``"reference"`` is the name
+    every piece inherits by **silence**, so it cannot identify a problem whose
+    other pieces have deliberately declared a native one. A piece that says only
+    ``"reference"`` inside an otherwise native problem is exactly the pure-Python
+    piece — a tabulated kernel, a legacy callback — the opt-in exists for.
+
+    So: if the parts declare exactly one backend other than ``"reference"``, that
+    one is the problem's and everything declaring ``"reference"`` is foreign. If
+    they declare two or more, there is no foreign/native split to find — a torch
+    piece beside a jax piece is a plain configuration mistake and no opt-in
+    resolves it — and this returns nothing, leaving
+    :func:`declared_capabilities` to refuse.
+
+    >>> class Torch:
+    ...     DIFFERENTIABLE, BATCHABLE, DEVICE, BACKEND = True, True, "cpu", "torch"
+    >>> class Python:
+    ...     DIFFERENTIABLE, BATCHABLE, DEVICE, BACKEND = False, False, "cpu", "reference"
+    >>> [part_name(part) for part in foreign_parts([Torch(), Python()])]
+    ['ampere.core.dataset.Python']
+    >>> foreign_parts([Torch(), Torch()])
+    ()
+    >>> class Jax:
+    ...     DIFFERENTIABLE, BATCHABLE, DEVICE, BACKEND = True, True, "cpu", "jax"
+    >>> foreign_parts([Torch(), Jax(), Python()])
+    ()
+    """
+    declared = {str(part.BACKEND) for part in parts}  # type: ignore[attr-defined]
+    native = declared - {_SILENT_BACKEND}
+    if len(native) != 1:
+        return ()
+    name = next(iter(native))
+    return tuple(
+        part
+        for part in parts
+        if str(part.BACKEND) != name  # type: ignore[attr-defined]
+    )
+
+
+def declared_capabilities(
+    parts: Sequence[object], *, allow_foreign_parts: bool = False
+) -> Capabilities:
     """The capabilities of a whole, from what its parts declare.
 
     Conjunctive by construction, and deliberately so: a chain is differentiable
@@ -383,7 +462,19 @@ def declared_capabilities(parts: Sequence[object]) -> Capabilities:
     Parameters
     ----------
     parts
-        The models and transformations a gradient would have to pass through.
+        The models and transformations a gradient would have to pass through —
+        and, since W2.13, the noise model and GP solver, and since W3.8 the
+        kernel.
+    allow_foreign_parts
+        Accept a piece whose ``BACKEND`` is not the problem's, instead of
+        refusing the composition (**W3.8**, ruled by Peter 2026-09-08). The
+        resulting record is **never** ``differentiable``, whatever the parts
+        declare: that is the whole price of the opt-in, and stating it here
+        rather than leaving it to the conjunction is deliberate — a foreign
+        piece that declared ``DIFFERENTIABLE = True`` (a jax kernel inside a
+        torch problem, say) would otherwise buy back a gradient that does not
+        exist. See :func:`foreign_parts` for how "the problem's backend" is
+        resolved, and :class:`FittingProblem` for the flag that reaches here.
 
     Raises
     ------
@@ -392,6 +483,8 @@ def declared_capabilities(parts: Sequence[object]) -> Capabilities:
         Ampere will not choose either for you: moving arrays between devices
         silently is how a run becomes mysteriously slow, and converting them
         between array libraries silently is how a run loses its gradients.
+        ``allow_foreign_parts=True`` lifts the second refusal, and only where
+        there is a single native backend to be foreign *to*.
 
     Examples
     --------
@@ -442,6 +535,26 @@ def declared_capabilities(parts: Sequence[object]) -> Capabilities:
     Traceback (most recent call last):
         ...
     ampere.core.exceptions.DatasetError: the pieces of this problem declare different backends...
+
+    **W3.8's opt-in** accepts that composition instead, for the one case a
+    native problem cannot express — a piece that exists only in Python — and
+    charges it the gradient, which is what the piece could never have supplied:
+
+    >>> declared_capabilities([TorchOnCpu(), SilentOnCpu()], allow_foreign_parts=True)
+    Capabilities(differentiable=False, batchable=False, device='cpu', backend='torch')
+
+    It resolves a foreign/native split, never a native/native one, so a torch
+    piece beside a jax piece is refused with or without it:
+
+    >>> class JaxOnCpu:
+    ...     DIFFERENTIABLE = True
+    ...     BATCHABLE = True
+    ...     DEVICE = "cpu"
+    ...     BACKEND = "jax"
+    >>> declared_capabilities([TorchOnCpu(), JaxOnCpu()], allow_foreign_parts=True)
+    Traceback (most recent call last):
+        ...
+    ampere.core.exceptions.DatasetError: the pieces of this problem declare different backends...
     """
     if not parts:
         return Capabilities()
@@ -454,27 +567,61 @@ def declared_capabilities(parts: Sequence[object]) -> Capabilities:
             f"device, or pass capabilities=Capabilities(device=...) to state which one is meant."
         )
     backends = {str(part.BACKEND) for part in parts}  # type: ignore[attr-defined]
-    if len(backends) > 1:
-        # Name the offending pieces by class, grouped by the backend each
-        # declares. W2.13 widened the parts to include noise models and GP
-        # solvers, and the commonest way to reach this message is now a
-        # native problem left with the core (numpy) IndependentNoise or
-        # DenseGP -- which the old wording, about "models and transformations",
-        # did not help anyone find.
+    foreign = foreign_parts(parts) if allow_foreign_parts else ()
+    if len(backends) > 1 and not foreign:
+        # Name the offending pieces by *qualified* class, grouped by the
+        # backend each declares. W2.13 widened the parts to include noise
+        # models and GP solvers and W3.8 the kernel, so the commonest way to
+        # reach this message is now a native problem left with an
+        # ampere.core piece -- which the old wording, about "models and
+        # transformations", did not help anyone find, and which the old bare
+        # class names could not even distinguish (ampere.core.Matern32 and
+        # ampere.backends.torch.Matern32 are both "Matern32").
         culprits = "; ".join(
             f"{name}: "
             + ", ".join(
-                sorted({type(part).__name__ for part in parts if str(part.BACKEND) == name})  # type: ignore[attr-defined]
+                sorted({part_name(part) for part in parts if str(part.BACKEND) == name})  # type: ignore[attr-defined]
             )
             for name in sorted(backends)
+        )
+        opt_in = (
+            ""
+            if allow_foreign_parts
+            else (
+                " If one of these is a piece that exists only in Python — a tabulated kernel, a "
+                "legacy callback — and the fit is gradient-free, "
+                "FittingProblem(..., allow_foreign_parts=True) accepts it and declares the "
+                "problem non-differentiable, which is the truth."
+            )
+        )
+        unresolved = (
+            (
+                " allow_foreign_parts=True does not resolve this one: it tells a native problem's "
+                "plain-Python pieces from its native ones, and two native backends have no such "
+                "split."
+            )
+            if allow_foreign_parts
+            else ""
         )
         raise DatasetError(
             f"the pieces of this problem declare different backends {sorted(backends)} "
             f"({culprits}). Ampere does not convert arrays between libraries on your behalf — a "
             f"mixed problem is a configuration mistake that would otherwise fail two steps later "
             f"inside a backend, or silently drop gradients. Build every model, transformation, "
-            f"noise model and GP solver on one backend, or pass "
+            f"noise model, GP solver and kernel on one backend, or pass "
             f"capabilities=Capabilities(backend=...) to state which one is meant."
+            f"{opt_in}{unresolved}"
+        )
+    if foreign:
+        native = (set(backends) - {_SILENT_BACKEND}).pop()
+        return Capabilities(
+            # Never differentiable, whatever the parts declare: the gradient is
+            # exactly what a foreign part cannot carry, and the flag is the one
+            # place the capability ladder tells an engine so (W3.8).
+            differentiable=False,
+            batchable=all(bool(part.BATCHABLE) for part in parts),  # type: ignore[attr-defined]
+            device=devices.pop(),
+            backend=native,
         )
     return Capabilities(
         differentiable=all(bool(part.DIFFERENTIABLE) for part in parts),  # type: ignore[attr-defined]
@@ -954,11 +1101,13 @@ class Dataset:
 
         The instrument steps, and — **since W2.13** (ruled 2026-09-07,
         ``inference.md`` §10a, fold-in 7) — the likelihood's own parts: its
-        noise model, and its GP solver when a GP is declared. Before that
-        widening a problem could report ``backend="jax"`` and
-        ``differentiable=True`` while its GP solve factorised in scipy, which
-        both backend tracks recorded as a finding; the flags now cover the
-        whole of what one evaluation passes through.
+        noise model, its GP solver when a GP is declared, and — **since W3.8**
+        (ruled 2026-09-08) — that GP's kernel. Before the first widening a
+        problem could report ``backend="jax"`` and ``differentiable=True``
+        while its GP solve factorised in scipy; before the second it could do
+        the same while its *covariance* was built in numpy and converted, which
+        detaches the graph just as thoroughly. The flags now cover the whole of
+        what one evaluation passes through.
         """
         return (*self.instrument.steps, *self.likelihood.capability_parts)
 
@@ -1699,6 +1848,28 @@ class FittingProblem:
         The intended workflow is to run non-strict, read
         :meth:`failure_summary`, then re-run with ``strict=True`` to get the
         raise at the offending draw with a full traceback.
+    allow_foreign_parts
+        Accept a piece whose ``BACKEND`` is not this problem's, instead of
+        refusing the composition (**W3.8**, ruled by Peter 2026-09-08 on W2.4
+        slice 3's carried finding). Spelt to sit beside ``strict``: both are
+        explicit, per-problem declarations that change what the composition
+        will tolerate, and neither has a global or environment-variable form.
+
+        It exists for one case, and it is not the case of a mistake: a piece
+        expressible **only in Python** — a tabulated kernel read off a grid, a
+        legacy callback, an external code with no native twin — inside a torch
+        or jax problem that wants to call through it and sample gradient-free.
+        Everything else that reaches the refusal is a composition left half
+        converted, which is why the default is to refuse by name.
+
+        The price is stated in the capability ladder rather than in a comment:
+        the problem is **not differentiable**, so
+        :func:`~ampere.core.realise`, :class:`~ampere.inference.NUTSEngine` and
+        :class:`~ampere.inference.VIEngine` refuse it by name whatever the flag
+        says, the gradient-free engines run it on the numpy contract path (the
+        realisation fast path falls back, as it already does for any problem
+        with no usable realisation), and the run's provenance records
+        ``ampere_foreign_parts`` naming the pieces. See :attr:`foreign_parts`.
     lenient_compile
         Downgrade a model's ``compile_for`` refusal
         (:class:`~ampere.core.exceptions.CompositionError`) to a warning and
@@ -1740,6 +1911,7 @@ class FittingProblem:
         reference_values: Mapping[str, Value] | ArrayLike | None = None,
         validate: bool = True,
         strict: bool = False,
+        allow_foreign_parts: bool = False,
         lenient_compile: bool = False,
         simulator_failures: Sequence[type[BaseException]] = (),
         failure_history: int = DEFAULT_FAILURE_HISTORY,
@@ -1824,8 +1996,13 @@ class FittingProblem:
         self._mapping = ParameterSet.merge(self._components(), ties=self.ties)
         self._require_resolved()
 
+        # W3.8's opt-in. Read before the aggregation, because it is what
+        # decides whether a foreign part is a refusal or a declaration.
+        self.allow_foreign_parts = bool(allow_foreign_parts)
         self.capabilities = (
-            declared_capabilities(self._capability_parts())
+            declared_capabilities(
+                self._capability_parts(), allow_foreign_parts=self.allow_foreign_parts
+            )
             if capabilities is None
             else capabilities
         )
@@ -1982,7 +2159,22 @@ class FittingProblem:
         return self._mapping.merged.unpack(median)
 
     def _capability_parts(self) -> tuple[object, ...]:
-        return (*self._compiled.values(), *self.datasets.capability_parts)
+        return tuple(part for _, part in self._labelled_capability_parts())
+
+    def _labelled_capability_parts(self) -> tuple[tuple[str, object], ...]:
+        """Every capability part, paired with where in the problem it sits.
+
+        The pairing exists for W3.8's messages and provenance: "a numpy
+        ``Matern32``" is not an actionable sentence in a six-dataset joint fit,
+        and "``sed``'s numpy ``Matern32``" is. The labels are the problem's own
+        component labels, so they read the way the merged parameter names do.
+        """
+        labelled: list[tuple[str, object]] = [
+            (label, model) for label, model in self._compiled.items()
+        ]
+        for label, dataset in self.datasets.items():
+            labelled.extend((label, part) for part in dataset.capability_parts)
+        return tuple(labelled)
 
     # -- declarations ---------------------------------------------------------
 
@@ -2197,6 +2389,52 @@ class FittingProblem:
         ``ampere_backend``, which is why that attribute is a fact.
         """
         return self.capabilities.backend
+
+    @property
+    def foreign_parts(self) -> tuple[object, ...]:
+        """The composed pieces that are not this problem's backend's (**W3.8**).
+
+        The module-level :func:`foreign_parts`' structural rule, applied to this
+        problem's capability parts: the pieces that declare ``"reference"`` — the
+        name a piece inherits by silence — inside a problem whose other pieces
+        declare exactly one native backend. Empty for almost every problem,
+        because the composition that produces one is refused at construction
+        unless ``allow_foreign_parts=True`` was passed.
+
+        Deliberately read from the **parts** rather than from :attr:`backend`, so
+        that ``capabilities=Capabilities(backend=...)`` behaves the way it always
+        has. That override is the documented way to *assert* a backend the parts
+        do not name — the reference backend's own realisation tests use it — and
+        reading the assertion back as "every part is foreign" would turn a
+        deliberate declaration into a refusal. What the override cannot do is
+        hide a genuine mixture: a numpy kernel among native pieces is still
+        found, because the parts still disagree.
+
+        It is what :func:`~ampere.core.realise`,
+        :class:`~ampere.inference.NUTSEngine` and
+        :class:`~ampere.inference.VIEngine` refuse on, and what a run's
+        ``ampere_foreign_parts`` records.
+        """
+        return foreign_parts(self._capability_parts())
+
+    @property
+    def foreign_part_names(self) -> tuple[str, ...]:
+        """:attr:`foreign_parts`, as ``"<where>: <qualified class>"`` strings.
+
+        Sorted and de-duplicated, so a refusal, a warning and a run's provenance
+        all name the pieces the same way, and so a six-dataset joint fit says
+        *which* dataset's kernel is the numpy one rather than merely that one is.
+        """
+        offenders = {id(part) for part in self.foreign_parts}
+        return tuple(
+            sorted(
+                {
+                    f"{where}: {part_name(part)}"
+                    for where, part in self._labelled_capability_parts()
+                    if id(part) in offenders
+                }
+            )
+        )
 
     def check_engine(
         self, engine: str = "this engine", *, differentiable: bool | None = None

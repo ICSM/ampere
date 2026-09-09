@@ -52,7 +52,9 @@ from ampere.backends.reference import CalibrationScale, Resample
 from ampere.core import DenseGP as _CoreDenseGP
 from ampere.core import GaussianProcessNoise as _CoreGaussianProcessNoise
 from ampere.core import IndependentNoise as _CoreIndependentNoise
+from ampere.core import Matern32 as _CoreMatern32
 from ampere.core import QuasisepGP as _CoreQuasisepGP
+from ampere.core import SquaredExponential as _CoreSquaredExponential
 from ampere.core import (
     GPSolver,
     Kernel,
@@ -65,6 +67,8 @@ from ampere.core import (
 
 from ..protocol import (
     BackendCapabilities,
+    CovarianceSpec,
+    KernelFamily,
     ModelKind,
     ModelSpec,
     SolverKind,
@@ -241,7 +245,31 @@ class QuasisepGP(_CoreQuasisepGP):
     BACKEND: ClassVar[str] = BACKEND
 
 
+# The kernels, for the same reason one step further down. **W3.8** (ruled by
+# Peter 2026-09-08) put the kernel on ``Likelihood.capability_parts`` too: a
+# solver builds the covariance by calling ``Kernel.matrix``, so a core kernel
+# inside a native solver hands back numpy and the conversion detaches the
+# graph. A fixture named ``"mirror"`` composing the core kernels is therefore
+# a two-backend problem now, and refused — which is this widening working,
+# not a casualty of it. They keep the core classes' names for the reason the
+# four above do: ``KernelSpec`` and ``Likelihood.to_spec`` record the
+# declaration, and ``test_cross_backend`` compares it across backends.
+
+
+class Matern32(_CoreMatern32):
+    """Matérn-3/2, declared as this backend's (W3.8)."""
+
+    BACKEND: ClassVar[str] = BACKEND
+
+
+class SquaredExponential(_CoreSquaredExponential):
+    """Squared exponential, declared as this backend's (W3.8)."""
+
+    BACKEND: ClassVar[str] = BACKEND
+
+
 _MODELS = {ModelKind.LINEAR: MirrorLinearModel, ModelKind.POWER_LAW: MirrorPowerLawModel}
+_KERNELS = {KernelFamily.MATERN32: Matern32, KernelFamily.SQUARED_EXPONENTIAL: SquaredExponential}
 
 
 class MirrorBackend(ReferenceBackend):
@@ -266,6 +294,9 @@ class MirrorBackend(ReferenceBackend):
         if spec.kind is TransformationKind.REBIN:
             return MirrorResample(spec.target, label=spec.label)
         return MirrorPhotometry(spec.target, spec.filters, label=spec.label)
+
+    def kernel(self, spec: CovarianceSpec) -> Kernel:
+        return _KERNELS[spec.family](spec.amplitude, spec.length_scale)
 
     def gp_solver(self, kind: SolverKind) -> GPSolver:
         return DenseGP() if kind is SolverKind.DENSE else QuasisepGP()
