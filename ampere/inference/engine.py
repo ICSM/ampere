@@ -662,6 +662,35 @@ class Engine(abc.ABC):
         return f"<{type(self).__name__} on {self.problem!r}>"
 
 
+def _refuse_foreign_parts(engine: str, problem: FittingProblem) -> None:
+    """Refuse *problem* for a gradient-based *engine* if it carries foreign parts.
+
+    **W3.8** (ruled by Peter 2026-09-08). ``allow_foreign_parts=True`` already
+    makes the problem non-differentiable, so the check below this one would
+    refuse it anyway — but it would refuse it as "one of your pieces declares
+    ``DIFFERENTIABLE = False``", which sends a user looking at their model when
+    the answer is a numpy kernel three levels down. Naming the pieces is the
+    whole difference between a refusal a user can act on and one they cannot.
+
+    Shared by :class:`~ampere.inference.NUTSEngine` and
+    :class:`~ampere.inference.VIEngine` so the two say the same thing, and
+    written here rather than in ``ampere.core`` because it raises this
+    package's :class:`~ampere.inference.exceptions.EngineError`.
+    """
+    if not problem.foreign_parts:
+        return
+    named = ", ".join(problem.foreign_part_names)
+    raise EngineError(
+        f"{engine} needs a gradient, and this problem composes {len(problem.foreign_parts)} "
+        f"piece(s) from another backend — {named} — whose arrays would have to be converted to "
+        f"{problem.backend!r} at every evaluation, which detaches the graph and leaves their "
+        f"parameters with no gradient at all. FittingProblem(..., allow_foreign_parts=True) "
+        f"declares that a *gradient-free* run may call through a piece that exists only in "
+        f"Python; it cannot make one differentiable. Build those pieces from "
+        f"{problem.backend}'s own classes, or sample with emcee, dynesty or zeus."
+    )
+
+
 def _check_ensemble(engine: str, walkers: int, free_size: int) -> int:
     """The conditions both ensemble samplers impose on their walker count.
 

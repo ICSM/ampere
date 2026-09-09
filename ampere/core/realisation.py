@@ -61,6 +61,7 @@ if TYPE_CHECKING:
 __all__ = [
     "Realisation",
     "RealisationFactory",
+    "foreign_parts_refusal",
     "log_likelihood_terms_of",
     "realise",
     "register_realisation",
@@ -282,6 +283,55 @@ def registered_realisations() -> Mapping[str, bool]:
     return {name: row.builtin for name, row in _REALISATIONS.items()}
 
 
+def foreign_parts_refusal(problem: FittingProblem, *, what: str) -> LoweringError | None:
+    """Why *problem* has no differentiable native form, or ``None`` (**W3.8**).
+
+    Ruled by Peter 2026-09-08 on W2.4 slice 3's carried finding: a piece from
+    another backend inside a native problem is **always** refused where a
+    gradient is required, whatever ``allow_foreign_parts`` says. The flag buys
+    a gradient-free run on the numpy contract path and nothing else; it cannot
+    buy a derivative that does not exist, and the failure it would otherwise
+    produce is the silent one — a realised density that samples happily while
+    the foreign piece's parameters never move.
+
+    Written once, here, and called from :func:`realise` and from each backend's
+    own ``LoweredProblem``, because both are reachable directly and a user who
+    constructs a lowered problem by hand deserves the same sentence as one who
+    asks an engine for it.
+
+    Parameters
+    ----------
+    problem
+        The composed problem.
+    what
+        What the caller was about to build, named in the message — "a
+        realisation", "a differentiable torch problem".
+
+    Returns
+    -------
+    LoweringError or None
+        The refusal to raise, or ``None`` when every part is the problem's own.
+    """
+    foreign = problem.foreign_parts
+    if not foreign:
+        return None
+    named = ", ".join(problem.foreign_part_names)
+    return LoweringError(
+        "realisation",
+        backend=problem.backend,
+        detail=(
+            f"this problem composes {len(foreign)} piece(s) from another backend — {named} — so "
+            f"{what} would have to convert their arrays, which detaches the graph and leaves "
+            f"their parameters with no gradient at all. That is refused whether or not the "
+            f"problem was composed with allow_foreign_parts=True: the flag declares that a "
+            f"gradient-free run may call through a piece that exists only in Python, and this "
+            f"path needs the gradient. Build those pieces from "
+            f"{problem.backend}'s own classes, or sample with a gradient-free engine "
+            f"(emcee, dynesty, zeus), which run the numpy contract path on every backend."
+        ),
+    )
+
+
 def realise(problem: FittingProblem) -> Realisation:
     """The backend-native, differentiable form of *problem*.
 
@@ -298,14 +348,23 @@ def realise(problem: FittingProblem) -> Realisation:
     realisation which had drifted from its own contract path fails here rather
     than sampling a healthy-looking posterior of a different problem.
 
+    **W3.8**: a problem carrying a part from another backend is refused here,
+    before dispatch, whether or not it was composed with
+    ``allow_foreign_parts=True`` — a realisation *is* the differentiable form,
+    and that flag never buys a gradient. See :func:`foreign_parts_refusal`.
+
     Raises
     ------
     LoweringError
-        If no realisation is registered for the problem's backend, naming the
+        If the problem composes a part from another backend (W3.8); if no
+        realisation is registered for the problem's backend, naming the
         backend and the remedy; if the factory's result does not satisfy
         :class:`Realisation`; or if it disagrees with
         ``problem.log_prob_unconstrained`` at the reference point.
     """
+    refusal = foreign_parts_refusal(problem, what="a realisation")
+    if refusal is not None:
+        raise refusal
     backend = problem.backend
     row = _REALISATIONS.get(backend)
     if row is None:

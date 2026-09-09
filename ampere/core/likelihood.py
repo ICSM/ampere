@@ -420,6 +420,24 @@ class Kernel(Parameterised, abc.ABC):
     #: representation, and so admits an exact O(N) solve on ordered 1D data.
     QUASISEPARABLE: ClassVar[bool] = False
 
+    # The four capability flags, with the reference path's honest answers.
+    # **W3.8** (ruled by Peter 2026-09-08 on W2.4 slice 3's carried finding):
+    # a kernel is a capability part now (:attr:`Likelihood.capability_parts`),
+    # so it declares them like every other composed piece. Until then it
+    # declared nothing, and an ``ampere.core`` kernel inside a torch or jax GP
+    # noise model was accepted while its amplitude silently got no gradient --
+    # the covariance was built in numpy and then converted, which detaches the
+    # graph in exactly the hyperparameters a native GP fit exists to fit.
+
+    #: Whether a gradient can be taken through this kernel's covariance.
+    DIFFERENTIABLE: ClassVar[bool] = False
+    #: Whether it builds a batch of covariances in one call.
+    BATCHABLE: ClassVar[bool] = False
+    #: Device its arrays live on. Never auto-detected (``architecture.md`` §5).
+    DEVICE: ClassVar[str] = "cpu"
+    #: Which rung of the capability ladder supplies it (W2.12's fourth flag).
+    BACKEND: ClassVar[str] = "reference"
+
     def spec(self) -> KernelSpec:
         """The neutral description a lowering rule consumes."""
         return KernelSpec(
@@ -2730,9 +2748,20 @@ class Likelihood(Parameterised):
         flag on it would either be a fiction or force every user family to
         pick a backend before it could be composed.
 
-        The kernel is absent for the same reason plus one more: it is
-        consumed *by* the solver, which is the piece that decides whether the
-        covariance is built in numpy or natively, and which is already here.
+        **The kernel joined at W3.8** (ruled by Peter 2026-09-08 on W2.4
+        slice 3's carried finding), reversing what this docstring used to say.
+        The argument for leaving it out was that the kernel is consumed *by*
+        the solver, which is the piece that decides whether the covariance is
+        built in numpy or natively — and that argument does not survive
+        contact with the code: a solver builds the covariance by *calling*
+        ``Kernel.matrix``, so a numpy kernel inside a native solver returns a
+        numpy array, the solver converts it, and the conversion detaches the
+        graph. The composed problem then declared ``differentiable=True``
+        while its kernel amplitude and length scale got no gradient at all —
+        the same silent degradation fold-in 7 removed for solvers and noise
+        models, one level down. It is here now, so the flags cover the whole
+        of what one evaluation passes through and a foreign kernel is a
+        backend disagreement like any other.
 
         One consequence recorded deliberately, as W2.1 recorded the same one
         for ``describe``: this is a class attribute of a
@@ -2740,7 +2769,7 @@ class Likelihood(Parameterised):
         joins the names a family's or noise model's parameter may not shadow.
         """
         if isinstance(self._noise, GaussianProcessNoise):
-            return (self._noise, self._noise.solver)
+            return (self._noise, self._noise.solver, self._noise.kernel)
         return (self._noise,)
 
     @property

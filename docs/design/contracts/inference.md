@@ -1052,6 +1052,78 @@ Phase 2's backends override these on their own `Model` and `Transformation`
 subclasses; the `Capable` protocol remains the statement of the surface for
 anything duck-typed into `capability_parts`.
 
+### Non-native parts in a native problem
+
+*(Added by W3.8, ruled by Peter 2026-09-08 on W2.4 slice 3's carried finding —
+a post-freeze §4.5 addition; the decision-log row of the same date in
+`DEVELOPMENT_PLAN.md` §2 is the record.)*
+
+W2.13's fold-in 7 widened the capability parts to the noise model and the GP
+solver, because a nominally differentiable problem whose GP solve ran in scipy
+was a problem whose hyperparameters got no gradient. **The kernel joined them
+here, for the same reason one level down**: a solver builds its covariance by
+*calling* `Kernel.matrix`, so a numpy kernel inside a native solver hands back a
+numpy array, the solver converts it, and the conversion detaches the graph in
+exactly the amplitude and length scale a native GP fit exists to fit. The
+argument that had kept the kernel out — "the solver is the piece that computes"
+— does not survive contact with the code, and is withdrawn.
+
+The ruling has three parts.
+
+**Refused by default.** A part whose `BACKEND` is not the problem's is the
+backend disagreement `declared_capabilities` already raises, and it names the
+offending pieces by their **fully qualified** class — `ampere.core.likelihood.
+Matern32` rather than `Matern32`, because a backend's own kernel deliberately
+shares the bare name (`Likelihood.to_spec` records the declaration and
+`results.md` §14 compares it across backends, so the two *must* agree there).
+The remedy has two halves: build the piece from the backend's own classes, or
+take the opt-in below and give up the gradient.
+
+**Accepted under an explicit opt-in when no gradient is needed.**
+`FittingProblem(..., allow_foreign_parts=True)` — spelt to sit beside `strict`,
+and like `strict` an explicit per-problem declaration with no global form. It
+exists for one case and it is not the case of a mistake: a piece expressible
+**only in Python** — a tabulated kernel, a legacy callback, an external code
+with no native twin — that a torch or jax problem wants to call through and
+sample gradient-free. Under it the problem's `differentiable` is **`False`**
+whatever the parts declare (a foreign part that claimed `True` would otherwise
+buy back a gradient that does not exist), the run's provenance records
+`ampere_foreign_parts` with the located names of the pieces, and the
+gradient-free engines run on the numpy contract path.
+
+Which backend is "the problem's" is resolved by the one asymmetry that is real:
+`"reference"` is the name a piece inherits **by silence**, so it can never
+identify a problem whose other pieces have deliberately declared a native one.
+If the parts declare exactly one non-`"reference"` backend, that one is the
+problem's and the `"reference"` pieces are foreign; two native backends have no
+foreign/native split to find and are refused with or without the flag. The
+check is **structural** — a part whose `BACKEND` is not the problem's — with no
+list of substitutable pieces and no assumption about families, so a part stops
+being foreign on the day it declares the backend and nothing here is edited
+when core grows `sample` implementations or a backend grows a native twin.
+
+**Always refused where a gradient is required.** `realise`, a backend's
+differentiable `LoweredProblem`, `NUTSEngine` and `VIEngine` refuse by name
+whatever the flag says, and whatever `strict` says: the flag declares that a
+gradient-free run may call through a Python-only piece, and it cannot make one
+differentiable. On the gradient-free side `realise`'s refusal *is* the routing —
+`_EvaluationCache` treats a `LoweringError` as "no usable realisation here" and
+scores on the contract path, exactly as it already does for an unlowerable
+family — so §10a's fast path falls back and `ampere_realised` is `0`.
+
+Whether a realisation could instead keep the native path and call the foreign
+piece through the backend's escape hatch (torch: detach → numpy → tensor; jax:
+`jax.pure_callback`) was **measured** rather than assumed, on the 400-point
+flexible-likelihood problem of `tests/benchmarks/test_engine_fast_path.py`, one
+`Engine.log_prob`: torch 10.7–12.6 ms contract, 7.8–9.1 ms callback, 7.3–7.5 ms
+all-native; jax 10.8–13.6 ms contract, 9.3–9.8 ms callback, 2.0–2.2 ms
+all-native. On torch the whole fast path is worth only 1.4–1.7×, and on jax —
+where it is worth 5–7× — the callback recovers just 1.2–1.4× of it, because the
+host round trip is precisely what jit exists to avoid. So the callback route
+buys little where the fast path is cheap and almost nothing where it is
+valuable, at the price of a second silently non-differentiable path. It is
+**not implemented**: the fall-back stands.
+
 ### `check_engine`
 
 `likelihoods.md` §16's second obligation, discharged for every dataset — and it
@@ -1180,6 +1252,12 @@ one-point check in `realise` is a guard, not the proof.
 
 **The gradient-free engines are unchanged.** They consume §10 and run on
 every backend; the reference backend registers no realisation in v1.
+
+**W3.8**: `realise` refuses, before dispatch, a problem composing a part from
+another backend — whether or not it was built with `allow_foreign_parts=True`,
+and whether or not it is `strict`. A realisation *is* the differentiable form,
+and that flag never buys a gradient. See §4.5, "Non-native parts in a native
+problem".
 
 ## 11. Failure signalling
 
