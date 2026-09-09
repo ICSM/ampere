@@ -27,6 +27,7 @@ here does.
 from __future__ import annotations
 
 import math
+import warnings
 from typing import Any
 
 import astropy.units as u
@@ -628,3 +629,31 @@ class TestABatch:
                 layout=layout,
                 batched=True,
             )
+
+
+class TestMaskedPathology:
+    """What a masked row is allowed to hold, and what a retained one is not."""
+
+    def test_a_masked_sample_may_have_a_zero_uncertainty(self) -> None:
+        """Masking is what a user does about a degenerate sample; the encoding agrees.
+
+        The arithmetic producing the whitened value and ``log sigma`` divides by
+        that sigma, so this is the row where numpy would otherwise warn and put
+        an infinity into the tensor.
+        """
+        grid = np.linspace(1.0, 5.0, 5)
+        observed = Spectrum(
+            grid * u.um,
+            grid * u.Jy,
+            uncertainty=np.array([0.1, 0.1, 0.0, 0.1, 0.1]) * u.Jy,
+            mask=np.array([False, False, True, False, False]),
+        )
+        datasets = {"sed": _Holder(observed)}
+        layout = EncodingLayout.from_datasets(datasets)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            encoded = encode_observations(datasets, layout=layout)
+        values = np.asarray(encoded.values)
+        assert np.all(np.isfinite(values))
+        assert values[0, 2, layout.group("log_sigma").offset] == 0.0
+        assert values[0, 2, layout.group("mask").offset] == 0.0

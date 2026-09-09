@@ -895,14 +895,22 @@ def _set_tensor(
 
         scale = record.value_scale
         parts = (values.real, values.imag) if record.is_complex else (values,)
-        asinh = np.arcsinh(np.stack(parts, axis=-1) / scale)
-        if record.has_sigma and sigma is not None:
-            _check_sigma(record, sigma, keep)
-            whitened = np.stack(parts, axis=-1) / sigma[..., None]
-            log_sigma = np.log(sigma) - math.log(scale)
-        else:
-            whitened = asinh
-            log_sigma = np.zeros(values.shape, dtype=float)
+        stacked = np.stack(parts, axis=-1)
+        # Masked rows are allowed to hold anything, including a NaN or a zero
+        # sigma -- masking is what a user does *about* those -- so the arithmetic
+        # below is expected to produce non-finite entries on those rows and
+        # :func:`_sanitised` zeroes them. Silencing numpy here rather than
+        # letting a warning escape is deliberate: the retained rows are checked
+        # explicitly, by name, a few lines down.
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+            asinh = np.arcsinh(stacked / scale)
+            if record.has_sigma and sigma is not None:
+                _check_sigma(record, sigma, keep)
+                whitened = stacked / sigma[..., None]
+                log_sigma = np.log(sigma) - math.log(scale)
+            else:
+                whitened = asinh
+                log_sigma = np.zeros(values.shape, dtype=float)
         _check_finite(record, asinh, keep)
 
         group = groups["value"]
