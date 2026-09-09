@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import dataclasses
 import enum
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import astropy.units as u
@@ -35,6 +35,7 @@ from ampere.core import (
     FittingProblem,
     FunctionSamples,
     Instrument,
+    Kernel,
     Likelihood,
     LimitKind,
     NoiseModel,
@@ -62,6 +63,7 @@ __all__ = [
     "GP_GRID",
     "CensoringKind",
     "DatasetSpec",
+    "KernelFactory",
     "NoiseKind",
     "ProblemSpec",
     "analytic_flux",
@@ -376,7 +378,18 @@ def observed_container(spec: ProblemSpec, dataset: DatasetSpec) -> FunctionSampl
 # ---------------------------------------------------------------------------
 
 
-def build_noise(backend: ConformanceBackend, dataset: DatasetSpec) -> NoiseModel:
+#: How a dataset's kernel is built. ``ConformanceBackend.kernel`` for every row
+#: but W3.8's, which passes ``ampere.core``'s own constructors to compose the
+#: **foreign** kernel a native problem may opt into.
+KernelFactory = Callable[[CovarianceSpec], Kernel]
+
+
+def build_noise(
+    backend: ConformanceBackend,
+    dataset: DatasetSpec,
+    *,
+    kernel_factory: KernelFactory | None = None,
+) -> NoiseModel:
     """The noise model *dataset* declares, from the backend's own noise classes.
 
     The noise model and the solver were ``ampere.core``'s here until W2.13,
@@ -389,21 +402,28 @@ def build_noise(backend: ConformanceBackend, dataset: DatasetSpec) -> NoiseModel
     """
     if dataset.noise is NoiseKind.IID:
         return backend.independent_noise()
+    build_kernel = backend.kernel if kernel_factory is None else kernel_factory
     return backend.gp_noise(
-        backend.kernel(dataset.covariance),
+        build_kernel(dataset.covariance),
         backend.gp_solver(dataset.solver),
         jitter=dataset.gp_jitter,
     )
 
 
 def build_likelihood(
-    backend: ConformanceBackend, dataset: DatasetSpec, observed: FunctionSamples
+    backend: ConformanceBackend,
+    dataset: DatasetSpec,
+    observed: FunctionSamples,
+    *,
+    kernel_factory: KernelFactory | None = None,
 ) -> Likelihood:
     """The likelihood *dataset* declares."""
     codes = censoring_codes(dataset, observed.n_samples)
     censoring = None if codes is None else Censoring(codes)
     return Likelihood(
-        family_named(dataset.family)(), build_noise(backend, dataset), censoring=censoring
+        family_named(dataset.family)(),
+        build_noise(backend, dataset, kernel_factory=kernel_factory),
+        censoring=censoring,
     )
 
 
@@ -425,11 +445,24 @@ def build_instrument(backend: ConformanceBackend, dataset: DatasetSpec) -> Instr
     )
 
 
-def build_problem(backend: ConformanceBackend, spec: ProblemSpec) -> FittingProblem:
+def build_problem(
+    backend: ConformanceBackend,
+    spec: ProblemSpec,
+    *,
+    kernel_factory: KernelFactory | None = None,
+    **problem_kwargs: Any,
+) -> FittingProblem:
     """Realise *spec* on *backend*.
 
     The only backend-supplied pieces are the model, the instrument steps, the
     kernel and the solver. Everything else is ``ampere.core``, unchanged.
+
+    ``kernel_factory`` replaces :meth:`ConformanceBackend.kernel`, and exists
+    for W3.8's rows alone: they compose the *same* declaration with a kernel
+    from another backend, which is the composition the ruling refuses by
+    default and accepts under ``allow_foreign_parts=True``. ``problem_kwargs``
+    reach :class:`~ampere.core.FittingProblem` unchanged, which is how those
+    rows pass that flag.
     """
     datasets = []
     for dataset in spec.datasets:
@@ -438,8 +471,14 @@ def build_problem(backend: ConformanceBackend, spec: ProblemSpec) -> FittingProb
             Dataset(
                 observed,
                 build_instrument(backend, dataset),
-                build_likelihood(backend, dataset, observed),
+                build_likelihood(backend, dataset, observed, kernel_factory=kernel_factory),
                 label=dataset.label,
             )
         )
-    return FittingProblem(backend.model(spec.model), datasets, ties=spec.ties, seed=spec.seed)
+    return FittingProblem(
+        backend.model(spec.model),
+        datasets,
+        ties=spec.ties,
+        seed=spec.seed,
+        **problem_kwargs,
+    )
