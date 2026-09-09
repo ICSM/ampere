@@ -277,7 +277,7 @@ def _check_slot(slot: _Slot, container: FunctionSamples, index: int) -> None:
 Budget = Iterable[Simulation] | SimulationBatch | Iterable[SimulationBatch]
 
 
-def _chunks_of(simulations: Budget) -> Iterator[list[Simulation]]:
+def _chunks_of(simulations: Budget) -> Iterator[Sequence[Simulation]]:
     """Normalise a budget into chunks, holding one chunk at a time.
 
     Three shapes reach the writers and all three mean the same thing —
@@ -290,14 +290,14 @@ def _chunks_of(simulations: Budget) -> Iterator[list[Simulation]]:
     chunk, because a caller holding a list already holds it all.
     """
     if isinstance(simulations, SimulationBatch):
-        yield list(simulations)
+        yield simulations
         return
     iterator = iter(simulations)
     first = next(iterator, None)
     if first is None:
         return
     if isinstance(first, SimulationBatch):
-        yield list(first)
+        yield first
         for chunk in iterator:
             if not isinstance(chunk, SimulationBatch):
                 raise ResultsError(
@@ -306,7 +306,7 @@ def _chunks_of(simulations: Budget) -> Iterator[list[Simulation]]:
                     f"simulate_many(as_chunks=True) yields or a flat sequence of Simulations, "
                     f"not both."
                 )
-            yield list(chunk)
+            yield chunk
         return
     first_draw: Simulation = first
     yield [first_draw, *iterator]
@@ -509,6 +509,7 @@ def _tree_from(
                 "container_schema": CONTAINER_SCHEMA_VERSION,
                 "samples": offset + count,
                 "channels": sorted(slots),
+                **dict(getattr(batch, "provenance", None) or {}),
             },
         )
     )

@@ -42,3 +42,8 @@ objects here, so their displayed values are placeholders — see the note above.
 .. autodata:: ampere.backends.torch.instrument.DETECTORS
 .. autodata:: ampere.backends.torch._config.DEFAULT_DTYPE
 .. autodata:: ampere.backends.torch._config.DEFAULT_DEVICE
+
+.. automodule:: ampere.backends.torch.sharding
+   :members:
+   :undoc-members:
+   :show-inheritance:

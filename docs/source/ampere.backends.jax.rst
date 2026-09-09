@@ -45,3 +45,8 @@ displayed value is a placeholder — see the note above.
 .. autodata:: ampere.backends.jax.models.COORDINATE_UNIT
 .. autodata:: ampere.backends.jax.models.FLUX_UNIT
 .. autodata:: ampere.backends.jax.gp.PRECISIONS
+
+.. automodule:: ampere.backends.jax.sharding
+   :members:
+   :undoc-members:
+   :show-inheritance:
