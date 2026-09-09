@@ -352,3 +352,209 @@ linear-Gaussian case W3.6 already uses.
    emulation and multi-fidelity work (this memo's recommendation)?
 4. Dependency policy: may `nautilus`/`ultranest` join the base install, or
    does every new sampler go behind an extra as `zeus` did?
+
+## 8. Follow-ups from the second exchange (2026-09-10)
+
+Peter's response to §§0–7, and Fable's answers. Where an answer revises the
+memo above, the revision is stated here rather than edited in, so the
+reasoning stays visible.
+
+### 8.1 Population inference by importance reweighting over amortised SBI
+
+Peter's use case: an amortised estimator (over noise and sampling, the
+`horizon_notes.md` §4–5 programme) run over 10⁴–10⁹ sources, then a
+population model built by reweighting each object's draws under a
+population prior and fitting the hyperparameters by VI. This is design
+horizon (b) with the object count taken seriously, and it sharpens three
+things above.
+
+- **Which estimator to amortise.** For population work the quantity per
+  object is the marginal likelihood under the population prior,
+  `p(xᵢ|Λ) = ∫ p(xᵢ|θ) π(θ|Λ) dθ`. With an amortised *posterior*
+  `q(θ|xᵢ)` trained under an interim prior `π₀`, that integral is the
+  reweighting estimator `(1/N) Σⱼ π(θᵢⱼ|Λ)/π₀(θᵢⱼ)` over draws
+  `θᵢⱼ ~ q(·|xᵢ)`, and its variance grows as the population prior narrows
+  relative to `π₀` (the effective sample size collapse every hierarchical
+  reweighting paper warns about). With an amortised *ratio* estimator
+  `r(x, θ) = p(x|θ)/p(x)`, the same integral is a plain Monte Carlo average
+  of `r(xᵢ, θ)` over draws from `π(θ|Λ)` — no interim prior to divide out,
+  and draws that follow the population prior wherever VI moves it. **NRE is
+  the natural amortised estimator for population inference**, and W3.4's
+  marginal estimators are already ratios. Storing per draw the estimator's
+  own log-density (§5.2b) is what keeps the NPE route usable when NRE is
+  not the estimator in hand; the two are the same hook.
+- **Where VI actually fits.** §2.4 dismissed stochastic-gradient methods
+  because single-object likelihoods are whole-dataset GP marginals. The
+  population objective `Σᵢ log p(xᵢ|Λ)` is the opposite shape — a sum over
+  10⁹ independent terms — and is exactly what stochastic VI over
+  minibatches of *sources* was made for. pyro/numpyro's `plate` with
+  `subsample_size` is the mechanism; the per-object terms are the stored
+  draws or the stored ratio network. This is the one place in ampere
+  where SVI's minibatch machinery earns its place, and it is a `population`
+  module over archived outputs, not an engine.
+- **Storage is the real design question at 10⁹.** One `DataTree` per
+  source does not scale; what scales is the *estimator* plus a columnar
+  store of a few draws (or summary statistics) per source — the
+  training-set writer's shape (§11 of `results.md`) but partitioned
+  (zarr or parquet, one row group per chunk of sources), with the
+  provenance attrs once per file. The per-draw `log_prior`, the
+  estimator's log-density and, for NRE, the log-ratio are the columns
+  that make reweighting possible without the network. A design item of
+  its own, before any population code.
+
+### 8.2 Surrogate-posterior methods — §3.3 revised
+
+Peter's point that BO has use cases "where even SBI is too expensive"
+identifies the family §3.3 mis-filed: Bayesian optimisation *of the
+log-posterior itself*, where the product is a GP surrogate of the density
+rather than a mode. The candidates, all slot A, all producing a surrogate
+from tens to a few hundred evaluations:
+
+- **VBMC** (Variational Bayesian Monte Carlo; Acerbi 2018, 2020;
+  `pyvbmc`): a GP surrogate of the log-joint refined by active sampling,
+  with a variational mixture fitted to the surrogate. Returns an
+  approximate posterior *and* an ELBO estimate of the evidence; handles
+  noisy likelihoods. Typically a few hundred evaluations in ≤ 10
+  dimensions. The most complete package of the family.
+- **GPry** (El Gammal, Schöneberg, Torrado, Fidler 2022–23): a GP
+  surrogate of the log-posterior with a bespoke acquisition, then MCMC on
+  the surrogate for contours; built for cosmological likelihoods,
+  reported at roughly 10² evaluations for ≤ 10-parameter posteriors,
+  callable with a plain log-posterior and bounds.
+- **BAPE / Bayesian active learning of posteriors** (Kandasamy et al.
+  2015 and successors) and **BOLFI** (Gutmann & Corander 2016, in ELFI):
+  the same idea for likelihood-free discrepancies — the SBI-adjacent
+  member of the family.
+- **Bayesian quadrature** (WSABI, Gunter et al. 2014; `emukit`): the
+  evidence as the primary product, the posterior as the by-product.
+
+Fit: each consumes `log_prob_unconstrained` on slot A (no gradients), and
+each returns a surrogate plus an evidence — so the output goes through
+§5.1 (evidence), §5.2 (draws from the surrogate, resampled or i.i.d., with
+the surrogate's own log-density stored) and §5.3 (`ampere_approximation =
+"gp_surrogate"`). No new contract surface beyond the memo's six. **Revised
+placement**: tier 2, as *the* route for a simulator too expensive for SBI
+budgets, with VBMC first because it ships evidence, noise handling and a
+mature package; "BO as acquisition for training sets" (§3.3) stands
+separately and is unchanged.
+
+On the specific memory — methods giving 1-D marginals from ~10 evaluations
+and 2-D marginals from ~50 — **Fable could not identify the paper with
+confidence.** The numbers fit two shapes: (i) slice-and-interpolate schemes
+that evaluate the density along axis-aligned 1-D and 2-D slices through the
+mode and fit a GP or spline per slice (a profile-likelihood construction
+with Bayesian dressing, which is only exact when the posterior is close to
+separable); (ii) the surrogate family above in low dimension, where
+GPry-style budgets do come down to tens of points per pair. If Peter can
+recall an author or a keyword, the question is worth settling, because a
+method that is (i) is a diagnostic rather than an inference engine, and
+should be filed with the profile-interval tools of §3.1.
+
+### 8.3 `margarine` (Bevins et al. 2023, MNRAS 526, 4613)
+
+What it does: trains a masked autoregressive flow (or a KDE) on posterior
+samples — weighted nested-sampling chains included — for a chosen subset
+of parameters, giving a marginal density with nuisance parameters
+integrated out. From that density it computes marginal KL divergences and
+Bayesian dimensionality (the `anesthetic`-style statistics, but on a
+subset), marginal Bayes factors (the nuisance-marginalised evidence
+comparison it was written for), and reusable densities: a posterior from
+one experiment becomes a prior or an importance-reweighting proposal for
+the next, and independent experiments' marginal posteriors can be combined
+by multiplication.
+
+Fit for ampere:
+
+- It is a **results-layer consumer**, not an engine: it wants draws (and
+  weights, if the raw weighted output is kept — §5.2a) for a subset of
+  merged names, which is exactly the `posterior` group with `var_names=`.
+- Three of its uses map onto hooks this memo already asks for: a fitted
+  density on stored draws *is* the proposal log-density of §5.2b for a run
+  whose engine did not store one (any MCMC run), which makes importance
+  correction and §8.1's reweighting available retroactively on archives;
+  marginal Bayes factors are a model-comparison route (§8.4); combining
+  archived runs is a multi-dataset route that costs no refit.
+- A flow trained on a posterior as the **next fit's prior** is the
+  interesting contract question: ampere's priors are per-parameter
+  (`parameters.md` §4.1), so a joint, correlated prior over several
+  parameters is an extension. It is not a large one — a flow is an
+  invertible map from a base distribution, so it supplies both `log_prior`
+  and a multi-dimensional `prior_transform` (the nested samplers' need)
+  directly — but it touches the frozen §4.1 and is a decision, not a
+  driver. This is also the "arbitrary priors" page the tutorials list as
+  still to be written.
+- **The package itself is a poor fit**: it is built on TensorFlow
+  Probability, a third array library beside numpy, torch and jax, with the
+  install weight that implies. The *functions* are worth having and are
+  small to write over what the project already carries: `anesthetic`
+  (numpy/pandas; the reference implementation of the nested-sampling
+  statistics, weighted samples native) for the KL/dimensionality half, and
+  a torch or jax flow from the stack the `sbi` and `jax` extras already
+  install for the density-emulation half. Recommendation: implement
+  `ampere.results.marginals` (working name) in that shape, and cite
+  margarine for the method.
+
+### 8.4 Model comparison — a fuller picture than §5.1
+
+What exists: `dynesty`'s evidence; `pointwise_log_likelihood` (W2.8) feeding
+`arviz.loo` and `arviz.waic`, so LOO/WAIC comparison is already a solved
+route wherever the solver offers `conditional_loo` (refused by name where
+it does not — the quasiseparable numpy solver); posterior-predictive checks
+(W2.8). What is worth adding, all in `ampere.results` and none an engine:
+
+- **`harmonic`** (McEwen et al.; the learnt harmonic-mean estimator, with
+  normalising-flow targets since v1.1): computes the evidence from
+  *posterior samples plus their log-posterior values*, which every ampere
+  run stores per draw (`log_likelihood + log_prior`). It wants several
+  chains for its cross-validation split — emcee/zeus give them; a
+  single-chain run (VI, SBI, nested) can be split by draw. Dependencies:
+  jax and flax, so the `jax` extra. **Fits the results layer verbatim**,
+  and it is the only route to an evidence for an MCMC run after the fact.
+- **Laplace evidence** from §3.2's `Optimum`; **thermodynamic integration**
+  if a PT sampler lands; **bridge sampling** on stored draws plus the
+  `log_prob` callable (a short implementation, no dependency); the
+  **Savage–Dickey ratio** for nested models, which needs the marginal
+  density at the nested value — §8.3's fitted density supplies it.
+- The engine-neutral evidence attribute (§5.1) is what makes
+  `compare(runs)` a one-line table: a `results.comparison` module with
+  `log_evidence(tree, method="attrs" | "harmonic" | "bridge" | "laplace")`,
+  `bayes_factor`, `savage_dickey`, and a `compare` that lines up evidences
+  and LOO/WAIC the way `arviz.compare` does for the latter. Every method
+  records how it got its number and its error estimate, because a Bayes
+  factor without its method is not a result.
+
+### 8.5 `ChainConsumer`, `anesthetic`, and "new figures made easy"
+
+`ChainConsumer` (v1, 2023 rewrite) takes a pandas `DataFrame` per chain
+with optional `weight` and `log_posterior` columns and draws the
+astronomy-style corner (1σ/2σ contours, several chains overlaid), summary
+tables (LaTeX-ready), and walk plots. Its strength over the six ampere
+plots is **comparison**: several runs — engines, models, data cuts — on one
+figure, which `arviz.plot_pair` does awkwardly. `anesthetic` (Handley)
+uses the same idiom — a weighted `DataFrame` subclass — and adds
+nested-sampling-specific plots and statistics.
+
+Fit: one bridge serves both, and pandas users generally —
+`to_dataframe(tree, var_names=..., group="posterior", weights=...)`
+flattening `(chain, draw)` into rows keyed by merged name, with
+`log_posterior` from the stored per-draw split, the equal weights (or the
+raw nested weights, §5.2a), and the run's provenance carried as
+`DataFrame.attrs`. Since the groups are xarray, `.to_dataframe()` exists
+already; the bridge is naming, weights, `log_posterior`, and a `name` per
+run for overlay legends. Both packages are light (pandas, matplotlib,
+scipy). Recommendation: keep the six contract plots in ArviZ/matplotlib —
+they are the stable, tested surface — and add the bridge plus a
+`chainconsumer` optional extra for publication figures and multi-run
+comparison, with one worked example on the docs site. The bridge also
+makes "new figures" a pandas exercise, which is what most users will
+reach for anyway.
+
+### 8.6 What this exchange adds to §5's adaptations
+
+Nothing new in kind; two in emphasis. §5.2b (the stored proposal density)
+is now the load-bearing hook for three things — importance correction,
+population reweighting at scale, and retroactive density emulation on
+archives — and should be the first of the six taken. And a seventh item:
+**a columnar, partitioned output format for amortised runs over many
+sources** (§8.1), designed before the population module rather than after
+the first 10⁷-source run shows one file per source does not work.
