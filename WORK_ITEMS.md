@@ -1006,6 +1006,46 @@ referenced the bare `swyft` name at class-definition time, so the lazy
 guard never protected them — the revived classes are defined inside the
 lazily-imported path or behind a factory. **Depends:** W3.2 (and W3.3 for
 set embeddings). **Blocks** nothing.
+**The "express through sbi" design (Fable, 2026-09-09, on Peter's
+request; the option Fable recommends).** TMNRE (Miller et al. 2021) is two
+ideas. *Marginal* ratio estimation: instead of one classifier for the joint
+ratio `r(θ, x) = p(θ|x)/p(θ)`, train one per marginal of interest —
+each 1D `θ_i` and each 2D pair — which is what makes the method robust at
+high parameter dimension and is what the corner plot actually needs.
+*Truncation*: after each round, restrict the *prior* to the region where
+the estimated 1D marginals put their mass (the hyperrectangle of per-
+parameter intervals above a small threshold ε), simulate the next round
+inside it, and retrain; because the restricted prior is the original
+prior renormalised on a subset — not a learned proposal — the ratio is
+unchanged inside the region and no importance correction is needed, the
+estimate stays amortised *within* the box, and the box is a diagnostic in
+its own right. In sbi 0.27 both halves exist: `NRE`/`NRE_B`/`BNRE` train a
+ratio estimator; a marginal estimator is the same trainer fed
+`theta[:, idx]` with a prior over that marginal (for ampere's unconstrained
+prior the marginal `log_prob` is not closed-form, but NRE only needs prior
+*samples* to train and the prior only to build a posterior — so marginals
+train from the joint draws' columns, and the marginal posterior is
+evaluated as `exp(log r) · p(θ_i)` with `p(θ_i)` estimated once from
+prior draws); `RestrictedPrior(prior, accept_reject_fn)` is the truncated
+prior, with `accept_reject_fn` an indicator on the current box (sbi's own
+`get_density_thresholder` gives the HPD form used by TSNPE; TMNRE's box is
+the product of 1D marginal intervals, a few lines on the 1D estimators'
+outputs), and `append_simulations(theta, x, from_round=r)` accumulates
+rounds. `build_posterior(sample_with="rejection")` samples the restricted
+prior through the ratio; `"mcmc"` (slice) is the fallback for narrow
+boxes. Ampere-side: `SBIEngine(method="tmnre", rounds=R, marginals=1|2,
+truncation_epsilon=ε)` — a round loop over `simulate_many` with the
+`RestrictedPrior` handed to it as the θ source (the batch's `values=`
+argument takes an array, so the engine draws from the restricted prior
+and passes the array), the 1D/2D estimators trained per round, the box
+recorded per round in the attrs (`ampere_sbi_truncation`), and the
+final marginal posteriors emitted as the run's draws — one chain from the
+final-round rejection sampler on the *joint* estimator if one is also
+trained, or the 1D/2D marginals as `sample_stats`/a derived group if not
+(a results question for the item: a run whose posterior is a set of
+marginals rather than joint draws is new to §4.6 and needs a row). No
+swyft, no Lightning, and the SBC/coverage machinery of W3.6 applies
+unchanged.
 **Accept (if revived):** the maturity note in the PR; `import
 ampere.inference` succeeds without swyft; `method="tmnre"` refuses with
 `OptionalDependencyError(extra="swyft")` without it and recovers the toy
