@@ -50,6 +50,7 @@ from ampere.core import (
     PlateBinding,
     PoissonFamily,
     Spectrum,
+    SquaredExponential,
     Tie,
     TimeSeries,
     Transformation,
@@ -81,6 +82,8 @@ from ampere.results import (
     hash_of,
     kind_named,
     model_fingerprint,
+    model_hash,
+    model_hash_fingerprint,
     model_identity_hash,
     model_result_from_dict,
     model_result_to_dict,
@@ -1706,7 +1709,10 @@ class TestSchemaFiveAttributes:
     """
 
     def test_the_schema_version_is_five(self) -> None:
-        assert PROVENANCE_SCHEMA_VERSION == 5
+        # The constant has moved on to 6 (W3.12's ampere_model_hash); this
+        # row asserts the three attributes below, not the exact number --
+        # TestSchemaSixAttributes pins the current value.
+        assert PROVENANCE_SCHEMA_VERSION >= 5
 
     def test_a_contract_path_run_records_realised_zero(self) -> None:
         attrs = provenance_attrs(joint_problem(), engine="emcee")
@@ -1768,3 +1774,105 @@ class TestSchemaFiveAttributes:
         run = recorded(joint_problem())
         for key in ("ampere_realised", "ampere_registered_lowerings", "ampere_solver_config"):
             assert key in run.attrs
+
+
+def _gp_problem_with_kernel(kernel: Any) -> FittingProblem:
+    """One GP dataset built on *kernel*, everything else held fixed.
+
+    ``Matern32`` and ``SquaredExponential`` both declare the identical
+    ``("amplitude", "length_scale")`` parameters, so swapping one for the
+    other at the same fixed values leaves ``ampere_spec_hash`` (and
+    ``ampere_component_spec_hashes``) untouched — precisely the "model
+    changed, parameter spec did not" gap :func:`model_hash` exists to close.
+    """
+    return FittingProblem(
+        Powerlaw(blue=BLUE),
+        DatasetCollection(
+            {
+                "gp": Dataset(
+                    blue_data(),
+                    Instrument([Calibrate()], channel="blue"),
+                    Likelihood(GaussianFamily(), GaussianProcessNoise(kernel)),
+                )
+            }
+        ),
+        seed=20260907,
+    )
+
+
+class TestModelHash:
+    """W3.12: the composition W3.5 built locally in ``ampere.results.artefacts``, promoted here."""
+
+    def test_it_is_a_32_character_digest(self) -> None:
+        assert len(model_hash(joint_problem())) == 32
+
+    def test_identical_problems_agree(self) -> None:
+        assert model_hash(joint_problem()) == model_hash(joint_problem())
+
+    def test_a_kernel_swap_moves_it_while_the_spec_hash_stays(self) -> None:
+        """The gap ``ampere_spec_hash`` alone leaves open (W3.5's finding), closed."""
+        matern = provenance_attrs(_gp_problem_with_kernel(Matern32(0.3, 1.0)))
+        squared_exponential = provenance_attrs(
+            _gp_problem_with_kernel(SquaredExponential(0.3, 1.0))
+        )
+        assert matern["ampere_spec_hash"] == squared_exponential["ampere_spec_hash"]
+        assert matern["ampere_model_hash"] != squared_exponential["ampere_model_hash"]
+
+    def test_the_fingerprint_has_no_parameters_or_observed_entry(self) -> None:
+        """The prior and the observed data are the *other* two hashes' job."""
+        fingerprint = model_hash_fingerprint(joint_problem())
+        for model in fingerprint["models"].values():
+            assert "parameters" not in model
+        for dataset in fingerprint["datasets"]:
+            assert "observed" not in dataset
+
+    def test_a_prior_only_change_leaves_it_alone(self) -> None:
+        """The reverse of the kernel-swap test: a moved prior must not move this hash."""
+
+        class Steeper(Model):
+            def __init__(self, grid: np.ndarray, location: float) -> None:
+                self.register_buffer("blue", grid, unit=u.micron)
+                self.register_parameter(Parameter("index", st.norm(location, 0.5)))
+
+            def evaluate(self, **values: Any) -> ModelResult:
+                ctx = self.context(values)
+                return ModelResult(
+                    {"blue": Spectrum(ctx["blue"] * u.micron, ctx["blue"] ** ctx["index"] * u.Jy)}
+                )
+
+        def problem(location: float) -> FittingProblem:
+            return FittingProblem(
+                Steeper(BLUE, location),
+                [Dataset(blue_data(), Instrument([], channel="blue", input_kind=Spectrum))],
+                seed=20260902,
+            )
+
+        # test_spec_hash_moves_when_a_prior_moves above shows this same knob
+        # (-1.0 versus -2.0) moves the spec hash; here it must leave
+        # model_hash untouched.
+        assert (
+            provenance_attrs(problem(-1.0))["ampere_spec_hash"]
+            != provenance_attrs(problem(-2.0))["ampere_spec_hash"]
+        )
+        assert model_hash(problem(-1.0)) == model_hash(problem(-2.0))
+
+
+class TestSchemaSixAttributes:
+    """W3.12: ``ampere_model_hash`` — the composition W3.5 built locally, promoted here."""
+
+    def test_the_schema_version_is_six(self) -> None:
+        assert PROVENANCE_SCHEMA_VERSION == 6
+
+    def test_a_run_records_it(self) -> None:
+        attrs = provenance_attrs(joint_problem())
+        assert "ampere_model_hash" in attrs
+        assert isinstance(attrs["ampere_model_hash"], str)
+        assert len(attrs["ampere_model_hash"]) == 32
+
+    def test_it_is_the_promoted_composition(self) -> None:
+        problem = joint_problem()
+        assert provenance_attrs(problem)["ampere_model_hash"] == model_hash(problem)
+
+    def test_an_emitted_run_carries_it(self) -> None:
+        run = recorded(joint_problem())
+        assert "ampere_model_hash" in run.attrs
