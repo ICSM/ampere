@@ -556,6 +556,7 @@ deferred with the namespace itself; see the amendment to §2.2.)*:
 |---|---|
 | Family A lives in a new `ampere.diagnostics` namespace, not `ampere.results` | Pre-fit: no `InferenceData` exists yet to consume; its JAX dependency is orthogonal to backend choice, not to results consumption (§2.4) |
 | Families B and C live in `ampere.results` | Both are pure `InferenceData`-in, plot-out — precisely `ampere.results`'s existing remit; introduces no dependency `ampere.results` doesn't already carry (§3.4, §4.4) |
+| Family D lives in `ampere.results.calibration`, with the `sbi` fast path inside `SBIEngine` *(W3.6)* | The same test, same answer: `InferenceData`s plus `simulate()` in, numbers and plots out, and no dependency the namespace does not already carry — `sbi` is imported lazily inside the engine method that needs it, so the base install is untouched (§11) |
 | RHMF hyperparameters are expert opt-in, not a shipped default, for Phase 2 | No ampere-specific validation exists or can exist in a document-only item; RHMF's own authors say the settings need cross-validation; an unvalidated "just works" default risks silently miscalibrating the very screening step meant to catch misspecification (§2.5) |
 | Pre-fit and post-fit anomaly scores share one container type and plot convention | Both answer the same question at different stages (prior_art.md §5 Lesson R2); a shared visual grammar lowers cognitive cost across the pipeline (§5) |
 | Comparability risk (Tension 5) is policed by mandatory provenance metadata, not by keeping the two visually distinct | Metadata travels with the data wherever it's consumed; visual distinctness only protects the one plot function that respects it (§5) |
@@ -629,7 +630,7 @@ Each of these is a decision, not an oversight. Each has an extension point.
 
 ---
 
-## 11. Family D — posterior calibration (recorded at review, 2026-09-01; future scope)
+## 11. Family D — posterior calibration (recorded at review, 2026-09-01; **landed W3.6**, 2026-09-09)
 
 Raised by Peter at review: is simulation-based calibration, or other
 posterior-calibration diagnostics, useful — especially for SBI? **Yes**, and
@@ -676,6 +677,44 @@ module's own diagnostics — decided when the code lands, per the §8 table's
 logic. Its outputs (rank histograms, coverage curves) are not
 coordinate-indexed deficiency maps, so — like family B, and for the same
 reason — it does **not** adopt the `AnomalyScore` convention.
+
+*(**Amended W3.6**, 2026-09-09 — the placement decision, taken as this
+section says it should be.* **`ampere.results.calibration`**, with the
+`sbi`-specific fast path inside the engine as `SBIEngine.calibrate`. The §8
+table's logic gives exactly that answer: the family consumes
+`InferenceData`s plus `simulate()`, produces numbers and pictures, and
+introduces **no dependency `ampere.results` does not already carry** — the
+`sbi` route needs `sbi`, which the extra already brings for the engine that
+trained the posterior, and it is imported lazily inside the engine method
+that uses it, so `import ampere.results` in the base install pulls in
+nothing new. That is the same argument §8 records for families B and C, and
+there was no reason for family D to answer it differently.
+
+*What landed.* Two routes, both returning one `xarray.Dataset` — the shape
+`results.md` §4 now calls the `calibration` group, written into a run by
+`attach_calibration` and drawn by `plot_sbc_ranks` and `plot_coverage`.
+
+1. **`SBIEngine.calibrate(count=, posterior_draws=, tarp=)`** — for an
+   amortised posterior, which can be re-conditioned on a fresh dataset for
+   nothing, so the whole check costs one simulation batch and no retraining.
+   `sbi.diagnostics`'s own `run_sbc`/`check_sbc` and `run_tarp`/`check_tarp`
+   do the arithmetic, per §2.2's depend-don't-reimplement posture. The one
+   thing this method owns, and the one that could have gone silently wrong,
+   is that the calibration batch is encoded with **the run's own
+   `EncodingLayout`**: a layout rebuilt from the simulated containers would
+   standardise its columns differently from the ones the network trained on,
+   and would then report a *different* network as calibrated. The layout's
+   hash is recorded on the group so that is checkable after the fact.
+2. **`sbc(problem, engine_factory, *, count, draws)`** — the Talts et al.
+   loop over `simulate` and a full fit per simulated dataset, for any engine.
+   Expensive by design and budget-controlled by the caller, and the only
+   route that can validate a *likelihood* rather than a network, which is
+   what this section anticipated for M2. Its first application is the
+   repeated-trial coverage study `examples/wstat_comparison.py` had recorded
+   as the thing a single seeded run cannot substitute for.
+
+*The `AnomalyScore` decision stands as written*: the group is a rank table
+and a coverage curve, not a deficiency map.)*
 
 **On evolution generally** (Peter's second point): diagnostics are
 expected to grow as the field produces new ones. This document's structure

@@ -40,7 +40,8 @@ it yourself with::
 
 which prints the comparison below, deterministically (every random draw —
 the synthetic data and both engines' own streams — is seeded), in around
-ten to twenty seconds on the reference backend.
+ten to twenty seconds on the reference backend. ``--coverage`` adds the
+repeated-trial coverage study described at the end of this page.
 
 The two routes
 ---------------
@@ -127,6 +128,116 @@ documents that profiling a background out, rather than marginalising it,
 tends to bias and overstate the precision of the parameters of interest
 specifically in the low-count regime this example uses. A single seeded run
 — including the one printed above — cannot itself demonstrate that bias
-reliably; only a repeated-trial coverage study can, which this fast worked
-example deliberately does not attempt. The recommendation above does not
-depend on it.
+reliably; only a repeated-trial coverage study can. The next section is that
+study.
+
+The repeated-trial coverage study
+----------------------------------
+
+Ampere's fourth diagnostic family — posterior calibration
+(``docs/design/contracts/diagnostics.md`` §11) — *is* a repeated-trial
+coverage study, so running one here costs the example a function call rather
+than a bespoke experiment. :func:`ampere.results.sbc` is the Talts et al.
+(2018) loop: draw :math:`\theta` from the prior, simulate a dataset there,
+fit it from scratch, and record where the truth fell among the posterior
+draws. Under a correctly calibrated posterior that **rank** is uniform, so
+its histogram is flat and the empirical coverage of every central credible
+interval sits on the diagonal::
+
+    python examples/wstat_comparison.py --coverage --full
+
+Both routes are run against the same generative model — the two-dataset
+formulation, with source- and background-region counts drawn from
+independent Poisson processes at the drawn parameters — and, crucially,
+against the **same simulated datasets**. That makes the joint fit a
+*control* rather than a second experiment: it fits the very model the data
+came from, so its ranks are uniform by construction and its row is what
+Monte Carlo noise looks like at this budget.
+
+Two details of how the study is set up matter more than they look.
+
+* **The joint problem needs a ``sample()``.** ``PoissonFamily`` refuses to
+  provide one by default — a ``log_prob`` says how a datum is scored, not
+  how one is generated, and ampere will not guess an observation process.
+  For a counting experiment there is nothing to guess, so the example's
+  ``CountingPoisson`` subclass supplies it in three lines. That is the
+  supported route the refusal itself names, and it is why the *WStat*
+  problem still cannot be simulated from: its profiled background estimate
+  is a function of the very counts a draw would have to produce.
+* **Simulation-based calibration averages over the prior it draws from.**
+  Run under the example's broad ``NORM_PRIOR``
+  (:math:`\log\mathcal{U}(0.5, 40)`), most prior draws are *bright*
+  sources, where profiling a background out is harmless — and the study
+  duly reports both routes as calibrated, with every uniformity p-value
+  above 0.19 and coverage curves that agree to within Monte Carlo noise
+  (reproduce it with ``--coverage --full --broad-prior``). That is a true
+  answer to a question nobody asked. The study therefore runs under
+  ``COVERAGE_NORM_PRIOR`` (:math:`\log\mathcal{U}(0.5, 3)`), which is the
+  faint regime the concern is actually about. The lesson generalises: a
+  calibration study is only as informative as the prior it integrates over,
+  and "well calibrated" always carries an implicit "over this prior".
+
+In the faint regime, over 128 simulated datasets with each rank taken
+against 200 posterior draws::
+
+    route   parameter              KS p  mean rank  rank var  68% cov.  95% cov.
+    wstat   model.norm            0.457      0.518    0.0759     0.736     0.945
+    wstat   model.index        0.000423      0.558    0.0722     0.716     0.922
+    joint   model.src_norm        0.797      0.496    0.0761     0.719     0.938
+    joint   model.src_index       0.183      0.539    0.0731     0.759     0.938
+
+Under uniformity the mean rank fraction is 0.5 with a standard error of
+0.026 at 128 trials, and its variance is :math:`1/12 = 0.0833`. The rank
+histograms themselves, ten equal bins each, are the picture behind those
+numbers (the script prints them; :func:`ampere.results.plot_sbc_ranks` draws
+them properly, with the binomial null band, for anyone who wants a figure)::
+
+    wstat   model.norm         8  13  11  13  17  14  13  12  15  12   (uniform expects 12.8)
+    wstat   model.index        8  11   6   5  19  17  20  12  18  12   (uniform expects 12.8)
+    joint   model.src_norm    11   9  15  12  17  14  17  10  11  12   (uniform expects 12.8)
+    joint   model.src_index    9   8  11  15  10  16  17  17  12  13   (uniform expects 12.8)
+
+**The profiled route's spectral index fails the uniformity test; the
+control's, on the same simulations, does not.** WStat's ``model.index``
+ranks give a Kolmogorov–Smirnov p-value of :math:`4\times10^{-4}` against
+0.18 for the joint fit's ``model.src_index``, with a mean rank fraction of
+0.558 (2.3 standard errors above 0.5) and a variance below the uniform's.
+The histogram says the same thing in one line: 8, 11, 6, 5 in the lower half
+against 20, 12, 18, 12 in the upper. Read as a picture, the truth lands in
+the upper part of the WStat posterior more often than it should, and that
+posterior is a little too tight. Read as a statement about the fit,
+profiling the background out has both biased the source index and overstated
+its precision — exactly the two failures the literature attributes to a
+profiled nuisance at low counts, and neither of them visible in the single
+run printed above, whose two posteriors agreed.
+
+Two honest qualifications, because a coverage study that overstates itself
+is worse than none. First, the control's own index ranks are shifted in the
+same direction by about two thirds as much (0.539, 1.5 standard errors) and
+are not significant; the two routes are ranked on the same simulations, so
+part of WStat's shift is noise the control shares. What the study
+establishes is that the profiled route's departure is *detectable* at this
+budget while the correctly specified fit's is not — it does not pin down the
+size of the effect to better than 128 trials allow. Second, the source
+*normalisation* shows no such failure on either route (p = 0.46 and 0.80):
+the bias here is in the spectral shape, not the flux scale.
+
+None of this changes the recommendation, and that is the point of having
+made it structurally: the joint fit was the right choice before the study,
+for reasons that do not depend on how the ranks fall. What the study adds is
+that the cost of the profiled route is now measured rather than asserted.
+
+The reduced version of the study — six simulations, short chains — runs in
+``tests/examples/test_wstat_comparison.py``, so the machinery the numbers
+above came from is exercised on every commit; the full budget above takes
+about twenty minutes on the reference backend, which is why it is behind a
+flag rather than in ``main()``.
+
+.. note::
+
+   Rank histograms and coverage curves are drawn by
+   :func:`ampere.results.plot_sbc_ranks` and
+   :func:`ampere.results.plot_coverage`, and
+   ``python examples/wstat_comparison.py --coverage --figures PREFIX``
+   writes them. They are not committed to this repository: no run outputs or
+   other binary artefacts are (see above).

@@ -139,6 +139,7 @@ from __future__ import annotations
 
 import dataclasses
 import functools
+import importlib
 import math
 from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
@@ -159,6 +160,14 @@ from ampere.core.encoding import (
 from ampere.core.exceptions import OptionalDependencyError
 from ampere.core.simulate import Executor, SimulationBatch
 from ampere.results.artefacts import ArtefactKey, ArtefactStore, artefact_key
+from ampere.results.calibration import (
+    PARAMETER_DIM,
+    SBI_ROUTE,
+    TARP_LEVEL_DIM,
+    attach_calibration,
+    calibration_dataset,
+)
+from ampere.results.provenance import ATTR_PREFIX
 from ampere.results.training import append_training_set, write_training_set
 
 from .engine import DEFAULT_CACHE_SIZE, Engine
@@ -1258,6 +1267,216 @@ class SBIEngine(Engine):
         tree = self.finish(chain, extra_attrs=attrs)
         return _with_estimator_log_prob(tree, estimator_log_prob)
 
+    # -- family D's fast path (W3.6) ------------------------------------------
+
+    def calibrate(
+        self,
+        *,
+        count: int,
+        posterior_draws: int = 1000,
+        tarp: bool = True,
+        levels: Any = None,
+        progress: bool = False,
+        posterior: Any = None,
+        attach_to: Any = None,
+        num_workers: int = 1,
+    ) -> Any:
+        """Family D on this run's trained posterior: SBC ranks and coverage.
+
+        ``diagnostics.md`` §11's calibration family, on the route where it is
+        cheap. An amortised posterior can be re-conditioned on a fresh dataset
+        for nothing, so the whole of simulation-based calibration costs one
+        extra simulation batch and **no retraining at all** — where
+        :func:`ampere.results.calibration.sbc` pays for a full fit per
+        simulation. The arithmetic is ``sbi``'s own ``run_sbc``/``check_sbc``
+        and ``run_tarp``/``check_tarp``, per §2.2's depend-don't-reimplement
+        posture; what this method owns is that they are handed the *right*
+        tensors.
+
+        Which is the one thing here that could go silently wrong. The fresh
+        batch is encoded with **this run's own**
+        :class:`~ampere.core.encoding.EncodingLayout` (:attr:`encoding`), not a
+        layout rebuilt from the simulated containers: a network is only
+        meaningful about a tensor packed the way it was trained, and a
+        calibration check that re-derived its standardisation from the
+        calibration batch would be testing a different network from the one the
+        run produced — and would report *that* one as calibrated.
+
+        θ is compared in the **unconstrained** parameterisation, which is where
+        the estimator lives (see this module's docstring). That costs nothing
+        and changes nothing: :meth:`~ampere.core.dataset.FittingProblem.constrain`
+        is monotone per parameter, so a rank is the same number in either space,
+        and the labels are the problem's own ``free_labels()`` either way.
+
+        Parameters
+        ----------
+        count
+            How many fresh prior draws to simulate and test at. ``sbi``'s own
+            checks warn below 100, and so does this: the uniformity test is a
+            goodness-of-fit test on this many points.
+        posterior_draws
+            ``L``: how many posterior draws each rank is taken against.
+        tarp
+            Also run the TARP expected-coverage test (Lemos et al. 2023) and
+            store its curve. It is the *joint* diagnostic the marginal ranks
+            cannot replace — a posterior can be calibrated in every margin and
+            wrong about the correlations — and it costs a second batch of
+            posterior sampling, which for an amortised NPE is cheap and for an
+            MCMC-sampled NLE or NRE is not.
+        levels
+            Nominal levels for the marginal coverage curve; the module default
+            (:data:`~ampere.results.calibration.DEFAULT_LEVELS`) otherwise.
+        progress
+            Show ``sbi``'s progress bars.
+        posterior
+            Test *this* posterior rather than :attr:`posterior`. The seam a
+            calibration study of a **deliberately** miscalibrated posterior
+            needs — a temperature-scaled wrapper, say — and the reason the
+            suite can prove this check fails when it should.
+        attach_to
+            A run's ``DataTree`` to write the result into, as its
+            ``calibration`` group (``results.md`` §4). Modified in place; the
+            dataset is returned either way.
+        num_workers
+            Forwarded to ``sbi``, which uses it only on the non-batched
+            sampling path (an NLE or NRE posterior).
+
+        Returns
+        -------
+        xarray.Dataset
+            The ``calibration`` group: ``ranks``, ``coverage``, ``ks_pvalue``,
+            ``c2st_ranks``, and — with *tarp* — ``tarp_coverage`` on its own
+            credibility grid, with the checks' scalar verdicts on the attrs.
+
+        Raises
+        ------
+        ampere.inference.EngineError
+            If this engine has not run, so there is no trained posterior and no
+            layout to encode the calibration batch with; or if every simulation
+            in the calibration batch failed.
+        """
+        sbi_package, torch = _require_sbi()
+        target = self.posterior if posterior is None else posterior
+        if target is None or self.encoding is None:
+            raise EngineError(
+                "sbi cannot calibrate a posterior it has not trained: call run() first, or pass "
+                "posterior= a posterior of your own. The encoding layout the calibration batch "
+                "must be packed under is recorded by run() and by nothing else."
+            )
+        simulations = int(count)
+        draws = int(posterior_draws)
+        if simulations < 1:
+            raise EngineError(f"a calibration check needs at least one simulation, got {count}.")
+        if draws < 1:
+            raise EngineError(f"a rank needs at least one posterior draw, got {posterior_draws}.")
+
+        problem = self.problem
+        dtype = getattr(torch, _DTYPE)
+        rng = self.stream("calibrate")
+        thetas, summaries, simulated = self._calibration_batch(simulations, rng)
+        theta_tensor = torch.as_tensor(thetas, dtype=dtype, device=self.device)
+        summary_tensor = torch.as_tensor(summaries, dtype=dtype, device=self.device)
+        prior = np.stack(
+            [problem.unconstrain(problem.sample_prior(rng)) for _ in range(thetas.shape[0])]
+        )
+        prior_tensor = torch.as_tensor(prior, dtype=dtype, device=self.device)
+
+        diagnostics = importlib.import_module("sbi.diagnostics")
+        ranks, dap = diagnostics.run_sbc(
+            theta_tensor,
+            summary_tensor,
+            target,
+            num_posterior_samples=draws,
+            num_workers=num_workers,
+            show_progress_bar=progress,
+        )
+        checks = diagnostics.check_sbc(ranks, prior_tensor, dap, num_posterior_samples=draws)
+        extras: dict[str, tuple[tuple[str, ...], Any]] = {
+            "ks_pvalue": ((PARAMETER_DIM,), _numpy(checks["ks_pvals"])),
+            "c2st_ranks": ((PARAMETER_DIM,), _numpy(checks["c2st_ranks"])),
+        }
+        coords: dict[str, Any] = {}
+        attrs: dict[str, Any] = {
+            f"{ATTR_PREFIX}calibration_uniformity_check": "sbi.diagnostics.check_sbc",
+            f"{ATTR_PREFIX}calibration_requested": simulations,
+            f"{ATTR_PREFIX}calibration_failures": simulated - int(thetas.shape[0]),
+            f"{ATTR_PREFIX}calibration_engine": type(self).__name__,
+            f"{ATTR_PREFIX}calibration_method": self.method,
+            f"{ATTR_PREFIX}calibration_encoding_layout": self.encoding.name,
+            f"{ATTR_PREFIX}calibration_encoding_hash": self.encoding.hash,
+            f"{ATTR_PREFIX}calibration_parameterisation": "unconstrained",
+            f"{ATTR_PREFIX}calibration_c2st_dap": float(np.mean(_numpy(checks["c2st_dap"]))),
+            f"{ATTR_PREFIX}calibration_sbi_version": str(
+                getattr(sbi_package, "__version__", "unknown")
+            ),
+        }
+        if problem.seed is not None:
+            attrs[f"{ATTR_PREFIX}calibration_seed"] = int(problem.seed)
+        if tarp:
+            ecp, alpha = diagnostics.run_tarp(
+                theta_tensor,
+                summary_tensor,
+                target,
+                num_posterior_samples=draws,
+                num_workers=num_workers,
+                show_progress_bar=progress,
+            )
+            area, ks_pvalue = diagnostics.check_tarp(ecp, alpha)
+            extras["tarp_coverage"] = ((TARP_LEVEL_DIM,), _numpy(ecp))
+            coords[TARP_LEVEL_DIM] = _numpy(alpha)
+            attrs[f"{ATTR_PREFIX}calibration_tarp_atc"] = float(area)
+            attrs[f"{ATTR_PREFIX}calibration_tarp_ks_pvalue"] = float(ks_pvalue)
+
+        result = calibration_dataset(
+            _numpy(ranks).astype(np.int64),
+            problem.free_labels(),
+            posterior_draws=draws,
+            route=SBI_ROUTE,
+            levels=levels,
+            extras=extras,
+            coords=coords,
+            attrs=attrs,
+        )
+        if attach_to is not None:
+            attach_calibration(attach_to, result)
+        return result
+
+    def _calibration_batch(self, count: int, rng: Any) -> tuple[np.ndarray, np.ndarray, int]:
+        """A fresh prior batch, unconstrained θ and layout-encoded x.
+
+        Streamed in chunks exactly as :meth:`_simulate_round` streams a
+        training round, and on its own named sub-stream (``"sbi.calibrate"``),
+        because ``lowering.md`` §9.2's rule is that adding a diagnostic must not
+        change what a fit simulated.
+        """
+        problem = self.problem
+        thetas: list[np.ndarray] = []
+        summaries: list[np.ndarray] = []
+        simulated = 0
+        for chunk in problem.simulate_many(
+            count,
+            observe=True,
+            rng=rng,
+            executor=self.executor,
+            chunk_size=self.chunk_size,
+            as_chunks=True,
+        ):
+            simulated += len(chunk)
+            keep = chunk.usable
+            if not len(keep):
+                continue
+            thetas.append(np.stack([problem.unconstrain(draw.theta) for draw in keep]))
+            summaries.append(
+                _summary_of(keep.observations, problem.datasets, batched=True, layout=self.encoding)
+            )
+        if not thetas:
+            raise EngineError(
+                f"sbi has nothing to calibrate on: every one of the {simulated} simulation(s) in "
+                f"the calibration batch failed. problem.failure_summary() says why:\n"
+                f"{problem.failure_summary()}"
+            )
+        return np.concatenate(thetas, axis=0), np.concatenate(summaries, axis=0), simulated
+
     # -- the pieces -----------------------------------------------------------
 
     def _trainer(
@@ -1592,6 +1811,13 @@ def _with_estimator_log_prob(tree: Any, values: np.ndarray) -> Any:
     except Exception:
         return tree
     return tree
+
+
+def _numpy(value: Any) -> np.ndarray:
+    """A torch tensor as a plain float array, detached and off the device."""
+    detach = getattr(value, "detach", None)
+    tensor = value if detach is None else detach().cpu()
+    return np.asarray(tensor.numpy() if hasattr(tensor, "numpy") else tensor, dtype=float)
 
 
 def _thinned(values: Sequence[float]) -> tuple[list[float], int]:

@@ -199,6 +199,7 @@ result, got float. ...
 | `log_likelihood` | one variable per **dataset label** — the per-dataset decomposition (§5) | `(chain, draw)` |
 | `observed_data` | one variable per dataset: the observed values | the dataset's own coordinate axis |
 | `constant_data` | per dataset: uncertainties, mask, extra coordinates, and any axes that are not dimensions | as above |
+| `calibration` | *(added W3.6)* `diagnostics.md` §11's family D, when a run has been calibrated: `ranks`, `coverage`, `ks_pvalue`, and the route's own extras | `(simulation, parameter)`, `(level, parameter)`, `(parameter,)` |
 
 The posterior is keyed by the merged name, which is the third of the three
 reasons `inference.md` §4.5 gives for the nested merge topology: a merged name
@@ -498,9 +499,22 @@ backend. They consume a stored run and a problem through the contract
 surfaces, which every backend already satisfies, so there was nothing for a
 backend to supply.)*
 
+*(**Added W3.6**, 2026-09-09: a fourth group joins the three, on the same
+terms. `diagnostics.md` §11's family D — posterior calibration — writes
+`calibration`, and it is not stored by default for the reason none of these
+are: computing it costs either a fresh simulation batch (an amortised
+posterior, re-conditioned for free) or a **full fit per simulation** (any other
+engine), which is a cost no emission may impose on a caller who did not ask for
+it. `ampere.results.attach_calibration` is the only writer; the group's shape
+is in §4's table; and it declines the `AnomalyScore` convention exactly as
+family B does, because a rank histogram is not a coordinate-indexed deficiency
+map. The randomness comes from the named sub-stream `"calibration"`, distinct
+from `"simulate"` and `"posterior_predictive"` for `lowering.md` §9.2's reason:
+adding a calibration check must not change what an SBI budget simulated.)*
+
 ## 8. The plotting surface
 
-Six functions, each taking the emitted run and nothing else.
+Six functions, each taking the emitted run and nothing else. *(Amended W3.6: eight — `diagnostics.md` §11's family D landed with two more, and they take either the emitted run or the `calibration` group on its own, since a study computed and not yet attached is still a thing worth drawing.)*
 
 | Function | Family | Notes |
 |---|---|---|
@@ -510,6 +524,8 @@ Six functions, each taking the emitted run and nothing else.
 | `plot_residuals` | B | consumes `residuals`; warns when the run's likelihood provenance says a GP was fitted, because `diagnostics.md` §3.1 scopes family B to standard-likelihood fits |
 | `plot_gp_localisation` | C | carries the degeneracy caveat by construction |
 | `plot_anomaly_score` | A and C | one renderer, both provenances |
+| `plot_sbc_ranks` | D | *(added W3.6)* consumes the `calibration` group, or a run carrying it |
+| `plot_coverage` | D | *(added W3.6)* the same group read as a coverage curve, with TARP's joint curve beside it where there is one |
 
 Two of these are contract rather than style.
 

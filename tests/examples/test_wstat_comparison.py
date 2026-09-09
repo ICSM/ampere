@@ -21,6 +21,7 @@ produces sane output, not to reproduce the doc page's own posterior.
 
 from __future__ import annotations
 
+import warnings
 from types import ModuleType
 
 import numpy as np
@@ -249,3 +250,160 @@ class TestEndToEnd:
         wstat_example.main()
         printed = capsys.readouterr().out
         assert "Recommendation: prefer the two-dataset Bayesian joint fit" in printed
+
+
+@pytest.fixture(scope="module")
+def reduced_study(wstat_example: ModuleType) -> dict[str, object]:
+    """One reduced coverage study, shared by the checks below.
+
+    Six simulations, short chains: enough to prove the machinery runs and that
+    both routes are ranked against the same datasets, and nowhere near enough
+    to say anything about coverage. Module-scoped because it is the only
+    expensive thing in this file.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        return wstat_example.coverage_study(count=6, draws=40, walkers=8, steps=120, burn_in=40)
+
+
+class TestTheCoverageStudy:
+    """W3.6: the repeated-trial coverage study the single run cannot substitute for.
+
+    ``examples/wstat_comparison.py``'s own paragraph on the profiled nuisance
+    says that "a repeated-trial coverage study would show it reliably; a single
+    seeded run, by construction, only shows one draw from that distribution".
+    W3.6 makes that study cheap enough to ship, and this class is the reduced
+    version of it — the same code path at a budget a per-PR gate can afford, so
+    that the docs page's numbers come from machinery this suite has actually
+    run.
+
+    What is *not* asserted here is the direction of the effect. At eight
+    simulations the uniformity test has no power at all, and asserting that
+    WStat's coverage comes out low would be asserting a coin flip; the full
+    budget (``python examples/wstat_comparison.py --coverage --full``) is what
+    the docs page quotes. What is asserted is that the machinery runs, that
+    both routes are ranked against the same simulations, and that the
+    generative subclass really does make the joint problem simulable — which is
+    the one piece that could break silently, because ``PoissonFamily.sample()``
+    refuses by default.
+    """
+
+    def test_the_generative_subclass_makes_the_joint_problem_simulable(
+        self, wstat_example: ModuleType, synthetic_data: tuple[np.ndarray, np.ndarray]
+    ) -> None:
+        """``PoissonFamily.sample()`` refuses; :class:`CountingPoisson`'s does not."""
+        source_counts, background_counts = synthetic_data
+        plain = wstat_example.build_joint_problem(source_counts, background_counts)
+        with pytest.raises(Exception, match="does not implement sample"):
+            plain.simulate(observe=True, rng=np.random.default_rng(0), stream="probe")
+
+        generative = wstat_example.build_joint_problem(
+            source_counts, background_counts, generative=True
+        )
+        simulation = generative.simulate(observe=True, rng=np.random.default_rng(0))
+        assert not simulation.failed
+        assert simulation.observations is not None
+        for label in ("src", "bkg"):
+            drawn = np.asarray(simulation.observations[label].values, dtype=float)
+            assert drawn.shape == (wstat_example.N_BINS,)
+            assert np.all(drawn >= 0.0)
+            assert np.all(drawn == np.round(drawn))
+
+    def test_the_generative_subclass_scores_identically_to_the_base_family(
+        self, wstat_example: ModuleType, synthetic_data: tuple[np.ndarray, np.ndarray]
+    ) -> None:
+        """Adding ``sample()`` must not change the density, or the study is of another model."""
+        source_counts, background_counts = synthetic_data
+        plain = wstat_example.build_joint_problem(source_counts, background_counts)
+        generative = wstat_example.build_joint_problem(
+            source_counts, background_counts, generative=True
+        )
+        values = {
+            "model.src_norm": wstat_example.TRUTH["src_norm"],
+            "model.src_index": wstat_example.TRUTH["src_index"],
+            "model.bkg_norm": wstat_example.TRUTH["bkg_norm"],
+        }
+        assert generative.log_prob(values) == pytest.approx(plain.log_prob(values))
+
+    def test_the_reduced_study_runs_and_ranks_both_routes(self, wstat_example: ModuleType) -> None:
+        """The whole study, at a budget the gate can afford."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            study = wstat_example.coverage_study(
+                count=6, draws=40, walkers=8, steps=120, burn_in=40
+            )
+        assert sorted(study) == ["joint", "wstat"]
+        for route, expected in (
+            ("wstat", ["model.index", "model.norm"]),
+            ("joint", ["model.src_index", "model.src_norm"]),
+        ):
+            result = study[route]
+            assert result.sizes["simulation"] == 6
+            assert sorted(str(n) for n in result.coords["parameter"].values) == expected
+            ranks = np.asarray(result["ranks"].values)
+            assert ranks.min() >= 0 and ranks.max() <= 40
+            assert result.attrs["ampere_calibration_route"] == "refit"
+            assert result.attrs["ampere_calibration_engine"] == "EmceeEngine"
+        # Both routes were ranked against the *same* simulations, which is what
+        # makes the joint route a control rather than a second experiment.
+        assert (
+            study["wstat"].attrs["ampere_calibration_seed"]
+            == study["joint"].attrs["ampere_calibration_seed"]
+        )
+
+    def test_the_summary_states_how_to_read_it_and_quotes_the_numbers(
+        self, wstat_example: ModuleType, reduced_study: dict[str, object]
+    ) -> None:
+        text = wstat_example.coverage_summary(reduced_study)
+        assert "The joint route is the control" in text
+        assert "mean rank" in text and "68% cov." in text
+        # The prior caution is not decoration: a study read without it answers
+        # a question about the prior it was run under, not about the statistic.
+        assert "averages over" in text
+        # The text rank histogram is the page's figure, this repository
+        # committing no binary artefacts.
+        assert "Rank histograms" in text
+        for name in ("model.norm", "model.index", "model.src_norm", "model.src_index"):
+            assert name in text
+
+    def test_the_figures_render_headless(
+        self, wstat_example: ModuleType, reduced_study: dict[str, object]
+    ) -> None:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        from ampere.results import figure_metadata
+
+        figures = wstat_example.coverage_figure(reduced_study)
+        try:
+            assert sorted(figures) == [
+                "joint_coverage",
+                "joint_ranks",
+                "wstat_coverage",
+                "wstat_ranks",
+            ]
+            assert any(
+                key.endswith(".ks_pvalue") for key in figure_metadata(figures["wstat_ranks"])
+            )
+        finally:
+            # matplotlib keeps every pyplot figure alive until it is closed, and
+            # four of them per run of this file is enough to warn about in a
+            # whole-suite gate.
+            import matplotlib.pyplot as pyplot
+
+            for figure in figures.values():
+                pyplot.close(figure)
+
+    def test_the_coverage_flag_is_off_by_default(
+        self, wstat_example: ModuleType, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """``main()`` must stay the fast worked example it was.
+
+        The study is minutes, not seconds, so the default entry point still runs
+        only the single-run comparison — and says, in the output, that the flag
+        exists, because a study nobody knows about is a study nobody runs.
+        """
+        wstat_example.main([])
+        printed = capsys.readouterr().out
+        assert "Repeated-trial coverage" not in printed
+        assert "--coverage" in printed

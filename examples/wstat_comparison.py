@@ -57,6 +57,10 @@ randomness) and through a separate, explicit seed for the synthetic data
 
 from __future__ import annotations
 
+import argparse
+import math
+import sys
+from collections.abc import Sequence
 from typing import Any
 
 import astropy.units as u
@@ -81,21 +85,33 @@ from ampere.core import (
 )
 from ampere.core.exceptions import LikelihoodError
 from ampere.inference import EmceeEngine
+from ampere.results import sbc
 
 __all__ = [
+    "COVERAGE_COUNT",
+    "COVERAGE_DRAWS",
+    "COVERAGE_SEED",
     "ENERGY_KEV",
+    "FULL_COVERAGE_COUNT",
+    "JOINT_PARAMETERS",
     "N_BINS",
     "RATIO",
     "REFERENCE_ENERGY_KEV",
     "SEED",
     "TRUTH",
+    "WSTAT_PARAMETERS",
+    "CountingPoisson",
     "ProfiledCashWithBackground",
     "XraySource",
     "XraySourceAndBackground",
     "build_joint_problem",
     "build_wstat_problem",
     "compare",
+    "coverage_figure",
+    "coverage_study",
+    "coverage_summary",
     "main",
+    "rank_histogram_text",
     "run_engine",
     "summarise",
     "synthetic_xray_counts",
@@ -420,13 +436,29 @@ class XraySourceAndBackground(Model):
 # ---------------------------------------------------------------------------
 
 
+#: The source normalisation's prior, shared by both routes so that a study
+#: fitting one and simulating from the other is a valid SBC. Broad: a worked
+#: example should not assume the answer it is about to fit.
+NORM_PRIOR = st.loguniform(0.5, 40.0)
+
+
 def build_wstat_problem(
-    source_counts: np.ndarray, background_counts: np.ndarray, *, seed: int | None = SEED
+    source_counts: np.ndarray,
+    background_counts: np.ndarray,
+    *,
+    seed: int | None = SEED,
+    norm_prior: Any = None,
 ) -> FittingProblem:
-    """Route 1: the profiled statistic as a user family, one dataset."""
+    """Route 1: the profiled statistic as a user family, one dataset.
+
+    ``norm_prior`` overrides the source normalisation's prior. It exists for
+    :func:`coverage_study`, which needs to ask the calibration question *in a
+    named regime* rather than averaged over a prior that is mostly bright
+    sources — see that function for why that distinction is the whole point.
+    """
     model = XraySource(
         ENERGY_KEV,
-        norm=st.loguniform(0.5, 40.0),
+        norm=NORM_PRIOR if norm_prior is None else norm_prior,
         index=st.uniform(-4.0, 4.0),
     )
     observed = Spectrum(ENERGY_KEV * u.keV, source_counts)
@@ -441,31 +473,343 @@ def build_wstat_problem(
 
 
 def build_joint_problem(
-    source_counts: np.ndarray, background_counts: np.ndarray, *, seed: int | None = SEED
+    source_counts: np.ndarray,
+    background_counts: np.ndarray,
+    *,
+    seed: int | None = SEED,
+    generative: bool = False,
+    norm_prior: Any = None,
 ) -> FittingProblem:
-    """Route 2: the two-dataset Bayesian formulation, source and background jointly."""
+    """Route 2: the two-dataset Bayesian formulation, source and background jointly.
+
+    ``generative=True`` swaps :class:`~ampere.core.PoissonFamily` for
+    :class:`CountingPoisson`, which is the same density plus the ``sample()``
+    the base family refuses to guess. The log-probability, and therefore the
+    posterior, is identical either way; what the subclass buys is
+    ``simulate(observe=True)``, which is what
+    :func:`coverage_study` needs and what the comparison above does not.
+    """
     model = XraySourceAndBackground(
         ENERGY_KEV,
-        src_norm=st.loguniform(0.5, 40.0),
+        src_norm=NORM_PRIOR if norm_prior is None else norm_prior,
         src_index=st.uniform(-4.0, 4.0),
         bkg_norm=st.loguniform(0.2, 20.0),
         ratio=RATIO,
     )
+    family = CountingPoisson if generative else PoissonFamily
     datasets = DatasetCollection(
         {
             "src": Dataset(
                 Spectrum(ENERGY_KEV * u.keV, source_counts),
                 Instrument(channel="source_region", input_kind=Spectrum, label="source"),
-                likelihood=Likelihood(PoissonFamily(), IndependentNoise()),
+                likelihood=Likelihood(family(), IndependentNoise()),
             ),
             "bkg": Dataset(
                 Spectrum(ENERGY_KEV * u.keV, background_counts),
                 Instrument(channel="background_region", input_kind=Spectrum, label="background"),
-                likelihood=Likelihood(PoissonFamily(), IndependentNoise()),
+                likelihood=Likelihood(family(), IndependentNoise()),
             ),
         }
     )
     return FittingProblem(model, datasets, seed=seed)
+
+
+# ---------------------------------------------------------------------------
+# The repeated-trial coverage study (W3.6), which is what settles the question
+# the single run above cannot.
+# ---------------------------------------------------------------------------
+
+
+@register_family
+class CountingPoisson(PoissonFamily):
+    """:class:`~ampere.core.PoissonFamily` plus the generative half.
+
+    ``PoissonFamily.sample()`` refuses by default, and deliberately: a
+    ``log_prob`` says how a datum is *scored*, not how one is generated, and
+    ampere will not guess an observation process. For a counting experiment
+    there is nothing to guess — the observation process **is** a Poisson draw
+    at the predicted rate, which is exactly what
+    :func:`synthetic_xray_counts` does by hand — so this three-line subclass
+    is the supported route the refusal itself names, and it is what lets the
+    coverage study below simulate two regions consistently rather than
+    inventing a background it then pretends not to know.
+    """
+
+    NAME = "poisson_counts"
+
+    def sample(
+        self,
+        predicted: np.ndarray,
+        noise: NoiseParams,
+        rng: np.random.Generator,
+    ) -> np.ndarray:
+        return np.asarray(
+            rng.poisson(np.clip(np.asarray(predicted, dtype=float), 0.0, None)), dtype=float
+        )
+
+
+#: The full study's budget: enough simulations for the uniformity test to have
+#: power, and chains long enough that the ranks are ranks and not noise. About
+#: half an hour on the reference backend, which is why it is behind ``--full``
+#: rather than the default.
+FULL_COVERAGE_COUNT = 128
+FULL_COVERAGE_DRAWS = 200
+FULL_COVERAGE_WALKERS = 16
+FULL_COVERAGE_STEPS = 600
+FULL_COVERAGE_BURN_IN = 150
+
+#: The "doc" study's budget: the same machinery, small enough to run while
+#: reading the page. Its rank histograms are noisy and its p-values are weak,
+#: and the printed summary says so rather than leaving a reader to assume
+#: otherwise.
+COVERAGE_COUNT = 32
+COVERAGE_DRAWS = 120
+COVERAGE_WALKERS = 12
+COVERAGE_STEPS = 300
+COVERAGE_BURN_IN = 100
+
+#: Seed for the whole study — the prior draws, each simulated dataset and each
+#: replica's walker initialisation all derive from it
+#: (``ampere.results.calibration``'s own sub-streams), so the study is
+#: reproducible from this number alone.
+COVERAGE_SEED = 20260909
+
+#: The two source parameters both routes estimate. The joint fit also estimates
+#: ``model.bkg_norm``, which WStat has no counterpart for, so the comparison is
+#: restricted to the two that are like for like.
+JOINT_PARAMETERS = ("model.src_norm", "model.src_index")
+#: The same two, as the WStat problem spells them.
+WSTAT_PARAMETERS = {"model.norm": "model.src_norm", "model.index": "model.src_index"}
+
+
+#: The prior the coverage study draws its simulations from, and the one both
+#: routes are fitted under. Deliberately **narrower** than :data:`NORM_PRIOR`,
+#: and this is the methodological point rather than a convenience: simulation-
+#: based calibration averages over the prior, so a study run under a prior that
+#: is mostly *bright* sources answers "is WStat calibrated on bright sources?"
+#: — to which the answer was never in doubt. Profiling a nuisance out is
+#: documented to cost precision specifically where the counts are few, so the
+#: prior the study runs under is restricted to that regime. That is not moving
+#: the goalposts; it is asking the question the practitioner has.
+COVERAGE_NORM_PRIOR = st.loguniform(0.5, 3.0)
+
+
+def coverage_study(
+    *,
+    count: int = COVERAGE_COUNT,
+    draws: int = COVERAGE_DRAWS,
+    walkers: int = COVERAGE_WALKERS,
+    steps: int = COVERAGE_STEPS,
+    burn_in: int = COVERAGE_BURN_IN,
+    seed: int = COVERAGE_SEED,
+    norm_prior: Any = None,
+) -> dict[str, Any]:
+    """Simulation-based calibration for both routes, on one set of simulations.
+
+    This is the repeated-trial coverage study the single seeded run above
+    cannot substitute for, and the reason it is affordable here is that
+    :func:`ampere.results.sbc` is *exactly* a repeated-trial coverage study:
+    draw θ from the prior, simulate a dataset there, fit it, and record where
+    the truth fell among the posterior draws.
+
+    Both routes are run against the **same** generative model — the
+    two-dataset joint formulation, with source and background counts drawn
+    from independent Poisson processes at the drawn θ, which is the process
+    the data really come from. That is what makes the comparison fair and what
+    makes the result attributable: the joint fit is calibrated *by
+    construction* (it is the fitted model), so any departure from uniformity
+    on the joint route is Monte Carlo noise and sets the scale against which
+    the WStat route's departure is read.
+
+    The WStat route fits each simulated *source*-region spectrum with the
+    profiled statistic, handing the family the simulated background-region
+    counts as its buffer, exactly as a practitioner would. Its source
+    parameters are drawn from the same marginal priors, so its ranks are a
+    valid SBC — and if profiling the background out costs coverage, this is
+    where it shows.
+
+    Both routes run under :data:`COVERAGE_NORM_PRIOR` rather than the example's
+    own broad :data:`NORM_PRIOR`, and the reason is worth stating because it is
+    a general lesson about this diagnostic and not a detail of this example:
+    **SBC averages over the prior**. Run under a prior that is mostly bright
+    sources, it answers a question about bright sources, and reports "well
+    calibrated" for a statistic that is fine there and might not be anywhere
+    else. Restricting the prior to the faint regime asks the question the
+    practitioner actually has. ``norm_prior=`` overrides it, and running the
+    study under both is the honest way to see how much of the answer is the
+    prior's doing.
+
+    Returns
+    -------
+    dict[str, xarray.Dataset]
+        ``{"wstat": ..., "joint": ...}``, each a ``calibration`` group ready
+        for :func:`ampere.results.plot_sbc_ranks` and
+        :func:`ampere.results.plot_coverage`.
+    """
+    prior = COVERAGE_NORM_PRIOR if norm_prior is None else norm_prior
+    source_counts, background_counts = synthetic_xray_counts()
+    truth = build_joint_problem(
+        source_counts, background_counts, seed=seed, generative=True, norm_prior=prior
+    )
+    options = {"steps": steps, "burn_in": burn_in}
+
+    def wstat_factory(replica: FittingProblem) -> Any:
+        simulated_source = np.asarray(replica.datasets["src"].observed.values, dtype=float)
+        simulated_background = np.asarray(replica.datasets["bkg"].observed.values, dtype=float)
+        return EmceeEngine(
+            build_wstat_problem(
+                simulated_source,
+                simulated_background,
+                seed=replica.seed,
+                norm_prior=prior,
+            ),
+            walkers=walkers,
+        )
+
+    return {
+        "wstat": sbc(
+            truth,
+            wstat_factory,
+            count=count,
+            draws=draws,
+            run_options=options,
+            parameters=WSTAT_PARAMETERS,
+            seed=seed,
+            label="WStat (profiled background)",
+        ),
+        "joint": sbc(
+            truth,
+            lambda replica: EmceeEngine(replica, walkers=walkers),
+            count=count,
+            draws=draws,
+            run_options=options,
+            parameters=JOINT_PARAMETERS,
+            seed=seed,
+            label="two-dataset joint fit",
+        ),
+    }
+
+
+def coverage_summary(study: dict[str, Any]) -> str:
+    """The study's numbers as a table, with the reading spelled out.
+
+    Nothing here asserts a direction the numbers do not show. What it does
+    assert — because it is true by construction rather than by luck — is that
+    the joint route is the control: it fits the model the data were simulated
+    from, so its row is what "calibrated" looks like at this budget, and the
+    WStat row is read against it and not against a theoretical ideal.
+    """
+    wstat, joint = study["wstat"], study["joint"]
+    simulations = int(wstat.attrs["ampere_calibration_simulations"])
+    posterior_draws = int(wstat.attrs["ampere_calibration_posterior_draws"])
+    lines = [
+        "Repeated-trial coverage: simulation-based calibration of both routes",
+        "=" * 76,
+        "",
+        f"{simulations} datasets simulated from the two-dataset generative model; each",
+        f"fitted by both routes; the true value ranked among {posterior_draws} posterior",
+        "draws (Talts et al. 2018).",
+        "",
+        (
+            f"{'route':<8}{'parameter':<17}{'KS p':>10}{'mean rank':>11}"
+            f"{'rank var':>10}{'68% cov.':>10}{'95% cov.':>10}"
+        ),
+    ]
+    for route, result in (("wstat", wstat), ("joint", joint)):
+        names = [str(name) for name in np.asarray(result.coords["parameter"].values).ravel()]
+        levels = np.asarray(result.coords["level"].values, dtype=float)
+        coverage = np.asarray(result["coverage"].values, dtype=float)
+        pvalues = np.asarray(result["ks_pvalue"].values, dtype=float)
+        fraction = np.asarray(result["ranks"].values, dtype=float) / float(posterior_draws)
+        for index, name in enumerate(names):
+            lines.append(
+                f"{route:<8}{name:<17}{pvalues[index]:>10.3g}"
+                f"{fraction[:, index].mean():>11.3f}{fraction[:, index].var():>10.4f}"
+                f"{np.interp(0.68, levels, coverage[:, index]):>10.3f}"
+                f"{np.interp(0.95, levels, coverage[:, index]):>10.3f}"
+            )
+    lines += [
+        "",
+        "Under a uniform rank distribution the mean rank fraction is 0.5 and its variance",
+        f"is 1/12 = 0.0833; the standard error of the mean at {simulations} simulations is",
+        f"{math.sqrt((1.0 / 12.0) / simulations):.3f}.",
+        "",
+        "How to read this. The joint route is the control: it fits the very model the data",
+        "were simulated from, so its ranks are uniform by construction and its row shows",
+        "what Monte Carlo noise looks like at this budget, on these very simulations. A",
+        "mean rank away from 0.5 on the WStat row that the control's does not share is the",
+        "profiled nuisance biasing the source parameters; a rank variance below 1/12, or a",
+        "68% coverage below 0.68, is it overstating their precision. Both are what the",
+        "literature documents for a profiled background in the low-count regime, and both",
+        "are what a single seeded fit cannot show.",
+        "",
+        "Two cautions, neither of them optional. The two routes are ranked on the *same*",
+        "simulated datasets, so their Monte Carlo noise is shared: a shift the control",
+        "shows too is noise, not profiling. And simulation-based calibration averages over",
+        "the prior it draws from — this study runs under COVERAGE_NORM_PRIOR, restricted",
+        "to the faint regime, because under the example's broad prior most draws are",
+        f"bright sources where profiling is harmless. At {simulations} simulations only a",
+        "gross failure is detectable; --full is where a modest one would be.",
+        "",
+        rank_histogram_text(study),
+    ]
+    return "\n".join(lines)
+
+
+#: How many bins the printed rank histogram uses. Ten, because a hundred-odd
+#: simulations put about a dozen in each, and a bin with fewer counts than that
+#: shows sampling noise rather than shape.
+RANK_HISTOGRAM_BINS = 10
+
+
+def rank_histogram_text(study: dict[str, Any], bins: int = RANK_HISTOGRAM_BINS) -> str:
+    """The rank histograms as text: one row per parameter, one column per bin.
+
+    A picture the terminal and the documentation page can both carry. This
+    repository commits no figures (see the module docstring), so the shape a
+    reader needs to see — flat, sloped, U-shaped — has to survive as
+    characters; :func:`coverage_figure` draws the real thing, with its
+    binomial null band, for anyone who wants it.
+    """
+    lines = [
+        f"Rank histograms, {bins} equal bins from 0 to L. Under a calibrated posterior every",
+        "bin holds the same number of trials; a slope is bias and a U is over-confidence.",
+        "",
+    ]
+    for route, result in (("wstat", study["wstat"]), ("joint", study["joint"])):
+        draws = int(result.attrs["ampere_calibration_posterior_draws"])
+        ranks = np.asarray(result["ranks"].values, dtype=float)
+        names = [str(name) for name in np.asarray(result.coords["parameter"].values).ravel()]
+        expected = ranks.shape[0] / bins
+        for index, name in enumerate(names):
+            counts, _ = np.histogram(ranks[:, index], bins=bins, range=(0.0, float(draws)))
+            row = " ".join(f"{int(value):>3d}" for value in counts)
+            lines.append(f"{route:<8}{name:<17}{row}   (uniform expects {expected:.1f})")
+    return "\n".join(lines)
+
+
+def coverage_figure(study: dict[str, Any], stem: str | None = None) -> dict[str, Any]:
+    """The study's four figures, drawn with the shipped plotting functions.
+
+    Deliberately :func:`ampere.results.plot_sbc_ranks` and
+    :func:`ampere.results.plot_coverage` called directly rather than a bespoke
+    layout: the figure a reader sees on this page is then exactly the one they
+    get on their own study, which is the whole argument
+    ``DEVELOPMENT_PLAN.md`` §4.6 makes for the plotting surface existing.
+
+    ``stem`` writes them as ``<stem>_<name>.png``. Nothing is written by
+    default — this repository commits no run outputs or figures.
+    """
+    from ampere.results import plot_coverage, plot_sbc_ranks
+
+    figures: dict[str, Any] = {}
+    for route in ("wstat", "joint"):
+        figures[f"{route}_ranks"] = plot_sbc_ranks(study[route])
+        figures[f"{route}_coverage"] = plot_coverage(study[route]).get_figure()
+    if stem is not None:
+        for name, figure in figures.items():
+            figure.savefig(f"{stem}_{name}.png", dpi=120, bbox_inches="tight")
+    return figures
 
 
 #: The "doc" budget: short chains that run in well under a minute on the
@@ -540,7 +884,7 @@ def compare(
     """
     lines = [
         "WStat (profiled, user family) vs the two-dataset Bayesian joint fit",
-        "=" * 70,
+        "=" * 76,
         "",
         f"{'parameter':<14}{'truth':>10}{'wstat median [68%]':>28}{'joint median [68%]':>28}",
     ]
@@ -587,7 +931,43 @@ def compare(
     return "\n".join(lines)
 
 
-def main() -> None:
+def main(argv: Sequence[str] | None = None) -> None:
+    """The comparison, and — with ``--coverage`` — the repeated-trial study.
+
+    The single-run comparison is what ``python examples/wstat_comparison.py``
+    prints, unchanged. ``--coverage`` adds the simulation-based calibration
+    study at the doc budget (a few minutes), and ``--coverage --full`` runs it
+    at the budget the docs page quotes (tens of minutes) — the flag exists
+    because a study that takes half an hour has no business being the default
+    of a worked example, and because the honest way to offer a cheap version
+    is to say out loud that it is one.
+    """
+    parser = argparse.ArgumentParser(description=__doc__, add_help=True)
+    parser.add_argument(
+        "--coverage",
+        action="store_true",
+        help="also run the repeated-trial coverage study (simulation-based calibration)",
+    )
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="run the coverage study at the full budget rather than the doc budget",
+    )
+    parser.add_argument(
+        "--broad-prior",
+        action="store_true",
+        help="run the coverage study under the example's broad NORM_PRIOR instead of the "
+        "faint-regime COVERAGE_NORM_PRIOR -- the comparison that shows how much of the "
+        "answer is the prior's doing",
+    )
+    parser.add_argument(
+        "--figures",
+        default=None,
+        help="write the coverage study's figures as <STEM>_<name>.png (nothing is written "
+        "by default; this repository commits no run outputs)",
+    )
+    arguments = parser.parse_args([] if argv is None else list(argv))
+
     source_counts, background_counts = synthetic_xray_counts()
 
     wstat_problem = build_wstat_problem(source_counts, background_counts)
@@ -600,6 +980,35 @@ def main() -> None:
 
     print(compare(wstat_summary, joint_summary))
 
+    if not arguments.coverage:
+        print(
+            "\nRun with --coverage for the repeated-trial coverage study the paragraph above "
+            "says\na single run cannot substitute for (--coverage --full for the docs page's "
+            "own budget)."
+        )
+        return
+    budget: dict[str, Any] = (
+        {
+            "count": FULL_COVERAGE_COUNT,
+            "draws": FULL_COVERAGE_DRAWS,
+            "walkers": FULL_COVERAGE_WALKERS,
+            "steps": FULL_COVERAGE_STEPS,
+            "burn_in": FULL_COVERAGE_BURN_IN,
+        }
+        if arguments.full
+        else {}
+    )
+    if arguments.broad_prior:
+        budget["norm_prior"] = NORM_PRIOR
+    study = coverage_study(**budget)
+    print()
+    print(coverage_summary(study))
+    if arguments.figures is not None:
+        written = coverage_figure(study, arguments.figures)
+        print(
+            "\nWrote: " + ", ".join(sorted(f"{arguments.figures}_{name}.png" for name in written))
+        )
+
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])

@@ -444,6 +444,19 @@ class TestTheOptionalExtra:
             SBIEngine(bounded_problem(), budget=10).run(draws=2)
         assert raised.value.extra == "sbi"
 
+    @pytest.mark.skipif(HAS_SBI, reason="the extra is installed here")
+    def test_calibrating_without_the_extra_refuses_by_name(self) -> None:
+        """W3.6's fast path is behind the same door as the fit itself.
+
+        ``sbi.diagnostics`` is what does the arithmetic, so ``calibrate`` must
+        reach for the extra exactly as ``run`` does — and must say so with the
+        extra named, rather than failing on ``self.posterior is None`` and
+        blaming the user for not having run a fit that could never have run.
+        """
+        with pytest.raises(OptionalDependencyError) as raised:
+            SBIEngine(bounded_problem(), budget=10).calibrate(count=4, posterior_draws=4)
+        assert raised.value.extra == "sbi"
+
     def test_importing_the_namespace_imports_neither_torch_nor_sbi(self) -> None:
         """The rule this module's engine could most easily have broken.
 
@@ -1325,3 +1338,178 @@ class TestTheArtefactCache:
             draws=10, training={"max_num_epochs": 2}
         )
         assert run.attrs["ampere_sbi_cache_hit"] == 1
+
+
+# ---------------------------------------------------------------------------
+# 12. Family D's fast path: SBC and TARP on the trained posterior (W3.6)
+# ---------------------------------------------------------------------------
+
+
+class _Narrowed:
+    """A posterior wrapper whose draws are squeezed towards their own mean.
+
+    The deliberately miscalibrated arm, and the reason it has to be a *wrapper*
+    rather than a badly trained network: a network trained on too little data is
+    miscalibrated by an amount nobody controls, so a test built on one would be
+    a test of the training budget. Temperature-scaling a **correct** posterior
+    is miscalibration of a known size and a known kind — over-confident, unbiased
+    — which is exactly what SBC's U-shaped rank histogram and TARP's negative
+    area-to-curve are defined to detect.
+
+    Only the two methods ``sbi.diagnostics`` reaches for are implemented, which
+    is the whole surface ``run_sbc``/``run_tarp`` use: ``sample_batched`` on the
+    batched path and ``sample`` on the fallback.
+    """
+
+    def __init__(self, inner: Any, temperature: float = 0.3) -> None:
+        self.inner = inner
+        self.temperature = temperature
+
+    def _squeeze(self, drawn: Any) -> Any:
+        centre = drawn.mean(dim=0, keepdim=True)
+        return centre + (drawn - centre) * self.temperature
+
+    def sample_batched(self, sample_shape: Any, x: Any = None, **kwargs: Any) -> Any:
+        return self._squeeze(self.inner.sample_batched(sample_shape, x=x, **kwargs))
+
+    def sample(self, sample_shape: Any, x: Any = None, **kwargs: Any) -> Any:
+        return self._squeeze(self.inner.sample(sample_shape, x=x, **kwargs))
+
+
+#: The calibration smoke budget. A hundred simulations is ``sbi``'s own floor
+#: for ``check_sbc`` and ``run_tarp`` (both warn below it), and a hundred
+#: posterior draws is enough resolution for a rank on a one-parameter problem.
+#: Re-conditioning an amortised posterior is free, so the whole check costs one
+#: simulation batch — about a second beside the fit's own thirteen.
+CALIBRATION_COUNT = 100
+CALIBRATION_DRAWS = 100
+
+
+@pytest.fixture(scope="module")
+def calibration_engine() -> Any:
+    """One trained NPE engine on the one-parameter bounded problem.
+
+    ``bounded_problem`` rather than the joint one: a single lognormal parameter
+    over four points is a problem NPE learns *well* at a budget a per-PR gate
+    can afford, and family D's null needs a posterior that really is calibrated
+    — an under-trained network would fail the check for a reason that has
+    nothing to do with the code under test.
+    """
+    engine = SBIEngine(bounded_problem(), method="npe", budget=1000)
+    engine.run(200, training={"max_num_epochs": 200})
+    return engine
+
+
+@pytest.fixture(scope="module")
+def calibration(calibration_engine: Any) -> Any:
+    return calibration_engine.calibrate(count=CALIBRATION_COUNT, posterior_draws=CALIBRATION_DRAWS)
+
+
+@needs_sbi
+class TestTheCalibrationFastPath:
+    """``diagnostics.md`` §11 on the route where re-conditioning is free."""
+
+    def test_the_group_has_the_shape_results_md_promises(self, calibration: Any) -> None:
+        assert calibration.sizes["simulation"] == CALIBRATION_COUNT
+        assert [str(name) for name in calibration.coords["parameter"].values] == ["model.slope"]
+        assert list(calibration["ranks"].dims) == ["simulation", "parameter"]
+        assert list(calibration["coverage"].dims) == ["level", "parameter"]
+        assert "c2st_ranks" in calibration
+        assert "tarp_coverage" in calibration
+        ranks = np.asarray(calibration["ranks"].values)
+        assert ranks.min() >= 0 and ranks.max() <= CALIBRATION_DRAWS
+
+    def test_it_records_the_layout_the_batch_was_encoded_under(
+        self, calibration: Any, calibration_engine: Any
+    ) -> None:
+        """The one thing that could go silently wrong, asserted.
+
+        A calibration batch packed under a layout rebuilt from the *simulated*
+        containers would standardise its columns differently from the ones the
+        network trained on, and would then report a different network as
+        calibrated. The recorded hash is what makes that checkable after the
+        fact, and it must be the run's own.
+        """
+        assert calibration.attrs["ampere_calibration_route"] == "sbi"
+        assert calibration.attrs["ampere_calibration_method"] == "npe"
+        assert calibration.attrs["ampere_calibration_parameterisation"] == "unconstrained"
+        assert calibration.attrs["ampere_calibration_encoding_hash"] == (
+            calibration_engine.encoding.hash
+        )
+        assert calibration.attrs["ampere_calibration_uniformity_check"] == (
+            "sbi.diagnostics.check_sbc"
+        )
+
+    def test_a_trained_npe_posterior_passes_check_sbc(self, calibration: Any) -> None:
+        """Accept criterion: uniform within ``check_sbc``'s own thresholds."""
+        assert float(np.min(calibration["ks_pvalue"].values)) > 0.05
+        # C2ST between the ranks and a uniform baseline: 0.5 is "indistinguishable".
+        assert float(np.max(calibration["c2st_ranks"].values)) < 0.65
+
+    def test_tarps_expected_coverage_passes_check_tarp(self, calibration: Any) -> None:
+        """The joint diagnostic, which the marginal ranks cannot stand in for."""
+        assert abs(float(calibration.attrs["ampere_calibration_tarp_atc"])) < 0.03
+        assert float(calibration.attrs["ampere_calibration_tarp_ks_pvalue"]) > 0.05
+
+    def test_a_temperature_scaled_posterior_fails_the_same_check(
+        self, calibration_engine: Any, calibration: Any
+    ) -> None:
+        """The arm that proves the check can fail — same engine, same batch size."""
+        narrowed = calibration_engine.calibrate(
+            count=CALIBRATION_COUNT,
+            posterior_draws=CALIBRATION_DRAWS,
+            posterior=_Narrowed(calibration_engine.posterior),
+        )
+        assert float(np.min(narrowed["ks_pvalue"].values)) < 0.01
+        # Under-dispersion is a *negative* area-to-curve in TARP's convention,
+        # and the honest posterior's is not.
+        atc = float(narrowed.attrs["ampere_calibration_tarp_atc"])
+        assert atc < -0.02
+        assert atc < float(calibration.attrs["ampere_calibration_tarp_atc"])
+        # And the coverage curve says it in the units a reader quotes.
+        levels = np.asarray(narrowed.coords["level"].values, dtype=float)
+        squeezed = float(np.interp(0.68, levels, np.asarray(narrowed["coverage"].values)[:, 0]))
+        honest = float(np.interp(0.68, levels, np.asarray(calibration["coverage"].values)[:, 0]))
+        assert squeezed < 0.45 < honest
+
+    def test_it_attaches_to_a_run_and_survives_netcdf(
+        self, calibration_engine: Any, calibration: Any, tmp_path: Any
+    ) -> None:
+        from ampere.results import CALIBRATION_GROUP, attach_calibration, from_netcdf, to_netcdf
+
+        run = calibration_engine.run(20, training={"max_num_epochs": 2})
+        attach_calibration(run, calibration)
+        assert CALIBRATION_GROUP in run.children
+        path = tmp_path / "calibrated.nc"
+        to_netcdf(run, path)
+        stored = from_netcdf(path)[CALIBRATION_GROUP].dataset
+        np.testing.assert_array_equal(
+            stored["ranks"].values, np.asarray(calibration["ranks"].values)
+        )
+        np.testing.assert_allclose(
+            stored["tarp_coverage"].values, np.asarray(calibration["tarp_coverage"].values)
+        )
+
+    def test_both_plots_render_from_the_group(self, calibration: Any) -> None:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        from ampere.results import figure_metadata, plot_coverage, plot_sbc_ranks
+
+        figure = plot_sbc_ranks(calibration)
+        assert any(key.endswith(".ks_pvalue") for key in figure_metadata(figure))
+        axes = plot_coverage(calibration)
+        metadata = figure_metadata(axes.get_figure())
+        assert "tarp.area_to_curve" in metadata
+
+    def test_skipping_tarp_leaves_the_group_without_its_curve(
+        self, calibration_engine: Any
+    ) -> None:
+        result = calibration_engine.calibrate(count=20, posterior_draws=20, tarp=False)
+        assert "tarp_coverage" not in result
+        assert "ampere_calibration_tarp_atc" not in result.attrs
+
+    def test_an_untrained_engine_refuses_and_says_to_run_first(self) -> None:
+        engine = SBIEngine(bounded_problem(), method="npe", budget=20)
+        with pytest.raises(EngineError, match="has not trained"):
+            engine.calibrate(count=4, posterior_draws=4)
