@@ -1225,11 +1225,24 @@ class SBIEngine(Engine):
     sample_with
         ``method="tmnre"`` only: how the final posterior draws. ``"rejection"``
         (the default) proposes from the truncated prior and accepts through the
-        ratio, so the draws are genuinely i.i.d., at a cost that grows as the
-        box's prior mass shrinks; ``"mcmc"`` is ``sbi``'s vectorised slice
-        sampler, the fallback when a narrow box makes rejection's acceptance
-        collapse, and it takes the usual ``num_chains``/``warmup_steps``/
-        ``thin`` through ``posterior_options=``.
+        ratio, so the draws are genuinely i.i.d. — the property the rest of
+        this class's documentation claims for an SBI run's single "chain".
+        ``"mcmc"`` is ``sbi``'s vectorised slice sampler, and it takes the usual
+        ``num_chains``/``warmup_steps``/``thin`` through ``posterior_options=``.
+
+        **Rejection's cost rises as the method succeeds, and that is not a
+        paradox but the arithmetic.** Its acceptance rate is roughly the
+        posterior's volume over the box's, and *each* proposal draw is itself
+        rejected out of the untruncated prior at the box's own prior mass —
+        which is small exactly when the truncation worked. Measured on
+        ``examples/sbi/tmnre_fit.py`` at its defaults: a third-round box holding
+        1 % of the prior's mass, about 1 % of proposals accepted through the
+        ratio, and **353.6 s against 43.8 s** for the same three rounds under
+        ``"mcmc"``. ``sbi`` says so itself, in a warning naming the remedy.
+        That remedy is this argument, and on a well-truncated problem it is
+        usually the right one — the default is ``"rejection"`` because i.i.d.
+        draws are what the rest of this class promises, not because it is the
+        cheaper of the two.
     device
         ``"cpu"`` (the default), or a torch device string. CI is CPU-only by
         ruling.

@@ -12,16 +12,29 @@ rather than asserted in a docstring:
   final box, printed as a credible interval and as a sparkline so that a
   reader can see the shape without a plotting backend;
 * the **posterior**, which is an ordinary posterior: a joint ratio estimator
-  trained on the last round's truncated prior, sampled by rejection, and
-  scored on the numpy contract path like every other ampere run's draws.
+  trained across the rounds and multiplied by the final truncated prior,
+  sampled by rejection, and scored on the numpy contract path like every other
+  ampere run's draws.
 
 Run it::
 
-    python examples/sbi/tmnre_fit.py
+    python examples/sbi/tmnre_fit.py                         # ~6 min: see below
+    python examples/sbi/tmnre_fit.py --sample-with mcmc      # the same fit in ~45 s
     python examples/sbi/tmnre_fit.py --rounds 4 --budget 1500 --marginals 2
-    python examples/sbi/tmnre_fit.py --sample-with mcmc      # narrow-box fallback
 
 Requires the ``sbi`` extra (``pixi run -e sbi python examples/sbi/tmnre_fit.py``).
+
+**Where the time goes, and what to do about it.** Almost all of a default run
+is the final *rejection* sampling, not the training or the simulating: the
+sampler proposes from the truncated prior and accepts through the ratio, and
+*both* of those rejections get harder as the box tightens — which is to say,
+as the method works. On the fit below the third-round box holds about 1 % of
+the prior's mass and the ratio accepts about 1 % of what the box proposes, so
+every stored draw costs of order 10⁴ draws from the untruncated prior; ``sbi``
+says so itself, in a warning naming the remedy. Measured here: 353.6 s with
+``--sample-with rejection`` (the default, whose draws are i.i.d.) against
+43.8 s with ``--sample-with mcmc`` for the same three rounds. The run records
+which sampler produced its draws either way.
 
 What to look at
 ---------------
@@ -183,9 +196,9 @@ def report(run: Any, engine: SBIEngine, elapsed: float) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rounds", type=int, default=3, help="rounds of simulate-and-train")
-    parser.add_argument("--budget", type=int, default=800, help="simulations per round")
-    parser.add_argument("--draws", type=int, default=200, help="posterior draws to store")
-    parser.add_argument("--epochs", type=int, default=120, help="training epoch cap")
+    parser.add_argument("--budget", type=int, default=500, help="simulations per round")
+    parser.add_argument("--draws", type=int, default=100, help="posterior draws to store")
+    parser.add_argument("--epochs", type=int, default=80, help="training epoch cap")
     parser.add_argument(
         "--marginals", type=int, default=1, choices=(1, 2), help="1-D only, or 1-D and 2-D"
     )
