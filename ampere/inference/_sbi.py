@@ -478,6 +478,31 @@ class _Embedding:
     output_dim: int
 
 
+def _default_output_width(free_size: int, kind: str) -> int:
+    """The embedding's default output width, kind-aware since **W3.11**.
+
+    ``"flat"``-layout nets (``"CNN"``/``"FC"``) keep the legacy default,
+    ``2 * free_size``: a summary that short is one more layer feeding a flow
+    whose own width is unrelated to it. The ``"set"``/``"transformer"``
+    embeddings *pool* a whole set of rows into this vector, so for them it is
+    the conditioning vector's entire capacity rather than an intermediate
+    width, and both shipped nets end in a ReLU: a narrow, randomly-initialised
+    one can and does emit all zeros before any gradient step (W3.3's own tests
+    set 16 explicitly, for exactly this reason). ``max(2 * free_size, 32)``
+    keeps a one- or two-parameter problem's pooled embedding away from that
+    floor, at the cost of a wider first layer; a user's own ``output_dim=``
+    always overrides this and is never touched here.
+
+    Ruled by Peter 2026-09-09 (WORK_ITEMS.md W3.11) as a default, not a
+    finding: how the right width depends on the data, model and problem
+    structure is deferred to a later embedding study.
+    """
+    width = 2 * int(free_size)
+    if kind in SET_EMBEDDINGS:
+        return max(width, 32)
+    return max(width, 1)
+
+
 def _embedding_of(
     embedding: Any,
     *,
@@ -499,7 +524,15 @@ def _embedding_of(
     The default output dimension is ``2 * free_size``, which is the legacy
     default and a sensible one: a summary narrower than twice the parameter
     count is unlikely to carry enough about the posterior's location *and*
-    width.
+    width. **W3.11** raises that default to ``max(2 * free_size, 32)`` for the
+    ``"set"`` and ``"transformer"`` embeddings only (see
+    :func:`_default_output_width`): for a pooled set, the output width *is*
+    the whole of the conditioning vector's capacity rather than one more
+    layer before a wider flat vector, and both shipped nets end in a ReLU, so
+    a narrow, randomly-initialised one can emit all zeros before it has seen
+    a single gradient step (W3.3's own tests set 16 explicitly for this
+    reason). ``"flat"``'s CNN/FC default is unchanged, for legacy parity, and
+    an explicit ``output_dim=`` always wins.
 
     One deliberate difference from the legacy code, and it is a bug fix rather
     than a change of vocabulary: an unknown ``type`` or an unknown
@@ -538,15 +571,14 @@ def _embedding_of(
             )
         return _Embedding(module=None, name="none", output_dim=0)
 
-    default_width = max(2 * int(free_size), 1)
-
     if embedding is True:
+        kind = EMBEDDINGS["default"]
         return _built(
-            EMBEDDINGS["default"],
+            kind,
             {},
             torch=torch,
             features=features,
-            width=default_width,
+            width=_default_output_width(free_size, kind),
             layout=layout,
         )
     if isinstance(embedding, str):
@@ -557,7 +589,14 @@ def _embedding_of(
                 f"sbi does not know the embedding {embedding!r}. Available: {known}, a "
                 f"torch.nn.Module of your own, or a dict of hyperparameters with a 'type' key."
             )
-        return _built(kind, {}, torch=torch, features=features, width=default_width, layout=layout)
+        return _built(
+            kind,
+            {},
+            torch=torch,
+            features=features,
+            width=_default_output_width(free_size, kind),
+            layout=layout,
+        )
     if isinstance(embedding, Mapping):
         settings = dict(embedding)
         named = str(settings.pop("type", "CNN"))
@@ -568,7 +607,7 @@ def _embedding_of(
                 f"sbi does not know the embedding type {named!r} named in the embedding= dict. "
                 f"Available: {known}."
             )
-        width = int(settings.pop("output_dim", default_width))
+        width = int(settings.pop("output_dim", _default_output_width(free_size, kind)))
         return _built(kind, settings, torch=torch, features=features, width=width, layout=layout)
     if isinstance(embedding, torch.nn.Module):
         shape = (
@@ -758,13 +797,19 @@ def _transformer_embedding(
       (``else: attention_mask = None``), so on the non-causal path the mask
       alone excludes nothing. The wrapper therefore zeroes masked and padded
       rows' *tokens* after the projection, which makes the output independent of
-      what a masked row holds whatever the net does with the mask. The mask is
-      passed as well, so that a later ``sbi`` honouring it changes nothing here.
-    * The aggregation is ``hidden_states[:, -1, :]``: the **last** token, after
-      full attention. A padded row is a zero token whose attention over the
-      sequence is uniform, so the summary is still a function of every row --
-      but it is a last-token read rather than a pooled one, and a caller wanting
-      pooling wants a module of their own over :func:`~ampere.core.encoding.unpack`.
+      what a masked row holds whatever the net does with the mask.
+    * ``forward``'s own aggregation is ``hidden_states[:, -1, :]``: the
+      **last** token, after full attention. A padded row is a zero token
+      whose attention over the sequence is uniform, so that read is still a
+      function of every row -- but *which* row it reads depends on row order
+      rather than on the observation, so two encodings of one set that differ
+      only in row order would train and condition on different summaries.
+      **W3.11** replaces it: the wrapper never calls ``net.forward`` at all,
+      and instead runs the net's own body modules directly and pools their
+      output with a masked mean over every retained token (permutation
+      invariant, and using every row rather than whichever lands last) --
+      see :func:`_transformer_masked_mean`, which names exactly which ``sbi``
+      attributes this depends on.
 
     The projection from the packing's feature width to the transformer's model
     dimension is ampere's: ``feature_space_dim`` is the model dimension, so
@@ -794,6 +839,96 @@ def _transformer_embedding(
     )
 
 
+#: The ``sbi`` 0.27 ``TransformerEmbedding`` attributes :func:`_transformer_masked_mean`
+#: reads directly, because its ``forward`` offers no hook onto the hidden states
+#: it pools. Named once so a rename shows up as one clear message rather than a
+#: bare ``AttributeError`` three calls deep.
+_TRANSFORMER_BODY_ATTRS: tuple[str, ...] = (
+    "preprocess",
+    "layers",
+    "norm",
+    "aggregator",
+    "is_causal",
+)
+
+
+def _transformer_masked_mean(net: Any, tokens: Any, keep: Any) -> Any:
+    """The masked-mean readout head (**W3.11**), over ``sbi``'s transformer body.
+
+    ``TransformerEmbedding.forward`` (``sbi`` 0.27) ends with
+    ``self.aggregator(hidden_states[:, -1, :])`` -- the summary is the
+    **last** token, after full (non-causal, unmasked) attention. Under this
+    wrapper's construction (``is_causal=False``, ``pos_emb="none"``) that
+    last token is a function of every row, since nothing restricts what it
+    attends to, but *which* row happens to sit last is a property of row
+    order, not of the observation: reversing the rows of one set trains and
+    conditions the last-token read on a different summary of the same data.
+    This head replaces that read with a mean over every retained token's
+    hidden state, which is exactly permutation-invariant (the transformer
+    body has no positional embedding under ``pos_emb="none"``, so permuting
+    the input rows permutes the hidden states the same way, and a mean over
+    a permuted set of vectors is the same mean) and uses every row rather
+    than one.
+
+    ``sbi`` 0.27 offers no hook for this -- ``forward`` returns a bare
+    tensor, not the hidden states it pooled -- so rather than call it and
+    discard its answer, this calls the net's own body modules directly, in
+    exactly the order and with exactly the arguments ``forward`` does before
+    its own last-token slice:
+
+    * ``net.preprocess`` -- identity on the non-ViT path this wrapper always
+      builds (``vit`` is never set), so it is called for the day that
+      changes rather than assumed away;
+    * ``net.layers`` -- the ``ModuleList`` of transformer blocks; each is
+      called as ``block(hidden_states, attention_mask=None,
+      position_ids=None)``, returning a tuple whose first element is the
+      updated hidden state, which is exactly how ``forward``'s own loop
+      calls them (``attention_mask`` is always ``None`` on the non-causal
+      path regardless of what is passed in, and ``position_ids`` is never
+      set by ``forward`` either);
+    * ``net.is_causal`` -- checked and required ``False`` here: this wrapper
+      only ever constructs the net that way (``encoding.md`` §7), and a mean
+      over tokens that attended under a causal mask would not mean what this
+      docstring says it means;
+    * ``net.norm`` -- the final normalisation layer, applied once after the
+      last block, exactly as ``forward`` does before it indexes out the last
+      token;
+    * ``net.aggregator`` -- the linear layer from ``feature_space_dim`` to
+      ``final_emb_dimension``, applied here to the pooled vector instead of
+      to the last token.
+
+    If a future ``sbi`` renames or restructures any of these, this raises
+    ``AttributeError`` naming the missing one (or the causal one, if that
+    flips) rather than silently reading something that is no longer what it
+    was -- :class:`TestTheTransformerWrapper`'s
+    ``test_the_readout_depends_on_named_sbi_attributes`` in
+    ``tests/inference/test_sbi.py`` fails loudly first if either happens.
+    """
+    missing = [name for name in _TRANSFORMER_BODY_ATTRS if not hasattr(net, name)]
+    if missing:
+        raise AttributeError(
+            f"sbi's TransformerEmbedding no longer has the attribute(s) {missing!r}, which "
+            "ampere's masked-mean readout head (docs/design/contracts/encoding.md §7, "
+            "Amended W3.11) reads directly because sbi 0.27's own forward() offers no hook "
+            "onto the hidden states it pools. This wrapper (_transformer_masked_mean in "
+            "ampere/inference/_sbi.py) needs updating for whatever sbi replaced it with."
+        )
+    if net.is_causal:
+        raise AttributeError(
+            "sbi's TransformerEmbedding was built with is_causal=True; ampere's masked-mean "
+            "readout head (_transformer_masked_mean) is only valid on the non-causal path "
+            "this wrapper constructs, and something changed that."
+        )
+    hidden = net.preprocess(tokens)
+    for block in net.layers:
+        hidden = block(hidden, attention_mask=None, position_ids=None)[0]
+    hidden = net.norm(hidden)
+    weights = keep.unsqueeze(-1).to(hidden.dtype)
+    counts = weights.sum(dim=1).clamp(min=1.0)
+    pooled = (hidden * weights).sum(dim=1) / counts
+    return net.aggregator(pooled)
+
+
 @functools.cache
 def _wrapper_classes(torch: Any) -> tuple[Any, Any]:
     """The two ``nn.Module`` wrappers, defined once per interpreter.
@@ -805,10 +940,11 @@ def _wrapper_classes(torch: Any) -> tuple[Any, Any]:
     They unpack ``x`` by the layout (which also reshapes it, since ``sbi``
     flattens ``x`` on some paths), they narrow float64 to the network's float32
     **once, here, at the boundary**, and they convert the packing's single mask
-    column into whatever their net wants -- NaN rows for the set embedding, an
-    attention mask and zeroed tokens for the transformer. No embedding ever sees
-    the mask column as a feature: :attr:`~ampere.core.encoding.Unpacked.features`
-    excludes it by construction.
+    column into whatever their net wants -- NaN rows for the set embedding,
+    zeroed tokens plus a masked-mean readout (:func:`_transformer_masked_mean`,
+    **W3.11**) for the transformer. No embedding ever sees the mask column as
+    a feature: :attr:`~ampere.core.encoding.Unpacked.features` excludes it by
+    construction.
     """
 
     class _SetEmbedding(torch.nn.Module):
@@ -829,7 +965,16 @@ def _wrapper_classes(torch: Any) -> tuple[Any, Any]:
             return self.net(torch.where(view.valid.unsqueeze(-1), features, absent))
 
     class _TransformerEmbedding(torch.nn.Module):
-        """Zeroed tokens plus an attention mask, then ``sbi``'s transformer."""
+        """Zeroed tokens, then ``sbi``'s transformer body with a masked-mean readout.
+
+        **W3.11**: ``self.net`` is never called directly (see
+        :func:`_transformer_masked_mean`) -- its own ``forward`` reads the
+        *last* token as its summary, which is a function of row order rather
+        than of the observation alone. This wrapper's tokens for masked and
+        padded rows are already zero (below), so the net's body reaches the
+        same information either way; only which token stands for the whole
+        set changes.
+        """
 
         def __init__(self, layout: EncodingLayout, projection: Any, net: Any) -> None:
             super().__init__()
@@ -845,8 +990,7 @@ def _wrapper_classes(torch: Any) -> tuple[Any, Any]:
             keep = view.valid
             projected = self.projection(view.features)
             tokens = projected * keep.unsqueeze(-1).to(projected.dtype)
-            output = self.net(tokens, attention_mask=keep.to(tokens.dtype))
-            return output[0] if isinstance(output, tuple) else output
+            return _transformer_masked_mean(self.net, tokens, keep)
 
     return _SetEmbedding, _TransformerEmbedding
 

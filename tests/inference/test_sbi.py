@@ -762,6 +762,33 @@ class TestTheEmbeddingVocabulary:
         with pytest.raises(EngineError, match="does not know the embedding"):
             self.resolved("convnext")
 
+    def test_the_set_and_transformer_default_width_is_raised_but_flat_keeps_its_own(
+        self,
+    ) -> None:
+        """W3.11's two defaults: ``max(2 * free_size, 32)`` for a pooled set,
+        ``2 * free_size`` (legacy parity, unchanged) for ``"flat"``.
+        """
+        set_layout = EncodingLayout.from_datasets(two_dataset_problem().datasets, kind="set")
+
+        # Accept criterion: a one-parameter problem's set embedding gets 32,
+        # not 2 -- the legacy default would leave an untrained ReLU net a
+        # coin flip away from emitting all zeros.
+        for named in ("set", "transformer"):
+            resolved = self.resolved(named, free_size=1, layout=set_layout)
+            assert resolved.output_dim == 32
+
+        # Above the floor, 2 * free_size wins for a set embedding too.
+        resolved = self.resolved("set", free_size=20, layout=set_layout)
+        assert resolved.output_dim == 40
+
+        # "flat" (CNN/FC) is untouched: 2 * free_size, even below 32.
+        resolved = self.resolved("FC", free_size=1, layout=None)
+        assert resolved.output_dim == 2
+
+        # An explicit output_dim= always wins over either default.
+        resolved = self.resolved({"type": "set", "output_dim": 5}, free_size=1, layout=set_layout)
+        assert resolved.output_dim == 5
+
     def test_a_set_embedding_under_a_flat_layout_is_refused_by_name(self) -> None:
         """W3.3's two need column groups, and the flat layout has none."""
         flat = EncodingLayout.from_datasets(two_dataset_problem().datasets, kind="flat")
@@ -1094,12 +1121,16 @@ class TestTheTransformerWrapper:
 
     @staticmethod
     def built(problem: Any) -> Any:
+        return TestTheTransformerWrapper.built_with_row_cap(problem, row_cap=None)
+
+    @staticmethod
+    def built_with_row_cap(problem: Any, *, row_cap: int | None) -> Any:
         import torch
 
         from ampere.inference._sbi import _embedding_of
 
         torch.manual_seed(20260909)
-        layout = EncodingLayout.from_datasets(problem.datasets)
+        layout = EncodingLayout.from_datasets(problem.datasets, row_cap=row_cap)
         resolved = _embedding_of(
             {"type": "transformer", "output_dim": 16},
             torch=torch,
@@ -1120,37 +1151,6 @@ class TestTheTransformerWrapper:
         assert config["pos_emb"] == "none"
         assert config["attention_dropout"] == 0.1
         assert config["vit_dropout"] == 0.1
-
-    def test_the_wrapper_hands_the_net_an_attention_mask(self) -> None:
-        """The mask column becomes ``attention_mask``, per ``encoding.md`` §7."""
-        import torch
-
-        from ampere.inference._sbi import _wrapper_classes
-
-        problem = two_dataset_problem()
-        layout = EncodingLayout.from_datasets(problem.datasets)
-        row_features = layout.columns_total - 1
-
-        class Recorder(torch.nn.Module):
-            def __init__(self) -> None:
-                super().__init__()
-                self.seen: Any = None
-
-            def forward(self, tokens: Any, attention_mask: Any = None, **_: Any) -> Any:
-                self.seen = attention_mask
-                return tokens[:, -1, :]
-
-        recorder = Recorder()
-        wrapper = _wrapper_classes(torch)[1](layout, torch.nn.Linear(row_features, 8), recorder)
-        x = torch.as_tensor(
-            np.asarray(encode_observations(problem.datasets, layout=layout).values),
-            dtype=torch.float64,
-        )
-        with torch.no_grad():
-            wrapper(x)
-        assert recorder.seen is not None
-        assert recorder.seen.shape == (1, layout.row_cap)
-        assert recorder.seen[0].tolist() == [1.0, 1.0, 1.0, 0.0, 1.0, 1.0]
 
     def test_a_masked_rows_value_does_not_change_the_output(self) -> None:
         """It cannot: the wrapper zeroes a masked row's token after projection."""
@@ -1174,6 +1174,88 @@ class TestTheTransformerWrapper:
         retained[:, 4, layout.group("value").offset] = 99.0
         with torch.no_grad():
             assert not torch.allclose(plain, module(retained), atol=1e-6)
+
+    def test_padded_rows_contribute_nothing_whatever_they_hold(self) -> None:
+        """Accept criterion: padded rows do not change the pooled output."""
+        import torch
+
+        problem = two_dataset_problem()
+        layout, module = self.built_with_row_cap(problem, row_cap=11)
+        x = torch.as_tensor(
+            np.asarray(encode_observations(problem.datasets, layout=layout).values),
+            dtype=torch.float32,
+        )
+        with torch.no_grad():
+            plain = module(x)
+        junk = x.clone()
+        junk[:, 6:, :] = 3.7  # every padded row, every column, including the mask
+        junk[:, 6:, layout.group("mask").offset] = 0.0  # ... except the mask
+        with torch.no_grad():
+            noisy = module(junk)
+        assert torch.allclose(plain, noisy, atol=1e-6)
+
+    def test_reversing_the_rows_changes_nothing(self) -> None:
+        """W3.11's accept criterion: this is the assertion the last-token read fails.
+
+        Built and checked exactly as the set embedding's own permutation test,
+        against the *same* module twice (plain and row-reversed) so that a
+        regression to the last-token read -- which reads a different row after
+        a reversal, and so a different summary -- would be caught here rather
+        than only in a slower end-to-end fit.
+        """
+        import torch
+
+        problem = two_dataset_problem()
+        layout, module = self.built(problem)
+        x = torch.as_tensor(
+            np.asarray(encode_observations(problem.datasets, layout=layout).values),
+            dtype=torch.float32,
+        )
+        with torch.no_grad():
+            plain = module(x)
+            reversed_rows = module(torch.flip(x, dims=(1,)))
+        assert torch.allclose(plain, reversed_rows, atol=1e-6)
+
+    def test_the_readout_depends_on_named_sbi_attributes(self) -> None:
+        """The masked-mean readout has no hook onto sbi's forward; it reads
+        the net's body modules by name, and must fail loudly, not silently
+        wrongly, if a future sbi renames one.
+        """
+        import torch
+
+        from ampere.inference._sbi import _transformer_masked_mean
+
+        problem = two_dataset_problem()
+        layout, module = self.built(problem)
+        tokens = torch.zeros(1, layout.row_cap, module.net.aggregator.in_features)
+        keep = torch.ones(1, layout.row_cap, dtype=torch.bool)
+
+        # The real net has every attribute this depends on, and is causal=False.
+        _transformer_masked_mean(module.net, tokens, keep)  # does not raise
+
+        class Renamed:
+            """A stand-in missing one of the attributes the readout reads."""
+
+            preprocess = staticmethod(lambda x: x)
+            norm = staticmethod(lambda x: x)
+            aggregator = staticmethod(lambda x: x)
+            is_causal = False
+            # 'layers' is deliberately absent.
+
+        with pytest.raises(AttributeError, match=r"\['layers'\]"):
+            _transformer_masked_mean(Renamed(), tokens, keep)
+
+        class Causal:
+            """A stand-in with every attribute, but the wrong value for one."""
+
+            preprocess = staticmethod(lambda x: x)
+            layers: tuple[Any, ...] = ()
+            norm = staticmethod(lambda x: x)
+            aggregator = staticmethod(lambda x: x)
+            is_causal = True
+
+        with pytest.raises(AttributeError, match="is_causal=True"):
+            _transformer_masked_mean(Causal(), tokens, keep)
 
 
 @needs_sbi
