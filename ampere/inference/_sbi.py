@@ -766,6 +766,14 @@ class SBIEngine(Engine):
             :class:`~ampere.inference.VIEngine`'s guide draws are and for the
             same reason. For NPE they are cheap; for NLE and NRE each one costs
             an MCMC step, so a large number is not free.
+
+            One cost is easy to overlook and is the same for all three: every
+            stored draw is **scored on the numpy contract path** afterwards, so
+            ``draws`` is also a count of full ``problem.evaluate`` calls — one
+            forward-model evaluation each. That is what buys the true per-draw
+            split beside the estimator's own density, and it is why a draw
+            count here is not the free number it is for a variational fit.
+            ``engine_draws_recomputed`` in the attrs is that count.
         training
             Forwarded verbatim to the ``sbi`` trainer's ``train`` --
             ``max_num_epochs``, ``training_batch_size``, ``learning_rate``,
