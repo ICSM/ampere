@@ -675,6 +675,17 @@ def provenance_attrs(
         Further entries, JSON-normalised and prefixed like the rest. Use it for
         engine-specific settings (step size, number of live points).
 
+    Notes
+    -----
+    One attribute is **conditional**: ``ampere_foreign_parts`` (W3.8), the
+    located names of the pieces this problem composes from another backend —
+    a numpy kernel inside a torch problem, say, accepted because the problem
+    declared ``allow_foreign_parts=True``. It is absent from every other run,
+    and its absence is the ordinary case rather than a missing value: a run
+    that carries it is a run whose named pieces could not have contributed a
+    gradient, which is exactly what a reader asking "were this fit's GP
+    hyperparameters actually fitted natively?" needs to know.
+
     Examples
     --------
     >>> import numpy as np, scipy.stats as st, astropy.units as u
@@ -780,6 +791,17 @@ def provenance_attrs(
         ),
         "solver_config": canonical_json(solver_configs(problem)),
     }
+    # W3.8, and **conditional**: present only for a problem composed with
+    # allow_foreign_parts=True (or one whose capabilities= override hid a
+    # foreign piece), which is a composition no earlier ampere could build at
+    # all. A key that cannot appear on any run an existing reader has seen
+    # cannot change how that reader reads one, so this rides no
+    # PROVENANCE_SCHEMA_VERSION bump; the *names* are recorded rather than a
+    # bare flag because "this run had no gradients through some piece" is only
+    # actionable if it says which piece.
+    foreign = problem.foreign_part_names
+    if foreign:
+        attrs["foreign_parts"] = canonical_json(list(foreign))
     if problem.seed is None:
         attrs["seed_source"] = "entropy"
     else:
