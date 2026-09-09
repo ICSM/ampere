@@ -1021,15 +1021,17 @@ def _calibration_of(result: Any) -> Any:
     )
 
 
-def _selected_columns(group: Any, parameters: Sequence[str] | None, limit: int) -> list[int]:
-    """Which ranked columns to draw, by position, refusing an unreadable grid."""
+def _selected_columns(
+    group: Any, parameters: Sequence[str] | None, limit: int, *, what: str, override: str
+) -> list[int]:
+    """Which ranked columns to draw, by position, refusing an unreadable figure."""
     available = [str(name) for name in np.asarray(group.coords[PARAMETER_DIM].values).ravel()]
     chosen = _p.select_names(available, parameters, what="calibrated parameter")
     if len(chosen) > limit:
         raise ResultsError(
-            f"{len(chosen)} rank histograms were asked for and the limit is {limit}. A grid "
-            f"that large is not readable and is usually a selection mistake; narrow it with "
-            f"parameters=, or raise max_panels= deliberately."
+            f"{len(chosen)} {what} were asked for and the limit is {limit}. A figure that "
+            f"crowded is not readable and is usually a selection mistake; narrow it with "
+            f"parameters={override}."
         )
     return [available.index(name) for name in chosen]
 
@@ -1082,7 +1084,9 @@ def plot_sbc_ranks(
         open the group to get them.
     """
     group = _calibration_of(result)
-    positions = _selected_columns(group, parameters, max_panels)
+    positions = _selected_columns(
+        group, parameters, max_panels, what="rank histograms", override=", or raise max_panels="
+    )
     labels = [str(name) for name in np.asarray(group.coords[PARAMETER_DIM].values).ravel()]
     ranks = np.asarray(group["ranks"].values, dtype=float)
     draws = int(group.attrs.get(f"{ATTR_PREFIX}calibration_posterior_draws", ranks.max() or 1))
@@ -1201,7 +1205,9 @@ def plot_coverage(
         TARP's area-to-curve where there is one.
     """
     group = _calibration_of(result)
-    positions = _selected_columns(group, parameters, MAX_RANK_PANELS)
+    positions = _selected_columns(
+        group, parameters, MAX_RANK_PANELS, what="coverage curves", override=""
+    )
     labels = [str(name) for name in np.asarray(group.coords[PARAMETER_DIM].values).ravel()]
     levels = np.asarray(group.coords[LEVEL_DIM].values, dtype=float)
     coverage = np.asarray(group["coverage"].values, dtype=float)
