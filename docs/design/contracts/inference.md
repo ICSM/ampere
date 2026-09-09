@@ -1915,6 +1915,41 @@ The conformance battery carries this as a declared capability
 claims to pickle round-trips, and one that does not must genuinely fail to,
 so the refusal can never rest on a stale declaration.
 
+### Truncated proposals over this surface (*Amended W3.4*)
+
+W3.4 lands `SBIEngine(method="tmnre", ...)` — truncated marginal ratio
+estimation, Miller et al. (2021) — and it asks this section for exactly one
+thing beyond what W3.1 already fixed: **`values=` is how a round proposes.**
+The other multi-round methods propose from the *posterior* the previous round
+trained, which is an `sbi` object that can be handed to `append_simulations` as
+a `proposal=`. TMNRE's proposal is a truncated **prior** — the joint prior
+renormalised on the hyperrectangle where the estimated 1-D marginals put their
+mass — which is not an `sbi` posterior at all, so the engine draws from it
+itself and passes the resulting θ table through `values=`. Nothing here
+changes: `values=` already means "simulate at *these* θ", one per draw, and
+the per-round sub-stream rule (`"sbi.simulate.<round>"`) is what keeps a round
+reproducible whatever the previous round's rejection sampler consumed.
+
+Two consequences worth recording where a reader of this section will meet them.
+
+**The truncated prior needs no importance correction, and that is a property of
+`values=` rather than a claim about the estimator.** Because the proposal is
+the prior restricted to a subset — not a learned distribution — the target
+inside the box is the same target, so the pairs a round produces are drawn from
+the same joint the untruncated budget draws from, conditioned on the box. A
+proposal that were a *fitted* posterior would not have that property, which is
+why `rounds > 1` costs amortisation for every method and an importance weight
+for some of them.
+
+**A truncated round's cost is a prior-sampling cost, and it is ampere's.** The
+box is enforced by rejection against the joint prior, and `sample_prior` is a
+Python loop because §6's ties and §9's hierarchies are resolved per draw. A box
+holding a thousandth of the prior's mass therefore needs of order a thousand
+`sample_prior` calls per simulation, whatever the simulator costs. The engine
+records each round's acceptance rate for exactly this reason and warns below
+1e-3; a future vectorised `sample_prior` for the tie-free case would remove
+the constant, and nothing in this section forecloses it.
+
 ## 14. Nested result channels — the symmetrical question
 
 `results_schema.md` §17 routes this here: Peter asked whether nested result

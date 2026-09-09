@@ -200,6 +200,7 @@ result, got float. ...
 | `observed_data` | one variable per dataset: the observed values | the dataset's own coordinate axis |
 | `constant_data` | per dataset: uncertainties, mask, extra coordinates, and any axes that are not dimensions | as above |
 | `calibration` | *(added W3.6)* `diagnostics.md` §11's family D, when a run has been calibrated: `ranks`, `coverage`, `ks_pvalue`, and the route's own extras | `(simulation, parameter)`, `(level, parameter)`, `(parameter,)` |
+| `marginals` | *(added W3.4)* a truncated-marginal SBI run's per-marginal ratio estimators, evaluated on a grid over the final truncation box: `grid`, `grid_constrained`, `log_ratio`, `log_density`, and at `marginals=2` the pairs' `pair_grid_row`/`pair_grid_column`/`pair_log_ratio`/`pair_log_density` | `(marginal_parameter, marginal_node)`; `(marginal_pair, marginal_row, marginal_column)` |
 
 The posterior is keyed by the merged name, which is the third of the three
 reasons `inference.md` §4.5 gives for the nested merge topology: a merged name
@@ -511,6 +512,30 @@ family B does, because a rank histogram is not a coordinate-indexed deficiency
 map. The randomness comes from the named sub-stream `"calibration"`, distinct
 from `"simulate"` and `"posterior_predictive"` for `lowering.md` §9.2's reason:
 adding a calibration check must not change what an SBI budget simulated.)*
+
+*(**Added W3.4**, 2026-09-09: a fifth reserved group, `marginals`, and it is
+the one that does **not** follow the rule above — a TMNRE run stores it by
+default. The reason is that the three groups here, and `calibration`, are
+things a run could be asked for *later*, from the stored run plus the problem;
+`marginals` cannot be. It is the output of networks that exist only inside the
+fit — one ratio estimator per 1-D marginal, and per pair at `marginals=2` —
+and once `SBIEngine.run` returns, nothing in an archived file can reproduce
+them. Marginal ratio estimation is also half of what the method **is**: a run
+that trained one estimator per marginal and stored none of them would have
+thrown away the answer and kept only the by-product. So the group is written
+by `SBIEngine.run` itself, for `method="tmnre"` only, and it is a *summary* —
+each estimator's log-ratio and its estimated marginal posterior on a grid over
+the final box, in both parameterisations — never the networks, which are torch
+modules with no netCDF representation and belong in W3.5's artefact store if
+they are to be kept at all. The cost is bounded and small by construction:
+`(free_size, 129)` for the 1-D marginals and `(pairs, 33, 33)` for the pairs,
+independent of the draw count and of the data size.
+The run's posterior is unaffected — a joint estimator trained on the last
+round's truncated prior supplies ordinary i.i.d. joint draws, so §4's
+`posterior`, `sample_stats` and `log_likelihood` groups mean exactly what they
+mean for every other engine. The truncation history rides in the attrs
+(`ampere_sbi_truncation`), not in a group: it is one small record per round,
+which is provenance's shape and not an array's.)*
 
 ## 8. The plotting surface
 
