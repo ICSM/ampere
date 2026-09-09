@@ -325,6 +325,22 @@ the first two; the rest are user `nn.Module`s):
   DeepSets encoder over the draws is the standard treatment, and it
   connects to design horizon (b)'s population post-processing.
 
+**What the W3.3 traps mean for every later embedding** (added
+2026-09-09 after verifying sbi 0.27): sbi's interface is a module over a
+single tensor `x`, so everything an encoder needs — coordinates, values,
+error bars, masks, dataset identity, instrument context — has to travel
+*inside* `x`. That makes the **packing format the contract** and the
+network a free choice: `encoding.md` fixes named column groups and an
+`unpack` helper, standardisation lives in the encoding with its
+statistics in the layout (sbi's own z-scoring switched off), and each
+embedding is a thin wrapper that unpacks and adapts — NaN rows for sbi's
+set embedding, an attention mask for its transformer, a coordinate grid
+for a ConvCNP encoder, a per-set context vector for FiLM conditioning.
+The two features that matter most for amortisation are already in the
+packing: whitened values with `log σ` (noise) and the coordinate with
+Fourier features (sampling). What a future encoder adds is only its
+inductive bias.
+
 **Practical recommendation.** W3.3 lands set and transformer embeddings
 because sbi ships them. A ConvCNP-style encoder is the first *experiment*
 worth running once W3.6's calibration machinery exists to judge it — an

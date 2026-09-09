@@ -977,6 +977,48 @@ the `TransformerEmbedding`, both masked by the mask column; `layout=` is an
 what is and is not stable across `CONTAINER_SCHEMA_VERSION`s) — an addition
 to §4, so a decision-log row. **Depends:** W3.2. **Blocks** nothing hard;
 W3.6 uses it if merged.
+**Traps and their solutions (Fable, 2026-09-09, verified against sbi
+0.27; each is a requirement of this item).** (1) **sbi z-scores `x`
+column-wise by default** (`posterior_nn(z_score_x="independent")`) over
+the training tensor — on a padded, mixed-column tensor that standardises
+the mask and coordinate columns and lets padded rows contaminate every
+column's statistics: the engine passes `z_score_x="none"` for any
+non-flat layout and the **encoding does its own standardisation**, per
+column group, with the statistics part of the layout (so the observed
+data at inference is standardised identically). (2) **Values across
+datasets differ by orders of magnitude** (photometry vs spectrum units):
+the value columns are the whitened `y/σ`, `log σ` and an `asinh`-scaled
+`y`, not raw `y` — this is also what makes amortisation over noise
+possible. (3) **Mask conventions differ per embedding**: sbi's
+`PermutationInvariantEmbedding` treats an all-NaN row as absent and
+already computes a masked mean; the transformer wants a `(batch, rows)`
+`attention_mask`. The contract keeps one explicit mask column
+(backend-neutral, serialisable); the torch-side wrapper `unpack`s the
+tensor by the layout and converts — NaN rows for the set embedding,
+`attention_mask` for the transformer — so no embedding ever sees the mask
+column as a feature. (4) **`TransformerEmbedding` defaults** are wrong for
+sets: `is_causal=True` (rows attend only to earlier rows), dropout 0.5 on
+both attention and MLP, `pos_emb="rotary"` (index-based). Set
+`is_causal=False`, explicit dropout, `pos_emb="none"`, and carry the
+coordinate as features: the normalised coordinate plus fixed Fourier
+features (NeRF-style, band count in the layout). Its `forward` returns a
+tuple; the wrapper takes the first element. (5) **Sum pooling makes the
+embedding depend on the row count**; use the masked mean and add `log N`
+(valid rows per dataset) as an explicit per-set feature, so the count is
+information rather than a scale. (6) **The layout fixes the row cap**
+(sbi validates `x_shape` at `set_default_x` anyway): an observation with
+more rows than the layout allows is refused by name; attention is
+quadratic in rows, so a 2 000-point spectrum beside 10 photometric points
+is the case the row cap and, later, per-dataset sub-encoders exist for.
+(7) **dtype**: ampere is float64, sbi nets are float32 — cast at the
+boundary, in the wrapper, once. (8) **Complex values** are two columns,
+real and imaginary (linear), recorded in the layout. (9) **The durable
+design**: `encoding.md` defines the *packing* — named column groups
+(coordinates, coordinate features, values, σ, mask, dataset id, per-set
+features, a reserved context slot) — and one `unpack(x, layout)` helper;
+every embedding, present or future (neural-process encoders, FiLM-
+conditioned nets), is a module over the unpacked view, so the packing is
+the contract and the networks are free.
 **Accept:** encode/decode round trip on every container fixture in
 `tests/core` including a masked, an irregular and a complex one; two
 datasets of different lengths encode into one padded tensor whose mask
