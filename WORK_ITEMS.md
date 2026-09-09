@@ -695,7 +695,7 @@ restructures `docs/development.md` and `CLAUDE.md` for Phase 3.
 namespaces; README install routes verified by running them in a scratch
 environment; the annotation list in the report; all three gates unchanged.
 
-## Phase 3 — The SBI layer (drafted 2026-09-08 by Fable; **approved by Peter 2026-09-08** with W3.1 revised into two slices from his three notes, and W3.8–W3.10 added from his rulings; W3.1's revised text approved 2026-09-09; dispatch open)
+## Phase 3 — The SBI layer (drafted 2026-09-08 by Fable; **approved by Peter 2026-09-08** with W3.1 revised into two slices from his three notes, and W3.8–W3.12 added from his rulings; W3.1's revised text approved 2026-09-09; dispatch open)
 
 Written from `DEVELOPMENT_PLAN.md` §5 Phase 3, its §6 deferred choices and
 §7's trained-artefact trap, `inference.md` §13 and limitation 17.5,
@@ -1026,13 +1026,12 @@ column is exact; a layout mismatch is refused by name; `SBIEngine(...,
 embedding="set")` trains and samples on a two-dataset toy problem in the
 `sbi` environment; `dev` and `sbi` gates green; lint/format/pyrefly clean.
 
-### W3.4 — TMNRE: reviving the swyft implementation [M; Opus; conditional]
+### W3.4 — TMNRE through sbi's own ratio estimators [M; Opus] (ruled 2026-09-09; the swyft revival is not pursued)
 Plan §5: "revive the swyft TMNRE implementation from
-`docs/design/harvest/swyft/`". **Gate first** (the first fact is already in: swyft 0.4.5, September
-2023, pinned to pytorch-lightning ≤ 1.9.5 — see the facts paragraph
-above; Fable's recommendation is the "express through sbi's `NRE` rounds"
-option, and Peter may rule on the facts without spending an agent on the
-note): the item begins with a
+`docs/design/harvest/swyft/`". **Ruled by Peter 2026-09-09: the "express through sbi" route — no swyft,
+no maturity note; the design paragraph below is the item's scope, and
+the swyft-revival text after it is kept only as the record of what was
+not done.** *(Superseded)* Gate first: the item begins with a
 one-page maturity note — does swyft install alongside sbi 0.27 and torch
 2.13 in the `sbi` environment today (it is a PyTorch-Lightning package,
 last seen active 2024), what its truncation offers that `sbi`'s `NRE` +
@@ -1224,6 +1223,46 @@ breakdown is approved. **Blocks** nothing.
 page sits in the API reference toctree beside the legacy section; every
 legacy name on the page is either an explicit `:doc:` link to its page or a
 plain literal (no dangling cross-references); British English.
+
+### W3.11 — Set-embedding readouts: default width and a pooled transformer head [S; Sonnet] (proposed 2026-09-09, awaiting Peter)
+From W3.3's two open questions. (1) The set and transformer embeddings
+inherit the `"flat"` default output width `2·free_size`; for a pooled set
+that is the conditioning vector's whole capacity, and sbi's nets end in a
+ReLU, so a narrow randomly-initialised net can emit all zeros (W3.3's
+tests set 16 explicitly for this reason). Default becomes
+`max(2·free_size, 32)` for `"set"`/`"transformer"`, `2·free_size` kept for
+`"flat"` (legacy parity), user override unchanged. (2) sbi's transformer
+reads the **last token** as its summary; under full attention with no
+positional embedding the last token is a function of every row, but the
+readout depends on which row happens to be last (or on a padded zero
+token). The wrapper gains a **masked-mean readout head** over the tokens
+after sbi's transformer body, which is permutation-invariant and uses
+every retained token; a learned CLS token is the alternative, more
+parameters for the same information, not chosen. Both are wrapper
+changes in `ampere/inference/_sbi.py` (§7 of `encoding.md` amended,
+*Amended W3.11*); no contract change. **Depends:** W3.6 (owns `_sbi.py`
+until it merges). **Accept:** the two defaults asserted; the transformer
+wrapper's output unchanged under row permutation (a test that fails on
+the last-token read and passes on the mean); `sbi` and `dev` gates green.
+
+### W3.12 — Model identity hash: promote, record, and check on append [S; Sonnet] (proposed 2026-09-09, awaiting Peter)
+From W3.5's open question and its carried finding. W3.5 built a
+`model_hash` locally (model fingerprints minus their parameter specs,
+dataset fingerprints minus the observed data, plus bindings) because the
+spec hash covers only the parameter declaration and a kernel/solver/
+family swap with identical parameters must be a miss. `provenance.py`
+already has `model_fingerprint`/`dataset_fingerprint`/`problem_fingerprint`;
+this item promotes W3.5's composition to a public
+`model_identity_hash(problem)` beside `spec_hashes`, records it on every
+run and training set as `ampere_model_hash` (**`PROVENANCE_SCHEMA_VERSION`
+→ 6**, one decision-log row), makes `artefacts.py` use it rather than its
+private copy, and fixes W2.8's `append_training_set` to refuse an append
+whose `ampere_model_hash` differs from the file's, by name — plan §7's
+trap, live today. **Depends:** W3.6 (touches `ampere/results/`).
+**Accept:** the attr on a run and a training set; a kernel swap with
+identical parameters refuses the append and names the hash; `artefacts.py`
+has no private fingerprint code left; all four gates green (schema bump
+touches every run); lint/format/pyrefly clean.
 
 ### W3.10 — Automatic paging above the plot caps, with a loud warning [S; Sonnet; not urgent]
 Ruled by Peter 2026-09-08 (on W2.8's confirmed caps): above
