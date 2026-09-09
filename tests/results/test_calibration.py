@@ -464,6 +464,19 @@ class TestTheRefitLoop:
 # ---------------------------------------------------------------------------
 
 
+def _close(*figures: Any) -> None:
+    """Release the figures a test drew.
+
+    matplotlib keeps every pyplot figure alive until it is closed, and a suite
+    that draws a few dozen and keeps them all warns about it -- and, in a long
+    ``test-all`` run, is holding memory for nothing.
+    """
+    import matplotlib.pyplot as pyplot
+
+    for figure in figures:
+        pyplot.close(figure)
+
+
 @pytest.fixture(scope="module")
 def study() -> Any:
     """One small study, shared by the storage and plotting checks."""
@@ -505,12 +518,15 @@ class TestStorageAndPlots:
         coverage_metadata = figure_metadata(axes.get_figure())
         assert any(key.endswith(".coverage_68") for key in coverage_metadata)
         assert axes.get_xlim() == (0.0, 1.0)
+        _close(figure, axes.get_figure())
 
     def test_both_plots_accept_the_run_that_carries_the_group(self, study: Any) -> None:
         run = EmceeEngine(toy_problem(), walkers=8).run(steps=80, burn_in=20)
         attach_calibration(run, study)
-        assert plot_sbc_ranks(run) is not None
-        assert plot_coverage(run) is not None
+        ranks = plot_sbc_ranks(run)
+        coverage = plot_coverage(run)
+        assert ranks is not None and coverage is not None
+        _close(ranks, coverage.get_figure())
 
     def test_a_run_without_the_group_is_refused_with_the_remedy(self) -> None:
         run = EmceeEngine(toy_problem(), walkers=8).run(steps=80, burn_in=20)
@@ -520,6 +536,7 @@ class TestStorageAndPlots:
     def test_a_selection_of_parameters_is_honoured(self, study: Any) -> None:
         figure = plot_sbc_ranks(study, parameters=["model.slope"])
         assert len(figure.axes) == 1
+        _close(figure)
 
     def test_too_many_panels_is_refused_loudly(self, study: Any) -> None:
         with pytest.raises(ResultsError, match="max_panels"):

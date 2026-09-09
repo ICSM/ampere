@@ -375,13 +375,24 @@ class TestTheCoverageStudy:
         from ampere.results import figure_metadata
 
         figures = wstat_example.coverage_figure(reduced_study)
-        assert sorted(figures) == [
-            "joint_coverage",
-            "joint_ranks",
-            "wstat_coverage",
-            "wstat_ranks",
-        ]
-        assert any(key.endswith(".ks_pvalue") for key in figure_metadata(figures["wstat_ranks"]))
+        try:
+            assert sorted(figures) == [
+                "joint_coverage",
+                "joint_ranks",
+                "wstat_coverage",
+                "wstat_ranks",
+            ]
+            assert any(
+                key.endswith(".ks_pvalue") for key in figure_metadata(figures["wstat_ranks"])
+            )
+        finally:
+            # matplotlib keeps every pyplot figure alive until it is closed, and
+            # four of them per run of this file is enough to warn about in a
+            # whole-suite gate.
+            import matplotlib.pyplot as pyplot
+
+            for figure in figures.values():
+                pyplot.close(figure)
 
     def test_the_coverage_flag_is_off_by_default(
         self, wstat_example: ModuleType, capsys: pytest.CaptureFixture[str]
