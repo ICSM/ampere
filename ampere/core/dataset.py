@@ -2568,9 +2568,12 @@ class FittingProblem:
             Peter): the per-draw observation context — sigma pattern, grid,
             instrument settings — that amortising SBI over noise realisations
             will draw from a context prior. ``None`` is the only accepted value
-            today; the signature exists ahead of the machinery so that the
-            items which need it are additions rather than changes, and the
-            batch's provenance records that no context was used.
+            today and anything else is **refused by name** rather than
+            ignored — accepting a context and not using it would put a budget
+            in a training set whose provenance claimed one. The signature
+            exists ahead of the machinery so that the items which need it are
+            additions rather than changes, and the batch's provenance records
+            that no context was used.
 
         Returns
         -------
@@ -2653,6 +2656,19 @@ class FittingProblem:
         """The generator behind :meth:`simulate_many`; one chunk at a time."""
         if isinstance(count, bool) or not isinstance(count, (int, np.integer)):
             raise DatasetError(f"a simulation budget must be an integer, got {count!r}.")
+        if context is not None:
+            # The reserved hook, refused rather than ignored. Accepting a
+            # context and silently not using it would put a budget in a
+            # training set whose provenance claimed a per-draw observation
+            # context that never reached the simulator -- exactly the stale
+            # artefact the hook is being reserved to make possible to record.
+            raise DatasetError(
+                f"simulate_many's context= is reserved: the per-draw observation context "
+                f"(sigma pattern, grid, instrument settings) that amortising SBI over noise "
+                f"realisations will draw from a context prior. The signature exists ahead of "
+                f"the machinery so the items that need it are additions rather than changes, "
+                f"and None is the only value it accepts today; got {context!r}."
+            )
         count = int(count)
         bounds = chunk_bounds(count, chunk_size)
         rows = self._batch_values(values, count)

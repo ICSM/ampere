@@ -859,6 +859,11 @@ class TestTheNativePathIsAskedForByName:
         batch = build().simulate_many(2, context=None)
         assert batch.provenance["simulation_context"] == "none"
 
+    def test_a_supplied_context_is_refused_rather_than_ignored(self) -> None:
+        """Reserving a keyword is not the same as accepting one and dropping it."""
+        with pytest.raises(DatasetError, match="reserved"):
+            build().simulate_many(2, context={"sigma": 0.1})
+
     def test_the_provenance_of_a_mixed_budget_claims_least(self) -> None:
         """Concatenation is conservative: a mixture must not read as a native run."""
         native = SimulationBatch((), provenance={"simulate_batched": True})
