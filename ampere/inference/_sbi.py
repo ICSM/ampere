@@ -1604,6 +1604,9 @@ class SBIEngine(Engine):
         # W3.5: the artefact key is the problem's own hashes plus everything
         # that shaped the estimator -- the encoding *hash* stands in for the
         # layout, so a differently-packed observation is a miss by construction.
+        # W3.12: marginals=/truncation_epsilon= are now artefact_key's own
+        # keywords -- the _key_architecture stopgap that folded TMNRE's
+        # settings into the architecture string is gone.
         cache_key: ArtefactKey | None = (
             None
             if self.cache is None
@@ -1611,9 +1614,11 @@ class SBIEngine(Engine):
                 problem,
                 layout=layout.hash,
                 method=self.method,
-                architecture=self._key_architecture(architecture),
+                architecture=architecture,
                 budget=self.budget,
                 rounds=self.rounds,
+                marginals=self.marginals if self.method == TMNRE else None,
+                truncation_epsilon=self.truncation_epsilon if self.method == TMNRE else None,
             )
         )
         cached = None if cache_key is None or self.cache is None else self.cache.get(cache_key)
@@ -2358,30 +2363,6 @@ class SBIEngine(Engine):
             pair_grid_column=pair_column,
             pair_log_ratio=pair_ratio,
             pair_log_density=pair_density,
-        )
-
-    def _key_architecture(self, architecture: str) -> str:
-        """The architecture ingredient of the cache key, TMNRE's settings folded in.
-
-        **A stopgap, and it is deliberate that it is an ugly one.**
-        ``ampere.results.artefacts.artefact_key`` takes a fixed set of
-        ingredients and this item does not own that module, but ``marginals``
-        and ``truncation_epsilon`` both change what is trained: a different ε
-        gives a different box, a different box gives a different final
-        estimator, and two runs differing only in ε would otherwise collide on
-        one digest and the second would be served the first's posterior. That
-        is exactly the silent staleness ``DEVELOPMENT_PLAN.md`` §7 names, so
-        the settings are folded into the ingredient nearest to them until
-        :func:`~ampere.results.artefacts.artefact_key` grows its own keywords.
-        The *recorded* architecture (``ampere_sbi_density_estimator``) is
-        untouched — this string exists only inside the key, where it also makes
-        :meth:`~ampere.results.ArtefactStore.diff` name the setting that moved.
-        """
-        if self.method != TMNRE:
-            return architecture
-        return (
-            f"{architecture}+tmnre(marginals={self.marginals},"
-            f"epsilon={self.truncation_epsilon!r},sample_with={self.sample_with})"
         )
 
     def _artefact(self) -> Any:
