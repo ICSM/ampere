@@ -76,12 +76,24 @@ closed by a content-addressed store whose key is built entirely from hashes
 :func:`~ampere.results.artefact_key` builds one :class:`~ampere.results.ArtefactKey`
 from a :class:`~ampere.core.dataset.FittingProblem` and a run's own settings
 (the method, the estimator architecture, the budget, the rounds, the encoding
-layout and the ``sbi``/torch versions), and
-:class:`~ampere.results.ArtefactStore` is the ``get``/``put``/``train_or_load``
-seam an inference engine (``SBIEngine(cache=...)``, W3.5) calls around
-training. A stored artefact that cannot be trusted — a hand-edited sidecar, a
-corrupted pickle — is a silent miss with an :class:`~ampere.results.ArtefactCacheWarning`,
-never a raised error.
+layout, the ``sbi``/torch versions and, for TMNRE, its ``marginals``/
+``truncation_epsilon``), and :class:`~ampere.results.ArtefactStore` is the
+``get``/``put``/``train_or_load`` seam an inference engine
+(``SBIEngine(cache=...)``, W3.5) calls around training. A stored artefact
+that cannot be trusted — a hand-edited sidecar, a corrupted pickle — is a
+silent miss with an :class:`~ampere.results.ArtefactCacheWarning`, never a
+raised error.
+
+**W3.12**: the key's ``model_hash`` field is :func:`~ampere.results.model_hash`
+— every model's fingerprint minus its parameter declaration, every dataset's
+fingerprint minus its observed data, plus the model bindings — promoted into
+:mod:`ampere.results.provenance` and recorded on every run and training set
+as ``ampere_model_hash`` (``PROVENANCE_SCHEMA_VERSION`` 6), so a likelihood
+family, noise model, solver or kernel swap that leaves every parameter's name
+and prior unchanged is a miss here too, not only in this store:
+:func:`~ampere.results.append_training_set` now refuses to grow a training
+set whose ``ampere_model_hash`` disagrees with the problem given — or that
+predates the attribute altogether.
 
 Posterior calibration (family D)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
