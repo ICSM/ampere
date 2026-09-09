@@ -723,6 +723,35 @@ test-all` plus the `dev` gate proving nothing new leaks into the base
 install; the `torch`/`jax` gates are re-run only by items that touch a
 backend. Phase 2's operations notes hold: one five-suite gate at a time.
 
+**Facts gathered 2026-09-09 for the items not yet dispatched** (verified
+against the installed sbi 0.27.0 and PyPI, while W3.1 slice 2's gates
+ran). *W3.3*: sbi's `PermutationInvariantEmbedding(trial_net,
+trial_net_output_dim, aggregation_fn="sum"|…, output_dim=…)` takes input
+`(batch, permutation_dim, input_dim)` and its `forward` has some mask
+handling — verify exactly what before relying on it, and ship a small
+masked-pooling wrapper (multiply each row's embedding by the mask column
+before aggregation) rather than trusting a network to learn that padded
+rows are absent. `TransformerEmbedding` takes `(batch, seq_len,
+feature_space_dim)` and its `forward(input, attention_mask=None, …)`
+accepts a `(batch, seq_len)` mask — but sbi calls an embedding as
+`net(x)` only, so W3.3 needs a thin wrapper module that splits the mask
+column out of `x` and passes it as `attention_mask`; its `pos_emb` is
+`"rotary"` (index-based) or `"none"` — for set data use `"none"` and
+carry the *coordinate* as row features (raw plus Fourier features), and
+**set `is_causal=False`** (the default is `True`, which would make a
+spectrum's rows attend only to earlier rows). *W3.6*: `run_sbc(thetas,
+xs, posterior, num_posterior_samples=1000, reduce_fns="marginals", …) ->
+(ranks, dap_samples)`, `check_sbc(ranks, prior_samples, dap_samples,
+num_posterior_samples=1000) -> dict`, `run_tarp(thetas, xs, posterior,
+references=None, num_posterior_samples=1000, …, z_score_theta=True) ->
+(ecp, alpha)`, `check_tarp(ecp, alpha) -> (atc, ks_pval)`. *W3.4*: swyft's
+latest release is **0.4.5 of September 2023**, pinned to
+`pytorch-lightning >=1.5.10,<=1.9.5`, so it cannot be installed beside
+torch 2.13 without an old Lightning — the maturity note's first fact, and
+a strong signal that TMNRE is better expressed through sbi's own `NRE`
+plus `RestrictedPrior` rounds than by reviving the harvest (Peter rules;
+see W3.4).
+
 ### W3.0 — Phase 2 carry-over housekeeping [S; Sonnet]
 The four findings the Phase 2 handoff lists, none of them a contract change.
 (1) The name `ampere` on PyPI is an unrelated battery-modelling package, so
@@ -957,7 +986,11 @@ embedding="set")` trains and samples on a two-dataset toy problem in the
 
 ### W3.4 — TMNRE: reviving the swyft implementation [M; Opus; conditional]
 Plan §5: "revive the swyft TMNRE implementation from
-`docs/design/harvest/swyft/`". **Gate first**: the item begins with a
+`docs/design/harvest/swyft/`". **Gate first** (the first fact is already in: swyft 0.4.5, September
+2023, pinned to pytorch-lightning ≤ 1.9.5 — see the facts paragraph
+above; Fable's recommendation is the "express through sbi's `NRE` rounds"
+option, and Peter may rule on the facts without spending an agent on the
+note): the item begins with a
 one-page maturity note — does swyft install alongside sbi 0.27 and torch
 2.13 in the `sbi` environment today (it is a PyTorch-Lightning package,
 last seen active 2024), what its truncation offers that `sbi`'s `NRE` +
