@@ -156,14 +156,18 @@ Monte Carlo noise looks like at this budget.
 
 Two details of how the study is set up matter more than they look.
 
-* **The joint problem needs a ``sample()``.** ``PoissonFamily`` refuses to
-  provide one by default — a ``log_prob`` says how a datum is scored, not
-  how one is generated, and ampere will not guess an observation process.
-  For a counting experiment there is nothing to guess, so the example's
-  ``CountingPoisson`` subclass supplies it in three lines. That is the
-  supported route the refusal itself names, and it is why the *WStat*
-  problem still cannot be simulated from: its profiled background estimate
-  is a function of the very counts a draw would have to produce.
+* **The joint problem needs a ``sample()``.** ``PoissonFamily`` supplies
+  one: for a counting experiment there is nothing to guess — the
+  observation process *is* a Poisson draw at the predicted rate — so the
+  draw is the core's own. (It was not always: the family refused by
+  default, on the general principle that a ``log_prob`` says how a datum is
+  scored and not how one is generated, and the example carried a
+  three-line subclass. This study is the use case that retired the refusal
+  for the three families whose generative form their density already
+  fixes.) The refusal itself stands wherever the observation process is
+  genuinely undetermined, which is why the *WStat* problem still cannot be
+  simulated from: its profiled background estimate is a function of the
+  very counts a draw would have to produce.
 * **Simulation-based calibration averages over the prior it draws from.**
   Run under the example's broad ``NORM_PRIOR``
   (:math:`\log\mathcal{U}(0.5, 40)`), most prior draws are *bright*
