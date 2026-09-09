@@ -638,7 +638,15 @@ Not scheduled, but the contracts must not paint them out:
   archived single-object fits via importance reweighting under population
   hyperpriors (Hogg-style). Hook — **decided**: every run stores per-sample
   `log_likelihood` and `log_prior` (§4.6); a population module can then be
-  built entirely on stored InferenceData files.
+  built entirely on stored InferenceData files. **Constraint added
+  2026-09-10 (Peter, on the inference-extensions memo §8.1)**: population
+  inference over amortised SBI at 10⁴–10⁹ sources will need a columnar,
+  partitioned store rather than one file per source; its design waits for
+  the population work, but nothing landed before then may exclude it — no
+  results or training-set format may assume one file per source, and the
+  per-draw columns reweighting needs (`log_prior`, the proposal's own
+  log-density, a log-ratio where one exists) stay separable from per-run
+  provenance.
 - **(c) Model emulation**: an emulator is just a Model trained on
   (θ, ModelResult) pairs that `simulate()` already produces; it satisfies
   the same contract (channels included) and is differentiable even when the

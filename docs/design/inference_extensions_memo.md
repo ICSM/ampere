@@ -450,6 +450,47 @@ recall an author or a keyword, the question is worth settling, because a
 method that is (i) is a diagnostic rather than an inference engine, and
 should be filed with the profile-interval tools of §3.1.
 
+#### 8.2.1 Identified (2026-09-10): Rizzato & Sellentin 2022, arXiv:2203.05009
+
+Peter's recollection was "Extremely expensive likelihoods: a
+variational-Bayes solution for precision cosmology" (Rizzato & Sellentin
+2022; MNRAS 2023). Checked against the paper: the variational family is a
+generalisation of the **DALI** expansion (Sellentin, Quartin & Amendola
+2014) — a Taylor expansion of the log-posterior about the mode carried to
+cubic and quartic terms in a form that stays positive-definite, so the
+density is non-Gaussian but parametric; the fit minimises a **quadratic
+loss** between the family and the posterior *values at a fixed set of
+points*, not an ELBO; **no gradients**; the points are whatever is already
+in hand (an old chain, a simulation grid) rather than adaptively chosen;
+**no evidence** is produced. The numbers Peter remembered are the paper's
+2-D marginals — **14–45 evaluations** — while the full 7-D KiDS-450
+posterior took ~18 000 real evaluations plus 8 900 artificial zero-density
+points (0.6 % of the original chain), so the handful-of-evaluations claim
+is per-marginal and the full-dimensional cost is much larger.
+
+Fit for ampere, and one observation that makes it more interesting than
+the surrogate family for one use case:
+
+- It is slot A in the weakest sense — it needs log-posterior *values*, at
+  points it does not choose — and its output is a parametric density, so
+  it goes through §5.3 (`ampere_approximation = "dali"`) and §5.2 (draws
+  by sampling the cheap analytic form, with its log-density stored).
+- **Its "only at pre-selected points" setting is ampere's training set.**
+  A §11 training set stores `(θ, ModelResult)` for a whole budget, and the
+  log-likelihood at every stored θ is then a *likelihood* evaluation on
+  stored model outputs — no simulator call. So this method is a
+  post-processing consumer of a budget plus an observation, in the same
+  position as SBI but returning a parametric posterior rather than a
+  trained network, and it can be run on a budget that was simulated for
+  something else. That is the reading with a use: a quick,
+  gradient-free, no-training posterior from an existing budget, and a
+  cross-check on an SBI posterior trained from the same one.
+- Its marginal-only mode is diagnostic-grade — a 2-D contour from a few
+  dozen points is a look, not an inference — and belongs with the
+  profile tools of §3.1 rather than the engines.
+- Placement: tier 3, "budget-reuse posterior", beside the surrogate
+  family; VBMC/GPry remain the choice when the points *can* be chosen.
+
 ### 8.3 `margarine` (Bevins et al. 2023, MNRAS 526, 4613)
 
 What it does: trains a masked autoregressive flow (or a KDE) on posterior
@@ -557,4 +598,10 @@ population reweighting at scale, and retroactive density emulation on
 archives — and should be the first of the six taken. And a seventh item:
 **a columnar, partitioned output format for amortised runs over many
 sources** (§8.1), designed before the population module rather than after
-the first 10⁷-source run shows one file per source does not work.
+the first 10⁷-source run shows one file per source does not work. **Ruled by Peter 2026-09-10**: the columnar store waits for
+drafting until population work begins, on the condition that nothing
+landed in the meantime excludes it — concretely, no results or
+training-set format may assume one file per source, and the per-draw
+columns that reweighting needs (`log_prior`, the proposal's log-density,
+a ratio where one exists) must stay separable from the per-run
+provenance. That constraint is recorded in the plan's design horizon (b).
