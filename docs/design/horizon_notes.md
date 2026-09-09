@@ -272,3 +272,124 @@ uncertainty column by default; W3.1 slice 2 and W3.2 leave a `context=`
 slot in `simulate_many`/`SBIEngine` (accepting `None` today) and record it
 in provenance; the full context machinery is a Phase 3 follow-on item
 drafted when W3.3 lands, or a Phase 5 item if the budget is spent.
+
+## Follow-ups from the second exchange (2026-09-09)
+
+### 4/5. Embedding architectures suited to functional and process data
+
+The W3.3 encoding gives any embedding rows of `(coordinates, value, σ,
+mask, dataset id)`. What the network does with them decides how much
+amortisation is real. In rough order of how well they fit astronomical
+data, and all reachable through W3.2's `embedding=` slot (sbi 0.27 ships
+the first two; the rest are user `nn.Module`s):
+
+- **DeepSets / permutation-invariant pooling** (sbi's
+  `PermutationInvariantEmbedding`): the baseline. Invariant to row order
+  and count, so it handles irregular sampling and missing data; but the
+  per-row network sees each point alone, so it learns *local* features and
+  relies on pooling for the rest. Cheap, and the right first experiment.
+- **Set transformers / attention over rows** (sbi's `TransformerEmbedding`
+  with Fourier-feature positional encodings of the *coordinate*, not the
+  index): attention lets rows interact, so line shapes, band edges and
+  correlated residual structure are representable; masking is native. The
+  natural default for spectra of varying length and grid.
+- **Neural-process encoders**: the Conditional Neural Process family
+  (Garnelo et al. 2018; Attentive NP, Kim et al. 2019; **Convolutional
+  CNP**, Gordon et al. 2020; Transformer NP, Nguyen & Grover 2022) was
+  built for exactly this — off-grid functional observations with varying
+  sampling and missing data, treated as a *process*. The ConvCNP encoder
+  ("SetConv" onto a fine internal grid, then a CNN) is translation
+  equivariant along the coordinate, which is the right inductive bias for
+  a spectrum whose features can appear anywhere, and it is explicitly
+  discretisation-invariant. Any of these encoders is a valid embedding
+  for NPE; the NP *decoder* is not needed because the density estimator
+  plays that role.
+- **Neural-operator branch networks** (DeepONet's branch net, Lu et al.
+  2021; FNO encoders): coordinate-conditioned and discretisation-invariant
+  by construction — the same ideas the plan's design horizon (c) names
+  for coordinate-conditioned emulators, so an encoder written for
+  emulation is reusable as an embedding and vice versa.
+- **Noise awareness**: whichever architecture, feed `σ` (and `log σ`, and
+  the whitened `y/σ`) as row features — a network cannot condition on
+  error bars it cannot see — *and* make the σ-pattern a simulator input
+  (the observation context of §4), because the encoder can only be
+  invariant to what the training set varied.
+- **Instrument context**: settings that are not per-row (resolution,
+  filter identity, exposure) enter as a per-set conditioning vector, most
+  simply through FiLM layers (Perez et al. 2018) or as extra tokens in an
+  attention encoder. That is what turns "amortised over sampling" into
+  "amortised over instruments".
+- **Distributional data**: where the observation is itself a set of draws
+  (a population of posterior samples, a Monte Carlo error budget), a
+  DeepSets encoder over the draws is the standard treatment, and it
+  connects to design horizon (b)'s population post-processing.
+
+**Practical recommendation.** W3.3 lands set and transformer embeddings
+because sbi ships them. A ConvCNP-style encoder is the first *experiment*
+worth running once W3.6's calibration machinery exists to judge it — an
+`examples/sbi/` script, not a contract change. Everything above consumes
+the same encoding, so nothing in Phase 3 forecloses any of it.
+
+### 3. Interferometry as a second motivation for multi-task noise
+
+Peter's addition: interferometric data can also carry cross-talk between
+flux, amplitude and phase, and — the stronger, more general point —
+**misspecification is correlated across channels even when the data has
+no intrinsic cross-talk**, because one wrong sky model produces coherent
+errors in every derived quantity. That argument applies to any vector
+observable derived from one model: Stokes components, RA/Dec, visibility
+amplitude and phase (or real and imaginary parts), multi-band fluxes. It
+makes a coregionalised misspecification model the *default* shape for
+vector data rather than a special case for instrumental leakage. For
+visibilities the coordinate is `(u, v)`, so the shared-grid Kronecker
+trick of §3 still applies but the per-output solve is 2D — a dense solve
+at thousands of baselines, or a §2 solver beyond that. Phase 4's
+interferometry item (`docs/design/modalities/interferometry.md`) should
+leave the channel pairing visible so Phase 5 can bind a joint noise model
+to it.
+
+### 1. Kernels: what exists, what is missing, and sparsity as the guard
+
+**The kernel surface today is thinner than "already good".**
+`ampere.core` has two kernels, `Matern32` and `SquaredExponential`; there
+is **no kernel algebra** (no sum or product of kernels); and the celerite
+translation table (`_QUASISEPARABLE_TERMS`) is private with one entry. A
+user-defined `Kernel` subclass works on the dense path — the ABC is public
+and `matrix`/`diagonal` are all a `DenseGP` needs — but it cannot reach
+the O(N) path, because there is no public way to register its celerite
+representation. So: users can define kernels; they cannot make them fast,
+and they cannot combine them. Fringing in M2 is currently absorbed by a
+stationary Matérn-3/2 (it stays calibrated), not modelled as a periodic
+component.
+
+**What a modest item would add** (Phase 4 or 5 — it is not on the SBI
+critical path, but it is small and every later kernel idea sits on it):
+`Sum` and `Product` kernels with the obvious `KernelSpec` composition and
+celerite translation (a sum of quasiseparable terms is quasiseparable; a
+product is not in general and is refused on the O(N) path); a **damped
+periodic / SHO term** — celerite's `SHOTerm` with `Q > 1/2`, or the
+`RotationTerm` pair — which is exactly a quasi-periodic ripple and so the
+right component for fringing; Matérn-1/2 and -5/2 as celerite-exact
+siblings; a **public `register_quasiseparable_term`** so a user kernel
+declares its own celerite builder; and, with sums in hand, a
+spectral-mixture kernel is simply a sum of SHO terms with free
+frequencies. Conformance rows: each new term against a dense evaluation
+of its closed form, and the sum against the sum of matrices.
+
+**Sparsity-inducing priors on the components, marginalised.** Peter's
+point generalises to every noise model beyond `IndependentNoise`: once a
+noise model is a *sum* of components (several kernels, plus warps), give
+the component amplitudes a sparsity-inducing prior so the data switch off
+what it does not need, and let the GP marginal likelihood integrate the
+latent functions out — that marginalisation is already what the flexible
+likelihood does; only the hyperparameters are sampled. The continuous
+choice is the **regularised horseshoe** (Piironen & Vehtari 2017): a
+half-Cauchy global scale and per-component local scales, expressible today
+with `HierarchicalPrior` (`parameters.md` §9) without any new contract
+surface; spike-and-slab is discrete and stays out (`lowering.md` §12 Q1
+refuses discrete bijections). Two practical notes for when it is tried:
+NUTS on horseshoe hierarchies wants the *non-centred* parameterisation, so
+the lowering rules should offer it (a `lowering.md` §3 note, not a
+contract change); and the same prior on warp-knot increments is the
+cleanest answer to §1's degrees-of-freedom risk — the identity warp is the
+sparse solution, and the data must pay to leave it.
