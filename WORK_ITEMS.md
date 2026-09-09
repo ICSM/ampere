@@ -695,7 +695,7 @@ restructures `docs/development.md` and `CLAUDE.md` for Phase 3.
 namespaces; README install routes verified by running them in a scratch
 environment; the annotation list in the report; all three gates unchanged.
 
-## Phase 3 — The SBI layer (drafted 2026-09-08 by Fable; **approved by Peter 2026-09-08** with W3.1 revised into two slices from his three notes, and W3.8–W3.12 added from his rulings; W3.1's revised text approved 2026-09-09; dispatch open)
+## Phase 3 — The SBI layer (drafted 2026-09-08 by Fable; **approved by Peter 2026-09-08** with W3.1 revised into two slices from his three notes, and W3.8–W3.14 added from his rulings; W3.1's revised text approved 2026-09-09; dispatch open)
 
 Written from `DEVELOPMENT_PLAN.md` §5 Phase 3, its §6 deferred choices and
 §7's trained-artefact trap, `inference.md` §13 and limitation 17.5,
@@ -1270,6 +1270,37 @@ identical parameters refuses the append and names the hash; `artefacts.py`
 has no private fingerprint code left; all four gates green (schema bump
 touches every run); lint/format/pyrefly clean.
 
+### W3.14 — Generative forms for the unambiguous families: `sample()` on Poisson, Student-t and complex Gaussian [M; Opus] (proposed 2026-09-09, awaiting Peter)
+Peter's ruling of 2026-09-09 ("implement further core `sample` families
+when we have a use case") met its use case in W3.6: a counting
+experiment cannot `simulate(observe=True)`, so neither SBC nor SBI on
+count data works without the user subclassing `PoissonFamily` to add
+three lines. `inference.md` §13's refusal was written for families whose
+observation process is genuinely ambiguous; Poisson counts, Student-t and
+complex Gaussian are not — each has one generative form that its
+`log_prob` already fixes. This item adds `sample(predicted, noise, rng)`
+to those three in `ampere.core` (Poisson: `rng.poisson(predicted)`;
+Student-t: location-scale with the family's degrees of freedom, using the
+noise model's σ as the scale exactly as `log_prob` does; complex Gaussian:
+independent real and imaginary parts with the noise model's σ — circular
+symmetry, as the family's density assumes), keeping the specific refusal
+for `cauchy`-with-no-scale and any family that does not fix its form,
+and adds the **native twins** on torch and jax through the presence-based
+dispatch W3.1 slice 2 left open (the pathway Peter asked to keep open —
+this item is its first use). Latent-GP consumers (Poisson with a GP rate)
+sample the latent through `latent_transform` first, as the Gaussian GP
+branch does. **Spec**: §13's "what can be sampled" amended (*Amended
+W3.14*), one decision-log row (a §4.4 contract change: the refusal
+becomes the exception rather than the default for these families).
+**Depends:** W3.6 (merged). **Blocks** nothing.
+**Accept:** conformance rows per backend: 4 000 draws of each family
+match its `log_prob`'s implied moments (Poisson mean = variance =
+`predicted`; Student-t scale and ν; complex Gaussian's real/imaginary
+variances and zero cross-covariance), numpy path the oracle and native
+twins compared distributionally; the W3.6 WStat example's `CountingPoisson`
+subclass deleted; the refusal text unchanged for families still refusing;
+all four gates green; lint/format/pyrefly clean ×3.
+
 ### W3.10 — Automatic paging above the plot caps, with a loud warning [S; Sonnet; not urgent]
 Ruled by Peter 2026-09-08 (on W2.8's confirmed caps): above
 `MAX_CORNER_VARIABLES`/`MAX_TRACE_VARIABLES`, `plot_corner` and `plot_trace`
@@ -1399,3 +1430,4 @@ coordinates and the scoring of draws) and W3.6 (the calibration statistics).
 | W3.3 | merged 2026-09-09 at `1ca558a` (Opus-authored, Fable-reviewed; no fixes needed — branch gates dev 1834/184 and sbi 2534/55, lint/format/pyrefly clean ×2; merged-master gates after W3.3+W3.5: dev 1867/191, jax 2338/122, sbi 2574/55, torch 2509/120 on the re-run after two first-run failures were explained and fixed — see the handoff). `ampere/core/encoding.py`: `EncodingLayout.from_datasets` (statistics and the mask frozen from the observed containers), `encode`/`encode_observations`/`decode`/`unpack` with `per_dataset` views and `grid_shape`; `SBIEngine(layout="flat"|"set"|EncodingLayout)` with `embedding="set"|"transformer"` behind wrappers that convert the one mask column (NaN rows / `attention_mask`), `z_score_x="none"` for set layouts, the layout by name, hash and in full in the run's and training sets' attrs; `encoding.md` bound and frozen with seven *Amended W3.3* sentences (decision-log row). Found: a latent train/inference skew in W3.2's flat path (mask read lazily) closed structurally; **two upstream sbi 0.27 bugs** — the set embedding's valid-row count reads the first batch element only, and the transformer drops `attention_mask` unless causal — both worked around in the wrappers (worth upstream issues). Carried: `z_score_x="none"` does not silence sbi's constant-column warning; `row_cap` above the observation is legal but inert until per-dataset capacity (§9.1). Open for Peter: the set embeddings' default `output_dim` (inherits legacy's `2·free_size`, arguably narrow for a pooled set); the transformer's last-token read (a CLS token or masked-mean head is a wrapper away, deliberately not added) |
 | W3.5 | merged 2026-09-09 at `6dba1f3` (Sonnet-authored, Fable-reviewed; the `_sbi.py` wiring applied by the orchestrator in the following commit, adapted to W3.3 — plus `__reduce__` hooks on the lazily-built prior and wrapper classes, without which a trained posterior could not be pickled; branch gates dev 1813/172, sbi 2501/55). `ampere.results.artefacts`: `ArtefactKey`/`artefact_key`/`ArtefactStore` (`get`/`put`/`diff`/`train_or_load`), JSON sidecar of the ingredients so a miss names what changed, corrupt or hand-edited artefacts a warned miss, no partial keys, no force; `model_hash` added beyond the item text. Carried (real, W2.8 code): `append_training_set` checks only `ampere_spec_hash`, so a model change with identical parameter names could append onto a set simulated under the old model — small follow-up item to compare `model_fingerprint` too. Open: whether `model_hash` should be promoted into `provenance.py` as a public fingerprint |
 | W3.8 | merged 2026-09-09 (Opus-authored, Fable-reviewed; no fixes needed — branch gates dev 1890/205, jax 2375/136, torch 2545/134 with the one failure being W3.5's versions test already fixed on master at `ed3eaaf`; lint/format/pyrefly clean ×3; merged-master gates all green: dev 1890/205, jax 2375/136, torch 2546/134, sbi 2611/69). **Root cause found one level below the item's**: solvers build covariances by calling `Kernel.matrix`, so a core kernel in a native solver detaches the graph — the kernel now joins `capability_parts` with the four flags. `FittingProblem(allow_foreign_parts=True)`, `foreign_parts`/`foreign_part_names`, qualified class names in refusals, `differentiable` forced `False` under the opt-in, `ampere_foreign_parts` in provenance (conditional, no schema bump — folded into W3.12's), `foreign_parts_refusal` from `realise` and both `LoweredProblem`s, `_refuse_foreign_parts` ahead of NUTS/VI's other checks; the fast path falls back through `realise`'s refusal with no engine change. The callback route (torch detach hop, jax `pure_callback`) **measured and rejected**: 1.2–1.6× where all-native is 1.4–1.7× (torch) or 5–7× (jax). Accepted at review: presence of `ampere_foreign_parts` is the flag (no separate boolean — the attr answers "which pieces got no gradient"); the working name kept. Carried: torch `noise.py`'s `_check_one_device` is partly redundant with the new check but still needed at noise-model construction; `tests/gpu` now also catches a CPU kernel in a GPU problem (unexercised) |
+| W3.6 | merged 2026-09-09 at `d25d8a5` (Opus-authored, Fable-reviewed; no fixes needed — branch gates dev 1900/200, sbi 2615/56, lint/format/pyrefly clean ×2, docs build clean; merged-master gates recorded in the handoff). `ampere.results.calibration` (`calibration_dataset`, `sbc` — the Talts et al. refit loop with a duck-typed `engine_factory` and `replace_observations` — `attach_calibration`), `SBIEngine.calibrate` over `run_sbc`/`check_sbc`/`run_tarp`/`check_tarp` on the run's own layout (1.2 s at 100×100 after a 13.5 s train), `plot_sbc_ranks` (99 % binomial band, failure shape named) and `plot_coverage`; the `calibration` group (decision-log row); `diagnostics.md` §11 landed. Verified against a closed-form linear-Gaussian posterior (ranks uniform within 3 SE) and that a temperature-scaled posterior *fails* (`ks p` 5e-9). **The WStat coverage study** (W2.9's request, 128 trials × 200 draws, 21 min for both routes): under the example's broad prior nothing fails — SBC averages over a prior that is mostly bright sources — so the study runs under the faint prior `log-U(0.5, 3)` by default with `--broad-prior` as the comparison; there WStat's spectral index fails uniformity (`p = 4×10⁻⁴`, mean rank fraction 0.558, rank variance below 1/12: bias *and* overstated precision) where the full joint fit on the same simulations does not (`p = 0.18`); the page states the two qualifications. Carried: `PoissonFamily.sample()` is unimplemented so count data cannot `simulate(observe=True)` — the example subclasses it; **this is the use case Peter's ruling of 2026-09-09 (further core `sample` families) was waiting for** — W3.14 drafted; `replace_observations` rebuilds from the public surface and should delegate to a `FittingProblem.replace` if one ever lands; `pyrefly` on `PATH` resolves to a miniforge binary with no project deps (use `pixi run typecheck`); the agent briefly edited the shared checkout by `cd`-ing to it and restored it byte-for-byte (verified clean at the merge) — the worktree onboarding should say the isolation guard does not block file edits after a `cd`. **Open for Peter**: the study's faint-prior default (recommendation: keep — the broad prior answers a question nobody asked, and the flag keeps the comparison one command away) |
