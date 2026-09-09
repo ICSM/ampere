@@ -9,8 +9,11 @@ complete** (closed 2026-09-08): the core contracts are frozen
 (`spec-v1.0`, 2026-09-03), both modern backends (`ampere.backends.torch`,
 `.jax`) implement them alongside the numpy reference backend, milestone M2
 (the flagship misspecification validation) is reached, and the
-documentation reflects what landed. **Phase 3 (the SBI layer) begins in
-clean sessions** — the procedure is in `docs/development.md`'s "⚡ Pick up
+documentation reflects what landed. **Phase 3 (the SBI layer) is in
+progress** (since 2026-09-08): `simulate_many` with its executor protocol,
+the `SBIEngine` over sbi 0.27, the coordinate–value–mask encoding, artefact
+caching and the foreign-parts opt-in are merged; the live state, what is in
+flight and what comes next are in `docs/development.md`'s "⚡ Pick up
 here". Before any non-trivial work, read:
 
 - **`DEVELOPMENT_PLAN.md`** — the source of truth: decisions taken, target

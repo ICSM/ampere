@@ -54,11 +54,21 @@ work.
   freeze's adversarial pass ran as Fable + `gpt-5.6-terra`, sol being
   blocked). Historical mapping: Phase 0 to Sonnet; contract specs
   Fable-drafted or Fable-reviewed; mechanical companions to Sonnet/Opus.
-- Phase 2 (current, W2.1–W2.11): backend tracks W2.4/W2.5 to Opus, one
-  per track (torch, jax), conformance suite as the cross-check;
-  well-specified items (W2.1–W2.3, W2.6–W2.9, W2.11) to Sonnet or Opus by
-  judgement density; cross-model adversarial review (terra, until sol is
-  available) at milestone M2 and for anything touching the frozen §4
-  contracts, likelihood/GP mathematics, or lowering rules.
+- Phase 2: **complete** (closed 2026-09-08). Backend tracks W2.4/W2.5 went
+  to Opus, one per track, with the conformance suite as the cross-check;
+  well-specified items to Sonnet or Opus by judgement density; the
+  cross-model passes are owed retroactively (Codex quota) — the queue is
+  in `docs/development.md`.
+- Phase 3 (current, the SBI layer, W3.x): contracts and integration to
+  Fable (the encoding contract was Fable-drafted before its item ran);
+  items needing judgement within the spec (`simulate_many`, the engine,
+  the encoding, native sampling, foreign parts, calibration, TMNRE) to
+  Opus; well-specified items (housekeeping, docs pages, caching, CI, the
+  embedding-readout and model-hash follow-ups) to Sonnet. Two agents run
+  in parallel only with explicit file ownership in both prompts, and all
+  gates serialise through `flock /tmp/ampere-gate.lock`. Cross-model
+  review of the SBI mathematics (the batched-equals-loop and native
+  sampling claims, the unconstrained prior, the calibration statistics)
+  when the quota returns.
 - Reviews of merged-candidate PRs: orchestrator (Fable) pass always;
   cross-model pass for contract/maths-touching changes.
