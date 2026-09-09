@@ -405,7 +405,6 @@ def _prior_class(torch: Any) -> Any:
                 validate_args=False,
             )
 
-
         def __reduce__(self) -> tuple[Any, tuple[Any, ...]]:
             # The class is built inside a function (torch is imported lazily),
             # so pickle cannot find it by name; a trained posterior carries its
