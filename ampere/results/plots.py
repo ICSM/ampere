@@ -19,7 +19,12 @@ general-purpose ones (:func:`plot_corner`, :func:`plot_trace`,
 possible, which is the whole point of having fixed it first. ``diagnostics.md``
 §6 places families B (residual whiteness, posterior-predictive checks) and C
 (GP localisation) in this namespace, and their entry points are here beside the
-general-purpose ones.
+general-purpose ones. **W3.10** turned :func:`plot_corner` and
+:func:`plot_trace`'s refusal above their caps into automatic paging with a
+loud :class:`ResultsWarning` (``results.md`` §8, *Amended W3.10*), so that a
+run with more variables than fit on one figure gets several instead of
+nothing; ``paginate=False`` keeps the original one-figure-or-refuse
+behaviour for a caller who wants it.
 
 Two obligations that are contract, not style
 --------------------------------------------
@@ -67,6 +72,7 @@ __all__ = [
     "MAX_RANK_PANELS",
     "MAX_TRACE_VARIABLES",
     "AnomalyScoreLike",
+    "ResultsWarning",
     "gp_localisation_caveat",
     "plot_anomaly_score",
     "plot_corner",
@@ -78,22 +84,48 @@ __all__ = [
     "plot_trace",
 ]
 
-#: How many scalar columns :func:`plot_corner` will draw before refusing.
+#: How many scalar columns :func:`plot_corner` will draw on one figure before
+#: paging.
 #:
-#: ``results.md`` §8 requires "a corner plot of a 10⁵-element latent block" to
-#: be "refused loudly rather than attempted" and leaves the threshold to the
-#: implementation. Twenty is where a pairwise grid stops being readable — 400
-#: panels — long before it stops being *drawable*, and the refusal names
-#: ``max_variables=`` so a user who genuinely wants thirty gets thirty by
-#: saying so. There is no defensible value here that is not a judgement; what
-#: is not a judgement is that the default must be small enough to catch the
-#: mistake and overridable enough not to be an obstacle.
+#: ``results.md`` §8 required "a corner plot of a 10⁵-element latent block" to
+#: be refused loudly rather than attempted, and left the threshold to the
+#: implementation; **W3.10** (ruled 2026-09-08, on W2.8's confirmed caps)
+#: changed the refusal itself into automatic paging with a loud warning, so
+#: what this constant now bounds is a *page*, not the whole figure. Twenty is
+#: where a pairwise grid stops being readable — 400 panels — long before it
+#: stops being *drawable*, and :func:`plot_corner` names ``max_variables=`` in
+#: its warning so a user who genuinely wants thirty per page gets thirty by
+#: saying so, or ``paginate=False`` for the one-figure-or-refuse behaviour this
+#: constant originally described. There is no defensible value here that is
+#: not a judgement; what is not a judgement is that the default must be small
+#: enough to catch the mistake and overridable enough not to be an obstacle.
 MAX_CORNER_VARIABLES = 20
 
 #: The same guard for :func:`plot_trace`, where the cost is linear rather than
 #: quadratic in the column count — so the threshold is higher, and it is still
-#: a threshold: a figure of 200 stacked panels is not a diagnostic.
+#: a threshold: a figure of 200 stacked panels is not a diagnostic. Bounds a
+#: page since **W3.10**, exactly as :data:`MAX_CORNER_VARIABLES` does.
 MAX_TRACE_VARIABLES = 40
+
+
+class ResultsWarning(UserWarning):
+    """A plotting call was honoured, but not exactly as asked.
+
+    **Landed at W3.10**, for the one case that surface has so far: paging
+    above :data:`MAX_CORNER_VARIABLES` or :data:`MAX_TRACE_VARIABLES` instead
+    of the refusal ``results.md`` §8 used to require (*Amended W3.10*, on
+    W2.8's confirmed caps — Peter's ruling 2026-09-08 was explicit that
+    "automatic paging with a loud warning is wanted later"). Splitting a
+    corner or trace figure into several pages changes what a caller gets back
+    — a :class:`list` of figures rather than one — silently enough that a
+    script written against the single-figure return could misbehave without
+    ever raising, which is exactly the shape of bug a warning exists to catch
+    before it does. Deliberately a :class:`UserWarning` subclass and not an
+    :class:`~ampere.core.exceptions.AmpereError`: nothing failed, and a
+    caller who wants the old failure back for one call still has it via
+    ``paginate=False``.
+    """
+
 
 #: The mandatory interpretation caveat on every GP-localisation output.
 #:
@@ -152,6 +184,80 @@ class AnomalyScoreLike(Protocol):
 # General-purpose posterior plots
 # ---------------------------------------------------------------------------
 
+#: Passed to :func:`~ampere.results._plotting.parameter_columns` in place of a
+#: caller's ``max_variables`` when paging, so that function's own "refuse
+#: above this many columns" checks never fire — pagination, not refusal, is
+#: what W3.10 wants above the real cap. Not ``math.inf``: the parameter is
+#: typed ``int`` and a run with more columns than this is not a thing that
+#: happens.
+_UNPAGED = 2**30
+
+
+def _paginate_columns(
+    columns: Sequence[tuple[str, np.ndarray]], *, limit: int
+) -> list[list[tuple[str, np.ndarray]]]:
+    """Split *columns* into pages of at most *limit*, in the given order.
+
+    ``results.md`` §8 (*Amended W3.10*): pages are cut in merged-name order,
+    "array blocks kept whole where they fit". A block here is a run of
+    consecutive columns sharing one parameter name — an array-valued
+    parameter's expanded elements, or a lone scalar's single column — so
+    blocks are recovered from the column labels :func:`~ampere.results.
+    _plotting.parameter_columns` already produced (``"name"`` for a scalar,
+    ``"name[element]"`` per element of a block) rather than threaded through
+    as separate state.
+
+    A block that fits in a fresh page but not in the page currently being
+    filled starts a new page rather than splitting — that is "kept whole
+    where they fit". A block bigger than *limit* cannot fit any page whole,
+    so it alone is split into consecutive full pages of exactly *limit*
+    columns, in element order; nothing else the run wants next is added to
+    those pages, which keeps the split block from picking up a stray
+    unrelated column as a neighbour.
+    """
+    blocks: list[list[tuple[str, np.ndarray]]] = []
+    for column in columns:
+        name = column[0].partition("[")[0]
+        if blocks and blocks[-1][0][0].partition("[")[0] == name:
+            blocks[-1].append(column)
+        else:
+            blocks.append([column])
+    pages: list[list[tuple[str, np.ndarray]]] = []
+    current: list[tuple[str, np.ndarray]] = []
+    for block in blocks:
+        if len(block) > limit:
+            if current:
+                pages.append(current)
+                current = []
+            for start in range(0, len(block), limit):
+                pages.append(block[start : start + limit])
+            continue
+        if current and len(current) + len(block) > limit:
+            pages.append(current)
+            current = []
+        current.extend(block)
+    if current:
+        pages.append(current)
+    return pages or [[]]
+
+
+def _warn_paged(*, what: str, total: int, limit: int, n_pages: int) -> None:
+    """The loud warning ``results.md`` §8 requires when paging fires.
+
+    Names the page count, the cap and the ``var_names=`` route to a smaller
+    figure — the three things the item text asks the warning to name — plus
+    ``paginate=False`` for a caller who would rather have today's refusal
+    back for this one call.
+    """
+    warnings.warn(
+        f"{what} of {total} variables exceeds max_variables={limit}, so it was split into "
+        f"{n_pages} pages instead of refused (results.md §8, amended W3.10); each page's "
+        f"figure_metadata records which. Narrow the run with var_names=, raise max_variables= "
+        f"to change how many pages are cut, or pass paginate=False for the old refusal.",
+        ResultsWarning,
+        stacklevel=3,
+    )
+
 
 def plot_corner(
     tree: Any,
@@ -161,6 +267,7 @@ def plot_corner(
     labels: Sequence[str] | None = None,
     truths: Any = None,
     max_variables: int = MAX_CORNER_VARIABLES,
+    paginate: bool = True,
     **kwargs: Any,
 ) -> Any:
     """The pairwise marginal grid.
@@ -176,9 +283,21 @@ def plot_corner(
     the whole block; its elements are labelled from the dimension's own
     coordinate where it has one — a plate's coordinate is the dataset labels
     (``hierarchical_population.md`` §10.2) — and by integer index where it does
-    not. A corner plot of a 10⁵-element latent block is a mistake this function
-    refuses loudly rather than attempts: the refusal names the variable, its
-    size and ``max_variables``, which is the deliberate override.
+    not.
+
+    **Paging (W3.10).** More than ``max_variables`` columns used to be refused
+    outright; now they are **paged** instead — split into consecutive figures
+    each within the cap, in merged-name order, with an array-valued block kept
+    whole on one page where it fits on one at all. A block bigger than
+    ``max_variables`` on its own cannot fit any page whole, so it alone is
+    split across full pages of exactly ``max_variables`` columns, in element
+    order. Paging fires a :class:`ResultsWarning` naming the page count, the
+    cap and the ``var_names=`` route to a smaller figure instead, and every
+    page's :func:`~ampere.results.figure_metadata` carries ``"page"`` as
+    ``"i of n"``. ``paginate=False`` restores the original behaviour exactly:
+    one figure or a :class:`~ampere.core.exceptions.ResultsError` naming the
+    variable, its size and ``max_variables``, for a caller who needs a single
+    figure and would rather fail than receive a list.
 
     Prior-rejected draws are **excluded**, not plotted. Their θ is a perfectly
     good number and stored as one (``results.md`` §5), but the point carries
@@ -196,31 +315,127 @@ def plot_corner(
         that stored one.
     labels
         Axis labels, one per **column** after array-valued blocks have been
-        expanded. The merged names are the default and are usually the right
-        answer; a mismatched length is refused rather than silently truncated.
+        expanded, across *every* page. The merged names are the default and
+        are usually the right answer; a mismatched length is refused rather
+        than silently truncated.
     truths
         Reference values: a mapping of merged name to value (arrays allowed,
-        matching the block), or a sequence in column order. ``None`` draws no
-        reference lines.
+        matching the block), or a sequence in column order across every page.
+        ``None`` draws no reference lines.
     max_variables
-        The refusal threshold above. Raising it is a deliberate act.
+        The per-page cap above. Raising it is a deliberate act.
+    paginate
+        Page above the cap (the default) rather than refuse. ``False``
+        restores the pre-W3.10 refusal, unchanged, for a caller who needs
+        exactly one figure or a hard failure.
     **kwargs
         Forwarded to :func:`corner.corner`.
 
     Returns
     -------
-    matplotlib.figure.Figure
-        With :func:`~ampere.results.figure_metadata` carrying the column labels
-        and the number of draws actually used, so a caller can tell a thinned
-        or prior-rejected-heavy run from a full one without re-reading it.
+    matplotlib.figure.Figure | list[matplotlib.figure.Figure]
+        A single :class:`~matplotlib.figure.Figure` — exactly today's return
+        — for every call whose columns fit within ``max_variables``, paginated
+        or not. Only a call that actually pages returns a :class:`list` of
+        figures, in page order. Each figure carries
+        :func:`~ampere.results.figure_metadata` with the column labels drawn
+        on it and the number of draws actually used, so a caller can tell a
+        thinned or prior-rejected-heavy run from a full one without
+        re-reading it; a paged figure's metadata also carries ``"page"``.
     """
     corner = _p.require_corner()
     dataset = _p.require_sampling_group(tree, group)
     names = _p.select_names(
         [str(name) for name in dataset.data_vars], var_names, what=f"{group} variable"
     )
-    columns = _p.parameter_columns(dataset, names, limit=max_variables, what="a corner plot")
     keep = _p.scored_draws(tree)
+    if not paginate:
+        columns = _p.parameter_columns(dataset, names, limit=max_variables, what="a corner plot")
+        drawn_labels = _resolve_labels(columns, labels)
+        return _render_corner_page(
+            corner,
+            columns,
+            keep=keep,
+            drawn_labels=drawn_labels,
+            truths=_corner_truths(truths, columns),
+            page=None,
+            **kwargs,
+        )
+    columns = _p.parameter_columns(dataset, names, limit=_UNPAGED, what="a corner plot")
+    drawn_labels = _resolve_labels(columns, labels)
+    resolved_truths = _corner_truths(truths, columns)
+    pages = _paginate_columns(columns, limit=max_variables)
+    if len(pages) == 1:
+        return _render_corner_page(
+            corner,
+            pages[0],
+            keep=keep,
+            drawn_labels=drawn_labels,
+            truths=resolved_truths,
+            page=None,
+            **kwargs,
+        )
+    _warn_paged(what="a corner plot", total=len(columns), limit=max_variables, n_pages=len(pages))
+    figures = []
+    offset = 0
+    for index, page_columns in enumerate(pages, start=1):
+        span = len(page_columns)
+        figures.append(
+            _render_corner_page(
+                corner,
+                page_columns,
+                keep=keep,
+                drawn_labels=drawn_labels[offset : offset + span],
+                truths=None if resolved_truths is None else resolved_truths[offset : offset + span],
+                page=(index, len(pages)),
+                **kwargs,
+            )
+        )
+        offset += span
+    return figures
+
+
+def _resolve_labels(
+    columns: Sequence[tuple[str, np.ndarray]], labels: Sequence[str] | None
+) -> list[str]:
+    """The axis labels to draw, one per column across every page.
+
+    Shared by :func:`plot_corner`'s paginated and unpaginated paths so a
+    caller's ``labels=`` is validated once, against the *total* column count,
+    rather than once per page — a mismatch is reported the same way whether
+    the run pages or not.
+    """
+    drawn_labels = [label for label, _ in columns]
+    if labels is None:
+        return drawn_labels
+    if len(labels) != len(drawn_labels):
+        raise ResultsError(
+            f"{len(labels)} label(s) were given for {len(drawn_labels)} column(s) "
+            f"{drawn_labels}. An array-valued parameter is one variable and several "
+            f"columns (results.md §4), so the labels are per column, not per variable."
+        )
+    return [str(label) for label in labels]
+
+
+def _render_corner_page(
+    corner: Any,
+    columns: Sequence[tuple[str, np.ndarray]],
+    *,
+    keep: np.ndarray | None,
+    drawn_labels: Sequence[str],
+    truths: Any,
+    page: tuple[int, int] | None,
+    **kwargs: Any,
+) -> Any:
+    """One figure's worth of :func:`plot_corner`, unpaged or one page of many.
+
+    Split out of :func:`plot_corner` so that the unpaged path (one call, one
+    figure) and the paged path (one call per page) draw identically — a
+    figure this function returns cannot tell which path produced it, which is
+    the point: paging must not change what one page looks like, only how many
+    there are. ``drawn_labels`` and ``truths`` arrive already resolved and
+    sliced to *columns*; this function only draws.
+    """
     samples = np.column_stack(
         [(values if keep is None else values[keep]).ravel() for _, values in columns]
     )
@@ -230,23 +445,12 @@ def plot_corner(
             "to draw. That is a statement about the run, not about this plot: check the priors "
             "and the sampler's initialisation."
         )
-    drawn_labels = [label for label, _ in columns]
-    if labels is not None:
-        if len(labels) != len(drawn_labels):
-            raise ResultsError(
-                f"{len(labels)} label(s) were given for {len(drawn_labels)} column(s) "
-                f"{drawn_labels}. An array-valued parameter is one variable and several "
-                f"columns (results.md §4), so the labels are per column, not per variable."
-            )
-        drawn_labels = [str(label) for label in labels]
-    figure = corner.corner(
-        samples,
-        labels=drawn_labels,
-        truths=_corner_truths(truths, columns),
-        **kwargs,
-    )
+    figure = corner.corner(samples, labels=list(drawn_labels), truths=truths, **kwargs)
     _p.attach_metadata(figure, "corner.variables", ", ".join(label for label, _ in columns))
     _p.attach_metadata(figure, "corner.draws", str(int(samples.shape[0])))
+    if page is not None:
+        index, total_pages = page
+        _p.attach_metadata(figure, "page", f"{index} of {total_pages}")
     return figure
 
 
@@ -316,6 +520,7 @@ def plot_trace(
     group: str = "posterior",
     combined: bool = False,
     max_variables: int = MAX_TRACE_VARIABLES,
+    paginate: bool = True,
     **kwargs: Any,
 ) -> Any:
     """Per-chain traces and marginals, the convergence eyeball.
@@ -329,9 +534,23 @@ def plot_trace(
 
     Each variable gets a row of two panels — the marginal on the left, the
     trace against draw index on the right — and ``lp`` from ``sample_stats``
-    gets a row of its own at the bottom, because a trace of the parameters
-    without the log-density beside it hides the commonest failure a trace plot
-    exists to catch.
+    gets a row of its own at the bottom of **every page**, because a trace of
+    the parameters without the log-density beside it hides the commonest
+    failure a trace plot exists to catch, whichever page is being read.
+
+    **Paging (W3.10).** More than ``max_variables`` parameter rows used to be
+    refused outright; now they are **paged** instead — split into consecutive
+    figures each within the cap, in merged-name order, with an array-valued
+    block kept whole on one page where it fits on one at all. A block bigger
+    than ``max_variables`` on its own cannot fit any page whole, so it alone
+    is split across full pages of exactly ``max_variables`` rows, in element
+    order. Paging fires a :class:`ResultsWarning` naming the page count, the
+    cap and the ``var_names=`` route to a smaller figure instead, and every
+    page's :func:`~ampere.results.figure_metadata` carries ``"page"`` as
+    ``"i of n"``. ``paginate=False`` restores the original behaviour exactly:
+    one figure or a :class:`~ampere.core.exceptions.ResultsError` naming the
+    count and ``max_variables``, for a caller who needs a single figure and
+    would rather fail than receive a list.
 
     Parameters
     ----------
@@ -346,28 +565,76 @@ def plot_trace(
         each chain separately. The default is per chain, because chains that
         disagree are exactly what this plot is looked at for.
     max_variables
-        Refuse rather than stack more rows than this — the same guard, and the
-        same reason, as :func:`plot_corner`'s.
+        The per-page cap above. Raising it is a deliberate act.
+    paginate
+        Page above the cap (the default) rather than refuse. ``False``
+        restores the pre-W3.10 refusal, unchanged, for a caller who needs
+        exactly one figure or a hard failure.
     **kwargs
         Forwarded to the trace line artist.
 
     Returns
     -------
-    matplotlib.figure.Figure
-        With :func:`~ampere.results.figure_metadata` carrying the number of
-        prior-rejected draws, so the gaps are countable as well as visible.
+    matplotlib.figure.Figure | list[matplotlib.figure.Figure]
+        A single :class:`~matplotlib.figure.Figure` — exactly today's return
+        — for every call whose rows fit within ``max_variables``, paginated
+        or not. Only a call that actually pages returns a :class:`list` of
+        figures, in page order. Each figure carries
+        :func:`~ampere.results.figure_metadata` with the number of
+        prior-rejected draws, so the gaps are countable as well as visible; a
+        paged figure's metadata also carries ``"page"``.
     """
     dataset = _p.require_sampling_group(tree, group)
     names = _p.select_names(
         [str(name) for name in dataset.data_vars], var_names, what=f"{group} variable"
     )
-    columns = _p.parameter_columns(dataset, names, limit=max_variables, what="a trace plot")
     keep = _p.scored_draws(tree)
-    rejected = 0 if keep is None else int(np.count_nonzero(~keep))
-    rows: list[tuple[str, np.ndarray]] = list(columns)
     stats = tree["sample_stats"].dataset if keep is not None else None
+    if not paginate:
+        columns = _p.parameter_columns(dataset, names, limit=max_variables, what="a trace plot")
+        return _render_trace_page(
+            columns, keep=keep, stats=stats, combined=combined, page=None, **kwargs
+        )
+    columns = _p.parameter_columns(dataset, names, limit=_UNPAGED, what="a trace plot")
+    pages = _paginate_columns(columns, limit=max_variables)
+    if len(pages) == 1:
+        return _render_trace_page(
+            pages[0], keep=keep, stats=stats, combined=combined, page=None, **kwargs
+        )
+    _warn_paged(what="a trace plot", total=len(columns), limit=max_variables, n_pages=len(pages))
+    return [
+        _render_trace_page(
+            page_columns,
+            keep=keep,
+            stats=stats,
+            combined=combined,
+            page=(index, len(pages)),
+            **kwargs,
+        )
+        for index, page_columns in enumerate(pages, start=1)
+    ]
+
+
+def _render_trace_page(
+    columns: Sequence[tuple[str, np.ndarray]],
+    *,
+    keep: np.ndarray | None,
+    stats: Any,
+    combined: bool,
+    page: tuple[int, int] | None,
+    **kwargs: Any,
+) -> Any:
+    """One figure's worth of :func:`plot_trace`, unpaged or one page of many.
+
+    ``lp`` is appended to *every* page's rows, not only the last: the trace
+    plot's own reason for drawing it beside the parameters — catching the
+    commonest convergence failure — applies to whichever page is on screen,
+    and it costs one row, not the whole cap.
+    """
+    rows: list[tuple[str, np.ndarray]] = list(columns)
     if stats is not None and "lp" in stats.variables:
         rows.append(("lp", np.asarray(stats["lp"].values, dtype=float)))
+    rejected = 0 if keep is None else int(np.count_nonzero(~keep))
     figure, axes = _p.grid_axes(len(rows), 2)
     for row, (label, values) in enumerate(rows):
         # A prior-rejected draw is a gap, never a zero and never a level line
@@ -388,6 +655,9 @@ def plot_trace(
                 "trace (gaps are prior-rejected draws)" if rejected else "trace", fontsize="small"
             )
     _p.attach_metadata(figure, "trace.rejected_draws", str(rejected))
+    if page is not None:
+        index, total_pages = page
+        _p.attach_metadata(figure, "page", f"{index} of {total_pages}")
     figure.tight_layout()
     return figure
 
