@@ -180,8 +180,13 @@ complex container (W3.2's refusal, kept until a use case says otherwise).
 `unpack(x, layout) -> Unpacked`: named views of the groups (`dataset`,
 `coordinate`, `coordinate_features`, `value`, `value_asinh`, `log_sigma`,
 `mask`, `set_features`, `context`), `features` (every non-mask group
-concatenated, the tensor a per-row network consumes) and `valid` (the
-boolean mask). It is the **only** way a network is meant to read the
+concatenated, the tensor a per-row network consumes), `valid` (the
+boolean mask), and **`per_dataset`**: the same views sliced by dataset in
+`datasets` order (the layout knows each dataset's row offset and count),
+with, for a grid kind (`Image`, `Cube`), a `grid_shape` so the slice can
+be reshaped back to its axes exactly — rows are stored in C-order for
+precisely this reason. `per_dataset` is what lets a hierarchical
+embedding (§9.1) be a wrapper rather than a packing change. It is the **only** way a network is meant to read the
 tensor, and it is the backend-neutral half; the torch-side wrappers in
 `ampere.inference` adapt to what each embedding wants:
 
@@ -211,12 +216,32 @@ every hash unchanged.
 
 ## 9. Deliberate limitations of this draft
 
-1. **One tensor for the whole collection.** A long spectrum beside a few
-   photometric points shares one row set; attention is quadratic in rows.
-   The extension is per-dataset sub-encoders over per-dataset row caps,
-   concatenated (a "multi-set" wrapper) — a later item, not a packing
-   change, since each sub-tensor is this packing restricted to one
-   dataset.
+1. **One tensor for the whole collection, and one pooling rule.** A long
+   spectrum beside a few photometric points shares one row set, and
+   full attention is quadratic in rows; an image (a 256×256 `Image` is
+   65 536 rows) makes a set embedding with full attention infeasible and
+   even a DeepSets pass memory-heavy at SBI batch sizes. **The packing is
+   not the obstacle — the single pooling stage is**, and the extension
+   path is fixed here so it is not re-derived (Peter's question,
+   2026-09-09). (a) *Per-kind first-stage encoders* over `per_dataset`
+   slices: a set or attention encoder for irregular 1D kinds, a CNN or
+   ConvCNP over the reshaped grid for `Image`/`Cube` (the right inductive
+   bias for a grid anyway, and linear in pixels), an identity for a
+   handful of photometric points — each emitting a small number `K` of
+   *tokens* per dataset rather than one vector, so nothing is pooled away
+   before datasets meet. (b) *A second stage over the union of tokens*
+   with dataset-identity embeddings — a set transformer, or a
+   Perceiver-style latent bottleneck (`M` latent tokens cross-attending
+   to all tokens, cost `O(N·M)` rather than `O(N²)`) when the token count
+   is still large. Cross-dataset synthesis — a line strength read against
+   a photometric colour, an image's morphology against a spectrum's
+   slope — happens in stage (b), which sees every dataset's tokens; it is
+   not lost by splitting stage (a) per dataset, because stage (a) does
+   not pool to a scalar. Both stages are wrappers over `unpack`; the only
+   layout addition they need is a per-dataset row cap, which is a field,
+   not a version bump. Until then, `row_cap` and chunking are the
+   controls, and an `Image` observation under a flat set embedding is
+   *allowed* but expensive — the refusal is on rows, not on kind.
 2. **Coordinate features are per axis.** Multi-axis kinds get independent
    Fourier features per axis, not mixed 2D features; sufficient for a
    first encoder, and a wrapper may add its own.
