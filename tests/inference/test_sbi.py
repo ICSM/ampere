@@ -954,10 +954,19 @@ class TestTheLayoutArgument:
             _layout_of(two_dataset_problem(), 17)
 
     def test_a_set_layout_with_no_embedding_is_refused_by_name(self) -> None:
-        """A flow over a padded matrix is not a posterior over an observation."""
-        engine = SBIEngine(two_dataset_problem(), budget=10, layout="set")
+        """A flow over a padded matrix is not a posterior over an observation.
+
+        Checked through ``_embedding_of`` rather than through ``run``, so that it
+        runs in ``dev`` like every other refusal in this section: the refusal is
+        reached before the ``torch`` argument is ever touched, which is why
+        ``None`` is a legitimate thing to pass here and an
+        ``OptionalDependencyError`` is not what a caller should meet first.
+        """
+        from ampere.inference._sbi import _embedding_of
+
+        layout = EncodingLayout.from_datasets(two_dataset_problem().datasets, kind="set")
         with pytest.raises(EngineError, match="no embedding"):
-            engine.run(draws=2)
+            _embedding_of(None, torch=None, features=0, free_size=1, layout=layout)
 
 
 @needs_sbi
