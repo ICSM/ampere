@@ -1,13 +1,15 @@
-# Ampere v2 — Encoding Contract (draft, W3.3)
+# Ampere v2 — Encoding Contract (W3.3)
 
-Status: **draft, 2026-09-09** (Fable, at Peter's request, while W3.1
-slice 2's gates ran). A **post-freeze §4 addition** — `DEVELOPMENT_PLAN.md`
-§5's Phase 3 second bullet ("a canonical coordinate–value–mask tensor
-encoding of containers for embedding networks") made concrete. Recorded in
-the plan's decision log the same day; **W3.3 lands the code and binds this
-text**, amending it in place where the code proves it wrong, and the
-document is frozen at the W3.3 merge. Until then the binding parts are
-§3–§7; §8–§10 are guidance.
+Status: **bound by W3.3, 2026-09-09** (drafted the same day by Fable, at
+Peter's request, while W3.1 slice 2's gates ran). A **post-freeze §4
+addition** — `DEVELOPMENT_PLAN.md` §5's Phase 3 second bullet ("a canonical
+coordinate–value–mask tensor encoding of containers for embedding
+networks") made concrete. Recorded in the plan's decision log the same day;
+**W3.3 landed the code** (`ampere/core/encoding.py`, the wrappers and
+`layout=` in `ampere/inference/_sbi.py`) and every sentence below now
+describes what exists. Sentences the code proved wrong were amended in
+place and are marked ***Amended W3.3***, with the reason; the document is
+frozen at the W3.3 merge. §3–§7 are binding; §8–§10 are guidance.
 
 Where this document and `DEVELOPMENT_PLAN.md` disagree, the plan wins.
 
@@ -53,8 +55,22 @@ context, reserved in `WORK_ITEMS.md`'s Phase 3 section; not this item's).
 - **Layout**: the frozen, hashable description of the packing for one
   fitting problem (§5). Two tensors with the same layout hash are
   comparable; a network trained on one layout refuses another by name.
+  ***Amended W3.3***: the class is spelled **`EncodingLayout`**, not
+  `Layout`. `ampere.core.Layout` already names the container schema's
+  `POINTS`/`GRID` enum and is frozen at `spec-v1.0`, so a second `Layout`
+  in the same namespace would be a collision on the one word that has to
+  stay unambiguous. `EncodingError` likewise lives in `encoding.py` rather
+  than `core/exceptions.py` — this is a post-freeze addition, and its
+  vocabulary arrives with it — and subclasses `ContractError`, so a caller
+  catching that catches this.
 - **Encoded**: the `(rows, columns)` float64 array for one observation, or
-  `(count, rows, columns)` for a batch, plus its layout.
+  `(count, rows, columns)` for a batch, plus its layout. ***Amended
+  W3.3***: it is **always** `(count, rows, columns)`, with `count = 1` for
+  one observation, so the observation the posterior is conditioned on and
+  the rows a network trains on have the same rank and the same code path —
+  which is the reason W3.2's `_summary_of` was already two-dimensional.
+  `Encoded.matrix` is the `(count, rows * columns)` view, and is what a
+  `"flat"` layout hands `sbi`.
 - **Kind of layout**: `"set"` (rows as above; the general case) or
   `"flat"` (W3.2's fixed-size summary — one row, the masked-out values of
   every dataset concatenated in `datasets` order; a degenerate layout
@@ -77,7 +93,12 @@ in brackets; `A` is the layout's coordinate count (§5).
    coordinate at `B` fixed frequencies `π·2^k`, `k = 0…B−1` (NeRF-style
    Fourier features); `B` is a layout parameter, default 4, and `B = 0`
    removes the group. This is how a network with no positional embedding
-   sees *where* a sample is, at more than one scale.
+   sees *where* a sample is, at more than one scale. Ordered axis-major,
+   then band, then `(sin, cos)`. ***Amended W3.3***: an axis a dataset does
+   not have contributes **zeros** here rather than the `sin(0) = 0`,
+   `cos(0) = 1` its zero-filled coordinate column would give. An axis that
+   does not exist must not look like an axis sitting at the centre of its
+   range.
 4. **`value`** [1 or 2] — the whitened value `y/σ` (real and imaginary
    columns when the container is complex, else one column). Where the
    dataset has no uncertainties, the asinh-scaled value (§4) stands in and
@@ -106,6 +127,18 @@ then zeroed by the mask at unpack time (§7) — the contract does not invent
 values for masked samples, mirroring `inference.md` §13's rule for
 `simulate`.
 
+***Amended W3.3***, one clause: a masked sample's encoded value is left as
+the container holds it *unless the result is not finite*, in which case
+the column is **0**. Masking a sample is precisely what a user does about
+a NaN, so a masked sample legitimately holds one; and a non-finite number
+in the stored tensor poisons the training loss, the netCDF round trip and
+`sbi`'s own input validation even where the mask says the row is absent —
+zeroing it downstream is too late. Finite values on masked rows are kept,
+so the round trip is exact there too. The mirror-image rule is a refusal:
+a **retained** sample whose value is not finite, or whose σ is not
+strictly positive and finite, is refused by name (§6) rather than
+sanitised, because there the number is the data.
+
 Rows are ordered dataset by dataset in `datasets` order, and within a
 dataset in the container's storage order (flattened C-order for multi-axis
 kinds). Row order carries **no meaning** — a set embedding must be
@@ -116,6 +149,17 @@ it is fixed so that an encoding is reproducible bit for bit.
 fewer rows is padded to `R` with all-zero rows and `mask = 0`; one with
 more is **refused by name** (the remedy is a larger cap in a new layout,
 or masking). Padding is what lets a batch be one rectangular tensor.
+
+***Amended W3.3***, on where the padding sits and what "fewer rows" can
+mean in v1. The padded rows are at the **tail**, after every dataset's
+block, and each dataset's row count is itself a field of the layout, so a
+container whose sample count differs from the layout's is refused at
+encode (§6) rather than encoded into a shifted block. That is what keeps
+`per_dataset`'s row bounds (§7) exact: a per-dataset capacity, which is
+what a genuinely differently-sampled observation would need, is §9.1's
+reserved extension and a field rather than a version bump. So `R` above
+the observation's own row count is legal and costs only zero rows today;
+it becomes useful when that extension lands.
 
 ## 4. Standardisation, and why it lives here
 
@@ -143,7 +187,7 @@ wander far outside the observed scale is encoded at the tails of `asinh`
 
 ## 5. The layout
 
-A frozen, plain-data record (`Layout`) with, at least:
+A frozen, plain-data record (`EncodingLayout`) with, at least:
 
 - `kind` (`"set"` | `"flat"`), `version` (`ENCODING_VERSION`, 1);
 - `datasets`: for each label in order — `kind` (container class name),
@@ -157,6 +201,29 @@ A frozen, plain-data record (`Layout`) with, at least:
   (derivable, stored for interpretability);
 - `hash`: `hash_of(to_dict())` (`ampere.results.provenance.hash_of`),
   over everything above.
+
+***Amended W3.3***, three corrections to that list.
+
+1. **`rows` is the total sample count, not the valid one**, and `valid` is
+   a second field beside it. §3 requires a masked sample to be a row with
+   `mask = 0` — that is the whole reason the mask is a column — so the
+   valid count cannot also be the row count. `row_cap` defaults to the sum
+   of `rows`.
+2. **The mask itself is in the layout**, as each dataset's `excluded` flat
+   indices. It has to be. `Dataset.effective_mask` is resolved lazily, at
+   the first prediction, so a driver that encodes the observation before
+   simulating and the draws afterwards would read `None` once and a mask
+   the next time — two different packings inside one run, under one hash.
+   Freezing it at layout construction (from `effective_mask` where it is
+   resolved, from the observed container's own mask where it is not) makes
+   the guarantee structural. A differently *masked* observation is
+   therefore a different layout, and `compare` says so.
+3. **`hash_of` is imported inside the method that calls it.**
+   `ampere.core` imports no other ampere namespace at module scope, and
+   `ampere.results` imports `ampere.core`. The recipe is unchanged — the
+   same canonical JSON and the same personalised BLAKE2b digest every
+   other ampere fingerprint uses — so a layout hash sits beside a spec hash
+   in a run's attrs and means the same kind of thing.
 
 The layout is recorded in a run's attrs (`ampere_encoding_layout`, the
 dict; `ampere_encoding_hash`) and in a training set's attrs, is one
@@ -174,6 +241,38 @@ problem's (a *different* observation of the same shape passes — that is
 amortisation; a different *shape* does not); a non-numeric extra
 coordinate (ignored with the layout recording that it was); `"flat"` on a
 complex container (W3.2's refusal, kept until a use case says otherwise).
+
+***Amended W3.3.*** The landed list, in full, each naming the remedy:
+
+- a `row_cap` below the observation's own row count (raise the cap, or
+  mask what should not be fitted) — checked at layout construction, so a
+  cap that could never work is refused before any encoding happens;
+- a layout whose dataset labels, container kinds, axis names, row counts,
+  grid shapes, complex-ness, `has_sigma` or **mask** differ from the
+  problem's, reported field by field with the layout's own hash in the
+  message;
+- a container whose sample count differs from the layout's for that
+  dataset (see §3's padding amendment);
+- a batch whose datasets disagree on how many draws they carry;
+- a dataset the layout knows and the observations lack — a simulation that
+  produced no observation is not an empty one;
+- a retained sample whose value is not finite, or whose σ is not strictly
+  positive and finite (mask it, or declare the dataset without
+  uncertainties and let the `asinh` value stand in);
+- a problem with no datasets, and one where every sample of every dataset
+  is masked out — the encoding would be empty, and there would be nothing
+  to condition on;
+- `"flat"` on a complex container, **at layout construction** rather than
+  at the first encode: complex-ness is a fact about the problem, so it can
+  be refused before any observation is packed.
+
+One entry of the drafted list did **not** land: a non-numeric extra
+coordinate is ignored, and the layout records *nothing* about it. Recording
+which extra coordinates were ignored would put a container's free-form
+per-sample labels into the layout hash, so renaming a filter would become a
+different layout and therefore a retrained network. §9.5 already says extra
+coordinates are not features in v1; silence about them is the consistent
+reading, and the container is where they remain visible.
 
 ## 7. `unpack`, wrappers, and the one mask convention
 
@@ -203,6 +302,41 @@ tensor, and it is the backend-neutral half; the torch-side wrappers in
 The cast from float64 to the network's float32 happens once, in the
 wrapper. Pooling is the **masked mean**, never the sum, so the pooled
 embedding does not scale with row count; the count is `set_features`'.
+
+***Amended W3.3***, from reading what sbi 0.27 actually does. Both nets
+work, both are used, and both needed more of the wrapper than the draft
+assumed.
+
+- `PermutationInvariantEmbedding` pools with a **sum** by default
+  (`aggregation_fn="sum"`), so it is constructed with `"mean"`. Its own
+  valid-row count is computed as
+  `isnan(x).sum(dim=1).reshape(-1)[:num_batch]`, which reads the *first*
+  batch element's count for every element as soon as `x` has more than one
+  feature column. Under this contract that is exactly right, because the
+  mask is a property of the **layout** and is therefore identical across a
+  batch — but it is right by construction rather than by luck, and a
+  future packing with a per-draw mask must stop using that aggregation.
+- `TransformerEmbedding.forward` **discards `attention_mask` unless
+  `is_causal` is true** (`else: attention_mask = None`), and its
+  aggregation reads the **last token** rather than pooling. So the mask
+  cannot be delegated on the non-causal path the draft (rightly) requires:
+  the wrapper zeroes masked and padded rows' *tokens* after its
+  projection, which makes the output independent of what a masked row
+  holds whatever the net does with the mask, and passes `attention_mask`
+  as well so that a later sbi honouring it changes nothing here. Its
+  `feature_space_dim` is the transformer's **model** dimension, not an
+  input width, so the wrapper owns a linear projection from the packing's
+  feature width into it. `forward` returns a bare tensor in 0.27 despite
+  its `Tuple` annotation; the wrapper takes element 0 only when it is
+  given a tuple.
+- **A user module gets the raw tensor**, and `unpack(x, layout)` is public
+  for it to call. The class-attribute protocol was dropped: it adds a
+  second way to write an embedding, and a second thing every future
+  wrapper has to remember, in exchange for one line the module can write
+  itself.
+- `unpack` also accepts a **flattened** `(..., rows · columns)` tensor and
+  reshapes it, because sbi flattens `x` on some of its paths and no
+  wrapper should have to know which one it is on.
 
 ## 8. Stability
 
@@ -257,10 +391,17 @@ every hash unchanged.
 
 ## 10. Handoffs
 
-- **W3.3** lands `ampere/core/encoding.py` (`Layout`, `encode`, `decode`,
-  `unpack`), the wrappers in `ampere/inference/_sbi.py`, `layout=` on
-  `SBIEngine`, and binds this text; the decision-log row is amended with
-  what changed.
+- **W3.3 landed** `ampere/core/encoding.py` (`EncodingLayout`, `encode`,
+  `encode_observations`, `decode`, `unpack`, `EncodingError`), the two
+  wrappers and `layout=` in `ampere/inference/_sbi.py`, and bound this
+  text; the decision-log row is amended with what changed. `_summary_of`
+  survives as a thin adapter over `encode`, so the `"flat"` packing has one
+  implementation rather than two. `decode` inverts the packing through the
+  `value_asinh` column rather than the whitened one, because that column is
+  defined whether or not a dataset has uncertainties; it reconstructs
+  coordinates, values, uncertainties and the mask, and
+  `Decoded.as_container(template)` borrows the axes, unit, extra
+  coordinates and metadata the encoding does not carry.
 - **W3.5** hashes the layout into the artefact key.
 - **W3.6** encodes the calibration batches with the run's own layout, so
   a coverage test is a test of the network as trained.

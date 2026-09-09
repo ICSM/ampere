@@ -98,10 +98,14 @@ ENCODING_VERSION = 1
 #: standardised coordinate is expanded into. ``0`` removes the group.
 DEFAULT_FOURIER_BANDS = 4
 
-#: The two layout kinds. ``"set"`` is the general packing this module exists
-#: for; ``"flat"`` is W3.2's fixed-size summary, kept as a degenerate layout
-#: under the same object so that its hash covers it too.
+#: The general packing this module exists for: one row per sample, the column
+#: groups of §3, and a set-based network over them.
 SET_KIND = "set"
+
+#: W3.2's fixed-size summary — one row, every dataset's unmasked observed
+#: values concatenated in ``datasets`` order. Kept as a degenerate layout under
+#: the same object so that its hash covers it too, and it remains the right
+#: default for a single fitting problem whose data layout is fixed anyway.
 FLAT_KIND = "flat"
 
 #: The column groups of a ``"set"`` layout, **in order**. Names are contract.
