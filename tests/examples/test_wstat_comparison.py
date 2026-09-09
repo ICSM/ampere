@@ -317,7 +317,9 @@ class TestTheCoverageStudy:
             assert type(problem.datasets[label].likelihood.family) is PoissonFamily
         assert not hasattr(wstat_example, "CountingPoisson")
 
-    def test_the_reduced_study_is_unchanged_by_w3_14(self, wstat_example: ModuleType) -> None:
+    def test_the_reduced_study_is_unchanged_by_w3_14(
+        self, reduced_study: dict[str, object]
+    ) -> None:
         """The deletion moved no number, and this is the evidence for it.
 
         The ranks recorded here are the ones the reduced study produced with
@@ -331,13 +333,11 @@ class TestTheCoverageStudy:
 
         Pinned as integers rather than as a hash so that a failure says *how*
         the study moved, which is the question anyone reading this row will
-        have.
+        have. Run off the module-scoped fixture rather than starting a third
+        study of its own: it is the same budget and the same seed, and the
+        study is the only expensive thing in this file.
         """
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", UserWarning)
-            study = wstat_example.coverage_study(
-                count=6, draws=40, walkers=8, steps=120, burn_in=40
-            )
+        study = reduced_study
         expected = {
             "wstat": [[39, 16], [16, 31], [34, 25], [23, 40], [18, 22], [13, 32]],
             "joint": [[40, 18], [23, 32], [29, 33], [19, 38], [11, 20], [19, 35]],
