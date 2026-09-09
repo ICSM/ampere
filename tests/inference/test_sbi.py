@@ -67,16 +67,33 @@ import scipy.stats as st
 from ampere.backends.reference import Resample
 from ampere.core import (
     Dataset,
+    EncodingError,
+    EncodingLayout,
     FittingProblem,
     Instrument,
     Model,
     Parameter,
     ProcessExecutor,
     Spectrum,
+    VisibilitySet,
+    encode_observations,
 )
 from ampere.core.exceptions import OptionalDependencyError
 from ampere.inference import EmceeEngine, EngineError, SBIEngine
 from ampere.inference._sbi import SUMMARY_LAYOUT, _summary_of, _thinned
+
+
+class _Observed:
+    """A stand-in dataset: the encoding reads ``observed`` and nothing else.
+
+    Used only where composing a whole problem would mean choosing a likelihood
+    family the test has no opinion about -- a complex ``VisibilitySet``, say.
+    """
+
+    def __init__(self, observed: Any) -> None:
+        self.observed = observed
+        self.effective_mask = None if observed.mask is None else np.asarray(observed.mask).ravel()
+
 
 HAS_SBI = importlib.util.find_spec("sbi") is not None
 
@@ -322,14 +339,23 @@ class TestTheSummaryLayout:
         assert SUMMARY_LAYOUT == "flat"
 
     def test_a_complex_container_is_refused_by_name(self) -> None:
-        """W3.3's contract owns the real/imaginary encoding, so this one refuses."""
-        problem = bounded_problem()
+        """The ``"set"`` layout encodes real and imaginary parts; ``"flat"`` will not.
 
-        class Complex:
-            values = np.array([1.0 + 2.0j, 3.0 + 0.0j])
-
-        with pytest.raises(EngineError, match="complex"):
-            _summary_of({"default": Complex()}, problem.datasets, batched=False)
+        The refusal moved with W3.3 from this driver into the layout, which is
+        where it belongs: a complex container is a fact about the *problem*, so
+        it can be refused before any observation is packed rather than at the
+        first draw.
+        """
+        visibilities = VisibilitySet(
+            [10.0, -30.0] * u.dimensionless_unscaled,
+            [-20.0, 40.0] * u.dimensionless_unscaled,
+            np.array([1.0 + 2.0j, 3.0 + 0.0j]) * u.Jy,
+        )
+        datasets = {"vis": _Observed(visibilities)}
+        with pytest.raises(EncodingError, match="complex"):
+            EncodingLayout.from_datasets(datasets, kind="flat")
+        # The set layout takes it: two value columns, real and imaginary.
+        assert EncodingLayout.from_datasets(datasets).group("value").width == 2
 
     def test_a_missing_observation_is_refused_by_name(self) -> None:
         problem = bounded_problem()
@@ -660,12 +686,19 @@ class TestTheEmbeddingVocabulary:
     FEATURES = 52
 
     @staticmethod
-    def resolved(embedding: Any, features: int = FEATURES, free_size: int = 2) -> Any:
+    def resolved(
+        embedding: Any,
+        features: int = FEATURES,
+        free_size: int = 2,
+        layout: Any = None,
+    ) -> Any:
         import torch
 
         from ampere.inference._sbi import _embedding_of
 
-        return _embedding_of(embedding, torch=torch, features=features, free_size=free_size)
+        return _embedding_of(
+            embedding, torch=torch, features=features, free_size=free_size, layout=layout
+        )
 
     def test_none_is_no_embedding_at_all(self) -> None:
         resolved = self.resolved(None)
@@ -714,7 +747,14 @@ class TestTheEmbeddingVocabulary:
 
     def test_an_unknown_name_is_refused_with_the_vocabulary(self) -> None:
         with pytest.raises(EngineError, match="does not know the embedding"):
-            self.resolved("transformer")
+            self.resolved("convnext")
+
+    def test_a_set_embedding_under_a_flat_layout_is_refused_by_name(self) -> None:
+        """W3.3's two need column groups, and the flat layout has none."""
+        flat = EncodingLayout.from_datasets(two_dataset_problem().datasets, kind="flat")
+        for named in ("set", "transformer"):
+            with pytest.raises(EngineError, match="column groups"):
+                self.resolved(named, layout=flat)
 
     def test_an_unknown_hyperparameter_is_refused_by_name(self) -> None:
         """The legacy code fell through silently here; this does not."""
@@ -860,3 +900,375 @@ class TestMultipleRounds:
         assert run.attrs["ampere_sbi_simulations"] == 400
         assert run["posterior"].dataset.sizes["draw"] == 40
         assert np.all(np.isfinite(np.asarray(run["sample_stats"]["lp"])))
+
+
+# ---------------------------------------------------------------------------
+# 9. W3.3: the coordinate-value-mask layout and the two set embeddings
+# ---------------------------------------------------------------------------
+
+
+class TestTheLayoutArgument:
+    """``layout=``: what the network is trained on, named and hashed. No extra."""
+
+    def test_the_default_is_the_flat_summary_w3_2_shipped(self) -> None:
+        engine = SBIEngine(two_dataset_problem(), budget=10)
+        assert engine.layout == SUMMARY_LAYOUT == "flat"
+        assert engine.encoding is None  # resolved at run(), not at construction
+
+    def test_a_set_layout_packs_one_row_per_sample_of_every_dataset(self) -> None:
+        problem = two_dataset_problem()
+        layout = EncodingLayout.from_datasets(problem.datasets, kind="set")
+        # 'short' has 2 samples, 'long' 4 -- masked ones are rows, not absences.
+        assert layout.row_cap == 6
+        assert layout.bounds == ((0, 2), (2, 6))
+        encoded = encode_observations(problem.datasets, layout=layout)
+        mask = np.asarray(encoded.values)[0, :, layout.group("mask").offset]
+        assert mask.tolist() == [1.0, 1.0, 1.0, 0.0, 1.0, 1.0]
+
+    def test_an_unknown_layout_name_is_refused_with_the_two_that_exist(self) -> None:
+        from ampere.inference._sbi import _layout_of
+
+        with pytest.raises(EngineError, match="does not know the layout"):
+            _layout_of(two_dataset_problem(), "sequence")
+
+    def test_a_layout_from_another_problem_is_refused_saying_which_field_differs(
+        self,
+    ) -> None:
+        """Accept criterion: a mismatch is refused **by name**, field by field."""
+        from ampere.inference._sbi import _layout_of
+
+        other = EncodingLayout.from_datasets(bounded_problem().datasets)
+        with pytest.raises(EngineError) as raised:
+            _layout_of(two_dataset_problem(), other)
+        assert "dataset labels" in str(raised.value)
+        assert other.hash in str(raised.value)
+
+    def test_a_row_cap_the_observation_exceeds_is_refused_by_name(self) -> None:
+        with pytest.raises(EncodingError, match="row cap"):
+            EncodingLayout.from_datasets(two_dataset_problem().datasets, row_cap=2)
+
+    def test_something_that_is_neither_a_name_nor_a_layout_is_refused(self) -> None:
+        from ampere.inference._sbi import _layout_of
+
+        with pytest.raises(EngineError, match="layout="):
+            _layout_of(two_dataset_problem(), 17)
+
+    def test_a_set_layout_with_no_embedding_is_refused_by_name(self) -> None:
+        """A flow over a padded matrix is not a posterior over an observation.
+
+        Checked through ``_embedding_of`` rather than through ``run``, so that it
+        runs in ``dev`` like every other refusal in this section: the refusal is
+        reached before the ``torch`` argument is ever touched, which is why
+        ``None`` is a legitimate thing to pass here and an
+        ``OptionalDependencyError`` is not what a caller should meet first.
+        """
+        from ampere.inference._sbi import _embedding_of
+
+        layout = EncodingLayout.from_datasets(two_dataset_problem().datasets, kind="set")
+        with pytest.raises(EngineError, match="no embedding"):
+            _embedding_of(None, torch=None, features=0, free_size=1, layout=layout)
+
+
+@needs_sbi
+class TestTheSetEmbeddingWrapper:
+    """The masked-pooling wrapper, checked on its own before any training.
+
+    Three properties, and each is a thing a network would otherwise have to
+    *learn* -- badly, and only for the layout it saw: padded rows contribute
+    nothing, masked rows contribute nothing, and row order means nothing.
+    """
+
+    #: A wide output and a fixed seed, so the untrained net is *alive*: the two
+    #: shipped nets both end in a ReLU, and a narrow randomly initialised one
+    #: emits all zeros, under which every invariance below would hold of
+    #: nothing at all. ``test_a_real_row_does_reach_it`` is the row that would
+    #: catch that, and it is why it is here.
+    WIDTH = 16
+
+    @staticmethod
+    def built(problem: Any, *, row_cap: int | None = None) -> Any:
+        import torch
+
+        from ampere.inference._sbi import _embedding_of
+
+        torch.manual_seed(20260909)
+        layout = EncodingLayout.from_datasets(problem.datasets, row_cap=row_cap)
+        resolved = _embedding_of(
+            {"type": "set", "output_dim": TestTheSetEmbeddingWrapper.WIDTH},
+            torch=torch,
+            features=0,
+            free_size=problem.free_size,
+            layout=layout,
+        )
+        module = resolved.module
+        module.eval()
+        return layout, module
+
+    @staticmethod
+    def tensor(problem: Any, layout: Any) -> Any:
+        import torch
+
+        return torch.as_tensor(
+            np.asarray(encode_observations(problem.datasets, layout=layout).values),
+            dtype=torch.float32,
+        )
+
+    def test_padded_rows_contribute_nothing_whatever_they_hold(self) -> None:
+        """Accept criterion: adding padded rows changes nothing."""
+        import torch
+
+        problem = two_dataset_problem()
+        layout, module = self.built(problem, row_cap=11)
+        x = self.tensor(problem, layout)
+        with torch.no_grad():
+            plain = module(x)
+        junk = x.clone()
+        junk[:, 6:, :] = 3.7  # every padded row, every column, including the mask
+        junk[:, 6:, layout.group("mask").offset] = 0.0  # ... except the mask
+        with torch.no_grad():
+            noisy = module(junk)
+        assert torch.allclose(plain, noisy, atol=1e-6)
+
+    def test_a_masked_rows_value_does_not_reach_the_embedding(self) -> None:
+        import torch
+
+        problem = two_dataset_problem()
+        layout, module = self.built(problem)
+        x = self.tensor(problem, layout)
+        with torch.no_grad():
+            plain = module(x)
+        # Row 3 is 'long' sample 1, the masked one.
+        moved = x.clone()
+        moved[:, 3, layout.group("value").offset] = 99.0
+        moved[:, 3, layout.group("value_asinh").offset] = -99.0
+        with torch.no_grad():
+            changed = module(moved)
+        assert torch.allclose(plain, changed, atol=1e-6)
+
+    def test_reversing_the_rows_changes_nothing(self) -> None:
+        """Permutation invariance: the property the whole packing is for."""
+        import torch
+
+        problem = two_dataset_problem()
+        layout, module = self.built(problem)
+        x = self.tensor(problem, layout)
+        with torch.no_grad():
+            plain = module(x)
+            reversed_rows = module(torch.flip(x, dims=(1,)))
+        assert torch.allclose(plain, reversed_rows, atol=1e-6)
+
+    def test_a_real_row_does_reach_it(self) -> None:
+        """The three invariances above would all hold of a constant function."""
+        import torch
+
+        problem = two_dataset_problem()
+        layout, module = self.built(problem)
+        x = self.tensor(problem, layout)
+        moved = x.clone()
+        moved[:, 0, layout.group("value").offset] = 42.0
+        with torch.no_grad():
+            assert not torch.allclose(module(x), module(moved), atol=1e-6)
+
+    def test_it_pools_with_a_mean_rather_than_a_sum(self) -> None:
+        """Trap 5: a summed embedding scales with the row count."""
+        _, module = self.built(two_dataset_problem())
+        assert module.net.aggregation_fn == "mean"
+
+
+@needs_sbi
+class TestTheTransformerWrapper:
+    """Non-causal, no positional embedding, explicit dropout, and masked."""
+
+    @staticmethod
+    def built(problem: Any) -> Any:
+        import torch
+
+        from ampere.inference._sbi import _embedding_of
+
+        torch.manual_seed(20260909)
+        layout = EncodingLayout.from_datasets(problem.datasets)
+        resolved = _embedding_of(
+            {"type": "transformer", "output_dim": 16},
+            torch=torch,
+            features=0,
+            free_size=problem.free_size,
+            layout=layout,
+        )
+        module = resolved.module
+        module.eval()
+        return layout, module
+
+    def test_the_defaults_sbi_ships_are_all_overridden(self) -> None:
+        """``is_causal``, ``pos_emb`` and both dropouts (trap 4)."""
+        _, module = self.built(two_dataset_problem())
+        config = module.net.config
+        assert module.net.is_causal is False
+        assert config["is_causal"] is False
+        assert config["pos_emb"] == "none"
+        assert config["attention_dropout"] == 0.1
+        assert config["vit_dropout"] == 0.1
+
+    def test_the_wrapper_hands_the_net_an_attention_mask(self) -> None:
+        """The mask column becomes ``attention_mask``, per ``encoding.md`` §7."""
+        import torch
+
+        from ampere.inference._sbi import _wrapper_classes
+
+        problem = two_dataset_problem()
+        layout = EncodingLayout.from_datasets(problem.datasets)
+        row_features = layout.columns_total - 1
+
+        class Recorder(torch.nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.seen: Any = None
+
+            def forward(self, tokens: Any, attention_mask: Any = None, **_: Any) -> Any:
+                self.seen = attention_mask
+                return tokens[:, -1, :]
+
+        recorder = Recorder()
+        wrapper = _wrapper_classes(torch)[1](layout, torch.nn.Linear(row_features, 8), recorder)
+        x = torch.as_tensor(
+            np.asarray(encode_observations(problem.datasets, layout=layout).values),
+            dtype=torch.float64,
+        )
+        with torch.no_grad():
+            wrapper(x)
+        assert recorder.seen is not None
+        assert recorder.seen.shape == (1, layout.row_cap)
+        assert recorder.seen[0].tolist() == [1.0, 1.0, 1.0, 0.0, 1.0, 1.0]
+
+    def test_a_masked_rows_value_does_not_change_the_output(self) -> None:
+        """It cannot: the wrapper zeroes a masked row's token after projection."""
+        import torch
+
+        problem = two_dataset_problem()
+        layout, module = self.built(problem)
+        x = torch.as_tensor(
+            np.asarray(encode_observations(problem.datasets, layout=layout).values),
+            dtype=torch.float32,
+        )
+        moved = x.clone()
+        moved[:, 3, layout.group("value").offset] = 99.0
+        moved[:, 3, layout.group("value_asinh").offset] = -99.0
+        with torch.no_grad():
+            plain = module(x)
+            assert torch.allclose(plain, module(moved), atol=1e-6)
+        # The positive control: a *retained* row does change it, so the row
+        # above is excluded rather than the whole net being deaf.
+        retained = x.clone()
+        retained[:, 4, layout.group("value").offset] = 99.0
+        with torch.no_grad():
+            assert not torch.allclose(plain, module(retained), atol=1e-6)
+
+
+@needs_sbi
+class TestTheSetLayoutEndToEnd:
+    """Accept criterion: it trains and samples on a two-dataset toy problem."""
+
+    def test_the_set_embedding_trains_and_samples(self) -> None:
+        engine = SBIEngine(
+            two_dataset_problem(), method="npe", budget=200, embedding="set", layout="set"
+        )
+        run = engine.run(draws=25, training={"max_num_epochs": 8})
+        posterior = run["posterior"].dataset
+        assert (posterior.sizes["chain"], posterior.sizes["draw"]) == (1, 25)
+        assert set(posterior.data_vars) == {"model.slope"}
+        assert float(np.asarray(posterior["model.slope"]).min()) > 0.0
+        assert np.all(np.isfinite(np.asarray(run["sample_stats"]["lp"])))
+        assert run.attrs["ampere_sbi_embedding"] == "set"
+
+    def test_the_transformer_embedding_trains_at_a_tiny_budget(self) -> None:
+        engine = SBIEngine(
+            two_dataset_problem(),
+            method="npe",
+            budget=80,
+            embedding="transformer",
+            layout="set",
+        )
+        run = engine.run(draws=10, training={"max_num_epochs": 3})
+        assert run["posterior"].dataset.sizes["draw"] == 10
+        assert run.attrs["ampere_sbi_embedding"] == "transformer"
+
+    def test_the_run_records_the_layout_by_name_and_by_hash(self) -> None:
+        """Accept criterion: the name and the hash are in the run's attrs."""
+        import json
+
+        problem = two_dataset_problem()
+        layout = EncodingLayout.from_datasets(problem.datasets)
+        engine = SBIEngine(problem, method="npe", budget=80, embedding="set", layout=layout)
+        run = engine.run(draws=10, training={"max_num_epochs": 3})
+        assert run.attrs["ampere_sbi_summary_layout"] == "set"
+        assert run.attrs["ampere_encoding_hash"] == layout.hash
+        assert run.attrs["ampere_sbi_encoding_rows"] == layout.row_cap
+        assert run.attrs["ampere_sbi_encoding_columns"] == layout.columns_total
+        recorded = json.loads(run.attrs["ampere_encoding_layout"])
+        assert EncodingLayout.from_dict(recorded) == layout
+        assert engine.encoding is layout
+
+    def test_a_training_set_records_the_layout_too(self, tmp_path: Path) -> None:
+        """Accept criterion: and in a training set's attrs, so W3.5 can key on it."""
+        from ampere.results.training import read_training_set
+
+        path = tmp_path / "set_budget.nc"
+        problem = two_dataset_problem()
+        engine = SBIEngine(
+            problem,
+            method="npe",
+            budget=40,
+            chunk_size=20,
+            embedding="set",
+            layout="set",
+            training_set=path,
+        )
+        run = engine.run(draws=8, training={"max_num_epochs": 3})
+        training = read_training_set(path)
+        assert len(training) == 40
+        import xarray
+
+        stored = xarray.open_datatree(path)
+        try:
+            assert stored.attrs["ampere_encoding_hash"] == run.attrs["ampere_encoding_hash"]
+            assert stored.attrs["ampere_encoding_layout"]
+        finally:
+            stored.close()
+
+    def test_sbi_is_told_not_to_z_score_a_set_tensor(self) -> None:
+        """Trap 1: sbi's column-wise z-scoring would standardise the mask column."""
+        import sbi.neural_nets
+
+        seen: dict[str, Any] = {}
+        original = sbi.neural_nets.posterior_nn
+
+        def spy(*args: Any, **kwargs: Any) -> Any:
+            seen.update(kwargs)
+            return original(*args, **kwargs)
+
+        problem = two_dataset_problem()
+        engine = SBIEngine(problem, budget=20, embedding="set", layout="set")
+        sbi.neural_nets.posterior_nn = spy
+        try:
+            engine.run(draws=2, training={"max_num_epochs": 1})
+        finally:
+            sbi.neural_nets.posterior_nn = original
+        assert seen["z_score_x"] == "none"
+
+    def test_the_flat_layout_keeps_sbis_own_z_scoring(self) -> None:
+        """Where it is right: one row of real values, and nothing structural."""
+        import sbi.neural_nets
+
+        seen: dict[str, Any] = {}
+        original = sbi.neural_nets.posterior_nn
+
+        def spy(*args: Any, **kwargs: Any) -> Any:
+            seen.update(kwargs)
+            return original(*args, **kwargs)
+
+        engine = SBIEngine(bounded_problem(), budget=20, embedding="FC")
+        sbi.neural_nets.posterior_nn = spy
+        try:
+            engine.run(draws=2, training={"max_num_epochs": 1})
+        finally:
+            sbi.neural_nets.posterior_nn = original
+        assert "z_score_x" not in seen

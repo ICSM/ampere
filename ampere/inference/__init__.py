@@ -220,7 +220,7 @@ from __future__ import annotations
 from ._dynesty import DynestyEngine
 from ._emcee import EmceeEngine
 from ._nuts import NUTSEngine
-from ._sbi import EMBEDDINGS, METHODS, SUMMARY_LAYOUT, SBIEngine
+from ._sbi import EMBEDDINGS, LAYOUTS, METHODS, SET_EMBEDDINGS, SUMMARY_LAYOUT, SBIEngine
 from ._vi import VIEngine
 from ._zeus import ZeusEngine
 from .engine import DEFAULT_CACHE_SIZE, Engine
@@ -229,7 +229,9 @@ from .exceptions import EngineError, SamplingFailureWarning
 __all__ = [
     "DEFAULT_CACHE_SIZE",
     "EMBEDDINGS",
+    "LAYOUTS",
     "METHODS",
+    "SET_EMBEDDINGS",
     "SUMMARY_LAYOUT",
     "DynestyEngine",
     "EmceeEngine",

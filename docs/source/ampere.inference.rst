@@ -67,4 +67,8 @@ Re-exported from ``ampere.inference``; shown under the module that defines it.
 
 .. autodata:: ampere.inference._sbi.EMBEDDINGS
 
+.. autodata:: ampere.inference._sbi.SET_EMBEDDINGS
+
+.. autodata:: ampere.inference._sbi.LAYOUTS
+
 .. autodata:: ampere.inference._sbi.SUMMARY_LAYOUT
