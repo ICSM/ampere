@@ -55,6 +55,7 @@ from ampere.results import (
     POINTWISE_LOG_LIKELIHOOD_GROUP,
     POSTERIOR_PREDICTIVE_GROUP,
     DrawRecorder,
+    ResultsWarning,
     add_pointwise_log_likelihood,
     add_posterior_predictive,
     figure_metadata,
@@ -184,6 +185,22 @@ def run(problem: FittingProblem, *, chains: int = 2, draws: int = 30, reject: bo
     return recorder.emit(engine="fixture")
 
 
+def _with_extra_scalars(tree: Any, count: int, *, prefix: str = "extra", seed: int = 7) -> Any:
+    """*tree*, with *count* extra scalar posterior variables assigned.
+
+    W3.10's paging tests want more merged names than any real toy problem
+    declares; assigning bare scalar variables straight onto the stored
+    posterior — as the existing array-block tests already do for one
+    variable — is the fixture-free way to get there.
+    """
+    posterior = tree["posterior"].dataset
+    rng = np.random.default_rng(seed)
+    shape = (posterior.sizes["chain"], posterior.sizes["draw"])
+    extra = {f"{prefix}.p{i}": (("chain", "draw"), rng.normal(size=shape)) for i in range(count)}
+    tree["posterior"] = posterior.assign(extra)
+    return tree
+
+
 # ---------------------------------------------------------------------------
 # plot_corner
 # ---------------------------------------------------------------------------
@@ -222,19 +239,21 @@ class TestCorner:
         with pytest.raises(ResultsError, match="flatters the fit"):
             plot_corner(run(toy()), var_names=["model.index"], truths=dict(TRUTH))
 
-    def test_an_oversized_block_is_refused_loudly_rather_than_attempted(self) -> None:
-        # results.md §8: "a corner plot of a 10^5-element latent block must be
-        # refused loudly rather than attempted". The refusal names the variable,
-        # its size and the override.
+    def test_paginate_false_refuses_an_oversized_block_exactly_as_before_w3_10(self) -> None:
+        # results.md §8 pre-W3.10: "a corner plot of a 10^5-element latent
+        # block must be refused loudly rather than attempted". W3.10 turned
+        # the *default* behaviour into paging (see TestCornerPaging below),
+        # but paginate=False must restore this refusal text unchanged, for a
+        # caller who needs a single figure or a hard failure.
         tree = run(toy())
         block = np.zeros((2, 30, 500))
         tree["posterior"] = tree["posterior"].dataset.assign(
             {"latent.z": (("chain", "draw", "latent.z_dim_0"), block)}
         )
         with pytest.raises(ResultsError, match="refused loudly rather than attempted"):
-            plot_corner(tree, var_names=["latent.z"])
+            plot_corner(tree, var_names=["latent.z"], paginate=False)
         with pytest.raises(ResultsError, match="max_variables"):
-            plot_corner(tree, var_names=["latent.z"])
+            plot_corner(tree, var_names=["latent.z"], paginate=False)
 
     def test_the_threshold_is_an_override_and_not_a_wall(self) -> None:
         tree = run(toy())
@@ -248,6 +267,92 @@ class TestCorner:
     def test_it_refuses_a_tree_that_is_not_a_run(self) -> None:
         with pytest.raises(ResultsError, match="not an emitted run"):
             plot_corner(None)
+
+
+class TestCornerPaging:
+    """W3.10: paging above MAX_CORNER_VARIABLES, with a loud ResultsWarning."""
+
+    def test_25_scalar_parameters_give_two_pages_and_one_warning(self) -> None:
+        # results.md §8's accept criterion, literally.
+        tree = _with_extra_scalars(run(toy()), 23)  # 2 (toy's own) + 23 = 25
+        with pytest.warns(ResultsWarning, match="25 variables"):
+            figures = plot_corner(tree)
+        assert isinstance(figures, list)
+        assert [
+            len(figure_metadata(figure)["corner.variables"].split(", ")) for figure in figures
+        ] == [20, 5]
+        assert [figure_metadata(figure)["page"] for figure in figures] == ["1 of 2", "2 of 2"]
+
+    def test_a_200_element_plate_gives_ten_pages(self) -> None:
+        # results.md §8's other accept criterion, literally.
+        tree = run(toy())
+        block = np.random.default_rng(3).normal(size=(2, 30, 200))
+        tree["posterior"] = tree["posterior"].dataset.assign(
+            {"latent.z": (("chain", "draw", "latent.z_dim_0"), block)}
+        )
+        with pytest.warns(ResultsWarning, match="10 pages"):
+            figures = plot_corner(tree, var_names=["latent.z"])
+        assert len(figures) == 10
+        assert all(
+            len(figure_metadata(figure)["corner.variables"].split(", ")) == 20 for figure in figures
+        )
+        assert [figure_metadata(figure)["page"] for figure in figures] == [
+            f"{index} of 10" for index in range(1, 11)
+        ]
+
+    def test_a_call_within_the_cap_still_returns_one_figure(self) -> None:
+        # The return-type contract: paginate defaults to True, and that must
+        # not change the return of a call that never pages.
+        figure = plot_corner(run(toy()))
+        assert not isinstance(figure, list)
+        assert "page" not in figure_metadata(figure)
+
+    def test_an_array_block_moves_whole_to_a_fresh_page_rather_than_splitting(self) -> None:
+        # results.md §8: "array blocks kept whole where they fit". Fifteen
+        # scalars leave five slots on page one; a six-element block does not
+        # fit in those five, but does fit a fresh page of its own, so the
+        # whole block moves there rather than splitting five-and-one.
+        tree = _with_extra_scalars(run(toy()), 13)  # 2 + 13 = 15 scalars
+        block = np.random.default_rng(4).normal(size=(2, 30, 6))
+        tree["posterior"] = tree["posterior"].dataset.assign(
+            {"block": (("chain", "draw", "block_dim_0"), block)}
+        )
+        with pytest.warns(ResultsWarning):
+            figures = plot_corner(tree)
+        assert len(figures) == 2
+        assert len(figure_metadata(figures[0])["corner.variables"].split(", ")) == 15
+        assert figure_metadata(figures[1])["corner.variables"] == (
+            "block[0], block[1], block[2], block[3], block[4], block[5]"
+        )
+
+    def test_paginate_false_refuses_many_scalars_with_the_pre_w3_10_text(self) -> None:
+        tree = _with_extra_scalars(run(toy()), 23)
+        with pytest.raises(ResultsError, match="the limit is 20"):
+            plot_corner(tree, paginate=False)
+
+    def test_the_warning_names_the_cap_and_the_var_names_route(self) -> None:
+        tree = _with_extra_scalars(run(toy()), 23)
+        with pytest.warns(ResultsWarning, match="max_variables=20") as caught:
+            plot_corner(tree)
+        assert any("var_names=" in str(warning.message) for warning in caught)
+
+    def test_labels_and_truths_are_resolved_across_every_page(self) -> None:
+        tree = _with_extra_scalars(run(toy()), 23)
+        names = [str(name) for name in tree["posterior"].dataset.data_vars]
+        labels = [f"L{index}" for index in range(len(names))]
+        truths = dict(zip(names, range(len(names)), strict=True))
+        with pytest.warns(ResultsWarning):
+            figures = plot_corner(tree, labels=labels, truths=truths)
+        assert len(figures) == 2
+        assert (
+            figure_metadata(figures[0])["corner.draws"]
+            == figure_metadata(figures[1])["corner.draws"]
+        )
+
+    def test_a_mismatched_label_count_is_refused_before_any_page_is_drawn(self) -> None:
+        tree = _with_extra_scalars(run(toy()), 23)
+        with pytest.raises(ResultsError, match="per column, not per variable"):
+            plot_corner(tree, labels=["only one"])
 
 
 # ---------------------------------------------------------------------------
@@ -284,6 +389,52 @@ class TestTrace:
     def test_it_refuses_a_tree_that_is_not_a_run(self) -> None:
         with pytest.raises(ResultsError, match="not an emitted run"):
             plot_trace(None)
+
+
+class TestTracePaging:
+    """W3.10: plot_trace pages above MAX_TRACE_VARIABLES exactly as plot_corner does."""
+
+    def test_it_pages_above_the_cap_with_a_warning_and_lp_on_every_page(self) -> None:
+        tree = run(toy())
+        block = np.random.default_rng(5).normal(size=(2, 30, 90))
+        tree["posterior"] = tree["posterior"].dataset.assign(
+            {"latent.z": (("chain", "draw", "latent.z_dim_0"), block)}
+        )
+        with pytest.warns(ResultsWarning, match="3 pages"):
+            figures = plot_trace(tree, var_names=["latent.z"])
+        assert len(figures) == 3
+        # 40 + 40 + 10 rows of latent.z, plus one lp row on every page.
+        assert [len(figure.axes) // 2 for figure in figures] == [41, 41, 11]
+        assert [figure_metadata(figure)["page"] for figure in figures] == [
+            "1 of 3",
+            "2 of 3",
+            "3 of 3",
+        ]
+
+    def test_a_call_within_the_cap_still_returns_one_figure(self) -> None:
+        figure = plot_trace(run(toy()))
+        assert not isinstance(figure, list)
+        assert "page" not in figure_metadata(figure)
+
+    def test_paginate_false_refuses_above_the_cap_exactly_as_before_w3_10(self) -> None:
+        tree = run(toy())
+        block = np.random.default_rng(5).normal(size=(2, 30, 90))
+        tree["posterior"] = tree["posterior"].dataset.assign(
+            {"latent.z": (("chain", "draw", "latent.z_dim_0"), block)}
+        )
+        with pytest.raises(ResultsError, match="refused loudly rather than attempted"):
+            plot_trace(tree, var_names=["latent.z"], paginate=False)
+
+    def test_rejected_draws_are_counted_on_every_page(self) -> None:
+        tree = run(toy(), reject=True)
+        block = np.random.default_rng(6).normal(size=(2, 30, 45))
+        tree["posterior"] = tree["posterior"].dataset.assign(
+            {"latent.z": (("chain", "draw", "latent.z_dim_0"), block)}
+        )
+        with pytest.warns(ResultsWarning):
+            figures = plot_trace(tree, var_names=["latent.z"])
+        assert len(figures) == 2
+        assert all(figure_metadata(figure)["trace.rejected_draws"] == "1" for figure in figures)
 
 
 # ---------------------------------------------------------------------------

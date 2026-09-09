@@ -548,8 +548,8 @@ Six functions, each taking the emitted run and nothing else. *(Amended W3.6: eig
 
 | Function | Family | Notes |
 |---|---|---|
-| `plot_corner` | — | selects by merged parameter name; an array-valued block is one variable, and a corner plot of a 10⁵-element latent block must be refused loudly rather than attempted |
-| `plot_trace` | — | reads `sample_stats` too, so a prior-rejected draw shows as a gap (NaN), not as zero |
+| `plot_corner` | — | selects by merged parameter name; an array-valued block is one variable, and a corner plot of a 10⁵-element latent block must be paged, with a warning *(Amended W3.10; was "refused loudly rather than attempted")* |
+| `plot_trace` | — | reads `sample_stats` too, so a prior-rejected draw shows as a gap (NaN), not as zero; pages above its own cap exactly as `plot_corner` does *(Amended W3.10)* |
 | `plot_posterior_predictive` | B | consumes `posterior_predictive`; its precondition is `add_posterior_predictive`, and its refusal must say so rather than reporting a missing group |
 | `plot_residuals` | B | consumes `residuals`; warns when the run's likelihood provenance says a GP was fitted, because `diagnostics.md` §3.1 scopes family B to standard-likelihood fits |
 | `plot_gp_localisation` | C | carries the degeneracy caveat by construction |
@@ -557,7 +557,7 @@ Six functions, each taking the emitted run and nothing else. *(Amended W3.6: eig
 | `plot_sbc_ranks` | D | *(added W3.6)* consumes the `calibration` group, or a run carrying it |
 | `plot_coverage` | D | *(added W3.6)* the same group read as a coverage curve, with TARP's joint curve beside it where there is one |
 
-Two of these are contract rather than style.
+Three of these are contract rather than style.
 
 **The GP-localisation caveat is mandatory and machine-readable.**
 `diagnostics.md` §4.3 makes it "a plotting-function requirement for W1.8, not a
@@ -595,6 +595,30 @@ depending on the other. *(R4 granted and landed at the freeze, 2026-09-03:
 the protocol.)* `plot_anomaly_score` stays typed against the *shape*
 (`AnomalyScoreLike`, a runtime-checkable `Protocol`), so a caller may hand
 it the real class or anything matching.
+
+**Above the cap, `plot_corner` and `plot_trace` page rather than refuse**
+*(Amended W3.10, ruled by Peter 2026-09-08 on W2.8's confirmed caps)*.
+`MAX_CORNER_VARIABLES`/`MAX_TRACE_VARIABLES` used to bound the whole figure,
+refusing outright above them; they now bound one **page**, and a request
+above the cap is split into a list of figures each within it, in merged-name
+order, with an array-valued block kept whole on one page where it fits on
+one at all — a block bigger than the cap on its own cannot fit any page
+whole, so it alone is split across full pages of exactly the cap's width, in
+element order, rather than mixed with an unrelated neighbour. Paging fires a
+loud `ResultsWarning` naming the page count, the cap and the `var_names=`
+route to a smaller figure instead of one that pages. `var_names=` and
+`max_variables=` keep exactly their pre-W3.10 meanings — which columns and
+how many per page — and `paginate=False` restores the pre-W3.10 refusal
+unchanged, for a caller who needs one figure or a hard failure rather than a
+list. Every page's `figure_metadata` records `"page"` as `"i of n"`.
+
+The return type is precise about when it changes: a call whose columns fit
+within the cap returns a single `Figure`, exactly as before W3.10, whether or
+not `paginate` is set — pagination that never fires changes nothing about
+the return. Only a call that actually pages returns a `list[Figure]`, in
+page order. A caller that always wants a list regardless of page count is
+not this contract's problem to solve; the item's is "keep the single-figure
+return for every call that fits within the cap".
 
 Every plotting function is a declared signature that raises `NotImplementedError`
 naming Phase 2. That is deliberate: the surface is what two backend tracks and

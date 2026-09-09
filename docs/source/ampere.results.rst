@@ -121,6 +121,21 @@ rather than a network. Both return the same :class:`xarray.Dataset`,
 Diagnostics and plotting
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
+**W3.10**: :func:`~ampere.results.plot_corner` and
+:func:`~ampere.results.plot_trace` **page** above
+:data:`~ampere.results.plots.MAX_CORNER_VARIABLES` /
+:data:`~ampere.results.plots.MAX_TRACE_VARIABLES` rather than refuse — a list
+of figures each within the cap, in merged-name order, with an array-valued
+block kept whole on one page where it fits on one at all — and warn loudly
+with :class:`~ampere.results.ResultsWarning`, naming the page count, the cap
+and the ``var_names=`` route to a smaller figure. ``max_variables=`` still
+means "how many per page"; ``paginate=False`` restores the pre-W3.10 refusal
+for a caller who wants one figure or a hard failure; a call whose columns fit
+the cap always returns a single :class:`~matplotlib.figure.Figure`, paginated
+or not, and only a call that actually pages returns a ``list`` of them, each
+carrying ``"page"`` as ``"i of n"`` in its
+:func:`~ampere.results.figure_metadata`.
+
 .. autodata:: ampere.results.diagnostics.WHITENESS_STREAM
 .. autodata:: ampere.results.diagnostics.GP_LOCALISATION_PROVENANCE
 .. autodata:: ampere.results.plots.GP_LOCALISATION_CAVEAT
