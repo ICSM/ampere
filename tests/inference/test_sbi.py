@@ -58,7 +58,7 @@ import math
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import astropy.units as u
 import numpy as np
@@ -93,6 +93,7 @@ from ampere.inference._tmnre import (
     pair_labels,
     pair_mesh,
 )
+from ampere.results import PROVENANCE_SCHEMA_VERSION
 
 
 class _Observed:
@@ -598,7 +599,7 @@ class TestTheRunItEmits:
         attrs = npe_run.attrs
         assert attrs["ampere_engine"] == "sbi"
         assert attrs["ampere_backend"] == "reference"
-        assert attrs["ampere_schema_version"] == 5
+        assert attrs["ampere_schema_version"] == PROVENANCE_SCHEMA_VERSION
         assert attrs["ampere_sbi_method"] == "npe"
         assert attrs["ampere_sbi_trainer"].startswith("NPE")
         assert attrs["ampere_sbi_density_estimator"] == "maf"
@@ -2175,3 +2176,86 @@ class TestTheShippedTMNREExample:
         assert "tmnre on reference" in report
         assert "truncation box" in report
         assert "not amortised" in report
+
+
+# ---------------------------------------------------------------------------
+# 14. W3.15: torch is seeded from the problem too
+# ---------------------------------------------------------------------------
+
+
+@needs_sbi
+class TestTorchIsSeededFromTheProblem:
+    """Before this, ``problem.seed`` fixed the budget and nothing else.
+
+    Neither ``ampere`` nor ``sbi`` seeded torch's own global generator, so a
+    network's initial weights, its trainer's batch order and (for an
+    MCMC-sampled posterior) its sampler's momentum draws varied between two
+    runs of the *same* seeded problem — W3.4's carried finding. ``run()`` now
+    seeds torch from the problem's own sub-stream before every step that
+    spends it, so a run repeats bitwise, the network included, and records
+    the seed it used as ``ampere_sbi_torch_seed``.
+    """
+
+    NPE_SETTINGS: ClassVar[dict[str, Any]] = {"method": "npe", "budget": 120}
+    NPE_OPTIONS: ClassVar[dict[str, Any]] = {"draws": 10, "training": {"max_num_epochs": 2}}
+    TMNRE_SETTINGS: ClassVar[dict[str, Any]] = {
+        "method": "tmnre",
+        "rounds": 1,
+        "budget": 100,
+        "sample_with": "mcmc",
+    }
+    TMNRE_OPTIONS: ClassVar[dict[str, Any]] = {
+        "draws": 6,
+        "training": {"max_num_epochs": 2},
+        "posterior_options": {"num_chains": 2, "warmup_steps": 4, "thin": 1},
+    }
+
+    def test_npe_repeats_bitwise_from_the_same_problem_seed(self) -> None:
+        first = SBIEngine(bounded_problem(SEED), **self.NPE_SETTINGS).run(**self.NPE_OPTIONS)
+        second = SBIEngine(bounded_problem(SEED), **self.NPE_SETTINGS).run(**self.NPE_OPTIONS)
+        assert np.asarray(first["posterior"]["model.slope"]) == pytest.approx(
+            np.asarray(second["posterior"]["model.slope"]), abs=0.0
+        )
+        assert first.attrs["ampere_sbi_torch_seed"] == second.attrs["ampere_sbi_torch_seed"]
+
+    def test_tmnre_repeats_bitwise_at_a_tiny_budget(self) -> None:
+        first = SBIEngine(bounded_problem(SEED), **self.TMNRE_SETTINGS).run(**self.TMNRE_OPTIONS)
+        second = SBIEngine(bounded_problem(SEED), **self.TMNRE_SETTINGS).run(**self.TMNRE_OPTIONS)
+        assert np.asarray(first["posterior"]["model.slope"]) == pytest.approx(
+            np.asarray(second["posterior"]["model.slope"]), abs=0.0
+        )
+        assert first.attrs["ampere_sbi_torch_seed"] == second.attrs["ampere_sbi_torch_seed"]
+
+    def test_a_different_problem_seed_gives_a_different_torch_seed_and_draws(self) -> None:
+        first = SBIEngine(bounded_problem(SEED), **self.NPE_SETTINGS).run(**self.NPE_OPTIONS)
+        other = SBIEngine(bounded_problem(SEED + 1), **self.NPE_SETTINGS).run(**self.NPE_OPTIONS)
+        assert first.attrs["ampere_sbi_torch_seed"] != other.attrs["ampere_sbi_torch_seed"]
+        assert not np.allclose(
+            np.asarray(first["posterior"]["model.slope"]),
+            np.asarray(other["posterior"]["model.slope"]),
+        )
+
+    def test_a_cache_hit_samples_reproducibly_too(self, tmp_path: Path) -> None:
+        """Training is skipped on a hit, so sampling must be pinned on its own."""
+        from ampere.results.artefacts import ArtefactStore
+
+        store = ArtefactStore(tmp_path / "artefacts")
+        settings = dict(self.NPE_SETTINGS, cache=store)
+        SBIEngine(bounded_problem(SEED), **settings).run(**self.NPE_OPTIONS)
+        first = SBIEngine(bounded_problem(SEED), **settings).run(**self.NPE_OPTIONS)
+        second = SBIEngine(bounded_problem(SEED), **settings).run(**self.NPE_OPTIONS)
+        assert first.attrs["ampere_sbi_cache_hit"] == 1
+        assert second.attrs["ampere_sbi_cache_hit"] == 1
+        assert np.asarray(first["posterior"]["model.slope"]) == pytest.approx(
+            np.asarray(second["posterior"]["model.slope"]), abs=0.0
+        )
+        assert first.attrs["ampere_sbi_torch_seed"] == second.attrs["ampere_sbi_torch_seed"]
+
+    def test_the_attr_is_absent_for_an_unseeded_problem(self) -> None:
+        """``seed=None`` asks for fresh randomness, torch included -- not a fixed one."""
+        run = SBIEngine(bounded_problem(seed=None), **self.NPE_SETTINGS).run(**self.NPE_OPTIONS)
+        assert "ampere_sbi_torch_seed" not in run.attrs
+
+    def test_the_attr_is_an_int_for_a_seeded_problem(self) -> None:
+        run = SBIEngine(bounded_problem(SEED), **self.NPE_SETTINGS).run(**self.NPE_OPTIONS)
+        assert isinstance(run.attrs["ampere_sbi_torch_seed"], int)

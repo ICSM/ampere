@@ -2041,6 +2041,61 @@ records each round's acceptance rate for exactly this reason and warns below
 1e-3; a future vectorised `sample_prior` for the tie-free case would remove
 the constant, and nothing in this section forecloses it.
 
+### Training and sampling are reproducible too (*Amended W3.15*)
+
+The per-round sub-stream rule above fixes every *simulation*, but until W3.15
+it fixed nothing else: neither `ampere` nor `sbi` seeded torch's own global
+generator, so a density estimator's initial weights and a trainer's batch
+order came from whatever state torch's process-wide RNG happened to be in.
+Two runs of the same seeded problem therefore agreed on every simulated pair
+and disagreed on the posterior trained from them, so W3.5's "identical
+posterior" claim held only through the artefact cache, not from the
+problem's seed itself.
+
+`SBIEngine.run` now seeds torch's global generator from the problem's own
+sub-stream — `self.integer_seed("sbi.torch")`, the same idiom `_nuts.py` and
+`_vi.py` use for pyro's kernels — immediately before every step that spends
+it: building the first network, each round's `train()` (TMNRE's marginal and
+joint estimators included), a multi-round proposal's own `sample()` call, and
+the run's final posterior draw (a distinct sub-stream, `"sbi.torch.sample"`).
+The generator behind a label is created once and then advanced (§ above), so
+calling `integer_seed` with the same concern before every round's training
+already gives each round its own seed, with no per-round label arithmetic
+needed. Reseeding immediately before the final draw — rather than trusting
+whatever state training left behind — is what makes a **cache hit** sample
+reproducibly too: a hit trains nothing, so without its own seed point the
+draw would depend on how much randomness the (still unconditionally
+constructed, then discarded) network setup happened to consume. The seed
+actually used to start training is recorded as `ampere_sbi_torch_seed`;
+absent, not `None`, when `problem.seed is None`, because an unseeded run
+asked for fresh randomness and torch is not pinned behind its back.
+
+**A second global generator turned up beside torch's.** `sbi`'s default MCMC
+method (`"slice_np_vectorized"`, what an NLE/NRE posterior and a TMNRE
+`sample_with="mcmc"` one both sample by) draws its slice proposals through
+`numpy`'s *legacy* global generator (`np.random`) directly, not through
+anything `torch.manual_seed` reaches and not through `problem.rng`'s own
+sub-streams either — found by this item's own TMNRE acceptance check
+refusing to repeat once torch alone was seeded. So the same call that seeds
+torch also seeds `np.random`, wherever a posterior might be MCMC-sampled; an
+NPE posterior's flow never reads it, so doing this unconditionally costs
+that path nothing. And both are **saved and restored** around each seeded
+block — this driver's own version of the rule `_nuts.py`'s
+`torch.random.fork_rng` and `_zeus.py`'s `_global_seed` both state already:
+ampere does not leave a library's global random state changed behind it, so
+unrelated code drawing from `np.random` or torch after `run()` returns is
+exactly as reproducible as it would have been had this engine never run.
+
+Two things this does not reach, deliberately. TMNRE's own round-to-round
+proposal (the truncated prior, `_propose`) draws through the same
+numpy-backed `_UnconstrainedPrior` every other prior draw in this section
+does, so it needs no seed of its own at all — it was already reproducible.
+And `calibrate()` never retrains — a rejection-sampled TMNRE posterior is
+merely *rebuilt* under MCMC (§ above), not refit — so it has no training step
+for this to seed; its own SBC/TARP posterior sampling (`sbi.diagnostics`,
+internal to that call) is unaffected and remains as reproducible, or not, as
+it was before W3.15.
+
 ## 14. Nested result channels — the symmetrical question
 
 `results_schema.md` §17 routes this here: Peter asked whether nested result
