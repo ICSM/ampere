@@ -9,7 +9,9 @@ networks") made concrete. Recorded in the plan's decision log the same day;
 `layout=` in `ampere/inference/_sbi.py`) and every sentence below now
 describes what exists. Sentences the code proved wrong were amended in
 place and are marked ***Amended W3.3***, with the reason; the document is
-frozen at the W3.3 merge. §3–§7 are binding; §8–§10 are guidance.
+frozen at the W3.3 merge, except §7, which W3.11 amended in place
+(marked ***Amended W3.11***) for two wrapper defaults ruled by Peter on
+2026-09-09 — no contract change. §3–§7 are binding; §8–§10 are guidance.
 
 Where this document and `DEVELOPMENT_PLAN.md` disagree, the plan wins.
 
@@ -322,13 +324,12 @@ assumed.
   cannot be delegated on the non-causal path the draft (rightly) requires:
   the wrapper zeroes masked and padded rows' *tokens* after its
   projection, which makes the output independent of what a masked row
-  holds whatever the net does with the mask, and passes `attention_mask`
-  as well so that a later sbi honouring it changes nothing here. Its
-  `feature_space_dim` is the transformer's **model** dimension, not an
-  input width, so the wrapper owns a linear projection from the packing's
-  feature width into it. `forward` returns a bare tensor in 0.27 despite
-  its `Tuple` annotation; the wrapper takes element 0 only when it is
-  given a tuple.
+  holds whatever the net does with the mask. Its `feature_space_dim` is
+  the transformer's **model** dimension, not an input width, so the
+  wrapper owns a linear projection from the packing's feature width into
+  it. `forward` returns a bare tensor in 0.27 despite its `Tuple`
+  annotation. (The last-token read, and passing `attention_mask` to
+  `forward` at all, are superseded below — *Amended W3.11*.)
 - **A user module gets the raw tensor**, and `unpack(x, layout)` is public
   for it to call. The class-attribute protocol was dropped: it adds a
   second way to write an embedding, and a second thing every future
@@ -337,6 +338,48 @@ assumed.
 - `unpack` also accepts a **flattened** `(..., rows · columns)` tensor and
   reshapes it, because sbi flattens `x` on some of its paths and no
   wrapper should have to know which one it is on.
+
+***Amended W3.11***, from W3.3's two open questions (ruled by Peter
+2026-09-09; both are defaults, not findings — a later embedding study
+tests how the right choice depends on the data, model and problem
+structure, and writes up the result as guidance).
+
+- **Default output width.** `"flat"`'s CNN/FC embeddings keep the legacy
+  default, `2 · free_size`. For `"set"`/`"transformer"` the default is
+  now `max(2 · free_size, 32)`: the pooled vector is the whole of the
+  conditioning vector's capacity rather than an intermediate width, and
+  both shipped nets end in a ReLU, so a narrow, randomly-initialised one
+  can emit all zeros before a single gradient step. A user's own
+  `output_dim=` always overrides either default.
+- **The transformer's readout.** `TransformerEmbedding.forward` reads the
+  **last token** as its summary (`self.aggregator(hidden_states[:, -1,
+  :])`). Under full attention with no positional embedding that token is
+  a function of every row, but *which* row happens to sit last is a
+  property of row order, not of the observation — two encodings of one
+  set that differ only in row order train and condition on different
+  summaries. The wrapper now builds a **masked-mean readout head**
+  instead: permutation-invariant, and using every retained token rather
+  than one. (A learned CLS token is the alternative — more parameters for
+  the same information — and was not chosen.)
+
+  There is no hook for this in sbi 0.27's public interface — `forward`
+  returns a bare tensor, not the hidden states it pooled — so the wrapper
+  never calls `net.forward` for the transformer at all, and instead calls
+  the net's own body modules directly, in the order and with the
+  arguments `forward` itself uses before its last-token slice:
+  `net.preprocess` (identity, on the non-ViT path this wrapper always
+  builds), each block in `net.layers` (called as `block(hidden_states,
+  attention_mask=None, position_ids=None)`, taking element 0 of its
+  tuple), `net.norm` (the final normalisation), and `net.aggregator` (the
+  linear layer to `final_emb_dimension`, applied to the pooled vector
+  rather than to the last token); `net.is_causal` is checked and required
+  `False`, since the masked mean assumes attention was never causally
+  restricted. Because these are read by name rather than through a
+  public API, `ampere/inference/_sbi.py`'s `_transformer_masked_mean`
+  documents each one and raises `AttributeError` naming whichever is
+  missing or wrong; `tests/inference/test_sbi.py`'s
+  `test_the_readout_depends_on_named_sbi_attributes` fails loudly first
+  if a future sbi renames or restructures any of them.
 
 ## 8. Stability
 
