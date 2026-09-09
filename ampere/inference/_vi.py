@@ -478,8 +478,8 @@ class VIEngine(Engine):
         attrs: dict[str, object] = {
             "vi_final_elbo": elbo[-1],
             "vi_elbo_trace": _thinned(elbo),
-            "pyro_version": pyro.__version__,
-            "torch_version": torch.__version__,
+            "pyro_version": str(pyro.__version__),
+            "torch_version": str(torch.__version__),
         }
         return drawn, attrs
 
@@ -565,8 +565,8 @@ class VIEngine(Engine):
         attrs: dict[str, object] = {
             "vi_final_elbo": elbo[-1],
             "vi_elbo_trace": _thinned(elbo),
-            "numpyro_version": numpyro.__version__,
-            "jax_version": jax.__version__,
+            "numpyro_version": str(numpyro.__version__),
+            "jax_version": str(jax.__version__),
         }
         return drawn, attrs
 

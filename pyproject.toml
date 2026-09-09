@@ -517,7 +517,13 @@ test-py313 = { features = ["py313", "dev", "zeus", "extinction"] }
 # "sbi<0.28"]), so torch is not listed separately here. Kept out of the
 # default test-py3* matrix -- see ci.yml's non-blocking
 # sbi-characterisation job.
-sbi = { features = ["py313", "dev", "zeus", "extinction", "sbi"] }
+# W3.2 (2026-09-09): the `torch` feature joins this environment. The `sbi`
+# extra installs torch but not pyro-ppl, and tests/inference's torch NUTS/VI
+# rows and tests/m2's torch agreement rows do not skip without pyro -- so the
+# environment's `test-all` had been red since W2.11 created it. With `torch`
+# here the environment is `torch` + sbi, which is also what a user who runs
+# SBI on the torch backend actually has. Same CPU-index pin either way.
+sbi = { features = ["py313", "dev", "zeus", "extinction", "netcdf", "torch", "sbi"] }
 # Backend environments (W2.4 for torch, W2.5 for jax): each is the daily-use
 # `dev` feature set plus its backend extra, not a bare `dev + backend`. The
 # items' gate is `pixi run -e <backend> test-all`, which runs all five

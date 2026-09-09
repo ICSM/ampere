@@ -552,8 +552,8 @@ class NUTSEngine(Engine):
             "nuts_divergences": (
                 int(np.sum(np.asarray(extra["diverging"]))) if "diverging" in extra else 0
             ),
-            "numpyro_version": numpyro.__version__,
-            "jax_version": jax.__version__,
+            "numpyro_version": str(numpyro.__version__),
+            "jax_version": str(jax.__version__),
         }
         if "num_steps" in extra:
             attrs["nuts_mean_tree_size"] = float(np.mean(np.asarray(extra["num_steps"])))
@@ -646,8 +646,8 @@ class NUTSEngine(Engine):
 
         attrs: dict[str, object] = {
             "nuts_divergences": int(divergences),
-            "pyro_version": pyro.__version__,
-            "torch_version": torch.__version__,
+            "pyro_version": str(pyro.__version__),
+            "torch_version": str(torch.__version__),
         }
         if accepted:
             attrs["nuts_mean_accept_prob"] = float(np.mean(accepted))
