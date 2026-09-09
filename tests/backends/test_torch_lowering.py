@@ -1484,3 +1484,118 @@ class TestNativeBatchedSimulation:
             assert np.array_equal(values, second[label])
             assert np.array_equal(values[:3], shuffled[label][:3])
             assert not np.array_equal(values[3], shuffled[label][3])
+
+    @pytest.mark.parametrize(
+        ("likelihood", "observed"),
+        [
+            (
+                lambda: Likelihood(PoissonFamily(), IndependentNoise()),
+                lambda: Spectrum(GRID * u.um, _COUNTS * u.Jy),
+            ),
+            (lambda: Likelihood(StudentTFamily(5.0), IndependentNoise()), lambda: None),
+        ],
+        ids=["poisson", "student_t"],
+    )
+    def test_a_two_stage_native_draw_is_a_pure_function_of_its_seed(
+        self, likelihood: Any, observed: Any
+    ) -> None:
+        """The property the two-stage route exists to keep (*W3.14*).
+
+        ``poisson`` and ``student_t`` cannot be written as arithmetic on
+        pre-drawn normals, so their variates are drawn *after* the ``vmap``,
+        per draw, from that draw's own seed — and if that had been done with
+        the global generator instead (``randomness="different"``), this row
+        would fail on the first two comparisons.
+        """
+        problem, lowered = lowered_for(likelihood(), observed=observed())
+        theta = self.theta(problem, 4)
+        prediction = lowered.simulate_batched(theta)
+        first = lowered.sample_observations(theta, prediction.predicted, [11, 22, 33, 44])
+        second = lowered.sample_observations(theta, prediction.predicted, [11, 22, 33, 44])
+        shuffled = lowered.sample_observations(theta, prediction.predicted, [11, 22, 33, 45])
+        for label, values in first.items():
+            assert np.array_equal(values, second[label])
+            assert np.array_equal(values[:3], shuffled[label][:3])
+            assert not np.array_equal(values[3], shuffled[label][3])
+
+    def test_the_two_stage_route_leaves_the_global_rng_where_it_found_it(self) -> None:
+        """``fork_rng`` rather than a bare ``manual_seed``, asserted (*W3.14*).
+
+        The Student-t variate is drawn through ``torch.distributions``, which
+        takes no generator, so the per-draw stream comes from seeding the
+        global RNG inside a fork. A fork that leaked would make every later
+        ``torch.randn`` in the process a function of how many observations had
+        been simulated — a spectacularly hard bug to find from the symptom.
+        """
+        problem, lowered = lowered_for(Likelihood(StudentTFamily(5.0), IndependentNoise()))
+        theta = self.theta(problem, 3)
+        prediction = lowered.simulate_batched(theta)
+        torch.manual_seed(4242)
+        before = torch.randn(4)
+        lowered.sample_observations(theta, prediction.predicted, [1, 2, 3])
+        after = torch.randn(4)
+        torch.manual_seed(4242)
+        assert torch.equal(before, torch.randn(4))
+        assert torch.equal(after, torch.randn(4))
+
+    def test_a_family_the_core_will_not_sample_is_refused_by_name(self) -> None:
+        """Peter's ruling has a ceiling: a backend samples what ``ampere.core`` samples.
+
+        ``cauchy`` since W3.14, ``poisson`` having crossed the line: the family
+        that holds this row down is whichever one the core still declines to
+        guess an observation process for.
+        """
+        problem, lowered = lowered_for(Likelihood(CauchyFamily(), IndependentNoise()))
+        theta = self.theta(problem, 2)
+        prediction = lowered.simulate_batched(theta)
+        with pytest.raises(LoweringError, match="numpy path"):
+            lowered.sample_observations(theta, prediction.predicted, [1, 2])
+
+    def test_a_user_overridden_sample_is_left_to_the_numpy_path(self) -> None:
+        """Their override is the observation process they wrote (*W3.14*)."""
+
+        class DoubledPoisson(PoissonFamily):
+            def sample(self, predicted, noise, rng):
+                return np.asarray(rng.poisson(2.0 * predicted), dtype=float)
+
+        problem, lowered = lowered_for(
+            Likelihood(DoubledPoisson(), IndependentNoise()),
+            observed=Spectrum(GRID * u.um, _COUNTS * u.Jy),
+        )
+        theta = self.theta(problem, 2)
+        prediction = lowered.simulate_batched(theta)
+        with pytest.raises(LoweringError, match="numpy path"):
+            lowered.sample_observations(theta, prediction.predicted, [1, 2])
+
+    def test_the_poisson_twin_draws_counts(self) -> None:
+        problem, lowered = lowered_for(
+            Likelihood(PoissonFamily(), IndependentNoise()),
+            observed=Spectrum(GRID * u.um, _COUNTS * u.Jy),
+        )
+        theta = self.theta(problem, 3)
+        prediction = lowered.simulate_batched(theta)
+        drawn = np.asarray(
+            lowered.sample_observations(theta, prediction.predicted, [5, 6, 7])["default"]
+        )
+        assert drawn.shape == (3, GRID.size)
+        assert np.all(drawn >= 0.0) and np.all(drawn == np.round(drawn))
+
+    def test_a_negative_native_poisson_rate_is_refused_by_name(self) -> None:
+        """torch's own message names neither the family nor the prediction (*W3.14*).
+
+        The core's ``sample`` refuses the same condition by name and the native
+        twin must not be less articulate about it, so the rate is checked
+        before ``torch.poisson`` sees it. Driven through the surface directly,
+        because a lognormal norm cannot be pushed negative from a prior draw.
+        """
+        problem, lowered = lowered_for(
+            Likelihood(PoissonFamily(), IndependentNoise()),
+            observed=Spectrum(GRID * u.um, _COUNTS * u.Jy),
+        )
+        theta = self.theta(problem, 2)
+        prediction = lowered.simulate_batched(theta)
+        broken = {
+            label: -np.abs(np.asarray(values)) for label, values in prediction.predicted.items()
+        }
+        with pytest.raises(LoweringError, match="negative or non-finite expected count"):
+            lowered.sample_observations(theta, broken, [1, 2])

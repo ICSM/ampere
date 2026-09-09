@@ -2236,12 +2236,69 @@ class TestNativeBatchedSimulation:
             assert not np.array_equal(values[3], shuffled[label][3])
 
     def test_a_family_the_core_will_not_sample_is_refused_by_name(self) -> None:
-        """Peter's ruling has a ceiling: a backend samples what ``ampere.core`` samples."""
-        from ampere.core import PoissonFamily
+        """Peter's ruling has a ceiling: a backend samples what ``ampere.core`` samples.
 
-        problem = _family_problem(PoissonFamily(), counts=True)
+        ``cauchy`` since W3.14, ``poisson`` having crossed the line: the family
+        that holds this row down is whichever one the core still declines to
+        guess an observation process for.
+        """
+        problem = _family_problem(CauchyFamily())
         lowered = lower_problem(problem)
         theta = self.theta(problem, 2)
         prediction = lowered.simulate_batched(theta)
         with pytest.raises(LoweringError, match="numpy path"):
             lowered.sample_observations(theta, prediction.predicted, [1, 2])
+
+    def test_a_user_overridden_sample_is_left_to_the_numpy_path(self) -> None:
+        """Their override is the observation process they wrote (*W3.14*).
+
+        Worth its own row now that ``poisson`` has a twin: the check is that
+        the family's ``sample`` is the *core's own* method, not merely that
+        the family is one of the four names, so a subclass that changes the
+        draw still falls back rather than being replaced by ours.
+        """
+        from ampere.core import PoissonFamily
+
+        class DoubledPoisson(PoissonFamily):
+            def sample(self, predicted, noise, rng):
+                return np.asarray(rng.poisson(2.0 * predicted), dtype=float)
+
+        problem = _family_problem(DoubledPoisson(), counts=True)
+        lowered = lower_problem(problem)
+        theta = self.theta(problem, 2)
+        prediction = lowered.simulate_batched(theta)
+        with pytest.raises(LoweringError, match="numpy path"):
+            lowered.sample_observations(theta, prediction.predicted, [1, 2])
+
+    @pytest.mark.parametrize(
+        ("family", "counts"),
+        [
+            (StudentTFamily(nu=5.0), False),
+            (PoissonFamily(), True),
+        ],
+        ids=["student_t", "poisson"],
+    )
+    def test_the_w3_14_twins_draw_rather_than_refuse(self, family: Any, counts: bool) -> None:
+        """The floor of the same ruling: what the core samples, this backend samples."""
+        problem = _family_problem(family, counts=counts)
+        lowered = lower_problem(problem)
+        theta = self.theta(problem, 3)
+        prediction = lowered.simulate_batched(theta)
+        drawn = lowered.sample_observations(theta, prediction.predicted, [5, 6, 7])
+        values = np.asarray(drawn["default"])
+        assert values.shape == (3, AGREEMENT_GRID.size)
+        assert np.all(np.isfinite(values))
+        if counts:
+            assert np.all(values >= 0.0) and np.all(values == np.round(values))
+
+    def test_the_complex_twin_draws_complex_visibilities(self) -> None:
+        """A complex container is what the ``complex_gaussian`` twin exists for."""
+        problem = _visibility_problem()
+        lowered = lower_problem(problem)
+        theta = self.theta(problem, 3)
+        prediction = lowered.simulate_batched(theta)
+        drawn = lowered.sample_observations(theta, prediction.predicted, [5, 6, 7])
+        values = np.asarray(drawn["default"])
+        assert np.iscomplexobj(values)
+        assert np.all(np.isfinite(values))
+        assert np.any(values.imag != 0.0)
