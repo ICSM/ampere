@@ -88,17 +88,35 @@ says whether it is normalised — it is for NPE, where the posterior is a direct
 density over ℝⁿ; it is not for NLE and NRE, whose posteriors are known only up
 to the evidence.
 
-The summary, and why it is behind one function
------------------------------------------------
-The network sees a fixed-length vector, not a
-:class:`~ampere.core.dataset.DatasetCollection`. Until W3.3 lands the
-coordinate-value-mask encoding, the vector is :func:`_summary_of`: each
-dataset's observed values, flattened, masked samples dropped, concatenated in
-``datasets`` order. That is enough for a single fitting problem, where the data
-layout is fixed anyway, and it is deliberately the *whole* of the layout logic
-so that W3.3 replaces one function rather than searching the module. The run
-records which layout it used (``ampere_sbi_summary_layout``, ``"flat"`` today),
-because a network trained on one layout must never be believed about another.
+The tensor the network sees, and the layout that fixes it
+---------------------------------------------------------
+The network sees **one tensor**, not a
+:class:`~ampere.core.dataset.DatasetCollection` — that is the whole of what
+``sbi``'s interface allows — so what goes into it is a contract in its own
+right, and since W3.3 that contract is ``docs/design/contracts/encoding.md``
+and lives in :mod:`ampere.core.encoding`. ``layout=`` picks the packing:
+
+* ``"flat"`` (the default) is W3.2's fixed-size summary — each dataset's
+  observed values, flattened, masked samples dropped, concatenated in
+  ``datasets`` order. It is enough for a single fitting problem, where the data
+  layout is fixed anyway, and for a short real vector a flow is both cheaper and
+  better conditioned than one behind a set embedding.
+* ``"set"`` is the coordinate-value-mask packing: one **row per sample**,
+  carrying where it sits, what was measured, how well, whether it counts and
+  which dataset it came from. A set-based embedding over those rows is invariant
+  to how many there are and where they sit, which is what makes amortisation
+  across differently-sampled datasets possible, and its uncertainty columns are
+  what makes amortisation across noise realisations possible once the reserved
+  observation context varies them.
+
+Either way the run records **which** packing it used, by name and by hash
+(``ampere_sbi_summary_layout``, ``ampere_encoding_layout``,
+``ampere_encoding_hash``), and so does any training set it writes, because a
+network trained on one layout must never be believed about another. The layout
+is built from the observed containers **before** the first simulation is drawn
+and every statistic in it is frozen there, so the standardisation the network
+trains under and the one the observation is shown under are the same object
+rather than two computations that agree.
 
 ``context=`` is the observation-context slot the horizon notes reserve
 (confirmed by Peter 2026-09-09): a per-draw uncertainty pattern, grid or instrument
@@ -129,6 +147,15 @@ from typing import Any, ClassVar
 import numpy as np
 
 from ampere.core.dataset import FittingProblem
+from ampere.core.encoding import (
+    FLAT_KIND,
+    SET_KIND,
+    EncodingError,
+    EncodingLayout,
+    encode,
+    encode_observations,
+    unpack,
+)
 from ampere.core.exceptions import OptionalDependencyError
 from ampere.core.simulate import Executor, SimulationBatch
 from ampere.results.training import append_training_set, write_training_set
@@ -138,7 +165,9 @@ from .exceptions import EngineError
 
 __all__ = [
     "EMBEDDINGS",
+    "LAYOUTS",
     "METHODS",
+    "SET_EMBEDDINGS",
     "SUMMARY_LAYOUT",
     "SBIEngine",
 ]
@@ -182,12 +211,31 @@ EMBEDDINGS: Mapping[str, str] = {
     "default": "CNN",
     "FC": "FC",
     "FullyConnected": "FC",
+    # W3.3's two, which read the coordinate-value-mask packing rather than a
+    # flat feature vector and are therefore only available under a ``"set"``
+    # layout. Both are ``sbi`` 0.27 nets behind an ampere wrapper that unpacks
+    # the tensor by the layout and converts the one mask column into whatever
+    # that net wants (``encoding.md`` §7).
+    "set": "set",
+    "PermutationInvariant": "set",
+    "transformer": "transformer",
+    "Transformer": "transformer",
 }
 
-#: What :func:`_summary_of` builds, recorded in ``ampere_sbi_summary_layout``.
-#: W3.3 adds the coordinate-value-mask layouts beside it and makes this one of
-#: several; a run that does not say which layout it used cannot be reused.
-SUMMARY_LAYOUT = "flat"
+#: The subset of :data:`EMBEDDINGS` that consumes the ``"set"`` packing. A flat
+#: layout has no column groups to unpack, so asking for one of these with
+#: ``layout="flat"`` is refused by name rather than silently ignored.
+SET_EMBEDDINGS: tuple[str, ...] = ("set", "transformer")
+
+#: The layouts ``layout=`` names. ``"flat"`` is W3.2's fixed-size summary and
+#: stays the default: for a single fitting problem the data layout is fixed
+#: anyway, and a flow over a short real vector is both cheaper and better
+#: conditioned than one behind a set embedding. ``"set"`` is the
+#: coordinate-value-mask packing of ``encoding.md``.
+LAYOUTS: tuple[str, ...] = (FLAT_KIND, SET_KIND)
+
+#: The default layout's name, recorded in ``ampere_sbi_summary_layout``.
+SUMMARY_LAYOUT = FLAT_KIND
 
 #: How many loss values a run records per trace. Provenance attributes are
 #: JSON-encoded into the archived file, so a trace must stay small whatever the
@@ -206,21 +254,61 @@ _DTYPE = "float32"
 # ---------------------------------------------------------------------------
 
 
+def _layout_of(problem: FittingProblem, layout: Any) -> EncodingLayout:
+    """Resolve ``layout=`` into the frozen record everything downstream uses.
+
+    A string names a kind and the layout is built from *problem*'s own observed
+    containers; an :class:`~ampere.core.encoding.EncodingLayout` is taken as
+    given and **checked against the problem**, field by field, because a layout
+    is exactly the object a caller reuses across runs and one that does not
+    describe this problem would otherwise train a network on columns that mean
+    something else.
+    """
+    if isinstance(layout, EncodingLayout):
+        try:
+            layout.check_against(problem.datasets)
+        except EncodingError as error:
+            raise EngineError(str(error)) from error
+        return layout
+    if isinstance(layout, str):
+        if layout not in LAYOUTS:
+            known = ", ".join(LAYOUTS)
+            raise EngineError(
+                f"sbi does not know the layout {layout!r}. Available: {known}, or an "
+                f"ampere.core.EncodingLayout of your own -- for a wider row cap, a different "
+                f"Fourier band count, or a layout carried over from an earlier run."
+            )
+        try:
+            return EncodingLayout.from_datasets(problem.datasets, kind=layout)
+        except EncodingError as error:
+            raise EngineError(str(error)) from error
+    raise EngineError(
+        f"sbi's layout= is one of {list(LAYOUTS)} or an ampere.core.EncodingLayout, got {layout!r}."
+    )
+
+
 def _summary_of(
     observations: Mapping[str, Any] | None,
     datasets: Mapping[str, Any],
     *,
     batched: bool,
+    layout: EncodingLayout | None = None,
 ) -> np.ndarray:
-    """The fixed-layout summary vector: ``layout="flat"``.
+    """The tensor the density estimator conditions on, under *layout*.
 
-    Each dataset contributes its observed values, flattened, with the samples
-    its :meth:`~ampere.core.dataset.Dataset.effective_mask` excludes dropped;
-    the pieces are concatenated in ``datasets`` order. Masked samples are
-    dropped **consistently** — the same columns are absent from every draw and
-    from the observation the posterior is conditioned on — which is the whole
-    of what "fixed layout" means and the reason the mask is read from the
-    dataset rather than from the drawn container.
+    W3.3 turned this from the whole of the layout logic into a thin adapter over
+    :mod:`ampere.core.encoding`, which is where the packing now lives and where
+    its contract (``encoding.md``) can be read. What survives from W3.2 is the
+    guarantee, and it is the one that matters: the observation the posterior is
+    conditioned on and the rows the network trained on have the same columns in
+    the same order, standardised the same way, with the same samples masked.
+
+    That guarantee is now **structural** rather than careful. The layout freezes
+    every statistic and every mask at construction, from the observed data
+    alone, so no two calls here can disagree about what a column means —
+    including the two W3.2 could in principle have disagreed on, since
+    :attr:`~ampere.core.dataset.Dataset.effective_mask` is resolved lazily and
+    the observation is encoded before the first simulation is drawn.
 
     Parameters
     ----------
@@ -229,63 +317,36 @@ def _summary_of(
         :class:`~ampere.core.simulate.ContainerBatch`\\ es, whose leading axis
         is the sample axis; with it false they are single containers.
     datasets
-        The problem's own collection, which supplies both the order and the
-        masks. Reading the order from here rather than from *observations* is
-        deliberate: a dict built elsewhere could iterate differently and the
-        network would silently see its columns permuted.
+        The problem's own collection, which supplies the order. Reading the
+        order from here rather than from *observations* is deliberate: a dict
+        built elsewhere could iterate differently and the network would silently
+        see its columns permuted.
     batched
         Whether *observations* carries a leading sample axis.
+    layout
+        The frozen packing. ``None`` builds the default ``"flat"`` one from
+        *datasets*, which is what a caller predating ``layout=`` gets.
 
     Returns
     -------
     numpy.ndarray
-        ``(count, features)``, always two-dimensional — ``count`` is 1 for the
+        ``(count, features)`` for a ``"flat"`` layout — ``count`` is 1 for the
         unbatched form, so the observation and the training set have the same
-        shape and the same code path.
+        rank and the same code path — and ``(count, rows, columns)`` for a
+        ``"set"`` one.
     """
     if not datasets:
         raise EngineError("sbi has nothing to summarise: this problem declares no datasets.")
-    columns: list[np.ndarray] = []
-    for label in datasets:
-        holding = None if observations is None else observations.get(label)
-        if holding is None:
-            raise EngineError(
-                f"sbi cannot build a summary vector for dataset {label!r}: the simulation "
-                f"produced no observation for it. simulate_many(..., observe=True) is what "
-                f"draws them, and a dataset whose likelihood family cannot sample refuses by "
-                f"name (inference.md §13)."
-            )
-        values = np.asarray(holding.values)
-        if np.iscomplexobj(values):
-            raise EngineError(
-                f"dataset {label!r} holds complex values, and the {SUMMARY_LAYOUT!r} summary "
-                f"layout has no encoding for one — flattening a complex array into a real "
-                f"feature vector is a choice (real and imaginary parts as two columns) that "
-                f"belongs in the encoding contract rather than in this driver. W3.3's "
-                f"coordinate-value-mask encoding defines it; until then, fit a complex "
-                f"dataset with a likelihood-based engine."
-            )
-        flat = np.asarray(values, dtype=float)
-        flat = flat.reshape(flat.shape[0], -1) if batched else flat.reshape(1, -1)
-        mask = datasets[label].effective_mask
-        if mask is not None:
-            keep = ~np.asarray(mask, dtype=bool).reshape(-1)
-            if keep.size != flat.shape[1]:
-                raise EngineError(
-                    f"dataset {label!r}: its effective mask covers {keep.size} sample(s) but the "
-                    f"container being summarised has {flat.shape[1]}. The mask is resolved at "
-                    f"composition and is evaluation-invariant by declaration, so this is a "
-                    f"disagreement between the observed container and the simulated one."
-                )
-            flat = flat[:, keep]
-        columns.append(flat)
-    summary = np.concatenate(columns, axis=1)
-    if summary.shape[1] == 0:
-        raise EngineError(
-            "sbi's summary vector is empty: every sample of every dataset is masked out, so "
-            "there is nothing for the density estimator to condition on."
+    try:
+        resolved = (
+            EncodingLayout.from_datasets(datasets, kind=FLAT_KIND) if layout is None else layout
         )
-    return summary
+        encoded = encode(observations, layout=resolved, batched=batched)
+    except EncodingError as error:
+        raise EngineError(str(error)) from error
+    if resolved.kind == FLAT_KIND:
+        return encoded.matrix
+    return np.asarray(encoded.values)
 
 
 # ---------------------------------------------------------------------------
@@ -394,7 +455,14 @@ class _Embedding:
     output_dim: int
 
 
-def _embedding_of(embedding: Any, *, torch: Any, features: int, free_size: int) -> _Embedding:
+def _embedding_of(
+    embedding: Any,
+    *,
+    torch: Any,
+    features: int,
+    free_size: int,
+    layout: EncodingLayout | None = None,
+) -> _Embedding:
     """The ``embedding=`` vocabulary, carried over from ``ampere/infer/sbi.py``.
 
     The legacy class accepted four things and this accepts the same four, with
@@ -423,15 +491,40 @@ def _embedding_of(embedding: Any, *, torch: Any, features: int, free_size: int) 
     through the hyperparameter dict — or, for the low-dimensional summaries
     the ``"flat"`` layout produces, no embedding at all, which is the default
     for exactly this reason.
+
+    **W3.3 adds two spellings and one rule.** ``"set"`` and ``"transformer"``
+    build ``sbi``'s ``PermutationInvariantEmbedding`` and ``TransformerEmbedding``
+    behind an ampere wrapper that reads the coordinate-value-mask packing
+    through :func:`~ampere.core.encoding.unpack` (see :func:`_set_embedding` and
+    :func:`_transformer_embedding`). They need column groups, so they need a
+    ``"set"`` layout, and asking for one under ``"flat"`` is refused by name
+    rather than quietly given a vector with no coordinates in it. The converse
+    holds too: a ``"set"`` layout with no embedding at all is refused, because a
+    ``(rows, columns)`` tensor fed straight to a flow is a flow over a padded
+    matrix and means nothing.
     """
+    is_set = layout is not None and layout.kind == SET_KIND
     if embedding is None or embedding is False:
+        if is_set:
+            raise EngineError(
+                "sbi was given layout='set' and no embedding. The set packing is rows of "
+                "(coordinate, value, sigma, mask) that only a set-based network can read: "
+                "handing it straight to a density estimator would model a padded matrix "
+                "rather than an observation. Pass embedding='set' or embedding='transformer', "
+                "or a torch.nn.Module of your own over ampere.core.unpack."
+            )
         return _Embedding(module=None, name="none", output_dim=0)
 
     default_width = max(2 * int(free_size), 1)
 
     if embedding is True:
         return _built(
-            EMBEDDINGS["default"], {}, torch=torch, features=features, width=default_width
+            EMBEDDINGS["default"],
+            {},
+            torch=torch,
+            features=features,
+            width=default_width,
+            layout=layout,
         )
     if isinstance(embedding, str):
         kind = EMBEDDINGS.get(embedding)
@@ -441,7 +534,7 @@ def _embedding_of(embedding: Any, *, torch: Any, features: int, free_size: int) 
                 f"sbi does not know the embedding {embedding!r}. Available: {known}, a "
                 f"torch.nn.Module of your own, or a dict of hyperparameters with a 'type' key."
             )
-        return _built(kind, {}, torch=torch, features=features, width=default_width)
+        return _built(kind, {}, torch=torch, features=features, width=default_width, layout=layout)
     if isinstance(embedding, Mapping):
         settings = dict(embedding)
         named = str(settings.pop("type", "CNN"))
@@ -453,12 +546,15 @@ def _embedding_of(embedding: Any, *, torch: Any, features: int, free_size: int) 
                 f"Available: {known}."
             )
         width = int(settings.pop("output_dim", default_width))
-        return _built(kind, settings, torch=torch, features=features, width=width)
+        return _built(kind, settings, torch=torch, features=features, width=width, layout=layout)
     if isinstance(embedding, torch.nn.Module):
+        shape = (
+            (1, layout.row_cap, layout.columns_total) if is_set and layout else (1, int(features))
+        )
         return _Embedding(
             module=embedding,
             name="custom",
-            output_dim=_probe_width(embedding, torch=torch, features=features),
+            output_dim=_probe_width(embedding, torch=torch, shape=shape),
         )
     raise EngineError(
         f"sbi does not know what to do with embedding={embedding!r}. Pass one of "
@@ -490,13 +586,41 @@ _FC_KEYS: Mapping[str, str] = {
 }
 
 
+#: W3.3's two, whose hyperparameters are ampere's own rather than a legacy
+#: dictionary's, so the names are ``sbi``'s where ``sbi`` has one.
+_SET_KEYS: Mapping[str, str] = {
+    "trial_net_output_dim": "trial_net_output_dim",
+    "num_hiddens": "num_hiddens",
+    "num_layers": "num_layers",
+    "aggregation_fn": "aggregation_fn",
+}
+_TRANSFORMER_KEYS: Mapping[str, str] = {
+    "feature_space_dim": "feature_space_dim",
+    "num_hidden_layers": "num_hidden_layers",
+    "num_attention_heads": "num_attention_heads",
+    "intermediate_size": "intermediate_size",
+    "dropout": "dropout",
+}
+
+
 def _built(
-    kind: str, settings: Mapping[str, Any], *, torch: Any, features: int, width: int
+    kind: str,
+    settings: Mapping[str, Any],
+    *,
+    torch: Any,
+    features: int,
+    width: int,
+    layout: EncodingLayout | None = None,
 ) -> _Embedding:
-    """One of the two shipped nets, with its legacy hyperparameters translated."""
+    """One of the four shipped nets, with its hyperparameters translated."""
     from sbi.neural_nets import embedding_nets  # pyrefly: ignore[missing-import]
 
-    table = _CNN_KEYS if kind == "CNN" else _FC_KEYS
+    table = {
+        "CNN": _CNN_KEYS,
+        "FC": _FC_KEYS,
+        "set": _SET_KEYS,
+        "transformer": _TRANSFORMER_KEYS,
+    }[kind]
     unknown = sorted(set(settings) - set(table))
     if unknown:
         raise EngineError(
@@ -504,6 +628,17 @@ def _built(
             f"Available: {sorted(table)}, plus 'type' and 'output_dim'."
         )
     kwargs = {table[key]: value for key, value in settings.items()}
+    if kind in SET_EMBEDDINGS:
+        if layout is None or layout.kind != SET_KIND:
+            raise EngineError(
+                f"the {kind!r} embedding reads the coordinate-value-mask packing -- rows of "
+                f"(coordinate, value, sigma, mask) with named column groups -- and this run's "
+                f"layout is {FLAT_KIND!r}, which is one row of concatenated values and has no "
+                f"column groups to read. Pass layout='set' (or an EncodingLayout) alongside "
+                f"embedding={kind!r}."
+            )
+        builder = _set_embedding if kind == "set" else _transformer_embedding
+        return builder(embedding_nets, torch=torch, layout=layout, width=int(width), **kwargs)
     if kind == "CNN":
         module = embedding_nets.CNNEmbedding(
             input_shape=(int(features),), output_dim=int(width), **kwargs
@@ -515,19 +650,191 @@ def _built(
     return _Embedding(module=module, name=kind, output_dim=int(width))
 
 
-def _probe_width(module: Any, *, torch: Any, features: int) -> int:
+def _set_embedding(
+    embedding_nets: Any,
+    *,
+    torch: Any,
+    layout: EncodingLayout,
+    width: int,
+    trial_net_output_dim: int | None = None,
+    num_hiddens: int = 40,
+    num_layers: int = 2,
+    aggregation_fn: str = "mean",
+) -> _Embedding:
+    """``PermutationInvariantEmbedding`` over the packing, masked by the wrapper.
+
+    ``sbi``'s net already has mask handling: an **all-NaN row** is treated as
+    absent, its per-row embedding zeroed, and the aggregation divided by the
+    surviving count. The wrapper's job is therefore to write the mask column
+    into the tensor as NaN rows and hand over the rest, which is exactly what
+    ``encoding.md`` §7 specifies.
+
+    Two things about ``sbi`` 0.27 were verified before relying on any of it, and
+    both are why this is a wrapper rather than a bare net.
+
+    * ``aggregation_fn`` defaults to ``"sum"``, which makes the pooled embedding
+      scale with the row count. It is set to ``"mean"`` here (W3.3 trap 5); the
+      count is not lost, because ``log N`` per dataset is a column of the
+      packing's ``set_features`` group.
+    * The net's own valid-row count is computed as
+      ``isnan(x).sum(dim=1).reshape(-1)[:num_batch]``, which reads the *first*
+      batch element's count for every element whenever ``x`` has more than one
+      feature column. Under this contract that is harmless and exactly right,
+      because the mask is a property of the **layout** and is therefore
+      identical across a batch -- but it is harmless by construction rather
+      than by luck, and a future packing with a per-draw mask would have to stop
+      using this net's aggregation.
+    """
+    row_features = layout.columns_total - layout.group("mask").width
+    trial_width = int(trial_net_output_dim or max(2 * int(width), 8))
+    trial = embedding_nets.FCEmbedding(
+        input_dim=int(row_features),
+        output_dim=trial_width,
+        num_layers=int(num_layers),
+        num_hiddens=int(num_hiddens),
+    )
+    net = embedding_nets.PermutationInvariantEmbedding(
+        trial_net=trial,
+        trial_net_output_dim=trial_width,
+        aggregation_fn=str(aggregation_fn),
+        num_hiddens=int(num_hiddens),
+        num_layers=int(num_layers),
+        output_dim=int(width),
+        aggregation_dim=1,
+    )
+    wrappers = _wrapper_classes(torch)
+    return _Embedding(module=wrappers[0](layout, net), name="set", output_dim=int(width))
+
+
+def _transformer_embedding(
+    embedding_nets: Any,
+    *,
+    torch: Any,
+    layout: EncodingLayout,
+    width: int,
+    feature_space_dim: int = 32,
+    num_hidden_layers: int = 2,
+    num_attention_heads: int = 4,
+    intermediate_size: int = 64,
+    dropout: float = 0.1,
+) -> _Embedding:
+    """``TransformerEmbedding`` over the packing, with W3.3's four corrections.
+
+    ``sbi`` 0.27's defaults are wrong for a set and are all overridden here
+    (W3.3 trap 4): ``is_causal=True`` would make a spectrum's rows attend only
+    to earlier rows, ``pos_emb="rotary"`` would encode the *index* rather than
+    the coordinate, and both dropouts default to 0.5. So this builds it with
+    ``is_causal=False``, ``pos_emb="none"``, explicit dropout, and the
+    coordinate carried as row features (raw plus Fourier bands) by the packing
+    itself.
+
+    Two facts about that net were verified and shape the wrapper, and the first
+    is the reason it cannot simply pass a mask and trust it:
+
+    * ``forward`` **discards** ``attention_mask`` unless ``is_causal`` is true
+      (``else: attention_mask = None``), so on the non-causal path the mask
+      alone excludes nothing. The wrapper therefore zeroes masked and padded
+      rows' *tokens* after the projection, which makes the output independent of
+      what a masked row holds whatever the net does with the mask. The mask is
+      passed as well, so that a later ``sbi`` honouring it changes nothing here.
+    * The aggregation is ``hidden_states[:, -1, :]``: the **last** token, after
+      full attention. A padded row is a zero token whose attention over the
+      sequence is uniform, so the summary is still a function of every row --
+      but it is a last-token read rather than a pooled one, and a caller wanting
+      pooling wants a module of their own over :func:`~ampere.core.encoding.unpack`.
+
+    The projection from the packing's feature width to the transformer's model
+    dimension is ampere's: ``feature_space_dim`` is the model dimension, so
+    without it the model dimension would be whatever the column count happened
+    to be.
+    """
+    row_features = layout.columns_total - layout.group("mask").width
+    heads = max(int(num_attention_heads), 1)
+    model_dim = max(int(feature_space_dim), int(width), heads)
+    model_dim += (-model_dim) % heads
+    projection = torch.nn.Linear(int(row_features), model_dim)
+    net = embedding_nets.TransformerEmbedding(
+        feature_space_dim=model_dim,
+        final_emb_dimension=int(width),
+        is_causal=False,
+        pos_emb="none",
+        attention_dropout=float(dropout),
+        vit_dropout=float(dropout),
+        num_hidden_layers=int(num_hidden_layers),
+        num_attention_heads=heads,
+        num_key_value_heads=heads,
+        intermediate_size=int(intermediate_size),
+    )
+    wrappers = _wrapper_classes(torch)
+    return _Embedding(
+        module=wrappers[1](layout, projection, net), name="transformer", output_dim=int(width)
+    )
+
+
+@functools.cache
+def _wrapper_classes(torch: Any) -> tuple[Any, Any]:
+    """The two ``nn.Module`` wrappers, defined once per interpreter.
+
+    Inside a function for :func:`_prior_class`'s reason: they subclass
+    ``torch.nn.Module``, and this module imports torch on use, never on import.
+
+    Both do the same three things and differ only in what they hand the net.
+    They unpack ``x`` by the layout (which also reshapes it, since ``sbi``
+    flattens ``x`` on some paths), they narrow float64 to the network's float32
+    **once, here, at the boundary**, and they convert the packing's single mask
+    column into whatever their net wants -- NaN rows for the set embedding, an
+    attention mask and zeroed tokens for the transformer. No embedding ever sees
+    the mask column as a feature: :attr:`~ampere.core.encoding.Unpacked.features`
+    excludes it by construction.
+    """
+
+    class _SetEmbedding(torch.nn.Module):
+        """Mask as NaN rows, then ``sbi``'s permutation-invariant net."""
+
+        def __init__(self, layout: EncodingLayout, net: Any) -> None:
+            super().__init__()
+            self.layout = layout
+            self.net = net
+
+        def forward(self, x: Any) -> Any:
+            view = unpack(x.to(getattr(torch, _DTYPE)), self.layout)
+            features = view.features
+            absent = torch.full_like(features, float("nan"))
+            return self.net(torch.where(view.valid.unsqueeze(-1), features, absent))
+
+    class _TransformerEmbedding(torch.nn.Module):
+        """Zeroed tokens plus an attention mask, then ``sbi``'s transformer."""
+
+        def __init__(self, layout: EncodingLayout, projection: Any, net: Any) -> None:
+            super().__init__()
+            self.layout = layout
+            self.projection = projection
+            self.net = net
+
+        def forward(self, x: Any) -> Any:
+            view = unpack(x.to(getattr(torch, _DTYPE)), self.layout)
+            keep = view.valid
+            projected = self.projection(view.features)
+            tokens = projected * keep.unsqueeze(-1).to(projected.dtype)
+            output = self.net(tokens, attention_mask=keep.to(tokens.dtype))
+            return output[0] if isinstance(output, tuple) else output
+
+    return _SetEmbedding, _TransformerEmbedding
+
+
+def _probe_width(module: Any, *, torch: Any, shape: tuple[int, ...]) -> int:
     """A user module's output width, measured rather than asked for.
 
     A ``torch.nn.Module`` does not have to declare what it produces, and the
     number is worth recording — it is what a reader of an archived run needs to
     know what the network actually saw. So it is measured with one forward pass
-    on a zero input, and a module that will not take this problem's summary
-    reports 0 rather than failing the run here: the real failure, if there is
-    one, belongs at training time with ``sbi``'s own message.
+    on a zero input of the shape this layout produces, and a module that will
+    not take it reports 0 rather than failing the run here: the real failure, if
+    there is one, belongs at training time with ``sbi``'s own message.
     """
     try:
         with torch.no_grad():
-            probe = module(torch.zeros(1, int(features)))
+            probe = module(torch.zeros(*shape))
         return int(np.asarray(probe.detach().cpu().numpy()).reshape(1, -1).shape[1])
     except Exception:
         return 0
@@ -570,7 +877,21 @@ class SBIEngine(Engine):
         The data embedding network; see :func:`_embedding_of` and
         :data:`EMBEDDINGS`. ``None`` feeds the summary vector to the density
         estimator directly, which is the right choice for the low-dimensional
-        summaries this layout produces.
+        summaries the ``"flat"`` layout produces. ``"set"`` and
+        ``"transformer"`` are W3.3's two and need ``layout="set"``: they read
+        the coordinate-value-mask packing through
+        :func:`~ampere.core.encoding.unpack` and mask themselves from its one
+        mask column, so no network ever sees that column as a feature.
+    layout
+        The packing the network is trained on: ``"flat"`` (the default; W3.2's
+        fixed-size summary), ``"set"`` (the coordinate-value-mask encoding), or
+        an :class:`~ampere.core.encoding.EncodingLayout` built by hand — for a
+        wider row cap, a different Fourier band count, or a layout carried over
+        from an earlier run so that the two produce comparable tensors. A layout
+        that does not describe this problem is refused by name, saying which
+        field differs. A ``"set"`` layout passes ``z_score_x="none"`` to
+        ``sbi``: the encoding standardises itself, from statistics frozen in the
+        layout.
     density_estimator
         The network architecture: a string ``sbi`` knows (``"maf"``,
         ``"nsf"``, ``"mdn"``, ``"made"`` for NPE/NLE; ``"resnet"``, ``"mlp"``
@@ -685,6 +1006,7 @@ class SBIEngine(Engine):
         method: str = "npe",
         budget: int = 1000,
         embedding: Any = None,
+        layout: Any = SUMMARY_LAYOUT,
         density_estimator: Any = None,
         rounds: int = 1,
         device: str = "cpu",
@@ -733,6 +1055,11 @@ class SBIEngine(Engine):
         self.method = chosen
         self.budget = int(budget)
         self.embedding = embedding
+        self.layout = layout
+        #: The resolved :class:`~ampere.core.encoding.EncodingLayout` after a
+        #: run: what the network was trained under, and what an observation
+        #: shown to it later must match by hash.
+        self.encoding: EncodingLayout | None = None
         self.density_estimator_spec = density_estimator
         self.rounds = int(rounds)
         self.device = str(device)
@@ -804,18 +1131,30 @@ class SBIEngine(Engine):
 
         problem = self.problem
         dtype = getattr(torch, _DTYPE)
-        observation = _summary_of(
-            {label: problem.datasets[label].observed for label in problem.datasets},
-            problem.datasets,
-            batched=False,
-        )
-        features = int(observation.shape[1])
+        # The layout is built **first**, from the observed containers alone, and
+        # everything after it -- the observation, every round's rows, the
+        # embedding's input width, the training set's attrs -- is derived from
+        # it. That ordering is the contract (``encoding.md`` §4): a statistic
+        # computed from the simulations could not be the same at inference.
+        layout = _layout_of(problem, self.layout)
+        self.encoding = layout
+        try:
+            observation = np.asarray(encode_observations(problem.datasets, layout=layout).values)
+        except EncodingError as error:
+            raise EngineError(str(error)) from error
+        if layout.kind == FLAT_KIND:
+            observation = observation.reshape(1, -1)
+        features = int(np.prod(observation.shape[1:]))
 
         resolved = _embedding_of(
-            self.embedding, torch=torch, features=features, free_size=problem.free_size
+            self.embedding,
+            torch=torch,
+            features=features,
+            free_size=problem.free_size,
+            layout=layout,
         )
         trainer, architecture = self._trainer(
-            sbi_package, torch, embedding=resolved, progress=progress
+            sbi_package, torch, embedding=resolved, layout=layout, progress=progress
         )
         self.sampler = trainer
 
@@ -848,6 +1187,7 @@ class SBIEngine(Engine):
             trainer=trainer,
             architecture=architecture,
             embedding=resolved,
+            layout=layout,
             features=features,
             simulated=simulated,
             usable=usable,
@@ -859,9 +1199,26 @@ class SBIEngine(Engine):
     # -- the pieces -----------------------------------------------------------
 
     def _trainer(
-        self, sbi_package: Any, torch: Any, *, embedding: _Embedding, progress: bool
+        self,
+        sbi_package: Any,
+        torch: Any,
+        *,
+        embedding: _Embedding,
+        layout: EncodingLayout,
+        progress: bool,
     ) -> tuple[Any, str]:
-        """``sbi``'s trainer for this method, with the prior and the network."""
+        """``sbi``'s trainer for this method, with the prior and the network.
+
+        The one thing the layout changes here is ``z_score_x``. ``sbi``
+        standardises ``x`` column-wise from the training tensor by default
+        (``z_score_x="independent"``), and on the set packing that would z-score
+        the mask, the dataset index and the coordinate columns, and let padded
+        rows enter every column's statistics. So a set layout passes
+        ``z_score_x="none"`` and **the encoding does its own standardisation**,
+        with every statistic a field of the layout and computed from the
+        observation (``encoding.md`` §4). The flat layout keeps ``sbi``'s
+        z-scoring, where it is exactly right: one row of real values.
+        """
         prior = _prior_class(torch)(
             self.problem,
             self.stream("prior"),
@@ -881,7 +1238,10 @@ class SBIEngine(Engine):
                 from sbi import neural_nets  # pyrefly: ignore[missing-import]
 
                 builder = getattr(neural_nets, builder_name)
-                network = builder(model=architecture, **{keyword: embedding.module})
+                options: dict[str, Any] = {keyword: embedding.module}
+                if layout.kind == SET_KIND:
+                    options["z_score_x"] = "none"
+                network = builder(model=architecture, **options)
         # NRE spells its network `classifier=`; NPE and NLE spell it
         # `density_estimator=`. One keyword table rather than one branch per
         # method, so a fourth method is a row.
@@ -932,7 +1292,9 @@ class SBIEngine(Engine):
             if not len(keep):
                 continue
             thetas.append(np.stack([problem.unconstrain(draw.theta) for draw in keep]))
-            summaries.append(_summary_of(keep.observations, problem.datasets, batched=True))
+            summaries.append(
+                _summary_of(keep.observations, problem.datasets, batched=True, layout=self.encoding)
+            )
         self.batch = last
         if not thetas:
             raise EngineError(
@@ -969,15 +1331,31 @@ class SBIEngine(Engine):
         ``O(existing + new)``, so few large chunks beat many small ones. The
         cost is the user's to choose through ``chunk_size=``; what this method
         guarantees is that the whole budget is never held in memory to pay it.
+
+        The layout's name and hash ride along in the chunk's **provenance**,
+        which :func:`~ampere.results.training.write_training_set` writes to the
+        file's root attributes. That is what makes a stored budget answer the
+        question W3.5 and W3.6 both ask of it -- *which packing were these rows
+        encoded under?* -- without either of them having to guess, and it needs
+        no new argument on a writer this item does not own.
         """
         path = self.training_set
         if path is None:  # pragma: no cover - the caller checks before calling
             return
+        stamped = dataclasses.replace(chunk, provenance=self._encoding_provenance(chunk))
         if self._written:
-            append_training_set(path, chunk, self.problem)
+            append_training_set(path, stamped, self.problem)
         else:
-            write_training_set(path, chunk, self.problem)
+            write_training_set(path, stamped, self.problem)
             self._written = True
+
+    def _encoding_provenance(self, chunk: SimulationBatch) -> dict[str, Any]:
+        """The chunk's own provenance plus this run's layout name and hash."""
+        found = dict(chunk.provenance)
+        if self.encoding is not None:
+            found["encoding_layout"] = self.encoding.to_dict()
+            found["encoding_hash"] = self.encoding.hash
+        return found
 
     def _append(
         self,
@@ -1036,6 +1414,7 @@ class SBIEngine(Engine):
         trainer: Any,
         architecture: str,
         embedding: _Embedding,
+        layout: EncodingLayout,
         features: int,
         simulated: int,
         usable: int,
@@ -1058,8 +1437,16 @@ class SBIEngine(Engine):
             "sbi_draws": draws,
             "sbi_embedding": embedding.name,
             "sbi_embedding_output_dim": embedding.output_dim,
-            "sbi_summary_layout": SUMMARY_LAYOUT,
+            "sbi_summary_layout": layout.name,
             "sbi_summary_features": features,
+            # The layout, in full, and its hash. A network is only meaningful
+            # about a tensor packed the way it was trained on, so a run that
+            # cannot say which packing that was cannot be reused -- by W3.5's
+            # artefact cache, by W3.6's coverage batches, or by a reader.
+            "encoding_layout": layout.to_dict(),
+            "encoding_hash": layout.hash,
+            "sbi_encoding_rows": layout.row_cap,
+            "sbi_encoding_columns": layout.columns_total,
             "sbi_parameterisation": "unconstrained",
             "sbi_context": "none",
             "sbi_device": self.device,
