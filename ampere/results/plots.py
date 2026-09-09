@@ -39,6 +39,7 @@ Two obligations that are contract, not style
 
 from __future__ import annotations
 
+import math
 import warnings
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Protocol, runtime_checkable
@@ -49,6 +50,13 @@ import scipy.stats as st
 from ampere.core.exceptions import ResultsError
 
 from . import _plotting as _p
+from .calibration import (
+    CALIBRATION_GROUP,
+    LEVEL_DIM,
+    PARAMETER_DIM,
+    SIMULATION_DIM,
+    TARP_LEVEL_DIM,
+)
 from .derived import GP_LOCALISATION_GROUP, POSTERIOR_PREDICTIVE_GROUP, RESIDUALS_GROUP
 from .diagnostics import residual_whiteness
 from .provenance import ATTR_PREFIX
@@ -56,14 +64,17 @@ from .provenance import ATTR_PREFIX
 __all__ = [
     "GP_LOCALISATION_CAVEAT",
     "MAX_CORNER_VARIABLES",
+    "MAX_RANK_PANELS",
     "MAX_TRACE_VARIABLES",
     "AnomalyScoreLike",
     "gp_localisation_caveat",
     "plot_anomaly_score",
     "plot_corner",
+    "plot_coverage",
     "plot_gp_localisation",
     "plot_posterior_predictive",
     "plot_residuals",
+    "plot_sbc_ranks",
     "plot_trace",
 ]
 
@@ -971,4 +982,264 @@ def plot_anomaly_score(
             for provenance in provenances
         )
         panel.set_title(_p.wrap(notes, width=110), fontsize="xx-small", loc="left")
+    return panel
+
+
+# ---------------------------------------------------------------------------
+# Family D — posterior calibration
+# ---------------------------------------------------------------------------
+
+
+#: How many ranked columns :func:`plot_sbc_ranks` will draw before refusing.
+#: The same judgement :data:`MAX_TRACE_VARIABLES` records, for the same reason:
+#: a rank histogram per column of a 10⁵-element latent block is a mistake, and
+#: refusing it with the count named is the difference between a refusal and a
+#: hung process.
+MAX_RANK_PANELS = 40
+
+
+def _calibration_of(result: Any) -> Any:
+    """A calibration group, from either the group itself or the run holding it.
+
+    Both are worth accepting. A caller who has just run
+    :func:`~ampere.results.calibration.sbc` holds the dataset; a caller reading
+    an archived run holds the tree, and having to reach into it by group name
+    would be exactly the "reporting a missing group" ``results.md`` §8 says a
+    plot must not do.
+    """
+    if hasattr(result, "data_vars") and "ranks" in getattr(result, "data_vars", {}):
+        return result
+    children = getattr(result, "children", None)
+    if children is not None and CALIBRATION_GROUP in children:
+        return result[CALIBRATION_GROUP].dataset
+    raise ResultsError(
+        f"this plot draws a {CALIBRATION_GROUP!r} group and was given a "
+        f"{type(result).__name__} that is neither one nor a run carrying one. Compute it with "
+        f"ampere.results.sbc(problem, engine_factory, ...) or, for an SBIEngine's own trained "
+        f"posterior, engine.calibrate(count=...), and attach it with "
+        f"ampere.results.attach_calibration(run, calibration)."
+    )
+
+
+def _selected_columns(group: Any, parameters: Sequence[str] | None, limit: int) -> list[int]:
+    """Which ranked columns to draw, by position, refusing an unreadable grid."""
+    available = [str(name) for name in np.asarray(group.coords[PARAMETER_DIM].values).ravel()]
+    chosen = _p.select_names(available, parameters, what="calibrated parameter")
+    if len(chosen) > limit:
+        raise ResultsError(
+            f"{len(chosen)} rank histograms were asked for and the limit is {limit}. A grid "
+            f"that large is not readable and is usually a selection mistake; narrow it with "
+            f"parameters=, or raise max_panels= deliberately."
+        )
+    return [available.index(name) for name in chosen]
+
+
+def plot_sbc_ranks(
+    result: Any,
+    *,
+    parameters: Sequence[str] | None = None,
+    bins: int | None = None,
+    max_panels: int = MAX_RANK_PANELS,
+    **kwargs: Any,
+) -> Any:
+    """The SBC rank histogram, one panel per calibrated parameter.
+
+    ``diagnostics.md`` §11's first output. Under a calibrated posterior the
+    rank of the true value among ``L`` posterior draws is uniform on
+    ``{0, ..., L}``, so a flat histogram is the pass and the *shape* of a
+    failure says what kind it is: **U-shaped** means the posteriors are too
+    narrow (the truth keeps landing in the tails), **inverted-U-shaped** means they are
+    too wide, and a **slope** means they are biased. That reading is drawn on
+    each panel rather than left to the caption, because a histogram without it
+    is a picture a reader has to already know how to interpret.
+
+    The grey band is the 99 % interval of the binomial null — the spread a
+    *correctly* calibrated posterior produces at this many simulations — so a
+    small study's noise is visibly noise rather than a finding. The panel title
+    carries the Kolmogorov—Smirnov p-value the group stores.
+
+    Parameters
+    ----------
+    result
+        A ``calibration`` group (:func:`~ampere.results.calibration.sbc` or
+        :meth:`ampere.inference.SBIEngine.calibrate`) or a run carrying one.
+    parameters
+        Which calibrated parameters to draw; all of them by default.
+    bins
+        Histogram bins. The default is at most 20, and never more than there
+        are simulations divided by 5 — a rank histogram with fewer than a
+        handful of counts per bin shows sampling noise and nothing else.
+    max_panels
+        The refusal threshold; see :data:`MAX_RANK_PANELS`.
+    **kwargs
+        Forwarded to the bar artist.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+        With :func:`~ampere.results.figure_metadata` carrying each parameter's
+        KS p-value, so a caller reading numbers off the figure does not have to
+        open the group to get them.
+    """
+    group = _calibration_of(result)
+    positions = _selected_columns(group, parameters, max_panels)
+    labels = [str(name) for name in np.asarray(group.coords[PARAMETER_DIM].values).ravel()]
+    ranks = np.asarray(group["ranks"].values, dtype=float)
+    draws = int(group.attrs.get(f"{ATTR_PREFIX}calibration_posterior_draws", ranks.max() or 1))
+    simulations = ranks.shape[0]
+    count = _rank_bins(bins, simulations)
+    pvalues = np.asarray(group["ks_pvalue"].values, dtype=float) if "ks_pvalue" in group else None
+
+    figure, axes = _p.new_axes(nrows=len(positions), size=(8.0, 2.6))
+    edges = np.linspace(0.0, float(draws), count + 1)
+    expected = simulations / count
+    # The 99 % binomial interval of a single bin's count under uniformity. Drawn
+    # rather than described: at 20 simulations the null is wide enough that an
+    # eye-catching histogram is usually nothing at all.
+    low, high = st.binom(simulations, 1.0 / count).ppf([0.005, 0.995])
+    for panel_index, position in enumerate(positions):
+        panel = axes[panel_index]
+        panel.axhspan(
+            float(low), float(high), color="0.85", zorder=0, label="99 % of a uniform null"
+        )
+        panel.axhline(expected, color="0.5", linewidth=0.8, zorder=1)
+        panel.hist(ranks[:, position], bins=edges, zorder=2, **kwargs)
+        panel.set_xlabel(f"rank of the truth among {draws} posterior draws")
+        panel.set_ylabel("simulations")
+        verdict = _rank_verdict(ranks[:, position], draws)
+        title = f"{labels[position]}: {verdict}"
+        if pvalues is not None:
+            title += f" (KS p = {float(pvalues[position]):.3g}, {simulations} simulation(s))"
+            _p.attach_metadata(
+                figure, f"{labels[position]}.ks_pvalue", f"{float(pvalues[position]):.6g}"
+            )
+        panel.set_title(title, fontsize="small")
+        panel.legend(loc="best", fontsize="xx-small")
+    figure.tight_layout()
+    return figure
+
+
+def _rank_bins(bins: int | None, simulations: int) -> int:
+    """How many bins a rank histogram gets, capped by the number of simulations."""
+    if bins is not None:
+        chosen = int(bins)
+        if chosen < 1:
+            raise ResultsError(f"a rank histogram needs at least one bin, got {bins}.")
+        return chosen
+    return max(1, min(20, simulations // 5))
+
+
+def _rank_verdict(ranks: np.ndarray, draws: int) -> str:
+    """The shape of the histogram, named: U, inverted-U, sloped, or flat.
+
+    Read off two moments of the rank fraction rather than off the drawn bars,
+    so the words and the picture are two views of one number: a variance above
+    the uniform's says the truth keeps landing in the tails (too narrow), one
+    below says it keeps landing in the middle (too wide), and a mean away from
+    a half says the posterior is displaced.
+    """
+    fraction = np.asarray(ranks, dtype=float) / max(float(draws), 1.0)
+    if fraction.size == 0:
+        return "no simulations"
+    mean = float(np.mean(fraction))
+    spread = float(np.var(fraction))
+    uniform_spread = 1.0 / 12.0
+    error = math.sqrt(uniform_spread / max(fraction.size, 1))
+    if abs(mean - 0.5) > 3.0 * error:
+        return "sloped — the posterior is biased " + ("low" if mean > 0.5 else "high")
+    if spread > uniform_spread * 1.4:
+        return "U-shaped — the posteriors are too narrow"
+    if spread < uniform_spread * 0.6:
+        return "inverted-U-shaped — the posteriors are too wide"
+    return "consistent with uniform"
+
+
+def plot_coverage(
+    result: Any,
+    *,
+    parameters: Sequence[str] | None = None,
+    tarp: bool = True,
+    ax: Any = None,
+    **kwargs: Any,
+) -> Any:
+    """The coverage curve: empirical against nominal credible level.
+
+    ``diagnostics.md`` §11's second output, and the one a reader who does not
+    think in ranks can act on directly: at nominal level ``alpha``, what fraction
+    of the simulated truths actually fell inside the posterior's central ``alpha``
+    credible interval? A calibrated posterior puts the curve on the diagonal;
+    a curve **below** it is overconfident (the intervals are too small for
+    their label) and one **above** it is conservative.
+
+    One line per parameter, from the marginal ranks. Where the group carries
+    TARP's own curve (:meth:`ampere.inference.SBIEngine.calibrate` with
+    ``tarp=True``), it is drawn beside them in black, and the distinction is
+    stated in the legend rather than left implicit: TARP measures the *joint*
+    coverage, and a posterior can be perfectly calibrated in every
+    one-dimensional margin while being wrong about the correlations between
+    them (Lemos et al. 2023).
+
+    Parameters
+    ----------
+    result
+        A ``calibration`` group or a run carrying one.
+    parameters
+        Which calibrated parameters to draw; all of them by default.
+    tarp
+        Draw TARP's joint curve when the group has one.
+    ax
+        Draw on this axes rather than a new figure.
+    **kwargs
+        Forwarded to the line artist.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+        The axes drawn on, with
+        :func:`~ampere.results.figure_metadata` carrying each parameter's
+        coverage at the 68 % and 95 % levels — the two a reader quotes — and
+        TARP's area-to-curve where there is one.
+    """
+    group = _calibration_of(result)
+    positions = _selected_columns(group, parameters, MAX_RANK_PANELS)
+    labels = [str(name) for name in np.asarray(group.coords[PARAMETER_DIM].values).ravel()]
+    levels = np.asarray(group.coords[LEVEL_DIM].values, dtype=float)
+    coverage = np.asarray(group["coverage"].values, dtype=float)
+    simulations = int(
+        group.attrs.get(f"{ATTR_PREFIX}calibration_simulations", group.sizes[SIMULATION_DIM])
+    )
+
+    figure, axes = _p.new_axes(ax, size=(5.5, 5.0))
+    panel = axes[0]
+    panel.plot(
+        [0.0, 1.0], [0.0, 1.0], color="0.5", linestyle="--", linewidth=0.9, label="calibrated"
+    )
+    for position in positions:
+        panel.plot(levels, coverage[:, position], marker=".", label=labels[position], **kwargs)
+        for quoted in (0.68, 0.95):
+            value = float(np.interp(quoted, levels, coverage[:, position]))
+            _p.attach_metadata(
+                figure, f"{labels[position]}.coverage_{round(quoted * 100)}", f"{value:.6g}"
+            )
+    if tarp and "tarp_coverage" in group:
+        panel.plot(
+            np.asarray(group.coords[TARP_LEVEL_DIM].values, dtype=float),
+            np.asarray(group["tarp_coverage"].values, dtype=float),
+            color="black",
+            linewidth=1.4,
+            label="TARP (joint)",
+        )
+        area = group.attrs.get(f"{ATTR_PREFIX}calibration_tarp_atc")
+        if area is not None:
+            _p.attach_metadata(figure, "tarp.area_to_curve", f"{float(area):.6g}")
+    panel.set_xlabel("nominal credible level")
+    panel.set_ylabel("empirical coverage")
+    panel.set_xlim(0.0, 1.0)
+    panel.set_ylim(0.0, 1.0)
+    panel.set_aspect("equal", adjustable="box")
+    panel.set_title(
+        f"coverage over {simulations} simulation(s) — below the diagonal is overconfident",
+        fontsize="small",
+    )
+    panel.legend(loc="best", fontsize="x-small")
     return panel
