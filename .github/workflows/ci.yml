@@ -19,9 +19,16 @@ on:
     branches: [master]
   pull_request:
   # Non-blocking triggers for the sbi-characterisation job only (see its
-  # `if:` guard below) -- push/pull_request never run it, since torch+sbi
-  # are a large download that would otherwise sit on every PR's critical
-  # path. Everything else in this workflow also reruns on these two
+  # `if:` guard below) -- push/pull_request never run it. Before W3.7 the
+  # reason was purely the size of the torch+sbi download; since W3.7 the
+  # `backend-suites` matrix already pays that cost on every PR (its `sbi`
+  # leg -- "new-namespace suites (sbi)" -- is now blocking), so the download
+  # itself is no longer avoided here. What stays true, and is now the sole
+  # reason, is that `sbi-characterisation` exercises the *legacy*
+  # `ampere.infer.sbi` flow specifically (see that job's own comment) --
+  # narrow, disjoint coverage that does not need every PR's turnaround time
+  # added to it on top of the now-blocking `sbi` leg. Everything else in
+  # this workflow also reruns on these two
   # events, which is harmless (same jobs as any push) rather than
   # something to specifically avoid.
   workflow_dispatch:
@@ -199,49 +206,76 @@ jobs:
     name: new-namespace suites (${{ matrix.environment }})
     runs-on: ubuntu-latest
     # W2.11, and DEVELOPMENT_PLAN.md §5's Phase 2 line ("separate torch, jax
-    # and no-extras jobs"). One job per backend environment, and one backend
-    # environment per job:
+    # and no-extras jobs"). W3.7 added `sbi` as this matrix's third leg,
+    # promoting it from the non-blocking weekly `sbi-characterisation` job
+    # below to a blocking PR gate -- the resulting check is named
+    # "new-namespace suites (sbi)", exactly like its siblings, which is what
+    # a branch-protection required-check entry must name. One job per
+    # environment, and one environment per job:
     #
     #  * `fail-fast: false` is load-bearing, not decoration. A broken torch
-    #    row must fail the torch leg and leave the jax leg to report its own
-    #    result; with fail-fast on (the default) GitHub cancels the sibling
-    #    leg the moment one fails, and the answer to "did jax survive this
-    #    change?" would be "cancelled". Together with `suites` above being a
-    #    separate job on `dev`, this is what makes a backend failure a
-    #    single-job failure: the three environments never share a runner, a
-    #    step or a process.
+    #    row must fail the torch leg and leave the jax/sbi legs to report
+    #    their own result; with fail-fast on (the default) GitHub cancels the
+    #    sibling legs the moment one fails, and the answer to "did jax/sbi
+    #    survive this change?" would be "cancelled". Together with `suites`
+    #    above being a separate job on `dev`, this is what makes a failure in
+    #    one environment a single-job failure: the environments never share a
+    #    runner, a step or a process.
     #  * Never two environments in one job. `pixi run -e <env> test-all` is a
     #    five-suite, one-process gate; two of them running concurrently
     #    exhausted a 13 GB development machine during this item, and GitHub's
     #    hosted runners have 7 GB. Sequential steps in one job would be safe
     #    on memory and wrong on isolation, which is the criterion that
     #    decides it.
-    #  * `cache: true` matters most here: these are the two large
-    #    environments (torch ~1.9 GB installed, jax ~0.5 GB). The torch one
-    #    would be several gigabytes larger still without pyproject.toml's
-    #    CPU-index pin on `torch` -- see [tool.pixi.feature.torch.
-    #    pypi-dependencies]. Hosted runners are CPU-only; GPU tests are a
-    #    later, nightly/manual item and add no rows here.
+    #  * `cache: true` matters most here: these are the largest environments
+    #    (torch ~1.9 GB installed, jax ~0.5 GB, sbi -- torch's install plus
+    #    the `sbi` extra (sbi, pyro-ppl) -- larger again). The torch and sbi
+    #    installs would be several gigabytes larger still without
+    #    pyproject.toml's CPU-index pin on `torch` -- see
+    #    [tool.pixi.feature.torch.pypi-dependencies] and
+    #    [tool.pixi.feature.sbi.pypi-dependencies]. Hosted runners are
+    #    CPU-only; GPU tests are a later, nightly/manual item and add no rows
+    #    here.
+    #  * `sbi`'s `test-all` step is the slower of the three locally (see
+    #    docs/development.md's "Environment" section for the recorded
+    #    reference numbers: torch's five-suite gate 12-17 min, sbi's
+    #    14-20 min, jax's 8-13 min on this project's 13 GB development
+    #    machine) -- the neural density/likelihood/ratio estimator training
+    #    in `tests/inference/test_sbi.py` costs more wall time than another
+    #    environment's conformance rows do, even at the tiny CI budgets W3.2
+    #    and W3.6 chose. `bench` is deliberately NOT run for `sbi` (see the
+    #    step below): it would only re-exercise the same torch-backed
+    #    benchmarks the `torch` leg already runs, at a cost this already-
+    #    slower leg cannot spare for numbers that duplicate an existing row.
     strategy:
       fail-fast: false
       matrix:
-        environment: [torch, jax]
+        environment: [torch, jax, sbi]
     steps:
       - uses: actions/checkout@v7
       - uses: prefix-dev/setup-pixi@v0.10.2
         with:
           environments: ${{ matrix.environment }}
           cache: true
-      # The backend's own types, with its real library present. The `dev`
-      # typecheck job above cannot do this -- it excludes both backends
+      # The environment's own types, with its real libraries present. The
+      # `dev` typecheck job above cannot do this -- it excludes both backends
       # precisely because neither library is installed there -- so this step
       # is the only place ampere/backends/${{ matrix.environment }} is
-      # actually type-checked.
+      # actually type-checked (for `sbi`, that means `ampere/backends/torch`,
+      # since jax is absent there too), and, for `sbi` specifically, the only
+      # place `ampere/inference/_sbi.py` is checked with the real `sbi`
+      # package installed rather than an untyped lazy import.
       - run: pixi run -e ${{ matrix.environment }} typecheck
       - run: pixi run -e ${{ matrix.environment }} test-all
-      - run: pixi run -e ${{ matrix.environment }} bench
+      # W3.7: `sbi`'s environment already contains `torch`, so running
+      # `tests/benchmarks/` there would benchmark the same backend code the
+      # `torch` leg already covers -- a second copy of the same numbers, not
+      # a new one -- so this step and the upload below are skipped for `sbi`.
+      - name: benchmarks (torch, jax only; sbi would duplicate torch's)
+        if: matrix.environment != 'sbi'
+        run: pixi run -e ${{ matrix.environment }} bench
       - name: upload benchmark results
-        if: always()
+        if: always() && matrix.environment != 'sbi'
         uses: actions/upload-artifact@v7
         with:
           name: benchmarks-${{ matrix.environment }}
@@ -312,14 +346,22 @@ jobs:
   sbi-characterisation:
     name: characterisation suite (with sbi extra)
     runs-on: ubuntu-latest
-    # Non-blocking: torch+sbi are a large download and this duplicates
-    # most of what the `test` job's characterisation step already covers
-    # (emcee/dynesty/zeus), adding only the sbi flow itself. Run on a
-    # schedule and on demand rather than on every push/PR, so the sbi
-    # extra's weight never sits on the PR-gate critical path. See W0.6's
-    # report for the full rationale. (W2.11 pinned this environment's torch
-    # to the CPU index too, so the weekly run no longer downloads ~2 GB of
-    # CUDA runtime to a CPU-only hosted runner.)
+    # Non-blocking, kept as it was before W3.7: this duplicates most of what
+    # the `test` job's characterisation step already covers (emcee/dynesty/
+    # zeus), adding only the legacy sbi flow. Run on a schedule and on demand
+    # rather than on every push/PR. See W0.6's report for the full rationale.
+    # (W2.11 pinned this environment's torch to the CPU index too, so the
+    # weekly run no longer downloads ~2 GB of CUDA runtime to a CPU-only
+    # hosted runner.)
+    #
+    # W3.7 note: this job is unchanged by, and independent of, the `sbi` leg
+    # `backend-suites` now runs on every PR ("new-namespace suites (sbi)"
+    # below) -- that leg runs `pixi run -e sbi test-all` (the new-namespace
+    # suites, including the sbi engine's own tests in `tests/inference`),
+    # not `test-characterisation` (the legacy `ampere.infer.sbi` flow), so
+    # the two jobs cover disjoint code and neither makes the other
+    # redundant. This one stays weekly/on-demand because it is still a large
+    # download relative to what it alone would justify on every PR.
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v7
