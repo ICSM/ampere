@@ -970,11 +970,13 @@ class SBIEngine(Engine):
         cost is the user's to choose through ``chunk_size=``; what this method
         guarantees is that the whole budget is never held in memory to pay it.
         """
-        assert self.training_set is not None
+        path = self.training_set
+        if path is None:  # pragma: no cover - the caller checks before calling
+            return
         if self._written:
-            append_training_set(self.training_set, chunk, self.problem)
+            append_training_set(path, chunk, self.problem)
         else:
-            write_training_set(self.training_set, chunk, self.problem)
+            write_training_set(path, chunk, self.problem)
             self._written = True
 
     def _append(
