@@ -570,6 +570,20 @@ paper-grade evidence the redesign delivers its central promise.
 - Sphinx docs rebuilt around the new core; example gallery migrated;
   migration guide from legacy; deprecation policy for `ampere.{data,models,
   infer}`; beta release (addresses issues #57–60, #62).
+- **Composition tutorials that the capability already supports but no
+  example shows** (Peter, 2026-09-09): a worked, runnable example of a
+  problem with several observations — photometry plus one or more spectra
+  on one model, `SyntheticPhotometry` beside `Resample`/`LSFConvolution`
+  — and how calibration uncertainty is represented (a `CalibrationScale`
+  step with a prior as the nuisance parameter, per spectrum or shared via a
+  tie; the flexible likelihood as the complement for what calibration does
+  not explain). The capability is in `ampere.core` and the reference
+  backend and is exercised by `docs/design/modalities/spectrum_photometry.md`
+  and the tests; what is missing is the user-facing example, best written
+  when the legacy tutorials and `minimal_working_example*.py` are converted
+  here. Not needed before then, but a `tests/examples` smoke test of the
+  composition may be worth adding earlier so the capability cannot regress
+  unnoticed.
 
 ### Cross-cutting workstream — CI/CD (grows with each phase)
 

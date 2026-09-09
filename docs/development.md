@@ -102,6 +102,8 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
 
 **Horizon notes (2026-09-09)**: Peter's Phase 5+ look-ahead is in `docs/design/horizon_notes.md`; two things came out of it into the present — the **observation-context** reservation in the Phase 3 section (confirmed) and a **kernel-algebra item added to the plan's Phase 4** bullets (ruled).
 
+**Phase 6 note (2026-09-09)**: a multi-observation composition tutorial (photometry + spectra, calibration uncertainty) is recorded in the plan's Phase 6 bullets — capability exists, example does not.
+
 **For Peter — what is still open.** Only the repository actions he alone takes: push master to origin and watch the first live CI run (a branch-protection rule naming the old `phase1-suites` job needs `suites`); delete the stray local `worktree-agent-*` branches; run `pixi run gpu` in the `torch`/`jax` environments on a machine with an accelerator. Every ruling from the 2026-09-08 digest is recorded; W2.9's coverage study is scheduled inside W3.6.
 
 **Owed (unchanged)**: retroactive `gpt-5.6-terra` passes when the Codex quota returns (~2026-09-30), in this order — W2.3 (GP algebra), W2.1, W2.6, W2.2, then W2.13, W2.4/W2.5 slice 2 (the celerite2 transcriptions), W2.14, W2.10, W2.5 slice 3 (the LOO scan); Phase 3 adds W3.1, W3.2, W3.6 to the queue as they merge.
