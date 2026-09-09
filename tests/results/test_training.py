@@ -41,8 +41,10 @@ from ampere.core.dataset import Failure, FailureReason, Simulation
 from ampere.core.exceptions import ResultsError
 from ampere.results import (
     ATTR_PREFIX,
+    PROVENANCE_SCHEMA_VERSION,
     TRAINING_SET_SCHEMA_VERSION,
     append_training_set,
+    provenance_attrs,
     read_training_set,
     write_training_set,
 )
@@ -181,6 +183,9 @@ class TestRoundTrip:
         assert len(stored.spec_hash) == 32
         assert len(stored.attrs[f"{ATTR_PREFIX}problem_hash"]) == 32
         assert len(stored.attrs[f"{ATTR_PREFIX}data_hash"]) == 32
+        # W3.12: ampere_model_hash joins the recipe at schema 6.
+        assert len(stored.attrs[f"{ATTR_PREFIX}model_hash"]) == 32
+        assert stored.attrs[f"{ATTR_PREFIX}schema_version"] == PROVENANCE_SCHEMA_VERSION == 6
         assert stored.attrs[f"{ATTR_PREFIX}seed"] == 20260908
         assert stored.attrs[f"{ATTR_PREFIX}training_set_version"] == TRAINING_SET_SCHEMA_VERSION
 
@@ -231,6 +236,51 @@ class TestAppend:
         write_training_set(tmp_path / "budget.nc", budget(problem, 1), problem)
         with pytest.raises(ResultsError, match="batch is empty"):
             append_training_set(tmp_path / "budget.nc", [], problem)
+
+    def test_a_model_swap_with_identical_parameters_refuses_by_model_hash(
+        self, tmp_path: Path
+    ) -> None:
+        """W3.12: the gap ``ampere_spec_hash`` alone leaves open (W3.5's finding).
+
+        A different model class computing something else, declaring the
+        *identical* parameters as ``Powerlaw`` — so the spec hash cannot
+        tell the two apart, and only ``ampere_model_hash`` can.
+        """
+
+        class OtherPowerlaw(Powerlaw):
+            """A different class, the same parameter declaration."""
+
+        problem = toy()
+        write_training_set(tmp_path / "budget.nc", budget(problem, 2), problem)
+        other = toy(OtherPowerlaw)
+        assert (
+            provenance_attrs(other)[f"{ATTR_PREFIX}spec_hash"]
+            == provenance_attrs(problem)[f"{ATTR_PREFIX}spec_hash"]
+        )
+        assert (
+            provenance_attrs(other)[f"{ATTR_PREFIX}model_hash"]
+            != provenance_attrs(problem)[f"{ATTR_PREFIX}model_hash"]
+        )
+        with pytest.raises(ResultsError, match="model_hash"):
+            append_training_set(tmp_path / "budget.nc", budget(other, 1), other)
+
+    def test_a_pre_schema_six_file_refuses_by_name_rather_than_guessing(
+        self, tmp_path: Path
+    ) -> None:
+        """A file written before ``ampere_model_hash`` existed has no digest to compare."""
+        xarray = pytest.importorskip("xarray")
+
+        problem = toy()
+        path = tmp_path / "budget.nc"
+        write_training_set(path, budget(problem, 2), problem)
+        opened = xarray.open_datatree(str(path))
+        tree = opened.load()
+        opened.close()
+        del tree.attrs[f"{ATTR_PREFIX}model_hash"]
+        tree.to_netcdf(str(path))
+
+        with pytest.raises(ResultsError, match="predates"):
+            append_training_set(path, budget(problem, 1), problem)
 
 
 # ---------------------------------------------------------------------------

@@ -9,8 +9,8 @@ unchanged:
 Group                 Contents
 ===================== ======================================================
 root attrs            :func:`~ampere.results.provenance.provenance_attrs` —
-                      the spec, problem and data hashes, the versions, the
-                      seed; §9's recipe, not a second one
+                      the spec, problem, data and *(W3.12)* model hashes, the
+                      versions, the seed; §9's recipe, not a second one
 ``theta``             one variable per merged parameter name,
                       ``(sample,)`` plus the parameter's own dimensions
 ``<model>.<channel>`` one group per model channel: ``values``, and
@@ -30,11 +30,16 @@ than per pair — which is what makes a coordinate-conditioned (neural-operator
 style) emulator's training set the same size as a fixed-grid one, and which
 this writer therefore *enforces*: a batch whose channel coordinates move from
 sample to sample is refused rather than silently written with the last one. And
-**the spec hash sits in the attributes**, so ``DEVELOPMENT_PLAN.md`` §7's
-"spec-hash invalidation of trained artefacts" is a comparison of two strings —
-which :func:`append_training_set` makes on every append, because a budget
-extended after the model was edited is exactly the poisoned cache §7 warns
-about.
+**the spec hash — and, since W3.12, the model hash — sit in the attributes**,
+so ``DEVELOPMENT_PLAN.md`` §7's "spec-hash invalidation of trained artefacts"
+is a comparison of strings — which :func:`append_training_set` makes on every
+append, because a budget extended after the model was edited is exactly the
+poisoned cache §7 warns about. The spec hash alone is only the *parameter*
+declaration, though, so a likelihood family, noise model, solver or kernel
+swap that leaves every parameter's name and prior unchanged used to pass it
+unnoticed: :func:`~ampere.results.provenance.model_hash` (``ampere_model_hash``,
+``PROVENANCE_SCHEMA_VERSION`` 6) closes that gap, and a file written before it
+existed is refused by name rather than treated as an agreement it cannot make.
 
 What this deliberately does not store is the model. An emulator is trained on
 ``(θ, ModelResult)`` pairs and validated against the spec hash; reconstructing
@@ -82,7 +87,7 @@ from ampere.core.results_schema import FunctionSamples, ModelResult
 from ampere.core.simulate import SimulationBatch
 
 from .emission import SAMPLE_STATS_GROUP, _container_dims
-from .provenance import ATTR_PREFIX, provenance_attrs
+from .provenance import ATTR_PREFIX, PROVENANCE_SCHEMA_VERSION, provenance_attrs
 from .serialisation import CONTAINER_SCHEMA_VERSION, container_from_dict
 
 __all__ = [
@@ -402,18 +407,28 @@ def append_training_set(
 ) -> str:
     """Grow an existing training set by one batch. The ``sample`` dimension grows.
 
-    The spec hash is checked first and a mismatch **refuses**: appending draws
-    from an edited model to a budget written before the edit produces a file
-    whose two halves came from different simulators and whose provenance says
-    they did not. That is precisely ``DEVELOPMENT_PLAN.md`` §7's poisoned cache,
-    and the check is a string comparison because §11 put the hash in the
-    attributes so that it could be.
+    Two checks run first, and either can **refuse**. The spec hash: appending
+    draws from an edited model to a budget written before the edit produces a
+    file whose two halves came from different simulators and whose
+    provenance says they did not — precisely ``DEVELOPMENT_PLAN.md`` §7's
+    poisoned cache, and a string comparison because §11 put the hash in the
+    attributes so that it could be. And, since **W3.12**, the model hash
+    (``ampere_model_hash``, schema 6): the spec hash alone is only the
+    *parameter* declaration, so a likelihood family, noise model, solver or
+    kernel swap that leaves every parameter's name and prior unchanged used
+    to pass the spec-hash check unnoticed — plan §7's trap arriving by the
+    other door, and the real gap W2.8's original check left open. A file
+    written before the model hash existed (schema < 6: no
+    ``ampere_model_hash`` attribute at all) is refused too, by name, rather
+    than treated as an agreement it cannot actually make.
 
     Raises
     ------
     ampere.core.exceptions.ResultsError
-        If the file's spec hash differs from the problem's, if the file is not
-        a training set, or if the batch's channels do not match the file's.
+        If the file's spec hash differs from the problem's, if the file's
+        model hash differs from the problem's, if the file predates the
+        model hash, if the file is not a training set, or if the batch's
+        channels do not match the file's.
     """
     chunks = [chunk for chunk in _chunks_of(simulations) if chunk]
     if not chunks:
@@ -426,15 +441,36 @@ def append_training_set(
     batch = chunks[0]
     xarray = _require_xarray()
     existing = _open(path)
-    stored = existing.attrs.get(f"{ATTR_PREFIX}spec_hash")
     current = provenance_attrs(problem)
-    if stored != current.get(f"{ATTR_PREFIX}spec_hash"):
+    stored_spec = existing.attrs.get(f"{ATTR_PREFIX}spec_hash")
+    if stored_spec != current.get(f"{ATTR_PREFIX}spec_hash"):
         raise ResultsError(
             f"this training set was written from a different declaration: it records "
-            f"spec_hash {stored!r} and the problem given hashes to "
+            f"spec_hash {stored_spec!r} and the problem given hashes to "
             f"{current.get(f'{ATTR_PREFIX}spec_hash')!r}. Appending would leave one file whose "
             f"halves came from two simulators, which is the stale-artefact trap the hash exists "
             f"to catch (DEVELOPMENT_PLAN.md §7). Write a new set."
+        )
+    model_hash_key = f"{ATTR_PREFIX}model_hash"
+    if model_hash_key not in existing.attrs:
+        raise ResultsError(
+            f"this training set predates ampere_model_hash: it was written under "
+            f"PROVENANCE_SCHEMA_VERSION < {PROVENANCE_SCHEMA_VERSION} (W3.12), so its spec hash "
+            f"agrees with the problem given but there is no recorded model hash to compare — a "
+            f"likelihood family, noise model, solver or kernel swap that left every parameter's "
+            f"name and prior unchanged could have been appended onto this file unnoticed. Write "
+            f"a new set to record the model hash from the start."
+        )
+    stored_model = existing.attrs[model_hash_key]
+    if stored_model != current.get(model_hash_key):
+        raise ResultsError(
+            f"this training set was written from a different model: it records "
+            f"model_hash {stored_model!r} and the problem given hashes to "
+            f"{current.get(model_hash_key)!r}. The parameter declaration agrees (the spec hash "
+            f"matches) but the likelihood family, noise model, solver or kernel does not — "
+            f"appending would leave one file whose halves came from two simulators, which is the "
+            f"stale-artefact trap the hash exists to catch (DEVELOPMENT_PLAN.md §7). Write a new "
+            f"set."
         )
     offset = int(existing.attrs.get(f"{ATTR_PREFIX}samples", 0))
     slots = _slots_from(batch)
