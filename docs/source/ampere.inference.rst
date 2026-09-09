@@ -50,6 +50,43 @@ Three things about an SBI run are worth knowing before reading one:
 Requires the ``sbi`` extra; both it and torch are imported inside ``run``, so
 ``import ampere.inference`` in the base install pulls in neither.
 
+Truncated marginal ratio estimation
+------------------------------------
+
+``method="tmnre"`` is Miller et al. (2021)'s TMNRE, expressed through ``sbi``
+0.27's own ``NRE`` trainers and ``RestrictedPrior`` rather than through the
+archived swyft implementation (which pins ``pytorch-lightning <= 1.9.5`` and
+cannot be installed beside the torch the ``sbi`` extra resolves to). Two ideas,
+and a run shows both:
+
+* **marginal ratio estimation** — one classifier per 1-D ``θ_i``, and per
+  unordered pair at ``marginals=2``, rather than one for the joint ratio. Each
+  is trained on the same ``x`` against the corresponding *columns* of ``θ``, so
+  none of them has to represent the joint's correlations, which is what makes
+  the method work as the parameter count grows;
+* **truncation** — after each round the *prior* is restricted to the
+  hyperrectangle where those 1-D marginals exceed ``truncation_epsilon`` times
+  their own maximum, the next round simulates inside it, and every estimator is
+  retrained. The restricted prior is the original prior renormalised on a
+  subset rather than a learned proposal, so the ratio is unchanged inside the
+  box and no importance correction appears anywhere.
+
+A TMNRE run emits ordinary joint draws: a joint estimator is trained alongside
+the marginals in the final round, on the truncated prior, and its posterior is
+sampled by rejection (``sample_with="mcmc"`` is the fallback for a narrow box).
+Beside them the run carries a ``marginals`` group — each estimator's log-ratio
+and estimated marginal posterior on a grid over the final box, in both the
+unconstrained and the constrained parameterisation — and its truncation history
+in ``ampere_sbi_truncation``, one record per round with the box, its
+log-volume, the round's counts and the proposal's acceptance rate. The boxes
+are nested by construction.
+
+The cost is stated in the run: **a truncated estimator is not amortised.** The
+box is chosen at the observed data, so the estimator must not be re-conditioned
+on another observation, and ``ampere_sbi_amortised`` is ``0`` for every TMNRE
+run whatever its round count. ``examples/sbi/tmnre_fit.py`` is the method end
+to end on the toy joint problem.
+
 .. automodule:: ampere.inference
    :members:
    :imported-members:
@@ -72,3 +109,9 @@ Re-exported from ``ampere.inference``; shown under the module that defines it.
 .. autodata:: ampere.inference._sbi.LAYOUTS
 
 .. autodata:: ampere.inference._sbi.SUMMARY_LAYOUT
+
+.. autodata:: ampere.inference._sbi.TMNRE_SAMPLERS
+
+.. autodata:: ampere.inference._tmnre.MARGINAL_ORDERS
+
+.. autodata:: ampere.inference._tmnre.DEFAULT_TRUNCATION_EPSILON

@@ -60,7 +60,8 @@ What is here
     ``torch`` or ``jax`` extra.
 :class:`SBIEngine`
     **Simulation-based** inference — neural posterior, likelihood or ratio
-    estimation through the ``sbi`` package (``method="npe" | "nle" | "nre"``).
+    estimation through the ``sbi`` package (``method="npe" | "nle" | "nre" |
+    "tmnre"``).
     The one driver here that does not consume ``log_prob`` while it fits:
     §4.5's ``simulate(params) -> data``, batched through
     :meth:`~ampere.core.dataset.FittingProblem.simulate_many`, is the whole of
@@ -76,8 +77,16 @@ What is here
     carries the *true* per-draw split beside the estimator's own log-density
     (``ampere_sbi_log_prob`` in ``sample_stats``) — which is what makes
     calibration and importance reweighting possible later. One chain of
-    i.i.d. draws, as :class:`VIEngine` emits and for the same reason. Needs
-    the ``sbi`` extra; both it and torch are imported inside ``run``.
+    i.i.d. draws, as :class:`VIEngine` emits and for the same reason.
+    ``method="tmnre"`` is truncated marginal ratio estimation (Miller et al.
+    2021) over the same trainer: one ratio estimator per 1-D marginal (and per
+    pair at ``marginals=2``), a *prior* truncated between rounds to the box
+    where those marginals put their mass, and a joint estimator trained last
+    on the truncated prior so the run still emits ordinary joint draws. It
+    carries a ``marginals`` group beside them and its truncation history in
+    the attrs, and it is **not amortised** — the box is chosen at this
+    observation. Needs the ``sbi`` extra; both it and torch are imported
+    inside ``run``.
 
 The first three are gradient-free, so all three call
 :meth:`~ampere.core.dataset.FittingProblem.check_engine` with
@@ -220,7 +229,17 @@ from __future__ import annotations
 from ._dynesty import DynestyEngine
 from ._emcee import EmceeEngine
 from ._nuts import NUTSEngine
-from ._sbi import EMBEDDINGS, LAYOUTS, METHODS, SET_EMBEDDINGS, SUMMARY_LAYOUT, SBIEngine
+from ._sbi import (
+    DEFAULT_TRUNCATION_EPSILON,
+    EMBEDDINGS,
+    LAYOUTS,
+    MARGINAL_ORDERS,
+    METHODS,
+    SET_EMBEDDINGS,
+    SUMMARY_LAYOUT,
+    TMNRE_SAMPLERS,
+    SBIEngine,
+)
 from ._vi import VIEngine
 from ._zeus import ZeusEngine
 from .engine import DEFAULT_CACHE_SIZE, Engine
@@ -228,11 +247,14 @@ from .exceptions import EngineError, SamplingFailureWarning
 
 __all__ = [
     "DEFAULT_CACHE_SIZE",
+    "DEFAULT_TRUNCATION_EPSILON",
     "EMBEDDINGS",
     "LAYOUTS",
+    "MARGINAL_ORDERS",
     "METHODS",
     "SET_EMBEDDINGS",
     "SUMMARY_LAYOUT",
+    "TMNRE_SAMPLERS",
     "DynestyEngine",
     "EmceeEngine",
     "Engine",
