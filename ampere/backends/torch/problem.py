@@ -122,16 +122,18 @@ What slice 3 added
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 import numpy as np
 import torch
 
 from ampere.core import (
+    BatchedPrediction,
     FittingProblem,
     GaussianProcessNoise,
     IndependentNoise,
+    chunk_bounds,
 )
 from ampere.core.dataset import (
     INSTRUMENT_COMPONENT,
@@ -147,6 +149,7 @@ from ._config import (
     as_tensor,
     complex_dtype,
     resolve_device,
+    to_numpy,
 )
 from ._families import FamilyInputs, limit_masks, native_log_prob, refuse_family
 from .parameters import TorchParameterSpace
@@ -436,11 +439,24 @@ class _LoweredDataset:
         one — so which samples are retained is a fact about the problem, not
         about θ, and can be a constant here.
         """
+        return self.predict_full(routed)[self.retain]
+
+    def predict_full(self, routed: Mapping[str, Mapping[str, Any]]) -> torch.Tensor:
+        """The same chain, **before** the mask is applied (W3.1 slice 2).
+
+        The density wants the retained samples; a *simulation* wants the whole
+        container, because ``Dataset.predict`` returns one and a masked sample
+        keeps the observed container's own value rather than vanishing from it
+        (``inference.md`` §13). Splitting the two here rather than re-walking
+        the chain keeps one implementation of the forward model, which is the
+        only way ``simulate_batched`` can be checked against ``log_likelihood``
+        at all.
+        """
         flux = self.model.flux(self.channel, routed[self.model_label])
         grid = self.model.grid(self.channel)
         for step in self.steps:
             flux, grid = step.apply_flux(flux, grid, self._step_values(routed, step.label))
-        return flux[self.retain]
+        return flux
 
     # -- the log-likelihood -------------------------------------------------
 
@@ -516,6 +532,102 @@ class _LoweredDataset:
             whitened,
             self.noise.kernel.resolve(values),
         )
+
+    # -- the generative half (W3.1 slice 2) ---------------------------------
+
+    def sampling_refusal(self) -> LoweringError | None:
+        """Why this dataset cannot be sampled natively, or ``None``.
+
+        The twin of ``ampere.backends.jax.problem._LoweredDataset``'s method of
+        the same name, and the same four conditions — see it for the reasoning.
+        In one sentence: Peter's ruling of 2026-09-08 is that every backend
+        samples natively, and what a backend may sample is fixed by what
+        ``ampere.core`` samples, because the numpy path is the oracle. Today
+        that is :meth:`ampere.core.GaussianFamily.sample` and nothing else; a
+        native twin for a family the core declines to guess a sampling
+        distribution for would be the "silently train an SBI posterior on the
+        wrong forward model" §13's refusal exists to prevent. Everything else
+        is handed back to the numpy path, where the core's own refusal text is
+        what the caller meets.
+        """
+        from ampere.core import GaussianFamily
+
+        family = self.likelihood.family
+        if type(family).sample is not GaussianFamily.sample:
+            return _refuse(
+                family.NAME or type(family).__name__,
+                f"dataset {self.label!r} does not draw its observations through "
+                f"ampere.core.GaussianFamily.sample, so this backend has no native twin for "
+                f"it: the numpy path is the oracle, and a backend that guessed a sampling "
+                f"distribution the contract declines to guess would train an SBI posterior on "
+                f"the wrong forward model. The draw is made on the numpy path instead.",
+            )
+        censoring = self.likelihood.censoring
+        if censoring is not None and bool(np.any(np.asarray(censoring.kinds)[self.retain] != 0)):
+            return _refuse(
+                "censoring",
+                f"dataset {self.label!r} declares limits on retained samples, which blocks "
+                f"observation drawing on every backend.",
+            )
+        if self.complex_valued:
+            return _refuse(
+                "complex_gaussian",
+                f"dataset {self.label!r} holds complex observations, which ampere.core does "
+                f"not sample.",
+            )
+        if self.latent_name is not None:
+            return _refuse(
+                "latent",
+                f"dataset {self.label!r} declares a latent GP, whose family reads "
+                f"noise.latent; ampere.core samples no such family.",
+            )
+        return None
+
+    def sample_retained(
+        self,
+        routed: Mapping[str, Mapping[str, Any]],
+        predicted: torch.Tensor,
+        normals: torch.Tensor,
+    ) -> torch.Tensor:
+        """One draw of the retained observed values, natively.
+
+        :meth:`ampere.core.GaussianFamily.sample` transcribed into torch, with
+        the two branches it has and the same stabiliser reasoning:
+
+        * uncorrelated noise — ``x = mu + sigma z``, with the noise model's own
+          sigma, so a fitted ``scale`` or ``jitter`` is already in it;
+        * correlated (GP) noise — ``x = mu + L z1 + sigma z2``, with ``L`` from
+          the solver's **own** ``latent_transform_native``, the same whitening
+          the latent path uses, and the solver's numerical jitter folded into
+          the diagonal because it is part of the covariance the marginal
+          likelihood scores. Omitting it would draw from a narrower
+          distribution than the density evaluates.
+
+        The standard normals arrive **already drawn**, as ``(2, n)``, rather
+        than being drawn here. ``torch.func.vmap`` has no per-sample random
+        state — a ``torch.Generator`` is not a tensor and cannot be mapped over
+        — so the randomness is generated outside the transform, per draw, from
+        that draw's own seed, and mapped in as data. That is not a compromise:
+        it is what makes the draw a pure function of the seed, which is what
+        partition independence needs.
+        """
+        values = dict(self._dataset_values(routed).get(LIKELIHOOD_COMPONENT, {}))
+        sigma = self._sigma(predicted, values)
+        realisation = predicted
+        if self.correlated:
+            realisation = realisation + self.noise.solver.latent_transform_native(
+                self.noise.kernel,
+                self.observed_coordinates,
+                normals[0],
+                self.noise.kernel.resolve(values),
+            )
+            stabiliser = float(getattr(self.noise.solver, "jitter", 0.0) or 0.0)
+            if stabiliser:
+                floor = torch.full_like(normals[1], stabiliser)
+                sigma = floor if sigma is None else torch.sqrt(sigma**2 + floor**2)
+        if sigma is None:
+            return realisation
+        return realisation + sigma * normals[1]
 
     def log_likelihood(self, routed: Mapping[str, Mapping[str, Any]]) -> torch.Tensor:
         """``log p(data | θ)`` for this dataset alone, as a differentiable scalar.
@@ -797,6 +909,170 @@ class LoweredProblem:
                 f"log_prob_unconstrained.",
             )
         return torch.func.vmap(self.log_prob_unconstrained)(stack)
+
+    # -- batched simulation (W3.1 slice 2) ----------------------------------
+
+    def _forward(self, theta: torch.Tensor) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+        """One θ through the whole noise-free forward model, natively.
+
+        Returns what :class:`~ampere.core.BatchedPrediction` holds, as nested
+        dictionaries of tensors so ``torch.func.vmap`` maps them in one call:
+        every model's every channel, and every dataset's instrument-transformed
+        prediction on the *whole* observed grid.
+
+        Every channel, not only the bound ones, because ``results.md`` §11
+        writes one training-set group per ``<model>.<channel>`` and a fast path
+        that returned fewer would silently write a smaller file than the loop.
+        """
+        routed = self._route(self.parameters._tensor(theta))
+        channels = {
+            label: {
+                channel: model.flux(channel, routed.get(label, {}))
+                for channel in getattr(model, "channels", ())
+            }
+            for label, model in self.problem.models.items()
+        }
+        predicted = {dataset.label: dataset.predict_full(routed) for dataset in self._datasets}
+        return channels, predicted
+
+    def simulate_batched(
+        self,
+        theta: Any,
+        *,
+        chunk_size: int | None = None,
+        sharder: Any = None,
+    ) -> BatchedPrediction:
+        """``inference.md`` §13's *batched form*, natively: a stack of θ, one ``vmap``.
+
+        ``(batch, free_size)`` **constrained** free vectors in — the coordinates
+        ``SimulationBatch.theta`` holds, not the unconstrained ones
+        :meth:`log_prob_unconstrained` takes, because a simulation budget is a
+        set of parameter values rather than a set of sampler positions.
+
+        **Per chunk, always.** ``chunk_size`` bounds how many simulations are
+        vectorised at once and the chunks are *looped*; a ``vmap`` over a whole
+        budget is exactly the single-device memory trap Peter's ruling of
+        2026-09-08 names, and the reason ``simulate_many`` is built on an
+        executor rather than on this. ``None`` means one chunk, which is what
+        ``simulate_many`` passes because it has already chunked.
+
+        **What it does not do.** It draws no noise
+        (:meth:`sample_observations` does), it flags no failures (there is no
+        control flow inside a ``vmap`` to flag with, so a simulator that fails
+        produces NaNs, classified by the caller exactly as the loop classifies
+        them), and it refuses rather than falling back — ``simulate_many`` owns
+        the fallback, and owning it in two places would let a fast path quietly
+        become a slow one.
+
+        Refused, by name, when the problem declares ``batchable = False``, for
+        the same reason :meth:`log_prob_unconstrained_batched` refuses: a
+        compiled extension reached through a ``torch.autograd.Function`` is not
+        something ``vmap`` can rewrite.
+        """
+        if not self.problem.batchable:
+            raise _refuse(
+                "batched simulation",
+                f"this problem declares batchable=False, so its forward model cannot be "
+                f"evaluated over a stack of parameter vectors in one call "
+                f"({self.problem.capabilities}). torch.func.vmap needs every operation to be "
+                f"one it can rewrite, and a compiled extension reached through a "
+                f"torch.autograd.Function is not — QuasisepGP is the usual answer here. "
+                f"simulate_many falls back to the loop, which is the semantics anyway.",
+            )
+        stack = as_tensor(theta, dtype=DEFAULT_DTYPE, device=self.device)
+        if stack.ndim != 2 or int(stack.shape[1]) != self.free_size:
+            raise _refuse(
+                "batched simulation",
+                f"simulate_batched takes a (batch, {self.free_size}) stack of constrained free "
+                f"vectors, got shape {tuple(stack.shape)}.",
+            )
+        vectorised = torch.func.vmap(self._forward)
+        channels: dict[str, dict[str, list[np.ndarray]]] = {}
+        predicted: dict[str, list[np.ndarray]] = {}
+        for start, stop in chunk_bounds(int(stack.shape[0]), chunk_size):
+            piece = stack[start:stop]
+            produced, prediction = (
+                vectorised(piece) if sharder is None else sharder.shard(vectorised, piece)
+            )
+            for label, holding in produced.items():
+                for channel, values in holding.items():
+                    channels.setdefault(label, {}).setdefault(channel, []).append(to_numpy(values))
+            for label, values in prediction.items():
+                predicted.setdefault(label, []).append(to_numpy(values))
+        return BatchedPrediction(
+            channels={
+                label: {channel: np.concatenate(parts) for channel, parts in holding.items()}
+                for label, holding in channels.items()
+            },
+            predicted={label: np.concatenate(parts) for label, parts in predicted.items()},
+        )
+
+    def sample_observations(
+        self,
+        theta: Any,
+        predicted: Mapping[str, Any],
+        seeds: Sequence[int],
+    ) -> dict[str, np.ndarray]:
+        """Draw the retained observed values for a chunk, natively.
+
+        Peter's ruling of 2026-09-08. The distribution is
+        :meth:`ampere.core.GaussianFamily.sample`'s, transcribed in
+        :meth:`_LoweredDataset.sample_retained`; the **stream** is
+        ``torch.Generator``'s, which is why the numpy path stays the oracle and
+        the two are compared *distributionally* rather than draw for draw.
+
+        *seeds* is one integer per draw, taken from the per-draw child generator
+        ``simulate_many`` spawns **by index** — so partition independence
+        carries over unchanged: draw *i* gets the same generator whichever chunk
+        it ran in, and a budget split 1/7/whole gives the same observations.
+
+        The standard normals are drawn **outside** the ``vmap``, one generator
+        per draw seeded from that draw's own integer, and mapped in as data.
+        ``torch.func.vmap`` has no per-sample random state to give a transformed
+        function, and faking one with a global generator would make a draw
+        depend on how the chunk was scheduled — which is the property this whole
+        path is built to keep.
+
+        Refuses by name, before drawing anything, for any dataset this backend
+        may not sample (:meth:`_LoweredDataset.sampling_refusal`); the caller
+        then runs the numpy path, where ``ampere.core``'s own refusal text is
+        what a user meets.
+        """
+        for dataset in self._datasets:
+            refusal = dataset.sampling_refusal()
+            if refusal is not None:
+                raise refusal
+        stack = as_tensor(theta, dtype=DEFAULT_DTYPE, device=self.device)
+        drawn: dict[str, np.ndarray] = {}
+        for dataset in self._datasets:
+            size = int(dataset.retain.sum())
+            normals = torch.stack(
+                [
+                    torch.randn(
+                        (2, size),
+                        generator=torch.Generator(device="cpu").manual_seed(
+                            int(seed) & 0x7FFFFFFFFFFFFFFF
+                        ),
+                        dtype=DEFAULT_DTYPE,
+                    ).to(self.device)
+                    for seed in seeds
+                ]
+            )
+            rows = as_tensor(
+                np.asarray(predicted[dataset.label]), dtype=DEFAULT_DTYPE, device=self.device
+            )
+            retained = rows[:, dataset.retain]
+
+            def one(
+                vector: torch.Tensor,
+                row: torch.Tensor,
+                noise: torch.Tensor,
+                of: Any = dataset,
+            ) -> torch.Tensor:
+                return of.sample_retained(self._route(vector), row, noise)
+
+            drawn[dataset.label] = to_numpy(torch.func.vmap(one)(stack, retained, normals))
+        return drawn
 
     def potential(self) -> Callable[[torch.Tensor], torch.Tensor]:
         """The **negative** unconstrained log-density, which is what pyro wants.

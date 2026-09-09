@@ -134,6 +134,7 @@ from .exceptions import (
     CompositionError,
     DatasetError,
     LikelihoodError,
+    LoweringError,
     TransformationError,
 )
 from .likelihood import (
@@ -154,8 +155,11 @@ from .parameter import (
 from .results_schema import FunctionSamples, ModelResult
 from .rng import SEED_BYTES
 from .rng import generator as _generator
+from .realisation import realise, sample_observations_of, simulate_batched_of
 from .simulate import (
+    BatchedPrediction,
     ChunkHook,
+    ChunkSharder,
     ExecutionFailure,
     Executor,
     ProcessExecutor,
@@ -1279,8 +1283,7 @@ class Dataset:
         observed = self.observed
         routed = {} if values is None else self.route(values)
         resolved = routed.get(LIKELIHOOD_COMPONENT, {})
-        weights = np.asarray(observed.weights()).ravel() * np.asarray(predicted.weights()).ravel()
-        retain = weights > 0.0
+        retain = self.retained_mask(predicted)
         # Checked against the *effective* mask, prediction side included, so a
         # limit the union excludes does not block the draw — the same answer
         # log_prob's excision gives (masking beats censoring, likelihoods.md §9).
@@ -1312,6 +1315,88 @@ class Dataset:
         except LikelihoodError as error:
             raise DatasetError(f"dataset {self.label!r}: {error}") from error
         drawn[retain] = np.asarray(realisation, dtype=DTYPE)
+        return observed.with_values(drawn.reshape(observed.shape))
+
+    def __setstate__(self, state: Mapping[str, Any]) -> None:
+        """Re-freeze the instrument after unpickling, because ``id()`` does not survive.
+
+        Found at W3.1 slice 2, when :class:`~ampere.core.simulate.ProcessExecutor`
+        stopped defaulting to ``fork``. A forked worker inherits the parent's
+        objects by memory and never unpickles the problem, so this never
+        surfaced; a ``forkserver`` or ``spawn`` worker does unpickle it, and
+        the first thing it did was raise ``instrument … was frozen and one of
+        its steps has been reconfigured since``.
+
+        Nothing had been reconfigured. ``Instrument.freeze`` fingerprints its
+        steps' declarations with :func:`id` — sound while a process holds the
+        objects, since ``Parameter`` is frozen and reconfiguration therefore
+        always replaces objects, but object identity is exactly what pickle
+        does not preserve. The snapshot's fingerprint and the restored steps'
+        could not agree, so a perfectly consistent problem convicted itself.
+
+        Re-freezing is the right repair rather than a suppression: ``freeze``
+        recomputes the merged snapshot **from the steps**, and the steps are
+        what was restored, so the invariant is re-established from the data
+        instead of asserted over it. It is idempotent and touches nothing else.
+        The underlying ``id()`` fingerprint is left alone — it lives in a
+        contract module this item does not own — and is carried as a finding.
+        """
+        self.__dict__.update(state)
+        instrument = self.__dict__.get("instrument")
+        if instrument is not None:
+            instrument.freeze()
+
+    def retained_mask(self, predicted: FunctionSamples) -> np.ndarray:
+        """Which samples a draw covers: the observed-and-predicted union, as a mask.
+
+        The one place :meth:`draw_observation` computes ``retain``, exposed
+        (W3.1 slice 2) because the native sampling path needs the *same* answer
+        for a whole chunk. Public rather than duplicated for the reason
+        ``Dataset.effective_mask`` was made public at W2.13: a rule written
+        twice is a rule that eventually differs, and this one decides which
+        samples are inventing data.
+        """
+        weights = (
+            np.asarray(self.observed.weights()).ravel() * np.asarray(predicted.weights()).ravel()
+        )
+        return weights > 0.0
+
+    def place_observation(
+        self, predicted: FunctionSamples, realisation: np.ndarray
+    ) -> FunctionSamples:
+        """:meth:`draw_observation`'s second half, given a draw made elsewhere.
+
+        Added at W3.1 slice 2 for the native sampling path: a backend draws the
+        retained values in its own arithmetic, and this is what turns them back
+        into the observed container — **by the same rules**, which is the whole
+        reason it is one method here rather than a second placement written on
+        each backend. Masked samples keep the observed container's own values
+        (``inference.md`` §13: they carry zero information, so drawing noise for
+        them would be inventing data), and a censoring declaration that survives
+        the mask refuses exactly as it does on the numpy path, because a limit
+        is part of the observation process and applying the censoring operator
+        to a draw is not implemented on any backend.
+        """
+        observed = self.observed
+        retain = self.retained_mask(predicted)
+        if self._censored_after_masking(retain):
+            raise DatasetError(
+                f"dataset {self.label!r}: a censoring declaration on retained samples blocks "
+                f"observation drawing — a limit is part of the observation process, and applying "
+                f"the censoring operator to a draw is not implemented. Use "
+                f"simulate(observe=False) and draw your own observations from the predicted "
+                f"containers."
+            )
+        drawn = np.array(np.asarray(observed.values).ravel(), dtype=DTYPE, copy=True)
+        values = np.asarray(realisation, dtype=DTYPE).ravel()
+        expected = int(np.count_nonzero(retain))
+        if values.size != expected:
+            raise DatasetError(
+                f"dataset {self.label!r}: a natively drawn observation carries {values.size} "
+                f"value(s) for {expected} retained sample(s). A draw covers the samples the "
+                f"observed and predicted masks both retain, and nothing else."
+            )
+        drawn[retain] = values
         return observed.with_values(drawn.reshape(observed.shape))
 
     def __repr__(self) -> str:
@@ -2357,6 +2442,9 @@ class FittingProblem:
         chunk_size: int | None = ...,
         as_chunks: Literal[False] = ...,
         on_chunk: ChunkHook | None = ...,
+        native: bool | None = ...,
+        sharder: ChunkSharder | None = ...,
+        context: Any = ...,
     ) -> SimulationBatch: ...
 
     @overload
@@ -2372,6 +2460,9 @@ class FittingProblem:
         chunk_size: int | None = ...,
         as_chunks: Literal[True],
         on_chunk: ChunkHook | None = ...,
+        native: bool | None = ...,
+        sharder: ChunkSharder | None = ...,
+        context: Any = ...,
     ) -> Iterator[SimulationBatch]: ...
 
     def simulate_many(
@@ -2386,6 +2477,9 @@ class FittingProblem:
         chunk_size: int | None = None,
         as_chunks: bool = False,
         on_chunk: ChunkHook | None = None,
+        native: bool | None = None,
+        sharder: ChunkSharder | None = None,
+        context: Any = None,
     ) -> SimulationBatch | Iterator[SimulationBatch]:
         """Run the forward model *count* times: an SBI budget, in one call.
 
@@ -2445,6 +2539,38 @@ class FittingProblem:
             the device-placement hook (``ChunkHook``). With ``chunk_size=1`` it
             is what guarantees a model-parallel simulator is never asked to
             hold two simulations at once.
+        native
+            Whether to run each chunk through the **backend's own vectorised
+            forward path** (W3.1 slice 2): one ``torch.func.vmap`` or
+            ``jax.vmap`` over the chunk instead of *n* Python calls, with the
+            observations drawn natively too where the backend can. ``None``
+            (the default) uses it when it is available and falls back to the
+            loop when it is not, recording which happened in the batch's
+            ``provenance``; ``True`` requires it, and refuses **by name** when
+            a part is not ``BATCHABLE``, an executor was given, or the backend
+            registers no realisation; ``False`` forces the loop.
+
+            Per chunk, always — never over the whole budget, which is the
+            single-device memory trap the executor design exists to avoid
+            (``DEVELOPMENT_PLAN.md`` §2, *Batched simulation*). Everything else
+            is unchanged: the same θ, the same per-draw child generators
+            derived by index, the same ``Simulation`` objects. What is *not*
+            reproduced draw-for-draw is native noise, because a backend's
+            random stream is not numpy's — a natively drawn budget is a draw
+            from the same distribution, not the same draw, and
+            ``provenance['sample_backend']`` says which stream produced it.
+        sharder
+            A :class:`~ampere.core.simulate.ChunkSharder` spreading one chunk's
+            vectorised evaluation over several devices. ``None`` is the
+            single-device case. Only the native path consults it.
+        context
+            **Reserved** (Fable's horizon note of 2026-09-09, confirmed by
+            Peter): the per-draw observation context — sigma pattern, grid,
+            instrument settings — that amortising SBI over noise realisations
+            will draw from a context prior. ``None`` is the only accepted value
+            today; the signature exists ahead of the machinery so that the
+            items which need it are additions rather than changes, and the
+            batch's provenance records that no context was used.
 
         Returns
         -------
@@ -2498,6 +2624,9 @@ class FittingProblem:
             executor=executor,
             chunk_size=chunk_size,
             on_chunk=on_chunk,
+            native=native,
+            sharder=sharder,
+            context=context,
         )
         if as_chunks:
             return chunks
@@ -2517,6 +2646,9 @@ class FittingProblem:
         executor: Executor | None,
         chunk_size: int | None,
         on_chunk: ChunkHook | None,
+        native: bool | None = None,
+        sharder: ChunkSharder | None = None,
+        context: Any = None,
     ) -> Iterator[SimulationBatch]:
         """The generator behind :meth:`simulate_many`; one chunk at a time."""
         if isinstance(count, bool) or not isinstance(count, (int, np.integer)):
@@ -2534,6 +2666,15 @@ class FittingProblem:
             )
         task = self._batch_task(runner)
         batched = isinstance(runner, SerialExecutor) and self._batch_evaluable()
+        serial = isinstance(runner, SerialExecutor)
+        wants_native = native is not False and not batched
+        native_path = (
+            self._native_batch(
+                required=bool(native), serial=serial, observe=observe, sharder=sharder
+            )
+            if wants_native
+            else None
+        )
         parent = self.rng(stream) if rng is None else rng
 
         for index, (start, stop) in enumerate(bounds):
@@ -2549,12 +2690,38 @@ class FittingProblem:
                     else self._resolve(rows[draw])
                 )
                 requests.append(_DrawRequest(draw, resolved, child, observe))
+            provenance = self._batch_provenance(
+                native_path, batched=batched, observe=observe, context=context
+            )
             with self._suspend_recording():
-                outcomes = (
-                    self._run_batched(requests) if batched else list(runner.map(task, requests))
-                )
+                if native_path is not None:
+                    try:
+                        outcomes: Sequence[Any] = native_path.run(requests, observe)
+                    except Exception:
+                        # Auto means "use it if it works". A chunk the native
+                        # path could not produce is run by the loop -- the same
+                        # theta, the same child generators, the same draws --
+                        # and the batch records that it was, so a training set
+                        # never claims a provenance it does not have. With
+                        # native=True the caller asked for the native path by
+                        # name and gets the failure rather than a silent
+                        # substitution.
+                        if native:
+                            raise
+                        native_path = None
+                        provenance = self._batch_provenance(
+                            None, batched=batched, observe=observe, context=context
+                        )
+                        outcomes = list(runner.map(task, requests))
+                elif batched:
+                    outcomes = self._run_batched(requests)
+                else:
+                    outcomes = list(runner.map(task, requests))
             yield SimulationBatch(
-                tuple(self._collect(requests, outcomes)), stream=stream, offset=start
+                tuple(self._collect(requests, outcomes)),
+                stream=stream,
+                offset=start,
+                provenance=provenance,
             )
 
     def _batch_values(
@@ -2607,7 +2774,14 @@ class FittingProblem:
 
     def _assert_picklable(self) -> None:
         try:
-            pickle.dumps(self)
+            # A **round trip**, not a dump. Slice 1 checked only that the
+            # problem could be written, which is all a forked worker needs: it
+            # inherits the parent's objects by memory. Since W3.1 slice 2 the
+            # default start method is forkserver, so the worker genuinely
+            # reconstructs the problem, and a class that writes but does not
+            # read is a failure inside a worker bootstrap rather than a
+            # sentence here naming the problem.
+            pickle.loads(pickle.dumps(self))
         except Exception as error:
             raise DatasetError(
                 f"this fitting problem cannot be sent to a worker process: {error}. A process "
@@ -2616,6 +2790,103 @@ class FittingProblem:
                 f"local class, or an open file or device handle held on a model. Define the "
                 f"model at module scope, or run the budget with the serial or thread executor."
             ) from error
+
+    def _native_batch(
+        self,
+        *,
+        required: bool,
+        serial: bool,
+        observe: bool,
+        sharder: ChunkSharder | None,
+    ) -> _NativeBatch | None:
+        """The realised backend's vectorised forward path, or ``None`` for the loop.
+
+        W3.1 slice 2. Three conditions, and each is a refusal by name rather
+        than a silent absence when ``native=True`` asked for the path:
+
+        * **the executor is the serial one.** A pool partitions the *draws*, a
+          ``vmap`` evaluates them together; they are alternative ways of
+          spending one chunk, and the caller who passed an executor chose. The
+          same rule ``evaluate_batch`` follows on the reference backend.
+        * **every part declares** ``BATCHABLE``, which is
+          ``problem.batchable``, aggregated conjunctively. The commonest part
+          that does not is ``QuasisepGP``, whose celerite2 primitives register
+          no batching rule — and although a *prediction* never touches the GP
+          solve, the flag is a statement about the composed problem, and
+          honouring it here rather than reasoning about which parts a
+          prediction happens to use is what keeps one declaration from meaning
+          two things.
+        * **the backend has a realisation offering** ``simulate_batched``, and
+          that realisation agrees with the contract path at the reference
+          point (:class:`_NativeBatch`).
+
+        With ``native=None`` — the default — any of those failing means the
+        loop runs and the batch's provenance says ``simulate_batched`` was
+        false. Nothing is lost by that: the loop is the semantics.
+        """
+        if not serial:
+            if required:
+                raise DatasetError(
+                    f"simulate_many(native=True) was asked for the backend's vectorised "
+                    f"forward path, but an executor was given as well "
+                    f"({type(self).__name__}'s draws would be partitioned across workers). A "
+                    f"pool distributes simulations and a vmap evaluates them together; they "
+                    f"are alternative ways of spending one chunk. Drop executor=, or drop "
+                    f"native=True."
+                )
+            return None
+        if not self.batchable:
+            if required:
+                raise DatasetError(
+                    f"simulate_many(native=True) needs a problem every part of which declares "
+                    f"BATCHABLE, and this one declares batchable=False "
+                    f"({self.capabilities}). One part is enough to withdraw the claim, because "
+                    f"a vmap is over the composed function; ampere.backends.*.QuasisepGP is "
+                    f"the usual answer. Run it with native=False, or with the default, which "
+                    f"falls back to the loop."
+                )
+            return None
+        try:
+            return _NativeBatch(self, observe=observe, sharder=sharder)
+        except Exception:
+            if required:
+                raise
+            return None
+
+    def _batch_provenance(
+        self,
+        native_path: _NativeBatch | None,
+        *,
+        batched: bool,
+        observe: bool,
+        context: Any,
+    ) -> dict[str, Any]:
+        """How a chunk was produced, for the training set's root attributes.
+
+        ``simulate_batched`` is ``True`` only for the backend's vectorised
+        path: the reference backend's ``evaluate_batch`` is a *model's* batch
+        call rather than a lowered problem's, and conflating the two would make
+        the attribute unable to answer the question it exists for.
+        ``sample_backend`` names the arithmetic that drew the noise, which is
+        ``"reference"`` whenever ``LikelihoodFamily.sample`` did — including on
+        a torch or jax problem whose observations came from the loop.
+        ``context`` is the reserved per-draw observation context (Fable's
+        horizon note of 2026-09-09, confirmed by Peter): ``None`` today, and
+        recorded as such so a stored budget can be told apart from one written
+        once the machinery exists.
+        """
+        provenance: dict[str, Any] = {
+            "simulate_batched": native_path is not None,
+            "evaluate_batch": bool(batched),
+            "simulation_context": "none" if context is None else str(context),
+        }
+        if observe:
+            provenance["sample_backend"] = (
+                self.backend
+                if native_path is not None and native_path.samples_natively
+                else "reference"
+            )
+        return provenance
 
     def _batch_evaluable(self) -> bool:
         """Whether every compiled model can evaluate a table of θ in one call."""
@@ -2986,6 +3257,282 @@ def _simulate_shared(request: _DrawRequest) -> Simulation | ExecutionFailure:
             exception_type="RuntimeError",
         )
     return problem._run_simulation(request.values, request.generator, observe=request.observe)
+
+
+#: How closely a native chunk must agree with the contract path at the one
+#: point that is checked, and deliberately the same numbers
+#: ``ampere.core.realise`` uses for the density: the two are the same kind of
+#: claim ("this backend computes *this* problem"), so they are held to the same
+#: standard rather than to two numbers that could drift apart.
+_NATIVE_AGREEMENT_RTOL = 1e-6
+_NATIVE_AGREEMENT_ATOL = 1e-6
+
+
+class _NativeBatch:
+    """A realised problem's vectorised forward path, checked and ready to use.
+
+    The native half of ``inference.md`` §13's *batched form* (W3.1 slice 2).
+    ``simulate_many`` builds one of these lazily, once per call, and then hands
+    it a chunk at a time; if it cannot be built the loop runs and the batch says
+    so in its provenance.
+
+    **What it does not change.** The loop is still the semantics: the same θ,
+    the same per-draw child generators derived by index, the same
+    ``Simulation`` objects with the same channels, the same failure records.
+    What changes is *where the arithmetic happens* — one ``vmap`` over a chunk
+    instead of *n* Python calls — and, when the backend can also draw
+    observations, which random stream the noise came from.
+
+    **Why the templates.** A ``Simulation`` holds core containers, and a
+    backend hands back bare arrays; something has to put the values back into a
+    ``Spectrum`` with its axes, unit, mask and metadata. Rebuilding a container
+    per draw would cost more than the ``vmap`` saved, so the containers are
+    built **once**, at the problem's reference values, and refilled with
+    ``with_values`` — which is exactly what
+    ``transformations.md`` §14 asks a compiled model to do in its own hot loop.
+    That is sound because the two things a template fixes are both
+    evaluation-invariant *by contract*: axes, because
+    ``Likelihood.check_alignment`` compares predicted and observed axes for
+    equality at composition, and the mask, because ``Dataset._masked_pair``
+    refuses a parameter-dependent one by name.
+
+    **The agreement check.** The reference evaluation is not only a source of
+    templates: the native prediction is computed at the same point and compared
+    with it, channel by channel and dataset by dataset, to the tolerances
+    :func:`~ampere.core.realise` uses. That is the same guard, for the same
+    reason — one point is not a proof (the conformance battery makes the full
+    comparison) but a realisation which had drifted from its own contract path
+    would otherwise write a training set of a different forward model.
+    """
+
+    __slots__ = (
+        "backend",
+        "channels",
+        "predict",
+        "problem",
+        "realised",
+        "sampler",
+        "sharder",
+        "templates",
+    )
+
+    def __init__(
+        self,
+        problem: FittingProblem,
+        *,
+        observe: bool,
+        sharder: ChunkSharder | None,
+    ) -> None:
+        self.problem = problem
+        self.backend = problem.backend
+        self.sharder = sharder
+        self.realised = realise(problem)
+        batched = simulate_batched_of(self.realised)
+        if batched is None:
+            raise LoweringError(
+                "batched simulation",
+                backend=problem.backend,
+                detail=(
+                    f"the {problem.backend!r} realisation offers no simulate_batched, so there "
+                    f"is no native forward path to run a chunk through. The loop is the "
+                    f"semantics and runs unchanged; a backend joins the fast path by supplying "
+                    f"that member (inference.md §13, batched form)."
+                ),
+            )
+        self.predict = batched
+        self.sampler = sample_observations_of(self.realised) if observe else None
+        self.templates, self.channels = self._reference_templates()
+        if self.sampler is not None:
+            self._check_sampler()
+
+    # -- construction --------------------------------------------------------
+
+    def _reference_templates(self) -> tuple[dict[str, Any], dict[str, ModelResult]]:
+        """Evaluate the contract path once, and check the native path against it."""
+        problem = self.problem
+        routed = problem._mapping.distribute(dict(problem.reference_values))
+        results = problem._evaluate_models(routed)
+        predicted = {
+            label: dataset.predict(results[problem._bindings[label]], routed.get(label))
+            for label, dataset in problem.datasets.items()
+        }
+        reference = np.asarray(
+            problem._mapping.merged.pack(dict(problem.reference_values)), dtype=float
+        )
+        native = self.predict(reference.reshape(1, -1), sharder=self.sharder)
+        self._check_agreement(native, predicted, results)
+        return predicted, dict(results)
+
+    def _check_sampler(self) -> None:
+        """Ask the backend, once, whether it may draw this problem's observations.
+
+        A **trial draw** at the reference values rather than a capability
+        question, because "can you sample this?" has exactly as many ways of
+        being answered wrongly as "sample this" has of failing, and one of them
+        is free. What it costs is one discarded draw per ``simulate_many``
+        call; what it buys is that a family the backend must not sample —
+        ``poisson`` and every other family ``ampere.core`` declines to guess a
+        sampling distribution for — falls back to the numpy path **here**,
+        before any real draw, so the caller meets ``ampere.core``'s own refusal
+        text rather than a backend's paraphrase of it (``inference.md`` §13,
+        "what can be sampled, and what will not be guessed").
+
+        The discarded draw's seed is arbitrary and deliberately so: it is never
+        placed in a container and never reaches a result, and drawing it from
+        the batch's own stream would make a budget's randomness depend on
+        whether this check happened to run.
+        """
+        sampler = self.sampler
+        if sampler is None:  # pragma: no cover - guarded by the caller
+            return
+        problem = self.problem
+        reference = np.asarray(
+            problem._mapping.merged.pack(dict(problem.reference_values)), dtype=float
+        ).reshape(1, -1)
+        try:
+            native = self.predict(reference, sharder=self.sharder)
+            drawn = sampler(reference, native.predicted, [0])
+            for label, dataset in problem.datasets.items():
+                dataset.place_observation(self.templates[label], np.asarray(drawn[label][0]))
+        except Exception:
+            self.sampler = None
+
+    def _check_agreement(
+        self,
+        native: BatchedPrediction,
+        predicted: Mapping[str, FunctionSamples],
+        results: Mapping[str, ModelResult],
+    ) -> None:
+        """One point, both mappings, the tolerances ``realise`` uses."""
+        for label, container in predicted.items():
+            self._compare(
+                np.asarray(native.predicted[label][0]),
+                np.asarray(container.values).ravel(),
+                f"dataset {label!r}'s prediction",
+            )
+        for model, result in results.items():
+            produced = native.channels.get(model, {})
+            for channel in result:
+                if channel not in produced:
+                    raise LoweringError(
+                        "batched simulation",
+                        backend=self.backend,
+                        detail=(
+                            f"the native batched path produced no values for channel "
+                            f"{channel!r} of model {model!r}, which the contract path does "
+                            f"produce. A training set written from it would be missing a "
+                            f"group the loop writes (results.md §11)."
+                        ),
+                    )
+                self._compare(
+                    np.asarray(produced[channel][0]),
+                    np.asarray(result[channel].values).ravel(),
+                    f"model {model!r} channel {channel!r}",
+                )
+
+    def _compare(self, got: np.ndarray, expected: np.ndarray, what: str) -> None:
+        if got.shape != expected.shape or not np.allclose(
+            got, expected, rtol=_NATIVE_AGREEMENT_RTOL, atol=_NATIVE_AGREEMENT_ATOL
+        ):
+            raise LoweringError(
+                "batched simulation",
+                backend=self.backend,
+                detail=(
+                    f"the native batched forward path disagrees with the contract path for "
+                    f"{what} at the problem's reference values. They are one quantity computed "
+                    f"twice; simulating with the first while recording the second would write a "
+                    f"training set of a different forward model."
+                ),
+            )
+
+    # -- use -----------------------------------------------------------------
+
+    @property
+    def samples_natively(self) -> bool:
+        """Whether observations are drawn on the backend rather than in numpy."""
+        return self.sampler is not None
+
+    def run(self, requests: Sequence[_DrawRequest], observe: bool) -> list[Simulation]:
+        """One chunk, natively: ``vmap`` the prediction, then rebuild the draws."""
+        problem = self.problem
+        theta = np.stack(
+            [problem._mapping.merged.pack(dict(request.values)) for request in requests]
+        )
+        native = self.predict(theta, sharder=self.sharder)
+        drawn: Mapping[str, np.ndarray] | None = None
+        if observe and self.sampler is not None:
+            seeds = [int(request.generator.integers(0, 2**63 - 1)) for request in requests]
+            drawn = self.sampler(theta, native.predicted, seeds)
+        simulations: list[Simulation] = []
+        for position, request in enumerate(requests):
+            simulations.append(self._draw(position, request, native, theta, observe, drawn))
+        return simulations
+
+    def _draw(
+        self,
+        position: int,
+        request: _DrawRequest,
+        native: BatchedPrediction,
+        theta: np.ndarray,
+        observe: bool,
+        drawn: Mapping[str, np.ndarray] | None,
+    ) -> Simulation:
+        problem = self.problem
+        resolved = dict(request.values)
+        results = {
+            model: ModelResult(
+                {
+                    channel: template[channel].with_values(
+                        native.channels[model][channel][position]
+                    )
+                    for channel in template
+                },
+                meta=template.meta or None,
+                parameters=resolved,
+            )
+            for model, template in self.channels.items()
+        }
+        predicted = {
+            label: template.with_values(native.predicted[label][position])
+            for label, template in self.templates.items()
+        }
+        observations: dict[str, FunctionSamples] | None = None
+        if observe:
+            routed = problem._mapping.distribute(resolved)
+            observations = {}
+            for label, dataset in problem.datasets.items():
+                # Trapped exactly as ``_run_simulation`` traps it, and for the
+                # same reason: a likelihood that cannot produce a draw at *this*
+                # theta is §11's flagged failure, not an exception the budget
+                # stops at. What is deliberately *not* trapped is what the loop
+                # does not trap either — a family that cannot be sampled at all
+                # raises, because that is a fact about the composition and would
+                # fail identically for every draw.
+                try:
+                    if drawn is not None:
+                        observations[label] = dataset.place_observation(
+                            predicted[label], np.asarray(drawn[label][position])
+                        )
+                    else:
+                        observations[label] = dataset.draw_observation(
+                            predicted[label], routed.get(label), request.generator
+                        )
+                except problem._failure_types as error:
+                    failure = _failure_from(FailureReason.LIKELIHOOD_FAILED, error, label)
+                    return Simulation(
+                        parameters=resolved,
+                        theta=theta[position],
+                        results=results,
+                        predicted=predicted,
+                        failure=failure,
+                    )
+        return Simulation(
+            parameters=resolved,
+            theta=theta[position],
+            results=results,
+            predicted=predicted,
+            observations=observations,
+        )
 
 
 def _spawn(generator: np.random.Generator, count: int, stream: str) -> list[np.random.Generator]:

@@ -96,7 +96,7 @@ capabilities everywhere else too.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 import jax
@@ -104,9 +104,11 @@ import jax.numpy as jnp
 import numpy as np
 
 from ampere.core import (
+    BatchedPrediction,
     FittingProblem,
     GaussianProcessNoise,
     IndependentNoise,
+    chunk_bounds,
 )
 from ampere.core.dataset import (
     INSTRUMENT_COMPONENT,
@@ -346,11 +348,24 @@ class _LoweredDataset:
         one — so which samples are retained is a fact about the problem, not
         about θ, and can be a constant here.
         """
+        return self.predict_full(routed)[self.retain]
+
+    def predict_full(self, routed: Mapping[str, Mapping[str, Any]]) -> jax.Array:
+        """The same chain, **before** the mask is applied (W3.1 slice 2).
+
+        The density wants the retained samples; a *simulation* wants the whole
+        container, because ``Dataset.predict`` returns one and a masked sample
+        keeps the observed container's own value rather than vanishing from it
+        (``inference.md`` §13). Splitting the two here rather than re-walking
+        the chain keeps one implementation of the forward model, which is the
+        only way ``simulate_batched`` can be checked against ``log_likelihood``
+        at all.
+        """
         flux = self.model.flux(self.channel, routed[self.model_label])
         grid = self.model.grid(self.channel)
         for step in self.steps:
             flux, grid = step.apply_flux(flux, grid, self._step_values(routed, step.label))
-        return flux[self.retain]
+        return flux
 
     def _step_values(
         self, routed: Mapping[str, Mapping[str, Any]], label: str
@@ -427,6 +442,120 @@ class _LoweredDataset:
             whitened,
             self.noise.kernel.resolve(values),
         )
+
+    # -- the generative half (W3.1 slice 2) ---------------------------------
+
+    def sampling_refusal(self) -> LoweringError | None:
+        """Why this dataset cannot be sampled natively, or ``None``.
+
+        Peter's ruling of 2026-09-08 is that every backend samples natively;
+        what a backend may sample is fixed by what ``ampere.core`` samples,
+        because **the numpy path is the oracle**. Today that is
+        :meth:`ampere.core.GaussianFamily.sample` and nothing else: the base
+        :meth:`~ampere.core.LikelihoodFamily.sample` refuses specifically, and
+        ``student_t``, ``cauchy``, ``complex_gaussian`` and ``poisson`` all
+        inherit that refusal (``inference.md`` §13, "what can be sampled, and
+        what will not be guessed"). A native twin for a family the core will
+        not sample would be a backend inventing an observation process the
+        contract declines to guess — precisely the "silently train an SBI
+        posterior on the wrong forward model" the refusal exists to prevent —
+        so this backend samples exactly what the core samples, and refuses the
+        rest **by handing the draw back to the numpy path**, where the core's
+        own refusal text is what the caller meets.
+
+        Four conditions, in the order they matter:
+
+        * the family's ``sample`` must be ``GaussianFamily``'s own. A
+          *user-overridden* ``sample`` is refused too, and deliberately: it is
+          a numpy function, it is the observation process its author wrote, and
+          running something else instead would be worse than running it slowly
+          (§13's "a user with an exotic observation process supplies it by
+          subclassing");
+        * a censoring declaration that survives the mask blocks a draw on every
+          backend, because applying the censoring operator to a draw is not
+          implemented anywhere;
+        * complex data have no ``sample`` in the core at all;
+        * a latent declaration means the family reads ``noise.latent``, which
+          the Gaussian family does not.
+        """
+        family = self.likelihood.family
+        from ampere.core import GaussianFamily
+
+        if type(family).sample is not GaussianFamily.sample:
+            return _refuse(
+                family.NAME or type(family).__name__,
+                f"dataset {self.label!r} does not draw its observations through "
+                f"ampere.core.GaussianFamily.sample, so this backend has no native twin for "
+                f"it: the numpy path is the oracle, and a backend that guessed a sampling "
+                f"distribution the contract declines to guess would train an SBI posterior on "
+                f"the wrong forward model. The draw is made on the numpy path instead.",
+            )
+        censoring = self.likelihood.censoring
+        if censoring is not None and bool(np.any(np.asarray(censoring.kinds)[self.retain] != 0)):
+            return _refuse(
+                "censoring",
+                f"dataset {self.label!r} declares limits on retained samples, which blocks "
+                f"observation drawing on every backend.",
+            )
+        if self.observed_values.dtype == jnp.complex128:
+            return _refuse(
+                "complex_gaussian",
+                f"dataset {self.label!r} holds complex observations, which ampere.core does "
+                f"not sample.",
+            )
+        if self.latent_name is not None:
+            return _refuse(
+                "latent",
+                f"dataset {self.label!r} declares a latent GP, whose family reads "
+                f"noise.latent; ampere.core samples no such family.",
+            )
+        return None
+
+    def sample_retained(
+        self,
+        routed: Mapping[str, Mapping[str, Any]],
+        predicted: jax.Array,
+        key: jax.Array,
+    ) -> jax.Array:
+        """One draw of the retained observed values, natively.
+
+        :meth:`ampere.core.GaussianFamily.sample` transcribed into jax, with the
+        two branches it has and the same stabiliser reasoning:
+
+        * uncorrelated noise — ``x = mu + sigma z``, with the noise model's own
+          sigma, so a fitted ``scale`` or ``jitter`` is already in it;
+        * correlated (GP) noise — ``x = mu + L z1 + sigma z2``, with ``L`` from
+          the solver's **own** ``latent_transform_jax``, the same whitening the
+          latent path uses, and the solver's numerical jitter folded into the
+          diagonal because it is part of the covariance the marginal likelihood
+          scores. Omitting it would draw from a narrower distribution than the
+          density evaluates, and the error is not small at the jitter values
+          the library's own error message tells a user to raise.
+
+        Traceable, so ``jax.vmap`` maps it over a chunk; the key is per draw.
+        """
+        values = dict(self._dataset_values(routed).get(LIKELIHOOD_COMPONENT, {}))
+        sigma = self._sigma(predicted, values)
+        realisation = predicted
+        size = int(self.retain.sum())
+        if self.correlated:
+            gp_key, noise_key = jax.random.split(key)
+            whitened = jax.random.normal(gp_key, (size,), dtype=jnp.float64)
+            realisation = realisation + self.noise.solver.latent_transform_jax(
+                self.noise.kernel,
+                self.observed_coordinates,
+                whitened,
+                self.noise.kernel.resolve(values),
+            )
+            stabiliser = float(getattr(self.noise.solver, "jitter", 0.0) or 0.0)
+            if stabiliser:
+                floor = jnp.full((size,), stabiliser, dtype=jnp.float64)
+                sigma = floor if sigma is None else jnp.sqrt(sigma**2 + floor**2)
+        else:
+            noise_key = key
+        if sigma is None:
+            return realisation
+        return realisation + sigma * jax.random.normal(noise_key, (size,), dtype=jnp.float64)
 
     def log_likelihood(self, routed: Mapping[str, Mapping[str, Any]]) -> jax.Array:
         """``log p(data | θ)`` for this dataset, as a traceable jax scalar."""
@@ -666,6 +795,146 @@ class LoweredProblem:
                 f"shape {tuple(stacked.shape)}.",
             )
         return jax.vmap(self.log_prob_unconstrained)(stacked)
+
+    # -- batched simulation (W3.1 slice 2) ----------------------------------
+
+    def _forward(self, theta: jax.Array) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+        """One θ through the whole noise-free forward model, natively.
+
+        Returns what :class:`~ampere.core.BatchedPrediction` holds, as a pytree
+        of jax arrays so that ``jax.vmap`` maps it in one traced call: every
+        model's every channel, and every dataset's instrument-transformed
+        prediction on the *whole* observed grid.
+
+        Every channel, not only the bound ones, because ``results.md`` §11
+        writes one training-set group per ``<model>.<channel>`` and a fast path
+        that returned fewer would silently write a smaller file than the loop.
+        """
+        routed = self._route(jnp.asarray(theta, dtype=jnp.float64).reshape(-1))
+        channels = {
+            label: {
+                channel: model.flux(channel, routed.get(label, {}))
+                for channel in getattr(model, "channels", ())
+            }
+            for label, model in self.problem.models.items()
+        }
+        predicted = {dataset.label: dataset.predict_full(routed) for dataset in self._datasets}
+        return channels, predicted
+
+    def simulate_batched(
+        self,
+        theta: Any,
+        *,
+        chunk_size: int | None = None,
+        sharder: Any = None,
+    ) -> BatchedPrediction:
+        """``inference.md`` §13's *batched form*, natively: a stack of θ, one ``vmap``.
+
+        ``(batch, free_size)`` **constrained** free vectors in — the
+        coordinates ``SimulationBatch.theta`` holds, not the unconstrained ones
+        :meth:`log_prob_unconstrained` takes, because a simulation budget is a
+        set of parameter values rather than a set of sampler positions.
+
+        **Per chunk, always.** ``chunk_size`` bounds how many simulations are
+        vectorised at once and the chunks are *looped*; ``vmap`` over a whole
+        budget is exactly the single-device memory trap Peter's ruling of
+        2026-09-08 names, and the reason ``simulate_many`` is built on an
+        executor rather than on this. ``None`` means one chunk, which is what
+        ``simulate_many`` passes because it has already chunked.
+
+        **What it does not do.** It draws no noise (:meth:`sample_observations`
+        does), it flags no failures (there is no control flow inside a trace to
+        flag with, so a simulator that fails produces NaNs, classified by the
+        caller exactly as the loop classifies them), and it refuses rather than
+        falling back — ``simulate_many`` owns the fallback, and owning it in
+        two places would let a fast path quietly become a slow one.
+
+        Refused, by name, when the problem declares ``batchable = False``. The
+        refusal is load-bearing for the same reason
+        :meth:`log_prob_unconstrained_batched`'s is: ``celerite2.jax``
+        registers no batching rule for its primitives.
+        """
+        if not self.batchable:
+            raise _refuse(
+                "batched simulation",
+                f"this problem declares batchable = False, so its forward model cannot be "
+                f"vmapped over a stack of parameter vectors. The flag is aggregated from what "
+                f"every part declares ({self.problem.capabilities}), conjunctively — "
+                f"ampere.backends.jax.QuasisepGP is the one that withdraws it, because "
+                f"celerite2's primitives register no jax batching rule. simulate_many falls "
+                f"back to the loop, which is the semantics anyway.",
+            )
+        stack = jnp.asarray(theta, dtype=jnp.float64)
+        if stack.ndim != 2 or int(stack.shape[1]) != self.free_size:
+            raise _refuse(
+                "batched simulation",
+                f"simulate_batched takes a (batch, {self.free_size}) stack of constrained free "
+                f"vectors, got shape {tuple(stack.shape)}.",
+            )
+        vectorised = jax.vmap(self._forward)
+        channels: dict[str, dict[str, list[np.ndarray]]] = {}
+        predicted: dict[str, list[np.ndarray]] = {}
+        for start, stop in chunk_bounds(int(stack.shape[0]), chunk_size):
+            piece = stack[start:stop]
+            produced, prediction = (
+                vectorised(piece) if sharder is None else sharder.shard(vectorised, piece)
+            )
+            for label, holding in produced.items():
+                for channel, values in holding.items():
+                    channels.setdefault(label, {}).setdefault(channel, []).append(
+                        np.asarray(values)
+                    )
+            for label, values in prediction.items():
+                predicted.setdefault(label, []).append(np.asarray(values))
+        return BatchedPrediction(
+            channels={
+                label: {channel: np.concatenate(parts) for channel, parts in holding.items()}
+                for label, holding in channels.items()
+            },
+            predicted={label: np.concatenate(parts) for label, parts in predicted.items()},
+        )
+
+    def sample_observations(
+        self,
+        theta: Any,
+        predicted: Mapping[str, Any],
+        seeds: Sequence[int],
+    ) -> dict[str, np.ndarray]:
+        """Draw the retained observed values for a chunk, natively.
+
+        Peter's ruling of 2026-09-08. The distribution is
+        :meth:`ampere.core.GaussianFamily.sample`'s, transcribed in
+        :meth:`_LoweredDataset.sample_retained`; the **stream** is
+        ``jax.random``'s, which is why the numpy path stays the oracle and the
+        two are compared *distributionally* rather than draw for draw.
+
+        *seeds* is one integer per draw, taken from the per-draw child
+        generator ``simulate_many`` spawns **by index** — so partition
+        independence carries over unchanged: draw *i* gets the same key
+        whichever chunk it ran in, and a budget split 1/7/whole gives the same
+        observations.
+
+        Refuses by name, before drawing anything, for any dataset this backend
+        may not sample (:meth:`_LoweredDataset.sampling_refusal`); the caller
+        then runs the numpy path, where ``ampere.core``'s own refusal text is
+        what a user meets.
+        """
+        for dataset in self._datasets:
+            refusal = dataset.sampling_refusal()
+            if refusal is not None:
+                raise refusal
+        stack = jnp.asarray(theta, dtype=jnp.float64)
+        keys = jnp.stack([jax.random.PRNGKey(int(seed) & 0xFFFFFFFF) for seed in seeds])
+        drawn: dict[str, np.ndarray] = {}
+        for dataset in self._datasets:
+            rows = jnp.asarray(np.asarray(predicted[dataset.label]), dtype=jnp.float64)
+            retained = rows[:, dataset.retain]
+
+            def one(vector: jax.Array, row: jax.Array, key: jax.Array, of: Any = dataset) -> Any:
+                return of.sample_retained(self._route(vector.reshape(-1)), row, key)
+
+            drawn[dataset.label] = np.asarray(jax.vmap(one)(stack, retained, keys))
+        return drawn
 
     def potential(self) -> Callable[[jax.Array], jax.Array]:
         """The **negative** unconstrained log-density, which is what numpyro wants.

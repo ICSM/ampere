@@ -216,6 +216,7 @@ from .noise import (
 from .parameters import LoweredParameters, TorchParameterSpace
 from .problem import LoweredProblem, lower_problem
 from .rng import generator, seed_for
+from .sharding import DistributedSharder, SingleDeviceSharder, available_devices
 
 # ``inference.md`` §10a: importing this package is the user's opt-in to torch,
 # and it is also the moment the torch realisation becomes reachable through
@@ -235,6 +236,7 @@ __all__ = [
     "BlackBody",
     "CalibrationScale",
     "DenseGP",
+    "DistributedSharder",
     "FractionalModelGPNoise",
     "FractionalModelNoise",
     "GaussianProcessNoise",
@@ -249,11 +251,13 @@ __all__ = [
     "PowerLaw",
     "QuasisepGP",
     "Resample",
+    "SingleDeviceSharder",
     "SquaredExponential",
     "SyntheticPhotometry",
     "TorchParameterSpace",
     "TorchSpectralModel",
     "as_tensor",
+    "available_devices",
     "bin_edges",
     "bundled_filter_library",
     "generator",

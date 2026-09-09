@@ -826,3 +826,75 @@ class TestTheStartMethod:
 
     def test_the_start_method_is_visible_in_the_repr(self) -> None:
         assert f"start_method={ProcessExecutor(2).start_method!r}" in repr(ProcessExecutor(2))
+
+
+class TestTheNativePathIsAskedForByName:
+    """W3.1 slice 2's core-side surface, on a backend that has no native path.
+
+    The reference backend registers no realisation, which makes it exactly the
+    right place to assert the *other* half of the contract: what
+    ``simulate_many`` does when the fast path is not there. The answer is "runs
+    the loop and says so", and the two rows that matter are that the answer is
+    recorded rather than inferred, and that asking for the fast path by name
+    gets a refusal rather than a silent slow path.
+    """
+
+    def test_the_loop_is_the_default_and_the_provenance_records_it(self) -> None:
+        batch = build().simulate_many(4, observe=True)
+        assert batch.provenance["simulate_batched"] is False
+        assert batch.provenance["sample_backend"] == "reference"
+        assert batch.provenance["simulation_context"] == "none"
+
+    def test_a_backend_without_a_realisation_refuses_native_true(self) -> None:
+        with pytest.raises(DatasetError, match=r"realisation|BATCHABLE"):
+            build().simulate_many(4, native=True)
+
+    def test_native_true_with_an_executor_is_refused_by_name(self) -> None:
+        """A pool partitions the draws and a vmap evaluates them together."""
+        with pytest.raises(DatasetError, match="executor"):
+            build().simulate_many(4, native=True, executor=ThreadExecutor(1))
+
+    def test_the_reserved_context_is_recorded(self) -> None:
+        """The horizon note's hook: the signature exists before the machinery."""
+        batch = build().simulate_many(2, context=None)
+        assert batch.provenance["simulation_context"] == "none"
+
+    def test_the_provenance_of_a_mixed_budget_claims_least(self) -> None:
+        """Concatenation is conservative: a mixture must not read as a native run."""
+        native = SimulationBatch((), provenance={"simulate_batched": True})
+        loop = SimulationBatch((), provenance={"simulate_batched": False})
+        joined = SimulationBatch.concatenate([native, loop])
+        assert joined.provenance["simulate_batched"] is False
+
+    def test_the_provenance_survives_re_chunking_and_selection(self) -> None:
+        batch = build().simulate_many(4, observe=True)
+        assert next(iter(batch.iter_chunks(2))).provenance == batch.provenance
+        assert batch.usable.provenance == batch.provenance
+        assert batch[1:3].provenance == batch.provenance
+
+    def test_an_evaluate_batch_model_is_not_a_native_batched_path(self) -> None:
+        """The two are different claims and the attribute must not conflate them.
+
+        ``Model.evaluate_batch`` is a *model* taking a table of θ;
+        ``simulate_batched`` is a *lowered problem* running through a backend's
+        ``vmap``. A training set that recorded the first as the second could not
+        answer the question the attribute exists for.
+        """
+        batch = build(BatchedFlat()).simulate_many(4)
+        assert batch.provenance["evaluate_batch"] is True
+        assert batch.provenance["simulate_batched"] is False
+
+    def test_a_restored_problem_still_simulates(self) -> None:
+        """The round trip a forkserver worker makes, asserted where it can be read.
+
+        ``_assert_picklable`` writes *and reads* since W3.1 slice 2, because a
+        worker started by ``forkserver`` (the default now) reconstructs the
+        problem rather than inheriting it. Reading it back is not enough on its
+        own: the failure this row exists for was a restored problem that
+        unpickled cleanly and then refused to evaluate, so the assertion is a
+        simulation rather than a ``loads``.
+        """
+        restored = pickle.loads(pickle.dumps(build()))
+        drawn = restored.simulate(observe=True)
+        assert not drawn.failed
+        assert drawn.observations is not None

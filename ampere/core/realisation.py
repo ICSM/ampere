@@ -65,6 +65,8 @@ __all__ = [
     "realise",
     "register_realisation",
     "registered_realisations",
+    "sample_observations_of",
+    "simulate_batched_of",
 ]
 
 
@@ -133,6 +135,65 @@ def log_likelihood_terms_of(realised: Realisation) -> Callable[[Any], Mapping[st
     """
     terms = getattr(realised, "log_likelihood_terms", None)
     return terms if callable(terms) else None
+
+
+def simulate_batched_of(realised: Realisation) -> Callable[..., Any] | None:
+    """*realised*'s optional native batched **prediction**, or ``None``.
+
+    ``inference.md`` §13's *batched form*, native path, added at W3.1 slice 2::
+
+        simulate_batched(theta, *, chunk_size=None, sharder=None)
+            -> ampere.core.simulate.BatchedPrediction
+
+    with ``theta`` a ``(batch, free_size)`` stack of **constrained** free
+    vectors — the same coordinates :attr:`SimulationBatch.theta` holds, not the
+    unconstrained ones :meth:`Realisation.log_prob_unconstrained` takes,
+    because a simulation budget is a set of parameter values rather than a set
+    of sampler positions.
+
+    Optional for the same reason ``log_likelihood_terms`` is, and fetched the
+    same way rather than declared on :class:`Realisation`: a runtime-checkable
+    Protocol checks *presence*, so declaring it would make every realisation
+    that supplies only the mandatory three fail :func:`isinstance`, which is
+    the check :func:`realise` uses to give a backend a legible error.
+
+    ``simulate_many`` uses it when it is there and falls back to the loop —
+    honestly, and recording that it did in the batch's provenance — when it is
+    not, or when the realisation refuses (a non-batchable part; a solver whose
+    primitives have no batching rule). The loop remains the semantics; this is
+    throughput underneath it.
+    """
+    batched = getattr(realised, "simulate_batched", None)
+    return batched if callable(batched) else None
+
+
+def sample_observations_of(realised: Realisation) -> Callable[..., Any] | None:
+    """*realised*'s optional native observation **sampling**, or ``None``.
+
+    Peter's ruling of 2026-09-08 ("every backend supports observation sampling
+    natively"), landed at W3.1 slice 2::
+
+        sample_observations(theta, predicted, seeds)
+            -> {dataset label: (batch, n_retained) array}
+
+    drawing from the same distribution ``LikelihoodFamily.sample`` scores over
+    the retained samples, in the backend's own arithmetic and from the
+    backend's own random stream. *seeds* is one integer per draw, derived from
+    the per-draw child generator ``simulate_many`` already spawns by index, so
+    the partition independence of the numpy path carries over: draw *i* is the
+    same draw whichever chunk it ran in.
+
+    **The numpy path stays the oracle**, and the comparison is
+    *distributional* rather than draw-for-draw, because ``torch.Generator`` and
+    ``jax.random`` do not reproduce numpy's stream and could not be made to
+    without reimplementing one library inside another. What must match exactly
+    is the *refusals*: a family the core will not sample is a family no backend
+    may sample, and a realisation whose sampler cannot honour that says so at
+    construction so the loop — and with it the core's own refusal text —
+    is what the caller meets.
+    """
+    sampler = getattr(realised, "sample_observations", None)
+    return sampler if callable(sampler) else None
 
 
 #: ``FittingProblem -> Realisation``. Must refuse, by name, at construction —

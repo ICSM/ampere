@@ -76,7 +76,9 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from .dataset import Failure, Simulation
 
 __all__ = [
+    "BatchedPrediction",
     "ChunkHook",
+    "ChunkSharder",
     "ContainerBatch",
     "ExecutionFailure",
     "Executor",
@@ -103,6 +105,86 @@ _Result = TypeVar("_Result")
 #: W3.1 slice 2 wires the torch and jax backends into it; in this slice it is a
 #: documented callable and nothing more.
 ChunkHook = Callable[[int], None]
+
+
+@runtime_checkable
+class ChunkSharder(Protocol):
+    """How one chunk's stacked θ is spread over the devices a backend reports.
+
+    **Peter's addendum of 2026-09-09**, landed at W3.1 slice 2 as an API and a
+    single-device implementation, with the distributed ones designed and
+    smoke-tested but not exercised — full exercise waits for the GPU item.
+
+    The layering is the point. :class:`Executor` distributes *simulations*
+    across processes and machines; a sharder distributes **one chunk's
+    vectorised evaluation** across the accelerators of one host, which is a
+    different axis and a different mechanism (``jax.pmap``/``shard_map``,
+    ``torch.distributed``/``DTensor``). Neither subsumes the other: an SBI
+    budget on eight GPUs wants both, and a budget on one CPU wants neither.
+
+    It is deliberately not a distributed runtime. Two methods, both of which a
+    single-device implementation answers trivially, so that the default costs
+    nothing and the degenerate case is what CPU CI exercises:
+
+    ``devices()``
+        The devices this sharder will use, named. Length 1 is the degenerate
+        case; length 0 is not allowed, because "no device" is not a thing a
+        chunk can be evaluated on.
+    ``shard(fn, stacked)``
+        Evaluate *fn* — already vectorised over the leading axis — on
+        *stacked*, returning what ``fn(stacked)`` would have returned. A
+        single-device implementation *is* ``fn(stacked)``. A multi-device one
+        splits the leading axis, runs the parts in parallel and reassembles, so
+        the contract is a **value** contract: sharding must not change the
+        answer, only where it was computed.
+    """
+
+    def devices(self) -> tuple[str, ...]:  # pragma: no cover - protocol
+        """The devices this sharder spreads a chunk over, in order."""
+        ...
+
+    def shard(self, fn: Callable[[Any], Any], stacked: Any) -> Any:  # pragma: no cover - protocol
+        """``fn(stacked)``, however it chooses to compute it."""
+        ...
+
+
+@dataclasses.dataclass(frozen=True)
+class BatchedPrediction:
+    """What a realisation's ``simulate_batched`` hands back: one chunk, noise-free.
+
+    ``inference.md`` §13's *batched form*, native path. Two mappings of plain
+    numpy arrays with a **leading sample axis**, and plain numpy on purpose:
+    this crosses out of a backend into ``ampere.core``, which owns no array
+    type but numpy's, and the consumer is going to build core containers from
+    it anyway.
+
+    Attributes
+    ----------
+    channels
+        ``{model label: {channel: (batch, n)}}`` — every channel of every model
+        the problem holds, which is what
+        :attr:`SimulationBatch.results` is rebuilt from. Not merely the
+        channels a dataset happens to be bound to: ``results.md`` §11 writes one
+        training-set group per ``<model>.<channel>``, so a native path that
+        returned fewer would silently write a smaller file than the loop.
+    predicted
+        ``{dataset label: (batch, n_full)}`` — the instrument-transformed
+        prediction on **every** observed sample, masked ones included, because
+        that is the shape ``Dataset.predict`` returns and masking is the
+        consumer's (``draw_observation``'s) business.
+    """
+
+    channels: Mapping[str, Mapping[str, np.ndarray]]
+    predicted: Mapping[str, np.ndarray]
+
+    def __len__(self) -> int:
+        """The batch size, read off whichever stack is present."""
+        for stack in self.predicted.values():
+            return int(np.shape(stack)[0])
+        for produced in self.channels.values():
+            for stack in produced.values():
+                return int(np.shape(stack)[0])
+        return 0
 
 
 # ---------------------------------------------------------------------------
@@ -930,14 +1012,27 @@ class SimulationBatch:
     offset
         Index of the first draw within the whole budget, so a chunk knows where
         it sits. ``batch.offset + i`` is draw ``batch[i]``'s global index.
+    provenance
+        **W3.1 slice 2**: how this batch was produced, for the training set's
+        root attributes. Keys are unprefixed and
+        :func:`~ampere.results.provenance_attrs` adds the ``ampere_``; two are
+        written today, and both answer a question a stored budget cannot
+        otherwise be asked. ``simulate_batched`` says whether the noise-free
+        prediction came from a backend's vectorised path or from the loop, and
+        ``sample_backend`` names the backend that drew the observations —
+        because the numpy path and a native one draw from the *same*
+        distribution but not from the same random stream, so a budget is only
+        reproducible against the path that produced it.
     """
 
     simulations: tuple[Simulation, ...]
     stream: str = "simulate"
     offset: int = 0
+    provenance: Mapping[str, Any] = dataclasses.field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "simulations", tuple(self.simulations))
+        object.__setattr__(self, "provenance", dict(self.provenance))
 
     # -- sequence surface ----------------------------------------------------
 
@@ -955,6 +1050,7 @@ class SimulationBatch:
                 tuple(self.simulations[index]),
                 stream=self.stream,
                 offset=self.offset + (span.start if len(span) else 0),
+                provenance=self.provenance,
             )
         return self.simulations[index]
 
@@ -1035,27 +1131,59 @@ class SimulationBatch:
         none.
         """
         return SimulationBatch(
-            tuple(draw for draw in self.simulations if not draw.failed), stream=self.stream
+            tuple(draw for draw in self.simulations if not draw.failed),
+            stream=self.stream,
+            provenance=self.provenance,
         )
 
     def iter_chunks(self, chunk_size: int) -> Iterator[SimulationBatch]:
         """Re-chunk an in-memory batch, for a consumer that wants it in pieces."""
         for start, stop in chunk_bounds(len(self), chunk_size):
             yield SimulationBatch(
-                self.simulations[start:stop], stream=self.stream, offset=self.offset + start
+                self.simulations[start:stop],
+                stream=self.stream,
+                offset=self.offset + start,
+                provenance=self.provenance,
             )
 
     @classmethod
     def concatenate(cls, batches: Iterable[SimulationBatch]) -> SimulationBatch:
-        """Join chunks back into one batch, in order."""
+        """Join chunks back into one batch, in order.
+
+        The provenance is the **union** over the chunks, with disagreement
+        resolved conservatively: a budget in which any chunk fell back to the
+        loop is a budget whose predictions did not all come from the native
+        path, and saying otherwise in a training set's attributes would be a
+        false record of how the file was made.
+        """
         collected = list(batches)
         if not collected:
             return cls(())
         draws: list[Simulation] = []
         for batch in collected:
             draws.extend(batch.simulations)
-        return cls(tuple(draws), stream=collected[0].stream, offset=collected[0].offset)
+        return cls(
+            tuple(draws),
+            stream=collected[0].stream,
+            offset=collected[0].offset,
+            provenance=_merge_provenance(collected),
+        )
 
     def __repr__(self) -> str:
         failed = int(np.count_nonzero(self.failed)) if self.simulations else 0
         return f"<SimulationBatch {len(self)} draw(s), {failed} failed, stream={self.stream!r}>"
+
+
+def _merge_provenance(batches: Sequence[SimulationBatch]) -> dict[str, Any]:
+    """Join chunk provenance conservatively; see :meth:`SimulationBatch.concatenate`."""
+    merged: dict[str, Any] = {}
+    for batch in batches:
+        for key, value in batch.provenance.items():
+            if key not in merged:
+                merged[key] = value
+            elif merged[key] != value:
+                # Two chunks disagreeing means the budget is a mixture, and the
+                # only honest single value for "how was this made?" is the one
+                # that claims least: False for a flag, "mixed" for a name.
+                merged[key] = False if isinstance(value, bool) else "mixed"
+    return merged
