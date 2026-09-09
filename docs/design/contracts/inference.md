@@ -58,7 +58,7 @@ jax import, lazily or otherwise (`architecture.md` §4 rule 1).
 >>> import scipy.stats as st
 >>> import astropy.units as u
 >>> from ampere.core import (
-...     Capabilities, Dataset, DatasetCollection, Evaluation, FailureReason,
+...     Capabilities, CauchyFamily, Dataset, DatasetCollection, Evaluation, FailureReason,
 ...     FittingProblem, GaussianFamily, GaussianProcessNoise, HierarchicalPrior,
 ...     IndependentNoise, Instrument, Likelihood, Marginalisation, Matern32, Model,
 ...     ModelResult, Parameter, ParameterSet, PhotometricPoints, PoissonFamily,
@@ -1528,7 +1528,7 @@ True
 
 ```
 
-### What can be sampled, and what will not be guessed
+### What can be sampled, and what will not be guessed (*Amended W3.14*)
 
 **Ruled by Peter, 2026-09-02 (R3)**: `LikelihoodFamily` has the generative
 half — an overridable `sample(predicted, noise, rng)`, receiving the same
@@ -1538,11 +1538,59 @@ drawing delegates to it, so what a family cannot sample it refuses precisely,
 and a user with an exotic observation process supplies it by subclassing:
 
 ```pycon
->>> class SamplingPoisson(PoissonFamily):
+>>> class SamplingCauchy(CauchyFamily):
 ...     def sample(self, predicted, noise, rng):
-...         return rng.poisson(predicted).astype(float)
+...         return predicted + noise.sigma * rng.standard_cauchy(size=predicted.shape)
 
 ```
+
+**Amended W3.14.** The refusal was the default for every shipped family but the
+Gaussian one until Peter's ruling of 2026-09-09, whose use case arrived in W3.6:
+a counting experiment could not `simulate(observe=True)`, so neither SBC nor SBI
+on count data worked without the user subclassing `PoissonFamily`. The refusal
+was written for families whose observation process is *genuinely ambiguous*, and
+three of the shipped families are not — `poisson`, `student_t` and
+`complex_gaussian` each have exactly one generative form, and each family's own
+`log_prob` already fixes which one. Those three implement `sample`; `cauchy` and
+every declared-but-unimplemented family keep the refusal **word for word**. What
+changed is the list of families the contract can honestly say it knows the
+answer for, not the rule: where the observation process is not determined by the
+density, ampere still declines to guess it.
+
+- **`poisson`** — `counts ~ Poisson(rate)`, returned as float because that is
+  what the containers hold. `predicted` means what it means in `log_prob`: the
+  expected count *before* the latent is applied. Under `IndependentNoise` that
+  is the whole rate, and mean and variance are both `predicted`. Under
+  `GaussianProcessNoise` the family's model is `counts ~ Poisson(predicted ·
+  exp(f))`, so the rate is `predicted · exp(f)` and `f` is the latent the caller
+  supplied — the *conditional* draw, at the same `f` `log_prob` scores at, which
+  is what makes the whitened `z` in θ and the drawn data one model rather than
+  two. `Dataset.draw_observation` reads that `z` out of θ and hands it to
+  `noise_params`, exactly as `Dataset.log_likelihood_of` does on the scoring
+  side. With no latent supplied a fresh GP realisation is drawn through
+  `GPSolver.latent_transform`, as the Gaussian GP branch draws its own; the
+  marginal is then a log-normal mixture of Poissons and is over-dispersed
+  relative to a Poisson, which is what the model says. A negative or non-finite
+  rate is refused by name (`log_prob` guards `rate <= 0`; the draw guards
+  `rate < 0`, a zero rate being a well-defined point mass the density
+  nonetheless declines to score).
+- **`student_t`** — `x = μ + σ · t_ν`, with the family's own `ν` and the noise
+  model's `σ` used **as the scale**, exactly as `log_prob` standardises by it.
+  `σ` is not the standard deviation: the variance is `σ² ν / (ν − 2)` for
+  `ν > 2` and undefined below, and matching the variance instead would be a draw
+  from a different density from the one that scores it. A correlated (GP) noise
+  model is refused by name — a Student-t is a scale mixture of Gaussians, the
+  mixture does not commute with a GP covariance, and the marginal is not a
+  Student-t at all (the composition is already refused at construction, the
+  family declaring no `CONSUMES_LATENT_GP`).
+- **`complex_gaussian`** — independent `Normal(0, σ²)` on the real and the
+  imaginary part, which is the circular symmetry the family's density assumes.
+  **`σ` is the per-component standard deviation, not the total**, and that is
+  read off the density rather than assumed: `−|r|²/(2σ²) − log 2π − log σ²` is
+  the joint density of two independent `Normal(0, σ²)` components, so
+  `E|x − μ|² = 2σ²`. A correlated noise model is refused with the same message
+  the density refuses it with — the circular complex GP is declared analytic and
+  its implementation is Phase 4's, so there is no marginal to draw from either.
 
 `GaussianFamily.sample` is implemented for both noise models — the
 combinations the merged contracts get **provably right**:
@@ -1573,25 +1621,45 @@ specific, naming the family and the override that provides the observation
 process:
 
 ```pycon
->>> latent_theta = {"model.rate": 3.0, "counts.latent.z": np.zeros(3)}
->>> latent_problem.simulate(latent_theta, observe=True)
+>>> cauchy_problem = FittingProblem(
+...     Rate(grid),
+...     [Dataset(
+...         counts.with_values([4.0, 7.0, 2.0], uncertainty=[1.0, 1.0, 1.0]),
+...         likelihood=Likelihood(CauchyFamily(), IndependentNoise()),
+...         label="counts",
+...     )],
+... )
+>>> cauchy_problem.simulate({"model.rate": 3.0}, observe=True)
 Traceback (most recent call last):
     ...
-ampere.core.exceptions.DatasetError: dataset 'counts': the poisson family does not implement
+ampere.core.exceptions.DatasetError: dataset 'counts': the cauchy family does not implement
 sample(): its log_prob defines how a datum is scored, not how one is generated, and ampere
-will not guess a sampling distribution. Subclass PoissonFamily and override
+will not guess a sampling distribution. Subclass CauchyFamily and override
 sample(predicted, noise, rng) with the observation process, or use simulate(observe=False)
 and draw observations from the predicted containers yourself.
 
 ```
 
-The default refuses rather than guessing — adding Gaussian noise to a Poisson
-rate would silently train an SBI posterior on the wrong forward model. The
-noise-free half still works, which is what emulator training wants:
+The default refuses rather than guessing — inventing a symmetric error bar for a
+density that fixes none would silently train an SBI posterior on the wrong
+forward model. The noise-free half still works, which is what emulator training
+wants:
 
 ```pycon
->>> latent_problem.simulate(latent_theta).failed
+>>> cauchy_problem.simulate({"model.rate": 3.0}).failed
 False
+
+```
+
+The three families W3.14 added draw instead, at the moments their own densities
+imply:
+
+```pycon
+>>> latent_theta = {"model.rate": 3.0, "counts.latent.z": np.zeros(3)}
+>>> drawn = latent_problem.simulate(latent_theta, observe=True)
+>>> values = drawn.observations['counts'].values
+>>> bool(np.all(values >= 0.0) and np.all(values == np.round(values)))
+True
 
 ```
 
@@ -1599,19 +1667,42 @@ Masked samples keep the observed container's own values: they carry zero
 information and are excluded from every likelihood, so drawing noise for them
 would be inventing data.
 
-#### Sampling on a backend (*Amended W3.1*)
+#### Sampling on a backend (*Amended W3.1*, *W3.14*)
 
 **Ruled by Peter, 2026-09-08**: every backend supports observation sampling
 natively. W3.1 slice 2 landed it, and the ruling has a **ceiling** which is
 stated here because it is the load-bearing half: *a backend samples exactly what
-`ampere.core` samples.* Today that is `GaussianFamily.sample` and nothing else.
-A native twin for `student_t`, `cauchy`, `complex_gaussian` or `poisson` would
-be a backend inventing an observation process the contract has just finished
-declining to guess — the "silently train an SBI posterior on the wrong forward
-model" this whole subsection exists to prevent — so those families keep the
-refusal above **on every backend**, and a family whose `sample` a *user* has
-overridden keeps it too: their override is the observation process they wrote,
-and running something else instead would be worse than running it slowly.
+`ampere.core` samples.* A native twin for a family the core declines to guess a
+sampling distribution for would be a backend inventing an observation process
+the contract has just finished declining to guess — the "silently train an SBI
+posterior on the wrong forward model" this whole subsection exists to prevent —
+so `cauchy` keeps the refusal above **on every backend**, and a family whose
+`sample` a *user* has overridden keeps it too: their override is the observation
+process they wrote, and running something else instead would be worse than
+running it slowly.
+
+**Amended W3.14**, on both sides of that ceiling. The core now samples four
+families, so the twins follow: `gaussian`, `poisson`, `student_t` and
+`complex_gaussian` all draw natively on torch and on jax, through the
+presence-based dispatch slice 2 left open. The ceiling itself is unchanged — a
+backend samples what the core samples, no more — and the *floor* is stated too:
+a family the core samples but a backend has no twin for **falls back to the
+numpy path**, silently and correctly, rather than refusing. A backend may be
+slower than the core; it may not be more restrictive than it, because a refusal
+where the contract samples would be a capability withdrawn by an implementation
+detail.
+
+The two backends reach the same distributions by different routes, and the
+difference is `vmap`'s, not the contract's. `jax.random` takes a traced rate and
+a traced `ν` inside `jax.vmap`, so jax's twins are one expression each. Under
+`torch.func.vmap` a random operation is either an error or driven by the global
+generator, and the second would make a draw depend on how the chunk was
+scheduled — the property the per-draw seed exists to protect — so torch's
+non-Gaussian twins are **two-stage**: the transform computes each draw's
+distribution *parameters* (the Poisson rate, including `exp(f)` for a latent GP;
+the Student-t location, scale and `ν`), and the variate is drawn outside it, per
+draw, from that draw's own seed. That keeps a draw a pure function of its seed
+on both backends, which is what partition independence needs.
 
 A realisation may therefore offer an optional
 `sample_observations(theta, predicted, seeds)`, checked by presence exactly as

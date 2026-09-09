@@ -23,7 +23,9 @@ import scipy.stats as st
 
 from ampere.core import (
     Capabilities,
+    CauchyFamily,
     Censoring,
+    ComplexGaussianFamily,
     Dataset,
     DatasetCollection,
     DatasetError,
@@ -50,15 +52,18 @@ from ampere.core import (
     PoissonFamily,
     QuasisepGP,
     Spectrum,
+    StudentTFamily,
     Tie,
     Transformation,
     TransformationError,
+    VisibilitySet,
     declared_capabilities,
     foreign_parts,
     part_name,
     generator,
     substream,
 )
+from ampere.core.likelihood import NoiseParams
 
 # ---------------------------------------------------------------------------
 # Stubs
@@ -1802,14 +1807,18 @@ class TestSimulate:
         assert problem(np.int64(7)).seed == 7
 
     def test_a_family_that_cannot_be_sampled_says_so(self) -> None:
-        counts = Spectrum(WAVELENGTH * u.micron, np.array([4.0, 7.0, 2.0]))
+        # W3.14 moved the three unambiguous families off this row (Poisson,
+        # Student-t and complex Gaussian sample now), so the family that holds
+        # it down is the Cauchy one: Peter's ruling of 2026-09-09 names three
+        # families and is a list rather than a principle each implementer
+        # applies for itself, so everything else keeps the refusal.
         problem = FittingProblem(
-            Counts(WAVELENGTH),
+            Flat(WAVELENGTH),
             [
                 Dataset(
-                    counts,
-                    likelihood=Likelihood(PoissonFamily(), IndependentNoise()),
-                    label="counts",
+                    flat_spectrum(),
+                    likelihood=Likelihood(CauchyFamily(), IndependentNoise()),
+                    label="d",
                 )
             ],
         )
@@ -1819,36 +1828,245 @@ class TestSimulate:
         # error. The refusal is specific (ruled 2026-09-02, R3): it names the
         # family and the override that provides the observation process.
         with pytest.raises(DatasetError, match="does not implement sample"):
-            problem.simulate({"model.rate": 3.0}, observe=True)
+            problem.simulate({"model.level": 2.0}, observe=True)
         # The noise-free half still works, which is what emulator training wants.
-        assert not problem.simulate({"model.rate": 3.0}).failed
+        assert not problem.simulate({"model.level": 2.0}).failed
+
+    def test_the_refusal_text_is_unchanged_for_a_family_that_still_refuses(self) -> None:
+        """W3.14 widened *which* families sample; it did not touch the sentence.
+
+        Asserted word for word rather than through a ``match=`` fragment,
+        because the refusal is quoted in ``inference.md`` §13 and in
+        ``likelihoods.md`` §3 and is the thing a user actually meets:
+        shortening it, or letting a family acquire its own paraphrase of it,
+        is what this row exists to catch.
+        """
+        with pytest.raises(LikelihoodError) as raised:
+            CauchyFamily().sample(
+                np.zeros(3), NoiseParams(sigma=None, values={}), np.random.default_rng(0)
+            )
+        assert str(raised.value) == (
+            "the cauchy family does not implement sample(): its log_prob defines how a datum "
+            "is scored, not how one is generated, and ampere will not guess a sampling "
+            "distribution. Subclass CauchyFamily and override sample(predicted, noise, rng) "
+            "with the observation process, or use simulate(observe=False) and draw "
+            "observations from the predicted containers yourself."
+        )
 
     def test_a_user_family_provides_its_own_sample(self) -> None:
         # R3's point: the observation process is the family author's to supply.
-        # A Poisson subclass overriding sample() makes observe=True draws work
-        # end to end, with the same NoiseParams the likelihood scores with.
-        class SamplingPoisson(PoissonFamily):
+        # A subclass of a still-refusing family overriding sample() makes
+        # observe=True draws work end to end, with the same NoiseParams the
+        # likelihood scores with.
+        class SamplingCauchy(CauchyFamily):
             def sample(self, predicted, noise, rng):
-                return rng.poisson(predicted).astype(float)
+                return predicted + noise.sigma * rng.standard_cauchy(size=predicted.shape)
 
+        problem = FittingProblem(
+            Flat(WAVELENGTH),
+            [
+                Dataset(
+                    flat_spectrum(),
+                    likelihood=Likelihood(SamplingCauchy(), IndependentNoise()),
+                    label="d",
+                )
+            ],
+            seed=20260902,
+        )
+        drawn = problem.simulate({"model.level": 2.0}, observe=True).observations["d"]
+        assert drawn.values.shape == (3,)
+        assert not np.allclose(drawn.values, 2.0)
+        # The draw is scoreable by the same likelihood that will fit it.
+        assert math.isfinite(problem.log_prob({"model.level": 2.0}))
+
+    def test_poisson_counts_are_drawn_at_the_predicted_rate(self) -> None:
+        """W3.14: mean and variance are both the rate, and the values are counts.
+
+        Both moments, because a Poisson is the one shipped family whose mean
+        fixes its variance: a draw with the right mean and the wrong dispersion
+        — a rounded Gaussian, say — would pass a mean-only row and train an SBI
+        posterior on a forward model with the wrong noise.
+        """
         counts = Spectrum(WAVELENGTH * u.um, np.array([40.0, 70.0, 20.0]))
         problem = FittingProblem(
             Counts(WAVELENGTH),
             [
                 Dataset(
                     counts,
-                    likelihood=Likelihood(SamplingPoisson(), IndependentNoise()),
+                    likelihood=Likelihood(PoissonFamily(), IndependentNoise()),
                     label="counts",
                 )
             ],
             seed=20260902,
         )
-        drawn = problem.simulate({"model.rate": 30.0}, observe=True).observations["counts"]
-        assert drawn.values.shape == (3,)
-        assert np.all(drawn.values == np.round(drawn.values))
-        assert not np.allclose(drawn.values, 30.0)
-        # The draw is scoreable by the same likelihood that will fit it.
+        draws = np.array(
+            [
+                problem.simulate({"model.rate": 30.0}, observe=True).observations["counts"].values
+                for _ in range(4000)
+            ]
+        )
+        assert np.all(draws == np.round(draws))
+        assert np.all(draws >= 0.0)
+        # se(mean) = sqrt(30/4000) = 0.087; se(var) = 30 sqrt(2/4000) = 0.67.
+        assert draws.mean(axis=0) == pytest.approx(30.0, abs=0.35)
+        assert draws.var(axis=0) == pytest.approx(30.0, abs=2.7)
+        # The draw is scoreable by the same likelihood that will fit it, which
+        # is the property ``check_observed``'s integrality test would fail on.
         assert math.isfinite(problem.log_prob({"model.rate": 30.0}))
+
+    def test_a_negative_poisson_rate_is_refused_by_name(self) -> None:
+        with pytest.raises(LikelihoodError, match="finite, non-negative expected count"):
+            PoissonFamily().sample(
+                np.array([1.0, -2.0]), NoiseParams(sigma=None, values={}), np.random.default_rng(0)
+            )
+
+    def test_the_latent_gp_poisson_draw_uses_the_latent_in_theta(self) -> None:
+        """The whitened ``z`` θ carries is the ``z`` the counts are drawn at.
+
+        The property SBC needs, and the one that could break silently: a draw
+        that invented its own latent would leave θ and the data describing two
+        different models, and every rank would be wrong without anything
+        raising. Checked against the rate the *contract path's* own whitening
+        transform produces rather than against a number written out here — ``f``
+        is ``L(θ) z``, not ``z``, which is exactly why the family must not read
+        ``z`` itself.
+        """
+        counts = Spectrum(WAVELENGTH * u.um, np.array([40.0, 70.0, 20.0]))
+        likelihood = Likelihood(PoissonFamily(), GaussianProcessNoise(Matern32(0.4, 2.0)))
+        problem = FittingProblem(
+            Counts(WAVELENGTH),
+            [Dataset(counts, likelihood=likelihood, label="counts")],
+            seed=7,
+        )
+        latent_name = next(
+            name for name in problem.parameters.names if name.startswith("counts.latent.")
+        )
+        draws = np.array(
+            [
+                problem.simulate({"model.rate": 30.0, latent_name: np.full(3, 1.5)}, observe=True)
+                .observations["counts"]
+                .values
+                for _ in range(3000)
+            ]
+        )
+        assert likelihood.noise.kernel is not None and likelihood.noise.solver is not None
+        expected = 30.0 * np.exp(
+            likelihood.noise.solver.latent_transform(
+                likelihood.noise.kernel,
+                WAVELENGTH[:, None],
+                np.full(3, 1.5),
+                {"amplitude": 0.4, "length_scale": 2.0},
+            )
+        )
+        assert draws.mean(axis=0) == pytest.approx(expected, rel=0.05)
+        assert np.all(draws == np.round(draws))
+
+    def test_a_latent_gp_poisson_draw_with_no_latent_is_over_dispersed(self) -> None:
+        """With no ``z`` supplied the family draws its own GP realisation.
+
+        The marginal is then a log-normal mixture of Poissons, so the variance
+        far exceeds the mean — the one observable difference between "drew a
+        latent" and "ignored the GP entirely", and the reason this row asserts
+        a dispersion rather than a mean.
+        """
+        counts = Spectrum(WAVELENGTH * u.um, np.array([40.0, 70.0, 20.0]))
+        amplitude = 0.6
+        likelihood = Likelihood(PoissonFamily(), GaussianProcessNoise(Matern32(amplitude, 2.0)))
+        dataset = Dataset(counts, likelihood=likelihood, label="counts")
+        predicted = counts.with_values(np.full(3, 30.0))
+        rng = np.random.default_rng(11)
+        draws = np.array(
+            [dataset.draw_observation(predicted, None, rng).values for _ in range(4000)]
+        )
+        # counts ~ Poisson(30 exp f), f ~ N(0, amplitude**2):
+        # E = 30 exp(a**2 / 2), Var = E + E**2 (exp(a**2) - 1).
+        mean = 30.0 * math.exp(0.5 * amplitude**2)
+        variance = mean + mean**2 * (math.exp(amplitude**2) - 1.0)
+        assert draws.mean(axis=0) == pytest.approx(mean, rel=0.06)
+        assert draws.var(axis=0) == pytest.approx(variance, rel=0.25)
+        assert draws.var(axis=0).min() > 3.0 * mean
+
+    def test_student_t_draws_at_the_scale_and_degrees_of_freedom_log_prob_uses(self) -> None:
+        """Location-scale, and ``sigma`` is the **scale**, not the variance.
+
+        The variance of the draw is ``sigma**2 nu / (nu - 2)``, so a draw whose
+        scale had been mistaken for a standard deviation would come out too
+        narrow by half at ``nu = 6``. Both that and the tail shape are checked,
+        the latter by a KS test against ``scipy.stats.t``, because a second
+        moment alone cannot tell a t from a Gaussian of the same variance.
+        """
+        nu = 6.0
+        likelihood = Likelihood(StudentTFamily(nu=nu), IndependentNoise())
+        problem = FittingProblem(
+            Flat(WAVELENGTH),
+            [Dataset(flat_spectrum(), likelihood=likelihood, label="d")],
+            seed=4,
+        )
+        draws = np.array(
+            [
+                problem.simulate({"model.level": 2.0}, observe=True).observations["d"].values
+                for _ in range(4000)
+            ]
+        )
+        assert draws.mean(axis=0) == pytest.approx(2.0, abs=0.02)
+        assert draws.var(axis=0) == pytest.approx(0.01 * nu / (nu - 2.0), rel=0.2)
+        standardised = (draws[:, 0] - 2.0) / 0.1
+        assert st.kstest(standardised, st.t(nu).cdf).pvalue > 0.001
+        # ... and it is not a Gaussian of the same variance, which is what a
+        # variance-only row would happily accept. The tail is where the two
+        # part company and the KS statistic is where they do not: P(|z| > 3) is
+        # 2.4 % for t(6) against 0.35 % for the variance-matched normal, so 4000
+        # draws expect ~96 exceedances against ~14 and the two never overlap.
+        exceedances = int(np.sum(np.abs(standardised) > 3.0))
+        assert exceedances > 55
+
+    def test_student_t_refuses_a_correlated_noise_model_by_name(self) -> None:
+        with pytest.raises(LikelihoodError, match="scale mixture of Gaussians"):
+            StudentTFamily(nu=4.0).sample(
+                np.zeros(3),
+                NoiseParams(
+                    sigma=np.full(3, 0.1),
+                    values={"nu": 4.0},
+                    coordinates=WAVELENGTH[:, None],
+                    kernel=Matern32(0.5, 2.0),
+                    solver=DenseGP(),
+                ),
+                np.random.default_rng(0),
+            )
+
+    def test_the_complex_gaussian_draw_is_circular(self) -> None:
+        """Equal component variances, zero cross-covariance, ``sigma`` per component.
+
+        The convention is read off the density — ``-|r|**2 / (2 sigma**2) -
+        log(2 pi) - log(sigma**2)`` is the joint density of two independent
+        ``Normal(0, sigma**2)`` components — so each component's variance is
+        ``sigma**2`` and the *total* is ``2 sigma**2``. A draw that took sigma
+        for the total would be narrower by sqrt(2) in each component, which no
+        amplitude plot would show.
+        """
+        sigma = 0.2
+        observed = VisibilitySet(
+            WAVELENGTH,
+            0.5 * WAVELENGTH,
+            np.array([1.0 + 0.5j, 0.5 + 0.0j, -0.2 + 0.3j]) * u.Jy,
+            uncertainty=np.full(3, sigma) * u.Jy,
+        )
+        likelihood = Likelihood(ComplexGaussianFamily(), IndependentNoise())
+        dataset = Dataset(observed, likelihood=likelihood, label="v")
+        predicted = observed.with_values(np.array([1.0 + 0.0j, 0.0 + 1.0j, -1.0 + 0.0j]))
+        rng = np.random.default_rng(21)
+        draws = np.array(
+            [dataset.draw_observation(predicted, None, rng).values for _ in range(4000)]
+        )
+        assert np.iscomplexobj(draws)
+        assert draws.mean(axis=0) == pytest.approx(np.asarray(predicted.values), abs=0.02)
+        assert draws.real.var(axis=0) == pytest.approx(sigma**2, rel=0.1)
+        assert draws.imag.var(axis=0) == pytest.approx(sigma**2, rel=0.1)
+        centred_real = draws.real - draws.real.mean(axis=0)
+        centred_imaginary = draws.imag - draws.imag.mean(axis=0)
+        cross = np.mean(centred_real * centred_imaginary, axis=0)
+        # se of the cross-covariance is sigma**2 / sqrt(N) = 6.3e-4.
+        assert np.abs(cross).max() < 5.0 * sigma**2 / math.sqrt(4000)
 
     def test_a_crash_is_flagged_not_raised(self) -> None:
         problem = FittingProblem(

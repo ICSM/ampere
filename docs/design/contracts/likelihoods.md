@@ -138,7 +138,7 @@ True
 
 ```
 
-### The optional generative half: `sample`
+### The optional generative half: `sample` (*Amended W3.14*)
 
 **Ruled by Peter, 2026-09-02** (W1.7's ruling request R3, recorded in
 `DEVELOPMENT_PLAN.md` §2): a family may also override
@@ -165,21 +165,51 @@ family supplies its own the same way `LaplaceFamily` above supplies
 
 ```
 
-**Native twins (*Amended W3.1*, slice 2).** Peter ruled on 2026-09-08 that every
-backend supports observation sampling natively, and W3.1 slice 2 landed it: a
-realisation may expose `sample_observations`, which draws a whole chunk's
-retained values in the backend's own arithmetic. The ruling has a ceiling, and it
-is this section's rule restated one level down: **a backend samples exactly what
-`ampere.core` samples**, which is `GaussianFamily.sample` and nothing else. The
-default refusal is not a gap a backend is free to fill — it is the contract
-declining to guess an observation process — so `student_t`, `cauchy`,
-`complex_gaussian` and `poisson` refuse identically on torch and jax, and a
-family whose `sample` a user has overridden is left to that override rather than
-replaced by a native approximation of it. The twins transcribe both of
-`GaussianFamily.sample`'s branches, GP draw and solver stabiliser included, from
-the solver's own native `latent_transform`. `inference.md` §13's "sampling on a
-backend" carries the rest, including why the numpy path stays the oracle and the
-comparison is distributional.
+**Amended W3.14: which families implement it.** Peter ruled on 2026-09-09 that
+further core `sample` families land "when we have a use case", and W3.6 supplied
+one — a counting experiment could not `simulate(observe=True)`, so neither SBC
+nor SBI on count data worked without the user subclassing `PoissonFamily`. The
+refusal was written for families whose observation process is *genuinely
+ambiguous*; three of the shipped families are not, each having one generative
+form that its own `log_prob` already fixes:
+
+| family | draw | `σ` means |
+| --- | --- | --- |
+| `poisson` | `counts ~ Poisson(rate)`, the rate being `predicted` (or `predicted · exp(f)` under a latent GP) | — the family defines its own dispersion |
+| `student_t` | `x = μ + σ t_ν`, the family's own `ν` | the **scale**; the variance is `σ² ν/(ν−2)` |
+| `complex_gaussian` | independent `Normal(0, σ²)` real and imaginary parts | the **per-component** standard deviation; the total variance is `2σ²` |
+
+Each reads its parameters exactly as its `log_prob` reads them, which is the
+whole content of "the generative counterpart": a fitted `scale` or `jitter` is
+in the draw because it is in the `σ` the density uses, and the latent `f` a
+Poisson draws at is the `f` the density scores at — `Dataset.draw_observation`
+takes the whitened `z` out of θ and hands it to `noise_params`, exactly as
+`Dataset.log_likelihood_of` does. `cauchy` and every declared-but-unimplemented
+family keep the refusal, **word for word**; `student_t` refuses a correlated
+noise model by name (a scale mixture of Gaussians does not commute with a GP
+covariance) and `complex_gaussian` refuses one with the same
+`GP_ANALYTIC_IMPLEMENTED` message its density refuses it with. `inference.md`
+§13 carries the full statement, the reasoning and the doctests.
+
+**Native twins (*Amended W3.1*, slice 2; *W3.14*).** Peter ruled on 2026-09-08
+that every backend supports observation sampling natively, and W3.1 slice 2
+landed it: a realisation may expose `sample_observations`, which draws a whole
+chunk's retained values in the backend's own arithmetic. The ruling has a
+ceiling, and it is this section's rule restated one level down: **a backend
+samples exactly what `ampere.core` samples**. The default refusal is not a gap a
+backend is free to fill — it is the contract declining to guess an observation
+process — so `cauchy` refuses identically on torch and jax, and a family whose
+`sample` a user has overridden is left to that override rather than replaced by
+a native approximation of it. W3.14 moved the four families the core now samples
+across that line: `gaussian`, `poisson`, `student_t` and `complex_gaussian` all
+have twins on both backends, transcribing the same branches — GP draw and solver
+stabiliser included, from the solver's own native `latent_transform`. The floor
+is the other half of the same rule: a family the core samples but a backend has
+no twin for falls back to the numpy path rather than refusing, because a backend
+may be slower than the contract but never more restrictive than it.
+`inference.md` §13's "sampling on a backend" carries the rest, including why the
+numpy path stays the oracle, why the comparison is distributional, and why
+torch's non-Gaussian twins are two-stage where jax's are not.
 
 ### The composition-time hook: `check_observed`
 

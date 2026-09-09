@@ -100,7 +100,6 @@ __all__ = [
     "SEED",
     "TRUTH",
     "WSTAT_PARAMETERS",
-    "CountingPoisson",
     "ProfiledCashWithBackground",
     "XraySource",
     "XraySourceAndBackground",
@@ -477,17 +476,24 @@ def build_joint_problem(
     background_counts: np.ndarray,
     *,
     seed: int | None = SEED,
-    generative: bool = False,
     norm_prior: Any = None,
 ) -> FittingProblem:
     """Route 2: the two-dataset Bayesian formulation, source and background jointly.
 
-    ``generative=True`` swaps :class:`~ampere.core.PoissonFamily` for
-    :class:`CountingPoisson`, which is the same density plus the ``sample()``
-    the base family refuses to guess. The log-probability, and therefore the
-    posterior, is identical either way; what the subclass buys is
-    ``simulate(observe=True)``, which is what
-    :func:`coverage_study` needs and what the comparison above does not.
+    This problem is both scoreable and **simulable**, which is what
+    :func:`coverage_study` needs: ``simulate(observe=True)`` draws source and
+    background counts consistently at a drawn θ, from the same Poisson
+    processes the density scores.
+
+    Until W3.14 it took a ``generative=True`` flag that swapped
+    :class:`~ampere.core.PoissonFamily` for a three-line ``CountingPoisson``
+    subclass supplying the ``sample()`` the base family refused to guess. That
+    refusal has been lifted for a counting experiment — there was nothing to
+    guess, the observation process **is** a Poisson draw at the predicted
+    rate — so the core samples it now and the flag, the subclass and the
+    registry entry are gone. The numbers are unchanged: the subclass's body
+    and ``PoissonFamily.sample``'s are the same ``rng.poisson(rate)`` on the
+    same generator, so the study draws the same counts it always did.
     """
     model = XraySourceAndBackground(
         ENERGY_KEV,
@@ -496,18 +502,17 @@ def build_joint_problem(
         bkg_norm=st.loguniform(0.2, 20.0),
         ratio=RATIO,
     )
-    family = CountingPoisson if generative else PoissonFamily
     datasets = DatasetCollection(
         {
             "src": Dataset(
                 Spectrum(ENERGY_KEV * u.keV, source_counts),
                 Instrument(channel="source_region", input_kind=Spectrum, label="source"),
-                likelihood=Likelihood(family(), IndependentNoise()),
+                likelihood=Likelihood(PoissonFamily(), IndependentNoise()),
             ),
             "bkg": Dataset(
                 Spectrum(ENERGY_KEV * u.keV, background_counts),
                 Instrument(channel="background_region", input_kind=Spectrum, label="background"),
-                likelihood=Likelihood(family(), IndependentNoise()),
+                likelihood=Likelihood(PoissonFamily(), IndependentNoise()),
             ),
         }
     )
@@ -518,34 +523,6 @@ def build_joint_problem(
 # The repeated-trial coverage study (W3.6), which is what settles the question
 # the single run above cannot.
 # ---------------------------------------------------------------------------
-
-
-@register_family
-class CountingPoisson(PoissonFamily):
-    """:class:`~ampere.core.PoissonFamily` plus the generative half.
-
-    ``PoissonFamily.sample()`` refuses by default, and deliberately: a
-    ``log_prob`` says how a datum is *scored*, not how one is generated, and
-    ampere will not guess an observation process. For a counting experiment
-    there is nothing to guess — the observation process **is** a Poisson draw
-    at the predicted rate, which is exactly what
-    :func:`synthetic_xray_counts` does by hand — so this three-line subclass
-    is the supported route the refusal itself names, and it is what lets the
-    coverage study below simulate two regions consistently rather than
-    inventing a background it then pretends not to know.
-    """
-
-    NAME = "poisson_counts"
-
-    def sample(
-        self,
-        predicted: np.ndarray,
-        noise: NoiseParams,
-        rng: np.random.Generator,
-    ) -> np.ndarray:
-        return np.asarray(
-            rng.poisson(np.clip(np.asarray(predicted, dtype=float), 0.0, None)), dtype=float
-        )
 
 
 #: The full study's budget: enough simulations for the uniformity test to have
@@ -649,7 +626,7 @@ def coverage_study(
     prior = COVERAGE_NORM_PRIOR if norm_prior is None else norm_prior
     source_counts, background_counts = synthetic_xray_counts()
     truth = build_joint_problem(
-        source_counts, background_counts, seed=seed, generative=True, norm_prior=prior
+        source_counts, background_counts, seed=seed, norm_prior=prior
     )
     options = {"steps": steps, "burn_in": burn_in}
 

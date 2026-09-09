@@ -18,7 +18,8 @@ import os
 import pickle
 import subprocess
 import sys
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, ClassVar
 
 import numpy as np
 import pytest
@@ -213,6 +214,31 @@ LATENT_GP = ProblemSpec(
 COMPLEX = ProblemSpec(
     model=ModelSpec(kind=ModelKind.COMPLEX, coordinates=GP_GRID),
     datasets=(DatasetSpec(family="complex_gaussian"),),
+)
+
+#: The three shapes W3.14's generative rows need beside :data:`LATENT_GP` and
+#: :data:`COMPLEX`, which already existed.
+#:
+#: ``POISSON_COUNTS`` is the analytic half of the Poisson family: counts, no
+#: uncertainties (``REQUIRES_UNCERTAINTY`` is ``False``), independent noise.
+#: ``STUDENT_T`` carries a deliberately large ``uncertainty`` for the reason
+#: :data:`CORRELATED_DRAWS` does — a scale of 0.1 is small enough that a draw
+#: at the wrong ``nu`` would still sit inside any honest tolerance. ``CAUCHY``
+#: is the still-refusing family, and exists so that §13's refusal row keeps a
+#: subject now that ``poisson`` has acquired a ``sample``.
+POISSON_COUNTS = ProblemSpec(
+    model=ModelSpec(kind=ModelKind.POWER_LAW, coordinates=GP_GRID),
+    datasets=(DatasetSpec(family="poisson"),),
+)
+
+STUDENT_T = ProblemSpec(
+    model=ModelSpec(kind=ModelKind.POWER_LAW, coordinates=GP_GRID),
+    datasets=(DatasetSpec(family="student_t", uncertainty=0.3),),
+)
+
+CAUCHY = ProblemSpec(
+    model=ModelSpec(kind=ModelKind.POWER_LAW, coordinates=GP_GRID),
+    datasets=(DatasetSpec(family="cauchy"),),
 )
 
 #: Readable pytest ids for the three shapes above, used where a row is
@@ -1036,7 +1062,9 @@ class TestNativeObservationSampling:
         off_diagonal = np.abs(np.cov(drawn, rowvar=False)[np.triu_indices(len(sigma), k=1)])
         assert off_diagonal.max() < 0.5 * float(sigma.min() ** 2)
 
-    def test_poisson_refuses_by_name_on_every_backend(self, backend: ConformanceBackend) -> None:
+    def test_a_refusing_family_refuses_by_name_on_every_backend(
+        self, backend: ConformanceBackend
+    ) -> None:
         """§13's refusal is the same sentence whichever backend is underneath.
 
         Asserted against the **text**, not against the exception type, because
@@ -1044,25 +1072,205 @@ class TestNativeObservationSampling:
         native path may not sample it hands back to the numpy path, and the
         numpy path names the family and the override that would supply the
         observation process.
+
+        The family carrying this row was ``poisson`` until W3.14 moved it (and
+        ``student_t`` and ``complex_gaussian``) to the other side of the line;
+        it is ``cauchy`` now, which is the shipped family the core still
+        declines to guess an observation process for.
         """
         from ampere.core.exceptions import DatasetError
 
-        problem = build_problem(backend, LATENT_GP)
+        problem = build_problem(backend, CAUCHY)
         with pytest.raises(DatasetError) as raised:
             problem.simulate_many(2, observe=True)
         message = str(raised.value)
-        assert "the poisson family does not implement sample()" in message
+        assert "the cauchy family does not implement sample()" in message
         assert "override" in message and "sample(predicted, noise, rng)" in message
 
     def test_the_prediction_is_still_native_when_the_draw_is_not(
         self, backend: ConformanceBackend
     ) -> None:
         """Falling back on the noise does not throw away the vectorised forward model."""
-        problem = build_problem(backend, LATENT_GP)
+        problem = build_problem(backend, CAUCHY)
         native = problem.backend in registered_realisations() and problem.batchable
         batch = problem.simulate_many(3, observe=False)
         assert batch.provenance["simulate_batched"] is native
         assert "sample_backend" not in batch.provenance
+
+
+class TestTheUnambiguousFamilyDraws:
+    """W3.14: ``poisson``, ``student_t`` and ``complex_gaussian`` draw, everywhere.
+
+    One column per registered backend fixture, and **two paths per family**:
+    the numpy oracle (``native=False``, which is ``ampere.core``'s own
+    ``LikelihoodFamily.sample``) and the backend's native twin, held to the
+    *same* assertions and the same tolerances the Gaussian rows above use.
+    That is what "the numpy path is the oracle and the twins are compared
+    distributionally" means operationally: not that one is checked against the
+    other draw for draw — ``jax.random`` and ``torch.Generator`` reproduce
+    neither numpy's stream nor each other's — but that both are checked
+    against the moments their own ``log_prob`` implies, so a twin that had
+    drifted from the density it is the counterpart of fails on its own.
+
+    Each family is checked at whatever statistic actually pins its shape,
+    rather than at a uniform mean-and-variance:
+
+    * ``poisson`` — mean *and* variance, both the rate, plus integrality. A
+      rounded Gaussian would pass a mean-only row and be a different forward
+      model.
+    * ``student_t`` — the scale through the **MAD** and the shape through a KS
+      test against ``scipy.stats.t``. Not the variance: at ``nu = 4`` (the
+      family's default, and what the battery composes) the fourth moment is
+      infinite, so the sample variance has no standard error to compare
+      against and a variance row would be a coin flip.
+    * ``complex_gaussian`` — each component's variance against ``sigma**2``,
+      because ``sigma`` is the *per-component* standard deviation, and the
+      cross-covariance against zero, because circularity is the whole content
+      of the family.
+    """
+
+    DRAWS = 4000
+    CHUNK = 500
+
+    #: A flat, generous rate: ``index = 0`` makes every sample's expectation
+    #: ``norm``, so the Poisson rows have real power at every point rather than
+    #: testing the ``k = 0`` term at the long-wavelength end of a falling power
+    #: law (``norm``'s prior is ``LogUniform(0.1, 10)``, so 9.0 is inside it).
+    POISSON_THETA: ClassVar[dict[str, float]] = {"model.norm": 9.0, "model.index": 0.0}
+
+    def problem(
+        self, backend: ConformanceBackend, spec: ProblemSpec, *, native: bool
+    ) -> FittingProblem:
+        problem = build_problem(backend, spec)
+        if native and (problem.backend not in registered_realisations() or not problem.batchable):
+            pytest.skip(f"the {problem.backend!r} backend has no native batched path")
+        return problem
+
+    def drawn(
+        self,
+        problem: FittingProblem,
+        *,
+        native: bool,
+        overrides: Mapping[str, Any] | None = None,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """``(observations, prediction)`` for :attr:`DRAWS` draws at one θ."""
+        values = dict(problem.reference_values)
+        values.update(overrides or {})
+        theta = np.tile(np.asarray(problem.parameters.pack(values), dtype=float), (self.DRAWS, 1))
+        batch = problem.simulate_many(
+            self.DRAWS, values=theta, observe=True, native=native, chunk_size=self.CHUNK
+        )
+        expected = problem.backend if native else "reference"
+        assert batch.provenance["sample_backend"] == expected
+        assert batch.observations is not None
+        return (
+            np.asarray(batch.observations["sed"].values),
+            np.asarray(batch.predicted["sed"].values[0]),
+        )
+
+    @pytest.mark.parametrize("native", [False, True], ids=["numpy", "native"])
+    def test_poisson_counts_have_the_rate_as_both_moments(
+        self, backend: ConformanceBackend, tolerances: Tolerances, native: bool
+    ) -> None:
+        problem = self.problem(backend, POISSON_COUNTS, native=native)
+        drawn, rate = self.drawn(problem, native=native, overrides=self.POISSON_THETA)
+        assert np.all(drawn >= 0.0)
+        assert np.all(drawn == np.round(drawn))
+        mean_error = np.sqrt(rate / self.DRAWS)
+        assert np.all(
+            np.abs(drawn.mean(axis=0) - rate) <= tolerances.monte_carlo_sigmas * mean_error
+        )
+        # A Poisson's fourth central moment is ``lam + 3 lam**2``, so the
+        # sample variance's own standard error is ``sqrt((lam + 2 lam**2)/M)``.
+        variance_error = np.sqrt((rate + 2.0 * rate**2) / self.DRAWS)
+        assert np.all(
+            np.abs(drawn.var(axis=0) - rate) <= tolerances.monte_carlo_sigmas * variance_error
+        )
+
+    @pytest.mark.parametrize("native", [False, True], ids=["numpy", "native"])
+    def test_a_latent_gp_poisson_draw_uses_the_latent_in_theta(
+        self, backend: ConformanceBackend, tolerances: Tolerances, native: bool
+    ) -> None:
+        """The rate is ``predicted * exp(f)``, at the ``f`` the density scores at.
+
+        The property SBC needs: θ carries the whitened ``z``, and if the draw
+        invented its own the pair ``(θ, x)`` would come from no model at all.
+        Driven at a *constant* ``z`` so the expected rate is a computed number
+        rather than a distribution, and the transform is the solver's own —
+        ``f = L(θ) z`` is not ``z``, which is exactly why the family may not
+        read the whitened block itself.
+        """
+        problem = self.problem(backend, LATENT_GP, native=native)
+        latent = next(name for name in problem.parameters.names if name.startswith("sed.latent."))
+        grid = np.asarray(GP_GRID, dtype=float)
+        whitened = np.full(grid.size, 0.8)
+        drawn, rate = self.drawn(problem, native=native, overrides={latent: whitened})
+        spec = LATENT_GP.datasets[0]
+        covariance = kernel_matrix(
+            spec.covariance.family, grid, spec.covariance.amplitude, spec.covariance.length_scale
+        )
+        expected = rate * np.exp(np.linalg.cholesky(covariance) @ whitened)
+        assert np.all(drawn == np.round(drawn))
+        error = np.sqrt(expected / self.DRAWS)
+        assert np.all(
+            np.abs(drawn.mean(axis=0) - expected) <= tolerances.monte_carlo_sigmas * error
+        )
+
+    @pytest.mark.parametrize("native", [False, True], ids=["numpy", "native"])
+    def test_student_t_draws_recover_the_scale_and_the_degrees_of_freedom(
+        self, backend: ConformanceBackend, tolerances: Tolerances, native: bool
+    ) -> None:
+        problem = self.problem(backend, STUDENT_T, native=native)
+        drawn, location = self.drawn(problem, native=native)
+        sigma = float(STUDENT_T.datasets[0].uncertainty)
+        nu = float(family_named("student_t")().parameters["nu"].value)
+        standardised = (drawn - location) / sigma
+        # The MAD, not the variance: at nu = 4 the fourth moment is infinite,
+        # so a sample variance has no standard error to be compared against.
+        # median|t| is t.ppf(0.75), and the median's own standard error is
+        # 1 / (2 f(m) sqrt(M)).
+        median = float(st.t(nu).ppf(0.75))
+        error = 1.0 / (2.0 * float(st.t(nu).pdf(median)) * np.sqrt(self.DRAWS))
+        empirical = np.median(np.abs(standardised), axis=0)
+        assert np.all(np.abs(empirical - median) <= tolerances.monte_carlo_sigmas * error)
+        # ... and the shape, which no scale statistic can see.
+        assert st.kstest(standardised[:, 0], st.t(nu).cdf).pvalue > 1e-4
+        matched = st.norm(0.0, np.std(standardised[:, 0]))
+        assert st.kstest(standardised[:, 0], matched.cdf).pvalue < 1e-4
+
+    @pytest.mark.parametrize("native", [False, True], ids=["numpy", "native"])
+    def test_the_complex_gaussian_draw_is_circular(
+        self, backend: ConformanceBackend, tolerances: Tolerances, native: bool
+    ) -> None:
+        if not backend.capabilities.complex_models:
+            pytest.skip(
+                f"backend {backend.name!r} declares no complex model "
+                f"(BackendCapabilities.complex_models), so ModelKind.COMPLEX cannot be built"
+            )
+        problem = self.problem(backend, COMPLEX, native=native)
+        drawn, mean = self.drawn(problem, native=native)
+        assert np.iscomplexobj(drawn)
+        sigma = float(COMPLEX.datasets[0].uncertainty)
+        variance = sigma**2
+        standard_error = variance * np.sqrt(2.0 / self.DRAWS)
+        for component in (drawn.real, drawn.imag):
+            assert np.all(
+                np.abs(component.var(axis=0) - variance)
+                <= tolerances.monte_carlo_sigmas * standard_error
+            )
+        centre_error = sigma / np.sqrt(self.DRAWS)
+        assert np.all(
+            np.abs(drawn.mean(axis=0) - mean) <= tolerances.monte_carlo_sigmas * centre_error
+        )
+        # Circularity: the components are independent, so their covariance is
+        # zero and its own standard error is ``sigma**2 / sqrt(M)``.
+        cross = np.mean(
+            (drawn.real - drawn.real.mean(axis=0)) * (drawn.imag - drawn.imag.mean(axis=0)),
+            axis=0,
+        )
+        assert np.all(
+            np.abs(cross) <= tolerances.monte_carlo_sigmas * variance / np.sqrt(self.DRAWS)
+        )
 
 
 class TestBatchedSimulation:

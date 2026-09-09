@@ -130,9 +130,14 @@ import torch
 
 from ampere.core import (
     BatchedPrediction,
+    ComplexGaussianFamily,
     FittingProblem,
+    GaussianFamily,
     GaussianProcessNoise,
     IndependentNoise,
+    LikelihoodFamily,
+    PoissonFamily,
+    StudentTFamily,
     chunk_bounds,
     foreign_parts_refusal,
 )
@@ -166,6 +171,26 @@ def _refuse(what: str, detail: str) -> LoweringError:
 
 def _tensor(value: Any, *, device: torch.device = DEFAULT_DEVICE) -> torch.Tensor:
     return as_tensor(value, dtype=DEFAULT_DTYPE, device=device)
+
+
+def _seed(seed: int) -> int:
+    """A per-draw integer as a torch seed: non-negative and inside int64."""
+    return int(seed) & 0x7FFFFFFFFFFFFFFF
+
+
+#: Neutral family name -> the ``ampere.core`` class whose ``sample`` this
+#: backend has a native twin for (*W3.14*). The **one** place this module names
+#: them, so the ceiling ``inference.md`` §13 states — a backend samples exactly
+#: what the core samples — is one table rather than a condition repeated per
+#: family: a core family that gains a ``sample`` joins by adding a row here and
+#: a branch to :meth:`_LoweredDataset.draw_chunk`, and one that has no twin
+#: here falls back to the numpy path unchanged.
+_TWINNED_FAMILIES: dict[str, type[LikelihoodFamily]] = {
+    "gaussian": GaussianFamily,
+    "poisson": PoissonFamily,
+    "student_t": StudentTFamily,
+    "complex_gaussian": ComplexGaussianFamily,
+}
 
 
 #: The noise models whose ``sigma`` this module transcribes in
@@ -540,28 +565,36 @@ class _LoweredDataset:
         """Why this dataset cannot be sampled natively, or ``None``.
 
         The twin of ``ampere.backends.jax.problem._LoweredDataset``'s method of
-        the same name, and the same four conditions — see it for the reasoning.
-        In one sentence: Peter's ruling of 2026-09-08 is that every backend
+        the same name, and the same conditions — see it for the reasoning. In
+        one sentence: Peter's ruling of 2026-09-08 is that every backend
         samples natively, and what a backend may sample is fixed by what
-        ``ampere.core`` samples, because the numpy path is the oracle. Today
-        that is :meth:`ampere.core.GaussianFamily.sample` and nothing else; a
-        native twin for a family the core declines to guess a sampling
-        distribution for would be the "silently train an SBI posterior on the
-        wrong forward model" §13's refusal exists to prevent. Everything else
-        is handed back to the numpy path, where the core's own refusal text is
-        what the caller meets.
-        """
-        from ampere.core import GaussianFamily
+        ``ampere.core`` samples, because the numpy path is the oracle; a native
+        twin for a family the core declines to guess a sampling distribution
+        for would be the "silently train an SBI posterior on the wrong forward
+        model" §13's refusal exists to prevent. Everything else is handed back
+        to the numpy path, where the core's own refusal text is what the caller
+        meets.
 
+        **Amended W3.14**: the set the core samples is
+        :data:`_TWINNED_FAMILIES` — ``gaussian``, ``poisson``, ``student_t``
+        and ``complex_gaussian`` — and the test is that the family's ``sample``
+        is the *core's own* method for that family, so a user override still
+        falls back to the numpy function its author wrote. The complex
+        condition is gone (complex data are what the ``complex_gaussian`` twin
+        exists for) and the latent condition now applies only to the three
+        families that do not read ``noise.latent``.
+        """
         family = self.likelihood.family
-        if type(family).sample is not GaussianFamily.sample:
+        core = _TWINNED_FAMILIES.get(family.NAME)
+        if core is None or type(family).sample is not core.sample:
             return _refuse(
                 family.NAME or type(family).__name__,
-                f"dataset {self.label!r} does not draw its observations through "
-                f"ampere.core.GaussianFamily.sample, so this backend has no native twin for "
-                f"it: the numpy path is the oracle, and a backend that guessed a sampling "
-                f"distribution the contract declines to guess would train an SBI posterior on "
-                f"the wrong forward model. The draw is made on the numpy path instead.",
+                f"dataset {self.label!r} does not draw its observations through one of "
+                f"ampere.core's own family sample() methods, so this backend has no native "
+                f"twin for it: the numpy path is the oracle, and a backend that guessed a "
+                f"sampling distribution the contract declines to guess would train an SBI "
+                f"posterior on the wrong forward model. The draw is made on the numpy path "
+                f"instead.",
             )
         censoring = self.likelihood.censoring
         if censoring is not None and bool(np.any(np.asarray(censoring.kinds)[self.retain] != 0)):
@@ -570,19 +603,77 @@ class _LoweredDataset:
                 f"dataset {self.label!r} declares limits on retained samples, which blocks "
                 f"observation drawing on every backend.",
             )
-        if self.complex_valued:
-            return _refuse(
-                "complex_gaussian",
-                f"dataset {self.label!r} holds complex observations, which ampere.core does "
-                f"not sample.",
-            )
-        if self.latent_name is not None:
+        if self.latent_name is not None and family.NAME != "poisson":
             return _refuse(
                 "latent",
                 f"dataset {self.label!r} declares a latent GP, whose family reads "
-                f"noise.latent; ampere.core samples no such family.",
+                f"noise.latent; the {family.NAME!r} twin does not consume one.",
             )
         return None
+
+    def draw_chunk(
+        self,
+        route: Callable[[torch.Tensor], dict[str, dict[str, Any]]],
+        stack: torch.Tensor,
+        predicted: torch.Tensor,
+        seeds: Sequence[int],
+        device: torch.device,
+    ) -> torch.Tensor:
+        """A whole chunk's retained observed values, natively (*W3.14*).
+
+        Two shapes of draw, and which one a family takes is decided by whether
+        its variate can be written as arithmetic on standard normals.
+
+        * **One stage** (``gaussian``, ``complex_gaussian``). The normals are
+          drawn outside the transform, per draw, from that draw's own seed, and
+          mapped in as data; :meth:`sample_retained` then assembles the value.
+          ``torch.func.vmap`` has no per-sample random state — a
+          ``torch.Generator`` is not a tensor and cannot be mapped over, and
+          ``randomness="different"`` would drive the draw from the *global*
+          generator and so make it depend on how the chunk was scheduled — so
+          this is what makes a draw a pure function of its seed, which is what
+          partition independence needs.
+        * **Two stage** (``poisson``, ``student_t``). Their variates are not
+          arithmetic on normals, so the transform computes each draw's
+          distribution *parameters* — the Poisson rate, ``exp(f)`` and all; the
+          Student-t location, scale and ``nu`` — and the variate is drawn after
+          it, per draw, from that draw's own seed. Same property, one stage
+          later. jax needs none of this: ``jax.random`` takes a traced rate and
+          a traced ``nu`` inside ``jax.vmap``.
+
+        The variates are drawn on the **CPU** and moved, exactly as the normals
+        already were: a ``torch.Generator`` bound to a device would make a
+        budget's randomness a function of where it ran.
+        """
+        name = self.likelihood.family.NAME
+        size = int(self.retain.sum())
+        if name in ("poisson", "student_t"):
+
+            def parameters(vector: torch.Tensor, row: torch.Tensor, of: Any = self) -> Any:
+                return of.sample_parameters(route(vector), row)
+
+            resolved = torch.func.vmap(parameters)(stack, predicted)
+            if name == "poisson":
+                return self._poisson_variates(resolved, seeds, device)
+            return self._student_t_variates(resolved, seeds, size, device)
+
+        normals = torch.stack(
+            [
+                torch.randn(
+                    (2, size),
+                    generator=torch.Generator(device="cpu").manual_seed(_seed(seed)),
+                    dtype=DEFAULT_DTYPE,
+                ).to(device)
+                for seed in seeds
+            ]
+        )
+
+        def one(
+            vector: torch.Tensor, row: torch.Tensor, noise: torch.Tensor, of: Any = self
+        ) -> torch.Tensor:
+            return of.sample_retained(route(vector), row, noise)
+
+        return torch.func.vmap(one)(stack, predicted, normals)
 
     def sample_retained(
         self,
@@ -590,38 +681,32 @@ class _LoweredDataset:
         predicted: torch.Tensor,
         normals: torch.Tensor,
     ) -> torch.Tensor:
-        """One draw of the retained observed values, natively.
+        """One draw of the retained observed values, from two standard normals.
 
-        :meth:`ampere.core.GaussianFamily.sample` transcribed into torch, with
-        the two branches it has and the same stabiliser reasoning:
+        The one-stage families (:meth:`draw_chunk`). ``normals`` is ``(2, n)``,
+        already drawn from this draw's own seed.
 
-        * uncorrelated noise — ``x = mu + sigma z``, with the noise model's own
-          sigma, so a fitted ``scale`` or ``jitter`` is already in it;
-        * correlated (GP) noise — ``x = mu + L z1 + sigma z2``, with ``L`` from
-          the solver's **own** ``latent_transform_native``, the same whitening
-          the latent path uses, and the solver's numerical jitter folded into
-          the diagonal because it is part of the covariance the marginal
-          likelihood scores. Omitting it would draw from a narrower
-          distribution than the density evaluates.
-
-        The standard normals arrive **already drawn**, as ``(2, n)``, rather
-        than being drawn here. ``torch.func.vmap`` has no per-sample random
-        state — a ``torch.Generator`` is not a tensor and cannot be mapped over
-        — so the randomness is generated outside the transform, per draw, from
-        that draw's own seed, and mapped in as data. That is not a compromise:
-        it is what makes the draw a pure function of the seed, which is what
-        partition independence needs.
+        * ``gaussian`` — ``x = mu + sigma z`` uncorrelated, and
+          ``x = mu + L z1 + sigma z2`` under a GP, with ``L`` from the solver's
+          **own** ``latent_transform_native``, the same whitening the latent
+          path uses, and the solver's numerical jitter folded into the diagonal
+          because it is part of the covariance the marginal likelihood scores.
+          Omitting it would draw from a narrower distribution than the density
+          evaluates.
+        * ``complex_gaussian`` (*W3.14*) — ``x = mu + sigma (z1 + i z2)``: the
+          two normals become the two components, independent and of equal
+          variance, which is the circular symmetry the family's density
+          assumes. ``sigma`` is the **per-component** standard deviation, as
+          ``-|r|**2 / (2 sigma**2) - log 2pi - log sigma**2`` implies.
         """
         values = dict(self._dataset_values(routed).get(LIKELIHOOD_COMPONENT, {}))
         sigma = self._sigma(predicted, values)
+        if self.likelihood.family.NAME == "complex_gaussian":
+            assert sigma is not None  # REQUIRES_UNCERTAINTY, checked at composition
+            return predicted + sigma * torch.complex(normals[0], normals[1])
         realisation = predicted
         if self.correlated:
-            realisation = realisation + self.noise.solver.latent_transform_native(
-                self.noise.kernel,
-                self.observed_coordinates,
-                normals[0],
-                self.noise.kernel.resolve(values),
-            )
+            realisation = realisation + self._gp_realisation(values, normals[0])
             stabiliser = float(getattr(self.noise.solver, "jitter", 0.0) or 0.0)
             if stabiliser:
                 floor = torch.full_like(normals[1], stabiliser)
@@ -629,6 +714,95 @@ class _LoweredDataset:
         if sigma is None:
             return realisation
         return realisation + sigma * normals[1]
+
+    def sample_parameters(
+        self, routed: Mapping[str, Mapping[str, Any]], predicted: torch.Tensor
+    ) -> dict[str, torch.Tensor]:
+        """One draw's distribution parameters, for the two-stage families (*W3.14*).
+
+        Everything about the draw that depends on θ, and nothing that depends
+        on randomness — so it can go through ``torch.func.vmap`` while the
+        variate cannot. ``poisson`` returns its ``rate`` (the prediction, times
+        ``exp(f)`` under a GP, with ``f`` the dataset's own latent block, so θ
+        and the drawn counts describe one model); ``student_t`` returns the
+        ``location``, the ``scale`` — the noise model's sigma, used as the
+        scale exactly as the density standardises by it — and ``nu``.
+        """
+        values = dict(self._dataset_values(routed).get(LIKELIHOOD_COMPONENT, {}))
+        family = self.likelihood.family
+        if family.NAME == "poisson":
+            rate = predicted
+            latent = self._latent(routed, values)
+            if latent is not None:
+                rate = rate * torch.exp(latent)
+            return {"rate": rate}
+        sigma = self._sigma(predicted, values)
+        assert sigma is not None  # REQUIRES_UNCERTAINTY, checked at composition
+        own = {key: value for key, value in values.items() if key in family.parameters}
+        return {
+            "location": predicted,
+            "scale": sigma,
+            "nu": _tensor(family.context(own)["nu"], device=predicted.device),
+        }
+
+    def _poisson_variates(
+        self, resolved: Mapping[str, torch.Tensor], seeds: Sequence[int], device: torch.device
+    ) -> torch.Tensor:
+        rates = resolved["rate"].detach().to("cpu", dtype=DEFAULT_DTYPE)
+        if not bool(torch.isfinite(rates).all()) or bool((rates < 0.0).any()):
+            raise _refuse(
+                "poisson",
+                f"dataset {self.label!r}: the model predicted a negative or non-finite expected "
+                f"count for at least one draw in this chunk, which no Poisson can be drawn "
+                f"from. Constrain the prediction to the positive half-line (a Log bijection on "
+                f"the norm, or a positive-support prior); ampere.core's own sample() refuses "
+                f"the same condition by name.",
+            )
+        drawn = torch.stack(
+            [
+                torch.poisson(
+                    rates[index], generator=torch.Generator(device="cpu").manual_seed(_seed(seed))
+                )
+                for index, seed in enumerate(seeds)
+            ]
+        )
+        return drawn.to(device)
+
+    def _student_t_variates(
+        self,
+        resolved: Mapping[str, torch.Tensor],
+        seeds: Sequence[int],
+        size: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        """``mu + sigma t_nu``, one draw at a time from that draw's own seed.
+
+        ``torch.distributions.StudentT`` takes no generator, so the per-draw
+        stream comes from ``torch.random.fork_rng`` around a ``manual_seed`` —
+        forked so the caller's global RNG state is left exactly as it was
+        found, and CPU-only because the variates are drawn on the CPU and moved
+        like the normals. It is the public API for the distribution, which is
+        the reason it is preferred to the private generator-aware gamma: an
+        exact Student-t out of ``torch`` beats a rejection sampler whose
+        accuracy would become ampere's problem.
+        """
+        degrees = resolved["nu"].detach().to("cpu", dtype=DEFAULT_DTYPE)
+        variates = []
+        with torch.random.fork_rng(devices=[]):
+            for index, seed in enumerate(seeds):
+                torch.manual_seed(_seed(seed))
+                variates.append(torch.distributions.StudentT(degrees[index]).sample((size,)))
+        standard = torch.stack(variates).to(device)
+        return resolved["location"] + resolved["scale"] * standard
+
+    def _gp_realisation(self, values: Mapping[str, Any], whitened: torch.Tensor) -> torch.Tensor:
+        """``L(θ) z``, from the solver's own native whitening transform."""
+        return self.noise.solver.latent_transform_native(
+            self.noise.kernel,
+            self.observed_coordinates,
+            whitened,
+            self.noise.kernel.resolve(values),
+        )
 
     def log_likelihood(self, routed: Mapping[str, Mapping[str, Any]]) -> torch.Tensor:
         """``log p(data | θ)`` for this dataset alone, as a differentiable scalar.
@@ -1024,9 +1198,9 @@ class LoweredProblem:
     ) -> dict[str, np.ndarray]:
         """Draw the retained observed values for a chunk, natively.
 
-        Peter's ruling of 2026-09-08. The distribution is
-        :meth:`ampere.core.GaussianFamily.sample`'s, transcribed in
-        :meth:`_LoweredDataset.sample_retained`; the **stream** is
+        Peter's ruling of 2026-09-08. The distributions are ``ampere.core``'s
+        own families' ``sample`` methods, transcribed in
+        :meth:`_LoweredDataset.draw_chunk`; the **stream** is
         ``torch.Generator``'s, which is why the numpy path stays the oracle and
         the two are compared *distributionally* rather than draw for draw.
 
@@ -1035,12 +1209,15 @@ class LoweredProblem:
         carries over unchanged: draw *i* gets the same generator whichever chunk
         it ran in, and a budget split 1/7/whole gives the same observations.
 
-        The standard normals are drawn **outside** the ``vmap``, one generator
-        per draw seeded from that draw's own integer, and mapped in as data.
-        ``torch.func.vmap`` has no per-sample random state to give a transformed
-        function, and faking one with a global generator would make a draw
-        depend on how the chunk was scheduled — which is the property this whole
-        path is built to keep.
+        Every variate is drawn **outside** the ``vmap``, per draw, from that
+        draw's own seed. ``torch.func.vmap`` has no per-sample random state to
+        give a transformed function, and faking one with a global generator
+        would make a draw depend on how the chunk was scheduled — which is the
+        property this whole path is built to keep. For the Gaussian and complex
+        families that means two standard normals mapped in as data; for the
+        Poisson and Student-t twins W3.14 added it means the transform computes
+        the draw's distribution parameters and the variate follows (see
+        :meth:`_LoweredDataset.draw_chunk`).
 
         Refuses by name, before drawing anything, for any dataset this backend
         may not sample (:meth:`_LoweredDataset.sampling_refusal`); the caller
@@ -1054,33 +1231,19 @@ class LoweredProblem:
         stack = as_tensor(theta, dtype=DEFAULT_DTYPE, device=self.device)
         drawn: dict[str, np.ndarray] = {}
         for dataset in self._datasets:
-            size = int(dataset.retain.sum())
-            normals = torch.stack(
-                [
-                    torch.randn(
-                        (2, size),
-                        generator=torch.Generator(device="cpu").manual_seed(
-                            int(seed) & 0x7FFFFFFFFFFFFFFF
-                        ),
-                        dtype=DEFAULT_DTYPE,
-                    ).to(self.device)
-                    for seed in seeds
-                ]
-            )
+            # The prediction's own dtype decides, as it does at lowering time
+            # (W2.4 slice 3): a complex_gaussian dataset predicts complex
+            # visibilities, and forcing them to float64 here would not fail
+            # loudly -- it would draw around the real projection of the model.
+            raw = np.asarray(predicted[dataset.label])
             rows = as_tensor(
-                np.asarray(predicted[dataset.label]), dtype=DEFAULT_DTYPE, device=self.device
+                raw,
+                dtype=complex_dtype(DEFAULT_DTYPE) if raw.dtype.kind == "c" else DEFAULT_DTYPE,
+                device=self.device,
             )
-            retained = rows[:, dataset.retain]
-
-            def one(
-                vector: torch.Tensor,
-                row: torch.Tensor,
-                noise: torch.Tensor,
-                of: Any = dataset,
-            ) -> torch.Tensor:
-                return of.sample_retained(self._route(vector), row, noise)
-
-            drawn[dataset.label] = to_numpy(torch.func.vmap(one)(stack, retained, normals))
+            drawn[dataset.label] = to_numpy(
+                dataset.draw_chunk(self._route, stack, rows[:, dataset.retain], seeds, self.device)
+            )
         return drawn
 
     def potential(self) -> Callable[[torch.Tensor], torch.Tensor]:

@@ -282,25 +282,26 @@ class TestTheCoverageStudy:
     WStat's coverage comes out low would be asserting a coin flip; the full
     budget (``python examples/wstat_comparison.py --coverage --full``) is what
     the docs page quotes. What is asserted is that the machinery runs, that
-    both routes are ranked against the same simulations, and that the
-    generative subclass really does make the joint problem simulable — which is
-    the one piece that could break silently, because ``PoissonFamily.sample()``
-    refuses by default.
+    both routes are ranked against the same simulations, and that the joint
+    problem really is simulable — which is the one piece that could break
+    silently.
+
+    **Amended W3.14.** The joint problem used to reach ``observe=True``
+    through a ``CountingPoisson`` subclass supplying the ``sample()``
+    ``PoissonFamily`` refused to guess; the core samples counts now, so the
+    subclass and the ``generative=`` flag are gone. The rows that checked the
+    subclass are replaced by :meth:`test_the_reduced_study_is_unchanged_by_w3_14`,
+    which pins the study's actual output: the deletion is only sound if the
+    numbers did not move, and a prose claim that they did not is not evidence.
     """
 
-    def test_the_generative_subclass_makes_the_joint_problem_simulable(
+    def test_the_joint_problem_is_simulable_without_a_subclass(
         self, wstat_example: ModuleType, synthetic_data: tuple[np.ndarray, np.ndarray]
     ) -> None:
-        """``PoissonFamily.sample()`` refuses; :class:`CountingPoisson`'s does not."""
+        """``PoissonFamily.sample()`` draws counts since W3.14; the example just uses it."""
         source_counts, background_counts = synthetic_data
-        plain = wstat_example.build_joint_problem(source_counts, background_counts)
-        with pytest.raises(Exception, match="does not implement sample"):
-            plain.simulate(observe=True, rng=np.random.default_rng(0), stream="probe")
-
-        generative = wstat_example.build_joint_problem(
-            source_counts, background_counts, generative=True
-        )
-        simulation = generative.simulate(observe=True, rng=np.random.default_rng(0))
+        problem = wstat_example.build_joint_problem(source_counts, background_counts)
+        simulation = problem.simulate(observe=True, rng=np.random.default_rng(0))
         assert not simulation.failed
         assert simulation.observations is not None
         for label in ("src", "bkg"):
@@ -308,22 +309,41 @@ class TestTheCoverageStudy:
             assert drawn.shape == (wstat_example.N_BINS,)
             assert np.all(drawn >= 0.0)
             assert np.all(drawn == np.round(drawn))
+        # And the family is ampere.core's own, not a local subclass: the point
+        # of W3.14 is that a counting experiment needs no such thing.
+        from ampere.core import PoissonFamily
 
-    def test_the_generative_subclass_scores_identically_to_the_base_family(
-        self, wstat_example: ModuleType, synthetic_data: tuple[np.ndarray, np.ndarray]
+        for label in ("src", "bkg"):
+            assert type(problem.datasets[label].likelihood.family) is PoissonFamily
+        assert not hasattr(wstat_example, "CountingPoisson")
+
+    def test_the_reduced_study_is_unchanged_by_w3_14(
+        self, reduced_study: dict[str, object]
     ) -> None:
-        """Adding ``sample()`` must not change the density, or the study is of another model."""
-        source_counts, background_counts = synthetic_data
-        plain = wstat_example.build_joint_problem(source_counts, background_counts)
-        generative = wstat_example.build_joint_problem(
-            source_counts, background_counts, generative=True
-        )
-        values = {
-            "model.src_norm": wstat_example.TRUTH["src_norm"],
-            "model.src_index": wstat_example.TRUTH["src_index"],
-            "model.bkg_norm": wstat_example.TRUTH["bkg_norm"],
+        """The deletion moved no number, and this is the evidence for it.
+
+        The ranks recorded here are the ones the reduced study produced with
+        ``CountingPoisson`` still in place, at the same seed and the same
+        budget. They are reproduced exactly because the subclass's body and
+        ``PoissonFamily.sample``'s are the same ``rng.poisson(rate)`` drawn
+        from the same generator at the same point in the same stream — the
+        subclass clipped the rate at zero and the core refuses a negative one
+        instead, which is a difference this model (a strictly positive rate)
+        never reaches.
+
+        Pinned as integers rather than as a hash so that a failure says *how*
+        the study moved, which is the question anyone reading this row will
+        have. Run off the module-scoped fixture rather than starting a third
+        study of its own: it is the same budget and the same seed, and the
+        study is the only expensive thing in this file.
+        """
+        study = reduced_study
+        expected = {
+            "wstat": [[39, 16], [16, 31], [34, 25], [23, 40], [18, 22], [13, 32]],
+            "joint": [[40, 18], [23, 32], [29, 33], [19, 38], [11, 20], [19, 35]],
         }
-        assert generative.log_prob(values) == pytest.approx(plain.log_prob(values))
+        for route, ranks in expected.items():
+            assert np.array_equal(np.asarray(study[route]["ranks"].values), np.asarray(ranks))
 
     def test_the_reduced_study_runs_and_ranks_both_routes(self, wstat_example: ModuleType) -> None:
         """The whole study, at a budget the gate can afford."""

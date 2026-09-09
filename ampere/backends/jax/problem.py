@@ -105,9 +105,14 @@ import numpy as np
 
 from ampere.core import (
     BatchedPrediction,
+    ComplexGaussianFamily,
     FittingProblem,
+    GaussianFamily,
     GaussianProcessNoise,
     IndependentNoise,
+    LikelihoodFamily,
+    PoissonFamily,
+    StudentTFamily,
     chunk_bounds,
     foreign_parts_refusal,
 )
@@ -127,6 +132,21 @@ __all__ = ["LoweredProblem", "lower_problem"]
 
 def _refuse(what: str, detail: str) -> LoweringError:
     return LoweringError(what, backend=BACKEND, detail=detail)
+
+
+#: Neutral family name -> the ``ampere.core`` class whose ``sample`` this
+#: backend has a native twin for (*W3.14*). The **one** place this module
+#: names them, so the ceiling ``inference.md`` §13 states — a backend samples
+#: exactly what the core samples — is one table rather than a condition
+#: repeated per family: a core family that gains a ``sample`` joins by adding
+#: a row here and a branch to :meth:`_LoweredDataset.sample_retained`, and one
+#: that does not have a twin here falls back to the numpy path unchanged.
+_TWINNED_FAMILIES: dict[str, type[LikelihoodFamily]] = {
+    "gaussian": GaussianFamily,
+    "poisson": PoissonFamily,
+    "student_t": StudentTFamily,
+    "complex_gaussian": ComplexGaussianFamily,
+}
 
 
 def _is_native_solver(solver: Any) -> bool:
@@ -451,45 +471,52 @@ class _LoweredDataset:
 
         Peter's ruling of 2026-09-08 is that every backend samples natively;
         what a backend may sample is fixed by what ``ampere.core`` samples,
-        because **the numpy path is the oracle**. Today that is
-        :meth:`ampere.core.GaussianFamily.sample` and nothing else: the base
-        :meth:`~ampere.core.LikelihoodFamily.sample` refuses specifically, and
-        ``student_t``, ``cauchy``, ``complex_gaussian`` and ``poisson`` all
-        inherit that refusal (``inference.md`` §13, "what can be sampled, and
-        what will not be guessed"). A native twin for a family the core will
-        not sample would be a backend inventing an observation process the
-        contract declines to guess — precisely the "silently train an SBI
-        posterior on the wrong forward model" the refusal exists to prevent —
-        so this backend samples exactly what the core samples, and refuses the
-        rest **by handing the draw back to the numpy path**, where the core's
-        own refusal text is what the caller meets.
+        because **the numpy path is the oracle**. A native twin for a family
+        the core will not sample would be a backend inventing an observation
+        process the contract declines to guess — precisely the "silently train
+        an SBI posterior on the wrong forward model" the refusal exists to
+        prevent — so this backend samples exactly what the core samples, and
+        refuses the rest **by handing the draw back to the numpy path**, where
+        the core's own refusal text is what the caller meets.
 
-        Four conditions, in the order they matter:
+        **Amended W3.14**, when the core acquired three more ``sample``
+        implementations. The set is now ``gaussian``, ``poisson``,
+        ``student_t`` and ``complex_gaussian`` — :data:`_TWINNED_FAMILIES`,
+        which is the one place this backend names them — and the test is still
+        the same test: the family's ``sample`` must be the *core's own* method
+        for that family. That keeps two properties at once. A family the core
+        refuses (``cauchy``, ``rice``, ``von_mises``, a user family with no
+        ``sample``) is refused here, so the caller meets the core's refusal
+        text. A family whose ``sample`` a *user* has overridden is refused too,
+        and deliberately: it is a numpy function, it is the observation process
+        its author wrote, and running something else instead would be worse
+        than running it slowly (§13's "a user with an exotic observation
+        process supplies it by subclassing").
 
-        * the family's ``sample`` must be ``GaussianFamily``'s own. A
-          *user-overridden* ``sample`` is refused too, and deliberately: it is
-          a numpy function, it is the observation process its author wrote, and
-          running something else instead would be worse than running it slowly
-          (§13's "a user with an exotic observation process supplies it by
-          subclassing");
+        Two conditions survive the widening:
+
         * a censoring declaration that survives the mask blocks a draw on every
           backend, because applying the censoring operator to a draw is not
           implemented anywhere;
-        * complex data have no ``sample`` in the core at all;
         * a latent declaration means the family reads ``noise.latent``, which
-          the Gaussian family does not.
+          only ``poisson`` does. The other three would silently ignore it.
+
+        The complex condition is gone: complex data are exactly what the
+        ``complex_gaussian`` twin draws, and a complex container under any
+        other family is refused by ``Likelihood.check_alignment`` long before
+        a draw is asked for.
         """
         family = self.likelihood.family
-        from ampere.core import GaussianFamily
-
-        if type(family).sample is not GaussianFamily.sample:
+        core = _TWINNED_FAMILIES.get(family.NAME)
+        if core is None or type(family).sample is not core.sample:
             return _refuse(
                 family.NAME or type(family).__name__,
-                f"dataset {self.label!r} does not draw its observations through "
-                f"ampere.core.GaussianFamily.sample, so this backend has no native twin for "
-                f"it: the numpy path is the oracle, and a backend that guessed a sampling "
-                f"distribution the contract declines to guess would train an SBI posterior on "
-                f"the wrong forward model. The draw is made on the numpy path instead.",
+                f"dataset {self.label!r} does not draw its observations through one of "
+                f"ampere.core's own family sample() methods, so this backend has no native "
+                f"twin for it: the numpy path is the oracle, and a backend that guessed a "
+                f"sampling distribution the contract declines to guess would train an SBI "
+                f"posterior on the wrong forward model. The draw is made on the numpy path "
+                f"instead.",
             )
         censoring = self.likelihood.censoring
         if censoring is not None and bool(np.any(np.asarray(censoring.kinds)[self.retain] != 0)):
@@ -498,17 +525,11 @@ class _LoweredDataset:
                 f"dataset {self.label!r} declares limits on retained samples, which blocks "
                 f"observation drawing on every backend.",
             )
-        if self.observed_values.dtype == jnp.complex128:
-            return _refuse(
-                "complex_gaussian",
-                f"dataset {self.label!r} holds complex observations, which ampere.core does "
-                f"not sample.",
-            )
-        if self.latent_name is not None:
+        if self.latent_name is not None and family.NAME != "poisson":
             return _refuse(
                 "latent",
                 f"dataset {self.label!r} declares a latent GP, whose family reads "
-                f"noise.latent; ampere.core samples no such family.",
+                f"noise.latent; the {family.NAME!r} twin does not consume one.",
             )
         return None
 
@@ -520,34 +541,52 @@ class _LoweredDataset:
     ) -> jax.Array:
         """One draw of the retained observed values, natively.
 
-        :meth:`ampere.core.GaussianFamily.sample` transcribed into jax, with the
-        two branches it has and the same stabiliser reasoning:
+        The core family's own ``sample`` transcribed into jax, dispatched on
+        the neutral family name exactly as :meth:`log_likelihood` dispatches
+        the density. Every branch is traceable, so ``jax.vmap`` maps it over a
+        chunk and the key is per draw; ``jax.random`` takes a *traced* rate and
+        a traced ``nu``, which is why this backend needs none of the
+        two-stage machinery torch's twins do.
 
-        * uncorrelated noise — ``x = mu + sigma z``, with the noise model's own
-          sigma, so a fitted ``scale`` or ``jitter`` is already in it;
-        * correlated (GP) noise — ``x = mu + L z1 + sigma z2``, with ``L`` from
-          the solver's **own** ``latent_transform_jax``, the same whitening the
-          latent path uses, and the solver's numerical jitter folded into the
-          diagonal because it is part of the covariance the marginal likelihood
-          scores. Omitting it would draw from a narrower distribution than the
-          density evaluates, and the error is not small at the jitter values
-          the library's own error message tells a user to raise.
-
-        Traceable, so ``jax.vmap`` maps it over a chunk; the key is per draw.
+        * ``gaussian`` — ``x = mu + sigma z`` uncorrelated, and
+          ``x = mu + L z1 + sigma z2`` under a GP, with ``L`` from the solver's
+          **own** ``latent_transform_jax``, the same whitening the latent path
+          uses, and the solver's numerical jitter folded into the diagonal
+          because it is part of the covariance the marginal likelihood scores.
+          Omitting it would draw from a narrower distribution than the density
+          evaluates, and the error is not small at the jitter values the
+          library's own error message tells a user to raise.
+        * ``poisson`` (*W3.14*) — ``counts ~ Poisson(rate)``, the rate being
+          the prediction, or ``prediction * exp(f)`` under a GP with ``f`` the
+          dataset's own latent block through :meth:`_latent` — the same ``f``
+          the density scores at, so θ and the drawn data describe one model.
+          Returned as float64, because that is what the containers hold and
+          what ``ampere.core.PoissonFamily.sample`` returns.
+        * ``student_t`` (*W3.14*) — ``x = mu + sigma t_nu``, with ``sigma``
+          used as the *scale*, exactly as the density standardises by it.
+        * ``complex_gaussian`` (*W3.14*) — independent ``Normal(0, sigma**2)``
+          on each component, ``sigma`` being the per-component standard
+          deviation the density's ``-|r|**2 / (2 sigma**2)`` implies.
         """
         values = dict(self._dataset_values(routed).get(LIKELIHOOD_COMPONENT, {}))
+        name = self.likelihood.family.NAME
+        if name == "poisson":
+            return self._sample_poisson(routed, predicted, values, key)
+        if name == "student_t":
+            return self._sample_student_t(predicted, values, key)
+        if name == "complex_gaussian":
+            return self._sample_complex_gaussian(predicted, values, key)
+        return self._sample_gaussian(predicted, values, key)
+
+    def _sample_gaussian(
+        self, predicted: jax.Array, values: Mapping[str, Any], key: jax.Array
+    ) -> jax.Array:
         sigma = self._sigma(predicted, values)
         realisation = predicted
         size = int(self.retain.sum())
         if self.correlated:
             gp_key, noise_key = jax.random.split(key)
-            whitened = jax.random.normal(gp_key, (size,), dtype=jnp.float64)
-            realisation = realisation + self.noise.solver.latent_transform_jax(
-                self.noise.kernel,
-                self.observed_coordinates,
-                whitened,
-                self.noise.kernel.resolve(values),
-            )
+            realisation = realisation + self._gp_realisation(values, gp_key, size)
             stabiliser = float(getattr(self.noise.solver, "jitter", 0.0) or 0.0)
             if stabiliser:
                 floor = jnp.full((size,), stabiliser, dtype=jnp.float64)
@@ -557,6 +596,58 @@ class _LoweredDataset:
         if sigma is None:
             return realisation
         return realisation + sigma * jax.random.normal(noise_key, (size,), dtype=jnp.float64)
+
+    def _sample_poisson(
+        self,
+        routed: Mapping[str, Mapping[str, Any]],
+        predicted: jax.Array,
+        values: Mapping[str, Any],
+        key: jax.Array,
+    ) -> jax.Array:
+        size = int(self.retain.sum())
+        rate = predicted
+        if self.correlated:
+            latent = self._latent(routed, values)
+            if latent is None:
+                # Unreachable through ``Dataset``, which declares a latent block
+                # for every LATENT combination, but the core's own sample() has
+                # the same fallback and the two must not diverge.
+                gp_key, key = jax.random.split(key)
+                latent = self._gp_realisation(values, gp_key, size)
+            rate = rate * jnp.exp(latent)
+        return jax.random.poisson(key, rate, (size,)).astype(jnp.float64)
+
+    def _sample_student_t(
+        self, predicted: jax.Array, values: Mapping[str, Any], key: jax.Array
+    ) -> jax.Array:
+        sigma = self._sigma(predicted, values)
+        assert sigma is not None  # REQUIRES_UNCERTAINTY, checked at composition
+        family = self.likelihood.family
+        own = {key_: value for key_, value in values.items() if key_ in family.parameters}
+        nu = jnp.asarray(family.context(own)["nu"], dtype=jnp.float64)
+        size = int(self.retain.sum())
+        return predicted + sigma * jax.random.t(key, nu, (size,), dtype=jnp.float64)
+
+    def _sample_complex_gaussian(
+        self, predicted: jax.Array, values: Mapping[str, Any], key: jax.Array
+    ) -> jax.Array:
+        sigma = self._sigma(predicted, values)
+        assert sigma is not None  # REQUIRES_UNCERTAINTY, checked at composition
+        size = int(self.retain.sum())
+        real_key, imaginary_key = jax.random.split(key)
+        real = jax.random.normal(real_key, (size,), dtype=jnp.float64)
+        imaginary = jax.random.normal(imaginary_key, (size,), dtype=jnp.float64)
+        return predicted + sigma * (real + 1j * imaginary)
+
+    def _gp_realisation(self, values: Mapping[str, Any], key: jax.Array, size: int) -> jax.Array:
+        """``L(θ) z`` for a fresh whitened draw, from the solver's own transform."""
+        whitened = jax.random.normal(key, (size,), dtype=jnp.float64)
+        return self.noise.solver.latent_transform_jax(
+            self.noise.kernel,
+            self.observed_coordinates,
+            whitened,
+            self.noise.kernel.resolve(values),
+        )
 
     def log_likelihood(self, routed: Mapping[str, Mapping[str, Any]]) -> jax.Array:
         """``log p(data | θ)`` for this dataset, as a traceable jax scalar."""
@@ -936,7 +1027,12 @@ class LoweredProblem:
         keys = jnp.stack([jax.random.PRNGKey(int(seed) & 0xFFFFFFFF) for seed in seeds])
         drawn: dict[str, np.ndarray] = {}
         for dataset in self._datasets:
-            rows = jnp.asarray(np.asarray(predicted[dataset.label]), dtype=jnp.float64)
+            # The prediction's own dtype decides, as it does at lowering time
+            # (W2.4 slice 3): a complex_gaussian dataset predicts complex
+            # visibilities, and forcing them to float64 here would not fail
+            # loudly -- it would draw around the real projection of the model.
+            raw = np.asarray(predicted[dataset.label])
+            rows = jnp.asarray(raw, dtype=jnp.complex128 if raw.dtype.kind == "c" else jnp.float64)
             retained = rows[:, dataset.retain]
 
             def one(vector: jax.Array, row: jax.Array, key: jax.Array, of: Any = dataset) -> Any:
