@@ -165,6 +165,22 @@ family supplies its own the same way `LaplaceFamily` above supplies
 
 ```
 
+**Native twins (*Amended W3.1*, slice 2).** Peter ruled on 2026-09-08 that every
+backend supports observation sampling natively, and W3.1 slice 2 landed it: a
+realisation may expose `sample_observations`, which draws a whole chunk's
+retained values in the backend's own arithmetic. The ruling has a ceiling, and it
+is this section's rule restated one level down: **a backend samples exactly what
+`ampere.core` samples**, which is `GaussianFamily.sample` and nothing else. The
+default refusal is not a gap a backend is free to fill — it is the contract
+declining to guess an observation process — so `student_t`, `cauchy`,
+`complex_gaussian` and `poisson` refuse identically on torch and jax, and a
+family whose `sample` a user has overridden is left to that override rather than
+replaced by a native approximation of it. The twins transcribe both of
+`GaussianFamily.sample`'s branches, GP draw and solver stabiliser included, from
+the solver's own native `latent_transform`. `inference.md` §13's "sampling on a
+backend" carries the rest, including why the numpy path stays the oracle and the
+comparison is distributional.
+
 ### The composition-time hook: `check_observed`
 
 Also ruled 2026-09-02 (W1.11 gap I-5): a family may override
