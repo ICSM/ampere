@@ -536,6 +536,16 @@ paper-grade evidence the redesign delivers its central promise.
   modalities (astrometric time series, IFU cubes) then follow the template
   it establishes.
 - Astropy interop adapter (`core/astropy_compat.py`, §4.7).
+- **Kernel algebra and a public quasiseparable-term registry** (ruled by
+  Peter 2026-09-09 as extensibility work: users must be able to compose a
+  more expressive noise model). `Sum`/`Product` kernels with `KernelSpec`
+  composition and celerite translation (a sum of quasiseparable terms is
+  quasiseparable; a product is refused on the O(N) path); a damped
+  periodic/SHO term for fringing; Matérn-1/2 and -5/2; a public
+  `register_quasiseparable_term` so a user kernel can reach the O(N) path;
+  a spectral-mixture kernel as a sum of SHO terms. Conformance rows per
+  term against its dense closed form. Background and the sparsity-prior
+  companion note: `docs/design/horizon_notes.md` §1 and its follow-up.
 
 ### Phase 5 — Scale-out & advanced inference
 - Approximate GP strategies for images/IFU (SVGP, SKI, Vecchia) behind the

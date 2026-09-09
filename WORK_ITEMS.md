@@ -1141,7 +1141,7 @@ bars cannot condition on them; (ii) W3.1 slice 2 and W3.2 accept a
 recorded as such in provenance, so the signature exists before the
 machinery; (iii) the context prior and per-context instrument
 renegotiation are a follow-on item drafted when W3.3 lands, or Phase 5 if
-the Phase 3 budget is spent. Peter to confirm the reservation.
+the Phase 3 budget is spent. **Reservation confirmed by Peter 2026-09-09.**
 
 ### Deferred from Phase 3 (recorded so they are not re-derived)
 - **jax-native SBI** (sbijax/flowjax): plan §6 says "if and when maturity

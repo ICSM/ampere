@@ -6,6 +6,7 @@ before Phase 5, and possibly not until Phase 6 is complete. Recorded so the
 thinking is not re-derived. Where a note has a consequence for work that
 is being built *now*, that consequence is stated explicitly at the end and
 is the only part of this document with any claim on the present.
+(The observation-context reservation was confirmed by Peter 2026-09-09.)
 
 Each section: the question, what the frozen design already provides, what
 it would take, and a first recommendation. Citations are to the design
@@ -362,8 +363,9 @@ and they cannot combine them. Fringing in M2 is currently absorbed by a
 stationary Matérn-3/2 (it stays calibrated), not modelled as a periodic
 component.
 
-**What a modest item would add** (Phase 4 or 5 — it is not on the SBI
-critical path, but it is small and every later kernel idea sits on it):
+**What a modest item would add** (**Phase 4**, ruled by Peter 2026-09-09:
+it is extensibility work, letting users compose a more expressive noise
+model; recorded in the plan's §5 Phase 4 bullets):
 `Sum` and `Product` kernels with the obvious `KernelSpec` composition and
 celerite translation (a sum of quasiseparable terms is quasiseparable; a
 product is not in general and is refused on the O(N) path); a **damped
