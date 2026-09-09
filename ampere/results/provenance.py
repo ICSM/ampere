@@ -102,6 +102,8 @@ __all__ = [
     "hash_container",
     "hash_of",
     "model_fingerprint",
+    "model_hash",
+    "model_hash_fingerprint",
     "model_identity_hash",
     "neutral_model_identity",
     "normalise",
@@ -141,7 +143,25 @@ __all__ = [
 #: provenance" and ``results.md`` §14's cross-backend spec-hash agreement can
 #: both hold. None of the three is an input to ``problem_fingerprint``, but
 #: this constant is, so ``ampere_problem_hash`` moves as at every bump.
-PROVENANCE_SCHEMA_VERSION = 5
+#: 6 (W3.12): ``ampere_model_hash`` joined the recorded attributes —
+#: :func:`model_hash`'s composition, promoted here from a private copy
+#: :mod:`ampere.results.artefacts` built locally at W3.5 (every model's
+#: :func:`model_fingerprint` minus its ``"parameters"`` entry, every
+#: dataset's :func:`dataset_fingerprint` minus its ``"observed"`` entry,
+#: plus the model bindings). ``ampere_spec_hash`` alone answers "was this the
+#: same *parameter declaration*?"; a likelihood family, noise model, solver
+#: or kernel swap that leaves every parameter's name and prior unchanged
+#: answers that question identically while scoring completely differently —
+#: exactly the gap W3.5's module docstring found and
+#: :func:`~ampere.results.training.append_training_set` (W2.8) left open,
+#: since it checked only ``ampere_spec_hash``. Not itself an input to
+#: :func:`problem_fingerprint` (it is built from fingerprints that function
+#: already covers), but the schema constant is, so ``ampere_problem_hash``
+#: moves again at this bump as at every previous one. A training set written
+#: under an earlier schema carries no ``ampere_model_hash`` at all, which is
+#: why :func:`~ampere.results.training.append_training_set` refuses such a
+#: file by name rather than guessing.
+PROVENANCE_SCHEMA_VERSION = 6
 
 #: Every attribute this module writes starts with this, so ampere's provenance
 #: never collides with ArviZ's own (``created_at``, ``creation_library``, ...)
@@ -570,6 +590,61 @@ def spec_hashes(problem: FittingProblem) -> dict[str, Any]:
     return {"spec": hash_of(problem.parameters.to_spec()), "components": components}
 
 
+def model_hash_fingerprint(problem: FittingProblem) -> dict[str, Any]:
+    """Everything :func:`model_hash` hashes: model and dataset identity, minus the prior.
+
+    W3.5's finding, promoted here at W3.12: :func:`spec_hashes`' ``"spec"``
+    entry is *only* the merged parameter declaration, and a likelihood family,
+    noise model, solver or kernel swap that leaves every parameter's name and
+    prior unchanged is invisible to it — two runs that would score completely
+    differently share a spec hash. This fingerprint is the complement: every
+    model's :func:`model_fingerprint` with its ``"parameters"`` entry
+    stripped out (that entry is just this model's slice of the *merged* prior
+    the spec hash already covers, in the trace order only the merged set gets
+    right — ``lowering.md`` §9.2), every dataset's :func:`dataset_fingerprint`
+    with its ``"observed"`` entry stripped out (the data hash's job), and the
+    model bindings, which wire models to datasets and are themselves part of
+    what "the same model" means.
+
+    Kept separate from :func:`spec_hashes` and :func:`dataset_fingerprint`'s
+    own ``"observed"`` entry on purpose — not one blended fingerprint — so a
+    caller comparing two problems can say *which* of "prior", "model" or
+    "data" moved rather than only that something did
+    (:class:`~ampere.results.artefacts.ArtefactKey` does exactly this).
+    """
+    return {
+        "models": {
+            label: {
+                key: value for key, value in model_fingerprint(model).items() if key != "parameters"
+            }
+            for label, model in problem.models.items()
+        },
+        "model_bindings": dict(problem.bindings),
+        "datasets": [
+            {
+                key: value
+                for key, value in dataset_fingerprint(problem.datasets[label]).items()
+                if key != "observed"
+            }
+            for label in problem.datasets
+        ],
+    }
+
+
+def model_hash(problem: FittingProblem) -> str:
+    """The cache key :func:`spec_hashes` alone cannot be — see :func:`model_hash_fingerprint`.
+
+    Recorded on every run and training set as ``ampere_model_hash``
+    (schema 6), and what :func:`~ampere.results.training.append_training_set`
+    now checks alongside ``ampere_spec_hash`` before growing a file, and what
+    :func:`~ampere.results.artefacts.artefact_key` uses for
+    :class:`~ampere.results.artefacts.ArtefactKey`'s ``model_hash`` field —
+    the same recipe, called once from each place rather than reinvented at
+    either.
+    """
+    return hash_of(model_hash_fingerprint(problem))
+
+
 # ---------------------------------------------------------------------------
 # Versions
 # ---------------------------------------------------------------------------
@@ -677,6 +752,16 @@ def provenance_attrs(
 
     Notes
     -----
+    ``ampere_model_hash`` (W3.12, schema 6) is :func:`model_hash`'s digest —
+    every model and dataset fingerprint with its prior/data slice stripped
+    out, plus the model bindings. It is what
+    :func:`~ampere.results.training.append_training_set` now checks beside
+    ``ampere_spec_hash`` before growing a training set, and what
+    :func:`~ampere.results.artefacts.artefact_key` uses rather than
+    recomputing its own copy: a kernel, solver or family swap that leaves
+    every parameter's name and prior unchanged moves this hash and not the
+    spec hash, which is exactly the case the spec hash alone cannot catch.
+
     One attribute is **conditional**: ``ampere_foreign_parts`` (W3.8), the
     located names of the pieces this problem composes from another backend —
     a numpy kernel inside a torch problem, say, accepted because the problem
@@ -761,6 +846,14 @@ def provenance_attrs(
         "model_identity_hashes": canonical_json(
             {label: model_identity_hash(model) for label, model in problem.models.items()}
         ),
+        # W3.12 (schema 6): the composition ampere.results.artefacts built
+        # locally at W3.5, promoted here. Answers "same likelihood family,
+        # noise model, solver and kernel, on the same data, wired the same
+        # way?" -- the gap ampere_spec_hash alone leaves open, since two
+        # likelihoods differing only in kernel or solver can declare
+        # identical parameters and so share a spec hash while scoring
+        # completely differently.
+        "model_hash": model_hash(problem),
         "capabilities": canonical_json(problem.capabilities.to_dict()),
         "free_size": int(problem.free_size),
         "free_names": canonical_json(list(problem.parameters.free_names)),

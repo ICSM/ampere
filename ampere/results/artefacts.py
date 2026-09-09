@@ -24,11 +24,11 @@ it, needs those packages installed). What it *does* need, heavily, is
 :mod:`ampere.results.provenance` — :func:`~ampere.results.provenance.
 spec_hashes`, :func:`~ampere.results.provenance.hash_of`,
 :func:`~ampere.results.provenance.hash_container`,
-:func:`~ampere.results.provenance.model_fingerprint`,
-:func:`~ampere.results.provenance.dataset_fingerprint` and
-:func:`~ampere.results.provenance.package_versions` are the whole of how a
-key is built — and the training-set format this cache is meant to sit beside
-(``ampere.results.training``, W2.8) already lives here, keyed by the same
+:func:`~ampere.results.provenance.model_hash` (W3.12; the composition below
+used to be inline here) and :func:`~ampere.results.provenance.package_versions`
+are the whole of how a key is built — and the training-set format this cache
+is meant to sit beside (``ampere.results.training``, W2.8) already lives here,
+keyed by the same
 ``ampere_spec_hash``. ``ampere.inference`` already imports from
 ``ampere.results`` for exactly this reason (``_sbi.py`` writes training sets
 through it), so nothing about backend-neutrality is at stake either way — the
@@ -58,19 +58,21 @@ prior unchanged is exactly a "model changed" case the item's own Accept line
 requires to be a miss, and ``spec_hashes["spec"]`` alone would not catch it.
 
 So :class:`ArtefactKey` keeps ``prior_hash`` exactly as named (literally
-``spec_hashes(problem)["spec"]``) and adds ``model_hash`` beside it: every
-model's :func:`~ampere.results.provenance.model_fingerprint` (class, buffers,
-``describe()`` — its own ``"parameters"`` entry stripped out, since that is
-just this model's slice of the *merged* prior ``prior_hash`` already covers,
-in the trace order only the merged set gets right), the model bindings, and
-each dataset's likelihood/noise/solver/kernel/instrument description
-(:func:`~ampere.results.provenance.dataset_fingerprint`, with its
-``"observed"`` entry stripped out — that is ``data_hash``'s job), kept
+``spec_hashes(problem)["spec"]``) and adds ``model_hash`` beside it, kept
 separate on purpose so a miss can name *which* of "prior", "model" or "data"
 moved rather than one blended hash that can only say "something did".
-Nothing here reinvents how any of these are hashed; every ingredient is
-exactly the recipe :mod:`ampere.results.provenance`
-already uses, called at one more call site.
+
+**W3.12**: ``model_hash`` was originally built here, inline, as a composition
+of :func:`~ampere.results.provenance.model_fingerprint` and
+:func:`~ampere.results.provenance.dataset_fingerprint` with their
+``"parameters"``/``"observed"`` entries stripped out. That composition is
+now :func:`~ampere.results.provenance.model_hash` itself, promoted into
+:mod:`ampere.results.provenance` so that
+:func:`~ampere.results.training.append_training_set` can check the same
+digest a training set was written against, not a second copy of the same
+recipe. This module no longer computes a fingerprint of its own anywhere —
+``prior_hash``, ``model_hash`` and ``data_hash`` are each one call into
+:mod:`ampere.results.provenance`.
 
 Refusals
 --------
@@ -104,10 +106,9 @@ from ampere.core.dataset import FittingProblem
 from ampere.core.exceptions import ResultsError
 
 from .provenance import (
-    dataset_fingerprint,
     hash_container,
     hash_of,
-    model_fingerprint,
+    model_hash,
     package_versions,
     spec_hashes,
 )
@@ -196,10 +197,36 @@ class ArtefactKey:
     #: trained under one library version and reused under another is exactly
     #: the silent staleness plan §7 warns about.
     versions: Mapping[str, str]
+    #: **W3.4's carried gap, closed at W3.12.** TMNRE's marginal order — ``1``
+    #: for 1-D marginals only, ``2`` to add the pairs — changes what is
+    #: trained, so two TMNRE runs differing only here must not share a cache
+    #: key. ``None`` for every other method, which has no marginals to
+    #: choose; last field, so every pre-W3.4 :meth:`ingredients` digest for a
+    #: non-TMNRE key is unchanged (see below).
+    marginals: int | None = None
+    #: **W3.4's carried gap, closed at W3.12.** The truncation fraction ε that
+    #: shapes each round's restricted-prior box — a different ε gives a
+    #: different box and so a different trained estimator. ``None`` for every
+    #: other method. Last field, for the same reason ``marginals`` is.
+    truncation_epsilon: float | None = None
+    #: **The third of W3.4's folded settings.** TMNRE's ``sample_with``
+    #: (``"rejection"`` or ``"mcmc"``) is baked into the *built* posterior —
+    #: ``sbi`` returns a different posterior class for each — and the built
+    #: posterior is exactly what the store holds, so a hit under the other
+    #: mode would sample the wrong way and record the wrong sampler in the
+    #: run's attrs. ``None`` for every other method. Last field, as above.
+    sample_with: str | None = None
 
     def ingredients(self) -> dict[str, Any]:
-        """Every field as a JSON-safe mapping — what the sidecar records."""
-        return {
+        """Every field as a JSON-safe mapping — what the sidecar records.
+
+        ``marginals``, ``truncation_epsilon`` and ``sample_with`` are written
+        **only when set** (i.e. for a TMNRE key): a non-TMNRE key's ingredients — and so
+        its :meth:`digest` — are byte-for-byte what they were before W3.4's
+        two fields existed, since the two keys simply do not appear in the
+        mapping rather than appearing as ``null``.
+        """
+        ingredients: dict[str, Any] = {
             "prior_hash": self.prior_hash,
             "model_hash": self.model_hash,
             "data_hash": self.data_hash,
@@ -211,6 +238,13 @@ class ArtefactKey:
             "seed": self.seed,
             "versions": dict(self.versions),
         }
+        if self.marginals is not None:
+            ingredients["marginals"] = int(self.marginals)
+        if self.truncation_epsilon is not None:
+            ingredients["truncation_epsilon"] = float(self.truncation_epsilon)
+        if self.sample_with is not None:
+            ingredients["sample_with"] = str(self.sample_with)
+        return ingredients
 
     def digest(self) -> str:
         """The cache key proper — one hash of every ingredient together.
@@ -232,13 +266,19 @@ def artefact_key(
     budget: int,
     rounds: int,
     packages: Sequence[str] = _DEFAULT_PACKAGES,
+    marginals: int | None = None,
+    truncation_epsilon: float | None = None,
+    sample_with: str | None = None,
 ) -> ArtefactKey:
     """Build the one complete :class:`ArtefactKey` for *problem* and a run's settings.
 
     Every argument beyond *problem* is required and keyword-only: "a partial
     key is never accepted" (the item text) is enforced here, at the one place
     a key is built, so a caller cannot construct one that silently omits an
-    ingredient and compares equal to a run that differed in it.
+    ingredient and compares equal to a run that differed in it. The three
+    exceptions are *marginals*, *truncation_epsilon* and *sample_with*, which
+    are optional because they mean nothing outside TMNRE — see their own
+    parameters below.
 
     Parameters
     ----------
@@ -262,13 +302,35 @@ def artefact_key(
         Which installed package versions join the key — the default is the
         two the item names, ``("sbi", "torch")``; an emulator cache might
         pass a different tuple.
+    marginals
+        **W3.4's carried gap, closed here.** TMNRE's marginal order, ``1`` or
+        ``2``; ``None`` (the default) for every other method, which has no
+        marginals to choose. Written into :meth:`ArtefactKey.ingredients`
+        only when given, so a non-TMNRE key's digest is unaffected by this
+        parameter existing at all.
+    truncation_epsilon
+        **W3.4's carried gap, closed here.** TMNRE's truncation fraction,
+        strictly between 0 and 1; ``None`` for every other method. A
+        different ε gives a different restricted-prior box and so a
+        different trained estimator, which must not share a cache key with
+        another ε's.
+    sample_with
+        TMNRE's posterior sampling mode (``"rejection"`` or ``"mcmc"``);
+        ``None`` for every other method. The mode is baked into the built
+        posterior the store holds — ``sbi`` builds a different posterior
+        class for each — so two runs differing only here must not share a
+        key: the second would be served the first's sampler and record its
+        own in the attrs. Any non-empty string is accepted; which modes exist
+        is ``ampere.inference``'s business, not this module's.
 
     Raises
     ------
     ampere.core.exceptions.ResultsError
-        If *layout*, *method* or *architecture* is empty, or *budget* or
-        *rounds* is less than 1 — the ingredients a caller could otherwise
-        leave meaninglessly blank.
+        If *layout*, *method* or *architecture* is empty, if *budget* or
+        *rounds* is less than 1, if *marginals* is given and not ``1`` or
+        ``2``, if *truncation_epsilon* is given and not strictly between 0
+        and 1, or if *sample_with* is given and empty — the ingredients a
+        caller could otherwise leave meaninglessly blank or nonsensical.
     """
     layout = str(layout)
     method = str(method)
@@ -287,37 +349,31 @@ def artefact_key(
         raise ResultsError(f"artefact_key needs a budget of at least 1, got {budget!r}.")
     if int(rounds) < 1:
         raise ResultsError(f"artefact_key needs at least one round, got {rounds!r}.")
+    if marginals is not None and int(marginals) not in (1, 2):
+        raise ResultsError(
+            f"artefact_key's marginals= is TMNRE's marginal order: 1 (1-D marginals only) or 2 "
+            f"(the 2-D pairs too), or None for a method with no marginals to choose. Got "
+            f"{marginals!r}."
+        )
+    if truncation_epsilon is not None and not (0 < float(truncation_epsilon) < 1):
+        raise ResultsError(
+            f"artefact_key's truncation_epsilon= is a fraction of each 1-D marginal's own "
+            f"integral, strictly between 0 and 1, or None for a method with no truncation. Got "
+            f"{truncation_epsilon!r}."
+        )
+    if sample_with is not None and not str(sample_with):
+        raise ResultsError(
+            "artefact_key's sample_with= is TMNRE's posterior sampling mode, a non-empty "
+            "string, or None for a method whose posterior has no sampling mode to choose. "
+            "Got an empty string."
+        )
 
     data_hashes = {
         label: hash_container(problem.datasets[label].observed) for label in problem.datasets
     }
-    model_identity = {
-        "models": {
-            label: {
-                key: value
-                for key, value in model_fingerprint(model).items()
-                # "parameters" is that model's own slice of the *merged* prior
-                # ``prior_hash`` already covers (in ``lowering.md`` §9.2's
-                # trace order, which only the merged set gets right) — kept
-                # out of here so a prior-only change moves ``prior_hash``
-                # alone rather than ``model_hash`` too.
-                if key != "parameters"
-            }
-            for label, model in problem.models.items()
-        },
-        "model_bindings": dict(problem.bindings),
-        "datasets": [
-            {
-                key: value
-                for key, value in dataset_fingerprint(problem.datasets[label]).items()
-                if key != "observed"
-            }
-            for label in problem.datasets
-        ],
-    }
     return ArtefactKey(
         prior_hash=spec_hashes(problem)["spec"],
-        model_hash=hash_of(model_identity),
+        model_hash=model_hash(problem),
         data_hash=hash_of(data_hashes),
         layout=layout,
         method=method,
@@ -326,6 +382,9 @@ def artefact_key(
         rounds=int(rounds),
         seed=problem.seed if problem.seed is not None else "entropy",
         versions=package_versions(extra=tuple(packages)),
+        marginals=None if marginals is None else int(marginals),
+        truncation_epsilon=None if truncation_epsilon is None else float(truncation_epsilon),
+        sample_with=None if sample_with is None else str(sample_with),
     )
 
 

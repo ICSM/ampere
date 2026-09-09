@@ -202,6 +202,11 @@ result, got float. ...
 | `calibration` | *(added W3.6)* `diagnostics.md` §11's family D, when a run has been calibrated: `ranks`, `coverage`, `ks_pvalue`, and the route's own extras | `(simulation, parameter)`, `(level, parameter)`, `(parameter,)` |
 | `marginals` | *(added W3.4)* a truncated-marginal SBI run's per-marginal ratio estimators, evaluated on a grid over the final truncation box: `grid`, `grid_constrained`, `log_ratio`, `log_density`, and at `marginals=2` the pairs' `pair_grid_row`/`pair_grid_column`/`pair_log_ratio`/`pair_log_density` | `(marginal_parameter, marginal_node)`; `(marginal_pair, marginal_row, marginal_column)` |
 
+None of the groups above is the root attributes themselves — those are §9's,
+and *(added W3.12)* they gain one more member there: `ampere_model_hash`,
+written on every run (and, §11, every training set) beside the spec, problem
+and data hashes.
+
 The posterior is keyed by the merged name, which is the third of the three
 reasons `inference.md` §4.5 gives for the nested merge topology: a merged name
 is "a `Tie` site, a `free_labels()` entry, an ArviZ coordinate, a corner-plot
@@ -707,6 +712,23 @@ went to 4**, per the rule below. `capabilities` is not an input to
 None of the three is an input to `problem_fingerprint`, but the schema constant
 is, so `ampere_problem_hash` moved again at this bump as at every previous one.
 
+**One attribute joined at W3.12, and the constant is now 6** (decision-log row
+"Model identity hash promoted to provenance (W3.12)" in `DEVELOPMENT_PLAN.md`
+§2). **`ampere_model_hash`** is `model_hash(problem)`'s digest — every model's
+fingerprint with its `"parameters"` entry stripped out, every dataset's
+fingerprint with its `"observed"` entry stripped out, plus the model bindings.
+It closes a gap W3.5 found and named while building the trained-artefact
+cache (§7 above): `ampere_spec_hash` alone is the *parameter* declaration, so
+a likelihood family, noise model, solver or kernel swap that leaves every
+parameter's name and prior unchanged moves no spec hash at all, and would
+silently pass `append_training_set`'s (§11, W2.8) invalidation check. This
+attribute is what `append_training_set` now compares alongside the spec hash,
+refusing an append whose model hash disagrees — and refusing, by name, an
+append onto a file written before this attribute existed at all, since such a
+file has nothing to compare against. Not itself an input to
+`problem_fingerprint`, but the schema constant is, so `ampere_problem_hash`
+moved again at this bump as at every previous one.
+
 **Failures travel.** `ampere_failure_counts` is the unbounded count per
 `FailureReason`; `ampere_failures` is the bounded history, each entry
 `Failure.to_dict()`. `inference.md` limitation 17.7 notes that the history is
@@ -876,6 +898,17 @@ fingerprint minus its `class` and `module` keys, and `model_identity_hash` is
 its digest, recorded as `ampere_model_identity_hashes`. §14 states what it
 licenses — and, more importantly, what it does not.
 
+**Not to be confused with `model_hash(problem)`** (W3.12, below): that
+function is a *whole-problem* fingerprint, keeping `class` and `module` and
+instead dropping each model's `"parameters"` entry and each dataset's
+`"observed"` entry — the halves `ampere_spec_hash` and `ampere_data_hash`
+already cover — plus the model bindings. The two answer different
+questions: `model_identity_hash` asks "could a cross-backend emulator be
+*offered* for this declaration?" (§14); `model_hash` asks "is this exactly
+the same model and data wiring, whatever the parameter values or the
+observations turn out to be?", which is what a trained artefact or a growing
+training set needs.
+
 ```pycon
 >>> description = describe_likelihood(joint.datasets["blue"].likelihood)
 >>> description["family"], description["noise"], description["marginalisation"]
@@ -1021,7 +1054,7 @@ before the review, does not otherwise have a home for:
 
 | Group | Contents | Dims |
 |---|---|---|
-| root attrs | `ampere_spec_hash`, `ampere_problem_hash`, `ampere_data_hash`, versions, seed — the same recipe as §9 | — |
+| root attrs | `ampere_spec_hash`, `ampere_problem_hash`, `ampere_data_hash`, `ampere_model_hash` *(added W3.12)*, versions, seed — the same recipe as §9 | — |
 | `theta` | one variable per merged parameter name | `(sample,)`, plus the parameter's own dimensions |
 | `<model>.<channel>` | one group per model channel: `values`, and `uncertainty`/`mask` where present | `(sample,)` + the channel's coordinate dimensions |
 | `coordinates` | each channel's coordinate arrays, with units as attributes | the channel's dimensions |
@@ -1032,10 +1065,20 @@ Three properties, each of which is why the format is netCDF and not JSON or a
 pickle. NaN is native, so a masked or crashed sample needs no sentinel. The
 coordinate arrays are stored once for the whole set rather than per pair, which
 is what makes a coordinate-conditioned (neural-operator style) emulator's
-training set the same size as a fixed-grid one. And the spec hash sits in the
-attributes, so `DEVELOPMENT_PLAN.md` §7's "spec-hash invalidation of trained
-artefacts" is a comparison of two strings rather than a convention somebody has
-to remember.
+training set the same size as a fixed-grid one. And the spec hash — and, since
+W3.12, the model hash — sit in the attributes, so `DEVELOPMENT_PLAN.md` §7's
+"spec-hash invalidation of trained artefacts" is a comparison of strings rather
+than a convention somebody has to remember.
+
+*Amended W3.12*: `append_training_set` now checks `ampere_model_hash` as well
+as `ampere_spec_hash` before growing a file, because the spec hash alone is
+only the parameter declaration — a likelihood family, noise model, solver or
+kernel swap that leaves every parameter's name and prior unchanged used to
+pass the old check unnoticed (§9's model-hash paragraph states the gap and
+the fix in full). A file written before schema 6 carries no
+`ampere_model_hash` at all and is refused by name — "this training set
+predates the model hash" — rather than treated as an agreement it cannot
+actually make.
 
 *Amended W3.1*: the two writers also take a
 `ampere.core.simulate.SimulationBatch`, and the **iterator of chunks**
@@ -1283,8 +1326,9 @@ invisible to `buffer_fingerprint(likelihood)`;
 `PROVENANCE_SCHEMA_VERSION` is now 2.)* *(**Amended W2.15**: 2 is what that
 bump made it, not what it is now — the constant went on to 3 (§8's `config`
 payload), 4 at W2.12 and 5 at W2.13. §9 carries the sequence;
-`ampere/results/provenance.py` is the authority.)* The original
-requests are kept below for the record.
+`ampere/results/provenance.py` is the authority.)* *(**Amended W3.12**: and
+on to 6, for `ampere_model_hash` — see §9's model-hash paragraph.)* The
+original requests are kept below for the record.
 
 **R1 — when does arviz join the base install, and with which netCDF engine?**
 `architecture.md` §3's extras table says arviz is "folded into the base install

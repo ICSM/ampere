@@ -41,6 +41,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import astropy.units as u
 import numpy as np
@@ -235,6 +236,125 @@ class TestArtefactKey:
         path = tmp_path / "ingredients.json"
         path.write_text(json.dumps(key.ingredients()))
         assert json.loads(path.read_text()) == key.ingredients()
+
+
+# ---------------------------------------------------------------------------
+# W3.4's carried gap, closed: marginals= and truncation_epsilon= (W3.12)
+# ---------------------------------------------------------------------------
+
+#: ``package_versions()`` patched to this fixed mapping whenever a digest
+#: must be reproducible across environments and across time — the installed
+#: sbi/torch versions, and ampere's own dev-version string (which embeds the
+#: commit count), are not what the tests below are checking.
+_FIXED_VERSIONS = {"python": "3.13.0", "ampere": "0.0.0-frozen"}
+
+#: The exact digest ``_key(_problem())`` (``method="npe"``, no
+#: ``marginals=``/``truncation_epsilon=``) hashed to on the base commit
+#: (``ea7f1d7``, before this item), recomputed under ``_FIXED_VERSIONS`` so
+#: the comparison does not depend on which packages happen to be installed
+#: or which commit ``ampere``'s own dev-version string names.
+#: :class:`ArtefactKey` grows two new fields at this item; a non-TMNRE key's
+#: digest must still equal exactly this, because the two fields are omitted
+#: from :meth:`ArtefactKey.ingredients` rather than written as ``null``.
+_BASE_COMMIT_NPE_DIGEST = "4a1f077041bde3044bcc76d8a7d6c02e"
+
+
+class TestTMNREKeyFields:
+    """W3.4's carried stopgap (``_sbi.py``'s former ``_key_architecture``), closed.
+
+    ``marginals`` and ``truncation_epsilon`` are now :class:`ArtefactKey`'s
+    own fields, written into :meth:`~ArtefactKey.ingredients` only for a
+    TMNRE key — which is also what keeps a non-TMNRE key's digest identical
+    to what it was before this item existed.
+    """
+
+    def test_a_non_tmnre_keys_digest_is_unchanged_by_this_item(self) -> None:
+        with patch("ampere.results.artefacts.package_versions", return_value=dict(_FIXED_VERSIONS)):
+            key = _key(_problem())
+        assert key.marginals is None
+        assert key.truncation_epsilon is None
+        assert key.sample_with is None
+        assert "marginals" not in key.ingredients()
+        assert "truncation_epsilon" not in key.ingredients()
+        assert "sample_with" not in key.ingredients()
+        assert key.digest() == _BASE_COMMIT_NPE_DIGEST
+
+    def test_marginals_and_truncation_epsilon_default_to_none_and_are_omitted(self) -> None:
+        key = _key(_problem())
+        assert key.marginals is None
+        assert key.truncation_epsilon is None
+        assert set(key.ingredients()) == {
+            "prior_hash",
+            "model_hash",
+            "data_hash",
+            "layout",
+            "method",
+            "architecture",
+            "budget",
+            "rounds",
+            "seed",
+            "versions",
+        }
+
+    def test_a_tmnre_key_carries_all_three_fields(self) -> None:
+        key = _key(
+            _problem(), method="tmnre", marginals=2, truncation_epsilon=0.01, sample_with="mcmc"
+        )
+        assert key.marginals == 2
+        assert key.truncation_epsilon == 0.01
+        assert key.sample_with == "mcmc"
+        assert key.ingredients()["marginals"] == 2
+        assert key.ingredients()["truncation_epsilon"] == 0.01
+        assert key.ingredients()["sample_with"] == "mcmc"
+
+    def test_a_different_sample_with_is_a_miss_that_names_it(self, tmp_path: Path) -> None:
+        """The sampling mode is baked into the stored posterior, so it must be in the key."""
+        store = ArtefactStore(tmp_path)
+        settings = {"method": "tmnre", "marginals": 1, "truncation_epsilon": 0.01}
+        store.put(_key(_problem(), sample_with="rejection", **settings), "artefact-v1")
+
+        moved_key = _key(_problem(), sample_with="mcmc", **settings)
+        assert store.get(moved_key) is None
+        diff = store.diff(moved_key)
+        assert diff["sample_with"] == ("rejection", "mcmc")
+        assert "marginals" not in diff
+        assert "truncation_epsilon" not in diff
+
+    def test_an_empty_sample_with_is_refused(self) -> None:
+        with pytest.raises(ResultsError, match="sample_with"):
+            _key(_problem(), method="tmnre", marginals=1, truncation_epsilon=0.01, sample_with="")
+
+    def test_a_different_truncation_epsilon_is_a_miss_that_names_it(self, tmp_path: Path) -> None:
+        """Accept: "a TMNRE key with a different truncation_epsilon is a miss that names it"."""
+        store = ArtefactStore(tmp_path)
+        base_key = _key(_problem(), method="tmnre", marginals=1, truncation_epsilon=0.01)
+        store.put(base_key, "artefact-v1")
+
+        moved_key = _key(_problem(), method="tmnre", marginals=1, truncation_epsilon=0.02)
+        assert store.get(moved_key) is None
+        diff = store.diff(moved_key)
+        assert diff["truncation_epsilon"] == (0.01, 0.02)
+        assert "marginals" not in diff
+
+    def test_a_different_marginals_order_is_a_miss_that_names_it(self, tmp_path: Path) -> None:
+        store = ArtefactStore(tmp_path)
+        base_key = _key(_problem(), method="tmnre", marginals=1, truncation_epsilon=0.01)
+        store.put(base_key, "artefact-v1")
+
+        moved_key = _key(_problem(), method="tmnre", marginals=2, truncation_epsilon=0.01)
+        diff = store.diff(moved_key)
+        assert diff["marginals"] == (1, 2)
+        assert "truncation_epsilon" not in diff
+
+    @pytest.mark.parametrize("marginals", [0, 3, -1])
+    def test_an_out_of_range_marginals_is_refused(self, marginals: int) -> None:
+        with pytest.raises(ResultsError):
+            _key(_problem(), method="tmnre", marginals=marginals, truncation_epsilon=0.01)
+
+    @pytest.mark.parametrize("epsilon", [0.0, 1.0, -0.1, 1.5])
+    def test_an_out_of_range_truncation_epsilon_is_refused(self, epsilon: float) -> None:
+        with pytest.raises(ResultsError):
+            _key(_problem(), method="tmnre", marginals=1, truncation_epsilon=epsilon)
 
 
 # ---------------------------------------------------------------------------
