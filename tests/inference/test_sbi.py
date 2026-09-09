@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import itertools
 import math
 import subprocess
 import sys
@@ -79,8 +80,19 @@ from ampere.core import (
     encode_observations,
 )
 from ampere.core.exceptions import OptionalDependencyError
-from ampere.inference import EmceeEngine, EngineError, SBIEngine
-from ampere.inference._sbi import SUMMARY_LAYOUT, _summary_of, _thinned
+from ampere.inference import DEFAULT_TRUNCATION_EPSILON, EmceeEngine, EngineError, SBIEngine
+from ampere.inference._sbi import METHODS, SUMMARY_LAYOUT, _summary_of, _thinned
+from ampere.inference._tmnre import (
+    GRID_POINTS_1D,
+    GRID_POINTS_2D,
+    TruncationBox,
+    grid_between,
+    interval_above,
+    marginal_indices,
+    marginal_log_density,
+    pair_labels,
+    pair_mesh,
+)
 
 
 class _Observed:
@@ -1595,3 +1607,547 @@ class TestTheCalibrationFastPath:
         engine = SBIEngine(bounded_problem(), method="npe", budget=20)
         with pytest.raises(EngineError, match="has not trained"):
             engine.calibrate(count=4, posterior_draws=4)
+
+
+# ---------------------------------------------------------------------------
+# 13. W3.4: truncated marginal ratio estimation
+# ---------------------------------------------------------------------------
+
+
+#: The three-round fit's settings, in one place because the report quotes them.
+#: 800 simulations a round on the three-parameter joint problem, and an epoch
+#: cap high enough that the *joint* estimator — the one the run's draws come
+#: from — gets most of the way down rather than stopping early in its descent.
+#: The marginal estimators reach ``sbi``'s own early stop well before it.
+TMNRE_BUDGET = 800
+TMNRE_EPOCHS = 120
+TMNRE_DRAWS = 200
+
+#: How far the TMNRE posterior's mean may sit from the emcee reference's, in
+#: units of the reference's own standard deviation.
+#:
+#: **This is looser than W3.2's NPE row (0.5) and the difference is measured,
+#: not assumed.** The run's draws come from a *ratio* estimator, and this
+#: module's own section 5 already declines to hold ``method="nre"`` to accuracy
+#: at CI budgets for the same reason. Three three-round fits of this problem,
+#: at budgets 800/1 000/2 000 and epoch caps 40/150/200, put the worst of the
+#: three parameters at 0.63, 0.70 and 0.52 reference standard deviations, with
+#: the error moving along the ``norm``/``calibration`` degeneracy the data
+#: barely break; the *widths* met W3.2's own 0.6-1.5 band in every one of them,
+#: which is the half that catches an over-confident estimator. So the width
+#: threshold below is W3.2's exactly, and the location threshold is 1.0 — still
+#: an order of magnitude tighter than the errors a prior-bridge or truncation
+#: bug produces (a lost Jacobian moves a lognormal mean by whole widths; a box
+#: that clipped the posterior would show as a *narrow* run, which the width row
+#: catches).
+TMNRE_MEAN_TOLERANCE = 1.0
+
+#: The truth ``test_engines`` generated the joint problem's data at, in the
+#: order ``free_labels()`` gives. Every truncation box must contain it: a box
+#: that does not has cut away the answer, and no later round can put it back.
+TMNRE_TRUTH = np.array([2.0, -1.2, 1.0])
+
+
+class TestTheTruncationPieces:
+    """``_tmnre``'s arithmetic, checked without ``sbi`` so ``dev`` runs it.
+
+    Every one of these is a claim the round loop rests on and none of them
+    needs a trained network to state: that boxes nest, that a threshold
+    crossing keeps both modes of a bimodal marginal, that a degenerate column
+    does not raise.
+    """
+
+    def test_an_unbounded_box_accepts_everything_and_has_no_volume(self) -> None:
+        box = TruncationBox.unbounded(3)
+        assert box.size == 3
+        assert box.accepts_everything
+        assert box.log_volume == math.inf
+        assert box.contains(np.zeros(3))
+
+    def test_intersection_never_grows_a_box(self) -> None:
+        wide = TruncationBox((-1.0, -1.0), (1.0, 1.0))
+        narrow = TruncationBox((-0.5, -2.0), (0.25, 2.0))
+        both = wide.intersect(narrow)
+        assert both.lower == (-0.5, -1.0)
+        assert both.upper == (0.25, 1.0)
+        assert both.log_volume < wide.log_volume
+
+    def test_a_box_knows_what_is_inside_it(self) -> None:
+        box = TruncationBox((-1.0, 0.0), (1.0, 2.0))
+        assert box.contains([0.0, 1.0])
+        assert box.contains([-1.0, 2.0])  # edges are inside
+        assert not box.contains([0.0, 2.5])
+
+    def test_the_indicator_is_a_picklable_object_rather_than_a_closure(self) -> None:
+        """A trained posterior carries its prior, and the store pickles it."""
+        import pickle
+
+        indicator = TruncationBox((-1.0,), (1.0,)).indicator()
+        assert pickle.loads(pickle.dumps(indicator)).lower.tolist() == [-1.0]
+
+    def test_the_box_records_both_parameterisations(self) -> None:
+        problem = bounded_problem()
+        recorded = TruncationBox((-0.5,), (0.5,)).to_dict(problem.constrain)
+        # `slope` is positive, so its bijection is the log and a constrained
+        # edge is exp(edge): a reader sees the box in their own coordinates.
+        assert recorded["lower_constrained"][0] == pytest.approx(math.exp(-0.5), rel=1e-6)
+        assert recorded["upper_constrained"][0] == pytest.approx(math.exp(0.5), rel=1e-6)
+
+    def test_the_interval_spans_both_modes_of_a_bimodal_marginal(self) -> None:
+        """A truncation that kept only the peak's own mode would be a silent bug."""
+        grid = np.linspace(-5.0, 5.0, 401)
+        density = np.log(
+            np.exp(-0.5 * ((grid + 3.0) / 0.3) ** 2) + np.exp(-0.5 * ((grid - 3.0) / 0.3) ** 2)
+        )
+        lower, upper = interval_above(grid, density, 1e-4)
+        assert lower < -3.0 < 3.0 < upper
+        assert lower > -5.0 and upper < 5.0
+
+    def test_a_flat_marginal_keeps_the_whole_grid(self) -> None:
+        grid = np.linspace(0.0, 1.0, 11)
+        assert interval_above(grid, np.zeros(11), 1e-4) == (0.0, 1.0)
+
+    def test_a_degenerate_column_gives_a_flat_density_rather_than_raising(self) -> None:
+        """Every draw identical — a tied or effectively fixed parameter."""
+        samples = np.full((50, 1), 1.5)
+        values = marginal_log_density(samples, np.linspace(1.0, 2.0, 7).reshape(-1, 1))
+        assert values.shape == (7,)
+        assert np.allclose(values, 0.0)
+
+    def test_a_kernel_density_peaks_where_the_draws_are(self) -> None:
+        rng = np.random.default_rng(7)
+        samples = rng.normal(2.0, 0.5, 500).reshape(-1, 1)
+        grid = np.linspace(0.0, 4.0, 81).reshape(-1, 1)
+        values = marginal_log_density(samples, grid)
+        assert float(grid[int(np.argmax(values)), 0]) == pytest.approx(2.0, abs=0.2)
+
+    def test_the_marginals_are_enumerated_in_a_fixed_order(self) -> None:
+        assert marginal_indices(3, 1) == ((0,), (1,), (2,))
+        assert marginal_indices(3, 2) == ((0, 1), (0, 2), (1, 2))
+        assert pair_labels(("a", "b", "c"), marginal_indices(3, 2)) == ("a|b", "a|c", "b|c")
+
+    def test_a_degenerate_grid_is_widened_rather_than_left_with_no_width(self) -> None:
+        nodes = grid_between(1.0, 1.0, 5)
+        assert nodes.size == 5
+        assert nodes[-1] > nodes[0]
+
+    def test_the_pair_mesh_reshapes_back_to_its_two_axes(self) -> None:
+        mesh = pair_mesh(np.array([0.0, 1.0]), np.array([10.0, 20.0, 30.0]))
+        assert mesh.shape == (6, 2)
+        assert mesh[:, 0].reshape(2, 3)[1].tolist() == [1.0, 1.0, 1.0]
+        assert mesh[:, 1].reshape(2, 3)[0].tolist() == [10.0, 20.0, 30.0]
+
+
+class TestWhatTMNRERefuses:
+    """The new arguments belong to one method, and say so. No ``sbi`` needed."""
+
+    def test_an_unknown_marginal_order_names_what_the_two_are_for(self) -> None:
+        with pytest.raises(EngineError, match="corner plot"):
+            SBIEngine(bounded_problem(), method="tmnre", marginals=3)
+
+    def test_a_threshold_outside_zero_to_one_is_refused_by_name(self) -> None:
+        with pytest.raises(EngineError, match="strictly between 0 and 1"):
+            SBIEngine(bounded_problem(), method="tmnre", truncation_epsilon=2.0)
+
+    def test_an_unknown_sampler_names_both(self) -> None:
+        with pytest.raises(EngineError, match="rejection, mcmc"):
+            SBIEngine(bounded_problem(), method="tmnre", sample_with="vi")
+
+    @pytest.mark.parametrize(
+        ("options", "match"),
+        [
+            ({"marginals": 2}, "belongs to method='tmnre'"),
+            ({"truncation_epsilon": 0.1}, "does not truncate anything"),
+            ({"sample_with": "mcmc"}, "posterior_options= is where"),
+        ],
+    )
+    def test_the_truncation_arguments_are_refused_for_the_other_methods(
+        self, options: dict[str, Any], match: str
+    ) -> None:
+        """Accepted-and-ignored is the failure mode this refusal exists to stop."""
+        with pytest.raises(EngineError, match=match):
+            SBIEngine(bounded_problem(), method="npe", **options)
+
+    def test_the_method_list_names_the_fourth(self) -> None:
+        assert set(METHODS) == {"npe", "nle", "nre", "tmnre"}
+        with pytest.raises(EngineError, match="no longer amortised"):
+            SBIEngine(bounded_problem(), method="tmnr")
+
+
+@pytest.fixture(scope="module")
+def tmnre_run() -> Any:
+    """One three-round TMNRE fit of the joint problem. The expensive fixture."""
+    if not HAS_SBI:  # pragma: no cover - the class-level skip covers this
+        pytest.skip("needs the 'sbi' extra")
+    engine = SBIEngine(joint_problem(), method="tmnre", rounds=3, budget=TMNRE_BUDGET)
+    return engine.run(draws=TMNRE_DRAWS, training={"max_num_epochs": TMNRE_EPOCHS})
+
+
+@needs_sbi
+class TestTMNRERecoversTheJointPosterior:
+    """Accept criterion 1: the run recovers the toy joint posterior.
+
+    The draws come from the joint estimator trained across the rounds and
+    multiplied by the *truncated* prior, so this is a statement about the whole
+    loop: a box that cut posterior mass, a ratio multiplied by the wrong
+    proposal density, or a rejection sampler proposing outside the box would
+    all show up here.
+
+    The width band is W3.2's NPE band exactly; the location tolerance is
+    :data:`TMNRE_MEAN_TOLERANCE`, which is looser and says there why.
+    """
+
+    NAMES = ("model.norm", "model.index", "calibration")
+
+    def test_the_posterior_is_in_the_constrained_space_under_merged_names(
+        self, tmnre_run: Any
+    ) -> None:
+        posterior = tmnre_run["posterior"].dataset
+        assert set(posterior.data_vars) == set(self.NAMES)
+        assert posterior.sizes == {"chain": 1, "draw": TMNRE_DRAWS}
+        assert float(np.asarray(posterior["model.norm"]).min()) > 0.0
+        assert float(np.asarray(posterior["calibration"]).min()) > 0.0
+
+    @pytest.mark.parametrize("name", NAMES)
+    def test_the_mean_matches_the_reference(
+        self, name: str, tmnre_run: Any, emcee_reference: dict[str, tuple[float, float]]
+    ) -> None:
+        drawn = np.asarray(tmnre_run["posterior"][name])
+        mean, width = emcee_reference[name]
+        assert abs(float(drawn.mean()) - mean) < TMNRE_MEAN_TOLERANCE * width
+
+    @pytest.mark.parametrize("name", NAMES)
+    def test_the_width_matches_the_reference(
+        self, name: str, tmnre_run: Any, emcee_reference: dict[str, tuple[float, float]]
+    ) -> None:
+        """W3.2's own band: an over-confident estimator passes the mean row."""
+        drawn = np.asarray(tmnre_run["posterior"][name])
+        _, width = emcee_reference[name]
+        assert 0.6 < float(drawn.std()) / width < 1.5
+
+    @pytest.mark.parametrize("name", NAMES)
+    def test_the_marginal_estimators_agree_with_the_reference_too(
+        self, name: str, tmnre_run: Any, emcee_reference: dict[str, tuple[float, float]]
+    ) -> None:
+        """The method's *own* product, checked against the same reference.
+
+        The joint estimator supplies the draws; the marginal ones are what
+        TMNRE exists to train, and they are a separate estimate of the same
+        quantity — so an implementation that trained them on the wrong columns,
+        or reconstructed ``p(θ_i|x) ∝ r(θ_i, x) · q(θ_i)`` against the wrong
+        ``q``, would disagree here while the ``posterior`` group looked fine.
+        Read on the group's own grid, in the constrained coordinates the
+        reference is in.
+        """
+        group = tmnre_run["marginals"].dataset
+        index = list(group.coords["marginal_parameter"].values).index(name)
+        grid = np.asarray(group["grid_constrained"])[index]
+        density = np.exp(np.asarray(group["log_density"])[index])
+        density /= np.trapezoid(density, grid)
+        estimate = float(np.trapezoid(density * grid, grid))
+        mean, width = emcee_reference[name]
+        assert abs(estimate - mean) < TMNRE_MEAN_TOLERANCE * width
+
+    def test_every_draw_still_carries_the_true_split_scored_on_the_numpy_path(
+        self, tmnre_run: Any
+    ) -> None:
+        """Nothing about the emitted run is special: ``finish`` scored these."""
+        stats = tmnre_run["sample_stats"].dataset
+        prior = np.asarray(stats["log_prior"])
+        likelihood = np.asarray(stats["log_likelihood"])
+        assert np.all(np.isfinite(prior))
+        assert np.all(np.isfinite(likelihood))
+        assert np.asarray(stats["lp"]) == pytest.approx(prior + likelihood)
+        assert np.all(np.isfinite(np.asarray(stats["ampere_sbi_log_prob"])))
+
+
+@needs_sbi
+class TestTheTruncationHistory:
+    """Accept criterion 2: the boxes nest, they contain the truth, and say so."""
+
+    @staticmethod
+    def history(run: Any) -> list[dict[str, Any]]:
+        import json
+
+        return json.loads(run.attrs["ampere_sbi_truncation"])
+
+    def test_there_is_one_record_per_round(self, tmnre_run: Any) -> None:
+        records = self.history(tmnre_run)
+        assert [record["round"] for record in records] == [1, 2, 3]
+        assert [record["simulations"] for record in records] == [TMNRE_BUDGET] * 3
+
+    def test_the_boxes_never_grow(self, tmnre_run: Any) -> None:
+        volumes = [record["log_volume"] for record in self.history(tmnre_run)]
+        assert all(later <= earlier + 1e-9 for earlier, later in itertools.pairwise(volumes))
+        # And they genuinely shrank rather than merely not growing: three
+        # rounds that changed nothing would pass a monotonicity check alone.
+        assert volumes[-1] < volumes[0]
+
+    def test_every_box_contains_the_truth_the_data_were_generated_at(self, tmnre_run: Any) -> None:
+        truth = joint_problem().unconstrain(TMNRE_TRUTH)
+        for record in self.history(tmnre_run):
+            box = TruncationBox(tuple(record["lower"]), tuple(record["upper"]))
+            assert box.contains(truth), f"round {record['round']} lost the truth"
+
+    def test_the_boxes_are_nested_round_by_round(self, tmnre_run: Any) -> None:
+        records = self.history(tmnre_run)
+        for earlier, later in itertools.pairwise(records):
+            assert np.all(np.asarray(later["lower"]) >= np.asarray(earlier["lower"]) - 1e-9)
+            assert np.all(np.asarray(later["upper"]) <= np.asarray(earlier["upper"]) + 1e-9)
+
+    def test_the_attrs_name_the_method_the_rounds_and_the_threshold(self, tmnre_run: Any) -> None:
+        attrs = tmnre_run.attrs
+        assert attrs["ampere_sbi_method"] == "tmnre"
+        assert attrs["ampere_sbi_trainer"].startswith("NRE")
+        assert attrs["ampere_sbi_rounds"] == 3
+        assert attrs["ampere_sbi_marginals"] == 1
+        assert attrs["ampere_sbi_truncation_epsilon"] == DEFAULT_TRUNCATION_EPSILON
+        assert attrs["ampere_sbi_truncation_sampler"] == "rejection"
+        assert attrs["ampere_sbi_marginal_estimators"] == 3
+        assert attrs["ampere_sbi_log_prob_kind"] == "unnormalised"
+
+    def test_a_truncated_run_says_it_is_not_amortised(self, tmnre_run: Any) -> None:
+        """The cost of truncation, recorded rather than left to be inferred."""
+        assert tmnre_run.attrs["ampere_sbi_amortised"] == 0
+
+    def test_a_single_round_fit_of_another_method_still_is(self) -> None:
+        run = SBIEngine(bounded_problem(), method="npe", budget=120).run(
+            draws=10, training={"max_num_epochs": 2}
+        )
+        assert run.attrs["ampere_sbi_amortised"] == 1
+
+
+@pytest.fixture(scope="module")
+def pair_run() -> Any:
+    """``marginals=2`` at a smoke budget: the group's *shape* is what is tested.
+
+    MCMC rather than rejection, and two rounds rather than three, because
+    nothing below asks about accuracy — the accuracy claim is
+    :func:`tmnre_run`'s — and a slice sampler over a box is the cheap way to
+    get a posterior of the right shape.
+    """
+    if not HAS_SBI:  # pragma: no cover - the class-level skip covers this
+        pytest.skip("needs the 'sbi' extra")
+    engine = SBIEngine(
+        joint_problem(), method="tmnre", rounds=2, budget=300, marginals=2, sample_with="mcmc"
+    )
+    run = engine.run(
+        draws=40,
+        training={"max_num_epochs": 8},
+        posterior_options={"num_chains": 4, "warmup_steps": 10, "thin": 1},
+    )
+    return engine, run
+
+
+@needs_sbi
+class TestTheMarginalsGroup:
+    """Accept criterion 3: the group carries 1-D and 2-D and survives netCDF."""
+
+    def test_the_run_carries_a_marginals_group_beside_the_usual_five(
+        self, pair_run: tuple[Any, Any]
+    ) -> None:
+        _, run = pair_run
+        assert sorted(run.children) == [
+            "constant_data",
+            "log_likelihood",
+            "marginals",
+            "observed_data",
+            "posterior",
+            "sample_stats",
+        ]
+
+    def test_the_one_dimensional_marginals_are_one_row_per_parameter(
+        self, pair_run: tuple[Any, Any]
+    ) -> None:
+        _, run = pair_run
+        group = run["marginals"].dataset
+        assert [str(name) for name in group.coords["marginal_parameter"].values] == [
+            "model.norm",
+            "model.index",
+            "calibration",
+        ]
+        assert group["log_ratio"].dims == ("marginal_parameter", "marginal_node")
+        assert group["log_density"].shape == (3, GRID_POINTS_1D)
+        assert np.all(np.isfinite(np.asarray(group["log_ratio"])))
+        # ``log_density`` is normalised to a maximum of zero, so it is the
+        # marginal posterior up to its own constant and a plot can draw it.
+        assert np.asarray(group["log_density"]).max(axis=1) == pytest.approx(np.zeros(3))
+
+    def test_each_grid_spans_the_final_box_in_both_parameterisations(
+        self, pair_run: tuple[Any, Any]
+    ) -> None:
+        engine, run = pair_run
+        group = run["marginals"].dataset
+        grid = np.asarray(group["grid"])
+        assert engine.truncation is not None
+        assert grid[:, 0] == pytest.approx(np.asarray(engine.truncation.lower))
+        assert grid[:, -1] == pytest.approx(np.asarray(engine.truncation.upper))
+        # `model.norm` and `calibration` are lognormal, so their constrained
+        # grids are positive and monotone; `model.index` is unbounded and its
+        # two grids are the same numbers.
+        constrained = np.asarray(group["grid_constrained"])
+        assert np.all(constrained[0] > 0.0)
+        assert np.all(np.diff(constrained[0]) > 0.0)
+        assert constrained[1] == pytest.approx(grid[1])
+
+    def test_the_pairs_are_there_with_their_own_two_axes(self, pair_run: tuple[Any, Any]) -> None:
+        _, run = pair_run
+        group = run["marginals"].dataset
+        assert [str(name) for name in group.coords["marginal_pair"].values] == [
+            "model.norm|model.index",
+            "model.norm|calibration",
+            "model.index|calibration",
+        ]
+        assert group["pair_log_ratio"].dims == ("marginal_pair", "marginal_row", "marginal_column")
+        assert group["pair_log_ratio"].shape == (3, GRID_POINTS_2D, GRID_POINTS_2D)
+        assert np.all(np.isfinite(np.asarray(group["pair_log_density"])))
+        assert run.attrs["ampere_sbi_marginals"] == 2
+        assert run.attrs["ampere_sbi_marginal_estimators"] == 6
+
+    def test_the_group_says_what_parameterisation_it_is_in(self, pair_run: tuple[Any, Any]) -> None:
+        _, run = pair_run
+        attrs = run["marginals"].attrs
+        assert attrs["ampere_marginals_parameterisation"] == "unconstrained"
+        assert attrs["ampere_marginals_order"] == 2
+        assert attrs["ampere_marginals_schema_version"] == 1
+
+    def test_it_survives_the_netcdf_round_trip(
+        self, pair_run: tuple[Any, Any], tmp_path: Path
+    ) -> None:
+        from ampere.results import from_netcdf, to_netcdf
+
+        _, run = pair_run
+        back = from_netcdf(to_netcdf(run, tmp_path / "tmnre.nc"))
+        assert "marginals" in back.children
+        group, original = back["marginals"].dataset, run["marginals"].dataset
+        for name in ("grid", "log_ratio", "log_density", "pair_log_ratio", "pair_log_density"):
+            assert np.asarray(group[name]) == pytest.approx(np.asarray(original[name]))
+        assert back["marginals"].attrs["ampere_marginals_order"] == 2
+
+    def test_a_one_dimensional_run_carries_no_pairs(self, tmnre_run: Any) -> None:
+        group = tmnre_run["marginals"].dataset
+        assert "pair_log_ratio" not in group.data_vars
+        assert "marginal_pair" not in group.coords
+
+
+@pytest.fixture(scope="module")
+def bounded_tmnre() -> Any:
+    """A one-parameter TMNRE engine at its *default* settings, for calibration.
+
+    ``bounded_problem`` rather than the joint one, and the default rejection
+    sampler rather than ``sample_with="mcmc"``, because what these rows are
+    about is the default path: a calibration check re-conditions the posterior
+    at ``count`` fresh observations, and a rejection posterior pays its
+    find-the-maximum stage at every one of them. One parameter keeps the whole
+    thing inside a per-PR budget while still exercising the rebuild.
+    """
+    if not HAS_SBI:  # pragma: no cover - the class-level skip covers this
+        pytest.skip("needs the 'sbi' extra")
+    engine = SBIEngine(bounded_problem(), method="tmnre", rounds=2, budget=300)
+    engine.run(draws=30, training={"max_num_epochs": 20})
+    return engine
+
+
+@needs_sbi
+class TestTMNRECalibrationAndCaching:
+    """Accept criterion 4, and W3.5's store against a run with more in it."""
+
+    def test_calibrate_runs_on_a_tmnre_run_against_the_truncated_prior(
+        self, bounded_tmnre: Any
+    ) -> None:
+        """The reference distribution is the box, and the group says so.
+
+        Calibrating a truncated posterior against the *full* prior would report
+        miscalibration for every truth the box excludes — an artefact of the
+        method rather than a property of the estimator — so the fresh batch and
+        the reference draws both come from the truncated prior.
+        """
+        result = bounded_tmnre.calibrate(count=10, posterior_draws=20, tarp=False)
+        assert result.sizes["simulation"] == 10
+        assert result.attrs["ampere_calibration_reference"] == "truncated_prior"
+        assert result.attrs["ampere_calibration_method"] == "tmnre"
+        assert np.all(np.isfinite(np.asarray(result["ks_pvalue"])))
+
+    def test_it_checks_a_rejection_run_through_an_mcmc_posterior(self, bounded_tmnre: Any) -> None:
+        """And says which, because it is not the object the run sampled with.
+
+        Running SBC against the rejection posterior itself does not merely take
+        longer: its fixed 10 000-proposal-draw maximisation is paid once per
+        conditioning observation, out of a prior whose draws are themselves
+        rejected against the box, so the check does not finish.
+        """
+        assert bounded_tmnre.sample_with == "rejection"
+        result = bounded_tmnre.calibrate(count=6, posterior_draws=10, tarp=False)
+        assert result.attrs["ampere_calibration_sampler"] == "mcmc"
+
+    def test_an_untruncated_method_still_calibrates_against_the_prior(self) -> None:
+        """And through its own posterior: nothing is rebuilt for NPE, NLE or NRE."""
+        engine = SBIEngine(bounded_problem(), method="npe", budget=200)
+        engine.run(draws=20, training={"max_num_epochs": 5})
+        result = engine.calibrate(count=10, posterior_draws=10, tarp=False)
+        assert result.attrs["ampere_calibration_reference"] == "prior"
+        assert result.attrs["ampere_calibration_sampler"] == "as_run"
+
+    def test_a_cache_hit_restores_the_marginals_group_and_the_history(self, tmp_path: Any) -> None:
+        """A TMNRE run's answer is more than its posterior, so the store holds more."""
+        from ampere.results.artefacts import ArtefactStore
+
+        store = ArtefactStore(tmp_path / "artefacts")
+        settings = dict(method="tmnre", rounds=2, budget=120, sample_with="mcmc", cache=store)
+        options = dict(
+            draws=10,
+            training={"max_num_epochs": 2},
+            posterior_options={"num_chains": 2, "warmup_steps": 5, "thin": 1},
+        )
+        first = SBIEngine(joint_problem(), **settings).run(**options)
+        assert first.attrs["ampere_sbi_cache_hit"] == 0
+
+        engine = SBIEngine(joint_problem(), **settings)
+        second = engine.run(**options)
+        assert second.attrs["ampere_sbi_cache_hit"] == 1
+        assert second.attrs["ampere_sbi_simulations"] == 0
+        # The group and the history come back, not only the posterior.
+        assert "marginals" in second.children
+        assert engine.truncation is not None
+        assert len(engine.truncation_history) == 2
+        assert second.attrs["ampere_sbi_truncation"] == first.attrs["ampere_sbi_truncation"]
+
+    def test_a_different_threshold_is_a_miss(self, tmp_path: Any) -> None:
+        """ε changes the box, the box changes the estimator, so it must not hit.
+
+        ``artefact_key`` has no ``truncation_epsilon`` ingredient yet, so the
+        engine folds TMNRE's settings into the architecture ingredient
+        (``SBIEngine._key_architecture``) rather than letting two different
+        runs collide on one digest. This row is what makes that a fact.
+        """
+        from ampere.results.artefacts import ArtefactStore
+
+        store = ArtefactStore(tmp_path / "artefacts")
+        settings = dict(method="tmnre", rounds=1, budget=100, sample_with="mcmc", cache=store)
+        options = dict(
+            draws=6,
+            training={"max_num_epochs": 2},
+            posterior_options={"num_chains": 2, "warmup_steps": 4, "thin": 1},
+        )
+        SBIEngine(joint_problem(), **settings).run(**options)
+        again = SBIEngine(joint_problem(), truncation_epsilon=1e-3, **settings).run(**options)
+        assert again.attrs["ampere_sbi_cache_hit"] == 0
+
+
+@needs_sbi
+class TestTheShippedTMNREExample:
+    """``examples/sbi/tmnre_fit.py`` runs, at the budget it is asked for."""
+
+    def test_it_runs_and_reports_the_box(self) -> None:
+        script = EXAMPLES / "tmnre_fit.py"
+        assert script.exists()
+        finished = subprocess.run(
+            [sys.executable, str(script), "--budget", "120", "--rounds", "2", "--draws", "20"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        report = finished.stdout
+        assert "tmnre on reference" in report
+        assert "truncation box" in report
+        assert "not amortised" in report
