@@ -1224,7 +1224,7 @@ page sits in the API reference toctree beside the legacy section; every
 legacy name on the page is either an explicit `:doc:` link to its page or a
 plain literal (no dangling cross-references); British English.
 
-### W3.11 — Set-embedding readouts: default width and a pooled transformer head [S; Sonnet] (proposed 2026-09-09, awaiting Peter)
+### W3.11 — Set-embedding readouts: default width and a pooled transformer head [S; Sonnet] (ruled by Peter 2026-09-09)
 From W3.3's two open questions. (1) The set and transformer embeddings
 inherit the `"flat"` default output width `2·free_size`; for a pooled set
 that is the conditioning vector's whole capacity, and sbi's nets end in a
@@ -1240,12 +1240,18 @@ after sbi's transformer body, which is permutation-invariant and uses
 every retained token; a learned CLS token is the alternative, more
 parameters for the same information, not chosen. Both are wrapper
 changes in `ampere/inference/_sbi.py` (§7 of `encoding.md` amended,
-*Amended W3.11*); no contract change. **Depends:** W3.6 (owns `_sbi.py`
+*Amended W3.11*); no contract change. **Peter's rider (2026-09-09)**: both
+choices are accepted as defaults, not as findings — how the right width
+depends on the data, the model and the problem structure, and what the
+readout choice (last token, masked mean, CLS) costs, are to be **tested
+carefully at some point** with the calibration machinery, and the result
+written up as guidance for end users; recorded in the Phase 3 deferred
+list as an embedding study. **Depends:** W3.6 (owns `_sbi.py`
 until it merges). **Accept:** the two defaults asserted; the transformer
 wrapper's output unchanged under row permutation (a test that fails on
 the last-token read and passes on the mean); `sbi` and `dev` gates green.
 
-### W3.12 — Model identity hash: promote, record, and check on append [S; Sonnet] (proposed 2026-09-09, awaiting Peter)
+### W3.12 — Model identity hash: promote, record, and check on append [S; Sonnet] (ruled by Peter 2026-09-09)
 From W3.5's open question and its carried finding. W3.5 built a
 `model_hash` locally (model fingerprints minus their parameter specs,
 dataset fingerprints minus the observed data, plus bindings) because the
@@ -1311,6 +1317,13 @@ the Phase 3 budget is spent. **Reservation confirmed by Peter 2026-09-09.**
   check when (d) is scheduled.
 - **Emulators** (design horizon (c)): a `Model` trained on the training set
   W3.1 writes; Phase 5 or later.
+- **An embedding study** (Peter's rider on W3.11, 2026-09-09): once W3.6's
+  SBC/TARP machinery and W3.11's defaults exist, a systematic study of how
+  the embedding width and the readout (last token, masked mean, CLS)
+  affect calibration and posterior width across data kinds, model sizes
+  and problem structures — an `examples/sbi/` study with a docs page,
+  its product being **guidance for end users**, not a contract change.
+  Phase 3 if the budget allows, else the first Phase 5 SBI item.
 - **RHMF exploratory trial**: Peter's ratification note on the W2.7
   deferral (2026-09-08) asks for early testing in a later phase; recorded
   as a Phase 5 bullet in the plan's §5.
