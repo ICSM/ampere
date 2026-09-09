@@ -58,6 +58,13 @@ Three consequences, all of them recorded in the run's attrs
   through ``constrain`` before anything is stored or scored, so the emitted
   ``posterior`` group is in the user's own coordinates like every other run's.
 
+One warning is expected and is not a problem: ``sbi`` looks for ``mean`` and
+``stddev`` on the prior to build the network's input standardisation, and a
+distribution defined by ``sample`` and ``log_prob`` has neither in closed
+form, so it says so and estimates them from draws. That is exactly what this
+driver would have done, done by the library that needs the numbers, and it
+affects only the affine z-scoring of the network's inputs — never the density.
+
 What a run stores that a sampler's run does not
 ------------------------------------------------
 Every stored draw is scored on the numpy contract path through
@@ -408,6 +415,14 @@ def _embedding_of(embedding: Any, *, torch: Any, features: int, free_size: int) 
     hyperparameter is **refused by name** instead of silently building nothing
     (the legacy dict branch fell through with ``embedding_net`` left as the
     dict, which ``posterior_nn`` then took as a module).
+
+    One trap is ``sbi``'s and is left to it, because its own message names the
+    remedy: ``CNNEmbedding`` defaults to two convolutions with kernel 5 and a
+    pool of 2, which drives a summary shorter than roughly twenty features to
+    zero width and asserts. The remedy is fewer layers or a smaller kernel,
+    through the hyperparameter dict — or, for the low-dimensional summaries
+    the ``"flat"`` layout produces, no embedding at all, which is the default
+    for exactly this reason.
     """
     if embedding is None or embedding is False:
         return _Embedding(module=None, name="none", output_dim=0)
