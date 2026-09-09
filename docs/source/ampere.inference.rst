@@ -45,7 +45,18 @@ Three things about an SBI run are worth knowing before reading one:
 * **the summary the network saw has a name.** ``ampere_sbi_summary_layout``
   is ``"flat"`` today — each dataset's observed values, masked samples
   dropped, concatenated in ``datasets`` order — and a network trained on one
-  layout must never be believed about another.
+  layout must never be believed about another;
+* **a seeded problem's run is reproducible, network and all.** ``run()``
+  seeds torch's own global generator (and, for an MCMC-sampled NLE, NRE or
+  TMNRE posterior, ``numpy``'s legacy one, which is what ``sbi``'s default
+  MCMC method actually draws through) from the problem's seed before every
+  network it builds, before each round's training and before the final
+  posterior draw — cache hit or not — so two runs of the same seeded problem
+  give bitwise-identical draws. Both are restored once the seeded step
+  finishes, so nothing about this leaks into unrelated code sharing the
+  process. The seed used is recorded as ``ampere_sbi_torch_seed``, absent
+  when ``problem.seed is None``, which asks for fresh randomness every time
+  instead.
 
 Requires the ``sbi`` extra; both it and torch are imported inside ``run``, so
 ``import ampere.inference`` in the base install pulls in neither.
