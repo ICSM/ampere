@@ -273,8 +273,8 @@ class MirrorBackend(ReferenceBackend):
     def independent_noise(self) -> NoiseModel:
         return IndependentNoise()
 
-    def gp_noise(self, kernel: Kernel, solver: GPSolver) -> NoiseModel:
-        return GaussianProcessNoise(kernel, solver)
+    def gp_noise(self, kernel: Kernel, solver: GPSolver, *, jitter: Any = None) -> NoiseModel:
+        return GaussianProcessNoise(kernel, solver, jitter=jitter)
 
     def parameter_space(self, declaration: ParameterSet) -> MirrorParameterSpace:
         return MirrorParameterSpace(declaration)

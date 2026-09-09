@@ -22,6 +22,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+import scipy.stats as st
 
 from ampere.core import (
     Dataset,
@@ -87,6 +88,19 @@ JOINT = ProblemSpec(
 CORRELATED = ProblemSpec(
     model=ModelSpec(kind=ModelKind.LINEAR, coordinates=GP_GRID),
     datasets=(DatasetSpec(noise=NoiseKind.GP, covariance=CovarianceSpec()),),
+)
+
+#: The correlated shape with a **fixed diagonal floor** on the GP noise model.
+#:
+#: W3.1 slice 2's parity row. ``GaussianProcessNoise`` has taken ``scale=`` and
+#: ``jitter=`` since ``ampere.core`` declared them, and torch's subclass has
+#: forwarded them since W2.4 — jax's did not, so the same three-line
+#: composition succeeded on one modern backend and raised ``TypeError`` on the
+#: other. That is exactly the drift the battery exists to catch, so the check
+#: lives here rather than in either backend's own suite.
+CORRELATED_JITTER = ProblemSpec(
+    model=ModelSpec(kind=ModelKind.LINEAR, coordinates=GP_GRID),
+    datasets=(DatasetSpec(noise=NoiseKind.GP, covariance=CovarianceSpec(), gp_jitter=0.05),),
 )
 
 #: The same problem through the O(N) solver rather than the dense one.
@@ -828,6 +842,61 @@ class TestSimulation:
     def test_the_stream_advances_between_draws(self, backend: ConformanceBackend) -> None:
         problem = build_problem(backend, SINGLE)
         assert problem.simulate().theta.tolist() != problem.simulate().theta.tolist()
+
+
+class TestTheGPNoiseFloor:
+    """W3.1 slice 2: every backend's ``GaussianProcessNoise`` takes ``jitter=``.
+
+    Three claims, and the first is the one that was actually broken: the
+    composition **exists** on every backend. The other two are what make the
+    keyword mean the same thing everywhere — the parameter is declared and held
+    fixed (so no engine dimension appears), and the floor really is in the
+    density, in quadrature with the data's own uncertainties, rather than
+    accepted and dropped.
+    """
+
+    FLOOR = 0.05
+
+    def test_the_floor_is_a_declared_fixed_parameter(self, backend: ConformanceBackend) -> None:
+        problem = build_problem(backend, CORRELATED_JITTER)
+        noise = problem.datasets["sed"].likelihood.noise
+        assert "jitter" in noise.parameters.names
+        assert "jitter" not in noise.parameters.free_names
+        assert problem.free_size == build_problem(backend, CORRELATED).free_size
+
+    def test_the_floor_reaches_the_density(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """Against ``scipy``, not against the no-floor problem: an oracle, not a difference."""
+        problem = build_problem(backend, CORRELATED_JITTER)
+        theta = problem.unconstrain(problem.reference_values)
+        spec = CORRELATED_JITTER.datasets[0]
+        grid = np.asarray(GP_GRID, dtype=float)
+        mean = analytic_flux(
+            CORRELATED_JITTER.model, model_context(problem, dict(problem.reference_values)), grid
+        )
+        covariance = kernel_matrix(
+            spec.covariance.family, grid, spec.covariance.amplitude, spec.covariance.length_scale
+        ) + np.diag(np.full(grid.size, spec.uncertainty**2 + self.FLOOR**2))
+        observed = np.asarray(problem.datasets["sed"].observed.values, dtype=float)
+        expected = float(
+            st.multivariate_normal(mean=mean, cov=covariance, allow_singular=False).logpdf(observed)
+        )
+        assert float(problem.log_likelihood(problem.constrain(theta))) == pytest.approx(
+            expected, abs=tolerances.linear_algebra
+        )
+
+    def test_it_lowers_where_the_backend_has_a_realisation(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        problem = build_problem(backend, CORRELATED_JITTER)
+        if problem.backend not in registered_realisations():
+            pytest.skip(f"the {problem.backend!r} backend registers no realisation")
+        realised = realise(problem)
+        theta = problem.unconstrain(problem.reference_values)
+        assert float(np.asarray(realised.log_prob_unconstrained(theta))) == pytest.approx(
+            float(problem.log_prob_unconstrained(theta)), abs=tolerances.cross_backend
+        )
 
 
 class TestBatchedSimulation:

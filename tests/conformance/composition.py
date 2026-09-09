@@ -153,6 +153,16 @@ class DatasetSpec:
     noise: NoiseKind = NoiseKind.IID
     covariance: CovarianceSpec = dataclasses.field(default_factory=CovarianceSpec)
     solver: SolverKind = SolverKind.DENSE
+    gp_jitter: float | None = None
+    """A fixed diagonal floor on a :attr:`NoiseKind.GP` noise model (W3.1 slice 2).
+
+    ``None`` registers no such parameter, which is what every row written
+    before this field existed asks for. A number registers a held-fixed
+    ``jitter``, so ``sigma_eff² = sigma_data² + jitter²`` — the keyword the
+    torch class has taken since W2.4 and the jax class had not, which is why
+    it is asserted here rather than in one backend's own suite.
+    """
+
     censoring: CensoringKind = CensoringKind.NONE
     censored: tuple[int, ...] = ()
     data_seed: int = 20260902
@@ -379,7 +389,11 @@ def build_noise(backend: ConformanceBackend, dataset: DatasetSpec) -> NoiseModel
     """
     if dataset.noise is NoiseKind.IID:
         return backend.independent_noise()
-    return backend.gp_noise(backend.kernel(dataset.covariance), backend.gp_solver(dataset.solver))
+    return backend.gp_noise(
+        backend.kernel(dataset.covariance),
+        backend.gp_solver(dataset.solver),
+        jitter=dataset.gp_jitter,
+    )
 
 
 def build_likelihood(

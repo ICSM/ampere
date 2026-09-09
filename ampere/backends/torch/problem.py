@@ -309,6 +309,8 @@ class _LoweredDataset:
             if observed.uncertainty is None
             else _tensor(np.asarray(observed.uncertainty, dtype=float)[self.retain], device=device)
         )
+        if self.gp_marginal and self.likelihood.family.REQUIRES_UNCERTAINTY:
+            self._check_gp_uncertainty(observed, label)
         # Which samples are limits is a fact about the data, so the three
         # groups are resolved once here rather than per evaluation. A limit on
         # a masked sample is not a limit at all -- likelihoods.md §9's "masking
@@ -319,6 +321,45 @@ class _LoweredDataset:
             censoring.check_against(observed)
             self.detection, self.upper, self.lower = limit_masks(
                 np.asarray(censoring.kinds)[self.retain], device=device
+            )
+
+    def _check_gp_uncertainty(self, observed: Any, label: str) -> None:
+        """Refuse, at construction, a GP-marginal dataset the contract path cannot normalise.
+
+        The twin of ``ampere.backends.jax.problem._LoweredDataset``'s method of
+        the same name (W3.0 landed it there; the identical gap here is the
+        carried finding W3.1 slice 2 closes). Same condition, same wording, for
+        the same reason: ``GaussianProcessNoise.sigma`` refuses a dataset with
+        no observed uncertainty at all, or with a retained uncertainty that is
+        zero or negative -- "an infinitely precise measurement, which no
+        likelihood can normalise" -- for any family that
+        ``REQUIRES_UNCERTAINTY``, and on the contract path that surfaces only
+        when the density is evaluated. ``ampere.core.realise``'s one-point
+        agreement check happens to catch it today, because the contract path
+        raises while computing the reference log-probability, but that is
+        incidental to which one point gets checked rather than a refusal this
+        backend makes by name -- and a ``strict`` NUTS run would sample a
+        density the contract refuses. So the refusal belongs here, at
+        construction, beside the ``REQUIRES_UNCERTAINTY``/sigma-is-None check
+        :meth:`log_likelihood` already makes for the non-GP branch.
+        """
+        if observed.uncertainty is None:
+            if "jitter" not in self.noise.parameters:
+                raise _refuse(
+                    "uncertainty",
+                    f"dataset {label!r} has no observed uncertainties and its noise model "
+                    f"declares no jitter, so sigma is undefined.",
+                )
+            return
+        retained = np.asarray(observed.uncertainty, dtype=float).ravel()[self.retain]
+        bad = retained <= 0.0
+        if np.any(bad):
+            raise _refuse(
+                "uncertainty",
+                f"dataset {label!r} was given zero or negative uncertainties on "
+                f"{int(np.sum(bad))} retained sample(s). A zero uncertainty is an "
+                f"infinitely precise measurement, which no likelihood can normalise; "
+                f"mask the sample, or give it a real error bar.",
             )
 
     def _check_noise_surface(self) -> None:

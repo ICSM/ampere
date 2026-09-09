@@ -884,18 +884,19 @@ class TestTheNativePath:
         assert "'default'" in str(raised.value)
 
     def test_a_gp_dataset_with_jitter_and_real_uncertainty_does_not_refuse(self) -> None:
-        """The new check is narrow: a legitimate jittered GP dataset still lowers.
+        """The check is narrow: a legitimate jittered GP dataset still lowers.
 
-        ``ampere.backends.jax.GaussianProcessNoise`` has no ``jitter=``
-        constructor keyword yet (unlike the torch backend's -- a gap outside
-        this item's scope), so the parameter is registered directly; what
-        matters here is that declaring one alongside real, positive
-        uncertainties does not trip the new construction-time check.
+        The floor arrives through the ``jitter=`` constructor keyword, which
+        this backend's ``GaussianProcessNoise`` has taken since W3.1 slice 2 —
+        the parity gap W3.0 carried, since the torch class had taken it since
+        W2.4 and the same three-line composition therefore raised ``TypeError``
+        on one modern backend and not the other. What matters here is that
+        declaring a floor alongside real, positive uncertainties does not trip
+        the construction-time check.
         """
-        from ampere.core import Parameter, family_named
+        from ampere.core import family_named
 
-        noise = GaussianProcessNoise(Matern32(0.4, 2.0), DenseGP())
-        noise.register_parameter(Parameter("jitter", value=0.1, fixed=True))
+        noise = GaussianProcessNoise(Matern32(0.4, 2.0), DenseGP(), jitter=0.1)
         problem = FittingProblem(
             PowerLaw(
                 AGREEMENT_GRID,

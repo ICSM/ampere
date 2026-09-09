@@ -472,12 +472,19 @@ class ConformanceBackend(Protocol):
         exactly what that widening exists to catch.
         """
 
-    def gp_noise(self, kernel: Kernel, solver: GPSolver) -> NoiseModel:
+    def gp_noise(self, kernel: Kernel, solver: GPSolver, *, jitter: Any = None) -> NoiseModel:
         """This backend's GP noise composition over *kernel* and *solver*.
 
         **Added at W2.13**, for the reason :meth:`independent_noise` gives.
         *kernel* and *solver* are this fixture's own, from :meth:`kernel` and
         :meth:`gp_solver`.
+
+        *jitter* — **added at W3.1 slice 2** — is the optional diagonal floor
+        every ``GaussianProcessNoise`` takes at construction, and it is a
+        keyword here because a backend that had quietly dropped it would be a
+        backend on which ``sigma_eff² = (scale·sigma_data)² + jitter²`` means
+        something else. ``None`` (the default) registers no such parameter,
+        which is what every row written before this keyword existed asks for.
         """
 
     def parameter_space(self, declaration: ParameterSet) -> ParameterSpace:

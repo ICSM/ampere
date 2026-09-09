@@ -1338,6 +1338,38 @@ class TestWhatTheRealisationStillRefuses:
         with pytest.raises(LoweringError, match="latent_transform_native"):
             lowered_for(likelihood, observed=counts)
 
+    def test_a_zero_uncertainty_gp_dataset_refuses_by_name_at_construction(self) -> None:
+        """W3.0's finding, carried to this backend: refuse what the contract refuses.
+
+        ``ampere.core.likelihood``'s ``GaussianProcessNoise.sigma`` (through
+        ``_observed_sigma``) refuses a dataset with a retained uncertainty that
+        is zero or negative — "an infinitely precise measurement, which no
+        likelihood can normalise" — the moment the contract path evaluates it.
+        W3.0 gave the jax realisation the construction-time twin of that
+        refusal and recorded that torch had the identical gap; this closes it,
+        with the same condition and the same wording. Reaching the refusal only
+        through ``ampere.core.realise``'s one-point agreement check is not
+        enough: a ``strict`` NUTS run evaluates every other point too, and
+        would sample a density the contract refuses.
+        """
+        blank = Spectrum(GRID * u.um, _VALUES * u.Jy, uncertainty=np.zeros(GRID.size) * u.Jy)
+        with pytest.raises(LoweringError, match="zero or negative uncertainties") as raised:
+            lowered_for(
+                Likelihood(GaussianFamily(), GaussianProcessNoise(Matern32(0.3, 2.0))),
+                observed=blank,
+            )
+        assert "'default'" in str(raised.value)
+
+    def test_a_gp_dataset_with_jitter_and_real_uncertainty_still_lowers(self) -> None:
+        """The check is narrow: a legitimate jittered GP dataset is untouched."""
+        problem, lowered = lowered_for(
+            Likelihood(GaussianFamily(), GaussianProcessNoise(Matern32(0.3, 2.0), jitter=0.05))
+        )
+        theta = problem.prior_transform(np.array([0.4, 0.6]))
+        assert float(lowered.log_likelihood(theta)) == pytest.approx(
+            problem.log_likelihood(theta), abs=1e-8
+        )
+
     def test_another_backends_gp_solver_is_refused_by_name(self) -> None:
         """A numpy solve in a differentiable problem is a backend disagreement."""
         from ampere.core import DatasetError
