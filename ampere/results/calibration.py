@@ -572,7 +572,7 @@ def sbc(
         )
         candidate = engine_factory(replica)
         engine_names.add(type(candidate).__name__)
-        run = candidate.run(**options) if callable(getattr(candidate, "run", None)) else candidate
+        run = candidate if _is_run(candidate) else candidate.run(**options)
         columns = _posterior_columns(run, parameters)
         if names is None:
             names = [column.label for column in columns]
@@ -606,6 +606,19 @@ def sbc(
             **({} if label is None else {f"{ATTR_PREFIX}calibration_label": str(label)}),
         },
     )
+
+
+def _is_run(candidate: Any) -> bool:
+    """Whether *candidate* is already an emitted run rather than an engine.
+
+    Asked of the object's *shape*, not its type, because :mod:`ampere.results`
+    must not import :class:`~ampere.inference.engine.Engine` -- ``ampere.
+    inference`` imports this namespace, so the dependency only runs one way. A
+    run is a tree with a ``posterior`` child; anything else is asked to
+    ``run()``.
+    """
+    children = getattr(candidate, "children", None)
+    return children is not None and "posterior" in children
 
 
 def _base_seed(problem: FittingProblem, seed: int | None) -> int:

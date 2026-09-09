@@ -9,7 +9,9 @@ The namespace covers provenance (the hashes and ``ampere_*`` attributes a run
 carries), emission and netCDF round-tripping, plain-data serialisation for
 containers and model results, the derived groups a run does not store by
 default, the post-fit diagnostics as numbers, the plotting surface, and
-trained-artefact caching keyed on those same provenance hashes.
+trained-artefact caching keyed on those same provenance hashes. Since W3.6 it
+also covers ``diagnostics.md``'s fourth family — posterior calibration, in
+:mod:`ampere.results.calibration`.
 
 .. automodule:: ampere.results
    :members:
@@ -41,6 +43,11 @@ The group and dimension names
 .. autodata:: ampere.results.derived.FACTORISED_DECOMPOSITION
 .. autodata:: ampere.results.derived.CONDITIONAL_LOO_DECOMPOSITION
 .. autodata:: ampere.results.derived.GP_LOCALISATION_GROUP
+.. autodata:: ampere.results.calibration.CALIBRATION_GROUP
+.. autodata:: ampere.results.calibration.SIMULATION_DIM
+.. autodata:: ampere.results.calibration.PARAMETER_DIM
+.. autodata:: ampere.results.calibration.LEVEL_DIM
+.. autodata:: ampere.results.calibration.TARP_LEVEL_DIM
 
 Provenance and schema versions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -50,6 +57,7 @@ Provenance and schema versions
 .. autodata:: ampere.results.serialisation.CONTAINER_SCHEMA_VERSION
 .. autodata:: ampere.results.training.TRAINING_SET_SCHEMA_VERSION
 .. autodata:: ampere.results.artefacts.ARTEFACT_CACHE_SCHEMA_VERSION
+.. autodata:: ampere.results.calibration.CALIBRATION_SCHEMA_VERSION
 
 Training sets
 ~~~~~~~~~~~~~
@@ -75,6 +83,29 @@ training. A stored artefact that cannot be trusted — a hand-edited sidecar, a
 corrupted pickle — is a silent miss with an :class:`~ampere.results.ArtefactCacheWarning`,
 never a raised error.
 
+Posterior calibration (family D)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``diagnostics.md`` §11's fourth diagnostic family, landed at W3.6. Where
+families A to C diagnose the *model*, this one diagnoses the *inference
+machinery*: does the posterior an engine produces have the coverage it claims?
+Two routes, one result. :meth:`ampere.inference.SBIEngine.calibrate` is the
+cheap one — an amortised posterior re-conditioned on a fresh simulation batch,
+with ``sbi``'s own ``run_sbc``/``check_sbc`` and ``run_tarp``/``check_tarp``
+doing the arithmetic — and :func:`~ampere.results.sbc` is the general one: the
+Talts et al. loop over ``simulate`` with a full fit per simulated dataset,
+expensive by design, and the only route that can validate a *likelihood*
+rather than a network. Both return the same :class:`xarray.Dataset`,
+:func:`~ampere.results.attach_calibration` writes it into a run as its
+``calibration`` group, and :func:`~ampere.results.plot_sbc_ranks` and
+:func:`~ampere.results.plot_coverage` draw it.
+``examples/wstat_comparison.py``'s ``--coverage`` study is the worked example.
+
+.. autodata:: ampere.results.calibration.CALIBRATION_STREAM
+.. autodata:: ampere.results.calibration.DEFAULT_LEVELS
+.. autodata:: ampere.results.calibration.SBI_ROUTE
+.. autodata:: ampere.results.calibration.REFIT_ROUTE
+
 Diagnostics and plotting
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -82,4 +113,5 @@ Diagnostics and plotting
 .. autodata:: ampere.results.diagnostics.GP_LOCALISATION_PROVENANCE
 .. autodata:: ampere.results.plots.GP_LOCALISATION_CAVEAT
 .. autodata:: ampere.results.plots.MAX_CORNER_VARIABLES
+.. autodata:: ampere.results.plots.MAX_RANK_PANELS
 .. autodata:: ampere.results.plots.MAX_TRACE_VARIABLES
