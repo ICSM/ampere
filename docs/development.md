@@ -106,6 +106,8 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
 
 **Ruled by Peter 2026-09-09**: `ProcessExecutor` defaults to `forkserver` on POSIX (`fork` via `mp_context=`) — adopting it now also stops different Python versions seeing different behaviour and errors as the platform default changes; slice 2 implements and records it in the decision-log row.
 
+**Rulings 2026-09-09 on slice 2's questions**: native sampling stays the default; further core `sample` implementations when a use case arrives, with the pathway kept open; the mesh sharder's padding accepted, to be tested and costed with the GPU item. The GPU item's scope now includes: run `tests/gpu` for real, and cost `MeshSharder`'s padding against refusal.
+
 **For Peter — what is still open.** Only the repository actions he alone takes: push master to origin and watch the first live CI run (a branch-protection rule naming the old `phase1-suites` job needs `suites`); delete the stray local `worktree-agent-*` branches; run `pixi run gpu` in the `torch`/`jax` environments on a machine with an accelerator. Every ruling from the 2026-09-08 digest is recorded; W2.9's coverage study is scheduled inside W3.6.
 
 **Owed (unchanged)**: retroactive `gpt-5.6-terra` passes when the Codex quota returns (~2026-09-30), in this order — W2.3 (GP algebra), W2.1, W2.6, W2.2, then W2.13, W2.4/W2.5 slice 2 (the celerite2 transcriptions), W2.14, W2.10, W2.5 slice 3 (the LOO scan); Phase 3 adds W3.1, W3.2, W3.6 to the queue as they merge.
