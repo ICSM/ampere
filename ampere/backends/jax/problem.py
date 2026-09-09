@@ -109,6 +109,7 @@ from ampere.core import (
     GaussianProcessNoise,
     IndependentNoise,
     chunk_bounds,
+    foreign_parts_refusal,
 )
 from ampere.core.dataset import (
     INSTRUMENT_COMPONENT,
@@ -624,6 +625,14 @@ class LoweredProblem:
                 f"problem built from another backend's pieces cannot be lowered here — build it "
                 f"from ampere.backends.jax's models and steps.",
             )
+        # W3.8: a problem that reports this backend but composes a piece from
+        # another one. That composition is refused at construction unless it
+        # asked for allow_foreign_parts=True, and the flag buys a gradient-free
+        # run and nothing more -- a lowered problem *is* the differentiable
+        # form, so it refuses by name here regardless.
+        foreign = foreign_parts_refusal(problem, what="a differentiable jax problem")
+        if foreign is not None:
+            raise foreign
         self.problem = problem
         self.parameters = LoweredParameterSet(problem.parameters, strict=problem.strict)
         self._mapping = problem.mapping

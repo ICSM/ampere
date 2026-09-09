@@ -106,7 +106,7 @@ from ampere.core.realisation import (
     registered_realisations,
 )
 
-from .engine import DEFAULT_CACHE_SIZE, Engine, _kept
+from .engine import DEFAULT_CACHE_SIZE, Engine, _kept, _refuse_foreign_parts
 from .exceptions import EngineError
 
 __all__ = ["SAMPLER_LIBRARIES", "NUTSEngine", "supported_backends"]
@@ -263,6 +263,13 @@ class NUTSEngine(Engine):
         *,
         cache_size: int = DEFAULT_CACHE_SIZE,
     ) -> None:
+        # First, ahead of every other refusal: a foreign part is the most
+        # specific diagnosis available and the only one that names the piece
+        # (W3.8). Ordering it here also means it is the answer on a backend
+        # that has no realisation registered at all, where "this driver cannot
+        # run on your backend" would send the user to install something that
+        # would not have helped.
+        _refuse_foreign_parts(self.NAME, problem)
         available = supported_backends()
         if problem.backend not in available:
             known = ", ".join(sorted(available)) or "(none: no backend has been imported here)"

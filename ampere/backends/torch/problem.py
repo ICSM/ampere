@@ -134,6 +134,7 @@ from ampere.core import (
     GaussianProcessNoise,
     IndependentNoise,
     chunk_bounds,
+    foreign_parts_refusal,
 )
 from ampere.core.dataset import (
     INSTRUMENT_COMPONENT,
@@ -712,6 +713,14 @@ class LoweredProblem:
                 f"declare (W2.12, widened at W2.13), so a problem built from another backend's "
                 f"pieces cannot be lowered here — build it from ampere.backends.torch's.",
             )
+        # W3.8: a problem that reports this backend but composes a piece from
+        # another one. That composition is refused at construction unless it
+        # asked for allow_foreign_parts=True, and the flag buys a gradient-free
+        # run and nothing more -- a lowered problem *is* the differentiable
+        # form, so it refuses by name here regardless.
+        foreign = foreign_parts_refusal(problem, what="a differentiable torch problem")
+        if foreign is not None:
+            raise foreign
         self.problem = problem
         # Where this realisation lives (W2.4 slice 3). ``problem.device`` is
         # ``declared_capabilities``' aggregate over every part, which refuses a
