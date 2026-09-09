@@ -338,6 +338,32 @@ _TRACE_POINTS = 200
 #: outcome of a well-behaved run on sharply informative data.
 _TRUNCATION_ACCEPTANCE_FLOOR = 1e-3
 
+#: The MCMC settings :meth:`SBIEngine.calibrate` builds its own posterior with
+#: when the run's is a rejection-sampled TMNRE one. Short chains on purpose: a
+#: calibration check asks for ``count`` times ``posterior_draws`` draws whose *ranks*
+#: are the statistic, not for a publication-grade chain, and ``sbi``'s own
+#: defaults (twenty chains, two hundred warm-up steps, automatic thinning)
+#: multiply that by two orders of magnitude against a prior whose ``log_prob``
+#: is a Python loop. A caller who disagrees passes ``posterior=`` their own.
+_CALIBRATION_MCMC: Mapping[str, Any] = {
+    "num_chains": 8,
+    "warmup_steps": 25,
+    "thin": 1,
+    "init_strategy": "proposal",
+}
+
+#: How a TMNRE MCMC posterior is *initialised*, and it is a cost-shaped choice
+#: rather than a tuning one. ``sbi``'s default, ``"resample"``, draws
+#: ``num_candidate_samples`` (10 000) from the proposal and picks starting
+#: points by importance weight; the proposal here is the prior restricted to
+#: the box, so those 10 000 draws are themselves rejected out of ampere's
+#: Python-loop prior and a narrow box makes the *initialisation* cost more than
+#: the chain. ``"proposal"`` draws one starting point per chain from the same
+#: distribution, which is already exactly where a truncated posterior's chain
+#: should start. Everything a caller usually wants to set — chains, warm-up,
+#: thinning — stays theirs, through ``posterior_options=`` at sample time.
+_TMNRE_MCMC: Mapping[str, Any] = {"init_strategy": "proposal"}
+
 #: The dtype ``sbi`` 0.27 trains in. Stated once rather than spelled at each
 #: tensor: ampere's own arithmetic is float64 throughout, and the single
 #: narrowing happens at the boundary, here.
@@ -1691,6 +1717,18 @@ class SBIEngine(Engine):
         calibration batch would be testing a different network from the one the
         run produced — and would report *that* one as calibrated.
 
+        **W3.4 adds two things for a truncated run, both recorded.** A TMNRE
+        posterior is defined *on its box*, so the distribution it is calibrated
+        against is the truncated prior and not the original one — calibrating
+        it against the full prior would report miscalibration for every truth
+        the box excludes, which is an artefact of the method rather than a
+        property of the estimator (``ampere_calibration_reference``). And a
+        run whose posterior samples by rejection is checked through an MCMC
+        posterior over the *same* trained estimator
+        (``ampere_calibration_sampler``), because a rejection posterior pays a
+        fixed maximisation stage per conditioning observation and SBC
+        re-conditions at ``count`` of them. Pass *posterior* to override either.
+
         θ is compared in the **unconstrained** parameterisation, which is where
         the estimator lives (see this module's docstring). That costs nothing
         and changes nothing: :meth:`~ampere.core.dataset.FittingProblem.constrain`
@@ -1746,6 +1784,26 @@ class SBIEngine(Engine):
         """
         sbi_package, torch = _require_sbi()
         target = self.posterior if posterior is None else posterior
+        # W3.4: a rejection-sampled TMNRE posterior is the wrong object to run
+        # SBC against, and unusably so rather than merely slowly. A rejection
+        # posterior pays a fixed find-the-maximum stage of 10 000 proposal
+        # draws *per conditioning observation*, and every one of those draws is
+        # itself rejected against the box out of ampere's Python-loop prior;
+        # SBC re-conditions the posterior at ``count`` fresh observations, so
+        # the check costs that stage ``count`` times over and does not finish.
+        # The same trained estimator sampled by slice MCMC answers the same
+        # question at a cost that is linear in the draws, so the check builds
+        # one -- recorded in ``ampere_calibration_sampler`` -- and a caller who
+        # wants something else passes ``posterior=`` as they always could.
+        rebuilt = False
+        if posterior is None and self.method == TMNRE and self.sample_with == "rejection":
+            target = self.sampler.build_posterior(
+                self.estimator,
+                prior=self._proposal,
+                sample_with="mcmc",
+                mcmc_parameters=_CALIBRATION_MCMC,
+            )
+            rebuilt = True
         if target is None or self.encoding is None:
             raise EngineError(
                 "sbi cannot calibrate a posterior it has not trained: call run() first, or pass "
@@ -1809,6 +1867,7 @@ class SBIEngine(Engine):
             f"{ATTR_PREFIX}calibration_encoding_hash": self.encoding.hash,
             f"{ATTR_PREFIX}calibration_parameterisation": "unconstrained",
             f"{ATTR_PREFIX}calibration_reference": "truncated_prior" if truncated else "prior",
+            f"{ATTR_PREFIX}calibration_sampler": "mcmc" if rebuilt else "as_run",
             f"{ATTR_PREFIX}calibration_c2st_dap": float(np.mean(_numpy(checks["c2st_dap"]))),
             f"{ATTR_PREFIX}calibration_sbi_version": str(
                 getattr(sbi_package, "__version__", "unknown")
@@ -2072,7 +2131,10 @@ class SBIEngine(Engine):
         # A caller who wants it can still pass it through ``training=``.
         self.estimator = trainer.train(show_train_summary=False, **options)
         self.posterior = trainer.build_posterior(
-            self.estimator, prior=proposal, sample_with=self.sample_with
+            self.estimator,
+            prior=proposal,
+            sample_with=self.sample_with,
+            **({"mcmc_parameters": dict(_TMNRE_MCMC)} if self.sample_with == "mcmc" else {}),
         )
         self.posterior.set_default_x(observation)
         self.marginal_summary = self._marginal_summary(
