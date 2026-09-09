@@ -165,6 +165,7 @@ are what a reader of a *run* meets.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import functools
 import importlib
@@ -1585,16 +1586,25 @@ class SBIEngine(Engine):
             observation = observation.reshape(1, -1)
         features = int(np.prod(observation.shape[1:]))
 
-        resolved = _embedding_of(
-            self.embedding,
-            torch=torch,
-            features=features,
-            free_size=problem.free_size,
-            layout=layout,
-        )
-        trainer, architecture = self._trainer(
-            sbi_package, torch, embedding=resolved, layout=layout, progress=progress
-        )
+        # W3.15: seeded once here, before the first network is built, so that
+        # an eager embedding's initial weights are as reproducible as the
+        # rest of the run; seeded again before every round's ``train()``
+        # (below, and in ``_run_tmnre``) for training's own randomness (batch
+        # order, dropout), and once more (a distinct concern) immediately
+        # before every posterior draw, so sampling repeats whether this run
+        # trained or hit the cache. ``torch_seed`` is this call's own draw --
+        # the first from ``"sbi.torch"`` -- and is what the attrs record.
+        with self._seeded(torch, "sbi.torch") as torch_seed:
+            resolved = _embedding_of(
+                self.embedding,
+                torch=torch,
+                features=features,
+                free_size=problem.free_size,
+                layout=layout,
+            )
+            trainer, architecture = self._trainer(
+                sbi_package, torch, embedding=resolved, layout=layout, progress=progress
+            )
         self.sampler = trainer
 
         simulated = 0
@@ -1642,7 +1652,9 @@ class SBIEngine(Engine):
             )
         else:
             for round_index in range(self.rounds):
-                theta, summary, counts = self._simulate_round(round_index, proposal=proposal)
+                theta, summary, counts = self._simulate_round(
+                    round_index, proposal=proposal, torch=torch
+                )
                 simulated += counts[0]
                 usable += counts[1]
                 self._append(
@@ -1654,16 +1666,22 @@ class SBIEngine(Engine):
                     proposal=proposal,
                     round_index=round_index,
                 )
-                self.estimator = trainer.train(show_train_summary=False, **dict(training or {}))
+                with self._seeded(torch, "sbi.torch"):
+                    self.estimator = trainer.train(show_train_summary=False, **dict(training or {}))
                 self.posterior = trainer.build_posterior(self.estimator)
                 self.posterior.set_default_x(observation_tensor)
                 proposal = self.posterior
         if not cache_hit and cache_key is not None and self.cache is not None:
             self.cache.put(cache_key, self._artefact())
 
-        drawn = self.posterior.sample(
-            (int(draws),), show_progress_bars=progress, **dict(posterior_options or {})
-        )
+        # A distinct concern from training's, and reseeded here rather than
+        # relying on training's own seed to carry through: a cache hit skips
+        # training altogether, so sampling must be pinned on its own for the
+        # hit and the miss to each repeat from run to run (W3.15).
+        with self._seeded(torch, "sbi.torch.sample"):
+            drawn = self.posterior.sample(
+                (int(draws),), show_progress_bars=progress, **dict(posterior_options or {})
+            )
         unconstrained = np.asarray(drawn.detach().cpu().numpy(), dtype=float).reshape(
             int(draws), problem.free_size
         )
@@ -1681,6 +1699,7 @@ class SBIEngine(Engine):
             simulated=simulated,
             usable=usable,
             draws=int(draws),
+            torch_seed=torch_seed,
         )
         if cache_key is not None:
             attrs["sbi_cache_hit"] = int(cache_hit)
@@ -1982,6 +2001,75 @@ class SBIEngine(Engine):
             )
         return np.concatenate(thetas, axis=0), np.concatenate(summaries, axis=0), simulated
 
+    # -- W3.15: torch has a global generator this driver does not own ---------
+
+    @contextlib.contextmanager
+    def _seeded(self, torch: Any, concern: str) -> Iterator[int | None]:
+        """Seed torch's (and, where it matters, numpy's *legacy* global) generator
+        for one block, from this run's own sub-stream, then put both back.
+
+        Neither ``ampere`` nor ``sbi`` seeds torch: network initialisation and
+        a trainer's batch order are drawn from torch's *global* generator, the
+        one piece of randomness ``problem.rng``'s own sub-streams cannot reach,
+        so two runs of the same seeded problem disagreed even though
+        ``problem.seed`` fixed every simulation. This is ``lowering.md``
+        §9.1's route (1) — seed the global stream from this engine's own
+        sub-stream — the same one ``_nuts.py`` and ``_vi.py`` use for pyro.
+
+        **numpy's legacy global generator too**, for the same reason
+        ``_zeus.py``'s ``_global_seed`` seeds more than one library's global
+        state: ``sbi``'s default MCMC method (``"slice_np_vectorized"``, what
+        an NLE/NRE posterior and a TMNRE ``sample_with="mcmc"`` one both use)
+        draws its slice proposals through ``np.random`` directly rather than
+        through anything ``torch.manual_seed`` reaches, so an MCMC-sampled
+        posterior stayed irreproducible even after torch was seeded — found
+        by this item's own TMNRE acceptance run refusing to repeat. An NPE
+        posterior's flow never touches it, so seeding it unconditionally here
+        costs that path nothing.
+
+        **Restored on exit**, this driver's own version of the same rule
+        ``_nuts.py``'s ``torch.random.fork_rng`` and ``_zeus.py``'s
+        ``_global_seed`` both state: ampere does not leave a library's global
+        random state changed behind it, so a caller's own unrelated use of
+        ``np.random`` or torch after ``run()`` returns is exactly as
+        (ir)reproducible as it would have been had this engine done nothing.
+        Restoring the *generator's* state is not undoing anything already
+        computed — a trained network's weights, once drawn, stay drawn — it
+        only affects whatever draws next.
+
+        Called with the *same* ``concern`` more than once in a run, this
+        yields a different seed each time: ``FittingProblem.rng``'s generator
+        for a label is created once and then advanced, so repeated draws
+        differ while the whole sequence is reproducible for a given seed and
+        call order (``dataset.py``'s ``rng`` docstring) — which is what makes
+        the training seed "distinct per round" for free, from one call
+        written once and made before every round's training rather than from
+        any per-round label arithmetic here.
+
+        ``problem.seed is None`` is left alone, on purpose: it means this run
+        asked not to be reproducible, and seeding torch (or numpy) anyway
+        would make it look reproducible without being asked (``integer_seed``'s
+        own contract, ``engine.py``).
+        """
+        if self.problem.seed is None:
+            yield None
+            return
+        seed = self.integer_seed(concern)
+        torch_state = torch.random.get_rng_state()
+        cuda_states = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+        numpy_state = np.random.get_state()
+        try:
+            torch.manual_seed(seed)
+            if "cuda" in self.device:
+                torch.cuda.manual_seed_all(seed)
+            np.random.seed(seed)
+            yield seed
+        finally:
+            torch.random.set_rng_state(torch_state)
+            if cuda_states is not None:
+                torch.cuda.set_rng_state_all(cuda_states)
+            np.random.set_state(numpy_state)
+
     # -- the pieces -----------------------------------------------------------
 
     def _trainer(
@@ -2120,10 +2208,16 @@ class SBIEngine(Engine):
             summary_tensor = torch.as_tensor(summary, dtype=dtype, device=self.device)
             trainer.append_simulations(theta_tensor, summary_tensor, from_round=round_index)
             final = round_index == self.rounds - 1
-            for indices, estimator in self.marginal_estimators.items():
-                estimator.append(theta_tensor, summary_tensor, round_index=round_index)
-                if len(indices) == 1 or final:
-                    estimator.train(**options)
+            # W3.15: one reseed per round covers every estimator this round
+            # trains (one or more 1-D marginals, the pairs on the last round)
+            # under a single, round-distinct draw from "sbi.torch" -- the
+            # generator behind it advances on every call, so this is already
+            # a different seed from the one the previous round used.
+            with self._seeded(torch, "sbi.torch"):
+                for indices, estimator in self.marginal_estimators.items():
+                    estimator.append(theta_tensor, summary_tensor, round_index=round_index)
+                    if len(indices) == 1 or final:
+                        estimator.train(**options)
             rows = np.concatenate(accumulated, axis=0)
             box = self._truncate(box, rows, observation=observation, torch=torch, dtype=dtype)
             record: dict[str, Any] = {
@@ -2148,7 +2242,8 @@ class SBIEngine(Engine):
         # θ-dependence is ``p(x|θ)`` whatever the θ were drawn from, so round
         # 1's wide rows are ordinary training data rather than contamination.
         # A caller who wants it can still pass it through ``training=``.
-        self.estimator = trainer.train(show_train_summary=False, **options)
+        with self._seeded(torch, "sbi.torch"):
+            self.estimator = trainer.train(show_train_summary=False, **options)
         self.posterior = trainer.build_posterior(
             self.estimator,
             prior=proposal,
@@ -2405,7 +2500,7 @@ class SBIEngine(Engine):
         self.posterior.set_default_x(observation)
 
     def _simulate_round(
-        self, round_index: int, *, proposal: Any = None, values: Any = None
+        self, round_index: int, *, proposal: Any = None, values: Any = None, torch: Any = None
     ) -> tuple[np.ndarray, np.ndarray, tuple[int, int]]:
         """One round's budget: θ in unconstrained space, x as a summary matrix.
 
@@ -2426,12 +2521,26 @@ class SBIEngine(Engine):
         the draws come from a ``RestrictedPrior`` and reach ``simulate_many``
         through its ``values=`` argument (``inference.md`` §13). *proposal* and
         *values* are alternatives; passing both is a caller error.
+
+        **W3.15**: *torch* is required exactly when *proposal* is given --
+        drawing from it is a real, trained posterior's ``sample()`` and needs
+        the same reseed the run's final draw does, for round 2 onwards to
+        repeat from the problem's seed too.
         """
         problem = self.problem
         if proposal is not None and values is not None:  # pragma: no cover - internal
             raise EngineError("a simulation round takes a proposal or given values, not both.")
         if proposal is not None:
-            drawn = proposal.sample((self.budget,), show_progress_bars=False)
+            # W3.15: *proposal* here is a trained posterior (an NPE flow, or
+            # an NLE/NRE's MCMC posterior), so drawing from it spends torch's
+            # global generator exactly as the final posterior draw does, and
+            # needs the same reseed to make round 2's simulated batch (and
+            # therefore everything trained on it) repeat from the problem's
+            # seed. TMNRE never reaches here with a proposal (its rounds
+            # arrive through *values*, from the numpy-seeded prior), so
+            # *torch* is only required when *proposal* is given.
+            with self._seeded(torch, "sbi.torch.sample"):
+                drawn = proposal.sample((self.budget,), show_progress_bars=False)
             unconstrained = np.asarray(drawn.detach().cpu().numpy(), dtype=float).reshape(
                 self.budget, problem.free_size
             )
@@ -2587,6 +2696,7 @@ class SBIEngine(Engine):
         simulated: int,
         usable: int,
         draws: int,
+        torch_seed: int | None,
     ) -> dict[str, object]:
         """Everything a reader of an archived SBI run needs to judge it."""
         summary = getattr(trainer, "summary", {}) or {}
@@ -2640,6 +2750,12 @@ class SBIEngine(Engine):
             "sbi_version": str(getattr(sbi_package, "__version__", "unknown")),
             "torch_version": str(torch.__version__),
         }
+        # W3.15: absent, not `None`, for an unseeded problem -- an unseeded
+        # run asked for fresh randomness every time, and a recorded `None`
+        # would read as "recorded and empty" rather than "not applicable"
+        # (the same convention `calibration_seed` already uses, above).
+        if torch_seed is not None:
+            attrs["sbi_torch_seed"] = torch_seed
         if self.method == TMNRE:
             attrs["sbi_marginals"] = self.marginals
             attrs["sbi_truncation_epsilon"] = self.truncation_epsilon
