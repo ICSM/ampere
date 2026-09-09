@@ -58,6 +58,26 @@ What is here
     guide draws have no Markov structure, so R-hat has nothing to say about
     them, and the ELBO trace is what a reader looks at instead. Needs the
     ``torch`` or ``jax`` extra.
+:class:`SBIEngine`
+    **Simulation-based** inference — neural posterior, likelihood or ratio
+    estimation through the ``sbi`` package (``method="npe" | "nle" | "nre"``).
+    The one driver here that does not consume ``log_prob`` while it fits:
+    §4.5's ``simulate(params) -> data``, batched through
+    :meth:`~ampere.core.dataset.FittingProblem.simulate_many`, is the whole of
+    its training surface, which is why it is the engine for a model whose
+    likelihood cannot be written down — a wrapped external simulator composed
+    as a black-box model on the reference backend, the case this field
+    actually brings. ``executor=`` and ``chunk_size=`` pass straight through,
+    so that budget runs under a process pool without this driver knowing.
+    The prior is bridged into **unconstrained** coordinates, so bounded priors
+    need no ``RestrictedPrior`` and the density estimator sees ℝⁿ; the drawn
+    posterior is mapped back through ``constrain`` before anything is stored.
+    Every stored draw is then scored on the numpy contract path, so the run
+    carries the *true* per-draw split beside the estimator's own log-density
+    (``ampere_sbi_log_prob`` in ``sample_stats``) — which is what makes
+    calibration and importance reweighting possible later. One chain of
+    i.i.d. draws, as :class:`VIEngine` emits and for the same reason. Needs
+    the ``sbi`` extra; both it and torch are imported inside ``run``.
 
 The first three are gradient-free, so all three call
 :meth:`~ampere.core.dataset.FittingProblem.check_engine` with
@@ -66,7 +86,8 @@ likelihood?" rather than "is this problem differentiable?" — and a
 marginalisation no gradient-free engine can deliver is refused before any
 sampling starts. :class:`NUTSEngine` passes ``differentiable=True`` for the
 same reason and in the same spirit: it is stating what the *engine* offers,
-and :class:`VIEngine` likewise.
+and :class:`VIEngine` likewise. :class:`SBIEngine` passes ``False``, which is
+the honest answer for an engine whose forward model may be a compiled binary.
 
 Every run emits the run
 -----------------------
@@ -134,12 +155,17 @@ stream at the same time.
 
 Not here, deliberately
 ----------------------
-No multiprocessing pool. ``inference.md`` limitation 17.7 records that the
-failure history is per-process, so a pooled run would leave each worker with
-its own counts and the aggregate silently incomplete; aggregating them is a
-real piece of work, not a keyword argument. No optimisers and no SBI layer
-either — ``architecture.md`` §3 puts both in this namespace, and both are later
-phases.
+No multiprocessing pool **for the samplers**. ``inference.md`` limitation 17.7
+records that the failure history is per-process, so a pooled run would leave
+each worker with its own counts and the aggregate silently incomplete;
+aggregating them is a real piece of work, not a keyword argument.
+:class:`SBIEngine` is the one exception, and it is one because it does not
+drive its own pool: its ``executor=`` goes to
+:meth:`~ampere.core.dataset.FittingProblem.simulate_many`, which owns both
+ends of the pool and replays every draw's failure record on the parent in draw
+order (``inference.md`` §13, *Execution*). No optimisers —
+``architecture.md`` §3 puts them in this namespace too, and they are a later
+phase.
 
 Examples
 --------
@@ -194,6 +220,7 @@ from __future__ import annotations
 from ._dynesty import DynestyEngine
 from ._emcee import EmceeEngine
 from ._nuts import NUTSEngine
+from ._sbi import EMBEDDINGS, METHODS, SUMMARY_LAYOUT, SBIEngine
 from ._vi import VIEngine
 from ._zeus import ZeusEngine
 from .engine import DEFAULT_CACHE_SIZE, Engine
@@ -201,11 +228,15 @@ from .exceptions import EngineError, SamplingFailureWarning
 
 __all__ = [
     "DEFAULT_CACHE_SIZE",
+    "EMBEDDINGS",
+    "METHODS",
+    "SUMMARY_LAYOUT",
     "DynestyEngine",
     "EmceeEngine",
     "Engine",
     "EngineError",
     "NUTSEngine",
+    "SBIEngine",
     "SamplingFailureWarning",
     "VIEngine",
     "ZeusEngine",
