@@ -77,15 +77,33 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
     `test-py312` / `test-py313` (the CI matrix, one Python each); `sbi`
     (since W3.2 the `dev` set plus the `torch` feature and the `sbi`
     extra — sbi 0.27, torch, pyro — and a real gate of its own:
-    `pixi run -e sbi test-all`); `torch` / `jax` (the backend environments —
-    real gates since W2.4/W2.5: `pixi run -e torch test-all`,
-    `pixi run -e jax test-all`, and each backend package is typechecked
-    with its real types only in its own environment). Since W2.11 both
-    `torch` and `sbi` resolve torch from PyTorch's **CPU** index, so
-    neither pulls ~2 GB of CUDA runtime onto a CPU-only runner; this
-    changes nothing about what `pip install "ampere[torch]"` gives a user.
-    **Run five-suite gates one at a time** — two concurrently exhaust a
-    13 GB machine.
+    `pixi run -e sbi test-all`, plus `pixi run -e sbi typecheck`); `torch` /
+    `jax` (the backend environments — real gates since W2.4/W2.5:
+    `pixi run -e torch test-all`, `pixi run -e jax test-all`, and each
+    backend package is typechecked with its real types only in its own
+    environment). Since W2.11 both `torch` and `sbi` resolve torch from
+    PyTorch's **CPU** index, so neither pulls ~2 GB of CUDA runtime onto a
+    CPU-only runner; this changes nothing about what `pip install
+    "ampere[torch]"` gives a user. **Run five-suite gates one at a time** —
+    two concurrently exhaust a 13 GB machine. Torch's five-suite gate takes
+    12–17 min here, sbi's 14–20 min, jax's 8–13 min, dev's 5–8 min.
+  - **CI's `suites` matrix** (`.github/workflows/ci.yml`): one blocking
+    job per new-namespace environment, each producing a check named
+    "new-namespace suites (`<environment>`)" — `dev` (its own `suites` job:
+    `test-all` + `bench`) and, in the `backend-suites` job's matrix,
+    `torch`, `jax` and, since W3.7, `sbi` (each: `typecheck` then
+    `test-all`; `torch`/`jax` also run `bench`, deliberately not repeated
+    for `sbi` since it would only re-exercise torch's own benchmarks under
+    another name — see the job's comment). `sbi`'s install is cached the
+    same way as `torch`'s (`setup-pixi`'s `cache: true`). The weekly/
+    on-demand `sbi-characterisation` job is unrelated: it exercises the
+    *legacy* `ampere.infer.sbi` flow, not the new-namespace `sbi` gate, and
+    stays non-blocking. Because the `sbi` leg's local reference time
+    (14–20 min) sits above the `torch` leg's (12–17 min), a CI runner with
+    torch's-leg headroom does not automatically have sbi's-leg headroom —
+    see W3.7's report for the cheap levers considered (splitting
+    `typecheck` out of the job, tightening the smoke budgets further)
+    without widening that item's scope to touch test budgets.
 - Plain-pip alternative: `pip install -e ".[dev]"`, Python ≥ 3.11.
 - Conda env `ampere` (Python 3.13) has an editable install pointing at the
   main checkout — worktree-based work that needs importing its own changes
