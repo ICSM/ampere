@@ -187,12 +187,11 @@ class TestArtefactKey:
     def test_versions_ingredient_reflects_which_packages_are_installed(self) -> None:
         key = _key(_problem())
         assert "python" in key.versions
-        if HAS_SBI:
-            assert "sbi" in key.versions
-            assert "torch" in key.versions
-        else:
-            assert "sbi" not in key.versions
-            assert "torch" not in key.versions
+        # Each package on its own: the `torch` environment has torch without
+        # sbi, and a key must say exactly what is installed, no more.
+        for name in ("sbi", "torch"):
+            installed = importlib.util.find_spec(name) is not None
+            assert (name in key.versions) is installed, name
 
     @needs_sbi
     def test_recording_fewer_packages_moves_the_digest(self) -> None:
