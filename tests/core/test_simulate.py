@@ -17,6 +17,7 @@ constraint a user's own simulator is under, and
 from __future__ import annotations
 
 import math
+import multiprocessing
 import os
 import pickle
 import time
@@ -183,6 +184,11 @@ def levels(count: int, **overrides: float) -> np.ndarray:
     for index, value in overrides.items():
         table[int(index.lstrip("_"))] = value
     return table
+
+
+def _worker_pid(_: Any) -> int:
+    """Which process ran this item. Module scope, so a worker can unpickle it."""
+    return os.getpid()
 
 
 def values_of(batch: SimulationBatch, label: str = "default") -> np.ndarray:
@@ -716,3 +722,184 @@ class TestExecutorsInTheirOwnRight:
     def test_the_process_executor_is_a_context_manager(self) -> None:
         with ProcessExecutor(1) as pool:
             assert pool.map(math.sqrt, [4.0]) == [2.0]
+
+
+class TestThePoolIsReusedAcrossMapCalls:
+    """W3.1 slice 2's carried finding: a chunked budget must not rebuild the pool.
+
+    ``chunk_size``'s job is bounding **memory**. Slice 1 built a pool per
+    ``map`` call, so it also bounded throughput — every chunk paid for process
+    creation plus one pickle of the fitting problem per worker. The rule that
+    replaced it is narrow on purpose: *a pool is replaced only when a worker
+    died or expired*, which is exactly the two states in which the held pool is
+    not usable any more.
+    """
+
+    @staticmethod
+    def counting(executor: ProcessExecutor, monkeypatch: pytest.MonkeyPatch) -> list[int]:
+        """Record every pool this executor builds, without changing what it builds."""
+        built: list[int] = []
+        original = executor._factory
+
+        def factory(workers: int) -> Any:
+            built.append(workers)
+            return original(workers)
+
+        monkeypatch.setattr(executor, "_factory", factory)
+        return built
+
+    def test_one_pool_serves_a_multi_chunk_budget(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        executor = ProcessExecutor(2)
+        built = self.counting(executor, monkeypatch)
+        try:
+            batch = build().simulate_many(6, observe=True, executor=executor, chunk_size=2)
+        finally:
+            executor.shutdown()
+        assert len(batch) == 6
+        assert built == [2], "three chunks must share one pool"
+
+    def test_the_same_worker_processes_run_every_chunk(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The stronger form: not merely one pool object, the same processes."""
+        executor = ProcessExecutor(2)
+        try:
+            first = set(executor.map(_worker_pid, [0, 1, 2, 3]))
+            second = set(executor.map(_worker_pid, [0, 1, 2, 3]))
+        finally:
+            executor.shutdown()
+        assert first == second
+
+    def test_a_dead_worker_does_replace_the_pool(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The exception to the rule, and the only one that is not a timeout."""
+        executor = ProcessExecutor(2)
+        built = self.counting(executor, monkeypatch)
+        problem = FittingProblem(HardCrash(), [Dataset(observed())], seed=SEED)
+        try:
+            batch = problem.simulate_many(5, values=levels(5, _2=DIES_AT), executor=executor)
+        finally:
+            executor.shutdown()
+        assert batch.failed.tolist() == [False, False, True, False, False]
+        assert len(built) > 1
+
+    def test_shutdown_closes_the_held_pool(self) -> None:
+        executor = ProcessExecutor(1)
+        executor.map(math.sqrt, [4.0])
+        assert executor._source is not None and executor._source.live
+        executor.shutdown()
+        assert executor._source is None
+
+    def test_a_new_broadcast_payload_closes_the_pool(self) -> None:
+        """Workers are handed the payload at start-up, so a changed one needs new workers."""
+        executor = ProcessExecutor(1)
+        try:
+            executor.broadcast("first")
+            executor.map(math.sqrt, [4.0])
+            assert executor._source is not None
+            executor.broadcast("second")
+            assert executor._source is None
+        finally:
+            executor.shutdown()
+
+
+class TestTheStartMethod:
+    """``forkserver`` on POSIX by default (ruled, W3.1 slice 2), ``fork`` on request."""
+
+    def test_the_default_is_forkserver_on_posix(self) -> None:
+        if os.name != "posix":  # pragma: no cover - not this CI
+            pytest.skip("forkserver is a POSIX start method")
+        assert ProcessExecutor(2).start_method == "forkserver"
+
+    def test_fork_is_still_available_through_mp_context(self) -> None:
+        if os.name != "posix":  # pragma: no cover - not this CI
+            pytest.skip("fork is a POSIX start method")
+        executor = ProcessExecutor(2, mp_context=multiprocessing.get_context("fork"))
+        assert executor.start_method == "fork"
+
+    def test_a_budget_runs_under_the_default_start_method(self) -> None:
+        executor = ProcessExecutor(2)
+        try:
+            batch = build().simulate_many(4, observe=True, executor=executor)
+        finally:
+            executor.shutdown()
+        assert len(batch) == 4 and not batch.failed.any()
+
+    def test_the_start_method_is_visible_in_the_repr(self) -> None:
+        assert f"start_method={ProcessExecutor(2).start_method!r}" in repr(ProcessExecutor(2))
+
+
+class TestTheNativePathIsAskedForByName:
+    """W3.1 slice 2's core-side surface, on a backend that has no native path.
+
+    The reference backend registers no realisation, which makes it exactly the
+    right place to assert the *other* half of the contract: what
+    ``simulate_many`` does when the fast path is not there. The answer is "runs
+    the loop and says so", and the two rows that matter are that the answer is
+    recorded rather than inferred, and that asking for the fast path by name
+    gets a refusal rather than a silent slow path.
+    """
+
+    def test_the_loop_is_the_default_and_the_provenance_records_it(self) -> None:
+        batch = build().simulate_many(4, observe=True)
+        assert batch.provenance["simulate_batched"] is False
+        assert batch.provenance["sample_backend"] == "reference"
+        assert batch.provenance["simulation_context"] == "none"
+
+    def test_a_backend_without_a_realisation_refuses_native_true(self) -> None:
+        with pytest.raises(DatasetError, match=r"realisation|BATCHABLE"):
+            build().simulate_many(4, native=True)
+
+    def test_native_true_with_an_executor_is_refused_by_name(self) -> None:
+        """A pool partitions the draws and a vmap evaluates them together."""
+        with pytest.raises(DatasetError, match="executor"):
+            build().simulate_many(4, native=True, executor=ThreadExecutor(1))
+
+    def test_the_reserved_context_is_recorded(self) -> None:
+        """The horizon note's hook: the signature exists before the machinery."""
+        batch = build().simulate_many(2, context=None)
+        assert batch.provenance["simulation_context"] == "none"
+
+    def test_a_supplied_context_is_refused_rather_than_ignored(self) -> None:
+        """Reserving a keyword is not the same as accepting one and dropping it."""
+        with pytest.raises(DatasetError, match="reserved"):
+            build().simulate_many(2, context={"sigma": 0.1})
+
+    def test_the_provenance_of_a_mixed_budget_claims_least(self) -> None:
+        """Concatenation is conservative: a mixture must not read as a native run."""
+        native = SimulationBatch((), provenance={"simulate_batched": True})
+        loop = SimulationBatch((), provenance={"simulate_batched": False})
+        joined = SimulationBatch.concatenate([native, loop])
+        assert joined.provenance["simulate_batched"] is False
+
+    def test_the_provenance_survives_re_chunking_and_selection(self) -> None:
+        batch = build().simulate_many(4, observe=True)
+        assert next(iter(batch.iter_chunks(2))).provenance == batch.provenance
+        assert batch.usable.provenance == batch.provenance
+        assert batch[1:3].provenance == batch.provenance
+
+    def test_an_evaluate_batch_model_is_not_a_native_batched_path(self) -> None:
+        """The two are different claims and the attribute must not conflate them.
+
+        ``Model.evaluate_batch`` is a *model* taking a table of θ;
+        ``simulate_batched`` is a *lowered problem* running through a backend's
+        ``vmap``. A training set that recorded the first as the second could not
+        answer the question the attribute exists for.
+        """
+        batch = build(BatchedFlat()).simulate_many(4)
+        assert batch.provenance["evaluate_batch"] is True
+        assert batch.provenance["simulate_batched"] is False
+
+    def test_a_restored_problem_still_simulates(self) -> None:
+        """The round trip a forkserver worker makes, asserted where it can be read.
+
+        ``_assert_picklable`` writes *and reads* since W3.1 slice 2, because a
+        worker started by ``forkserver`` (the default now) reconstructs the
+        problem rather than inheriting it. Reading it back is not enough on its
+        own: the failure this row exists for was a restored problem that
+        unpickled cleanly and then refused to evaluate, so the assertion is a
+        simulation rather than a ``loads``.
+        """
+        restored = pickle.loads(pickle.dumps(build()))
+        drawn = restored.simulate(observe=True)
+        assert not drawn.failed
+        assert drawn.observations is not None

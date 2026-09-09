@@ -61,6 +61,7 @@ from __future__ import annotations
 import concurrent.futures
 import dataclasses
 import functools
+import multiprocessing
 import os
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
@@ -75,7 +76,9 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from .dataset import Failure, Simulation
 
 __all__ = [
+    "BatchedPrediction",
     "ChunkHook",
+    "ChunkSharder",
     "ContainerBatch",
     "ExecutionFailure",
     "Executor",
@@ -102,6 +105,86 @@ _Result = TypeVar("_Result")
 #: W3.1 slice 2 wires the torch and jax backends into it; in this slice it is a
 #: documented callable and nothing more.
 ChunkHook = Callable[[int], None]
+
+
+@runtime_checkable
+class ChunkSharder(Protocol):
+    """How one chunk's stacked θ is spread over the devices a backend reports.
+
+    **Peter's addendum of 2026-09-09**, landed at W3.1 slice 2 as an API and a
+    single-device implementation, with the distributed ones designed and
+    smoke-tested but not exercised — full exercise waits for the GPU item.
+
+    The layering is the point. :class:`Executor` distributes *simulations*
+    across processes and machines; a sharder distributes **one chunk's
+    vectorised evaluation** across the accelerators of one host, which is a
+    different axis and a different mechanism (``jax.pmap``/``shard_map``,
+    ``torch.distributed``/``DTensor``). Neither subsumes the other: an SBI
+    budget on eight GPUs wants both, and a budget on one CPU wants neither.
+
+    It is deliberately not a distributed runtime. Two methods, both of which a
+    single-device implementation answers trivially, so that the default costs
+    nothing and the degenerate case is what CPU CI exercises:
+
+    ``devices()``
+        The devices this sharder will use, named. Length 1 is the degenerate
+        case; length 0 is not allowed, because "no device" is not a thing a
+        chunk can be evaluated on.
+    ``shard(fn, stacked)``
+        Evaluate *fn* — already vectorised over the leading axis — on
+        *stacked*, returning what ``fn(stacked)`` would have returned. A
+        single-device implementation *is* ``fn(stacked)``. A multi-device one
+        splits the leading axis, runs the parts in parallel and reassembles, so
+        the contract is a **value** contract: sharding must not change the
+        answer, only where it was computed.
+    """
+
+    def devices(self) -> tuple[str, ...]:  # pragma: no cover - protocol
+        """The devices this sharder spreads a chunk over, in order."""
+        ...
+
+    def shard(self, fn: Callable[[Any], Any], stacked: Any) -> Any:  # pragma: no cover - protocol
+        """``fn(stacked)``, however it chooses to compute it."""
+        ...
+
+
+@dataclasses.dataclass(frozen=True)
+class BatchedPrediction:
+    """What a realisation's ``simulate_batched`` hands back: one chunk, noise-free.
+
+    ``inference.md`` §13's *batched form*, native path. Two mappings of plain
+    numpy arrays with a **leading sample axis**, and plain numpy on purpose:
+    this crosses out of a backend into ``ampere.core``, which owns no array
+    type but numpy's, and the consumer is going to build core containers from
+    it anyway.
+
+    Attributes
+    ----------
+    channels
+        ``{model label: {channel: (batch, n)}}`` — every channel of every model
+        the problem holds, which is what
+        :attr:`SimulationBatch.results` is rebuilt from. Not merely the
+        channels a dataset happens to be bound to: ``results.md`` §11 writes one
+        training-set group per ``<model>.<channel>``, so a native path that
+        returned fewer would silently write a smaller file than the loop.
+    predicted
+        ``{dataset label: (batch, n_full)}`` — the instrument-transformed
+        prediction on **every** observed sample, masked ones included, because
+        that is the shape ``Dataset.predict`` returns and masking is the
+        consumer's (``draw_observation``'s) business.
+    """
+
+    channels: Mapping[str, Mapping[str, np.ndarray]]
+    predicted: Mapping[str, np.ndarray]
+
+    def __len__(self) -> int:
+        """The batch size, read off whichever stack is present."""
+        for stack in self.predicted.values():
+            return int(np.shape(stack)[0])
+        for produced in self.channels.values():
+            for stack in produced.values():
+                return int(np.shape(stack)[0])
+        return 0
 
 
 # ---------------------------------------------------------------------------
@@ -193,16 +276,124 @@ class SerialExecutor:
         return "<SerialExecutor>"
 
 
+class _PoolSource:
+    """Where :func:`_windowed_map` gets a pool, and where a dead one is replaced.
+
+    Split out at W3.1 slice 2, to make a pool outlive one ``map`` call. Slice 1
+    built a pool per call, which meant a chunked budget paid the whole start-up
+    cost — process creation plus one pickle of the fitting problem per worker —
+    once per chunk, and ``chunk_size`` (whose job is bounding *memory*) silently
+    became a throughput knob. A persistent source keeps the pool across calls
+    and hands out the same one; an ephemeral source is the old behaviour, which
+    is still what a thread pool wants, having nothing to amortise.
+
+    Two ways a pool leaves: :meth:`discard`, which is the only thing that ever
+    throws one away, and it is called exactly where slice 1 rebuilt — a draw
+    that blew its timeout (whose worker is still running and must be killed) or
+    a worker that died and broke the pool for everyone. So the rule the item
+    asks for holds literally: *a pool is replaced only when a worker died or
+    expired.*
+    """
+
+    __slots__ = ("_factory", "_persistent", "_pool", "_warm", "_workers")
+
+    def __init__(
+        self,
+        factory: Callable[[], concurrent.futures.Executor],
+        *,
+        persistent: bool,
+        workers: int,
+        warm: bool = False,
+    ) -> None:
+        self._factory = factory
+        self._persistent = persistent
+        self._workers = workers
+        self._warm = warm
+        self._pool: concurrent.futures.Executor | None = None
+
+    @property
+    def workers(self) -> int:
+        """How many workers the pool this source hands out was built for."""
+        return self._workers
+
+    @property
+    def live(self) -> bool:
+        """Whether a pool is currently held (what the reuse rows assert on)."""
+        return self._pool is not None
+
+    def acquire(self) -> concurrent.futures.Executor:
+        """The pool to run on, building — and warming — one if none is held."""
+        if self._pool is None:
+            self._pool = self._factory()
+            if self._warm:
+                _warm_up(self._pool, self._workers)
+        return self._pool
+
+    def fresh(self) -> concurrent.futures.Executor:
+        """An independent, throwaway pool — never the shared one.
+
+        Crash attribution (:func:`_rerun_alone`) re-runs each survivor on a pool
+        of its own precisely so that a second crash convicts a second draw; the
+        shared pool must not be the thing that dies for it.
+        """
+        return self._factory()
+
+    def discard(self, *, kill: bool) -> None:
+        """Throw the held pool away. *kill* stops workers that are still busy."""
+        pool = self._pool
+        self._pool = None
+        if pool is None:
+            return
+        if kill:
+            _terminate(pool)
+        pool.shutdown(wait=not kill, cancel_futures=True)
+
+    def release(self) -> None:
+        """End of a ``map`` call: an ephemeral source closes, a persistent one keeps."""
+        if not self._persistent:
+            self.discard(kill=False)
+
+
+def _ready() -> bool:
+    """The no-op a warm-up submits. Module level, so it pickles."""
+    return True
+
+
+def _warm_up(pool: concurrent.futures.Executor, workers: int) -> None:
+    """Start every worker **before** the first deadline is taken.
+
+    ``timeout`` is a per-simulation deadline measured from submission, which is
+    only the same thing as a deadline measured from the start of the work if
+    the worker is already running when the item is submitted. Under ``fork``
+    that held to within milliseconds; under ``forkserver`` (the default since
+    W3.1 slice 2) the first submission also pays for the fork server booting
+    and the pool's initializer unpickling the fitting problem, which is seconds
+    on a real problem — enough to expire an honest draw and blame the
+    simulator for it.
+
+    So the workers are started with a no-op that is *not* under a deadline, and
+    with a persistent pool that cost is paid once per pool rather than once per
+    chunk. Failures are swallowed deliberately: a pool that cannot start is a
+    pool the real submission will report through the ordinary
+    :class:`ExecutionFailure` path, and duplicating that here would only change
+    which line the user sees.
+    """
+    try:
+        for future in [pool.submit(_ready) for _ in range(max(1, workers))]:
+            future.result()
+    except Exception:  # pragma: no cover - reported by the real submission
+        pass
+
+
 def _windowed_map(
-    pool_factory: Callable[[], concurrent.futures.Executor],
+    source: _PoolSource,
     fn: Callable[[_Item], _Result],
     items: Sequence[_Item],
     *,
-    workers: int,
     timeout: float | None,
     recover: bool,
 ) -> list[Any]:
-    """Run *items* on a pool, at most *workers* in flight, with a per-item deadline.
+    """Run *items* on a pool, at most ``source.workers`` in flight, with a deadline.
 
     The window is what makes ``timeout`` mean "per simulation". Submitting the
     whole budget at once and timing each future from submission would expire
@@ -213,15 +404,32 @@ def _windowed_map(
     *recover* says whether a dead pool can be replaced (processes: yes;
     threads: there is nothing to replace and nothing to kill).
     """
+    try:
+        return _windowed_loop(source, fn, items, timeout=timeout, recover=recover)
+    finally:
+        source.release()
+
+
+def _windowed_loop(
+    source: _PoolSource,
+    fn: Callable[[_Item], _Result],
+    items: Sequence[_Item],
+    *,
+    timeout: float | None,
+    recover: bool,
+) -> list[Any]:
+    """:func:`_windowed_map` without the release, which its caller owns."""
+    workers = source.workers
     results: list[Any] = [None] * len(items)
     pending = list(range(len(items)))
     while pending:
-        pool = pool_factory()
+        pool = source.acquire()
         queue = pending
         pending = []
         inflight: list[tuple[int, concurrent.futures.Future[Any], float]] = []
         cursor = 0
         rebuild = False
+        broken = False
         try:
             while cursor < len(queue) or inflight:
                 while cursor < len(queue) and len(inflight) < workers:
@@ -265,8 +473,9 @@ def _windowed_map(
                     # guilty convicts itself and the innocent ones simply
                     # produce their results.
                     survivors = [index, *(entry[0] for entry in inflight), *queue[cursor:]]
+                    broken = True
                     if recover:
-                        _rerun_alone(pool_factory, fn, items, results, survivors, timeout)
+                        _rerun_alone(source, fn, items, results, survivors, timeout)
                     else:
                         # A thread pool breaks only when it cannot start a
                         # worker at all — interpreter shutdown, or a hard
@@ -283,16 +492,18 @@ def _windowed_map(
                     inflight.clear()
                     break
         finally:
-            # ``wait=False`` after a timeout: the expired worker is still busy,
-            # and waiting for it is exactly what the timeout said not to do.
-            if rebuild:
-                _terminate(pool)
-            pool.shutdown(wait=not rebuild, cancel_futures=True)
+            # The only two exits that throw a pool away, and they are the two
+            # the reuse rule names: a draw that expired (whose worker is still
+            # busy, and ``wait=False`` after ``kill`` is exactly what the
+            # timeout said to do) and a worker that died and broke the pool for
+            # everyone. Anything else leaves the pool for the next call.
+            if rebuild or broken:
+                source.discard(kill=rebuild)
     return results
 
 
 def _rerun_alone(
-    pool_factory: Callable[[], concurrent.futures.Executor],
+    source: _PoolSource,
     fn: Callable[[_Item], _Result],
     items: Sequence[_Item],
     results: list[Any],
@@ -301,7 +512,7 @@ def _rerun_alone(
 ) -> None:
     """Re-run *survivors* one per fresh pool, so a crash is attributed correctly."""
     for index in survivors:
-        pool = pool_factory()
+        pool = source.fresh()
         try:
             future = pool.submit(fn, items[index])
             try:
@@ -387,15 +598,12 @@ class ThreadExecutor:
         if not materialised:
             return []
         workers = self.max_workers or min(32, len(materialised))
-        factory = functools.partial(concurrent.futures.ThreadPoolExecutor, max_workers=workers)
-        return _windowed_map(
-            factory,
-            fn,
-            materialised,
+        source = _PoolSource(
+            functools.partial(concurrent.futures.ThreadPoolExecutor, max_workers=workers),
+            persistent=False,
             workers=workers,
-            timeout=self.timeout,
-            recover=False,
         )
+        return _windowed_map(source, fn, materialised, timeout=self.timeout, recover=False)
 
     def __repr__(self) -> str:
         return f"<ThreadExecutor max_workers={self.max_workers}, timeout={self.timeout}>"
@@ -433,13 +641,23 @@ class ProcessExecutor:
         process per simulation, which is the strongest isolation available and
         the right setting for a routine that cannot be run twice in one process.
     mp_context
-        A :mod:`multiprocessing` context, if the default start method is wrong
-        for this simulator. Worth reaching for: the platform default on Linux is
-        ``fork``, and forking a process that already holds a threaded runtime —
-        jax says so itself, and torch's intra-op pools have the same shape —
-        risks a deadlock in the child. ``get_context("spawn")`` is the safe
-        answer where that applies, at the cost of re-importing the world in each
-        worker.
+        A :mod:`multiprocessing` context, if this executor's default start
+        method is wrong for this simulator. **The default is ``forkserver`` on
+        POSIX** (ruled for W3.1 slice 2), not the platform's own: forking a
+        process that already holds a threaded runtime — jax says so itself, and
+        torch's intra-op pools have the same shape — risks a deadlock in the
+        child, and Python 3.14 changes the platform default away from ``fork``
+        for exactly that reason, so ampere is not going to inherit a default
+        that is about to move under it. ``forkserver`` forks children from a
+        small, clean server process instead, which keeps most of ``fork``'s
+        start-up saving without inheriting the parent's threads. The cost is
+        that everything sent to a worker must **pickle** and be importable by
+        name from a module: a simulator defined at module scope is fine, one
+        defined inside a function or a test body is not. Pass
+        ``get_context("fork")`` to have the old behaviour back, or
+        ``get_context("spawn")`` where a library demands it — ``fork`` is still
+        available, it is simply no longer what you get by saying nothing.
+        ``None`` (the default) means ampere's choice, not the platform's.
 
     Notes
     -----
@@ -470,8 +688,9 @@ class ProcessExecutor:
         self.max_workers = None if max_workers is None else int(max_workers)
         self.timeout = None if timeout is None else float(timeout)
         self.max_tasks_per_child = None if max_tasks_per_child is None else int(max_tasks_per_child)
-        self.mp_context = mp_context
+        self.mp_context = _default_context() if mp_context is None else mp_context
         self._shared: Any = None
+        self._source: _PoolSource | None = None
         if self.max_workers is not None and self.max_workers < 1:
             raise DatasetError(f"a process pool needs at least one worker, got {max_workers!r}.")
         if self.timeout is not None and self.timeout <= 0.0:
@@ -483,7 +702,14 @@ class ProcessExecutor:
         Retrieved inside the worker with :func:`worker_shared`. ``simulate_many``
         uses this to place the fitting problem, which is why the pickling cost
         of a large problem is paid per worker rather than per draw.
+
+        A payload is delivered by the pool's ``initializer``, so a pool already
+        running was given the *previous* one. Broadcasting a different value
+        therefore closes the held pool: the alternative is workers scoring a
+        problem the caller has replaced.
         """
+        if self._source is not None and value is not self._shared:
+            self._close_pool()
         self._shared = value
 
     def _factory(self, workers: int) -> concurrent.futures.Executor:
@@ -495,6 +721,31 @@ class ProcessExecutor:
             max_tasks_per_child=self.max_tasks_per_child,
         )
 
+    def _pool_source(self, workers: int) -> _PoolSource:
+        """The persistent source for this executor, built or reused.
+
+        Reused when the pool it holds is wide enough for the window this call
+        wants — the window bounds concurrency, so a wider pool is never wrong —
+        which is what makes a chunked budget share one pool: chunks are equal
+        except the last, and the last is smaller.
+        """
+        source = self._source
+        if source is None or source.workers < workers:
+            self._close_pool()
+            source = _PoolSource(
+                functools.partial(self._factory, workers),
+                persistent=True,
+                workers=workers,
+                warm=True,
+            )
+            self._source = source
+        return source
+
+    def _close_pool(self) -> None:
+        if self._source is not None:
+            self._source.discard(kill=False)
+            self._source = None
+
     def map(self, fn: Callable[[_Item], _Result], items: Iterable[_Item], /) -> list[Any]:
         """Apply *fn* to every item on the pool, returning results in item order."""
         materialised = list(items)
@@ -502,16 +753,22 @@ class ProcessExecutor:
             return []
         workers = self.max_workers or min(len(materialised), _default_workers())
         return _windowed_map(
-            functools.partial(self._factory, workers),
+            self._pool_source(workers),
             fn,
             materialised,
-            workers=workers,
             timeout=self.timeout,
             recover=True,
         )
 
     def shutdown(self) -> None:
-        """Drop the broadcast payload. Pools are per ``map`` call and already closed."""
+        """Close the held pool and drop the broadcast payload.
+
+        Idempotent, and worth calling: since W3.1 slice 2 the pool **outlives**
+        a ``map`` call, so an executor kept in a long-lived object keeps worker
+        processes alive until this runs (or until it is garbage-collected and
+        the pool's own finaliser does it). The context-manager form calls it.
+        """
+        self._close_pool()
         self._shared = None
 
     def __enter__(self) -> ProcessExecutor:
@@ -520,15 +777,49 @@ class ProcessExecutor:
     def __exit__(self, *exc_info: object) -> None:
         self.shutdown()
 
+    @property
+    def start_method(self) -> str:
+        """The multiprocessing start method workers are created with."""
+        context = self.mp_context
+        if context is None:
+            return multiprocessing.get_start_method()
+        return str(context.get_start_method())
+
     def __repr__(self) -> str:
         return (
             f"<ProcessExecutor max_workers={self.max_workers}, timeout={self.timeout}, "
-            f"max_tasks_per_child={self.max_tasks_per_child}>"
+            f"max_tasks_per_child={self.max_tasks_per_child}, "
+            f"start_method={self.start_method!r}>"
         )
 
 
 def _default_workers() -> int:
     return max(1, os.cpu_count() or 1)
+
+
+def _default_context() -> Any:
+    """``forkserver`` on POSIX, the platform's own elsewhere (ruled, W3.1 slice 2).
+
+    Two reasons, and neither is a preference. **Forking a threaded runtime may
+    deadlock**: jax warns about it in as many words, torch's intra-op pools have
+    the same shape, and a budget that hangs in a worker is the worst failure
+    mode this executor has, because it looks like a slow simulator. And
+    **Python 3.14 moves the platform default off ``fork`` on Linux** for that
+    reason, so inheriting the platform default would mean ampere's behaviour
+    changing under it at an interpreter upgrade rather than at a decision.
+
+    ``forkserver`` over ``spawn`` because it keeps most of the start-up saving:
+    the server process is paid for once and each worker is a fork of it, rather
+    than a fresh interpreter re-importing the world. The price is the same as
+    ``spawn``'s — everything a worker touches must pickle and be importable by
+    name — which ``ProcessExecutor`` already required of the fitting problem.
+    """
+    if os.name != "posix":
+        return None
+    try:
+        return multiprocessing.get_context("forkserver")
+    except ValueError:  # pragma: no cover - POSIX without forkserver
+        return None
 
 
 #: Where :meth:`ProcessExecutor.broadcast`'s payload lands inside a worker.
@@ -721,14 +1012,27 @@ class SimulationBatch:
     offset
         Index of the first draw within the whole budget, so a chunk knows where
         it sits. ``batch.offset + i`` is draw ``batch[i]``'s global index.
+    provenance
+        **W3.1 slice 2**: how this batch was produced, for the training set's
+        root attributes. Keys are unprefixed and
+        :func:`~ampere.results.provenance_attrs` adds the ``ampere_``; two are
+        written today, and both answer a question a stored budget cannot
+        otherwise be asked. ``simulate_batched`` says whether the noise-free
+        prediction came from a backend's vectorised path or from the loop, and
+        ``sample_backend`` names the backend that drew the observations —
+        because the numpy path and a native one draw from the *same*
+        distribution but not from the same random stream, so a budget is only
+        reproducible against the path that produced it.
     """
 
     simulations: tuple[Simulation, ...]
     stream: str = "simulate"
     offset: int = 0
+    provenance: Mapping[str, Any] = dataclasses.field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "simulations", tuple(self.simulations))
+        object.__setattr__(self, "provenance", dict(self.provenance))
 
     # -- sequence surface ----------------------------------------------------
 
@@ -746,6 +1050,7 @@ class SimulationBatch:
                 tuple(self.simulations[index]),
                 stream=self.stream,
                 offset=self.offset + (span.start if len(span) else 0),
+                provenance=self.provenance,
             )
         return self.simulations[index]
 
@@ -826,27 +1131,59 @@ class SimulationBatch:
         none.
         """
         return SimulationBatch(
-            tuple(draw for draw in self.simulations if not draw.failed), stream=self.stream
+            tuple(draw for draw in self.simulations if not draw.failed),
+            stream=self.stream,
+            provenance=self.provenance,
         )
 
     def iter_chunks(self, chunk_size: int) -> Iterator[SimulationBatch]:
         """Re-chunk an in-memory batch, for a consumer that wants it in pieces."""
         for start, stop in chunk_bounds(len(self), chunk_size):
             yield SimulationBatch(
-                self.simulations[start:stop], stream=self.stream, offset=self.offset + start
+                self.simulations[start:stop],
+                stream=self.stream,
+                offset=self.offset + start,
+                provenance=self.provenance,
             )
 
     @classmethod
     def concatenate(cls, batches: Iterable[SimulationBatch]) -> SimulationBatch:
-        """Join chunks back into one batch, in order."""
+        """Join chunks back into one batch, in order.
+
+        The provenance is the **union** over the chunks, with disagreement
+        resolved conservatively: a budget in which any chunk fell back to the
+        loop is a budget whose predictions did not all come from the native
+        path, and saying otherwise in a training set's attributes would be a
+        false record of how the file was made.
+        """
         collected = list(batches)
         if not collected:
             return cls(())
         draws: list[Simulation] = []
         for batch in collected:
             draws.extend(batch.simulations)
-        return cls(tuple(draws), stream=collected[0].stream, offset=collected[0].offset)
+        return cls(
+            tuple(draws),
+            stream=collected[0].stream,
+            offset=collected[0].offset,
+            provenance=_merge_provenance(collected),
+        )
 
     def __repr__(self) -> str:
         failed = int(np.count_nonzero(self.failed)) if self.simulations else 0
         return f"<SimulationBatch {len(self)} draw(s), {failed} failed, stream={self.stream!r}>"
+
+
+def _merge_provenance(batches: Sequence[SimulationBatch]) -> dict[str, Any]:
+    """Join chunk provenance conservatively; see :meth:`SimulationBatch.concatenate`."""
+    merged: dict[str, Any] = {}
+    for batch in batches:
+        for key, value in batch.provenance.items():
+            if key not in merged:
+                merged[key] = value
+            elif merged[key] != value:
+                # Two chunks disagreeing means the budget is a mixture, and the
+                # only honest single value for "how was this made?" is the one
+                # that claims least: False for a flag, "mixed" for a name.
+                merged[key] = False if isinstance(value, bool) else "mixed"
+    return merged

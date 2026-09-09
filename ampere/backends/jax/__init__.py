@@ -100,6 +100,7 @@ from .noise import (
 )
 from .parameters import LoweredParameterSet, LoweringFallbackWarning, filter_spec
 from .problem import LoweredProblem, lower_problem
+from .sharding import MeshSharder, SingleDeviceSharder, available_devices
 
 # ``inference.md`` §10a: importing this package is the user's opt-in to jax,
 # and it is also the moment the jax realisation becomes reachable through
@@ -127,12 +128,15 @@ __all__ = [
     "LoweredProblem",
     "LoweringFallbackWarning",
     "Matern32",
+    "MeshSharder",
     "ModifiedBlackBody",
     "PowerLaw",
     "QuasisepGP",
     "Resample",
+    "SingleDeviceSharder",
     "SquaredExponential",
     "SyntheticPhotometry",
+    "available_devices",
     "configure_x64",
     "filter_spec",
     "log_abs_det_jacobian",

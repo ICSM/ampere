@@ -106,6 +106,8 @@ from .realisation import (
     realise,
     register_realisation,
     registered_realisations,
+    sample_observations_of,
+    simulate_batched_of,
 )
 from .parameter import (
     SEPARATOR,
@@ -154,7 +156,9 @@ from .results_schema import (
     VisibilitySet,
 )
 from .simulate import (
+    BatchedPrediction,
     ChunkHook,
+    ChunkSharder,
     ContainerBatch,
     ExecutionFailure,
     Executor,
@@ -199,6 +203,7 @@ __all__ = [
     "Axis",
     "AxisRequirement",
     "AxisSpec",
+    "BatchedPrediction",
     "BatteryReport",
     "Bijection",
     "Binding",
@@ -212,6 +217,7 @@ __all__ = [
     "ChannelError",
     "ChannelRequirements",
     "ChunkHook",
+    "ChunkSharder",
     "ComplexGaussianFamily",
     "CompositionError",
     "ContainerBatch",
@@ -317,5 +323,7 @@ __all__ = [
     "registered_lowerings",
     "registered_realisations",
     "run_registrant_battery",
+    "sample_observations_of",
+    "simulate_batched_of",
     "substream",
 ]

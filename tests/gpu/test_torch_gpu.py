@@ -376,3 +376,57 @@ class TestNutsDraws:
         assert posterior.sizes["chain"] == 1
         for name in problem.parameters.free_names:
             assert np.all(np.isfinite(np.asarray(posterior[name].values)))
+
+
+class TestChunkSharding:
+    """W3.1 slice 2's multi-device hook, at the API level.
+
+    Peter's addendum of 2026-09-09 asks for the sharding API to be designed,
+    documented and smoke-tested here, with the full exercise left to the GPU
+    item. On this backend "multi-device" means a ``torch.distributed`` process
+    group, which a single pytest process has not got and which ampere
+    deliberately does not launch — so what these rows can prove without a
+    ``torchrun`` harness is the pair of statements that matter most: the
+    degenerate case really does run on the accelerator, and the distributed
+    case **refuses by name** rather than hanging in a collective.
+
+    The value claim — that splitting a chunk across ranks does not change the
+    answer — belongs to the GPU item, run under ``torchrun``, and it is
+    asserted for jax's ``pmap`` route in ``test_jax_gpu.py`` where a single
+    process can hold several devices.
+    """
+
+    def theta(self, problem: FittingProblem, draws: int = 8) -> np.ndarray:
+        rng = np.random.default_rng(20260909)
+        return np.stack(
+            [
+                problem.prior_transform(row)
+                for row in rng.uniform(0.05, 0.95, (draws, problem.free_size))
+            ]
+        )
+
+    def test_the_single_device_sharder_runs_on_the_accelerator(self) -> None:
+        from ampere.backends.torch import SingleDeviceSharder
+
+        problem = gp_problem()
+        lowered = lower_problem(problem)
+        theta = self.theta(problem)
+        alone = lowered.simulate_batched(theta, sharder=SingleDeviceSharder(DEVICE))
+        plain = lowered.simulate_batched(theta)
+        for label, values in plain.predicted.items():
+            assert np.allclose(values, alone.predicted[label], rtol=0.0, atol=1e-9)
+
+    def test_the_devices_torch_reports_are_the_ones_it_would_use(self) -> None:
+        from ampere.backends.torch import available_devices
+
+        assert len(available_devices()) == torch.cuda.device_count()
+
+    def test_the_distributed_sharder_refuses_without_a_process_group(self) -> None:
+        """A refusal naming the remedy, never a collective that hangs."""
+        from ampere.backends.torch import DistributedSharder
+        from ampere.core.exceptions import LoweringError
+
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            pytest.skip("this process is already in a torch.distributed group")
+        with pytest.raises(LoweringError, match="process group"):
+            DistributedSharder()

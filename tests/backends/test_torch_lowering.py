@@ -1338,6 +1338,38 @@ class TestWhatTheRealisationStillRefuses:
         with pytest.raises(LoweringError, match="latent_transform_native"):
             lowered_for(likelihood, observed=counts)
 
+    def test_a_zero_uncertainty_gp_dataset_refuses_by_name_at_construction(self) -> None:
+        """W3.0's finding, carried to this backend: refuse what the contract refuses.
+
+        ``ampere.core.likelihood``'s ``GaussianProcessNoise.sigma`` (through
+        ``_observed_sigma``) refuses a dataset with a retained uncertainty that
+        is zero or negative — "an infinitely precise measurement, which no
+        likelihood can normalise" — the moment the contract path evaluates it.
+        W3.0 gave the jax realisation the construction-time twin of that
+        refusal and recorded that torch had the identical gap; this closes it,
+        with the same condition and the same wording. Reaching the refusal only
+        through ``ampere.core.realise``'s one-point agreement check is not
+        enough: a ``strict`` NUTS run evaluates every other point too, and
+        would sample a density the contract refuses.
+        """
+        blank = Spectrum(GRID * u.um, _VALUES * u.Jy, uncertainty=np.zeros(GRID.size) * u.Jy)
+        with pytest.raises(LoweringError, match="zero or negative uncertainties") as raised:
+            lowered_for(
+                Likelihood(GaussianFamily(), GaussianProcessNoise(Matern32(0.3, 2.0))),
+                observed=blank,
+            )
+        assert "'default'" in str(raised.value)
+
+    def test_a_gp_dataset_with_jitter_and_real_uncertainty_still_lowers(self) -> None:
+        """The check is narrow: a legitimate jittered GP dataset is untouched."""
+        problem, lowered = lowered_for(
+            Likelihood(GaussianFamily(), GaussianProcessNoise(Matern32(0.3, 2.0), jitter=0.05))
+        )
+        theta = problem.prior_transform(np.array([0.4, 0.6]))
+        assert float(lowered.log_likelihood(theta)) == pytest.approx(
+            problem.log_likelihood(theta), abs=1e-8
+        )
+
     def test_another_backends_gp_solver_is_refused_by_name(self) -> None:
         """A numpy solve in a differentiable problem is a backend disagreement."""
         from ampere.core import DatasetError
@@ -1349,3 +1381,106 @@ class TestWhatTheRealisationStillRefuses:
                     GaussianProcessNoise(Matern32(0.3, 2.0), CoreQuasisepGP()),
                 )
             )
+
+
+class TestNativeBatchedSimulation:
+    """W3.1 slice 2: ``simulate_batched`` and the CPU-only sharding rows.
+
+    The cross-backend claims — agreement with the loop, partition
+    independence, the distributional check on a native draw — are conformance
+    rows, because they are claims about *every* backend. What is here is what
+    is specific to this one: the surface's own shapes and refusals, and the
+    single-device degenerate case of the sharding hook, which is the case CPU
+    CI can exercise (``tests/gpu`` holds the rest).
+    """
+
+    def built(self, noise: Any = None) -> Any:
+        return lowered_for(
+            Likelihood(GaussianFamily(), noise if noise is not None else IndependentNoise())
+        )
+
+    def theta(self, problem: FittingProblem, draws: int) -> np.ndarray:
+        rng = np.random.default_rng(20260909)
+        return np.stack(
+            [
+                problem.prior_transform(row)
+                for row in rng.uniform(0.05, 0.95, (draws, problem.free_size))
+            ]
+        )
+
+    def test_it_agrees_with_the_contract_path_draw_by_draw(self) -> None:
+        problem, lowered = self.built(GaussianProcessNoise(Matern32(0.3, 2.0)))
+        theta = self.theta(problem, 5)
+        produced = lowered.simulate_batched(theta)
+        for index, row in enumerate(theta):
+            expected = problem.simulate(row)
+            for label, container in expected.predicted.items():
+                assert np.allclose(
+                    produced.predicted[label][index],
+                    np.asarray(container.values),
+                    rtol=0.0,
+                    atol=1e-9,
+                )
+            for model, result in expected.results.items():
+                for channel in result:
+                    assert np.allclose(
+                        produced.channels[model][channel][index],
+                        np.asarray(result[channel].values),
+                        rtol=0.0,
+                        atol=1e-9,
+                    )
+
+    @pytest.mark.parametrize("chunk_size", [1, 7, None], ids=["chunk-1", "chunk-7", "whole"])
+    def test_the_chunking_does_not_change_the_prediction(self, chunk_size: int | None) -> None:
+        problem, lowered = self.built()
+        theta = self.theta(problem, 9)
+        whole = lowered.simulate_batched(theta)
+        chunked = lowered.simulate_batched(theta, chunk_size=chunk_size)
+        for label, values in whole.predicted.items():
+            assert np.array_equal(values, chunked.predicted[label])
+
+    def test_a_quasiseparable_problem_refuses_by_name(self) -> None:
+        _, lowered = self.built(GaussianProcessNoise(Matern32(0.3, 2.0), QuasisepGP()))
+        with pytest.raises(LoweringError, match="QuasisepGP"):
+            lowered.simulate_batched(np.zeros((3, lowered.free_size)))
+
+    def test_a_non_stack_is_refused(self) -> None:
+        _, lowered = self.built()
+        with pytest.raises(LoweringError, match="batch, "):
+            lowered.simulate_batched(np.zeros(lowered.free_size))
+
+    def test_the_single_device_sharder_is_the_degenerate_case(self) -> None:
+        """CPU CI's half of Peter's addendum: the hook runs, and changes nothing."""
+        from ampere.backends.torch import SingleDeviceSharder, available_devices
+
+        problem, lowered = self.built()
+        theta = self.theta(problem, 6)
+        plain = lowered.simulate_batched(theta)
+        for sharder in (SingleDeviceSharder(), SingleDeviceSharder("cpu")):
+            assert len(sharder.devices()) == 1
+            produced = lowered.simulate_batched(theta, sharder=sharder)
+            for label, values in plain.predicted.items():
+                assert np.array_equal(values, produced.predicted[label])
+        assert available_devices()
+
+    def test_the_distributed_sharder_refuses_without_a_process_group(self) -> None:
+        """A refusal naming the remedy, never a collective that hangs."""
+        from ampere.backends.torch import DistributedSharder
+
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            pytest.skip("this process is already in a torch.distributed group")
+        with pytest.raises(LoweringError, match="process group"):
+            DistributedSharder()
+
+    def test_a_native_draw_is_a_pure_function_of_its_seed(self) -> None:
+        """What makes partition independence possible on a backend with no per-draw RNG."""
+        problem, lowered = self.built()
+        theta = self.theta(problem, 4)
+        prediction = lowered.simulate_batched(theta)
+        first = lowered.sample_observations(theta, prediction.predicted, [11, 22, 33, 44])
+        second = lowered.sample_observations(theta, prediction.predicted, [11, 22, 33, 44])
+        shuffled = lowered.sample_observations(theta, prediction.predicted, [11, 22, 33, 45])
+        for label, values in first.items():
+            assert np.array_equal(values, second[label])
+            assert np.array_equal(values[:3], shuffled[label][:3])
+            assert not np.array_equal(values[3], shuffled[label][3])

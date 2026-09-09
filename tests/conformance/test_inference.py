@@ -22,6 +22,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+import scipy.stats as st
 
 from ampere.core import (
     Dataset,
@@ -87,6 +88,39 @@ JOINT = ProblemSpec(
 CORRELATED = ProblemSpec(
     model=ModelSpec(kind=ModelKind.LINEAR, coordinates=GP_GRID),
     datasets=(DatasetSpec(noise=NoiseKind.GP, covariance=CovarianceSpec()),),
+)
+
+#: The correlated shape with a **fixed diagonal floor** on the GP noise model.
+#:
+#: W3.1 slice 2's parity row. ``GaussianProcessNoise`` has taken ``scale=`` and
+#: ``jitter=`` since ``ampere.core`` declared them, and torch's subclass has
+#: forwarded them since W2.4 — jax's did not, so the same three-line
+#: composition succeeded on one modern backend and raised ``TypeError`` on the
+#: other. That is exactly the drift the battery exists to catch, so the check
+#: lives here rather than in either backend's own suite.
+CORRELATED_JITTER = ProblemSpec(
+    model=ModelSpec(kind=ModelKind.LINEAR, coordinates=GP_GRID),
+    datasets=(DatasetSpec(noise=NoiseKind.GP, covariance=CovarianceSpec(), gp_jitter=0.05),),
+)
+
+#: The correlated shape sized so that a **draw** can be checked against its own
+#: covariance without the tolerance having to be generous.
+#:
+#: W3.1 slice 2's native-sampling rows. ``sigma`` is deliberately large (0.3, so
+#: ``sigma² = 0.09``) for the reason ``tests/core/test_dataset.py`` gives about
+#: the numpy oracle it copies: with the 0.1 used elsewhere in this file,
+#: dropping the diagonal term entirely would move the covariance by 0.01 and no
+#: honest tolerance would catch it. The amplitude is raised to 0.5 for the same
+#: reason on the other axis.
+CORRELATED_DRAWS = ProblemSpec(
+    model=ModelSpec(kind=ModelKind.LINEAR, coordinates=GP_GRID),
+    datasets=(
+        DatasetSpec(
+            noise=NoiseKind.GP,
+            covariance=CovarianceSpec(amplitude=0.5, length_scale=2.0),
+            uncertainty=0.3,
+        ),
+    ),
 )
 
 #: The same problem through the O(N) solver rather than the dense one.
@@ -830,6 +864,207 @@ class TestSimulation:
         assert problem.simulate().theta.tolist() != problem.simulate().theta.tolist()
 
 
+class TestTheGPNoiseFloor:
+    """W3.1 slice 2: every backend's ``GaussianProcessNoise`` takes ``jitter=``.
+
+    Three claims, and the first is the one that was actually broken: the
+    composition **exists** on every backend. The other two are what make the
+    keyword mean the same thing everywhere — the parameter is declared and held
+    fixed (so no engine dimension appears), and the floor really is in the
+    density, in quadrature with the data's own uncertainties, rather than
+    accepted and dropped.
+    """
+
+    FLOOR = 0.05
+
+    def test_the_floor_is_a_declared_fixed_parameter(self, backend: ConformanceBackend) -> None:
+        problem = build_problem(backend, CORRELATED_JITTER)
+        noise = problem.datasets["sed"].likelihood.noise
+        assert "jitter" in noise.parameters.names
+        assert "jitter" not in noise.parameters.free_names
+        assert problem.free_size == build_problem(backend, CORRELATED).free_size
+
+    def test_the_floor_reaches_the_density(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """Against ``scipy``, not against the no-floor problem: an oracle, not a difference."""
+        problem = build_problem(backend, CORRELATED_JITTER)
+        theta = problem.unconstrain(problem.reference_values)
+        spec = CORRELATED_JITTER.datasets[0]
+        grid = np.asarray(GP_GRID, dtype=float)
+        mean = analytic_flux(
+            CORRELATED_JITTER.model, model_context(problem, dict(problem.reference_values)), grid
+        )
+        covariance = kernel_matrix(
+            spec.covariance.family, grid, spec.covariance.amplitude, spec.covariance.length_scale
+        ) + np.diag(np.full(grid.size, spec.uncertainty**2 + self.FLOOR**2))
+        observed = np.asarray(problem.datasets["sed"].observed.values, dtype=float)
+        expected = float(
+            st.multivariate_normal(mean=mean, cov=covariance, allow_singular=False).logpdf(observed)
+        )
+        assert float(problem.log_likelihood(problem.constrain(theta))) == pytest.approx(
+            expected, abs=tolerances.linear_algebra
+        )
+
+    def test_it_lowers_where_the_backend_has_a_realisation(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        problem = build_problem(backend, CORRELATED_JITTER)
+        if problem.backend not in registered_realisations():
+            pytest.skip(f"the {problem.backend!r} backend registers no realisation")
+        realised = realise(problem)
+        theta = problem.unconstrain(problem.reference_values)
+        assert float(np.asarray(realised.log_prob_unconstrained(theta))) == pytest.approx(
+            float(problem.log_prob_unconstrained(theta)), abs=tolerances.cross_backend
+        )
+
+
+class TestNativeObservationSampling:
+    """W3.1 slice 2: every backend draws observations, and the numpy path is the oracle.
+
+    Peter's ruling of 2026-09-08. The comparison is **distributional**, not
+    draw-for-draw, and that is forced rather than chosen: ``jax.random`` and
+    ``torch.Generator`` do not reproduce numpy's stream, and making one do so
+    would mean reimplementing a random library inside another. So what is
+    asserted is what a sampling distribution *is* — its mean and its covariance
+    — against the closed form, with the same two extra assertions the numpy
+    oracle in ``tests/core/test_dataset.py`` carries and for the same reason:
+    the joint tolerance alone would not catch a dropped ``K`` or a dropped
+    ``sigma``, and both of those look entirely plausible in a plot.
+
+    What *is* asserted exactly is the **refusals**. A family ``ampere.core``
+    declines to sample is a family no backend may sample, because a backend
+    guessing an observation process the contract will not guess is precisely
+    how an SBI posterior gets trained on the wrong forward model.
+    """
+
+    DRAWS = 4000
+    CHUNK = 500
+
+    @staticmethod
+    def natively_drawn(problem: FittingProblem, draws: int, chunk: int) -> Any:
+        """*draws* observations at the reference θ, all on the native path."""
+        theta = np.tile(
+            np.asarray(problem.parameters.pack(dict(problem.reference_values)), dtype=float),
+            (draws, 1),
+        )
+        return problem.simulate_many(
+            draws, values=theta, observe=True, native=True, chunk_size=chunk
+        )
+
+    def problem(self, backend: ConformanceBackend, spec: ProblemSpec) -> FittingProblem:
+        problem = build_problem(backend, spec)
+        if problem.backend not in registered_realisations() or not problem.batchable:
+            pytest.skip(f"the {problem.backend!r} backend has no native batched path")
+        return problem
+
+    def test_the_native_draw_has_the_declared_covariance(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """``K + diag(σ²)``, from the backend's own random stream.
+
+        The tolerance is the Monte-Carlo standard error of the sample
+        covariance itself — ``se(Ĉᵢⱼ) = sqrt((Cᵢᵢ Cⱼⱼ + Cᵢⱼ²)/M)`` — so it stays
+        honest as the draw count changes, exactly as the numpy row's does.
+        """
+        problem = self.problem(backend, CORRELATED_DRAWS)
+        batch = self.natively_drawn(problem, self.DRAWS, self.CHUNK)
+        assert batch.provenance["sample_backend"] == problem.backend
+
+        spec = CORRELATED_DRAWS.datasets[0]
+        grid = np.asarray(GP_GRID, dtype=float)
+        covariance = kernel_matrix(
+            spec.covariance.family, grid, spec.covariance.amplitude, spec.covariance.length_scale
+        )
+        expected = covariance + np.diag(np.full(grid.size, spec.uncertainty**2))
+        drawn = np.asarray(batch.observations["sed"].values)
+        empirical = np.cov(drawn, rowvar=False)
+
+        diagonal = np.diag(expected)
+        standard_error = np.sqrt((np.outer(diagonal, diagonal) + expected**2) / self.DRAWS)
+        assert np.all(
+            np.abs(empirical - expected) <= tolerances.monte_carlo_sigmas * standard_error
+        )
+        # The two ways this could be wrong and still look plausible, ruled out
+        # explicitly rather than left to the joint tolerance: no correlation at
+        # all (the off-diagonals collapse to zero) and no diagonal noise at all
+        # (the variances are K's alone). The nearest-neighbour off-diagonals
+        # are the ones with signal on this grid; the far corners are near zero
+        # by construction at this length scale, so asserting on them would be
+        # asserting on noise.
+        assert np.abs(np.diag(empirical, 1)).min() > 0.05
+        assert np.abs(np.diag(empirical) - np.diag(covariance)).min() > 0.04
+
+    def test_the_native_draw_is_centred_on_the_prediction(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        problem = self.problem(backend, CORRELATED_DRAWS)
+        batch = self.natively_drawn(problem, self.DRAWS, self.CHUNK)
+        drawn = np.asarray(batch.observations["sed"].values)
+        mean = np.asarray(batch.predicted["sed"].values[0])
+        spec = CORRELATED_DRAWS.datasets[0]
+        grid = np.asarray(GP_GRID, dtype=float)
+        variance = (
+            np.diag(
+                kernel_matrix(
+                    spec.covariance.family,
+                    grid,
+                    spec.covariance.amplitude,
+                    spec.covariance.length_scale,
+                )
+            )
+            + spec.uncertainty**2
+        )
+        standard_error = np.sqrt(variance / self.DRAWS)
+        assert np.all(
+            np.abs(drawn.mean(axis=0) - mean) <= tolerances.monte_carlo_sigmas * standard_error
+        )
+
+    def test_an_uncorrelated_native_draw_has_the_declared_variance(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """The other branch: ``x = mu + sigma z``, with no covariance to hide in."""
+        problem = self.problem(backend, SINGLE)
+        batch = self.natively_drawn(problem, self.DRAWS, self.CHUNK)
+        drawn = np.asarray(batch.observations["sed"].values)
+        sigma = np.asarray(problem.datasets["sed"].observed.uncertainty, dtype=float)
+        empirical = drawn.var(axis=0)
+        standard_error = sigma**2 * np.sqrt(2.0 / self.DRAWS)
+        assert np.all(
+            np.abs(empirical - sigma**2) <= tolerances.monte_carlo_sigmas * standard_error
+        )
+        off_diagonal = np.abs(np.cov(drawn, rowvar=False)[np.triu_indices(len(sigma), k=1)])
+        assert off_diagonal.max() < 0.5 * float(sigma.min() ** 2)
+
+    def test_poisson_refuses_by_name_on_every_backend(self, backend: ConformanceBackend) -> None:
+        """§13's refusal is the same sentence whichever backend is underneath.
+
+        Asserted against the **text**, not against the exception type, because
+        the ruling is that a backend does not get its own paraphrase: what the
+        native path may not sample it hands back to the numpy path, and the
+        numpy path names the family and the override that would supply the
+        observation process.
+        """
+        from ampere.core.exceptions import DatasetError
+
+        problem = build_problem(backend, LATENT_GP)
+        with pytest.raises(DatasetError) as raised:
+            problem.simulate_many(2, observe=True)
+        message = str(raised.value)
+        assert "the poisson family does not implement sample()" in message
+        assert "override" in message and "sample(predicted, noise, rng)" in message
+
+    def test_the_prediction_is_still_native_when_the_draw_is_not(
+        self, backend: ConformanceBackend
+    ) -> None:
+        """Falling back on the noise does not throw away the vectorised forward model."""
+        problem = build_problem(backend, LATENT_GP)
+        native = problem.backend in registered_realisations() and problem.batchable
+        batch = problem.simulate_many(3, observe=False)
+        assert batch.provenance["simulate_batched"] is native
+        assert "sample_backend" not in batch.provenance
+
+
 class TestBatchedSimulation:
     """W3.1: ``simulate_many`` is the loop, on every backend and every executor.
 
@@ -839,6 +1074,18 @@ class TestBatchedSimulation:
     built on a *second* problem with the same seed, because reading
     ``rng("simulate")`` in the test would advance the very stream the batch is
     about to spawn from.
+
+    **Amended at W3.1 slice 2**, when the equality acquired two grades. The
+    loop remains the semantics, and ``native=False`` still reproduces it
+    **bitwise** — that row is the literal statement slice 1 landed. On a
+    backend that can run the chunk through its own ``vmap``, the *prediction*
+    agrees to ``tolerances.cross_backend`` rather than bitwise (vectorised
+    arithmetic is not scalar arithmetic in the last digits) and the
+    *observations* are a draw from the same distribution rather than the same
+    draw, because ``jax.random`` and ``torch.Generator`` are not numpy's
+    stream and could not be made to be without reimplementing one library
+    inside another. Which of the two happened is not left to inference: the
+    batch's ``provenance`` records it, and these rows read it.
     """
 
     COUNT = 6
@@ -853,33 +1100,90 @@ class TestBatchedSimulation:
         )
 
     @staticmethod
-    def identical(left: SimulationBatch, right: SimulationBatch) -> bool:
-        if len(left) != len(right) or not np.array_equal(left.theta, right.theta):
+    def agrees(
+        left: SimulationBatch,
+        right: SimulationBatch,
+        *,
+        tolerance: float = 0.0,
+        observations: bool = True,
+    ) -> bool:
+        """Order and values. *tolerance* 0.0 is the bitwise form slice 1 landed.
+
+        ``observations=False`` compares the noise-free half only, which is what
+        a natively drawn batch can promise: the same distribution, from a
+        different random stream.
+        """
+
+        def same(one: Any, other: Any) -> bool:
+            first, second = np.asarray(one), np.asarray(other)
+            if tolerance == 0.0:
+                return bool(np.array_equal(first, second))
+            return bool(np.allclose(first, second, rtol=0.0, atol=tolerance))
+
+        if len(left) != len(right) or not same(left.theta, right.theta):
             return False
         for one, other in zip(left, right, strict=True):
             for label in one.predicted:
-                if not np.array_equal(
-                    np.asarray(one.predicted[label].values),
-                    np.asarray(other.predicted[label].values),
-                ):
+                if not same(one.predicted[label].values, other.predicted[label].values):
                     return False
             if (one.observations is None) != (other.observations is None):
                 return False
-            if one.observations is not None and other.observations is not None:
+            if observations and one.observations is not None and other.observations is not None:
                 for label in one.observations:
-                    if not np.array_equal(
-                        np.asarray(one.observations[label].values),
-                        np.asarray(other.observations[label].values),
-                    ):
+                    if not same(one.observations[label].values, other.observations[label].values):
                         return False
         return True
 
+    @staticmethod
+    def can_run_natively(problem: FittingProblem) -> bool:
+        """Whether this backend offers the vectorised forward path for *problem*."""
+        return bool(problem.batchable) and problem.backend in registered_realisations()
+
+    @classmethod
+    def matches_the_loop(
+        cls,
+        batch: SimulationBatch,
+        reference: SimulationBatch,
+        tolerances: Tolerances,
+    ) -> bool:
+        """Hold *batch* to whatever its own provenance says it is.
+
+        The one place the two grades of the equality are chosen between, so no
+        row has to remember which backend does what: a batch that ran the loop
+        is held to the bitwise identity, and one that ran a backend's ``vmap``
+        to ``cross_backend`` on the prediction — with the observations compared
+        only if the loop drew them.
+        """
+        native = bool(batch.provenance.get("simulate_batched"))
+        drew_natively = batch.provenance.get("sample_backend", "reference") != "reference"
+        return cls.agrees(
+            batch,
+            reference,
+            tolerance=tolerances.cross_backend if native else 0.0,
+            observations=not drew_natively,
+        )
+
     @pytest.mark.parametrize("observe", [False, True], ids=["predicted", "observed"])
     def test_the_batch_is_n_calls_of_simulate(
-        self, backend: ConformanceBackend, observe: bool
+        self, backend: ConformanceBackend, tolerances: Tolerances, observe: bool
     ) -> None:
         batch = build_problem(backend, SINGLE).simulate_many(self.COUNT, observe=observe)
-        assert self.identical(batch, self.loop(backend, self.COUNT, observe=observe))
+        loop = self.loop(backend, self.COUNT, observe=observe)
+        assert self.matches_the_loop(batch, loop, tolerances)
+
+    def test_the_loop_is_still_reproduced_bitwise(self, backend: ConformanceBackend) -> None:
+        """``native=False`` is slice 1's statement, unamended, on every backend.
+
+        Worth a row of its own rather than a note: the native path is a
+        throughput optimisation *underneath* an equality, and the way to keep
+        that true is to be able to switch it off and get the equality back
+        exactly. If this ever fails, something in the native path has leaked
+        into the semantics.
+        """
+        batch = build_problem(backend, SINGLE).simulate_many(self.COUNT, observe=True, native=False)
+        assert self.agrees(batch, self.loop(backend, self.COUNT, observe=True))
+        assert batch.provenance["simulate_batched"] is False
+        assert batch.provenance["sample_backend"] == "reference"
 
     @pytest.mark.parametrize(
         "executor",
@@ -887,7 +1191,7 @@ class TestBatchedSimulation:
         ids=["serial", "thread-2", "process-2"],
     )
     def test_every_shipped_executor_gives_the_same_batch(
-        self, backend: ConformanceBackend, executor: Any
+        self, backend: ConformanceBackend, tolerances: Tolerances, executor: Any
     ) -> None:
         from ampere.core.exceptions import DatasetError
 
@@ -900,16 +1204,72 @@ class TestBatchedSimulation:
                 problem.simulate_many(self.COUNT, observe=True, executor=executor)
             return
         batch = problem.simulate_many(self.COUNT, observe=True, executor=executor, chunk_size=4)
-        assert self.identical(batch, self.loop(backend, self.COUNT, observe=True))
+        loop = self.loop(backend, self.COUNT, observe=True)
+        assert self.matches_the_loop(batch, loop, tolerances)
 
     @pytest.mark.parametrize("chunk_size", [1, 7, None], ids=["chunk-1", "chunk-7", "whole"])
     def test_the_partition_does_not_change_the_answer(
-        self, backend: ConformanceBackend, chunk_size: int | None
+        self, backend: ConformanceBackend, tolerances: Tolerances, chunk_size: int | None
     ) -> None:
         batch = build_problem(backend, SINGLE).simulate_many(
             self.COUNT, observe=True, chunk_size=chunk_size
         )
-        assert self.identical(batch, self.loop(backend, self.COUNT, observe=True))
+        loop = self.loop(backend, self.COUNT, observe=True)
+        assert self.matches_the_loop(batch, loop, tolerances)
+
+    @pytest.mark.parametrize("chunk_size", [1, 7, None], ids=["chunk-1", "chunk-7", "whole"])
+    def test_the_partition_does_not_change_the_native_answer(
+        self, backend: ConformanceBackend, tolerances: Tolerances, chunk_size: int | None
+    ) -> None:
+        """The same claim on the native path, and it is a stronger one there.
+
+        A chunk is what gets ``vmap``ped, so on the native path the partition
+        decides the *shape of every array in the trace* — which is exactly the
+        thing that could change an answer without changing a line of the model.
+        Compared against the whole-budget native batch rather than against the
+        loop, so a difference here is the chunking and nothing else.
+        Observations included: the per-draw key is derived by index, so native
+        sampling is partition-independent too.
+        """
+        problem = build_problem(backend, SINGLE)
+        if not self.can_run_natively(problem):
+            pytest.skip(f"the {problem.backend!r} backend has no native batched path")
+        whole = problem.simulate_many(self.COUNT, observe=True, native=True)
+        chunked = build_problem(backend, SINGLE).simulate_many(
+            self.COUNT, observe=True, native=True, chunk_size=chunk_size
+        )
+        assert self.agrees(chunked, whole, tolerance=tolerances.cross_backend)
+
+    def test_the_provenance_says_which_path_ran(self, backend: ConformanceBackend) -> None:
+        """A stored budget must be able to say how it was made, not be guessed at."""
+        problem = build_problem(backend, SINGLE)
+        batch = problem.simulate_many(self.COUNT, observe=True)
+        assert batch.provenance["simulate_batched"] is self.can_run_natively(problem)
+        assert batch.provenance["simulation_context"] == "none"
+        expected = problem.backend if self.can_run_natively(problem) else "reference"
+        assert batch.provenance["sample_backend"] == expected
+
+    def test_a_problem_that_cannot_be_run_natively_is_refused_by_name(
+        self, backend: ConformanceBackend
+    ) -> None:
+        """``native=True`` must be a sentence, on every backend, never a slow path.
+
+        The same rule ``log_prob_unconstrained_batched`` follows: a capability
+        that is not there is refused with a message naming what withdrew it,
+        because a fast path that quietly becomes a slow one is a fast path
+        nobody can measure.
+        """
+        from ampere.core.exceptions import DatasetError, LoweringError
+
+        problem = build_problem(backend, SINGLE)
+        if self.can_run_natively(problem):
+            if SolverKind.QUASISEP not in backend.capabilities.solvers:
+                pytest.skip(f"{problem.backend!r} runs every declared shape natively")
+            problem = build_problem(backend, CORRELATED_QUASISEP)
+            if problem.batchable:
+                pytest.skip(f"{problem.backend!r} declares the quasiseparable solver batchable")
+        with pytest.raises((DatasetError, LoweringError)):
+            problem.simulate_many(2, native=True)
 
     def test_a_composed_problem_can_be_sent_to_a_worker(self, backend: ConformanceBackend) -> None:
         """The precondition for the process pool, asserted rather than assumed.

@@ -1521,6 +1521,48 @@ Masked samples keep the observed container's own values: they carry zero
 information and are excluded from every likelihood, so drawing noise for them
 would be inventing data.
 
+#### Sampling on a backend (*Amended W3.1*)
+
+**Ruled by Peter, 2026-09-08**: every backend supports observation sampling
+natively. W3.1 slice 2 landed it, and the ruling has a **ceiling** which is
+stated here because it is the load-bearing half: *a backend samples exactly what
+`ampere.core` samples.* Today that is `GaussianFamily.sample` and nothing else.
+A native twin for `student_t`, `cauchy`, `complex_gaussian` or `poisson` would
+be a backend inventing an observation process the contract has just finished
+declining to guess — the "silently train an SBI posterior on the wrong forward
+model" this whole subsection exists to prevent — so those families keep the
+refusal above **on every backend**, and a family whose `sample` a *user* has
+overridden keeps it too: their override is the observation process they wrote,
+and running something else instead would be worse than running it slowly.
+
+A realisation may therefore offer an optional
+`sample_observations(theta, predicted, seeds)`, checked by presence exactly as
+`log_likelihood_terms` is. It draws the retained values for a whole chunk in the
+backend's own arithmetic and from the backend's own random stream; a dataset it
+may not sample is refused **before** any draw is made, and `simulate_many` then
+runs the numpy path, so what a user meets is `ampere.core`'s own refusal text
+rather than a backend's paraphrase of it. Masked samples keep the observed
+container's values by the same rule, applied in one place
+(`Dataset.place_observation`) rather than reimplemented per backend, and a
+censoring declaration that survives the mask blocks a draw on every backend.
+
+**The numpy path stays the oracle, and the comparison is distributional.**
+`jax.random` and `torch.Generator` do not reproduce numpy's stream and could not
+be made to without reimplementing one library inside another, so a natively
+drawn budget is a draw from the same distribution, not the same draw. The
+conformance battery therefore holds a native draw to its *moments* — the mean
+and the covariance of 4 000 draws against `K + diag(σ²)`, at the Monte-Carlo
+standard error of the estimator itself — with the same two extra assertions the
+numpy row carries and for the same reason: the joint tolerance alone would not
+catch a dropped `K` (the off-diagonals collapse) or a dropped `σ` (the variances
+become `K`'s alone), and both look entirely plausible in a plot.
+
+Which stream produced a budget is **recorded, not inferred**:
+`SimulationBatch.provenance['sample_backend']` names it, and the training-set
+writer puts it in the file's root attributes as `ampere_sample_backend`. Its
+value is `"reference"` whenever `LikelihoodFamily.sample` drew — including on a
+torch or jax problem whose observations came from the loop.
+
 ### Batched form: `simulate_many` (*Amended W3.1*)
 
 Limitation 17.5 said `simulate` is one draw and that `simulate_many(n)` was
@@ -1627,6 +1669,76 @@ the hook — a table evaluated in one call is by definition not partitioned acro
 workers, so the two are alternative ways of spending the same batch, and a torch
 model that declares the flag for `vmap` falls to the loop honestly.
 
+**The native path, and exactly what it guarantees (*Amended W3.1*, slice 2).**
+A realisation may offer an optional
+`simulate_batched(theta, *, chunk_size=None, sharder=None)` — checked by
+presence, as `log_likelihood_terms` is — which runs a chunk's whole noise-free
+forward model through `torch.func.vmap` or `jax.vmap` and hands back a
+`BatchedPrediction`: every model's every channel, and every dataset's
+instrument-transformed prediction on the whole observed grid. *Every* channel,
+because `results.md` §11 writes one training-set group per `<model>.<channel>`
+and a fast path returning fewer would silently write a smaller file than the
+loop. θ is the **constrained** free vector — the coordinates
+`SimulationBatch.theta` holds, not the unconstrained ones a sampler works in,
+because a simulation budget is a set of parameter values rather than a set of
+sampler positions.
+
+`simulate_many` uses it when the problem is realised and every part declares
+`BATCHABLE`, and the guarantee it then makes is deliberately **two-graded**,
+because one sentence could not be true of both halves:
+
+- **the noise-free prediction** still satisfies the equality above, to
+  `tolerances.cross_backend` rather than bitwise. Vectorised arithmetic is not
+  scalar arithmetic in the last digits, and a `vmap` is free to accumulate in a
+  different order; the claim is that it is the same function, not that XLA and
+  ATen reassociate identically. The *partition* independence is unweakened, and
+  is a stronger claim here than on the loop, because a chunk is what gets
+  `vmap`ped and therefore decides the shape of every array in the trace:
+  `chunk_size` 1, 7 and the whole budget give the same predictions;
+- **the observations**, where they were drawn natively, are a draw from the same
+  distribution and *not* the same draw — see "sampling on a backend" above.
+
+`native=False` switches the fast path off and restores the bitwise equality
+exactly, which is the way that claim stays checkable; `native=True` requires the
+fast path and **refuses by name** when a part is not `BATCHABLE`, when an
+executor was given (a pool partitions the draws and a `vmap` evaluates them
+together — they are alternative ways of spending one chunk), or when the backend
+registers no realisation. The default, `native=None`, uses it where it is
+available and falls back to the loop where it is not, recording which happened
+in `SimulationBatch.provenance['simulate_batched']` — written to a training set
+as `ampere_simulate_batched`, and merged conservatively across chunks so a mixed
+budget never reads as a native one. `Model.evaluate_batch` is recorded
+separately (`ampere_evaluate_batch`): a model taking a table of θ and a lowered
+problem running through a backend's `vmap` are different claims, and one
+attribute could not answer for both.
+
+Three properties are contractual and follow from the design rather than from
+care. The `vmap` is **per chunk with the chunks looped**, never over the budget
+— that is exactly the single-device memory trap the ruling names. The
+`Simulation` objects a native chunk produces are the loop's: containers rebuilt
+from templates taken once at the reference values, which is sound because a
+predicted container's axes and its effective mask are evaluation-invariant *by
+contract* (`Likelihood.check_alignment` and `Dataset._masked_pair`). And the
+native path is checked against the contract path at that same reference point,
+channel by channel and dataset by dataset, to the tolerances `realise` uses for
+the density — a guard rather than a proof, for the same reason §10a gives, with
+the conformance battery making the full comparison.
+
+**Sharding a chunk (*Amended W3.1*, slice 2; Peter, 2026-09-09).** There are
+three axes a budget can be spread along and the contract keeps them apart:
+across processes or machines is the `Executor`; across the draws in one chunk is
+the `vmap`; across the accelerators of one host is a
+`ChunkSharder` — `devices()` and `shard(fn, stacked)`, where the contract is a
+*value* contract: sharding must not change the answer, only where it was
+computed. jax ships `SingleDeviceSharder` and a `pmap`-based `MeshSharder`;
+torch ships `SingleDeviceSharder` and a `DistributedSharder` that evaluates one
+rank's stride of the chunk and gathers. ampere **does not launch a process
+group**: a multi-rank run is launched under `torchrun`, and a sharder built
+without one refuses by name rather than hanging in a collective. The
+single-device case is the reference implementation and is what CPU CI exercises;
+the multi-device rows live in `tests/gpu` and skip without hardware, with the
+full exercise scheduled with the GPU item.
+
 ### Execution: the executor protocol (*Amended W3.1*)
 
 `ampere.core.simulate.Executor` is one method — `map(fn, items)`, results in
@@ -1646,6 +1758,30 @@ simulation in flight, the problem broadcast to each worker once at start-up
 rather than pickled per draw, and `max_tasks_per_child=1` available for a
 routine that cannot be run twice in one process. `ThreadExecutor` suits an
 I/O-bound wrapper.
+
+**The pool outlives a `map` call (*Amended W3.1*, slice 2).** Slice 1 built one
+per call, which made `chunk_size` — whose job is bounding *memory* — bound
+throughput as well, since every chunk paid for process creation plus one pickle
+of the problem per worker. `ProcessExecutor` now keeps its pool, and the
+replacement rule is exactly the two states in which the held pool is unusable:
+**a pool is replaced only when a worker died or a draw expired.** Broadcasting a
+different payload closes it too, since workers are handed the payload at
+start-up. `shutdown()` therefore matters, and the context-manager form calls it.
+
+**The default start method is `forkserver` on POSIX (*Amended W3.1*, slice 2;
+ruled for that item).** Not the platform's own, for two reasons that point the
+same way: forking a process that already holds a threaded runtime may deadlock —
+jax warns about it in as many words, and torch's intra-op pools have the same
+shape — and Python 3.14 moves the platform default off `fork` on Linux for that
+reason, so inheriting the platform default would mean ampere's behaviour
+changing at an interpreter upgrade rather than at a decision. `forkserver` over
+`spawn` because it keeps most of the start-up saving; `fork` remains available
+through `mp_context=`. The price is `spawn`'s: everything a worker touches must
+pickle **and unpickle**, which is why `simulate_many`'s picklability check is a
+round trip rather than a dump, and why a `timeout` is now taken only after the
+workers have been started with an undeadlined no-op — a deadline measured from
+submission is a deadline on the *simulation* only if the worker is already
+running when the item is submitted.
 
 **What is flagged and what is raised.** A per-simulation `timeout` on either
 pool expires as a flagged failure, never an exception, and so does a worker that
@@ -1681,7 +1817,10 @@ with a message naming the usual culprits rather than letting an opaque
 `PicklingError` surface from inside a worker's bootstrap. Making that true at
 all needed a `copyreg` reduction for `mappingproxy`
 (`ampere/core/_pickling.py`), since every frozen mapping in `ampere.core` is one
-and none of them could be pickled before.
+and none of them could be pickled before. Since W3.1 slice 2 the check is a
+**round trip**: a forked worker inherits the problem by memory and never
+reconstructs it, whereas a `forkserver` worker does, and a class that writes but
+does not read is a failure inside a worker bootstrap rather than a sentence here.
 
 **The process pool is therefore not a universal executor, and that is the right
 answer rather than a gap.** A problem composed on the *reference* backend

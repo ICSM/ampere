@@ -391,10 +391,29 @@ class GaussianProcessNoise(_CoreGaussianProcessNoise):
         built in jax and the hyperparameters are trainable.
     solver
         GP solve strategy. Defaults to this backend's ``DenseGP()``.
+    scale, jitter
+        As :class:`~ampere.backends.jax.IndependentNoise`, and applied to the
+        **diagonal** term before the kernel is added:
+        ``sigma_eff² = (scale · sigma_data)² + jitter²``. Added at W3.1 slice 2
+        for parity with the torch class, which has taken them since W2.4 — the
+        declaration was always the core's and the native path already
+        transcribes the quadrature in :meth:`_sigma`, so what was missing was
+        only the constructor keyword that registers the parameters. A ``jitter``
+        is also what lets a GP-marginal dataset with no observed uncertainties
+        compose at all (:meth:`_check_gp_uncertainty`).
     device
         Platform name (``"cpu"``, the default) or an explicit ``jax.Device``.
         Never auto-detected; it sets the ``DEVICE`` capability flag and nothing
         else here — the kernel and the solver own the arrays that move.
+
+    Examples
+    --------
+    >>> import scipy.stats as st
+    >>> from ampere.backends.jax import Matern32, configure_x64
+    >>> configure_x64()
+    >>> noise = GaussianProcessNoise(Matern32(0.3, 1.0), jitter=st.halfnorm(0.0, 0.1))
+    >>> noise.parameters.free_names
+    ('jitter',)
     """
 
     DIFFERENTIABLE: ClassVar[bool] = True
@@ -421,10 +440,18 @@ class GaussianProcessNoise(_CoreGaussianProcessNoise):
     BACKEND: ClassVar[str] = BACKEND
 
     def __init__(
-        self, kernel: Kernel, solver: GPSolver | None = None, *, device: Any = DEVICE
+        self,
+        kernel: Kernel,
+        solver: GPSolver | None = None,
+        *,
+        scale: Any = None,
+        jitter: Any = None,
+        device: Any = DEVICE,
     ) -> None:
         require_x64(f"a jax {type(self).__name__}")
-        super().__init__(kernel, DenseGP() if solver is None else solver)
+        super().__init__(
+            kernel, DenseGP() if solver is None else solver, scale=scale, jitter=jitter
+        )
         resolved = resolve_device(device, f"a jax {type(self).__name__}")
         object.__setattr__(self, "_device", resolved)
         object.__setattr__(self, "DEVICE", device_flag(device, resolved))

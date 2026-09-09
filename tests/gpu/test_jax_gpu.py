@@ -200,3 +200,53 @@ class TestTheRefusalsStillHold:
                 ],
                 seed=1,
             )
+
+
+class TestChunkSharding:
+    """W3.1 slice 2's multi-device hook, at the API level.
+
+    Peter's addendum of 2026-09-09 asks for the sharding API to be designed,
+    documented and smoke-tested here, with the full exercise left to the GPU
+    item — so these rows say what a sharder must be true of and run them on
+    whatever accelerators this process reports. The single-device degenerate
+    case is exercised on CPU by ``tests/backends``; what needs hardware is the
+    claim that splitting a chunk across devices does not change the answer,
+    which is the *whole* of a sharder's contract.
+    """
+
+    def problem(self) -> FittingProblem:
+        return _problem(DenseGP, PLATFORM)
+
+    def theta(self, problem: FittingProblem, draws: int = 8) -> np.ndarray:
+        rng = np.random.default_rng(20260909)
+        return np.stack(
+            [problem.prior_transform(row) for row in rng.uniform(0.05, 0.95, (draws, 2))]
+        )
+
+    def test_the_sharder_reports_the_devices_it_will_use(self) -> None:
+        from ampere.backends.jax import MeshSharder
+
+        sharder = MeshSharder(ACCELERATORS)
+        assert len(sharder.devices()) == len(ACCELERATORS)
+
+    def test_sharding_does_not_change_the_prediction(self) -> None:
+        """The value contract: where it was computed is not part of the answer."""
+        from ampere.backends.jax import MeshSharder, SingleDeviceSharder
+
+        problem = self.problem()
+        lowered = lower_problem(problem)
+        theta = self.theta(problem)
+        alone = lowered.simulate_batched(theta, sharder=SingleDeviceSharder(PLATFORM))
+        spread = lowered.simulate_batched(theta, sharder=MeshSharder(ACCELERATORS))
+        for label, values in alone.predicted.items():
+            assert np.allclose(values, spread.predicted[label], rtol=0.0, atol=1e-9)
+
+    def test_a_ragged_chunk_is_padded_not_refused(self) -> None:
+        """A budget has no reason to be a multiple of the device count."""
+        from ampere.backends.jax import MeshSharder
+
+        problem = self.problem()
+        lowered = lower_problem(problem)
+        theta = self.theta(problem, draws=len(ACCELERATORS) * 2 + 1)
+        spread = lowered.simulate_batched(theta, sharder=MeshSharder(ACCELERATORS))
+        assert len(spread) == theta.shape[0]
