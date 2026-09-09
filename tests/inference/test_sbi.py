@@ -1272,3 +1272,56 @@ class TestTheSetLayoutEndToEnd:
         finally:
             sbi.neural_nets.posterior_nn = original
         assert "z_score_x" not in seen
+
+
+@needs_sbi
+class TestTheArtefactCache:
+    """W3.5's wiring: a second identical run trains nothing and says so."""
+
+    def test_a_second_identical_run_is_a_hit_that_trains_nothing(self, tmp_path: Any) -> None:
+        from ampere.results.artefacts import ArtefactStore
+
+        store = ArtefactStore(tmp_path / "artefacts")
+        first = SBIEngine(joint_problem(), method="npe", budget=150, cache=store).run(
+            draws=20, training={"max_num_epochs": 3}
+        )
+        assert first.attrs["ampere_sbi_cache_hit"] == 0
+        assert first.attrs["ampere_sbi_simulations"] > 0
+
+        engine = SBIEngine(joint_problem(), method="npe", budget=150, cache=store)
+        second = engine.run(draws=20, training={"max_num_epochs": 3})
+        assert second.attrs["ampere_sbi_cache_hit"] == 1
+        assert second.attrs["ampere_sbi_cache_key"] == first.attrs["ampere_sbi_cache_key"]
+        # Nothing was simulated or trained on the hit, and the run says so
+        # rather than repeating the first run's numbers.
+        assert second.attrs["ampere_sbi_simulations"] == 0
+        assert engine.posterior is not None
+
+    def test_a_different_budget_is_a_miss(self, tmp_path: Any) -> None:
+        from ampere.results.artefacts import ArtefactStore
+
+        store = ArtefactStore(tmp_path / "artefacts")
+        SBIEngine(joint_problem(), method="npe", budget=150, cache=store).run(
+            draws=10, training={"max_num_epochs": 2}
+        )
+        run = SBIEngine(joint_problem(), method="npe", budget=160, cache=store).run(
+            draws=10, training={"max_num_epochs": 2}
+        )
+        assert run.attrs["ampere_sbi_cache_hit"] == 0
+
+    def test_without_a_store_the_attrs_say_nothing_about_a_cache(self) -> None:
+        run = SBIEngine(joint_problem(), method="npe", budget=120).run(
+            draws=10, training={"max_num_epochs": 2}
+        )
+        assert "ampere_sbi_cache_hit" not in run.attrs
+
+    def test_a_set_embedding_posterior_survives_the_store_too(self, tmp_path: Any) -> None:
+        from ampere.results.artefacts import ArtefactStore
+
+        store = ArtefactStore(tmp_path / "artefacts")
+        settings = dict(method="npe", budget=120, embedding="set", layout="set", cache=store)
+        SBIEngine(two_dataset_problem(), **settings).run(draws=10, training={"max_num_epochs": 2})
+        run = SBIEngine(two_dataset_problem(), **settings).run(
+            draws=10, training={"max_num_epochs": 2}
+        )
+        assert run.attrs["ampere_sbi_cache_hit"] == 1

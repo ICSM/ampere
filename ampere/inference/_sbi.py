@@ -158,6 +158,7 @@ from ampere.core.encoding import (
 )
 from ampere.core.exceptions import OptionalDependencyError
 from ampere.core.simulate import Executor, SimulationBatch
+from ampere.results.artefacts import ArtefactKey, ArtefactStore, artefact_key
 from ampere.results.training import append_training_set, write_training_set
 
 from .engine import DEFAULT_CACHE_SIZE, Engine
@@ -404,6 +405,14 @@ def _prior_class(torch: Any) -> Any:
                 validate_args=False,
             )
 
+
+        def __reduce__(self) -> tuple[Any, tuple[Any, ...]]:
+            # The class is built inside a function (torch is imported lazily),
+            # so pickle cannot find it by name; a trained posterior carries its
+            # prior, and W3.5's artefact store pickles the posterior. Rebuild
+            # through the module-level factory instead.
+            return _rebuild_prior, (self._problem, self._rng, self._dtype, self._device)
+
         @property
         def support(self) -> Any:
             """All of ℝⁿ — which is the point of working in these coordinates."""
@@ -439,6 +448,12 @@ def _prior_class(torch: Any) -> Any:
             return f"<unconstrained joint prior, {self._size} dimension(s)>"
 
     return _UnconstrainedPrior
+
+
+def _rebuild_prior(problem: FittingProblem, rng: Any, dtype: Any, device: str) -> Any:
+    """Unpickle hook for the lazily-built prior class (see its ``__reduce__``)."""
+    _, torch = _require_sbi()
+    return _prior_class(torch)(problem, rng, dtype=dtype, device=device)
 
 
 # ---------------------------------------------------------------------------
@@ -796,6 +811,9 @@ def _wrapper_classes(torch: Any) -> tuple[Any, Any]:
             self.layout = layout
             self.net = net
 
+        def __reduce__(self) -> tuple[Any, tuple[Any, ...]]:
+            return _rebuild_set_embedding, (self.layout, self.net)
+
         def forward(self, x: Any) -> Any:
             view = unpack(x.to(getattr(torch, _DTYPE)), self.layout)
             features = view.features
@@ -811,6 +829,9 @@ def _wrapper_classes(torch: Any) -> tuple[Any, Any]:
             self.projection = projection
             self.net = net
 
+        def __reduce__(self) -> tuple[Any, tuple[Any, ...]]:
+            return _rebuild_transformer_embedding, (self.layout, self.projection, self.net)
+
         def forward(self, x: Any) -> Any:
             view = unpack(x.to(getattr(torch, _DTYPE)), self.layout)
             keep = view.valid
@@ -820,6 +841,18 @@ def _wrapper_classes(torch: Any) -> tuple[Any, Any]:
             return output[0] if isinstance(output, tuple) else output
 
     return _SetEmbedding, _TransformerEmbedding
+
+
+def _rebuild_set_embedding(layout: EncodingLayout, net: Any) -> Any:
+    """Unpickle hook for the lazily-built set wrapper (see its ``__reduce__``)."""
+    _, torch = _require_sbi()
+    return _wrapper_classes(torch)[0](layout, net)
+
+
+def _rebuild_transformer_embedding(layout: EncodingLayout, projection: Any, net: Any) -> Any:
+    """Unpickle hook for the lazily-built transformer wrapper (see its ``__reduce__``)."""
+    _, torch = _require_sbi()
+    return _wrapper_classes(torch)[1](layout, projection, net)
 
 
 def _probe_width(module: Any, *, torch: Any, shape: tuple[int, ...]) -> int:
@@ -1014,6 +1047,7 @@ class SBIEngine(Engine):
         chunk_size: int | None = None,
         context: Any = None,
         training_set: str | Path | None = None,
+        cache: ArtefactStore | None = None,
         cache_size: int = DEFAULT_CACHE_SIZE,
         use_realisation: bool = True,
     ) -> None:
@@ -1066,6 +1100,9 @@ class SBIEngine(Engine):
         self.executor = executor
         self.chunk_size = None if chunk_size is None else int(chunk_size)
         self.training_set = None if training_set is None else str(training_set)
+        #: W3.5: a trained-artefact store keyed on the problem's own hashes, or
+        #: ``None`` to train every time. A hit skips simulation and training.
+        self.cache = cache
         #: ``sbi``'s trained posterior, network and trainer after a run.
         self.posterior: Any = None
         self.estimator: Any = None
@@ -1162,15 +1199,38 @@ class SBIEngine(Engine):
         usable = 0
         proposal: Any = None
         observation_tensor = torch.as_tensor(observation[0], dtype=dtype, device=self.device)
-        for round_index in range(self.rounds):
-            theta, summary, counts = self._simulate_round(round_index, proposal=proposal)
-            simulated += counts[0]
-            usable += counts[1]
-            self._append(trainer, theta, summary, torch=torch, dtype=dtype, proposal=proposal)
-            self.estimator = trainer.train(show_train_summary=False, **dict(training or {}))
-            self.posterior = trainer.build_posterior(self.estimator)
+        # W3.5: the artefact key is the problem's own hashes plus everything
+        # that shaped the estimator -- the encoding *hash* stands in for the
+        # layout, so a differently-packed observation is a miss by construction.
+        cache_key: ArtefactKey | None = (
+            None
+            if self.cache is None
+            else artefact_key(
+                problem,
+                layout=layout.hash,
+                method=self.method,
+                architecture=architecture,
+                budget=self.budget,
+                rounds=self.rounds,
+            )
+        )
+        cached = None if cache_key is None or self.cache is None else self.cache.get(cache_key)
+        cache_hit = cached is not None
+        if cache_hit:
+            self.posterior = cached
             self.posterior.set_default_x(observation_tensor)
-            proposal = self.posterior
+        else:
+            for round_index in range(self.rounds):
+                theta, summary, counts = self._simulate_round(round_index, proposal=proposal)
+                simulated += counts[0]
+                usable += counts[1]
+                self._append(trainer, theta, summary, torch=torch, dtype=dtype, proposal=proposal)
+                self.estimator = trainer.train(show_train_summary=False, **dict(training or {}))
+                self.posterior = trainer.build_posterior(self.estimator)
+                self.posterior.set_default_x(observation_tensor)
+                proposal = self.posterior
+            if cache_key is not None and self.cache is not None:
+                self.cache.put(cache_key, self.posterior)
 
         drawn = self.posterior.sample(
             (int(draws),), show_progress_bars=progress, **dict(posterior_options or {})
@@ -1193,6 +1253,9 @@ class SBIEngine(Engine):
             usable=usable,
             draws=int(draws),
         )
+        if cache_key is not None:
+            attrs["sbi_cache_hit"] = int(cache_hit)
+            attrs["sbi_cache_key"] = cache_key.digest()
         tree = self.finish(chain, extra_attrs=attrs)
         return _with_estimator_log_prob(tree, estimator_log_prob)
 
