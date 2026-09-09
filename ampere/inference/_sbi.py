@@ -1,4 +1,4 @@
-"""The simulation-based driver: NPE, NLE and NRE over ``simulate_many``.
+"""The simulation-based driver: NPE, NLE, NRE and TMNRE over ``simulate_many``.
 
 Private module; the class is :class:`ampere.inference.SBIEngine`. Named with a
 leading underscore for the reason ``_emcee.py``, ``_nuts.py`` and ``_vi.py``
@@ -133,6 +133,34 @@ they are i.i.d. by construction, so there is no chain structure to split and
 R-hat has nothing to say about them. The training-loss trace is what an SBI run
 has instead of a convergence diagnostic, and it is recorded (thinned, with the
 stride).
+
+The fourth method, and what it adds (W3.4)
+-------------------------------------------
+``method="tmnre"`` is truncated marginal neural ratio estimation, and it is
+**not** a fourth family: it drives the same ``NRE`` trainer ``method="nre"``
+does, and differs in what happens around it. :mod:`ampere.inference._tmnre`
+holds the pieces and states the mathematics; the loop is
+:meth:`SBIEngine._run_tmnre`. Three things about it belong here, because they
+are what a reader of a *run* meets.
+
+* **A TMNRE run's posterior is an ordinary posterior.** One estimator over the
+  whole parameter vector is trained on the last round's truncated prior beside
+  the marginal ones, and the run's draws come from it — one chain, i.i.d.,
+  scored on the numpy contract path exactly as an NPE run's are. Nothing about
+  the ``posterior``, ``sample_stats`` or ``log_likelihood`` groups is special.
+* **The marginals are a group of their own.** ``marginals`` carries each 1-D
+  (and, at ``marginals=2``, each 2-D) estimator's log-ratio and estimated
+  marginal posterior on a grid over the final box, in both parameterisations.
+  That is the corner plot the method exists to produce, and it is a *summary*
+  of the estimators rather than the estimators themselves, which are torch
+  modules with no place in a netCDF file.
+* **The truncation is provenance.** ``ampere_sbi_truncation`` is one record per
+  round — the box, its log-volume, the round's counts, the proposal's
+  acceptance rate — and the boxes are nested by construction, so a run that
+  shows a growing volume is a bug and not a judgement call. The box is
+  observation-specific, so ``ampere_sbi_amortised`` is ``0`` for every TMNRE
+  run whatever its round count: unlike a one-round NPE or NRE fit, a truncated
+  estimator must not be re-conditioned on a different observation.
 """
 
 from __future__ import annotations
@@ -141,6 +169,7 @@ import dataclasses
 import functools
 import importlib
 import math
+import warnings
 from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any, ClassVar
@@ -170,15 +199,37 @@ from ampere.results.calibration import (
 from ampere.results.provenance import ATTR_PREFIX
 from ampere.results.training import append_training_set, write_training_set
 
+from ._tmnre import (
+    DEFAULT_TRUNCATION_EPSILON,
+    GRID_POINTS_1D,
+    GRID_POINTS_2D,
+    MARGINAL_ORDERS,
+    MARGINALS_SCHEMA_VERSION,
+    MarginalEstimator,
+    MarginalSummary,
+    TMNREArtefact,
+    TruncationBox,
+    attach_marginals,
+    constrained_grid,
+    grid_between,
+    interval_above,
+    marginal_indices,
+    marginal_log_density,
+    pair_mesh,
+    restricted_prior_class,
+)
 from .engine import DEFAULT_CACHE_SIZE, Engine
-from .exceptions import EngineError
+from .exceptions import EngineError, SamplingFailureWarning
 
 __all__ = [
+    "DEFAULT_TRUNCATION_EPSILON",
     "EMBEDDINGS",
     "LAYOUTS",
+    "MARGINAL_ORDERS",
     "METHODS",
     "SET_EMBEDDINGS",
     "SUMMARY_LAYOUT",
+    "TMNRE_SAMPLERS",
     "SBIEngine",
 ]
 
@@ -193,12 +244,31 @@ __all__ = [
 #: to ``NRE_B``; the run records the class that actually ran, in
 #: ``ampere_sbi_trainer``, so an archived run says which variant of the family
 #: produced it rather than only which family.
-METHODS: Mapping[str, str] = {"npe": "NPE", "nle": "NLE", "nre": "NRE"}
+#:
+#: **W3.4** adds a fourth key that is not a fourth *family*: ``"tmnre"`` drives
+#: the same ``NRE`` trainer as ``"nre"`` and differs in what is done around it —
+#: one estimator per marginal, a truncated prior between rounds, a joint
+#: estimator trained on the last round's truncated prior to supply the run's
+#: draws (:mod:`ampere.inference._tmnre`).
+METHODS: Mapping[str, str] = {"npe": "NPE", "nle": "NLE", "nre": "NRE", "tmnre": "NRE"}
+
+#: ampere's name for the truncated-marginal method, spelled once.
+TMNRE = "tmnre"
+
+#: The methods whose estimator is a **classifier** rather than a density, which
+#: is the one thing ``sbi`` spells differently for them (``classifier=`` rather
+#: than ``density_estimator=``, and ``classifier_nn`` as the builder).
+_RATIO_METHODS: tuple[str, ...] = ("nre", TMNRE)
 
 #: The default network architecture per method. NPE and NLE learn a *density*
 #: and take a normalising flow; NRE learns a *classifier* and takes a residual
 #: network, which is why the two are not one default.
-_DEFAULT_ARCHITECTURE: Mapping[str, str] = {"npe": "maf", "nle": "maf", "nre": "resnet"}
+_DEFAULT_ARCHITECTURE: Mapping[str, str] = {
+    "npe": "maf",
+    "nle": "maf",
+    "nre": "resnet",
+    "tmnre": "resnet",
+}
 
 #: Which ``sbi.neural_nets`` builder wraps an embedding net for each method,
 #: and the keyword each one spells the embedding with. NRE's classifier sees θ
@@ -207,7 +277,14 @@ _BUILDERS: Mapping[str, tuple[str, str]] = {
     "npe": ("posterior_nn", "embedding_net"),
     "nle": ("likelihood_nn", "embedding_net"),
     "nre": ("classifier_nn", "embedding_net_x"),
+    "tmnre": ("classifier_nn", "embedding_net_x"),
 }
+
+#: How a TMNRE posterior draws: ``"rejection"`` samples the truncated prior and
+#: accepts through the ratio, which gives genuinely i.i.d. draws and is the
+#: default; ``"mcmc"`` (``sbi``'s vectorised slice sampler) is the fallback for
+#: a box so narrow that rejection's acceptance collapses.
+TMNRE_SAMPLERS: tuple[str, ...] = ("rejection", "mcmc")
 
 #: The embedding vocabulary carried over from the frozen legacy
 #: ``ampere/infer/sbi.py`` (read, never modified): the two shipped nets by
@@ -252,6 +329,40 @@ SUMMARY_LAYOUT = FLAT_KIND
 #: epoch count; the stride is recorded, and the final value separately and
 #: exactly, so nothing about the optimisation is lost that a reader would use.
 _TRACE_POINTS = 200
+
+#: Below this acceptance rate the truncated prior is warned about rather than
+#: silently made expensive: a box holding a thousandth of the prior's mass
+#: needs roughly a thousand prior draws per simulation, and ampere's prior is a
+#: Python loop over ``sample_prior`` because ties and hierarchies are resolved
+#: per draw. It is a warning and not a refusal — a tiny box is the *intended*
+#: outcome of a well-behaved run on sharply informative data.
+_TRUNCATION_ACCEPTANCE_FLOOR = 1e-3
+
+#: The MCMC settings :meth:`SBIEngine.calibrate` builds its own posterior with
+#: when the run's is a rejection-sampled TMNRE one. Short chains on purpose: a
+#: calibration check asks for ``count`` times ``posterior_draws`` draws whose *ranks*
+#: are the statistic, not for a publication-grade chain, and ``sbi``'s own
+#: defaults (twenty chains, two hundred warm-up steps, automatic thinning)
+#: multiply that by two orders of magnitude against a prior whose ``log_prob``
+#: is a Python loop. A caller who disagrees passes ``posterior=`` their own.
+_CALIBRATION_MCMC: Mapping[str, Any] = {
+    "num_chains": 8,
+    "warmup_steps": 25,
+    "thin": 1,
+    "init_strategy": "proposal",
+}
+
+#: How a TMNRE MCMC posterior is *initialised*, and it is a cost-shaped choice
+#: rather than a tuning one. ``sbi``'s default, ``"resample"``, draws
+#: ``num_candidate_samples`` (10 000) from the proposal and picks starting
+#: points by importance weight; the proposal here is the prior restricted to
+#: the box, so those 10 000 draws are themselves rejected out of ampere's
+#: Python-loop prior and a narrow box makes the *initialisation* cost more than
+#: the chain. ``"proposal"`` draws one starting point per chain from the same
+#: distribution, which is already exactly where a truncated posterior's chain
+#: should start. Everything a caller usually wants to set — chains, warm-up,
+#: thinning — stays theirs, through ``posterior_options=`` at sample time.
+_TMNRE_MCMC: Mapping[str, Any] = {"init_strategy": "proposal"}
 
 #: The dtype ``sbi`` 0.27 trains in. Stated once rather than spelled at each
 #: tensor: ampere's own arithmetic is float64 throughout, and the single
@@ -1053,8 +1164,12 @@ class SBIEngine(Engine):
     method
         ``"npe"`` (neural posterior estimation -- the posterior directly, and
         the only one of the three that samples without MCMC), ``"nle"`` (the
-        likelihood, sampled with MCMC) or ``"nre"`` (the likelihood-to-evidence
-        ratio, also sampled with MCMC). See :data:`METHODS`.
+        likelihood, sampled with MCMC), ``"nre"`` (the likelihood-to-evidence
+        ratio, also sampled with MCMC), or ``"tmnre"`` (**W3.4**: the same
+        ratio estimator, plus one estimator per marginal and a prior truncated
+        between rounds -- see :mod:`ampere.inference._tmnre` and the
+        ``marginals``/``truncation_epsilon``/``sample_with`` arguments below).
+        See :data:`METHODS`.
     budget
         Simulations **per round**. The single number that decides what this
         engine costs and how good its answer is.
@@ -1091,6 +1206,43 @@ class SBIEngine(Engine):
         the posterior is. More than one round makes the result **amortised no
         longer** -- the trained posterior is then only valid at this
         observation -- which is a real cost and the reason the default is 1.
+        Under ``method="tmnre"`` the proposal is not the trained posterior but
+        the *prior truncated to the current box*, which is what makes the
+        estimate exact inside the box without an importance correction.
+    marginals
+        ``method="tmnre"`` only. ``1`` (the default) trains one ratio estimator
+        per parameter — which is what the truncation box is built from; ``2``
+        adds one per unordered pair, which is what a corner plot's off-diagonal
+        panels are. The pairs cost one more estimator per pair and are trained
+        only in the final round, since no box depends on them. Refused, by
+        name, for the other three methods, which have no marginals to choose.
+    truncation_epsilon
+        ``method="tmnre"`` only: the threshold, as a fraction of each 1-D
+        marginal's own maximum, that decides the truncation interval. Smaller
+        keeps a wider box and spends more simulations outside the posterior;
+        larger risks cutting posterior mass that no later round can recover.
+        See :data:`~ampere.inference._tmnre.DEFAULT_TRUNCATION_EPSILON`.
+    sample_with
+        ``method="tmnre"`` only: how the final posterior draws. ``"rejection"``
+        (the default) proposes from the truncated prior and accepts through the
+        ratio, so the draws are genuinely i.i.d. — the property the rest of
+        this class's documentation claims for an SBI run's single "chain".
+        ``"mcmc"`` is ``sbi``'s vectorised slice sampler, and it takes the usual
+        ``num_chains``/``warmup_steps``/``thin`` through ``posterior_options=``.
+
+        **Rejection's cost rises as the method succeeds, and that is not a
+        paradox but the arithmetic.** Its acceptance rate is roughly the
+        posterior's volume over the box's, and *each* proposal draw is itself
+        rejected out of the untruncated prior at the box's own prior mass —
+        which is small exactly when the truncation worked. Measured on
+        ``examples/sbi/tmnre_fit.py`` at its defaults: a third-round box holding
+        1 % of the prior's mass, about 1 % of proposals accepted through the
+        ratio, and **353.6 s against 43.8 s** for the same three rounds under
+        ``"mcmc"``. ``sbi`` says so itself, in a warning naming the remedy.
+        That remedy is this argument, and on a well-truncated problem it is
+        usually the right one — the default is ``"rejection"`` because i.i.d.
+        draws are what the rest of this class promises, not because it is the
+        cheaper of the two.
     device
         ``"cpu"`` (the default), or a torch device string. CI is CPU-only by
         ruling.
@@ -1134,6 +1286,24 @@ class SBIEngine(Engine):
     batch
         The **last** round's :class:`~ampere.core.simulate.SimulationBatch`,
         failures included, for a caller who wants the pairs as well as the fit.
+    truncation
+        ``method="tmnre"`` only: the final
+        :class:`~ampere.inference._tmnre.TruncationBox`, in unconstrained
+        coordinates. ``None`` for every other method.
+    truncation_history
+        One record per round: that round's box in both parameterisations, its
+        log-volume, its simulation counts, and the rate at which the box that
+        produced those draws accepted prior samples. This is what
+        ``ampere_sbi_truncation`` carries, and it is the run's own evidence
+        that the truncation behaved — the volumes must not grow.
+    marginal_estimators
+        The trained :class:`~ampere.inference._tmnre.MarginalEstimator`\\ s by
+        index tuple, for a caller who wants to evaluate one somewhere the
+        stored grid does not reach. Empty after a cache hit, which restores a
+        run's *stored* content and not the networks behind it.
+    marginal_summary
+        Those estimators evaluated over the final box — what the run's
+        ``marginals`` group holds.
 
     Examples
     --------
@@ -1194,6 +1364,9 @@ class SBIEngine(Engine):
         layout: Any = SUMMARY_LAYOUT,
         density_estimator: Any = None,
         rounds: int = 1,
+        marginals: int = 1,
+        truncation_epsilon: float = DEFAULT_TRUNCATION_EPSILON,
+        sample_with: str | None = None,
         device: str = "cpu",
         executor: Executor | None = None,
         chunk_size: int | None = None,
@@ -1210,12 +1383,61 @@ class SBIEngine(Engine):
                 f"sbi does not know the method {method!r}. Available: {known}. 'npe' estimates "
                 f"the posterior directly and is the only one that samples without MCMC; 'nle' "
                 f"estimates the likelihood and 'nre' the likelihood-to-evidence ratio, and both "
-                f"are then sampled with MCMC."
+                f"are then sampled with MCMC; 'tmnre' is 'nre' with one estimator per marginal "
+                f"and a prior truncated between rounds, and is no longer amortised."
             )
         if int(budget) < 1:
             raise EngineError(f"sbi needs a simulation budget of at least 1, got {budget}.")
         if int(rounds) < 1:
             raise EngineError(f"sbi needs at least one round, got {rounds}.")
+        order = int(marginals)
+        epsilon = float(truncation_epsilon)
+        sampler = None if sample_with is None else str(sample_with).lower()
+        if chosen == TMNRE:
+            if order not in MARGINAL_ORDERS:
+                known = ", ".join(str(value) for value in MARGINAL_ORDERS)
+                raise EngineError(
+                    f"tmnre's marginals= is the order of the marginals it estimates: {known}. "
+                    f"1 trains one ratio estimator per parameter (which is what the truncation "
+                    f"box is built from); 2 adds one per unordered pair, which is what a corner "
+                    f"plot's off-diagonal panels are. Got {marginals!r}."
+                )
+            if not 0.0 < epsilon < 1.0:
+                raise EngineError(
+                    f"tmnre's truncation_epsilon= is a fraction of each 1-D marginal's own "
+                    f"maximum, so it lies strictly between 0 and 1 (the default is "
+                    f"{DEFAULT_TRUNCATION_EPSILON}). A smaller value keeps a wider box and costs "
+                    f"simulations; a larger one risks cutting posterior mass no later round can "
+                    f"recover. Got {truncation_epsilon!r}."
+                )
+            if sampler is not None and sampler not in TMNRE_SAMPLERS:
+                known = ", ".join(TMNRE_SAMPLERS)
+                raise EngineError(
+                    f"tmnre's sample_with= is one of {known}, got {sample_with!r}. 'rejection' "
+                    f"draws from the truncated prior and accepts through the ratio, so the draws "
+                    f"are i.i.d.; 'mcmc' is the fallback when a narrow box makes rejection's "
+                    f"acceptance rate collapse."
+                )
+        else:
+            if order != 1:
+                raise EngineError(
+                    f"sbi's marginals= belongs to method='tmnre', which trains one ratio "
+                    f"estimator per marginal; method={chosen!r} trains one estimator over the "
+                    f"whole parameter vector and has no marginals to choose. Got {marginals!r}."
+                )
+            if epsilon != DEFAULT_TRUNCATION_EPSILON:
+                raise EngineError(
+                    f"sbi's truncation_epsilon= belongs to method='tmnre', which truncates the "
+                    f"prior between rounds; method={chosen!r} does not truncate anything. Got "
+                    f"{truncation_epsilon!r}."
+                )
+            if sampler is not None:
+                raise EngineError(
+                    f"sbi's sample_with= belongs to method='tmnre', whose posterior is built "
+                    f"against a truncated prior; for method={chosen!r} sbi's own default sampler "
+                    f"for the family is used and posterior_options= is where its settings go. "
+                    f"Got {sample_with!r}."
+                )
         if context is not None:
             raise EngineError(
                 f"sbi's context= is the reserved per-draw observation-context slot (a sigma "
@@ -1248,6 +1470,12 @@ class SBIEngine(Engine):
         self.encoding: EncodingLayout | None = None
         self.density_estimator_spec = density_estimator
         self.rounds = int(rounds)
+        #: TMNRE's order (1 or 2), threshold and posterior sampler. Meaningless
+        #: for the other three, which the constructor refuses to let a caller
+        #: set at all rather than accepting and ignoring.
+        self.marginals = order
+        self.truncation_epsilon = epsilon
+        self.sample_with = (sampler or TMNRE_SAMPLERS[0]) if chosen == TMNRE else None
         self.device = str(device)
         self.executor = executor
         self.chunk_size = None if chunk_size is None else int(chunk_size)
@@ -1260,6 +1488,15 @@ class SBIEngine(Engine):
         self.estimator: Any = None
         #: The last round's batch, failures included.
         self.batch: SimulationBatch | None = None
+        #: **W3.4**, after a TMNRE run: the final truncation box, one record
+        #: per round (what the run's ``ampere_sbi_truncation`` is built from),
+        #: the trained marginal estimators by index tuple, and the summary the
+        #: ``marginals`` group carries. All ``None``/empty otherwise.
+        self.truncation: TruncationBox | None = None
+        self.truncation_history: list[dict[str, Any]] = []
+        self.marginal_estimators: dict[tuple[int, ...], MarginalEstimator] = {}
+        self.marginal_summary: MarginalSummary | None = None
+        self._proposal: Any = None
         self._written = False
 
     # -- the run --------------------------------------------------------------
@@ -1294,12 +1531,25 @@ class SBIEngine(Engine):
             Forwarded verbatim to the ``sbi`` trainer's ``train`` --
             ``max_num_epochs``, ``training_batch_size``, ``learning_rate``,
             ``stop_after_epochs``, ``validation_fraction``. ampere interposes
-            no defaults: they are ``sbi``'s and they are good ones.
+            no defaults: they are ``sbi``'s and they are good ones. Under
+            ``method="tmnre"`` the same settings train every estimator, the
+            marginal ones included.
         posterior_options
             Forwarded verbatim to the trained posterior's ``sample``. This is
             where an MCMC posterior's ``num_chains``, ``warmup_steps``,
             ``thin`` and ``init_strategy`` go, which is what makes an NLE or
             NRE run affordable at a small draw count.
+
+            For a TMNRE posterior under the default ``sample_with="rejection"``
+            it is also where ``num_samples_to_find_max`` and
+            ``max_sampling_batch_size`` go, and they are worth knowing about:
+            ``sbi`` defaults both to 10 000 draws *from the proposal*, and this
+            driver's proposal is the prior restricted to the box, whose own
+            draws are rejected from a prior that is a Python loop over
+            ``sample_prior``. A narrow box therefore makes those defaults the
+            dominant cost of a run. No default is interposed here — that is
+            W3.2 decision (5) and it stands — but a small run should say so
+            explicitly.
         progress
             Show ``sbi``'s own progress bars, for training and for sampling.
             Off by default: a driver that prints by default is unusable inside
@@ -1361,7 +1611,7 @@ class SBIEngine(Engine):
                 problem,
                 layout=layout.hash,
                 method=self.method,
-                architecture=architecture,
+                architecture=self._key_architecture(architecture),
                 budget=self.budget,
                 rounds=self.rounds,
             )
@@ -1369,20 +1619,39 @@ class SBIEngine(Engine):
         cached = None if cache_key is None or self.cache is None else self.cache.get(cache_key)
         cache_hit = cached is not None
         if cache_hit:
-            self.posterior = cached
-            self.posterior.set_default_x(observation_tensor)
+            self._restore(cached, observation_tensor)
+        elif self.method == TMNRE:
+            simulated, usable = self._run_tmnre(
+                sbi_package,
+                torch,
+                trainer=trainer,
+                layout=layout,
+                features=features,
+                dtype=dtype,
+                observation=observation_tensor,
+                training=training,
+                progress=progress,
+            )
         else:
             for round_index in range(self.rounds):
                 theta, summary, counts = self._simulate_round(round_index, proposal=proposal)
                 simulated += counts[0]
                 usable += counts[1]
-                self._append(trainer, theta, summary, torch=torch, dtype=dtype, proposal=proposal)
+                self._append(
+                    trainer,
+                    theta,
+                    summary,
+                    torch=torch,
+                    dtype=dtype,
+                    proposal=proposal,
+                    round_index=round_index,
+                )
                 self.estimator = trainer.train(show_train_summary=False, **dict(training or {}))
                 self.posterior = trainer.build_posterior(self.estimator)
                 self.posterior.set_default_x(observation_tensor)
                 proposal = self.posterior
-            if cache_key is not None and self.cache is not None:
-                self.cache.put(cache_key, self.posterior)
+        if not cache_hit and cache_key is not None and self.cache is not None:
+            self.cache.put(cache_key, self._artefact())
 
         drawn = self.posterior.sample(
             (int(draws),), show_progress_bars=progress, **dict(posterior_options or {})
@@ -1409,7 +1678,21 @@ class SBIEngine(Engine):
             attrs["sbi_cache_hit"] = int(cache_hit)
             attrs["sbi_cache_key"] = cache_key.digest()
         tree = self.finish(chain, extra_attrs=attrs)
-        return _with_estimator_log_prob(tree, estimator_log_prob)
+        tree = _with_estimator_log_prob(tree, estimator_log_prob)
+        if self.marginal_summary is not None:
+            attach_marginals(
+                tree,
+                self.marginal_summary.to_dataset(
+                    attrs={
+                        f"{ATTR_PREFIX}marginals_schema_version": MARGINALS_SCHEMA_VERSION,
+                        f"{ATTR_PREFIX}marginals_order": self.marginals,
+                        f"{ATTR_PREFIX}marginals_epsilon": self.truncation_epsilon,
+                        f"{ATTR_PREFIX}marginals_parameterisation": "unconstrained",
+                        f"{ATTR_PREFIX}marginals_method": self.method,
+                    }
+                ),
+            )
+        return tree
 
     # -- family D's fast path (W3.6) ------------------------------------------
 
@@ -1445,6 +1728,18 @@ class SBIEngine(Engine):
         calibration check that re-derived its standardisation from the
         calibration batch would be testing a different network from the one the
         run produced — and would report *that* one as calibrated.
+
+        **W3.4 adds two things for a truncated run, both recorded.** A TMNRE
+        posterior is defined *on its box*, so the distribution it is calibrated
+        against is the truncated prior and not the original one — calibrating
+        it against the full prior would report miscalibration for every truth
+        the box excludes, which is an artefact of the method rather than a
+        property of the estimator (``ampere_calibration_reference``). And a
+        run whose posterior samples by rejection is checked through an MCMC
+        posterior over the *same* trained estimator
+        (``ampere_calibration_sampler``), because a rejection posterior pays a
+        fixed maximisation stage per conditioning observation and SBC
+        re-conditions at ``count`` of them. Pass *posterior* to override either.
 
         θ is compared in the **unconstrained** parameterisation, which is where
         the estimator lives (see this module's docstring). That costs nothing
@@ -1501,6 +1796,26 @@ class SBIEngine(Engine):
         """
         sbi_package, torch = _require_sbi()
         target = self.posterior if posterior is None else posterior
+        # W3.4: a rejection-sampled TMNRE posterior is the wrong object to run
+        # SBC against, and unusably so rather than merely slowly. A rejection
+        # posterior pays a fixed find-the-maximum stage of 10 000 proposal
+        # draws *per conditioning observation*, and every one of those draws is
+        # itself rejected against the box out of ampere's Python-loop prior;
+        # SBC re-conditions the posterior at ``count`` fresh observations, so
+        # the check costs that stage ``count`` times over and does not finish.
+        # The same trained estimator sampled by slice MCMC answers the same
+        # question at a cost that is linear in the draws, so the check builds
+        # one -- recorded in ``ampere_calibration_sampler`` -- and a caller who
+        # wants something else passes ``posterior=`` as they always could.
+        rebuilt = False
+        if posterior is None and self.method == TMNRE and self.sample_with == "rejection":
+            target = self.sampler.build_posterior(
+                self.estimator,
+                prior=self._proposal,
+                sample_with="mcmc",
+                mcmc_parameters=_CALIBRATION_MCMC,
+            )
+            rebuilt = True
         if target is None or self.encoding is None:
             raise EngineError(
                 "sbi cannot calibrate a posterior it has not trained: call run() first, or pass "
@@ -1517,11 +1832,25 @@ class SBIEngine(Engine):
         problem = self.problem
         dtype = getattr(torch, _DTYPE)
         rng = self.stream("calibrate")
-        thetas, summaries, simulated = self._calibration_batch(simulations, rng)
+        # W3.4: a TMNRE posterior is defined **on its truncation box**, so the
+        # distribution it must be calibrated against is the truncated prior and
+        # not the original one. Calibrating a truncated posterior against the
+        # full prior would report miscalibration for every truth the box
+        # excludes -- which is an artefact of the method, not a property of the
+        # estimator -- so the batch and the reference draws both come from the
+        # box. The attrs say which of the two happened.
+        truncated = self.method == TMNRE and self._proposal is not None
+        given = self._truncated_theta(simulations) if truncated else None
+        thetas, summaries, simulated = self._calibration_batch(simulations, rng, values=given)
         theta_tensor = torch.as_tensor(thetas, dtype=dtype, device=self.device)
         summary_tensor = torch.as_tensor(summaries, dtype=dtype, device=self.device)
-        prior = np.stack(
-            [problem.unconstrain(problem.sample_prior(rng)) for _ in range(thetas.shape[0])]
+        count_kept = int(thetas.shape[0])
+        prior = (
+            self._truncated_theta(count_kept, unconstrained=True)
+            if truncated
+            else np.stack(
+                [problem.unconstrain(problem.sample_prior(rng)) for _ in range(count_kept)]
+            )
         )
         prior_tensor = torch.as_tensor(prior, dtype=dtype, device=self.device)
 
@@ -1549,6 +1878,8 @@ class SBIEngine(Engine):
             f"{ATTR_PREFIX}calibration_encoding_layout": self.encoding.name,
             f"{ATTR_PREFIX}calibration_encoding_hash": self.encoding.hash,
             f"{ATTR_PREFIX}calibration_parameterisation": "unconstrained",
+            f"{ATTR_PREFIX}calibration_reference": "truncated_prior" if truncated else "prior",
+            f"{ATTR_PREFIX}calibration_sampler": "mcmc" if rebuilt else "as_run",
             f"{ATTR_PREFIX}calibration_c2st_dap": float(np.mean(_numpy(checks["c2st_dap"]))),
             f"{ATTR_PREFIX}calibration_sbi_version": str(
                 getattr(sbi_package, "__version__", "unknown")
@@ -1585,13 +1916,34 @@ class SBIEngine(Engine):
             attach_calibration(attach_to, result)
         return result
 
-    def _calibration_batch(self, count: int, rng: Any) -> tuple[np.ndarray, np.ndarray, int]:
-        """A fresh prior batch, unconstrained θ and layout-encoded x.
+    def _truncated_theta(self, count: int, *, unconstrained: bool = False) -> np.ndarray:
+        """*count* draws from the final truncated prior, for a calibration batch.
+
+        In constrained coordinates by default, which is what
+        :meth:`~ampere.core.dataset.FittingProblem.simulate_many`'s ``values=``
+        takes; *unconstrained* gives the coordinates ``sbi``'s checks compare
+        ranks in.
+        """
+        drawn = self._proposal.sample((int(count),), show_progress_bars=False)
+        rows = np.asarray(drawn.detach().cpu().numpy(), dtype=float).reshape(
+            int(count), self.problem.free_size
+        )
+        if unconstrained:
+            return rows
+        return np.stack([self.problem.constrain(row) for row in rows])
+
+    def _calibration_batch(
+        self, count: int, rng: Any, *, values: Any = None
+    ) -> tuple[np.ndarray, np.ndarray, int]:
+        """A fresh batch, unconstrained θ and layout-encoded x.
 
         Streamed in chunks exactly as :meth:`_simulate_round` streams a
         training round, and on its own named sub-stream (``"sbi.calibrate"``),
         because ``lowering.md`` §9.2's rule is that adding a diagnostic must not
         change what a fit simulated.
+
+        *values* is ``None`` for a prior batch and one constrained θ per draw
+        for W3.4's truncated one; the rest of the method does not care which.
         """
         problem = self.problem
         thetas: list[np.ndarray] = []
@@ -1599,6 +1951,7 @@ class SBIEngine(Engine):
         simulated = 0
         for chunk in problem.simulate_many(
             count,
+            values=values,
             observe=True,
             rng=rng,
             executor=self.executor,
@@ -1650,27 +2003,11 @@ class SBIEngine(Engine):
             dtype=getattr(torch, _DTYPE),
             device=self.device,
         )
-        spec = self.density_estimator_spec
-        if spec is not None and not isinstance(spec, str):
-            network: Any = spec
-            architecture = getattr(spec, "__name__", type(spec).__name__)
-        else:
-            architecture = str(spec or _DEFAULT_ARCHITECTURE[self.method])
-            if embedding.module is None:
-                network = architecture
-            else:
-                builder_name, keyword = _BUILDERS[self.method]
-                from sbi import neural_nets  # pyrefly: ignore[missing-import]
-
-                builder = getattr(neural_nets, builder_name)
-                options: dict[str, Any] = {keyword: embedding.module}
-                if layout.kind == SET_KIND:
-                    options["z_score_x"] = "none"
-                network = builder(model=architecture, **options)
+        network, architecture = self._network(embedding=embedding, layout=layout)
         # NRE spells its network `classifier=`; NPE and NLE spell it
         # `density_estimator=`. One keyword table rather than one branch per
         # method, so a fourth method is a row.
-        keyword = "classifier" if self.method == "nre" else "density_estimator"
+        keyword = "classifier" if self.method in _RATIO_METHODS else "density_estimator"
         trainer = getattr(sbi_package.inference, METHODS[self.method])(
             prior=prior,
             device=self.device,
@@ -1679,8 +2016,412 @@ class SBIEngine(Engine):
         )
         return trainer, architecture
 
+    def _network(self, *, embedding: _Embedding, layout: EncodingLayout) -> tuple[Any, str]:
+        """The estimator ``sbi`` is handed, and the name a run records for it.
+
+        Split out of :meth:`_trainer` at **W3.4** because a TMNRE run builds
+        several: one joint estimator and one per marginal, each needing its own
+        network **and its own embedding instance** — two trainers sharing one
+        ``torch.nn.Module`` would train one net against two objectives.
+        """
+        spec = self.density_estimator_spec
+        if spec is not None and not isinstance(spec, str):
+            return spec, getattr(spec, "__name__", type(spec).__name__)
+        architecture = str(spec or _DEFAULT_ARCHITECTURE[self.method])
+        if embedding.module is None:
+            return architecture, architecture
+        builder_name, keyword = _BUILDERS[self.method]
+        from sbi import neural_nets  # pyrefly: ignore[missing-import]
+
+        builder = getattr(neural_nets, builder_name)
+        options: dict[str, Any] = {keyword: embedding.module}
+        if layout.kind == SET_KIND:
+            options["z_score_x"] = "none"
+        return builder(model=architecture, **options), architecture
+
+    # -- W3.4: the truncated marginal loop -------------------------------------
+
+    def _run_tmnre(
+        self,
+        sbi_package: Any,
+        torch: Any,
+        *,
+        trainer: Any,
+        layout: EncodingLayout,
+        features: int,
+        dtype: Any,
+        observation: Any,
+        training: Mapping[str, Any] | None,
+        progress: bool,
+    ) -> tuple[int, int]:
+        """TMNRE's rounds: marginals, a box, a truncated prior, a joint fit.
+
+        The loop the item's design paragraph describes, with three decisions
+        made here and worth reading before the code.
+
+        **The 1-D estimators are trained every round; the pairs are not.** Only
+        the 1-D marginals build the truncation box, so training a pair
+        estimator before the last round would be work no decision consumes. The
+        pairs still *accumulate* every round's rows, so the estimator they
+        finally train on is the whole budget, not the last round's slice.
+
+        **The joint estimator accumulates every round and trains once, last.**
+        That is what gives the run ordinary i.i.d. joint draws to emit, scored
+        on the numpy path exactly as an NPE run's are, and it is sound over
+        mixed rounds for the same reason truncation needs no importance
+        correction: a ratio classifier's θ-dependence is ``p(x|θ)`` whatever
+        the θ were drawn from, the proposal entering only as a constant this
+        method never needs. So the final estimator sees the union of the
+        rounds, and is multiplied by the *truncated* prior to give a posterior.
+
+        **Every round simulates through ``values=``.** The proposal is a
+        truncated *prior*, not a trained posterior, so θ is drawn from the
+        :class:`~sbi.utils.RestrictedPrior`, mapped back through ``constrain``,
+        and handed to
+        :meth:`~ampere.core.dataset.FittingProblem.simulate_many` as given
+        values (``inference.md`` §13) — which is also what keeps every round on
+        its own simulation sub-stream.
+        """
+        problem = self.problem
+        free = int(problem.free_size)
+        options = dict(training or {})
+        singles = marginal_indices(free, 1)
+        pairs = marginal_indices(free, 2) if self.marginals == 2 else ()
+        self.marginal_estimators = {
+            indices: MarginalEstimator(
+                indices,
+                self._marginal_trainer(
+                    sbi_package, torch, layout=layout, features=features, progress=progress
+                ),
+            )
+            for indices in (*singles, *pairs)
+        }
+        box = TruncationBox.unbounded(free)
+        proposal: Any = None
+        accumulated: list[np.ndarray] = []
+        simulated = 0
+        usable = 0
+        self.truncation_history = []
+        for round_index in range(self.rounds):
+            values, acceptance = self._propose(proposal)
+            theta, summary, counts = self._simulate_round(round_index, values=values)
+            simulated += counts[0]
+            usable += counts[1]
+            accumulated.append(theta)
+            theta_tensor = torch.as_tensor(theta, dtype=dtype, device=self.device)
+            summary_tensor = torch.as_tensor(summary, dtype=dtype, device=self.device)
+            trainer.append_simulations(theta_tensor, summary_tensor, from_round=round_index)
+            final = round_index == self.rounds - 1
+            for indices, estimator in self.marginal_estimators.items():
+                estimator.append(theta_tensor, summary_tensor, round_index=round_index)
+                if len(indices) == 1 or final:
+                    estimator.train(**options)
+            rows = np.concatenate(accumulated, axis=0)
+            box = self._truncate(box, rows, observation=observation, torch=torch, dtype=dtype)
+            record: dict[str, Any] = {
+                "round": round_index + 1,
+                "simulations": counts[0],
+                "usable": counts[1],
+                # The rate at which the proposal that produced *this* round's
+                # draws accepted, which is the previous round's box under the
+                # untruncated prior -- 1.0 for round 1, which drew from the
+                # prior itself.
+                "proposal_acceptance": acceptance,
+            }
+            record.update(box.to_dict(problem.constrain))
+            self.truncation_history.append(record)
+            proposal = self._restricted_prior(torch, box, round_index)
+        self.truncation = box
+        self._proposal = proposal
+        # Every round's rows, not only the truncated ones. ``sbi``'s
+        # ``discard_prior_samples=True`` was measured on this problem and is
+        # not an improvement: it costs a third of the budget and leaves the
+        # estimate no closer to an emcee reference, because a ratio's
+        # θ-dependence is ``p(x|θ)`` whatever the θ were drawn from, so round
+        # 1's wide rows are ordinary training data rather than contamination.
+        # A caller who wants it can still pass it through ``training=``.
+        self.estimator = trainer.train(show_train_summary=False, **options)
+        self.posterior = trainer.build_posterior(
+            self.estimator,
+            prior=proposal,
+            sample_with=self.sample_with,
+            **({"mcmc_parameters": dict(_TMNRE_MCMC)} if self.sample_with == "mcmc" else {}),
+        )
+        self.posterior.set_default_x(observation)
+        self.marginal_summary = self._marginal_summary(
+            box,
+            np.concatenate(accumulated, axis=0),
+            observation=observation,
+            torch=torch,
+            dtype=dtype,
+        )
+        return simulated, usable
+
+    def _marginal_trainer(
+        self,
+        sbi_package: Any,
+        torch: Any,
+        *,
+        layout: EncodingLayout,
+        features: int,
+        progress: bool,
+    ) -> Any:
+        """One ``NRE`` trainer for one marginal, with **no prior at all**.
+
+        ``prior=None`` is not a shortcut: an ``NRE`` classifier is trained by
+        contrasting a batch's own ``(θ, x)`` pairs against its own permuted
+        ones, so nothing during training asks a distribution for a density, and
+        a marginal of ampere's unconstrained joint prior has no closed form to
+        give it anyway. The marginal posterior is recovered afterwards as
+        ``exp(log r) · q(θ_i)`` with ``q`` estimated from the very θ column the
+        estimator trained on (:func:`~ampere.inference._tmnre.
+        marginal_log_density`), which is the quantity the ratio is a ratio
+        *to*, so the two halves match by construction rather than by assumption.
+
+        The embedding is rebuilt per trainer rather than shared: two trainers
+        holding one ``torch.nn.Module`` would optimise one network against two
+        objectives. It is built from the same ``embedding=`` and the same
+        *feature count* as the joint one, so every estimator in a run reads the
+        same summary in the same way; what differs between them is only which
+        columns of θ they see.
+        """
+        rebuilt = _embedding_of(
+            self.embedding,
+            torch=torch,
+            features=features,
+            free_size=self.problem.free_size,
+            layout=layout,
+        )
+        network, _ = self._network(embedding=rebuilt, layout=layout)
+        return getattr(sbi_package.inference, METHODS[self.method])(
+            prior=None,
+            device=self.device,
+            show_progress_bars=progress,
+            classifier=network,
+        )
+
+    def _propose(self, proposal: Any) -> tuple[Any, float]:
+        """The next round's θ, in **constrained** coordinates, and the rate.
+
+        ``None`` for round 1: ``simulate_many`` draws from the joint prior
+        itself, which is the budget idiom and cheaper than rejecting against a
+        box that accepts everything. Afterwards the draws come from the
+        truncated prior, and the fraction of untruncated prior draws it
+        accepted is recorded — it is the box's own prior mass, the honest
+        measure of how much a round's budget was concentrated, and the number
+        that tells a reader why a later round took longer.
+        """
+        if proposal is None:
+            return None, 1.0
+        drawn = proposal.sample((self.budget,), show_progress_bars=False)
+        unconstrained = np.asarray(drawn.detach().cpu().numpy(), dtype=float).reshape(
+            self.budget, self.problem.free_size
+        )
+        rate = getattr(proposal, "acceptance_rate", None)
+        acceptance = 1.0 if rate is None else float(np.asarray(_numpy(rate)).reshape(-1)[0])
+        if acceptance < _TRUNCATION_ACCEPTANCE_FLOOR:
+            warnings.warn(
+                f"tmnre's truncated prior accepted {acceptance:.3%} of prior draws, so a round's "
+                f"budget costs roughly {1.0 / max(acceptance, 1e-12):.0f} prior samples each. The "
+                f"box has become very small relative to the prior; lower truncation_epsilon= for "
+                f"a wider box, or accept the cost.",
+                SamplingFailureWarning,
+                stacklevel=3,
+            )
+        return np.stack([self.problem.constrain(row) for row in unconstrained]), acceptance
+
+    def _truncate(
+        self,
+        box: TruncationBox,
+        rows: np.ndarray,
+        *,
+        observation: Any,
+        torch: Any,
+        dtype: Any,
+    ) -> TruncationBox:
+        """The next box: per parameter, where the 1-D marginal exceeds ``ε·max``.
+
+        The grid spans the intersection of the incoming box with the range of θ
+        actually simulated so far, which is what makes the sequence of boxes
+        **nested by construction**: no edge can move outward, because no node
+        outside the previous box is ever evaluated. :meth:`TruncationBox.
+        intersect` then states that as a property rather than leaving it to
+        this arithmetic.
+        """
+        lower: list[float] = []
+        upper: list[float] = []
+        for index in range(rows.shape[1]):
+            column = rows[:, index]
+            low = max(float(column.min()), box.lower[index])
+            high = min(float(column.max()), box.upper[index])
+            grid = grid_between(low, high, GRID_POINTS_1D)
+            nodes = grid.reshape(-1, 1)
+            estimator = self.marginal_estimators[(index,)]
+            density = estimator.log_ratio(
+                nodes, observation, torch=torch, dtype=dtype
+            ) + marginal_log_density(column.reshape(-1, 1), nodes)
+            edges = interval_above(grid, density, self.truncation_epsilon)
+            lower.append(edges[0])
+            upper.append(edges[1])
+        return TruncationBox(tuple(lower), tuple(upper)).intersect(box)
+
+    def _restricted_prior(self, torch: Any, box: TruncationBox, round_index: int) -> Any:
+        """The joint prior renormalised on *box*, as ``sbi``'s own object.
+
+        A fresh base prior per round, on its own named sub-stream, for
+        ``inference.md`` §12's reason: two rounds sharing a stream would make
+        one round's draws depend on how many the other took, and a rejection
+        sampler's consumption depends on the box.
+        """
+        utils = importlib.import_module("sbi.utils")
+        base = _prior_class(torch)(
+            self.problem,
+            self.stream(f"tmnre.propose.{round_index + 2}"),
+            dtype=getattr(torch, _DTYPE),
+            device=self.device,
+        )
+        return restricted_prior_class(utils.RestrictedPrior)(
+            base, box.indicator(), sample_with="rejection", device=self.device
+        )
+
+    def _marginal_summary(
+        self,
+        box: TruncationBox,
+        rows: np.ndarray,
+        *,
+        observation: Any,
+        torch: Any,
+        dtype: Any,
+    ) -> MarginalSummary:
+        """Every trained marginal, evaluated on a grid over the **final** box.
+
+        This is the ``marginals`` group's content and the answer to the results
+        question the item names: the estimators are torch modules and have no
+        place in a netCDF file, while the curve each one draws over the final
+        box is exactly what a corner plot is and what a reader of an archived
+        run can act on.
+
+        Evaluated here rather than reused from the round loop because the loop's
+        grids span each round's *incoming* box, and the stored summary should
+        span the box the run finished with.
+        """
+        problem = self.problem
+        labels = tuple(problem.free_labels())
+        free = len(labels)
+        centre = 0.5 * (np.asarray(box.lower, dtype=float) + np.asarray(box.upper, dtype=float))
+        grid = np.empty((free, GRID_POINTS_1D), dtype=float)
+        grid_constrained = np.empty_like(grid)
+        log_ratio = np.empty_like(grid)
+        log_density = np.empty_like(grid)
+        for index in range(free):
+            nodes = grid_between(box.lower[index], box.upper[index], GRID_POINTS_1D)
+            column = nodes.reshape(-1, 1)
+            ratio = self.marginal_estimators[(index,)].log_ratio(
+                column, observation, torch=torch, dtype=dtype
+            )
+            density = ratio + marginal_log_density(rows[:, [index]], column)
+            grid[index] = nodes
+            grid_constrained[index] = constrained_grid(problem, nodes, index, centre)
+            log_ratio[index] = ratio
+            log_density[index] = density - np.nanmax(density)
+
+        pairs = marginal_indices(free, 2) if self.marginals == 2 else ()
+        pair_row = np.zeros((len(pairs), GRID_POINTS_2D), dtype=float)
+        pair_column = np.zeros_like(pair_row)
+        pair_ratio = np.zeros((len(pairs), GRID_POINTS_2D, GRID_POINTS_2D), dtype=float)
+        pair_density = np.zeros_like(pair_ratio)
+        for position, indices in enumerate(pairs):
+            first, second = indices
+            axis_row = grid_between(box.lower[first], box.upper[first], GRID_POINTS_2D)
+            axis_column = grid_between(box.lower[second], box.upper[second], GRID_POINTS_2D)
+            mesh = pair_mesh(axis_row, axis_column)
+            ratio = self.marginal_estimators[indices].log_ratio(
+                mesh, observation, torch=torch, dtype=dtype
+            )
+            density = ratio + marginal_log_density(rows[:, list(indices)], mesh)
+            shape = (GRID_POINTS_2D, GRID_POINTS_2D)
+            pair_row[position] = axis_row
+            pair_column[position] = axis_column
+            pair_ratio[position] = ratio.reshape(shape)
+            pair_density[position] = (density - np.nanmax(density)).reshape(shape)
+
+        return MarginalSummary(
+            labels=labels,
+            order=self.marginals,
+            epsilon=self.truncation_epsilon,
+            grid=grid,
+            grid_constrained=grid_constrained,
+            log_ratio=log_ratio,
+            log_density=log_density,
+            pairs=pairs,
+            pair_grid_row=pair_row,
+            pair_grid_column=pair_column,
+            pair_log_ratio=pair_ratio,
+            pair_log_density=pair_density,
+        )
+
+    def _key_architecture(self, architecture: str) -> str:
+        """The architecture ingredient of the cache key, TMNRE's settings folded in.
+
+        **A stopgap, and it is deliberate that it is an ugly one.**
+        ``ampere.results.artefacts.artefact_key`` takes a fixed set of
+        ingredients and this item does not own that module, but ``marginals``
+        and ``truncation_epsilon`` both change what is trained: a different ε
+        gives a different box, a different box gives a different final
+        estimator, and two runs differing only in ε would otherwise collide on
+        one digest and the second would be served the first's posterior. That
+        is exactly the silent staleness ``DEVELOPMENT_PLAN.md`` §7 names, so
+        the settings are folded into the ingredient nearest to them until
+        :func:`~ampere.results.artefacts.artefact_key` grows its own keywords.
+        The *recorded* architecture (``ampere_sbi_density_estimator``) is
+        untouched — this string exists only inside the key, where it also makes
+        :meth:`~ampere.results.ArtefactStore.diff` name the setting that moved.
+        """
+        if self.method != TMNRE:
+            return architecture
+        return (
+            f"{architecture}+tmnre(marginals={self.marginals},"
+            f"epsilon={self.truncation_epsilon!r},sample_with={self.sample_with})"
+        )
+
+    def _artefact(self) -> Any:
+        """What the artefact store is handed: the posterior, or TMNRE's bundle.
+
+        A TMNRE run's answer is not only its posterior — the truncation history
+        and the marginal summary are part of what the run emits, and a cache
+        hit that produced a run missing its ``marginals`` group would be a
+        different run under the same key. So the bundle is stored whole
+        (:class:`~ampere.inference._tmnre.TMNREArtefact`), and everything in it
+        pickles: the box is plain floats, the indicator a dataclass rather than
+        a closure, the summary numpy arrays.
+        """
+        if self.method != TMNRE:
+            return self.posterior
+        return TMNREArtefact(
+            posterior=self.posterior,
+            truncation=self.truncation,
+            history=list(self.truncation_history),
+            marginals=self.marginal_summary,
+        )
+
+    def _restore(self, cached: Any, observation: Any) -> None:
+        """A cache hit, put back where a run would have left it.
+
+        The *estimators* are not restored — a stored run holds their summary,
+        not their weights — so :attr:`marginal_estimators` stays empty after a
+        hit. Everything the emitted run carries is restored.
+        """
+        if isinstance(cached, TMNREArtefact):
+            self.posterior = cached.posterior
+            self.truncation = cached.truncation
+            self.truncation_history = list(cached.history)
+            self.marginal_summary = cached.marginals
+        else:
+            self.posterior = cached
+        self.posterior.set_default_x(observation)
+
     def _simulate_round(
-        self, round_index: int, *, proposal: Any
+        self, round_index: int, *, proposal: Any = None, values: Any = None
     ) -> tuple[np.ndarray, np.ndarray, tuple[int, int]]:
         """One round's budget: θ in unconstrained space, x as a summary matrix.
 
@@ -1694,9 +2435,17 @@ class SBIEngine(Engine):
         budget larger than memory is held only as the two small arrays a
         trainer needs -- θ and the summary -- while the containers stream to
         the training-set file and are dropped.
+
+        **W3.4**: *values* is the other way in — one **constrained** θ per
+        draw, already drawn elsewhere. TMNRE's rounds arrive that way, because
+        its proposal is a truncated *prior* rather than a trained posterior, so
+        the draws come from a ``RestrictedPrior`` and reach ``simulate_many``
+        through its ``values=`` argument (``inference.md`` §13). *proposal* and
+        *values* are alternatives; passing both is a caller error.
         """
         problem = self.problem
-        values = None
+        if proposal is not None and values is not None:  # pragma: no cover - internal
+            raise EngineError("a simulation round takes a proposal or given values, not both.")
         if proposal is not None:
             drawn = proposal.sample((self.budget,), show_progress_bars=False)
             unconstrained = np.asarray(drawn.detach().cpu().numpy(), dtype=float).reshape(
@@ -1791,6 +2540,7 @@ class SBIEngine(Engine):
         torch: Any,
         dtype: Any,
         proposal: Any,
+        round_index: int,
     ) -> None:
         """Hand one round's pairs to the trainer, in the spelling it wants.
 
@@ -1799,11 +2549,20 @@ class SBIEngine(Engine):
         atomic loss corrects for); NLE and NRE take ``from_round`` instead, and
         pass no proposal at all. The difference is ``sbi``'s, and it is the one
         place this driver has to know which family it is driving.
+
+        **W3.4**: TMNRE passes the *actual* round index rather than
+        ``0``-or-``1``, because its rounds accumulate — a ratio trained on the
+        union of every round's rows is still a ratio for whatever prior it is
+        later multiplied by, which is precisely why truncation needs no
+        importance correction (:mod:`ampere.inference._tmnre`) — and the index
+        is what ``sbi``'s own per-round bookkeeping then reports.
         """
         theta_tensor = torch.as_tensor(theta, dtype=dtype, device=self.device)
         summary_tensor = torch.as_tensor(summary, dtype=dtype, device=self.device)
         if self.method == "npe":
             trainer.append_simulations(theta_tensor, summary_tensor, proposal=proposal)
+        elif self.method == TMNRE:
+            trainer.append_simulations(theta_tensor, summary_tensor, from_round=int(round_index))
         else:
             trainer.append_simulations(
                 theta_tensor, summary_tensor, from_round=0 if proposal is None else 1
@@ -1873,6 +2632,13 @@ class SBIEngine(Engine):
             "sbi_encoding_rows": layout.row_cap,
             "sbi_encoding_columns": layout.columns_total,
             "sbi_parameterisation": "unconstrained",
+            # Whether the trained estimator is still valid at *another*
+            # observation. A single-round fit is; every multi-round one is not,
+            # because its proposal (a trained posterior, or W3.4's truncation
+            # box) was chosen at this observation. Recorded rather than left to
+            # be inferred from the round count, because TMNRE loses it at one
+            # round too -- the box is applied to the posterior either way.
+            "sbi_amortised": int(self.rounds == 1 and self.method != TMNRE),
             "sbi_context": "none",
             "sbi_device": self.device,
             "sbi_training_loss": thinned,
@@ -1890,6 +2656,22 @@ class SBIEngine(Engine):
             "sbi_version": str(getattr(sbi_package, "__version__", "unknown")),
             "torch_version": str(torch.__version__),
         }
+        if self.method == TMNRE:
+            attrs["sbi_marginals"] = self.marginals
+            attrs["sbi_truncation_epsilon"] = self.truncation_epsilon
+            attrs["sbi_truncation_sampler"] = str(self.sample_with)
+            # One record per round: the box after it, in both parameterisations,
+            # its log-volume, the round's simulation counts and the rate at
+            # which the box that produced them accepted prior draws. This is
+            # the run's own evidence that the truncation behaved -- the volumes
+            # must not grow, and the truth (when a study knows one) must stay
+            # inside every box.
+            attrs["sbi_truncation"] = list(self.truncation_history)
+            attrs["sbi_marginal_estimators"] = len(marginal_indices(self.problem.free_size, 1)) + (
+                len(marginal_indices(self.problem.free_size, 2)) if self.marginals == 2 else 0
+            )
+            if self.truncation is not None:
+                attrs["sbi_truncation_log_volume"] = self.truncation.log_volume
         if training_loss:
             attrs["sbi_final_training_loss"] = training_loss[-1]
         if validation_loss:
