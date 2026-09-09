@@ -1127,6 +1127,22 @@ Phase 3 critical path — dispatch when convenient. **Depends:** nothing.
 200-element plate gives ten; `paginate=False` refuses exactly as today; the
 metadata round-trips; `dev` gate green; lint/format/pyrefly clean.
 
+### Reserved hook from the horizon notes (Fable, 2026-09-09; `docs/design/horizon_notes.md`)
+Peter's look-ahead questions on amortising SBI over noise realisations and
+over sampling share one hook that is cheap to reserve now and costly to
+retrofit: a per-draw **observation context** (σ-pattern, grid, instrument
+settings) drawn from a context prior, passed to `simulate_many`, recorded
+on the `Simulation`, and visible to the embedding. Three consequences for
+items not yet dispatched, none changing an approved body's scope: (i)
+W3.3's encoding carries the **uncertainty column by default** (mandatory
+unless the dataset has none), since a network that cannot see the error
+bars cannot condition on them; (ii) W3.1 slice 2 and W3.2 accept a
+`context=` argument on `simulate_many`/`SBIEngine` that is `None` today and
+recorded as such in provenance, so the signature exists before the
+machinery; (iii) the context prior and per-context instrument
+renegotiation are a follow-on item drafted when W3.3 lands, or Phase 5 if
+the Phase 3 budget is spent. Peter to confirm the reservation.
+
 ### Deferred from Phase 3 (recorded so they are not re-derived)
 - **jax-native SBI** (sbijax/flowjax): plan §6 says "if and when maturity
   warrants"; nothing above needs it, and `simulate_many`'s native
