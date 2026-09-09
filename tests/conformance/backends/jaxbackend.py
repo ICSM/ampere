@@ -279,6 +279,13 @@ class JaxBackend:
         device="cpu",
         # `configure_x64()` below, and every class raises without it.
         float64=True,
+        # W3.1: a jax array carries a `jaxlib` `Device` handle, which is
+        # process-local and has no pickle reduction, so a jax-composed problem
+        # cannot be sent to a worker process — and jax warns, loudly and
+        # correctly, that forking a jax process is likely to deadlock. Not a
+        # gap: throughput on a device backend is slice 2's per-chunk `vmap`,
+        # and `simulate_many` refuses the process pool here by name.
+        picklable=False,
         # Both, since W2.5 slice 2 chose celerite2.jax for the O(N) solve.
         solvers=frozenset({SolverKind.DENSE, SolverKind.QUASISEP}),
     )

@@ -369,6 +369,18 @@ class BackendCapabilities:
         has not written one is unaffected and those rows skip with a reason;
         the alternative, a required fixture method, would have made a
         Phase-2 track's own slice a change to every other track's fixture.
+    ``picklable``
+        Whether a problem composed from this backend's pieces can be sent to a
+        worker process (W3.1). ``True`` by default, because a backend whose
+        arrays are plain numpy or plain torch tensors pickles and the
+        process-pool executor is therefore available to it. jax declares
+        ``False``: a jax array carries a ``jaxlib`` ``Device`` handle, which is
+        process-local and has no pickle reduction, and jax itself warns that
+        forking a jax process is likely to deadlock. That is a fact about the
+        backend rather than a gap in it — throughput on a device backend is
+        W3.1 slice 2's per-chunk ``vmap``, not a pool of processes — so the
+        battery asserts the *refusal* for such a backend rather than skipping
+        the row.
     ``tolerances``
         The per-comparison table (:class:`Tolerances`). It lives on the
         backend, not in a module constant, because a float32 or
@@ -381,6 +393,7 @@ class BackendCapabilities:
     device: str = "cpu"
     float64: bool = True
     complex_models: bool = False
+    picklable: bool = True
     solvers: frozenset[SolverKind] = frozenset({SolverKind.DENSE})
     tolerances: Tolerances = DEFAULT_TOLERANCES
 

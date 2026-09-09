@@ -1098,7 +1098,9 @@ Each is a decision, not an oversight. Each has an extension point.
    0.6 s, the per-call time growing with the file as advertised. That is
    comfortable at these sizes and is not the reason to build the
    unlimited-dimension writer; the trigger is a budget whose *chunks* are many,
-   since the cost is quadratic in their number.)*
+   since the cost is quadratic in their number — the same 10⁵ draws in fifty
+   chunks cost 36 s of appends against 0.3 s of first write, and at that point
+   the writer, not the simulator, is the budget.)*
 10. **`AnomalyScore` is a `Protocol`, not a class.** *(Closed at the freeze:
     R4 was granted and `ampere.core.AnomalyScore` landed 2026-09-03. The
     renderer stays typed against the shape, which the class satisfies.)*

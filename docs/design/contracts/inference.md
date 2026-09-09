@@ -1683,6 +1683,21 @@ all needed a `copyreg` reduction for `mappingproxy`
 (`ampere/core/_pickling.py`), since every frozen mapping in `ampere.core` is one
 and none of them could be pickled before.
 
+**The process pool is therefore not a universal executor, and that is the right
+answer rather than a gap.** A problem composed on the *reference* backend
+pickles, which is what matters: it is where a wrapped external simulator is
+composed, and an external simulator is the case the pool exists for. A problem
+composed on **jax** does not — a jax array carries a `jaxlib` `Device` handle,
+which is process-local and has no pickle reduction, and jax warns in its own
+right that forking a jax process is likely to deadlock — so `simulate_many`
+refuses the pool for it, by name, before any worker starts. Throughput on a
+device backend is not more processes; it is W3.1 slice 2's per-chunk `vmap`,
+with the serial and thread executors and `chunk_size` still available meanwhile.
+The conformance battery carries this as a declared capability
+(`BackendCapabilities.picklable`) and asserts *both* halves: a backend that
+claims to pickle round-trips, and one that does not must genuinely fail to,
+so the refusal can never rest on a stale declaration.
+
 ## 14. Nested result channels — the symmetrical question
 
 `results_schema.md` §17 routes this here: Peter asked whether nested result

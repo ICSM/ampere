@@ -889,9 +889,17 @@ class TestBatchedSimulation:
     def test_every_shipped_executor_gives_the_same_batch(
         self, backend: ConformanceBackend, executor: Any
     ) -> None:
-        batch = build_problem(backend, SINGLE).simulate_many(
-            self.COUNT, observe=True, executor=executor, chunk_size=4
-        )
+        from ampere.core.exceptions import DatasetError
+
+        problem = build_problem(backend, SINGLE)
+        if isinstance(executor, ProcessExecutor) and not backend.capabilities.picklable:
+            # Not a skip: the contract for a backend whose arrays live on a
+            # device is that the pool is refused *by name*, before any worker
+            # starts, rather than failing somewhere inside one.
+            with pytest.raises(DatasetError, match="cannot be sent to a worker process"):
+                problem.simulate_many(self.COUNT, observe=True, executor=executor)
+            return
+        batch = problem.simulate_many(self.COUNT, observe=True, executor=executor, chunk_size=4)
         assert self.identical(batch, self.loop(backend, self.COUNT, observe=True))
 
     @pytest.mark.parametrize("chunk_size", [1, 7, None], ids=["chunk-1", "chunk-7", "whole"])
@@ -904,8 +912,18 @@ class TestBatchedSimulation:
         assert self.identical(batch, self.loop(backend, self.COUNT, observe=True))
 
     def test_a_composed_problem_can_be_sent_to_a_worker(self, backend: ConformanceBackend) -> None:
-        """The precondition for the process pool, asserted rather than assumed."""
+        """The precondition for the process pool, asserted rather than assumed.
+
+        A backend that declares ``picklable=False`` is held to the other half
+        of the contract instead: it must genuinely *fail* to pickle, so that
+        the refusal ``simulate_many`` raises is a true statement about the
+        problem rather than a stale declaration on a fixture.
+        """
         problem = build_problem(backend, SINGLE)
+        if not backend.capabilities.picklable:
+            with pytest.raises((TypeError, ValueError, AttributeError, pickle.PicklingError)):
+                pickle.dumps(problem)
+            return
         restored = pickle.loads(pickle.dumps(problem))
         assert restored.free_size == problem.free_size
         assert restored.backend == problem.backend

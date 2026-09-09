@@ -424,7 +424,23 @@ class ProcessExecutor:
         the right setting for a routine that cannot be run twice in one process.
     mp_context
         A :mod:`multiprocessing` context, if the default start method is wrong
-        for this simulator.
+        for this simulator. Worth reaching for: the platform default on Linux is
+        ``fork``, and forking a process that already holds a threaded runtime —
+        jax says so itself, and torch's intra-op pools have the same shape —
+        risks a deadlock in the child. ``get_context("spawn")`` is the safe
+        answer where that applies, at the cost of re-importing the world in each
+        worker.
+
+    Notes
+    -----
+    **Not every problem can be pooled, and the refusal is the contract.** A
+    problem composed on the reference backend pickles, which is the case that
+    matters: a wrapped external simulator is composed there. One composed on jax
+    does not — a jax array carries a process-local ``Device`` handle with no
+    pickle reduction — so
+    :meth:`~ampere.core.dataset.FittingProblem.simulate_many` refuses this
+    executor for it by name, before a worker starts. Throughput on a device
+    backend is per-chunk ``vmap`` (W3.1 slice 2), not more processes.
 
     Examples
     --------
