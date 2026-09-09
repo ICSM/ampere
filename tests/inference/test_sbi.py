@@ -762,6 +762,33 @@ class TestTheEmbeddingVocabulary:
         with pytest.raises(EngineError, match="does not know the embedding"):
             self.resolved("convnext")
 
+    def test_the_set_and_transformer_default_width_is_raised_but_flat_keeps_its_own(
+        self,
+    ) -> None:
+        """W3.11's two defaults: ``max(2 * free_size, 32)`` for a pooled set,
+        ``2 * free_size`` (legacy parity, unchanged) for ``"flat"``.
+        """
+        set_layout = EncodingLayout.from_datasets(two_dataset_problem().datasets, kind="set")
+
+        # Accept criterion: a one-parameter problem's set embedding gets 32,
+        # not 2 -- the legacy default would leave an untrained ReLU net a
+        # coin flip away from emitting all zeros.
+        for named in ("set", "transformer"):
+            resolved = self.resolved(named, free_size=1, layout=set_layout)
+            assert resolved.output_dim == 32
+
+        # Above the floor, 2 * free_size wins for a set embedding too.
+        resolved = self.resolved("set", free_size=20, layout=set_layout)
+        assert resolved.output_dim == 40
+
+        # "flat" (CNN/FC) is untouched: 2 * free_size, even below 32.
+        resolved = self.resolved("FC", free_size=1, layout=None)
+        assert resolved.output_dim == 2
+
+        # An explicit output_dim= always wins over either default.
+        resolved = self.resolved({"type": "set", "output_dim": 5}, free_size=1, layout=set_layout)
+        assert resolved.output_dim == 5
+
     def test_a_set_embedding_under_a_flat_layout_is_refused_by_name(self) -> None:
         """W3.3's two need column groups, and the flat layout has none."""
         flat = EncodingLayout.from_datasets(two_dataset_problem().datasets, kind="flat")

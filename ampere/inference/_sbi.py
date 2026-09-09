@@ -478,6 +478,31 @@ class _Embedding:
     output_dim: int
 
 
+def _default_output_width(free_size: int, kind: str) -> int:
+    """The embedding's default output width, kind-aware since **W3.11**.
+
+    ``"flat"``-layout nets (``"CNN"``/``"FC"``) keep the legacy default,
+    ``2 * free_size``: a summary that short is one more layer feeding a flow
+    whose own width is unrelated to it. The ``"set"``/``"transformer"``
+    embeddings *pool* a whole set of rows into this vector, so for them it is
+    the conditioning vector's entire capacity rather than an intermediate
+    width, and both shipped nets end in a ReLU: a narrow, randomly-initialised
+    one can and does emit all zeros before any gradient step (W3.3's own tests
+    set 16 explicitly, for exactly this reason). ``max(2 * free_size, 32)``
+    keeps a one- or two-parameter problem's pooled embedding away from that
+    floor, at the cost of a wider first layer; a user's own ``output_dim=``
+    always overrides this and is never touched here.
+
+    Ruled by Peter 2026-09-09 (WORK_ITEMS.md W3.11) as a default, not a
+    finding: how the right width depends on the data, model and problem
+    structure is deferred to a later embedding study.
+    """
+    width = 2 * int(free_size)
+    if kind in SET_EMBEDDINGS:
+        return max(width, 32)
+    return max(width, 1)
+
+
 def _embedding_of(
     embedding: Any,
     *,
@@ -499,7 +524,15 @@ def _embedding_of(
     The default output dimension is ``2 * free_size``, which is the legacy
     default and a sensible one: a summary narrower than twice the parameter
     count is unlikely to carry enough about the posterior's location *and*
-    width.
+    width. **W3.11** raises that default to ``max(2 * free_size, 32)`` for the
+    ``"set"`` and ``"transformer"`` embeddings only (see
+    :func:`_default_output_width`): for a pooled set, the output width *is*
+    the whole of the conditioning vector's capacity rather than one more
+    layer before a wider flat vector, and both shipped nets end in a ReLU, so
+    a narrow, randomly-initialised one can emit all zeros before it has seen
+    a single gradient step (W3.3's own tests set 16 explicitly for this
+    reason). ``"flat"``'s CNN/FC default is unchanged, for legacy parity, and
+    an explicit ``output_dim=`` always wins.
 
     One deliberate difference from the legacy code, and it is a bug fix rather
     than a change of vocabulary: an unknown ``type`` or an unknown
@@ -538,15 +571,14 @@ def _embedding_of(
             )
         return _Embedding(module=None, name="none", output_dim=0)
 
-    default_width = max(2 * int(free_size), 1)
-
     if embedding is True:
+        kind = EMBEDDINGS["default"]
         return _built(
-            EMBEDDINGS["default"],
+            kind,
             {},
             torch=torch,
             features=features,
-            width=default_width,
+            width=_default_output_width(free_size, kind),
             layout=layout,
         )
     if isinstance(embedding, str):
@@ -557,7 +589,14 @@ def _embedding_of(
                 f"sbi does not know the embedding {embedding!r}. Available: {known}, a "
                 f"torch.nn.Module of your own, or a dict of hyperparameters with a 'type' key."
             )
-        return _built(kind, {}, torch=torch, features=features, width=default_width, layout=layout)
+        return _built(
+            kind,
+            {},
+            torch=torch,
+            features=features,
+            width=_default_output_width(free_size, kind),
+            layout=layout,
+        )
     if isinstance(embedding, Mapping):
         settings = dict(embedding)
         named = str(settings.pop("type", "CNN"))
@@ -568,7 +607,7 @@ def _embedding_of(
                 f"sbi does not know the embedding type {named!r} named in the embedding= dict. "
                 f"Available: {known}."
             )
-        width = int(settings.pop("output_dim", default_width))
+        width = int(settings.pop("output_dim", _default_output_width(free_size, kind)))
         return _built(kind, settings, torch=torch, features=features, width=width, layout=layout)
     if isinstance(embedding, torch.nn.Module):
         shape = (
