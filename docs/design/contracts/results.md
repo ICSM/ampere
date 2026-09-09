@@ -996,6 +996,16 @@ attributes, so `DEVELOPMENT_PLAN.md` §7's "spec-hash invalidation of trained
 artefacts" is a comparison of two strings rather than a convention somebody has
 to remember.
 
+*Amended W3.1*: the two writers also take a
+`ampere.core.simulate.SimulationBatch`, and the **iterator of chunks**
+`FittingProblem.simulate_many(..., as_chunks=True)` yields. Nothing about the
+format changes — a set written from chunks is sample-for-sample the set written
+whole — but the peak memory does: the first chunk is written and the rest
+appended, so a budget larger than memory reaches the file without ever being
+held. That moves the cost onto limitation 13.9's `O(existing + new)` append,
+which is quadratic in the *number* of chunks, so few large chunks beat many
+small ones; the measurements are in W3.1's report.
+
 The one thing this format deliberately does **not** do is store the model. An
 emulator is trained on `(θ, ModelResult)` pairs and validated against the spec
 hash; reconstructing the simulator that produced them is out of scope for a
@@ -1079,7 +1089,18 @@ Each is a decision, not an oversight. Each has an extension point.
    its place: **append is read-concatenate-rewrite**, `O(existing + new)` per
    call, because an in-place unlimited-dimension resize is a second
    serialisation path through h5netcdf rather than xarray. That is the
-   extension point when a budget outgrows memory.)*
+   extension point when a budget outgrows memory.)* *(Amended **W3.1**: the
+   writers now accept `simulate_many`'s chunk iterator, which is what makes a
+   budget larger than memory writable at all — and which makes this append the
+   thing that limits it, since it is paid once per chunk. Measured on tiny
+   three-point simulations: 10⁴ draws in ten chunks cost 1.6 s of appends
+   against a 0.1 s first write, and 10⁵ draws in ten chunks cost 9.4 s against
+   0.6 s, the per-call time growing with the file as advertised. That is
+   comfortable at these sizes and is not the reason to build the
+   unlimited-dimension writer; the trigger is a budget whose *chunks* are many,
+   since the cost is quadratic in their number — the same 10⁵ draws in fifty
+   chunks cost 36 s of appends against 0.3 s of first write, and at that point
+   the writer, not the simulator, is the budget.)*
 10. **`AnomalyScore` is a `Protocol`, not a class.** *(Closed at the freeze:
     R4 was granted and `ampere.core.AnomalyScore` landed 2026-09-03. The
     renderer stays typed against the shape, which the class satisfies.)*

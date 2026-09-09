@@ -396,3 +396,79 @@ class TestFormatProperties:
             failure=Failure(FailureReason.LIKELIHOOD_FAILED, "not positive definite"),
         )
         assert pair["failure"]["reason"] == "likelihood_failed"
+
+
+# ---------------------------------------------------------------------------
+# Writing a budget that never fits in memory (W3.1)
+# ---------------------------------------------------------------------------
+
+
+class TestWritingFromChunks:
+    """``simulate_many(as_chunks=True)`` reaches the file a chunk at a time.
+
+    The property that matters is that it makes **no difference**: a set written
+    from chunks is the set written from the whole batch, sample for sample.
+    What differs is the peak memory (one chunk, not the budget) and the cost —
+    each chunk after the first pays §13 limitation 9's ``O(existing + new)``
+    append.
+    """
+
+    def test_a_batch_is_accepted_wherever_a_list_of_simulations_is(self, tmp_path: Path) -> None:
+        problem = toy()
+        batch = problem.simulate_many(4, observe=True)
+        write_training_set(tmp_path / "batch.nc", batch, problem)
+        assert len(read_training_set(tmp_path / "batch.nc")) == 4
+
+    def test_writing_from_chunks_equals_writing_the_whole_batch(self, tmp_path: Path) -> None:
+        whole = toy()
+        chunked = toy()
+        write_training_set(tmp_path / "whole.nc", whole.simulate_many(7, observe=True), whole)
+        write_training_set(
+            tmp_path / "chunks.nc",
+            chunked.simulate_many(7, observe=True, as_chunks=True, chunk_size=3),
+            chunked,
+        )
+        one = read_training_set(tmp_path / "whole.nc")
+        other = read_training_set(tmp_path / "chunks.nc")
+        assert len(one) == len(other) == 7
+        for index in range(7):
+            assert one.parameters(index) == other.parameters(index)
+            left, right = one.result(index), other.result(index)
+            assert sorted(left) == sorted(right)
+            for channel in left:
+                assert left[channel] == right[channel], (index, channel)
+            assert one.observations(index)["sed"] == other.observations(index)["sed"]
+
+    def test_the_chunks_are_pulled_lazily_so_the_budget_is_never_all_held(
+        self, tmp_path: Path
+    ) -> None:
+        problem = toy()
+        live: list[int] = []
+
+        def counted() -> Any:
+            for chunk in problem.simulate_many(6, observe=True, as_chunks=True, chunk_size=2):
+                live.append(len(chunk))
+                yield chunk
+
+        write_training_set(tmp_path / "lazy.nc", counted(), problem)
+        assert live == [2, 2, 2]
+        assert len(read_training_set(tmp_path / "lazy.nc")) == 6
+
+    def test_appending_takes_chunks_too(self, tmp_path: Path) -> None:
+        problem = toy()
+        write_training_set(tmp_path / "grow.nc", problem.simulate_many(2), problem)
+        append_training_set(
+            tmp_path / "grow.nc", problem.simulate_many(4, as_chunks=True, chunk_size=2), problem
+        )
+        assert len(read_training_set(tmp_path / "grow.nc")) == 6
+
+    def test_a_mixed_budget_is_refused_rather_than_half_written(self, tmp_path: Path) -> None:
+        problem = toy()
+        batch = problem.simulate_many(2)
+        with pytest.raises(ResultsError, match="mixes SimulationBatch chunks"):
+            write_training_set(tmp_path / "mixed.nc", [batch, batch[0]], problem)
+
+    def test_an_empty_chunk_iterator_is_still_an_empty_budget(self, tmp_path: Path) -> None:
+        problem = toy()
+        with pytest.raises(ResultsError, match="at least one simulation"):
+            write_training_set(tmp_path / "empty.nc", iter(()), problem)

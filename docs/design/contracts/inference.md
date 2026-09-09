@@ -1196,7 +1196,7 @@ the sentence a user needs and free text cannot be counted:
 ```pycon
 >>> [str(reason) for reason in FailureReason]
 ['model_failed', 'instrument_failed', 'non_finite_prediction', 'likelihood_failed',
- 'non_finite_log_likelihood']
+ 'non_finite_log_likelihood', 'execution_failed']
 
 ```
 
@@ -1520,6 +1520,183 @@ False
 Masked samples keep the observed container's own values: they carry zero
 information and are excluded from every likelihood, so drawing noise for them
 would be inventing data.
+
+### Batched form: `simulate_many` (*Amended W3.1*)
+
+Limitation 17.5 said `simulate` is one draw and that `simulate_many(n)` was
+Phase 3's. It landed at **W3.1 slice 1**, and the shape it landed in is fixed by
+Peter's ruling of 2026-09-08 (`DEVELOPMENT_PLAN.md` §2, *Batched simulation*):
+`vmap` is a single-device route and must not be the design, because a budget
+routinely wants many devices or many machines and a single simulation may not
+fit on one device at all. So **the loop is the reference semantics**, and it is
+stated as an equality rather than as a description:
+
+> `problem.simulate_many(n, stream=s)` returns, in order, exactly what
+> `[problem.simulate(rng=child) for child in problem.rng(s).spawn(n)]` returns —
+> whatever executor ran it, and however it was chunked.
+
+That is the strongest equality available, and the reason it is spelled with
+`spawn` rather than "n calls of `simulate`" is §12's advance-the-stream rule:
+`simulate` *advances* its sub-stream, so draw 7 of a plain loop depends on how
+many draws preceded it **in this process**, which a partitioned budget cannot
+promise. Deriving one child generator per draw **by index** removes the
+dependency by construction. numpy's spawning is cumulative — `spawn(a)` then
+`spawn(b)` gives the children `spawn(a + b)` would — so children are spawned a
+chunk at a time without the batch ever holding *n* generators, and `chunk_size`
+1 and 7 give bit-identical batches.
+
+θ is drawn **in the parent**, before any work is handed out, and the
+already-advanced child travels with it. That is not an optimisation: it is what
+lets a draw whose worker was killed still record the θ it was killed on, which
+is the difference between reject-and-record and losing the evidence.
+
+```pycon
+>>> batch = seeded.simulate_many(5, observe=True)
+>>> len(batch), batch.theta.shape
+(5, (5, 1))
+>>> batch.observations['default'].values.shape
+(5, 3)
+>>> bool(batch.failed.any())
+False
+
+```
+
+A batch is a **sequence of `Simulation`s**, so every consumer of the single-draw
+contract above keeps working unchanged, with stacked views over the columns an
+SBI trainer wants laid beside it:
+
+```pycon
+>>> batch[2].observations['default'].values.tolist() == (
+...     batch.observations['default'].values[2].tolist()
+... )
+True
+>>> sorted(batch.results), len(batch.results['model'])
+(['model'], 5)
+
+```
+
+The stacks are `ContainerBatch`, **not** `FunctionSamples` with a leading sample
+axis. `results_schema.md` fixes a container's value shape to the one its
+coordinates imply, so a container carrying a sample axis would be a container
+whose values contradict its axes; `ContainerBatch` instead holds what is shared
+once (kind, axes, unit, extra coordinates) and what varies as an array, and
+indexing rebuilds the draw's own container. It is the same economy `results.md`
+§11 gives the on-disk training set, for the same reason.
+
+`values=None` draws each θ from the joint prior on the batch sub-stream — the
+budget idiom. An array of shape `(count, free_size)`, or a sequence of that many
+mappings or vectors, simulates at **given** θ: the simulation-based-calibration
+idiom, where the θ are the ones whose rank statistics are being checked. One
+mapping is refused rather than broadcast, because simulating a single point *n*
+times is a deliberate thing to ask for and not something to arrive at by
+accident.
+
+```pycon
+>>> given = seeded.simulate_many(3, values=[[1.0], [2.0], [3.0]])
+>>> given.theta.ravel().tolist()
+[1.0, 2.0, 3.0]
+>>> seeded.simulate_many(3, values={"model.slope": 2.0})
+Traceback (most recent call last):
+    ...
+ampere.core.exceptions.DatasetError: simulate_many's values= is one θ per draw ...
+
+```
+
+**Chunking.** `chunk_size` bounds how many simulations exist at once;
+`as_chunks=True` yields `SimulationBatch` chunks lazily, and
+`write_training_set`/`append_training_set` take the iterator, so a budget larger
+than memory reaches the file without ever being held. The cost moves rather than
+disappearing: each chunk after the first pays `results.md` limitation 13.9's
+`O(existing + new)` append, which is quadratic in the *number* of chunks, so few
+large chunks beat many small ones. `on_chunk` is called with each chunk's index
+before that chunk runs — the device-placement hook. A single simulation larger
+than one device is **not** partitioned by ampere; a model-parallel simulator is a
+`Model` whose `__call__` does its own placement, and `chunk_size=1` plus the hook
+is what guarantees such a model is never asked to hold two simulations at once.
+W3.1 slice 2 wires the backends into the hook and adds per-chunk `vmap`
+*underneath* this contract, never instead of it.
+
+**`BATCHABLE` on the reference backend.** The flag means one thing said in two
+dialects — *this part can take a stack of θ*. On torch and jax that is
+`log_prob_unconstrained_batched` through `vmap`, which a backend model declares
+without implementing anything here; on the reference backend it is
+`Model.evaluate_batch(batch)`, the form an external code that takes a *table* of
+parameter sets in one call already has. `simulate_many` uses it under the serial
+executor only, and only when the model both declares the flag **and** overrides
+the hook — a table evaluated in one call is by definition not partitioned across
+workers, so the two are alternative ways of spending the same batch, and a torch
+model that declares the flag for `vmap` falls to the loop honestly.
+
+### Execution: the executor protocol (*Amended W3.1*)
+
+`ampere.core.simulate.Executor` is one method — `map(fn, items)`, results in
+item order — and it is deliberately the shape `concurrent.futures.Executor`
+already has, so dask's `Client.get_executor()`, ray's executor wrappers and
+mpi4py's `MPIPoolExecutor` satisfy it as they stand. A queue-driven cluster
+array is the one case that wants a thin adapter, and the adapter is that method.
+Two properties are contractual, and both are properties of the *result* rather
+than of the schedule: results come back positionally, and how the executor
+groups, distributes or retries items must not change the values it returns.
+`simulate_many` guarantees the randomness half of the second by handing each
+draw its own generator, so an executor only has to avoid reordering.
+
+Three are shipped. `SerialExecutor` is the default and the oracle.
+`ProcessExecutor` is the route for an external simulator: one worker process per
+simulation in flight, the problem broadcast to each worker once at start-up
+rather than pickled per draw, and `max_tasks_per_child=1` available for a
+routine that cannot be run twice in one process. `ThreadExecutor` suits an
+I/O-bound wrapper.
+
+**What is flagged and what is raised.** A per-simulation `timeout` on either
+pool expires as a flagged failure, never an exception, and so does a worker that
+dies outright — `FailureReason.EXECUTION_FAILED`, its own code beside
+`MODEL_FAILED` because "the simulator said no" and "the executor lost the
+simulator" call for different remedies and a single count could not tell a user
+which they had. An exception the *simulator* raises propagates, exactly as it
+would from `simulate`: a declared `simulator_failures` class is already flagged
+inside `simulate`, so an exception that gets that far is an undeclared one, and
+turning it into a silently dropped draw would hide a bug inside a plausible
+failure rate.
+
+Two limits are stated rather than engineered around. A **thread** cannot be
+interrupted, so `ThreadExecutor`'s deadline bounds the answer and not the work:
+the draw is flagged at the deadline, and `map` still returns only once the
+abandoned thread has finished, because leaving a non-daemon worker thread
+running would hang the interpreter at exit instead. A **crashed worker** breaks
+its whole pool and the operating system does not say which draw did it, so the
+draws that were merely in flight beside it are re-run one per fresh pool, where
+whichever draw is guilty convicts itself rather than an innocent neighbour.
+
+**Failure accounting is the parent's.** Recording is suspended while a chunk
+runs and replayed on the problem in draw order, whichever process produced the
+draws — so `failure_counts` is right after a pooled budget, which limitation
+17.7 says it would not otherwise be. That limitation stands for the engines that
+drive their own pools; this path is the exception, and it is one because
+`simulate_many` owns both ends of the pool.
+
+**Picklability is a precondition, and it is checked.** A process pool sends the
+problem to its workers, so every model, instrument, likelihood and prior in it
+must pickle; `simulate_many` checks once, before a worker starts, and refuses
+with a message naming the usual culprits rather than letting an opaque
+`PicklingError` surface from inside a worker's bootstrap. Making that true at
+all needed a `copyreg` reduction for `mappingproxy`
+(`ampere/core/_pickling.py`), since every frozen mapping in `ampere.core` is one
+and none of them could be pickled before.
+
+**The process pool is therefore not a universal executor, and that is the right
+answer rather than a gap.** A problem composed on the *reference* backend
+pickles, which is what matters: it is where a wrapped external simulator is
+composed, and an external simulator is the case the pool exists for. A problem
+composed on **jax** does not — a jax array carries a `jaxlib` `Device` handle,
+which is process-local and has no pickle reduction, and jax warns in its own
+right that forking a jax process is likely to deadlock — so `simulate_many`
+refuses the pool for it, by name, before any worker starts. Throughput on a
+device backend is not more processes; it is W3.1 slice 2's per-chunk `vmap`,
+with the serial and thread executors and `chunk_size` still available meanwhile.
+The conformance battery carries this as a declared capability
+(`BackendCapabilities.picklable`) and asserts *both* halves: a backend that
+claims to pickle round-trips, and one that does not must genuinely fail to,
+so the refusal can never rest on a stale declaration.
 
 ## 14. Nested result channels — the symmetrical question
 
