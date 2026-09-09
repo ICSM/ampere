@@ -273,8 +273,10 @@ class TestTMNREKeyFields:
             key = _key(_problem())
         assert key.marginals is None
         assert key.truncation_epsilon is None
+        assert key.sample_with is None
         assert "marginals" not in key.ingredients()
         assert "truncation_epsilon" not in key.ingredients()
+        assert "sample_with" not in key.ingredients()
         assert key.digest() == _BASE_COMMIT_NPE_DIGEST
 
     def test_marginals_and_truncation_epsilon_default_to_none_and_are_omitted(self) -> None:
@@ -294,12 +296,33 @@ class TestTMNREKeyFields:
             "versions",
         }
 
-    def test_a_tmnre_key_carries_both_fields(self) -> None:
-        key = _key(_problem(), method="tmnre", marginals=2, truncation_epsilon=0.01)
+    def test_a_tmnre_key_carries_all_three_fields(self) -> None:
+        key = _key(
+            _problem(), method="tmnre", marginals=2, truncation_epsilon=0.01, sample_with="mcmc"
+        )
         assert key.marginals == 2
         assert key.truncation_epsilon == 0.01
+        assert key.sample_with == "mcmc"
         assert key.ingredients()["marginals"] == 2
         assert key.ingredients()["truncation_epsilon"] == 0.01
+        assert key.ingredients()["sample_with"] == "mcmc"
+
+    def test_a_different_sample_with_is_a_miss_that_names_it(self, tmp_path: Path) -> None:
+        """The sampling mode is baked into the stored posterior, so it must be in the key."""
+        store = ArtefactStore(tmp_path)
+        settings = {"method": "tmnre", "marginals": 1, "truncation_epsilon": 0.01}
+        store.put(_key(_problem(), sample_with="rejection", **settings), "artefact-v1")
+
+        moved_key = _key(_problem(), sample_with="mcmc", **settings)
+        assert store.get(moved_key) is None
+        diff = store.diff(moved_key)
+        assert diff["sample_with"] == ("rejection", "mcmc")
+        assert "marginals" not in diff
+        assert "truncation_epsilon" not in diff
+
+    def test_an_empty_sample_with_is_refused(self) -> None:
+        with pytest.raises(ResultsError, match="sample_with"):
+            _key(_problem(), method="tmnre", marginals=1, truncation_epsilon=0.01, sample_with="")
 
     def test_a_different_truncation_epsilon_is_a_miss_that_names_it(self, tmp_path: Path) -> None:
         """Accept: "a TMNRE key with a different truncation_epsilon is a miss that names it"."""

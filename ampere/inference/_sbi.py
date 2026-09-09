@@ -1604,9 +1604,11 @@ class SBIEngine(Engine):
         # W3.5: the artefact key is the problem's own hashes plus everything
         # that shaped the estimator -- the encoding *hash* stands in for the
         # layout, so a differently-packed observation is a miss by construction.
-        # W3.12: marginals=/truncation_epsilon= are now artefact_key's own
-        # keywords -- the _key_architecture stopgap that folded TMNRE's
-        # settings into the architecture string is gone.
+        # W3.12: marginals=/truncation_epsilon=/sample_with= are now
+        # artefact_key's own keywords -- the _key_architecture stopgap that
+        # folded TMNRE's settings into the architecture string is gone.
+        # sample_with belongs in the key because sbi bakes it into the built
+        # posterior, which is exactly what the store holds (_artefact).
         cache_key: ArtefactKey | None = (
             None
             if self.cache is None
@@ -1619,6 +1621,7 @@ class SBIEngine(Engine):
                 rounds=self.rounds,
                 marginals=self.marginals if self.method == TMNRE else None,
                 truncation_epsilon=self.truncation_epsilon if self.method == TMNRE else None,
+                sample_with=self.sample_with if self.method == TMNRE else None,
             )
         )
         cached = None if cache_key is None or self.cache is None else self.cache.get(cache_key)

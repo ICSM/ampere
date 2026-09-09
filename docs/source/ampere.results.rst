@@ -76,8 +76,8 @@ closed by a content-addressed store whose key is built entirely from hashes
 :func:`~ampere.results.artefact_key` builds one :class:`~ampere.results.ArtefactKey`
 from a :class:`~ampere.core.dataset.FittingProblem` and a run's own settings
 (the method, the estimator architecture, the budget, the rounds, the encoding
-layout, the ``sbi``/torch versions and, for TMNRE, its ``marginals``/
-``truncation_epsilon``), and :class:`~ampere.results.ArtefactStore` is the
+layout, the ``sbi``/torch versions and, for TMNRE, its ``marginals``,
+``truncation_epsilon`` and ``sample_with``), and :class:`~ampere.results.ArtefactStore` is the
 ``get``/``put``/``train_or_load`` seam an inference engine
 (``SBIEngine(cache=...)``, W3.5) calls around training. A stored artefact
 that cannot be trusted — a hand-edited sidecar, a corrupted pickle — is a

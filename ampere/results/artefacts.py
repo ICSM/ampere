@@ -209,12 +209,19 @@ class ArtefactKey:
     #: different box and so a different trained estimator. ``None`` for every
     #: other method. Last field, for the same reason ``marginals`` is.
     truncation_epsilon: float | None = None
+    #: **The third of W3.4's folded settings.** TMNRE's ``sample_with``
+    #: (``"rejection"`` or ``"mcmc"``) is baked into the *built* posterior —
+    #: ``sbi`` returns a different posterior class for each — and the built
+    #: posterior is exactly what the store holds, so a hit under the other
+    #: mode would sample the wrong way and record the wrong sampler in the
+    #: run's attrs. ``None`` for every other method. Last field, as above.
+    sample_with: str | None = None
 
     def ingredients(self) -> dict[str, Any]:
         """Every field as a JSON-safe mapping — what the sidecar records.
 
-        ``marginals`` and ``truncation_epsilon`` are written **only when
-        set** (i.e. for a TMNRE key): a non-TMNRE key's ingredients — and so
+        ``marginals``, ``truncation_epsilon`` and ``sample_with`` are written
+        **only when set** (i.e. for a TMNRE key): a non-TMNRE key's ingredients — and so
         its :meth:`digest` — are byte-for-byte what they were before W3.4's
         two fields existed, since the two keys simply do not appear in the
         mapping rather than appearing as ``null``.
@@ -235,6 +242,8 @@ class ArtefactKey:
             ingredients["marginals"] = int(self.marginals)
         if self.truncation_epsilon is not None:
             ingredients["truncation_epsilon"] = float(self.truncation_epsilon)
+        if self.sample_with is not None:
+            ingredients["sample_with"] = str(self.sample_with)
         return ingredients
 
     def digest(self) -> str:
@@ -259,15 +268,17 @@ def artefact_key(
     packages: Sequence[str] = _DEFAULT_PACKAGES,
     marginals: int | None = None,
     truncation_epsilon: float | None = None,
+    sample_with: str | None = None,
 ) -> ArtefactKey:
     """Build the one complete :class:`ArtefactKey` for *problem* and a run's settings.
 
     Every argument beyond *problem* is required and keyword-only: "a partial
     key is never accepted" (the item text) is enforced here, at the one place
     a key is built, so a caller cannot construct one that silently omits an
-    ingredient and compares equal to a run that differed in it. The two
-    exceptions are *marginals* and *truncation_epsilon*, which are optional
-    because they mean nothing outside TMNRE — see their own parameters below.
+    ingredient and compares equal to a run that differed in it. The three
+    exceptions are *marginals*, *truncation_epsilon* and *sample_with*, which
+    are optional because they mean nothing outside TMNRE — see their own
+    parameters below.
 
     Parameters
     ----------
@@ -303,15 +314,23 @@ def artefact_key(
         different ε gives a different restricted-prior box and so a
         different trained estimator, which must not share a cache key with
         another ε's.
+    sample_with
+        TMNRE's posterior sampling mode (``"rejection"`` or ``"mcmc"``);
+        ``None`` for every other method. The mode is baked into the built
+        posterior the store holds — ``sbi`` builds a different posterior
+        class for each — so two runs differing only here must not share a
+        key: the second would be served the first's sampler and record its
+        own in the attrs. Any non-empty string is accepted; which modes exist
+        is ``ampere.inference``'s business, not this module's.
 
     Raises
     ------
     ampere.core.exceptions.ResultsError
         If *layout*, *method* or *architecture* is empty, if *budget* or
         *rounds* is less than 1, if *marginals* is given and not ``1`` or
-        ``2``, or if *truncation_epsilon* is given and not strictly between 0
-        and 1 — the ingredients a caller could otherwise leave meaninglessly
-        blank or nonsensical.
+        ``2``, if *truncation_epsilon* is given and not strictly between 0
+        and 1, or if *sample_with* is given and empty — the ingredients a
+        caller could otherwise leave meaninglessly blank or nonsensical.
     """
     layout = str(layout)
     method = str(method)
@@ -342,6 +361,12 @@ def artefact_key(
             f"integral, strictly between 0 and 1, or None for a method with no truncation. Got "
             f"{truncation_epsilon!r}."
         )
+    if sample_with is not None and not str(sample_with):
+        raise ResultsError(
+            "artefact_key's sample_with= is TMNRE's posterior sampling mode, a non-empty "
+            "string, or None for a method whose posterior has no sampling mode to choose. "
+            "Got an empty string."
+        )
 
     data_hashes = {
         label: hash_container(problem.datasets[label].observed) for label in problem.datasets
@@ -359,6 +384,7 @@ def artefact_key(
         versions=package_versions(extra=tuple(packages)),
         marginals=None if marginals is None else int(marginals),
         truncation_epsilon=None if truncation_epsilon is None else float(truncation_epsilon),
+        sample_with=None if sample_with is None else str(sample_with),
     )
 
 
