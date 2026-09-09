@@ -17,6 +17,7 @@ constraint a user's own simulator is under, and
 from __future__ import annotations
 
 import math
+import os
 import pickle
 import time
 from collections.abc import Sequence
@@ -93,6 +94,24 @@ class Unreliable(Flat):
             raise Crash("the RT code exited 1")
         if level == HANGS_AT:
             time.sleep(30.0)
+        return super().evaluate(**values)
+
+
+#: The ``level`` at which :class:`HardCrash` takes its worker process with it.
+DIES_AT = 8.5
+
+
+class HardCrash(Flat):
+    """Dies the way a segfaulting compiled routine does: the process just goes.
+
+    ``os._exit`` runs no handlers and unwinds nothing, so as far as the pool is
+    concerned this is a segfault — and, crucially, it breaks the pool for
+    *every* draw in flight, not only for the guilty one.
+    """
+
+    def evaluate(self, **values: Any) -> Spectrum:
+        if float(self.context(values)["level"]) == DIES_AT:
+            os._exit(70)
         return super().evaluate(**values)
 
 
@@ -391,6 +410,18 @@ class TestExecutionFailures:
         assert problem.failure_counts[FailureReason.EXECUTION_FAILED] == 1
         assert problem.failure_counts[FailureReason.MODEL_FAILED] == 1
         assert len(batch.usable) == 4
+
+    def test_a_dead_worker_is_attributed_to_the_draw_that_killed_it(self) -> None:
+        """Nothing is flagged on suspicion: the innocent neighbours are re-run."""
+        problem = FittingProblem(HardCrash(), [Dataset(observed())], seed=SEED)
+        batch = problem.simulate_many(5, values=levels(5, _2=DIES_AT), executor=ProcessExecutor(2))
+        assert batch.failed.tolist() == [False, False, True, False, False]
+        failure = batch.failures[2]
+        assert failure is not None
+        assert failure.reason is FailureReason.EXECUTION_FAILED
+        assert "died" in failure.message
+        assert len(batch.usable) == 4
+        assert problem.failure_counts[FailureReason.EXECUTION_FAILED] == 1
 
     def test_the_reason_is_a_distinct_code_in_the_vocabulary(self) -> None:
         assert FailureReason.EXECUTION_FAILED not in (

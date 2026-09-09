@@ -256,20 +256,30 @@ def _windowed_map(
                         break
                 except concurrent.futures.BrokenExecutor:
                     # A worker died outright (a segfaulting Fortran routine is
-                    # the case this exists for). The OS does not tell us which
-                    # draw did it, so the survivors are re-run one at a time on
-                    # a fresh single-worker pool, where whichever draw is guilty
-                    # convicts itself rather than an innocent neighbour.
-                    results[index] = ExecutionFailure(
-                        message=(
-                            "the worker process running this simulation died; the draw "
-                            "produced no result"
-                        ),
-                        exception_type="BrokenProcessPool",
-                    )
-                    survivors = [entry[0] for entry in inflight] + queue[cursor:]
-                    if survivors and recover:
+                    # the case this exists for), and killing one worker breaks
+                    # the pool for *every* draw in flight — including the one
+                    # being awaited, which may well be innocent. The OS does not
+                    # say which draw did it, so nothing is flagged on suspicion:
+                    # every affected draw, the awaited one first, is re-run one
+                    # per fresh single-worker pool, where whichever draw is
+                    # guilty convicts itself and the innocent ones simply
+                    # produce their results.
+                    survivors = [index, *(entry[0] for entry in inflight), *queue[cursor:]]
+                    if recover:
                         _rerun_alone(pool_factory, fn, items, results, survivors, timeout)
+                    else:
+                        # A thread pool breaks only when it cannot start a
+                        # worker at all — interpreter shutdown, or a hard
+                        # resource limit — and there is nothing to replace it
+                        # with, so the survivors are lost with it and say so.
+                        for survivor in survivors:
+                            results[survivor] = ExecutionFailure(
+                                message=(
+                                    "the executor broke while this draw was queued; the draw "
+                                    "produced no result"
+                                ),
+                                exception_type="BrokenExecutor",
+                            )
                     inflight.clear()
                     break
         finally:
