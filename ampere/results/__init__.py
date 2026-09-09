@@ -33,6 +33,11 @@ The contract is ``docs/design/contracts/results.md``. In outline:
     :class:`~ampere.core.AnomalyScore`.
 ``plots``
     The plotting surface, including ``diagnostics.md``'s families B and C.
+``artefacts``
+    Trained-artefact caching keyed on the problem's own provenance hashes
+    (``DEVELOPMENT_PLAN.md`` §7's trap) — :class:`ArtefactStore`, its
+    :class:`ArtefactKey` and :func:`artefact_key`, and the ``train_or_load``
+    seam an inference engine calls around training (W3.5).
 
 Dependencies
 ------------
@@ -57,6 +62,13 @@ with a bare ``ModuleNotFoundError`` from three frames down.
 from __future__ import annotations
 
 from ._plotting import figure_metadata
+from .artefacts import (
+    ARTEFACT_CACHE_SCHEMA_VERSION,
+    ArtefactCacheWarning,
+    ArtefactKey,
+    ArtefactStore,
+    artefact_key,
+)
 from .derived import (
     CONDITIONAL_LOO_DECOMPOSITION,
     FACTORISED_DECOMPOSITION,
@@ -153,6 +165,7 @@ from .serialisation import (
 )
 
 __all__ = [
+    "ARTEFACT_CACHE_SCHEMA_VERSION",
     "ATTR_PREFIX",
     "CHAIN_DIM",
     "CONDITIONAL_LOO_DECOMPOSITION",
@@ -180,6 +193,9 @@ __all__ = [
     "TRAINING_SET_SCHEMA_VERSION",
     "WHITENESS_STREAM",
     "AnomalyScoreLike",
+    "ArtefactCacheWarning",
+    "ArtefactKey",
+    "ArtefactStore",
     "ChiSquareCheck",
     "DrawRecorder",
     "ResultsError",
@@ -189,6 +205,7 @@ __all__ = [
     "add_posterior_predictive",
     "add_residuals",
     "append_training_set",
+    "artefact_key",
     "buffer_fingerprint",
     "canonical_json",
     "chi_square_pvalue",
