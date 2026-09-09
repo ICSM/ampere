@@ -424,16 +424,19 @@ def foreign_parts(parts: Sequence[object]) -> tuple[object, ...]:
     >>> foreign_parts([Torch(), Jax(), Python()])
     ()
     """
-    declared = {str(part.BACKEND) for part in parts}  # type: ignore[attr-defined]
+    # ``getattr`` rather than a bare attribute here, unlike
+    # :func:`declared_capabilities`, which requires the declaration and says so.
+    # This one is reached from :attr:`FittingProblem.foreign_parts`, which a
+    # run's provenance asks of *every* problem -- including one whose parts were
+    # never aggregated because the caller passed ``capabilities=``. Raising
+    # there would turn a silent part into a failure at emission time, long after
+    # the composition that could have been fixed.
+    declared = {str(getattr(part, "BACKEND", _SILENT_BACKEND)) for part in parts}
     native = declared - {_SILENT_BACKEND}
     if len(native) != 1:
         return ()
     name = next(iter(native))
-    return tuple(
-        part
-        for part in parts
-        if str(part.BACKEND) != name  # type: ignore[attr-defined]
-    )
+    return tuple(part for part in parts if str(getattr(part, "BACKEND", _SILENT_BACKEND)) != name)
 
 
 def declared_capabilities(
