@@ -1321,6 +1321,48 @@ seeded problem produce bitwise-identical draws and attrs (NPE, and TMNRE
 at a tiny budget); a different problem seed differs; `sbi` and `dev` gates
 green; lint/format/pyrefly clean.
 
+### W3.13 — Phase 3 documentation pass [M; Sonnet] (drafted 2026-09-09 by Fable; dispatch when W3.15, W3.10 and W3.7 have merged; Peter to confirm)
+Like W2.15, after the last Phase 3 merge: every user-facing and design
+document reflects what landed. (1) `docs/source/`: an **SBI tutorial page**
+(`sbi.rst`, in the v2 tutorials toctree beside the M2 and WStat pages)
+built from `examples/sbi/` — `toy_powerlaw.py` (NPE on a native problem at
+the smoke budget; what `SBIEngine.run` returns; the `ampere_sbi_*` attrs),
+`external_simulator.py`/`fit_external_simulator.py` (a black-box simulator
+through `simulate_many`'s executor protocol and `forkserver`),
+`cached_fit.py` (the artefact store: a hit, and a miss that names what
+moved), `tmnre_fit.py` (TMNRE, the `marginals` group, the truncation
+history) — plus `SBIEngine.calibrate` (SBC and TARP, `plot_sbc_ranks`,
+`plot_coverage`), the embedding choices (`EncodingLayout`, set versus
+transformer, the default width) and reproducibility (W3.15's seed); every
+example the page uses covered by `tests/examples` as the M2 and WStat pages
+are; `advanced.rst`'s "Very slow models" and "Embedding networks" sections
+rewritten for `ampere.inference` with the legacy note inverted (legacy
+`ampere.infer.sbi` is the frozen route); `migrating.rst`'s `SBI_SNPE` row
+completed; `install.rst`'s `sbi` extra row updated; the legacy
+`Embedding_nets` notebook kept under the legacy warning. (2)
+`docs/design/architecture.md` §3 and the plan's §5 Phase 3 bullets
+annotated with what landed (sbi 0.27; **no swyft** — TMNRE through sbi's
+own ratio estimators, Peter's ruling of 2026-09-09; the encoding;
+`forkserver`; the schema-6 attrs), and every `docs/design/contracts/*`
+"landed"/"amended" annotation for the Phase 3 landings checked against the
+code (the list of stale sentences in the report, each marked *Amended
+W3.13*, one decision-log row for the batch). (3) Docstring index: every
+public name added in Phase 3 (`ampere.inference`'s SBI surface,
+`ampere.results.calibration`, `artefacts`, `training`,
+`provenance.model_hash`) renders under autodoc without warnings. (4) The
+deferred list (plan §6) reviewed: the swyft half of the "SBI package set"
+bullet struck through with the ruling, the jax-native SBI bullet kept, the
+embedding *study* and the ε study entered where the handoff put them. (5)
+`README.md`'s pitch gains one sentence on SBI, with the WStat coverage-study
+numbers if they fit. No code behaviour changes; no contract changes beyond
+annotations. **Depends:** W3.15, W3.10, W3.7 (merged). **Blocks** the Phase
+3 close-out.
+**Accept:** `pixi run docs` succeeds with no warnings attributable to the
+new namespaces; every example the tutorial uses runs under `tests/examples`
+(existing coverage confirmed, new coverage added where an example had none);
+the annotation list in the report; a docs-only diff — the `dev` gate green,
+plus the `sbi` gate if `tests/examples` changed.
+
 ### W3.10 — Automatic paging above the plot caps, with a loud warning [S; Sonnet; not urgent]
 Ruled by Peter 2026-09-08 (on W2.8's confirmed caps): above
 `MAX_CORNER_VARIABLES`/`MAX_TRACE_VARIABLES`, `plot_corner` and `plot_trace`
