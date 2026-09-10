@@ -8,6 +8,17 @@ is being built *now*, that consequence is stated explicitly at the end and
 is the only part of this document with any claim on the present.
 (The observation-context reservation was confirmed by Peter 2026-09-09.)
 
+**Folded into `DEVELOPMENT_PLAN.md` on 2026-09-10 (Peter's instruction:
+"so the whole horizon is visible in one place")**: §1 and §2 as Phase 5
+bullets (warping with its degrees-of-freedom guard and the sparsity prior;
+the approximate-GP bullet widened to HSGP/EFGP with its two contract
+questions); §3 and its follow-up as a Phase 5 bullet (joint noise over a
+tuple of channels) and design horizon (h); §4–5 as a Phase 5 bullet and
+design horizon (i); the embedding follow-up's ConvCNP experiment into the
+deferred embedding study (§6); the kernel follow-up was already Phase 4
+(W4.5). The plan is the authority from here; this file stays as the
+reasoning behind each entry.
+
 Each section: the question, what the frozen design already provides, what
 it would take, and a first recommendation. Citations are to the design
 documents and to the literature by name; nothing here has been measured.
