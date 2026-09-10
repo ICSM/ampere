@@ -114,7 +114,12 @@ Extras
 
    * - ``sbi``
      - torch, sbi
-     - Neural posterior estimation, in the **legacy** ``ampere.infer.sbi``
+     - Simulation-based inference:
+       :class:`~ampere.inference.SBIEngine` (NPE, NLE, NRE and truncated
+       marginal ratio estimation — see :doc:`sbi`), and the legacy
+       ``ampere.infer.sbi``. Installs torch but **not** ``pyro-ppl``, so it
+       does not by itself unlock :class:`~ampere.inference.NUTSEngine`/
+       :class:`~ampere.inference.VIEngine` on a torch problem
 
    * - ``extinction``
      - dust_extinction
