@@ -25,8 +25,10 @@ truth inside its 68 % interval.
 
 Ampere is in its **v2** redesign. The current release is a backend-neutral
 core of frozen contracts with three backends implementing it — pure
-numpy/scipy, torch, and jax — and five inference engines written once against
-the contracts and run on any of them. :doc:`overview` is the map.
+numpy/scipy, torch, and jax — and six inference engines written once against
+the contracts and run on any of them, the sixth being
+:class:`~ampere.inference.SBIEngine` for models with no likelihood to write
+down at all (see :doc:`sbi`). :doc:`overview` is the map.
 
 User guide
 ----------
