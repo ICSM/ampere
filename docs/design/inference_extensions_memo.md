@@ -702,3 +702,16 @@ are sentences in the contracts they name, all of which can wait for the
 first item that touches them — provided the list exists so that nothing
 lands against it in the meantime, which is the same condition Peter set
 for the columnar store.
+
+## 10. Rulings (Peter, 2026-09-10)
+
+§7.1 **yes** — the stored proposal density is the rule for every approximate
+engine (it will make VI results interpretable too); §7.2 **`DataTree`** with
+an `optimum` group; §7.3 **acquisition only** — BO is not an engine; §7.4
+**every new sampler behind its own extra** — the base install stays quick
+to start with, a user upgrades for a specific problem; §9's three horizons
+**approved** and added to the plan as (e), (f), (g); §5's first three
+adaptations **drafted now** as W5.0 (the results contract for approximate
+and evidence-producing engines); §8.6's columnar store confirmed as
+recorded. Nothing in this memo is scheduled beyond W5.0.
+

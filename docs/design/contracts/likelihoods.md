@@ -283,6 +283,18 @@ True
 
 ```
 
+**The principle for a family's sampling form** (*ruled by Peter 2026-09-10*,
+on W3.14's `cauchy` question; the rule §13 of `inference.md` applies).
+`sample()` is added to a family when a data type needs that family's
+likelihood — never speculatively, and never for a subset of the stack: once a
+data type needs a likelihood, its sampling form is supported by **every
+inference approach on every backend at once** (the numpy path as the oracle,
+the native twins beside it, the conformance rows per backend), because a
+likelihood that fits but cannot simulate breaks SBC and SBI for exactly the
+users who brought the data type. So `cauchy` keeps its refusal until a data
+type needs it, and polarimetry will bring Rice's sampling form together with
+its likelihood, not after it.
+
 ## 4. The declaration that decides which engines can run: analytic or latent
 
 This is the load-bearing paragraph of `DEVELOPMENT_PLAN.md` §4.4, and the
