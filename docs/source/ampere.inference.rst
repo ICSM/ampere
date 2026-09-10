@@ -84,7 +84,9 @@ and a run shows both:
 
 A TMNRE run emits ordinary joint draws: a joint estimator is trained alongside
 the marginals in the final round, on the truncated prior, and its posterior is
-sampled by rejection (``sample_with="mcmc"`` is the fallback for a narrow box).
+sampled by MCMC over the same estimator by default (``sample_with="rejection"``
+gives i.i.d. draws instead, at a cost that rises as truncation succeeds — ruled
+2026-09-10 on the measured 353.6 s against 43.8 s).
 Beside them the run carries a ``marginals`` group — each estimator's log-ratio
 and estimated marginal posterior on a grid over the final box, in both the
 unconstrained and the constrained parameterisation — and its truncation history

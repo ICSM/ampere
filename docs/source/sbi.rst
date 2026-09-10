@@ -228,12 +228,12 @@ itself, because they are easy to get wrong silently:
   read back as one — a joint ratio estimator trained across every round
   (``discard_prior_samples=True`` would save none of the budget, since it was
   measured to cost about a third of it for no gain) multiplied by the *final*
-  truncated prior, sampled by rejection (i.i.d., what a single "chain"
-  promises) or, with ``--sample-with mcmc``, by MCMC over the same trained
-  estimator — the fallback for a narrow box, where rejection's cost rises
-  sharply as truncation succeeds: 353.6 s against 43.8 s for the same three
-  rounds at the module's default budget, and *both* numbers get worse as the
-  method works, not better;
+  truncated prior, sampled by MCMC over the same trained estimator by default
+  or, with ``--sample-with rejection``, by rejection (i.i.d., what a single
+  "chain" promises) — the default was switched on 2026-09-10 because
+  rejection's cost rises sharply as truncation succeeds: 353.6 s against
+  43.8 s for the same three rounds at the module's default budget, and *both*
+  numbers get worse as the method works, not better;
 * **``ampere_sbi_amortised`` is ``0`` for every TMNRE run**, whatever its
   round count — the box is chosen at this observation, so the trained
   estimator must not be re-conditioned on another one, which is the price of

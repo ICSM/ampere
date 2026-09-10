@@ -1766,6 +1766,15 @@ class TestWhatTMNRERefuses:
         with pytest.raises(EngineError, match="rejection, mcmc"):
             SBIEngine(bounded_problem(), method="tmnre", sample_with="vi")
 
+    def test_the_default_sampler_is_mcmc_and_rejection_stays_selectable(self) -> None:
+        """Ruled 2026-09-10 on W3.4's measurement (353.6 s against 43.8 s)."""
+        assert SBIEngine(bounded_problem(), method="tmnre").sample_with == "mcmc"
+        assert (
+            SBIEngine(bounded_problem(), method="tmnre", sample_with="rejection").sample_with
+            == "rejection"
+        )
+        assert SBIEngine(bounded_problem(), method="npe").sample_with is None
+
     @pytest.mark.parametrize(
         ("options", "match"),
         [
@@ -1927,7 +1936,8 @@ class TestTheTruncationHistory:
         assert attrs["ampere_sbi_rounds"] == 3
         assert attrs["ampere_sbi_marginals"] == 1
         assert attrs["ampere_sbi_truncation_epsilon"] == DEFAULT_TRUNCATION_EPSILON
-        assert attrs["ampere_sbi_truncation_sampler"] == "rejection"
+        # The default sampler since 2026-09-10 (Peter's ruling on W3.4's timing).
+        assert attrs["ampere_sbi_truncation_sampler"] == "mcmc"
         assert attrs["ampere_sbi_marginal_estimators"] == 3
         assert attrs["ampere_sbi_log_prob_kind"] == "unnormalised"
 
@@ -2057,18 +2067,22 @@ class TestTheMarginalsGroup:
 
 @pytest.fixture(scope="module")
 def bounded_tmnre() -> Any:
-    """A one-parameter TMNRE engine at its *default* settings, for calibration.
+    """A one-parameter TMNRE engine on the *rejection* sampler, for calibration.
 
-    ``bounded_problem`` rather than the joint one, and the default rejection
-    sampler rather than ``sample_with="mcmc"``, because what these rows are
-    about is the default path: a calibration check re-conditions the posterior
-    at ``count`` fresh observations, and a rejection posterior pays its
-    find-the-maximum stage at every one of them. One parameter keeps the whole
-    thing inside a per-PR budget while still exercising the rebuild.
+    ``bounded_problem`` rather than the joint one, and ``sample_with=
+    "rejection"`` explicitly -- it was the default until 2026-09-10 and is
+    now the selectable alternative -- because what these rows are about is
+    the rebuild path: a calibration check re-conditions the posterior at
+    ``count`` fresh observations, and a rejection posterior pays its
+    find-the-maximum stage at every one of them, so ``calibrate()`` rebuilds
+    it under MCMC. One parameter keeps the whole thing inside a per-PR budget
+    while still exercising the rebuild.
     """
     if not HAS_SBI:  # pragma: no cover - the class-level skip covers this
         pytest.skip("needs the 'sbi' extra")
-    engine = SBIEngine(bounded_problem(), method="tmnre", rounds=2, budget=300)
+    engine = SBIEngine(
+        bounded_problem(), method="tmnre", rounds=2, budget=300, sample_with="rejection"
+    )
     engine.run(draws=30, training={"max_num_epochs": 20})
     return engine
 
