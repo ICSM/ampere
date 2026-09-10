@@ -2655,11 +2655,13 @@ class PoissonFamily(LikelihoodFamily):
           (mean ``predicted * exp(K_ii / 2)``), and correctly so: it is a
           log-normal mixture of Poissons, which is what the model says.
 
-        A negative rate is refused **by name** rather than left to numpy,
-        whose message for it names neither the family nor the prediction. Note
-        that ``log_prob`` guards ``rate <= 0`` while this guards ``rate < 0``:
-        a rate of exactly zero is a well-defined draw (a point mass at zero
-        counts) even though the density declines to score it.
+        A non-positive rate is refused **by name** rather than left to numpy,
+        whose message for it names neither the family nor the prediction. The
+        guard is ``rate <= 0``, the same as ``log_prob``'s (ruled 2026-09-10 on
+        W3.14's finding): a rate of exactly zero is a well-defined draw — a
+        point mass at zero counts — but the density declines to score it, and
+        a draw the fitting likelihood cannot score is exactly what
+        ``simulate(observe=True)`` must never hand an SBC or SBI consumer.
         """
         rate = np.asarray(predicted, dtype=DTYPE)
         if noise.correlated:
@@ -2678,13 +2680,14 @@ class PoissonFamily(LikelihoodFamily):
                     f"retained samples. One latent value per retained sample."
                 )
             rate = rate * np.exp(values)
-        if not np.all(np.isfinite(rate)) or np.any(rate < 0.0):
+        if not np.all(np.isfinite(rate)) or np.any(rate <= 0.0):
             raise LikelihoodError(
-                "the poisson family needs a finite, non-negative expected count to draw from; "
-                "the model predicted a value that is negative or not finite. A count is a "
-                "count: constrain the prediction to the positive half-line (a Log bijection on "
-                "the norm, or a positive-support prior) rather than clipping the rate here, "
-                "which would draw from a distribution log_prob does not score."
+                "the poisson family needs a finite, positive expected count to draw from; "
+                "the model predicted a value that is zero, negative or not finite. A count is "
+                "a count: constrain the prediction to the positive half-line (a Log bijection "
+                "on the norm, or a positive-support prior) rather than clipping the rate here, "
+                "which would draw from a distribution log_prob does not score -- the guard is "
+                "log_prob's own, so every draw this returns is one the fit can score."
             )
         return np.asarray(rng.poisson(rate), dtype=DTYPE)
 
