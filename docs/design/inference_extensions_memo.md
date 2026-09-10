@@ -605,3 +605,100 @@ training-set format may assume one file per source, and the per-draw
 columns that reweighting needs (`log_prior`, the proposal's log-density,
 a ratio where one exists) must stay separable from the per-run
 provenance. That constraint is recorded in the plan's design horizon (b).
+
+## 9. The design horizons, re-read against the extensions (2026-09-10)
+
+Peter asked whether the plan's four design horizons (§5 of
+`DEVELOPMENT_PLAN.md`) need anything further in the light of this memo.
+Checked against the contracts first, so that the answer is about what is
+*not* yet reserved rather than what is:
+
+- `parameters.md` §12.1 already reserves a `MultivariatePrior` slot beside
+  `Prior`, and `ParameterSet.prior_transform`/`unconstrain` are set-level
+  methods evaluated in dependency order — so a joint prior (a flow trained
+  on a previous posterior, §8.3; a correlated calibration prior) is an
+  extension point that exists, not a reversal. A flow prior would be that
+  slot's first concrete customer.
+- `results_schema.md` §583 already carries a `fidelity` tag on every
+  container (horizon (a)'s hook), and `likelihoods.md`'s ruling X-1 gives
+  every noise model the prediction as an argument — so an emulator's own
+  predictive uncertainty (horizon (c)) can enter the likelihood as a
+  `NoiseModel` without touching the family contract.
+- Nothing registers engines: they are classes with a `NAME`, and
+  provenance records the string. Third-party engines and the "engine
+  battery" of §4 therefore have nothing to enumerate.
+
+What each horizon should say in addition, and three horizons worth adding:
+
+**(a) Multi-fidelity.** The inference-side consumers are delayed-acceptance
+MCMC (cheap model screens, expensive model accepts), multi-fidelity
+surrogates (Kennedy–O'Hagan, and VBMC/GPry's family in §8.2 at two costs)
+and multi-fidelity SBI budgets. All three need **two problems, or one
+problem with two model variants, over one parameter space**, and the check
+that they share it is already `ampere_spec_hash` equality. Two things to
+reserve: the training-set format carries fidelity per sample (a column, not
+an attr — a budget will mix fidelities), and cost accounting is per
+fidelity (below).
+
+**(b) Population.** Covered by §8.1 and Peter's ruling on the store. Two
+reservations to add: the interim prior must be reconstructible *from the
+archive alone* (the population module must evaluate `π₀(θ)` for stored draws
+without the model — `ParameterSet.to_spec()` is what it has, so the spec
+must round-trip the priors, which `serialisation_review.md` should be
+checked against rather than assumed); and NRE's log-ratio joins the
+per-draw columns as a first-class stored variable, since it is the
+prior-free quantity population inference wants.
+
+**(c) Emulation.** Three inference-side additions. An emulator's identity
+for `model_hash`/the artefact cache must include the training set it was
+fitted on (its `ampere_spec_hash` and `ampere_model_hash`, plus the budget
+and the emulator's own architecture), so a retrained emulator moves every
+key that depends on it. An emulated draw must be *distinguishable* from a
+simulated one in a run's provenance — `ampere_model_identity_hashes` names
+the model class, which is enough if the emulator is its own `Model`
+subclass, and that should be stated. And the surrogate-posterior family
+(§8.2) and emulation are the same machinery at two levels — a GP over the
+*density* versus a network over the *model output* — so the acquisition
+strategy (§3.3's BO reading) belongs to a shared "proposal" abstraction
+that `simulate_many(values=)` and TMNRE's truncated prior already
+foreshadow.
+
+**(d) Hierarchical SBI.** The W3.3 encoding is per problem, with one frozen
+layout hashed from the observed data. A population-level amortised
+estimator sees a *set of objects*, so the encoding must be allowed to
+nest — a set embedding over objects, each object a set embedding over
+samples — with a layout whose object count varies. The masked set
+embedding is the right primitive; what to reserve is that `EncodingLayout`
+is not assumed to have a fixed leading dimension.
+
+**Three horizons to add**, each with a hook that costs nothing now:
+
+- **(e) Model comparison and averaging.** Hook: the engine-neutral
+  evidence attributes (§5.1) and the rule that every run stores per-draw
+  `log_prior` and `log_likelihood` (already decided). Consumers: nested-
+  sampling and SMC evidences, `harmonic`, bridge sampling, Savage–Dickey,
+  LOO/WAIC (already there), and Bayesian model averaging over archived runs
+  with the same data hash.
+- **(f) Approximate-inference correction.** Hook: every engine whose draws
+  are not from the target stores the proposal's own log-density per draw
+  (§5.2b), and `ampere_approximation` names the family (§5.3). Consumers:
+  importance correction of VI/Laplace/Pathfinder/SBI runs, population
+  reweighting (b), retroactive density emulation on archives (§8.3). This
+  is the cross-cutting hook the memo keeps returning to, and it deserves
+  to be named once at horizon level rather than inside three others.
+- **(g) Engines as a registry, with uniform cost accounting.** Hook: an
+  engine registry shaped like the realisation registry (`register_engine`,
+  `registered_engines()`), so a third-party engine — a user's own, or one of
+  §§1–3's behind an extra — is discoverable by name, stamped into
+  provenance by the same code, and enumerated by the engine battery (§4);
+  and one cost record every engine writes (`engine_evaluations` exists for
+  slot A; SBI records simulated/usable; a surrogate method records surrogate
+  evaluations) — per fidelity where (a) applies — so the tier claims in §6
+  and multi-fidelity cost models are measurable rather than asserted.
+
+None of these needs a contract change today. (e)–(g) are one paragraph
+each in the plan's horizon list, and the per-horizon reservations above
+are sentences in the contracts they name, all of which can wait for the
+first item that touches them — provided the list exists so that nothing
+lands against it in the meantime, which is the same condition Peter set
+for the columnar store.
