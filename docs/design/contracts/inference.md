@@ -2331,6 +2331,12 @@ Each is a decision, not an oversight. Each has an extension point.
 5. **`simulate` is one draw.** A batched `simulate_many(n)` — which is what an
    SBI budget actually wants, and what a `batchable` backend could vectorise —
    is Phase 3's, and needs the capability flag to mean something first.
+   *(Amended W3.13, 2026-09-10)*: **closed at W3.1.** `simulate_many` lands
+   above (the "Batched form" and "Execution" subsections of §13), on an
+   order-preserving, partition-independent executor protocol; slice 2 adds
+   the per-chunk native form (`simulate_batched`) that a `BATCHABLE` backend
+   vectorises. Kept in this list, like item 9, because the limitation it
+   replaces was load-bearing in earlier discussion.
 6. **No `DatasetCollection.plate(...)`, and the comprehension does not scale.**
    N per-spaxel datasets are built by a comprehension the user writes (§9). A
    factory is convenience, not contract. What is *not* convenience is the cost:
@@ -2409,7 +2415,12 @@ Each is a decision, not an oversight. Each has an extension point.
   the reject-and-record signal §4.5 asks for. What is missing before Phase 3 is
   the batched form (limitation 17.5) and the coordinate–value–mask tensor
   encoding the plan's Phase 3 section describes, which belongs with the
-  embedding networks rather than here.
+  embedding networks rather than here. *(Amended W3.13, 2026-09-10)*: **both
+  have landed.** The batched form is §13's own "Batched form" and "Execution"
+  subsections (*Amended W3.1*) and limitation 17.5 above is closed; the
+  encoding is `docs/design/contracts/encoding.md`, frozen at W3.3 as its own
+  contract exactly where this sentence said it belonged, and consumed by
+  `SBIEngine(layout=...)`.
 
 ## 19. Open questions for review
 

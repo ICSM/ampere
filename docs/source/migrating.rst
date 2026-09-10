@@ -84,9 +84,17 @@ for the other.
      - Native (torch/jax) samplers with no legacy counterpart — see the
        capability ladder in :doc:`overview`.
    * - ``SBI_SNPE``
-     - ``SBIEngine`` — **to come** (W3.2, Phase 3)
-     - Simulation-based inference is being rebuilt on the v2 contracts; the
-       legacy class is the only SBI route until it lands.
+     - :class:`~ampere.inference.SBIEngine`
+     - Landed (W3.2–W3.15, Phase 3). Simulation-based inference over ``sbi``
+       0.27, fitting the same :class:`~ampere.core.FittingProblem` every
+       other v2 engine fits by training on simulated pairs from
+       :meth:`~ampere.core.dataset.FittingProblem.simulate_many` rather than
+       consuming ``log_prob``. Beyond a name change: NLE and NRE join NPE,
+       plus truncated marginal ratio estimation (``method="tmnre"``); a
+       trained posterior can be cached (``cache=``) and checked for
+       calibration (:meth:`~ampere.inference.SBIEngine.calibrate`); and a
+       seeded problem's run repeats bitwise, network included. See
+       :doc:`sbi` for the worked tutorial.
 
 The same fit, side by side
 ---------------------------

@@ -9,17 +9,23 @@ Ampere v2
 
    m2_misspecification
    wstat_comparison
+   sbi
 
 :doc:`m2_misspecification` is the flagship study: a deliberately misspecified
 spectrum, fitted with and without the flexible likelihood, at three data
 sizes and on all three backends, with the timings. :doc:`wstat_comparison`
 works through registering a **user-defined likelihood family** — a profiled
 Cash statistic with background — which is the extension point to reach for
-when your data are not Gaussian.
+when your data are not Gaussian. :doc:`sbi` is for the opposite case — a
+model with no likelihood to write down at all — fitting a black-box
+simulator with :class:`~ampere.inference.SBIEngine`, caching the trained
+posterior, truncated marginal ratio estimation, and checking that the
+result is calibrated.
 
-Both have runnable counterparts in the repository:
-``examples/m2_misspecification`` and ``examples/wstat_comparison.py``, each
-covered by its own test suite so that neither can rot unnoticed.
+All three have runnable counterparts in the repository:
+``examples/m2_misspecification``, ``examples/wstat_comparison.py`` and
+``examples/sbi/``, each covered by its own test suite so that none can rot
+unnoticed.
 
 Legacy tutorials
 ----------------

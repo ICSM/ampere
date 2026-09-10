@@ -1315,7 +1315,26 @@ Each is a decision, not an oversight. Each has an extension point.
 - **Phase 3 (SBI)** — §11's training-set format is what a simulation budget
   writes, and `ampere_problem_hash` is the cache key that invalidates a stale
   posterior. The batched `simulate_many` that `inference.md` limitation 17.5
-  defers is what will fill it efficiently.
+  defers is what will fill it efficiently. *(Amended W3.13, 2026-09-10)*:
+  landed, and one clause needs correcting rather than only dating. The
+  training-set writer takes `simulate_many`'s chunk iterator exactly as
+  described (`inference.md` limitation 17.5 is closed at W3.1), but the key
+  it and the trained-artefact store check against is not `ampere_problem_hash`:
+  that fingerprint also folds in each dataset's *observed values*
+  (`dataset_fingerprint`'s `"observed"` entry), which is right for matching a
+  derived group to the exact run it came from (§14 above) but wrong here — a
+  training set is simulated from the *prior* and does not depend on which
+  particular observation triggered the budget, so gating on it would refuse
+  a perfectly good append. `append_training_set` instead checks
+  `ampere_spec_hash` (the merged parameter declaration) and, since W3.12,
+  `ampere_model_hash` — `provenance.model_hash(problem)`, every model's and
+  dataset's fingerprint with `"parameters"`/`"observed"` stripped out, plus
+  the model bindings — because a likelihood family, noise model, solver or
+  kernel swap that leaves every parameter's name and prior unchanged moves
+  the spec hash not at all. `ArtefactKey`/`artefact_key` (W3.5) use the same
+  two hashes, plus the run's own settings (method, estimator architecture,
+  budget, rounds, encoding layout, `sbi`/torch versions, and TMNRE's
+  `marginals`/`truncation_epsilon`/`sample_with`, W3.12).
 - **Phase 5 (population inference)** — design horizon (b) is buildable entirely
   on stored runs: `sample_stats` carries the scalar `log_prior` and
   `log_likelihood` per draw, the NaN convention distinguishes an unevaluated

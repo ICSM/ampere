@@ -25,30 +25,29 @@ More detailed tutorials will be available soon!
 Very slow models
 ----------------
 
-AMPERE allows you to use a wide variety of models to interpret your data, which may include models which take a very long time to compute.
-In such cases, Neural Posterior Estimation (NPE) is probably a good bet!
-
-AMPERE uses `sbi <https://www.mackelab.org/sbi/>`_ under the hood to do NPE. You can see a few examples in the tutorials, but a more complete guide will appear here in the future.
+AMPERE allows you to use a wide variety of models to interpret your data, which may include models which take a very long time to compute, or whose likelihood cannot be written down at all — a compiled radiative-transfer code behind a Python call, say.
+In such cases, simulation-based inference is the right tool: :class:`~ampere.inference.SBIEngine` trains a neural network on simulated ``(theta, x)`` pairs, drawn through :meth:`~ampere.core.dataset.FittingProblem.simulate_many`, instead of consuming ``log_prob``.
+It runs under a process pool with per-simulation timeouts and crash capture, so a slow or occasionally-crashing external simulator is the case it is built for rather than an edge case it tolerates.
+:doc:`sbi` is the full tutorial — a black-box simulator fitted end to end, caching the trained posterior, truncated marginal ratio estimation for a tighter fit, and checking the result is calibrated; the runnable scripts are ``examples/sbi/``.
 
 .. note::
 
-   NPE currently lives in the **legacy** half of the package
-   (``ampere.infer.sbi``, ``pip install "ampere[sbi]"``). The v2 SBI layer is
-   Phase 3 of the redesign and will live in :mod:`ampere.inference` beside the
-   other engines; this section describes what exists today.
+   This is the **current** route. ``ampere.infer.sbi`` is legacy and frozen
+   (``pip install "ampere[sbi]"`` unlocks either): it still runs and is the
+   fullest worked example of an SED fit in this repository's legacy
+   notebooks, but it gains nothing new and the two APIs do not interoperate
+   — see :doc:`migrating`'s ``SBI_SNPE`` row. :class:`~ampere.inference.SBIEngine`
+   is where new SBI work lands, over ``sbi`` 0.27 (NPE, NLE, NRE and TMNRE),
+   consuming the same :class:`~ampere.core.FittingProblem` every other v2
+   engine does.
 
 
-Embedding Networks for automatic summary statistics with NPE
-------------------------------------------------------------
+Embedding networks for automatic summary statistics
+-----------------------------------------------------
 
-NPE is a powerful tool for speeding up inference with models where the likelihood is difficult to evaluate. 
-However, *because* the likelihood is difficult to evaluate, we can find ourselves simply comparing the simulated data to the real ones.
-When your data is high dimensional, this can make the comparison difficult, and even worse, it makes training the neural network for the posterior _very_ slow.
+Neural posterior/likelihood/ratio estimation needs a fixed-size summary of the observed data to condition the network on. When your data is high dimensional, comparing raw simulated and observed data directly makes training slow and can make a poor summary; a network that learns the summary statistics — an embedding network — usually does better than one hand-picked, and generalises across problems a hand-picked one would not.
 
-In these cases, it is better to define some summary statistics that can reduce the dimensionality of the data with minimal loss of useful information. 
-However, in the case of astronomical data it can be difficult to define a good statistics that are also easy to transfer to other problems.
-Hence, we can use a neural network to learn the best summary statistics for our problem, and then use these to train the NPE network.
-The interface provided by SBI is exposed and instructions for how to use it can be found in :doc:`notebooks/Embedding_nets`.
+:class:`~ampere.inference.SBIEngine` supports this two ways, chosen with ``layout=``/``embedding=``. The default, ``layout="flat"``, is a fixed-size vector — each dataset's observed values, masked samples dropped, concatenated in ``datasets`` order — which is the simple, sufficient choice for a single fitting problem, since the data layout never changes between simulation and inference. Where the layout itself can vary between simulated draws — irregular sampling, missing data, or amortising across differently-configured instruments — ``layout="set"`` packs every dataset through the coordinate–value–mask **encoding** (:class:`~ampere.core.encoding.EncodingLayout`) and reads it with a masked permutation-invariant (``embedding="set"``) or attention (``embedding="transformer"``) network, so the summary is learned over data whose shape is not fixed in advance. Both are ``sbi`` 0.27 nets behind an ampere wrapper that handles the mask column and pools every retained token, at a default output width of ``max(2 * free_size, 32)`` — a default, not a finding: which width and readout suit which combination of data, model and structure is a deferred study (``DEVELOPMENT_PLAN.md`` §6). :doc:`sbi`'s "Embedding choices" section works through both, and the legacy dict-based embedding vocabulary this section used to describe is documented, under the legacy warning, in :doc:`notebooks/Embedding_nets`.
 
 Parallelised evaluation
 -----------------------

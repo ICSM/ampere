@@ -27,9 +27,16 @@ likelihood in **4.7 ms**. The whole study is
 
 Ampere is in **alpha**, undergoing a v2 redesign. What is there today is a
 backend-neutral core of frozen contracts, three backends that implement it
-(pure numpy/scipy, torch and jax), and five inference engines written once
-against the contracts and run on any of them. If you are interested, please
-get in touch.
+(pure numpy/scipy, torch and jax), and six inference engines written once
+against the contracts and run on any of them. The sixth is for models with no
+likelihood to write down at all: `ampere.inference.SBIEngine` fits a
+black-box simulator by simulation-based inference (NPE/NLE/NRE, and truncated
+marginal ratio estimation for a tighter fit), over the same `FittingProblem`
+every other engine consumes, with the same posterior-calibration diagnostics
+— which is how `docs/source/wstat_comparison.rst`'s coverage study catches a
+profiled statistic's spectral index failing calibration (KS *p* = 4×10⁻⁴)
+where the equivalent Bayesian joint fit, on the same simulated data, does not
+(*p* = 0.18). If you are interested, please get in touch.
 
 ## Installation
 
@@ -70,7 +77,7 @@ h5netcdf are base dependencies, not extras, for exactly that reason.
 | `torch` | torch, pyro-ppl | `ampere.backends.torch`, and NUTS/VI on a torch problem |
 | `jax` | jax, numpyro, equinox | `ampere.backends.jax`, and NUTS/VI on a jax problem |
 | `zeus` | zeus-mcmc | `ampere.inference.ZeusEngine` |
-| `sbi` | torch, sbi | neural posterior estimation (legacy `ampere.infer.sbi`) |
+| `sbi` | torch, sbi | `ampere.inference.SBIEngine` (simulation-based inference) and legacy `ampere.infer.sbi` |
 | `extinction` | dust_extinction | legacy `ampere.models.extinctionModels.F99Extinction` |
 | `dev` | pytest, ruff, pyrefly, sphinx, … | contributor tooling |
 | `all` | every feature extra above | — |
@@ -88,9 +95,10 @@ and jax; nothing in ampere needs them together.
 - **Documentation**: `pixi run docs`, then `docs/_build/html/index.html`.
   Start at the architecture overview (`docs/source/overview.rst`), then the
   misspecification study (`docs/source/m2_misspecification.rst`).
-- **Runnable examples**: `examples/m2_misspecification` (the study above) and
-  `examples/wstat_comparison.py` (registering your own likelihood family).
-  Both are covered by tests, so neither can rot unnoticed.
+- **Runnable examples**: `examples/m2_misspecification` (the study above),
+  `examples/wstat_comparison.py` (registering your own likelihood family) and
+  `examples/sbi/` (fitting a black-box simulator with `SBIEngine`; needs the
+  `sbi` extra). All three are covered by tests, so none can rot unnoticed.
 - **Design**: `docs/design/` holds the frozen contract specifications
   (`spec-v1.0`) the v2 API implements — start with `architecture.md`.
 - **Contributing**: `DEVELOPMENT_PLAN.md` is the source of truth for where the
