@@ -594,9 +594,74 @@ reproducible bitwise from the problem's own seed.
   companion note: `docs/design/horizon_notes.md` §1 and its follow-up.
 
 ### Phase 5 — Scale-out & advanced inference
-- Approximate GP strategies for images/IFU (SVGP, SKI, Vecchia) behind the
-  `NoiseModel` interface (GPJax is the natural provider on the jax side,
-  GPyTorch on the torch side).
+- Approximate GP strategies for images/IFU behind the `GPSolver` /
+  `NoiseModel` interface — **SVGP, SKI, Vecchia, HSGP, EFGP, chosen by
+  measurement as celerite2 was** (*widened 2026-09-10 from
+  `docs/design/horizon_notes.md` §2*): each is a `GPSolver` with
+  `EXACT = False`, its approximation parameters in `provenance_config()`
+  (recorded, never hashed), a reduced-dimension `latent_transform`, and
+  `conditional_loo` exact-in-the-approximation or refused by name. The rule:
+  the first 2–3D solver landed is the one that wins a benchmark on the IFU
+  sketch's cube at realistic N; HSGP is the cheapest to land and the most
+  useful for NUTS, EFGP the one to reach for at image scale, Vecchia the
+  one that handles rough processes without a rank limit. Two contract
+  questions to settle when the phase opens: an approximation-aware
+  conformance tolerance for `EXACT = False` solvers (compare to `DenseGP`
+  with a tolerance that tightens with the basis size, and assert the
+  convergence rather than a fixed number), and whether the latent size fixed
+  at composition (`inference.md` limitation 17.4) may be the reduced rank
+  rather than N — the contract permits it, but `simulate(observe=True)` and
+  the latent-GP path must agree on the whitening. (GPJax is the natural
+  provider on the jax side, GPyTorch on the torch side.)
+- **Non-stationary flexible likelihood: input and amplitude warping as
+  kernel wrappers preserving quasiseparability** (*added 2026-09-10 from
+  `horizon_notes.md` §1 and its follow-up*): a `WarpedKernel(base,
+  input_warp=, amplitude_warp=)` whose monotone input warp keeps
+  `QuasisepGP`'s ordering precondition and whose amplitude warp is `D K D`
+  with `D` diagonal, so both keep the O(N) exact solve; the warp knots are
+  ordinary `Parameter`s (NUTS over them on torch/jax for free). Validated
+  by an M2 extension with a "many lines / one band" scenario comparing
+  stationary Matérn, warped Matérn and a sum of two kernels on bias,
+  calibration and localisation. **The degrees-of-freedom guard is part of
+  the item, not an afterthought**: few knots with hierarchical shrinkage to
+  the identity warp; the whiteness and localisation diagnostics run on the
+  *warped* residuals; SBC on injected misspecification. The same guard
+  generalises to every sum of noise components W4.5's kernel algebra makes
+  possible — a sparsity-inducing prior on component amplitudes (the
+  regularised horseshoe, Piironen & Vehtari 2017, expressible today with
+  `HierarchicalPrior`; spike-and-slab stays out, `lowering.md` §12 Q1),
+  marginalised by the GP as usual, with the lowering rules offering the
+  non-centred parameterisation NUTS wants (a `lowering.md` §3 note). Deep
+  kernel learning waits for the multi-dimensional GP work above.
+- **Joint noise over a tuple of channels — the linear model of
+  coregionalisation** (*added 2026-09-10 from `horizon_notes.md` §3 and
+  its follow-up; the limitation `likelihoods.md` §15 records*): a
+  `NoiseModel` bound to several channels with `K = Σ_q B_q ⊗ k_q`, scoped
+  first to the **shared-grid intrinsic model** `B ⊗ K_x`, which is exact
+  and stays O(N) — diagonalise `B`, rotate the outputs, solve T scalar GPs
+  with `QuasisepGP` — with `B` parameterised physically (a rotation for
+  Q/U leakage) rather than a free T(T+1)/2; the general LMC and mismatched
+  grids use the dense or a reduced-rank solver. Polarimetry the worked
+  modality, the astrometric sketch the second test, interferometry the
+  third (design horizon (h)). It is the first real use of
+  `DatasetCollection.contributions` as something other than a sum, so it
+  touches `inference.md` §4 and the results decomposition needs a
+  `"joint"` entry — the same vocabulary widening `"mixed"` was; the
+  diagnostics generalise per rotated output.
+- **Amortisation over observation context** (*added 2026-09-10 from
+  `horizon_notes.md` §4–5; the reserved hook is design horizon (i)*): a
+  per-draw context — the σ-pattern drawn from a noise-realisation prior
+  (scaled copies of the observed one, an archive of real error arrays, a
+  parametric S/N model), the grid, the instrument settings (resolution,
+  filter set, exposure) — as an input to `simulate_many`, recorded on the
+  `Simulation`, passed to `sample` in place of the container's σ, with the
+  chain re-negotiated per context (grouped by `chunk_size` to keep it
+  cheap) and the context surfaced to the embedding as row features (σ,
+  `log σ`, whitened values) and a per-set conditioning vector (FiLM, or
+  extra tokens). SBC per observation (W3.6) is the check that the context
+  prior covered the observation at hand. This is the amortisation the
+  population use case of `docs/design/inference_extensions_memo.md` §8.1
+  depends on.
 - Hierarchical/population inference: implement the container + hyperprior
   design from Phase 1 (plates in pyro/numpyro).
 - **RHMF exploratory trial** (Peter's ratification note, 2026-09-08, on the
@@ -725,6 +790,27 @@ Not scheduled, but the contracts must not paint them out:
   applies). Each new sampler lives behind its own extra (ruled
   2026-09-10): the base install stays quick to start with, and a user
   upgrades for a specific problem.
+- **(h) Vector observables with correlated misspecification** (added
+  2026-09-10 from `horizon_notes.md` §3's follow-up): one wrong sky model
+  produces coherent errors in every quantity derived from it — Stokes
+  components, RA/Dec, visibility amplitude and phase, multi-band fluxes —
+  so a coregionalised misspecification model is the *default* shape for
+  vector data, not a special case for instrumental leakage. Hook:
+  `results_schema.md` §15.2's one-value-array-per-container rule stands,
+  and **Phase 4's interferometry item leaves the channel pairing between
+  visibilities and closure phases visible** (W4.1) so Phase 5's joint
+  noise model can bind to it; `contributions` and the `"joint"`
+  decomposition entry are the likelihood-side hooks.
+- **(i) Amortisation over observation context** (added 2026-09-10 from
+  `horizon_notes.md` §4–5 and its "Consequence for Phase 3"): σ-pattern,
+  grid and instrument settings as per-draw simulator inputs from a context
+  prior, so an amortised posterior is valid across instruments and error
+  bars, not only across θ. Hook — **reserved at W3.1/W3.2/W3.3 and
+  confirmed by Peter 2026-09-09**: `simulate_many`/`SBIEngine` carry a
+  `context=` slot (accepting `None` today, recorded in provenance), and the
+  W3.3 encoding carries the uncertainty column by default. The machinery
+  itself is the Phase 5 bullet above; nothing before it may fix a call
+  signature that leaves no room for a context.
 
 Dependencies: 0 → 1 → 2 → {3, 4} → 5 → 6, with 3 and 4 parallelisable and
 the CI/CD workstream running alongside every phase.
@@ -826,7 +912,14 @@ Settled at the start of the phase that needs them, not now:
   "Questions collected for Peter" §3): whether TMNRE's default
   `truncation_epsilon = 1e-4` (a box of roughly ±4σ that stops shrinking
   after round 2 on the worked example) generalises, or needs per-problem
-  tuning guidance the way the width does.
+  tuning guidance the way the width does. *(Added 2026-09-10 from
+  `horizon_notes.md`'s embedding follow-up)*: the first *architecture*
+  experiment worth running now that W3.6's calibration exists is a
+  ConvCNP-style encoder (SetConv onto a fine internal grid, then a CNN —
+  translation-equivariant along the coordinate and discretisation-invariant)
+  as an `examples/sbi/` script through W3.2's `embedding=` slot, not a
+  contract change; neural-operator branch networks are the same idea shared
+  with design horizon (c)'s emulators.
 - ~~**Benchmark harness** (Phase 2): pytest-benchmark vs asv.~~ **Settled
   2026-09-08 (W2.11): pytest-benchmark.** The decision-log row above carries
   the reasoning; in one line, asv owns its own environments and its own

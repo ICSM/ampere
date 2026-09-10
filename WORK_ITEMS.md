@@ -1527,7 +1527,12 @@ freeze and unused since); the two likelihoods of sketch §1
 (`ComplexGaussianFamily` + `IndependentNoise` on visibilities;
 `VonMisesFamily` on closure phases) composed on one `sky` channel from two
 datasets and two instruments, negotiated once. `RiceFamily` on amplitudes
-checked as the third route. A `UniformDisc`/`GaussianSource`/`Binary` model
+checked as the third route. **Design horizon (h)'s obligation** (added
+2026-09-10): the pairing between the visibility and closure-phase channels
+stays *visible* in the composition — both datasets name the `sky` channel
+and the collection records which datasets derive from one model channel —
+so Phase 5's joint noise model over a tuple of channels can bind to it
+without a re-plumb; nothing here may fold the two into one container. A `UniformDisc`/`GaussianSource`/`Binary` model
 trio emitting an `Image` on the reference backend, and the same three
 emitting a `VisibilitySet` directly (the analytic route, no Fourier step)
 as each other's oracle. Sketch §8's verified claims become tests.
