@@ -18,8 +18,8 @@ rather than asserted in a docstring:
 
 Run it::
 
-    python examples/sbi/tmnre_fit.py                         # ~6 min: see below
-    python examples/sbi/tmnre_fit.py --sample-with mcmc      # the same fit in ~45 s
+    python examples/sbi/tmnre_fit.py                         # ~45 s (mcmc, the default)
+    python examples/sbi/tmnre_fit.py --sample-with rejection # the same fit, i.i.d. draws, ~6 min
     python examples/sbi/tmnre_fit.py --rounds 4 --budget 1500 --marginals 2
 
 Requires the ``sbi`` extra (``pixi run -e sbi python examples/sbi/tmnre_fit.py``).
@@ -32,9 +32,10 @@ as the method works. On the fit below the third-round box holds about 1 % of
 the prior's mass and the ratio accepts about 1 % of what the box proposes, so
 every stored draw costs of order 10⁴ draws from the untruncated prior; ``sbi``
 says so itself, in a warning naming the remedy. Measured here: 353.6 s with
-``--sample-with rejection`` (the default, whose draws are i.i.d.) against
-43.8 s with ``--sample-with mcmc`` for the same three rounds. The run records
-which sampler produced its draws either way.
+``--sample-with rejection`` (the original default, whose draws are i.i.d.)
+against 43.8 s with ``--sample-with mcmc`` for the same three rounds -- which
+is why ``mcmc`` is the default since 2026-09-10 (Peter's ruling on that
+measurement). The run records which sampler produced its draws either way.
 
 What to look at
 ---------------
@@ -210,9 +211,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--sample-with",
-        default="rejection",
+        default="mcmc",
         choices=("rejection", "mcmc"),
-        help="how the final posterior draws; mcmc is the narrow-box fallback",
+        help="how the final posterior draws; mcmc (the default since 2026-09-10) or rejection",
     )
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
 

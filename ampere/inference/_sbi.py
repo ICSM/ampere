@@ -287,6 +287,14 @@ _BUILDERS: Mapping[str, tuple[str, str]] = {
 #: a box so narrow that rejection's acceptance collapses.
 TMNRE_SAMPLERS: tuple[str, ...] = ("rejection", "mcmc")
 
+#: The sampler a TMNRE run uses when ``sample_with`` is not given. ``"mcmc"``
+#: since 2026-09-10 (Peter's ruling on W3.4's measurement): rejection's cost
+#: *rises* as truncation succeeds -- 353.6 s against 43.8 s for the same three
+#: rounds on the worked example -- and ``"mcmc"`` is what ``sbi`` itself
+#: defaults to for a ratio posterior and what ``method="nre"`` already uses.
+#: ``"rejection"`` stays selectable for a caller who wants i.i.d. draws.
+TMNRE_DEFAULT_SAMPLER = "mcmc"
+
 #: The embedding vocabulary carried over from the frozen legacy
 #: ``ampere/infer/sbi.py`` (read, never modified): the two shipped nets by
 #: name, a user's own ``torch.nn.Module``, and a dict of hyperparameters whose
@@ -1240,10 +1248,12 @@ class SBIEngine(Engine):
         1 % of the prior's mass, about 1 % of proposals accepted through the
         ratio, and **353.6 s against 43.8 s** for the same three rounds under
         ``"mcmc"``. ``sbi`` says so itself, in a warning naming the remedy.
-        That remedy is this argument, and on a well-truncated problem it is
-        usually the right one — the default is ``"rejection"`` because i.i.d.
-        draws are what the rest of this class promises, not because it is the
-        cheaper of the two.
+        That remedy is this argument, and it is now the default
+        (:data:`TMNRE_DEFAULT_SAMPLER`, ``"mcmc"``, ruled 2026-09-10): the
+        rejection route was the original default because i.i.d. draws are what
+        the rest of this class promises, but its cost rises exactly as the
+        method works, and ``"mcmc"`` is what ``sbi`` itself and
+        ``method="nre"`` already use. ``"rejection"`` remains selectable.
     device
         ``"cpu"`` (the default), or a torch device string. CI is CPU-only by
         ruling.
@@ -1476,7 +1486,7 @@ class SBIEngine(Engine):
         #: set at all rather than accepting and ignoring.
         self.marginals = order
         self.truncation_epsilon = epsilon
-        self.sample_with = (sampler or TMNRE_SAMPLERS[0]) if chosen == TMNRE else None
+        self.sample_with = (sampler or TMNRE_DEFAULT_SAMPLER) if chosen == TMNRE else None
         self.device = str(device)
         self.executor = executor
         self.chunk_size = None if chunk_size is None else int(chunk_size)
@@ -1541,8 +1551,8 @@ class SBIEngine(Engine):
             ``thin`` and ``init_strategy`` go, which is what makes an NLE or
             NRE run affordable at a small draw count.
 
-            For a TMNRE posterior under the default ``sample_with="rejection"``
-            it is also where ``num_samples_to_find_max`` and
+            For a TMNRE posterior under ``sample_with="rejection"`` (no longer
+            the default since 2026-09-10) it is also where ``num_samples_to_find_max`` and
             ``max_sampling_batch_size`` go, and they are worth knowing about:
             ``sbi`` defaults both to 10 000 draws *from the proposal*, and this
             driver's proposal is the prior restricted to the box, whose own

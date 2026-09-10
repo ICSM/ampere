@@ -1915,9 +1915,16 @@ class TestSimulate:
         assert math.isfinite(problem.log_prob({"model.rate": 30.0}))
 
     def test_a_negative_poisson_rate_is_refused_by_name(self) -> None:
-        with pytest.raises(LikelihoodError, match="finite, non-negative expected count"):
+        with pytest.raises(LikelihoodError, match="finite, positive expected count"):
             PoissonFamily().sample(
                 np.array([1.0, -2.0]), NoiseParams(sigma=None, values={}), np.random.default_rng(0)
+            )
+
+    def test_a_zero_poisson_rate_is_refused_like_log_prob_refuses_it(self) -> None:
+        """Ruled 2026-09-10: ``sample`` guards ``rate <= 0`` exactly as ``log_prob`` does."""
+        with pytest.raises(LikelihoodError, match="zero, negative or not finite"):
+            PoissonFamily().sample(
+                np.array([1.0, 0.0]), NoiseParams(sigma=None, values={}), np.random.default_rng(0)
             )
 
     def test_the_latent_gp_poisson_draw_uses_the_latent_in_theta(self) -> None:
