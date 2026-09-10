@@ -37,7 +37,7 @@ the fitting pipeline:
 | A | RHMF-style screening | pre-fit, collection-level | No — runs on raw data |
 | B | Residual whiteness / posterior-predictive checks | post-fit, standard-likelihood | Yes — a plain iid-Gaussian fit |
 | C | GP-localisation | post-fit, flexible-likelihood | Yes — a GP-noise-model fit |
-| D | Posterior calibration (SBC / coverage) — **future, Phase 3** (§11) | validation of the inference itself | Yes — many fits of simulated data |
+| D | Posterior calibration (SBC / coverage) — **landed W3.6** (§11) *(Amended W3.13)* | validation of the inference itself | Yes — many fits of simulated data |
 
 B is explicitly the trigger for "should I turn the GP on"; C is what you get
 once you have. A is a cheaper, earlier, collection-level version of the same

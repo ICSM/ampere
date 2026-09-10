@@ -225,7 +225,16 @@ differs from them; nothing here changes a policy, and where a difference is a
   through `ampere.core.realise` rather than by importing one. **The SBI layer
   and the optimisers named in the comment are not here**: SBI is Phase 3 and
   optimisers Phase 5. There is deliberately no multiprocessing pool
-  (`inference.md` limitation 17.7).
+  (`inference.md` limitation 17.7). *(Amended W3.13, 2026-09-10)*: **the SBI
+  layer has since landed and is here** — `inference/` ships six drivers, not
+  five, with `SBIEngine` (`_sbi.py`, `_tmnre.py`; W3.2, W3.4) fitting a model
+  through `FittingProblem.simulate_many` rather than `log_prob`, so it needs
+  no realisation and runs against the reference backend alone. It does gain
+  a process pool, but not the one this bullet means: `simulate_many`'s own
+  `ProcessExecutor` (`ampere.core.simulate`, W3.1), which owns both ends of
+  its pool and aggregates failure counts on the parent — the per-engine gap
+  limitation 17.7 describes is unaffected and still stands for `EmceeEngine`.
+  Optimisers remain Phase 5, unlanded.
 * **`diagnostics/` did not land in Phase 2, and that is a ruled deferral
   rather than a slippage.** The decision-log row of 2026-09-08
   (`ampere.diagnostics` and the RHMF pre-fit family, W2.7) records it in
