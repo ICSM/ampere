@@ -534,6 +534,41 @@ paper-grade evidence the redesign delivers its central promise.
   the data layout is fixed anyway; the encoding is what makes amortisation
   across differently-sampled datasets possible.
 
+**Phase 3 landed 2026-09-10 (W3.0–W3.15; the per-item detail is each status
+row in `WORK_ITEMS.md` and the decision-log rows in §2 above — this
+paragraph only reconciles the two bullets above against what shipped).**
+`ampere.inference.SBIEngine` is the one module, over **sbi 0.27.0** (pinned
+CPU torch, no pyro-ppl — the `sbi` pixi environment and extra, W3.2); NPE,
+NLE and NRE are `sbi.inference`'s own trainers, unamortised truncated
+marginal ratio estimation (TMNRE, Miller et al. 2021) is expressed through
+those same `NRE` trainers and a `RestrictedPrior` subclass (W3.4) rather
+than a revived swyft — **swyft is not used anywhere in ampere v2**, ruled by
+Peter 2026-09-09 on W3.4's finding that swyft's `pytorch-lightning<=1.9.5`
+pin cannot install beside the torch the `sbi` extra resolves to; the
+harvested swyft material stays exactly what §5's Phase 0 bullet always
+called it, an archived reference, not a dependency. Embedding-network
+support is `EncodingLayout`'s masked set and transformer wrappers (W3.3,
+W3.11), not a port of `infer/sbi.py`'s dict-based vocabulary, though that
+vocabulary's shape is what a caller still writes. jax-native SBI did not
+land and needed no revisiting (§6 below). The coordinate–value–mask
+encoding is `ampere/core/encoding.py` and `docs/design/contracts/encoding.md`
+(frozen at W3.3), exactly the second bullet's shape: one frozen `Layout`
+per problem, hashed from the observed data alone, that both the flat and
+the set/transformer embeddings read through `unpack`. Landed beyond either
+bullet's wording, because the batching work Phase 3 needed turned out to be
+a prerequisite rather than a detail: `FittingProblem.simulate_many` and its
+executor protocol (`SerialExecutor`/`ThreadExecutor`/`ProcessExecutor`,
+defaulting to **`forkserver`** on POSIX, Peter's ruling of 2026-09-09,
+W3.1), per-chunk native batched prediction and sampling (W3.1 slice 2),
+trained-artefact caching (`ArtefactStore`, W3.5) wired into the engine,
+non-native ("foreign") parts opt-in (W3.8), and posterior calibration
+(SBC/TARP, `ampere.results.calibration`, W3.6). `PROVENANCE_SCHEMA_VERSION`
+is **6** (W3.12): every SBI run and training set carries `ampere_model_hash`
+beside `ampere_spec_hash`, which is what the artefact cache and the
+training-set append check key on, and — since W3.15 — `ampere_sbi_torch_seed`
+records the seed that makes a run's network, training and posterior draws
+reproducible bitwise from the problem's own seed.
+
 ### Phase 4 — Extensibility proof: one new modality end-to-end
 - Implement **interferometric visibilities** (decided) through the whole
   stack to prove the composition design: Fourier sampling at (u,v) points as
@@ -728,8 +763,30 @@ Settled at the start of the phase that needs them, not now:
   as of early 2026). Ampere's own §4.1 layer remains the only user-facing
   parameter interface regardless of provider, for cross-backend parity;
   Paramax is a lowering mechanism, not a user API.
-- **SBI package set beyond `sbi` + swyft** (Phase 3): jax-native SBI
-  (sbijax/flowjax) if and when maturity warrants.
+- **SBI package set beyond `sbi` + ~~swyft~~** (Phase 3): **half settled
+  2026-09-09 (Peter's ruling on W3.4's finding, recorded in the TMNRE
+  decision-log row above): no swyft.** TMNRE is expressed through `sbi`
+  0.27's own `NRE` trainers and a `RestrictedPrior` subclass instead of a
+  revived swyft implementation — swyft's `pytorch-lightning<=1.9.5` pin
+  cannot install beside the torch the `sbi` extra resolves to, and nothing
+  in Phase 3 needed it once that was known. **jax-native SBI (sbijax/flowjax)
+  remains open, unchanged**: if and when maturity warrants — nothing in
+  Phase 3 needed it, since `simulate_many`'s native `simulate_batched` is the
+  jax half that would matter if it ever did.
+- **Embedding-network study** (Phase 3, deferred at W3.3/W3.11's review;
+  Peter's rider, 2026-09-09: "defaults, not findings"). The set and
+  transformer embeddings' default output width
+  (`max(2·free_size, 32)`, W3.11) and readout (mask-weighted mean pooling
+  over every retained token, replacing `sbi`'s own last-token read, W3.11)
+  are principled defaults chosen to make the wrappers correct, not the
+  product of a study of which width and readout suit which combination of
+  data, model and structure — that guidance for a user choosing between
+  `layout="flat"`, `"set"` and `"transformer"` is future work. Folds in the
+  **truncation-epsilon (ε) study** carried from W3.4 (`docs/development.md`'s
+  "Questions collected for Peter" §3): whether TMNRE's default
+  `truncation_epsilon = 1e-4` (a box of roughly ±4σ that stops shrinking
+  after round 2 on the worked example) generalises, or needs per-problem
+  tuning guidance the way the width does.
 - ~~**Benchmark harness** (Phase 2): pytest-benchmark vs asv.~~ **Settled
   2026-09-08 (W2.11): pytest-benchmark.** The decision-log row above carries
   the reasoning; in one line, asv owns its own environments and its own
