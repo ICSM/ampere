@@ -3,13 +3,18 @@
 
 W3.5's :class:`~ampere.results.ArtefactStore` / :func:`~ampere.results.artefact_key`
 seam, demonstrated end to end against a real, small, seeded ``sbi`` 0.27 NPE
-posterior. ``SBIEngine`` does not take a ``cache=`` argument yet: W3.3 (the
-coordinate-value-mask encoding) had not merged when this item landed, and the
-two touch ``ampere/inference/_sbi.py`` at the same time
-(``WORK_ITEMS.md``'s dispatch order: "W3.3 first and W3.5 appends"). So this
-script demonstrates the *equivalent* — the exact seam ``SBIEngine(cache=store)``
-will call, wired here around a small standalone training routine that plays
-the role ``SBIEngine.run`` otherwise would.
+posterior. **Historical note (W3.13):** when this script was written,
+``SBIEngine`` did not yet take a ``cache=`` argument — W3.3 (the
+coordinate-value-mask encoding) had not merged, and the two touch
+``ampere/inference/_sbi.py`` at the same time (``WORK_ITEMS.md``'s dispatch
+order: "W3.3 first and W3.5 appends") — so it demonstrated the *equivalent*,
+wired around a small standalone training routine playing the role
+``SBIEngine.run`` otherwise would. ``SBIEngine(cache=ArtefactStore(...))``
+**is the real seam now** (landed at the W3.5 merge) and is what a caller
+should reach for; this script is kept as written because it still
+demonstrates :class:`~ampere.results.ArtefactStore` and
+:func:`~ampere.results.artefact_key` honestly and directly, one level below
+where ``SBIEngine`` itself now calls them.
 
 Run it::
 
