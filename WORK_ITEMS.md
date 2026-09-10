@@ -1438,6 +1438,260 @@ Cross-model review via terra when the quota returns
 (~2026-09-30) for W3.1 slice 1 (the batched-equals-loop and partition-independence claims), W3.1 slice 2 (native sampling), W3.2 (the prior
 coordinates and the scoring of draws) and W3.6 (the calibration statistics).
 
+## Phase 4 — Extensibility proof: one new modality end to end (drafted 2026-09-10 by Fable; **for Peter's approval before any dispatch**)
+
+Written from `DEVELOPMENT_PLAN.md` §5 Phase 4 and §4.7, the interferometry
+sketch (`docs/design/modalities/interferometry.md`, whose §9 gaps I-1 to I-5
+all landed at the freeze and whose §11 questions Q1–Q4 were ruled "Phase 4"),
+the kernel note in `docs/design/horizon_notes.md` (§1 and its follow-up),
+and the Phase 3 close. Phase 4's claim is the plan's: the composition design
+is proven when a modality nobody wrote the contracts for runs through the
+whole stack — a kind-changing, coordinate-changing step in the middle of the
+chain, complex data, wrapped angles, two datasets on one model channel — with
+no change to `ampere.core` beyond what the sketch already named. The
+sequencing follows Phase 2 and 3: the reference-path composition first
+(W4.1), the likelihood closed form beside it (W4.2), the native twins that
+consume both (W4.3), the study that proves it (W4.4); the two extensibility
+items that share no files with those (W4.5 kernel algebra, W4.6 astropy)
+run in parallel from the start; the documentation pass closes the phase.
+
+**Four decisions for Peter before dispatch** (each item below states its
+assumption; a different ruling changes the text, not the plan):
+- **D1 — where a shipped modality lives.** The sketch keeps `ClosurePhases`
+  and the interferometric steps out of `ampere.core` ("exactly as
+  `transformations.md` §10 keeps the standard library out of core"), and
+  the standard library today is `ampere/backends/reference/instrument.py`
+  with twins per backend. Assumed: a new namespace **`ampere/modalities/`**
+  — `ampere/modalities/interferometry/` holding the backend-neutral kind
+  and the reference-path steps, native twins under
+  `ampere/backends/{torch,jax}/interferometry.py` — typed from the first
+  line, with a one-line addition to `architecture.md` §3's layout. The
+  alternative is everything under `backends/reference/` with the kind in
+  `core.results_schema` beside `VisibilitySet`.
+- **D2 — the `ClosurePhases` signature** (sketch Q3): four dimensionless
+  axes `(u1, v1, u2, v2)` fixing the triangle by two baselines (assumed —
+  it gives a GP over closure phases coordinates to work with), or a single
+  `triangle` label in the manner of `PhotometricPoints.filters`.
+- **D3 — whether W4.9 (astrometric time series by the template) runs in
+  Phase 4.** It is the test of the "other modalities then follow the
+  template" claim; it is not on the critical path.
+- **D4 — Opus for W4.1–W4.3, W4.5, W4.6; Sonnet for the rest** (per
+  `docs/orchestration.md`); W4.1 ∥ W4.5 ∥ W4.6 from the start, W4.2 after
+  W4.5 (both touch `core/likelihood.py`), W4.3 after W4.1 and W4.2.
+
+### W4.0 — Phase 4 housekeeping and the owed core fixes [S; Sonnet]
+The carried items that should not wait for a phase to need them. (1)
+`docs/source/overview.rst` refreshed for the Phase 3 landing (six engines;
+SBI landed; the capability ladder's SBI row) — W3.13's finding. (2)
+`_SimulateNatively.run` wraps the native sampler in the per-draw `try`, so a
+native sampler failure flags one draw where the numpy loop does, rather
+than aborting the chunk (W3.14's finding; the Poisson twin is the first
+family that can reach it; a test that injects a failing draw on each
+backend). (3) `Instrument._declarations()` fingerprints steps by value
+rather than `id()`, so a *bare* pickled `Instrument` round-trips
+(`transform.py`; W3.1 slice 2's finding; `Dataset.__setstate__`'s
+workaround then becomes redundant and is removed). (4) `architecture.md`
+§3's layout gains the `ampere/modalities/` line per D1. (5) Any one-line
+rulings Peter gives on the Phase 3 questions block (the TMNRE
+`sample_with` default, the Poisson zero-rate guard, `cauchy`) applied as
+ruled, each its own commit. **Depends:** nothing. **Accept:** the two
+regression tests; the pickled-`Instrument` round trip asserted; docs build
+clean; all four gates green (core is touched); lint/format/pyrefly clean.
+
+### W4.1 — The interferometry modality on the reference path [M; Opus]
+The sketch's §1 composition, built as shipped code under D1: the
+`ClosurePhases` kind (D2; values in radians, `Layout.POINTS`, a `triangle`
+label in `extra_coords`); `FourierSample` (`ACCEPTS = (Image,)`,
+`PRODUCES = VisibilitySet`; the `(u, v)` coverage as buffers taken *from the
+observed container* per gap I-2's rule, never recomputed; requirements per
+sketch §3 with `max_step = 1/(2 u_max)` so an under-sampled grid is refused
+by `compile_for` rather than aliased — gap I-4; a direct DFT on the
+reference path, the FFT-plus-interpolation variant refused by name as a
+later option); `ClosurePhase` (three visibilities to one angle, mask
+propagation through the three-to-one step per sketch §5, wrapped into
+(−π, π]); **the first two `configure_from` instances** — `BandwidthSmearing`
+and `TimeSmearing` — which ask the `FourierSample` before them for the
+extra `(u, v)` samples they average over (gap I-3's mechanism, landed at the
+freeze and unused since); the two likelihoods of sketch §1
+(`ComplexGaussianFamily` + `IndependentNoise` on visibilities;
+`VonMisesFamily` on closure phases) composed on one `sky` channel from two
+datasets and two instruments, negotiated once. `RiceFamily` on amplitudes
+checked as the third route. A `UniformDisc`/`GaussianSource`/`Binary` model
+trio emitting an `Image` on the reference backend, and the same three
+emitting a `VisibilitySet` directly (the analytic route, no Fourier step)
+as each other's oracle. Sketch §8's verified claims become tests.
+**Depends:** W4.0's (4) for the namespace line (not blocking). **Accept:**
+conformance rows — `FourierSample` of each image model against its analytic
+visibilities at `tolerances.cross_solver`; closure phases of the binary
+against the closed form; each smearing step against brute-force fine
+sampling; mask propagation asserted; the two-dataset composition evaluates
+the model once per draw (`inference.md` §8) — plus an emcee fit of the
+synthetic binary recovering the injected separation and flux ratio inside
+the central 95 %; `simulate(observe=True)` works on both kinds (W3.14's
+`complex_gaussian` sample, and a von Mises draw — **the wrapped family gains
+`sample()`**, one decision-log row); all four gates green;
+lint/format/pyrefly clean.
+
+### W4.2 — The circular complex Gaussian process: `complex_gaussian` + `GaussianProcessNoise` analytic [M; Opus]
+Sketch Q1, ruled 2026-09-03: the pair is declared `ANALYTIC` with the
+circular (equal-component, zero-pseudo-covariance) GP as its fixed meaning,
+and composition refuses until Phase 4 implements the closed form. This
+item implements it: for a circular complex Gaussian with covariance `K`
+over the `(u, v)` points plus the per-component σ², the marginal
+log-likelihood is the real 2N-dimensional Gaussian's with the block
+structure exploited (`log|K + Σ|` and the quadratic form each once, not
+twice) — on the `DenseGP` solver, the kernel evaluated on the 2-D `(u, v)`
+coordinates (so `Matern32`/`SquaredExponential` gain a 2-D distance, an
+`isotropic` flag on `KernelSpec` — the O(N) `QuasisepGP` path refuses by
+name since `REQUIRES_ORDERED_1D` cannot hold). `GP_ANALYTIC_IMPLEMENTED`
+flips to `True` for the family; `conditional_loo` for the pointwise group
+per `results.md` §6; `extra_coords` gains `Axis` support so a
+per-visibility frequency is a quantity in Hz (sketch Q2, ruled "Phase 4").
+Native twins on torch and jax for the closed form (the family exists on
+both since W2.4/W2.5 slice 3; the GP form is new). **Depends:** W4.5
+(both touch `core/likelihood.py`; W4.5 owns the kernel section, this item
+the family/noise section — merge W4.5 first). **Accept:** conformance
+rows — the closed form against a dense real 2N formulation at
+`tolerances.cross_solver` on all three backends; the refusal on the O(N)
+path word for word; `check_alignment`'s dtype check (gap I-1) still
+catches an amplitude fit; a GP fit of the W4.1 binary with an injected
+correlated calibration residual stays calibrated where the independent
+fit does not (SBC ranks via W3.6, the M2 pattern); all four gates green;
+lint/format/pyrefly clean; `likelihoods.md` §7 amended, one decision-log
+row.
+
+### W4.3 — Native twins for the interferometry steps, and the modality under every engine [M; Opus]
+`FourierSample`, `ClosurePhase` and the smearing steps on torch and jax
+(`ampere/backends/{torch,jax}/interferometry.py`): a differentiable direct
+DFT, batchable under `vmap`, `DIFFERENTIABLE`/`BATCHABLE`/`BACKEND`
+declared, lowered through the registry like every standard step; the kind
+needs no twin. Then the modality under every engine as the proof: NUTS on
+the binary on both backends; VI; `SBIEngine` on visibilities plus closure
+phases — W3.3's encoding already carries `is_complex`, and this is its
+first complex customer (fix what it gets wrong, in scope); the artefact
+cache keyed correctly on the two-dataset problem. **Depends:** W4.1, W4.2.
+**Accept:** conformance lockstep rows for each step (numpy the oracle);
+NUTS on torch and jax recovers the binary at W2's NUTS tolerances;
+`simulate_many(native=True)` on the two-dataset problem equals the loop;
+an NPE fit at the smoke budget passes the coverage check; all four gates
+plus sbi green; lint/format/pyrefly clean ×3.
+
+### W4.4 — The interferometry study: `examples/interferometry/` and its page [M; Sonnet]
+In the M2 layout (`generators.py`, `model.py` + `model_torch.py` +
+`model_jax.py`, `study.py`, `figures.py`, `__main__.py`): a synthetic
+resolved binary with a fainter disc component observed as visibilities and
+closure phases, fitted (a) with the correct model and independent noise,
+(b) with a deliberately incomplete model (the disc omitted) under
+independent noise, (c) under the flexible likelihood of W4.2 — the M2
+question asked of the proof modality: does the GP keep the binary
+parameters calibrated when the sky model is wrong? Three engines (emcee on
+the reference backend, NUTS on torch or jax, NPE), timings, the six plots,
+and the SBC row. `docs/source/interferometry.rst` in the v2 tutorials
+toctree, written as the **template for adding a modality** (kind, step,
+`configure_from`, the two-dataset composition, what the conformance suite
+owes). `tests/examples` coverage; `tests/interferometry` for the study's
+assertions in the M2 pattern. **Depends:** W4.3. **Accept:** the study's
+three assertions pinned (coverage under (a) and (c), failure under (b));
+runs in under ten minutes on the CI runner; page builds clean; the `dev`,
+`sbi` and both backend gates green.
+
+### W4.5 — Kernel algebra and the public quasiseparable-term registry [M; Opus]
+Ruled by Peter 2026-09-09 (plan §5 Phase 4; `horizon_notes.md`'s follow-up
+§1 is the specification): `Sum` and `Product` kernels with `KernelSpec`
+composition and celerite translation — a sum of quasiseparable terms is
+quasiseparable, a product is refused on the O(N) path by name; a damped
+periodic **SHO** term (celerite's `SHOTerm`, `Q > 1/2`; the
+`RotationTerm` pair as the second form) as the component for fringing;
+`Matern12` and `Matern52` as celerite-exact siblings; `Kernel`'s dense
+`matrix`/`diagonal` for every new term; a **public
+`register_quasiseparable_term(kernel_type, builder)`** beside the
+lowering/realisation registries' shape (one slot per type, no silent
+overwrite, built-in rows distinguished) so a user kernel reaches the O(N)
+path; a `SpectralMixture` kernel as a sum of SHO terms with free
+frequencies; the three backends' translations (numpy through celerite2's
+`GaussianProcess`, torch through `celerite2.backprop`, jax through
+`celerite2.jax.ops`), each term's `conditional_loo` where the solver has it.
+Sparsity-inducing priors on component amplitudes are *not* this item (the
+follow-up note's regularised horseshoe is expressible with
+`HierarchicalPrior` today and is a study, not a contract). **Depends:**
+nothing; owns `core/likelihood.py`'s kernel section and the backends'
+kernel modules. **Accept:** conformance rows per term against its dense
+closed form at `tolerances.cross_solver`, `Sum` against the sum of
+matrices, the `Product` refusal word for word, a user-registered term
+reaching `QuasisepGP` on all three backends; M2's `fringing` scenario
+re-fitted with `Matern32 + SHO` as the demonstration (bias and calibration
+reported beside the stationary fit — informational, not pinned); all four
+gates green; lint/format/pyrefly clean ×3; `likelihoods.md` §7/§8 amended,
+one decision-log row.
+
+### W4.6 — The astropy interop adapter (`core/astropy_compat.py`) [M; Opus]
+Plan §4.7, the last unimplemented §4 contract (`ampere/core/__init__.py`
+says so). `from_astropy(model, *, kind=, priors=None, channel=)` wraps any
+`astropy.modeling` model, compound models included, as an ampere `Model`:
+each astropy `Parameter` becomes an ampere `Parameter` (`bounds` → a
+uniform prior, `fixed` → frozen, `tied` → a `Tie`), overridable by a
+`priors=` mapping; `Quantity` inputs and outputs honoured; the output kind
+declared by the caller (inferred only where the model's `n_outputs` and
+units make it unambiguous, refused by name otherwise); capabilities the
+honest reference answers (black-box: gradient-free engines and SBI, never
+NUTS/VI — advertised in the docstring and the page). Translation to a
+native equivalent is **opt-in, never silent** (decided 2026-09-01): this
+item lands the hook — `from_astropy()` on a backend that raises for any
+model it has no row for — and an empty table; the curated rows are W4.7.
+`docs/design/contracts/astropy_compat.md`, short, in the contracts'
+format (a post-freeze §4 addition; one decision-log row). **Depends:**
+nothing; owns the new module, its contract page, `tests/core/test_astropy*`.
+**Accept:** conformance rows — a wrapped `BlackBody` and `PowerLaw1D` agree
+with the reference backend's own models' `log_prob` on the same data; a
+compound model with a tied parameter round-trips its tie; an emcee fit of a
+wrapped model; the SBI engine runs on one (black-box route); the refusal
+for an undeclared kind word for word; all four gates green (a core module);
+lint/format/pyrefly clean.
+
+### W4.7 — Native translations of common astropy models [S; Sonnet]
+The curated table §4.7 calls a later nicety: `BlackBody`, `PowerLaw1D`,
+`BrokenPowerLaw1D`, `Polynomial1D`, `Gaussian1D`, `Const1D` (and their
+compound sums/products) to native torch and jax models through W4.6's
+opt-in hook, restoring differentiability for the frequent cases; a model
+outside the table still raises. **Depends:** W4.6. **Accept:** conformance
+rows — each translated model agrees with the wrapped astropy original at
+`tolerances.cross_backend`; NUTS runs on a translated compound model on
+both backends; the refusal for an untranslatable model word for word; the
+`torch` and `jax` gates green; lint/format/pyrefly clean ×2.
+
+### W4.8 — Phase 4 documentation pass [M; Sonnet]
+Like W3.13, after the last Phase 4 merge: the modality template page
+(W4.4's) cross-linked from the overview and the architecture page; the
+astropy page (`docs/source/astropy.rst`: the casual user's route, the
+capability consequence, the opt-in translation); the kernel page (algebra,
+the SHO term for fringing, registering a term); `advanced.rst`'s noise-model
+section; every "landed"/"Phase 4" annotation in `docs/design/contracts/*`
+and `docs/design/modalities/interferometry.md`'s §9–§11 dispositions
+checked against the code (*Amended W4.8*, one decision-log row); the
+deferred list reviewed; README. **Depends:** every other Phase 4 item.
+**Accept:** `pixi run docs` with no new-namespace warnings; every example
+the pages use under `tests/examples`; the annotation list in the report;
+the `dev` gate green.
+
+### W4.9 — Astrometric time series by the template [M; Sonnet; D3 — optional in Phase 4]
+The sketch (`docs/design/modalities/astrometric_timeseries.md`): a reflex
+orbit on two `TimeSeries` channels, an epoch-sampling instrument, the
+time-domain flexible likelihood per coordinate on the O(N) path — built
+under `ampere/modalities/astrometry/` by W4.4's template with no new
+contract surface (the joint 2-vector GP the sketch wants is Phase 5's,
+deferred at the freeze). The value is the test of the template claim, and
+the second worked modality page. **Depends:** W4.4. **Accept:** conformance
+rows for the orbit model against a closed-form ephemeris; an emcee and a
+NUTS fit recovering an injected orbit; `QuasisepGP` on both channels; the
+page; all four gates green.
+
+Ordering: W4.0 ∥ W4.1 ∥ W4.5 ∥ W4.6 from the start (disjoint files:
+`modalities/` + `backends/reference/`; `core/likelihood.py` kernels +
+backends' kernels; `core/astropy_compat.py`); W4.2 after W4.5; W4.3 after
+W4.1 and W4.2; W4.7 after W4.6; W4.4 after W4.3; W4.9 after W4.4 if D3
+says so; W4.8 last.
+
+
 ## Status
 
 | Item | Status |
