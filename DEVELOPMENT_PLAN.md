@@ -1,12 +1,14 @@
 # Ampere v2 Development Plan — DRAFT for refinement
 
 Status: **plan settled; Phase 1 spec frozen** (freeze recorded 2026-09-03,
-W1.13; the `spec-v1.0` tag is created at that item's merge). All
+W1.13; the `spec-v1.0` tag is created at that item's merge); **Phases 0–3
+complete** (Phase 2 closed 2026-09-08, Phase 3 closed 2026-09-10 — the §5
+Phase 3 section carries the landed summary); Phase 4 is next to draft. All
 architectural proposals are confirmed; remaining open items are
 implementation-level choices deferred to their natural phase (§6). This
 document is the source of truth for the redevelopment of ampere: decisions
 taken, target architecture, and phased roadmap. The agent-sized work items
-for Phases 0–2 live in `WORK_ITEMS.md`.
+for Phases 0–3 live in `WORK_ITEMS.md`.
 
 ---
 
@@ -520,7 +522,7 @@ paper-grade evidence the redesign delivers its central promise.
 
 **M2 REACHED 2026-09-08 (W2.10, `956e1ab`).** Reproduced on all three backends over 200 → 2 000 → 20 000 points with the science claim asserted as thresholds, posterior agreement across backends at stated tolerances, and the benchmark table as a CI artefact. The adversarial pass was Fable's (Codex quota-blocked; a retroactive `gpt-5.6-terra` pass is owed on the merged range, along with the earlier ones).
 
-### Phase 3 — SBI layer (backend-spanning)
+### Phase 3 — SBI layer (backend-spanning) — **complete 2026-09-10** (W3.0–W3.15; the landed summary is the paragraph after the two original bullets)
 - One SBI module in `ampere.inference` consuming `simulate()` from any
   backend (including legacy black-box models): NPE/NLE/NRE via `sbi`;
   revive the swyft TMNRE implementation from
