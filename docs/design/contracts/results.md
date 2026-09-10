@@ -1332,7 +1332,9 @@ Each is a decision, not an oversight. Each has an extension point.
   the model bindings — because a likelihood family, noise model, solver or
   kernel swap that leaves every parameter's name and prior unchanged moves
   the spec hash not at all. `ArtefactKey`/`artefact_key` (W3.5) use the same
-  two hashes, plus the run's own settings (method, estimator architecture,
+  two hashes **and a third, `data_hash`, of the observed containers** — a
+  trained posterior is stored conditioned on the observation it was built
+  for, unlike a training set — plus the run's own settings (method, estimator architecture,
   budget, rounds, encoding layout, `sbi`/torch versions, and TMNRE's
   `marginals`/`truncation_epsilon`/`sample_with`, W3.12).
 - **Phase 5 (population inference)** — design horizon (b) is buildable entirely
