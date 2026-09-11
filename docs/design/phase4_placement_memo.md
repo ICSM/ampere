@@ -343,7 +343,9 @@ W4.2's (u, v) GP describes it on visibilities. Instrumental errors
 rather than in (u, v); neither form exposes those as axes, and they are
 the Phase 5 joint-noise question, not this one.
 
-**(d) Wavelength.** Because the axes are already B/λ, the four-axis form
+**(d) Wavelength.** *Superseded by §3.6 (Peter's question of 2026-09-11):
+the claim below holds for an achromatic sky error only, and the chromatic
+case is the common one.* Because the axes are already B/λ, the four-axis form
 absorbs the spectral dimension without adding one:
 
 - For an **achromatic sky** (the W4.4 study; an `Image` channel) nothing
@@ -391,7 +393,7 @@ not care about the ordering; the kernel and the coordinate-equality
 pairing with the visibility dataset (gap I-2's bit-identical rule, which
 is also horizon (h)'s hook) both do.
 
-### 3.5 Recommendation
+### 3.5 Recommendation (as first written; revised in §3.6)
 
 **Four axes, as drafted**, with the canonical ordering of §3.4 in the
 kind's docstring and asserted by W4.1's conformance row; the `triangle`
@@ -401,6 +403,124 @@ to record in the decision log: the kernel's coordinate space is
 four-dimensional and single-unit, `DenseGP` only; wavelength is absorbed,
 not added; per-axis (ARD) length scales are a W4.5 product-kernel option
 on the dense path if isotropy proves too strong.
+
+### 3.6 Correction: a chromatic sky error is correlated in wavelength, and (u, v) alone cannot express it
+
+Peter's question (2026-09-11): if the model is missing spectral lines or
+molecular bands that contribute at specific wavelengths in specific
+patches of sky, is the residual correlated across *wavelength* rather than
+across (u, v), or are the two so tightly coupled that it does not matter?
+
+It matters, and the memo's §3.3(d) was wrong for this case. Write the
+missing component as δI(x, y, λ) = P(x, y) S(λ) — a patch with a spectral
+profile (a band of width Δλ at λ₀). Its effect on a baseline **B** at
+wavelength λ is
+
+δV(**B**, λ) = S(λ) · F(**B**/λ),
+
+with F the Fourier transform of the patch, smooth in (u, v) on the scale
+1/θ of the patch. The residual is therefore a product of two functions on
+two *different* coordinates: sharp in λ, smooth in (u, v). Projecting onto
+(u, v) alone destroys the first:
+
+- Along one baseline's spoke, λ and |u| are monotonically related, so the
+  band appears as a bump in |u| of width u₀ Δλ/λ₀ at radius B/λ₀.
+- On a *different* baseline the same band sits at a different radius,
+  B′/λ₀. Two points close in (u, v) — a 50 m and a 100 m baseline at
+  similar position angle, at the same |u| — are at wavelengths a factor of
+  two apart, one in the band and one out of it.
+
+So an isotropic (u, v) kernel with one length scale is asked to do two
+incompatible things: correlate along a spoke on the band's scale, and
+correlate across the plane on the patch's scale, while *not* correlating
+neighbouring points from different baselines that are at different
+wavelengths. It cannot. The coupling u = B/λ absorbs wavelength only when
+S(λ) is constant — a grey error, a missing continuum component — which is
+the case the W4.4 study as drafted tests, and not the case Peter names,
+which is the common one in spectro-interferometry (Brγ, CO band heads,
+the silicate feature) and the case the M2 study was built around for
+spectra.
+
+**Consequence.** The kernel must see wavelength as a coordinate of its own,
+separate from (u, v), and the natural covariance is a product,
+k_uv(u, v) · k_λ(λ), with two length scales (patch size, band width). Given
+§3.2 (a kernel sees axes only), that means:
+
+1. **`VisibilitySet` gains a third axis, `spectral_axis`** (length,
+   frequency or energy, `Order.ANY` since the layout is `POINTS` and each
+   sample carries its own wavelength). Radio spectral windows and every
+   modern optical beam combiner are dispersed, so the monochromatic case
+   is the degenerate one (a constant column), not the other way round.
+   This amends a frozen kind: a decision-log row and a conformance update
+   in the same PR (ground rule 9). The blast radius measured at `59454ea`
+   is small — the constructor is called positionally in about ten test
+   sites (`tests/conformance/{composition,test_schema,test_results}.py`,
+   `tests/results/{test_plots,test_results}.py`,
+   `tests/backends/test_jax.py`) and one doctest in
+   `ampere/results/serialisation.py`; no shipped step or model produces
+   one yet. The alternative, a second dispersed kind beside a
+   monochromatic one, doubles what every step and family must accept for
+   no benefit.
+2. **`ClosurePhases` is five axes**: `(u1, v1, u2, v2, spectral_axis)`,
+   the same product structure, k(u1, v1, u2, v2) · k_λ(λ).
+3. **A kernel must be able to act on a subset of a container's axes.**
+   The single-unit rule (`likelihood.py:720-745`) refuses (u, v, λ) for an
+   isotropic kernel, and its own message points at the fix: "declare a
+   kernel that takes a length-scale per axis". `KernelSpec` (and every
+   `Kernel`) gains an `axes` selector; `Matern32(axes=("u", "v"))` is the
+   isotropic (u, v) kernel of W4.2 unchanged, `Matern32(axes=("spectral_axis",))`
+   the band kernel, and W4.5's `Product` composes them. This is one field
+   on the spec, checked in `check_compatible` against the subset's units,
+   and it is what lets W4.2's achromatic flagship and the chromatic case
+   coexist on one kind. It belongs to W4.5 (which owns the kernel section)
+   and W4.2 consumes it, so the dependency W4.2 → W4.5 already drafted is
+   the right order.
+4. **Sketch Q2 lapses for this purpose.** The per-sample frequency was
+   going into `extra_coords` with units so the Fourier step could pick a
+   `Cube` plane; with wavelength an axis, the step reads it from the axis
+   and the requirement it publishes on the cube's `spectral_axis` is
+   `points=` the container's unique wavelengths. `extra_coords` units may
+   still be wanted elsewhere but are no longer on Phase 4's critical
+   path; W4.2's text drops that clause.
+5. **Time stays out, deliberately.** The same argument applies to
+   instrumental errors smooth in time (piston, coherence loss), and the
+   same mechanism (an axis plus a product kernel) would serve; but those
+   are not sky misspecification, they are Phase 5's joint-noise question
+   (horizon (h)), and adding a `time` axis now would be a guess at a
+   contract nobody has exercised. The `triangle`/baseline labels and an
+   epoch label in `extra_coords` keep the structure recoverable.
+
+**Dimensionality after the correction.** Kernel coordinates: 3 for
+visibilities, 5 for closure phases, each split by the product into a
+2-D (or 4-D) single-unit block and a 1-D spectral block; hyperparameters:
+one extra length scale and amplitude per block. Data count unchanged.
+Solver: `DenseGP` only, as before. **The scale route this opens** is worth
+recording for Phase 5: in (B, λ) coordinates a dispersed observation is a
+*product* of a set of baseline-epochs and a spectral axis, so a product
+kernel's covariance is a Kronecker product K_B ⊗ K_λ, with K_B small and
+K_λ quasiseparable over the ordered spectral axis — exact and close to
+O(N) until masks break the structure. The kind must therefore keep the
+baseline × channel structure recoverable (a baseline label per sample in
+`extra_coords`, the wavelength as an axis), which the design above does.
+This is the reduced-rank/structured-solver bullet of Phase 5 with a
+concrete first customer; it is not Phase 4's.
+
+**The W4.4 study should include the chromatic case.** Scenario (b), "the
+disc omitted", is a grey error. Add a scenario in which the omitted
+component is a compact patch with a band profile (the interferometric
+analogue of M2's missing feature), fitted under (u, v)-only, λ-only and
+product kernels, so the claim that the product is needed is measured
+rather than argued. That is the study's real question for this
+observable.
+
+### 3.7 Revised recommendation for D2
+
+Four baseline axes plus a spectral axis for `ClosurePhases` (five in all),
+and `VisibilitySet` amended to three; the canonical baseline ordering of
+§3.4; `triangle` and baseline labels in `extra_coords`; the `axes`
+selector on kernels in W4.5 with `Product`; the amendment carried by W4.1
+(the kind) with its decision-log row and conformance update; W4.2's
+extra-coords-units clause dropped; the chromatic scenario added to W4.4.
 
 ---
 
@@ -452,8 +572,11 @@ unless noted):
    (`ampere.interferometry`) is wanted now, later with the first reader
    (recommended), or not at all. If a grouping word is wanted after all,
    which of `obs`, `astro`, or another.
-2. **D2**: four axes with the canonical ordering, the `triangle` label and
-   the frequency extra coordinate (recommended), or the label form with
-   the consequence that no GP can be composed on closure phases.
+2. **D2** (revised in §3.6–3.7): `VisibilitySet` amended to `(u, v,
+   spectral_axis)` and `ClosurePhases` as `(u1, v1, u2, v2,
+   spectral_axis)` with the canonical ordering; kernels gain an `axes`
+   selector so a product of a (u, v) block and a spectral block is
+   expressible (recommended); or the label form with the consequence that
+   no GP can be composed on closure phases.
 3. Whether the photometry + spectrum composition example becomes a small
    Phase 4 item ahead of W4.4 (recommended).
