@@ -1520,35 +1520,6 @@ class Dataset:
         whitened = block.get(self._latent.parameter.name)
         return None if whitened is None else np.asarray(whitened, dtype=DTYPE)
 
-    def __setstate__(self, state: Mapping[str, Any]) -> None:
-        """Re-freeze the instrument after unpickling, because ``id()`` does not survive.
-
-        Found at W3.1 slice 2, when :class:`~ampere.core.simulate.ProcessExecutor`
-        stopped defaulting to ``fork``. A forked worker inherits the parent's
-        objects by memory and never unpickles the problem, so this never
-        surfaced; a ``forkserver`` or ``spawn`` worker does unpickle it, and
-        the first thing it did was raise ``instrument … was frozen and one of
-        its steps has been reconfigured since``.
-
-        Nothing had been reconfigured. ``Instrument.freeze`` fingerprints its
-        steps' declarations with :func:`id` — sound while a process holds the
-        objects, since ``Parameter`` is frozen and reconfiguration therefore
-        always replaces objects, but object identity is exactly what pickle
-        does not preserve. The snapshot's fingerprint and the restored steps'
-        could not agree, so a perfectly consistent problem convicted itself.
-
-        Re-freezing is the right repair rather than a suppression: ``freeze``
-        recomputes the merged snapshot **from the steps**, and the steps are
-        what was restored, so the invariant is re-established from the data
-        instead of asserted over it. It is idempotent and touches nothing else.
-        The underlying ``id()`` fingerprint is left alone — it lives in a
-        contract module this item does not own — and is carried as a finding.
-        """
-        self.__dict__.update(state)
-        instrument = self.__dict__.get("instrument")
-        if instrument is not None:
-            instrument.freeze()
-
     def retained_mask(self, predicted: FunctionSamples) -> np.ndarray:
         """Which samples a draw covers: the observed-and-predicted union, as a mask.
 
@@ -3768,14 +3739,79 @@ class _NativeBatch:
             [problem._mapping.merged.pack(dict(request.values)) for request in requests]
         )
         native = self.predict(theta, sharder=self.sharder)
-        drawn: Mapping[str, np.ndarray] | None = None
+        drawn: Mapping[str, Any] | None = None
+        sampler_failures: dict[int, BaseException] = {}
         if observe and self.sampler is not None:
             seeds = [int(request.generator.integers(0, 2**63 - 1)) for request in requests]
-            drawn = self.sampler(theta, native.predicted, seeds)
+            drawn, sampler_failures = self._sample_chunk(theta, native, seeds)
         simulations: list[Simulation] = []
         for position, request in enumerate(requests):
-            simulations.append(self._draw(position, request, native, theta, observe, drawn))
+            simulations.append(
+                self._draw(
+                    position,
+                    request,
+                    native,
+                    theta,
+                    observe,
+                    drawn,
+                    sampler_failures.get(position),
+                )
+            )
         return simulations
+
+    def _sample_chunk(
+        self,
+        theta: np.ndarray,
+        native: BatchedPrediction,
+        seeds: Sequence[int],
+    ) -> tuple[Mapping[str, Any], dict[int, BaseException]]:
+        """The chunk's native draws, with a failing θ isolated rather than aborting all of it.
+
+        A native sampler is vectorised over the whole chunk (torch's Poisson
+        twin, for one, checks the *stacked* rate array for a non-positive entry
+        in one call — W3.14's finding), so one bad draw's exception carries no
+        row index and would otherwise discard or fail every draw in the chunk,
+        native and non-native evaluation alike, rather than the single request
+        that earned it. Retrying one row at a time after a batched failure
+        finds which position(s) actually raise, so the rest of the chunk keeps
+        its native draw and only the offending position is flagged. That is
+        the same rule the per-draw ``try`` around ``draw_observation`` in
+        :meth:`_draw` already applies: a likelihood that cannot produce a draw
+        at *this* θ is §11's flagged failure, not an exception the budget
+        stops at.
+
+        Under ``strict=True`` nothing here is caught -- the same rule
+        ``_failure_types`` enforces for the loop -- so the raise still lands at
+        the offending draw with its own traceback rather than a retried one.
+        """
+        problem = self.problem
+        assert self.sampler is not None  # guarded by the caller
+        if problem.strict:
+            return self.sampler(theta, native.predicted, seeds), {}
+        failure_types: tuple[type[BaseException], ...] = (*problem._failure_types, LoweringError)
+        try:
+            return self.sampler(theta, native.predicted, seeds), {}
+        except failure_types:
+            pass
+        drawn: dict[str, list[Any]] = {label: [] for label in native.predicted}
+        failures: dict[int, BaseException] = {}
+        for position in range(len(seeds)):
+            row_predicted = {
+                label: np.asarray(values)[position : position + 1]
+                for label, values in native.predicted.items()
+            }
+            try:
+                row = self.sampler(
+                    theta[position : position + 1], row_predicted, seeds[position : position + 1]
+                )
+            except failure_types as error:
+                failures[position] = error
+                for label in drawn:
+                    drawn[label].append(None)
+            else:
+                for label, values in row.items():
+                    drawn[label].append(np.asarray(values)[0])
+        return drawn, failures
 
     def _draw(
         self,
@@ -3784,7 +3820,8 @@ class _NativeBatch:
         native: BatchedPrediction,
         theta: np.ndarray,
         observe: bool,
-        drawn: Mapping[str, np.ndarray] | None,
+        drawn: Mapping[str, Any] | None,
+        sampler_failure: BaseException | None = None,
     ) -> Simulation:
         problem = self.problem
         resolved = dict(request.values)
@@ -3807,6 +3844,22 @@ class _NativeBatch:
         }
         observations: dict[str, FunctionSamples] | None = None
         if observe:
+            if sampler_failure is not None:
+                # The batched-then-retried native sampler raised for this
+                # request specifically (``_sample_chunk``); flagged exactly as
+                # a per-dataset ``draw_observation`` failure is below, since it
+                # is the same fact from the caller's point of view -- this θ
+                # produced no usable observation.
+                failure = _failure_from(
+                    FailureReason.LIKELIHOOD_FAILED, sampler_failure, "<native sampler>"
+                )
+                return Simulation(
+                    parameters=resolved,
+                    theta=theta[position],
+                    results=results,
+                    predicted=predicted,
+                    failure=failure,
+                )
             routed = problem._mapping.distribute(resolved)
             observations = {}
             for label, dataset in problem.datasets.items():
