@@ -3,7 +3,9 @@
 Status: **plan settled; Phase 1 spec frozen** (freeze recorded 2026-09-03,
 W1.13; the `spec-v1.0` tag is created at that item's merge); **Phases 0–3
 complete** (Phase 2 closed 2026-09-08, Phase 3 closed 2026-09-10 — the §5
-Phase 3 section carries the landed summary); Phase 4 is next to draft. All
+Phase 3 section carries the landed summary); Phase 4's items are drafted
+(WORK_ITEMS.md), D3–D4 ruled, D1–D2 under discussion
+(`docs/design/phase4_placement_memo.md`). All
 architectural proposals are confirmed; remaining open items are
 implementation-level choices deferred to their natural phase (§6). This
 document is the source of truth for the redevelopment of ampere: decisions

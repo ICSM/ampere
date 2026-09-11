@@ -1467,8 +1467,14 @@ items that share no files with those (W4.5 kernel algebra, W4.6 astropy)
 run in parallel from the start; the documentation pass closes the phase.
 
 **Four decisions for Peter before dispatch** (each item below states its
-assumption; a different ruling changes the text, not the plan):
-- **D1 — where a shipped modality lives.** The sketch keeps `ClosurePhases`
+assumption; a different ruling changes the text, not the plan). **Status
+2026-09-11**: D3 and D4 ruled (below); D1 and D2 are under discussion on
+`docs/design/phase4_placement_memo.md`, whose §4 lists the corrections the
+surveys found in W4.0, W4.1, W4.3, W4.4 and W4.8 — applied once D1 is ruled.
+- **D1 — where a shipped modality lives.** *Peter, 2026-09-11: not
+  `modalities` — a shorter word, decided after a survey of how the existing
+  classes behave; the survey and the options are the memo's §1–§2.* The
+  sketch keeps `ClosurePhases`
   and the interferometric steps out of `ampere.core` ("exactly as
   `transformations.md` §10 keeps the standard library out of core"), and
   the standard library today is `ampere/backends/reference/instrument.py`
@@ -1482,13 +1488,22 @@ assumption; a different ruling changes the text, not the plan):
 - **D2 — the `ClosurePhases` signature** (sketch Q3): four dimensionless
   axes `(u1, v1, u2, v2)` fixing the triangle by two baselines (assumed —
   it gives a GP over closure phases coordinates to work with), or a single
-  `triangle` label in the manner of `PhotometricPoints.filters`.
+  `triangle` label in the manner of `PhotometricPoints.filters`. *Peter,
+  2026-09-11: asked what the choice means for the dimensionality of the
+  problem given wavelength dependence — the memo's §3.*
 - **D3 — whether W4.9 (astrometric time series by the template) runs in
   Phase 4.** It is the test of the "other modalities then follow the
-  template" claim; it is not on the critical path.
+  template" claim; it is not on the critical path. **Ruled yes by Peter
+  2026-09-11: W4.9 runs; "this will be an essential test of the code".**
 - **D4 — Opus for W4.1–W4.3, W4.5, W4.6; Sonnet for the rest** (per
   `docs/orchestration.md`); W4.1 ∥ W4.5 ∥ W4.6 from the start, W4.2 after
   W4.5 (both touch `core/likelihood.py`), W4.3 after W4.1 and W4.2.
+  **Agreed by Peter 2026-09-11**, with the 2026-09-05 review-policy ruling
+  extended to Phase 4: while the Codex quota is blocked, items touching the
+  GP mathematics (W4.2, W4.5) merge on a second Fable review pass, with the
+  `gpt-5.6-terra` pass owed retroactively. W4.1 and W4.5 both edit
+  `core/likelihood.py`: W4.1 owns the family section (the von Mises
+  `sample()`), W4.5 the kernel section — stated in both prompts.
 
 ### W4.0 — Phase 4 housekeeping and the owed core fixes [S; Sonnet]
 The carried items that should not wait for a phase to need them. (1)
