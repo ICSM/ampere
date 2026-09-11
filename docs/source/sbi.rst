@@ -11,13 +11,14 @@ is ampere's answer — neural simulation-based inference over `sbi
 reference backend, by training a neural network on simulated
 :math:`(\theta, x)` pairs instead of consuming ``log_prob``.
 
-Five scripts in ``examples/sbi/`` cover it end to end, and this page walks
+Six scripts in ``examples/sbi/`` cover it end to end, and this page walks
 through them in the order a user would actually reach for them: fitting a
-black-box simulator, caching the trained posterior, truncated marginal ratio
-estimation for tighter posteriors, checking that a posterior is calibrated,
-and the embedding and reproducibility questions that cut across all of them.
-Every one of them is also exercised by the test suite, named at the point it
-is introduced below, so none of this page can rot unnoticed.
+black-box simulator (plus the bare native-problem case beside it), caching
+the trained posterior, truncated marginal ratio estimation for tighter
+posteriors, checking that a posterior is calibrated, and the embedding and
+reproducibility questions that cut across all of them. Every one of them is
+also exercised by the test suite, named at the point it is introduced below,
+so none of this page can rot unnoticed.
 
 Requires the ``sbi`` extra (``pixi install -e sbi``; ``pip install -e
 ".[sbi]"``), which resolves to **sbi 0.27.0 with a CPU torch 2.13 and no
@@ -131,6 +132,18 @@ training set (``results.md`` §11), failures included, a chunk at a time, so a
 budget larger than memory reaches disk without being held in it.
 ``tests/inference/test_sbi.py``'s ``TestTheShippedExample`` runs this script
 at a small budget on every gate.
+
+**The black-box case is not the only one.** When the model is built from a
+*native* backend instead — :mod:`ampere.backends.torch` or
+:mod:`ampere.backends.jax` — nothing about the fit changes, and that is worth
+seeing on its own: :download:`npe_native.py
+<../../examples/sbi/npe_native.py>` is the bare case, an ordinary native
+``FittingProblem`` handed straight to ``SBIEngine`` — no subprocess, no
+``cache=``, no truncation, one call. ``simulate_many``'s native batched path
+(W3.1 slice 2) runs the whole training budget automatically — ``native=None``,
+"use it if it works" — without ``SBIEngine`` ever asking for it by name.
+``tests/examples/test_npe_native.py`` runs it at a small budget on every
+gate.
 
 Caching a trained posterior
 -----------------------------
