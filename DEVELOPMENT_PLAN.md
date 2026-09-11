@@ -3,9 +3,9 @@
 Status: **plan settled; Phase 1 spec frozen** (freeze recorded 2026-09-03,
 W1.13; the `spec-v1.0` tag is created at that item's merge); **Phases 0–3
 complete** (Phase 2 closed 2026-09-08, Phase 3 closed 2026-09-10 — the §5
-Phase 3 section carries the landed summary); Phase 4's items are drafted
-(WORK_ITEMS.md), D3–D4 ruled, D1–D2 under discussion
-(`docs/design/phase4_placement_memo.md`). All
+Phase 3 section carries the landed summary); **Phase 4 in progress from
+2026-09-11** (items in WORK_ITEMS.md, decisions D1–D4 ruled — the record is
+`docs/design/phase4_placement_memo.md`). All
 architectural proposals are confirmed; remaining open items are
 implementation-level choices deferred to their natural phase (§6). This
 document is the source of truth for the redevelopment of ampere: decisions
@@ -111,6 +111,8 @@ backend-neutral core plus modern computational backends, targeting:
 | SBI runs reproducible from the problem's seed (W3.15) | **`SBIEngine.run` seeds torch's global generator — and numpy's legacy global one — from the problem's own sub-stream before every network build, training round and posterior draw, restoring both on exit; `ampere_sbi_torch_seed` recorded, absent when `problem.seed is None`** (`inference.md` §13 amended; 2026-09-10, W3.15; drafted from W3.4's carried finding and dispatched on Fable's judgement; accepted at the Fable review; **confirmed by Peter 2026-09-10**). Neither ampere nor sbi seeded torch, so two runs of one seeded problem agreed on every simulated pair and disagreed on the posterior trained from them — W3.5's "identical posterior" held only through the cache. The item's own TMNRE acceptance check then refused to repeat with torch alone seeded: sbi's default MCMC method draws its slice proposals through `np.random` directly, so the same context manager seeds that too. Both generators are restored afterwards — the rule `_nuts.py`'s `fork_rng` and `_zeus.py`'s `_global_seed` already state: ampere leaves no library's global random state changed behind it. The final draw is reseeded on its own concern so a cache hit, which trains nothing, samples reproducibly as well. Not reached, deliberately: `calibrate()` never retrains, and its internal `sbi.diagnostics` sampling is unchanged. Branch gates dev 1982/264, sbi 2766/80. |
 | Peter's Phase 3 rulings applied (W3.16) | **TMNRE samples by MCMC by default (`TMNRE_DEFAULT_SAMPLER = "mcmc"`, `"rejection"` selectable); `PoissonFamily.sample` guards `rate <= 0` exactly as `log_prob` does; and the principle for sampling forms: a data type's likelihood arrives with its sampling form, for every inference approach on every backend at once** (2026-09-10, ruled by Peter on the Phase 3 questions block; Fable-authored, merged at `fea7ef9`). The sampler default follows W3.4's own measurement (353.6 s against 43.8 s, and rejection's cost rising as the method works); the canonical TMNRE fixture now runs on the default and the calibration fixture asks for rejection explicitly, since the rebuild path it exercises is the rejection posterior's. The guard follows the rule that `simulate(observe=True)` must never hand an SBC or SBI consumer a draw the fitting likelihood cannot score; the native twins draw inside a trace and cannot raise, so a non-positive rate there is scored to −inf at evaluation as before. The principle closes the `cauchy` question by making it wait for its data type. Also ruled the same day, recorded where they act: `actionlint` and a path-gated CI split (W4.10); the overview refresh and a bare NPE example (W4.0); the stored proposal density, `DataTree` optima, BO as acquisition only, samplers behind extras, three new design horizons (§5) and the results-contract item they need (W5.0) — from the inference-extensions memo. Gates on merged master in W3.16's status row. |
 | Phase 3 documentation pass: stale annotations corrected in place (W3.13) | **Five stale sentences across `docs/design/architecture.md` §3 and `docs/design/contracts/{inference,diagnostics,results}.md`, plus this plan's own §5 Phase 3 bullets and §6's SBI deferred bullet, corrected in place and marked *Amended W3.13*; no contract semantics change** (2026-09-10; docs-only, `pixi run docs` unchanged at 13 warnings, byte-identical set; branch gates dev 1994/268, sbi 2782/80; accepted at the Fable review with one correction). `architecture.md` §3's "the SBI layer is not here" corrected now that `SBIEngine` landed (W3.2, W3.4); `inference.md` limitation 17.5 and its §18 Phase 3 bullet closed (batched `simulate_many`, W3.1; the encoding, W3.3); `diagnostics.md` row D landed at W3.6; `results.md` §18 corrected rather than dated — it named `ampere_problem_hash` as the SBI cache key, which is wrong: a training set is simulated from the prior and is checked on `ampere_spec_hash` + `ampere_model_hash` (W3.12), while the trained-artefact key adds `data_hash` of the observed containers because a stored posterior is conditioned on its observation (the review's correction of the agent's "same two hashes"). §5 gains the landed-summary paragraph (sbi 0.27, no swyft, the encoding, `forkserver`, schema 6); §6's SBI bullet loses swyft with Peter's ruling of 2026-09-09, keeps jax-native SBI, and gains the embedding-network study with the ε study folded in. |
+| Where a shipped observable lives (Phase 4 D1) | **The kind in `core/results_schema.py`; the steps in `backends/{reference,torch,jax}/<observable>.py`; no grouping namespace** (ruled by Peter 2026-09-11 on `docs/design/phase4_placement_memo.md` §2). The draft's `ampere/modalities/` was rejected on the name and on a rule it broke — it moved the reference backend's steps out of `backends/reference/`, so the three backends' step names were no longer parallel. A kind is three class attributes and not a contract, so adding one to core is not a §4 change; the out-of-tree extensibility claim remains proven by `tests/core/thirdparty_polarimeter.py`. A grouping namespace is revisited after realistic usage (end of Phase 4 or later); a per-observable front door (`ampere.interferometry`) arrives only with the first reader (OIFITS, Phase 6). |
+| The closure-phase signature, and wavelength as an axis (Phase 4 D2) | **`VisibilitySet` gains a third axis `spectral_axis`; `ClosurePhases` is `(u1, v1, u2, v2, spectral_axis)` with a canonical baseline ordering; kernels gain an `axes` selector so a `Product` of a (u, v) block and a spectral block is expressible** (ruled by Peter 2026-09-11, memo §3.6–3.7, after his question on chromatic misspecification). A missing band in a patch of sky gives δV = S(λ)·F(B/λ): sharp in wavelength, smooth in (u, v); two baselines of different length at the same (u, v) sit at different wavelengths, so the B/λ convention absorbs wavelength only for a grey error, and a kernel sees a container's axes only. The `VisibilitySet` amendment is a frozen-kind change carried by W4.1 with the conformance update in the same PR. A GP on *closure phases* is a latent composition (the family is wrapped) and is Phase 5's (W5.1); Phase 4's flagship GP is on the visibilities. The kernel space is dense-only (3 and 5 axes); in (B, λ) coordinates a dispersed observation is a product structure whose covariance is a Kronecker product with a quasiseparable spectral factor — Phase 5's structured-solver route, kept recoverable by the baseline labels and the wavelength axis. |
 
 
 ## 3. Architecture: a core and a capability ladder, not four peer backends
@@ -583,6 +585,9 @@ reproducible bitwise from the problem's own seed.
   the schema (complex data) and the transformation chain hardest; other
   modalities (astrometric time series, IFU cubes) then follow the template
   it establishes.
+- The photometry + spectrum composition as a documented example (W4.11,
+  ruled 2026-09-11): the simplest combined fit, written up for the docs
+  before the interferometry template page cites it.
 - Astropy interop adapter (`core/astropy_compat.py`, §4.7).
 - **Kernel algebra and a public quasiseparable-term registry** (ruled by
   Peter 2026-09-09 as extensibility work: users must be able to compose a
@@ -615,6 +620,16 @@ reproducible bitwise from the problem's own seed.
   rather than N — the contract permits it, but `simulate(observe=True)` and
   the latent-GP path must agree on the whitening. (GPJax is the natural
   provider on the jax side, GPyTorch on the torch side.)
+- **Matrix-free exact GPs in 2+ dimensions** (noted by Peter 2026-09-11,
+  not immediate): the interferometric kernels of Phase 4 live in 3 and 5
+  axes where the quasiseparable tools do not apply, so exact GPs are
+  dense there. `gpytorch` and `gpjax` avoid materialising the covariance
+  by treating it as a linear operator and solving with conjugate
+  gradients (MVM-based inference, with stochastic trace estimators for
+  the log-determinant), which bounds memory at O(N) for exact GPs. This
+  is a third solver strategy beside `DenseGP` and `QuasisepGP`, to be
+  taken up when a Phase 4 or Phase 5 case actually exceeds the dense
+  path's memory; nothing in the solver interface may preclude it.
 - **Non-stationary flexible likelihood: input and amplitude warping as
   kernel wrappers preserving quasiseparability** (*added 2026-09-10 from
   `horizon_notes.md` §1 and its follow-up*): a `WarpedKernel(base,
