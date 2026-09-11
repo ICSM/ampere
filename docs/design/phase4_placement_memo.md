@@ -660,8 +660,16 @@ free parameters: ('model.temperature', 'model.beta', 'model.scale')
   factor on the spectrum would be a `CalibrationScale` step and would appear
   as `irs.instrument.calibration_scale.scale`.
 
+The fit itself, run to completion after the memo was first written (16
+walkers, 250 steps, 4 000 evaluations, 500-point photometry tabulation):
+955 s wall on the reference path, 0.24 s per evaluation; the posterior's
+central 68 % brackets the injected temperature (179.9–180.3 K for 180 K)
+and emissivity index (1.586–1.606 for 1.6). With W4.0's operator cache the
+same fit should take about a tenth of that, which is W4.11's two-minute
+acceptance criterion.
+
 **Two findings from running it**, both out of this memo's scope and recorded
-for the owed list:
+for the owed list (now W4.0 (7) and W4.11):
 
 1. Applying an instrument to a model that has *not* adopted the negotiated
    grid is refused by name — the photometry step asks for the points it
