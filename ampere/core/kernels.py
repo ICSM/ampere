@@ -242,10 +242,6 @@ class ArrayOps(Protocol):
         """Elementwise sine."""
         ...
 
-    def take_columns(self, points: Any, columns: Sequence[int]) -> Any:
-        """The named columns of an ``(n, d)`` point set, in the order given."""
-        ...
-
 
 class NumpyOps:
     """:class:`ArrayOps` in numpy. The reference path's namespace, and the default."""
@@ -283,9 +279,6 @@ class NumpyOps:
 
     def sin(self, array: Any) -> np.ndarray:
         return np.sin(array)
-
-    def take_columns(self, points: Any, columns: Sequence[int]) -> np.ndarray:
-        return np.ascontiguousarray(np.asarray(points)[:, list(columns)])
 
 
 #: The reference namespace. One instance, because it holds no state.
@@ -623,7 +616,13 @@ class Kernel(Parameterised, abc.ABC):
         columns = self._columns
         if columns is None:
             return points
-        return self.ops.take_columns(points, columns)
+        # Plain fancy indexing rather than a namespace method: numpy, torch and
+        # jax all read ``x[:, [0, 1]]`` the same way, so the selection is one
+        # of the few array operations that needs no ArrayOps entry at all --
+        # and, more to the point, it then works whatever namespace the *kernel*
+        # carries, which need not be the namespace of the array the solver
+        # happens to hand it.
+        return points[:, list(columns)]
 
     # -- composition-time checks --------------------------------------------
 
@@ -1427,7 +1426,7 @@ class Sum(_Composite):
         is the direct-call guard.
         """
         if self._columns is not None:
-            return self.ops.take_columns(points, self._columns)
+            return points[:, list(self._columns)]
         selections = {child._columns for _, child in self._terms}
         if len(selections) != 1:
             raise LikelihoodError(
@@ -1436,7 +1435,7 @@ class Sum(_Composite):
                 "evaluates each term on its own axes."
             )
         columns = selections.pop()
-        return points if columns is None else self.ops.take_columns(points, columns)
+        return points if columns is None else points[:, list(columns)]
 
 
 class Product(_Composite):

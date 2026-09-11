@@ -151,7 +151,7 @@ from ampere.core import RotationTerm as _CoreRotationTerm
 from ampere.core import SpectralMixture as _CoreSpectralMixture
 from ampere.core import SquaredExponential as _CoreSquaredExponential
 from ampere.core.exceptions import LikelihoodError
-from ampere.core.kernels import NUMPY_OPS, lookup_quasiseparable_term
+from ampere.core.kernels import lookup_quasiseparable_term
 
 from ._config import BACKEND, require_x64, x64_enabled
 from ._device import DEVICE, device_flag, place_on, resolve_device
@@ -283,9 +283,6 @@ class JaxOps:
 
     def sin(self, array: Any) -> jax.Array:
         return jnp.sin(jnp.asarray(array, dtype=jnp.float64))
-
-    def take_columns(self, points: Any, columns: Sequence[int]) -> jax.Array:
-        return jnp.asarray(points)[:, jnp.asarray(list(columns))]
 
 
 class _JaxKernel(Kernel):
@@ -879,7 +876,7 @@ def _bare_coordinates(coordinates: Any, kernel: Kernel | None = None) -> Any:
     """
     array = np.asarray(coordinates, dtype=float)
     if kernel is not None and array.ndim == 2 and array.shape[1] > 1:
-        array = np.asarray(kernel.with_ops(NUMPY_OPS).select(array), dtype=float)
+        array = np.asarray(kernel.select(array), dtype=float)
     if array.ndim == 1:
         return array
     if array.ndim == 2 and array.shape[1] == 1:

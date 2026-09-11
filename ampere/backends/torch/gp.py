@@ -224,9 +224,6 @@ class TorchOps:
     def sin(self, array: Any) -> torch.Tensor:
         return torch.sin(self.scalar(array))
 
-    def take_columns(self, points: Any, columns: Sequence[int]) -> torch.Tensor:
-        return points[:, list(columns)]
-
 
 class _TorchKernel(Kernel):
     """Shared plumbing for the torch kernels: torch separations, torch covariances.
