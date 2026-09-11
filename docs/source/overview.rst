@@ -6,11 +6,13 @@ implement it. This page is the map: what the pieces are, which environment
 each of them needs, how a problem is put together, and what comes out of a
 run. :doc:`api` is the reference for every name mentioned here.
 
-The state of play, as of milestone **M2**: the contracts are frozen and
-implemented, three backends ship, five engines ship, and the flexible
+The state of play, as of milestone **M2** and the close of Phase 3: the
+contracts are frozen and implemented, three backends ship, six engines
+ship — simulation-based inference (:class:`~ampere.inference.SBIEngine`)
+landed alongside the five likelihood-based engines — and the flexible
 likelihood has been measured against a deliberately misspecified problem at
 three data sizes and on all three backends. :doc:`m2_misspecification` is
-that measurement.
+that measurement; :doc:`sbi` is the SBI tutorial.
 
 .. note::
 
@@ -36,7 +38,9 @@ rung can do everything the ones below it can:
    * - 0 — black box
      - Any callable ampere cannot see inside: an external radiative-transfer
        code, a legacy numpy model, a wrapped binary
-     - Gradient-free sampling (emcee, zeus, dynesty). SBI is Phase 3.
+     - Gradient-free sampling (emcee, zeus, dynesty), plus simulation-based
+       inference (:class:`~ampere.inference.SBIEngine`) where ``log_prob``
+       cannot be evaluated at all.
    * - 1 — reference
      - :mod:`ampere.backends.reference`, pure numpy/scipy
      - The same, plus the exact O(N) GP likelihood as a correctness anchor
@@ -246,7 +250,7 @@ Realisation, and the engines
 ----------------------------
 
 :mod:`ampere.inference` is written once against the fitting-problem surface
-and **imports no backend**, in any module, at any depth. Five engines ship:
+and **imports no backend**, in any module, at any depth. Six engines ship:
 
 .. list-table::
    :header-rows: 1
@@ -261,7 +265,7 @@ and **imports no backend**, in any module, at any depth. Five engines ship:
      - Affine-invariant ensemble MCMC. The general-purpose default.
    * - :class:`~ampere.inference.DynestyEngine`
      - base install
-     - Nested sampling. Multimodal posteriors, and the only one of the five
+     - Nested sampling. Multimodal posteriors, and the only one of the six
        that yields a marginal likelihood — so model comparison.
    * - :class:`~ampere.inference.ZeusEngine`
      - ``zeus`` extra
@@ -275,10 +279,19 @@ and **imports no backend**, in any module, at any depth. Five engines ship:
      - Stochastic variational inference. **Approximate** — the guide family
        is recorded in the run — and the honest use is a first look, or the
        only tractable route when the space is too large for MCMC.
+   * - :class:`~ampere.inference.SBIEngine`
+     - ``sbi`` extra
+     - Simulation-based inference (NPE, NLE, NRE, truncated variants) —
+       trains a neural density estimator on simulated ``(theta, x)`` pairs
+       instead of consuming ``log_prob``, so it is the route for a rung-0
+       black box with no tractable likelihood at all. **Approximate**, with
+       calibration and caching built in. :doc:`sbi` is the tutorial.
 
 The first three consume only the neutral surface, which is the architectural
 bet of the whole redesign, cashed: one driver, any backend, and a black-box
-model behind a thin adapter is not a special case.
+model behind a thin adapter is not a special case. :class:`~ampere.inference.SBIEngine`
+consumes the same surface through :meth:`~ampere.core.dataset.FittingProblem.simulate_many`
+rather than ``log_prob``, so it too runs on any rung, black box included.
 
 The last two cannot be, and the reason is precise: ``log_prob`` is not
 *traceable*. It runs the chain through containers that coerce with
