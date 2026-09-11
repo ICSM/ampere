@@ -23,6 +23,7 @@ import pytest
 
 import ampere.core.dataset
 import ampere.core.exceptions
+import ampere.core.kernels
 import ampere.core.likelihood
 import ampere.core.lowering
 import ampere.core.parameter
@@ -125,6 +126,7 @@ def test_inference_spec_examples_run() -> None:
         ampere.core.parameter,
         ampere.core.results_schema,
         ampere.core.transform,
+        ampere.core.kernels,
         ampere.core.likelihood,
         ampere.core.dataset,
         ampere.core.rng,
@@ -135,6 +137,7 @@ def test_inference_spec_examples_run() -> None:
         "parameter",
         "results_schema",
         "transform",
+        "kernels",
         "likelihood",
         "dataset",
         "rng",

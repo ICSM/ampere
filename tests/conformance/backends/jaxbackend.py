@@ -54,14 +54,18 @@ import numpy as np
 import scipy.stats as st
 
 from ampere.backends.jax import (
+    SHO,
     CalibrationScale,
     DenseGP,
     GaussianProcessNoise,
     IndependentNoise,
+    Matern12,
     Matern32,
+    Matern52,
     PowerLaw,
     QuasisepGP,
     Resample,
+    RotationTerm,
     SquaredExponential,
     configure_x64,
 )
@@ -81,6 +85,7 @@ from ampere.core import (
     propagate_mask,
 )
 
+from ._kernels import build_kernel
 from ..protocol import (
     BackendCapabilities,
     CovarianceSpec,
@@ -255,7 +260,14 @@ class JaxPhotometry(Transformation):
 
 
 _MODELS = {ModelKind.LINEAR: JaxLinearModel, ModelKind.POWER_LAW: JaxPowerLawModel}
-_KERNELS = {KernelFamily.MATERN32: Matern32, KernelFamily.SQUARED_EXPONENTIAL: SquaredExponential}
+_KERNELS: dict[KernelFamily, type[Kernel]] = {
+    KernelFamily.MATERN12: Matern12,
+    KernelFamily.MATERN32: Matern32,
+    KernelFamily.MATERN52: Matern52,
+    KernelFamily.SHO: SHO,
+    KernelFamily.ROTATION: RotationTerm,
+    KernelFamily.SQUARED_EXPONENTIAL: SquaredExponential,
+}
 
 
 class JaxBackend:
@@ -308,7 +320,7 @@ class JaxBackend:
         return JaxPhotometry(spec.target, spec.filters, label=spec.label)
 
     def kernel(self, spec: CovarianceSpec) -> Kernel:
-        return _KERNELS[spec.family](spec.amplitude, spec.length_scale)
+        return build_kernel(spec, _KERNELS)
 
     def gp_solver(self, kind: SolverKind) -> GPSolver:
         if kind is SolverKind.DENSE:

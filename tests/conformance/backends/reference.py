@@ -54,14 +54,17 @@ from ampere.backends.reference import (
 )
 from ampere.backends.reference.models import _SpectralModel
 from ampere.core import (
+    SHO,
     DenseGP,
     GaussianProcessNoise,
     GPSolver,
     HierarchicalPrior,
     IndependentNoise,
     Kernel,
-    NoiseModel,
+    Matern12,
     Matern32,
+    Matern52,
+    NoiseModel,
     Model,
     ModelResult,
     Parameter,
@@ -69,12 +72,14 @@ from ampere.core import (
     PhotometricPoints,
     Plate,
     QuasisepGP,
+    RotationTerm,
     Spectrum,
     SquaredExponential,
     Transformation,
     propagate_mask,
 )
 
+from ._kernels import build_kernel
 from ..protocol import (
     BackendCapabilities,
     CovarianceSpec,
@@ -326,7 +331,14 @@ class ReferenceParameterSpace:
 
 
 _MODELS = {ModelKind.LINEAR: LinearModel, ModelKind.POWER_LAW: PowerLawModel}
-_KERNELS = {KernelFamily.MATERN32: Matern32, KernelFamily.SQUARED_EXPONENTIAL: SquaredExponential}
+_KERNELS: dict[KernelFamily, type[Kernel]] = {
+    KernelFamily.MATERN12: Matern12,
+    KernelFamily.MATERN32: Matern32,
+    KernelFamily.MATERN52: Matern52,
+    KernelFamily.SHO: SHO,
+    KernelFamily.ROTATION: RotationTerm,
+    KernelFamily.SQUARED_EXPONENTIAL: SquaredExponential,
+}
 
 
 class ReferenceBackend:
@@ -359,7 +371,7 @@ class ReferenceBackend:
         return Photometry(spec.target, spec.filters, label=spec.label)
 
     def kernel(self, spec: CovarianceSpec) -> Kernel:
-        return _KERNELS[spec.family](spec.amplitude, spec.length_scale)
+        return build_kernel(spec, _KERNELS)
 
     def gp_solver(self, kind: SolverKind) -> GPSolver:
         return DenseGP() if kind is SolverKind.DENSE else QuasisepGP()

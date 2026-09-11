@@ -63,14 +63,18 @@ import torch
 
 from ampere.backends.torch import (
     BACKEND,
+    SHO,
     CalibrationScale,
     DenseGP,
     GaussianProcessNoise,
     IndependentNoise,
+    Matern12,
     Matern32,
+    Matern52,
     PowerLaw,
     QuasisepGP,
     Resample,
+    RotationTerm,
     SquaredExponential,
     TorchParameterSpace,
     TorchSpectralModel,
@@ -94,6 +98,7 @@ from ampere.core import (
     propagate_mask,
 )
 
+from ._kernels import build_kernel
 from ..protocol import (
     BackendCapabilities,
     CovarianceSpec,
@@ -381,7 +386,14 @@ _MODELS = {
     ModelKind.POWER_LAW: PowerLawModel,
     ModelKind.COMPLEX: PointSourceModel,
 }
-_KERNELS = {KernelFamily.MATERN32: Matern32, KernelFamily.SQUARED_EXPONENTIAL: SquaredExponential}
+_KERNELS: dict[KernelFamily, type[Kernel]] = {
+    KernelFamily.MATERN12: Matern12,
+    KernelFamily.MATERN32: Matern32,
+    KernelFamily.MATERN52: Matern52,
+    KernelFamily.SHO: SHO,
+    KernelFamily.ROTATION: RotationTerm,
+    KernelFamily.SQUARED_EXPONENTIAL: SquaredExponential,
+}
 
 
 class TorchBackend:
@@ -437,7 +449,7 @@ class TorchBackend:
         # hash -- but the covariance is built in torch, which is what makes a
         # GP hyperparameter differentiable. With the core kernels the Cholesky
         # had a gradient and the amplitude did not: W2.4's carried finding.
-        return _KERNELS[spec.family](spec.amplitude, spec.length_scale)
+        return build_kernel(spec, _KERNELS)
 
     def gp_solver(self, kind: SolverKind) -> GPSolver:
         return DenseGP() if kind is SolverKind.DENSE else QuasisepGP()

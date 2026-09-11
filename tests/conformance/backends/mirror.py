@@ -52,7 +52,11 @@ from ampere.backends.reference import CalibrationScale, Resample
 from ampere.core import DenseGP as _CoreDenseGP
 from ampere.core import GaussianProcessNoise as _CoreGaussianProcessNoise
 from ampere.core import IndependentNoise as _CoreIndependentNoise
+from ampere.core import SHO as _CoreSHO
+from ampere.core import Matern12 as _CoreMatern12
 from ampere.core import Matern32 as _CoreMatern32
+from ampere.core import Matern52 as _CoreMatern52
+from ampere.core import RotationTerm as _CoreRotationTerm
 from ampere.core import QuasisepGP as _CoreQuasisepGP
 from ampere.core import SquaredExponential as _CoreSquaredExponential
 from ampere.core import (
@@ -65,6 +69,7 @@ from ampere.core import (
     Transformation,
 )
 
+from ._kernels import build_kernel
 from ..protocol import (
     BackendCapabilities,
     CovarianceSpec,
@@ -256,8 +261,32 @@ class QuasisepGP(_CoreQuasisepGP):
 # declaration, and ``test_cross_backend`` compares it across backends.
 
 
+class Matern12(_CoreMatern12):
+    """Matérn-1/2, declared as this backend's (W3.8, family added W4.5)."""
+
+    BACKEND: ClassVar[str] = BACKEND
+
+
 class Matern32(_CoreMatern32):
     """Matérn-3/2, declared as this backend's (W3.8)."""
+
+    BACKEND: ClassVar[str] = BACKEND
+
+
+class Matern52(_CoreMatern52):
+    """Matérn-5/2, declared as this backend's (W3.8, family added W4.5)."""
+
+    BACKEND: ClassVar[str] = BACKEND
+
+
+class SHO(_CoreSHO):
+    """The damped oscillator, declared as this backend's (W4.5)."""
+
+    BACKEND: ClassVar[str] = BACKEND
+
+
+class RotationTerm(_CoreRotationTerm):
+    """The rotation pair, declared as this backend's (W4.5)."""
 
     BACKEND: ClassVar[str] = BACKEND
 
@@ -269,7 +298,14 @@ class SquaredExponential(_CoreSquaredExponential):
 
 
 _MODELS = {ModelKind.LINEAR: MirrorLinearModel, ModelKind.POWER_LAW: MirrorPowerLawModel}
-_KERNELS = {KernelFamily.MATERN32: Matern32, KernelFamily.SQUARED_EXPONENTIAL: SquaredExponential}
+_KERNELS: dict[KernelFamily, type[Kernel]] = {
+    KernelFamily.MATERN12: Matern12,
+    KernelFamily.MATERN32: Matern32,
+    KernelFamily.MATERN52: Matern52,
+    KernelFamily.SHO: SHO,
+    KernelFamily.ROTATION: RotationTerm,
+    KernelFamily.SQUARED_EXPONENTIAL: SquaredExponential,
+}
 
 
 class MirrorBackend(ReferenceBackend):
@@ -296,7 +332,7 @@ class MirrorBackend(ReferenceBackend):
         return MirrorPhotometry(spec.target, spec.filters, label=spec.label)
 
     def kernel(self, spec: CovarianceSpec) -> Kernel:
-        return _KERNELS[spec.family](spec.amplitude, spec.length_scale)
+        return build_kernel(spec, _KERNELS)
 
     def gp_solver(self, kind: SolverKind) -> GPSolver:
         return DenseGP() if kind is SolverKind.DENSE else QuasisepGP()
