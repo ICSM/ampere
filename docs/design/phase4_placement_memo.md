@@ -578,5 +578,193 @@ unless noted):
    selector so a product of a (u, v) block and a spectral block is
    expressible (recommended); or the label form with the consequence that
    no GP can be composed on closure phases.
-3. Whether the photometry + spectrum composition example becomes a small
-   Phase 4 item ahead of W4.4 (recommended).
+3. Whether the photometry + spectrum composition example (§7.1, which
+   runs today) becomes a small Phase 4 item ahead of W4.4 — the script,
+   its smoke test and the owed tutorial page, plus the two reference-path
+   findings it exposed (recommended).
+4. (Added by §7.2) whether a latent GP on closure phases — `VonMisesFamily`
+   consuming a latent GP on the native path, the Poisson pattern — is
+   drafted as a Phase 4 item after W4.3 or left to Phase 5.
+
+---
+
+## 7. Two worked compositions: one model, two datasets (Peter, 2026-09-11)
+
+Peter asked for a walk-through of a fit that targets a combined dataset with
+a single model, both to make the third ruling concrete and to test whether
+the D2 reasoning has gone down a blind alley. The first composition runs
+today against `59454ea`; the second is the interferometric one written in
+the same shape under §3.7, with every piece that does not yet exist marked.
+
+### 7.1 A spectrum and photometry on one model channel — runs today
+
+```python
+import numpy as np, scipy.stats as st, astropy.units as u
+from ampere.core import (Dataset, DatasetCollection, FittingProblem, Instrument, Likelihood,
+                         GaussianFamily, IndependentNoise, Spectrum, PhotometricPoints, negotiate)
+from ampere.backends.reference import ModifiedBlackBody, LSFConvolution, Resample, SyntheticPhotometry
+
+# 1. One model, one channel. The grid it is given is a fallback; negotiation replaces it.
+model = ModifiedBlackBody(np.geomspace(1.0, 100.0, 3000),
+                          temperature=st.uniform(50.0, 400.0), scale=st.loguniform(1e-16, 1e-14),
+                          beta=st.uniform(0.5, 2.5), channels="sed")
+
+# 2. Two instruments reading the same channel. Coordinates that must match the
+#    observed data (the spectrograph's grid) are the observed container's own.
+obs_wave = np.linspace(5.0, 35.0, 120)
+spectrograph = Instrument([LSFConvolution(resolving_power=100.0), Resample(obs_wave)],
+                          channel="sed", label="irs")
+camera = Instrument([SyntheticPhotometry.from_library(
+                        ["2MASS_J", "2MASS_Ks", "WISE_RSR_W1", "WISE_RSR_W3", "WISE_RSR_W4", "SPITZER_MIPS_70"],
+                        np.geomspace(1.0, 100.0, 500))],
+                    channel="sed", label="catalogue")
+
+# 3. Observed containers, built by hand from arrays (there is no reader in v2).
+observed_spectrum = Spectrum(obs_wave * u.um, flux * u.Jy, uncertainty=sigma * u.Jy)
+observed_photometry = PhotometricPoints(filters, pivots * u.um, phot * u.Jy, uncertainty=phot_sigma * u.Jy)
+
+# 4. Datasets bind observed + instrument + likelihood. Two instruments on one
+#    channel must carry distinct labels, or the collection refuses by name.
+gauss = lambda: Likelihood(GaussianFamily(), IndependentNoise())
+datasets = DatasetCollection({"irs": Dataset(observed_spectrum, spectrograph, likelihood=gauss()),
+                              "catalogue": Dataset(observed_photometry, camera, likelihood=gauss())})
+
+# 5. The problem negotiates once, compiles the model onto the union grid, validates.
+problem = FittingProblem(model, datasets, seed=20260911)
+problem.requirements["model"]["sed"].sources          # ('irs', 'catalogue')
+problem.parameters.free_names                        # ('model.temperature', 'model.beta', 'model.scale')
+
+# 6. Any engine.
+from ampere.inference import EmceeEngine
+run = EmceeEngine(problem, walkers=16).run(250, burn_in=125)
+```
+
+What it printed, and what each line teaches:
+
+```
+negotiated channels: ['sed']
+sources asking of channel 'sed': ('irs', 'catalogue')
+  axis spectral_axis: <AxisRequirement 'spectral_axis' micron [4.89383,35.7432]@R>=706.446 [5,35]@step<=0.12605 500 point(s)>
+free parameters: ('model.temperature', 'model.beta', 'model.scale')
+```
+
+- The LSF asked for its padded range at three times its own resolving
+  power (it learned the range from the `Resample` after it through
+  `configure_from`); the resampler asked for its own interval at half its
+  bin; the photometry step asked for the exact points it tabulated its
+  responses on. One union grid served all three, and the model was built
+  once per draw.
+- The user wrote no grid arithmetic and no `reloadFilters`. The legacy
+  ordering trap is gone by construction.
+- Three free parameters: the instruments here have none. A calibration
+  factor on the spectrum would be a `CalibrationScale` step and would appear
+  as `irs.instrument.calibration_scale.scale`.
+
+**Two findings from running it**, both out of this memo's scope and recorded
+for the owed list:
+
+1. Applying an instrument to a model that has *not* adopted the negotiated
+   grid is refused by name — the photometry step asks for the points it
+   published and finds the model's fallback grid instead. That is correct
+   (the message even says "a negotiation defect rather than a usage
+   error"), but it means synthetic data for an example must be generated
+   through `negotiate` + `compile_for` (or through the problem), and no
+   page says so. The template page needs that sentence.
+2. **The reference `LSFConvolution` rebuilds its dense `(n, n)` matrix on
+   every evaluation** (`backends/reference/instrument.py:407-425`; the
+   torch twin builds it once as a buffer). On the union grid the
+   photometry step's tabulation dominates *n*, so with a 4 000-point
+   tabulation one likelihood evaluation took 2.5 s (5 647 grid points;
+   2.2 s of it in `influence`), which is unusable even for an oracle. With
+   500 tabulation points it is a quarter of a second. A cached operator
+   keyed on the grid's identity is a small reference-backend fix
+   (Sonnet-sized) and should precede any example that fits a spectrum
+   through an LSF on the reference path.
+
+### 7.2 Visibilities and closure phases on one sky channel — the same shape under §3.7
+
+Pieces that exist today are unmarked; **[W4.x]** marks what the item builds;
+**[sketch]** marks a signature invented here and not yet designed.
+
+```python
+from ampere.core import VisibilitySet, ClosurePhases                      # ClosurePhases [W4.1]; VisibilitySet + spectral axis [W4.1]
+from ampere.core import ComplexGaussianFamily, VonMisesFamily, GaussianProcessNoise, DenseGP, Matern32, Product
+from ampere.backends.reference import Binary, FourierSample, ClosurePhase, BandwidthSmearing   # [W4.1]
+
+# 1. One model, one channel "sky", emitting an Image(x, y) in mas.
+model = Binary(separation=st.uniform(2.0, 20.0), position_angle=st.uniform(0.0, 2 * np.pi),
+               flux_ratio=st.loguniform(0.01, 1.0), channels="sky")          # [W4.1]
+
+# 2. Observed containers from the OIFITS tables (by hand; a reader is Phase 6).
+#    Every sample carries its own (u, v) in wavelengths AND its wavelength.
+vis = VisibilitySet(u_pts, v_pts, wave * u.um, visibility,
+                    uncertainty=sigma_vis, extra_coords={"baseline": baseline_labels})
+t3 = ClosurePhases(u1, v1, u2, v2, wave3 * u.um, phase * u.rad,             # canonical ordering (§3.4)
+                   uncertainty=sigma_phi * u.rad, extra_coords={"triangle": triangle_labels})
+
+# 3. Two instruments on the one channel. The Fourier step takes its (u, v, λ)
+#    buffers FROM the observed container (gap I-2), never recomputes them, and
+#    publishes x/y intervals of ±fov/2 with max_step = 1/(2 u_max) (gap I-4).
+vis_instrument = Instrument(
+    [FourierSample.from_observed(vis, field_of_view=60 * u.mas),            # [sketch] constructor
+     BandwidthSmearing(resolving_power=22.0)],                              # [W4.1]: asks FourierSample, via configure_from, for the extra samples it averages over
+    channel="sky", label="gravity_vis")
+t3_instrument = Instrument(
+    [FourierSample.from_observed(t3, field_of_view=60 * u.mas),             # three baselines per triangle
+     ClosurePhase()],                                                       # [W4.1]: three visibilities -> one angle in (-π, π], mask propagated
+    channel="sky", label="gravity_t3")
+
+# 4a. Independent likelihoods: the baseline fit.
+independent = DatasetCollection({
+    "vis": Dataset(vis, vis_instrument, likelihood=Likelihood(ComplexGaussianFamily(), IndependentNoise())),
+    "t3":  Dataset(t3,  t3_instrument,  likelihood=Likelihood(VonMisesFamily(), IndependentNoise())),   # VonMises IMPLEMENTED flips [W4.1]
+})
+problem = FittingProblem(model, independent, seed=20260911)
+problem.requirements["model"]["sky"].sources     # ('gravity_vis', 'gravity_t3'): the pairing horizon (h) wants, visible
+problem.requirements["model"]["sky"].axes         # x, y: one image grid from the union of both Fourier steps' requirements
+
+# 4b. The flexible likelihood on the visibilities — the chromatic case of §3.6.
+sky_error = Product(                                                        # [W4.5] Product, axes= selector
+    Matern32(axes=("u", "v"), amplitude=st.halfnorm(scale=0.05), length_scale=st.loguniform(1e5, 1e7)),   # smooth in spatial frequency: the patch
+    Matern32(axes=("spectral_axis",), length_scale=st.loguniform(0.005, 0.1)),                            # sharp in wavelength: the band, µm
+)
+flexible = DatasetCollection({
+    "vis": Dataset(vis, vis_instrument,
+                   likelihood=Likelihood(ComplexGaussianFamily(), GaussianProcessNoise(sky_error, DenseGP()))),   # [W4.2] the circular closed form
+    "t3":  Dataset(t3, t3_instrument, likelihood=Likelihood(VonMisesFamily(), IndependentNoise())),
+})
+```
+
+What is the same as §7.1, which is the point of the phase: the model,
+the two instruments on one channel with distinct labels, the observed
+coordinates taken from the container, one negotiation, one compile, any
+engine. What is new is exactly the list the plan wanted stressed: a
+kind-changing and coordinate-changing step in the middle of the chain, a
+complex container, a wrapped family, and `configure_from` used across a
+kind change.
+
+**Where the walk-through found the blind alley.** Step 4b puts the GP on
+the *visibilities* only. The memo's D2 argument (§3.3(c)) was that the
+axes make a GP on *closure phases* possible. Possible for the kernel, yes;
+but a GP added to a **wrapped** observable is not analytically
+marginalisable — the von Mises family with a GP is a `LATENT` composition,
+and today only `PoissonFamily` declares `CONSUMES_LATENT_GP = True`
+(`core/likelihood.py:2574`). So a GP on closure phases is reachable only by
+giving `VonMisesFamily` the latent-conditional `log_prob` and running on
+the native backends under NUTS or VI, the Poisson pattern — never on the
+numpy path with emcee. That is a real and useful thing, and the five-axis
+kind is what makes it *expressible*, but it is not what Phase 4's flagship
+test runs. Corrected claim for D2: the axes decide whether a GP on closure
+phases can ever be composed; the flagship GP of W4.2 and W4.4 is on the
+visibilities; a latent GP on closure phases is a candidate item after
+W4.3 (native path exists) and should be listed, not assumed.
+
+**What the third ruling was asking.** Only this: §7.1 is the simplest
+combined fit the package supports, nothing in `examples/` or `docs/source/`
+shows it, and W4.4's template page will cite it as "the case you already
+know" before showing §7.2. The ask is whether to write §7.1 up as a small
+item (the example script, its `tests/examples` smoke test, and the tutorial
+page `tutorials.rst` says is owed) *before* W4.4, so the template page has
+something to point at. The two findings above are what running it turned
+up, which is the argument for doing it early.
+
