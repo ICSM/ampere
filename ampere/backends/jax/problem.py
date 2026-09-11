@@ -1035,6 +1035,31 @@ class LoweredProblem:
             rows = jnp.asarray(raw, dtype=jnp.complex128 if raw.dtype.kind == "c" else jnp.float64)
             retained = rows[:, dataset.retain]
 
+            if dataset.likelihood.family.NAME == "poisson":
+                # Eager, before jax.vmap ever runs (W4.0 (2)): unlike the rest
+                # of this method, the *base* rate here is already a concrete
+                # array -- simulate_batched computed it earlier in the chunk
+                # -- so nothing stops checking it the way log_prob does
+                # (families.py's `_poisson` refuses rate <= 0, scored to
+                # -inf) before drawing from it, exactly as torch's
+                # `_poisson_variates` does on its own concrete `rate`. A
+                # correlated (GP) draw multiplies this by a strictly positive
+                # `exp(latent)` inside the vmap, so checking the pre-latent
+                # rate here is sufficient either way, and it is what makes a
+                # bad rate one *draw's* failure rather than silently invented
+                # counts that only fail much later, at evaluation.
+                concrete_rate = np.asarray(retained, dtype=float)
+                if not np.all(np.isfinite(concrete_rate)) or np.any(concrete_rate < 0.0):
+                    raise _refuse(
+                        "poisson",
+                        f"dataset {dataset.label!r}: the model predicted a negative or "
+                        f"non-finite expected count for at least one draw in this chunk, "
+                        f"which no Poisson can be drawn from. Constrain the prediction to the "
+                        f"positive half-line (a Log bijection on the norm, or a "
+                        f"positive-support prior); ampere.core's own sample() refuses the same "
+                        f"condition by name.",
+                    )
+
             def one(vector: jax.Array, row: jax.Array, key: jax.Array, of: Any = dataset) -> Any:
                 return of.sample_retained(self._route(vector.reshape(-1)), row, key)
 
