@@ -181,6 +181,7 @@ The tensor entry point is the same computation with the graph intact:
 from __future__ import annotations
 
 from ._config import BACKEND, DEFAULT_DEVICE, DEFAULT_DTYPE, as_tensor, to_numpy
+from .astropy import TRANSLATIONS, from_astropy
 from .gp import DenseGP, Matern32, QuasisepGP, SquaredExponential
 from .instrument import (
     DETECTORS,
@@ -233,6 +234,7 @@ __all__ = [
     "DEFAULT_DTYPE",
     "DETECTORS",
     "FLUX_UNIT",
+    "TRANSLATIONS",
     "BlackBody",
     "CalibrationScale",
     "DenseGP",
@@ -260,6 +262,7 @@ __all__ = [
     "available_devices",
     "bin_edges",
     "bundled_filter_library",
+    "from_astropy",
     "generator",
     "lower_bijection",
     "lower_hierarchical",
