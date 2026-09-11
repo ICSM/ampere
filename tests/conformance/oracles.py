@@ -17,22 +17,37 @@ from __future__ import annotations
 import math
 
 import numpy as np
+import scipy.special
 
 from ampere.core import Parameter, ParameterSet
 
 from .protocol import KernelFamily
 
+#: Milliarcseconds in one radian. Written out rather than imported from the
+#: backend under test: an oracle that asked ampere for its own constants would
+#: agree with ampere about them by construction.
+MAS_PER_RAD = 180.0 * 3600.0 * 1000.0 / math.pi
+
+#: Gaussian FWHM in units of its standard deviation.
+FWHM_PER_SIGMA = 2.0 * math.sqrt(2.0 * math.log(2.0))
+
 __all__ = [
+    "FWHM_PER_SIGMA",
+    "MAS_PER_RAD",
     "analytic_constrain",
     "analytic_diagonal_gaussian_log_prob",
     "analytic_lnprior",
     "analytic_log_abs_det",
     "analytic_prior_transform",
+    "binary_closure_phase",
+    "binary_visibility",
     "free_slices",
+    "gaussian_visibility",
     "kernel_matrix",
     "matern32_matrix",
     "squared_exponential_matrix",
     "summed_log_abs_det",
+    "uniform_disc_visibility",
 ]
 
 
@@ -175,3 +190,77 @@ def kernel_matrix(
     if family is KernelFamily.MATERN32:
         return matern32_matrix(coordinates, amplitude, length_scale)
     return squared_exponential_matrix(coordinates, amplitude, length_scale)
+
+
+# ---------------------------------------------------------------------------
+# Interferometry (W4.1)
+# ---------------------------------------------------------------------------
+#
+# The three closed forms every interferometric row compares against, and the
+# closure phase derived from the third. They are transcribed from the standard
+# statements of them — van Cittert-Zernike applied to a top hat, to a Gaussian
+# and to a pair of delta functions — with this suite's own sign convention
+# written in explicitly (``exp(-2 pi i (u x + v y))``, ``x`` east, ``y`` north,
+# a position angle measured east of north), because the sign is exactly what a
+# closure-phase row exists to catch.
+
+
+def uniform_disc_visibility(
+    u_pts: np.ndarray, v_pts: np.ndarray, *, diameter: float, flux: float
+) -> np.ndarray:
+    """``flux 2 J1(pi theta rho) / (pi theta rho)`` for a disc of *diameter* mas."""
+    rho = np.hypot(np.asarray(u_pts, dtype=float), np.asarray(v_pts, dtype=float))
+    argument = math.pi * diameter / MAS_PER_RAD * rho
+    envelope = np.where(argument == 0.0, 1.0, 2.0 * scipy.special.j1(argument) / argument)
+    return (flux * envelope).astype(np.complex128)
+
+
+def gaussian_visibility(
+    u_pts: np.ndarray, v_pts: np.ndarray, *, fwhm: float, flux: float
+) -> np.ndarray:
+    """``flux exp(-2 pi**2 sigma**2 rho**2)`` for a circular Gaussian of *fwhm* mas."""
+    rho = np.hypot(np.asarray(u_pts, dtype=float), np.asarray(v_pts, dtype=float))
+    sigma = fwhm / FWHM_PER_SIGMA / MAS_PER_RAD
+    return (flux * np.exp(-2.0 * math.pi**2 * sigma**2 * rho**2)).astype(np.complex128)
+
+
+def binary_visibility(
+    u_pts: np.ndarray,
+    v_pts: np.ndarray,
+    *,
+    separation: float,
+    position_angle: float,
+    flux_ratio: float,
+    flux: float,
+    component_fwhm: float,
+) -> np.ndarray:
+    """Two Gaussian components: the primary at the phase centre, the secondary offset.
+
+    ``separation`` and ``component_fwhm`` are mas, ``position_angle`` radians
+    east of north, so the secondary sits at
+    ``(s sin p, s cos p)``. The ``exp(-2 pi i)`` sign is the suite's.
+    """
+    offset_x = separation * math.sin(position_angle) / MAS_PER_RAD
+    offset_y = separation * math.cos(position_angle) / MAS_PER_RAD
+    phase = -2j * math.pi * (np.asarray(u_pts) * offset_x + np.asarray(v_pts) * offset_y)
+    envelope = gaussian_visibility(u_pts, v_pts, fwhm=component_fwhm, flux=1.0)
+    return envelope * flux / (1.0 + flux_ratio) * (1.0 + flux_ratio * np.exp(phase))
+
+
+def binary_closure_phase(
+    u1: np.ndarray, v1: np.ndarray, u2: np.ndarray, v2: np.ndarray, **source: float
+) -> np.ndarray:
+    """``arg(V_ij V_jk V_ki)`` with ``ki`` implied as ``-(ij + jk)``.
+
+    The canonical ordering ``ClosurePhases`` fixes, applied to
+    :func:`binary_visibility`. The Gaussian envelope is real and positive, so
+    it drops out of the argument — which is the reason a closure phase is a
+    statement about the *geometry* of a source and not about its size.
+    """
+    third = (-(np.asarray(u1) + np.asarray(u2)), -(np.asarray(v1) + np.asarray(v2)))
+    product = (
+        binary_visibility(u1, v1, **source)
+        * binary_visibility(u2, v2, **source)
+        * binary_visibility(third[0], third[1], **source)
+    )
+    return np.angle(product)

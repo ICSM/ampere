@@ -35,7 +35,7 @@ two in-repo fixtures rather than one (see §5).
 ## 2. The fixture protocol
 
 `tests/conformance/protocol.py` is the authority; this section is the prose.
-Seven members.
+Eight members.
 
 ### `name: str`
 
@@ -62,6 +62,7 @@ A frozen record:
 | `differentiable`, `batchable`, `device` | three of the four flags `inference.md` §18 says a backend declares. Mirror `ampere.core.Capabilities`. The fourth, `backend`, is not repeated here: it *is* `name` above. |
 | `float64` | whether the likelihood linear algebra runs in double precision. `architecture.md` §5 makes float64 the policy for GP solves; a backend that opts out for GPU throughput says so here and widens `tolerances.cross_backend`. |
 | `solvers` | the `SolverKind`s `gp_solver` can return an *implemented* solver for. Rows for absent kinds skip with a reason naming what is owed. |
+| `interferometry` | whether `interferometry()` can return this backend's Fourier, closure-phase and smearing steps and its three source models (W4.1). `False` by default; `test_interferometry.py`'s rows then skip with a reason naming what is owed. The native twins are W4.3's. |
 | `complex_models` | whether `model()` can realise `ModelKind.COMPLEX` — a channel of complex values, which the `complex_gaussian` rows need. `False` by default; those rows then skip with a reason. Added at W2.4 slice 3, and made a capability rather than a required protocol member so that one track's slice is not a change to every other track's fixture. |
 | `tolerances` | the per-comparison table (§3). |
 
@@ -85,7 +86,7 @@ way to assert that from outside without the model saying so.)
     `index ~ Normal(-1, 0.5)` (`Identity`).
   * `COMPLEX`: `V(x) = norm * exp(i * index * x)`, the same two parameters
     under the same priors, emitted as a **`VisibilitySet`** whose second (`v`)
-    axis comes from `protocol.complex_axes` — the same rule the observed
+    and third (`spectral_axis`) axes come from `protocol.complex_axes` — the same rule the observed
     container uses, because `check_alignment` compares the two for equality.
     Optional: only asked for if you declare `capabilities.complex_models`. Note
     that the modulus does not depend on `index`, deliberately — a backend that
@@ -157,6 +158,18 @@ Required surface: `declaration`, `free_size`, `free_labels()`, `pack`,
 `lnprior_unconstrained`. Every method takes and returns plain numpy on the
 boundary; convert at the edge if you work in another array type.
 
+### `interferometry() -> InterferometryPieces`
+
+**Added at W4.1.** The eleven interferometric classes this backend supplies —
+the five steps (`fourier_sample`, `closure_phase`, `amplitude`,
+`bandwidth_smearing`, `time_smearing`), the three source models emitting an
+`Image`, and the same three emitting a `VisibilitySet` from their closed forms.
+Only called when `capabilities.interferometry` is declared; a backend that has
+not written them may raise, and every row in `test_interferometry.py` then
+skips with a reason naming what is owed. The two container kinds they speak in
+(`VisibilitySet`, `ClosurePhases`) are `ampere.core`'s, not a backend's — D1's
+ruling of 2026-09-11 — so a backend supplies only the arithmetic.
+
 ### `to_numpy(values) -> np.ndarray`
 
 Bring a backend array back to numpy for comparison against an oracle. Only the
@@ -211,6 +224,8 @@ tests/conformance/
   test_results.py        results.md §14's rows (arviz-gated)
   test_schema.py         results_schema.md §16's rows
   test_cross_backend.py  the rows that compare two backends
+  test_interferometry.py Phase 4's modality: the Fourier, closure-phase and
+                         smearing steps, and the two-dataset composition
 ```
 
 Two rules for writing a row:
