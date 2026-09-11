@@ -44,7 +44,7 @@ import astropy.units as u
 import numpy as np
 import scipy.stats as st
 
-from ampere.core import Dataset, FittingProblem, Spectrum
+from ampere.core import Dataset, FittingProblem, GaussianFamily, Likelihood, Spectrum
 from ampere.inference import SBIEngine
 
 GRID = np.geomspace(1.0, 10.0, 12)
@@ -58,9 +58,14 @@ def build_problem(*, seed: int = 20260911) -> FittingProblem:
     Small on purpose: this script is about the seam between ``SBIEngine`` and
     a native realisation, not about the model. ``norm`` and ``index`` keep
     their reference-backend priors — a native problem is fitted exactly like
-    any other, priors included.
+    any other, priors included. The likelihood's noise model is torch's own
+    :class:`~ampere.backends.torch.IndependentNoise`, not
+    :class:`~ampere.core.Dataset`'s reference-backend default: every piece of
+    a native problem must declare the same backend (``DatasetError`` refuses
+    a mixed one by name), and the family (:class:`~ampere.core.GaussianFamily`)
+    is the one backend-neutral part of a likelihood.
     """
-    from ampere.backends.torch import PowerLaw
+    from ampere.backends.torch import IndependentNoise, PowerLaw
 
     rng = np.random.default_rng(seed)
     truth = TRUTH["model.norm"] * GRID**TRUTH["model.index"]
@@ -70,7 +75,8 @@ def build_problem(*, seed: int = 20260911) -> FittingProblem:
         uncertainty=np.full(GRID.size, UNCERTAINTY) * u.Jy,
     )
     model = PowerLaw(GRID, norm=st.lognorm(0.3, scale=2.0), index=st.norm(-1.0, 0.3))
-    problem = FittingProblem(model, [Dataset(observed)], seed=seed)
+    likelihood = Likelihood(GaussianFamily(), IndependentNoise())
+    problem = FittingProblem(model, [Dataset(observed, likelihood=likelihood)], seed=seed)
     assert problem.backend == "torch" and problem.batchable  # the point of the example
     return problem
 
