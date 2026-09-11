@@ -1956,6 +1956,9 @@ class TestPerInstanceDevice:
 
 VIS_U = np.array([0.5, 1.5, 2.5, 3.5, 4.5, 5.5])
 VIS_V = np.array([-1.0, 0.0, 1.0, 2.0, 3.0, 4.0])
+#: A monochromatic observation: the spectral axis a ``VisibilitySet`` has
+#: carried since W4.1 is one constant column here.
+VIS_WAVELENGTH = np.full(VIS_U.size, 2.2) * u.micron
 
 
 class _PointSource(Model):
@@ -2002,7 +2005,9 @@ class _PointSource(Model):
 
     def evaluate(self, **values: Any) -> ModelResult:
         ctx = self.context(values)
-        return ModelResult(VisibilitySet(ctx["u"], ctx["v"], np.asarray(self._visibility(ctx))))
+        return ModelResult(
+            VisibilitySet(ctx["u"], ctx["v"], VIS_WAVELENGTH, np.asarray(self._visibility(ctx)))
+        )
 
 
 def _visibilities() -> VisibilitySet:
@@ -2010,7 +2015,9 @@ def _visibilities() -> VisibilitySet:
     truth = np.asarray(exact.values)
     rng = np.random.default_rng(20260908)
     noise = rng.normal(0.0, 0.05, VIS_U.size) + 1j * rng.normal(0.0, 0.05, VIS_U.size)
-    return VisibilitySet(VIS_U, VIS_V, truth + noise, uncertainty=np.full(VIS_U.size, 0.05))
+    return VisibilitySet(
+        VIS_U, VIS_V, VIS_WAVELENGTH, truth + noise, uncertainty=np.full(VIS_U.size, 0.05)
+    )
 
 
 VISIBILITIES = _visibilities()

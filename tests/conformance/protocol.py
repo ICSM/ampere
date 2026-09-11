@@ -34,6 +34,7 @@ import enum
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, runtime_checkable
 
+import astropy.units as astropy_units
 import numpy as np
 
 from ampere.core import (
@@ -46,10 +47,12 @@ from ampere.core import (
 )
 
 __all__ = [
+    "COMPLEX_WAVELENGTH",
     "BackendCapabilities",
     "ConformanceBackend",
     "CountingModel",
     "CovarianceSpec",
+    "InterferometryPieces",
     "KernelFamily",
     "ModelKind",
     "ModelSpec",
@@ -154,7 +157,8 @@ class ModelKind(enum.StrEnum):
     ``COMPLEX``
         ``V(x) = norm * exp(2 pi i * index * x)`` — a **complex**-valued
         channel, emitted as a :class:`~ampere.core.VisibilitySet` rather than a
-        ``Spectrum``. Added at W2.4 slice 3, for the ``complex_gaussian``
+        ``Spectrum``, on the three axes :func:`complex_axes` fixes. Added at
+        W2.4 slice 3, for the ``complex_gaussian``
         family: it is the smallest form whose values are complex and whose
         parameters still move both the modulus and the phase, so a backend that
         dropped the imaginary part somewhere would disagree with the oracle
@@ -369,6 +373,14 @@ class BackendCapabilities:
         has not written one is unaffected and those rows skip with a reason;
         the alternative, a required fixture method, would have made a
         Phase-2 track's own slice a change to every other track's fixture.
+    ``interferometry``
+        Whether :meth:`ConformanceBackend.interferometry` can return this
+        backend's Fourier, closure-phase and smearing steps and its three
+        source models. ``False`` by default, so a backend that has not written
+        them is unaffected and the interferometric rows skip with a reason
+        naming what is owed — the same shape as ``complex_models``, and for
+        the same reason: one track's slice must not be a change to every other
+        track's fixture. Added at W4.1; the native twins are W4.3's.
     ``picklable``
         Whether a problem composed from this backend's pieces can be sent to a
         worker process (W3.1). ``True`` by default, because a backend whose
@@ -393,16 +405,65 @@ class BackendCapabilities:
     device: str = "cpu"
     float64: bool = True
     complex_models: bool = False
+    interferometry: bool = False
     picklable: bool = True
     solvers: frozenset[SolverKind] = frozenset({SolverKind.DENSE})
     tolerances: Tolerances = DEFAULT_TOLERANCES
+
+
+@dataclasses.dataclass(frozen=True)
+class InterferometryPieces:
+    """The interferometric classes one backend supplies (*W4.1*).
+
+    A record rather than eleven protocol methods, because they arrive as one
+    slice and are asked for as one: a backend either has an interferometric
+    vocabulary or it has none. The names are the reference backend's, which is
+    the convention every other twin follows (there is no step registry — a
+    twin associates with its reference by class name in the backend's own
+    module, the native surface it exposes, and its ``BACKEND`` declaration).
+
+    The steps
+    ---------
+    ``fourier_sample``
+        ``Image -> VisibilitySet``, built with
+        ``from_observed(container, field_of_view=..., oversampling=...)``.
+    ``closure_phase``
+        ``VisibilitySet -> ClosurePhases``, three baselines to one angle.
+    ``amplitude``
+        ``VisibilitySet -> VisibilitySet``, the modulus.
+    ``bandwidth_smearing``, ``time_smearing``
+        The two averaging steps, which ask ``fourier_sample`` for the extra
+        ``(u, v)`` samples they average over.
+
+    The models
+    ----------
+    ``uniform_disc``, ``gaussian_source``, ``binary``
+        Emit an ``Image`` on a negotiated ``(x, y)`` grid in mas, in Jy/sr.
+    ``uniform_disc_visibilities``, ``gaussian_source_visibilities``,
+    ``binary_visibilities``
+        The same three sources emitting a ``VisibilitySet`` directly from
+        their closed forms, in Jy. Both routes are supported and neither is
+        privileged; the rows hold both to the oracles in ``oracles.py``.
+    """
+
+    fourier_sample: type
+    closure_phase: type
+    amplitude: type
+    bandwidth_smearing: type
+    time_smearing: type
+    uniform_disc: type
+    gaussian_source: type
+    binary: type
+    uniform_disc_visibilities: type
+    gaussian_source_visibilities: type
+    binary_visibilities: type
 
 
 @runtime_checkable
 class ConformanceBackend(Protocol):
     """Everything the conformance battery asks of a backend.
 
-    Nine members. Implement them and every row in ``tests/conformance/``
+    Ten members. Implement them and every row in ``tests/conformance/``
     runs against your backend; register the instance in
     ``tests/conformance/backends/__init__.py`` and nothing else changes —
     which is W1.10's acceptance criterion ("adding a backend requires only a
@@ -490,6 +551,18 @@ class ConformanceBackend(Protocol):
     def parameter_space(self, declaration: ParameterSet) -> ParameterSpace:
         """Realise a parameter declaration as this backend's engine-facing view."""
 
+    def interferometry(self) -> InterferometryPieces:
+        """This backend's interferometric steps and source models (*W4.1*).
+
+        Only called when :attr:`BackendCapabilities.interferometry` is
+        declared; a backend that has not written them may raise, and every
+        interferometric row then skips with a reason naming what is owed. The
+        two container kinds these speak in are ``ampere.core``'s, not a
+        backend's — the placement D1 ruled on 2026-09-11 — so a backend
+        supplies only the arithmetic, which is the same claim
+        ``inference.md`` §18 makes for every other piece here.
+        """
+
     def to_numpy(self, values: Any) -> np.ndarray:
         """Bring a backend array back to numpy, for comparison against oracles.
 
@@ -499,12 +572,20 @@ class ConformanceBackend(Protocol):
         """
 
 
-def complex_axes(coordinates: Any) -> tuple[np.ndarray, np.ndarray]:
-    """The ``(u, v)`` point set a :attr:`ModelKind.COMPLEX` channel lives on.
+#: Wavelength every :attr:`ModelKind.COMPLEX` sample is measured at, micron.
+#: A single number because the battery's complex rows are monochromatic: the
+#: spectral axis a ``VisibilitySet`` has carried since W4.1 is a constant
+#: column here, which is the amendment's own statement of the monochromatic
+#: case and keeps the rows about the family's arithmetic.
+COMPLEX_WAVELENGTH = 2.2
 
-    A :class:`~ampere.core.VisibilitySet` has two coordinate axes and a
-    ``ModelSpec`` declares one sequence of coordinates, so the second has to
-    come from somewhere. It comes from here rather than from either side,
+
+def complex_axes(coordinates: Any) -> tuple[np.ndarray, np.ndarray, Any]:
+    """The ``(u, v, spectral_axis)`` point set a :attr:`ModelKind.COMPLEX` channel lives on.
+
+    A :class:`~ampere.core.VisibilitySet` has three coordinate axes and a
+    ``ModelSpec`` declares one sequence of coordinates, so the other two have
+    to come from somewhere. They come from here rather than from either side,
     because ``Likelihood.check_alignment`` compares the predicted and observed
     axes for equality: the fixture's model and the battery's observed container
     must derive them by the *same* rule, and a rule written twice is a rule
@@ -513,10 +594,14 @@ def complex_axes(coordinates: Any) -> tuple[np.ndarray, np.ndarray]:
     ``v = u / 2`` is arbitrary and deliberately so — the battery's complex rows
     are about the family's arithmetic, not about (u,v) coverage — but it is
     distinct from ``u``, which keeps the two axes from being accidentally
-    interchangeable in a comparison.
+    interchangeable in a comparison. The wavelength is
+    :data:`COMPLEX_WAVELENGTH` on every sample, a :class:`~astropy.units.Quantity`
+    so that the axis arrives with its unit rather than as a bare array the
+    kind would refuse.
     """
     u_axis = np.asarray(coordinates, dtype=float)
-    return u_axis, 0.5 * u_axis
+    wavelength = np.full(u_axis.shape, COMPLEX_WAVELENGTH) * astropy_units.micron
+    return u_axis, 0.5 * u_axis, wavelength
 
 
 def solver_kinds(capabilities: BackendCapabilities) -> tuple[SolverKind, ...]:

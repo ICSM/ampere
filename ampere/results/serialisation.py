@@ -53,7 +53,9 @@ Complex containers are carried as separate real and imaginary parts, because
 JSON has no complex number:
 
 >>> from ampere.core import VisibilitySet
->>> visibilities = VisibilitySet([1.0, 2.0], [3.0, 4.0], [1 + 2j, 3 - 1j])
+>>> visibilities = VisibilitySet(
+...     [1.0, 2.0], [3.0, 4.0], [2.2, 2.2] * u.um, [1 + 2j, 3 - 1j]
+... )
 >>> container_to_dict(visibilities)["values"]["imag"]
 [2.0, -1.0]
 >>> container_from_dict(container_to_dict(visibilities)) == visibilities
@@ -109,6 +111,7 @@ import astropy.units as u
 import numpy as np
 
 from ampere.core.results_schema import (
+    ClosurePhases,
     Cube,
     FunctionSamples,
     Image,
@@ -193,7 +196,16 @@ def registered_kinds() -> Mapping[str, type[FunctionSamples]]:
     return dict(_KINDS)
 
 
-for _kind in (FunctionSamples, Spectrum, PhotometricPoints, TimeSeries, Image, Cube, VisibilitySet):
+for _kind in (
+    FunctionSamples,
+    Spectrum,
+    PhotometricPoints,
+    TimeSeries,
+    Image,
+    Cube,
+    VisibilitySet,
+    ClosurePhases,
+):
     register_kind(_kind)
 del _kind
 

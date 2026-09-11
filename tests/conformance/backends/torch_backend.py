@@ -257,9 +257,13 @@ class PointSourceModel(Model):
     of what :mod:`ampere.backends.torch.problem` requires of a model in one
     screen.
 
-    The second (``v``) axis comes from
+    The second (``v``) and third (``spectral_axis``) axes come from
     :func:`~tests.conformance.protocol.complex_axes`, the same rule the
-    observed container uses; see that function for why it is not written twice.
+    observed container uses; see that function for why they are not written
+    twice. The wavelength is a constant column — the battery's complex rows
+    are monochromatic — and it takes no part in the arithmetic: a torch model
+    differentiates ``norm`` and ``index``, and the axis is carried straight
+    through to the emitted container.
     """
 
     DIFFERENTIABLE: ClassVar[bool] = True
@@ -268,7 +272,8 @@ class PointSourceModel(Model):
     BACKEND: ClassVar[str] = BACKEND
 
     def __init__(self, spec: ModelSpec) -> None:
-        u_axis, v_axis = complex_axes(spec.coordinates)
+        u_axis, v_axis, wavelength = complex_axes(spec.coordinates)
+        self._wavelength = wavelength
         self.spec = spec
         self.evaluations = 0
         self.channels = tuple(spec.channels)
@@ -314,6 +319,7 @@ class PointSourceModel(Model):
             channel: VisibilitySet(
                 to_numpy(self._u),
                 to_numpy(self._v),
+                self._wavelength,
                 to_numpy(self.flux(channel, values)).astype(np.complex128, copy=False),
                 unit=FLUX_UNIT,
             )

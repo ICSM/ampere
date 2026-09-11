@@ -1053,7 +1053,11 @@ class TestObservedDataKinds:
             ),
             "visibilities": (
                 VisibilitySet(
-                    [1.0, 2.0], [3.0, 4.0], np.array([1 + 2j, 3 - 1j]), uncertainty=[0.1, 0.1]
+                    [1.0, 2.0],
+                    [3.0, 4.0],
+                    [2.2, 2.2] * u.um,
+                    np.array([1 + 2j, 3 - 1j]),
+                    uncertainty=[0.1, 0.1],
                 ),
                 Likelihood(ComplexGaussianFamily()),
             ),
@@ -1072,7 +1076,11 @@ class TestObservedDataKinds:
         # kind: observed variables, their dims, constant_data variables
         "image": (["d"], ["d_x", "d_y"], ["d_uncertainty"]),
         "cube": (["d"], ["d_x", "d_y", "d_spectral_axis"], ["d_uncertainty"]),
-        "visibilities": (["d_imag", "d_real"], ["d_index"], ["d_u", "d_uncertainty", "d_v"]),
+        "visibilities": (
+            ["d_imag", "d_real"],
+            ["d_index"],
+            ["d_spectral_axis", "d_u", "d_uncertainty", "d_v"],
+        ),
         "photometry": (["d"], ["d_spectral_axis"], ["d_filters", "d_uncertainty"]),
     }
 
@@ -1295,7 +1303,7 @@ class TestContainerSerialisation:
                 [1.0, 2.0] * u.um,
                 np.arange(8.0).reshape(2, 2, 2),
             ),
-            VisibilitySet([1.0, 2.0], [3.0, 4.0], [1 + 2j, 3 - 1j]),
+            VisibilitySet([1.0, 2.0], [3.0, 4.0], [2.2, 2.2] * u.um, [1 + 2j, 3 - 1j]),
             Spectrum(BLUE * u.micron, [1.0, 0.5, 0.25] * u.Jy, fidelity="cheap"),
         ],
         ids=[

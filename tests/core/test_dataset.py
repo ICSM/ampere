@@ -2055,6 +2055,7 @@ class TestSimulate:
         observed = VisibilitySet(
             WAVELENGTH,
             0.5 * WAVELENGTH,
+            np.full(WAVELENGTH.size, 2.2) * u.um,
             np.array([1.0 + 0.5j, 0.5 + 0.0j, -0.2 + 0.3j]) * u.Jy,
             uncertainty=np.full(3, sigma) * u.Jy,
         )

@@ -23,11 +23,13 @@ import astropy.units as u
 import numpy as np
 import pytest
 import scipy.linalg
+import scipy.special
 import scipy.stats as st
 from scipy.stats import multivariate_normal
 
 from ampere.core import (
     AxisSpec,
+    ClosurePhases,
     CauchyFamily,
     Censoring,
     ComplexGaussianFamily,
@@ -1062,11 +1064,18 @@ class TestFamilyRegistry:
                 ) -> float:
                     return 0.0
 
-    @pytest.mark.parametrize("family", [RiceFamily(), VonMisesFamily()])
+    @pytest.mark.parametrize("family", [RiceFamily()])
     def test_declared_but_unimplemented_families_refuse_composition(
         self, family: LikelihoodFamily
     ) -> None:
-        """Declared in the registry, refused at composition — never silently wrong."""
+        """Declared in the registry, refused at composition — never silently wrong.
+
+        ``von_mises`` left this list at W4.1, when the interferometric
+        modality brought the data type that needed it. ``rice`` stays: the
+        sampling-form principle (``likelihoods.md`` §3) says a family's
+        likelihood and its draw arrive together with the data type that needs
+        them, and Rice's data type is polarimetry.
+        """
         assert family.NAME in list_families()
         assert not family.IMPLEMENTED
         with pytest.raises(LikelihoodError, match="declared but not implemented"):
@@ -1106,6 +1115,7 @@ class TestFamilyMathematics:
         vis = VisibilitySet(
             [120.0, -35.0, 88.0],
             [45.0, 190.0, -66.0],
+            [2.2, 2.2, 2.2] * u.um,
             [1.0 + 0.2j, 0.6 - 0.3j, 0.4 + 0.0j],
             uncertainty=[0.02, 0.03, 0.05],
         )
@@ -1123,7 +1133,9 @@ class TestFamilyMathematics:
         assert like.log_prob(model, vis) == pytest.approx(expected, abs=1e-12)
 
     def test_a_real_family_refuses_complex_data(self) -> None:
-        vis = VisibilitySet([1.0, 2.0], [3.0, 4.0], [1.0 + 0j, 0.5 + 0j], uncertainty=[0.1, 0.1])
+        vis = VisibilitySet(
+            [1.0, 2.0], [3.0, 4.0], [2.2, 2.2] * u.um, [1.0 + 0j, 0.5 + 0j], uncertainty=[0.1, 0.1]
+        )
         like = Likelihood(GaussianFamily(), IndependentNoise())
         with pytest.raises(LikelihoodError, match="holds real values"):
             like.check_alignment(vis.with_values([1.0 + 0j, 0.5 + 0j]), vis)
@@ -1164,6 +1176,153 @@ def photometry() -> PhotometricPoints:
         uncertainty=[0.1, 0.1, 0.1] * u.Jy,
         extra_coords={"limit_kind": np.array([0, 0, 1])},
     )
+
+
+class TestVonMisesFamily:
+    """The wrapped family W4.1 implemented, and why it is not a Gaussian.
+
+    ``likelihoods.md`` §17 Q4 fixed the interface at the freeze: angles in
+    radians, a *wrapped* residual, and ``kappa = 1/sigma**2`` per sample from
+    the container's own uncertainties. These rows are the implementation
+    meeting that.
+    """
+
+    @pytest.fixture
+    def phases(self) -> ClosurePhases:
+        return ClosurePhases(
+            [1.0e7, 2.0e7, 3.0e7],
+            [2.0e7, 1.0e7, 0.5e7],
+            [-0.5e7, 1.5e7, -2.0e7],
+            [1.0e7, -1.0e7, 2.5e7],
+            [2.2, 2.2, 2.2] * u.um,
+            [0.31, -0.12, 3.1241] * u.rad,
+            uncertainty=[0.02, 0.05, 0.0873] * u.rad,
+        )
+
+    def test_it_matches_scipy_von_mises(self, phases: ClosurePhases) -> None:
+        """The normalised density, against ``scipy.stats.vonmises``."""
+        predicted = phases.with_values([0.30, -0.10, -3.1241])
+        like = Likelihood(VonMisesFamily(), IndependentNoise())
+        like.check_alignment(predicted, phases)
+        kappa = 1.0 / np.asarray(phases.uncertainty) ** 2
+        residual = np.angle(np.exp(1j * (phases.values - predicted.values)))
+        expected = float(np.sum(st.vonmises.logpdf(residual, kappa)))
+        assert like.log_prob(predicted, phases) == pytest.approx(expected, abs=1e-12)
+
+    def test_the_residual_is_wrapped_where_a_gaussian_would_be_catastrophic(
+        self, phases: ClosurePhases
+    ) -> None:
+        """A 2-degree error across the branch cut, charged as 2 degrees.
+
+        ``interferometry.md`` §5 measured the alternative: an unwrapped
+        residual turns the third sample's 2-degree error into a 358-degree
+        one, a several-thousand-nat penalty on a triangle that fits perfectly,
+        silently. No sampler recovers from that; it avoids the region of
+        parameter space where the model phase is near pi.
+        """
+        predicted = phases.with_values([0.31, -0.12, -3.1241])
+        wrapped = Likelihood(VonMisesFamily(), IndependentNoise()).log_prob(predicted, phases)
+        unwrapped = Likelihood(GaussianFamily(), IndependentNoise()).log_prob(predicted, phases)
+        assert wrapped > 4.0
+        assert unwrapped < -2000.0
+
+    def test_it_tends_to_the_uniform_distribution_at_large_sigma(self) -> None:
+        """The normalisation is not decoration: at sigma = pi it is what keeps
+        the density a density. An unnormalised wrapped Gaussian assigns *less*
+        mass to a perfect match than the uniform distribution on the circle
+        does, which is impossible."""
+        wide = ClosurePhases(
+            [1.0e7],
+            [2.0e7],
+            [-0.5e7],
+            [1.0e7],
+            [2.2] * u.um,
+            [0.0] * u.rad,
+            uncertainty=[100.0] * u.rad,
+        )
+        like = Likelihood(VonMisesFamily(), IndependentNoise())
+        assert like.log_prob(wide.with_values([0.0]), wide) == pytest.approx(
+            -np.log(2.0 * np.pi), abs=1e-3
+        )
+
+    def test_degrees_are_refused_at_composition_rather_than_scored(self) -> None:
+        """Gap I-5's own example: the family's half of the composition-time hook."""
+        degrees = ClosurePhases(
+            [1.0e7],
+            [2.0e7],
+            [-0.5e7],
+            [1.0e7],
+            [2.2] * u.um,
+            [18.0] * u.deg,
+            uncertainty=[1.5] * u.deg,
+        )
+        like = Likelihood(VonMisesFamily(), IndependentNoise())
+        with pytest.raises(LikelihoodError, match="scores angles in radians"):
+            like.check_alignment(degrees.with_values([17.0]), degrees)
+
+    def test_a_bare_array_is_taken_as_radians(self) -> None:
+        bare = ClosurePhases([1.0e7], [2.0e7], [-0.5e7], [1.0e7], [2.2] * u.um, [0.2])
+        VonMisesFamily().check_observed(bare)
+
+    def test_a_correlated_noise_model_is_refused_at_composition(self) -> None:
+        """A GP on a wrapped observable is latent, and this family does not consume one.
+
+        ``Likelihood`` refuses the pair before anything is evaluated, which is
+        the general rule for a ``LATENT`` combination whose family has not
+        opted in. The family's own guard below is the second line of the same
+        defence, for a caller assembling ``NoiseParams`` by hand.
+        """
+        with pytest.raises(LikelihoodError, match="CONSUMES_LATENT_GP is False"):
+            Likelihood(VonMisesFamily(), GaussianProcessNoise(Matern32(0.3, 1.0e7), DenseGP()))
+
+    def test_the_family_itself_refuses_a_correlated_evaluation(self) -> None:
+        noise = NoiseParams(
+            sigma=np.ones(3), values={}, kernel=Matern32(0.3, 1.0), solver=DenseGP()
+        )
+        with pytest.raises(LikelihoodError, match="latent-variable model"):
+            VonMisesFamily().log_prob(np.zeros(3), np.zeros(3), noise)
+
+    def test_it_draws_from_the_distribution_it_scores(self, phases: ClosurePhases) -> None:
+        """The sampling form, added with the likelihood (``likelihoods.md`` §3).
+
+        Checked distributionally rather than by value: the circular mean of
+        many draws sits at the predicted angle, and the circular variance
+        matches ``1 - I1(kappa)/I0(kappa)`` for the concentration the density
+        uses.
+        """
+        family = VonMisesFamily()
+        rng = np.random.default_rng(20260911)
+        mean = np.full(4000, 0.7)
+        sigma = np.full(4000, 0.4)
+        noise = NoiseParams(sigma=sigma, values={})
+        drawn = family.sample(mean, noise, rng)
+        assert drawn.shape == mean.shape
+        assert np.all(np.abs(drawn) <= np.pi + 1e-12)
+        resultant = np.mean(np.exp(1j * drawn))
+        assert np.angle(resultant) == pytest.approx(0.7, abs=0.02)
+        kappa = 1.0 / 0.4**2
+        expected = scipy.special.i1e(kappa) / scipy.special.i0e(kappa)
+        assert abs(resultant) == pytest.approx(expected, abs=0.02)
+
+    def test_a_draw_is_one_the_density_can_score(self, phases: ClosurePhases) -> None:
+        """The rule ``simulate(observe=True)`` depends on: never hand back a
+        draw the fitting likelihood refuses."""
+        family = VonMisesFamily()
+        rng = np.random.default_rng(7)
+        noise = NoiseParams(sigma=np.asarray(phases.uncertainty), values={})
+        drawn = family.sample(np.asarray(phases.values), noise, rng)
+        observed = phases.with_values(drawn)
+        like = Likelihood(family, IndependentNoise())
+        like.check_alignment(phases, observed)
+        assert np.isfinite(like.log_prob(phases, observed))
+
+    def test_it_refuses_to_draw_under_a_correlated_noise_model(self) -> None:
+        family = VonMisesFamily()
+        noise = NoiseParams(
+            sigma=np.ones(3), values={}, kernel=Matern32(0.3, 1.0), solver=DenseGP()
+        )
+        with pytest.raises(LikelihoodError, match="cannot draw"):
+            family.sample(np.zeros(3), noise, np.random.default_rng(0))
 
 
 class TestCensoring:
@@ -1471,27 +1630,48 @@ class TestSolverStrategies:
         )
 
     def test_mixed_coordinate_units_are_refused(self) -> None:
-        """Euclidean separation across mixed units is meaningless; say so."""
+        """Euclidean separation across mixed units is meaningless; say so.
 
-        class MixedUnits(Spectrum):
-            pass
-
+        A ``VisibilitySet`` is now the standing example rather than a
+        contrived one: since W4.1 it carries dimensionless ``(u, v)`` *and* a
+        spectral axis, so an isotropic kernel over the whole point set is
+        refused by construction. That refusal is correct — a Euclidean
+        distance across wavelengths and baselines is meaningless — and the
+        flexible likelihood on visibilities therefore waits for a kernel that
+        can select the axes it applies to (W4.5).
+        """
         vis = VisibilitySet(
-            [1.0, 2.0] / u.rad, [3.0, 4.0], [1.0 + 0j, 0.5 + 0j], uncertainty=[0.1, 0.1]
+            [1.0, 2.0],
+            [3.0, 4.0],
+            [2.2, 2.2] * u.um,
+            [1.0 + 0j, 0.5 + 0j],
+            uncertainty=[0.1, 0.1],
         )
         noise = GaussianProcessNoise(Matern32(0.3, 1.0))
         with pytest.raises(LikelihoodError, match="different units"):
             noise.check_compatible(ComplexGaussianFamily(), vis)
 
     def test_a_two_axis_point_set_is_allowed_with_one_unit(self) -> None:
-        vis = VisibilitySet(
-            [1.0, 2.0, 5.0],
-            [3.0, 4.0, 1.0],
-            [1.0 + 0j, 0.5 + 0j, 0.2 + 0j],
+        """Several axes are fine; *mixed units* are the objection.
+
+        Written against a user-defined kind since W4.1, because no shipped
+        kind with more than one axis is single-unit any more.
+        """
+
+        class UVPoints(FunctionSamples):
+            AXES = (
+                AxisSpec("u", physical_types=("dimensionless",)),
+                AxisSpec("v", physical_types=("dimensionless",)),
+            )
+            LAYOUT = Layout.POINTS
+
+        points = UVPoints(
+            {"u": [1.0, 2.0, 5.0], "v": [3.0, 4.0, 1.0]},
+            [1.0, 0.5, 0.2],
             uncertainty=[0.1, 0.1, 0.1],
         )
         noise = GaussianProcessNoise(Matern32(0.3, 1.0))
-        noise.check_compatible(ComplexGaussianFamily(), vis)
+        noise.check_compatible(GaussianFamily(), points)
 
     def test_jitter_must_be_sane(self) -> None:
         with pytest.raises(LikelihoodError, match="jitter must be finite"):
@@ -1912,6 +2092,7 @@ class TestComposition:
         vis = VisibilitySet(
             [1.0, 2.0, 3.0],
             [4.0, 5.0, 6.0],
+            [2.2, 2.2, 2.2] * u.um,
             [1.0 + 0.2j, 0.6 - 0.3j, complex(np.nan, 1.0)],
             uncertainty=[0.05, 0.05, 0.05],
         )
@@ -1993,9 +2174,10 @@ class TestCompositionTimeDataChecks:
         # I-1: VisibilitySet is the only kind legal with both dtypes, so only
         # there could a complex prediction silently be fitted against |V|.
         uv, vv = np.array([10.0, 20.0, 30.0]), np.array([5.0, 15.0, 25.0])
-        complex_prediction = VisibilitySet(uv, vv, (np.ones(3) + 0.5j) * u.Jy)
+        wave = np.full(3, 2.2) * u.um
+        complex_prediction = VisibilitySet(uv, vv, wave, (np.ones(3) + 0.5j) * u.Jy)
         real_amplitudes = VisibilitySet(
-            uv, vv, np.abs(np.ones(3) + 0.5j) * u.Jy, uncertainty=0.1 * np.ones(3) * u.Jy
+            uv, vv, wave, np.abs(np.ones(3) + 0.5j) * u.Jy, uncertainty=0.1 * np.ones(3) * u.Jy
         )
         like = Likelihood(ComplexGaussianFamily(), IndependentNoise())
         with pytest.raises(LikelihoodError, match="take the modulus in the instrument chain"):

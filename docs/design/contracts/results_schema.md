@@ -66,7 +66,8 @@ Phase 2's code.
 | `Image` | A 2D map on separable, strictly monotonic spatial axes |
 | `Cube` | Two spatial axes plus a spectral axis, separable |
 | `TimeSeries` | A quantity at strictly increasing times |
-| `VisibilitySet` | **Complex** visibilities at scattered (u,v) points |
+| `VisibilitySet` | **Complex** visibilities at scattered (u,v) points, one wavelength per sample |
+| `ClosurePhases` | Closure phase per triangle in radians, indexed by two of its baselines and a wavelength |
 | `Axis` | One coordinate axis: values, unit, *advertised* structure (`regular`, `log_regular`), and `locate()` (§5) |
 | `AxisSpec`, `Layout`, `Order` | How a container kind declares its axis signature, its layout and its ordering rule |
 | `SchemaError`, `ChannelError` | This contract's errors; `ChannelError` is the binding failure a consumer may want to catch on its own |
@@ -307,7 +308,8 @@ does one or the other, and which one is part of the kind's definition.
 | `Image`, `Cube` | `x`, `y` | strictly monotonic (either direction) | sky axes legitimately run either way |
 | `Cube` | `spectral_axis` | strictly increasing | as `Spectrum` |
 | `PhotometricPoints` | `spectral_axis` | **any** | a point is identified by its filter, not its position; catalogues arrive in archive order |
-| `VisibilitySet` | `u`, `v` | **any** | a (u,v) point set has no natural order; imposing one would be a fiction |
+| `VisibilitySet` | `u`, `v`, `spectral_axis` | **any** | a (u,v) point set has no natural order; imposing one would be a fiction, and one wavelength repeats across every baseline of a channel |
+| `ClosurePhases` | `u1`, `v1`, `u2`, `v2`, `spectral_axis` | **any** | as `VisibilitySet`; the *canonical* ordering a triangle needs is a rule about which two baselines are stored, not about the order of the samples |
 
 Violating a validated rule fails at construction with a message that names both
 the problem and the fix:
@@ -850,9 +852,10 @@ ordering. It is the Phase 4 proof modality, and it is an ordinary container.
 >>> vis = VisibilitySet(
 ...     [120.0, -35.0, 88.0, -210.0],
 ...     [45.0, 190.0, -66.0, 12.0],
+...     [1.3, 1.3, 0.87, 0.87] * u.mm,
 ...     [1.0 + 0.2j, 0.6 - 0.3j, 0.4 + 0.0j, 0.1 - 0.05j],
 ...     uncertainty=[0.02, 0.02, 0.03, 0.05],
-...     extra_coords={"frequency_ghz": np.array([230.5, 230.5, 345.8, 345.8])},
+...     extra_coords={"baseline": np.array(["AB", "AC", "AB", "AC"])},
 ... )
 >>> vis.n_samples, vis.values.dtype.kind
 (4, 'c')
@@ -861,6 +864,17 @@ ordering. It is the Phase 4 proof modality, and it is an ordinary container.
 
 ```
 
+The third axis is the **wavelength of each sample** (amended at W4.1, ruled by
+Peter 2026-09-11). `(u, v)` are baselines in wavelengths, so the convention
+already divides by λ and a *grey* model error needs nothing more; a
+*chromatic* one does. A missing band in a patch of sky contributes
+`δV = S(λ)·F(B/λ)` — sharp in wavelength, smooth in spatial frequency — so two
+samples at the same `(u, v)` and different wavelengths are near-identical to a
+kernel that cannot see wavelength and very different in truth. A kernel sees a
+container's axes and nothing else, which is what makes it a container question
+(`phase4_placement_memo.md` §3.6). A monochromatic observation is a constant
+column.
+
 The (u,v) coordinates are dimensionless by convention — baselines measured in
 wavelengths — so a bare array is accepted without ceremony; spatial frequency in
 rad⁻¹ is accepted too:
@@ -868,8 +882,30 @@ rad⁻¹ is accepted too:
 ```pycon
 >>> vis.u.unit
 Unit(dimensionless)
->>> VisibilitySet([1.0, 2.0] / u.rad, [3.0, 4.0] / u.rad, [1.0 + 0j, 0.5 + 0j]).v.unit
+>>> VisibilitySet(
+...     [1.0, 2.0] / u.rad, [3.0, 4.0] / u.rad, [2.2, 2.2] * u.um, [1.0 + 0j, 0.5 + 0j]
+... ).v.unit
 Unit("1 / rad")
+
+```
+
+Closure phases are the second interferometric kind, added at W4.1 beside this
+one: four dimensionless baseline axes and a wavelength, values in radians, and
+a **canonical ordering** in the docstring (telescopes `i < j < k`, baselines
+`ij` and `jk` stored, `ki` implied as their negated sum) so that the same
+triangle in two files is the same point to a kernel.
+
+```pycon
+>>> from ampere.core import ClosurePhases
+>>> t3 = ClosurePhases(
+...     [40.0e6, 52.0e6], [10.0e6, -8.0e6],
+...     [-15.0e6, 11.0e6], [33.0e6, 27.0e6],
+...     [2.2, 2.2] * u.um,
+...     [0.31, -0.12] * u.rad,
+...     uncertainty=[0.02, 0.05] * u.rad,
+... )
+>>> t3.implied_baseline()[1].tolist()
+[-43000000.0, -19000000.0]
 
 ```
 
@@ -976,7 +1012,7 @@ claims, demonstrated one side at a time.)*
 | Ordering is validated per kind, or documented as tolerated | `architecture.md` §7 forbids the third option — an unstated assumption — which is what legacy had |
 | `Spectrum`/`TimeSeries` require strictly increasing coordinates | Quasiseparable GP solvers need ordered 1D coordinates, and duplicates make a covariance singular; both fail in ways that look like science problems |
 | `from_unsorted` exists, but sorting is never automatic | Silently reordering a user's arrays is how the alignment between coordinates and values gets quietly broken; opting in is one call |
-| `PhotometricPoints`/`VisibilitySet` tolerate arbitrary order | A filter-keyed point and a (u,v) sample have no natural order; requiring one would be a fiction, so it is documented instead |
+| `PhotometricPoints`/`VisibilitySet`/`ClosurePhases` tolerate arbitrary order | A filter-keyed point and a (u,v) sample have no natural order; requiring one would be a fiction, so it is documented instead |
 | Two layouts (`POINTS`, `GRID`), neither implying regularity | Storing an image as 10⁴ scattered coordinates wastes memory for no gain; separability is a real distinction, regularity is not the same claim |
 | `regular`/`log_regular` advertised on the axis | `architecture.md` §7: fast paths may be *taken*, never *required*. `log_regular` earns its place because constant-velocity LSF convolution needs exactly it |
 | Units converted once at construction; values are plain arrays | The units trap, `DEVELOPMENT_PLAN.md` §7 |
@@ -1026,6 +1062,12 @@ Each of these is a decision, not an oversight. Each has an extension point.
 8. **Complex support is per kind, via `ALLOW_COMPLEX`.** Only `VisibilitySet`
    sets it. A complex-valued spectrum (a model amplitude before squaring) would
    need its own kind or a flag change.
+8a. **A kind with mixed-unit axes cannot carry an isotropic GP.** Amended at
+   W4.1: `VisibilitySet` and `ClosurePhases` both mix dimensionless baseline
+   axes with a spectral one, and `GPSolver.check_compatible` refuses a
+   Euclidean separation across mixed units. The refusal is correct and the
+   answer is a kernel that selects the axes it applies to (W4.5), not a
+   looser check.
 9. **Masks do not propagate automatically.** A container knows its own mask;
    nothing here makes a transformation carry it through. That obligation is
    stated for W1.5 below rather than enforced here, because only a

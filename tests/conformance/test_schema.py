@@ -207,6 +207,9 @@ class TestOrderingAndComplexity:
         for kind in (Spectrum, PhotometricPoints, TimeSeries, Image, Cube):
             assert not kind.ALLOW_COMPLEX
         visibilities = VisibilitySet(
-            np.array([1.0, 2.0]), np.array([3.0, 4.0]), np.array([1 + 2j, 3 - 1j])
+            np.array([1.0, 2.0]),
+            np.array([3.0, 4.0]),
+            np.array([2.2, 2.2]) * u.um,
+            np.array([1 + 2j, 3 - 1j]),
         )
         assert visibilities.values.dtype.kind == "c"

@@ -152,6 +152,7 @@ def visibilities() -> VisibilitySet:
     return VisibilitySet(
         u_coord * u.dimensionless_unscaled,
         v_coord * u.dimensionless_unscaled,
+        np.full(5, 2.2) * u.um,
         values * u.Jy,
         uncertainty=np.full(5, 0.05) * u.Jy,
         mask=np.array([False, False, True, False, False]),
