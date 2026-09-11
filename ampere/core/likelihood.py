@@ -60,15 +60,44 @@ import math
 from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar
 
-import astropy.units as u
 import numpy as np
 import scipy.linalg
 import scipy.stats as st
 
 from .exceptions import LikelihoodError
+from .kernels import (
+    DTYPE,
+    NUMPY_OPS,
+    SHO,
+    ArrayOps,
+    CeleriteRepresentation,
+    Kernel,
+    KernelSpec,
+    Matern12,
+    Matern32,
+    Matern52,
+    NumpyOps,
+    Product,
+    QuasiseparableTerm,
+    RotationTerm,
+    SpectralMixture,
+    SquaredExponential,
+    StationaryKernel,
+    Sum,
+    TermBuilder,
+    _as_float64,
+    _as_hyperparameter,
+    _as_points,
+    _check_finite,
+    _positive,
+    lookup_quasiseparable_term,
+    quasiseparable_families,
+    register_quasiseparable_term,
+    registered_quasiseparable_terms,
+    term_provenance_entries,
+)
 from .parameter import (
     Identity,
-    Log,
     Parameter,
     Parameterised,
     ParameterSet,
@@ -77,7 +106,11 @@ from .results_schema import FunctionSamples, Layout
 
 __all__ = [
     "DTYPE",
+    "NUMPY_OPS",
+    "SHO",
+    "ArrayOps",
     "CauchyFamily",
+    "CeleriteRepresentation",
     "Censoring",
     "ComplexGaussianFamily",
     "DenseGP",
@@ -94,73 +127,40 @@ __all__ = [
     "LikelihoodFamily",
     "LimitKind",
     "Marginalisation",
+    "Matern12",
     "Matern32",
+    "Matern52",
     "NoiseModel",
     "NoiseParams",
+    "NumpyOps",
     "PoissonFamily",
+    "Product",
     "QuasisepGP",
+    "QuasiseparableTerm",
     "RiceFamily",
+    "RotationTerm",
+    "SpectralMixture",
     "SquaredExponential",
+    "StationaryKernel",
     "StructuredGridGP",
     "StudentTFamily",
+    "Sum",
+    "TermBuilder",
     "VecchiaGP",
     "VonMisesFamily",
     "WindowedSparseGP",
     "family_named",
     "latent_parameter",
     "list_families",
+    "lookup_quasiseparable_term",
+    "quasiseparable_families",
     "register_family",
+    "register_quasiseparable_term",
+    "registered_quasiseparable_terms",
+    "term_provenance_entries",
 ]
 
-#: The dtype every array in this module is held in. ``DEVELOPMENT_PLAN.md`` §7:
-#: GP linear algebra in float32 fails in ways that look like science problems.
-DTYPE = np.float64
-
 _LOG_2PI = math.log(2.0 * math.pi)
-_SQRT3 = math.sqrt(3.0)
-
-
-def _check_finite(array: np.ndarray, what: str) -> np.ndarray:
-    """Refuse NaN or inf. Applies to complex arrays as well as real ones."""
-    if not np.all(np.isfinite(array)):
-        raise LikelihoodError(
-            f"{what} contains non-finite entries. A likelihood cannot be evaluated on NaN or "
-            f"inf; mask the affected samples (mask=True excludes them entirely) rather than "
-            f"threading sentinels through the arithmetic."
-        )
-    return array
-
-
-def _as_float64(array: Any, what: str) -> np.ndarray:
-    """Cast to a contiguous float64 array, loudly."""
-    return _check_finite(np.ascontiguousarray(np.asarray(array), dtype=DTYPE), what)
-
-
-def _as_points(array: Any, what: str, *, dimensions: int | None = None) -> np.ndarray:
-    """Coerce coordinates to an ``(n, d)`` float64 array of *n points*.
-
-    ``np.atleast_2d`` is the wrong tool here and the reason this helper exists:
-    it turns a shape ``(m,)`` array into ``(1, m)`` — **one m-dimensional
-    point** — when what a caller passing a bare list of wavelengths means is m
-    one-dimensional points. That reading silently broadcasts through the kernel
-    and yields a one-element answer instead of an error, so a 1-D input is
-    interpreted here as a column, explicitly, and anything ambiguous raises.
-    """
-    values = np.asarray(array, dtype=DTYPE)
-    if values.ndim == 1:
-        values = values[:, None]
-    elif values.ndim != 2:
-        raise LikelihoodError(
-            f"{what} must be a 1-D array of coordinates or an (n, d) array of points, but it "
-            f"has shape {values.shape}."
-        )
-    if dimensions is not None and values.shape[1] != dimensions:
-        raise LikelihoodError(
-            f"{what} has {values.shape[1]} coordinate(s) per point, but the data it is being "
-            f"compared against have {dimensions}. Pass an (n, {dimensions}) array"
-            + (", or a bare 1-D array of coordinates." if dimensions == 1 else ".")
-        )
-    return _check_finite(np.ascontiguousarray(values), what)
 
 
 # ---------------------------------------------------------------------------
@@ -335,283 +335,6 @@ class Censoring:
 
 
 # ---------------------------------------------------------------------------
-# Kernels: neutral, declarative, hyperparameters are ordinary Parameters
-# ---------------------------------------------------------------------------
-
-
-@dataclasses.dataclass(frozen=True)
-class KernelSpec:
-    """The neutral, serialisable description of a kernel.
-
-    Family name plus ordered hyperparameter names is the minimum W1.9's
-    lowering table needs to emit a ``celerite2``/``tinygp``/GPyTorch term, and
-    the maximum that translates across all three. It deliberately carries no
-    values: the values are :class:`~ampere.core.parameter.Parameter`\\ s, which
-    have their own declaration contract.
-    """
-
-    family: str
-    hyperparameters: tuple[str, ...]
-    quasiseparable: bool
-
-    def to_dict(self) -> dict[str, Any]:
-        """A plain-data form for provenance attrs and spec hashing."""
-        return {
-            "family": self.family,
-            "hyperparameters": list(self.hyperparameters),
-            "quasiseparable": self.quasiseparable,
-        }
-
-
-def _as_hyperparameter(
-    name: str,
-    given: Any,
-    unit: u.UnitBase | None,
-    *,
-    positive: bool = True,
-) -> Parameter:
-    """Coerce a prior, a fixed number or a ready-made Parameter into a Parameter.
-
-    GP hyperparameters are *ordinary parameters*, with ``Log`` bijections —
-    ``parameters.md`` §13's instruction to this contract, discharged here in
-    one place so no kernel can quietly do it differently.
-    """
-    if isinstance(given, Parameter):
-        if given.name != name:
-            raise LikelihoodError(
-                f"kernel hyperparameter {name!r} was given a Parameter named {given.name!r}. "
-                f"A kernel's hyperparameter names are part of its KernelSpec (W1.9 lowers them "
-                f"to term keywords), so they are fixed; rename it with .rename({name!r})."
-            )
-        return given
-    if isinstance(given, (int, float, np.floating, np.integer)) and not isinstance(given, bool):
-        return Parameter(name, value=float(given), fixed=True, unit=unit)
-    if hasattr(given, "ppf"):
-        bijection = Log() if positive else Identity()
-        return Parameter(name, given, unit=unit, bijection=bijection)
-    raise LikelihoodError(
-        f"kernel hyperparameter {name!r} must be a frozen scipy.stats distribution (a prior), a "
-        f"number (held fixed), or an ampere Parameter — got {type(given).__name__}."
-    )
-
-
-class Kernel(Parameterised, abc.ABC):
-    """A stationary covariance function, declared neutrally.
-
-    A kernel is a *declaration*: a family name (:attr:`FAMILY`) and its
-    hyperparameters as ordinary :class:`~ampere.core.parameter.Parameter`\\ s.
-    It knows how to build its own dense covariance matrix — that is what
-    :class:`DenseGP` needs, and what the conformance suite compares every other
-    solver against — but a solver is free to ignore ``matrix`` entirely and
-    lower :meth:`spec` to a state-space term instead.
-
-    Subclasses declare :attr:`FAMILY`, :attr:`HYPERPARAMETERS`,
-    :attr:`QUASISEPARABLE`, and implement :meth:`_covariance`, which receives
-    non-negative separations. A non-stationary kernel would override
-    :meth:`matrix` instead; the machinery does not assume stationarity anywhere
-    outside :meth:`matrix`'s default implementation.
-    """
-
-    #: Neutral family name; W1.9's lowering table is keyed on it.
-    FAMILY: ClassVar[str] = ""
-    #: Hyperparameter names, in declaration order.
-    HYPERPARAMETERS: ClassVar[tuple[str, ...]] = ()
-    #: Whether this kernel has an exact quasiseparable (celerite-class)
-    #: representation, and so admits an exact O(N) solve on ordered 1D data.
-    QUASISEPARABLE: ClassVar[bool] = False
-
-    # The four capability flags, with the reference path's honest answers.
-    # **W3.8** (ruled by Peter 2026-09-08 on W2.4 slice 3's carried finding):
-    # a kernel is a capability part now (:attr:`Likelihood.capability_parts`),
-    # so it declares them like every other composed piece. Until then it
-    # declared nothing, and an ``ampere.core`` kernel inside a torch or jax GP
-    # noise model was accepted while its amplitude silently got no gradient --
-    # the covariance was built in numpy and then converted, which detaches the
-    # graph in exactly the hyperparameters a native GP fit exists to fit.
-
-    #: Whether a gradient can be taken through this kernel's covariance.
-    DIFFERENTIABLE: ClassVar[bool] = False
-    #: Whether it builds a batch of covariances in one call.
-    BATCHABLE: ClassVar[bool] = False
-    #: Device its arrays live on. Never auto-detected (``architecture.md`` §5).
-    DEVICE: ClassVar[str] = "cpu"
-    #: Which rung of the capability ladder supplies it (W2.12's fourth flag).
-    BACKEND: ClassVar[str] = "reference"
-
-    def spec(self) -> KernelSpec:
-        """The neutral description a lowering rule consumes."""
-        return KernelSpec(
-            family=self.FAMILY,
-            hyperparameters=self.HYPERPARAMETERS,
-            quasiseparable=self.QUASISEPARABLE,
-        )
-
-    # -- evaluation ----------------------------------------------------------
-
-    def resolve(self, values: Mapping[str, Any] | None = None) -> dict[str, Any]:
-        """This kernel's own hyperparameter values, out of a wider mapping.
-
-        A :class:`NoiseModel` hands round one flat mapping covering itself and
-        its kernel; the kernel picks out its own names rather than requiring
-        the caller to split them.
-        """
-        if values is None:
-            return self.context(None)
-        selected = {name: values[name] for name in self.parameters.names if name in values}
-        return self.context(selected)
-
-    @abc.abstractmethod
-    def _covariance(self, separation: np.ndarray, values: Mapping[str, Any]) -> np.ndarray:
-        """Covariance at non-negative separations, given resolved values."""
-
-    def matrix(self, left: np.ndarray, right: np.ndarray, values: Mapping[str, Any]) -> np.ndarray:
-        """Dense covariance between two coordinate sets.
-
-        ``left`` and ``right`` are ``(n, d)`` and ``(m, d)`` float64 arrays;
-        a bare 1-D array is read as a column of ``n`` one-dimensional points.
-        The result is ``(n, m)``. Separation is Euclidean in the coordinate
-        space, which is why :meth:`GPSolver.check_compatible` requires every
-        coordinate axis to share one unit.
-        """
-        resolved = self.resolve(values)
-        points = _as_points(left, "kernel coordinates")
-        other = _as_points(right, "kernel coordinates", dimensions=points.shape[1])
-        difference = points[:, None, :] - other[None, :, :]
-        separation = np.sqrt(np.einsum("ijk,ijk->ij", difference, difference))
-        return self._covariance(separation, resolved)
-
-    def diagonal(self, coordinates: np.ndarray, values: Mapping[str, Any]) -> np.ndarray:
-        """The prior variance at each coordinate; ``k(0)`` for a stationary kernel."""
-        resolved = self.resolve(values)
-        n = int(_as_points(coordinates, "kernel coordinates").shape[0])
-        return self._covariance(np.zeros(n, dtype=DTYPE), resolved)
-
-    def __repr__(self) -> str:
-        declared = ", ".join(repr(self.parameters[name]) for name in self.parameters.names)
-        return f"{type(self).__name__}({declared})"
-
-
-class Matern32(Kernel):
-    r"""Matérn-3/2: ampere's canonical flexible-likelihood kernel.
-
-    .. math::
-        k(r) = a^2 \left(1 + \frac{\sqrt{3}\,r}{\ell}\right)
-               \exp\!\left(-\frac{\sqrt{3}\,r}{\ell}\right)
-
-    ``DEVELOPMENT_PLAN.md`` §2 and §4.4 make this the default throughout,
-    replacing legacy's hardcoded RBF, for two independent reasons. It
-    represents structured residuals better than a squared exponential (a
-    once-differentiable sample path, not an analytic one — real model
-    deficiencies are not infinitely smooth); and it is **exactly
-    quasiseparable**, expressible as a sum of celerite/SHO terms, which is what
-    makes :class:`QuasisepGP` an *exact* O(N) solve rather than an
-    approximation. ``prior_art.md`` lesson S1 records that Starfish (Czekala et
-    al. 2015) independently arrived at exactly this kernel, in velocity
-    separation, for exactly this purpose.
-
-    ``amplitude`` is the marginal **standard deviation** — ``k(0) ==
-    amplitude²`` — following celerite2's ``Matern32Term(sigma=..., rho=...)``
-    convention, so a prior on it is a prior in the data's own units.
-
-    Parameters
-    ----------
-    amplitude, length_scale
-        A frozen ``scipy.stats`` prior (fitted, with a :class:`Log` bijection),
-        a number (held fixed), or a ready-made ``Parameter``.
-    amplitude_unit
-        Unit of ``amplitude``; must match the observed values' unit.
-    length_scale_unit
-        Unit of ``length_scale``; must match the coordinate axis's unit.
-
-    Examples
-    --------
-    >>> import scipy.stats as st
-    >>> import astropy.units as u
-    >>> kernel = Matern32(st.loguniform(1e-3, 1e1), st.loguniform(1e-2, 1e2))
-    >>> kernel.spec()
-    KernelSpec(family='matern32', hyperparameters=('amplitude', 'length_scale'),
-               quasiseparable=True)
-    >>> kernel.parameters.free_names
-    ('amplitude', 'length_scale')
-    >>> kernel.parameters.bijections()
-    (Log(lower=0.0), Log(lower=0.0))
-    >>> float(kernel.matrix([[0.0]], [[0.0]], {"amplitude": 2.0, "length_scale": 1.0})[0, 0])
-    4.0
-    """
-
-    FAMILY: ClassVar[str] = "matern32"
-    HYPERPARAMETERS: ClassVar[tuple[str, ...]] = ("amplitude", "length_scale")
-    QUASISEPARABLE: ClassVar[bool] = True
-
-    def __init__(
-        self,
-        amplitude: Any,
-        length_scale: Any,
-        *,
-        amplitude_unit: u.UnitBase | None = None,
-        length_scale_unit: u.UnitBase | None = None,
-    ) -> None:
-        self.register_parameters(
-            _as_hyperparameter("amplitude", amplitude, amplitude_unit),
-            _as_hyperparameter("length_scale", length_scale, length_scale_unit),
-        )
-
-    def _covariance(self, separation: np.ndarray, values: Mapping[str, Any]) -> np.ndarray:
-        amplitude = _positive(values["amplitude"], "amplitude", self.FAMILY, allow_zero=True)
-        length_scale = _positive(values["length_scale"], "length_scale", self.FAMILY)
-        scaled = _SQRT3 * separation / length_scale
-        return amplitude * amplitude * (1.0 + scaled) * np.exp(-scaled)
-
-
-class SquaredExponential(Kernel):
-    r"""Squared exponential (RBF): legacy's kernel, kept for comparison.
-
-    .. math::
-        k(r) = a^2 \exp\!\left(-\frac{r^2}{2\ell^2}\right)
-
-    Provided so the misspecification study in milestone M2 can compare the new
-    default against what legacy ampere actually did, and so a user who wants it
-    can have it. It is **not quasiseparable**: :class:`QuasisepGP` will refuse
-    it, and it therefore does not scale past :class:`DenseGP`. That asymmetry
-    is the concrete reason ``DEVELOPMENT_PLAN.md`` §2 made Matérn the default.
-    """
-
-    FAMILY: ClassVar[str] = "squared_exponential"
-    HYPERPARAMETERS: ClassVar[tuple[str, ...]] = ("amplitude", "length_scale")
-    QUASISEPARABLE: ClassVar[bool] = False
-
-    def __init__(
-        self,
-        amplitude: Any,
-        length_scale: Any,
-        *,
-        amplitude_unit: u.UnitBase | None = None,
-        length_scale_unit: u.UnitBase | None = None,
-    ) -> None:
-        self.register_parameters(
-            _as_hyperparameter("amplitude", amplitude, amplitude_unit),
-            _as_hyperparameter("length_scale", length_scale, length_scale_unit),
-        )
-
-    def _covariance(self, separation: np.ndarray, values: Mapping[str, Any]) -> np.ndarray:
-        amplitude = _positive(values["amplitude"], "amplitude", self.FAMILY, allow_zero=True)
-        length_scale = _positive(values["length_scale"], "length_scale", self.FAMILY)
-        return amplitude * amplitude * np.exp(-0.5 * (separation / length_scale) ** 2)
-
-
-def _positive(value: Any, name: str, owner: str, *, allow_zero: bool = False) -> float:
-    number = float(np.asarray(value, dtype=DTYPE))
-    if not math.isfinite(number) or number < 0.0 or (number == 0.0 and not allow_zero):
-        bound = ">= 0" if allow_zero else "> 0"
-        raise LikelihoodError(
-            f"{owner}'s {name!r} must be finite and {bound}, got {number!r}. Declare it with a "
-            f"prior supported on the positive half-line and a Log bijection so no sampler can "
-            f"propose a value outside it."
-        )
-    return number
-
-
-# ---------------------------------------------------------------------------
 # GP solver strategies
 # ---------------------------------------------------------------------------
 
@@ -711,7 +434,20 @@ class GPSolver(abc.ABC):
         return {}
 
     def check_compatible(self, kernel: Kernel, observed: FunctionSamples) -> None:
-        """Composition-time check that this strategy can run this problem."""
+        """Composition-time check that this strategy can run this problem.
+
+        **W4.5 widens two of the rules to the kernel's axis selection.** The
+        single-unit rule is now applied by :meth:`Kernel.check_axes`, per leaf
+        kernel, over the axes that leaf *selects* — a three-axis container is
+        refused for a bare isotropic kernel exactly as it was, and accepted for
+        ``Matern32(axes=("u", "v"))``. The ordered-1D rule counts the axes the
+        kernel tree actually uses rather than the container's, so a
+        quasiseparable solve over the spectral axis of a three-axis container
+        is expressible; and a :class:`~ampere.core.kernels.Product` is refused
+        on a quasiseparable solver by name, before the generic
+        ``QUASISEPARABLE`` refusal, because "products are not quasiseparable"
+        is a sharper diagnosis than "this kernel is not".
+        """
         kind = type(observed).__name__
         # Declarative incompatibilities first: they are permanent facts about
         # the choice, whereas "not implemented yet" is temporary, and a user
@@ -724,14 +460,16 @@ class GPSolver(abc.ABC):
                 f"PhotometricPoints, VisibilitySet); gridded 2D+ data are the subject of the "
                 f"SVGP / SKI / Vecchia strategy slots (DEVELOPMENT_PLAN.md §4.4, Phase 5)."
             )
-        units = {axis.unit for axis in observed.axes}
-        if len(units) > 1:
-            named = sorted(str(unit) for unit in units)
+        kernel.check_axes(observed, owner=self.NAME)
+        if self.REQUIRES_QUASISEPARABLE and isinstance(kernel, Product):
             raise LikelihoodError(
-                f"{self.NAME} measures separation as a Euclidean distance across a "
-                f"{kind}'s coordinate axes, but they carry different units {named}. A single "
-                f"isotropic length-scale is meaningless across mixed units; use one axis, or "
-                f"declare a kernel that takes a length-scale per axis."
+                f"{self.NAME} cannot lower a Product: a product of quasiseparable kernels is "
+                f"not quasiseparable. Where the factors act on different axes — which is what a "
+                f"Product is for — the result is not a function of one ordered coordinate at "
+                f"all, and where they act on the same one the semiseparable rank multiplies and "
+                f"is not recoverable from the factors' own representations. Use DenseGP, or "
+                f"replace the Product with a Sum, which is quasiseparable exactly when every "
+                f"term is."
             )
         if self.REQUIRES_QUASISEPARABLE and not kernel.QUASISEPARABLE:
             raise LikelihoodError(
@@ -739,11 +477,19 @@ class GPSolver(abc.ABC):
                 f"{type(kernel).__name__} ({kernel.FAMILY}) has none. Use Matern32 — which is why "
                 f"DEVELOPMENT_PLAN.md §2 made it the default — or switch to DenseGP."
             )
-        if self.REQUIRES_ORDERED_1D and len(observed.axes) != 1:
-            raise LikelihoodError(
-                f"{self.NAME} needs one ordered coordinate axis, but a {kind} has "
-                f"{len(observed.axes)}: {[axis.name for axis in observed.axes]}."
-            )
+        if self.REQUIRES_ORDERED_1D:
+            used = kernel.selected_axes([axis.name for axis in observed.axes])
+            if len(used) != 1:
+                raise LikelihoodError(
+                    f"{self.NAME} needs one ordered coordinate axis, but a {kind} has "
+                    f"{len(observed.axes)}: {[axis.name for axis in observed.axes]}."
+                    + (
+                        ""
+                        if kernel.axes is None and not kernel.terms
+                        else f" The kernel selects {list(used)}; select exactly one axis to "
+                        f"reach the O(N) path."
+                    )
+                )
         if not self.IMPLEMENTED:
             raise LikelihoodError(self._unimplemented_message())
 
@@ -978,70 +724,45 @@ class DenseGP(GPSolver):
 
 
 # ---------------------------------------------------------------------------
-# celerite2 terms: the exact quasiseparable representations (W2.3)
+# celerite2 terms: the exact quasiseparable representations (W2.3, W4.5)
 # ---------------------------------------------------------------------------
 
 
 @functools.cache
-def _matern32_term_type() -> Any:
-    r"""The celerite2 ``Term`` subclass for an **exact** Matérn-3/2.
+def _ampere_term_type() -> Any:
+    """The ``celerite2.terms.Term`` subclass that wraps an ampere kernel.
+
+    **One wrapper, every family (W4.5).** Until W4.5 this module carried a
+    hand-written ``celerite2`` term class per kernel — one, for Matérn-3/2,
+    with its rank-2 algebra spelled out — and each differentiable backend
+    carried a transcription of it. That does not scale to the five families
+    W4.5 adds: five closed forms and five sets of generators would have become
+    fifteen transcriptions of identical mathematics, with nothing checking that
+    they stayed identical.
+
+    So the mathematics moved to :mod:`ampere.core.kernels`, where each family's
+    generators are a registered
+    :class:`~ampere.core.kernels.CeleriteRepresentation` builder written once
+    against :class:`~ampere.core.kernels.ArrayOps`, and this class became a
+    *shim*: it asks the registry for the kernel's builder, calls it on the
+    coordinates celerite2 hands it, and returns celerite2's ``(c, a, U, V)``.
 
     Built on first use rather than at import, because it has to subclass
     ``celerite2.terms.Term`` and ``ampere.core`` does not import celerite2 at
     module level (see :class:`QuasisepGP`). :func:`functools.cache` makes the
     class a singleton, so ``isinstance`` and celerite2's own caches behave.
 
-    **Why ampere supplies its own term rather than using
-    ``celerite2.terms.Matern32Term``.** celerite2's is an *approximation*: its
-    own docstring says so, and its coefficients are
-
-    .. math::
-        k_{\epsilon}(\tau) = a^2 e^{-w_0 \tau}
-            \left[\cos(\epsilon\tau) + \frac{w_0}{\epsilon}\sin(\epsilon\tau)
-            \right],\qquad w_0 = \frac{\sqrt3}{\ell},
-
-    which tends to the Matérn-3/2 kernel only as :math:`\epsilon \to 0` — the
-    celerite basis :math:`e^{-c\tau}(a\cos d\tau + b \sin d\tau)` has no
-    :math:`\tau e^{-c\tau}` member. At the default ``eps=0.01`` that costs
-    about 5e-3 in the log-likelihood on a realistic spectrum, three orders of
-    magnitude outside the conformance battery's ``cross_solver`` tolerance.
-
-    The *solver* underneath, though, does not need the celerite basis at all:
-    it factorises any rank-J semiseparable matrix
-
-    .. math::
-        K_{nm} = \sum_j U_{nj} V_{mj} e^{-c_j (t_n - t_m)}\quad (n > m),
-
-    and Matérn-3/2 has an **exact** rank-2 representation in that form. For
-    :math:`t_n > t_m`, writing :math:`f = \sqrt3/\ell` and :math:`\Delta =
-    t_n - t_m`,
-
-    .. math::
-        k(\Delta) = a^2 (1 + f\Delta)e^{-f\Delta}
-                  = e^{-f(t_n - t_m)}
-                    \Big[\underbrace{a^2(1 + f t_n)}_{U_{n0}}
-                         \underbrace{\cdot\, 1}_{V_{m0}}
-                       + \underbrace{(-a^2 f)}_{U_{n1}}
-                         \underbrace{\cdot\, t_m}_{V_{m1}}\Big],
-
-    with :math:`c = (f, f)` and the diagonal :math:`a_n = a^2 +
-    \mathrm{diag}_n`. The bracket is :math:`a^2(1 + f t_n - f t_m) = a^2(1 +
-    f\Delta)`, so the identity is algebraic, not a limit. That is precisely
-    the claim ``likelihoods.md`` §6 makes — "Matérn-3/2 has an exact
-    representation as a sum of celerite/SHO terms, which is what makes
-    ``QuasisepGP`` an *exact* O(N) solve" — and this class is where it is
-    cashed in.
-
-    The generators grow linearly in the coordinate (:math:`U_{n0} \propto f
-    t_n`), so :math:`U_n \cdot V_m` is a difference of two large numbers when
-    :math:`f t \gg 1`. The coordinates are therefore re-referenced to the
-    midpoint of their own range — the products only ever involve differences,
-    so this is exact — which bounds the cancellation by half the number of
-    length scales the data span. Measured against the dense Cholesky: ~5e-12
-    over 10 length scales, ~3e-10 over 10², ~2e-8 over 10⁴. This is a
-    property of the celerite representation of a Matérn kernel, not of
-    ampere, and it is the one place where "exact" means "exact in exact
-    arithmetic".
+    **Why ampere supplies its own term rather than using celerite2's.**
+    celerite2's ``Matern32Term`` is an *approximation* and says so: the
+    celerite basis ``e^{-c t}(a cos d t + b sin d t)`` has no ``t e^{-c t}``
+    member, so its Matérn-3/2 is a limit in a parameter ``eps`` which at the
+    default ``eps=0.01`` costs about 5e-3 in the log-likelihood — three orders
+    of magnitude outside the conformance battery's ``cross_solver`` tolerance.
+    The *solver* underneath needs no such approximation: it factorises any
+    rank-J semiseparable matrix, and Matérn-1/2, -3/2 and -5/2, the SHO and the
+    rotation pair all have exact representations in that form. See
+    :class:`~ampere.core.kernels.CeleriteRepresentation` for the general shape
+    and each ``*_representation`` function for its algebra.
     """
     # Imported here rather than at module level: celerite2 is a base
     # dependency (architecture.md §2), but ampere.core promises to import
@@ -1050,17 +771,17 @@ def _matern32_term_type() -> Any:
     # never calls. Same idiom as the reference backend's pyphot import.
     import celerite2.terms
 
-    class _ExactMatern32Term(celerite2.terms.Term):
-        """``k(tau) = amplitude**2 (1 + sqrt(3) tau / ell) exp(-sqrt(3) tau / ell)``."""
+    class _AmpereTerm(celerite2.terms.Term):
+        """An ampere :class:`Kernel` presented as a celerite2 term."""
 
-        def __init__(self, amplitude: float, length_scale: float) -> None:
-            self.amplitude = float(amplitude)
-            self.length_scale = float(length_scale)
+        def __init__(self, kernel: Kernel, values: Mapping[str, Any]) -> None:
+            self.kernel = kernel
+            self.values = dict(values)
+            self.builder = lookup_quasiseparable_term(kernel.FAMILY)
 
         def get_value(self, tau: Any) -> np.ndarray:
             separation = np.abs(np.atleast_1d(np.asarray(tau, dtype=DTYPE)))
-            scaled = _SQRT3 * separation / self.length_scale
-            return np.asarray(self.amplitude**2 * (1.0 + scaled) * np.exp(-scaled), dtype=DTYPE)
+            return np.asarray(self.kernel.value(separation, self.values), dtype=DTYPE)
 
         def get_celerite_matrices(
             self,
@@ -1074,52 +795,47 @@ def _matern32_term_type() -> Any:
         ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
             points = np.ascontiguousarray(np.atleast_1d(np.asarray(x, dtype=DTYPE)))
             diagonal = np.ascontiguousarray(np.atleast_1d(np.asarray(diag, dtype=DTYPE)))
-            decay = _SQRT3 / self.length_scale
-            marginal = self.amplitude * self.amplitude
-            # x arrives sorted (QuasisepGP sorts before calling), so the
-            # midpoint of the range is (first + last) / 2.
-            shifted = points - 0.5 * (points[0] + points[-1])
+            # x arrives sorted (QuasisepGP sorts before calling), which is what
+            # the builders' midpoint centring assumes.
+            representation = self.builder(self.kernel, self.values, points)
             return (
-                np.ascontiguousarray([decay, decay], dtype=DTYPE),
-                np.ascontiguousarray(diagonal + marginal, dtype=DTYPE),
-                np.ascontiguousarray(
-                    np.stack(
-                        [
-                            marginal * (1.0 + decay * shifted),
-                            np.full_like(shifted, -marginal * decay),
-                        ],
-                        axis=-1,
-                    ),
-                    dtype=DTYPE,
-                ),
-                np.ascontiguousarray(
-                    np.stack([np.ones_like(shifted), shifted], axis=-1), dtype=DTYPE
-                ),
+                np.ascontiguousarray(representation.decay, dtype=DTYPE),
+                np.ascontiguousarray(diagonal + representation.marginal, dtype=DTYPE),
+                np.ascontiguousarray(representation.left, dtype=DTYPE),
+                np.ascontiguousarray(representation.right, dtype=DTYPE),
             )
 
-    return _ExactMatern32Term
+    return _AmpereTerm
 
 
-def _matern32_term(kernel: Kernel, values: Mapping[str, Any]) -> Any:
-    """Build the exact Matérn-3/2 celerite term from a resolved kernel."""
+def _celerite_term(kernel: Kernel, values: Mapping[str, Any]) -> Any:
+    """Build the exact celerite representation of a resolved kernel.
+
+    The overflow guard is here rather than inside a builder because it applies
+    to every family: ``k(0)`` is ``amplitude**2`` throughout ampere, so an
+    amplitude above about 1e154 makes the marginal variance — and with it every
+    generator — non-finite, and celerite2's factorisation returns quiet NaN
+    where a Cholesky raises. A composite's amplitudes are qualified
+    (``term0.amplitude``), so the last name segment is what is matched.
+    """
+    # The reference path computes in numpy whatever namespace the kernel was
+    # declared in, which is what ``with_ops`` exists for (a torch kernel handed
+    # to this solver must not build tensors celerite2's numpy driver cannot
+    # read). Ordinary reference kernels are already numpy, and get themselves
+    # back unchanged.
+    kernel = kernel.with_ops(NUMPY_OPS)
     resolved = kernel.resolve(values)
-    amplitude = _positive(resolved["amplitude"], "amplitude", kernel.FAMILY, allow_zero=True)
-    length_scale = _positive(resolved["length_scale"], "length_scale", kernel.FAMILY)
-    if not math.isfinite(amplitude * amplitude):
-        raise LikelihoodError(
-            f"the kernel's marginal variance amplitude**2 = {amplitude!r}**2 overflows float64, "
-            f"so the quasiseparable representation cannot be built. Constrain the amplitude "
-            f"prior to the data's own scale."
-        )
-    return _matern32_term_type()(amplitude, length_scale)
-
-
-#: Kernel family -> the builder for its **exact** celerite representation.
-#: :class:`QuasisepGP` routes a kernel to the O(N) path only through this
-#: table, so a kernel that declares ``QUASISEPARABLE`` without an entry here
-#: is refused by name rather than silently approximated. Sums of SHO terms
-#: (``likelihoods.md`` §12) join by adding one builder and one row.
-_QUASISEPARABLE_TERMS: dict[str, Any] = {Matern32.FAMILY: _matern32_term}
+    for name, value in resolved.items():
+        if name.rsplit(".", 1)[-1] != "amplitude":
+            continue
+        amplitude = float(np.asarray(value, dtype=DTYPE))
+        if not math.isfinite(amplitude * amplitude):
+            raise LikelihoodError(
+                f"the kernel's marginal variance amplitude**2 = {amplitude!r}**2 overflows "
+                f"float64, so the quasiseparable representation cannot be built. Constrain the "
+                f"amplitude prior to the data's own scale."
+            )
+    return _ampere_term_type()(kernel, values)
 
 
 class _SolverSlot(GPSolver):
@@ -1170,17 +886,22 @@ class QuasisepGP(GPSolver):
     ``pip install .`` from a checkout (PyPI's ``ampere`` package is
     unrelated) -- with no extras, must be a scalable fitting environment, not
     one that still has the O(N³) problem. It is **exact**, not approximate: a
-    Matérn-3/2 kernel
-    has an exact rank-2 semiseparable representation (see
-    :func:`_matern32_term_type` for the algebra), so this recursion computes
-    the same marginal likelihood :class:`DenseGP` does, in linear time. That
-    equivalence is a conformance row (§4.6), which is why :class:`DenseGP`
-    exists at all.
+    Matérn-3/2 kernel has an exact rank-2 semiseparable representation (see
+    :func:`~ampere.core.kernels.matern32_representation` for the algebra), so
+    this recursion computes the same marginal likelihood :class:`DenseGP` does,
+    in linear time. That equivalence is a conformance row (§4.6), which is why
+    :class:`DenseGP` exists at all. Since **W4.5** the same holds for
+    Matérn-1/2 and -5/2, the SHO, the rotation pair, and any :class:`Sum` of
+    them: a sum of quasiseparable terms is quasiseparable, at a rank that is
+    the sum of the terms'.
 
     A kernel reaches this path only if it declares ``QUASISEPARABLE`` **and**
-    ampere holds an exact celerite representation for its family
-    (:data:`_QUASISEPARABLE_TERMS`); anything else is refused by name at
-    composition time. Coordinates need not arrive sorted — a Gaussian density
+    every family in its tree has a representation in the public registry
+    (:func:`~ampere.core.kernels.register_quasiseparable_term`); anything else
+    is refused by name at composition time — including a
+    :class:`~ampere.core.kernels.Product`, which gets its own refusal because
+    the reason is structural rather than a missing row. Coordinates need not
+    arrive sorted — a Gaussian density
     is invariant under a simultaneous permutation of residuals, variances and
     coordinates, so this solver sorts internally and undoes the permutation on
     the way out.
@@ -1223,28 +944,33 @@ class QuasisepGP(GPSolver):
 
     def check_compatible(self, kernel: Kernel, observed: FunctionSamples) -> None:
         super().check_compatible(kernel, observed)
-        if kernel.FAMILY not in _QUASISEPARABLE_TERMS:
-            known = ", ".join(sorted(_QUASISEPARABLE_TERMS)) or "(none)"
-            raise LikelihoodError(
-                f"{type(kernel).__name__} declares QUASISEPARABLE = True, but ampere holds no "
-                f"exact celerite representation for the {kernel.FAMILY!r} family, so "
-                f"{self.NAME} has nothing to lower it to. Families with one: {known}. Add a "
-                f"builder to _QUASISEPARABLE_TERMS, or use DenseGP — a wrong representation "
-                f"would be an approximation wearing an exact solver's name."
-            )
+        # Every family in the tree needs a registered representation, not just
+        # the root: a Sum lowers term by term (``sum_representation``), so one
+        # unregistered term is enough to stop it, and it must be named here
+        # rather than discovered inside the first factorisation.
+        for leaf in kernel.leaves():
+            lookup_quasiseparable_term(leaf.FAMILY, owner=self.NAME)
 
     # -- internals -----------------------------------------------------------
 
-    def _axis(self, coordinates: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """The ``(n, 1)`` points, their bare axis, and the sorting permutation."""
+    def _axis(
+        self, coordinates: np.ndarray, kernel: Kernel | None = None
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """The ``(n, 1)`` points, their bare axis, and the sorting permutation.
+
+        ``kernel`` is passed since W4.5 so an axis-selecting kernel gets its own
+        column out of a multi-axis container's coordinates. It is optional so a
+        direct call with already-1-D coordinates still works.
+        """
         points = _as_points(coordinates, "data coordinates")
-        if points.shape[1] != 1:
+        selected = points if kernel is None else kernel.select(points)
+        if selected.shape[1] != 1:
             raise LikelihoodError(
                 f"{self.NAME} needs one ordered coordinate per sample, but the coordinates have "
-                f"{points.shape[1]} per point. check_compatible refuses this at composition "
+                f"{selected.shape[1]} per point. check_compatible refuses this at composition "
                 f"time; a direct solver call reaches it here. Use DenseGP for 2D+ coordinates."
             )
-        axis = np.ascontiguousarray(points[:, 0])
+        axis = np.ascontiguousarray(selected[:, 0])
         return points, axis, np.argsort(axis, kind="stable")
 
     def _factorise(
@@ -1257,7 +983,7 @@ class QuasisepGP(GPSolver):
         whitening: bool = False,
     ) -> Any:
         """A celerite2 ``GaussianProcess`` factorised on sorted coordinates."""
-        # Lazy, for the reason _matern32_term_type() gives.
+        # Lazy, for the reason _ampere_term_type() gives.
         import celerite2
 
         # celerite2.driver is the compiled extension: no stubs, so pyrefly
@@ -1282,7 +1008,7 @@ class QuasisepGP(GPSolver):
                 "is a caller error rather than an ill-conditioned problem."
             )
 
-        term = _QUASISEPARABLE_TERMS[kernel.FAMILY](kernel, values)
+        term = _celerite_term(kernel, values)
         gp = celerite2.GaussianProcess(term, mean=0.0)
         try:
             gp.compute(ordered_axis, diag=ordered_diagonal, check_sorted=False)
@@ -1315,7 +1041,7 @@ class QuasisepGP(GPSolver):
         variance: np.ndarray,
         values: Mapping[str, Any],
     ) -> float:
-        _, axis, order = self._axis(coordinates)
+        _, axis, order = self._axis(coordinates, kernel)
         residuals = _as_float64(residual, "residuals")
         diagonal = _as_float64(variance, "noise variances") + self.jitter**2
         gp = self._factorise(kernel, axis[order], diagonal[order], values)
@@ -1330,7 +1056,7 @@ class QuasisepGP(GPSolver):
         values: Mapping[str, Any],
         at: np.ndarray | None = None,
     ) -> GPConditional:
-        points, axis, order = self._axis(coordinates)
+        points, axis, order = self._axis(coordinates, kernel)
         residuals = _as_float64(residual, "residuals")
         diagonal = _as_float64(variance, "noise variances") + self.jitter**2
         gp = self._factorise(kernel, axis[order], diagonal[order], values)
@@ -1358,7 +1084,7 @@ class QuasisepGP(GPSolver):
         *,
         jitter: float = 1e-10,
     ) -> np.ndarray:
-        points, axis, order = self._axis(coordinates)
+        points, axis, order = self._axis(coordinates, kernel)
         draws = _as_float64(whitened, "whitened latent draws")
         # The same stabilisation DenseGP applies: a jitter relative to the
         # kernel's own scale, so the two solvers factorise the same matrix.
@@ -1797,27 +1523,16 @@ class GaussianProcessNoise(NoiseModel):
         self._check_hyperparameter_units(observed)
 
     def _check_hyperparameter_units(self, observed: FunctionSamples) -> None:
-        axis_unit = observed.axes[0].unit if observed.axes else None
-        declared: Mapping[str, u.UnitBase | None] = {
-            name: self.parameters[name].unit for name in self.parameters.names
-        }
-        length_scale = declared.get("length_scale")
-        if length_scale is not None and length_scale != axis_unit:
-            raise LikelihoodError(
-                f"the kernel's 'length_scale' is declared in {length_scale} but the "
-                f"{type(observed).__name__}'s coordinate axis is in {axis_unit}. Priors are "
-                f"numeric in the declared unit and rescaling a distribution correctly is "
-                f"family-specific, so this contract requires an exact match rather than a "
-                f"conversion (parameters.md §8 makes the same ruling for tying)."
-            )
-        amplitude = declared.get("amplitude")
-        if amplitude is not None and amplitude != observed.unit:
-            raise LikelihoodError(
-                f"the kernel's 'amplitude' is declared in {amplitude} but the "
-                f"{type(observed).__name__}'s values are in {observed.unit}. The amplitude is a "
-                f"marginal standard deviation in the data's own units; declare it in "
-                f"{observed.unit} or leave its unit unset."
-            )
+        """Delegated to the kernel tree since W4.5.
+
+        The rule and its messages are unchanged; what changed is who knows the
+        answer. A composite's hyperparameters are qualified
+        (``term0.length_scale``), and a term that selects ``("spectral_axis",)``
+        is measured in micron while its sibling on ``("u", "v")`` is
+        dimensionless — so "the coordinate axis" is a per-leaf question, and
+        :meth:`Kernel.check_units` is where each leaf answers it.
+        """
+        self._kernel.check_units(observed)
 
     def noise_params(
         self,
@@ -1851,19 +1566,34 @@ class GaussianProcessNoise(NoiseModel):
         the length scale against the prior alone and reported nothing wrong
         (``DEVELOPMENT_PLAN.md`` §2, 2026-09-08; §4.4 clarification).
         """
+        bound = self.kernel_for(observed)
         return NoiseParams(
             sigma=self.sigma(observed, retain, values, predicted=predicted),
             values=values,
             coordinates=coordinates,
-            kernel=self._kernel,
+            kernel=bound,
             solver=self._solver,
-            latent=self._realised_latent(coordinates, latent, values),
+            latent=self._realised_latent(bound, coordinates, latent, values),
             limits=limits,
             retain=retain,
         )
 
+    def kernel_for(self, observed: FunctionSamples) -> Kernel:
+        """This noise model's kernel, bound to *observed*'s axis order (W4.5).
+
+        The one place a kernel's ``axes=("u", "v")`` becomes "columns 0 and 1
+        of the stacked coordinate block". It has to be here and not in the
+        solver: the solver is handed a bare ``(n, d)`` array and no longer
+        knows what the columns are called, whereas this method has the
+        container. Returns the kernel itself, allocating nothing, whenever
+        nothing in the tree names axes — which is every problem written before
+        W4.5.
+        """
+        return self._kernel.for_axes([axis.name for axis in observed.axes])
+
     def _realised_latent(
         self,
+        kernel: Kernel,
         coordinates: np.ndarray | None,
         latent: np.ndarray | None,
         values: Mapping[str, Any],
@@ -1893,7 +1623,7 @@ class GaussianProcessNoise(NoiseModel):
                 f"the whitened latent GP values have shape {whitened.shape} but there are "
                 f"{points.shape[0]} retained sample(s). One latent value per retained sample."
             )
-        return self._solver.latent_transform(self._kernel, points, whitened, values)
+        return self._solver.latent_transform(kernel, points, whitened, values)
 
 
 # ---------------------------------------------------------------------------
@@ -3366,7 +3096,12 @@ class Likelihood(Parameterised):
             else at
         )
         return self._noise.solver.condition(
-            self._noise.kernel, coordinates, residual, sigma**2, resolved, at=target
+            self._noise.kernel_for(observed),
+            coordinates,
+            residual,
+            sigma**2,
+            resolved,
+            at=target,
         )
 
     # -- internals -----------------------------------------------------------

@@ -134,7 +134,7 @@ from __future__ import annotations
 import dataclasses
 import functools
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar
 
 import jax
@@ -142,15 +142,35 @@ import jax.numpy as jnp
 import jax.scipy.linalg as jsl
 import numpy as np
 
-from ampere.core import GPConditional, GPSolver, Kernel
+from ampere.core import GPConditional, GPSolver, Kernel, Product, Sum
+from ampere.core import SHO as _CoreSHO
+from ampere.core import Matern12 as _CoreMatern12
 from ampere.core import Matern32 as _CoreMatern32
+from ampere.core import Matern52 as _CoreMatern52
+from ampere.core import RotationTerm as _CoreRotationTerm
+from ampere.core import SpectralMixture as _CoreSpectralMixture
 from ampere.core import SquaredExponential as _CoreSquaredExponential
 from ampere.core.exceptions import LikelihoodError
+from ampere.core.kernels import NUMPY_OPS, lookup_quasiseparable_term
 
 from ._config import BACKEND, require_x64, x64_enabled
 from ._device import DEVICE, device_flag, place_on, resolve_device
 
-__all__ = ["DEVICE", "DenseGP", "Matern32", "QuasisepGP", "SquaredExponential"]
+__all__ = [
+    "DEVICE",
+    "SHO",
+    "DenseGP",
+    "JaxOps",
+    "Matern12",
+    "Matern32",
+    "Matern52",
+    "Product",
+    "QuasisepGP",
+    "RotationTerm",
+    "SpectralMixture",
+    "SquaredExponential",
+    "Sum",
+]
 
 _LOG_2PI = math.log(2.0 * math.pi)
 _SQRT3 = math.sqrt(3.0)
@@ -206,22 +226,88 @@ def _separation(left: Any, right: Any) -> jax.Array:
     return jnp.sqrt(jnp.sum(difference * difference, axis=-1))
 
 
+class JaxOps:
+    """:class:`~ampere.core.ArrayOps` in ``jax.numpy``, on one device.
+
+    **W4.5.** This backend used to transcribe each kernel's closed form and
+    each celerite representation into ``jax.numpy`` by hand; the torch backend
+    did the same, and both carried comments saying the copies had to stay in
+    step with the core's, with nothing able to check it. The mathematics now
+    lives once in :mod:`ampere.core.kernels`, written against this protocol,
+    and what remains backend-specific is this class: float64 coercion (the x64
+    policy of ``lowering.md`` §10.2), and placement on the kernel's device.
+
+    One instance per kernel, because the device is per instance since W2.5
+    slice 3.
+    """
+
+    def __init__(self, device: Any = None) -> None:
+        self.device = device
+
+    def scalar(self, value: Any) -> jax.Array:
+        return place_on(jnp.asarray(value, dtype=jnp.float64), self.device)
+
+    def points(self, coordinates: Any, *, dimensions: int | None = None) -> jax.Array:
+        array = _points(coordinates)
+        if dimensions is not None and int(array.shape[1]) != dimensions:
+            raise LikelihoodError(
+                f"kernel coordinates have {int(array.shape[1])} coordinate(s) per point, but "
+                f"the data they are being compared against have {dimensions}."
+            )
+        return array
+
+    def n_points(self, coordinates: Any) -> int:
+        return int(_points(coordinates).shape[0])
+
+    def separation(self, left: Any, right: Any) -> jax.Array:
+        difference = left[:, None, :] - right[None, :, :]
+        return jnp.sqrt(jnp.sum(difference * difference, axis=-1))
+
+    def zeros(self, n: int) -> jax.Array:
+        return jnp.zeros(n, dtype=jnp.float64)
+
+    def ones_like(self, array: Any) -> jax.Array:
+        return jnp.ones_like(jnp.asarray(array, dtype=jnp.float64))
+
+    def stack(self, arrays: Sequence[Any], axis: int = -1) -> jax.Array:
+        return jnp.stack([jnp.asarray(item, dtype=jnp.float64) for item in arrays], axis=axis)
+
+    def concatenate(self, arrays: Sequence[Any], axis: int = -1) -> jax.Array:
+        return jnp.concatenate([jnp.asarray(item, dtype=jnp.float64) for item in arrays], axis=axis)
+
+    def exp(self, array: Any) -> jax.Array:
+        return jnp.exp(jnp.asarray(array, dtype=jnp.float64))
+
+    def cos(self, array: Any) -> jax.Array:
+        return jnp.cos(jnp.asarray(array, dtype=jnp.float64))
+
+    def sin(self, array: Any) -> jax.Array:
+        return jnp.sin(jnp.asarray(array, dtype=jnp.float64))
+
+    def take_columns(self, points: Any, columns: Sequence[int]) -> jax.Array:
+        return jnp.asarray(points)[:, jnp.asarray(list(columns))]
+
+
 class _JaxKernel(Kernel):
     """Shared plumbing for the jax kernels: jax separations, jax covariances.
 
-    ``ampere.core.Kernel.matrix`` and ``.diagonal`` build their separations in
-    numpy and, through ``_positive``, coerce each hyperparameter with
-    ``float()`` — which is right on the reference path and fatal on a traced
-    one. Both are overridden here rather than reused.
+    ``ampere.core.Kernel``'s arithmetic is written against
+    :class:`~ampere.core.ArrayOps`, and this class supplies :class:`JaxOps`;
+    ``matrix``, ``diagonal`` and every family's ``_covariance`` are therefore
+    the core's, computing in ``jax.numpy``. Before **W4.5** they were all
+    overridden here, in transcriptions that had to be kept in step by hand.
 
-    The dropped ``_positive`` check is not dropped silently: a non-positive
-    length scale gives a non-finite covariance, the Cholesky then yields NaN,
-    and the guards in :class:`DenseGP` turn that into the §4.5 failure the
-    contract asks for. On the reference path the check can be an exception
-    because nothing is traced; here the same information has to travel as a
-    value. The declaration is what keeps it from arising at all: a kernel
-    hyperparameter is declared with a prior supported on the positive half-line
-    and a ``Log`` bijection, so no sampler can propose a value outside it.
+    What is still declared here is that the core's ``_positive`` checks do not
+    run (``VALIDATES = False``) — right on the reference path, fatal on a
+    traced one, where a hyperparameter may be a tracer. The check is not
+    dropped silently: a non-positive length scale gives a non-finite
+    covariance, the Cholesky then yields NaN, and the guards in
+    :class:`DenseGP` turn that into the §4.5 failure the contract asks for. On
+    the reference path the check can be an exception because nothing is traced;
+    here the same information has to travel as a value. The declaration is what
+    keeps it from arising at all: a kernel hyperparameter is declared with a
+    prior supported on the positive half-line and a ``Log`` bijection, so no
+    sampler can propose a value outside it.
     """
 
     BACKEND: ClassVar[str] = BACKEND
@@ -244,6 +330,8 @@ class _JaxKernel(Kernel):
     #: composition rather than a mixed-device failure inside a trace. Never
     #: auto-detected (``architecture.md`` §5); see :mod:`ampere.backends.jax._device`.
     DEVICE: ClassVar[str] = DEVICE
+    #: The hyperparameters may be tracers; positivity is the declaration's job.
+    VALIDATES: ClassVar[bool] = False
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         require_x64(f"a jax {type(self).__name__}")
@@ -252,22 +340,15 @@ class _JaxKernel(Kernel):
         resolved = resolve_device(device, f"a jax {type(self).__name__}")
         object.__setattr__(self, "_device", resolved)
         object.__setattr__(self, "DEVICE", device_flag(device, resolved))
+        object.__setattr__(self, "_ops", JaxOps(resolved))
 
     def place(self, array: Any) -> jax.Array:
         """*array* as float64 on this kernel's device."""
         return place_on(jnp.asarray(array, dtype=jnp.float64), getattr(self, "_device", None))
 
-    def _covariance(self, separation: Any, values: Mapping[str, Any]) -> jax.Array:
-        raise NotImplementedError
 
-    def matrix(self, left: Any, right: Any, values: Mapping[str, Any]) -> jax.Array:
-        """Dense covariance between two coordinate sets, ``(n, m)``, in jax."""
-        return self.place(self._covariance(_separation(left, right), self.resolve(values)))
-
-    def diagonal(self, coordinates: Any, values: Mapping[str, Any]) -> jax.Array:
-        """The prior variance at each coordinate; ``k(0)`` for a stationary kernel."""
-        n = int(_points(coordinates).shape[0])
-        return self.place(self._covariance(jnp.zeros(n, dtype=jnp.float64), self.resolve(values)))
+class Matern12(_JaxKernel, _CoreMatern12):
+    r"""Matérn-1/2 (Ornstein-Uhlenbeck) in ``jax.numpy``. Rank 1 on the O(N) path."""
 
 
 class Matern32(_JaxKernel, _CoreMatern32):
@@ -286,11 +367,9 @@ class Matern32(_JaxKernel, _CoreMatern32):
     solver that exploits it.
     """
 
-    def _covariance(self, separation: Any, values: Mapping[str, Any]) -> jax.Array:
-        amplitude = jnp.asarray(values["amplitude"], dtype=jnp.float64)
-        length_scale = jnp.asarray(values["length_scale"], dtype=jnp.float64)
-        scaled = _SQRT3 * jnp.asarray(separation, dtype=jnp.float64) / length_scale
-        return amplitude * amplitude * (1.0 + scaled) * jnp.exp(-scaled)
+
+class Matern52(_JaxKernel, _CoreMatern52):
+    r"""Matérn-5/2 in ``jax.numpy``. Rank 3 on the O(N) path, and exactly so (W4.5)."""
 
 
 class SquaredExponential(_JaxKernel, _CoreSquaredExponential):
@@ -303,11 +382,34 @@ class SquaredExponential(_JaxKernel, _CoreSquaredExponential):
     solver refuses it by name — the asymmetry that made Matérn the default.
     """
 
-    def _covariance(self, separation: Any, values: Mapping[str, Any]) -> jax.Array:
-        amplitude = jnp.asarray(values["amplitude"], dtype=jnp.float64)
-        length_scale = jnp.asarray(values["length_scale"], dtype=jnp.float64)
-        scaled = jnp.asarray(separation, dtype=jnp.float64) / length_scale
-        return amplitude * amplitude * jnp.exp(-0.5 * scaled * scaled)
+
+class SHO(_JaxKernel, _CoreSHO):
+    r"""A damped harmonic oscillator in ``jax.numpy``: the fringing component (W4.5)."""
+
+
+class RotationTerm(_JaxKernel, _CoreRotationTerm):
+    r"""celerite2's rotation pair in ``jax.numpy``: two SHOs, a period and its harmonic."""
+
+
+class SpectralMixture(_CoreSpectralMixture):
+    """A sum of jax :class:`SHO` components (W4.5).
+
+    Not a ``_JaxKernel``: a composite has no arithmetic of its own — it
+    combines its children's matrices — so it takes its namespace, its device
+    and its capability flags from them, which ``ampere.core.kernels._Composite``
+    already does. All this subclass supplies is the default component type.
+    """
+
+    def __init__(
+        self,
+        amplitudes: Sequence[Any],
+        periods: Sequence[Any],
+        qualities: Sequence[Any],
+        *,
+        component_type: type = SHO,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(amplitudes, periods, qualities, component_type=component_type, **kwargs)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -691,57 +793,56 @@ def _celerite2_jax() -> Any:
 
 
 @functools.cache
-def _matern32_term_type() -> Any:
-    r"""The ``celerite2.jax`` ``Term`` subclass for an **exact** Matérn-3/2.
+def _ampere_term_type() -> Any:
+    r"""The ``celerite2.jax`` ``Term`` subclass that wraps an ampere kernel.
 
-    ``ampere.core``'s ``_matern32_term_type`` in ``jax.numpy``: the same rank-2
-    semiseparable representation, the same midpoint centring, the same
-    algebra — transcribed rather than reused, because the core's builds its
-    matrices in numpy and coerces the hyperparameters with ``float()``, and a
-    traced amplitude or length scale survives neither.
+    **W4.5 replaced a transcription with a lookup.** Until W4.5 this was
+    ``_matern32_term_type``: a hand-written ``jax.numpy`` copy of the core's
+    rank-2 Matérn-3/2 generators, beside a private ``_QUASISEPARABLE_TERMS``
+    table that had to carry exactly the same families as the core's and the
+    torch backend's, with nothing able to check that it did. Both obligations
+    are now structural: the generators come from
+    :func:`ampere.core.kernels.lookup_quasiseparable_term`, the one registry
+    every backend reads, and they are built by the *same* function the
+    reference path uses, in :class:`JaxOps` instead of numpy. A family this
+    backend could lower and another could not is no longer expressible.
 
-    Never ``celerite2.jax.terms.Matern32Term``: that one is an *approximation*
-    (a celerite pair with a small ``eps``, since the celerite basis has no
-    :math:`\tau e^{-c\tau}` member), and at its default ``eps = 0.01`` it costs
-    about 5e-3 in the log-likelihood on a realistic spectrum — three orders
-    outside ``tolerances.cross_solver``. The solver underneath does not need
-    the celerite basis at all: it factorises any rank-J semiseparable matrix
+    Never ``celerite2.jax.terms.Matern32Term``, and the reason is unchanged:
+    that one is an *approximation* (a celerite pair with a small ``eps``, since
+    the celerite basis has no :math:`\tau e^{-c\tau}` member), and at its
+    default ``eps = 0.01`` it costs about 5e-3 in the log-likelihood on a
+    realistic spectrum — three orders outside ``tolerances.cross_solver``. The
+    solver underneath does not need the celerite basis at all: it factorises
+    any rank-J semiseparable matrix
 
     .. math::
         K_{nm} = \sum_j U_{nj} V_{mj} e^{-c_j (t_n - t_m)}\quad (n > m),
 
-    and for :math:`f = \sqrt3/\ell`, :math:`\Delta = t_n - t_m`,
+    which is what :class:`~ampere.core.CeleriteRepresentation` is, and in which
+    Matérn-1/2, -3/2 and -5/2, the SHO and the rotation pair are all exact.
 
-    .. math::
-        k(\Delta) = a^2 (1 + f\Delta)e^{-f\Delta}
-                  = e^{-f(t_n - t_m)}
-                    \big[a^2(1 + f t_n)\cdot 1 + (-a^2 f)\cdot t_m\big],
-
-    with :math:`c = (f, f)` and diagonal :math:`a_n = a^2 + \mathrm{diag}_n`,
-    which is algebra rather than a limit.
-
-    The generators grow linearly in the coordinate, so :math:`U_n \cdot V_m` is
-    a difference of two large numbers when :math:`f t \gg 1`. The coordinates
-    are therefore re-referenced to the midpoint of their own range — the
-    products only ever involve differences, so this is exact — which bounds
-    the cancellation by half the number of length scales the data span. This
-    module's docstring records what that costs, measured.
+    The generators of the Matérn terms grow with the coordinate, so
+    :math:`U_n \cdot V_m` is a difference of large numbers when the data span
+    many length scales; the builders re-reference the coordinates to the
+    midpoint of their own range, which is exact since only differences enter.
+    This module's docstring records what that costs, measured.
     """
     terms = _celerite2_jax().terms
 
-    class _ExactMatern32Term(terms.Term):
-        """``k(tau) = amplitude**2 (1 + sqrt(3) tau / ell) exp(-sqrt(3) tau / ell)``."""
+    class _AmpereTerm(terms.Term):
+        """An ampere :class:`~ampere.core.Kernel` presented as a celerite2 term."""
 
-        def __init__(self, amplitude: Any, length_scale: Any) -> None:
-            # Deliberately *not* coerced with float(): these are the values a
-            # gradient flows through, and on the traced path they are tracers.
-            self.amplitude = jnp.asarray(amplitude, dtype=jnp.float64)
-            self.length_scale = jnp.asarray(length_scale, dtype=jnp.float64)
+        def __init__(self, kernel: Kernel, values: Mapping[str, Any]) -> None:
+            # Deliberately *not* coerced with float() anywhere below these
+            # lines: the hyperparameters are what a gradient flows through, and
+            # on the traced path they are tracers.
+            self.kernel = kernel.with_ops(JaxOps(None))
+            self.values = dict(values)
+            self.builder = lookup_quasiseparable_term(kernel.FAMILY)
 
         def get_value(self, tau: Any) -> jax.Array:
             separation = jnp.abs(jnp.atleast_1d(jnp.asarray(tau, dtype=jnp.float64)))
-            scaled = _SQRT3 * separation / self.length_scale
-            return self.amplitude**2 * (1.0 + scaled) * jnp.exp(-scaled)
+            return jnp.asarray(self.kernel.value(separation, self.values), dtype=jnp.float64)
 
         def get_celerite_matrices(
             self,
@@ -751,48 +852,34 @@ def _matern32_term_type() -> Any:
         ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
             points = jnp.atleast_1d(jnp.asarray(x, dtype=jnp.float64))
             diagonal = jnp.atleast_1d(jnp.asarray(diag, dtype=jnp.float64))
-            decay = jnp.asarray(_SQRT3 / self.length_scale, dtype=jnp.float64)
-            marginal = self.amplitude * self.amplitude
-            # x arrives sorted (QuasisepGP sorts before calling), so the
-            # midpoint of the range is (first + last) / 2.
-            shifted = points - 0.5 * (points[0] + points[-1])
+            # x arrives sorted (QuasisepGP sorts before calling), which is what
+            # the builders' midpoint centring assumes.
+            representation = self.builder(self.kernel, self.values, points)
             return (
-                jnp.stack([decay, decay]),
-                diagonal + marginal,
-                jnp.stack(
-                    [
-                        marginal * (1.0 + decay * shifted),
-                        -marginal * decay * jnp.ones_like(shifted),
-                    ],
-                    axis=-1,
-                ),
-                jnp.stack([jnp.ones_like(shifted), shifted], axis=-1),
+                representation.decay,
+                diagonal + representation.marginal,
+                representation.left,
+                representation.right,
             )
 
-    return _ExactMatern32Term
+    return _AmpereTerm
 
 
-def _matern32_term(kernel: Kernel, values: Mapping[str, Any]) -> Any:
-    """Build the exact Matérn-3/2 celerite term from a resolved kernel."""
-    resolved = kernel.resolve(values)
-    return _matern32_term_type()(resolved["amplitude"], resolved["length_scale"])
+def _celerite_term(kernel: Kernel, values: Mapping[str, Any]) -> Any:
+    """Build the exact celerite representation of a resolved kernel, in jax."""
+    return _ampere_term_type()(kernel, kernel.resolve(values))
 
 
-#: Kernel family -> the builder for its **exact** celerite representation, as
-#: ``ampere.core``'s ``_QUASISEPARABLE_TERMS`` is for the numpy path and for
-#: the same reason: :class:`QuasisepGP` routes a kernel to the O(N) path only
-#: through this table, so a kernel that declares ``QUASISEPARABLE`` without an
-#: entry here is refused **by name** rather than silently approximated.
-_QUASISEPARABLE_TERMS: dict[str, Any] = {_CoreMatern32.FAMILY: _matern32_term}
-
-
-def _bare_coordinates(coordinates: Any) -> Any:
+def _bare_coordinates(coordinates: Any, kernel: Kernel | None = None) -> Any:
     """An ``(n,)`` numpy view of concrete coordinates, refusing 2D+ as the core does.
 
     The numpy twin of :meth:`QuasisepGP._axis`, used only where the
-    coordinates are already concrete.
+    coordinates are already concrete. ``kernel`` selects its own column out of
+    a multi-axis container's coordinates (W4.5).
     """
     array = np.asarray(coordinates, dtype=float)
+    if kernel is not None and array.ndim == 2 and array.shape[1] > 1:
+        array = np.asarray(kernel.with_ops(NUMPY_OPS).select(array), dtype=float)
     if array.ndim == 1:
         return array
     if array.ndim == 2 and array.shape[1] == 1:
@@ -816,8 +903,9 @@ class QuasisepGP(GPSolver):
     in under a second, where :class:`DenseGP` would need a 10⁶ by 10⁶ matrix.
 
     A kernel reaches this path only if it declares ``QUASISEPARABLE`` **and**
-    this backend holds an exact representation for its family
-    (:data:`_QUASISEPARABLE_TERMS`); anything else is refused by name at
+    every family in its tree has a representation in the public registry
+    (:func:`~ampere.core.kernels.register_quasiseparable_term`, which all three
+    backends read); anything else is refused by name at
     composition time. Coordinates need not arrive sorted — a Gaussian density
     is invariant under a simultaneous permutation of residuals, variances and
     coordinates — so this solver sorts internally and undoes the permutation
@@ -908,15 +996,10 @@ class QuasisepGP(GPSolver):
 
     def check_compatible(self, kernel: Kernel, observed: Any) -> None:
         super().check_compatible(kernel, observed)
-        if kernel.FAMILY not in _QUASISEPARABLE_TERMS:
-            known = ", ".join(sorted(_QUASISEPARABLE_TERMS)) or "(none)"
-            raise LikelihoodError(
-                f"{type(kernel).__name__} declares QUASISEPARABLE = True, but the jax backend "
-                f"holds no exact celerite representation for the {kernel.FAMILY!r} family, so "
-                f"{self.NAME} has nothing to lower it to. Families with one: {known}. Add a "
-                f"builder to ampere.backends.jax.gp._QUASISEPARABLE_TERMS, or use DenseGP — a "
-                f"wrong representation would be an approximation wearing an exact solver's name."
-            )
+        # Every family in the tree, not just the root: a Sum lowers term by
+        # term, so one unregistered term stops it and must be named here.
+        for leaf in kernel.leaves():
+            lookup_quasiseparable_term(leaf.FAMILY, owner=self.NAME)
 
     def provenance_config(self) -> Mapping[str, Any]:
         """``inference.md`` §10a fold-in 10: how this solver computes.
@@ -936,9 +1019,15 @@ class QuasisepGP(GPSolver):
     # -- internals -----------------------------------------------------------
 
     @staticmethod
-    def _axis(coordinates: Any) -> jax.Array:
-        """The bare ``(n,)`` coordinate axis, refusing 2D+ as the core does."""
+    def _axis(coordinates: Any, kernel: Kernel | None = None) -> jax.Array:
+        """The bare ``(n,)`` coordinate axis, refusing 2D+ as the core does.
+
+        ``kernel`` is passed since W4.5 so an axis-selecting kernel gets its own
+        column out of a multi-axis container's coordinates.
+        """
         points = _points(coordinates)
+        if kernel is not None:
+            points = kernel.select(points)
         if points.shape[1] != 1:
             raise LikelihoodError(
                 f"QuasisepGP needs one ordered coordinate per sample, but the coordinates have "
@@ -951,7 +1040,9 @@ class QuasisepGP(GPSolver):
         """*array* as float64 on this solver's device."""
         return place_on(jnp.asarray(array, dtype=jnp.float64), getattr(self, "_device", None))
 
-    def _sorted(self, coordinates: Any) -> tuple[jax.Array, jax.Array]:
+    def _sorted(
+        self, coordinates: Any, kernel: Kernel | None = None
+    ) -> tuple[jax.Array, jax.Array]:
         """The coordinate axis and the permutation that sorts it.
 
         Sorted in **numpy** when the coordinates are concrete, which in
@@ -970,14 +1061,14 @@ class QuasisepGP(GPSolver):
         agree on ties.
         """
         if isinstance(coordinates, jax.core.Tracer):
-            axis = self._axis(coordinates)
+            axis = self._axis(coordinates, kernel)
             return axis, jnp.argsort(axis, stable=True)
         # The *argument* is tested, not the converted axis: jax stages
         # operations on a captured constant into the jaxpr, so by the time
         # `_axis` has run `jnp.asarray` the value looks traced whether or not
         # it ever was. Asking the caller's own object is the only test that
         # distinguishes "this is data" from "this is being traced".
-        raw = np.asarray(_bare_coordinates(coordinates), dtype=float)
+        raw = np.asarray(_bare_coordinates(coordinates, kernel), dtype=float)
         return jnp.asarray(raw, dtype=jnp.float64), jnp.asarray(np.argsort(raw, kind="stable"))
 
     def _factorise(
@@ -996,7 +1087,7 @@ class QuasisepGP(GPSolver):
         returns quiet NaN where a Cholesky raises (measured), which is the
         reason both callers guard.
         """
-        term = _QUASISEPARABLE_TERMS[kernel.FAMILY](kernel, values)
+        term = _celerite_term(kernel, values)
         gp = _celerite2_jax().GaussianProcess(term, mean=0.0)
         gp.compute(ordered_axis, diag=ordered_diagonal, check_sorted=False)
         return gp
@@ -1025,7 +1116,7 @@ class QuasisepGP(GPSolver):
         NaN is what this catches. §4.5's ``-inf``, arrived at by the only
         means a trace allows.
         """
-        axis, order = self._sorted(coordinates)
+        axis, order = self._sorted(coordinates, kernel)
         r = self.place(residual)
         diagonal = self.place(variance) + self.jitter**2
         ordered = jnp.take(diagonal, order)
@@ -1093,7 +1184,7 @@ class QuasisepGP(GPSolver):
         values: Mapping[str, Any],
     ) -> float:
         """``log N(residual; 0, K(values) + diag(variance))``, in O(N)."""
-        axis, order = self._sorted(coordinates)
+        axis, order = self._sorted(coordinates, kernel)
         r = self.place(residual)
         diagonal = self.place(variance) + self.jitter**2
         self._check_diagonal(diagonal)
@@ -1117,7 +1208,7 @@ class QuasisepGP(GPSolver):
         each need all N inputs — and only the solve against it is O(N) per
         column.
         """
-        axis, order = self._sorted(coordinates)
+        axis, order = self._sorted(coordinates, kernel)
         points = _points(coordinates)
         r = self.place(residual)
         diagonal = self.place(variance) + self.jitter**2
@@ -1155,7 +1246,7 @@ class QuasisepGP(GPSolver):
         ``dot_tril`` carries its own differentiation rules, so the amplitude
         and the length scale keep their gradients through it.
         """
-        axis, order = self._sorted(coordinates)
+        axis, order = self._sorted(coordinates, kernel)
         draws = self.place(whitened)
         points = _points(coordinates)
         # The same stabilisation DenseGP applies: a jitter relative to the
@@ -1217,7 +1308,7 @@ class QuasisepGP(GPSolver):
         ``K + diag(a) = L D Lᵀ`` with ``L`` **unit** lower triangular,
         ``L_{nm} = U_n · W_m Π_{n>k>m} p_k``.
         """
-        term = _QUASISEPARABLE_TERMS[kernel.FAMILY](kernel, values)
+        term = _celerite_term(kernel, values)
         c, a, U, V = term.get_celerite_matrices(ordered_axis, ordered_diagonal)
         d, W = _celerite2_jax().ops.factor(ordered_axis, c, a, U, V)
         return c, U, d, W
@@ -1357,7 +1448,7 @@ class QuasisepGP(GPSolver):
 
         A contract surface, so it raises where celerite2 goes quietly NaN.
         """
-        axis, order = self._sorted(coordinates)
+        axis, order = self._sorted(coordinates, kernel)
         r = self.place(residual)
         diagonal = self.place(variance) + self.jitter**2
         self._check_diagonal(diagonal)

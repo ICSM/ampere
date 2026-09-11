@@ -89,7 +89,20 @@ from ._config import BACKEND, configure_x64, require_x64, x64_enabled
 from ._device import DEVICE
 from .bijections import log_abs_det_jacobian, lower_bijection
 from .distributions import lower_prior
-from .gp import PRECISIONS, DenseGP, Matern32, QuasisepGP, SquaredExponential
+from .gp import (
+    PRECISIONS,
+    SHO,
+    DenseGP,
+    Matern12,
+    Matern32,
+    Matern52,
+    Product,
+    QuasisepGP,
+    RotationTerm,
+    SpectralMixture,
+    SquaredExponential,
+    Sum,
+)
 from .instrument import CalibrationScale, LSFConvolution, Resample, SyntheticPhotometry
 from .models import COORDINATE_UNIT, FLUX_UNIT, BlackBody, ModifiedBlackBody, PowerLaw, planck_jy
 from .noise import (
@@ -116,6 +129,7 @@ __all__ = [
     "DEVICE",
     "FLUX_UNIT",
     "PRECISIONS",
+    "SHO",
     "BlackBody",
     "CalibrationScale",
     "DenseGP",
@@ -127,14 +141,20 @@ __all__ = [
     "LoweredParameterSet",
     "LoweredProblem",
     "LoweringFallbackWarning",
+    "Matern12",
     "Matern32",
+    "Matern52",
     "MeshSharder",
     "ModifiedBlackBody",
     "PowerLaw",
+    "Product",
     "QuasisepGP",
     "Resample",
+    "RotationTerm",
     "SingleDeviceSharder",
+    "SpectralMixture",
     "SquaredExponential",
+    "Sum",
     "SyntheticPhotometry",
     "available_devices",
     "configure_x64",
