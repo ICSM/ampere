@@ -130,10 +130,27 @@ class SolverKind(enum.StrEnum):
 
 
 class KernelFamily(enum.StrEnum):
-    """Kernel families, split by whether they have a quasiseparable form."""
+    """Kernel families a row may ask a backend for.
 
+    Every one but ``SQUARED_EXPONENTIAL`` and ``PRODUCT`` has an exact
+    semiseparable representation and so reaches the O(N) path; the two that do
+    not are here precisely so the battery can hold the refusals (W4.5).
+    """
+
+    MATERN12 = "matern12"
     MATERN32 = "matern32"
+    MATERN52 = "matern52"
+    SHO = "sho"
+    ROTATION = "rotation"
     SQUARED_EXPONENTIAL = "squared_exponential"
+    SUM = "sum"
+    PRODUCT = "product"
+    SPECTRAL_MIXTURE = "spectral_mixture"
+    #: A kernel declared **outside** ampere, whose celerite representation a
+    #: user registers with ``register_quasiseparable_term``. Every backend
+    #: builds it from its own ``Matern12`` under a family name of its own, so
+    #: one registration must carry it onto all three O(N) paths.
+    USER = "conformance_user_term"
 
 
 class ModelKind(enum.StrEnum):
@@ -259,11 +276,25 @@ class CovarianceSpec:
     :attr:`ModelSpec.coordinates`. Both are given as plain numbers, held
     fixed: the battery's GP rows compare numbers against ``scipy``, and a
     fitted hyperparameter would only add a sampling dimension they do not use.
+
+    **W4.5 made the declaration recursive.** ``terms`` is non-empty for a
+    :attr:`KernelFamily.SUM`, :attr:`KernelFamily.PRODUCT` or
+    :attr:`KernelFamily.SPECTRAL_MIXTURE`, and a backend's ``kernel()``
+    builds its children the same way it builds a leaf. ``period`` and
+    ``quality`` belong to the oscillators; ``axes`` is the selector, ``None``
+    meaning every axis, exactly as in ``ampere.core``.
     """
 
     family: KernelFamily = KernelFamily.MATERN32
     amplitude: float = 0.4
     length_scale: float = 2.0
+    period: float = 1.5
+    quality: float = 3.0
+    delta_quality: float = 0.5
+    fraction: float = 0.3
+    axes: tuple[str, ...] | None = None
+    length_scale_unit: Any = None
+    terms: tuple[CovarianceSpec, ...] = ()
 
 
 # ---------------------------------------------------------------------------

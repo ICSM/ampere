@@ -40,6 +40,16 @@ The default kernel is Matérn-3/2 rather than the squared exponential more famil
 A Matérn-3/2 sample path is once differentiable rather than analytic, which is a better description of a real model deficiency than infinite smoothness.
 And it is *exactly* quasiseparable, which is what makes :class:`ampere.core.QuasisepGP` an **exact** O(N) solve rather than an approximation - the difference between fitting two hundred points and fitting twenty thousand.
 
+A default is not a restriction.
+:class:`~ampere.core.Matern12` and :class:`~ampere.core.Matern52` sit either side of it in smoothness; :class:`~ampere.core.SHO` is a damped oscillator, which is the right shape for a residual with a *period* - interference fringing, an instrumental ripple - and :class:`~ampere.core.RotationTerm` is the pair of them celerite2 uses for a non-sinusoidal one.
+:class:`~ampere.core.Sum` and :class:`~ampere.core.Product` compose them, and a sum of quasiseparable terms is still quasiseparable, so a broad Matérn plus a narrow oscillator still costs O(N).
+:class:`~ampere.core.SpectralMixture` is that sum with free frequencies.
+Your own kernel works on the dense solver the moment you write its covariance function, and reaches the O(N) path once you register its celerite representation with :func:`~ampere.core.register_quasiseparable_term`.
+
+A kernel may also act on a *subset* of a container's coordinates, named with ``axes=``.
+That matters wherever a residual is correlated in two different ways at once: a missing patch of sky with a spectral profile is smooth across spatial frequency and sharp across wavelength, and its covariance is a :class:`~ampere.core.Product` of one kernel on ``("u", "v")`` and another on ``("spectral_axis",)``.
+A single isotropic length scale over axes in different units is meaningless, and ampere refuses it rather than being silently wrong.
+
 :doc:`m2_misspecification` measures all of this on a controlled problem, and :doc:`overview` shows how to compose it.
 
 .. rubric:: Footnotes

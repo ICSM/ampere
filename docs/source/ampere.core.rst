@@ -38,6 +38,8 @@ which is where its documentation lives.
 .. autodata:: ampere.core.dataset.SHARED_COMPONENT
 .. autodata:: ampere.core.dataset.LATENT_NAME
 .. autodata:: ampere.core.dataset.DEFAULT_FAILURE_HISTORY
+.. autodata:: ampere.core.kernels.NUMPY_OPS
+.. autodata:: ampere.core.kernels.TermBuilder
 .. autodata:: ampere.core.realisation.RealisationFactory
 .. autodata:: ampere.core.simulate.ChunkHook
 .. autodata:: ampere.core.encoding.ENCODING_VERSION

@@ -1557,11 +1557,11 @@ class TestQuasisepGP:
         amplitude/length-scale correspondence were wrong, this fails first and
         by name.
         """
-        from ampere.core.likelihood import _QUASISEPARABLE_TERMS
+        from ampere.core.likelihood import _celerite_term
 
         kernel = Matern32(0.4, 2.0)
         values = kernel.resolve(None)
-        term = _QUASISEPARABLE_TERMS[kernel.FAMILY](kernel, values)
+        term = _celerite_term(kernel, values)
         c, a, lower, right = term.get_celerite_matrices(coordinates, np.zeros(coordinates.size))
         assert c.shape == (2,) and lower.shape == (coordinates.size, 2)
 
@@ -1678,10 +1678,10 @@ class TestQuasisepGP:
     ) -> None:
         """The declaration is not enough; ampere must hold the representation."""
 
-        class Matern52(Matern32):
-            FAMILY = "matern52"
+        class Unregistered(Matern32):
+            FAMILY = "no_such_family"
 
-        noise = GaussianProcessNoise(Matern52(0.3, 1.0), QuasisepGP())
+        noise = GaussianProcessNoise(Unregistered(0.3, 1.0), QuasisepGP())
         with pytest.raises(LikelihoodError, match="no exact celerite representation"):
             noise.check_compatible(GaussianFamily(), observed)
 

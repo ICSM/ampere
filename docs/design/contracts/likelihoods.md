@@ -65,11 +65,13 @@ W2.4/W2.5 through `ampere.core.lowering`'s registry.)*
 >>> import scipy.stats as st
 >>> import astropy.units as u
 >>> from ampere.core import (
-...     Censoring, ComplexGaussianFamily, DenseGP, GaussianFamily, GaussianProcessNoise,
+...     SHO, Censoring, ComplexGaussianFamily, DenseGP, GaussianFamily, GaussianProcessNoise,
 ...     IndependentNoise, InducingPointGP, Likelihood, LikelihoodFamily, LimitKind,
-...     Marginalisation, Matern32, NoiseParams, PhotometricPoints, PoissonFamily,
-...     QuasisepGP, RiceFamily, Spectrum, SquaredExponential, StudentTFamily,
-...     VisibilitySet, WindowedSparseGP, family_named, list_families, register_family,
+...     Marginalisation, Matern12, Matern32, Matern52, NoiseParams, PhotometricPoints,
+...     PoissonFamily, Product, QuasisepGP, RiceFamily, RotationTerm, SpectralMixture,
+...     Spectrum, SquaredExponential, StationaryKernel, StudentTFamily, Sum, VisibilitySet,
+...     WindowedSparseGP, family_named, list_families, quasiseparable_families,
+...     register_family, register_quasiseparable_term,
 ... )
 >>> from ampere.core.exceptions import LikelihoodError
 
@@ -556,7 +558,7 @@ across all three.
 >>> kernel = Matern32(st.loguniform(1e-3, 1e1), st.loguniform(0.1, 10.0))
 >>> kernel.spec()
 KernelSpec(family='matern32', hyperparameters=('amplitude', 'length_scale'),
-           quasiseparable=True)
+           quasiseparable=True, axes=None, terms=())
 >>> kernel.spec().to_dict()
 {'family': 'matern32', 'hyperparameters': ['amplitude', 'length_scale'], 'quasiseparable': True}
 
@@ -632,6 +634,130 @@ The squared exponential is kept so milestone M2's misspecification study can
 compare the new default against what legacy actually did, and so a user who
 wants it can have it — on `DenseGP` only.
 
+### The kernel family, and the registry that makes one fast (*Amended W4.5*)
+
+*(W4.5, 2026-09-11. §15.1 and §15.3 recorded "one kernel per noise model" and
+"only Matérn-3/2 and the squared exponential ship" as deliberate limitations
+with named extension points. This is those extension points, built.)*
+
+Seven families ship, and the table's last column is the one that matters: a
+kernel reaches the O(N) path if and only if ampere holds an **exact**
+semiseparable representation for it.
+
+| Kernel | `k(τ)` | Rank | Sample path |
+|---|---|---|---|
+| `Matern12` | `a² e^{−τ/ℓ}` | 1 | continuous, nowhere differentiable |
+| `Matern32` | `a² (1 + √3 τ/ℓ) e^{−√3 τ/ℓ}` | 2 | once differentiable |
+| `Matern52` | `a² (1 + √5 τ/ℓ + 5τ²/3ℓ²) e^{−√5 τ/ℓ}` | 3 | twice differentiable |
+| `SHO` | `a² e^{−τω₀/2Q}[cos ηω₀τ + (4Q²−1)^{−½} sin ηω₀τ]`, `η = √(1−1/4Q²)` | 2 | damped periodic, `Q > ½` |
+| `RotationTerm` | two `SHO`s, at a damped period and its first harmonic | 4 | non-sinusoidal periodic |
+| `SquaredExponential` | `a² e^{−τ²/2ℓ²}` | — | analytic; **no** exact form |
+| `SpectralMixture` | `Σᵢ SHOᵢ` with free frequencies | Σ ranks | as its components |
+
+`amplitude` is the marginal standard deviation in every one of them, so
+`k(0) == a²` throughout and a prior on it is a prior in the data's own units.
+`SHO`'s `period` is the *undamped natural* period `2π/ω₀` (celerite2's `rho`);
+`RotationTerm`'s is the *damped* period of its fundamental, which is
+celerite2's own parameterisation and exactly `period` by construction.
+
+```pycon
+>>> float(SHO(0.5, 2.0, 4.0).diagonal(np.zeros(1), {})[0])
+0.25
+>>> quasiseparable_families()
+('matern12', 'matern32', 'matern52', 'rotation', 'sho', 'spectral_mixture', 'sum')
+
+```
+
+**Matérn-5/2 is exactly quasiseparable, and §15.3 said otherwise.** The
+correction is the same one W2.3 made for Matérn-3/2 and is worth stating
+plainly. There is no exact Matérn-5/2 in the **celerite basis**
+`e^{−cτ}(a cos dτ + b sin dτ)`, which has no `τ² e^{−cτ}` member — that much
+of §15.3 was right. But the solver underneath factorises any rank-J
+**semiseparable** matrix `K[n,m] = Σⱼ U[n,j] V[m,j] e^{−cⱼ(tₙ−tₘ)}`, and a
+degree-2 polynomial in `tₙ − tₘ` is a rank-3 bilinear form in `(1, t, t²)`:
+with `f = √5/ℓ`,
+
+```
+1 + f(tₙ−tₘ) + ⅓f²(tₙ−tₘ)²
+  = [1 + f tₙ + ⅓f² tₙ²]·1 + [−f − ⅔f² tₙ]·tₘ + [⅓f²]·tₘ²
+```
+
+so `Uₙ = a²(1 + f tₙ + ⅓f² tₙ², −f − ⅔f² tₙ, ⅓f²)`, `Vₘ = (1, tₘ, tₘ²)`,
+`c = (f, f, f)`. Algebra, not a limit. The quadratic generators cancel one
+order worse than Matérn-3/2's, which the midpoint re-referencing of §7 bounds;
+it is the term to watch when data span very many length scales.
+
+**`register_quasiseparable_term`: the table, opened.** Before W4.5 a user could
+define a `Kernel` subclass and use it — the ABC is public and `matrix` /
+`diagonal` are all `DenseGP` needs — but could not make it fast, because the
+celerite translation was a private dict. It is now a registry of the
+lowering/realisation registries' shape: one slot per kernel family, no silent
+overwrite, `override=` to replace deliberately, `builtin=` rows distinguished,
+and a provenance entry per user row (`term_provenance_entries()`, passed to
+`provenance_attrs`'s `extra=` as `registered_quasiseparable_terms`). A builder
+takes `(kernel, values, axis)` and returns a `CeleriteRepresentation` — `c`,
+`U`, `V` and `k(0)`.
+
+**One slot per family, not per (family, backend), and this is a decision.** A
+semiseparable representation is generators built from the coordinate and the
+hyperparameters with `exp`, `cos`, `sin` and `stack`: the same mathematics in
+numpy, torch and jax. What differs between backends is the *array namespace*,
+so that becomes an argument — `ArrayOps`, carried by the kernel instance
+(`Kernel.ops`) and rebound by each solver to its own through
+`Kernel.with_ops` — rather than a second registry key. Three consequences, all
+of them wanted: a user registers **once** and reaches the O(N) path on all
+three backends; the three backends cannot drift, where before W4.5 each carried
+its own transcription with a comment saying the tables "must carry exactly the
+same families" and nothing able to check it; and a backend that genuinely needs
+to specialise can still register its own builder under `override=True`.
+`StationaryKernel` is public for the same reason: a two-hyperparameter kernel
+of the usual shape should not have to redeclare the units and bijections.
+
+### Kernel algebra: `Sum` and `Product` (*Amended W4.5*)
+
+```pycon
+>>> composed = Sum(Matern32(st.loguniform(1e-3, 1e1), st.loguniform(0.1, 10.0)),
+...                SHO(st.halfnorm(0.0, 0.1), 0.02, 30.0))
+>>> composed.parameters.free_names
+('term0.amplitude', 'term0.length_scale', 'term1.amplitude')
+>>> composed.QUASISEPARABLE
+True
+
+```
+
+A composite qualifies its children's hyperparameters with a **term label** —
+`term0.amplitude` — which is the convention `ParameterSet.merge` already uses
+for component parameters, so two Matérn terms in one sum cannot collide.
+Positional indices (`terms.0.amplitude`) are not available: `parameters.md`'s
+name rule requires every dot-separated segment to be a Python identifier,
+because parameter values are handed to models as keyword arguments, and `0` is
+not one. `labels=("broad", "narrow")` replaces the defaults where the names
+carry meaning, and they do reach the sampler's coordinates and the stored
+chains.
+
+`KernelSpec` of a composite is a **tree**, `(label, spec)` pairs in declaration
+order. Order-preserving rather than canonicalised, **even for `Sum`, where
+addition commutes** — because the labels are what the children's parameters are
+named with, so reordering a sum renames its parameters and is a different
+declaration to everything downstream. Sorting the tree for the hash would let
+two runs whose chains cannot be compared claim one identity, which is the thing
+the hash exists to prevent.
+
+**A sum of quasiseparable terms is quasiseparable**; the generators concatenate
+and the ranks add, so an arbitrarily rich sum still costs O(N) with the
+constant growing in the total rank. `Sum.QUASISEPARABLE` is therefore an
+instance-level conjunction of its terms', not a class-level claim.
+
+**A product is not**, and is refused on the O(N) path by name:
+
+```pycon
+>>> chromatic = Product(Matern32(1.0, 2.0, axes=("u", "v")),
+...                     Matern32(0.3, 0.05, axes=("spectral_axis",)))
+>>> chromatic.QUASISEPARABLE
+False
+
+```
+
 ## 7. Solver strategies
 
 The solver is swappable behind the noise model precisely so the scaling story
@@ -642,7 +768,7 @@ definition of the right answer.
 | Strategy | Exact? | Applies to | Status |
 |---|---|---|---|
 | `DenseGP` | yes | anything, O(N³) | **implemented** — the correctness anchor |
-| `QuasisepGP` | yes | ordered 1D, quasiseparable kernels, O(N) | **implemented** (W2.3, celerite2) — `conditional_loo` deferred on the numpy solver; supplied by both differentiable backends' own |
+| `QuasisepGP` | yes | one ordered axis, quasiseparable kernels and `Sum`s of them, O(N) | **implemented** (W2.3, celerite2; six families and `Sum` since W4.5) — `conditional_loo` deferred on the numpy solver; supplied by both differentiable backends' own |
 | `WindowedSparseGP` | no | any kernel, any dimension | slot; see below |
 | `InducingPointGP` (SVGP) | no | 2D+ | slot; Phase 5 |
 | `StructuredGridGP` (SKI) | no | gridded 2D+ | slot; Phase 5 |
@@ -796,6 +922,80 @@ Where it earns its slot is the case `QuasisepGP` cannot reach: a
 non-quasiseparable kernel, or 2D+ data where the state-space recursion has no
 analogue. Phase 5 should implement it alongside the inducing-point strategies
 rather than instead of them.
+
+### The `axes` selector: which coordinates a kernel acts on (*Amended W4.5*)
+
+*(Ruled by Peter 2026-09-11; `phase4_placement_memo.md` §3.6 item 3. This lifts
+§15.2's second half — "mixed-unit axes are refused outright" — without lifting
+its first: a kernel is still isotropic in the coordinates it sees, and there is
+still one `length_scale`.)*
+
+Every `Kernel` takes an `axes=` selector naming the container axes it acts on.
+The default is `None`, meaning **every axis** — the pre-W4.5 reading, so no
+declaration written before W4.5 changes, and `KernelSpec.to_dict` emits the
+`axes` key only when a selection was made, so **no spec hash moves either**.
+
+The selection changes two of `check_compatible`'s rules, and both changes are
+the same change: the rule now applies per **leaf kernel**, over the axes that
+leaf selects, rather than over the container's.
+
+* **The single-unit rule.** A Euclidean separation across axes in different
+  units is meaningless and is still refused. What the selector adds is that a
+  container carrying `u`, `v` (dimensionless) and `spectral_axis` (micron) is
+  refused for a bare isotropic kernel *exactly as before*, and accepted for
+  `Matern32(axes=("u", "v"))`. The refusal's own message pointed at this fix
+  before W4.5 existed: "use one axis, or declare a kernel that takes a
+  length-scale per axis".
+* **`REQUIRES_ORDERED_1D`.** The count is of the axes the kernel *tree* uses,
+  not the container's, so a quasiseparable solve over the spectral axis of a
+  three-axis container is expressible.
+
+The hyperparameter-unit check follows the selection too: a `length_scale` is
+compared against the unit of the axes **its own leaf** selects, so a product of
+a dimensionless (u, v) kernel and a micron spectral one has two length scales
+in two units and both are right.
+
+Names become column indices once, at composition, in
+`GaussianProcessNoise.kernel_for` — which is where the container still is; the
+solver is handed a bare `(n, d)` block and no longer knows what the columns are
+called. The binding is **functional**: `Kernel.for_axes` returns a bound copy,
+so one kernel declaration may be shared between datasets whose axis orders
+differ.
+
+The case this exists for is `phase4_placement_memo.md` §3.6's chromatic sky
+error. A missing patch of sky with a spectral profile contributes
+`δV(B, λ) = S(λ)·F(B/λ)`: smooth in spatial frequency on the scale of the
+patch, sharp in wavelength on the scale of the band. Its covariance is a
+product of two kernels on **disjoint axis subsets** of one container, and no
+isotropic kernel over all three axes can express it.
+
+```python
+sky_error = Product(
+    Matern32(axes=("u", "v"), amplitude=..., length_scale=...),          # the patch
+    Matern32(axes=("spectral_axis",), length_scale=...),                 # the band
+)
+```
+
+A product's marginal variance is the product of its terms', so two terms each
+declaring an `amplitude` over-parameterise it by one degree of freedom; fix all
+but one (pass a number rather than a prior), as for any other multiplicative
+redundancy.
+
+### Why a product is refused on the O(N) path, word for word (*Amended W4.5*)
+
+```
+QuasisepGP cannot lower a Product: a product of quasiseparable kernels is not
+quasiseparable. Where the factors act on different axes — which is what a
+Product is for — the result is not a function of one ordered coordinate at all,
+and where they act on the same one the semiseparable rank multiplies and is not
+recoverable from the factors' own representations. Use DenseGP, or replace the
+Product with a Sum, which is quasiseparable exactly when every term is.
+```
+
+The refusal is raised **before** the generic `QUASISEPARABLE` one, because
+"products are not quasiseparable" is a sharper diagnosis than "this kernel is
+not" — and because a user who reaches for a product is usually reaching for the
+two-axis case, where no amount of registering would help.
 
 ## 8. Masks: `weights()`, and excision
 
@@ -1479,24 +1679,39 @@ W1.7's `Dataset` discharges once. `log_prob` re-checks only shapes, mirroring
 
 Each is a decision, not an oversight. Each has an extension point.
 
-1. **One kernel per noise model.** Sums and products of kernels (a long
-   length-scale plus a short one) are not expressible. The extension point is a
-   `SumKernel`/`ProductKernel` whose `spec()` composes its children's — the
-   `KernelSpec` shape already anticipates it, and celerite2's term algebra is
-   the lowering target. Note this is *not* the Starfish local-kernel case
-   (§11): a fixed sum of two global kernels is fixed-shape and would fit the
-   parameter contract fine.
-2. **Isotropic kernels only.** Separation is Euclidean in the coordinate space
-   and there is one `length_scale`, so a 2D anisotropic kernel needs a
-   per-axis length-scale the declaration does not carry. Mixed-unit axes are
+1. ~~**One kernel per noise model.**~~ **Lifted at W4.5.** `Sum` and
+   `Product` compose kernels, their `spec()` is a tree of their children's, and
+   a `Sum` of quasiseparable terms lowers to the O(N) path by concatenating
+   their generators (§6, "Kernel algebra"). A `Product` stays on `DenseGP` and
+   says so by name. The original note that this is *not* the Starfish
+   local-kernel case (§11) stands: a fixed sum of global kernels is
+   fixed-shape, which is why it fits the parameter contract at all.
+2. **Isotropic kernels only** — *half lifted at W4.5*. Separation is still
+   Euclidean in the coordinates a kernel sees and there is still one
+   `length_scale`, so a genuinely anisotropic 2D kernel (two length scales in
+   one plane) is still not expressible. What W4.5 adds is the `axes` selector
+   (§7): a kernel acts on a named subset of its container's axes, the
+   single-unit rule applies to that subset, and `Product` composes kernels on
+   disjoint subsets — so a container with axes in different units is now
+   *usable* rather than merely refused, and the two-length-scale case that
+   motivated the limitation (a patch in (u, v) times a band in wavelength) has
+   an expression. Mixed units **within one kernel's selection** are still
    refused outright rather than being silently wrong.
-3. **Only Matérn-3/2 and the squared exponential ship.** Matérn-5/2 and the
-   celerite SHO term are obvious additions; each is a `_covariance` method and
-   a `QUASISEPARABLE` flag — plus, for a quasiseparable one, an exact celerite
-   representation in `QuasisepGP`'s own table, since W2.3 made a declared
-   `QUASISEPARABLE` without a registered representation a loud refusal rather
-   than a silent approximation. Matérn-5/2 is *not* exactly quasiseparable, so
-   its flag would be `False` even though celerite approximates it well.
+3. ~~**Only Matérn-3/2 and the squared exponential ship.**~~ **Lifted at
+   W4.5**, which added `Matern12`, `Matern52`, `SHO`, `RotationTerm` and
+   `SpectralMixture`, and opened the translation table as
+   `register_quasiseparable_term` so a user kernel can reach the O(N) path
+   too (§6). W2.3's rule is unchanged and now enforced through that registry:
+   a declared `QUASISEPARABLE` with no registered representation is a loud
+   refusal, never a silent approximation.
+
+   **This clause's last sentence was wrong and is withdrawn.** Matérn-5/2 *is*
+   exactly quasiseparable — rank 3, by the same argument W2.3 used for
+   Matérn-3/2. It has no exact form in the celerite *basis*, which is what the
+   sentence was really about; the solver factorises the wider *semiseparable*
+   form, in which a degree-2 polynomial in `tₙ − tₘ` is a rank-3 bilinear form
+   in `(1, t, t²)`. §6 carries the algebra. Nothing shipped on the strength of
+   the wrong claim: no Matérn-5/2 existed to be flagged.
 4. **`GaussianProcessNoise` only supports `Layout.POINTS`.** A gridded 2D GP is
    the SVGP/SKI/Vecchia slots' business (Phase 5); `IndependentNoise` works on
    any layout.

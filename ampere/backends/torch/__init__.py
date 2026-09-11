@@ -181,7 +181,19 @@ The tensor entry point is the same computation with the graph intact:
 from __future__ import annotations
 
 from ._config import BACKEND, DEFAULT_DEVICE, DEFAULT_DTYPE, as_tensor, to_numpy
-from .gp import DenseGP, Matern32, QuasisepGP, SquaredExponential
+from .gp import (
+    SHO,
+    DenseGP,
+    Matern12,
+    Matern32,
+    Matern52,
+    Product,
+    QuasisepGP,
+    RotationTerm,
+    SpectralMixture,
+    SquaredExponential,
+    Sum,
+)
 from .instrument import (
     DETECTORS,
     CalibrationScale,
@@ -233,6 +245,7 @@ __all__ = [
     "DEFAULT_DTYPE",
     "DETECTORS",
     "FLUX_UNIT",
+    "SHO",
     "BlackBody",
     "CalibrationScale",
     "DenseGP",
@@ -246,13 +259,19 @@ __all__ = [
     "LoweredPrior",
     "LoweredProblem",
     "LoweringFallbackWarning",
+    "Matern12",
     "Matern32",
+    "Matern52",
     "ModifiedBlackBody",
     "PowerLaw",
+    "Product",
     "QuasisepGP",
     "Resample",
+    "RotationTerm",
     "SingleDeviceSharder",
+    "SpectralMixture",
     "SquaredExponential",
+    "Sum",
     "SyntheticPhotometry",
     "TorchParameterSpace",
     "TorchSpectralModel",

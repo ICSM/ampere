@@ -115,7 +115,7 @@ class TestRefusedByDefault:
         # backend's own kernel is also called Matern32, deliberately, because
         # Likelihood.to_spec records the declaration and the cross-backend
         # spec-hash row compares it.
-        assert "ampere.core.likelihood.Matern32" in message
+        assert "ampere.core.kernels.Matern32" in message
         assert native.name in message
         # Both halves of the remedy: build it natively, or opt in and give up
         # the gradient.
@@ -147,12 +147,12 @@ class TestTheOptIn:
 
     def test_the_foreign_part_is_named_and_located(self, native: ConformanceBackend) -> None:
         problem = foreign_problem(native, allow_foreign_parts=True)
-        assert problem.foreign_part_names == ("sed: ampere.core.likelihood.Matern32",)
+        assert problem.foreign_part_names == ("sed: ampere.core.kernels.Matern32",)
 
     def test_provenance_records_the_flag_and_the_names(self, native: ConformanceBackend) -> None:
         problem = foreign_problem(native, allow_foreign_parts=True)
         attrs = provenance_attrs(problem, engine="emcee")
-        assert "ampere.core.likelihood.Matern32" in attrs["ampere_foreign_parts"]
+        assert "ampere.core.kernels.Matern32" in attrs["ampere_foreign_parts"]
         assert "sed" in attrs["ampere_foreign_parts"]
         # And it is absent — not empty — from every other run, so a reader can
         # tell "no foreign parts" from "a run that never said".
@@ -217,7 +217,7 @@ class TestTheGradientRoutesRefuse:
         with pytest.raises(LoweringError) as excinfo:
             realise(problem)
         message = str(excinfo.value)
-        assert "ampere.core.likelihood.Matern32" in message
+        assert "ampere.core.kernels.Matern32" in message
         assert "allow_foreign_parts=True" in message
 
     def test_realise_refuses_a_strict_problem_too(self, native: ConformanceBackend) -> None:
@@ -225,7 +225,7 @@ class TestTheGradientRoutesRefuse:
         # realisation factory refuse at construction rather than return -inf at
         # runtime — and it does not interact with this refusal at all.
         problem = foreign_problem(native, allow_foreign_parts=True, strict=True)
-        with pytest.raises(LoweringError, match=r"ampere\.core\.likelihood\.Matern32"):
+        with pytest.raises(LoweringError, match=r"ampere\.core\.kernels\.Matern32"):
             realise(problem)
 
     @pytest.mark.parametrize("engine", [NUTSEngine, VIEngine])
@@ -236,7 +236,7 @@ class TestTheGradientRoutesRefuse:
         with pytest.raises(EngineError) as excinfo:
             engine(problem)
         message = str(excinfo.value)
-        assert "ampere.core.likelihood.Matern32" in message
+        assert "ampere.core.kernels.Matern32" in message
         assert "sed" in message
         # The refusal has to say what the flag does *not* do, or a user reads
         # "allow_foreign_parts" and tries it again with the flag already on.

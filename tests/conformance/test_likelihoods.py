@@ -17,31 +17,48 @@ is either ``scipy`` or the kernel written out from its own defining formula.
 from __future__ import annotations
 
 import math
+from collections.abc import Iterator
+from typing import Any
 
+import astropy.units as u
 import numpy as np
 import pytest
 import scipy.stats as st
 from scipy.stats import multivariate_normal
 
 from ampere.core import (
+    AxisSpec,
     Censoring,
+    FunctionSamples,
     GaussianFamily,
     GaussianProcessNoise,
     IndependentNoise,
+    Layout,
     Likelihood,
     LikelihoodError,
     LimitKind,
     Marginalisation,
     NoiseModel,
+    Order,
     Spectrum,
     family_named,
     list_families,
+    register_quasiseparable_term,
+    term_provenance_entries,
 )
+from ampere.core import Matern12 as CoreMatern12
+from ampere.core.kernels import _forget_quasiseparable_term, matern12_representation
 
 from ampere.backends.reference import FractionalModelGPNoise, FractionalModelNoise
 
+from .backends._kernels import USER_FAMILY, user_kernel_type
 from .composition import COORDINATE_UNIT, FLUX_UNIT, GP_GRID
-from .oracles import analytic_diagonal_gaussian_log_prob, kernel_matrix, matern32_matrix
+from .oracles import (
+    analytic_diagonal_gaussian_log_prob,
+    covariance_matrix,
+    kernel_matrix,
+    matern32_matrix,
+)
 from .protocol import (
     ConformanceBackend,
     CovarianceSpec,
@@ -698,3 +715,450 @@ class TestPredictionAwareNoise:
         assert likelihood.log_prob(predicted, observed) == pytest.approx(
             expected, abs=tolerances.linear_algebra
         )
+
+
+# ---------------------------------------------------------------------------
+# W4.5: the kernel algebra, the axis selector and the term registry
+# ---------------------------------------------------------------------------
+
+
+SHO_SPEC = CovarianceSpec(KernelFamily.SHO, AMPLITUDE, period=1.5, quality=3.0)
+LEAF_SPECS = [
+    CovarianceSpec(KernelFamily.MATERN12, AMPLITUDE, LENGTH_SCALE),
+    CovarianceSpec(KernelFamily.MATERN32, AMPLITUDE, LENGTH_SCALE),
+    CovarianceSpec(KernelFamily.MATERN52, AMPLITUDE, LENGTH_SCALE),
+    SHO_SPEC,
+    CovarianceSpec(KernelFamily.ROTATION, AMPLITUDE, period=1.5, quality=3.0),
+]
+SUM_SPEC = CovarianceSpec(
+    KernelFamily.SUM,
+    terms=(
+        CovarianceSpec(KernelFamily.MATERN32, 0.3, 2.0),
+        CovarianceSpec(KernelFamily.SHO, 0.2, period=1.5, quality=4.0),
+    ),
+)
+MIXTURE_SPEC = CovarianceSpec(
+    KernelFamily.SPECTRAL_MIXTURE,
+    terms=(
+        CovarianceSpec(KernelFamily.SHO, 0.3, period=1.5, quality=3.0),
+        CovarianceSpec(KernelFamily.SHO, 0.2, period=0.4, quality=8.0),
+    ),
+)
+USER_SPEC = CovarianceSpec(KernelFamily.USER, AMPLITUDE, LENGTH_SCALE)
+
+#: The chromatic covariance of ``phase4_placement_memo.md`` §3.6: smooth in
+#: spatial frequency, sharp in wavelength, on disjoint axis subsets of one
+#: three-axis container. The spatial term's amplitude is 1 because a product's
+#: marginal variance is the product of its terms' — two free amplitudes would
+#: over-parameterise it by one degree of freedom.
+CHROMATIC_SPEC = CovarianceSpec(
+    KernelFamily.PRODUCT,
+    terms=(
+        CovarianceSpec(KernelFamily.MATERN32, 1.0, 2.0, axes=("u", "v")),
+        CovarianceSpec(
+            KernelFamily.MATERN32, 0.3, 0.05, axes=("spectral_axis",), length_scale_unit=u.um
+        ),
+    ),
+)
+
+
+class DispersedPoints(FunctionSamples):
+    """A three-axis point set: (u, v) dimensionless and a wavelength in micron.
+
+    Local to this module deliberately. ``VisibilitySet`` is being amended to
+    three axes by W4.1 *in parallel*, and a conformance row that waited for it
+    would be a dependency W4.5 does not have. What it has to be is the smallest
+    container on which the axis selector is necessary rather than merely
+    available: an isotropic kernel over all three axes is refused by the
+    single-unit rule, and a ``Product`` of two selections is not.
+    """
+
+    AXES = (
+        AxisSpec("u", physical_types=("dimensionless",), equivalent_units=(u.rad**-1,)),
+        AxisSpec("v", physical_types=("dimensionless",), equivalent_units=(u.rad**-1,)),
+        AxisSpec("spectral_axis", physical_types=("length",), order=Order.ANY),
+    )
+    LAYOUT = Layout.POINTS
+
+    def __init__(self, u_coord: Any, v_coord: Any, spectral_axis: Any, values: Any, **kw: Any):
+        super().__init__(
+            {"u": u_coord, "v": v_coord, "spectral_axis": spectral_axis},
+            values,
+            **kw,
+        )
+
+
+def dispersed_pair() -> tuple[DispersedPoints, DispersedPoints]:
+    """A fixed ``(predicted, observed)`` pair on a three-axis container."""
+    rng = np.random.default_rng(20260911)
+    n = 12
+    u_points = rng.uniform(-3.0, 3.0, n)
+    v_points = rng.uniform(-3.0, 3.0, n)
+    wavelength = np.sort(rng.uniform(2.0, 2.4, n))
+    truth = 1.0 + 0.1 * u_points
+    observed = DispersedPoints(
+        u_points * u.dimensionless_unscaled,
+        v_points * u.dimensionless_unscaled,
+        wavelength * u.um,
+        (truth + rng.normal(0.0, SIGMA, n)) * FLUX_UNIT,
+        uncertainty=np.full(n, SIGMA) * FLUX_UNIT,
+    )
+    return observed.with_values(truth), observed
+
+
+def dispersed_points(container: DispersedPoints) -> np.ndarray:
+    """The ``(n, 3)`` coordinate block, in the container's own axis order."""
+    return np.column_stack([np.asarray(axis.values, dtype=float) for axis in container.axes])
+
+
+class TestNewKernelFamilies:
+    """W4.5's five new terms, each against its own defining formula.
+
+    ``tolerances.cross_solver`` throughout, which is the item's acceptance
+    tolerance and three orders tighter than any approximation reaches — the
+    point being that these representations are exact rather than good.
+    """
+
+    @pytest.mark.parametrize("covariance", LEAF_SPECS, ids=lambda c: str(c.family))
+    def test_the_dense_solve_agrees_with_multivariate_normal_logpdf(
+        self,
+        backend: ConformanceBackend,
+        covariance: CovarianceSpec,
+        tolerances: Tolerances,
+    ) -> None:
+        predicted, observed = spectra()
+        likelihood = gp_likelihood(backend, covariance)
+        grid = np.asarray(GP_GRID, dtype=float)
+        total = covariance_matrix(covariance, grid) + np.diag(np.full(grid.size, SIGMA**2))
+        expected = float(
+            multivariate_normal.logpdf(
+                observed.values - predicted.values, mean=np.zeros(grid.size), cov=total
+            )
+        )
+        assert likelihood.log_prob(predicted, observed) == pytest.approx(
+            expected, abs=tolerances.linear_algebra
+        )
+
+    @pytest.mark.parametrize("covariance", LEAF_SPECS, ids=lambda c: str(c.family))
+    def test_the_kernel_matches_its_defining_formula(
+        self,
+        backend: ConformanceBackend,
+        covariance: CovarianceSpec,
+        tolerances: Tolerances,
+    ) -> None:
+        grid = np.asarray(GP_GRID, dtype=float)
+        kernel = backend.kernel(covariance)
+        built = backend.to_numpy(kernel.matrix(grid[:, None], grid[:, None], kernel.resolve(None)))
+        assert built == pytest.approx(covariance_matrix(covariance, grid), abs=tolerances.analytic)
+
+    @pytest.mark.parametrize("covariance", LEAF_SPECS, ids=lambda c: str(c.family))
+    def test_the_amplitude_is_a_marginal_standard_deviation(
+        self,
+        backend: ConformanceBackend,
+        covariance: CovarianceSpec,
+        tolerances: Tolerances,
+    ) -> None:
+        """``k(0) == amplitude**2`` in every family: one convention, no exceptions."""
+        kernel = backend.kernel(covariance)
+        diagonal = backend.to_numpy(kernel.diagonal(np.zeros(3), kernel.resolve(None)))
+        assert diagonal == pytest.approx(covariance.amplitude**2, abs=tolerances.analytic)
+
+    @pytest.mark.parametrize(
+        "covariance", [*LEAF_SPECS, SUM_SPEC, MIXTURE_SPEC], ids=lambda c: str(c.family)
+    )
+    def test_the_quasiseparable_solve_agrees_with_the_dense_one(
+        self,
+        backend: ConformanceBackend,
+        covariance: CovarianceSpec,
+        tolerances: Tolerances,
+    ) -> None:
+        """The item's headline row: every term exact on the O(N) path.
+
+        The two solvers compute the same number by genuinely different
+        recursions — a dense Cholesky against a semiseparable factorisation —
+        so agreement at ``cross_solver`` is evidence that the representation is
+        the kernel, not merely near it.
+        """
+        if SolverKind.QUASISEP not in backend.capabilities.solvers:
+            pytest.skip(f"{backend.name} supplies no quasiseparable solver")
+        predicted, observed = spectra()
+        dense = gp_likelihood(backend, covariance, SolverKind.DENSE)
+        quasisep = gp_likelihood(backend, covariance, SolverKind.QUASISEP)
+        assert quasisep.log_prob(predicted, observed) == pytest.approx(
+            dense.log_prob(predicted, observed), abs=tolerances.cross_solver
+        )
+
+
+class TestKernelAlgebra:
+    """``Sum`` against the sum of matrices, ``Product`` against their product."""
+
+    def test_a_sum_is_the_sum_of_its_terms_matrices(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        grid = np.asarray(GP_GRID, dtype=float)
+        composed = backend.kernel(SUM_SPEC)
+        built = backend.to_numpy(
+            composed.matrix(grid[:, None], grid[:, None], composed.resolve(None))
+        )
+        blocks = []
+        for term in SUM_SPEC.terms:
+            kernel = backend.kernel(term)
+            blocks.append(
+                backend.to_numpy(kernel.matrix(grid[:, None], grid[:, None], kernel.resolve(None)))
+            )
+        assert built == pytest.approx(blocks[0] + blocks[1], abs=tolerances.exact)
+        # And against the oracle, so the row is not two implementations agreeing.
+        assert built == pytest.approx(covariance_matrix(SUM_SPEC, grid), abs=tolerances.analytic)
+
+    def test_a_sums_hyperparameters_are_namespaced_by_term(
+        self, backend: ConformanceBackend
+    ) -> None:
+        composed = backend.kernel(SUM_SPEC)
+        assert composed.parameters.names == (
+            "term0.amplitude",
+            "term0.length_scale",
+            "term1.amplitude",
+            "term1.period",
+            "term1.quality",
+        )
+
+    def test_the_spec_is_a_tree_in_declaration_order(self, backend: ConformanceBackend) -> None:
+        """The declaration a run's hash is taken over, across every backend."""
+        spec = backend.kernel(SUM_SPEC).spec()
+        assert spec.family == "sum"
+        assert [label for label, _ in spec.terms] == ["term0", "term1"]
+        assert [child.family for _, child in spec.terms] == ["matern32", "sho"]
+
+    def test_a_product_is_refused_on_the_quasiseparable_path_word_for_word(
+        self, backend: ConformanceBackend
+    ) -> None:
+        """Not "this kernel is not quasiseparable" — the structural reason, by name."""
+        if SolverKind.QUASISEP not in backend.capabilities.solvers:
+            pytest.skip(f"{backend.name} supplies no quasiseparable solver")
+        _, observed = spectra()
+        product = CovarianceSpec(
+            KernelFamily.PRODUCT,
+            terms=(
+                CovarianceSpec(KernelFamily.MATERN32, 1.0, 2.0),
+                CovarianceSpec(KernelFamily.MATERN12, 0.4, 0.5),
+            ),
+        )
+        noise = GaussianProcessNoise(
+            backend.kernel(product), backend.gp_solver(SolverKind.QUASISEP)
+        )
+        with pytest.raises(LikelihoodError) as excinfo:
+            noise.check_compatible(GaussianFamily(), observed)
+        assert str(excinfo.value) == (
+            "QuasisepGP cannot lower a Product: a product of quasiseparable kernels is not "
+            "quasiseparable. Where the factors act on different axes — which is what a Product "
+            "is for — the result is not a function of one ordered coordinate at all, and where "
+            "they act on the same one the semiseparable rank multiplies and is not recoverable "
+            "from the factors' own representations. Use DenseGP, or replace the Product with a "
+            "Sum, which is quasiseparable exactly when every term is."
+        )
+
+
+class TestAxisSelector:
+    """The selector's unit rule, and the product across disjoint axis subsets."""
+
+    def test_a_bare_kernel_still_refuses_a_mixed_unit_container_word_for_word(
+        self, backend: ConformanceBackend
+    ) -> None:
+        """The pre-W4.5 rule, unchanged: the selector adds a case, it removes none."""
+        _, observed = dispersed_pair()
+        noise = GaussianProcessNoise(
+            backend.kernel(CovarianceSpec(KernelFamily.MATERN32, AMPLITUDE, LENGTH_SCALE)),
+            backend.gp_solver(SolverKind.DENSE),
+        )
+        with pytest.raises(LikelihoodError) as excinfo:
+            noise.check_compatible(GaussianFamily(), observed)
+        assert str(excinfo.value) == (
+            "DenseGP measures separation as a Euclidean distance across a DispersedPoints's "
+            "coordinate axes, but they carry different units ['', 'um']. A single isotropic "
+            "length-scale is meaningless across mixed units; use one axis, or declare a kernel "
+            "that takes a length-scale per axis."
+        )
+
+    def test_a_mixed_unit_selection_is_refused_word_for_word(
+        self, backend: ConformanceBackend
+    ) -> None:
+        """The new rule: the single-unit check follows the kernel's own selection."""
+        _, observed = dispersed_pair()
+        spec = CovarianceSpec(
+            KernelFamily.MATERN32, AMPLITUDE, LENGTH_SCALE, axes=("u", "spectral_axis")
+        )
+        noise = GaussianProcessNoise(backend.kernel(spec), backend.gp_solver(SolverKind.DENSE))
+        with pytest.raises(LikelihoodError) as excinfo:
+            noise.check_compatible(GaussianFamily(), observed)
+        assert str(excinfo.value) == (
+            "Matern32 selects the DispersedPoints's axes ('u', 'spectral_axis'), which carry "
+            "different units ['', 'um']. A single isotropic length-scale is meaningless across "
+            "mixed units; select a subset whose axes share one unit, and compose the rest with "
+            "Product."
+        )
+
+    def test_a_selection_reaches_the_spec_and_so_the_hash(
+        self, backend: ConformanceBackend
+    ) -> None:
+        plain = backend.kernel(CovarianceSpec(KernelFamily.MATERN32, AMPLITUDE, LENGTH_SCALE))
+        selected = backend.kernel(
+            CovarianceSpec(KernelFamily.MATERN32, AMPLITUDE, LENGTH_SCALE, axes=("u", "v"))
+        )
+        assert plain.spec().axes is None
+        assert "axes" not in plain.spec().to_dict()
+        assert selected.spec().to_dict()["axes"] == ["u", "v"]
+
+    def test_a_product_of_two_selections_is_the_elementwise_product(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """The acceptance row: the chromatic case on a three-axis container.
+
+        The oracle is the elementwise product of the two factors' matrices,
+        each built from its own defining formula over its own axes — so this
+        compares an implementation with an equation, not with itself.
+        """
+        _, observed = dispersed_pair()
+        points = dispersed_points(observed)
+        noise = GaussianProcessNoise(
+            backend.kernel(CHROMATIC_SPEC), backend.gp_solver(SolverKind.DENSE)
+        )
+        noise.check_compatible(GaussianFamily(), observed)
+        bound = noise.kernel_for(observed)
+        built = backend.to_numpy(bound.matrix(points, points, bound.resolve(None)))
+        assert built == pytest.approx(
+            covariance_matrix(CHROMATIC_SPEC, points), abs=tolerances.analytic
+        )
+
+    def test_the_product_reaches_the_log_likelihood(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """Composable is not enough: a number comes out, and scipy agrees with it."""
+        predicted, observed = dispersed_pair()
+        likelihood = Likelihood(
+            GaussianFamily(),
+            GaussianProcessNoise(
+                backend.kernel(CHROMATIC_SPEC), backend.gp_solver(SolverKind.DENSE)
+            ),
+        )
+        points = dispersed_points(observed)
+        total = covariance_matrix(CHROMATIC_SPEC, points) + np.diag(
+            np.full(points.shape[0], SIGMA**2)
+        )
+        expected = float(
+            multivariate_normal.logpdf(
+                np.asarray(observed.values, dtype=float)
+                - np.asarray(predicted.values, dtype=float),
+                mean=np.zeros(points.shape[0]),
+                cov=total,
+            )
+        )
+        assert likelihood.log_prob(predicted, observed) == pytest.approx(
+            expected, abs=tolerances.linear_algebra
+        )
+
+    def test_a_selected_axis_reaches_the_quasiseparable_path(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """One ordered axis out of three: the O(N) solve on the spectral column."""
+        if SolverKind.QUASISEP not in backend.capabilities.solvers:
+            pytest.skip(f"{backend.name} supplies no quasiseparable solver")
+        predicted, observed = dispersed_pair()
+        spec = CovarianceSpec(
+            KernelFamily.MATERN32,
+            0.3,
+            0.05,
+            axes=("spectral_axis",),
+            length_scale_unit=u.um,
+        )
+        dense = Likelihood(
+            GaussianFamily(),
+            GaussianProcessNoise(backend.kernel(spec), backend.gp_solver(SolverKind.DENSE)),
+        )
+        quasisep = Likelihood(
+            GaussianFamily(),
+            GaussianProcessNoise(backend.kernel(spec), backend.gp_solver(SolverKind.QUASISEP)),
+        )
+        assert quasisep.log_prob(predicted, observed) == pytest.approx(
+            dense.log_prob(predicted, observed), abs=tolerances.cross_solver
+        )
+
+
+@pytest.fixture
+def registered_user_term() -> Iterator[None]:
+    """One registration of the battery's user term, torn down after the row.
+
+    The whole point of the row it serves: ``register_quasiseparable_term`` is
+    keyed on the kernel *family*, and every backend's user kernel declares the
+    same family, so **one** call reaches all three O(N) paths.
+    """
+    register_quasiseparable_term(
+        user_kernel_type(CoreMatern12), matern12_representation, override=True
+    )
+    try:
+        yield
+    finally:
+        _forget_quasiseparable_term(USER_FAMILY)
+
+
+class TestUserRegisteredTerm:
+    """A kernel declared outside ampere, made fast by one registration."""
+
+    def test_it_is_refused_until_its_representation_is_registered(
+        self, backend: ConformanceBackend
+    ) -> None:
+        if SolverKind.QUASISEP not in backend.capabilities.solvers:
+            pytest.skip(f"{backend.name} supplies no quasiseparable solver")
+        _, observed = spectra()
+        noise = GaussianProcessNoise(
+            backend.kernel(USER_SPEC), backend.gp_solver(SolverKind.QUASISEP)
+        )
+        with pytest.raises(LikelihoodError, match=USER_FAMILY):
+            noise.check_compatible(GaussianFamily(), observed)
+
+    def test_the_dense_path_never_needed_a_registration(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """The half that already worked: the ABC is public and ``matrix`` is all DenseGP needs."""
+        predicted, observed = spectra()
+        likelihood = gp_likelihood(backend, USER_SPEC)
+        grid = np.asarray(GP_GRID, dtype=float)
+        total = covariance_matrix(USER_SPEC, grid) + np.diag(np.full(grid.size, SIGMA**2))
+        expected = float(
+            multivariate_normal.logpdf(
+                observed.values - predicted.values, mean=np.zeros(grid.size), cov=total
+            )
+        )
+        assert likelihood.log_prob(predicted, observed) == pytest.approx(
+            expected, abs=tolerances.linear_algebra
+        )
+
+    def test_one_registration_carries_it_onto_this_backends_o_n_path(
+        self,
+        backend: ConformanceBackend,
+        registered_user_term: None,
+        tolerances: Tolerances,
+    ) -> None:
+        """The acceptance row, once per registered backend column.
+
+        The registration in the fixture names ``ampere.core``'s ``Matern12``
+        subclass; this backend's user kernel is a subclass of **its own**
+        ``Matern12`` under the same family name, and that is the only thing
+        they share. If the registry had been keyed on ``(family, backend)``,
+        this row would need three registrations and would be a much weaker
+        claim.
+        """
+        if SolverKind.QUASISEP not in backend.capabilities.solvers:
+            pytest.skip(f"{backend.name} supplies no quasiseparable solver")
+        predicted, observed = spectra()
+        dense = gp_likelihood(backend, USER_SPEC, SolverKind.DENSE)
+        quasisep = gp_likelihood(backend, USER_SPEC, SolverKind.QUASISEP)
+        assert quasisep.log_prob(predicted, observed) == pytest.approx(
+            dense.log_prob(predicted, observed), abs=tolerances.cross_solver
+        )
+
+    def test_the_user_row_is_stamped_in_provenance(self, registered_user_term: None) -> None:
+        """Ampere's own rows are not news; a user's are (``lowering.md``'s rule)."""
+        entries = [entry for entry in term_provenance_entries() if entry["family"] == USER_FAMILY]
+        assert len(entries) == 1
+        assert entries[0]["builtin"] is False
+        assert entries[0]["kind"] == "quasiseparable_term"

@@ -72,16 +72,23 @@ from __future__ import annotations
 
 import dataclasses
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar
 
 import numpy as np
 import torch
 
-from ampere.core import DTYPE, GPConditional, GPSolver, Kernel
+from ampere.core import DTYPE, GPConditional, GPSolver, Kernel, Product, Sum
+from ampere.core import SHO as _CoreSHO
+from ampere.core import StationaryKernel as _CoreStationary
+from ampere.core import Matern12 as _CoreMatern12
 from ampere.core import Matern32 as _CoreMatern32
+from ampere.core import Matern52 as _CoreMatern52
+from ampere.core import RotationTerm as _CoreRotationTerm
+from ampere.core import SpectralMixture as _CoreSpectralMixture
 from ampere.core import SquaredExponential as _CoreSquaredExponential
 from ampere.core.exceptions import LikelihoodError
+from ampere.core.kernels import lookup_quasiseparable_term
 
 from . import _celerite
 from ._config import (
@@ -96,7 +103,20 @@ from ._config import (
     to_numpy,
 )
 
-__all__ = ["DenseGP", "Matern32", "QuasisepGP", "SquaredExponential"]
+__all__ = [
+    "SHO",
+    "DenseGP",
+    "Matern12",
+    "Matern32",
+    "Matern52",
+    "Product",
+    "QuasisepGP",
+    "RotationTerm",
+    "SpectralMixture",
+    "SquaredExponential",
+    "Sum",
+    "TorchOps",
+]
 
 _LOG_2PI = math.log(2.0 * math.pi)
 _SQRT3 = math.sqrt(3.0)
@@ -143,12 +163,74 @@ def _separation(
     return torch.sqrt(torch.sum(difference * difference, dim=-1))
 
 
+class TorchOps:
+    """:class:`~ampere.core.ArrayOps` in torch, on one dtype and device.
+
+    **W4.5.** Before W4.5 this module transcribed each kernel's closed form and
+    each celerite representation into torch by hand, with a comment on every
+    one saying it "must stay a transcription". Five more families would have
+    made that fifteen copies. The mathematics now lives once in
+    :mod:`ampere.core.kernels`, written against this protocol, and what remains
+    backend-specific is exactly this class: where a number becomes a tensor,
+    and on what device.
+
+    One instance per kernel, not one per module, for the reason W2.4 slice 3
+    gave: a kernel placed on a GPU and handed coordinates that are already
+    there must not have them silently copied back, which a module-level default
+    device would do once per evaluation, invisibly.
+    """
+
+    def __init__(self, dtype: torch.dtype, device: torch.device) -> None:
+        self.dtype = dtype
+        self.device = device
+
+    def scalar(self, value: Any) -> torch.Tensor:
+        return as_tensor(value, dtype=self.dtype, device=self.device)
+
+    def points(self, coordinates: Any, *, dimensions: int | None = None) -> torch.Tensor:
+        tensor = _points(coordinates, dtype=self.dtype, device=self.device)
+        if dimensions is not None and int(tensor.shape[1]) != dimensions:
+            raise LikelihoodError(
+                f"kernel coordinates have {int(tensor.shape[1])} coordinate(s) per point, but "
+                f"the data they are being compared against have {dimensions}."
+            )
+        return tensor
+
+    def n_points(self, coordinates: Any) -> int:
+        return int(self.points(coordinates).shape[0])
+
+    def separation(self, left: Any, right: Any) -> torch.Tensor:
+        difference = left[:, None, :] - right[None, :, :]
+        return torch.sqrt(torch.sum(difference * difference, dim=-1))
+
+    def zeros(self, n: int) -> torch.Tensor:
+        return torch.zeros(n, dtype=self.dtype, device=self.device)
+
+    def ones_like(self, array: Any) -> torch.Tensor:
+        return torch.ones_like(self.scalar(array))
+
+    def stack(self, arrays: Sequence[Any], axis: int = -1) -> torch.Tensor:
+        return torch.stack([self.scalar(item) for item in arrays], dim=axis)
+
+    def concatenate(self, arrays: Sequence[Any], axis: int = -1) -> torch.Tensor:
+        return torch.cat([self.scalar(item) for item in arrays], dim=axis)
+
+    def exp(self, array: Any) -> torch.Tensor:
+        return torch.exp(self.scalar(array))
+
+    def cos(self, array: Any) -> torch.Tensor:
+        return torch.cos(self.scalar(array))
+
+    def sin(self, array: Any) -> torch.Tensor:
+        return torch.sin(self.scalar(array))
+
+
 class _TorchKernel(Kernel):
     """Shared plumbing for the torch kernels: torch separations, torch covariances.
 
     **W2.13.** W2.4 slice 1 shipped a torch :class:`DenseGP` that built its
-    covariance by calling ``ampere.core.Kernel.matrix`` — which computes in
-    numpy and coerces every hyperparameter with ``float()``. The Cholesky was
+    covariance by calling ``ampere.core.Kernel.matrix`` — which computed in
+    numpy and coerced every hyperparameter with ``float()``. The Cholesky was
     differentiable and the *hyperparameters were not*: the graph was cut at the
     covariance, so a fitted amplitude or length scale received no gradient at
     all. That was slice 1's principal carried finding, and W2.5 had already
@@ -156,18 +238,21 @@ class _TorchKernel(Kernel):
 
     They **subclass the core kernels** rather than redeclaring them, exactly as
     jax's do: same ``FAMILY``, same ``HYPERPARAMETERS``, same
-    ``QUASISEPARABLE`` flag, same ``NAME``, so a problem's declaration — and
-    therefore its spec hash — is unchanged by which backend computes it.
-    ``matrix`` and ``diagonal`` are overridden because the core's build their
-    separations in numpy; nothing else is.
+    ``QUASISEPARABLE`` flag, so a problem's declaration — and therefore its
+    spec hash — is unchanged by which backend computes it.
 
-    The core's ``_positive`` check on the hyperparameters is not reproduced,
-    and its absence is not silent: a non-positive length scale gives a
-    non-finite covariance, the Cholesky then fails, and :class:`DenseGP`'s two
-    surfaces turn that into the failure §4.5 asks for (an exception on the
-    contract path, ``-inf`` on the traced one). The declaration is what keeps
-    it from arising: a kernel hyperparameter is declared with a prior on the
-    positive half-line and a ``Log`` bijection, so no sampler proposes one.
+    **W4.5 removes the transcriptions.** ``matrix``, ``diagonal`` and every
+    family's ``_covariance`` used to be overridden here to rebuild the same
+    arithmetic in torch. They are not any more: the core's implementations are
+    written against :class:`~ampere.core.ArrayOps`, and this class supplies
+    :class:`TorchOps`. The one thing still declared here is that the core's
+    positivity checks are *not* applied (``VALIDATES = False``), and its
+    absence is not silent: a non-positive length scale gives a non-finite
+    covariance, the Cholesky then fails, and :class:`DenseGP`'s two surfaces
+    turn that into the failure §4.5 asks for (an exception on the contract
+    path, ``-inf`` on the traced one). The declaration is what keeps it from
+    arising: a kernel hyperparameter is declared with a prior on the positive
+    half-line and a ``Log`` bijection, so no sampler proposes one.
     """
 
     BACKEND: ClassVar[str] = BACKEND
@@ -179,6 +264,8 @@ class _TorchKernel(Kernel):
     #: The class-level default only; :meth:`_place` shadows it per instance
     #: from the ``device=`` keyword (W2.4 slice 3).
     DEVICE: ClassVar[str] = "cpu"
+    #: The hyperparameters may be tracers; positivity is the declaration's job.
+    VALIDATES: ClassVar[bool] = False
 
     def _place(self, dtype: Any, device: Any) -> None:
         """Record where this kernel's covariance is built. Called from ``__init__``.
@@ -191,26 +278,41 @@ class _TorchKernel(Kernel):
         the largest array in an ordinary dense GP evaluation.
         """
         place(self, dtype, device)
-
-    def _covariance(self, separation: Any, values: Mapping[str, Any]) -> torch.Tensor:
-        raise NotImplementedError
+        self._ops = TorchOps(self.dtype, self.device)
 
     def _scalar(self, value: Any) -> torch.Tensor:
         return as_tensor(value, dtype=self.dtype, device=self.device)
 
-    def matrix(self, left: Any, right: Any, values: Mapping[str, Any]) -> torch.Tensor:
-        """Dense covariance between two coordinate sets, ``(n, m)``, in torch."""
-        separation = _separation(left, right, dtype=self.dtype, device=self.device)
-        return self._covariance(separation, self.resolve(values))
 
-    def diagonal(self, coordinates: Any, values: Mapping[str, Any]) -> torch.Tensor:
-        """The prior variance at each coordinate; ``k(0)`` for a stationary kernel."""
-        n = int(_points(coordinates, dtype=self.dtype, device=self.device).shape[0])
-        zeros = torch.zeros(n, dtype=self.dtype, device=self.device)
-        return self._covariance(zeros, self.resolve(values))
+class _TorchStationary(_TorchKernel, _CoreStationary):
+    """The two-hyperparameter torch kernels' constructor."""
+
+    def __init__(
+        self,
+        amplitude: Any,
+        length_scale: Any,
+        *,
+        amplitude_unit: Any = None,
+        length_scale_unit: Any = None,
+        axes: Any = None,
+        dtype: torch.dtype = DEFAULT_DTYPE,
+        device: torch.device = DEFAULT_DEVICE,
+    ) -> None:
+        super().__init__(
+            amplitude,
+            length_scale,
+            amplitude_unit=amplitude_unit,
+            length_scale_unit=length_scale_unit,
+            axes=axes,
+        )
+        self._place(dtype, device)
 
 
-class Matern32(_TorchKernel, _CoreMatern32):
+class Matern12(_TorchStationary, _CoreMatern12):
+    r"""Matérn-1/2 (Ornstein-Uhlenbeck) in torch. Rank 1 on the O(N) path."""
+
+
+class Matern32(_TorchStationary, _CoreMatern32):
     r"""Matérn-3/2 in torch: ampere's canonical flexible-likelihood kernel.
 
     .. math::
@@ -226,32 +328,12 @@ class Matern32(_TorchKernel, _CoreMatern32):
     solver that exploits it.
     """
 
-    def __init__(
-        self,
-        amplitude: Any,
-        length_scale: Any,
-        *,
-        amplitude_unit: Any = None,
-        length_scale_unit: Any = None,
-        dtype: torch.dtype = DEFAULT_DTYPE,
-        device: torch.device = DEFAULT_DEVICE,
-    ) -> None:
-        super().__init__(
-            amplitude,
-            length_scale,
-            amplitude_unit=amplitude_unit,
-            length_scale_unit=length_scale_unit,
-        )
-        self._place(dtype, device)
 
-    def _covariance(self, separation: Any, values: Mapping[str, Any]) -> torch.Tensor:
-        amplitude = self._scalar(values["amplitude"])
-        length_scale = self._scalar(values["length_scale"])
-        scaled = _SQRT3 * self._scalar(separation) / length_scale
-        return amplitude * amplitude * (1.0 + scaled) * torch.exp(-scaled)
+class Matern52(_TorchStationary, _CoreMatern52):
+    r"""Matérn-5/2 in torch. Rank 3 on the O(N) path, and exactly so (W4.5)."""
 
 
-class SquaredExponential(_TorchKernel, _CoreSquaredExponential):
+class SquaredExponential(_TorchStationary, _CoreSquaredExponential):
     r"""Squared exponential (RBF) in torch: legacy's kernel, kept for comparison.
 
     .. math::
@@ -261,29 +343,83 @@ class SquaredExponential(_TorchKernel, _CoreSquaredExponential):
     solver refuses it by name — the asymmetry that made Matérn the default.
     """
 
+
+class SHO(_TorchKernel, _CoreSHO):
+    r"""A damped harmonic oscillator in torch: the fringing component (W4.5)."""
+
     def __init__(
         self,
         amplitude: Any,
-        length_scale: Any,
+        period: Any,
+        quality: Any,
         *,
         amplitude_unit: Any = None,
-        length_scale_unit: Any = None,
+        period_unit: Any = None,
+        axes: Any = None,
         dtype: torch.dtype = DEFAULT_DTYPE,
         device: torch.device = DEFAULT_DEVICE,
     ) -> None:
         super().__init__(
             amplitude,
-            length_scale,
+            period,
+            quality,
             amplitude_unit=amplitude_unit,
-            length_scale_unit=length_scale_unit,
+            period_unit=period_unit,
+            axes=axes,
         )
         self._place(dtype, device)
 
-    def _covariance(self, separation: Any, values: Mapping[str, Any]) -> torch.Tensor:
-        amplitude = self._scalar(values["amplitude"])
-        length_scale = self._scalar(values["length_scale"])
-        scaled = self._scalar(separation) / length_scale
-        return amplitude * amplitude * torch.exp(-0.5 * scaled * scaled)
+
+class RotationTerm(_TorchKernel, _CoreRotationTerm):
+    r"""celerite2's rotation pair in torch: two SHOs at a period and its harmonic."""
+
+    def __init__(
+        self,
+        amplitude: Any,
+        period: Any,
+        quality: Any,
+        delta_quality: Any = 0.0,
+        fraction: Any = 0.5,
+        *,
+        amplitude_unit: Any = None,
+        period_unit: Any = None,
+        axes: Any = None,
+        dtype: torch.dtype = DEFAULT_DTYPE,
+        device: torch.device = DEFAULT_DEVICE,
+    ) -> None:
+        super().__init__(
+            amplitude,
+            period,
+            quality,
+            delta_quality,
+            fraction,
+            amplitude_unit=amplitude_unit,
+            period_unit=period_unit,
+            axes=axes,
+        )
+        self._place(dtype, device)
+
+
+class SpectralMixture(_CoreSpectralMixture):
+    """A sum of torch :class:`SHO` components (W4.5).
+
+    Not a ``_TorchKernel``: a composite has no arithmetic of its own — it
+    combines its children's matrices — so it takes its namespace, its device
+    and its capability flags from them, which is what
+    ``ampere.core.kernels._Composite`` already does. All this subclass supplies
+    is the default component type.
+    """
+
+    def __init__(
+        self,
+        amplitudes: Sequence[Any],
+        periods: Sequence[Any],
+        qualities: Sequence[Any],
+        *,
+        component_type: type = SHO,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(amplitudes, periods, qualities, component_type=component_type, **kwargs)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -750,56 +886,43 @@ def _as_points(coordinates: Any, what: str, dimensions: int | None = None) -> np
 # ---------------------------------------------------------------------------
 
 
-def _matern32_matrices(
+def _celerite_matrices(
     kernel: Kernel,
     values: Mapping[str, Any],
     axis: torch.Tensor,
     diagonal: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    r"""The **exact** rank-2 celerite representation of Matérn-3/2, in torch.
+    r"""celerite2's ``(c, a, U, V)`` for any registered kernel, in torch.
 
-    Transcribed from ``ampere.core.likelihood._matern32_term_type``, whose
-    docstring carries the algebra, and it must stay a transcription:
+    **W4.5 replaced a transcription with a lookup.** Until W4.5 this was
+    ``_matern32_matrices``, a hand-written torch copy of the core's rank-2
+    Matérn-3/2 algebra whose docstring said in as many words that it "must stay
+    a transcription", beside a private ``_QUASISEPARABLE_TERMS`` table whose
+    comment said it "must carry exactly the same families" as the core's —
+    with nothing able to check either claim. Both obligations are now
+    structural rather than editorial: the representation comes from
+    :func:`ampere.core.kernels.lookup_quasiseparable_term`, the one registry
+    all three backends read, and the generators are built by the *same*
+    function the reference path uses, in :class:`TorchOps` instead of numpy.
+    A family this backend could lower and the reference could not is no longer
+    expressible.
 
-    .. math::
-        k(\Delta) = a^2(1 + f\Delta)e^{-f\Delta},\quad f = \sqrt3/\ell,
-
-    with :math:`U_n = (a^2(1 + f t_n),\, -a^2 f)`, :math:`V_m = (1,\, t_m)`,
-    :math:`c = (f, f)` and the diagonal :math:`a_n = a^2 + \mathrm{diag}_n`.
-    An algebraic identity, not celerite2's ``Matern32Term`` ε-limit — which
-    misses ``tolerances.cross_solver`` by three orders of magnitude at its
-    default and is the reason ampere carries its own term at all (W2.3).
-
-    Coordinates are re-referenced to the **midpoint of their own range**, for
-    the reason the core records: the generators grow linearly in the
-    coordinate, so ``U_n · V_m`` is a difference of two large numbers when
-    ``f t ≫ 1``, and centring bounds the cancellation by half the number of
-    length scales the data span. The core does this too, on sorted
-    coordinates, so the two paths cancel identically and agree to the last
-    bits rather than merely to a tolerance.
+    The conversion from :class:`~ampere.core.CeleriteRepresentation` to
+    celerite2's argument order is all that is left: ``a`` is the *noise*
+    diagonal plus the kernel's marginal variance.
     """
-    resolved = kernel.resolve(values)
-    amplitude = as_tensor(resolved["amplitude"], dtype=DEFAULT_DTYPE, device=DEFAULT_DEVICE)
-    length_scale = as_tensor(resolved["length_scale"], dtype=DEFAULT_DTYPE, device=DEFAULT_DEVICE)
-    decay = _SQRT3 / length_scale
-    marginal = amplitude * amplitude
-    shifted = axis - 0.5 * (axis[0] + axis[-1])
-    ones = torch.ones_like(shifted)
+    # celerite2's compiled kernels are float64 CPU whatever device the kernel
+    # was placed on, and a reference (numpy) kernel handed to this solver must
+    # still build tensors: the solver, not the kernel, decides the namespace.
+    kernel = kernel.with_ops(TorchOps(axis.dtype, axis.device))
+    builder = lookup_quasiseparable_term(kernel.FAMILY, owner="QuasisepGP")
+    representation = builder(kernel, values, axis)
     return (
-        torch.stack([decay, decay]).reshape(2),
-        diagonal + marginal,
-        torch.stack([marginal * (1.0 + decay * shifted), -marginal * decay * ones], dim=-1),
-        torch.stack([ones, shifted], dim=-1),
+        representation.decay,
+        diagonal + representation.marginal,
+        representation.left,
+        representation.right,
     )
-
-
-#: Kernel family -> the builder for its exact celerite representation **in torch**.
-#: The torch twin of ``ampere.core.likelihood._QUASISEPARABLE_TERMS``, and it
-#: must carry exactly the same families: a kernel this backend could lower and
-#: the reference backend could not (or the reverse) would be a lockstep break
-#: the conformance suite could not see, because a family absent from one table
-#: is refused rather than wrong.
-_QUASISEPARABLE_TERMS: dict[str, Any] = {Matern32.FAMILY: _matern32_matrices}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -909,22 +1032,19 @@ class QuasisepGP(GPSolver):
 
     def check_compatible(self, kernel: Kernel, observed: Any) -> None:
         super().check_compatible(kernel, observed)
-        if kernel.FAMILY not in _QUASISEPARABLE_TERMS:
-            known = ", ".join(sorted(_QUASISEPARABLE_TERMS)) or "(none)"
-            raise LikelihoodError(
-                f"{type(kernel).__name__} declares QUASISEPARABLE = True, but this backend holds "
-                f"no exact celerite representation for the {kernel.FAMILY!r} family, so "
-                f"{self.NAME} has nothing to lower it to. Families with one: {known}. Use "
-                f"DenseGP — a wrong representation would be an approximation wearing an exact "
-                f"solver's name."
-            )
+        # Every family in the tree, not just the root: a Sum lowers term by
+        # term, so one unregistered term stops it and must be named here.
+        for leaf in kernel.leaves():
+            lookup_quasiseparable_term(leaf.FAMILY, owner=self.NAME)
 
     # -- internals -----------------------------------------------------------
 
     def _tensor(self, value: Any) -> torch.Tensor:
         return as_tensor(value, dtype=self.TENSOR_DTYPE, device=self.TENSOR_DEVICE)
 
-    def _axis(self, coordinates: Any) -> tuple[torch.Tensor, torch.Tensor]:
+    def _axis(
+        self, coordinates: Any, kernel: Kernel | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """The bare coordinate axis and the permutation that sorts it.
 
         Coordinates need not arrive sorted: a Gaussian density is invariant
@@ -932,8 +1052,13 @@ class QuasisepGP(GPSolver):
         coordinates, so this solver sorts internally and undoes the
         permutation on the way out — exactly as ``ampere.core.QuasisepGP``
         does, so the two agree on unsorted input as well as on sorted.
+
+        ``kernel`` is passed since W4.5 so an axis-selecting kernel gets its
+        own column out of a multi-axis container's coordinates.
         """
         points = _points(coordinates).to(dtype=self.TENSOR_DTYPE, device=self.TENSOR_DEVICE)
+        if kernel is not None:
+            points = kernel.select(points)
         if points.shape[1] != 1:
             raise LikelihoodError(
                 f"{self.NAME} needs one ordered coordinate per sample, but the coordinates have "
@@ -950,17 +1075,7 @@ class QuasisepGP(GPSolver):
         diagonal: torch.Tensor,
         values: Mapping[str, Any],
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        builder = _QUASISEPARABLE_TERMS.get(kernel.FAMILY)
-        if builder is None:
-            known = ", ".join(sorted(_QUASISEPARABLE_TERMS)) or "(none)"
-            raise LikelihoodError(
-                f"{type(kernel).__name__} declares QUASISEPARABLE = True, but this backend holds "
-                f"no exact celerite representation for the {kernel.FAMILY!r} family, so "
-                f"{self.NAME} has nothing to lower it to. Families with one: {known}. Use "
-                f"DenseGP — a wrong representation would be an approximation wearing an exact "
-                f"solver's name."
-            )
-        return builder(kernel, values, axis, diagonal)
+        return _celerite_matrices(kernel, values, axis, diagonal)
 
     def _guarded_factor(
         self,
@@ -1056,7 +1171,7 @@ class QuasisepGP(GPSolver):
         values: Mapping[str, Any],
     ) -> torch.Tensor:
         """``log N(residual; 0, K + diag(variance))`` as a differentiable tensor."""
-        axis, order = self._axis(coordinates)
+        axis, order = self._axis(coordinates, kernel)
         residuals = self._tensor(residual).reshape(-1)
         diagonal = self._tensor(variance).reshape(-1) + self.jitter**2
         c, U, d, W = self._guarded_factor(kernel, axis[order], diagonal[order], values)
@@ -1084,7 +1199,7 @@ class QuasisepGP(GPSolver):
         which keeps the result attached to the graph (a fresh ``-inf`` constant
         would not, and pyro's NUTS refuses a potential with no ``grad_fn``).
         """
-        axis, order = self._axis(coordinates)
+        axis, order = self._axis(coordinates, kernel)
         residuals = self._tensor(residual).reshape(-1)[order]
         sorted_axis = axis[order]
         diagonal = self._tensor(variance).reshape(-1)[order] + self.jitter**2
@@ -1282,7 +1397,7 @@ class QuasisepGP(GPSolver):
         this solver supplies that the reference one could not is ``A_ii`` in
         linear time — see :meth:`_precision_diagonal`.
         """
-        axis, order = self._axis(coordinates)
+        axis, order = self._axis(coordinates, kernel)
         residuals = self._tensor(residual).reshape(-1)
         diagonal = self._tensor(variance).reshape(-1) + self.jitter**2
         sorted_axis = axis[order]
@@ -1310,7 +1425,7 @@ class QuasisepGP(GPSolver):
         outputs each need all N inputs — and only the solve against it is
         linear per column. :class:`DenseGP` pays O(N³) for the same answer.
         """
-        axis, order = self._axis(coordinates)
+        axis, order = self._axis(coordinates, kernel)
         points = axis.reshape(-1, 1)
         residuals = self._tensor(residual).reshape(-1)
         diagonal = self._tensor(variance).reshape(-1) + self.jitter**2
@@ -1356,7 +1471,7 @@ class QuasisepGP(GPSolver):
         hyperparameters were, and a NaN is then forced back in through one
         :func:`torch.where`, which keeps the result attached to the graph.
         """
-        axis, order = self._axis(coordinates)
+        axis, order = self._axis(coordinates, kernel)
         points = axis.reshape(-1, 1)
         draws = self._tensor(whitened).reshape(-1)
         # The reference solver's ``float(...) or 1.0``, kept as a value so a
@@ -1416,7 +1531,7 @@ class QuasisepGP(GPSolver):
         celerite's quiet NaN becomes the reference path's loud refusal, which
         :meth:`latent_transform_native` may not raise.
         """
-        axis, order = self._axis(coordinates)
+        axis, order = self._axis(coordinates, kernel)
         points = axis.reshape(-1, 1)
         draws = self._tensor(whitened).reshape(-1)
         scale = float(torch.mean(self._tensor(kernel.diagonal(points, values)))) or 1.0

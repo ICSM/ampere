@@ -1175,7 +1175,7 @@ class TestCapabilities:
         assert "different backends" in message
         # By name, and *qualified*: "Matern32: Matern32" would have named
         # nothing, because both kernels are called Matern32.
-        assert "ampere.core.likelihood.Matern32" in message
+        assert "ampere.core.kernels.Matern32" in message
         # With the remedy, both halves of it.
         assert "allow_foreign_parts=True" in message
         assert "gradient-free" in message
@@ -1191,7 +1191,7 @@ class TestCapabilities:
         assert not problem.differentiable
         assert problem.allow_foreign_parts
         assert [type(part).__name__ for part in problem.foreign_parts] == ["Matern32"]
-        assert problem.foreign_part_names == ("sed: ampere.core.likelihood.Matern32",)
+        assert problem.foreign_part_names == ("sed: ampere.core.kernels.Matern32",)
 
     def test_the_all_native_twin_has_no_foreign_parts(self) -> None:
         problem = _native_gp_problem()
@@ -1232,7 +1232,7 @@ class TestCapabilities:
             capabilities=Capabilities(differentiable=True, backend="native")
         )
         assert problem.differentiable
-        assert problem.foreign_part_names == ("sed: ampere.core.likelihood.Matern32",)
+        assert problem.foreign_part_names == ("sed: ampere.core.kernels.Matern32",)
 
     def test_foreign_parts_names_the_dataset_it_found_them_in(self) -> None:
         # A six-dataset joint fit needs "which one", not "a Matern32".
@@ -1259,10 +1259,10 @@ class TestCapabilities:
             ],
             allow_foreign_parts=True,
         )
-        assert problem.foreign_part_names == ("tabulated: ampere.core.likelihood.Matern32",)
+        assert problem.foreign_part_names == ("tabulated: ampere.core.kernels.Matern32",)
 
     def test_part_name_is_qualified(self) -> None:
-        assert part_name(Matern32(0.5, 2.0)) == "ampere.core.likelihood.Matern32"
+        assert part_name(Matern32(0.5, 2.0)) == "ampere.core.kernels.Matern32"
 
     def test_foreign_parts_is_empty_without_a_single_native_backend(self) -> None:
         # The helper answers "nothing resolvable here" rather than guessing,
