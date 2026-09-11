@@ -20,6 +20,8 @@ under test.
 
 from __future__ import annotations
 
+import time
+
 import astropy.units as u
 import numpy as np
 import pytest
@@ -385,6 +387,62 @@ class TestLSFConvolution:
         assert 10.0 - first_low == pytest.approx(5.0 * (sigma_first + sigma_second))
         assert first_high - 20.0 == pytest.approx(5.0 * (sigma_first + sigma_second))
         assert first_low < second_low < 10.0 < 20.0 < second_high < first_high
+
+    def test_the_second_evaluation_on_one_grid_does_not_rebuild_the_operator(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """W4.0 (7): the ``(n, n)`` operator is built once per grid and reused.
+
+        Before this fix, ``influence()`` rebuilt the dense matrix on every
+        call — measured at 2.2 s per evaluation on a 5,647-point union grid
+        (``docs/design/phase4_placement_memo.md`` §7.1). ``bin_edges`` runs
+        exactly once inside a rebuild and never on a cache hit, so counting
+        its calls is a deterministic stand-in for a wall-clock measurement —
+        which this test also takes, as a second, illustrative check, on a
+        grid large enough that the two evaluations are not noise apart.
+        """
+        import ampere.backends.reference.instrument as instrument_module
+
+        calls = 0
+        original = instrument_module.bin_edges
+
+        def counting(centres: np.ndarray) -> np.ndarray:
+            nonlocal calls
+            calls += 1
+            return original(centres)
+
+        monkeypatch.setattr(instrument_module, "bin_edges", counting)
+        step = LSFConvolution(fwhm=0.2)
+        grid = np.linspace(5.0, 15.0, 4000)
+
+        started = time.perf_counter()
+        built = step.influence(grid)
+        uncached = time.perf_counter() - started
+        assert calls == 1
+
+        started = time.perf_counter()
+        cached = step.influence(grid)  # the same array object: the fast path
+        cached_time = time.perf_counter() - started
+        assert calls == 1  # bin_edges was not called again: no rebuild happened
+        assert cached is built
+        assert cached_time < uncached / 5.0
+
+    def test_the_cached_operator_equals_a_rebuilt_one(self) -> None:
+        """The equality fallback returns what a fresh instance builds, not a stale operator.
+
+        A numerically identical grid that arrives as a *different* object
+        takes the ``np.array_equal`` fallback rather than the identity fast
+        path (``test_the_second_evaluation...`` above), and it must still get
+        the operator that grid implies.
+        """
+        grid = np.linspace(5.0, 15.0, 200)
+        cached_step = LSFConvolution(fwhm=0.3)
+        cached_step.influence(grid)  # populates the cache, keyed on this object
+        same_values = np.array(grid, copy=True)  # equal, but a different object
+        assert same_values is not grid
+        cached = cached_step.influence(same_values)
+        rebuilt = LSFConvolution(fwhm=0.3).influence(same_values)  # a fresh instance: no cache
+        assert np.array_equal(cached, rebuilt)
 
 
 class TestSyntheticPhotometry:

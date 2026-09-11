@@ -313,6 +313,12 @@ class LSFConvolution(_Step):
                 raise TransformationError(f"fwhm must be finite and positive, got {fwhm!r}.")
             self.register_buffer("fwhm", value, unit=COORDINATE_UNIT)
         self._span: tuple[float, float] | None = None
+        # The (n, n) operator cache (W4.0 (7)): configuration, not declaration
+        # -- it changes nothing this step reports about itself and is safe to
+        # pickle unset, so it carries no spec-hash consequence. See influence().
+        self._influence_source: Any = None
+        self._influence_grid: np.ndarray | None = None
+        self._influence_operator: np.ndarray | None = None
 
     def power(self) -> float | None:
         """``lambda / FWHM``, or ``None`` for a constant-width kernel.
@@ -405,8 +411,30 @@ class LSFConvolution(_Step):
         )
 
     def influence(self, source: Any) -> np.ndarray:
-        """The normalised ``(n, n)`` convolution matrix on the grid *source*."""
+        """The normalised ``(n, n)`` convolution matrix on the grid *source*, cached.
+
+        Built once per grid and reused (W4.0 (7); ``phase4_placement_memo.md``
+        §7.1 measured 2.2 s per evaluation rebuilding it on a 5,647-point
+        union grid). A compiled model's template grid is the *same array
+        object* every draw — ``transformations.md`` §14's compile-once
+        contract refills only the values, never the axis — so identity
+        against *source* is the fast path the hot loop actually takes, and
+        it is checked first. ``np.array_equal`` against the converted grid is
+        the fallback, for a grid that is numerically the same but arrives as
+        a different object (an uncompiled evaluation, or a caller of
+        :meth:`influence` directly); it is what stops a genuinely different
+        grid from ever being scored against a stale operator.
+
+        The cache is **configuration, not declaration**: unset, it changes
+        nothing this step reports about itself, so a fresh or unpickled
+        instance simply rebuilds on first use.
+        """
+        if self._influence_operator is not None and source is self._influence_source:
+            return self._influence_operator
         grid = np.asarray(source, dtype=DTYPE)
+        if self._influence_operator is not None and np.array_equal(grid, self._influence_grid):
+            self._influence_source = source  # next call on *this* object is now the fast path
+            return self._influence_operator
         sigma = self.sigma(grid)
         separation = grid[:, None] - grid[None, :]
         kernel = np.exp(-0.5 * (separation / sigma[:, None]) ** 2)
@@ -415,7 +443,11 @@ class LSFConvolution(_Step):
         widths = np.diff(bin_edges(grid))
         weighted = kernel * widths[None, :]
         total = weighted.sum(axis=1, keepdims=True)
-        return weighted / total
+        operator = weighted / total
+        self._influence_source = source
+        self._influence_grid = grid
+        self._influence_operator = operator
+        return operator
 
     def apply(self, samples: Any, values: Any) -> Spectrum:
         weights = self.influence(samples.spectral_axis.values)
