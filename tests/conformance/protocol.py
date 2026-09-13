@@ -48,6 +48,7 @@ from ampere.core import (
 
 __all__ = [
     "COMPLEX_WAVELENGTH",
+    "AstrometryPieces",
     "BackendCapabilities",
     "ConformanceBackend",
     "CountingModel",
@@ -412,6 +413,12 @@ class BackendCapabilities:
         naming what is owed — the same shape as ``complex_models``, and for
         the same reason: one track's slice must not be a change to every other
         track's fixture. Added at W4.1; the native twins are W4.3's.
+    ``astrometry``
+        Whether :meth:`ConformanceBackend.astrometry` can return this
+        backend's epoch-sampling step and reflex-orbit model. ``False`` by
+        default, for the same reason ``interferometry`` is: one modality's
+        slice must not be a change to every other track's fixture. Added at
+        W4.9.
     ``picklable``
         Whether a problem composed from this backend's pieces can be sent to a
         worker process (W3.1). ``True`` by default, because a backend whose
@@ -437,6 +444,7 @@ class BackendCapabilities:
     float64: bool = True
     complex_models: bool = False
     interferometry: bool = False
+    astrometry: bool = False
     picklable: bool = True
     solvers: frozenset[SolverKind] = frozenset({SolverKind.DENSE})
     tolerances: Tolerances = DEFAULT_TOLERANCES
@@ -490,11 +498,35 @@ class InterferometryPieces:
     binary_visibilities: type
 
 
+@dataclasses.dataclass(frozen=True)
+class AstrometryPieces:
+    """The astrometric classes one backend supplies (*W4.9*).
+
+    A two-field record, the same shape as :class:`InterferometryPieces` and
+    for the same reason: there is no step registry, so association with the
+    reference implementation is by class name in the backend's own
+    ``astrometry`` module, the native surface it exposes, and its ``BACKEND``
+    declaration.
+
+    ``epoch_sample``
+        ``TimeSeries -> TimeSeries``, kind-preserving, built with
+        ``from_observed(container)``.
+    ``reflex_orbit``
+        Emits the two ``TimeSeries`` channels ``"ra"`` and ``"dec"``.
+    """
+
+    epoch_sample: type
+    reflex_orbit: type
+
+
 @runtime_checkable
 class ConformanceBackend(Protocol):
     """Everything the conformance battery asks of a backend.
 
-    Ten members. Implement them and every row in ``tests/conformance/``
+    Twelve members (W4.9 added :meth:`astrometry`, the eleventh having been
+    W4.1's :meth:`interferometry` — the count was last stated, and last
+    correct, before either). Implement them and every row in
+    ``tests/conformance/``
     runs against your backend; register the instance in
     ``tests/conformance/backends/__init__.py`` and nothing else changes —
     which is W1.10's acceptance criterion ("adding a backend requires only a
@@ -592,6 +624,17 @@ class ConformanceBackend(Protocol):
         backend's — the placement D1 ruled on 2026-09-11 — so a backend
         supplies only the arithmetic, which is the same claim
         ``inference.md`` §18 makes for every other piece here.
+        """
+
+    def astrometry(self) -> AstrometryPieces:
+        """This backend's epoch-sampling step and reflex-orbit model (*W4.9*).
+
+        Only called when :attr:`BackendCapabilities.astrometry` is declared;
+        a backend that has not written them may raise, and every astrometric
+        row then skips with a reason naming what is owed. The kind these speak
+        in, :class:`~ampere.core.TimeSeries`, is ``ampere.core``'s own — the
+        same placement D1 ruled for interferometry, applied to the modality
+        that was chosen to test the ruling.
         """
 
     def to_numpy(self, values: Any) -> np.ndarray:

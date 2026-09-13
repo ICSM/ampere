@@ -198,6 +198,10 @@ from .gp import (
     SquaredExponential,
     Sum,
 )
+from .astrometry import (
+    EpochSample,
+    ReflexOrbit,
+)
 from .instrument import (
     DETECTORS,
     CalibrationScale,
@@ -274,6 +278,7 @@ __all__ = [
     "ClosurePhase",
     "DenseGP",
     "DistributedSharder",
+    "EpochSample",
     "FourierSample",
     "FractionalModelGPNoise",
     "FractionalModelNoise",
@@ -294,6 +299,7 @@ __all__ = [
     "PowerLaw",
     "Product",
     "QuasisepGP",
+    "ReflexOrbit",
     "Resample",
     "RotationTerm",
     "SingleDeviceSharder",

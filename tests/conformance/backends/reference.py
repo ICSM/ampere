@@ -54,10 +54,12 @@ from ampere.backends.reference import (
     BinaryVisibilities,
     CalibrationScale,
     ClosurePhase,
+    EpochSample,
     FourierSample,
     GaussianSource,
     GaussianSourceVisibilities,
     PowerLaw,
+    ReflexOrbit,
     Resample,
     TimeSmearing,
     UniformDisc,
@@ -92,6 +94,7 @@ from ampere.core import (
 
 from ._kernels import build_kernel
 from ..protocol import (
+    AstrometryPieces,
     BackendCapabilities,
     CovarianceSpec,
     InterferometryPieces,
@@ -104,6 +107,7 @@ from ..protocol import (
 )
 
 __all__ = [
+    "REFERENCE_ASTROMETRY",
     "REFERENCE_INTERFEROMETRY",
     "LinearModel",
     "Photometry",
@@ -375,6 +379,9 @@ class ReferenceBackend:
         # until W4.3 writes the native twins, so every interferometric row
         # skips elsewhere with a reason naming that.
         interferometry=True,
+        # W4.9: likewise the only backend with an astrometric vocabulary
+        # until the torch and jax fixtures declare their own twins below.
+        astrometry=True,
     )
 
     def model(self, spec: ModelSpec) -> Model:
@@ -410,9 +417,20 @@ class ReferenceBackend:
         # which is the truth here and the reason this fixture alone keeps them.
         return REFERENCE_INTERFEROMETRY
 
+    def astrometry(self) -> AstrometryPieces:
+        # The shipped classes, unmodified, for the same reason as above.
+        return REFERENCE_ASTROMETRY
+
     def to_numpy(self, values: Any) -> np.ndarray:
         return np.asarray(values)
 
+
+#: The shipped astrometric vocabulary, as one record (W4.9). Module-level so
+#: that :class:`MirrorBackend` can say which of it is its own.
+REFERENCE_ASTROMETRY = AstrometryPieces(
+    epoch_sample=EpochSample,
+    reflex_orbit=ReflexOrbit,
+)
 
 #: The shipped interferometric vocabulary, as one record (W4.1). Module-level
 #: so that :class:`MirrorBackend` can say which of it is its own.

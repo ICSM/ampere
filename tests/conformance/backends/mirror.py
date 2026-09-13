@@ -55,9 +55,11 @@ from ampere.backends.reference import (
     BinaryVisibilities,
     CalibrationScale,
     ClosurePhase,
+    EpochSample,
     FourierSample,
     GaussianSource,
     GaussianSourceVisibilities,
+    ReflexOrbit,
     Resample,
     TimeSmearing,
     UniformDisc,
@@ -85,6 +87,7 @@ from ampere.core import (
 
 from ._kernels import build_kernel
 from ..protocol import (
+    AstrometryPieces,
     BackendCapabilities,
     CovarianceSpec,
     InterferometryPieces,
@@ -105,6 +108,7 @@ BACKEND = "mirror"
 
 __all__ = [
     "BACKEND",
+    "MIRROR_ASTROMETRY",
     "MIRROR_INTERFEROMETRY",
     "DenseGP",
     "GaussianProcessNoise",
@@ -116,6 +120,7 @@ __all__ = [
     "MirrorBinaryVisibilities",
     "MirrorCalibrationScale",
     "MirrorClosurePhase",
+    "MirrorEpochSample",
     "MirrorFourierSample",
     "MirrorGaussianSource",
     "MirrorGaussianSourceVisibilities",
@@ -123,6 +128,7 @@ __all__ = [
     "MirrorParameterSpace",
     "MirrorPhotometry",
     "MirrorPowerLawModel",
+    "MirrorReflexOrbit",
     "MirrorResample",
     "MirrorTimeSmearing",
     "MirrorUniformDisc",
@@ -320,6 +326,29 @@ MIRROR_INTERFEROMETRY = InterferometryPieces(
 )
 
 
+# The astrometric vocabulary (W4.9), for the same reason as the interferometric
+# one above: a fixture named "mirror" that composed reference-backend classes
+# would declare two backends and be refused.
+
+
+class MirrorEpochSample(EpochSample):
+    """The epoch-sampling step, declared as this backend's (W4.9)."""
+
+    BACKEND: ClassVar[str] = BACKEND
+
+
+class MirrorReflexOrbit(ReflexOrbit):
+    """The reflex-orbit model, declared as this backend's (W4.9)."""
+
+    BACKEND: ClassVar[str] = BACKEND
+
+
+MIRROR_ASTROMETRY = AstrometryPieces(
+    epoch_sample=MirrorEpochSample,
+    reflex_orbit=MirrorReflexOrbit,
+)
+
+
 # The noise models and solvers, declared as this fixture's. Needed since
 # **W2.13**: the four capability flags widened to ``NoiseModel`` and
 # ``GPSolver`` (``inference.md`` §10a, fold-in 7) and
@@ -437,6 +466,7 @@ class MirrorBackend(ReferenceBackend):
         solvers=ReferenceBackend.capabilities.solvers,
         tolerances=ReferenceBackend.capabilities.tolerances,
         interferometry=True,
+        astrometry=True,
     )
 
     def model(self, spec: ModelSpec) -> Model:
@@ -463,6 +493,9 @@ class MirrorBackend(ReferenceBackend):
 
     def interferometry(self) -> InterferometryPieces:
         return MIRROR_INTERFEROMETRY
+
+    def astrometry(self) -> AstrometryPieces:
+        return MIRROR_ASTROMETRY
 
     def parameter_space(self, declaration: ParameterSet) -> MirrorParameterSpace:
         return MirrorParameterSpace(declaration)

@@ -48,6 +48,11 @@ three emitting visibilities analytically — :class:`UniformDiscVisibilities`,
 the closed forms the direct transform is held to. The two container kinds they
 speak in, ``VisibilitySet`` and ``ClosurePhases``, are ``ampere.core``'s.
 
+Astrometry (Phase 4, ``astrometry.py``, W4.9): the epoch-sampling step
+:class:`EpochSample` and the reflex-orbit model :class:`ReflexOrbit`, which
+emits two :class:`~ampere.core.TimeSeries` channels (``"ra"``, ``"dec"``) —
+the second modality built by the interferometry page's own template.
+
 Noise (``likelihoods.md`` §5, X-1): :class:`FractionalModelNoise` and its GP
 composition :class:`FractionalModelGPNoise`.
 
@@ -66,6 +71,10 @@ transformations […] and nothing else".
 
 from __future__ import annotations
 
+from .astrometry import (
+    EpochSample,
+    ReflexOrbit,
+)
 from .instrument import (
     DETECTORS,
     CalibrationScale,
@@ -116,6 +125,7 @@ __all__ = [
     "BlackBody",
     "CalibrationScale",
     "ClosurePhase",
+    "EpochSample",
     "FourierSample",
     "FractionalModelGPNoise",
     "FractionalModelNoise",
@@ -124,6 +134,7 @@ __all__ = [
     "LSFConvolution",
     "ModifiedBlackBody",
     "PowerLaw",
+    "ReflexOrbit",
     "Resample",
     "SyntheticPhotometry",
     "TimeSmearing",

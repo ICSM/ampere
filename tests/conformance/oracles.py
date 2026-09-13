@@ -31,7 +31,15 @@ MAS_PER_RAD = 180.0 * 3600.0 * 1000.0 / math.pi
 #: Gaussian FWHM in units of its standard deviation.
 FWHM_PER_SIGMA = 2.0 * math.sqrt(2.0 * math.log(2.0))
 
+#: Julian days per year, for the astrometric proper-motion term (W4.9). A
+#: second transcription of the same number
+#: :mod:`ampere.backends.reference.astrometry` uses, deliberately: an oracle
+#: that imported ampere's own constant would agree with ampere about it by
+#: construction.
+DAYS_PER_YEAR = 365.25
+
 __all__ = [
+    "DAYS_PER_YEAR",
     "DISPERSED_AXES",
     "FWHM_PER_SIGMA",
     "MAS_PER_RAD",
@@ -49,6 +57,8 @@ __all__ = [
     "matern12_matrix",
     "matern32_matrix",
     "matern52_matrix",
+    "reflex_orbit_dec",
+    "reflex_orbit_ra",
     "rotation_matrix",
     "sho_matrix",
     "squared_exponential_matrix",
@@ -411,3 +421,30 @@ def binary_closure_phase(
         * binary_visibility(third[0], third[1], **source)
     )
     return np.angle(product)
+
+
+def reflex_orbit_ra(
+    time: np.ndarray, *, pmra: float, period: float, phase: float, amp_ra: float
+) -> np.ndarray:
+    """The closed-form right-ascension offset of a circular reflex orbit, mas.
+
+    ``time`` in days: a linear proper-motion drift plus a periodic wobble,
+    :mod:`ampere.backends.reference.astrometry`'s own formula, transcribed
+    independently (W4.9's oracle is an equation, not a call to the model).
+    """
+    t = np.asarray(time, dtype=float)
+    cycle = 2.0 * math.pi * t / period + phase
+    return pmra * t / DAYS_PER_YEAR + amp_ra * np.sin(cycle)
+
+
+def reflex_orbit_dec(
+    time: np.ndarray, *, pmdec: float, period: float, phase: float, amp_dec: float
+) -> np.ndarray:
+    """The closed-form declination offset of a circular reflex orbit, mas.
+
+    The cosine partner of :func:`reflex_orbit_ra`, on the same ``period`` and
+    ``phase`` — the two coordinates of one orbit, sharing one cycle.
+    """
+    t = np.asarray(time, dtype=float)
+    cycle = 2.0 * math.pi * t / period + phase
+    return pmdec * t / DAYS_PER_YEAR + amp_dec * np.cos(cycle)
