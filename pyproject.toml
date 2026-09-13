@@ -265,6 +265,12 @@ markers = [
     # deselection is needed here -- and why `pytest tests/m2` stays fast for
     # anyone who runs it without reading this file first.
     "m2_full: milestone M2's full size ladder; run with `pytest -m m2_full`",
+    # W4.4. The interferometry study's longer runs (the documentation budget,
+    # the full calibration count): tens of minutes, so deliberately NOT in the
+    # PR gate. `tests/interferometry/conftest.py` skips these unless
+    # `-m interferometry_full` asks for them, in `tests/m2/conftest.py`'s own
+    # shape and for its own reason.
+    "interferometry_full: the interferometry study's full budget; run with `pytest -m interferometry_full`",
 ]
 
 # ---------------------------------------------------------------------------
