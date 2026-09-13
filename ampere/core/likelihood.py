@@ -60,6 +60,7 @@ import math
 from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar
 
+import astropy.units as u
 import numpy as np
 import scipy.linalg
 import scipy.special
