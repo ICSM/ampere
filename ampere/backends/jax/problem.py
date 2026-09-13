@@ -134,6 +134,28 @@ def _refuse(what: str, detail: str) -> LoweringError:
     return LoweringError(what, backend=BACKEND, detail=detail)
 
 
+#: The two spellings of a native model's value-and-coordinates surface, in the
+#: order they are looked for (*W4.3*). ``flux``/``grid`` is the original pair;
+#: ``native_flux``/``native_grid`` exists because a model may not have a method
+#: whose name one of its own parameters already uses --
+#: ``Parameterised._check_free_name`` refuses a parameter that shadows a class
+#: attribute, and ``flux`` is precisely what an interferometric source model
+#: calls its total flux density. Either pair composes; a model that offers both
+#: is taken at the first, and one that offers half of either is refused with the
+#: missing half named, because the two go together.
+_FLUX_NAMES: tuple[str, ...] = ("flux", "native_flux")
+_GRID_NAMES: tuple[str, ...] = ("grid", "native_grid")
+
+
+def _native_surface(model: Any, names: tuple[str, ...]) -> Any | None:
+    """The first callable *model* offers under *names*, or ``None``."""
+    for name in names:
+        found = getattr(model, name, None)
+        if callable(found):
+            return found
+    return None
+
+
 #: Neutral family name -> the ``ampere.core`` class whose ``sample`` this
 #: backend has a native twin for (*W3.14*). The **one** place this module
 #: names them, so the ceiling ``inference.md`` §13 states — a backend samples
@@ -180,16 +202,20 @@ class _LoweredDataset:
         self.noise = dataset.likelihood.noise
         self.steps = tuple(dataset.instrument.steps)
 
+        self.model_flux = _native_surface(self.model, _FLUX_NAMES)
+        self.model_grid = _native_surface(self.model, _GRID_NAMES)
         missing = ", ".join(
-            f"`{name}`" for name in ("flux", "grid") if not hasattr(self.model, name)
+            f"`{names[0]}` (or `{names[1]}`)"
+            for names, found in ((_FLUX_NAMES, self.model_flux), (_GRID_NAMES, self.model_grid))
+            if found is None
         )
         if missing:
             raise _refuse(
                 type(self.model).__name__,
                 f"model {self.model_label!r} has no native jax surface ({missing} missing), so "
                 f"it cannot be composed into a differentiable log-density. The two go together: "
-                f"`flux` supplies the values and `grid` the coordinates the instrument chain "
-                f"transforms them on, and `predict` calls both. Build the problem from "
+                f"the first supplies the values and the second the coordinates the instrument "
+                f"chain transforms them on, and `predict` calls both. Build the problem from "
                 f"ampere.backends.jax's models, or run it on a gradient-free engine.",
             )
         for step in self.steps:
@@ -400,8 +426,8 @@ class _LoweredDataset:
         only way ``simulate_batched`` can be checked against ``log_likelihood``
         at all.
         """
-        flux = self.model.flux(self.channel, routed[self.model_label])
-        grid = self.model.grid(self.channel)
+        flux = self.model_flux(self.channel, routed[self.model_label])
+        grid = self.model_grid(self.channel)
         for step in self.steps:
             flux, grid = step.apply_flux(flux, grid, self._step_values(routed, step.label))
         return flux
@@ -967,7 +993,7 @@ class LoweredProblem:
         routed = self._route(jnp.asarray(theta, dtype=jnp.float64).reshape(-1))
         channels = {
             label: {
-                channel: model.flux(channel, routed.get(label, {}))
+                channel: _native_surface(model, _FLUX_NAMES)(channel, routed.get(label, {}))
                 for channel in getattr(model, "channels", ())
             }
             for label, model in self.problem.models.items()
