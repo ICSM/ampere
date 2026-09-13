@@ -72,3 +72,92 @@ work.
   when the quota returns.
 - Reviews of merged-candidate PRs: orchestrator (Fable) pass always;
   cross-model pass for contract/maths-touching changes.
+
+## Token economy (proposed by Fable 2026-09-13, for Peter's ruling; from Phase 4's first wave)
+
+**What happened.** The first Phase 4 wave dispatched four agents at once
+(one Sonnet, three Opus). Each coded for about an hour, then spent one to
+three hours waiting for the five-suite gates, which are serialised through
+one lock on a 13 GB machine (dev 8 min, jax 11, torch 15, sbi 20–25, so
+sixteen gate runs ≈ 4 hours of wall clock behind a single lock). The
+session hit the 5-hour usage limit twice in one day, both times more than
+an hour before the window ended, each time killing all four agents
+mid-flight (their committed work survived). Reported usage per agent:
+W4.0 320 k tokens / 258 tool uses, W4.5 467 k / 314; the three read-only
+surveys 123–152 k each on Opus.
+
+**Where the tokens went.**
+
+1. **Waiting is the dominant waste.** An agent polling a gate wakes with its
+   whole context every poll. A subagent's prompt cache lives about five
+   minutes; the polling loops slept eight, so every poll was an *uncached*
+   re-read of 200–400 k tokens, ten to fifteen times per agent. That is
+   several million uncached input tokens per agent spent watching a
+   deterministic process that needs no model at all. Counter-intuitively,
+   a shorter sleep (under five minutes) would have been ten times cheaper
+   per poll, because cached reads are billed at a fraction of uncached.
+2. **Parallelism that the lock defeats.** Four agents coding in parallel
+   saved wall clock only during the coding hour; from then on they queued
+   on one lock, each keeping a live context while idle.
+3. **Context bloat.** 250–320 tool uses per agent, most of them reads of
+   long modules (`likelihood.py` 3 400 lines, `dataset.py` 3 900) in
+   full, several times, plus every gate log tail.
+4. **Model tier for legwork.** The surveys, which only locate and
+   summarise, ran on Opus 5.
+
+**Rules proposed (the first three applied to the second wave on
+2026-09-13 by message; the rest await the ruling).**
+
+- **Agents never wait for gates.** An agent runs the quick checks (lint,
+  format, typecheck, the import sweep) and the *targeted* test files its
+  item touches, each command under ten minutes, then commits and reports.
+  The five-suite gates run **once per merged wave** on master, launched by
+  the orchestrator as a detached shell chain (`nohup … flock … &`) that
+  needs no model; failures come back to a cheap fix-up agent with the log
+  excerpt. Branch gates were a confidence measure; the merged-master gate
+  is the one that counts and always was.
+- **Nothing sleeps longer than the cache.** If anything must poll (the
+  orchestrator on a gate it launched, say), it sleeps under the cache TTL
+  — under five minutes for a subagent, under an hour for the orchestrating
+  session — or it does not poll at all and lets the task notification
+  wake it. The `Monitor` tool, which waits on a condition without a model
+  turn, is the right primitive where available.
+- **Two agents at a time, not four,** and staggered so their targeted
+  test runs do not collide on the lock: dispatch the Opus item first, the
+  Sonnet items an hour later. Use the last hour of a usage window for
+  gates and reviews (cheap, cached, or model-free), not for fresh
+  dispatches.
+- **Read with a scalpel.** Prompts name file *and line range* for every
+  read the item needs; agents are told to read sections, not modules, to
+  use `git diff` rather than re-read a file they edited, and never to
+  print more than the tail of a log. A survey that only locates code is
+  Haiku work; one that summarises is Sonnet work; Opus reads only what it
+  must judge.
+- **Model tiers by judgement density, including the 4.6 generation.** If
+  Opus 4.6 and Sonnet 4.6 draw less of the usage quota than the 5-series
+  (to be checked on one item, not assumed), route: Sonnet 4.6 for
+  well-specified items with tight acceptance lines (W4.7, W4.10, W4.11,
+  documentation passes, CI); Opus 4.6 for judgement-within-spec where the
+  contracts are settled and the tests define the answer (a native twin of
+  an existing reference step, W4.3's kind); Opus 5 for GP mathematics,
+  new contract surface and anything with a decision-log row (W4.2); Fable
+  for integration, rulings and reviews. Measure the first such item's
+  usage and record it here.
+- **Make a fast gate.** `test-all` runs seven suites; most items touch
+  two. Add a `test-fast` task that excludes the `m2_full` rows and the
+  SBI training budgets, and a per-suite gate list in each item's Accept
+  line, so the full four-environment gate is a wave-level event. Consider
+  `pytest -x` on branch runs (stop at the first failure) and the
+  `pytest-xdist` question only for `dev` (memory forbids it for torch and
+  jax on this machine).
+- **Orchestrator discipline.** Record state in the repository at each
+  merge (done) but avoid turns whose only content is "still waiting":
+  one bounded poll per gate set at most, otherwise wait for notifications.
+  Batch the status-table, decision-log and handoff edits into one commit
+  per wave.
+
+**Expected effect.** Per agent, the waiting cost (the bulk) goes to zero;
+coding cost is unchanged; the gate wall clock is unchanged but no longer
+holds a context open. The first wave's four agents would have finished
+their reports within about ninety minutes each instead of three to four
+hours, well inside one usage window.
