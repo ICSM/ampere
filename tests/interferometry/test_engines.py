@@ -39,7 +39,8 @@ class TestNutsOnTorch:
     """The "flexible" arm (the study's most demanding composition) under NUTS."""
 
     @pytest.fixture(scope="class")
-    def run(self) -> Any:
+    @classmethod
+    def run(cls) -> Any:
         from ampere.inference import NUTSEngine
 
         problem = study.build_problem("torch", "flexible")
@@ -79,7 +80,8 @@ class TestNpeOnTheFlexibleArm:
     """W4.2's guidance for this row: TARP and the coverage curve, not the marginal KS p-value."""
 
     @pytest.fixture(scope="class")
-    def engine(self) -> Any:
+    @classmethod
+    def engine(cls) -> Any:
         from ampere.inference import SBIEngine
 
         problem = study.build_problem("reference", "flexible")
@@ -88,7 +90,8 @@ class TestNpeOnTheFlexibleArm:
         return engine
 
     @pytest.fixture(scope="class")
-    def calibration(self, engine: Any) -> Any:
+    @classmethod
+    def calibration(cls, engine: Any) -> Any:
         return engine.calibrate(count=CALIBRATION_COUNT, posterior_draws=CALIBRATION_DRAWS)
 
     def test_the_fit_runs_under_the_set_layout(self, engine: Any) -> None:
