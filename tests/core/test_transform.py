@@ -15,6 +15,7 @@ hook.
 from __future__ import annotations
 
 import importlib.util
+import pickle
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -1144,6 +1145,26 @@ class TestFreezeAndConfigureFrom:
         instrument = Instrument([step], input_kind=Spectrum)
         step.register_parameter(Parameter("gain", st.lognorm(0.1), value=1.0))
         assert "calibration_scale.gain" in instrument.parameters.names
+
+    def test_a_bare_frozen_instrument_round_trips_through_pickle(self) -> None:
+        """W4.0 (3): ``_declarations()`` fingerprints by value, not ``id()``.
+
+        Before this fix, only :class:`~ampere.core.dataset.Dataset` re-froze
+        its instrument after unpickling (W3.1 slice 2's workaround) — a
+        *bare* pickled ``Instrument``, with no ``Dataset`` around it to do
+        that, still convicted itself of a reconfiguration that never
+        happened: the restored steps' parameters are new objects with new
+        ``id()``\\ s, so the ``id()``-keyed fingerprint never agreed with
+        itself across the round trip. Nothing here wraps ``Instrument`` in a
+        ``Dataset`` at all.
+        """
+        instrument = Instrument([CalibrationScale()], input_kind=Spectrum).freeze()
+        before = instrument.parameters.names
+        restored = pickle.loads(pickle.dumps(instrument))
+        # The access itself is the assertion: it must not raise "reconfigured
+        # since", which is what the id()-keyed fingerprint used to do here.
+        assert restored.parameters.names == before
+        assert restored.mapping is restored.mapping  # still frozen, not reset to live
 
     def test_configure_from_hands_each_step_its_successors(self) -> None:
         seen: dict[str, tuple[str, ...]] = {}

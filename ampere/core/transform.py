@@ -69,7 +69,7 @@ import astropy.units as u
 import numpy as np
 
 from .exceptions import CompositionError, TransformationError
-from .parameter import ParameterMapping, ParameterSet, Parameterised, Value
+from .parameter import Parameter, ParameterMapping, ParameterSet, Parameterised, Value
 from .results_schema import COORDINATE_RTOL, DEFAULT_CHANNEL, FunctionSamples, ModelResult
 
 __all__ = [
@@ -791,8 +791,13 @@ class Transformation(Parameterised, abc.ABC):
 
         The posture is **push-forward-and-raise**: a step that is handed
         something it cannot use fails loudly at evaluation rather than ampere
-        inferring requirements backwards through the chain. The first real
-        instances (the smearing steps) are Phase 4's.
+        inferring requirements backwards through the chain. ``LSFConvolution``
+        is the first real instance, reading its successors' published
+        ``spectral_axis`` requirements (a resampler's or a photometry step's)
+        to pad its own kernel's range — implemented on all three backends
+        (the reference and torch classes each override this method; the jax
+        twin inherits the reference one). Interferometric bandwidth and time
+        smearing, which motivated the mechanism, are Phase 4's.
         """
 
     # -- evaluation ----------------------------------------------------------
@@ -959,7 +964,7 @@ class Instrument:
             self.steps[position].configure_from(self.steps[position + 1 :])
 
         self._frozen_mapping: ParameterMapping | None = None
-        self._frozen_declarations: tuple[tuple[str, tuple[int, ...]], ...] | None = None
+        self._frozen_declarations: tuple[tuple[str, tuple[Parameter, ...]], ...] | None = None
 
     def _resolve_input_kind(self, declared: type[FunctionSamples] | None) -> type[FunctionSamples]:
         if declared is not None:
@@ -1009,17 +1014,23 @@ class Instrument:
             return self._frozen_mapping
         return ParameterSet.merge({step.label: step.parameters for step in self.steps})
 
-    def _declarations(self) -> tuple[tuple[str, tuple[int, ...]], ...]:
-        """A cheap fingerprint of each step's parameter declarations.
+    def _declarations(self) -> tuple[tuple[str, tuple[Parameter, ...]], ...]:
+        """A cheap fingerprint of each step's parameter declarations, by value.
 
-        ``Parameter`` is a frozen dataclass, so reconfiguration always
-        replaces objects; object identity per step is therefore exactly the
-        invariant :meth:`freeze` snapshots.
+        Was ``id(parameter)`` per step (*W3.1 slice 2*): sound while one
+        process holds the objects, since ``Parameter`` is frozen and a
+        reconfiguration therefore always replaces them — but identity is
+        exactly what pickle does not preserve, so a perfectly consistent
+        ``Instrument`` unpickled by a ``forkserver``/``spawn`` worker, or a
+        *bare* pickled ``Instrument`` with no ``Dataset`` around it to
+        re-freeze it, convicted itself of a reconfiguration that never
+        happened. :meth:`Parameter.__eq__` already compares every field the
+        invariant cares about — name, prior, fixed-ness, shape, unit,
+        bijection, ties, plate, description, value — so comparing the
+        parameters themselves, not their identities, is the same cheap tuple
+        comparison and survives the round trip because value equality does.
         """
-        return tuple(
-            (step.label, tuple(id(parameter) for parameter in step.parameters))
-            for step in self.steps
-        )
+        return tuple((step.label, tuple(step.parameters)) for step in self.steps)
 
     def freeze(self) -> Instrument:
         """Snapshot the merged parameters; refuse later step reconfiguration.

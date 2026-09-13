@@ -210,6 +210,22 @@ differs from them; nothing here changes a policy, and where a difference is a
   docstring says. The parenthesis in the `core/` comment above ("and
   astropy_compat.py below is core") is a statement about where it will live,
   not about where it is.
+* **D1 (ruled by Peter 2026-09-11, `docs/design/phase4_placement_memo.md`
+  §2): a shipped observable's *kind* lives in `core/results_schema.py`; its
+  *steps* live in a per-backend `<observable>.py` module —
+  `backends/{reference,torch,jax}/<observable>.py`, parallel names across
+  all three — and there is **no grouping namespace**.** The draft's
+  `ampere/modalities/` was rejected on the name and on a rule it broke: it
+  moved the reference backend's steps out of `backends/reference/`, so the
+  three backends' step modules were no longer parallel. A kind is three
+  class attributes and not a §4 contract, so adding one to `core` is not a
+  contract change under ground rule 9; the out-of-tree extensibility claim
+  stays proven by `tests/core/thirdparty_polarimeter.py`. The
+  interferometry modality (W4.1 onwards) is the first to land under this
+  rule, in `backends/{reference,torch,jax}/interferometry.py`. A grouping
+  namespace is revisited after realistic usage (end of Phase 4 or later); a
+  per-observable front door (`ampere.interferometry`, say) arrives only
+  with the first reader (OIFITS, Phase 6).
 * `backends/reference/` is not "models and transformations only": it also
   ships `noise.py` (`FractionalModelNoise` and `FractionalModelGPNoise`,
   `likelihoods.md` §5 X-1) and, since **W2.13 fold-in 7**, every backend

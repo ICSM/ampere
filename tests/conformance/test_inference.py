@@ -27,6 +27,7 @@ import scipy.stats as st
 
 from ampere.core import (
     Dataset,
+    FailureReason,
     FittingProblem,
     Likelihood,
     ProcessExecutor,
@@ -1271,6 +1272,83 @@ class TestTheUnambiguousFamilyDraws:
         assert np.all(
             np.abs(cross) <= tolerances.monte_carlo_sigmas * variance / np.sqrt(self.DRAWS)
         )
+
+
+class TestANativeSamplerFailureIsolatesOneDraw:
+    """W4.0 (2): the native sampler's own whole-chunk guard does not abort the chunk.
+
+    A native sampler is vectorised over the whole chunk it is handed — torch's
+    Poisson twin (``_poisson_variates``) checks the *stacked* rate array for a
+    non-positive entry in one call, so a single bad θ's exception carries no
+    row index and would, unfixed, discard or raise for every draw in the
+    chunk (W3.14's finding). ``FittingProblem.simulate_many(native=True)``
+    retries one row at a time after such a failure, so only the request that
+    earned it is flagged — exactly as the numpy loop's own per-draw ``try``
+    around ``draw_observation`` isolates a likelihood failure — and the rest
+    of the chunk keeps its native draw rather than falling back to the loop.
+
+    ``poisson`` is the first family that can reach this path (*W3.14*): it is
+    the only one of the three native-sampled families whose native twin
+    refuses a whole batch for one bad row rather than drawing something for
+    every θ regardless of sign.
+    """
+
+    def problem(self, backend: ConformanceBackend) -> FittingProblem:
+        problem = build_problem(backend, POISSON_COUNTS)
+        if problem.backend not in registered_realisations() or not problem.batchable:
+            pytest.skip(f"the {problem.backend!r} backend has no native batched path")
+        return problem
+
+    def theta(self, problem: FittingProblem, overrides: Mapping[str, Any]) -> np.ndarray:
+        values = dict(problem.reference_values)
+        values.update(overrides)
+        return np.asarray(problem.parameters.pack(values), dtype=float)
+
+    def test_one_negative_rate_among_several_flags_only_itself(
+        self, backend: ConformanceBackend
+    ) -> None:
+        problem = self.problem(backend)
+        good = TestTheUnambiguousFamilyDraws.POISSON_THETA
+        broken = {"model.norm": -9.0, "model.index": 0.0}
+        theta = np.stack(
+            [
+                self.theta(problem, good),
+                self.theta(problem, good),
+                self.theta(problem, broken),
+                self.theta(problem, good),
+            ]
+        )
+        # One chunk (the default), so the batched sampler call really does
+        # cover all four draws at once and the retry path is exercised.
+        batch = problem.simulate_many(4, values=theta, observe=True, native=True)
+        assert batch.provenance["simulate_batched"] is True
+        assert batch.provenance["sample_backend"] == problem.backend
+        assert list(np.asarray(batch.failed)) == [False, False, True, False]
+        offender = batch[2]
+        assert offender.failure is not None
+        assert offender.failure.reason == FailureReason.LIKELIHOOD_FAILED
+        for index in (0, 1, 3):
+            simulation = batch[index]
+            assert not simulation.failed
+            drawn = np.asarray(simulation.observations["sed"].values)
+            assert np.all(drawn >= 0.0) and np.all(drawn == np.round(drawn))
+
+    def test_the_offending_draw_still_raises_under_strict(
+        self, backend: ConformanceBackend
+    ) -> None:
+        """``strict=True`` gets the raise at the offending draw, not a retried one.
+
+        The same rule ``_failure_types`` states for the loop (``likelihoods.md``
+        §17 Q1's ruling): non-strict isolates and records, strict propagates.
+        """
+        strict = build_problem(backend, POISSON_COUNTS, strict=True)
+        if strict.backend not in registered_realisations() or not strict.batchable:
+            pytest.skip(f"the {strict.backend!r} backend has no native batched path")
+        good = TestTheUnambiguousFamilyDraws.POISSON_THETA
+        broken = {"model.norm": -9.0, "model.index": 0.0}
+        theta = np.stack([self.theta(strict, good), self.theta(strict, broken)])
+        with pytest.raises(Exception):  # noqa: B017 - the backend's own exception type
+            strict.simulate_many(2, values=theta, observe=True, native=True)
 
 
 class TestBatchedSimulation:
