@@ -429,21 +429,44 @@ marginal test and fails TARP, which is the failure mode that matters for a
 two-parameter fit whose parameters are exactly as correlated as a binary's
 separation and flux ratio are.
 
-The six plots
------------------
+The plots: a found limitation, not assumed
+-----------------------------------------------
 
-``examples/interferometry/figures.py`` renders the shipped surface for each
-arm's run: :func:`~ampere.results.plot_corner`,
-:func:`~ampere.results.plot_trace` and
-:func:`~ampere.results.plot_posterior_predictive` on every arm;
-:func:`~ampere.results.plot_residuals` on "correct" and "incomplete" (their
-whiteness family is scoped to standard-likelihood fits);
+Four of the "six shipped plots" —
+:func:`~ampere.results.plot_posterior_predictive`,
+:func:`~ampere.results.plot_residuals`,
 :func:`~ampere.results.plot_gp_localisation` and
-:func:`~ampere.results.plot_anomaly_score` on "flexible". A separate pair,
-:func:`~ampere.results.plot_sbc_ranks` and :func:`~ampere.results.plot_coverage`,
-render the calibration study of the previous section. ``python -m
-examples.interferometry --figures DIR`` (add ``--calibration`` for the
-coverage figures) writes them; nothing is committed (ground rule 7).
+:func:`~ampere.results.plot_anomaly_score` — read a stored group through
+:func:`ampere.results._plotting.coordinate_of`, which needs **exactly one
+ordered coordinate axis** and refuses a "point kind with several axes" by
+name, citing ``results.md`` §4 and ``DEVELOPMENT_PLAN.md`` §4.4/§4.8's own
+staging: *"Gridded and multi-axis kinds are the Phase 5 staging."* Both of
+this study's kinds are exactly that — a :class:`~ampere.core.VisibilitySet`
+sample is a joint ``(u, v, spectral_axis)`` point with no natural order, and
+a :class:`~ampere.core.ClosurePhases` sample five such coordinates — so all
+four of those renderers refuse both datasets, on every arm, today. This is
+not the complex-valued gap W4.2's own carried note anticipated ("W4.4's
+figures must pick a component or modulus of the complex conditional mean")
+— that note undersold it: even a real, single-component view of the same
+data still has no ordered axis to plot against, because the refusal is about
+the *coordinate*, not the *value type*.
+
+What this leaves, and what ``examples/interferometry/figures.py`` renders,
+is :func:`~ampere.results.plot_corner` and :func:`~ampere.results.plot_trace`
+(posterior-only — neither needs a data coordinate) for every arm, plus
+:func:`~ampere.results.plot_sbc_ranks` and :func:`~ampere.results.plot_coverage`
+for the calibration study of the previous section, which live in *parameter*
+space and do not hit the same wall. ``python -m examples.interferometry
+--figures DIR`` (add ``--calibration`` for the coverage figures) writes
+them; nothing is committed (ground rule 7).
+
+**The transferable lesson for the next modality**: if your kind is a
+multi-axis point set (an interferometric visibility, a set of astrometric
+positions), budget for exactly this gap before promising "the six plots" —
+``ampere.results``'s family B/C diagnostics are staged for Phase 5 and are
+not yet a modality-agnostic surface. Checking ``ampere/results/`` for this
+restriction before relying on any of the four above is worth the two minutes
+it costs.
 
 See also
 ------------
