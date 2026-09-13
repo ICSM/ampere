@@ -200,6 +200,24 @@ def _native_surface(model: Any, names: tuple[str, ...]) -> Any | None:
     return None
 
 
+def _flat_channel(flux: torch.Tensor) -> torch.Tensor:
+    """One draw's channel values as a flat vector (*W4.3*).
+
+    ``BatchedPrediction.channels`` is declared ``{model: {channel: (batch, n)}}``
+    — flat per draw, in the container's own C-order, because that is what
+    ``ampere.core``'s agreement check compares against
+    ``result[channel].values.ravel()`` and what a training-set group is written
+    from. Every channel before Phase 4 was one-dimensional already, so this was
+    a no-op nobody had to write; an ``Image`` channel is ``(nx, ny)`` and needs
+    it. Flattening here rather than in the model keeps the native forward
+    surface the natural shape for the step that consumes it —
+    ``FourierSample.apply_flux`` contracts over two axes — and is applied under
+    ``vmap``, where the leading batch axis is hidden, so ``reshape(-1)`` is the
+    whole of it.
+    """
+    return flux.reshape(-1)
+
+
 #: Neutral family name -> the ``ampere.core`` class whose ``sample`` this
 #: backend has a native twin for (*W3.14*). The **one** place this module names
 #: them, so the ceiling ``inference.md`` §13 states — a backend samples exactly
@@ -1197,7 +1215,9 @@ class LoweredProblem:
         routed = self._route(self.parameters._tensor(theta))
         channels = {
             label: {
-                channel: _native_surface(model, _FLUX_NAMES)(channel, routed.get(label, {}))
+                channel: _flat_channel(
+                    _native_surface(model, _FLUX_NAMES)(channel, routed.get(label, {}))
+                )
                 for channel in getattr(model, "channels", ())
             }
             for label, model in self.problem.models.items()

@@ -78,6 +78,7 @@ from ampere.backends.reference.interferometry import (
     _FWHM_PER_SIGMA as FWHM_PER_SIGMA,  # the same constant, not a second copy
 )
 from ampere.backends.reference.interferometry import (
+    _DEFAULT_SMEARING_NODES,
     MAS_PER_RAD,
     SPECTRAL_UNIT,
     cell_solid_angle,
@@ -265,6 +266,44 @@ class FourierSample(_JaxInterferometryStep, _ReferenceFourierSample):
         super().__init__(*args, **kwargs)
         self._coverage_cache: Coverage | None = None
         self._operator_cache: tuple[bytes, tuple[jax.Array, jax.Array, jax.Array]] | None = None
+
+    # -- construction from the data ------------------------------------------
+
+    @classmethod
+    def from_observed(
+        cls,
+        container: Any,
+        *,
+        field_of_view: Any,
+        oversampling: float = 1.0,
+        label: str | None = None,
+        **placement: Any,
+    ) -> Any:
+        """The reference route, with this backend's placement keywords forwarded.
+
+        ``from_observed`` is **the supported route** — the coverage is taken
+        from the observed container and never recomputed (gap I-2) — and the
+        reference classmethod's signature predates a backend having a device to
+        be placed on, so it would drop a ``device=`` silently. The coverage is
+        still derived by the reference's own rule, through a probe, so the
+        canonical ordering a ``ClosurePhases`` container unfolds into lives in
+        exactly one place; this adds the placement and nothing else. (The same
+        probe-and-rebuild shape the reference ``_VisibilityModel.from_observed``
+        uses, for the same reason.)
+        """
+        probe = _ReferenceFourierSample.from_observed(
+            container, field_of_view=field_of_view, oversampling=oversampling
+        )
+        u_pts, v_pts, waves = probe.expanded_coverage
+        return cls(
+            u_pts,
+            v_pts,
+            waves * SPECTRAL_UNIT,
+            field_of_view=field_of_view,
+            oversampling=oversampling,
+            label=label,
+            **placement,
+        )
 
     # -- chain-internal negotiation ------------------------------------------
 
@@ -479,8 +518,8 @@ class TimeSmearing(_JaxAveragingStep, _ReferenceTimeSmearing):
 
     Unlike bandwidth smearing the direction is not radial — it is wherever the
     track goes. The uv rates are per-sample buffers given at construction or
-    read from the observed container's ``extra_coords`` by the inherited
-    ``from_observed``.
+    read from the observed container's ``extra_coords`` by
+    :meth:`from_observed`.
 
     Parameters
     ----------
@@ -489,6 +528,36 @@ class TimeSmearing(_JaxAveragingStep, _ReferenceTimeSmearing):
     device
         Where this step's constant arrays live.
     """
+
+    @classmethod
+    def from_observed(
+        cls,
+        container: Any,
+        *,
+        integration: Any,
+        nodes: int = _DEFAULT_SMEARING_NODES,
+        label: str | None = None,
+        **placement: Any,
+    ) -> Any:
+        """The reference route, with this backend's placement keywords forwarded.
+
+        The rates still come from the observed container's ``extra_coords``, and
+        a container without them is still refused by name with the two key names
+        it needs: that refusal is the reference classmethod's and is reached by
+        calling it. See :meth:`FourierSample.from_observed` for why the override
+        exists at all.
+        """
+        probe = _ReferenceTimeSmearing.from_observed(
+            container, integration=integration, nodes=nodes
+        )
+        return cls(
+            integration=integration,
+            du_dt=probe.buffers["du_dt"].value,
+            dv_dt=probe.buffers["dv_dt"].value,
+            nodes=nodes,
+            label=label,
+            **placement,
+        )
 
 
 # ---------------------------------------------------------------------------
