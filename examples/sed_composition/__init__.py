@@ -1,5 +1,5 @@
-"""One :class:`~ampere.core.ModifiedBlackBody`, two datasets: a spectrum and a
-photometric catalogue on the same model channel.
+"""One ``ModifiedBlackBody``, two datasets: a spectrum and a photometric
+catalogue on the same model channel.
 
 Memo §7.1 (``docs/design/phase4_placement_memo.md``), expanded into a runnable
 example and :doc:`the tutorial page </sed_composition>` (W4.11). See
