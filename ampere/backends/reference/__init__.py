@@ -39,6 +39,15 @@ Instrument steps (``transformations.md`` §10's table):
 :class:`CalibrationScale`, :class:`Resample`, :class:`LSFConvolution`,
 :class:`SyntheticPhotometry`.
 
+Interferometry (Phase 4, ``interferometry.py``): the steps
+:class:`FourierSample`, :class:`ClosurePhase`, :class:`BandwidthSmearing`,
+:class:`TimeSmearing` and :class:`Amplitude`, the image-emitting source models
+:class:`UniformDisc`, :class:`GaussianSource` and :class:`Binary`, and the same
+three emitting visibilities analytically — :class:`UniformDiscVisibilities`,
+:class:`GaussianSourceVisibilities`, :class:`BinaryVisibilities` — which are
+the closed forms the direct transform is held to. The two container kinds they
+speak in, ``VisibilitySet`` and ``ClosurePhases``, are ``ampere.core``'s.
+
 Noise (``likelihoods.md`` §5, X-1): :class:`FractionalModelNoise` and its GP
 composition :class:`FractionalModelGPNoise`.
 
@@ -66,6 +75,23 @@ from .instrument import (
     bin_edges,
     bundled_filter_library,
 )
+from .interferometry import (
+    BRIGHTNESS_UNIT,
+    MAS_PER_RAD,
+    SPECTRAL_UNIT,
+    Amplitude,
+    BandwidthSmearing,
+    Binary,
+    BinaryVisibilities,
+    ClosurePhase,
+    FourierSample,
+    GaussianSource,
+    GaussianSourceVisibilities,
+    TimeSmearing,
+    UniformDisc,
+    UniformDiscVisibilities,
+    cell_solid_angle,
+)
 from .models import (
     COORDINATE_UNIT,
     FLUX_UNIT,
@@ -77,19 +103,34 @@ from .models import (
 from .noise import FractionalModelGPNoise, FractionalModelNoise
 
 __all__ = [
+    "BRIGHTNESS_UNIT",
     "COORDINATE_UNIT",
     "DETECTORS",
     "FLUX_UNIT",
+    "MAS_PER_RAD",
+    "SPECTRAL_UNIT",
+    "Amplitude",
+    "BandwidthSmearing",
+    "Binary",
+    "BinaryVisibilities",
     "BlackBody",
     "CalibrationScale",
+    "ClosurePhase",
+    "FourierSample",
     "FractionalModelGPNoise",
     "FractionalModelNoise",
+    "GaussianSource",
+    "GaussianSourceVisibilities",
     "LSFConvolution",
     "ModifiedBlackBody",
     "PowerLaw",
     "Resample",
     "SyntheticPhotometry",
+    "TimeSmearing",
+    "UniformDisc",
+    "UniformDiscVisibilities",
     "bin_edges",
     "bundled_filter_library",
+    "cell_solid_angle",
     "planck_jy",
 ]

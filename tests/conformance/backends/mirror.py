@@ -48,7 +48,21 @@ import astropy.units as u
 import numpy as np
 import scipy.stats as st
 
-from ampere.backends.reference import CalibrationScale, Resample
+from ampere.backends.reference import (
+    Amplitude,
+    BandwidthSmearing,
+    Binary,
+    BinaryVisibilities,
+    CalibrationScale,
+    ClosurePhase,
+    FourierSample,
+    GaussianSource,
+    GaussianSourceVisibilities,
+    Resample,
+    TimeSmearing,
+    UniformDisc,
+    UniformDiscVisibilities,
+)
 from ampere.core import DenseGP as _CoreDenseGP
 from ampere.core import GaussianProcessNoise as _CoreGaussianProcessNoise
 from ampere.core import IndependentNoise as _CoreIndependentNoise
@@ -73,6 +87,7 @@ from ._kernels import build_kernel
 from ..protocol import (
     BackendCapabilities,
     CovarianceSpec,
+    InterferometryPieces,
     KernelFamily,
     ModelKind,
     ModelSpec,
@@ -90,16 +105,28 @@ BACKEND = "mirror"
 
 __all__ = [
     "BACKEND",
+    "MIRROR_INTERFEROMETRY",
     "DenseGP",
     "GaussianProcessNoise",
     "IndependentNoise",
+    "MirrorAmplitude",
     "MirrorBackend",
+    "MirrorBandwidthSmearing",
+    "MirrorBinary",
+    "MirrorBinaryVisibilities",
     "MirrorCalibrationScale",
+    "MirrorClosurePhase",
+    "MirrorFourierSample",
+    "MirrorGaussianSource",
+    "MirrorGaussianSourceVisibilities",
     "MirrorLinearModel",
     "MirrorParameterSpace",
     "MirrorPhotometry",
     "MirrorPowerLawModel",
     "MirrorResample",
+    "MirrorTimeSmearing",
+    "MirrorUniformDisc",
+    "MirrorUniformDiscVisibilities",
     "QuasisepGP",
 ]
 
@@ -201,6 +228,96 @@ class MirrorPhotometry(Photometry):
     """The battery's kind-changing step, declared as this backend's (W2.12)."""
 
     BACKEND: ClassVar[str] = BACKEND
+
+
+# The interferometric vocabulary (W4.1), for the reason the three steps above
+# exist: a fixture named "mirror" that composed reference-backend classes
+# would declare two backends and be refused, and the interferometric rows
+# would be a tautology rather than a demonstration that they are parametrised
+# at all. The arithmetic is the reference path's, honestly — a discrete
+# Fourier transform has nothing different to offer here — and what these
+# prove is that no row names a backend.
+
+
+class MirrorFourierSample(FourierSample):
+    """The Fourier step, declared as this backend's (W4.1)."""
+
+    BACKEND: ClassVar[str] = BACKEND
+
+
+class MirrorClosurePhase(ClosurePhase):
+    """The closure-phase step, declared as this backend's (W4.1)."""
+
+    BACKEND: ClassVar[str] = BACKEND
+
+
+class MirrorAmplitude(Amplitude):
+    """The modulus step, declared as this backend's (W4.1)."""
+
+    BACKEND: ClassVar[str] = BACKEND
+
+
+class MirrorBandwidthSmearing(BandwidthSmearing):
+    """Bandwidth smearing, declared as this backend's (W4.1)."""
+
+    BACKEND: ClassVar[str] = BACKEND
+
+
+class MirrorTimeSmearing(TimeSmearing):
+    """Time smearing, declared as this backend's (W4.1)."""
+
+    BACKEND: ClassVar[str] = BACKEND
+
+
+class MirrorUniformDisc(UniformDisc):
+    """The uniform disc, declared as this backend's (W4.1)."""
+
+    BACKEND: ClassVar[str] = BACKEND
+
+
+class MirrorGaussianSource(GaussianSource):
+    """The Gaussian source, declared as this backend's (W4.1)."""
+
+    BACKEND: ClassVar[str] = BACKEND
+
+
+class MirrorBinary(Binary):
+    """The binary, declared as this backend's (W4.1)."""
+
+    BACKEND: ClassVar[str] = BACKEND
+
+
+class MirrorUniformDiscVisibilities(UniformDiscVisibilities):
+    """The disc's closed form, declared as this backend's (W4.1)."""
+
+    BACKEND: ClassVar[str] = BACKEND
+
+
+class MirrorGaussianSourceVisibilities(GaussianSourceVisibilities):
+    """The Gaussian's closed form, declared as this backend's (W4.1)."""
+
+    BACKEND: ClassVar[str] = BACKEND
+
+
+class MirrorBinaryVisibilities(BinaryVisibilities):
+    """The binary's closed form, declared as this backend's (W4.1)."""
+
+    BACKEND: ClassVar[str] = BACKEND
+
+
+MIRROR_INTERFEROMETRY = InterferometryPieces(
+    fourier_sample=MirrorFourierSample,
+    closure_phase=MirrorClosurePhase,
+    amplitude=MirrorAmplitude,
+    bandwidth_smearing=MirrorBandwidthSmearing,
+    time_smearing=MirrorTimeSmearing,
+    uniform_disc=MirrorUniformDisc,
+    gaussian_source=MirrorGaussianSource,
+    binary=MirrorBinary,
+    uniform_disc_visibilities=MirrorUniformDiscVisibilities,
+    gaussian_source_visibilities=MirrorGaussianSourceVisibilities,
+    binary_visibilities=MirrorBinaryVisibilities,
+)
 
 
 # The noise models and solvers, declared as this fixture's. Needed since
@@ -319,6 +436,7 @@ class MirrorBackend(ReferenceBackend):
         float64=True,
         solvers=ReferenceBackend.capabilities.solvers,
         tolerances=ReferenceBackend.capabilities.tolerances,
+        interferometry=True,
     )
 
     def model(self, spec: ModelSpec) -> Model:
@@ -342,6 +460,9 @@ class MirrorBackend(ReferenceBackend):
 
     def gp_noise(self, kernel: Kernel, solver: GPSolver, *, jitter: Any = None) -> NoiseModel:
         return GaussianProcessNoise(kernel, solver, jitter=jitter)
+
+    def interferometry(self) -> InterferometryPieces:
+        return MIRROR_INTERFEROMETRY
 
     def parameter_space(self, declaration: ParameterSet) -> MirrorParameterSpace:
         return MirrorParameterSpace(declaration)

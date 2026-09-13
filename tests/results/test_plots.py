@@ -127,20 +127,26 @@ def gp_toy(solver: Any) -> FittingProblem:
 class PointSource(Model):
     """A flat complex visibility — the smallest complex-valued channel there is."""
 
-    def __init__(self, u_axis: np.ndarray, v_axis: np.ndarray) -> None:
+    def __init__(self, u_axis: np.ndarray, v_axis: np.ndarray, wave: np.ndarray) -> None:
         self.register_buffer("u", np.asarray(u_axis, dtype=float))
         self.register_buffer("v", np.asarray(v_axis, dtype=float))
+        self.register_buffer("wave", np.asarray(wave, dtype=float), unit=u.micron)
         self.register_parameter(Parameter("flux", st.loguniform(0.5, 2.0)))
 
     def evaluate(self, **values: Any) -> ModelResult:
         ctx = self.context(values)
         return ModelResult(
-            VisibilitySet(ctx["u"], ctx["v"], ctx["flux"] * np.ones(ctx["u"].size, dtype=complex))
+            VisibilitySet(
+                ctx["u"],
+                ctx["v"],
+                ctx["wave"] * u.micron,
+                ctx["flux"] * np.ones(ctx["u"].size, dtype=complex),
+            )
         )
 
 
 def visibility_problem() -> FittingProblem:
-    axes = (np.array([1.0, 2.0]), np.array([3.0, 4.0]))
+    axes = (np.array([1.0, 2.0]), np.array([3.0, 4.0]), np.array([2.2, 2.2]))
     return FittingProblem(
         PointSource(*axes),
         DatasetCollection(
@@ -149,6 +155,7 @@ def visibility_problem() -> FittingProblem:
                     VisibilitySet(
                         axes[0],
                         axes[1],
+                        axes[2] * u.micron,
                         np.array([1 + 0j, 1 + 0j]),
                         uncertainty=np.array([0.1, 0.1]),
                     ),

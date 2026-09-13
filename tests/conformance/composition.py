@@ -348,10 +348,11 @@ def observed_container(spec: ProblemSpec, dataset: DatasetSpec) -> FunctionSampl
         # complex values (``results_schema.md`` §16), and its uncertainty is
         # real: the per-component standard deviation of the circular complex
         # Gaussian, which is the noise model the family is.
-        u_axis, v_axis = complex_axes(grid)
+        u_axis, v_axis, wavelength = complex_axes(grid)
         return VisibilitySet(
             u_axis,
             v_axis,
+            wavelength,
             values * FLUX_UNIT,
             uncertainty=uncertainty,
             mask=mask,

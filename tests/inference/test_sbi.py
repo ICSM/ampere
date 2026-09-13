@@ -362,6 +362,7 @@ class TestTheSummaryLayout:
         visibilities = VisibilitySet(
             [10.0, -30.0] * u.dimensionless_unscaled,
             [-20.0, 40.0] * u.dimensionless_unscaled,
+            [2.2, 2.2] * u.um,
             np.array([1.0 + 2.0j, 3.0 + 0.0j]) * u.Jy,
         )
         datasets = {"vis": _Observed(visibilities)}

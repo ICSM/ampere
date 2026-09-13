@@ -31,9 +31,10 @@ What lives here
     V(u,v), position(t) — and a container is a set of samples of it. There is
     no regular-grid assumption anywhere in this module.
 :class:`Spectrum`, :class:`PhotometricPoints`, :class:`Image`, :class:`Cube`,
-:class:`TimeSeries`, :class:`VisibilitySet`
-    The kinds the plan enumerates. Each fixes an axis signature, a layout, an
-    ordering rule and whether its values may be complex.
+:class:`TimeSeries`, :class:`VisibilitySet`, :class:`ClosurePhases`
+    The kinds the plan enumerates, and the one Phase 4 added beside them. Each
+    fixes an axis signature, a layout, an ordering rule and whether its values
+    may be complex.
 :class:`Axis`
     One coordinate axis: name, values, unit, and the *advertised* structure
     (:attr:`Axis.regular`, :attr:`Axis.log_regular`) implementations may use to
@@ -47,7 +48,8 @@ sorted and deduplicated" assumption is the thing to kill. Every container kind
 therefore either *validates* its ordering rule at construction
 (:class:`Spectrum`, :class:`TimeSeries`, :class:`Image`, :class:`Cube`) or
 *documents* that it tolerates arbitrary order (:class:`PhotometricPoints`,
-:class:`VisibilitySet`). Neither is left to the reader.
+:class:`VisibilitySet`, :class:`ClosurePhases`). Neither is left to the
+reader.
 
 **Regularity is advertised, never required.** :attr:`Axis.regular` and
 :attr:`Axis.log_regular` let an implementation choose FFT convolution or a
@@ -129,6 +131,7 @@ __all__ = [
     "AnomalyScore",
     "Axis",
     "AxisSpec",
+    "ClosurePhases",
     "Cube",
     "FunctionSamples",
     "Image",
@@ -1472,7 +1475,7 @@ class Cube(FunctionSamples):
 
 
 class VisibilitySet(FunctionSamples):
-    """Complex visibilities at scattered (u, v) points.
+    """Complex visibilities at scattered ``(u, v, spectral_axis)`` points.
 
     The kind that stresses this schema hardest, and the Phase 4 proof modality:
     values are **complex**, the sampling is an irregular point set that no grid
@@ -1480,7 +1483,11 @@ class VisibilitySet(FunctionSamples):
     "coordinate + value" beats "array with implicit axes".
 
     Coordinate order is **explicitly tolerated as arbitrary** — a (u,v) point
-    set has no natural order, and imposing one would be a fiction.
+    set has no natural order, and imposing one would be a fiction. The same
+    tolerance covers the spectral axis, which is why it is :attr:`Order.ANY`
+    here and strictly increasing on a :class:`Spectrum`: a visibility table
+    arrives sorted by baseline, by time, or by neither, and one wavelength is
+    repeated across every baseline of a channel.
 
     ``uncertainty`` is real and non-negative: it is the per-component standard
     deviation of a circular complex Gaussian, the standard interferometric
@@ -1488,11 +1495,51 @@ class VisibilitySet(FunctionSamples):
     Non-circular noise, and the amplitude/phase (Rice, von Mises) formulations,
     are noise-model concerns and belong to W1.6 — the container deliberately
     does not encode them.
+
+    **The third axis (amended at W4.1, ruled by Peter 2026-09-11.)** ``(u, v)``
+    are baselines *in wavelengths*, so the convention already divides by
+    lambda; for a **grey** model error that absorbs the wavelength dependence
+    entirely, and the two-axis form the freeze shipped was enough. It is not
+    enough for a **chromatic** one. Write a missing component as
+    ``dI(x, y, lambda) = P(x, y) S(lambda)`` — a patch of sky with a band
+    profile — and its effect on a baseline **B** at wavelength lambda is
+    ``dV = S(lambda) F(B/lambda)``: sharp in wavelength, smooth in spatial
+    frequency. Two samples at the *same* ``(u, v)`` and different wavelengths
+    are then near-identical to a kernel that cannot see wavelength and very
+    different in truth, so the residual correlation a flexible likelihood is
+    meant to model is not expressible without the axis. A kernel sees a
+    container's axes and nothing else, which is what makes this a container
+    question rather than a kernel one (``phase4_placement_memo.md`` §3.6).
+
+    One wavelength (or frequency, or energy — :class:`Spectrum`'s physical
+    types) **per sample**, not a separate grid: the layout is still
+    :attr:`Layout.POINTS`, so the third axis has the same length as the other
+    two. A monochromatic observation is a constant column, which costs one
+    array and keeps every consumer writing one thing rather than two.
+
+    Two consequences worth stating, because neither announces itself:
+
+    * the axes now carry **mixed units** (dimensionless ``u``/``v``, a length
+      or frequency ``spectral_axis``), so an isotropic GP over the whole point
+      set is refused by :meth:`GPSolver.check_compatible` with its mixed-unit
+      message. That refusal is correct — a Euclidean distance across
+      wavelengths and baselines is meaningless — and the flexible likelihood
+      on visibilities therefore wants a kernel with an ``axes`` selector, so
+      that a ``Product`` of a ``(u, v)`` block and a spectral block is
+      expressible. That selector is W4.5's.
+    * ``visibility`` is the **fourth** positional argument. The axis goes
+      before the values so that the positional order matches :attr:`AXES`, as
+      it does for every other kind here.
     """
 
     AXES = (
         AxisSpec("u", physical_types=("dimensionless",), equivalent_units=(u.rad**-1,)),
         AxisSpec("v", physical_types=("dimensionless",), equivalent_units=(u.rad**-1,)),
+        AxisSpec(
+            "spectral_axis",
+            physical_types=("length", "frequency", "energy"),
+            order=Order.ANY,
+        ),
     )
     LAYOUT = Layout.POINTS
     ALLOW_COMPLEX = True
@@ -1501,6 +1548,7 @@ class VisibilitySet(FunctionSamples):
         self,
         u_coord: ArrayLike,
         v_coord: ArrayLike,
+        spectral_axis: ArrayLike,
         visibility: ArrayLike,
         *,
         unit: object = None,
@@ -1511,7 +1559,7 @@ class VisibilitySet(FunctionSamples):
         meta: Mapping[str, Any] | None = None,
     ) -> None:
         super().__init__(
-            {"u": u_coord, "v": v_coord},
+            {"u": u_coord, "v": v_coord, "spectral_axis": spectral_axis},
             visibility,
             unit=unit,
             uncertainty=uncertainty,
@@ -1532,6 +1580,11 @@ class VisibilitySet(FunctionSamples):
         return self.axis("v")
 
     @property
+    def spectral_axis(self) -> Axis:
+        """The per-sample spectral coordinate. One value per visibility."""
+        return self.axis("spectral_axis")
+
+    @property
     def visibility(self) -> np.ndarray:
         """Alias for :attr:`~FunctionSamples.values`."""
         return self.values
@@ -1543,6 +1596,159 @@ class VisibilitySet(FunctionSamples):
     def phase(self) -> np.ndarray:
         """Visibility phases in radians. A view for plotting, not a likelihood."""
         return _readonly(np.angle(self.values))
+
+
+class ClosurePhases(FunctionSamples):
+    """Closure phase per triangle, in radians, indexed by two of its baselines.
+
+    The sum of the three visibility phases around a closed triangle of
+    telescopes. It is the interferometric observable that survives an
+    atmosphere: a per-telescope phase error enters two of the three baselines
+    with opposite signs and cancels exactly, which is why closure phases are
+    fitted where raw phases cannot be.
+
+    A triangle is fixed by **two** of its three baselines — the third is minus
+    their sum — so the geometry is four dimensionless axes plus the wavelength
+    at which the triangle was measured, one per sample. Wavelength is an axis
+    for the reason it is one on :class:`VisibilitySet`, and the same way: see
+    that class's "third axis" note.
+
+    **Canonical ordering (required).** A triangle has three representations by
+    two of its baselines, and the same closure phase listed as
+    ``(u_ij, v_ij, u_jk, v_jk)`` in one file and as
+    ``(u_jk, v_jk, u_ki, v_ki)`` in another would look far apart to a kernel
+    and would fail the bit-identical coordinate pairing a likelihood needs
+    (``transformations.md`` §10). This kind therefore fixes one
+    (``phase4_placement_memo.md`` §3.4):
+
+    * telescopes are labelled ``i < j < k`` by the array's own station order;
+    * ``(u1, v1)`` is the baseline ``ij`` and ``(u2, v2)`` is the baseline
+      ``jk``, both with the sign convention ``b_ij = r_j - r_i`` projected on
+      the sky and divided by the wavelength;
+    * the third baseline ``ki`` is **implied**, and is
+      ``-(u1 + u2, v1 + v2)``; it is never stored, because storing a derived
+      quantity is how two files come to disagree;
+    * the stored value is
+      ``arg(V_ij · V_jk · V_ki) = arg(V(b1) · V(b2) · conj(V(b1 + b2)))``,
+      wrapped into ``(-pi, pi]``.
+
+    The sign convention is the second half of the ordering and is just as
+    load-bearing: with the opposite convention for ``b_ij`` every closure
+    phase changes sign, and a fit to a mirrored source would look just as good
+    as a fit to the true one. ``ampere.backends.reference.ClosurePhase``
+    produces exactly the convention above, and the conformance battery asserts
+    it against a closed form rather than against itself.
+
+    ``uncertainty`` is the per-triangle standard deviation **in radians**, the
+    propagated quantity every closure-phase pipeline reports; it becomes
+    ``kappa = 1/sigma**2`` under :class:`~ampere.core.VonMisesFamily`.
+
+    The identity labels belong in ``extra_coords``, not in the geometry: a
+    ``triangle`` label per sample (``"A0-G1-K0"``) and the per-sample
+    ``baseline`` names it was formed from are what a human reads and what
+    ties a closure phase back to the visibilities it came from — the pairing
+    the plan's design horizon (h) needs kept visible for a joint noise model
+    over the two channels.
+
+    Examples
+    --------
+    >>> import astropy.units as u
+    >>> t3 = ClosurePhases(
+    ...     [40.0e6, 52.0e6], [10.0e6, -8.0e6],
+    ...     [-15.0e6, 11.0e6], [33.0e6, 27.0e6],
+    ...     [2.2, 2.2] * u.um,
+    ...     [0.31, -0.12] * u.rad,
+    ...     uncertainty=[0.02, 0.05] * u.rad,
+    ...     extra_coords={"triangle": np.array(["A0-G1-K0", "A0-G1-J3"])},
+    ... )
+    >>> t3.n_samples, t3.unit
+    (2, Unit("rad"))
+    >>> t3.implied_baseline()[0].round(1).tolist()
+    [-25000000.0, -63000000.0]
+    """
+
+    AXES = (
+        AxisSpec("u1", physical_types=("dimensionless",), equivalent_units=(u.rad**-1,)),
+        AxisSpec("v1", physical_types=("dimensionless",), equivalent_units=(u.rad**-1,)),
+        AxisSpec("u2", physical_types=("dimensionless",), equivalent_units=(u.rad**-1,)),
+        AxisSpec("v2", physical_types=("dimensionless",), equivalent_units=(u.rad**-1,)),
+        AxisSpec(
+            "spectral_axis",
+            physical_types=("length", "frequency", "energy"),
+            order=Order.ANY,
+        ),
+    )
+    LAYOUT = Layout.POINTS
+    ALLOW_COMPLEX = False
+
+    def __init__(
+        self,
+        u1: ArrayLike,
+        v1: ArrayLike,
+        u2: ArrayLike,
+        v2: ArrayLike,
+        spectral_axis: ArrayLike,
+        phase: ArrayLike,
+        *,
+        unit: object = None,
+        uncertainty: ArrayLike | None = None,
+        mask: ArrayLike | None = None,
+        extra_coords: Mapping[str, ArrayLike] | None = None,
+        fidelity: str | None = None,
+        meta: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            {"u1": u1, "v1": v1, "u2": u2, "v2": v2, "spectral_axis": spectral_axis},
+            phase,
+            unit=unit,
+            uncertainty=uncertainty,
+            mask=mask,
+            extra_coords=extra_coords,
+            fidelity=fidelity,
+            meta=meta,
+        )
+
+    @property
+    def u1(self) -> Axis:
+        """The u coordinate of the first baseline, ``ij``."""
+        return self.axis("u1")
+
+    @property
+    def v1(self) -> Axis:
+        """The v coordinate of the first baseline, ``ij``."""
+        return self.axis("v1")
+
+    @property
+    def u2(self) -> Axis:
+        """The u coordinate of the second baseline, ``jk``."""
+        return self.axis("u2")
+
+    @property
+    def v2(self) -> Axis:
+        """The v coordinate of the second baseline, ``jk``."""
+        return self.axis("v2")
+
+    @property
+    def spectral_axis(self) -> Axis:
+        """The per-triangle spectral coordinate."""
+        return self.axis("spectral_axis")
+
+    @property
+    def phase(self) -> np.ndarray:
+        """Alias for :attr:`~FunctionSamples.values`, in radians."""
+        return self.values
+
+    def implied_baseline(self) -> tuple[np.ndarray, np.ndarray]:
+        """The third baseline ``ki``, ``-(u1 + u2, v1 + v2)``.
+
+        Derived on demand rather than stored, which is the canonical ordering's
+        own rule: a stored third baseline is a second statement of the same
+        fact, and two statements drift.
+        """
+        return (
+            _readonly(-(self.u1.values + self.u2.values)),
+            _readonly(-(self.v1.values + self.v2.values)),
+        )
 
 
 # ---------------------------------------------------------------------------

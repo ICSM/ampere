@@ -311,7 +311,10 @@ def containers() -> dict[str, FunctionSamples]:
             np.arange(8.0).reshape(2, 2, 2),
         ),
         "visibilities": VisibilitySet(
-            np.array([1.0, 2.0]), np.array([3.0, 4.0]), np.array([1 + 2j, 3 - 1j])
+            np.array([1.0, 2.0]),
+            np.array([3.0, 4.0]),
+            np.array([2.2, 2.2]) * u.um,
+            np.array([1 + 2j, 3 - 1j]),
         ),
     }
 

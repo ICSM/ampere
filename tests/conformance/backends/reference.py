@@ -48,9 +48,20 @@ import numpy as np
 import scipy.stats as st
 
 from ampere.backends.reference import (
+    Amplitude,
+    BandwidthSmearing,
+    Binary,
+    BinaryVisibilities,
     CalibrationScale,
+    ClosurePhase,
+    FourierSample,
+    GaussianSource,
+    GaussianSourceVisibilities,
     PowerLaw,
     Resample,
+    TimeSmearing,
+    UniformDisc,
+    UniformDiscVisibilities,
 )
 from ampere.backends.reference.models import _SpectralModel
 from ampere.core import (
@@ -83,6 +94,7 @@ from ._kernels import build_kernel
 from ..protocol import (
     BackendCapabilities,
     CovarianceSpec,
+    InterferometryPieces,
     KernelFamily,
     ModelKind,
     ModelSpec,
@@ -92,6 +104,7 @@ from ..protocol import (
 )
 
 __all__ = [
+    "REFERENCE_INTERFEROMETRY",
     "LinearModel",
     "Photometry",
     "PowerLawModel",
@@ -358,6 +371,10 @@ class ReferenceBackend:
         # rank-2 representation of Matern-3/2, not celerite2's eps
         # approximation), so the DenseGP<->QuasisepGP agreement rows run.
         solvers=frozenset({SolverKind.DENSE, SolverKind.QUASISEP}),
+        # W4.1: this is the only backend with an interferometric vocabulary
+        # until W4.3 writes the native twins, so every interferometric row
+        # skips elsewhere with a reason naming that.
+        interferometry=True,
     )
 
     def model(self, spec: ModelSpec) -> Model:
@@ -388,5 +405,27 @@ class ReferenceBackend:
     def parameter_space(self, declaration: ParameterSet) -> ReferenceParameterSpace:
         return ReferenceParameterSpace(declaration)
 
+    def interferometry(self) -> InterferometryPieces:
+        # The shipped classes, unmodified: they declare BACKEND = "reference",
+        # which is the truth here and the reason this fixture alone keeps them.
+        return REFERENCE_INTERFEROMETRY
+
     def to_numpy(self, values: Any) -> np.ndarray:
         return np.asarray(values)
+
+
+#: The shipped interferometric vocabulary, as one record (W4.1). Module-level
+#: so that :class:`MirrorBackend` can say which of it is its own.
+REFERENCE_INTERFEROMETRY = InterferometryPieces(
+    fourier_sample=FourierSample,
+    closure_phase=ClosurePhase,
+    amplitude=Amplitude,
+    bandwidth_smearing=BandwidthSmearing,
+    time_smearing=TimeSmearing,
+    uniform_disc=UniformDisc,
+    gaussian_source=GaussianSource,
+    binary=Binary,
+    uniform_disc_visibilities=UniformDiscVisibilities,
+    gaussian_source_visibilities=GaussianSourceVisibilities,
+    binary_visibilities=BinaryVisibilities,
+)

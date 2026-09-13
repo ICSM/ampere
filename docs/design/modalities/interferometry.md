@@ -11,8 +11,36 @@ contracts:
 - `likelihoods.md` §17 Q3/Q4 — whether closure phases need `VonMisesFamily`
   before the spec freeze, and how Rice should be parameterised.
 
-Nothing here is implemented. Every snippet below was executed against the
-merged `ampere.core` at commit `8c4e99d` (see §8 for what was checked and how);
+**Landed at W4.1 (Phase 4).** This sketch is now a design record with an
+implementation beside it, and where the two differ the implementation is the
+truth. What shipped, and what moved:
+
+- the kinds are `ampere.core.VisibilitySet` (amended to three axes) and
+  `ampere.core.ClosurePhases` (five), both in core rather than in a modality
+  namespace — D1's ruling of 2026-09-11;
+- the steps are `ampere.backends.reference.interferometry`:
+  `FourierSample`, `ClosurePhase`, `Amplitude`, `BandwidthSmearing`,
+  `TimeSmearing`, with `UniformDisc`/`GaussianSource`/`Binary` emitting an
+  `Image` and the same three emitting a `VisibilitySet` analytically;
+- `VonMisesFamily` is implemented, with `sample()` (§5's verdict, plus the
+  sampling-form principle added at W3.14); `RiceFamily` is still declared
+  only, because its data type is polarimetry (`likelihoods.md` §3);
+- §2's "`VisibilitySet` needs nothing added" is **superseded**: a chromatic
+  sky error is sharp in wavelength and smooth in (u, v), and a kernel sees a
+  container's axes only, so the kind gained a `spectral_axis`
+  (`phase4_placement_memo.md` §3.6, ruled 2026-09-11). One consequence the
+  sketch could not foresee: the axes now carry mixed units, so §7's GP over a
+  real-valued `VisibilitySet` is refused until kernels gain an `axes`
+  selector (W4.5);
+- §4's `max_step = 1/(2 u_max)` shipped, with an `oversampling` multiplier
+  beside it. The Nyquist step is the coarsest grid at which the *array's* own
+  information is representable; it is not a statement about the accuracy of
+  the quadrature, and a source with real power beyond the longest baseline
+  has that power folded back by a sum at that step.
+
+Nothing here was implemented when it was written. Every snippet below was
+executed against the merged `ampere.core` at commit `8c4e99d` (see §8 for what
+was checked and how);
 the sketches are **not** wired into `tests/core/test_spec_doctests.py`, which
 names its four contract specs explicitly. Whether modality sketches should be
 executed by the suite is W1.13's call — **decided at the freeze: they stay
@@ -54,6 +82,10 @@ instrument `transformations.md` §5 provides. Both routes are supported and
 neither is privileged.
 
 ## 2. The containers
+
+*Superseded in part at W4.1: `VisibilitySet` gained a `spectral_axis`, and
+`ClosurePhases` gained one too (five axes, not four). See the status note at
+the top.*
 
 `VisibilitySet` needs nothing added. It is complex, its `(u, v)` axes are
 dimensionless (baselines in wavelengths) with `Order.ANY`, its `uncertainty` is

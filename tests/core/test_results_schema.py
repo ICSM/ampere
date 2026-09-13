@@ -20,6 +20,7 @@ from ampere.core import (
     DEFAULT_CHANNEL,
     Axis,
     AxisSpec,
+    ClosurePhases,
     Cube,
     FunctionSamples,
     Image,
@@ -265,7 +266,7 @@ class TestKindChecking:
     def test_mismatch_names_channels_of_the_wanted_kind_when_there_are_some(
         self, sed, co_windows
     ) -> None:
-        vis = VisibilitySet([1.0, 2.0], [3.0, 4.0], [1 + 0j, 0 + 1j])
+        vis = VisibilitySet([1.0, 2.0], [3.0, 4.0], [2.2, 2.2] * u.um, [1 + 0j, 0 + 1j])
         result = ModelResult({"sed": sed, "uv": vis})
         with pytest.raises(ChannelError, match=r"\['uv'\]"):
             result.require("sed", VisibilitySet)
@@ -374,7 +375,7 @@ class TestCoordinatesAndValues:
 
     def test_points_layout_requires_equal_length_axes(self) -> None:
         with pytest.raises(SchemaError, match="must have the same length"):
-            VisibilitySet([1.0, 2.0, 3.0], [1.0, 2.0], [1 + 0j, 0 + 1j])
+            VisibilitySet([1.0, 2.0, 3.0], [1.0, 2.0], [2.2, 2.2] * u.um, [1 + 0j, 0 + 1j])
 
     def test_mesh_coordinates_are_refused(self) -> None:
         with pytest.raises(SchemaError, match="must be one-dimensional"):
@@ -512,7 +513,12 @@ class TestOrdering:
         "build",
         [
             lambda: PhotometricPoints(["b", "a"], [3.0, 1.0] * u.um, [1.0, 2.0] * u.Jy),
-            lambda: VisibilitySet([5.0, -3.0, 1.0], [2.0, 9.0, -4.0], [1 + 0j, 0 + 1j, 1 + 1j]),
+            lambda: VisibilitySet(
+                [5.0, -3.0, 1.0],
+                [2.0, 9.0, -4.0],
+                [2.2, 1.6, 2.2] * u.um,
+                [1 + 0j, 0 + 1j, 1 + 1j],
+            ),
         ],
         ids=["photometry", "visibilities"],
     )
@@ -877,9 +883,10 @@ class TestVisibilitySet:
         return VisibilitySet(
             [120.0, -35.0, 88.0, -210.0],
             [45.0, 190.0, -66.0, 12.0],
+            [1.3, 1.3, 0.87, 0.87] * u.mm,
             [1.0 + 0.2j, 0.6 - 0.3j, 0.4 + 0.0j, 0.1 - 0.05j],
             uncertainty=[0.02, 0.02, 0.03, 0.05],
-            extra_coords={"frequency_ghz": np.array([230.5, 230.5, 345.8, 345.8])},
+            extra_coords={"baseline": np.array(["AB", "AC", "AB", "AC"])},
         )
 
     def test_values_are_complex(self, vis) -> None:
@@ -902,24 +909,32 @@ class TestVisibilitySet:
 
     def test_complex_uncertainty_is_refused(self) -> None:
         with pytest.raises(SchemaError, match="include complex numbers"):
-            VisibilitySet([1.0, 2.0], [3.0, 4.0], [1 + 0j, 0 + 1j], uncertainty=[1 + 1j, 1 + 0j])
+            VisibilitySet(
+                [1.0, 2.0],
+                [3.0, 4.0],
+                [2.2, 2.2] * u.um,
+                [1 + 0j, 0 + 1j],
+                uncertainty=[1 + 1j, 1 + 0j],
+            )
 
     def test_bare_arrays_are_dimensionless_baselines_in_wavelengths(self, vis) -> None:
         assert vis.u.unit == u.dimensionless_unscaled
 
     def test_spatial_frequency_units_are_accepted(self) -> None:
-        vis = VisibilitySet([1.0, 2.0] / u.rad, [3.0, 4.0] / u.rad, [1 + 0j, 0.5 + 0j])
+        vis = VisibilitySet(
+            [1.0, 2.0] / u.rad, [3.0, 4.0] / u.rad, [2.2, 2.2] * u.um, [1 + 0j, 0.5 + 0j]
+        )
         assert vis.v.unit.is_equivalent(u.rad**-1)
 
     def test_wrong_axis_unit_is_refused(self) -> None:
         with pytest.raises(SchemaError, match="does not accept"):
-            VisibilitySet([1.0, 2.0] * u.m, [3.0, 4.0] * u.m, [1 + 0j, 0 + 1j])
+            VisibilitySet([1.0, 2.0] * u.m, [3.0, 4.0] * u.m, [2.2, 2.2] * u.um, [1 + 0j, 0 + 1j])
 
     def test_masks_and_extra_coords_work_on_complex_data(self, vis) -> None:
         masked = vis.with_values(vis.values, mask=np.array([False, False, True, False]))
         assert masked.n_valid == 3
         assert masked.weights().tolist() == [1.0, 1.0, 0.0, 1.0]
-        assert masked.extra_coords["frequency_ghz"].tolist() == [230.5, 230.5, 345.8, 345.8]
+        assert masked.extra_coords["baseline"].tolist() == ["AB", "AC", "AB", "AC"]
 
     def test_complex_values_are_refused_by_real_kinds(self) -> None:
         with pytest.raises(SchemaError, match="holds real values"):
@@ -928,6 +943,102 @@ class TestVisibilitySet:
     def test_a_visibility_set_is_an_ordinary_channel(self, vis) -> None:
         result = ModelResult({"uv_230ghz": vis})
         assert result.require("uv_230ghz", VisibilitySet) is vis
+
+    def test_the_spectral_axis_is_one_wavelength_per_sample(self, vis) -> None:
+        """W4.1's amendment: the third axis, and the monochromatic case.
+
+        ``(u, v)`` are baselines in wavelengths, so a *grey* model error needs
+        no spectral axis; a chromatic one does, because a kernel sees a
+        container's axes and nothing else. One value per sample, not a
+        separate grid — a monochromatic observation is a constant column.
+        """
+        assert [axis.name for axis in vis.axes] == ["u", "v", "spectral_axis"]
+        assert vis.spectral_axis.unit == u.mm
+        assert vis.spectral_axis.size == vis.n_samples
+        monochromatic = VisibilitySet(
+            [1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [2.2, 2.2, 2.2] * u.um, [1 + 0j, 0 + 1j, 1 + 1j]
+        )
+        assert monochromatic.spectral_axis.values.tolist() == [2.2, 2.2, 2.2]
+
+    def test_the_spectral_axis_takes_a_frequency_too(self) -> None:
+        """``Spectrum``'s physical types: whichever the observation is recorded in."""
+        radio = VisibilitySet([1.0, 2.0], [3.0, 4.0], [230.5, 345.8] * u.GHz, [1 + 0j, 0 + 1j])
+        assert radio.spectral_axis.unit == u.GHz
+
+    def test_an_unsorted_spectral_axis_is_tolerated(self) -> None:
+        """``Order.ANY``, unlike ``Spectrum``'s: a visibility table arrives in any order."""
+        jumbled = VisibilitySet(
+            [1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [2.2, 1.6, 2.2] * u.um, [1 + 0j, 0 + 1j, 1 + 1j]
+        )
+        assert jumbled.spectral_axis.values.tolist() == [2.2, 1.6, 2.2]
+
+    def test_a_missing_spectral_axis_is_a_loud_error(self) -> None:
+        with pytest.raises(SchemaError, match=r"does not accept|need a unit"):
+            VisibilitySet([1.0, 2.0], [3.0, 4.0], [2.2, 2.2], [1 + 0j, 0 + 1j])
+
+
+class TestClosurePhases:
+    """The kind Phase 4 added: a triangle, its wavelength, and an angle."""
+
+    @pytest.fixture
+    def t3(self) -> ClosurePhases:
+        return ClosurePhases(
+            [40.0e6, 52.0e6],
+            [10.0e6, -8.0e6],
+            [-15.0e6, 11.0e6],
+            [33.0e6, 27.0e6],
+            [2.2, 2.2] * u.um,
+            [0.31, -0.12] * u.rad,
+            uncertainty=[0.02, 0.05] * u.rad,
+            extra_coords={"triangle": np.array(["A0-G1-K0", "A0-G1-J3"])},
+        )
+
+    def test_five_axes_two_baselines_and_a_wavelength(self, t3) -> None:
+        assert [axis.name for axis in t3.axes] == ["u1", "v1", "u2", "v2", "spectral_axis"]
+        assert t3.LAYOUT is Layout.POINTS
+        assert t3.n_samples == 2
+        assert t3.u1.unit == u.dimensionless_unscaled
+        assert t3.spectral_axis.unit == u.um
+
+    def test_the_third_baseline_is_implied_rather_than_stored(self, t3) -> None:
+        """The canonical ordering's own rule: a stored derived quantity drifts."""
+        u3, v3 = t3.implied_baseline()
+        assert np.allclose(u3, -(t3.u1.values + t3.u2.values))
+        assert np.allclose(v3, -(t3.v1.values + t3.v2.values))
+        assert not u3.flags.writeable
+
+    def test_values_are_angles_in_radians(self, t3) -> None:
+        assert t3.unit == u.rad
+        assert np.array_equal(t3.phase, t3.values)
+        assert t3.uncertainty.tolist() == [0.02, 0.05]
+
+    def test_complex_values_are_refused(self) -> None:
+        """A closure phase is an angle; there is nothing complex about it."""
+        with pytest.raises(SchemaError, match="holds real values"):
+            ClosurePhases([1.0], [2.0], [3.0], [4.0], [2.2] * u.um, [1.0 + 1.0j] * u.rad)
+
+    def test_the_triangle_label_is_an_extra_coordinate(self, t3) -> None:
+        """Identity is an annotation; the geometry is the axes."""
+        assert t3.extra_coords["triangle"].tolist() == ["A0-G1-K0", "A0-G1-J3"]
+        with pytest.raises(SchemaError, match="collides with one of its declared axes"):
+            ClosurePhases(
+                [1.0],
+                [2.0],
+                [3.0],
+                [4.0],
+                [2.2] * u.um,
+                [0.1] * u.rad,
+                extra_coords={"u1": np.array([1.0])},
+            )
+
+    def test_the_masks_and_the_hot_loop_constructor_work(self, t3) -> None:
+        refilled = t3.with_values([0.2, 0.4], mask=np.array([False, True]))
+        assert refilled.axes is t3.axes
+        assert refilled.n_valid == 1
+        assert refilled.unit == u.rad
+
+    def test_it_is_an_ordinary_channel(self, t3) -> None:
+        assert ModelResult({"t3": t3}).require("t3", ClosurePhases) is t3
 
 
 class TestUserDefinedKinds:

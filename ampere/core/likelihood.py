@@ -62,6 +62,7 @@ from typing import Any, ClassVar
 
 import numpy as np
 import scipy.linalg
+import scipy.special
 import scipy.stats as st
 
 from .exceptions import LikelihoodError
@@ -1918,6 +1919,19 @@ class LikelihoodFamily(Parameterised, abc.ABC):
         return f"{type(self).__name__}({declared})"
 
 
+def _wrap_to_pi(angles: np.ndarray) -> np.ndarray:
+    """Wrap *angles* (radians) into ``(-pi, pi]``.
+
+    The one line that separates a circular family from a catastrophic one: a
+    phase residual is a point on a circle, and subtracting two angles that
+    straddle the branch cut gives an error near ``2 pi`` where the truth is
+    near zero. Written through ``angle(exp(i x))`` rather than through a
+    modulo, because that is the expression that gets the boundary and the sign
+    of ``-pi`` right without a special case.
+    """
+    return np.asarray(np.angle(np.exp(1j * np.asarray(angles, dtype=DTYPE))), dtype=DTYPE)
+
+
 def _independent_sigma(noise: NoiseParams, family: str) -> np.ndarray:
     if noise.sigma is None:
         raise LikelihoodError(
@@ -2452,18 +2466,65 @@ class RiceFamily(LikelihoodFamily):
 class VonMisesFamily(LikelihoodFamily):
     """Wrapped/von Mises phase noise — closure phases, position angles.
 
-    Declared, not implemented (the implementation is Phase 4's). The interface
-    is fixed: the observed and predicted values are angles in radians and the
-    residual is wrapped, not subtracted; and the concentration is
-    ``kappa = 1/sigma**2`` **per sample** from the container's own
-    uncertainties (ruled 2026-09-03, ``likelihoods.md`` §17 Q4) — exact in
-    the small-sigma limit, which is where closure-phase practice lives. A
-    fitted global ``kappa`` that ignores the per-sample uncertainties is a
-    different model, and a user family if anyone wants it.
+    **Implemented at W4.1**, with the interferometric modality that needed it;
+    the interface is the one fixed at the freeze. The observed and predicted
+    values are angles in **radians** and the residual is *wrapped*, not
+    subtracted; the concentration is ``kappa = 1/sigma**2`` **per sample**
+    from the container's own uncertainties (ruled 2026-09-03,
+    ``likelihoods.md`` §17 Q4) — exact in the small-sigma limit, which is
+    where closure-phase practice lives. A fitted global ``kappa`` that ignores
+    the per-sample uncertainties is a different model, and a user family if
+    anyone wants it; the case it is really meant to serve ("the pipeline
+    underestimates its closure-phase errors") is already
+    ``IndependentNoise(scale=...)``, which gives ``kappa = 1/(s sigma)**2``
+    with ``s`` an ordinary fitted parameter.
+
+    The density is the normalised one::
+
+        log p = kappa cos(delta) - kappa - log(2 pi) - log(i0e(kappa))
+
+    with ``delta`` the residual wrapped into ``(-pi, pi]``. The normalisation
+    is not decoration and is not a constant that cancels: an *unnormalised*
+    wrapped Gaussian has mass over the circle that depends on sigma, sigma
+    varies per triangle in every real dataset, and at sigma = pi it assigns
+    *less* density to a perfect match than the uniform distribution does —
+    which is impossible for a density on the circle (``interferometry.md``
+    §5). :func:`scipy.special.i0e` is the exponentially scaled ``I0``, which
+    is what keeps the normalisation finite at the large ``kappa`` a
+    well-measured closure phase produces.
+
+    Why a wrapped family at all, rather than a Gaussian on the wrapped
+    residual: on phases, an ordinary :class:`GaussianFamily` computes
+    ``observed - predicted`` unwrapped, so a 2° error straddling the branch
+    cut is charged as a 358° one — a 5 000-nat penalty on a triangle that fits
+    perfectly, silently, and no sampler recovers from it.
     """
 
     NAME: ClassVar[str] = "von_mises"
-    IMPLEMENTED: ClassVar[bool] = False
+    IMPLEMENTED: ClassVar[bool] = True
+
+    def check_observed(self, observed: FunctionSamples) -> None:
+        """The container must hold angles in radians.
+
+        Gap I-5's own example (``interferometry.md`` §5): a von Mises family
+        handed degrees is silently accepted by every other check — the units
+        agree with each other, the shapes agree, the kinds agree — and returns
+        a number that is nonsense by a factor of ``(180/pi)**2`` in the
+        concentration. ``None`` is accepted as "bare radians", because the
+        arithmetic here is unit-free and a container built from plain arrays
+        is an ordinary thing to have; any other unit is refused by name, with
+        the one-call fix.
+        """
+        unit = observed.unit
+        if unit is None or unit == u.rad:
+            return
+        raise LikelihoodError(
+            f"the {self.NAME} family scores angles in radians, but the observed "
+            f"{type(observed).__name__} is in {unit}. Its residual is wrapped into (-pi, pi] and "
+            f"its concentration is 1/sigma**2, so a container in {unit} is not merely rescaled — "
+            f"it is a different distribution. Convert once at composition time with "
+            f".to_unit(u.rad); units never reach the hot loop (DEVELOPMENT_PLAN.md §7)."
+        )
 
     def log_prob(
         self,
@@ -2471,7 +2532,55 @@ class VonMisesFamily(LikelihoodFamily):
         observed: np.ndarray,
         noise: NoiseParams,
     ) -> float:
-        raise self._unimplemented()
+        if noise.correlated:
+            raise LikelihoodError(
+                f"the {self.NAME} family with a GaussianProcessNoise model is a latent-variable "
+                f"model — a GP added to a *wrapped* observable does not marginalise in closed "
+                f"form — and this family does not implement the latent-conditional log_prob "
+                f"(CONSUMES_LATENT_GP is False). A latent GP on closure phases is a real and "
+                f"useful thing, reachable on the native backends under NUTS or VI the way "
+                f"PoissonFamily's is, and it is Phase 5's (W5.1). Use IndependentNoise here."
+            )
+        sigma = _independent_sigma(noise, self.NAME)
+        kappa = 1.0 / sigma**2
+        delta = _wrap_to_pi(np.asarray(observed, dtype=DTYPE) - np.asarray(predicted, dtype=DTYPE))
+        return float(
+            np.sum(kappa * (np.cos(delta) - 1.0) - _LOG_2PI - np.log(scipy.special.i0e(kappa)))
+        )
+
+    def sample(
+        self,
+        predicted: np.ndarray,
+        noise: NoiseParams,
+        rng: np.random.Generator,
+    ) -> np.ndarray:
+        """A draw from the same distribution :meth:`log_prob` scores (*W4.1*).
+
+        ``rng.vonmises(mu, kappa)`` per sample, with ``mu`` the predicted angle
+        and ``kappa = 1/sigma**2`` read exactly as the density reads it — a
+        fitted ``scale`` or ``jitter`` is in the draw because it is in the
+        ``sigma`` the density uses. The result is in ``(-pi, pi]``, numpy's own
+        range for the distribution and this family's own convention for an
+        angle; a predicted angle outside that range draws around its wrapped
+        position, which is the same statement the wrapped residual makes.
+
+        This is the family the sampling-form principle (``likelihoods.md`` §3,
+        ruled by Peter 2026-09-10) brings in with its likelihood rather than
+        after it: a data type that can be fitted but not simulated breaks SBC
+        and SBI for exactly the users who brought the data type, and closure
+        phases are that data type here. A correlated noise model is refused by
+        the same message the density refuses it with — there is no marginal to
+        draw from either.
+        """
+        if noise.correlated:
+            raise LikelihoodError(
+                f"the {self.NAME} family cannot draw under a correlated noise model: a GP added "
+                f"to a wrapped observable is a latent-variable model whose latent-conditional "
+                f"form this family does not implement (Phase 5, W5.1). Use IndependentNoise."
+            )
+        sigma = _independent_sigma(noise, self.NAME)
+        mean = np.asarray(predicted, dtype=DTYPE)
+        return np.asarray(rng.vonmises(mean, 1.0 / sigma**2), dtype=DTYPE)
 
 
 # ---------------------------------------------------------------------------
