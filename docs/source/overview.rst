@@ -106,7 +106,13 @@ backend:
 **A model** produces a prediction from parameters. It declares its own
 parameters (each with a prior) and its own buffers (fixed arrays such as a
 wavelength grid), and returns a container — a :class:`~ampere.core.Spectrum`,
-:class:`~ampere.core.PhotometricPoints` and so on — per named channel.
+:class:`~ampere.core.PhotometricPoints`, an :class:`~ampere.core.Image`, a
+:class:`~ampere.core.TimeSeries`, a :class:`~ampere.core.VisibilitySet` or
+:class:`~ampere.core.ClosurePhases`, and so on — per named channel. A
+container **kind** is three class attributes (axes, layout, whether values
+may be complex), extensible out of tree with no change to ``ampere.core``;
+:doc:`interferometry` is the worked template for adding one, and
+:doc:`astrometry` the second modality built by following it.
 
 **An instrument** is a chain of transformations from what the model produces
 to what a particular dataset observed: a calibration scale, a resampling onto
@@ -375,6 +381,15 @@ Where to go next
 * :doc:`m2_misspecification` — the evidence that the flexible likelihood
   works, what it costs, and the size ladder that shows why misspecification
   matters *more* as spectra get larger.
+* :doc:`interferometry` — the template for adding a new observable kind,
+  proved end to end on interferometric visibilities and closure phases;
+  :doc:`astrometry` is the second modality built by following it.
+* :doc:`kernels` — the kernel algebra in full: the seven quasiseparable
+  families, ``Sum``/``Product``/``SpectralMixture``, the ``axes=`` selector,
+  and registering your own term.
+* :doc:`astropy` — wrapping an ``astropy.modeling`` model as an ampere
+  model, the capability consequence, and the opt-in native route for the
+  common cases.
 * :doc:`wstat_comparison` — a worked example of registering your own
   likelihood family.
 * :doc:`api` — the reference for every name above.

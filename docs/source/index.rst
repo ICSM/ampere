@@ -8,7 +8,8 @@ Welcome to AMPERE's documentation!
 
 **AMPERE** is a Bayesian fitting environment for astronomers. It exists to
 make it possible to model complex, heterogeneous datasets — spectra and
-photometry together, and more besides — *even when your model cannot explain
+photometry together, images, time series, interferometric visibilities and
+closure phases, and more besides — *even when your model cannot explain
 everything in the data*.
 
 That last clause is the point of the package. A model deficiency shows up as
@@ -39,6 +40,8 @@ User guide
    install
    overview
    concept
+   kernels
+   astropy
    tutorials
    advanced
    faqs

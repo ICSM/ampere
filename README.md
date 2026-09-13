@@ -36,7 +36,23 @@ every other engine consumes, with the same posterior-calibration diagnostics
 — which is how `docs/source/wstat_comparison.rst`'s coverage study catches a
 profiled statistic's spectral index failing calibration (KS *p* = 4×10⁻⁴)
 where the equivalent Bayesian joint fit, on the same simulated data, does not
-(*p* = 0.18). If you are interested, please get in touch.
+(*p* = 0.18).
+
+Phase 4 proved the redesign extends past spectra and photometry: spectra,
+photometry, images, time series, interferometric visibilities and closure
+phases all compose through the same five nouns (model, instrument,
+likelihood, dataset, fitting problem), with `docs/source/interferometry.rst`
+written as the template for adding the next observable and
+`docs/source/astrometry.rst` the proof that the template works. Any
+`astropy.modeling` model — compound models included — wraps as an ampere
+model with `ampere.core.from_astropy`, with an opt-in, never-silent
+translation to a differentiable native equivalent for six common cases
+(`docs/source/astropy.rst`). And the flexible likelihood's kernel algebra
+goes beyond one Matérn-3/2 term: `Sum`/`Product`/`SpectralMixture`
+compositions, a damped-oscillator term for periodic residuals, an `axes=`
+selector for a container whose coordinates carry more than one physical
+meaning, and a public registry for a user's own quasiseparable term
+(`docs/source/kernels.rst`). If you are interested, please get in touch.
 
 ## Installation
 
@@ -96,9 +112,14 @@ and jax; nothing in ampere needs them together.
   Start at the architecture overview (`docs/source/overview.rst`), then the
   misspecification study (`docs/source/m2_misspecification.rst`).
 - **Runnable examples**: `examples/m2_misspecification` (the study above),
+  `examples/sed_composition` (a spectrum and a photometric catalogue, one
+  model, the simplest multi-instrument composition), `examples/interferometry`
+  (the modality template, proved on a resolved binary observed as
+  visibilities and closure phases), `examples/astrometry` (the second
+  modality, a reflex orbit on two time-series channels),
   `examples/wstat_comparison.py` (registering your own likelihood family) and
   `examples/sbi/` (fitting a black-box simulator with `SBIEngine`; needs the
-  `sbi` extra). All three are covered by tests, so none can rot unnoticed.
+  `sbi` extra). All are covered by tests, so none can rot unnoticed.
 - **Design**: `docs/design/` holds the frozen contract specifications
   (`spec-v1.0`) the v2 API implements — start with `architecture.md`.
 - **Contributing**: `DEVELOPMENT_PLAN.md` is the source of truth for where the
