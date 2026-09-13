@@ -181,7 +181,7 @@ The tensor entry point is the same computation with the graph intact:
 from __future__ import annotations
 
 from ._config import BACKEND, DEFAULT_DEVICE, DEFAULT_DTYPE, as_tensor, to_numpy
-from .astropy import TRANSLATIONS, from_astropy
+from .astropy import TRANSLATIONS, NativeAstropyModel, from_astropy
 from .gp import (
     SHO,
     DenseGP,
@@ -265,6 +265,7 @@ __all__ = [
     "Matern32",
     "Matern52",
     "ModifiedBlackBody",
+    "NativeAstropyModel",
     "PowerLaw",
     "Product",
     "QuasisepGP",
