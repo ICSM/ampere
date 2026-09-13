@@ -127,6 +127,12 @@ carries the seed, and exposes the surface every engine consumes: ``log_prob``,
 the ``log_likelihood``/``log_prior`` split, ``prior_transform``, ``simulate``
 and the capability flags.
 
+The snippet below composes one model with one instrument and one dataset;
+:doc:`sed_composition` is the same five nouns with **two** instruments
+bound to one model channel — a spectrum and a photometric catalogue — which
+is the ordinary shape of a real SED fit and the case where a dataset's label
+stops being optional.
+
 On the reference backend
 ~~~~~~~~~~~~~~~~~~~~~~~~
 

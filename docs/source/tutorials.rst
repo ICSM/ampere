@@ -7,10 +7,14 @@ Ampere v2
 .. toctree::
    :maxdepth: 2
 
+   sed_composition
    m2_misspecification
    wstat_comparison
    sbi
 
+:doc:`sed_composition` is the simplest composition there is — one model, a
+spectrum and a photometric catalogue, two instruments on one channel — and
+the page to start with if you have not built a multi-dataset fit before.
 :doc:`m2_misspecification` is the flagship study: a deliberately misspecified
 spectrum, fitted with and without the flexible likelihood, at three data
 sizes and on all three backends, with the timings. :doc:`wstat_comparison`
@@ -22,10 +26,10 @@ simulator with :class:`~ampere.inference.SBIEngine`, caching the trained
 posterior, truncated marginal ratio estimation, and checking that the
 result is calibrated.
 
-All three have runnable counterparts in the repository:
-``examples/m2_misspecification``, ``examples/wstat_comparison.py`` and
-``examples/sbi/``, each covered by its own test suite so that none can rot
-unnoticed.
+All four have runnable counterparts in the repository:
+``examples/sed_composition``, ``examples/m2_misspecification``,
+``examples/wstat_comparison.py`` and ``examples/sbi/``, each covered by its
+own test suite so that none can rot unnoticed.
 
 Legacy tutorials
 ----------------
@@ -49,6 +53,7 @@ Legacy tutorials
 Still to be written
 -------------------
 
-Combining different data types, conditional priors and arbitrary priors each
-deserve a page of their own; :doc:`overview` and the API reference carry what
-there is for now.
+Conditional priors and arbitrary priors each deserve a page of their own;
+:doc:`overview` and the API reference carry what there is for now.
+Combining different data types is no longer on this list —
+:doc:`sed_composition` is that page.
