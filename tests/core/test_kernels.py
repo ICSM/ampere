@@ -544,15 +544,25 @@ class TestAxisSelector:
     def test_a_mixed_unit_container_is_still_refused_for_a_bare_kernel(
         self, dispersed: DispersedPoints
     ) -> None:
-        """The pre-W4.5 rule, unchanged, word for word."""
+        """The pre-W4.5 rule, word for word; **the advice amended at W4.2**.
+
+        The rule is unchanged — a Euclidean separation across mixed units is
+        meaningless and is refused — and the remedy the message names is not. It
+        said "use one axis, or declare a kernel that takes a length-scale per
+        axis", which was the fix before the selector existed; on the modality
+        this refusal actually fires for (a ``VisibilitySet``, whose axes are
+        ``(u, v, spectral_axis)``) "use one axis" is not the fix and
+        ``axes=("u", "v")`` is, so the message says that instead.
+        """
         noise = GaussianProcessNoise(Matern32(0.3, 2.0), DenseGP())
         with pytest.raises(LikelihoodError) as excinfo:
             noise.check_compatible(GaussianFamily(), dispersed)
         assert str(excinfo.value) == (
             "DenseGP measures separation as a Euclidean distance across a DispersedPoints's "
             "coordinate axes, but they carry different units ['', 'um']. A single isotropic "
-            "length-scale is meaningless across mixed units; use one axis, or declare a kernel "
-            "that takes a length-scale per axis."
+            "length-scale is meaningless across mixed units; name the axes this kernel acts on "
+            "with axes=(...), as in Matern32(axes=('u',)), and compose kernels on different axes "
+            "with Product."
         )
 
     def test_a_mixed_unit_selection_is_refused_word_for_word(

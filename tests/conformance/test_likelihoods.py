@@ -29,6 +29,7 @@ from scipy.stats import multivariate_normal
 from ampere.core import (
     AxisSpec,
     Censoring,
+    ComplexGaussianFamily,
     FunctionSamples,
     GaussianFamily,
     GaussianProcessNoise,
@@ -41,6 +42,7 @@ from ampere.core import (
     NoiseModel,
     Order,
     Spectrum,
+    VisibilitySet,
     family_named,
     list_families,
     register_quasiseparable_term,
@@ -440,15 +442,20 @@ class TestMarginalisationDeclaration:
 
 
 class TestStagedAnalyticCombination:
-    """``complex_gaussian`` + GP: declared ``ANALYTIC``, implemented in Phase 4.
+    """A combination declared ``ANALYTIC`` whose closed form is not written.
 
     The 2026-09-03 ruling (``likelihoods.md`` §17 Q6) fixed the circular
-    (equal-component, zero-pseudo-covariance) complex GP as the combination's
-    meaning and landed the declaration at the freeze. Until Phase 4 implements
-    the closed form, composition must refuse with the schedule named — the
-    same declared-but-staged discipline as the ``QuasisepGP`` slot above.
-    Phase 4 replaces the refusal row with agreement rows against the circular
-    closed form.
+    (equal-component, zero-pseudo-covariance) complex GP as
+    ``complex_gaussian`` + GP's meaning and landed the *declaration* at the
+    freeze, with composition refused and the schedule named.
+
+    **W4.2 wrote it**, so this class keeps the discipline and loses its
+    instance: the rows that say the closed form is right are
+    :class:`TestTheCircularComplexGP`, and what is held here is that a family
+    declaring ``ANALYTIC_WITH_GP`` *without* ``GP_ANALYTIC_IMPLEMENTED`` is
+    still refused rather than quietly computed some other way. Held against a
+    family declared in the row, because no shipped family is in that position
+    any more — which is the point of keeping the row.
     """
 
     def test_the_declaration_is_analytic(self, backend: ConformanceBackend) -> None:
@@ -463,9 +470,13 @@ class TestStagedAnalyticCombination:
     ) -> None:
         from ampere.core import ComplexGaussianFamily
 
+        class StagedFamily(ComplexGaussianFamily):
+            NAME = "staged_complex"
+            GP_ANALYTIC_IMPLEMENTED = False
+
         gp = GaussianProcessNoise(backend.kernel(MATERN32), backend.gp_solver(SolverKind.DENSE))
-        with pytest.raises(LikelihoodError, match="Phase 4"):
-            Likelihood(ComplexGaussianFamily(), gp)
+        with pytest.raises(LikelihoodError, match="GP_ANALYTIC_IMPLEMENTED is False"):
+            Likelihood(StagedFamily(), gp)
 
 
 # ---------------------------------------------------------------------------
@@ -972,11 +983,16 @@ class TestAxisSelector:
         )
         with pytest.raises(LikelihoodError) as excinfo:
             noise.check_compatible(GaussianFamily(), observed)
+        # Amended at W4.2: the advice is now the selector rather than "use one
+        # axis", because on the modality this refusal actually fires for --
+        # a VisibilitySet, whose axes are (u, v, spectral_axis) -- "use one
+        # axis" is not the fix and `axes=("u", "v")` is.
         assert str(excinfo.value) == (
             "DenseGP measures separation as a Euclidean distance across a DispersedPoints's "
             "coordinate axes, but they carry different units ['', 'um']. A single isotropic "
-            "length-scale is meaningless across mixed units; use one axis, or declare a kernel "
-            "that takes a length-scale per axis."
+            "length-scale is meaningless across mixed units; name the axes this kernel acts on "
+            "with axes=(...), as in Matern32(axes=('u',)), and compose kernels on different axes "
+            "with Product."
         )
 
     def test_a_mixed_unit_selection_is_refused_word_for_word(
@@ -1162,3 +1178,328 @@ class TestUserRegisteredTerm:
         assert len(entries) == 1
         assert entries[0]["builtin"] is False
         assert entries[0]["kind"] == "quasiseparable_term"
+
+
+# ---------------------------------------------------------------------------
+# The circular complex GP (W4.2)
+# ---------------------------------------------------------------------------
+
+#: The (u, v) kernel of the visibility rows: an isotropic Matérn-3/2 on the two
+#: dimensionless axes, which is the selection ``likelihoods.md`` §4 calls the
+#: normal case for this modality — a bare kernel is refused by the per-leaf unit
+#: rule, because a ``VisibilitySet``'s third axis is a wavelength in micron.
+UV_SPEC = CovarianceSpec(KernelFamily.MATERN32, AMPLITUDE, LENGTH_SCALE, axes=("u", "v"))
+
+#: The chromatic product of ``phase4_placement_memo.md`` §3.6, on the real kind:
+#: smooth in spatial frequency on the scale of the missing patch, sharp in
+#: wavelength on the scale of the band. Both amplitudes are fixed numbers, as
+#: §6 requires — a product's marginal variance is the product of its terms', so
+#: two fitted amplitudes would over-parameterise it by one degree of freedom.
+VISIBILITY_CHROMATIC_SPEC = CovarianceSpec(
+    KernelFamily.PRODUCT,
+    terms=(
+        CovarianceSpec(KernelFamily.MATERN32, AMPLITUDE, LENGTH_SCALE, axes=("u", "v")),
+        CovarianceSpec(
+            KernelFamily.MATERN32, 1.0, 0.08, axes=("spectral_axis",), length_scale_unit=u.um
+        ),
+    ),
+)
+
+#: How many baselines the visibility rows carry. Small on purpose: the oracle
+#: factorises a dense ``2N`` covariance, and the claim being tested is about the
+#: arithmetic rather than about scaling.
+VISIBILITY_SIZE = 9
+
+
+def visibility_pair() -> tuple[VisibilitySet, VisibilitySet]:
+    """A fixed ``(predicted, observed)`` pair of **complex** visibilities.
+
+    Three axes in mixed units, and the wavelength genuinely varies, which is
+    what the chromatic product row needs: a constant spectral column would make
+    the spectral factor the constant matrix ``amplitude**2`` and the row would
+    prove nothing about the selection.
+
+    The coordinates are order-unity rather than the 10⁷ wavelengths a real
+    baseline is measured in, so that one ``length_scale`` serves every row here;
+    the modality at its own scale is ``tests/m2/test_visibility_calibration.py``.
+    """
+    rng = np.random.default_rng(20260913)
+    n = VISIBILITY_SIZE
+    u_points = rng.uniform(-3.0, 3.0, n)
+    v_points = rng.uniform(-3.0, 3.0, n)
+    wavelength = np.sort(rng.uniform(2.0, 2.4, n))
+    truth = (1.0 + 0.1 * u_points) * np.exp(0.4j * v_points)
+    noise = rng.normal(0.0, SIGMA, n) + 1j * rng.normal(0.0, SIGMA, n)
+    observed = VisibilitySet(
+        u_points * u.dimensionless_unscaled,
+        v_points * u.dimensionless_unscaled,
+        wavelength * u.um,
+        (truth + noise) * FLUX_UNIT,
+        uncertainty=np.full(n, SIGMA) * FLUX_UNIT,
+    )
+    return observed.with_values(truth), observed
+
+
+def visibility_points(container: VisibilitySet) -> np.ndarray:
+    """The ``(n, 3)`` coordinate block, in the container's own axis order."""
+    return np.column_stack([np.asarray(axis.values, dtype=float) for axis in container.axes])
+
+
+def circular_gp_likelihood(
+    backend: ConformanceBackend,
+    covariance: CovarianceSpec,
+    solver: SolverKind = SolverKind.DENSE,
+) -> Likelihood:
+    """``complex_gaussian`` over *backend*'s kernel and solver."""
+    noise = GaussianProcessNoise(backend.kernel(covariance), backend.gp_solver(solver))
+    return Likelihood(ComplexGaussianFamily(), noise)
+
+
+def real_2n_log_prob(covariance: CovarianceSpec, points: np.ndarray, residual: np.ndarray) -> float:
+    """The oracle: the dense real ``2N`` Gaussian, materialised and factorised.
+
+    Deliberately the expensive formulation ``ampere.core`` refuses to use. The
+    circular model says the real covariance of ``(Re r, Im r)`` is ``diag(S, S)``
+    with a zero off-diagonal block; this builds that ``2N`` by ``2N`` matrix and
+    hands it to ``scipy``, so what the rows compare is ampere's exploitation of
+    the structure against the structure written out. Nothing here calls a
+    solver, a family or a noise model.
+    """
+    block = covariance_matrix(covariance, points) + np.diag(np.full(points.shape[0], SIGMA**2))
+    zeros = np.zeros_like(block)
+    total = np.block([[block, zeros], [zeros, block]])
+    stacked = np.concatenate([np.real(residual), np.imag(residual)])
+    return float(multivariate_normal.logpdf(stacked, mean=np.zeros(stacked.size), cov=total))
+
+
+class TestTheCircularComplexGP:
+    """W4.2: ``complex_gaussian`` + ``GaussianProcessNoise``, the closed form.
+
+    The declaration was made at the freeze (``likelihoods.md`` §4, §17 Q6) and
+    the combination refused until Phase 4. These are the rows that say the
+    implementation computes what the declaration promised, and every oracle is
+    the **dense real 2N Gaussian** rather than another ampere path: the whole
+    content of the item is that the block structure may be exploited, so the
+    thing to compare against is the structure materialised.
+    """
+
+    def test_the_pair_is_declared_and_implemented(self, backend: ConformanceBackend) -> None:
+        """The declaration, on every column, since a backend could shadow it."""
+        noise = GaussianProcessNoise(backend.kernel(UV_SPEC), backend.gp_solver(SolverKind.DENSE))
+        family = ComplexGaussianFamily()
+        assert family.ANALYTIC_WITH_GP
+        assert family.GP_ANALYTIC_IMPLEMENTED
+        assert Likelihood(family, noise).marginalisation is Marginalisation.ANALYTIC
+
+    def test_the_dense_solver_declares_that_it_takes_stacked_residuals(
+        self, backend: ConformanceBackend
+    ) -> None:
+        """``STACKED_RESIDUALS`` is what makes the circular solve expressible."""
+        assert backend.gp_solver(SolverKind.DENSE).STACKED_RESIDUALS is True
+        if SolverKind.QUASISEP in backend.capabilities.solvers:
+            assert backend.gp_solver(SolverKind.QUASISEP).STACKED_RESIDUALS is False
+
+    @pytest.mark.parametrize(
+        "covariance", [UV_SPEC, VISIBILITY_CHROMATIC_SPEC], ids=["uv", "chromatic_product"]
+    )
+    def test_the_closed_form_is_the_dense_real_2n_gaussians(
+        self,
+        backend: ConformanceBackend,
+        covariance: CovarianceSpec,
+        tolerances: Tolerances,
+    ) -> None:
+        """The item's headline row, with the (u, v) kernel and with the product.
+
+        ``tolerances.cross_solver`` because the two computations are genuinely
+        different recursions: one Cholesky of an ``N`` by ``N`` matrix with two
+        right-hand sides against one Cholesky of a ``2N`` by ``2N`` matrix whose
+        off-diagonal block is zero.
+        """
+        predicted, observed = visibility_pair()
+        likelihood = circular_gp_likelihood(backend, covariance)
+        likelihood.check_alignment(predicted, observed)
+        residual = np.asarray(observed.values) - np.asarray(predicted.values)
+        expected = real_2n_log_prob(covariance, visibility_points(observed), residual)
+        assert likelihood.log_prob(predicted, observed) == pytest.approx(
+            expected, abs=tolerances.cross_solver
+        )
+
+    def test_a_zero_amplitude_reduces_to_the_independent_complex_gaussian(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """The reduction that catches a normalisation counted once too often.
+
+        At ``amplitude = 0`` the GP marginal must be the i.i.d. complex
+        Gaussian exactly. It is the cheapest detector of the factor-of-two
+        errors this density invites: ``log|S|`` counted once rather than twice,
+        or ``-log(2 pi)`` rather than ``-log(2 pi) - log(sigma**2)``.
+        """
+        predicted, observed = visibility_pair()
+        flat = CovarianceSpec(KernelFamily.MATERN32, 0.0, LENGTH_SCALE, axes=("u", "v"))
+        correlated = circular_gp_likelihood(backend, flat)
+        independent = Likelihood(ComplexGaussianFamily(), backend.independent_noise())
+        assert correlated.log_prob(predicted, observed) == pytest.approx(
+            independent.log_prob(predicted, observed), abs=tolerances.linear_algebra
+        )
+
+    def test_the_o_n_path_is_refused_by_name_word_for_word(
+        self, backend: ConformanceBackend
+    ) -> None:
+        """``REQUIRES_ORDERED_1D`` cannot hold on this modality, so say so.
+
+        Not the generic ordered-1D message, whose advice ("select exactly one
+        axis to reach the O(N) path") cannot be taken here: a visibility is a
+        point of the (u, v) plane at a wavelength, and no ordering of the plane
+        makes a stationary kernel a function of one coordinate.
+        """
+        if SolverKind.QUASISEP not in backend.capabilities.solvers:
+            pytest.skip(f"{backend.name} supplies no quasiseparable solver")
+        _, observed = visibility_pair()
+        noise = GaussianProcessNoise(
+            backend.kernel(UV_SPEC), backend.gp_solver(SolverKind.QUASISEP)
+        )
+        with pytest.raises(LikelihoodError) as excinfo:
+            noise.check_compatible(ComplexGaussianFamily(), observed)
+        assert str(excinfo.value) == (
+            "the complex_gaussian family on a complex VisibilitySet is the circular complex GP: "
+            "the real and imaginary parts are two independent real processes sharing one "
+            "covariance, so the solve takes a two-column right-hand side, and QuasisepGP "
+            "declares STACKED_RESIDUALS = False. QuasisepGP could not take them even in "
+            "principle: it needs one ordered one-dimensional coordinate, and a visibility lives "
+            "at a point of the (u, v) plane at a wavelength, which no ordering reduces to one "
+            "coordinate. Use DenseGP, with the kernel selecting the axes it acts on -- "
+            'Matern32(axes=("u", "v")) for an isotropic (u, v) kernel, or '
+            'Product(Matern32(axes=("u", "v")), Matern32(axes=("spectral_axis",))) for an error '
+            "that is smooth in (u, v) and sharp in wavelength."
+        )
+
+    def test_a_bare_kernel_is_still_refused_on_a_visibility_set(
+        self, backend: ConformanceBackend
+    ) -> None:
+        """W4.5's per-leaf unit rule, on the kind it was written for.
+
+        The message names the remedy since W4.2 — the ``axes=`` selector — and
+        this row is why that mattered: before the selector existed the advice
+        "use one axis" was the fix, and on this container it is not.
+        """
+        _, observed = visibility_pair()
+        noise = GaussianProcessNoise(
+            backend.kernel(CovarianceSpec(KernelFamily.MATERN32, AMPLITUDE, LENGTH_SCALE)),
+            backend.gp_solver(SolverKind.DENSE),
+        )
+        with pytest.raises(LikelihoodError) as excinfo:
+            noise.check_compatible(ComplexGaussianFamily(), observed)
+        message = str(excinfo.value)
+        assert "carry different units ['', 'um']" in message
+        assert "axes=(...)" in message
+
+    def test_a_real_prediction_against_complex_data_is_still_caught(
+        self, backend: ConformanceBackend
+    ) -> None:
+        """Gap I-1's dtype check, under a GP (the item's explicit criterion).
+
+        Kind equality does not imply comparability: a ``VisibilitySet`` is legal
+        with real or complex values, so a model that took the modulus somewhere
+        would otherwise be fitted against complex data with no warning anywhere.
+        The GP path must not have bypassed it — it is the one path that now
+        reshapes the residual before anything looks at it.
+        """
+        predicted, observed = visibility_pair()
+        amplitudes = predicted.with_values(np.abs(np.asarray(predicted.values)))
+        likelihood = circular_gp_likelihood(backend, UV_SPEC)
+        with pytest.raises(LikelihoodError, match="real"):
+            likelihood.check_alignment(amplitudes, observed)
+
+    def test_the_pointwise_terms_are_one_per_sample_and_leave_one_out(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """``conditional_loo`` for the pointwise group (``results.md`` §6).
+
+        One term per **sample**, not per component: a complex visibility is one
+        observation with two parts. The oracle refits each term from scratch —
+        the conditional of sample *i* given every other retained sample, each
+        component scored against the same conditional variance — so the row
+        compares the Cholesky identity against the definition rather than
+        against itself.
+        """
+        predicted, observed = visibility_pair()
+        likelihood = circular_gp_likelihood(backend, UV_SPEC)
+        terms = likelihood.pointwise_log_prob(predicted, observed)
+        assert terms.shape == (VISIBILITY_SIZE,)
+
+        points = visibility_points(observed)
+        residual = np.asarray(observed.values) - np.asarray(predicted.values)
+        total = covariance_matrix(UV_SPEC, points) + np.diag(np.full(points.shape[0], SIGMA**2))
+        for index in range(VISIBILITY_SIZE):
+            others = np.array([i for i in range(VISIBILITY_SIZE) if i != index])
+            block = total[np.ix_(others, others)]
+            cross = total[index, others]
+            solved = np.linalg.solve(block, cross)
+            variance = total[index, index] - cross @ solved
+            expected = 0.0
+            for component in (np.real(residual), np.imag(residual)):
+                mean = component[others] @ solved
+                expected += float(st.norm.logpdf(component[index], mean, math.sqrt(variance)))
+            assert terms[index] == pytest.approx(expected, abs=tolerances.linear_algebra)
+
+    def test_the_conditioned_mean_is_complex_and_localises_both_components(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """The localisation diagnostic on a complex residual (§4.8, family C).
+
+        The mean comes back **complex**, because a calibration error has a
+        direction in the complex plane and the modulus of the conditioned mean
+        would hide which way it went. The oracle is the textbook conditional
+        mean, per component, on the same matrix.
+        """
+        predicted, observed = visibility_pair()
+        likelihood = circular_gp_likelihood(backend, UV_SPEC)
+        conditioned = likelihood.conditional(predicted, observed)
+        assert conditioned.mean.dtype.kind == "c"
+        assert conditioned.variance.shape == (VISIBILITY_SIZE,)
+
+        points = visibility_points(observed)
+        residual = np.asarray(observed.values) - np.asarray(predicted.values)
+        kernel = covariance_matrix(UV_SPEC, points)
+        total = kernel + np.diag(np.full(points.shape[0], SIGMA**2))
+        expected = kernel @ np.linalg.solve(total, residual)
+        assert conditioned.mean == pytest.approx(expected, abs=tolerances.linear_algebra)
+
+    def test_a_draw_has_the_covariance_the_density_scores(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """``sample`` under a GP, against the moments of the declared model.
+
+        Three claims, and the second is the one a wrong draw would pass the
+        others on: each component's covariance is ``K + diag(sigma**2)``, the
+        components are **uncorrelated** with each other, and the correlation is
+        genuinely present rather than a diagonal. Drawing one realisation and
+        using it for both parts would satisfy the first and fail the second.
+        """
+        predicted, observed = visibility_pair()
+        likelihood = circular_gp_likelihood(backend, UV_SPEC)
+        likelihood.check_alignment(predicted, observed)
+        noise = likelihood.noise.noise_params(
+            observed,
+            np.ones(VISIBILITY_SIZE, dtype=bool),
+            likelihood.context(None),
+            coordinates=visibility_points(observed),
+        )
+        mean = np.zeros(VISIBILITY_SIZE, dtype=complex)
+        rng = np.random.default_rng(4242)
+        draws = np.stack([likelihood.family.sample(mean, noise, rng) for _ in range(6000)])
+        expected = covariance_matrix(UV_SPEC, visibility_points(observed)) + np.diag(
+            np.full(VISIBILITY_SIZE, SIGMA**2)
+        )
+        # The standard error of a covariance entry from L draws of a Gaussian is
+        # about sqrt((C_ii C_jj + C_ij**2) / L); the diagonal bounds it.
+        scale = float(np.max(np.diag(expected)))
+        error = scale * math.sqrt(2.0 / draws.shape[0])
+        for component in (np.real(draws), np.imag(draws)):
+            empirical = component.T @ component / draws.shape[0]
+            assert np.max(np.abs(empirical - expected)) < tolerances.monte_carlo_sigmas * error
+        cross = np.real(draws).T @ np.imag(draws) / draws.shape[0]
+        assert np.max(np.abs(cross)) < tolerances.monte_carlo_sigmas * error
+        # And the draw is correlated: the nearest pair of baselines shares far
+        # more than sigma**2 would give them.
+        assert np.max(np.abs(expected - np.diag(np.diag(expected)))) > SIGMA**2

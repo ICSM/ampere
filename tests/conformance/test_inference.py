@@ -58,6 +58,7 @@ from .oracles import kernel_matrix, summed_log_abs_det
 from .protocol import (
     ConformanceBackend,
     CovarianceSpec,
+    KernelFamily,
     ModelKind,
     ModelSpec,
     SolverKind,
@@ -215,6 +216,28 @@ LATENT_GP = ProblemSpec(
 COMPLEX = ProblemSpec(
     model=ModelSpec(kind=ModelKind.COMPLEX, coordinates=GP_GRID),
     datasets=(DatasetSpec(family="complex_gaussian"),),
+)
+
+#: The same shape under the **circular complex GP** (*W4.2*). ``likelihoods.md``
+#: §4 declares ``complex_gaussian`` + ``GaussianProcessNoise`` analytic with the
+#: circular model as its fixed meaning, and W4.2 implemented the closed form, so
+#: this is the shape that was *refused* on every path until Phase 4 and is now a
+#: realisation-agreement row like the others.
+#:
+#: The kernel selects ``("u", "v")``, and it has to: the kind's three axes are in
+#: mixed units, so W4.5's per-leaf unit rule refuses a bare one. That makes this
+#: shape the battery's only realisation row whose native path must resolve an
+#: ``axes=`` selector **and** stack a two-column right-hand side, which is
+#: exactly the pair of things a backend can get wrong silently.
+COMPLEX_GP = ProblemSpec(
+    model=ModelSpec(kind=ModelKind.COMPLEX, coordinates=GP_GRID),
+    datasets=(
+        DatasetSpec(
+            family="complex_gaussian",
+            noise=NoiseKind.GP,
+            covariance=CovarianceSpec(KernelFamily.MATERN32, 0.3, 2.0, axes=("u", "v")),
+        ),
+    ),
 )
 
 #: The three shapes W3.14's generative rows need beside :data:`LATENT_GP` and
@@ -587,31 +610,75 @@ class TestTheRealisation:
             compared += 1
         assert compared > 0, "every point was outside the support; the row proved nothing"
 
-    def test_a_complex_gp_is_refused_by_name_on_every_path(
+    def test_the_circular_complex_gp_realisation_agrees_with_the_numpy_path(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """**W4.2**: the circular complex GP, realised, against the oracle.
+
+        Until Phase 4 this row was a *refusal* — ``GP_ANALYTIC_IMPLEMENTED``
+        was ``False``, so the contract path refused the composition and no
+        backend could be quietly computing something for it. W4.2 wrote the
+        closed form, so the refusal becomes an agreement row, and it is the one
+        realisation row that exercises two things no other does: the native path
+        resolving an ``axes=("u", "v")`` selector against a three-axis
+        container, and the native path stacking a complex residual into the two
+        real columns the solver's right-hand side now carries.
+
+        Both are silent failures if wrong. A native path reading only the first
+        axis would score a kernel over ``u`` alone; one taking only the real
+        column would score half the data. Either disagrees with this oracle by
+        whole nats.
+        """
+        if not backend.capabilities.complex_models:
+            pytest.skip(
+                f"backend {backend.name!r} declares no complex model "
+                f"(BackendCapabilities.complex_models), so ModelKind.COMPLEX cannot be built"
+            )
+        problem = build_problem(backend, COMPLEX_GP)
+        dataset = problem.datasets["sed"]
+        assert np.asarray(dataset.observed.values).dtype.kind == "c"
+        # Analytic, not latent: no whitened block is declared for this pair.
+        assert dataset.latent is None
+        assert dataset.likelihood.marginalisation.value == "analytic"
+
+        realised = self.realised(problem)
+        compared = 0
+        for y in self.points(problem):
+            expected = problem.log_prob_unconstrained(y)
+            got = float(np.asarray(backend.to_numpy(realised.log_prob_unconstrained(y))))
+            if not np.isfinite(expected):
+                assert not np.isfinite(got)
+                continue
+            assert got == pytest.approx(expected, abs=tolerances.cross_backend)
+            compared += 1
+        assert compared > 0, "every point was outside the support; the row proved nothing"
+
+    def test_the_circular_complex_gp_is_refused_on_the_o_n_path(
         self, backend: ConformanceBackend
     ) -> None:
-        """The other half of W2.4 slice 3's complex item, and it is a refusal.
+        """The other half of W4.2's declaration: the O(N) solver cannot carry it.
 
-        ``ComplexGaussianFamily`` declares ``ANALYTIC_WITH_GP = True`` — the
-        circular complex GP does marginalise in closed form — and
-        ``GP_ANALYTIC_IMPLEMENTED = False``, because ``ampere.core`` has not
-        written it (``likelihoods.md`` §4; the implementation lands with the
-        visibility modality in Phase 4). This row holds the invariant that
-        makes that pair safe: the *contract* path refuses the composition, so
-        no backend can be quietly computing something for it, and the refusal
-        names the family.
+        A circular complex GP hands the solver two columns, and ``QuasisepGP``
+        declares ``STACKED_RESIDUALS = False`` — not as a gap but because
+        ``REQUIRES_ORDERED_1D`` cannot hold for a point of the (u, v) plane at a
+        wavelength. Refused at composition on the contract path, so no backend
+        gets the chance to invent a lowering for it.
 
-        It runs on every fixture, complex model or not, because it composes
-        nothing but a likelihood.
+        Runs wherever a quasiseparable solver exists; it needs a container
+        rather than a model, so it does not wait on ``complex_models``.
         """
         from ampere.core import ComplexGaussianFamily
         from ampere.core.exceptions import LikelihoodError
 
+        if SolverKind.QUASISEP not in backend.capabilities.solvers:
+            pytest.skip(f"{backend.name} supplies no quasiseparable solver")
+        observed = observed_container(COMPLEX_GP, COMPLEX_GP.datasets[0])
         noise = backend.gp_noise(
-            backend.kernel(CovarianceSpec()), backend.gp_solver(SolverKind.DENSE)
+            backend.kernel(COMPLEX_GP.datasets[0].covariance),
+            backend.gp_solver(SolverKind.QUASISEP),
         )
-        with pytest.raises(LikelihoodError, match="complex_gaussian"):
-            Likelihood(ComplexGaussianFamily(), noise)
+        with pytest.raises(LikelihoodError, match="STACKED_RESIDUALS = False"):
+            noise.check_compatible(ComplexGaussianFamily(), observed)
 
     def test_the_latent_gp_realisation_agrees_with_the_numpy_path(
         self, backend: ConformanceBackend, tolerances: Tolerances

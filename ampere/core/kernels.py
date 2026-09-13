@@ -658,8 +658,10 @@ class Kernel(Parameterised, abc.ABC):
                     raise LikelihoodError(
                         f"{owner} measures separation as a Euclidean distance across a "
                         f"{kind}'s coordinate axes, but they carry different units {named}. A "
-                        f"single isotropic length-scale is meaningless across mixed units; use "
-                        f"one axis, or declare a kernel that takes a length-scale per axis."
+                        f"single isotropic length-scale is meaningless across mixed units; name "
+                        f"the axes this kernel acts on with axes=(...), as in "
+                        f"{type(leaf).__name__}(axes={axis_names[:1]!r}), and compose kernels on "
+                        f"different axes with Product."
                     )
                 continue
             distinct = {units[name] for name in leaf._axes}
