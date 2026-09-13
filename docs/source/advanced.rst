@@ -22,6 +22,42 @@ These methods have the advantage of giving meaningful results even if the parame
 More detailed tutorials will be available soon!
 
 
+Noise models: beyond the default kernel
+------------------------------------------
+
+:doc:`concept` introduces the flexible likelihood with its default
+Matérn-3/2 kernel; :doc:`kernels` is the full reference for
+:class:`~ampere.core.GaussianProcessNoise`'s algebra, for the cases the
+default does not cover.
+
+**A residual with a period** — interference fringing, an instrumental
+ripple — wants :class:`~ampere.core.SHO`, celerite's damped
+simple-harmonic-oscillator term, rather than a stationary Matérn kernel that
+has no notion of periodicity at all. Composed with the default through
+:class:`~ampere.core.Sum`, a broad Matérn plus a narrow ``SHO`` still costs
+O(N) on :class:`~ampere.core.QuasisepGP` — a sum of quasiseparable terms is
+quasiseparable, because the semiseparable generators concatenate and the
+ranks simply add. ``examples/m2_misspecification/fringing.py`` demonstrates
+exactly this: refitting M2's ``fringing`` scenario with ``Matern32 + SHO``
+against the stationary default, with the bias and calibration improvement
+reported.
+
+**A residual correlated in two different ways at once** — a missing patch
+of sky with a spectral profile, smooth across spatial frequency and sharp
+across wavelength — wants a :class:`~ampere.core.Product` of two kernels,
+each acting on a named subset of the container's axes through the
+``axes=`` selector, rather than one isotropic kernel that cannot express
+two structures on two coordinates simultaneously. :doc:`interferometry` §6
+measures this case end to end.
+
+**A kernel ampere does not ship** works on the dense solver the moment you
+write its covariance function — :class:`~ampere.core.Kernel` is a public
+ABC — and reaches the O(N) path once you register its celerite
+representation with :func:`~ampere.core.register_quasiseparable_term`, out
+of tree, with no change to ``ampere.core``. :doc:`kernels` §5 walks through
+the registration with the same trivial worked example
+``tests/core/test_kernels.py`` uses to prove the route.
+
 Very slow models
 ----------------
 
@@ -64,8 +100,7 @@ Failing those, you can parallelise your model itself if that makes sense.
 Defining new data types
 -----------------------
 
-AMPERE packages a selection of container types suitable for the most common astronomical datasets - spectra, photometry, images, cubes and visibilities - but these might not always cover what you need.
+AMPERE packages a selection of container types suitable for the most common astronomical datasets - spectra, photometry, images, cubes, time series, interferometric visibilities and closure phases - but these might not always cover what you need.
 
 In v2 a container **kind** is a registered, extensible thing rather than a fixed list: :func:`ampere.results.register_kind` adds yours, :func:`~ampere.results.registered_kinds` lists what is known, and the registration is what lets a run store, hash and reload data of your kind alongside everything else.
-The design sketches in ``docs/design/modalities/`` work several new modalities through the contracts end to end - interferometric visibilities, IFU cubes, astrometric time series, awkward instruments - and are the place to start.
-A guide will appear here in future!
+:doc:`interferometry` is now the worked guide, not a sketch — a kind-changing step, a complex container, and the two composition shapes ("two instruments on one channel" and, in :doc:`astrometry`, "one model, two channels") that ship — written as a template a new modality follows section by section. The design sketches in ``docs/design/modalities/`` cover what has not shipped yet - IFU cubes, awkward instruments, and the joint 2-vector GP over correlated channels deferred to Phase 5 - and are the place to start for those.
