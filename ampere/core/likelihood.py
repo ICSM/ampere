@@ -173,7 +173,7 @@ def _stacked_components(residual: np.ndarray) -> np.ndarray:
     2N-dimensional real covariance is block diagonal with the *same* block
     twice. Writing the residual as two columns is what lets a solver exploit
     that: one factorisation, two solves, ``log|K + diag(σ²)|`` once and then
-    doubled, rather than a dense 2N × 2N factorisation costing eight times as
+    doubled, rather than a dense 2N by 2N factorisation costing eight times as
     much and carrying a zero off-diagonal block it already knows is zero.
 
     A real residual passes through untouched, so every pre-W4.2 call is
@@ -718,7 +718,7 @@ class DenseGP(GPSolver):
         ``k`` columns this is the joint marginal of ``k`` independent
         realisations sharing one covariance, which is the circular complex
         Gaussian's 2N-dimensional density written without ever forming the
-        2N × 2N matrix. One ``cho_factor``, ``k`` triangular solves, the
+        2N by 2N matrix. One ``cho_factor``, ``k`` triangular solves, the
         log-determinant computed once and counted ``k`` times.
         """
         factor = self._factor(kernel, coordinates, variance, values)
@@ -1619,9 +1619,7 @@ class GaussianProcessNoise(NoiseModel):
         self._solver.check_compatible(self._kernel, observed)
         self._check_hyperparameter_units(observed)
 
-    def _check_circular_solver(
-        self, family: LikelihoodFamily, observed: FunctionSamples
-    ) -> None:
+    def _check_circular_solver(self, family: LikelihoodFamily, observed: FunctionSamples) -> None:
         """Refuse, by name, a solver that cannot carry the circular GP's two columns.
 
         **W4.2.** A circular complex GP is two real processes sharing one
@@ -1654,9 +1652,9 @@ class GaussianProcessNoise(NoiseModel):
             f"{self._solver.NAME} could not take them even in principle: it needs one ordered "
             f"one-dimensional coordinate, and a visibility lives at a point of the (u, v) plane "
             f"at a wavelength, which no ordering reduces to one coordinate. Use DenseGP, with "
-            f"the kernel selecting the axes it acts on -- Matern32(axes=(\"u\", \"v\")) for an "
-            f"isotropic (u, v) kernel, or Product(Matern32(axes=(\"u\", \"v\")), "
-            f"Matern32(axes=(\"spectral_axis\",))) for an error that is smooth in (u, v) and "
+            f'the kernel selecting the axes it acts on -- Matern32(axes=("u", "v")) for an '
+            f'isotropic (u, v) kernel, or Product(Matern32(axes=("u", "v")), '
+            f'Matern32(axes=("spectral_axis",))) for an error that is smooth in (u, v) and '
             f"sharp in wavelength."
         )
 
@@ -2370,16 +2368,16 @@ class ComplexGaussianFamily(LikelihoodFamily):
     ``log p = -½ [ rᵉ ᵀ S⁻¹ rᵉ + rⁱ ᵀ S⁻¹ rⁱ + 2 log|S| + 2N log 2π ]``
 
     with ``rᵉ`` and ``rⁱ`` the real and imaginary parts of ``observed -
-    predicted``. One factorisation of the ``N × N`` matrix ``S``, two
+    predicted``. One factorisation of the ``N by N`` matrix ``S``, two
     triangular solves against it, ``log|S|`` computed once and counted twice.
-    Forming the ``2N × 2N`` matrix instead would cost eight times as much
+    Forming the ``2N by 2N`` matrix instead would cost eight times as much
     arithmetic to carry a zero block the model has already declared. The
     mechanism is :class:`GPSolver`'s ``(n, k)`` right-hand side, with ``k = 2``
     columns; :attr:`GPSolver.STACKED_RESIDUALS` is the declaration a solver
     makes that it can take them, and :meth:`GaussianProcessNoise.check_compatible`
     refuses one that cannot — the O(N) ``QuasisepGP`` — by name.
 
-    **σ is the per-component standard deviation throughout**, as
+    **``sigma`` is the per-component standard deviation throughout**, as
     ``results_schema.md`` §16 says a :class:`~ampere.core.VisibilitySet`'s
     real-valued uncertainty is, and the kernel's ``amplitude`` is a
     per-component marginal standard deviation for the same reason: ``K``
@@ -3446,9 +3444,7 @@ class Likelihood(Parameterised):
         if not complex_residual:
             return conditioned
         columns = np.asarray(conditioned.mean, dtype=DTYPE)
-        return GPConditional(
-            mean=columns[:, 0] + 1j * columns[:, 1], variance=conditioned.variance
-        )
+        return GPConditional(mean=columns[:, 0] + 1j * columns[:, 1], variance=conditioned.variance)
 
     # -- internals -----------------------------------------------------------
 

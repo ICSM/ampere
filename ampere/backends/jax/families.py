@@ -294,8 +294,12 @@ def _complex_gaussian(
 
     The circular complex Gaussian: real and imaginary parts independent
     ``Normal(0, sigma**2)``, so ``log p = sum[-log(2 pi sigma**2) - |y - mu|**2 / (2 sigma**2)]``.
-    The GP branch is refused on the reference path too
-    (``GP_ANALYTIC_IMPLEMENTED = False``, Phase 4's), so this never sees one.
+    The GP branch never reaches here, and since **W4.2** that is because it is
+    implemented somewhere else rather than because it is refused: the circular
+    complex GP lives on the solver, like the real Gaussian family's, so
+    :mod:`ampere.backends.jax.problem`'s ``gp_marginal`` branch stacks the
+    complex residual into two real columns and hands them to
+    ``DenseGP.log_marginal_likelihood_jax``.
     """
     assert sigma is not None
     residual = jnp.abs(observed - predicted)

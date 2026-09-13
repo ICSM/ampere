@@ -409,6 +409,21 @@ class SpectralMixture(_CoreSpectralMixture):
         super().__init__(amplitudes, periods, qualities, component_type=component_type, **kwargs)
 
 
+def _columns(array: Any) -> int:
+    """How many realisations a right-hand side carries: ``k`` (*W4.2*).
+
+    ``likelihoods.md`` §7 lets a ``residual`` be an ``(n, k)`` block of ``k``
+    realisations sharing one covariance, which is how the circular complex GP
+    scores its real and imaginary parts against one factorisation. jax's dense
+    solver needed almost nothing for it — ``jnp.sum(r * alpha)`` and ``r.size``
+    are already the right expressions for a block — so this helper exists for
+    the two places that are not: the log-determinant's multiplicity and the
+    size of the identity ``conditional_loo`` inverts against.
+    """
+    shape = jnp.shape(array)
+    return 1 if len(shape) < 2 else int(shape[1])
+
+
 @dataclasses.dataclass(frozen=True)
 class DenseGP(GPSolver):
     """Exact O(N³) dense Cholesky, in ``jax.scipy``.
@@ -460,6 +475,9 @@ class DenseGP(GPSolver):
     NAME: ClassVar[str] = "DenseGP"
     EXACT: ClassVar[bool] = True
     IMPLEMENTED: ClassVar[bool] = True
+    #: W4.2: this solver takes the circular complex GP's two-column right-hand
+    #: side, exactly as ``ampere.core.DenseGP`` does.
+    STACKED_RESIDUALS: ClassVar[bool] = True
     BACKEND: ClassVar[str] = BACKEND
     DIFFERENTIABLE: ClassVar[bool] = True
     BATCHABLE: ClassVar[bool] = True
@@ -608,7 +626,8 @@ class DenseGP(GPSolver):
         log_determinant = 2.0 * jnp.sum(jnp.log(jnp.abs(jnp.diag(lower))))
         quadratic = jnp.sum(r * alpha)
         value = jnp.asarray(
-            -0.5 * (quadratic + log_determinant + r.size * _LOG_2PI), dtype=jnp.float64
+            -0.5 * (quadratic + _columns(r) * log_determinant + r.size * _LOG_2PI),
+            dtype=jnp.float64,
         )
         return jnp.where(jnp.isfinite(value), value, -jnp.inf)
 
@@ -628,7 +647,7 @@ class DenseGP(GPSolver):
         alpha = self._solve(lower, r)
         log_determinant = 2.0 * float(jnp.sum(jnp.log(jnp.abs(jnp.diag(lower)))))
         quadratic = float(jnp.sum(r * alpha))
-        return -0.5 * (quadratic + log_determinant + r.size * _LOG_2PI)
+        return -0.5 * (quadratic + _columns(r) * log_determinant + r.size * _LOG_2PI)
 
     def conditional_loo(
         self,
@@ -650,11 +669,15 @@ class DenseGP(GPSolver):
         r = self.place(residual)
         lower = self._checked_factor(kernel, coordinates, variance, values)
         alpha = self._solve(lower, r)
-        precision_diagonal = jnp.diag(self._solve(lower, jnp.eye(r.size, dtype=self.dtype)))
+        rows = int(jnp.shape(r)[0])
+        columns = _columns(r)
+        precision_diagonal = jnp.diag(self._solve(lower, jnp.eye(rows, dtype=self.dtype)))
+        # W4.2: one term per *sample*, summing the k components, which share
+        # A_ii -- the quantity a leave-one-out conditional is built from.
+        quadratic = jnp.sum(jnp.reshape(alpha, (rows, columns)) ** 2, axis=1)
         return np.asarray(
-            0.5 * jnp.log(precision_diagonal)
-            - alpha**2 / (2.0 * precision_diagonal)
-            - 0.5 * _LOG_2PI
+            columns * (0.5 * jnp.log(precision_diagonal) - 0.5 * _LOG_2PI)
+            - quadratic / (2.0 * precision_diagonal)
         )
 
     def condition(
@@ -671,6 +694,8 @@ class DenseGP(GPSolver):
         lower = self._checked_factor(kernel, points, variance, values)
         target = points if at is None else _points(at)
         cross = jnp.asarray(kernel.matrix(target, points, values), dtype=jnp.float64)
+        # An (n, k) residual conditions to an (m, k) mean beside one (m,)
+        # variance: a posterior variance does not depend on the data (W4.2).
         mean = cross @ self._solve(lower, jnp.asarray(residual, dtype=jnp.float64))
         solved = self._solve(lower, cross.T)
         prior_variance = jnp.asarray(kernel.diagonal(target, values), dtype=jnp.float64)

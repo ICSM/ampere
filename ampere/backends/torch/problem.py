@@ -330,8 +330,26 @@ class _LoweredDataset:
             dtype=complex_dtype(DEFAULT_DTYPE) if self.complex_valued else DEFAULT_DTYPE,
             device=device,
         )
+        # Every axis, stacked into the `(n, d)` block ``Likelihood._coordinates``
+        # builds -- **not** ``axes[0]`` (*W4.2*). A one-axis container is
+        # unchanged by this (`(n, 1)` and `(n,)` are the same point set to
+        # ``Kernel.matrix``), and a VisibilitySet has three axes, so taking the
+        # first would have handed the kernel the `u` column and called it the
+        # coordinates. The same stack is what makes ``axes=("u", "v")``
+        # meaningful here, since a selector resolves to *columns of this block*.
         self.observed_coordinates = _tensor(
-            np.asarray(observed.axes[0].values, dtype=float)[self.retain], device=device
+            np.column_stack([np.asarray(axis.values, dtype=float) for axis in observed.axes])[
+                self.retain
+            ],
+            device=device,
+        )
+        # The kernel bound to this container's axis order, once, at lowering:
+        # W4.5 put the binding on the noise model because that is where the
+        # container is, and the native path has to use it or an ``axes=``
+        # selector would silently do nothing here while working on the contract
+        # path it is checked against.
+        self.bound_kernel = (
+            self.noise.kernel_for(observed) if getattr(self.noise, "CORRELATED", False) else None
         )
         self.uncertainty = (
             None
@@ -552,11 +570,12 @@ class _LoweredDataset:
             return None
         block = self._dataset_values(routed).get(LATENT_COMPONENT, {})
         whitened = _tensor(block[self.latent_name], device=self.device).reshape(-1)
+        kernel = self._kernel()
         return self.noise.solver.latent_transform_native(
-            self.noise.kernel,
+            kernel,
             self.observed_coordinates,
             whitened,
-            self.noise.kernel.resolve(values),
+            kernel.resolve(values),
         )
 
     # -- the generative half (W3.1 slice 2) ---------------------------------
@@ -657,10 +676,18 @@ class _LoweredDataset:
                 return self._poisson_variates(resolved, seeds, device)
             return self._student_t_variates(resolved, seeds, size, device)
 
+        # Two standard normals per draw, or **four** for the circular complex GP
+        # (*W4.2*): that draw needs a correlated and an independent block in each
+        # of the real and the imaginary parts, and the two components must share
+        # the factor L and nothing else. ``torch.randn`` fills row-major, so the
+        # first two rows of a ``(4, size)`` draw are byte-identical to the
+        # ``(2, size)`` draw from the same seed -- every stream this did not
+        # change is unchanged.
+        rows = 4 if (self.correlated and name == "complex_gaussian") else 2
         normals = torch.stack(
             [
                 torch.randn(
-                    (2, size),
+                    (rows, size),
                     generator=torch.Generator(device="cpu").manual_seed(_seed(seed)),
                     dtype=DEFAULT_DTYPE,
                 ).to(device)
@@ -703,7 +730,20 @@ class _LoweredDataset:
         sigma = self._sigma(predicted, values)
         if self.likelihood.family.NAME == "complex_gaussian":
             assert sigma is not None  # REQUIRES_UNCERTAINTY, checked at composition
-            return predicted + sigma * torch.complex(normals[0], normals[1])
+            if not self.correlated:
+                return predicted + sigma * torch.complex(normals[0], normals[1])
+            # W4.2: two real GP realisations sharing L, not one complex one.
+            # Sharing L is circularity's equal-component half; sharing nothing
+            # else is its zero-pseudo-covariance half. Drawing one realisation
+            # for both components would give a draw perfectly correlated between
+            # the parts, whose modulus statistics the density does not score.
+            whitened = torch.stack([normals[0], normals[1]], dim=-1)
+            correlated = self._gp_realisation(values, whitened)
+            stabiliser = float(getattr(self.noise.solver, "jitter", 0.0) or 0.0)
+            scale = sigma if not stabiliser else torch.sqrt(sigma**2 + stabiliser**2)
+            independent = torch.stack([normals[2], normals[3]], dim=-1)
+            components = correlated + scale.unsqueeze(-1) * independent
+            return predicted + torch.complex(components[..., 0], components[..., 1])
         realisation = predicted
         if self.correlated:
             realisation = realisation + self._gp_realisation(values, normals[0])
@@ -797,12 +837,18 @@ class _LoweredDataset:
 
     def _gp_realisation(self, values: Mapping[str, Any], whitened: torch.Tensor) -> torch.Tensor:
         """``L(θ) z``, from the solver's own native whitening transform."""
+        kernel = self._kernel()
         return self.noise.solver.latent_transform_native(
-            self.noise.kernel,
+            kernel,
             self.observed_coordinates,
             whitened,
-            self.noise.kernel.resolve(values),
+            kernel.resolve(values),
         )
+
+    def _kernel(self) -> Any:
+        """This dataset's kernel, bound to its container's axis order (*W4.2*)."""
+        assert self.bound_kernel is not None  # only a correlated dataset asks
+        return self.bound_kernel
 
     def log_likelihood(self, routed: Mapping[str, Mapping[str, Any]]) -> torch.Tensor:
         """``log p(data | θ)`` for this dataset alone, as a differentiable scalar.
@@ -823,13 +869,23 @@ class _LoweredDataset:
         sigma = self._sigma(predicted, values)
         if self.gp_marginal:
             residual = self.observed_values - predicted
-            variance = torch.zeros_like(residual) if sigma is None else sigma**2
+            # W4.2: a complex residual becomes the circular GP's two real
+            # columns, and the per-component sigma is the real diagonal of the
+            # one covariance both columns are scored against.
+            if self.complex_valued:
+                residual = torch.stack([residual.real, residual.imag], dim=-1)
+            variance = (
+                torch.zeros(residual.shape[0], dtype=DEFAULT_DTYPE, device=self.device)
+                if sigma is None
+                else sigma**2
+            )
+            kernel = self._kernel()
             value = self.noise.solver.log_marginal_likelihood_native(
-                self.noise.kernel,
+                kernel,
                 self.observed_coordinates,
                 residual,
                 variance,
-                self.noise.kernel.resolve(values),
+                kernel.resolve(values),
             )
         else:
             if sigma is None and self.likelihood.family.REQUIRES_UNCERTAINTY:

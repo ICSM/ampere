@@ -422,6 +422,23 @@ class SpectralMixture(_CoreSpectralMixture):
         super().__init__(amplitudes, periods, qualities, component_type=component_type, **kwargs)
 
 
+def _right_hand_side(tensor: torch.Tensor) -> torch.Tensor:
+    """A solver's right-hand side, flattened only when it is genuinely 1-D (*W4.2*).
+
+    Every solve in this module used to begin ``.reshape(-1)``, which is right
+    for the one realisation a real residual is and catastrophic for the ``(n, k)``
+    block ``likelihoods.md`` §7 now permits: flattening two columns would score
+    ``2n`` residuals against an ``n x n`` covariance. One helper rather than the
+    condition written out six times, because the six places have to agree.
+    """
+    return tensor.reshape(-1) if tensor.ndim < 2 else tensor
+
+
+def _columns(tensor: torch.Tensor) -> int:
+    """How many realisations a right-hand side carries: ``k``."""
+    return 1 if tensor.ndim < 2 else int(tensor.shape[1])
+
+
 @dataclasses.dataclass(frozen=True)
 class DenseGP(GPSolver):
     """Exact dense Cholesky, in torch. Agrees with ``ampere.core.DenseGP`` exactly.
@@ -473,6 +490,9 @@ class DenseGP(GPSolver):
     NAME: ClassVar[str] = "DenseGP"
     EXACT: ClassVar[bool] = True
     IMPLEMENTED: ClassVar[bool] = True
+    #: W4.2: this solver takes the circular complex GP's two-column right-hand
+    #: side, exactly as ``ampere.core.DenseGP`` does.
+    STACKED_RESIDUALS: ClassVar[bool] = True
 
     #: The four capability flags. W2.4 declared them against a parts set that
     #: did not yet include a solver and recorded the gap; **W2.13 closed it**
@@ -567,14 +587,23 @@ class DenseGP(GPSolver):
         variance: np.ndarray,
         values: Mapping[str, Any],
     ) -> torch.Tensor:
-        """``log N(residual; 0, K + diag(variance))`` as a differentiable tensor."""
+        """``log N(residual; 0, K + diag(variance))`` as a differentiable tensor.
+
+        **W4.2**: an ``(n, k)`` residual is the joint marginal of ``k``
+        realisations sharing this covariance — one factorisation, ``k`` solves,
+        the log-determinant counted ``k`` times. ``(residuals * alpha).sum()``
+        rather than ``residuals @ alpha`` because the latter is not defined
+        between two blocks and is the sum of the quadratic forms for a vector.
+        """
         total = self._covariance(kernel, coordinates, variance, values)
         factor = self._cholesky(total)
-        residuals = self._tensor(residual).reshape(-1)
+        residuals = _right_hand_side(self._tensor(residual))
         alpha = self._solve(factor, residuals)
         log_determinant = 2.0 * torch.log(torch.diagonal(factor)).sum()
-        quadratic = residuals @ alpha
-        return -0.5 * (quadratic + log_determinant + residuals.numel() * _LOG_2PI)
+        quadratic = (residuals * alpha).sum()
+        return -0.5 * (
+            quadratic + _columns(residuals) * log_determinant + residuals.numel() * _LOG_2PI
+        )
 
     def log_marginal_likelihood_native(
         self,
@@ -599,11 +628,13 @@ class DenseGP(GPSolver):
         """
         total = self._covariance(kernel, coordinates, variance, values)
         factor, info = torch.linalg.cholesky_ex(total)
-        residuals = self._tensor(residual).reshape(-1)
+        residuals = _right_hand_side(self._tensor(residual))
         alpha = self._solve(factor, residuals)
         log_determinant = 2.0 * torch.log(torch.diagonal(factor)).sum()
-        quadratic = residuals @ alpha
-        value = -0.5 * (quadratic + log_determinant + residuals.numel() * _LOG_2PI)
+        quadratic = (residuals * alpha).sum()
+        value = -0.5 * (
+            quadratic + _columns(residuals) * log_determinant + residuals.numel() * _LOG_2PI
+        )
         failed = torch.logical_or(info != 0, torch.logical_not(torch.isfinite(value)))
         return torch.where(failed, torch.full_like(value, -math.inf), value)
 
@@ -725,14 +756,17 @@ class DenseGP(GPSolver):
         """
         total = self._covariance(kernel, coordinates, variance, values)
         factor = self._cholesky(total)
-        residuals = self._tensor(residual).reshape(-1)
+        residuals = _right_hand_side(self._tensor(residual))
         alpha = self._solve(factor, residuals)
-        identity = torch.eye(residuals.numel(), dtype=self.TENSOR_DTYPE, device=self.TENSOR_DEVICE)
+        rows = int(residuals.shape[0])
+        columns = _columns(residuals)
+        identity = torch.eye(rows, dtype=self.TENSOR_DTYPE, device=self.TENSOR_DEVICE)
         precision_diagonal = torch.diagonal(self._solve(factor, identity))
-        terms = (
-            0.5 * torch.log(precision_diagonal)
-            - alpha**2 / (2.0 * precision_diagonal)
-            - 0.5 * _LOG_2PI
+        # W4.2: one term per *sample*, summing the k components, which share
+        # A_ii -- the quantity a leave-one-out conditional is built from.
+        quadratic = (alpha.reshape(rows, columns) ** 2).sum(dim=1)
+        terms = columns * (0.5 * torch.log(precision_diagonal) - 0.5 * _LOG_2PI) - quadratic / (
+            2.0 * precision_diagonal
         )
         return to_numpy(terms).astype(DTYPE, copy=False)
 
@@ -750,7 +784,9 @@ class DenseGP(GPSolver):
         factor = self._cholesky(total)
         target = points if at is None else _as_points(at, "conditioning grid", points.shape[1])
         cross = self._tensor(kernel.matrix(target, points, values))
-        residuals = self._tensor(residual).reshape(-1)
+        residuals = _right_hand_side(self._tensor(residual))
+        # An (n, k) residual conditions to an (m, k) mean beside one (m,)
+        # variance: a posterior variance does not depend on the data (W4.2).
         mean = cross @ self._solve(factor, residuals)
         solved = self._solve(factor, cross.transpose(0, 1))
         prior_variance = self._tensor(kernel.diagonal(target, values))
@@ -793,7 +829,7 @@ class DenseGP(GPSolver):
             covariance.shape[0], dtype=self.TENSOR_DTYPE, device=self.TENSOR_DEVICE
         ) * (jitter * scale)
         factor, info = torch.linalg.cholesky_ex(stabilised)
-        drawn = factor @ self._tensor(whitened).reshape(-1)
+        drawn = factor @ _right_hand_side(self._tensor(whitened))
         failed = torch.logical_or(info != 0, torch.logical_not(torch.isfinite(drawn).all()))
         return torch.where(failed, torch.full_like(drawn, math.nan), drawn)
 
