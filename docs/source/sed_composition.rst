@@ -277,3 +277,7 @@ See also
   everything on this page unchanged.
 * :doc:`sbi` — for a model with no likelihood to write down at all, rather
   than the two ordinary ones here.
+* :doc:`interferometry` — the same composition (one model, two instruments,
+  one channel) with a kind-changing step, a complex container and a wrapped
+  family added; cites this page as "the case you already know" before
+  showing the rest.

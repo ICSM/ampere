@@ -9,6 +9,7 @@ Ampere v2
 
    sed_composition
    m2_misspecification
+   interferometry
    wstat_comparison
    sbi
 
@@ -17,7 +18,12 @@ spectrum and a photometric catalogue, two instruments on one channel — and
 the page to start with if you have not built a multi-dataset fit before.
 :doc:`m2_misspecification` is the flagship study: a deliberately misspecified
 spectrum, fitted with and without the flexible likelihood, at three data
-sizes and on all three backends, with the timings. :doc:`wstat_comparison`
+sizes and on all three backends, with the timings. :doc:`interferometry` is
+the template for adding a **new modality** — a kind-changing,
+coordinate-changing step, a complex container, a wrapped angular family, and
+the M2 question asked of a resolved binary observed as visibilities and
+closure phases, plus the chromatic case a flexible likelihood over ``(u, v)``
+alone cannot express. :doc:`wstat_comparison`
 works through registering a **user-defined likelihood family** — a profiled
 Cash statistic with background — which is the extension point to reach for
 when your data are not Gaussian. :doc:`sbi` is for the opposite case — a
@@ -26,10 +32,11 @@ simulator with :class:`~ampere.inference.SBIEngine`, caching the trained
 posterior, truncated marginal ratio estimation, and checking that the
 result is calibrated.
 
-All four have runnable counterparts in the repository:
+All five have runnable counterparts in the repository:
 ``examples/sed_composition``, ``examples/m2_misspecification``,
-``examples/wstat_comparison.py`` and ``examples/sbi/``, each covered by its
-own test suite so that none can rot unnoticed.
+``examples/interferometry``, ``examples/wstat_comparison.py`` and
+``examples/sbi/``, each covered by its own test suite so that none can rot
+unnoticed.
 
 Legacy tutorials
 ----------------
