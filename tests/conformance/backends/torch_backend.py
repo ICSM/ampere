@@ -64,7 +64,18 @@ import torch
 from ampere.backends.torch import (
     BACKEND,
     SHO,
+    Amplitude,
+    BandwidthSmearing,
+    Binary,
+    BinaryVisibilities,
     CalibrationScale,
+    ClosurePhase,
+    FourierSample,
+    GaussianSource,
+    GaussianSourceVisibilities,
+    TimeSmearing,
+    UniformDisc,
+    UniformDiscVisibilities,
     DenseGP,
     GaussianProcessNoise,
     IndependentNoise,
@@ -102,6 +113,7 @@ from ._kernels import build_kernel
 from ..protocol import (
     BackendCapabilities,
     CovarianceSpec,
+    InterferometryPieces,
     KernelFamily,
     ModelKind,
     ModelSpec,
@@ -113,6 +125,7 @@ from ..protocol import (
 
 __all__ = [
     "BACKEND",
+    "TORCH_INTERFEROMETRY",
     "LinearModel",
     "Photometry",
     "PointSourceModel",
@@ -402,6 +415,28 @@ _KERNELS: dict[KernelFamily, type[Kernel]] = {
 }
 
 
+#: This backend's interferometric vocabulary, as one record (*W4.3*). The
+#: shipped classes, unmodified: they declare ``BACKEND = "torch"``, which is what
+#: makes the composed problems in ``test_interferometry.py`` single-backend ones.
+#: A twin associates with its reference by class name in the backend's own
+#: module, the native surface it exposes and this declaration — there is no step
+#: registry (``phase4_placement_memo.md`` §1.2) — so this record is the only
+#: place the battery needs to learn them.
+TORCH_INTERFEROMETRY = InterferometryPieces(
+    fourier_sample=FourierSample,
+    closure_phase=ClosurePhase,
+    amplitude=Amplitude,
+    bandwidth_smearing=BandwidthSmearing,
+    time_smearing=TimeSmearing,
+    uniform_disc=UniformDisc,
+    gaussian_source=GaussianSource,
+    binary=Binary,
+    uniform_disc_visibilities=UniformDiscVisibilities,
+    gaussian_source_visibilities=GaussianSourceVisibilities,
+    binary_visibilities=BinaryVisibilities,
+)
+
+
 class TorchBackend:
     """The torch fixture: the shipped ``ampere.backends.torch`` package.
 
@@ -434,6 +469,10 @@ class TorchBackend:
         # W2.4 slice 3: ``PointSourceModel`` realises ModelKind.COMPLEX, so the
         # ``complex_gaussian`` rows run here rather than skipping.
         complex_models=True,
+        # **W4.3**: the native interferometric twins, so every row in
+        # ``test_interferometry.py`` runs on this column instead of skipping
+        # with a reason naming what W4.3 owed.
+        interferometry=True,
         # Both, since W2.4 slice 2: see the module docstring.
         solvers=frozenset({SolverKind.DENSE, SolverKind.QUASISEP}),
     )
@@ -467,6 +506,9 @@ class TorchBackend:
 
     def gp_noise(self, kernel: Kernel, solver: GPSolver, *, jitter: Any = None) -> NoiseModel:
         return GaussianProcessNoise(kernel, solver, jitter=jitter)
+
+    def interferometry(self) -> InterferometryPieces:
+        return TORCH_INTERFEROMETRY
 
     def parameter_space(self, declaration: ParameterSet) -> TorchParameterSpace:
         return TorchParameterSpace(declaration)
