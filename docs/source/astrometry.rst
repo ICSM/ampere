@@ -280,52 +280,52 @@ comparable or tighter intervals than emcee — unsurprising given the
 gradient, and the same relationship :doc:`sed_composition` and
 :doc:`interferometry` both report.
 
-10. What the template did not say
---------------------------------------
+10. What the template now says, and where
+-------------------------------------------------
 
-The item's real deliverable: every gap, ambiguity or missing instruction
-met while following :doc:`interferometry` section by section, for W4.8 to
-fix in the template itself.
+This section originally listed every gap, ambiguity or missing instruction
+this item met while following :doc:`interferometry` section by section, for
+W4.8 to fix in the template itself. **W4.8 did**, so this section now says
+where each fix landed rather than that it was missing — the item's real
+deliverable turned into the template's own text, and this page keeps the
+record of what changed and why.
 
-- **§3 (``configure_from``)**: the template shows a step *using* the hook
-  but never says what a modality with a one-step chain should do about it —
-  nothing, in this case, but the template does not say "nothing is the
-  right answer here" and a reader has to work that out rather than be told.
+- **§3 (``configure_from``)**: the template showed a step *using* the hook
+  but never said what a modality with a one-step chain should do about it.
+  :doc:`interferometry` §3 now states it directly, citing this page's
+  ``EpochSample`` as the example: nothing is the right answer for a
+  one-step chain, and a modality that says so explicitly (in its docstring
+  or its page, as this one now does above) has made a decision rather than
+  skipped a section.
 - **§8 (inherit vs. re-declare)**: the stated rule ("declaration dangerous
-  and expensive => inherit; arithmetic dominant => re-declare") does not
+  and expensive => inherit; arithmetic dominant => re-declare") did not
   resolve this modality's case, where the declaration is cheap *and* the
-  arithmetic is cheap. The template needed a third clause — something like
-  "when both are cheap, inherit anyway, for the one-pattern-per-codebase
-  argument, not because duplicating either half would be dangerous" — and
-  did not have one.
-- **A periodic model is a new hazard class the template had no case for.**
-  Every source :doc:`interferometry` fits (a Gaussian, a uniform disc, a
-  binary) has a smooth, unimodal likelihood in its own parameters over any
-  prior wide enough to be "uninformative". A reflex orbit does not: its
-  period enters through a ``sin``/``cos`` with a genuine multi-modal
-  aliasing structure the moment the prior reaches past the observation
-  baseline, and the template's own recipe for choosing priors ("wide enough
-  to be honest, narrow enough to be useful") does not distinguish this case
-  from any other. **W4.8 should add a line to the template naming this**:
-  a modality whose model is periodic (or otherwise genuinely multi-modal in
-  its own right, independent of the likelihood/noise machinery) needs its
-  own discussion of prior width, separate from the composition questions
-  the rest of the template is about.
+  arithmetic is cheap. :doc:`interferometry` §8 now carries the third
+  clause this page asked for: when both halves are cheap, inherit anyway,
+  for the one-pattern-per-codebase argument, not because duplicating either
+  half would be dangerous.
+- **A periodic model is a hazard class the template had no case for.**
+  :doc:`interferometry` now closes with "A hazard the models here never
+  raise: periodic models and prior width", naming this page's §6 finding
+  directly: a modality whose model is periodic (or otherwise genuinely
+  multi-modal in its own right, independent of the likelihood/noise
+  machinery) needs its own discussion of prior width, separate from the
+  composition questions the rest of the template is about.
 - **The "two instruments, one channel" vs. "one model, two channels"
-  distinction is not named anywhere in the template**, even though both
-  shapes are now shipped (§4 above). A reader arriving at this modality
-  from :doc:`interferometry` alone would reasonably assume every
-  multi-dataset composition looks like the visibilities/closure-phases
-  case; it does not, and the template's §4 heading ("The two-dataset
-  composition on one channel") should probably be read as one instance of
-  a more general pattern rather than as the pattern itself.
-- **What the template got right, stated as a finding too**: §1's "three
-  class attributes are the whole of what a kind declares" correctly
-  predicted that a kind might already exist and need no declaration at
-  all — the strongest possible form of "no new contract surface" is not
-  needing a new class, and the template's own emphasis on those three
-  attributes (rather than on the mechanics of writing a new subclass) is
-  what made that visible immediately rather than after a false start.
+  distinction is now named.** :doc:`interferometry` §4 is retitled "The
+  two-dataset composition: two instruments on one channel" and opens by
+  naming both shapes and pointing here for the other one, so a reader
+  arriving from that page alone no longer has to discover by surprise that
+  a multi-dataset composition can look like this page's instead.
+- **What the template got right, stated as a finding too, and left
+  unchanged**: §1's "three class attributes are the whole of what a kind
+  declares" correctly predicted that a kind might already exist and need no
+  declaration at all — the strongest possible form of "no new contract
+  surface" is not needing a new class, and the template's own emphasis on
+  those three attributes (rather than on the mechanics of writing a new
+  subclass) is what made that visible immediately rather than after a false
+  start. Nothing about this needed fixing, so :doc:`interferometry` §1 is
+  unchanged.
 
 See also
 ------------
