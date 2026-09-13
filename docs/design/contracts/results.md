@@ -1249,6 +1249,28 @@ Each is a decision, not an oversight. Each has an extension point.
     fingerprint. What stays deliberately unreached is a plain attribute on a
     model that does *not* opt in — the author's choice now, rather than the
     contract's blind spot.
+14. **Four of the six plotting functions need exactly one ordered coordinate
+    axis, and a point kind with several axes has none.** *(Added W4.8, from
+    W4.4's finding.)* §4's dimension rule above says how a multi-axis point
+    kind is *stored* — one sample dimension, its axes ordinary variables on
+    it — and storage is fine. Reading it back for a plot is not:
+    `ampere.results._plotting.coordinate_of` picks a single coordinate to
+    plot a value against, which a `Spectrum` or a `TimeSeries` has and a
+    `VisibilitySet` (u, v, spectral_axis jointly) or a `ClosurePhases`
+    (five axes) does not. `plot_posterior_predictive`, `plot_residuals`,
+    `plot_gp_localisation` and `plot_anomaly_score` all refuse such a kind by
+    name; only `plot_corner`, `plot_trace`, `plot_sbc_ranks` and
+    `plot_coverage` are unaffected, because none of the four needs a data
+    coordinate at all. This is not the complex-valued gap §8 might suggest —
+    a real, single-component view of the same data still has no ordered axis
+    to plot against, because the refusal is about the coordinate, not the
+    value type. The extension point is family B/C support for a
+    multi-axis point kind (a coordinate the caller picks, or a projection
+    onto one), which `DEVELOPMENT_PLAN.md` §4.4's "future strategies for
+    2D+" list already stages for Phase 5 rather than for Phase 4's proof
+    modality — a gridded or multi-axis kind was never promised family B/C
+    support before then. `interferometry.rst`'s "The plots: a found
+    limitation, not assumed" section is the worked account.
 
 ## 14. What this contract hands to the specs downstream
 

@@ -59,7 +59,11 @@ sketched as a `from_astropy()` constructor on the backend subpackage, so the
 call site itself names the intent, and raising if the model (or any
 component of a compound model) is not fully in the curated table rather than
 silently falling back to black-box. The exact API is fixed with the adapter
-contract (Phase 4).
+contract (Phase 4). *(Amended W4.8: landed — `ampere.core.from_astropy()`
+at W4.6, `contracts/astropy_compat.md`; the curated native table at W4.7,
+`ampere.backends.{torch,jax}.from_astropy()`, six classes and their
+compound `+ - * /` forms. The sketch above is what shipped, essentially
+unchanged.)*
 
 ## 2. Reference backend: the trade-off, written out
 
@@ -205,6 +209,18 @@ differs from them; nothing here changes a policy, and where a difference is a
   §12.8), `realisation.py` (`register_realisation`/`realise` — W2.13,
   `inference.md` §10a), and `rng.py` (`substream`, `lowering.md` §9.2). All
   three are backend-neutral, so §4 rule 1 applies to them unchanged.
+  *(Amended W4.8: two more landed in Phase 4.)* `kernels.py` (**W4.5**) is
+  the kernel algebra moved out of `likelihood.py`, which re-exports every
+  name — the seven quasiseparable-eligible families, `Sum`/`Product`/
+  `SpectralMixture`, the `axes=` selector, and the public
+  `register_quasiseparable_term` registry. `astropy_translations.py`
+  (**W4.7**) is the shared, backend-neutral physics behind the curated
+  astropy-model translations — `BlackBody` through each backend's own
+  `planck_jy`, `PowerLaw1D`, `BrokenPowerLaw1D`, `Polynomial1D`, `Gaussian1D`,
+  `Const1D` — written once against a `TranslationOps` protocol in
+  `kernels.py`'s `ArrayOps` shape, so `backends/{torch,jax}/astropy.py`
+  build their `TRANSLATIONS` tables from one dict rather than two. Both are
+  backend-neutral, so §4 rule 1 applies to them unchanged too.
 * `core/astropy_compat.py` **landed at W4.6** (2026-09-11), the last §4
   contract to be implemented: §4.7's adapter, `from_astropy()`, wrapping any
   `astropy.modeling` model — compound models included — as a black-box
@@ -225,7 +241,12 @@ differs from them; nothing here changes a policy, and where a difference is a
   contract change under ground rule 9; the out-of-tree extensibility claim
   stays proven by `tests/core/thirdparty_polarimeter.py`. The
   interferometry modality (W4.1 onwards) is the first to land under this
-  rule, in `backends/{reference,torch,jax}/interferometry.py`. A grouping
+  rule, in `backends/{reference,torch,jax}/interferometry.py`. **The
+  astrometry modality (W4.9) is the second and the rule's own test** —
+  `TimeSeries` needed no new kind at all (§1's three class attributes said
+  as much before a line of code was written), and its steps live in
+  `backends/{reference,torch,jax}/astrometry.py`, parallel to
+  `interferometry.py` under the same rule. A grouping
   namespace is revisited after realistic usage (end of Phase 4 or later); a
   per-observable front door (`ampere.interferometry`, say) arrives only
   with the first reader (OIFITS, Phase 6).
@@ -279,12 +300,14 @@ differs from them; nothing here changes a policy, and where a difference is a
 
 **Extras table.**
 
-* *(none)* — the "astropy adapter" in that row has not landed (Phase 4, as
-  above). Everything else in the row has: the reference backend, emcee,
-  dynesty, celerite2's numpy interface, arviz and h5netcdf. The row's real
-  contents are `[project.dependencies]`, which also carries matplotlib,
-  spectres, tqdm, corner, pyphot and — on pyphot's behalf, ruled 2026-09-07 —
-  `requests`.
+* *(none)* — the "astropy adapter" in that row **has now landed**
+  *(Amended W4.8: at W4.6, 2026-09-11 — `from_astropy()` needs nothing
+  beyond the base install, since `AdaptedAstropyModel` is
+  `BACKEND = "reference"` throughout)*. Everything else in the row already
+  had: the reference backend, emcee, dynesty, celerite2's numpy interface,
+  arviz and h5netcdf. The row's real contents are `[project.dependencies]`,
+  which also carries matplotlib, spectres, tqdm, corner, pyphot and — on
+  pyphot's behalf, ruled 2026-09-07 — `requests`.
 * `torch` = `["torch", "pyro-ppl"]`, and `jax` = `["jax", "numpyro",
   "equinox"]`. **The "(GP solver library — deferred choice, plan §6)" in both
   rows is spent**: the choice was made by measurement in W2.4/W2.5 slice 2

@@ -145,8 +145,31 @@ generalisation a new modality is likely to need if its steps come in a
 chain longer than one: a step publishing a requirement that only the step
 after it can compute is exactly this shape, whatever the kinds involved.
 
-4. The two-dataset composition on one channel
------------------------------------------------
+**If your instrument chain is only one step long, there is nothing for
+``configure_from`` to do, and that is the right answer, not a gap to fill.**
+:doc:`astrometry` §3 found this the hard way: its ``EpochSample`` step is the
+whole of its chain, so it does not override ``configure_from`` at all, and
+the template as written gave no way to tell whether that silence meant
+"correct" or "forgotten". It means correct — a step with no successor has
+nothing to read ahead of, and leaving the hook at its no-op default is the
+entire implementation a one-step chain needs. State this explicitly when you
+build a new modality: a chain that never overrides ``configure_from``, and
+says so in its own docstring or page, has made a decision, not skipped a
+section of this template.
+
+4. The two-dataset composition: two instruments on one channel
+-------------------------------------------------------------------
+
+**Name the shape, because it is one of at least two that ship.** This
+section builds **two instruments on one model channel** — visibilities and
+closure phases, both reading the ``sky`` channel — which is one composition
+shape, not *the* composition shape. :doc:`astrometry` §4 builds the mirror
+image, **one model, two channels** (an orbit's ``ra`` and ``dec``, each with
+its own instrument and its own dataset), and the two are genuinely
+different: this shape's label collision (below) cannot happen in the other
+one, because two instruments bound to *different* channels never compete
+for a default label. A reader arriving here first should not assume every
+multi-dataset composition looks like this one.
 
 This is where the page stops being new and becomes :doc:`sed_composition`
 again — literally the same code, with the kind swapped:
@@ -353,6 +376,18 @@ the arithmetic the cheap half, inherit; when the declaration is thin and the
 arithmetic is the whole of the step, re-declare** (``ampere.backends.torch.instrument``'s
 own reasoning, for the opposite case).
 
+That rule has two clauses and :doc:`astrometry` needed a third. Its
+``EpochSample`` has no arithmetic at all (``apply`` is the identity) *and*
+its declaration is a few lines, so neither clause fires — both halves are
+cheap, and the rule as written does not say what to do. **When both the
+declaration and the arithmetic are cheap, inherit anyway, for the
+one-pattern-per-codebase argument, not because duplicating either half would
+be dangerous**: there is nothing to gain from a second, hand-maintained copy
+of a two-channel template that must stay bit-identical across backends, and
+a codebase with one twinning convention is easier to read than one with two
+conventions and a rule for choosing between them that only sometimes
+applies.
+
 ``examples/interferometry/model.py``'s ``BinaryWithDisc`` — the "correct"
 sky model of §9 below — takes the same lesson one step further: rather than
 adding a fourth subclass to ``ampere.backends.*``, it is a small,
@@ -468,12 +503,36 @@ not yet a modality-agnostic surface. Checking ``ampere/results/`` for this
 restriction before relying on any of the four above is worth the two minutes
 it costs.
 
+A hazard the models here never raise: periodic models and prior width
+-----------------------------------------------------------------------------
+
+Every source model this page fits — a Gaussian, a uniform disc, a binary —
+has a smooth, unimodal likelihood in its own parameters over any prior wide
+enough to be "uninformative". Nothing here says what to do about a model
+that is not, and :doc:`astrometry` §6 found one: a reflex orbit is
+**periodic**, and a period prior wide enough to reach past the observed
+epochs' own baseline is genuinely multi-modal — an emcee ensemble and a
+multi-chain NUTS run both locked onto a spurious period and stayed there,
+not because of slow mixing but because a chain that started near a real
+second mode has no reason to leave it. **A modality whose model is periodic
+(or otherwise genuinely multi-modal in its own right, independent of the
+likelihood or noise machinery) needs its own discussion of prior width,
+separate from the composition questions the rest of this page is about**: an
+informed prior centred on a value a periodogram or a previous epoch has
+already suggested, not a search over decades hoping the sampler finds the
+right one. Check whether your new modality's model has this shape before
+trusting a wide "uninformative" prior to behave the way it does for every
+model on this page.
+
 See also
 ------------
 
 * :doc:`sed_composition` — the simple case this page cites throughout: one
   model, two instruments, one channel, no kind change and no complex
   container.
+* :doc:`astrometry` — the second worked modality, built by following this
+  page section by section; its closing section records where this page
+  needed fixing, which is what W4.8 did.
 * :doc:`m2_misspecification` — the flagship study this page's arms
   reproduce the *shape* of on a different observable: a correctly and an
   incorrectly specified model, with and without the flexible likelihood.

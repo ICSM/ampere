@@ -1758,8 +1758,8 @@ W1.7's `Dataset` discharges once. `log_prob` re-checks only shapes, mirroring
 | Censoring + correlated noise is `LATENT` | Issue #11's own open question, answered: it is a multivariate-normal orthant probability with no closed form beyond a few dimensions |
 | Masking beats censoring on the same sample | Masking a region for a test run should not require editing the censoring array too |
 | Complex data are the circular complex Gaussian only | `results_schema.md` §16: the container's real σ encodes exactly that. Non-circular noise supplies its own 2×2 structure and is not a container concern |
-| `complex_gaussian` + GP is `ANALYTIC` — circular meaning fixed, implementation staged | Ruled 2026-09-03 (§17 Q6). The circular complex GP marginalises in closed form exactly as the real Gaussian does, and fixing the declaration now unblocks the flexible likelihood on the Phase-4 proof modality. `GP_ANALYTIC_IMPLEMENTED = False` keeps the pair a composition-time refusal until Phase 4 lands the closed form — declared-but-staged, never silently different |
-| Rice takes amplitudes from an `Amplitude` chain step; von Mises takes `κ = 1/σ²` per sample | Ruled 2026-09-03 (§17 Q3/Q4). The model predicts what it physically produces — the complex value — and projection is the instrument chain's job; the concentration comes from the container's own uncertainties, exact in the small-σ limit where closure-phase practice lives. Families themselves are Phase 4's |
+| `complex_gaussian` + GP is `ANALYTIC` — circular meaning fixed, implementation staged | Ruled 2026-09-03 (§17 Q6). The circular complex GP marginalises in closed form exactly as the real Gaussian does, and fixing the declaration now unblocks the flexible likelihood on the Phase-4 proof modality. `GP_ANALYTIC_IMPLEMENTED = False` keeps the pair a composition-time refusal until Phase 4 lands the closed form — declared-but-staged, never silently different. *(Amended W4.8: implemented at W4.2 — `GP_ANALYTIC_IMPLEMENTED` is now `True`; see §4's "declared analytic, implemented at W4.2" subsection for the closed form.)* |
+| Rice takes amplitudes from an `Amplitude` chain step; von Mises takes `κ = 1/σ²` per sample | Ruled 2026-09-03 (§17 Q3/Q4). The model predicts what it physically produces — the complex value — and projection is the instrument chain's job; the concentration comes from the container's own uncertainties, exact in the small-σ limit where closure-phase practice lives. Families themselves are Phase 4's. *(Amended W4.8: `VonMisesFamily` implemented at W4.1, exactly to this interface. `RiceFamily` remains declared, not implemented — `Amplitude` landed at W4.1, but nothing consumes it as a Rician mean yet, and Phase 4 did not schedule it.)* |
 | `check_alignment` is composition-time; `log_prob` re-checks only shapes | O(N) coordinate comparison is right once and wrong per evaluation — `results_schema.md` §10's split |
 | A noise model receives the prediction as well as the observation | Ruled 2026-09-03 (X-1). A noise whose magnitude depends on the model — a fractional model uncertainty, an analytically marginalised multiplicative calibration systematic, a model-variance weighting of counts — is a `NoiseModel`, not a family. Without the `predicted` argument the only way to express one is to re-implement the sampling distribution, which welds noise to family, cannot be reused, and cannot reach the GP path: exactly the monolithic collapse `prior_art.md` Tension 3 warns against |
 
@@ -1807,7 +1807,11 @@ Each is a decision, not an oversight. Each has an extension point.
    composition; the implementations are Phase 4's. Their parameterisations
    were fixed by the 2026-09-03 rulings (§17 Q3/Q4): the model predicts the
    complex value and an `Amplitude` chain step takes the modulus for Rice;
-   `κ = 1/σ²` per sample for von Mises.
+   `κ = 1/σ²` per sample for von Mises. *(Amended W4.8: `VonMisesFamily` was
+   implemented at W4.1, to exactly this interface, with the interferometry
+   modality that needed it — see the class docstring. `RiceFamily` remains
+   declared, not implemented; W4.1 checked it as a third route for
+   interferometric amplitudes and did not schedule it further.)*
 5a. **`PoissonFamily` is the only family that consumes the latent path.**
    Student-t and Cauchy *declare* `LATENT` under a GP and neither implements
    it, so composing either with `GaussianProcessNoise` is refused (§4). That
@@ -1817,7 +1821,11 @@ Each is a decision, not an oversight. Each has an extension point.
    `log_prob` that reads `noise.latent` plus flipping the flag. (The complex
    Gaussian left this list at the freeze: under a GP it now declares a
    *staged* `ANALYTIC` — §4 — refused until Phase 4 implements the circular
-   closed form.)
+   closed form.) *(Amended W4.8: Phase 4 did — W4.2 implements the circular
+   complex GP in closed form, so `complex_gaussian` + `GaussianProcessNoise`
+   is no longer staged; it marginalises analytically like every other
+   `ANALYTIC` pair. Student-t and Cauchy are unaffected and remain refused
+   under a GP.)*
 6. **The latent path has no inference.** *(Amended W2.14, 2026-09-08.)* As
    written, this limitation also described a **defect**: `latent_transform`
    was "the transform" and nothing on the scoring path applied it, so

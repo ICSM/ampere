@@ -431,6 +431,22 @@ every hash unchanged.
 5. **Extra coordinates are not features** in v1 (they may be non-numeric
    and are rarely what a network should condition on); a numeric extra
    coordinate a user wants seen is a later layout option.
+6. **The `coordinate` group aligns axes by position, not by name.** *(Added
+   W4.8, from W4.3's carried finding.)* §3 group 2 packs "the sample's
+   coordinate on each of its container's axes, in the container kind's axis
+   order" — column `k` is whichever axis a kind declares in position `k`,
+   with no check that two datasets' column `k` mean the same physical
+   quantity. That is harmless while every kind in a collection has axes in
+   a broadly comparable order (a `Spectrum`'s one spectral axis, an
+   `Image`'s `x`/`y`), but W4.3's first complex, multi-axis customer —
+   `VisibilitySet`'s `(u, v, spectral_axis)` and `ClosurePhases`' five —
+   makes the assumption visible rather than incidental: nothing stops a
+   layout mixing a kind whose column 0 is a spatial coordinate with one
+   whose column 0 is `u`, and a network sees two unrelated quantities in
+   the same input slot. Whether the packing should carry axis *identity*
+   (a physical-type or axis-name feature per column, not just position) is
+   a genuine design question this draft leaves open rather than answers —
+   a Phase 5 question, not a defect in what shipped.
 
 ## 10. Handoffs
 

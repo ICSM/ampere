@@ -1259,6 +1259,22 @@ and whether or not it is `strict`. A realisation *is* the differentiable form,
 and that flag never buys a gradient. See §4.5, "Non-native parts in a native
 problem".
 
+**W4.3: the per-model native surface gained a second spelling.** Every native
+model up to Phase 4 exposed its differentiable body and its compiled
+coordinate grid as `flux`/`grid`, and the realisation machinery looked those
+up by exactly those names. An interferometric source model cannot: every one
+of them already declares a *parameter* called `flux` (the object's own
+brightness), and `Parameterised._check_free_name`'s rule that a parameter may
+not shadow a class attribute (`parameters.md` §10) makes `flux`
+unavailable as a method name on exactly these classes. `flux`/`grid`
+therefore stopped being the only spelling: both backends' realisation
+machinery resolves `flux`/`grid` **or** `native_flux`/`native_grid` on a
+model, one decision-log row recording the choice — a model picks whichever
+pair does not collide with its own parameters, and the realisation asks for
+both before refusing. `ampere.backends.torch.interferometry` and
+`.jax.interferometry` are the first, and so far only, consumers of the
+second spelling.
+
 ## 11. Failure signalling
 
 `DEVELOPMENT_PLAN.md` §4.5: "external simulators crash and return NaNs; the
