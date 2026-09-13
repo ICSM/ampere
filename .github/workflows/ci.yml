@@ -151,7 +151,7 @@ jobs:
     # W4.10 (3): actionlint joins the `dev` toolchain (conda-forge ships a
     # binary -- `pixi search actionlint` finds it -- so this is a pixi task
     # like every other check here, not a separate GitHub Action step; see
-    # `pixi.toml`'s [tool.pixi.tasks] `actionlint` entry). Ungated, same
+    # `pyproject.toml`'s [tool.pixi.tasks] `actionlint` entry). Ungated, same
     # reasoning as `lint` above: it validates every workflow file, and a
     # non-workflow PR benefits from it running for free (it costs a few
     # seconds). It is what makes the SHA-pinning below and in
