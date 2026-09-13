@@ -97,7 +97,9 @@ class ReflexOrbit(_ReferenceReflexOrbit):
         self._own_grid = self._place(self._data("time"))
 
     def _place(self, values: Any) -> jax.Array:
-        return place_on(jnp.asarray(np.asarray(values, dtype=float)), getattr(self, "_device", None))
+        return place_on(
+            jnp.asarray(np.asarray(values, dtype=float)), getattr(self, "_device", None)
+        )
 
     # -- negotiation -----------------------------------------------------------
 

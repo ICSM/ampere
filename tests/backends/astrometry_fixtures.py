@@ -140,7 +140,10 @@ def two_channel_problem(
     datasets = DatasetCollection(
         {
             "ra": Dataset(
-                observed_ra, ra_instrument, likelihood=Likelihood(GaussianFamily(), ra_noise), label="ra"
+                observed_ra,
+                ra_instrument,
+                likelihood=Likelihood(GaussianFamily(), ra_noise),
+                label="ra",
             ),
             "dec": Dataset(
                 observed_dec,

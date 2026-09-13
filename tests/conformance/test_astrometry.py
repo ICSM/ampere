@@ -25,7 +25,6 @@ What these rows are for, following the item's own list:
 
 from __future__ import annotations
 
-import math
 from typing import Any
 
 import astropy.units as u
@@ -106,9 +105,7 @@ def orbit_model(pieces: AstrometryPieces, **overrides: Any) -> Any:
 
 def chain(pieces: AstrometryPieces, observed: TimeSeries, channel: str, label: str) -> Instrument:
     """The one-step epoch-sampling instrument for one coordinate."""
-    return Instrument(
-        [pieces.epoch_sample.from_observed(observed)], channel=channel, label=label
-    )
+    return Instrument([pieces.epoch_sample.from_observed(observed)], channel=channel, label=label)
 
 
 # ---------------------------------------------------------------------------
@@ -129,12 +126,18 @@ class TestReflexOrbitAgainstTheClosedForm:
         got = backend.to_numpy(result[channel].values)
         if channel == "ra":
             expected = reflex_orbit_ra(
-                EPOCHS, pmra=ORBIT["pmra"], period=ORBIT["period"], phase=ORBIT["phase"],
+                EPOCHS,
+                pmra=ORBIT["pmra"],
+                period=ORBIT["period"],
+                phase=ORBIT["phase"],
                 amp_ra=ORBIT["amp_ra"],
             )
         else:
             expected = reflex_orbit_dec(
-                EPOCHS, pmdec=ORBIT["pmdec"], period=ORBIT["period"], phase=ORBIT["phase"],
+                EPOCHS,
+                pmdec=ORBIT["pmdec"],
+                period=ORBIT["period"],
+                phase=ORBIT["phase"],
                 amp_dec=ORBIT["amp_dec"],
             )
         assert np.allclose(got, expected, rtol=0.0, atol=tolerances.analytic)
@@ -148,8 +151,16 @@ class TestReflexOrbitAgainstTheClosedForm:
         result = model.evaluate()
         ra = backend.to_numpy(result["ra"].values)
         dec = backend.to_numpy(result["dec"].values)
-        expected_ra = reflex_orbit_ra(EPOCHS, pmra=ORBIT["pmra"], period=ORBIT["period"], phase=1.3, amp_ra=ORBIT["amp_ra"])
-        expected_dec = reflex_orbit_dec(EPOCHS, pmdec=ORBIT["pmdec"], period=ORBIT["period"], phase=1.3, amp_dec=ORBIT["amp_dec"])
+        expected_ra = reflex_orbit_ra(
+            EPOCHS, pmra=ORBIT["pmra"], period=ORBIT["period"], phase=1.3, amp_ra=ORBIT["amp_ra"]
+        )
+        expected_dec = reflex_orbit_dec(
+            EPOCHS,
+            pmdec=ORBIT["pmdec"],
+            period=ORBIT["period"],
+            phase=1.3,
+            amp_dec=ORBIT["amp_dec"],
+        )
         assert np.allclose(ra, expected_ra, rtol=0.0, atol=1e-9)
         assert np.allclose(dec, expected_dec, rtol=0.0, atol=1e-9)
 
@@ -242,8 +253,12 @@ class TestTwoChannelsOneModel:
         )
         if gp:
             spec = CovarianceSpec(KernelFamily.MATERN32, 0.03, 120.0, axes=("time",))
-            ra_noise: Any = backend.gp_noise(backend.kernel(spec), backend.gp_solver(SolverKind.QUASISEP))
-            dec_noise: Any = backend.gp_noise(backend.kernel(spec), backend.gp_solver(SolverKind.QUASISEP))
+            ra_noise: Any = backend.gp_noise(
+                backend.kernel(spec), backend.gp_solver(SolverKind.QUASISEP)
+            )
+            dec_noise: Any = backend.gp_noise(
+                backend.kernel(spec), backend.gp_solver(SolverKind.QUASISEP)
+            )
         else:
             ra_noise = backend.independent_noise()
             dec_noise = backend.independent_noise()
@@ -333,7 +348,8 @@ class TestTwoChannelsOneModel:
         observed = observed_channel("ra", backend.to_numpy(ra_instrument(result).values))
         spec = CovarianceSpec(KernelFamily.MATERN32, 0.03, 120.0, axes=("time",))
         dense = Likelihood(
-            GaussianFamily(), backend.gp_noise(backend.kernel(spec), backend.gp_solver(SolverKind.DENSE))
+            GaussianFamily(),
+            backend.gp_noise(backend.kernel(spec), backend.gp_solver(SolverKind.DENSE)),
         )
         quasisep = Likelihood(
             GaussianFamily(),

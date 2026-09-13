@@ -79,12 +79,8 @@ class TestReflexOrbitConstruction:
         """A strict generalisation of the design sketch's shared-epoch example."""
         ra_epochs = kit_data.EPOCHS
         dec_epochs = kit_data.EPOCHS[:-2]
-        ra_instrument = Instrument(
-            [EpochSample(ra_epochs)], channel="ra", label="astrom_ra"
-        )
-        dec_instrument = Instrument(
-            [EpochSample(dec_epochs)], channel="dec", label="astrom_dec"
-        )
+        ra_instrument = Instrument([EpochSample(ra_epochs)], channel="ra", label="astrom_ra")
+        dec_instrument = Instrument([EpochSample(dec_epochs)], channel="dec", label="astrom_dec")
         model = ReflexOrbit(ra_epochs * u.day, **kit_data.ORBIT)
         compiled = model.compile_for(negotiate([ra_instrument, dec_instrument]))
         result = compiled.evaluate()
