@@ -1,12 +1,18 @@
-"""W4.6's refusal rows for the opt-in translation hook (``astropy_compat.md`` §5).
+"""The opt-in translation hook's refusal rows (``astropy_compat.md`` §5), W4.6 and W4.7.
 
 The 2026-09-01 ruling — *curated astropy→native translation is opt-in, never
 silent* — has two halves. :func:`ampere.core.from_astropy` is the half that
 never substitutes anything; ``ampere.backends.torch.from_astropy`` and its jax
 twin are the half that substitutes **only** when asked and **only** what it has
-a curated row for. W4.6 lands the hook with an **empty** table, so every call
-refuses, and the refusal is what there is to test. W4.7 fills the table and
-turns these rows into "everything outside the table still refuses".
+a curated row for. W4.6 landed the hook with an **empty** table, so every call
+refused, and the refusal was the whole of what there was to test. W4.7 fills
+the table (``BlackBody``, ``PowerLaw1D``, ``BrokenPowerLaw1D``,
+``Polynomial1D``, ``Gaussian1D``, ``Const1D`` and their compound sums,
+products, differences and ratios — :mod:`ampere.core.astropy_translations`),
+so what is left to test here is "everything outside the curated table still
+refuses, by name" — the same refusal, now exercised against a model the table
+genuinely has no row for (:class:`~astropy.modeling.functional_models.Sersic1D`)
+rather than against every model.
 
 The core half of the refusal — the leaf decomposition of a compound model, and
 the message itself — is :func:`ampere.core.translation_refusal`, and is tested
@@ -27,7 +33,7 @@ from pathlib import Path
 import astropy.units as u
 import numpy as np
 import pytest
-from astropy.modeling.models import BlackBody, Const1D, Gaussian1D, PowerLaw1D
+from astropy.modeling.models import BlackBody, Const1D, Gaussian1D, PowerLaw1D, Sersic1D
 
 import ampere.core.astropy_compat
 from ampere.core import Spectrum, astropy_components, from_astropy, translation_refusal
@@ -112,31 +118,41 @@ class TestTheRefusal:
 class TestTheBackendHooks:
     """Each backend's hook, in the environment where its extra is installed."""
 
-    def test_the_hook_is_exported_and_the_table_is_empty(self, module: str) -> None:
+    def test_the_hook_is_exported_and_the_table_holds_the_curated_rows(self, module: str) -> None:
+        """W4.7: the table is no longer empty, and holds exactly the curated six."""
         if not _installed(module):
             pytest.skip(f"needs the {module.rsplit('.', 1)[-1]!r} extra")
         backend = importlib.import_module(module)
         assert callable(backend.from_astropy)
-        assert backend.TRANSLATIONS == {}
+        assert {cls.__name__ for cls in backend.TRANSLATIONS} == {
+            "BlackBody",
+            "PowerLaw1D",
+            "BrokenPowerLaw1D",
+            "Polynomial1D",
+            "Gaussian1D",
+            "Const1D",
+        }
 
-    def test_it_refuses_every_model_while_the_table_is_empty(self, module: str) -> None:
+    def test_it_refuses_a_model_outside_the_curated_table(self, module: str) -> None:
+        """A model the table genuinely has no row for still refuses, by name."""
         if not _installed(module):
             pytest.skip(f"needs the {module.rsplit('.', 1)[-1]!r} extra")
         backend = importlib.import_module(module)
         name = module.rsplit(".", 1)[-1]
-        model = BlackBody(temperature=3000.0 * u.K, scale=1.0 * u.Jy / u.sr)
+        model = Sersic1D(amplitude=1.0, r_eff=1.0, n=4.0)
         with pytest.raises(CapabilityError) as raised:
             backend.from_astropy(model, grid=WAVELENGTH * u.micron, kind=Spectrum)
         message = str(raised.value)
         assert f"ampere.backends.{name}.from_astropy()" in message
-        assert "BlackBody" in message
+        assert "Sersic1D" in message
 
     def test_it_names_the_untranslatable_half_of_a_compound_model(self, module: str) -> None:
+        """A curated leaf beside an uncurated one still refuses, naming only the latter."""
         if not _installed(module):
             pytest.skip(f"needs the {module.rsplit('.', 1)[-1]!r} extra")
         backend = importlib.import_module(module)
-        model = Gaussian1D(1.0, 2.0, 0.5) + Const1D(0.3)
-        with pytest.raises(CapabilityError, match="Const1D"):
+        model = Gaussian1D(1.0, 2.0, 0.5) + Sersic1D(amplitude=1.0, r_eff=1.0, n=4.0)
+        with pytest.raises(CapabilityError, match="Sersic1D"):
             backend.from_astropy(model, grid=WAVELENGTH * u.micron, kind=Spectrum)
 
 
