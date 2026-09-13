@@ -91,19 +91,86 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
     job per new-namespace environment, each producing a check named
     "new-namespace suites (`<environment>`)" — `dev` (its own `suites` job:
     `test-all` + `bench`) and, in the `backend-suites` job's matrix,
-    `torch`, `jax` and, since W3.7, `sbi` (each: `typecheck` then
-    `test-all`; `torch`/`jax` also run `bench`, deliberately not repeated
-    for `sbi` since it would only re-exercise torch's own benchmarks under
-    another name — see the job's comment). `sbi`'s install is cached the
-    same way as `torch`'s (`setup-pixi`'s `cache: true`). The weekly/
-    on-demand `sbi-characterisation` job is unrelated: it exercises the
-    *legacy* `ampere.infer.sbi` flow, not the new-namespace `sbi` gate, and
-    stays non-blocking. Because the `sbi` leg's local reference time
-    (14–20 min) sits above the `torch` leg's (12–17 min), a CI runner with
-    torch's-leg headroom does not automatically have sbi's-leg headroom —
-    see W3.7's report for the cheap levers considered (splitting
-    `typecheck` out of the job, tightening the smoke budgets further)
-    without widening that item's scope to touch test budgets.
+    `torch`, `jax` and, since W3.7, `sbi` (each: `test-all`; `torch`/`jax`
+    also run `bench`, deliberately not repeated for `sbi` since it would
+    only re-exercise torch's own benchmarks under another name — see the
+    job's comment). `sbi`'s install is cached the same way as `torch`'s
+    (`setup-pixi`'s `cache: true`). The weekly/on-demand
+    `sbi-characterisation` job is unrelated: it exercises the *legacy*
+    `ampere.infer.sbi` flow, not the new-namespace `sbi` gate, and stays
+    non-blocking.
+  - **W4.10 — `typecheck` split out of the backend legs.** Since W4.10,
+    `pixi run -e <env> typecheck` for `torch`/`jax`/`sbi` runs in its own
+    matrix job, `backend-typecheck` (check name
+    "typecheck (pyrefly, `<environment>`)"), independent of
+    `backend-suites` (no `needs:` between them) — the two run concurrently
+    rather than one serialising in front of the other, so the slow `sbi`
+    leg's critical path in `backend-suites` is `test-all` alone. This was
+    W3.7's finding: the `sbi` leg's local reference time (14–20 min) sits
+    above the `torch` leg's (12–17 min), and splitting `typecheck` out was
+    one of the two cheap levers considered there without widening that
+    item's scope to touch test budgets. `dev`'s own `typecheck` job is
+    unchanged (it already ran on its own).
+  - **W4.10 — path gating.** A `changes` job runs first and computes, from
+    a pull request's changed files, which of five buckets are touched —
+    `run_dev`, `run_torch`, `run_jax`, `run_sbi`, `run_docs` — using
+    `.github/scripts/path_filters.py` as the single executable source of
+    the rule table (reproduced as a comment at the top of `ci.yml` and
+    below). Every job in the workflow always runs; a bucket controls
+    whether that job's *steps* do real work or print a one-line skip note,
+    so an unaffected leg's check still reports **success**, never
+    "skipped" or "expected" — the latter is what a top-level
+    `on.push.paths`/`on.pull_request.paths` filter would produce (the
+    workflow never triggers at all on an unaffected PR, so a required
+    check named in branch protection never gets a status and the merge
+    button hangs waiting for it). Push to master, `workflow_dispatch` and
+    `schedule` runs are never gated — path gating only narrows a
+    *pull_request* diff's turnaround time, never what lands on master or
+    what a human explicitly asked to run.
+
+    The path-filter table (buckets are exclusive; a path is classified by
+    the first rule that matches — see the script's module docstring for
+    the authoritative version):
+
+    | Path pattern | Runs |
+    | --- | --- |
+    | `pyproject.toml`, `pixi.lock`, `.github/**`, `ampere/core/**`, `ampere/results/**`, `ampere/inference/**`, and the shared test suites (`tests/{core,results,inference,conformance,m2,benchmarks,scaling,gpu,characterisation}/**` | everything: dev, torch, jax, sbi, docs |
+    | `ampere/backends/torch/**`, `tests/backends/*torch*` | torch, sbi (sbi's environment installs torch too) |
+    | `ampere/backends/jax/**`, `tests/backends/*jax*` | jax |
+    | `ampere/backends/reference/**`, remaining `tests/backends/**` | dev only |
+    | `examples/sbi/**` | dev, sbi |
+    | `examples/interferometry/**` (W4.4, not landed at W4.10 — a marked slot) | dev, torch, jax, sbi (conservative; W4.4 should narrow this to the backend(s) each example file actually exercises) |
+    | `examples/**` (remainder), `tests/examples/**` | dev only |
+    | `docs/**`, any `*.md` | dev, docs |
+    | anything unrecognised | everything (same as the first row) |
+
+    Locally: `python .github/scripts/path_filters.py --paths <files...>`
+    (or `--stdin` with a newline-separated list) prints the bucket for each
+    path and the resulting job list — the same thing the `changes` job
+    prints in its own log. This is also how the item's three synthetic
+    diffs were evidenced (W4.10's report).
+  - **W4.10 — `actionlint`.** `pixi run -e dev actionlint` (a conda-forge
+    binary, alongside `pandoc` in the `dev` feature) validates
+    `.github/workflows/*.yml`; CI's `actionlint` job runs the same task,
+    ungated (cheap, and useful on every PR — not only ones touching a
+    workflow file). Every `uses:` in `ci.yml` is pinned to a full commit
+    SHA with a `# vX.Y` comment (pinact style), and
+    `.github/dependabot.yml` enables the `github-actions` ecosystem
+    (weekly) so a version bump arrives as a reviewable PR updating both the
+    SHA and its comment together.
+  - **Required-check names for branch protection** (unchanged names keep
+    their existing branch-protection entries; new ones need adding):
+    `lint + format-check`, `actionlint`,
+    `typecheck (pyrefly, new namespaces)`, `test (py311)`, `test (py312)`,
+    `test (py313)`, `new-namespace suites (dev)`,
+    `typecheck (pyrefly, torch)`, `typecheck (pyrefly, jax)`,
+    `typecheck (pyrefly, sbi)`, `new-namespace suites (torch)`,
+    `new-namespace suites (jax)`, `new-namespace suites (sbi)`,
+    `docs build`, `minimal install (no extras)`. (`path filters` — the
+    `changes` job itself — and the weekly/on-demand
+    `characterisation suite (with sbi extra)` are not required checks: the
+    former is plumbing every other job depends on, not a signal in its own
+    right, and the latter is deliberately non-blocking, as before W4.10.)
 - Plain-pip alternative: `pip install -e ".[dev]"`, Python ≥ 3.11.
 - Conda env `ampere` (Python 3.13) has an editable install pointing at the
   main checkout — worktree-based work that needs importing its own changes
