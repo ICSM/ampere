@@ -3,9 +3,10 @@
 Status: **plan settled; Phase 1 spec frozen** (freeze recorded 2026-09-03,
 W1.13; the `spec-v1.0` tag is created at that item's merge); **Phases 0–3
 complete** (Phase 2 closed 2026-09-08, Phase 3 closed 2026-09-10 — the §5
-Phase 3 section carries the landed summary); **Phase 4 in progress from
-2026-09-11** (items in WORK_ITEMS.md, decisions D1–D4 ruled — the record is
-`docs/design/phase4_placement_memo.md`). All
+Phase 3 section carries the landed summary); **Phase 4 complete
+(2026-09-11 to 2026-09-13; the §5 Phase 4 paragraph carries the landed
+summary; decisions D1–D4 are recorded in `docs/design/phase4_placement_memo.md`);
+Phase 5 is next to draft.** All
 architectural proposals are confirmed; remaining open items are
 implementation-level choices deferred to their natural phase (§6). This
 document is the source of truth for the redevelopment of ampere: decisions
@@ -119,6 +120,7 @@ backend-neutral core plus modern computational backends, targeting:
 | The astropy adapter, a post-freeze §4 addition (W4.6) | **`core/astropy_compat.py` implements §4.7 as `contracts/astropy_compat.md` states it** (merged 2026-09-13, `b6d9298`): the adapter is black-box on the reference backend (`DIFFERENTIABLE = False`, `BATCHABLE = False` — astropy vectorises over inputs, not over parameter vectors), bounds become uniform priors, fixed parameters are frozen, ties are recorded and applied rather than sampled, an unbounded free parameter without a prior is refused; **no solid angle is ever invented** — a per-steradian output converts to a flux density only through an equivalency the caller states; the kind is declared or inferred only where the axis unit and arity make it unambiguous. The opt-in native translation of 2026-09-01 is a per-backend `from_astropy` that refuses anything outside its curated table; the table is empty until W4.7. |
 | The circular complex GP implemented, and a solver's right-hand side widened (W4.2) | **`complex_gaussian` + `GaussianProcessNoise` is `ANALYTIC` *and implemented*: the circular (equal-component, zero-pseudo-covariance) complex GP, computed as one Cholesky of `S = K(θ) + diag(σ²)` with a two-column right-hand side rather than as a `2N` by `2N` factorisation** (merged 2026-09-13, `4d93323`; the 2026-09-03 ruling of `likelihoods.md` §17 Q6 executed, `GP_ANALYTIC_IMPLEMENTED` now `True`). Circularity says the real `2N` covariance of `(Re r, Im r)` is `diag(S, S)` with a zero off-diagonal block, so the density is `−½[rᵉᵀS⁻¹rᵉ + rⁱᵀS⁻¹rⁱ + 2 log|S| + 2N log 2π]`: one factorisation, two solves, `log|S|` once and counted twice. Materialising the `2N` matrix costs eight times the arithmetic to carry a zero block the model has declared; calling the real solver twice computes the log-determinant twice. **The `GPSolver` contract is amended accordingly** (`likelihoods.md` §7, new subsection): a `residual` may be an `(n, k)` block of `k` realisations independent of one another and sharing one covariance — `log_marginal_likelihood` sums the `k` marginals, `conditional_loo` stays one term per sample (the components share `A_ii`), `condition` gives an `(m, k)` mean and one `(m,)` variance, `latent_transform` maps `(n, k)` to `(n, k)`. `GPSolver.STACKED_RESIDUALS` is the opt-in, `False` by default because both failure modes are silent: flattening scores `2n` residuals against an `n` by `n` covariance, and taking the first column drops the imaginary part of every visibility. **`QuasisepGP` is refused by name, and it is structural rather than scheduling**: `REQUIRES_ORDERED_1D` cannot hold for a point of the `(u, v)` plane at a wavelength, whatever the kernel selects, so the refusal precedes the solver's own check — `interferometry.md` §7's prediction that the O(N) path "will inherit it" is withdrawn. σ and the kernel `amplitude` are both per-component (`results_schema.md` §16), so `E|r|² = 2(K_ii + σ²)`; the draw is two real realisations sharing `L` and nothing else. Two native-path bugs closed in the same PR, exposed by the first multi-axis GP customer: both backends' lowerings took `observed.axes[0]` as the GP coordinates rather than the full `(n, d)` stack, and both used the unbound `noise.kernel` where W4.5 put the axis binding on `kernel_for(observed)`. |
 | The native model surface has a second spelling (W4.3) | **`ampere.backends.{torch,jax}.problem` resolve a native model's value-and-coordinates pair over two names: `flux`/`grid` (the original) and `native_flux`/`native_grid`** (merged 2026-09-13, `64284d5`). A genuine collision rather than taste: `Parameterised._check_free_name` refuses a parameter whose name shadows a class attribute, and `flux` is exactly what every interferometric source model calls its total flux density, so such a model cannot have a method called `flux` and the convention the placement memo records as a duck-typed `flux`/`grid` surface was unsatisfiable for the first modality that needed it. Either pair composes; a model offering half of either is refused with the missing half named. Not a §4 change (the surface is a backend-internal convention), recorded because it is a documented convention. **Open for Peter**: whether `native_flux`/`native_grid` becomes the canonical spelling and `flux`/`grid` the alias, or the shadowing rule is narrowed instead. Also recorded: both modern backends' interferometric twins use the *inheriting* pattern — the declaration (requirements, `configure_from`, the canonical-closure check) is written once, because a pixel-scale requirement written twice would alias silently. |
+| Phase 4 documentation pass: stale claims annotated in place (W4.8) | **Nineteen additive *Amended W4.8* annotations across ten frozen design documents; no contract semantics change; the conformance suite untouched** (merged 2026-09-13, `c8bf2c0`). Every "Phase 4", "landed", "declared, not implemented" and "will" claim in `likelihoods.md`, `results_schema.md`, `results.md`, `transformations.md`, `inference.md`, `encoding.md`, `architecture.md` and the interferometry, spectrum-photometry and astrometry sketches was checked against the merged code. One is a correction: the interferometry sketch's Q2 ruled that `extra_coords` would gain `Axis` support for a per-visibility frequency, and Phase 4 met the need with a `spectral_axis` on the container instead (D2), so `results_schema.md` §15.4's extension point stands unspent. Two new limitations recorded where they had no home: `results.md` §13 item 14 (four of the six plots refuse a point kind with several axes — Phase 5's multi-axis diagnostics) and `encoding.md` §9 item 6 (the packing aligns axes by position, not name). The template page `interferometry.rst` is amended for the four gaps W4.9 found by following it. |
 
 
 ## 3. Architecture: a core and a capability ladder, not four peer backends
@@ -606,8 +608,8 @@ reproducible bitwise from the problem's own seed.
   term against its dense closed form. Background and the sparsity-prior
   companion note: `docs/design/horizon_notes.md` §1 and its follow-up.
 
-**Phase 4 as landed (2026-09-11 to 2026-09-13; W4.0–W4.11; the documentation
-pass W4.8 closes it — this paragraph is completed at its merge).** The
+**Phase 4 as landed (2026-09-11 to 2026-09-13; W4.0–W4.11, closed at W4.8's
+merge `c8bf2c0`).** The
 composition design held for a modality nobody wrote the contracts for, and
 then for a second one built by following the first's page. **Placement
 (D1)**: a shipped observable's kind lives in `core/results_schema.py`, its
@@ -654,8 +656,12 @@ on closure phases (W5.1); matrix-free exact GPs for the 3- and 5-axis
 kernels; multi-axis point kinds refused by four of the six plots;
 `NUTSEngine` tuning knobs; the encoding's positional axis alignment; the
 Kronecker structure of dispersed data as the structured-solver route; the
-grouping-namespace question, to be revisited after realistic usage; the
-terra reviews owed on W4.1, W4.2 and W4.5.
+grouping-namespace question, to be revisited after realistic usage; the terra reviews owed on W4.1, W4.2 and W4.5. **The documentation pass** (W4.8)
+fixed the template for the gaps astrometry found, added the astropy and
+kernel pages, and left nineteen *Amended W4.8* annotations across the
+frozen documents — one of them a correction rather than a confirmation:
+the interferometry sketch's Q2 (per-visibility frequency as an
+`extra_coords` quantity) landed as a container axis instead.
 
 ### Phase 5 — Scale-out & advanced inference
 - Approximate GP strategies for images/IFU behind the `GPSolver` /
