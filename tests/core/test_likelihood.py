@@ -570,28 +570,41 @@ class TestLatentPathDeclaration:
         noise = GaussianProcessNoise(Matern32(0.3, 1.0))
         assert family.marginalisation_with(noise) is Marginalisation.LATENT
 
-    def test_the_circular_complex_gp_is_declared_analytic_and_staged(self) -> None:
-        """Ruled 2026-09-03 (§17 Q6): the declaration lands now, Phase 4 implements.
+    def test_the_circular_complex_gp_is_declared_analytic_and_implemented(self) -> None:
+        """Ruled 2026-09-03 (§17 Q6), implemented at **W4.2**.
 
         ``complex_gaussian`` + ``GaussianProcessNoise`` declares ``ANALYTIC``
         with the circular (equal-component, zero-pseudo-covariance) complex GP
-        as the fixed meaning — but composing the pair is refused with a message
-        naming Phase 4, because the closed form is not implemented yet and a
-        refusal is the only honest alternative to a silently different model.
+        as the fixed meaning. Until W4.2 the pair was *refused* at composition
+        with Phase 4 named, because the closed form was declared rather than
+        written; this row is the other side of that, and it is kept here rather
+        than deleted because the staging flag is still the mechanism and the
+        declaration is still what decides the marginalisation.
         """
         noise = GaussianProcessNoise(Matern32(0.3, 1.0))
         family = ComplexGaussianFamily()
         assert family.marginalisation_with(noise) is Marginalisation.ANALYTIC
-        assert not ComplexGaussianFamily.GP_ANALYTIC_IMPLEMENTED
-        with pytest.raises(LikelihoodError, match="Phase 4"):
+        assert ComplexGaussianFamily.GP_ANALYTIC_IMPLEMENTED
+        assert Likelihood(family, noise).marginalisation is Marginalisation.ANALYTIC
+
+    def test_a_family_whose_closed_form_is_staged_is_still_refused(self) -> None:
+        """The discipline outlives its first instance (*W4.2*).
+
+        ``GP_ANALYTIC_IMPLEMENTED`` exists so that a family may declare its GP
+        marginalisation before writing it and have composition refuse rather
+        than fall back on a model the declaration does not describe. Every
+        shipped family now either implements the closed form or is latent, so
+        the rule is held against a family declared here.
+        """
+
+        class StagedFamily(ComplexGaussianFamily):
+            NAME = "staged_complex"
+            GP_ANALYTIC_IMPLEMENTED = False
+
+        noise = GaussianProcessNoise(Matern32(0.3, 1.0))
+        family = StagedFamily()
+        with pytest.raises(LikelihoodError, match="GP_ANALYTIC_IMPLEMENTED is False"):
             Likelihood(family, noise)
-        # Reaching log_prob directly with a correlated NoiseParams refuses too,
-        # rather than quietly computing the independent value.
-        params = NoiseParams(
-            sigma=np.array([0.1]), values={}, kernel=Matern32(0.3, 1.0), solver=DenseGP()
-        )
-        with pytest.raises(LikelihoodError, match="Phase 4"):
-            family.log_prob(np.array([1.0 + 0.0j]), np.array([1.0 + 0.1j]), params)
 
     @pytest.mark.parametrize("family", [StudentTFamily(), CauchyFamily()])
     def test_a_latent_family_that_ignores_the_latent_values_cannot_be_composed(

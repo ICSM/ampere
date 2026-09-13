@@ -165,6 +165,33 @@ __all__ = [
 _LOG_2PI = math.log(2.0 * math.pi)
 
 
+def _stacked_components(residual: np.ndarray) -> np.ndarray:
+    """A complex residual as the ``(n, 2)`` real block the circular GP solves on.
+
+    **W4.2.** The circular complex Gaussian's real and imaginary parts are
+    independent real processes sharing one covariance ``K + diag(σ²)``, so the
+    2N-dimensional real covariance is block diagonal with the *same* block
+    twice. Writing the residual as two columns is what lets a solver exploit
+    that: one factorisation, two solves, ``log|K + diag(σ²)|`` once and then
+    doubled, rather than a dense 2N × 2N factorisation costing eight times as
+    much and carrying a zero off-diagonal block it already knows is zero.
+
+    A real residual passes through untouched, so every pre-W4.2 call is
+    unchanged: a one-column right-hand side is the ``k = 1`` case of the same
+    rule (:class:`GPSolver`).
+    """
+    values = np.asarray(residual)
+    if values.dtype.kind != "c":
+        return values
+    return np.ascontiguousarray(np.column_stack([values.real, values.imag]), dtype=DTYPE)
+
+
+def _components(residual: np.ndarray) -> int:
+    """How many independent realisations a right-hand side carries: ``k``."""
+    array = np.asarray(residual)
+    return 1 if array.ndim == 1 else int(array.shape[1])
+
+
 # ---------------------------------------------------------------------------
 # Declarations: marginalisation and censoring
 # ---------------------------------------------------------------------------
@@ -349,6 +376,13 @@ class GPConditional:
     family C consume — "the conditioned GP mean ... already localises where the
     model is deficient". The mean is **signed**, so it shows the direction of
     the local deficiency and not merely its size.
+
+    **W4.2**: with a multi-realisation right-hand side (:class:`GPSolver`) the
+    mean is ``(m, k)`` and the variance stays ``(m,)``, since a posterior
+    variance does not depend on the data. :meth:`Likelihood.conditional`
+    recombines the circular complex GP's two columns into a **complex** mean
+    before returning, so a caller who conditioned on visibilities gets a signed
+    deficiency in each component rather than two anonymous columns.
     """
 
     mean: np.ndarray
@@ -384,6 +418,29 @@ class GPSolver(abc.ABC):
     a nominally differentiable problem whose GP solve runs in numpy is a
     problem whose GP hyperparameters get no gradient at all. Pass the
     backend's own solver.
+
+    **The right-hand side may carry several realisations (W4.2).** Every method
+    below that takes a ``residual`` accepts either an ``(n,)`` array -- one
+    realisation, which is every pre-W4.2 call -- or an ``(n, k)`` block of
+    ``k`` realisations that are **independent of one another and share this one
+    covariance**. The declared quantity is then the joint one:
+    :meth:`log_marginal_likelihood` returns the sum of the ``k`` marginals, so
+    the log-determinant enters ``k`` times and the factorisation happens once;
+    :meth:`conditional_loo` returns one term per *sample*, summed over the
+    ``k`` components, since the precision diagonal they share is what a
+    leave-one-out conditional is built from; :meth:`condition` returns an
+    ``(m, k)`` mean beside the single ``(m,)`` variance the components share;
+    :meth:`latent_transform` maps ``(n, k)`` whitened draws to ``(n, k)``.
+
+    That is not a convenience. It is what makes the **circular complex GP** of
+    ``likelihoods.md`` §4 computable at the cost of one real solve rather than
+    eight (see :class:`ComplexGaussianFamily`): the real 2N covariance of a
+    circular complex Gaussian is ``K + diag(sigma^2)`` twice on the diagonal
+    and zero off it, and a two-column right-hand side is that structure written
+    arithmetically. A strategy that cannot take more than one column says so
+    through :attr:`STACKED_RESIDUALS`, and
+    :meth:`GaussianProcessNoise.check_compatible` refuses it by name on complex
+    data rather than letting it silently score one component.
     """
 
     #: Neutral strategy name, for provenance and error messages.
@@ -397,6 +454,17 @@ class GPSolver(abc.ABC):
     REQUIRES_QUASISEPARABLE: ClassVar[bool] = False
     #: Whether an implementation exists in the reference (numpy) path.
     IMPLEMENTED: ClassVar[bool] = False
+    #: Whether the strategy accepts an ``(n, k)`` right-hand side of ``k``
+    #: realisations sharing one covariance (**W4.2**; see the class docstring).
+    #: ``False`` by default, which is the honest answer for a strategy written
+    #: before the rule existed and for every declared slot: a solver that
+    #: flattened a two-column residual would score the two components against a
+    #: single covariance of the wrong size, and a solver that took only the
+    #: first column would silently drop the imaginary part of every visibility.
+    #: :meth:`GaussianProcessNoise.check_compatible` reads it and refuses by
+    #: name, so the flag is a declaration a user-written solver opts into once
+    #: its own algebra handles the extra columns.
+    STACKED_RESIDUALS: ClassVar[bool] = False
 
     #: Whether a gradient can be taken through this solver's linear algebra.
     DIFFERENTIABLE: ClassVar[bool] = False
@@ -602,6 +670,7 @@ class DenseGP(GPSolver):
     NAME: ClassVar[str] = "DenseGP"
     EXACT: ClassVar[bool] = True
     IMPLEMENTED: ClassVar[bool] = True
+    STACKED_RESIDUALS: ClassVar[bool] = True
 
     def __post_init__(self) -> None:
         if not math.isfinite(self.jitter) or self.jitter < 0.0:
@@ -643,11 +712,24 @@ class DenseGP(GPSolver):
         variance: np.ndarray,
         values: Mapping[str, Any],
     ) -> float:
+        """``log N(residual; 0, K + diag(variance))``, summed over the columns.
+
+        **W4.2** generalises the right-hand side (see :class:`GPSolver`): with
+        ``k`` columns this is the joint marginal of ``k`` independent
+        realisations sharing one covariance, which is the circular complex
+        Gaussian's 2N-dimensional density written without ever forming the
+        2N × 2N matrix. One ``cho_factor``, ``k`` triangular solves, the
+        log-determinant computed once and counted ``k`` times.
+        """
         factor = self._factor(kernel, coordinates, variance, values)
         alpha = scipy.linalg.cho_solve(factor, residual)
         log_determinant = 2.0 * float(np.sum(np.log(np.abs(np.diag(factor[0])))))
-        quadratic = float(residual @ alpha)
-        return -0.5 * (quadratic + log_determinant + residual.size * _LOG_2PI)
+        # ``np.sum(r * alpha)`` rather than ``r @ alpha``: the same number for a
+        # vector, and the sum of the k quadratic forms for a block, whereas the
+        # matrix product of two (n, k) blocks is not defined at all.
+        quadratic = float(np.sum(residual * alpha))
+        columns = _components(residual)
+        return -0.5 * (quadratic + columns * log_determinant + residual.size * _LOG_2PI)
 
     def conditional_loo(
         self,
@@ -662,14 +744,23 @@ class DenseGP(GPSolver):
         With ``A = (K + diag(variance + jitter^2))^{-1}``:
         ``sigma_i^{2,-i} = 1 / A_ii`` and ``mu_i^{-i} = y_i - [A r]_i / A_ii``,
         so ``log p_i = 0.5 log A_ii - [A r]_i^2 / (2 A_ii) - 0.5 log(2 pi)``.
+
+        **W4.2**: with a ``(n, k)`` right-hand side there is still **one term
+        per sample**, because a sample is what ``results.md`` §6's pointwise
+        group is indexed by and a complex visibility is one sample with two
+        components. The components share ``A``, hence share ``A_ii``, so term
+        *i* is the sum of the ``k`` conditional densities at that sample and
+        the normalisation and the log-precision are counted ``k`` times.
         """
         factor = self._factor(kernel, coordinates, variance, values)
         alpha = scipy.linalg.cho_solve(factor, residual)
-        precision_diagonal = np.diag(scipy.linalg.cho_solve(factor, np.eye(residual.size)))
+        rows = np.shape(residual)[0]
+        columns = _components(residual)
+        precision_diagonal = np.diag(scipy.linalg.cho_solve(factor, np.eye(rows)))
+        quadratic = np.sum(np.reshape(alpha, (rows, columns)) ** 2, axis=1)
         return np.asarray(
-            0.5 * np.log(precision_diagonal)
-            - alpha**2 / (2.0 * precision_diagonal)
-            - 0.5 * _LOG_2PI,
+            columns * (0.5 * np.log(precision_diagonal) - 0.5 * _LOG_2PI)
+            - quadratic / (2.0 * precision_diagonal),
             dtype=DTYPE,
         )
 
@@ -689,6 +780,9 @@ class DenseGP(GPSolver):
         else:
             target = _as_points(at, "conditioning grid", dimensions=points.shape[1])
         cross = kernel.matrix(target, points, values)
+        # An (n, k) residual gives an (m, k) conditioned mean -- one column per
+        # realisation -- beside the single (m,) variance the k realisations
+        # share, since a posterior variance does not depend on the data at all.
         mean = cross @ scipy.linalg.cho_solve(factor, residual)
         solved = scipy.linalg.cho_solve(factor, cross.T)
         prior_variance = kernel.diagonal(target, values)
@@ -1521,8 +1615,50 @@ class GaussianProcessNoise(NoiseModel):
 
     def check_compatible(self, family: LikelihoodFamily, observed: FunctionSamples) -> None:
         super().check_compatible(family, observed)
+        self._check_circular_solver(family, observed)
         self._solver.check_compatible(self._kernel, observed)
         self._check_hyperparameter_units(observed)
+
+    def _check_circular_solver(
+        self, family: LikelihoodFamily, observed: FunctionSamples
+    ) -> None:
+        """Refuse, by name, a solver that cannot carry the circular GP's two columns.
+
+        **W4.2.** A circular complex GP is two real processes sharing one
+        covariance, so the solver is handed a two-column right-hand side
+        (:class:`GPSolver`, :class:`ComplexGaussianFamily`). ``DenseGP``
+        declares :attr:`GPSolver.STACKED_RESIDUALS`; the O(N) ``QuasisepGP``
+        cannot, and the reason is structural rather than a missing afternoon's
+        work: it needs one ordered one-dimensional coordinate
+        (:attr:`GPSolver.REQUIRES_ORDERED_1D`), and the coordinates of a
+        visibility measurement are a point in the ``(u, v)`` plane at a
+        wavelength — there is no ordering of the plane under which a stationary
+        kernel becomes a function of one coordinate, so the premise of the
+        semiseparable recursion does not hold on this modality at all.
+
+        Checked **before** the solver's own ``check_compatible`` so that this is
+        the message a user sees, exactly as the ``Product`` refusal precedes the
+        generic quasiseparable one: "select one axis to reach the O(N) path" is
+        advice that cannot be taken here, and telling someone to do the
+        impossible is worse than telling them nothing.
+        """
+        if not family.ALLOWS_COMPLEX or np.asarray(observed.values).dtype.kind != "c":
+            return
+        if self._solver.STACKED_RESIDUALS:
+            return
+        raise LikelihoodError(
+            f"the {family.NAME} family on a complex {type(observed).__name__} is the circular "
+            f"complex GP: the real and imaginary parts are two independent real processes "
+            f"sharing one covariance, so the solve takes a two-column right-hand side, and "
+            f"{self._solver.NAME} declares STACKED_RESIDUALS = False. "
+            f"{self._solver.NAME} could not take them even in principle: it needs one ordered "
+            f"one-dimensional coordinate, and a visibility lives at a point of the (u, v) plane "
+            f"at a wavelength, which no ordering reduces to one coordinate. Use DenseGP, with "
+            f"the kernel selecting the axes it acts on -- Matern32(axes=(\"u\", \"v\")) for an "
+            f"isotropic (u, v) kernel, or Product(Matern32(axes=(\"u\", \"v\")), "
+            f"Matern32(axes=(\"spectral_axis\",))) for an error that is smooth in (u, v) and "
+            f"sharp in wavelength."
+        )
 
     def _check_hyperparameter_units(self, observed: FunctionSamples) -> None:
         """Delegated to the kernel tree since W4.5.
@@ -1906,13 +2042,25 @@ class LikelihoodFamily(Parameterised, abc.ABC):
         )
 
     def _gp_analytic_unimplemented(self) -> LikelihoodError:
+        """The staged-combination refusal: declared analytic, not yet computable.
+
+        **Generalised at W4.2.** Until then this message named the one case it
+        had — the circular complex GP, staged for Phase 4 — and the wording was
+        specific to it. Phase 4 implemented that case, so what is left is the
+        *discipline* rather than an instance of it, and the message says what it
+        is for: a family may declare :attr:`ANALYTIC_WITH_GP` before its closed
+        form exists, and composition then refuses rather than falling back to a
+        latent formulation the declaration does not describe.
+        """
         return LikelihoodError(
             f"the {self.NAME} family with a correlated noise model declares "
-            f"Marginalisation.ANALYTIC — the circular (equal-component, "
-            f"zero-pseudo-covariance) complex GP marginalises in closed form — but the "
-            f"implementation is Phase 4's, with the interferometric-visibility modality "
-            f"(DEVELOPMENT_PLAN.md §5). The declaration is fixed now so the freeze can be "
-            f"reviewed against it; until Phase 4 lands, use IndependentNoise with this family."
+            f"Marginalisation.ANALYTIC — its own noise process is Gaussian, so the GP covariance "
+            f"folds into it and integrates out — but "
+            f"{type(self).__name__}.GP_ANALYTIC_IMPLEMENTED is False, so the closed form is "
+            f"declared rather than written. A declared-but-staged combination is refused here "
+            f"instead of being quietly computed some other way, because the other ways are a "
+            f"different model: use IndependentNoise with this family, or implement log_prob's "
+            f"correlated branch and set GP_ANALYTIC_IMPLEMENTED = True."
         )
 
     def __repr__(self) -> str:
@@ -2208,18 +2356,42 @@ class ComplexGaussianFamily(LikelihoodFamily):
     §17 Q6), with the **circular complex GP** as the fixed meaning: one real
     kernel applied independently to the real and imaginary parts — equal
     component covariances, zero pseudo-covariance — which marginalises in
-    closed form exactly as the real Gaussian does. That unblocks the flexible
-    likelihood on the plan's Phase-4 proof modality. The *implementation* is
-    Phase 4's, with the visibility modality, so
-    :attr:`GP_ANALYTIC_IMPLEMENTED` is ``False`` and composing this family
-    with a :class:`GaussianProcessNoise` is refused with a message naming
-    exactly that — a refusal, never a silently different model.
+    closed form exactly as the real Gaussian does.
+
+    **W4.2 implements it**, so :attr:`GP_ANALYTIC_IMPLEMENTED` is now ``True``
+    and the composition that was refused with Phase 4 named is the flexible
+    likelihood on visibilities. The closed form is the real 2N-dimensional
+    Gaussian's, with the block structure used rather than materialised. Write
+    ``S = K(θ) + diag(σ²)`` for the **per-component** covariance; the real
+    ``2N`` covariance of ``(Re r, Im r)`` is ``diag(S, S)``, block diagonal
+    with a zero off-diagonal block — that is exactly what circularity says —
+    so
+
+    ``log p = -½ [ rᵉ ᵀ S⁻¹ rᵉ + rⁱ ᵀ S⁻¹ rⁱ + 2 log|S| + 2N log 2π ]``
+
+    with ``rᵉ`` and ``rⁱ`` the real and imaginary parts of ``observed -
+    predicted``. One factorisation of the ``N × N`` matrix ``S``, two
+    triangular solves against it, ``log|S|`` computed once and counted twice.
+    Forming the ``2N × 2N`` matrix instead would cost eight times as much
+    arithmetic to carry a zero block the model has already declared. The
+    mechanism is :class:`GPSolver`'s ``(n, k)`` right-hand side, with ``k = 2``
+    columns; :attr:`GPSolver.STACKED_RESIDUALS` is the declaration a solver
+    makes that it can take them, and :meth:`GaussianProcessNoise.check_compatible`
+    refuses one that cannot — the O(N) ``QuasisepGP`` — by name.
+
+    **σ is the per-component standard deviation throughout**, as
+    ``results_schema.md`` §16 says a :class:`~ampere.core.VisibilitySet`'s
+    real-valued uncertainty is, and the kernel's ``amplitude`` is a
+    per-component marginal standard deviation for the same reason: ``K``
+    appears once per component in the expression above, so a correlated
+    calibration error of RMS ``a`` in each of the real and the imaginary parts
+    is the kernel with ``amplitude = a``. The total modulus variance
+    ``E|r|²`` is ``2 (K_ii + σ²)``.
     """
 
     NAME: ClassVar[str] = "complex_gaussian"
     ALLOWS_COMPLEX: ClassVar[bool] = True
     ANALYTIC_WITH_GP: ClassVar[bool] = True
-    GP_ANALYTIC_IMPLEMENTED: ClassVar[bool] = False
 
     def log_prob(
         self,
@@ -2228,11 +2400,38 @@ class ComplexGaussianFamily(LikelihoodFamily):
         noise: NoiseParams,
     ) -> float:
         if noise.correlated:
-            raise self._gp_analytic_unimplemented()
+            return self._gp_log_prob(predicted, observed, noise)
         sigma = _independent_sigma(noise, self.NAME)
         residual = np.abs(observed - predicted)
         variance = sigma**2
         return float(np.sum(-(residual**2) / (2.0 * variance) - _LOG_2PI - np.log(variance)))
+
+    def _gp_log_prob(
+        self,
+        predicted: np.ndarray,
+        observed: np.ndarray,
+        noise: NoiseParams,
+    ) -> float:
+        """The circular complex GP marginal (**W4.2**). See the class docstring.
+
+        Three lines of arithmetic, and the whole of the circular model is in the
+        middle one: the complex residual becomes two real columns, and the
+        solver is handed both against **one** covariance. The factorisation is
+        shared because the solver sees one matrix and one two-column right-hand
+        side, not because anything here caches a factor.
+        """
+        assert noise.solver is not None and noise.kernel is not None  # narrowed by .correlated
+        assert noise.coordinates is not None
+        residual = np.asarray(observed, dtype=np.complex128) - np.asarray(
+            predicted, dtype=np.complex128
+        )
+        return noise.solver.log_marginal_likelihood(
+            noise.kernel,
+            noise.coordinates,
+            _stacked_components(residual),
+            noise.variance,
+            noise.values,
+        )
 
     def sample(
         self,
@@ -2260,18 +2459,40 @@ class ComplexGaussianFamily(LikelihoodFamily):
         library's own density does not score, and the error would look like a
         factor nobody could see in an amplitude plot.
 
-        A correlated noise model is refused by the same message the density
-        refuses it with: the circular complex GP is declared analytic and its
-        implementation is Phase 4's (:attr:`GP_ANALYTIC_IMPLEMENTED`), so
-        there is no marginal here to draw from either.
+        **Under a GP (W4.2)** the same circular model governs the draw, which
+        means it is *not* one complex GP realisation but two real ones::
+
+            x = mu + (L z1 + sigma w1) + i (L z1' + sigma w1')
+
+        with ``L`` from :meth:`GPSolver.latent_transform` and the two
+        whitened blocks drawn independently. The two components share the
+        matrix ``L`` — that is the "equal component covariances" half of
+        circularity — and share nothing else — that is the "zero
+        pseudo-covariance" half. Drawing one realisation and using it for both
+        components would give a draw perfectly correlated between real and
+        imaginary parts, whose modulus statistics the density above does not
+        score; the two-column whitened block is what keeps the draw and the
+        density the same distribution. The solver's own ``jitter`` is folded
+        into the diagonal exactly as :meth:`GaussianFamily.sample` folds it,
+        and for the same reason.
         """
-        if noise.correlated:
-            raise self._gp_analytic_unimplemented()
         sigma = _independent_sigma(noise, self.NAME)
         mean = np.asarray(predicted, dtype=np.complex128)
-        real = rng.standard_normal(mean.shape)
-        imaginary = rng.standard_normal(mean.shape)
-        return mean + sigma * (real + 1j * imaginary)
+        if not noise.correlated:
+            real = rng.standard_normal(mean.shape)
+            imaginary = rng.standard_normal(mean.shape)
+            return mean + sigma * (real + 1j * imaginary)
+        assert noise.solver is not None and noise.kernel is not None  # narrowed by .correlated
+        assert noise.coordinates is not None
+        whitened = rng.standard_normal((mean.shape[0], 2))
+        correlated = noise.solver.latent_transform(
+            noise.kernel, noise.coordinates, whitened, noise.values
+        )
+        stabiliser = float(getattr(noise.solver, "jitter", 0.0) or 0.0)
+        scale = sigma if not stabiliser else np.sqrt(sigma**2 + stabiliser**2)
+        independent = rng.standard_normal((mean.shape[0], 2))
+        components = np.asarray(correlated, dtype=DTYPE) + scale[:, None] * independent
+        return mean + components[:, 0] + 1j * components[:, 1]
 
 
 @register_family
@@ -3115,8 +3336,11 @@ class Likelihood(Parameterised):
         limits = self._retained_limits(retain)
 
         if self._noise.CORRELATED:
-            # Reachable only for the Gaussian family: every other implemented
-            # ANALYTIC-with-GP combination is refused at composition.
+            # The Gaussian family, and -- since W4.2 -- the complex Gaussian
+            # one. A complex residual becomes the circular GP's two real
+            # columns, and `conditional_loo` returns one term per *sample*
+            # summing the two components, which is what `results.md` §6's
+            # pointwise group is indexed by.
             coordinates = self._coordinates(observed, retain)
             noise = self._noise.noise_params(
                 observed,
@@ -3131,7 +3355,7 @@ class Likelihood(Parameterised):
             return noise.solver.conditional_loo(
                 noise.kernel,
                 noise.coordinates,
-                observed_values - predicted_values,
+                _stacked_components(observed_values - predicted_values),
                 noise.variance,
                 noise.values,
             )
@@ -3187,6 +3411,12 @@ class Likelihood(Parameterised):
         coordinates = self._coordinates(observed, retain)
         predicted_values = self._retained(predicted, retain, "predicted")
         residual = self._retained(observed, retain, "observed") - predicted_values
+        # Since W4.2 a complex residual conditions as the circular GP's two
+        # columns, and the conditioned mean comes back complex: one signed
+        # deficiency in the real part and one in the imaginary part is what
+        # localises a calibration error on a visibility, where the modulus of
+        # the mean would hide which way the error went.
+        complex_residual = np.asarray(residual).dtype.kind == "c"
         # The prediction is passed here too (ruled 2026-09-03, X-1), so W1.12's
         # diagnostics see the same effective sigma the fit used.
         sigma = self._noise.sigma(observed, retain, resolved, predicted=predicted_values)
@@ -3205,13 +3435,19 @@ class Likelihood(Parameterised):
             if at is None
             else at
         )
-        return self._noise.solver.condition(
+        conditioned = self._noise.solver.condition(
             self._noise.kernel_for(observed),
             coordinates,
-            residual,
+            _stacked_components(residual),
             sigma**2,
             resolved,
             at=target,
+        )
+        if not complex_residual:
+            return conditioned
+        columns = np.asarray(conditioned.mean, dtype=DTYPE)
+        return GPConditional(
+            mean=columns[:, 0] + 1j * columns[:, 1], variance=conditioned.variance
         )
 
     # -- internals -----------------------------------------------------------
