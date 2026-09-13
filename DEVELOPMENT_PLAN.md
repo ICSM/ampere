@@ -606,6 +606,57 @@ reproducible bitwise from the problem's own seed.
   term against its dense closed form. Background and the sparsity-prior
   companion note: `docs/design/horizon_notes.md` §1 and its follow-up.
 
+**Phase 4 as landed (2026-09-11 to 2026-09-13; W4.0–W4.11; the documentation
+pass W4.8 closes it — this paragraph is completed at its merge).** The
+composition design held for a modality nobody wrote the contracts for, and
+then for a second one built by following the first's page. **Placement
+(D1)**: a shipped observable's kind lives in `core/results_schema.py`, its
+steps and models in `backends/{reference,torch,jax}/<observable>.py`, no
+grouping namespace. **Interferometry** (W4.1, W4.3): `VisibilitySet` amended
+to `(u, v, spectral_axis)` and `ClosurePhases` `(u1, v1, u2, v2, spectral_axis)`
+with a canonical baseline ordering (D2, after Peter's chromatic-misspecification
+question: a kernel sees axes only, and a missing band in a patch of sky is
+sharp in wavelength and smooth in spatial frequency); `FourierSample` (a
+direct DFT of a gridded `Image`, coverage from the observed container,
+Nyquist requirements over the expanded coverage), `ClosurePhase`, the
+bandwidth and time smearing steps (the first cross-kind uses of
+`configure_from`), `Amplitude`, three image models and their analytic
+visibility twins, inheriting native twins on both modern backends (the
+declaration written once because a pixel scale written twice would alias
+silently), `VonMisesFamily` implemented with `sample()` and native on both
+backends, NUTS/VI/NPE all recovering the binary. **The circular complex GP**
+(W4.2): one Cholesky with a two-column right-hand side, the `GPSolver`
+contract widened to `(n, k)` residuals behind `STACKED_RESIDUALS`, the O(N)
+path refused structurally, two native-path bugs (the coordinate stack and
+the unbound kernel) fixed; SBC shows the flexible fit calibrated where the
+rigid one is not. **Kernel algebra** (W4.5): seven families with exact
+semiseparable representations (Matérn-5/2 rank 3, `likelihoods.md` §15.3
+withdrawn), `Sum`/`Product`/`SpectralMixture`, the `axes=` selector with the
+per-leaf unit rule, one public `register_quasiseparable_term` registry keyed
+on the family with the array namespace as an argument. **The astropy
+adapter** (W4.6, W4.7): `from_astropy` black-box on the reference backend
+with bounds, fixed values and ties translated and no solid angle invented;
+the opt-in native route with six curated models and compound `+ − * /`,
+tied parameters and `|`/`&` refused by name. **The examples**: the
+photometry + spectrum composition as the simplest combined fit (W4.11, far
+infrared filters; the reference LSF operator cached by W4.0 to make it
+tractable), the interferometry study with SBC-pinned coverage and a
+chromatic arm reported informationally (W4.4), and **astrometry by the
+template** (W4.9): a reflex orbit on two `TimeSeries` channels with no
+change to core, four gaps in the template page found and handed to W4.8.
+**CI** (W4.10): path-gated jobs whose skipped required checks report
+success, typecheck split out of the backend legs, `actionlint` with
+SHA-pinned actions. **Process**: every wave gated once on the merged master
+in all four environments (all green); the token-economy rules of
+`docs/orchestration.md` adopted mid-phase after the session limit killed
+the first wave twice. **Carried to Phase 5 or the owed list**: a latent GP
+on closure phases (W5.1); matrix-free exact GPs for the 3- and 5-axis
+kernels; multi-axis point kinds refused by four of the six plots;
+`NUTSEngine` tuning knobs; the encoding's positional axis alignment; the
+Kronecker structure of dispersed data as the structured-solver route; the
+grouping-namespace question, to be revisited after realistic usage; the
+terra reviews owed on W4.1, W4.2 and W4.5.
+
 ### Phase 5 — Scale-out & advanced inference
 - Approximate GP strategies for images/IFU behind the `GPSolver` /
   `NoiseModel` interface — **SVGP, SKI, Vecchia, HSGP, EFGP, chosen by
