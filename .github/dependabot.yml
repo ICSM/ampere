@@ -1,0 +1,22 @@
+version: 2
+updates:
+  # W4.10 (3): action versions in .github/workflows/*.yml are pinned to a
+  # full commit SHA with a `# vX.Y` comment (pinact style) rather than a
+  # floating tag; Dependabot's github-actions ecosystem understands that
+  # convention and opens a PR that bumps both the SHA and its comment
+  # together when a new release lands, rather than leaving the pin to rot
+  # silently. This is the second half of the "SHA pin + Dependabot" pair
+  # Peter asked for on W3.7's report -- either alone lets versions drift
+  # (a bare SHA pin with nobody watching for updates, or a Dependabot rule
+  # with no pin to update); both together is what actually keeps action
+  # versions current.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "ci"
+      - "dependencies"

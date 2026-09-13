@@ -13,6 +13,49 @@ name: CI
 # disagree, which is the failure mode this workflow is supposed to prevent.
 # The one deliberate exception is `minimal-install`, whose entire point is to
 # be the plainest possible pip install (see its own comment).
+#
+# W4.10: action references below are pinned to a full commit SHA with a
+# `# vX.Y` comment (pinact style) rather than a floating tag, and
+# `.github/dependabot.yml` enables the `github-actions` ecosystem so a
+# version bump is a reviewable PR that updates both the SHA and its
+# comment together, not a silent re-resolution of a tag.
+#
+# --- Path-filter table (W4.10 (2)) -----------------------------------------
+# The `changes` job below computes these buckets from the PR's changed
+# files (`.github/scripts/path_filters.py` is the executable source of
+# truth; this table and docs/development.md's CI section are read-only
+# copies of it, kept for humans who are not about to run the script):
+#
+#   pyproject.toml, pixi.lock, .github/**,              -> everything: dev,
+#   ampere/core/**, ampere/results/**,                     torch, jax, sbi,
+#   ampere/inference/**, and the shared test suites        docs
+#   (tests/{core,results,inference,conformance,m2,
+#   benchmarks,scaling,gpu,characterisation}/**)
+#   ampere/backends/torch/**,                           -> torch, sbi (sbi's
+#   tests/backends/*torch*                                 env installs
+#                                                           torch too)
+#   ampere/backends/jax/**, tests/backends/*jax*        -> jax
+#   ampere/backends/reference/**,                       -> dev only
+#   tests/backends/** (remainder)
+#   examples/sbi/**                                     -> dev, sbi
+#   examples/interferometry/** (W4.4, not landed at     -> dev, torch, jax,
+#   W4.10 -- MARKED SLOT, conservative until the study     sbi (conservative;
+#   defines its own per-file backend split)                narrow when W4.4
+#                                                           lands)
+#   examples/** (remainder), tests/examples/**          -> dev only
+#   docs/**, any *.md                                   -> dev, docs
+#   anything else (unrecognised path)                   -> everything (same
+#                                                           as the first row)
+#
+# A required check skipped by this filter still reports SUCCESS, never
+# "skipped" or "expected": every job below always runs (no job-level `if:`
+# keyed on the filter), and only its *steps* are conditioned on the
+# relevant `needs.changes.outputs.*` flag -- see the `changes` job's own
+# comment for why a top-level `on.push.paths`/`on.pull_request.paths` is
+# deliberately not used instead. Push to master, `workflow_dispatch` and
+# `schedule` runs are never gated -- only pull_request diffs narrow which
+# steps do real work.
+# -----------------------------------------------------------------------
 
 on:
   push:
@@ -43,24 +86,98 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: path filters
+    runs-on: ubuntu-latest
+    # W4.10 (2), path gating. The honest pattern: compute the diff *inside*
+    # the workflow (never `on.push.paths`/`on.pull_request.paths` at the
+    # top of this file -- that would stop the whole workflow from
+    # triggering at all on an unaffected PR, and a required check that
+    # never gets a run sits as "Expected -- Waiting for status to be
+    # reported" forever, hanging branch protection). Every job below always
+    # runs; what a path-filter bucket controls is whether that job's
+    # *steps* do real work or a one-line skip note, so every required-check
+    # name always reports a conclusion, and an unaffected leg reports
+    # SUCCESS, never "skipped" or "expected". See
+    # `.github/scripts/path_filters.py`'s module docstring for the actual
+    # rule table (also reproduced in docs/development.md's CI section) --
+    # this job only calls it; the rules live in one file, not pasted into
+    # both places and left to drift.
+    #
+    # Push to master, `workflow_dispatch` and `schedule` runs are never
+    # gated (the script's fallback is "everything") -- path gating exists
+    # to shorten a PR's feedback loop, not to under-test what actually
+    # lands on master or what a human explicitly asked to run.
+    outputs:
+      run_dev: ${{ steps.filter.outputs.run_dev }}
+      run_torch: ${{ steps.filter.outputs.run_torch }}
+      run_jax: ${{ steps.filter.outputs.run_jax }}
+      run_sbi: ${{ steps.filter.outputs.run_sbi }}
+      run_docs: ${{ steps.filter.outputs.run_docs }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - name: compute path filters
+        id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          python .github/scripts/path_filters.py \
+            --event-name "$EVENT_NAME" --base "$BASE_SHA" --head "$HEAD_SHA" \
+            --github-output "$GITHUB_OUTPUT"
+
   lint:
     name: lint + format-check
     runs-on: ubuntu-latest
+    # Ungated: cheap (well under a minute) and applies to every Python file
+    # regardless of which path-filter bucket it falls in, so there is no
+    # saving from gating it -- see the `changes` job above for the buckets
+    # that DO gate the slower jobs below.
     steps:
-      - uses: actions/checkout@v7
-      - uses: prefix-dev/setup-pixi@v0.10.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
           environments: dev
           cache: true
       - run: pixi run -e dev lint
       - run: pixi run -e dev format-check
 
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    # W4.10 (3): actionlint joins the `dev` toolchain (conda-forge ships a
+    # binary -- `pixi search actionlint` finds it -- so this is a pixi task
+    # like every other check here, not a separate GitHub Action step; see
+    # `pyproject.toml`'s [tool.pixi.tasks] `actionlint` entry). Ungated, same
+    # reasoning as `lint` above: it validates every workflow file, and a
+    # non-workflow PR benefits from it running for free (it costs a few
+    # seconds). It is what makes the SHA-pinning below and in
+    # `.github/dependabot.yml` earn their keep -- a workflow that stops
+    # parsing, or a step that silently drops an input, is caught here
+    # instead of on the next real PR.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+        with:
+          environments: dev
+          cache: true
+      - run: pixi run -e dev actionlint
+
   typecheck:
     name: typecheck (pyrefly, new namespaces)
     runs-on: ubuntu-latest
+    needs: changes
     steps:
-      - uses: actions/checkout@v7
-      - uses: prefix-dev/setup-pixi@v0.10.2
+      - name: "skip note (path-gated: no `run_dev` paths changed)"
+        if: needs.changes.outputs.run_dev != 'true'
+        run: echo "skipped -- see the path-filter table in this workflow's header comment and .github/scripts/path_filters.py"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.run_dev == 'true'
+      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+        if: needs.changes.outputs.run_dev == 'true'
         with:
           environments: dev
           cache: true
@@ -68,13 +185,16 @@ jobs:
       # neither backend extra -- so the task itself excludes
       # ampere/backends/torch and ampere/backends/jax here (they are piles of
       # unresolvable imports without their libraries, not piles of type
-      # errors). Each is checked with its *real* types in the backend-suites
-      # job below, which runs the same task in the environment that has them.
+      # errors). Each is checked with its *real* types in the
+      # backend-typecheck job below, which runs the same task in the
+      # environment that has them.
       - run: pixi run -e dev typecheck
+        if: needs.changes.outputs.run_dev == 'true'
 
   test:
     name: test (py${{ matrix.python }})
     runs-on: ubuntu-latest
+    needs: changes
     strategy:
       fail-fast: false
       matrix:
@@ -85,13 +205,27 @@ jobs:
         # protect it; dropping it later, if it comes to that, is just
         # deleting "311" from this list.
         python: ["311", "312", "313"]
+    # Path-gated on `run_dev` (this matrix is a `dev`-feature-set
+    # environment per Python version -- no torch/jax extra -- so it is
+    # unaffected by a torch- or jax-only change; see the `changes` job and
+    # .github/scripts/path_filters.py). Every step below carries the same
+    # `if:` rather than the job itself, so an unaffected PR still reports
+    # "test (py311)" etc. as a green, completed check -- never skipped or
+    # absent -- which is what keeps a required check honest for branch
+    # protection.
     steps:
-      - uses: actions/checkout@v7
-      - uses: prefix-dev/setup-pixi@v0.10.2
+      - name: "skip note (path-gated: no `run_dev` paths changed)"
+        if: needs.changes.outputs.run_dev != 'true'
+        run: echo "skipped -- see the path-filter table in this workflow's header comment and .github/scripts/path_filters.py"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.run_dev == 'true'
+      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+        if: needs.changes.outputs.run_dev == 'true'
         with:
           environments: test-py${{ matrix.python }}
           cache: true
       - name: fast tests (with coverage)
+        if: needs.changes.outputs.run_dev == 'true'
         run: pixi run -e test-py${{ matrix.python }} pytest tests/test_imports.py --cov=ampere --cov-report=xml --cov-report=term
       # Characterisation suite (W0.4/W0.5, "legacy still works"): runs here
       # in [dev,zeus,extinction] -- no `sbi` extra, so torch is never
@@ -105,6 +239,7 @@ jobs:
       # characterisation job below for the torch/sbi-inclusive run this
       # deliberately excludes.
       - name: characterisation suite (emcee/dynesty/zeus; sbi skips cleanly)
+        if: needs.changes.outputs.run_dev == 'true'
         run: pixi run -e test-py${{ matrix.python }} test-characterisation
       # W0.10: tests/core and tests/conformance (which imports core) run on
       # every matrix leg, not just py3.13 -- the py3.11 core-import break
@@ -130,17 +265,23 @@ jobs:
       # where it also serves its other purpose (registry-leak containment in a
       # shared pytest process).
       - name: "phase 1 suite: core (py${{ matrix.python }})"
+        if: needs.changes.outputs.run_dev == 'true'
         run: pixi run -e test-py${{ matrix.python }} test-core
       - name: "phase 1 suite: results (py${{ matrix.python }})"
+        if: needs.changes.outputs.run_dev == 'true'
         run: pixi run -e test-py${{ matrix.python }} test-results
       - name: "phase 1 suite: conformance (py${{ matrix.python }})"
+        if: needs.changes.outputs.run_dev == 'true'
         run: pixi run -e test-py${{ matrix.python }} conformance
       - name: "backends suite (py${{ matrix.python }})"
+        if: needs.changes.outputs.run_dev == 'true'
         run: pixi run -e test-py${{ matrix.python }} test-backends
       - name: "inference suite (py${{ matrix.python }})"
+        if: needs.changes.outputs.run_dev == 'true'
         run: pixi run -e test-py${{ matrix.python }} test-inference
       - name: upload coverage
-        uses: actions/upload-artifact@v7
+        if: needs.changes.outputs.run_dev == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: coverage-py${{ matrix.python }}
           path: coverage.xml
@@ -149,6 +290,10 @@ jobs:
   suites:
     name: new-namespace suites (dev)
     runs-on: ubuntu-latest
+    needs: changes
+    # Path-gated on `run_dev` -- see the `changes` job and
+    # .github/scripts/path_filters.py's rule table.
+    #
     # W0.10: `ci.yml` never ran tests/core, tests/results or
     # tests/conformance before this job -- see that item's report for the
     # py3.11 core-import break (fixed a8e6f54) that only W1.10's manual
@@ -176,35 +321,99 @@ jobs:
     # registers a likelihood family at import, which is the exact shape of the
     # leak this job exists to catch.
     steps:
-      - uses: actions/checkout@v7
-      - uses: prefix-dev/setup-pixi@v0.10.2
+      - name: "skip note (path-gated: no `run_dev` paths changed)"
+        if: needs.changes.outputs.run_dev != 'true'
+        run: echo "skipped -- see the path-filter table in this workflow's header comment and .github/scripts/path_filters.py"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.run_dev == 'true'
+      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+        if: needs.changes.outputs.run_dev == 'true'
         with:
           environments: dev
           cache: true
       - run: pixi run -e dev test-all
+        if: needs.changes.outputs.run_dev == 'true'
       # W2.11, DEVELOPMENT_PLAN.md §5 Phase 2: "benchmark suite ... with
       # results tracked as CI artefacts". The reference backend's row. Runs
       # after the suites, in the same job, so the environment is set up once
       # and the two never contend for the runner's memory (see
       # backend-suites' note on that).
       - run: pixi run -e dev bench
+        if: needs.changes.outputs.run_dev == 'true'
       - name: upload benchmark results
-        # `if: always()` so a red suite still publishes whatever the
-        # benchmark step managed -- but note the step above is skipped when
-        # `test-all` fails, so in practice this uploads nothing then. It is
-        # here for the opposite case: a benchmark row that fails still leaves
-        # its partial JSON attached to the PR, which is when a reviewer most
-        # wants it.
-        if: always()
-        uses: actions/upload-artifact@v7
+        # `always()` so a red suite still publishes whatever the benchmark
+        # step managed -- but note the step above is skipped when `test-all`
+        # fails, so in practice this uploads nothing then. It is here for the
+        # opposite case: a benchmark row that fails still leaves its partial
+        # JSON attached to the PR, which is when a reviewer most wants it.
+        # Still gated on `run_dev` (`&&`, not `always()` alone) so a skipped
+        # leg does not spend a step trying to upload a file that was never
+        # produced.
+        if: needs.changes.outputs.run_dev == 'true' && always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: benchmarks-dev
           path: benchmark.json
           if-no-files-found: ignore
 
+  backend-typecheck:
+    name: typecheck (pyrefly, ${{ matrix.environment }})
+    runs-on: ubuntu-latest
+    needs: changes
+    # W4.10 (1), ruled by Peter on W3.7's report: `typecheck` split out of
+    # each five-suite leg into its own matrix job, so the slow `sbi` leg's
+    # critical path in `backend-suites` below is `test-all` alone -- this
+    # job and `backend-suites` are independent jobs (no `needs:` between
+    # them), so they run concurrently rather than one serialising in front
+    # of the other inside a shared job. The trade-off is one extra
+    # environment install per leg; `cache: true` (setup-pixi) is what keeps
+    # that cheap.
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [torch, jax, sbi]
+    steps:
+      - name: decide whether this leg's real work runs
+        id: gate
+        run: |
+          case "${{ matrix.environment }}" in
+            torch) echo "run=${{ needs.changes.outputs.run_torch }}" >> "$GITHUB_OUTPUT" ;;
+            jax)   echo "run=${{ needs.changes.outputs.run_jax }}" >> "$GITHUB_OUTPUT" ;;
+            sbi)   echo "run=${{ needs.changes.outputs.run_sbi }}" >> "$GITHUB_OUTPUT" ;;
+          esac
+      - name: "skip note (path-gated: no paths for this leg changed)"
+        if: steps.gate.outputs.run != 'true'
+        run: echo "skipped -- see the path-filter table in this workflow's header comment and .github/scripts/path_filters.py"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: steps.gate.outputs.run == 'true'
+      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+        if: steps.gate.outputs.run == 'true'
+        with:
+          environments: ${{ matrix.environment }}
+          cache: true
+      # The environment's own types, with its real libraries present. The
+      # `dev` typecheck job above cannot do this -- it excludes both backends
+      # precisely because neither library is installed there -- so this step
+      # is the only place ampere/backends/${{ matrix.environment }} is
+      # actually type-checked (for `sbi`, that means `ampere/backends/torch`,
+      # since jax is absent there too), and, for `sbi` specifically, the only
+      # place `ampere/inference/_sbi.py` is checked with the real `sbi`
+      # package installed rather than an untyped lazy import.
+      - run: pixi run -e ${{ matrix.environment }} typecheck
+        if: steps.gate.outputs.run == 'true'
+
   backend-suites:
     name: new-namespace suites (${{ matrix.environment }})
     runs-on: ubuntu-latest
+    needs: changes
+    # Path-gated per leg (`run_torch`/`run_jax`/`run_sbi`) -- see the
+    # `changes` job and .github/scripts/path_filters.py's rule table. The
+    # `typecheck` step this job used to run first is now `backend-typecheck`
+    # above, a separate job on the same matrix (W4.10 (1)): the two run
+    # concurrently rather than one serialising in front of the other, so
+    # this job's own critical path -- the slow `sbi` leg in particular -- is
+    # `test-all` alone.
+    #
     # W2.11, and DEVELOPMENT_PLAN.md §5's Phase 2 line ("separate torch, jax
     # and no-extras jobs"). W3.7 added `sbi` as this matrix's third leg,
     # promoting it from the non-blocking weekly `sbi-characterisation` job
@@ -252,31 +461,36 @@ jobs:
       matrix:
         environment: [torch, jax, sbi]
     steps:
-      - uses: actions/checkout@v7
-      - uses: prefix-dev/setup-pixi@v0.10.2
+      - name: decide whether this leg's real work runs
+        id: gate
+        run: |
+          case "${{ matrix.environment }}" in
+            torch) echo "run=${{ needs.changes.outputs.run_torch }}" >> "$GITHUB_OUTPUT" ;;
+            jax)   echo "run=${{ needs.changes.outputs.run_jax }}" >> "$GITHUB_OUTPUT" ;;
+            sbi)   echo "run=${{ needs.changes.outputs.run_sbi }}" >> "$GITHUB_OUTPUT" ;;
+          esac
+      - name: "skip note (path-gated: no paths for this leg changed)"
+        if: steps.gate.outputs.run != 'true'
+        run: echo "skipped -- see the path-filter table in this workflow's header comment and .github/scripts/path_filters.py"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: steps.gate.outputs.run == 'true'
+      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+        if: steps.gate.outputs.run == 'true'
         with:
           environments: ${{ matrix.environment }}
           cache: true
-      # The environment's own types, with its real libraries present. The
-      # `dev` typecheck job above cannot do this -- it excludes both backends
-      # precisely because neither library is installed there -- so this step
-      # is the only place ampere/backends/${{ matrix.environment }} is
-      # actually type-checked (for `sbi`, that means `ampere/backends/torch`,
-      # since jax is absent there too), and, for `sbi` specifically, the only
-      # place `ampere/inference/_sbi.py` is checked with the real `sbi`
-      # package installed rather than an untyped lazy import.
-      - run: pixi run -e ${{ matrix.environment }} typecheck
       - run: pixi run -e ${{ matrix.environment }} test-all
+        if: steps.gate.outputs.run == 'true'
       # W3.7: `sbi`'s environment already contains `torch`, so running
       # `tests/benchmarks/` there would benchmark the same backend code the
       # `torch` leg already covers -- a second copy of the same numbers, not
       # a new one -- so this step and the upload below are skipped for `sbi`.
       - name: benchmarks (torch, jax only; sbi would duplicate torch's)
-        if: matrix.environment != 'sbi'
+        if: steps.gate.outputs.run == 'true' && matrix.environment != 'sbi'
         run: pixi run -e ${{ matrix.environment }} bench
       - name: upload benchmark results
-        if: always() && matrix.environment != 'sbi'
-        uses: actions/upload-artifact@v7
+        if: steps.gate.outputs.run == 'true' && matrix.environment != 'sbi' && always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: benchmarks-${{ matrix.environment }}
           path: benchmark.json
@@ -285,6 +499,10 @@ jobs:
   docs:
     name: docs build
     runs-on: ubuntu-latest
+    needs: changes
+    # Path-gated on `run_docs` -- see the `changes` job and
+    # .github/scripts/path_filters.py's rule table.
+    #
     # W2.11. DEVELOPMENT_PLAN.md §5 asked for this at Phase 1 ("Sphinx docs
     # build check with warnings-as-errors") and it never landed, because
     # `pixi run docs` was red on master for four environment reasons that had
@@ -306,16 +524,26 @@ jobs:
     # anyway: the documentation *builds*, from a clean clone, in a declared
     # environment, on every PR.
     steps:
-      - uses: actions/checkout@v7
-      - uses: prefix-dev/setup-pixi@v0.10.2
+      - name: "skip note (path-gated: no `run_docs` paths changed)"
+        if: needs.changes.outputs.run_docs != 'true'
+        run: echo "skipped -- see the path-filter table in this workflow's header comment and .github/scripts/path_filters.py"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.run_docs == 'true'
+      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+        if: needs.changes.outputs.run_docs == 'true'
         with:
           environments: dev
           cache: true
       - run: pixi run -e dev docs
+        if: needs.changes.outputs.run_docs == 'true'
 
   minimal-install:
     name: minimal install (no extras)
     runs-on: ubuntu-latest
+    needs: changes
+    # Path-gated on `run_dev` -- see the `changes` job and
+    # .github/scripts/path_filters.py's rule table.
+    #
     # Deliberately NOT pixi: this job's entire point is to catch lazy-
     # import regressions under the plainest possible install --
     # `pip install -e .` with none of the optional extras -- which is
@@ -330,18 +558,29 @@ jobs:
     # assertion: none of ampere.core, ampere.inference or ampere.results may
     # reach an array library that is not installed here.
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - name: "skip note (path-gated: no `run_dev` paths changed)"
+        if: needs.changes.outputs.run_dev != 'true'
+        run: echo "skipped -- see the path-filter table in this workflow's header comment and .github/scripts/path_filters.py"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.run_dev == 'true'
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        if: needs.changes.outputs.run_dev == 'true'
         with:
           python-version: "3.13"
       - run: pip install -e .
+        if: needs.changes.outputs.run_dev == 'true'
       - run: python -c "import ampere"
+        if: needs.changes.outputs.run_dev == 'true'
       - name: the new namespaces import without torch or jax
+        if: needs.changes.outputs.run_dev == 'true'
         run: python -c "import ampere.core, ampere.inference, ampere.results"
       - name: torch and jax are genuinely absent, so the step above proves something
+        if: needs.changes.outputs.run_dev == 'true'
         run: python -c "import importlib.util as u; assert u.find_spec('torch') is None and u.find_spec('jax') is None, 'this job must have neither backend library installed'"
       - run: pip install pytest
+        if: needs.changes.outputs.run_dev == 'true'
       - run: pytest tests/test_imports.py
+        if: needs.changes.outputs.run_dev == 'true'
 
   sbi-characterisation:
     name: characterisation suite (with sbi extra)
@@ -362,10 +601,15 @@ jobs:
     # the two jobs cover disjoint code and neither makes the other
     # redundant. This one stays weekly/on-demand because it is still a large
     # download relative to what it alone would justify on every PR.
+    # Not path-gated (deliberately): scheduled/manual runs are outside the
+    # PR path-filter entirely -- see the `changes` job's comment and
+    # .github/scripts/path_filters.py's "non-pull_request events... fall
+    # back to everything" note. This `if:` is its pre-existing
+    # schedule/workflow_dispatch guard, unrelated to path gating.
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
-      - uses: actions/checkout@v7
-      - uses: prefix-dev/setup-pixi@v0.10.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
           environments: sbi
           cache: true
