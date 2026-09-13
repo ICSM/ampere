@@ -1024,6 +1024,21 @@ core is the vocabulary, not the library.
 | Fourier sampling | `Image` → `VisibilitySet` | none | `intervals` on `x`/`y` from the field of view, `max_step` from the longest baseline |
 | Response matrix (RMF/ARF) | `Spectrum` → `Spectrum` | usually none (the matrix is a buffer); a fitted gain or livetime is an ordinary parameter, and the matrix is then rebuilt inside `apply` | `points` at the matrix's own tabulated energies |
 
+*(Amended W4.8: this section's title says "implementations in Phase 2", and
+most of the table did land there — but the row order above is no longer one
+module. The spectral/photometric rows (LSF convolution, spectral resampling,
+synthetic photometry, calibration, response matrix) live in each backend's
+`instrument.py`; Fourier sampling landed at W4.1 in each backend's
+`interferometry.py`, alongside two rows this table never named at the
+freeze — `BandwidthSmearing` and `TimeSmearing`, both `VisibilitySet` →
+`VisibilitySet`, publishing nothing themselves and instead reading the
+extra `(u, v)` sub-samples `FourierSample` computes for them through
+`configure_from` — gap I-3's mechanism (§5 above), with the concrete steps
+closed at W4.1; epoch sampling landed at W4.9 in each backend's
+`astrometry.py`. One name per standard
+transformation, one module per observable, no grouping namespace — D1's
+ruling, `architecture.md` §3.)*
+
 Two of them are worth a note. A **response matrix is a matrix multiply**, so
 X-ray forward folding is an ordinary `Transformation` and needs nothing special
 — `results_schema.md` §16 asks W1.11 to confirm that `Spectrum` with an energy

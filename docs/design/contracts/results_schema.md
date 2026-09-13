@@ -1045,7 +1045,17 @@ Each of these is a decision, not an oversight. Each has an extension point.
    fast paths; `Axis` gains a field when a consumer needs one.
 4. **No unit on `extra_coords`.** They are labels, and a labelled quantity that
    needs a unit is arguably an axis. If W1.6 wants a per-point frequency with
-   units, `extra_coords` should become a mapping of `Axis`.
+   units, `extra_coords` should become a mapping of `Axis`. *(Amended W4.8:
+   the limitation stands, and Phase 4 chose the other half of its own
+   sentence instead — "arguably an axis" turned out to be simply an axis.
+   `interferometry.md`'s Q2 asked for per-visibility frequency with units,
+   and W4.1 gave `VisibilitySet` a third first-class axis, `spectral_axis`,
+   rather than extending `extra_coords`. The reason was a kernel: a kernel
+   sees a container's declared axes and nothing else, and the chromatic case
+   (`phase4_placement_memo.md` §3.6) needed a coordinate a kernel's `axes=`
+   selector could act on, which a label never could have supplied whatever
+   unit it carried. `extra_coords` remains unit-less and unchanged; the
+   extension point this item names was not the one Phase 4 needed.)*
 5. **No cross-channel consistency checks.** Nothing verifies that two channels
    claiming to be the same model's output share a unit or overlap sensibly. That
    is composition's job (W1.5) and it needs the instruments to say what they

@@ -339,7 +339,9 @@ Written that way it was composed, aligned and evaluated against the merged code
 with no change to `ampere.core`. **Verdict on Q3: `VonMisesFamily` does not need
 to be implemented before the spec freeze**, because implementing it needs no
 contract amendment. It should be implemented with Phase 4, and `IMPLEMENTED`
-flipped then. What *does* need to land in the freeze is gap I-5 below — a
+flipped then. *(Amended W4.8: done — landed at W4.1, `IMPLEMENTED = True`, the
+six-line sketch above essentially unchanged; see the class docstring.)* What
+*does* need to land in the freeze is gap I-5 below — a
 family-level composition-time hook — which is a genuine interface addition that
 this family is the first to need.
 
@@ -560,7 +562,9 @@ and two documentation obligations.
 ### I-1 — `check_alignment` does not compare value dtypes, so a complex prediction can be fitted against real amplitudes
 
 *Ruled 2026-09-02: **approved and landed** — `check_alignment` compares value
-dtype kinds, with the proposed message.*
+dtype kinds, with the proposed message.* *(Amended W4.8: exercised as
+predicted — W4.2's own report confirms "`check_alignment`'s dtype check
+(gap I-1) still catches an amplitude fit".)*
 
 **Severity: defect.** This is the only kind in the schema for which both a real
 and a complex value array are legal, so it is the only place this can happen —
@@ -605,7 +609,10 @@ rule is now stated in `transformations.md` §10 (every coordinate-reproducing
 step takes the observed coordinates from the observed container, never
 recomputes them), in `likelihoods.md` §16's W1.5 bullet, and in the
 `Dataset` docstring on the caller side. No tolerance was added: the check
-stays load-bearing and exact.*
+stays load-bearing and exact.* *(Amended W4.8: the concrete instances are
+`FourierSample.from_observed` (W4.1) and `EpochSample.from_observed` (W4.9),
+both reading the observed container's own coordinates rather than
+recomputing them.)*
 
 **Severity: documentation, with a real trap behind it.** `Axis.__eq__` uses
 `np.array_equal`, so `check_alignment` requires the Fourier step's `(u, v)`
@@ -637,7 +644,11 @@ note, and `likelihoods.md` §16's W1.5 bullet:
 *Ruled 2026-09-03: **approved and landed at the freeze** — the chain-internal
 `configure_from(downstream)` is in the contract (`transformations.md` §5),
 called once per step at `Instrument` construction; `pull_back` is not
-adopted. The concrete smearing steps remain Phase 4's.*
+adopted. The concrete smearing steps remain Phase 4's.* *(Amended W4.8: landed
+at W4.1 — `BandwidthSmearing` and `TimeSmearing` in
+`backends/reference/interferometry.py`, with `FourierSample` using
+`configure_from` to learn how many extra `(u, v)` sub-samples they need,
+exactly the mechanism this gap proposed.)*
 
 **Severity: expressiveness; a real loss of reuse, with a workaround.** Bandwidth
 smearing and time smearing are ordinary, reusable interferometric effects whose
@@ -683,7 +694,9 @@ the `pull_back` sketch with the honest statement:
 *Ruled 2026-09-03: **approved and landed at the freeze** — `compile_for`
 raises `CompositionError` when it cannot honour a requirement
 (`transformations.md` §7), with `FittingProblem(lenient_compile=True)` the
-explicit warning-and-proceed opt-out.*
+explicit warning-and-proceed opt-out.* *(Amended W4.8: the concrete instance
+is `FourierSample`'s Nyquist requirement, `max_step = 1/(2 s u_max)`, refused
+by `compile_for` rather than aliased — landed at W4.1.)*
 
 **Severity: this modality upgrades §15.3 from "would be nice" to "should be
 decided".** `transformations.md` §15.3 asks whether a model should be able to
@@ -711,7 +724,9 @@ implementation: `check_observed` is called on the observed container only —
 the unit-equality check already forces the two containers to agree on
 everything a container carries, and value-range properties genuinely differ
 between them (a Poisson rate is not an integer, and would fail the very check
-its counts must pass).*
+its counts must pass).* *(Amended W4.8: the concrete instance predicted here
+is `VonMisesFamily.check_observed`, landed at W4.1 — a family handed degrees
+instead of radians is refused by name rather than scored as nonsense.)*
 
 **Severity: interface addition; should land in the freeze.** `check_alignment`
 calls `self._noise.check_compatible(family, observed)` — the *noise model* gets
@@ -755,7 +770,10 @@ I-2's landed rule (the `Dataset` docstring now states the caller
 obligation); items 2 and 4 by W1.7 as merged (`inference.md` §8: once,
 jointly; `LikelihoodError` → −inf with a recorded reason); item 3 by
 W1.7's dataset-label refusal plus the 2026-09-03 instrument-label ruling
-landed at W1.13.*
+landed at W1.13.* *(Amended W4.8: all four are now exercised by a real
+two-dataset composition — W4.1's visibilities-plus-closure-phases fit on one
+`sky` channel, with `label="vis"`/`label="t3"` naming item 3's collision
+explicitly, as `interferometry.rst` §4 walks through.)*
 
 None of these invents W1.7's API; they are properties its `Dataset` /
 `DatasetCollection` must have for this modality to compose.
@@ -796,6 +814,18 @@ with `results_schema.md` §17 Q5: yes eventually, `extra_coords` gains
 Q4 — closed by `results_schema.md` §17 Q4's ruling: `(x, y, spectral)`
 confirmed, this sketch's own analysis (the spatial axes stay adjacent
 under a Fourier consumer) being part of the evidence.
+
+*(Amended W4.8, checked against the code.* Q1 **landed at W4.2**:
+`GP_ANALYTIC_IMPLEMENTED = True`, the closed form §7 describes. Q2 **landed
+differently, at W4.1**: `extra_coords` did not gain `Axis` support at all;
+instead `VisibilitySet` gained a third first-class axis, `spectral_axis`,
+because the chromatic case (`phase4_placement_memo.md` §3.6) needed a
+coordinate a kernel's `axes=` selector could see, not a label — see the
+preamble above and `interferometry.rst` §1's "chromatic amendment" section.
+Q3 **decided at W4.1**: `ClosurePhases` is the four-axis form plus
+`spectral_axis` (five axes total), with the canonical ordering fixed in the
+kind's own docstring, resolving the sketch's "four axes vs. a `triangle`
+label" question in favour of the axes. Q4 is undisturbed by Phase 4.*)*
 
 1. **Should `complex_gaussian` + `GaussianProcessNoise` be declared `ANALYTIC`
    (§7)?** This sketch recommends yes, with the circular (equal-component,

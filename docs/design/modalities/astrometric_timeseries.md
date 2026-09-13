@@ -14,6 +14,17 @@ astrometry is chosen for in `DEVELOPMENT_PLAN.md` §5's target-scope list:
 correlated timing residuals as a genuine time-domain flexible likelihood,
 not just an independent-noise fit with a fancy container.
 
+*(Amended W4.8: landed at W4.9, by the interferometry template of
+`interferometry.rst` rather than as a fresh sketch-to-code translation —
+`ampere.backends.reference.astrometry.ReflexOrbit` and `.EpochSample` are
+this sketch's `ReflexOrbit`/`EpochSampling` under the shipped naming
+convention, essentially unchanged in shape. The joint 2-vector GP gap below
+is exactly as deferred: W4.9 ships two independent `QuasisepGP`s, one per
+coordinate, not the coregionalised pair this section asks for. See
+`docs/source/astrometry.rst` for what W4.9 found that this sketch could not
+have anticipated — chiefly, that a periodic model needs its own discussion
+of prior width, which is not a composition question at all.)*
+
 ## 1. The model: a reflex orbit, on two channels
 
 `results_schema.md` §15.2 rules that a vector-valued observable (Stokes

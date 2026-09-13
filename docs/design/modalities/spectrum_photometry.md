@@ -116,6 +116,23 @@ Calibration must come **before** the kind change (`ACCEPTS = (Spectrum,)`
 on both steps) — `Instrument` checks this at construction
 (`transformations.md` §5) and refuses the reverse order outright.
 
+*(Amended W4.8: the constructor above is the sketch's "contract shape only"
+placeholder and pre-dates what shipped. The real
+`ampere.backends.reference.SyntheticPhotometry` — the fix for gap 1 below,
+first exercised by W4.11's `examples/sed_composition` — takes
+`(filters, wavelength, response, *, detector, pivots=None, ...)`: `detector`
+is a **required** `"photon"`/`"energy"` convention per filter (ruled by Peter
+2026-09-05, `DEVELOPMENT_PLAN.md` §2, since the reference backend is the
+conformance oracle and the two conventions give different numbers), `pivots`
+is optional and computed from the responses when omitted, and `apply` reads
+the compiled container through `Axis.locate` (gap 1's fix) rather than
+positionally. A filter-library route, `SyntheticPhotometry.from_library`,
+reads each filter's convention from `ampere`'s bundled pyphot metadata, so a
+caller need not always pass a bare response matrix as this sketch does. The
+transferable shape — filters, a tabulation buffer, a response buffer,
+`PRODUCES = PhotometricPoints` — is unchanged; only the constructor's
+keywords and the positional-read fix moved past this sketch.)*
+
 ## 3. Negotiation, once
 
 ```pycon
