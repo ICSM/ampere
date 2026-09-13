@@ -58,6 +58,8 @@ from ampere.backends.torch import (  # noqa: E402  (after the importorskip, deli
     lower_problem,
 )
 from ampere.core import (  # noqa: E402
+    ClosurePhases,
+    ComplexGaussianFamily,
     Dataset,
     DatasetCollection,
     FittingProblem,
@@ -66,6 +68,8 @@ from ampere.core import (  # noqa: E402
     Likelihood,
     Spectrum,
     Tie,
+    VisibilitySet,
+    VonMisesFamily,
     realise,
 )
 
@@ -430,3 +434,165 @@ class TestChunkSharding:
             pytest.skip("this process is already in a torch.distributed group")
         with pytest.raises(LoweringError, match="process group"):
             DistributedSharder()
+
+
+# ---------------------------------------------------------------------------
+# The Phase 4 modality's placement (W4.3)
+# ---------------------------------------------------------------------------
+
+#: A two-baseline, one-triangle array, inline and tiny. Self-contained on
+#: purpose: the *arithmetic* of the interferometric twins is held to the
+#: reference backend on the CPU by ``tests/backends/test_native_interferometry.py``
+#: and by the conformance battery, so what is left for a GPU row is the
+#: **placement** — and a placement row should not also carry a synthetic source,
+#: a negotiated grid and a noise realisation it cannot check.
+_UV = np.array([1.0e7, -1.6e7, 0.6e7])
+_VV = np.array([0.4e7, 1.2e7, -1.6e7])
+_WAVES = np.full(3, 2.2)
+_FIELD_OF_VIEW = 40.0
+
+
+def _visibilities() -> VisibilitySet:
+    """Three baselines with a real error bar apiece."""
+    return VisibilitySet(
+        _UV,
+        _VV,
+        _WAVES * u.micron,
+        np.array([0.9 + 0.1j, 0.6 - 0.2j, 0.8 + 0.05j]) * u.Jy,
+        uncertainty=np.full(3, 0.02) * u.Jy,
+    )
+
+
+def _closure_phases() -> ClosurePhases:
+    """One triangle, whose third baseline is the negated sum of the stored two."""
+    return ClosurePhases(
+        _UV[:1],
+        _VV[:1],
+        _UV[1:2],
+        _VV[1:2],
+        _WAVES[:1] * u.micron,
+        np.array([-0.4]) * u.rad,
+        uncertainty=np.full(1, 0.05) * u.rad,
+    )
+
+
+def interferometric_problem(device: str = DEVICE) -> FittingProblem:
+    """Visibilities and closure phases from one sky, every piece on *device*."""
+    from ampere.backends.torch import interferometry as itf
+
+    visibility = _visibilities()
+    phase = _closure_phases()
+    model = itf.Binary.on_field(
+        _FIELD_OF_VIEW * u.mas,
+        8,
+        channels="sky",
+        separation=st.uniform(6.0, 14.0),
+        position_angle=0.7,
+        flux_ratio=st.uniform(0.1, 0.7),
+        flux=1.7,
+        component_fwhm=2.0,
+        device=device,
+    )
+    return FittingProblem(
+        model,
+        [
+            Dataset(
+                visibility,
+                Instrument(
+                    [
+                        itf.FourierSample.from_observed(
+                            visibility, field_of_view=_FIELD_OF_VIEW * u.mas, device=device
+                        )
+                    ],
+                    channel="sky",
+                    label="vis",
+                ),
+                Likelihood(ComplexGaussianFamily(), IndependentNoise(device=device)),
+                label="vis",
+            ),
+            Dataset(
+                phase,
+                Instrument(
+                    [
+                        itf.FourierSample.from_observed(
+                            phase, field_of_view=_FIELD_OF_VIEW * u.mas, device=device
+                        ),
+                        itf.ClosurePhase(device=device),
+                    ],
+                    channel="sky",
+                    label="t3",
+                ),
+                Likelihood(VonMisesFamily(), IndependentNoise(device=device)),
+                label="t3",
+            ),
+        ],
+        seed=SEED,
+    )
+
+
+class TestTheInterferometricTwinsComposeOnTheDevice:
+    """``declared_capabilities``' device rule, for Phase 4's proof modality.
+
+    The reason this row exists is :class:`TestTheDeviceRuleComposes`'s: a Fourier
+    step built on the CPU beside a sky model on the GPU is a configuration error
+    torch would otherwise surface as a device mismatch inside the first
+    contraction — or not at all, since it broadcasts a CPU scalar against a CUDA
+    tensor without complaint.
+    """
+
+    def test_every_interferometric_part_declares_the_device(self) -> None:
+        problem = interferometric_problem()
+        assert problem.device == DEVICE
+        parts = (*problem.models.values(), *problem.datasets.capability_parts)
+        assert {str(part.DEVICE) for part in parts} == {DEVICE}
+
+    def test_the_realised_density_and_its_gradient_live_on_the_device(self) -> None:
+        """A DFT of a model image, contracted and differentiated on the accelerator."""
+        problem = interferometric_problem()
+        lowered = lower_problem(problem)
+        theta = _start(problem).clone().requires_grad_(True)
+        value = lowered.log_prob_unconstrained(theta)
+        assert value.device.type == torch.device(DEVICE).type
+        assert bool(torch.isfinite(value))
+        value.backward()
+        assert theta.grad is not None
+        assert theta.grad.device.type == torch.device(DEVICE).type
+        assert bool(torch.isfinite(theta.grad).all())
+
+    def test_a_cpu_step_in_a_device_problem_is_refused_at_composition(self) -> None:
+        """Per-instance placement, so the mistake is loud rather than silent."""
+        from ampere.backends.torch import interferometry as itf
+        from ampere.core.exceptions import DatasetError
+
+        visibility = _visibilities()
+        with pytest.raises(DatasetError, match="different devices"):
+            FittingProblem(
+                itf.Binary.on_field(
+                    _FIELD_OF_VIEW * u.mas,
+                    8,
+                    channels="sky",
+                    separation=st.uniform(6.0, 14.0),
+                    position_angle=0.7,
+                    flux_ratio=st.uniform(0.1, 0.7),
+                    flux=1.7,
+                    component_fwhm=2.0,
+                    device=DEVICE,
+                ),
+                [
+                    Dataset(
+                        visibility,
+                        Instrument(
+                            [
+                                itf.FourierSample.from_observed(
+                                    visibility, field_of_view=_FIELD_OF_VIEW * u.mas
+                                )
+                            ],
+                            channel="sky",
+                            label="vis",
+                        ),
+                        Likelihood(ComplexGaussianFamily(), IndependentNoise(device=DEVICE)),
+                        label="vis",
+                    )
+                ],
+                seed=SEED,
+            )

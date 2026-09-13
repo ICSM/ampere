@@ -55,7 +55,18 @@ import scipy.stats as st
 
 from ampere.backends.jax import (
     SHO,
+    Amplitude,
+    BandwidthSmearing,
+    Binary,
+    BinaryVisibilities,
     CalibrationScale,
+    ClosurePhase,
+    FourierSample,
+    GaussianSource,
+    GaussianSourceVisibilities,
+    TimeSmearing,
+    UniformDisc,
+    UniformDiscVisibilities,
     DenseGP,
     GaussianProcessNoise,
     IndependentNoise,
@@ -69,6 +80,8 @@ from ampere.backends.jax import (
     SquaredExponential,
     configure_x64,
 )
+from ampere.backends.jax._config import require_x64
+from ampere.backends.jax._device import DEVICE
 from ampere.backends.jax.models import _SpectralModel
 from ampere.backends.jax.parameters import LoweredParameterSet
 from ampere.core import (
@@ -82,6 +95,7 @@ from ampere.core import (
     PhotometricPoints,
     Spectrum,
     Transformation,
+    VisibilitySet,
     propagate_mask,
 )
 
@@ -89,12 +103,14 @@ from ._kernels import build_kernel
 from ..protocol import (
     BackendCapabilities,
     CovarianceSpec,
+    InterferometryPieces,
     KernelFamily,
     ModelKind,
     ModelSpec,
     SolverKind,
     TransformationKind,
     TransformationSpec,
+    complex_axes,
 )
 from .reference import influence_matrix, offset_plate
 
@@ -109,9 +125,11 @@ COORDINATE_UNIT = u.micron
 
 __all__ = [
     "BACKEND",
+    "JAX_INTERFEROMETRY",
     "JaxBackend",
     "JaxLinearModel",
     "JaxPhotometry",
+    "JaxPointSourceModel",
     "JaxPowerLawModel",
 ]
 
@@ -210,6 +228,96 @@ class JaxPowerLawModel(_CountingModel, PowerLaw):
         )
 
 
+class JaxPointSourceModel(Model):
+    """``V(x) = norm * exp(i * index * x)`` — the battery's ``COMPLEX`` kind, in jax.
+
+    The jax twin of ``torch_backend.PointSourceModel``, added at **W4.3** so that
+    W2.4 slice 3's ``complex_gaussian`` rows and W4.2's circular-complex-GP rows
+    run on this backend instead of skipping: until now ``ModelKind.COMPLEX``
+    existed on the torch fixture alone, and a closed form checked on one backend
+    is a closed form checked once.
+
+    Local to the battery, and complex all the way through: the buffers are real
+    (the ``u`` and ``v`` axes), the flux is a ``complex128`` array, and
+    :meth:`evaluate` emits a :class:`~ampere.core.VisibilitySet`, the only kind
+    ``results_schema.md`` §16 allows complex values in.
+
+    It does not subclass ``ampere.backends.jax.models._SpectralModel``, and that
+    is the point rather than an omission: that class is spectrum shaped — a
+    micron axis, a Jy ``Spectrum`` per channel, a real ``_flux`` — and a
+    visibility model shares none of it but the parameter plumbing. What it does
+    share is the **native surface** a realisation walks (``grid`` and ``flux``),
+    written out here so that a reviewer can see the whole of what
+    :mod:`ampere.backends.jax.problem` requires of a model in one screen. The
+    shipped visibility models are :mod:`ampere.backends.jax.interferometry`'s;
+    this one is the battery's, for the same reason its straight line is.
+
+    The second (``v``) and third (``spectral_axis``) axes come from
+    :func:`~tests.conformance.protocol.complex_axes`, the same rule the observed
+    container uses, so the predicted and observed axes are equal by construction
+    rather than by coincidence.
+    """
+
+    DIFFERENTIABLE: ClassVar[bool] = True
+    BATCHABLE: ClassVar[bool] = True
+    DEVICE: ClassVar[str] = DEVICE
+    BACKEND: ClassVar[str] = BACKEND
+
+    def __init__(self, spec: ModelSpec) -> None:
+        require_x64("a jax JaxPointSourceModel")
+        u_axis, v_axis, wavelength = complex_axes(spec.coordinates)
+        self._wavelength = wavelength
+        self.spec = spec
+        self.evaluations = 0
+        self.channels = tuple(spec.channels)
+        self.register_buffer("u", u_axis)
+        self.register_buffer("v", v_axis)
+        self._u = jnp.asarray(u_axis, dtype=jnp.float64)
+        self._v = jnp.asarray(v_axis, dtype=jnp.float64)
+        self.register_parameter(Parameter("norm", st.loguniform(0.1, 10.0)))
+        self.register_parameter(Parameter("index", st.norm(-1.0, 0.5)))
+
+    def reset_evaluations(self) -> None:
+        self.evaluations = 0
+
+    # -- the native surface a realisation composes ---------------------------
+
+    def grid(self, channel: str) -> Any:
+        """The ``u`` axis. One channel, so *channel* is only validated."""
+        if channel not in self.channels:
+            raise KeyError(channel)
+        return self._u
+
+    def flux(self, channel: str, values: Any = None) -> Any:
+        """``norm * exp(i * index * u)`` as a complex array, gradient intact.
+
+        Built from a real modulus and a real angle rather than through
+        ``exp(1j * phase)``, so both parameters stay real leaves of the graph and
+        the derivative is the one a real-parameter model should have — the same
+        choice ``torch.polar`` makes on the other backend.
+        """
+        context = self.context({} if values is None else values)
+        norm = jnp.asarray(context["norm"], dtype=jnp.float64)
+        angle = jnp.asarray(context["index"], dtype=jnp.float64) * self._u
+        return norm * (jnp.cos(angle) + 1j * jnp.sin(angle))
+
+    # -- the contract surface ------------------------------------------------
+
+    def evaluate(self, **values: Any) -> ModelResult:
+        self.evaluations += 1
+        emitted = {
+            channel: VisibilitySet(
+                np.asarray(self._u),
+                np.asarray(self._v),
+                self._wavelength,
+                np.asarray(self.flux(channel, values)).astype(np.complex128, copy=False),
+                unit=FLUX_UNIT,
+            )
+            for channel in self.channels
+        }
+        return ModelResult(emitted)
+
+
 class JaxPhotometry(Transformation):
     """``Spectrum -> PhotometricPoints``: the battery's kind-changing step, in jax.
 
@@ -259,7 +367,11 @@ class JaxPhotometry(Transformation):
         )
 
 
-_MODELS = {ModelKind.LINEAR: JaxLinearModel, ModelKind.POWER_LAW: JaxPowerLawModel}
+_MODELS = {
+    ModelKind.LINEAR: JaxLinearModel,
+    ModelKind.POWER_LAW: JaxPowerLawModel,
+    ModelKind.COMPLEX: JaxPointSourceModel,
+}
 _KERNELS: dict[KernelFamily, type[Kernel]] = {
     KernelFamily.MATERN12: Matern12,
     KernelFamily.MATERN32: Matern32,
@@ -268,6 +380,28 @@ _KERNELS: dict[KernelFamily, type[Kernel]] = {
     KernelFamily.ROTATION: RotationTerm,
     KernelFamily.SQUARED_EXPONENTIAL: SquaredExponential,
 }
+
+
+#: This backend's interferometric vocabulary, as one record (*W4.3*). The
+#: shipped classes, unmodified: they declare ``BACKEND = "jax"``, which is what
+#: makes the composed problems in ``test_interferometry.py`` single-backend
+#: ones. A twin associates with its reference by class name in the backend's own
+#: module, the native surface it exposes and this declaration — there is no step
+#: registry (``phase4_placement_memo.md`` §1.2) — so this record is the only
+#: place the battery needs to learn them.
+JAX_INTERFEROMETRY = InterferometryPieces(
+    fourier_sample=FourierSample,
+    closure_phase=ClosurePhase,
+    amplitude=Amplitude,
+    bandwidth_smearing=BandwidthSmearing,
+    time_smearing=TimeSmearing,
+    uniform_disc=UniformDisc,
+    gaussian_source=GaussianSource,
+    binary=Binary,
+    uniform_disc_visibilities=UniformDiscVisibilities,
+    gaussian_source_visibilities=GaussianSourceVisibilities,
+    binary_visibilities=BinaryVisibilities,
+)
 
 
 class JaxBackend:
@@ -298,6 +432,16 @@ class JaxBackend:
         # gap: throughput on a device backend is slice 2's per-chunk `vmap`,
         # and `simulate_many` refuses the process pool here by name.
         picklable=False,
+        # **W4.3**: ``JaxPointSourceModel`` realises ModelKind.COMPLEX, so the
+        # ``complex_gaussian`` rows (W2.4 slice 3) and the circular complex GP
+        # rows (W4.2) run here rather than skipping. Until now the kind existed
+        # on the torch fixture alone, and a closed form checked on one backend
+        # is a closed form checked once.
+        complex_models=True,
+        # **W4.3**: the native interferometric twins, so every row in
+        # ``test_interferometry.py`` runs on this column instead of skipping
+        # with a reason naming what W4.3 owed.
+        interferometry=True,
         # Both, since W2.5 slice 2 chose celerite2.jax for the O(N) solve.
         solvers=frozenset({SolverKind.DENSE, SolverKind.QUASISEP}),
     )
@@ -336,6 +480,9 @@ class JaxBackend:
 
     def gp_noise(self, kernel: Kernel, solver: GPSolver, *, jitter: Any = None) -> NoiseModel:
         return GaussianProcessNoise(kernel, solver, jitter=jitter)
+
+    def interferometry(self) -> InterferometryPieces:
+        return JAX_INTERFEROMETRY
 
     def parameter_space(self, declaration: ParameterSet) -> LoweredParameterSet:
         return LoweredParameterSet(declaration)

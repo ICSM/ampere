@@ -178,6 +178,66 @@ def _seed(seed: int) -> int:
     return int(seed) & 0x7FFFFFFFFFFFFFFF
 
 
+#: The two spellings of a native model's value-and-coordinates surface, in the
+#: order they are looked for (*W4.3*). ``flux``/``grid`` is the original pair;
+#: ``native_flux``/``native_grid`` exists because a model may not have a method
+#: whose name one of its own parameters already uses —
+#: ``Parameterised._check_free_name`` refuses a parameter that shadows a class
+#: attribute, and ``flux`` is precisely what an interferometric source model
+#: calls its total flux density. Either pair composes; a model that offers
+#: both is taken at the first, and one that offers half of either is refused
+#: with the missing half named, because the two go together.
+_FLUX_NAMES: tuple[str, ...] = ("flux", "native_flux")
+_GRID_NAMES: tuple[str, ...] = ("grid", "native_grid")
+
+
+def _native_surface(model: Any, names: tuple[str, ...]) -> Any | None:
+    """The first callable *model* offers under *names*, or ``None``."""
+    for name in names:
+        found = getattr(model, name, None)
+        if callable(found):
+            return found
+    return None
+
+
+def _require_flux(model: Any, label: str) -> Any:
+    """*model*'s native value surface, or a refusal naming the model (*W4.3*).
+
+    A problem may hold a model no dataset binds, and every channel of every
+    model is written to a training set (``results.md`` §11), so this path reaches
+    a model the per-dataset refusal never checked. Naming it is the whole point:
+    before the two-spelling lookup this was an ``AttributeError`` on ``flux``,
+    which at least said which attribute was missing, and a bare ``None`` call
+    would say nothing at all.
+    """
+    found = _native_surface(model, _FLUX_NAMES)
+    if found is None:
+        raise _refuse(
+            type(model).__name__,
+            f"model {label!r} has no native surface (`{_FLUX_NAMES[0]}` or "
+            f"`{_FLUX_NAMES[1]}`), so its channels cannot be produced natively.",
+        )
+    return found
+
+
+def _flat_channel(flux: torch.Tensor) -> torch.Tensor:
+    """One draw's channel values as a flat vector (*W4.3*).
+
+    ``BatchedPrediction.channels`` is declared ``{model: {channel: (batch, n)}}``
+    — flat per draw, in the container's own C-order, because that is what
+    ``ampere.core``'s agreement check compares against
+    ``result[channel].values.ravel()`` and what a training-set group is written
+    from. Every channel before Phase 4 was one-dimensional already, so this was
+    a no-op nobody had to write; an ``Image`` channel is ``(nx, ny)`` and needs
+    it. Flattening here rather than in the model keeps the native forward
+    surface the natural shape for the step that consumes it —
+    ``FourierSample.apply_flux`` contracts over two axes — and is applied under
+    ``vmap``, where the leading batch axis is hidden, so ``reshape(-1)`` is the
+    whole of it.
+    """
+    return flux.reshape(-1)
+
+
 #: Neutral family name -> the ``ampere.core`` class whose ``sample`` this
 #: backend has a native twin for (*W3.14*). The **one** place this module names
 #: them, so the ceiling ``inference.md`` §13 states — a backend samples exactly
@@ -223,11 +283,20 @@ class _LoweredDataset:
         self.noise = dataset.likelihood.noise
         self.steps = tuple(dataset.instrument.steps)
 
-        if not hasattr(self.model, "flux"):
+        self.model_flux = _native_surface(self.model, _FLUX_NAMES)
+        self.model_grid = _native_surface(self.model, _GRID_NAMES)
+        if self.model_flux is None or self.model_grid is None:
+            missing = ", ".join(
+                f"`{names[0]}` (or `{names[1]}`)"
+                for names, found in ((_FLUX_NAMES, self.model_flux), (_GRID_NAMES, self.model_grid))
+                if found is None
+            )
             raise _refuse(
                 type(self.model).__name__,
-                f"model {self.model_label!r} has no native torch surface (a `flux` method), so it "
-                f"cannot be composed into a differentiable log-density. Build the problem from "
+                f"model {self.model_label!r} has no native torch surface ({missing} missing), so "
+                f"it cannot be composed into a differentiable log-density. The two go together: "
+                f"the first supplies the values and the second the coordinates the instrument "
+                f"chain transforms them on, and `predict` calls both. Build the problem from "
                 f"ampere.backends.torch's models, or run it on a gradient-free engine.",
             )
         for step in self.steps:
@@ -496,8 +565,8 @@ class _LoweredDataset:
         only way ``simulate_batched`` can be checked against ``log_likelihood``
         at all.
         """
-        flux = self.model.flux(self.channel, routed[self.model_label])
-        grid = self.model.grid(self.channel)
+        flux = self.model_flux(self.channel, routed[self.model_label])
+        grid = self.model_grid(self.channel)
         for step in self.steps:
             flux, grid = step.apply_flux(flux, grid, self._step_values(routed, step.label))
         return flux
@@ -1166,7 +1235,7 @@ class LoweredProblem:
         routed = self._route(self.parameters._tensor(theta))
         channels = {
             label: {
-                channel: model.flux(channel, routed.get(label, {}))
+                channel: _flat_channel(_require_flux(model, label)(channel, routed.get(label, {})))
                 for channel in getattr(model, "channels", ())
             }
             for label, model in self.problem.models.items()
