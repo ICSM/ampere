@@ -229,11 +229,27 @@ cannot serve it, which is what that class is for; it is also a
 (`LoweringError` was the other candidate and was rejected: its constructor is
 prior-family-shaped, rendering "prior family 'BlackBody'".)
 
-**W4.6 lands the hook and an empty table.** W4.7 lands the curated rows
-(`BlackBody`, `PowerLaw1D`, `BrokenPowerLaw1D`, `Polynomial1D`, `Gaussian1D`,
-`Const1D` and their compound sums and products) and the composition rule that
-builds one native model from several rows. Until then every call refuses, which
-is what `tests/core/test_astropy_backend_hook.py` holds the hook to.
+**W4.6 landed the hook and an empty table. W4.7 fills it**: `BlackBody`,
+`PowerLaw1D`, `BrokenPowerLaw1D`, `Polynomial1D`, `Gaussian1D`, `Const1D`, and
+their compound sums, products, differences and ratios (astropy's `+ - * /`;
+its other two composition operators, `|` and `&`, have no elementwise meaning
+as one channel's flux and are refused by name, same as a leaf outside the
+table). The physics is written once, backend-neutral, in
+`ampere.core.astropy_translations` — a two-method namespace
+(`exp`, `where`) plus each backend's own tested `planck_jy`, in the same
+spirit `kernels.py`'s `ArrayOps` fixed for the GP kernels (W4.5) — and both
+`ampere.backends.torch.astropy` and `ampere.backends.jax.astropy` build their
+`TRANSLATIONS` table from that one dict, so "one table serves both backends".
+Parameters, priors, frozen-ness, the channel and the kind all come from
+`ampere.core.astropy_compat.translate_astropy_parameters` — the same
+translation §3's table describes — so a native and a black-box fit of the
+same astropy model cannot disagree on what a bound or a fixed value means.
+
+A compound model carrying an astropy `tied=` parameter is refused on *both*
+native backends: a tie is an arbitrary Python callable evaluated on plain
+floats, so there is no gradient through it, and no way to evaluate it at all
+while jax is tracing. The black-box route (§3.2) is unaffected — it still
+applies a tie exactly as astropy defines it.
 
 ```python
 >>> from ampere.core import astropy_components, translation_refusal
@@ -249,6 +265,14 @@ path — gradient-free engines and SBI, never NUTS or VI — or extend the table
 currently holds: nothing yet (W4.7 adds the curated rows).
 
 ```
+
+The empty `{}` above is deliberate — it is `translation_refusal`'s own table
+argument, not a backend's, so this page's doctest needs neither extra
+installed to run. `ampere.backends.torch.TRANSLATIONS` and
+`ampere.backends.jax.TRANSLATIONS`, in an environment with the extra, hold
+the six curated classes above; `tests/core/test_astropy_backend_hook.py`
+holds both to refusing a model outside them (`Sersic1D`, which the table
+does not curate), by name, exactly as this page's example does.
 
 ## 6. Kinds and the grid (binding)
 

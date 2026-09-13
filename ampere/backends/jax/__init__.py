@@ -87,7 +87,7 @@ from __future__ import annotations
 
 from ._config import BACKEND, configure_x64, require_x64, x64_enabled
 from ._device import DEVICE
-from .astropy import TRANSLATIONS, from_astropy
+from .astropy import TRANSLATIONS, NativeAstropyModel, from_astropy
 from .bijections import log_abs_det_jacobian, lower_bijection
 from .distributions import lower_prior
 from .gp import (
@@ -148,6 +148,7 @@ __all__ = [
     "Matern52",
     "MeshSharder",
     "ModifiedBlackBody",
+    "NativeAstropyModel",
     "PowerLaw",
     "Product",
     "QuasisepGP",
