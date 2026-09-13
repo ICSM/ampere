@@ -364,7 +364,7 @@ third-party family inherits the refusal rather than the defect. This is the
 same discipline the unimplemented `RiceFamily` gets, applied to a combination
 rather than to a family.
 
-### The circular complex GP: declared analytic, implemented in Phase 4
+### The circular complex GP: declared analytic, **implemented at W4.2**
 
 **Ruled by Peter, 2026-09-03** (§17 Q6, the interferometry sketch's
 recommendation accepted): `complex_gaussian` + `GaussianProcessNoise`
@@ -372,27 +372,58 @@ declares `ANALYTIC`, with the **circular complex GP** — one real kernel
 applied independently to the real and imaginary parts: equal component
 covariances, zero pseudo-covariance — as the fixed meaning. That is the
 declaration under which the flexible likelihood reaches the plan's Phase-4
-proof modality, and fixing it now is what lets the freeze be reviewed
+proof modality, and fixing it at the freeze is what let the freeze be reviewed
 against it.
 
-The *implementation* is Phase 4's, with the visibility modality, so the
-combination is **refused at composition with the schedule named** — the same
-declared-but-staged discipline `RiceFamily` gets for a whole family, applied
-to one combination. A refusal, never a silently different model:
+Between the freeze and W4.2 the combination was **refused at composition with
+the schedule named** — the declared-but-staged discipline `RiceFamily` gets for
+a whole family, applied to one combination. **W4.2 implements it**, so
+`GP_ANALYTIC_IMPLEMENTED` is `True` and the composition is the flexible
+likelihood on visibilities:
 
 ```pycon
 >>> ComplexGaussianFamily().marginalisation_with(gp_noise)
 <Marginalisation.ANALYTIC: 'analytic'>
->>> Likelihood(ComplexGaussianFamily(), gp_noise)
-Traceback (most recent call last):
-    ...
-ampere.core.exceptions.LikelihoodError: the complex_gaussian family with a correlated noise model declares Marginalisation.ANALYTIC ... but the implementation is Phase 4's, with the interferometric-visibility modality ...
+>>> Likelihood(ComplexGaussianFamily(), gp_noise).marginalisation
+<Marginalisation.ANALYTIC: 'analytic'>
 
 ```
 
-`LikelihoodFamily.GP_ANALYTIC_IMPLEMENTED` is the staging flag (default
-`True`; `False` here until Phase 4), so a future family in the same position
-inherits the discipline rather than reinventing it.
+The closed form, and **why it is one factorisation rather than two**. Write
+`S = K(θ) + diag(σ²)` for the per-component covariance over the observed
+points. Circularity says the real `2N` covariance of `(Re r, Im r)` is
+`diag(S, S)` — the same block twice, and zero off the diagonal — so
+
+```
+log p = -½ [ rᵉᵀ S⁻¹ rᵉ  +  rⁱᵀ S⁻¹ rⁱ  +  2 log|S|  +  2N log 2π ]
+```
+
+with `rᵉ`, `rⁱ` the components of `observed − predicted`. That is **one**
+Cholesky of an `N × N` matrix, **two** triangular solves against it, and
+`log|S|` evaluated once and counted twice. Forming the `2N × 2N` matrix and
+factorising it would cost eight times the arithmetic in order to carry a zero
+block the model has already declared, and calling the real solver twice would
+compute `log|S|` twice. §7's `(n, k)` right-hand side is the mechanism: the
+family hands the solver two columns and one covariance.
+
+`σ` is the **per-component** standard deviation, which is what
+`results_schema.md` §16 says a `VisibilitySet`'s real-valued uncertainty
+encodes, and the kernel's `amplitude` is a per-component marginal standard
+deviation for the same reason — `K` appears once per component above, so a
+correlated calibration error of RMS `a` in each component is the kernel with
+`amplitude = a`. The total modulus variance `E|r|²` is `2 (K_ii + σ²)`.
+
+The **draw** (`sample`, §3) follows the same model and is therefore *two* real
+GP realisations rather than one complex one: `x = μ + (L z₁ + σ w₁) + i (L z₁′ +
+σ w₁′)`, the two components sharing `L` and sharing nothing else. Using one
+realisation for both would give a draw perfectly correlated between the real and
+imaginary parts, whose modulus statistics this density does not score.
+
+`LikelihoodFamily.GP_ANALYTIC_IMPLEMENTED` remains the staging flag (default
+`True`), so a future family that declares `ANALYTIC_WITH_GP` before writing its
+closed form inherits the discipline rather than reinventing it; its refusal no
+longer names Phase 4, because the instance the wording was written for has
+landed.
 
 ### Enforcing it against the engine
 
@@ -823,6 +854,63 @@ Traceback (most recent call last):
 ampere.core.exceptions.LikelihoodError: QuasisepGP needs a kernel with an exact quasiseparable representation, but SquaredExponential (squared_exponential) has none. ...
 
 ```
+
+### The right-hand side may carry several realisations (*Amended W4.2*)
+
+Every solver method that takes a `residual` accepts either an `(n,)` array —
+one realisation, which is every call written before W4.2 — or an `(n, k)` block
+of `k` realisations that are **independent of one another and share this one
+covariance**. The declared quantities follow from that and from nothing else:
+
+| method | `(n,)` | `(n, k)` |
+|---|---|---|
+| `log_marginal_likelihood` | the marginal | the **sum** of the `k` marginals: `log|K+Σ|` enters `k` times, the factorisation happens once |
+| `conditional_loo` | one term per sample | still one term per **sample**, summing the `k` components, which share `A_ii` |
+| `condition` | `(m,)` mean, `(m,)` variance | `(m, k)` mean, `(m,)` variance — a posterior variance does not depend on the data |
+| `latent_transform` | `(n,)` → `(n,)` | `(n, k)` → `(n, k)` |
+
+This exists for §4's circular complex GP, where `k = 2` and the two columns are
+the real and imaginary parts of one complex residual. It is not a convenience
+API: a two-column right-hand side is the only way to state "these two
+realisations share this covariance" to a strategy whose whole job is to
+factorise the covariance once.
+
+`GPSolver.STACKED_RESIDUALS` is the declaration that a strategy can take the
+extra columns. It is `False` by default, which is the honest answer for a
+strategy written before the rule existed and for every declared slot, because
+the two ways of getting it wrong are both silent: flattening `(n, 2)` scores
+`2n` residuals against an `n × n` covariance, and taking the first column drops
+the imaginary part of every visibility. `DenseGP` declares `True` on all three
+backends.
+
+```pycon
+>>> (DenseGP.STACKED_RESIDUALS, QuasisepGP.STACKED_RESIDUALS)
+(True, False)
+
+```
+
+### Why the O(N) path is refused on visibilities, word for word (*W4.2*)
+
+```
+the complex_gaussian family on a complex VisibilitySet is the circular complex
+GP: the real and imaginary parts are two independent real processes sharing one
+covariance, so the solve takes a two-column right-hand side, and QuasisepGP
+declares STACKED_RESIDUALS = False. QuasisepGP could not take them even in
+principle: it needs one ordered one-dimensional coordinate, and a visibility
+lives at a point of the (u, v) plane at a wavelength, which no ordering reduces
+to one coordinate. Use DenseGP, with the kernel selecting the axes it acts on --
+Matern32(axes=("u", "v")) for an isotropic (u, v) kernel, or
+Product(Matern32(axes=("u", "v")), Matern32(axes=("spectral_axis",))) for an
+error that is smooth in (u, v) and sharp in wavelength.
+```
+
+Raised by `GaussianProcessNoise.check_compatible` **before** the solver's own
+`check_compatible`, for the reason the `Product` refusal precedes the generic
+quasiseparable one: the generic `REQUIRES_ORDERED_1D` message ends "select
+exactly one axis to reach the O(N) path", and on this modality that is advice
+nobody can take. `REQUIRES_ORDERED_1D` cannot hold for a visibility set,
+whatever the kernel selects, so the refusal says so and names the solver that
+does work.
 
 A solver **may** branch on `Axis.regular` or `Axis.log_regular` for a fast path
 and **must** have a path when both are false — `results_schema.md` §16's

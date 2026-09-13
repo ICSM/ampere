@@ -48,23 +48,28 @@ normalisation looks as though it is missing a half and is not — two
 independent real Gaussians contribute ``-log(2 pi sigma**2)/2`` each, which is
 the ``-log(2 pi) - log(sigma**2)`` written above.
 
-**The correlated case is refused by name, because ``ampere.core`` refuses it
-first.** ``likelihoods.md`` §4 and the family's own
+**The correlated case no longer reaches this module at all (W4.2).**
+``likelihoods.md`` §4 and the family's own
 :attr:`~ampere.core.ComplexGaussianFamily.ANALYTIC_WITH_GP` declare that a
 circular complex GP *does* marginalise in closed form — one real kernel
 applied independently to the real and imaginary parts, equal component
 covariances and zero pseudo-covariance, so the marginal likelihood is the sum
-of two real Gaussian marginals over the same ``K + diag(σ²)``. That is a
-three-line addition to this module. It is not made, and the reason is a rule
-rather than a shortage of time: the family declares
-``GP_ANALYTIC_IMPLEMENTED = False``, so composing it with a
-:class:`~ampere.core.GaussianProcessNoise` raises at composition on the
-contract path — there is no oracle. ``inference.md`` §10a makes the numpy path
-the thing a realisation is checked against, so a native path with no
-counterpart would be a backend inventing a likelihood, which is exactly what
-:func:`refuse_family` exists to prevent. When Phase 4 implements it in
-``ampere.core`` the refusal below lifts and the reduction above is what
-replaces it.
+of two real Gaussian marginals over the same ``K + diag(σ²)``. Until W4.2 the
+family declared ``GP_ANALYTIC_IMPLEMENTED = False`` and :func:`refuse_family`
+refused the combination here, because ``ampere.core`` refused it first and
+``inference.md`` §10a makes the numpy path the thing a realisation is checked
+against: a native path with no counterpart is a backend inventing a likelihood.
+
+W4.2 implemented the closed form in ``ampere.core``, and it landed where the
+Gaussian family's GP already lives — on the **solver**, not here. A family whose
+``ANALYTIC_WITH_GP`` is true hands its whole covariance to
+``DenseGP.log_marginal_likelihood_native``
+(:mod:`ampere.backends.torch.problem`'s ``gp_marginal`` branch), and what makes
+the complex case work is that the branch stacks the complex residual into the
+two real columns the solver now accepts. So the density below stays the
+uncorrelated one, and :func:`refuse_family`'s ``GP_ANALYTIC_IMPLEMENTED`` guard
+stays as the **generic** staging check for whatever family next declares a
+closed form before writing it.
 
 Two families stay refused, by name, at construction:
 
@@ -344,12 +349,14 @@ def refuse_family(
     of its refusals from one place, at construction, in the order that gives
     the most useful first message.
 
-    *correlated* says whether the dataset's noise model induces correlations.
-    It exists for one family: a ``complex_gaussian`` under a
-    :class:`~ampere.core.GaussianProcessNoise` is declared analytic and is not
-    yet implemented in ``ampere.core``, so this backend refuses it by name
-    rather than inventing the one likelihood the conformance suite could not
-    check. See the module docstring.
+    *correlated* says whether the dataset's noise model induces correlations. It
+    was added for one family — a ``complex_gaussian`` under a
+    :class:`~ampere.core.GaussianProcessNoise`, declared analytic and unwritten
+    — and **W4.2 wrote that closed form**, so the guard below now has no shipped
+    instance and is kept as the generic one: any family that declares
+    ``ANALYTIC_WITH_GP`` without ``GP_ANALYTIC_IMPLEMENTED`` is refused here,
+    because a realisation is checked against the numpy path and there would be
+    nothing to check it against. See the module docstring.
     """
     name = family.NAME
     if correlated and not bool(getattr(family, "GP_ANALYTIC_IMPLEMENTED", True)):
@@ -362,10 +369,9 @@ def refuse_family(
                 f"yet (GP_ANALYTIC_IMPLEMENTED is False), so ampere.core has no numpy path for "
                 f"this combination. A realisation is checked against that path (inference.md "
                 f"§10a), so lowering it here would be this backend inventing a likelihood "
-                f"nothing could check. For the complex_gaussian family the closed form is the "
-                f"circular complex GP -- one real kernel on the real and imaginary parts "
-                f"independently -- and it lands with the visibility modality in Phase 4; use "
-                f"IndependentNoise until then."
+                f"nothing could check. Implement log_prob's correlated branch in ampere.core "
+                f"and set GP_ANALYTIC_IMPLEMENTED = True, or use IndependentNoise with this "
+                f"family."
             ),
         )
     if name not in NATIVE_FAMILIES:

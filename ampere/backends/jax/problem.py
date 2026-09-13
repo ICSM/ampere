@@ -286,8 +286,26 @@ class _LoweredDataset:
             raw[self.retain],
             dtype=jnp.complex128 if raw.dtype.kind == "c" else jnp.float64,
         )
+        # Every axis, stacked into the `(n, d)` block ``Likelihood._coordinates``
+        # builds -- **not** ``axes[0]`` (*W4.2*). A one-axis container is
+        # unchanged by this (`(n, 1)` and `(n,)` are the same point set to
+        # ``Kernel.matrix``), and a VisibilitySet has three axes, so taking the
+        # first would have handed the kernel the `u` column and called it the
+        # coordinates. The same stack is what makes ``axes=("u", "v")``
+        # meaningful here, since a selector resolves to *columns of this block*.
         self.observed_coordinates = jnp.asarray(
-            np.asarray(observed.axes[0].values, dtype=float)[self.retain], dtype=jnp.float64
+            np.column_stack([np.asarray(axis.values, dtype=float) for axis in observed.axes])[
+                self.retain
+            ],
+            dtype=jnp.float64,
+        )
+        # The kernel bound to this container's axis order, once, at lowering:
+        # W4.5 put the binding on the noise model because that is where the
+        # container is, and the native path has to use it or an ``axes=``
+        # selector would silently do nothing here while working on the contract
+        # path it is checked against.
+        self.bound_kernel = (
+            self.noise.kernel_for(observed) if getattr(self.noise, "CORRELATED", False) else None
         )
         self.uncertainty = (
             None
@@ -457,11 +475,12 @@ class _LoweredDataset:
             return None
         block = self._dataset_values(routed).get(LATENT_COMPONENT, {})
         whitened = jnp.asarray(block[self.latent_name], dtype=jnp.float64).reshape(-1)
+        kernel = self._kernel()
         return self.noise.solver.latent_transform_jax(
-            self.noise.kernel,
+            kernel,
             self.observed_coordinates,
             whitened,
-            self.noise.kernel.resolve(values),
+            kernel.resolve(values),
         )
 
     # -- the generative half (W3.1 slice 2) ---------------------------------
@@ -634,20 +653,47 @@ class _LoweredDataset:
         sigma = self._sigma(predicted, values)
         assert sigma is not None  # REQUIRES_UNCERTAINTY, checked at composition
         size = int(self.retain.sum())
-        real_key, imaginary_key = jax.random.split(key)
-        real = jax.random.normal(real_key, (size,), dtype=jnp.float64)
-        imaginary = jax.random.normal(imaginary_key, (size,), dtype=jnp.float64)
-        return predicted + sigma * (real + 1j * imaginary)
+        if not self.correlated:
+            real_key, imaginary_key = jax.random.split(key)
+            real = jax.random.normal(real_key, (size,), dtype=jnp.float64)
+            imaginary = jax.random.normal(imaginary_key, (size,), dtype=jnp.float64)
+            return predicted + sigma * (real + 1j * imaginary)
+        # W4.2: two real GP realisations sharing L, not one complex one. Sharing
+        # L is circularity's equal-component half; sharing nothing else is its
+        # zero-pseudo-covariance half. Drawing one realisation for both
+        # components would give a draw perfectly correlated between the parts,
+        # whose modulus statistics the density does not score.
+        gp_key, noise_key = jax.random.split(key)
+        correlated = self._gp_realisation(values, gp_key, size, components=2)
+        stabiliser = float(getattr(self.noise.solver, "jitter", 0.0) or 0.0)
+        scale = sigma if not stabiliser else jnp.sqrt(sigma**2 + stabiliser**2)
+        independent = jax.random.normal(noise_key, (size, 2), dtype=jnp.float64)
+        components = correlated + scale[:, None] * independent
+        return predicted + components[:, 0] + 1j * components[:, 1]
 
-    def _gp_realisation(self, values: Mapping[str, Any], key: jax.Array, size: int) -> jax.Array:
-        """``L(θ) z`` for a fresh whitened draw, from the solver's own transform."""
-        whitened = jax.random.normal(key, (size,), dtype=jnp.float64)
+    def _gp_realisation(
+        self, values: Mapping[str, Any], key: jax.Array, size: int, components: int = 1
+    ) -> jax.Array:
+        """``L(θ) z`` for a fresh whitened draw, from the solver's own transform.
+
+        *components* is ``k``: one for a real process, two for the circular
+        complex GP, whose real and imaginary parts share the factor ``L`` and
+        nothing else (*W4.2*).
+        """
+        shape = (size,) if components == 1 else (size, components)
+        whitened = jax.random.normal(key, shape, dtype=jnp.float64)
+        kernel = self._kernel()
         return self.noise.solver.latent_transform_jax(
-            self.noise.kernel,
+            kernel,
             self.observed_coordinates,
             whitened,
-            self.noise.kernel.resolve(values),
+            kernel.resolve(values),
         )
+
+    def _kernel(self) -> Any:
+        """This dataset's kernel, bound to its container's axis order (*W4.2*)."""
+        assert self.bound_kernel is not None  # only a correlated dataset asks
+        return self.bound_kernel
 
     def log_likelihood(self, routed: Mapping[str, Mapping[str, Any]]) -> jax.Array:
         """``log p(data | θ)`` for this dataset, as a traceable jax scalar."""
@@ -661,13 +707,21 @@ class _LoweredDataset:
             # likelihood, and the branch GaussianFamily.log_prob takes when
             # `noise.correlated`.
             residual = self.observed_values - predicted
-            variance = jnp.zeros_like(residual) if sigma is None else sigma**2
+            # W4.2: a complex residual becomes the circular GP's two real
+            # columns, and the per-component sigma is the real diagonal of the
+            # one covariance both columns are scored against.
+            if jnp.iscomplexobj(residual):
+                residual = jnp.stack([residual.real, residual.imag], axis=-1)
+            variance = (
+                jnp.zeros(jnp.shape(residual)[0], dtype=jnp.float64) if sigma is None else sigma**2
+            )
+            kernel = self._kernel()
             value = self.noise.solver.log_marginal_likelihood_jax(
-                self.noise.kernel,
+                kernel,
                 self.observed_coordinates,
                 residual,
                 variance,
-                self.noise.kernel.resolve(values),
+                kernel.resolve(values),
             )
         else:
             if sigma is None and self.likelihood.family.REQUIRES_UNCERTAINTY:

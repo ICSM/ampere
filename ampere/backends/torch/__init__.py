@@ -144,10 +144,13 @@ What slice 3 added
 * **``complex_gaussian``**: the circular complex Gaussian, transcribed into
   :mod:`ampere.backends.torch._families` and composing in the realised path
   with complex tensors end to end. Its *correlated* form — the circular
-  complex GP, which ``likelihoods.md`` §4 declares analytic — is refused by
-  name, because ``ampere.core`` declares ``GP_ANALYTIC_IMPLEMENTED = False``
-  and refuses it first: a realisation with no numpy oracle would be this
-  backend inventing a likelihood. Phase 4 implements both together.
+  complex GP, which ``likelihoods.md`` §4 declares analytic — was refused by
+  name at slice 3, because ``ampere.core`` declared
+  ``GP_ANALYTIC_IMPLEMENTED = False`` and refused it first: a realisation with
+  no numpy oracle would be this backend inventing a likelihood. **W4.2 lifted
+  that**: ``ampere.core`` has the closed form, and here it is the solver rather
+  than the family body that carries it, since ``DenseGP`` now takes the
+  two-column right-hand side the circular GP reduces to.
 * the last **``sigma_tensor`` consumer gap**: a noise model that overrides
   ``sigma`` without supplying the native hook used to fall back silently to
   the base quadrature in the realised density — a different likelihood from

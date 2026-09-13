@@ -460,16 +460,105 @@ class TestTheComplexGaussianBody:
         assert dataset.complex_valued is True
         assert dataset.observed_values.dtype == complex_dtype(torch.float64)
 
-    def test_a_complex_gp_is_refused_by_name(self) -> None:
-        """``GP_ANALYTIC_IMPLEMENTED`` is False in the core, so this backend refuses."""
+    def test_a_complex_gp_is_no_longer_refused(self) -> None:
+        """**W4.2**: the closed form exists, so the staging refusal does not fire.
+
+        Until Phase 4 this row asserted the opposite, and the reason was a rule
+        rather than a shortage of time: ``ampere.core`` declared
+        ``GP_ANALYTIC_IMPLEMENTED = False``, so there was no numpy oracle and a
+        native path would have been this backend inventing a likelihood. The
+        closed form is written now, and it lives on the **solver** — the
+        ``gp_marginal`` branch of :mod:`ampere.backends.torch.problem`, stacking
+        the complex residual into two real columns — not in this module, which is
+        why the family body below is still the uncorrelated one.
+        """
         from ampere.backends.torch._families import refuse_family
 
-        refusal = refuse_family(
-            ComplexGaussianFamily(), censored=False, latent=False, correlated=True
+        assert (
+            refuse_family(ComplexGaussianFamily(), censored=False, latent=False, correlated=True)
+            is None
         )
+
+    def test_the_staging_guard_still_refuses_a_family_that_has_not_written_one(self) -> None:
+        """The guard keeps its rule and loses its instance (*W4.2*).
+
+        ``refuse_family``'s ``correlated`` argument exists for a family that
+        declares ``ANALYTIC_WITH_GP`` without ``GP_ANALYTIC_IMPLEMENTED``. No
+        shipped family is in that position any more, so the rule is held against
+        one declared here — otherwise lifting the complex refusal would have
+        quietly removed the check along with its subject.
+        """
+        from ampere.backends.torch._families import refuse_family
+
+        class StagedFamily(ComplexGaussianFamily):
+            NAME = "staged_complex"
+            GP_ANALYTIC_IMPLEMENTED = False
+
+        refusal = refuse_family(StagedFamily(), censored=False, latent=False, correlated=True)
         assert refusal is not None
-        assert "complex_gaussian" in str(refusal)
-        assert "circular complex GP" in str(refusal)
+        assert "staged_complex" in str(refusal)
+        assert "GP_ANALYTIC_IMPLEMENTED is False" in str(refusal)
+
+    def test_the_circular_complex_gp_realisation_agrees_with_the_contract_path(self) -> None:
+        """The native closed form against its numpy oracle (*W4.2*).
+
+        ``inference.md`` §10a makes the numpy path the thing a realisation is
+        checked against, and this is that check for the circular complex GP. Two
+        things only this shape exercises on the realised path: the kernel's
+        ``axes=("u", "v")`` selector resolved against the lowering's own
+        coordinate block (a ``VisibilitySet`` has three axes, and the lowering
+        read only the first until W4.2), and the complex residual stacked into
+        the solver's two-column right-hand side.
+        """
+        from tests.conformance.backends.torch_backend import TorchBackend
+        from tests.conformance.composition import build_problem
+        from tests.conformance.test_inference import COMPLEX_GP
+
+        problem = build_problem(TorchBackend(), COMPLEX_GP)
+        lowered = lower_problem(problem)
+        theta = problem.parameters.pack(problem.reference_values)
+        expected = problem.evaluate(theta).log_likelihood
+        terms = lowered.log_likelihood_terms(problem.unconstrain(theta))
+        assert float(terms["sed"].detach()) == pytest.approx(expected, abs=1e-9)
+
+    def test_the_circular_complex_gp_gives_the_hyperparameters_a_gradient(self) -> None:
+        """A native solver exists so the kernel's knobs can be fitted.
+
+        W2.4 slice 1's finding, asked of the complex path: a lowering that
+        coerced anything to numpy between the kernel and the density would leave
+        the amplitude and the length scale with a derivative of exactly zero, and
+        the fit would sample them against the prior alone.
+        """
+        from tests.conformance.backends.torch_backend import TorchBackend
+        from tests.conformance.composition import build_problem
+        from tests.conformance.protocol import CovarianceSpec, KernelFamily
+        from tests.conformance.test_inference import COMPLEX_GP
+        import dataclasses
+
+        fitted = dataclasses.replace(
+            COMPLEX_GP,
+            datasets=(
+                dataclasses.replace(
+                    COMPLEX_GP.datasets[0],
+                    covariance=CovarianceSpec(
+                        KernelFamily.MATERN32,
+                        st.loguniform(1e-2, 1.0),
+                        st.loguniform(0.5, 10.0),
+                        axes=("u", "v"),
+                    ),
+                ),
+            ),
+        )
+        problem = build_problem(TorchBackend(), fitted)
+        lowered = lower_problem(problem)
+        point = torch.tensor(problem.unconstrain(problem.reference_values), requires_grad=True)
+        lowered.log_prob_unconstrained(point).backward()
+        gradient = point.grad
+        assert gradient is not None
+        assert torch.all(torch.isfinite(gradient))
+        # The kernel's two hyperparameters are the last columns, in declaration
+        # order: the noise model registers them before the family's (none here).
+        assert bool(torch.all(gradient[-2:] != 0.0))
 
     def test_the_gradient_reaches_the_phase(self) -> None:
         """A complex residual whose gradient stops would be silent otherwise.

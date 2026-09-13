@@ -2039,6 +2039,21 @@ def _visibility_problem(noise: Any = None) -> FittingProblem:
     )
 
 
+def _circular_gp_noise(*, fitted: bool = False) -> GaussianProcessNoise:
+    """The circular complex GP's noise model on this backend's pieces (*W4.2*).
+
+    ``axes=("u", "v")`` because it has to be: a ``VisibilitySet`` carries a
+    wavelength in micron beside two dimensionless axes, and a single isotropic
+    length-scale across mixed units is refused by W4.5's per-leaf unit rule.
+    *fitted* makes the hyperparameters free, for the gradient row; the agreement
+    rows fix them, so that the point the two paths are compared at is the one
+    the row names.
+    """
+    amplitude: Any = st.loguniform(1e-2, 1.0) if fitted else 0.04
+    length_scale: Any = st.loguniform(0.5, 10.0) if fitted else 3.0
+    return GaussianProcessNoise(Matern32(amplitude, length_scale, axes=("u", "v")), DenseGP())
+
+
 class _GridlessPointSource(_PointSource):
     """A native model that supplies ``flux`` and forgets ``grid``.
 
@@ -2106,16 +2121,102 @@ class TestTheComplexGaussianPath:
             tolerance=1e-9,
         )
 
-    def test_the_gp_combination_is_refused_by_name_as_the_numpy_path_refuses_it(
-        self,
-    ) -> None:
-        """``complex_gaussian`` + GP is declared ANALYTIC and unimplemented on
-        both paths (Phase 4's circular closed form), so this backend refuses
-        the composition rather than inventing one."""
+    def test_the_circular_gp_realisation_agrees_with_the_contract_path(self) -> None:
+        """``complex_gaussian`` + GP, realised natively (**W4.2**).
+
+        Until Phase 4 this row was a refusal: the pair was declared ANALYTIC
+        and unimplemented, so this backend refused the composition rather than
+        inventing one. W4.2 wrote the closed form, and the realised density has
+        to agree with the contract path at the same point, like every other
+        family here.
+
+        Two things only this shape exercises. The kernel selects
+        ``("u", "v")`` — it must, because a ``VisibilitySet``'s third axis is a
+        wavelength in micron and W4.5's per-leaf unit rule refuses a bare
+        kernel over mixed units — so the lowering has to bind the selector to
+        columns of its own coordinate block; and the residual is complex, so the
+        lowering has to stack it into the two real columns the solver now takes.
+        A path that read only ``axes[0]`` or only the real part would score a
+        different density and would disagree here by whole nats.
+        """
+        _agrees(_visibility_problem(_circular_gp_noise()), tolerance=1e-9)
+
+    def test_the_circular_gp_density_is_differentiable_in_the_hyperparameters(self) -> None:
+        """The point of a native solver: the GP hyperparameters get a gradient.
+
+        W2.4 slice 1's finding, asked of the complex path. A lowering that
+        coerced anything to numpy between the kernel and the density would leave
+        the amplitude and the length scale with a derivative of exactly zero —
+        a fit that samples them against the prior alone and reports nothing
+        wrong.
+        """
+        problem = _visibility_problem(_circular_gp_noise(fitted=True))
+        lowered = lower_problem(problem)
+        point = jnp.asarray(problem.unconstrain(problem.reference_values))
+        gradient = np.asarray(jax.grad(lowered.log_prob_unconstrained)(point))
+        assert gradient.shape == (problem.free_size,)
+        assert np.all(np.isfinite(gradient))
+        # The last two columns are the kernel's, in declaration order.
+        assert np.all(gradient[-2:] != 0.0)
+
+    def test_the_circular_gp_draw_is_complex_and_wider_than_the_independent_one(self) -> None:
+        """The native draw under the circular GP (*W3.14* plus *W4.2*).
+
+        The draw is two real GP realisations sharing ``L``, and the two claims
+        made here are the ones a broken one fails loudly: it comes back complex,
+        and it is **wider** than the independent draw, because the GP's own
+        amplitude adds in quadrature to sigma per component. A lowering that
+        ignored the correlated branch would pass the first and fail the second.
+        """
+        amplitude = 0.4
+        noise = GaussianProcessNoise(Matern32(amplitude, 3.0, axes=("u", "v")), DenseGP())
+        lowered = lower_problem(_visibility_problem(noise))
+        independent = lower_problem(_visibility_problem())
+        draws = 64
+        rng = np.random.default_rng(20260913)
+        reference = _visibility_problem()
+        theta = np.stack(
+            [
+                reference.prior_transform(row)
+                for row in rng.uniform(0.4, 0.6, (draws, reference.free_size))
+            ]
+        )
+        seeds = list(range(draws))
+        correlated_draws = np.asarray(
+            lowered.sample_observations(theta, lowered.simulate_batched(theta).predicted, seeds)[
+                "default"
+            ]
+        )
+        plain_draws = np.asarray(
+            independent.sample_observations(
+                theta, independent.simulate_batched(theta).predicted, seeds
+            )["default"]
+        )
+        assert np.iscomplexobj(correlated_draws)
+        assert np.all(np.isfinite(correlated_draws))
+        # sigma is 0.05 and the GP amplitude 0.4, so the correlated draw's
+        # spread about the prediction is about eight times the independent
+        # one's. A factor of two is margin enough to be a real assertion.
+        predicted = np.asarray(lowered.simulate_batched(theta).predicted["default"])
+        spread = np.std(np.real(correlated_draws - predicted))
+        plain_spread = np.std(np.real(plain_draws - predicted))
+        assert spread > 2.0 * plain_spread
+
+    def test_the_o_n_path_is_refused_by_name(self) -> None:
+        """``QuasisepGP`` cannot carry the circular GP's two columns.
+
+        Not a gap: ``REQUIRES_ORDERED_1D`` cannot hold for a point of the
+        (u, v) plane at a wavelength, so the refusal says so and names
+        ``DenseGP``. ``ampere.core`` raises it, and this row holds that the
+        backend's own solver declares the flag the refusal reads.
+        """
         from ampere.core.exceptions import LikelihoodError
 
-        with pytest.raises(LikelihoodError):
-            Likelihood(ComplexGaussianFamily(), GaussianProcessNoise(Matern32(0.4, 2.0), DenseGP()))
+        assert DenseGP.STACKED_RESIDUALS is True
+        assert QuasisepGP.STACKED_RESIDUALS is False
+        noise = GaussianProcessNoise(Matern32(0.4, 2.0, axes=("u", "v")), QuasisepGP())
+        with pytest.raises(LikelihoodError, match="STACKED_RESIDUALS = False"):
+            noise.check_compatible(ComplexGaussianFamily(), VISIBILITIES)
 
     def test_a_model_without_a_native_grid_is_refused_by_name(self) -> None:
         """``predict`` calls ``flux`` *and* ``grid``; the refusal now says so.
