@@ -3829,7 +3829,13 @@ class _NativeBatch:
             model: ModelResult(
                 {
                     channel: template[channel].with_values(
-                        native.channels[model][channel][position]
+                        # The flat ``(batch, n)`` form ``BatchedPrediction``
+                        # declares, restored to the container's own shape: a
+                        # multi-axis channel (an ``Image``) is the first to
+                        # need it (found at W4.3).
+                        np.asarray(native.channels[model][channel][position]).reshape(
+                            np.shape(template[channel].values)
+                        )
                     )
                     for channel in template
                 },

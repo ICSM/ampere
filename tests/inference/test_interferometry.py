@@ -54,7 +54,6 @@ import numpy as np
 import pytest
 import scipy.stats as st
 
-from ampere.core import LoweringError
 from ampere.core.encoding import (
     EncodingError,
     EncodingLayout,
@@ -63,7 +62,6 @@ from ampere.core.encoding import (
     encode_observations,
     unpack,
 )
-from ampere.core.exceptions import SchemaError
 from ampere.core.simulate import SimulationBatch
 from ampere.inference import EngineError, NUTSEngine, VIEngine
 
@@ -553,36 +551,46 @@ class TestTheBatchedForwardPath:
         image = built.models["model"].templates["sky"]
         assert np.shape(stacked.channels["model"]["sky"]) == (1, np.size(image.values))
 
-    def test_simulate_many_native_is_blocked_by_a_core_shape_gap(self, kit: Kit) -> None:
-        """**A carried defect, pinned here rather than only in a report (W4.3).**
+    def test_simulate_many_native_equals_the_loop(self, kit: Kit) -> None:
+        """``simulate_many(native=True)`` on the two-dataset problem equals the loop.
 
-        ``ampere.core.dataset``'s native batched path is internally inconsistent
-        about a **multi-axis** channel, and this modality is the first to have
-        one. ``_BatchedSampler._check_agreement`` compares the native channel
-        stack against ``result[channel].values.ravel()`` — the flat form
-        ``BatchedPrediction`` declares — while ``_draw`` hands the same array
-        straight to ``template[channel].with_values(...)``, which needs the
-        container's own ``(nx, ny)``. A one-dimensional channel satisfies both;
-        an ``Image`` cannot satisfy either choice at both sites.
-
-        The fix is one line at ``_draw``::
-
-            channel: template[channel].with_values(
-                np.asarray(native.channels[model][channel][position]).reshape(
-                    np.shape(template[channel].values)
-                )
-            )
-
-        verified on this branch: with it applied, ``simulate_many(native=True)``
-        runs, records ``provenance["simulate_batched"] is True`` and reproduces
-        the loop's predictions exactly. ``ampere/core/dataset.py`` is outside
-        this item's file ownership, so the defect is carried rather than fixed,
-        and this row holds the present behaviour so that the fix is visible as a
-        change. **Replace it with the equality assertion when the fix lands.**
+        The acceptance row W4.3 could not close on its branch: ``_draw`` in
+        ``ampere.core.dataset`` handed the flat ``(batch, n)`` channel stack
+        ``BatchedPrediction`` declares straight to ``with_values``, which needs
+        the container's own ``(nx, ny)`` — a gap every one-dimensional channel
+        hid and an ``Image`` exposed. Fixed at the merge (2026-09-13), so this
+        row is the equality itself: the predictions of both datasets agree with
+        the loop's to :data:`BATCHED_RTOL`, the batch says it was batched, and
+        the observations exist with the containers' own shapes. The observed
+        draws are not compared bitwise — the native sampler is a different
+        generator from numpy's (W3.14), and the battery holds it to the
+        distribution rather than to the stream.
         """
         built = source.two_dataset_problem(kit.backend, kit.itf)
-        with pytest.raises((SchemaError, LoweringError), match=r"shape|disagree"):
-            built.simulate_many(self.COUNT, observe=True, native=True)
+        batch = built.simulate_many(self.COUNT, observe=True, native=True)
+        reference = self.loop(kit, self.COUNT, observe=True)
+        assert batch.provenance["simulate_batched"] is True
+        assert np.array_equal(np.asarray(batch.theta), np.asarray(reference.theta))
+        for index, (mine, theirs) in enumerate(zip(batch, reference, strict=True)):
+            assert not mine.failed, mine.failure
+            for label in theirs.predicted:
+                _agrees(
+                    np.asarray(mine.predicted[label].values),
+                    np.asarray(theirs.predicted[label].values),
+                    f"dataset {label!r} draw {index}",
+                )
+            for model, result in theirs.results.items():
+                for channel in result:
+                    _agrees(
+                        np.asarray(mine.results[model][channel].values),
+                        np.asarray(result[channel].values),
+                        f"model {model!r} channel {channel!r} draw {index}",
+                    )
+            assert mine.observations is not None
+            for label in theirs.observations or {}:
+                assert np.shape(mine.observations[label].values) == np.shape(
+                    theirs.observations[label].values
+                )
 
 
 # ---------------------------------------------------------------------------
