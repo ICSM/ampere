@@ -26,6 +26,7 @@ from .astropy_compat import (
     AstropyTie,
     astropy_components,
     from_astropy,
+    translate_astropy_parameters,
     translation_refusal,
 )
 from .dataset import (
@@ -421,6 +422,7 @@ __all__ = [
     "simulate_batched_of",
     "substream",
     "term_provenance_entries",
+    "translate_astropy_parameters",
     "translation_refusal",
     "unpack",
 ]

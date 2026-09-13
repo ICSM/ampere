@@ -105,6 +105,7 @@ __all__ = [
     "AstropyTie",
     "astropy_components",
     "from_astropy",
+    "translate_astropy_parameters",
     "translation_refusal",
 ]
 
@@ -181,6 +182,114 @@ class AstropyTie:
             "name": self.name,
             "function": str(getattr(self.function, "__qualname__", repr(self.function))),
         }
+
+
+# ---------------------------------------------------------------------------
+# Parameter translation, exposed (W4.7 reuses this verbatim)
+# ---------------------------------------------------------------------------
+
+
+def translate_astropy_parameters(
+    model: Any, priors: Mapping[str, Any] | None = None
+) -> tuple[tuple[Parameter, ...], dict[str, AstropyTie]]:
+    """Every astropy ``Parameter`` of *model*, translated: §3's table, exposed.
+
+    :class:`AdaptedAstropyModel` is built on this — :meth:`AdaptedAstropyModel._declare`
+    is now a two-line caller — and so is W4.7's native translation, which
+    composes a differentiable torch/jax model from the **same** parameter
+    names, priors, frozen-ness and ties this function gives, by calling it on
+    the same (possibly compound) astropy model rather than re-deriving the
+    table. That is the whole point of exposing it: the black-box route and a
+    curated native one cannot drift on what a bound, a fixed value or a tie
+    means, because both read it from here.
+
+    *model*'s own ``param_names`` already carries a compound model's numeric
+    suffixes (``temperature_0``, ``temperature_1``), so this needs no
+    knowledge of leaf decomposition — it walks the top-level model's
+    parameter table exactly as :class:`AdaptedAstropyModel` does, and a
+    compound model's astropy ``Parameter`` proxies (``model.temperature_0``)
+    already read and write through to the correct submodel.
+
+    Returns
+    -------
+    tuple
+        ``(parameters, ties)``: the non-tied parameters, in *model*'s own
+        ``param_names`` order, as ampere :class:`~ampere.core.Parameter`
+        instances; and ``name -> AstropyTie`` for every parameter astropy
+        declares ``tied``.
+
+    Raises
+    ------
+    ParameterError
+        A ``priors=`` entry naming a parameter *model* does not declare, a
+        ``priors=`` entry for a tied parameter (nothing would ever consult
+        it), or a parameter that is free, unbounded and without a
+        ``priors=`` entry of its own — see §3's table.
+    """
+    param_names = tuple(model.param_names)
+    given = priors or {}
+    unknown = sorted(set(given) - set(param_names))
+    if unknown:
+        raise ParameterError(
+            f"from_astropy() was given priors for {unknown}, which "
+            f"{type(model).__name__} does not declare. Its parameters are "
+            f"{list(param_names)}. In a compound model astropy suffixes them by "
+            f"submodel ('temperature_0', 'temperature_1'), and the adapter keeps astropy's "
+            f"names exactly — renaming them would break the tie callables, which read the "
+            f"astropy model by attribute."
+        )
+    parameters: list[Parameter] = []
+    ties: dict[str, AstropyTie] = {}
+    for name in param_names:
+        declared = getattr(model, name)
+        if declared.tied:
+            if name in given:
+                raise ParameterError(
+                    f"from_astropy() was given a prior for {name!r}, but astropy declares it "
+                    f"tied: its value is computed by {declared.tied!r} on every evaluation, "
+                    f"so a prior would never be consulted. Clear the tie on the astropy "
+                    f"model, or drop the prior."
+                )
+            ties[name] = AstropyTie(name, declared.tied)
+            continue
+        parameters.append(_translate(name, declared, given))
+    return tuple(parameters), ties
+
+
+def _translate(name: str, declared: Any, priors: Mapping[str, Any]) -> Parameter:
+    """One astropy ``Parameter`` as an ampere :class:`~ampere.core.Parameter`."""
+    unit = declared.unit
+    value = np.asarray(declared.value, dtype=float)
+    initial: Value = float(value) if value.ndim == 0 else value
+    if name in priors:
+        return _as_parameter(name, priors[name], unit=unit, value=initial)
+    if declared.fixed:
+        return Parameter(name, value=initial, fixed=True, unit=unit)
+    low, high = declared.bounds
+    if low is not None and high is not None:
+        lo, hi = float(low), float(high)
+        if not (math.isfinite(lo) and math.isfinite(hi)) or hi <= lo:
+            raise ParameterError(
+                f"astropy parameter {name!r} declares bounds {declared.bounds}, which are not "
+                f"a usable interval. Fix them on the astropy model, or give this parameter a "
+                f"prior of its own through from_astropy(priors={{{name!r}: ...}})."
+            )
+        return Parameter(
+            name,
+            scipy.stats.uniform(lo, hi - lo),
+            value=initial,
+            unit=unit,
+            description=f"uniform over the astropy bounds {declared.bounds}",
+        )
+    raise ParameterError(
+        f"astropy parameter {name!r} is free and unbounded"
+        + (f" (astropy declares bounds={declared.bounds})" if any(declared.bounds) else "")
+        + ", so there is no prior to translate. ampere will not invent one: a default "
+        f"improper prior is how a fit silently becomes a different fit. Give it one — "
+        f"from_astropy(model, priors={{{name!r}: scipy.stats.norm(0.0, 1.0)}}) — or bound it "
+        f"on the astropy model (parameter.bounds = (lo, hi)), which translates to a uniform "
+        f"prior over that interval, or fix it (parameter.fixed = True)."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -272,64 +381,45 @@ class AdaptedAstropyModel(Model):
 
     def _declare(self, priors: Mapping[str, Any]) -> None:
         """Translate every astropy parameter into an ampere one, or a tie."""
-        unknown = sorted(set(priors) - set(self._param_names))
-        if unknown:
-            raise ParameterError(
-                f"from_astropy() was given priors for {unknown}, which "
-                f"{type(self.astropy_model).__name__} does not declare. Its parameters are "
-                f"{list(self._param_names)}. In a compound model astropy suffixes them by "
-                f"submodel ('temperature_0', 'temperature_1'), and the adapter keeps astropy's "
-                f"names exactly — renaming them would break the tie callables, which read the "
-                f"astropy model by attribute."
-            )
-        for name in self._param_names:
-            declared = getattr(self.astropy_model, name)
-            if declared.tied:
-                if name in priors:
-                    raise ParameterError(
-                        f"from_astropy() was given a prior for {name!r}, but astropy declares it "
-                        f"tied: its value is computed by {declared.tied!r} on every evaluation, "
-                        f"so a prior would never be consulted. Clear the tie on the astropy "
-                        f"model, or drop the prior."
-                    )
-                self.ties[name] = AstropyTie(name, declared.tied)
-                continue
-            self.register_parameter(self._translate(name, declared, priors))
+        parameters, self.ties = translate_astropy_parameters(self.astropy_model, priors)
+        for parameter in parameters:
+            self.register_parameter(parameter)
 
-    def _translate(self, name: str, declared: Any, priors: Mapping[str, Any]) -> Parameter:
-        """One astropy ``Parameter`` as an ampere :class:`~ampere.core.Parameter`."""
-        unit = declared.unit
-        value = np.asarray(declared.value, dtype=float)
-        initial: Value = float(value) if value.ndim == 0 else value
-        if name in priors:
-            return _as_parameter(name, priors[name], unit=unit, value=initial)
-        if declared.fixed:
-            return Parameter(name, value=initial, fixed=True, unit=unit)
-        low, high = declared.bounds
-        if low is not None and high is not None:
-            lo, hi = float(low), float(high)
-            if not (math.isfinite(lo) and math.isfinite(hi)) or hi <= lo:
-                raise ParameterError(
-                    f"astropy parameter {name!r} declares bounds {declared.bounds}, which are not "
-                    f"a usable interval. Fix them on the astropy model, or give this parameter a "
-                    f"prior of its own through from_astropy(priors={{{name!r}: ...}})."
-                )
-            return Parameter(
-                name,
-                scipy.stats.uniform(lo, hi - lo),
-                value=initial,
-                unit=unit,
-                description=f"uniform over the astropy bounds {declared.bounds}",
-            )
-        raise ParameterError(
-            f"astropy parameter {name!r} is free and unbounded"
-            + (f" (astropy declares bounds={declared.bounds})" if any(declared.bounds) else "")
-            + ", so there is no prior to translate. ampere will not invent one: a default "
-            f"improper prior is how a fit silently becomes a different fit. Give it one — "
-            f"from_astropy(model, priors={{{name!r}: scipy.stats.norm(0.0, 1.0)}}) — or bound it "
-            f"on the astropy model (parameter.bounds = (lo, hi)), which translates to a uniform "
-            f"prior over that interval, or fix it (parameter.fixed = True)."
-        )
+    # -- exposed for W4.7's native translations -----------------------------
+    #
+    # Three read-only views of state this adapter already computes and holds
+    # privately. §5 asks a native translation for "the same unit handling",
+    # and the way that cannot drift from this adapter's own is to *read* the
+    # numbers this adapter already worked out — once, at configuration time —
+    # rather than have a second module re-derive them.
+
+    @property
+    def grids(self) -> tuple[Any, ...] | None:
+        """This model's per-axis coordinates, in the kind's own order.
+
+        ``None`` until either the caller supplies ``grid=`` or ``compile_for``
+        negotiates one — the same moment :attr:`template` stops being
+        ``None``.
+        """
+        return self._grids
+
+    @property
+    def factor(self) -> np.ndarray | float:
+        """The hoisted output-unit conversion factor (see :meth:`_unit_factor`).
+
+        Computed once, at configuration time, against ``output_unit=`` and
+        ``equivalencies=`` — the solid-angle rule included. ``1.0`` until a
+        grid is known.
+        """
+        return self._factor
+
+    @property
+    def template(self) -> FunctionSamples | None:
+        """The container this model refills with ``with_values`` on every evaluation.
+
+        ``None`` until a grid is known (see :attr:`grids`).
+        """
+        return self._template
 
     # -- configuration -----------------------------------------------------
 
