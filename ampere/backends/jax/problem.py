@@ -156,6 +156,26 @@ def _native_surface(model: Any, names: tuple[str, ...]) -> Any | None:
     return None
 
 
+def _require_flux(model: Any, label: str) -> Any:
+    """*model*'s native value surface, or a refusal naming the model (*W4.3*).
+
+    A problem may hold a model no dataset binds, and every channel of every
+    model is written to a training set (``results.md`` §11), so this path reaches
+    a model the per-dataset refusal never checked. Naming it is the whole point:
+    before the two-spelling lookup this was an ``AttributeError`` on ``flux``,
+    which at least said which attribute was missing, and a bare ``None`` call
+    would say nothing at all.
+    """
+    found = _native_surface(model, _FLUX_NAMES)
+    if found is None:
+        raise _refuse(
+            type(model).__name__,
+            f"model {label!r} has no native surface (`{_FLUX_NAMES[0]}` or "
+            f"`{_FLUX_NAMES[1]}`), so its channels cannot be produced natively.",
+        )
+    return found
+
+
 def _flat_channel(flux: jax.Array) -> jax.Array:
     """One draw's channel values as a flat vector (*W4.3*).
 
@@ -1011,9 +1031,7 @@ class LoweredProblem:
         routed = self._route(jnp.asarray(theta, dtype=jnp.float64).reshape(-1))
         channels = {
             label: {
-                channel: _flat_channel(
-                    _native_surface(model, _FLUX_NAMES)(channel, routed.get(label, {}))
-                )
+                channel: _flat_channel(_require_flux(model, label)(channel, routed.get(label, {})))
                 for channel in getattr(model, "channels", ())
             }
             for label, model in self.problem.models.items()
