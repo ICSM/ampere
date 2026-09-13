@@ -205,11 +205,14 @@ differs from them; nothing here changes a policy, and where a difference is a
   §12.8), `realisation.py` (`register_realisation`/`realise` — W2.13,
   `inference.md` §10a), and `rng.py` (`substream`, `lowering.md` §9.2). All
   three are backend-neutral, so §4 rule 1 applies to them unchanged.
-* `core/astropy_compat.py` **does not exist yet**. §4.7 of the plan puts the
-  astropy adapter in Phase 4, which is also what `ampere/core/__init__.py`'s
-  docstring says. The parenthesis in the `core/` comment above ("and
-  astropy_compat.py below is core") is a statement about where it will live,
-  not about where it is.
+* `core/astropy_compat.py` **landed at W4.6** (2026-09-11), the last §4
+  contract to be implemented: §4.7's adapter, `from_astropy()`, wrapping any
+  `astropy.modeling` model — compound models included — as a black-box
+  `Model` on the reference path, with the opt-in native-translation hook on
+  each backend (`backends/{torch,jax}/astropy.py`, curated tables empty until
+  W4.7). Its contract page is `contracts/astropy_compat.md`, a post-freeze §4
+  addition. The parenthesis in the `core/` comment above ("and
+  astropy_compat.py below is core") is now a statement about where it is.
 * **D1 (ruled by Peter 2026-09-11, `docs/design/phase4_placement_memo.md`
   §2): a shipped observable's *kind* lives in `core/results_schema.py`; its
   *steps* live in a per-backend `<observable>.py` module —

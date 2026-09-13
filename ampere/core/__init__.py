@@ -10,13 +10,24 @@ Currently landed: the parameter and prior contract (W1.3,
 ``docs/design/contracts/results_schema.md``), the transformation and
 instrument contract (W1.5, ``docs/design/contracts/transformations.md``), the
 likelihood/noise-model contract (W1.6,
-``docs/design/contracts/likelihoods.md``) and the dataset, fitting-problem and
-inference contract (W1.7, ``docs/design/contracts/inference.md``). The
-remaining §4 contract — ``astropy_compat`` — arrives with Phase 4.
+``docs/design/contracts/likelihoods.md``), the dataset, fitting-problem and
+inference contract (W1.7, ``docs/design/contracts/inference.md``) and — since
+W4.6, the last of them — the astropy interop adapter (§4.7,
+``docs/design/contracts/astropy_compat.md``), which wraps any
+``astropy.modeling`` model as a black-box ampere model. Every §4 contract is
+now implemented here.
 """
 
 from __future__ import annotations
 
+from .astropy_compat import (
+    ADAPTABLE_KINDS,
+    AdaptedAstropyModel,
+    AstropyTie,
+    astropy_components,
+    from_astropy,
+    translation_refusal,
+)
 from .dataset import (
     DEFAULT_FAILURE_HISTORY,
     INSTRUMENT_COMPONENT,
@@ -226,6 +237,7 @@ from .transform import (
 _register_pickle_support()
 
 __all__ = [
+    "ADAPTABLE_KINDS",
     "COLUMN_GROUPS",
     "COORDINATE_RTOL",
     "DEFAULT_CHANNEL",
@@ -244,9 +256,11 @@ __all__ = [
     "SET_KIND",
     "SHARED_COMPONENT",
     "SHO",
+    "AdaptedAstropyModel",
     "AmpereError",
     "AnomalyScore",
     "ArrayOps",
+    "AstropyTie",
     "Axis",
     "AxisRequirement",
     "AxisSpec",
@@ -365,6 +379,7 @@ __all__ = [
     "VisibilitySet",
     "VonMisesFamily",
     "WindowedSparseGP",
+    "astropy_components",
     "chunk_bounds",
     "declared_capabilities",
     "decode",
@@ -375,6 +390,7 @@ __all__ = [
     "family_named",
     "foreign_parts",
     "foreign_parts_refusal",
+    "from_astropy",
     "generator",
     "latent_parameter",
     "list_families",
@@ -403,5 +419,6 @@ __all__ = [
     "simulate_batched_of",
     "substream",
     "term_provenance_entries",
+    "translation_refusal",
     "unpack",
 ]

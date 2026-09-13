@@ -87,6 +87,7 @@ from __future__ import annotations
 
 from ._config import BACKEND, configure_x64, require_x64, x64_enabled
 from ._device import DEVICE
+from .astropy import TRANSLATIONS, from_astropy
 from .bijections import log_abs_det_jacobian, lower_bijection
 from .distributions import lower_prior
 from .gp import (
@@ -130,6 +131,7 @@ __all__ = [
     "FLUX_UNIT",
     "PRECISIONS",
     "SHO",
+    "TRANSLATIONS",
     "BlackBody",
     "CalibrationScale",
     "DenseGP",
@@ -159,6 +161,7 @@ __all__ = [
     "available_devices",
     "configure_x64",
     "filter_spec",
+    "from_astropy",
     "log_abs_det_jacobian",
     "lower_bijection",
     "lower_prior",
