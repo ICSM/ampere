@@ -71,12 +71,16 @@ uncorrelated one, and :func:`refuse_family`'s ``GP_ANALYTIC_IMPLEMENTED`` guard
 stays as the **generic** staging check for whatever family next declares a
 closed form before writing it.
 
-Two families stay refused, by name, at construction:
+One family stays refused, by name, at construction:
 
-``rice``, ``von_mises``
-    Declared slots with no implementation anywhere yet, including the
-    reference path. A backend that implemented one first would be inventing
-    the definition rather than transcribing it.
+``rice``
+    A declared slot with no implementation anywhere yet, including the
+    reference path. A backend that implemented it first would be inventing the
+    definition rather than transcribing it. (``von_mises`` was in the same
+    position until W4.1 implemented it in ``ampere.core`` with the
+    interferometric modality; **W4.3** transcribes it here, because NUTS on
+    visibilities *and* closure phases is what Phase 4 set out to prove and the
+    closure-phase half needs a wrapped density with a gradient.)
 
 **Censored Student-t is refused specifically**, and the reason is worth
 stating because it is a library gap rather than a decision: the Tobit form
@@ -109,7 +113,7 @@ import torch
 from ampere.core import LimitKind
 from ampere.core.exceptions import LoweringError
 
-from ._config import BACKEND, DEFAULT_DEVICE, DEFAULT_DTYPE, as_tensor
+from ._config import BACKEND, DEFAULT_DEVICE, DEFAULT_DTYPE, as_tensor, complex_dtype
 
 __all__ = ["NATIVE_FAMILIES", "FamilyInputs", "native_log_prob", "refuse_family"]
 
@@ -313,6 +317,47 @@ def _complex_gaussian(inputs: FamilyInputs) -> torch.Tensor:
     return torch.sum(-(residual * residual) / (2.0 * variance) - _LOG_2PI - torch.log(variance))
 
 
+def _von_mises(inputs: FamilyInputs) -> torch.Tensor:
+    """``VonMisesFamily.log_prob``, transcribed (*W4.3*). Wrapped phase noise.
+
+    ``log p = sum[kappa (cos(delta) - 1) - log(2 pi) - log(i0e(kappa))]`` with
+    ``kappa = 1/sigma**2`` per sample and ``delta`` the residual **wrapped**
+    into ``(-pi, pi]``. Three details are load-bearing rather than stylistic,
+    and all three are the core's:
+
+    * the wrap goes through ``angle(exp(i x))``, not a modulo, because that is
+      the expression that gets the boundary and the sign of ``-pi`` right
+      without a special case — and it is differentiable, which a branch on the
+      value would not be;
+    * the normalisation is ``i0e``, the *exponentially scaled* Bessel function,
+      which is what keeps ``log I0(kappa)`` finite at the large ``kappa`` a
+      well-measured closure phase produces. ``kappa (cos - 1)`` rather than
+      ``kappa cos - kappa`` is the same regrouping the core makes, for the same
+      cancellation reason;
+    * the normalisation does **not** cancel. Sigma varies per triangle in every
+      real dataset, so an unnormalised wrapped Gaussian would have
+      sigma-dependent mass over the circle (``interferometry.md`` §5).
+
+    Censoring never reaches here (a limit on an angle is not defined) and a
+    correlated noise model is refused at composition: a GP added to a wrapped
+    observable is a latent-variable model whose latent-conditional form
+    ``ampere.core`` does not implement, which is Phase 5's (W5.1).
+    """
+    sigma = inputs.sigma
+    if sigma is None:  # pragma: no cover - composition refuses this first
+        raise LoweringError(
+            "uncertainty",
+            backend=BACKEND,
+            detail="the von_mises family needs per-sample uncertainties (kappa = 1/sigma**2).",
+        )
+    kappa = 1.0 / (sigma * sigma)
+    residual = inputs.observed - inputs.predicted
+    delta = torch.angle(torch.exp(1j * residual.to(complex_dtype(inputs.dtype))))
+    return torch.sum(
+        kappa * (torch.cos(delta) - 1.0) - _LOG_2PI - torch.log(torch.special.i0e(kappa))
+    )
+
+
 #: Family neutral name -> its torch body. The table a lowering consults, and
 #: the one place a new family joins the realised path: add a body, add a row,
 #: and the conformance suite compares it against ``ampere.core``'s at every
@@ -323,6 +368,7 @@ NATIVE_FAMILIES: dict[str, Any] = {
     "cauchy": _cauchy,
     "poisson": _poisson,
     "complex_gaussian": _complex_gaussian,
+    "von_mises": _von_mises,
 }
 
 #: Families whose torch body cannot consume a censoring declaration, and the

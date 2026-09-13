@@ -19,11 +19,15 @@ at all.
 Which families are here
 -----------------------
 Exactly the ones ``ampere.core`` **implements** — ``gaussian``,
-``student_t``, ``cauchy``, ``complex_gaussian`` and ``poisson``. ``rice`` and
-``von_mises`` are declared-but-unimplemented slots on the reference path
-(their ``log_prob`` raises), so there is nothing here to agree with: they are
-refused by name at lowering time, which is the same answer the numpy path
-gives, arrived at earlier.
+``student_t``, ``cauchy``, ``complex_gaussian``, ``poisson`` and, since
+**W4.3**, ``von_mises``. ``rice`` is still a declared-but-unimplemented slot on
+the reference path (its ``log_prob`` raises), so there is nothing here to agree
+with: it is refused by name at lowering time, which is the same answer the numpy
+path gives, arrived at earlier. ``von_mises`` was in that position until W4.1
+implemented it in ``ampere.core`` with the interferometric modality, and it is
+transcribed here because NUTS on visibilities *and* closure phases is what Phase
+4 set out to prove, and the closure-phase half needs a wrapped density with a
+gradient.
 
 Censoring
 ---------
@@ -65,7 +69,7 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 import jax.scipy.stats as jst
-from jax.scipy.special import betainc, gammaln
+from jax.scipy.special import betainc, gammaln, i0e
 
 from ampere.core import LikelihoodFamily, LimitKind
 from ampere.core.exceptions import LoweringError
@@ -339,15 +343,54 @@ def _poisson(
     return jnp.where(jnp.all(rate > 0.0), value, -jnp.inf)
 
 
+def _von_mises(
+    predicted: jax.Array,
+    observed: jax.Array,
+    sigma: jax.Array | None,
+    family: LikelihoodFamily,
+    values: Mapping[str, Any],
+    limits: jax.Array | None,
+    latent: jax.Array | None,
+) -> jax.Array:
+    """``ampere.core.VonMisesFamily.log_prob`` in jax (*W4.3*). Wrapped phase noise.
+
+    ``log p = sum[kappa (cos(delta) - 1) - log(2 pi) - log(i0e(kappa))]`` with
+    ``kappa = 1/sigma**2`` per sample and ``delta`` the residual **wrapped**
+    into ``(-pi, pi]``. Three details are the core's and all three matter:
+
+    * the wrap goes through ``angle(exp(i x))`` rather than a modulo, because
+      that expression gets the boundary and the sign of ``-pi`` right with no
+      special case, and it is differentiable where a branch on the value would
+      not be;
+    * the normalisation uses ``i0e``, the exponentially scaled ``I0``, which is
+      what keeps ``log I0(kappa)`` finite at the large ``kappa`` a
+      well-measured closure phase produces; ``kappa (cos - 1)`` is the same
+      regrouping the core makes, for the same cancellation reason;
+    * it does **not** cancel: sigma varies per triangle in every real dataset,
+      so an unnormalised wrapped Gaussian would put sigma-dependent mass on the
+      circle (``interferometry.md`` §5).
+
+    Censoring never reaches here -- a limit on an angle is not defined -- and a
+    correlated noise model is refused at composition, because a GP added to a
+    wrapped observable is a latent-variable model whose latent-conditional form
+    ``ampere.core`` does not implement (Phase 5, W5.1).
+    """
+    assert sigma is not None  # lower_family has checked the declaration
+    kappa = 1.0 / sigma**2
+    delta = jnp.angle(jnp.exp(1j * (observed - predicted).astype(jnp.complex128)))
+    return jnp.sum(kappa * (jnp.cos(delta) - 1.0) - _LOG_2PI - jnp.log(i0e(kappa)))
+
+
 #: Family ``NAME`` -> its lowered evaluation. The keys are exactly the
 #: families ``ampere.core`` implements; see this module's docstring for why
-#: ``rice`` and ``von_mises`` are absent rather than stubbed.
+#: ``rice`` is absent rather than stubbed.
 _FAMILIES: dict[str, Any] = {
     "gaussian": _gaussian,
     "student_t": _student_t,
     "cauchy": _cauchy,
     "complex_gaussian": _complex_gaussian,
     "poisson": _poisson,
+    "von_mises": _von_mises,
 }
 
 #: The family names this backend can compose into a differentiable density.
