@@ -61,9 +61,11 @@ from ampere.backends.jax import (
     BinaryVisibilities,
     CalibrationScale,
     ClosurePhase,
+    EpochSample,
     FourierSample,
     GaussianSource,
     GaussianSourceVisibilities,
+    ReflexOrbit,
     TimeSmearing,
     UniformDisc,
     UniformDiscVisibilities,
@@ -101,6 +103,7 @@ from ampere.core import (
 
 from ._kernels import build_kernel
 from ..protocol import (
+    AstrometryPieces,
     BackendCapabilities,
     CovarianceSpec,
     InterferometryPieces,
@@ -125,6 +128,7 @@ COORDINATE_UNIT = u.micron
 
 __all__ = [
     "BACKEND",
+    "JAX_ASTROMETRY",
     "JAX_INTERFEROMETRY",
     "JaxBackend",
     "JaxLinearModel",
@@ -404,6 +408,15 @@ JAX_INTERFEROMETRY = InterferometryPieces(
 )
 
 
+#: This backend's astrometric vocabulary, as one record (*W4.9*). The shipped
+#: classes, unmodified: they declare ``BACKEND = "jax"``, for the same reason
+#: :data:`JAX_INTERFEROMETRY` does above.
+JAX_ASTROMETRY = AstrometryPieces(
+    epoch_sample=EpochSample,
+    reflex_orbit=ReflexOrbit,
+)
+
+
 class JaxBackend:
     """The jax fixture: the shipped ``ampere.backends.jax`` package."""
 
@@ -442,6 +455,8 @@ class JaxBackend:
         # ``test_interferometry.py`` runs on this column instead of skipping
         # with a reason naming what W4.3 owed.
         interferometry=True,
+        # **W4.9**: the native astrometric twins, likewise.
+        astrometry=True,
         # Both, since W2.5 slice 2 chose celerite2.jax for the O(N) solve.
         solvers=frozenset({SolverKind.DENSE, SolverKind.QUASISEP}),
     )
@@ -483,6 +498,9 @@ class JaxBackend:
 
     def interferometry(self) -> InterferometryPieces:
         return JAX_INTERFEROMETRY
+
+    def astrometry(self) -> AstrometryPieces:
+        return JAX_ASTROMETRY
 
     def parameter_space(self, declaration: ParameterSet) -> LoweredParameterSet:
         return LoweredParameterSet(declaration)

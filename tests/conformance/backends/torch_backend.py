@@ -70,9 +70,11 @@ from ampere.backends.torch import (
     BinaryVisibilities,
     CalibrationScale,
     ClosurePhase,
+    EpochSample,
     FourierSample,
     GaussianSource,
     GaussianSourceVisibilities,
+    ReflexOrbit,
     TimeSmearing,
     UniformDisc,
     UniformDiscVisibilities,
@@ -111,6 +113,7 @@ from ampere.core import (
 
 from ._kernels import build_kernel
 from ..protocol import (
+    AstrometryPieces,
     BackendCapabilities,
     CovarianceSpec,
     InterferometryPieces,
@@ -125,6 +128,7 @@ from ..protocol import (
 
 __all__ = [
     "BACKEND",
+    "TORCH_ASTROMETRY",
     "TORCH_INTERFEROMETRY",
     "LinearModel",
     "Photometry",
@@ -437,6 +441,15 @@ TORCH_INTERFEROMETRY = InterferometryPieces(
 )
 
 
+#: This backend's astrometric vocabulary, as one record (*W4.9*). The shipped
+#: classes, unmodified: they declare ``BACKEND = "torch"``, for the same
+#: reason :data:`TORCH_INTERFEROMETRY` does above.
+TORCH_ASTROMETRY = AstrometryPieces(
+    epoch_sample=EpochSample,
+    reflex_orbit=ReflexOrbit,
+)
+
+
 class TorchBackend:
     """The torch fixture: the shipped ``ampere.backends.torch`` package.
 
@@ -473,6 +486,8 @@ class TorchBackend:
         # ``test_interferometry.py`` runs on this column instead of skipping
         # with a reason naming what W4.3 owed.
         interferometry=True,
+        # **W4.9**: the native astrometric twins, likewise.
+        astrometry=True,
         # Both, since W2.4 slice 2: see the module docstring.
         solvers=frozenset({SolverKind.DENSE, SolverKind.QUASISEP}),
     )
@@ -509,6 +524,9 @@ class TorchBackend:
 
     def interferometry(self) -> InterferometryPieces:
         return TORCH_INTERFEROMETRY
+
+    def astrometry(self) -> AstrometryPieces:
+        return TORCH_ASTROMETRY
 
     def parameter_space(self, declaration: ParameterSet) -> TorchParameterSpace:
         return TorchParameterSpace(declaration)

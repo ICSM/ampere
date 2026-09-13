@@ -104,6 +104,7 @@ from .gp import (
     SquaredExponential,
     Sum,
 )
+from .astrometry import EpochSample, ReflexOrbit
 from .instrument import CalibrationScale, LSFConvolution, Resample, SyntheticPhotometry
 from .interferometry import (
     Amplitude,
@@ -153,6 +154,7 @@ __all__ = [
     "CalibrationScale",
     "ClosurePhase",
     "DenseGP",
+    "EpochSample",
     "FourierSample",
     "FractionalModelGPNoise",
     "FractionalModelNoise",
@@ -173,6 +175,7 @@ __all__ = [
     "PowerLaw",
     "Product",
     "QuasisepGP",
+    "ReflexOrbit",
     "Resample",
     "RotationTerm",
     "SingleDeviceSharder",
