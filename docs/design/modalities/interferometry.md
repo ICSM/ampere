@@ -38,6 +38,45 @@ truth. What shipped, and what moved:
   the quadrature, and a source with real power beyond the longest baseline
   has that power folded back by a sum at that step.
 
+**Landed at W4.3 (Phase 4).** The native twins and the modality under every
+engine, which is what the sketch was a proof *of*:
+
+- the steps and the six source models exist on both modern backends,
+  `ampere.backends.torch.interferometry` and
+  `ampere.backends.jax.interferometry`, under the same class names. Both follow
+  the **inheriting** twin pattern — each class derives from its
+  `ampere.backends.reference` counterpart and overrides only the four capability
+  flags and the arithmetic — because in this modality the declaration is the
+  large and dangerous half: `FourierSample` publishes the field of view and the
+  Nyquist `max_step` over the *expanded* coverage, and its `configure_from`
+  fixes the flat sub-sample layout two other steps read back. Two backends that
+  wrote that twice would eventually negotiate slightly different pixel scales
+  for one declaration, and §4's own warning says why that would not look like an
+  error;
+- the native model surface is spelled `native_flux` / `native_grid` rather than
+  `flux` / `grid`. Not a preference: every source model declares a *parameter*
+  called `flux`, and `Parameterised._check_free_name` refuses a parameter whose
+  name shadows a class attribute, so `flux` is unavailable as a method name on
+  exactly these classes. Both backends' `problem.py` accept either spelling;
+- §7's GP over a `VisibilitySet` **runs** now: W4.5's `axes=` selector landed,
+  W4.2 implemented the circular complex closed form, and W4.3 samples it under
+  NUTS on both backends. The GP on the *closure phases* is still refused by
+  name — a GP added to a wrapped observable is a latent-variable model, which is
+  W5.1's;
+- `VonMisesFamily` gained native bodies on torch and jax. It had been refused on
+  both on the stated grounds that `ampere.core` declared but did not implement
+  it — true until W4.1 — and without them NUTS cannot see the closure-phase half
+  of the joint fit at all;
+- **two honest downgrades**, declared on the classes that own them:
+  `UniformDisc` declares `DIFFERENTIABLE = False` on both backends, because a
+  hard-edged disc rendered onto a grid is piecewise constant in its diameter and
+  automatic differentiation returns the amplitude term while silently omitting
+  the larger boundary term; and `UniformDiscVisibilities` declares it too, for a
+  library reason each backend states — `torch.special.bessel_j1` has no
+  backward at all, and `jax.scipy.special.bessel_jn` is accurate only inside a
+  measured argument window. A uniform disc is therefore not a gradient-based
+  model in ampere; the Gaussian and the binary are.
+
 Nothing here was implemented when it was written. Every snippet below was
 executed against the merged `ampere.core` at commit `8c4e99d` (see §8 for what
 was checked and how);
@@ -408,7 +447,11 @@ change any interface.
 
 ## 7. The likelihood side, and one thing it cannot do
 
-> **Status, W4.2 (2026-09-13): this section's recommendation is implemented.**
+> **Status, W4.2 (2026-09-13): this section's recommendation is implemented**,
+> and **W4.3** samples it: NUTS on a `complex_gaussian` + `GaussianProcessNoise`
+> visibility problem runs on both modern backends, with the kernel bound through
+> `GaussianProcessNoise.kernel_for(observed)` so that an `axes=("u", "v")`
+> selector means the same thing natively as it does on the contract path.
 > `complex_gaussian` + `GaussianProcessNoise` is `ANALYTIC`, with the circular
 > GP as its meaning exactly as argued below; `GP_ANALYTIC_IMPLEMENTED` is
 > `True`; and the implementation is the "one call on a stacked residual" this

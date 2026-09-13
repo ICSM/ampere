@@ -51,12 +51,18 @@ from ampere.backends.jax import (
     configure_x64,
     lower_problem,
 )
+from ampere.backends.jax import IndependentNoise
 from ampere.core import (
+    ClosurePhases,
+    ComplexGaussianFamily,
     Dataset,
     FittingProblem,
     GaussianFamily,
+    Instrument,
     Likelihood,
     Spectrum,
+    VisibilitySet,
+    VonMisesFamily,
 )
 
 configure_x64()
@@ -250,3 +256,125 @@ class TestChunkSharding:
         theta = self.theta(problem, draws=len(ACCELERATORS) * 2 + 1)
         spread = lowered.simulate_batched(theta, sharder=MeshSharder(ACCELERATORS))
         assert len(spread) == theta.shape[0]
+
+
+# ---------------------------------------------------------------------------
+# The Phase 4 modality's placement (W4.3)
+# ---------------------------------------------------------------------------
+
+#: A two-baseline, one-triangle array, inline and tiny. Self-contained on
+#: purpose: the *arithmetic* of the interferometric twins is held to the
+#: reference backend on the CPU by ``tests/backends/test_native_interferometry.py``
+#: and by the conformance battery, so what is left for a GPU row is the
+#: **placement** — and a placement row should not also carry a synthetic source,
+#: a negotiated grid and a noise realisation it cannot check.
+_UV = np.array([1.0e7, -1.6e7, 0.6e7])
+_VV = np.array([0.4e7, 1.2e7, -1.6e7])
+_WAVES = np.full(3, 2.2)
+_FIELD_OF_VIEW = 40.0
+
+
+def _visibilities() -> VisibilitySet:
+    """Three baselines with a real error bar apiece."""
+    return VisibilitySet(
+        _UV,
+        _VV,
+        _WAVES * u.micron,
+        np.array([0.9 + 0.1j, 0.6 - 0.2j, 0.8 + 0.05j]) * u.Jy,
+        uncertainty=np.full(3, 0.02) * u.Jy,
+    )
+
+
+def _closure_phases() -> ClosurePhases:
+    """One triangle, whose third baseline is the negated sum of the stored two."""
+    return ClosurePhases(
+        _UV[:1],
+        _VV[:1],
+        _UV[1:2],
+        _VV[1:2],
+        _WAVES[:1] * u.micron,
+        np.array([-0.4]) * u.rad,
+        uncertainty=np.full(1, 0.05) * u.rad,
+    )
+
+
+def interferometric_problem(device: str = PLATFORM) -> FittingProblem:
+    """Visibilities and closure phases from one sky, every piece on *device*."""
+    from ampere.backends.jax import interferometry as itf
+
+    visibility = _visibilities()
+    phase = _closure_phases()
+    model = itf.Binary.on_field(
+        _FIELD_OF_VIEW * u.mas,
+        8,
+        channels="sky",
+        separation=st.uniform(6.0, 14.0),
+        position_angle=0.7,
+        flux_ratio=st.uniform(0.1, 0.7),
+        flux=1.7,
+        component_fwhm=2.0,
+        device=device,
+    )
+    return FittingProblem(
+        model,
+        [
+            Dataset(
+                visibility,
+                Instrument(
+                    [
+                        itf.FourierSample.from_observed(
+                            visibility, field_of_view=_FIELD_OF_VIEW * u.mas, device=device
+                        )
+                    ],
+                    channel="sky",
+                    label="vis",
+                ),
+                Likelihood(ComplexGaussianFamily(), IndependentNoise(device=device)),
+                label="vis",
+            ),
+            Dataset(
+                phase,
+                Instrument(
+                    [
+                        itf.FourierSample.from_observed(
+                            phase, field_of_view=_FIELD_OF_VIEW * u.mas, device=device
+                        ),
+                        itf.ClosurePhase(device=device),
+                    ],
+                    channel="sky",
+                    label="t3",
+                ),
+                Likelihood(VonMisesFamily(), IndependentNoise(device=device)),
+                label="t3",
+            ),
+        ],
+        seed=20260913,
+    )
+
+
+class TestTheInterferometricTwinsComposeOnTheDevice:
+    """``declared_capabilities``' device rule, for Phase 4's proof modality.
+
+    The arithmetic is held to the reference backend on the CPU by
+    ``tests/backends/test_native_interferometry.py`` and by the conformance
+    battery; what is specific to an accelerator is the **placement**, and that a
+    density built from a discrete Fourier transform of a model image evaluates
+    and differentiates there.
+    """
+
+    def test_every_interferometric_part_declares_the_device(self) -> None:
+        problem = interferometric_problem()
+        assert problem.device == PLATFORM
+        parts = (*problem.models.values(), *problem.datasets.capability_parts)
+        assert {str(part.DEVICE) for part in parts} == {PLATFORM}
+
+    def test_the_realised_density_and_its_gradient_live_on_the_device(self) -> None:
+        problem = interferometric_problem()
+        lowered = lower_problem(problem)
+        theta = jax.numpy.asarray(problem.unconstrain(problem.reference_values))
+        value = lowered.log_prob_unconstrained(theta)
+        assert {device.platform for device in value.devices()} == {PLATFORM}
+        assert bool(jax.numpy.isfinite(value))
+        gradient = jax.grad(lowered.log_prob_unconstrained)(theta)
+        assert {device.platform for device in gradient.devices()} == {PLATFORM}
+        assert bool(jax.numpy.all(jax.numpy.isfinite(gradient)))
