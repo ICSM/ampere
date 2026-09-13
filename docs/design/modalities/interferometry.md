@@ -408,9 +408,24 @@ change any interface.
 
 ## 7. The likelihood side, and one thing it cannot do
 
+> **Status, W4.2 (2026-09-13): this section's recommendation is implemented.**
+> `complex_gaussian` + `GaussianProcessNoise` is `ANALYTIC`, with the circular
+> GP as its meaning exactly as argued below; `GP_ANALYTIC_IMPLEMENTED` is
+> `True`; and the implementation is the "one call on a stacked residual" this
+> section predicted rather than the "two calls to
+> `log_marginal_likelihood`" — `GPSolver`'s right-hand side may now carry `k`
+> realisations sharing one covariance, so the factorisation and the
+> log-determinant happen once (`likelihoods.md` §4 and §7). The prediction that
+> `QuasisepGP` "will inherit it" is the one thing here that turned out **false**,
+> and for a structural reason rather than a scheduling one: the O(N) path needs
+> one ordered one-dimensional coordinate, and a visibility is a point of the
+> `(u, v)` plane at a wavelength. It is refused by name. The section is kept as
+> written below, as the record of the argument the ruling was made on.
+
 The visibility likelihood is `ComplexGaussianFamily` plus `IndependentNoise`,
 and it composes and evaluates cleanly on a `VisibilitySet` (verified). The
-flexible likelihood, however, is **refused** for visibilities:
+flexible likelihood, however, **was refused** for visibilities when this was
+written:
 
 ```
 LikelihoodError: the complex_gaussian family with a GaussianProcessNoise noise
@@ -462,6 +477,12 @@ here: the kernel is isotropic in `(u, v)`, so an elongated source's anisotropic
 residual correlation is not expressible (§15.2); and only one kernel per noise
 model, so "short-baseline structure plus long-baseline structure" needs the
 `SumKernel` extension point (§15.1).
+
+*(W4.5 lifted the second of those — `Sum` and `Product` ship, and the chromatic
+`Product(Matern32(axes=("u", "v")), Matern32(axes=("spectral_axis",)))` of
+`phase4_placement_memo.md` §3.6 is one of W4.2's conformance rows. The first
+stands: one isotropic length-scale per leaf, so an anisotropic `(u, v)`
+correlation still has no expression. `likelihoods.md` §15.2 is where it lives.)*
 
 ## 8. What was verified, and how
 
