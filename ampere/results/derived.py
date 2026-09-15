@@ -141,6 +141,34 @@ FACTORISED_DECOMPOSITION = "factorised"
 CONDITIONAL_LOO_DECOMPOSITION = "conditional_loo"
 
 
+def _refuse_complex(label: str, complex_valued: bool, group: str, alternative: str) -> None:
+    """Refuse, by name, a complex-valued dataset for a group that holds one real variable.
+
+    **W5.2.** Before this, the three derived groups disagreed:
+    :func:`add_posterior_predictive` refused explicitly, while
+    :func:`add_residuals` and :func:`gp_localisation` let plain numpy casting
+    (``observed.values`` or a conditioned mean, cast to ``float``) silently
+    discard the imaginary part, with only a ``ComplexWarning`` — the kind of
+    warning a script redirecting stderr never sees. All three now refuse the
+    same way: ``results.md`` §4 splits a complex *observed* container into
+    ``<label>_real`` and ``<label>_imag`` at emission time, and none of the
+    derived groups mirror that split, so there is nowhere for the second
+    component to go. Which component to derive, or the modulus, is the
+    caller's choice and not this function's to guess — deferred to W5.3's
+    ``component=`` argument on the plotting side; until then, the caller
+    supplies a real dataset by name or computes the complex one directly.
+    """
+    if not complex_valued:
+        return
+    raise ResultsError(
+        f"dataset {label!r} is complex-valued, and a {group} group holds one real variable "
+        f"per dataset. results.md §4 splits a complex observed container into <label>_real "
+        f"and <label>_imag; the derived groups do not do that yet, and which component -- or "
+        f"the modulus -- is the right one to derive is the caller's choice (deferred to "
+        f"W5.3). {alternative}"
+    )
+
+
 def add_posterior_predictive(
     tree: Any,
     problem: FittingProblem,
@@ -202,14 +230,13 @@ def add_posterior_predictive(
     labels = _requested(problem, datasets)
     for label in labels:
         observed = problem.datasets[label].observed
-        if np.asarray(observed.values).dtype.kind == "c":
-            raise ResultsError(
-                f"dataset {label!r} is complex-valued, and a posterior-predictive group holds "
-                f"one real variable per dataset. results.md §4 splits a complex observed "
-                f"container into <label>_real and <label>_imag; the derived groups do not do "
-                f"that yet. Replicate the real datasets by name, or draw the replicates "
-                f"yourself with FittingProblem.simulate(observe=True)."
-            )
+        _refuse_complex(
+            label,
+            np.asarray(observed.values).dtype.kind == "c",
+            "posterior-predictive",
+            "Replicate the real datasets by name, or draw the replicates yourself with "
+            "FittingProblem.simulate(observe=True).",
+        )
     thetas, kept = _stored_thetas(tree, problem, thin)
     chains, draws = thetas.shape[0], thetas.shape[1]
     variables = {
@@ -309,20 +336,30 @@ def add_residuals(
     ------
     ampere.core.exceptions.ResultsError
         If the problem is not the one the run was over, if a requested dataset
-        is not in it, or if ``standardised=True`` and a dataset has no
-        uncertainties to standardise by.
+        is not in it, if a requested dataset's observed container is
+        complex-valued (**W5.2**: this group holds one real variable per
+        dataset, exactly as :func:`add_posterior_predictive` and
+        :func:`gp_localisation` refuse for the same reason), or if
+        ``standardised=True`` and a dataset has no uncertainties to
+        standardise by.
     """
     _require_same_problem(tree, problem)
     labels = _requested(problem, datasets)
-    if standardised:
-        for label in labels:
-            observed = problem.datasets[label].observed
-            if observed.uncertainty is None:
-                raise ResultsError(
-                    f"dataset {label!r} has no uncertainties, so a standardised residual is "
-                    f"undefined. Pass standardised=False for residuals in the data's own "
-                    f"units, or attach uncertainties to the observed container."
-                )
+    for label in labels:
+        observed = problem.datasets[label].observed
+        _refuse_complex(
+            label,
+            np.asarray(observed.values).dtype.kind == "c",
+            "residuals",
+            "Residualise the real datasets by name, or compute observed - predicted "
+            "yourself with FittingProblem.simulate() and Likelihood.conditional's inputs.",
+        )
+        if standardised and observed.uncertainty is None:
+            raise ResultsError(
+                f"dataset {label!r} has no uncertainties, so a standardised residual is "
+                f"undefined. Pass standardised=False for residuals in the data's own "
+                f"units, or attach uncertainties to the observed container."
+            )
     thetas, kept = _stored_thetas(tree, problem, thin)
     chains, draws = thetas.shape[0], thetas.shape[1]
     variables = {
@@ -429,9 +466,28 @@ def gp_localisation(
         A 1-D array of coordinates to evaluate on instead of the data's own
         axis. Handed to the solver untouched, so one place decides what a bare
         array of coordinates means.
+
+    Raises
+    ------
+    ampere.core.exceptions.ResultsError
+        If the problem is not the one the run was over, if no dataset has a
+        ``GaussianProcessNoise`` model, or if a requested dataset's observed
+        container is complex-valued (**W5.2**: the conditioned mean of a
+        circular complex GP comes back complex too, and this group holds one
+        real variable per dataset — the same reason
+        :func:`add_posterior_predictive` and :func:`add_residuals` refuse).
     """
     _require_same_problem(tree, problem)
     labels = _gp_requested(problem, datasets)
+    for label in labels:
+        observed = problem.datasets[label].observed
+        _refuse_complex(
+            label,
+            np.asarray(observed.values).dtype.kind == "c",
+            "gp_localisation",
+            "Localise the real datasets by name, or call Likelihood.conditional yourself "
+            "and choose a component of the complex conditioned mean.",
+        )
     thetas, kept = _stored_thetas(tree, problem, thin)
     chains, draws = thetas.shape[0], thetas.shape[1]
     grid = None if at is None else np.asarray(at, dtype=float)
