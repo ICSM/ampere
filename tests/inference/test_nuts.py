@@ -360,6 +360,25 @@ class TestTheJointProblemSamples:
         norm = np.asarray(joint_run["posterior"]["model.norm"])
         assert bool(np.all(norm > 0.0))  # lognormal support
 
+    def test_max_tree_depth_and_target_accept_prob_pass_through(self, kit: Kit) -> None:
+        """W5.2: both are pass-through to the library's own ``NUTS``, recorded
+        like the existing settings, rather than merely accepted and dropped.
+
+        Non-default values are chosen deliberately (a shallower tree, a higher
+        acceptance target) so this fails if either argument is silently
+        ignored rather than merely if it is mis-recorded.
+        """
+        run = realised_sample(
+            joint_problem(kit),
+            draws=50,
+            warmup=50,
+            chains=1,
+            max_tree_depth=4,
+            target_accept_prob=0.95,
+        )
+        assert run.attrs["ampere_nuts_max_tree_depth"] == 4
+        assert run.attrs["ampere_nuts_target_accept_prob"] == pytest.approx(0.95)
+
 
 # ---------------------------------------------------------------------------
 # 2. Agreement with a posterior that is arithmetic
