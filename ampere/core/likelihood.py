@@ -394,6 +394,32 @@ class GPConditional:
         return np.sqrt(np.clip(self.variance, 0.0, None))
 
 
+def _find_nested_product(
+    kernel: Kernel, path: tuple[str, ...] = ()
+) -> tuple[Product, tuple[str, ...]] | None:
+    """The first :class:`Product` in *kernel*'s tree, and the label path to it.
+
+    W5.2: a bare :class:`Product` is refused by name (:meth:`GPSolver.check_compatible`)
+    because "products are not quasiseparable" is a sharper diagnosis than the
+    generic ``not kernel.QUASISEPARABLE`` one -- but that check only fired when
+    *kernel* itself was the ``Product``. A :class:`Sum` that merely *contains*
+    one — ``Sum(Matern32(...), Product(...))`` — is not itself a ``Product``,
+    so it fell through to the generic refusal, which names ``Sum`` rather than
+    the term that is actually the problem. This walks the composite tree (via
+    :attr:`Kernel.terms`, empty for a leaf) and returns the first ``Product``
+    found, together with the dotted label path from the root, so the caller
+    can name it directly. The empty path means *kernel* itself is the
+    ``Product`` -- the case the original check already handled correctly.
+    """
+    if isinstance(kernel, Product):
+        return kernel, path
+    for label, child in kernel.terms:
+        found = _find_nested_product(child, (*path, label))
+        if found is not None:
+            return found
+    return None
+
+
 class GPSolver(abc.ABC):
     """How the GP algebra is done. A strategy, chosen per problem.
 
@@ -513,10 +539,13 @@ class GPSolver(abc.ABC):
         ``Matern32(axes=("u", "v"))``. The ordered-1D rule counts the axes the
         kernel tree actually uses rather than the container's, so a
         quasiseparable solve over the spectral axis of a three-axis container
-        is expressible; and a :class:`~ampere.core.kernels.Product` is refused
-        on a quasiseparable solver by name, before the generic
-        ``QUASISEPARABLE`` refusal, because "products are not quasiseparable"
-        is a sharper diagnosis than "this kernel is not".
+        is expressible; and a :class:`~ampere.core.kernels.Product` — anywhere
+        in the kernel's tree, not only at the root, so a
+        ``Sum(Matern32(...), Product(...))`` names the ``Product`` term
+        rather than the enclosing ``Sum`` (W5.2) — is refused on a
+        quasiseparable solver by name, before the generic ``QUASISEPARABLE``
+        refusal, because "products are not quasiseparable" is a sharper
+        diagnosis than "this kernel is not".
         """
         kind = type(observed).__name__
         # Declarative incompatibilities first: they are permanent facts about
@@ -531,16 +560,31 @@ class GPSolver(abc.ABC):
                 f"SVGP / SKI / Vecchia strategy slots (DEVELOPMENT_PLAN.md §4.4, Phase 5)."
             )
         kernel.check_axes(observed, owner=self.NAME)
-        if self.REQUIRES_QUASISEPARABLE and isinstance(kernel, Product):
-            raise LikelihoodError(
-                f"{self.NAME} cannot lower a Product: a product of quasiseparable kernels is "
-                f"not quasiseparable. Where the factors act on different axes — which is what a "
-                f"Product is for — the result is not a function of one ordered coordinate at "
-                f"all, and where they act on the same one the semiseparable rank multiplies and "
-                f"is not recoverable from the factors' own representations. Use DenseGP, or "
-                f"replace the Product with a Sum, which is quasiseparable exactly when every "
-                f"term is."
-            )
+        if self.REQUIRES_QUASISEPARABLE:
+            found = _find_nested_product(kernel)
+            if found is not None and not found[1]:
+                raise LikelihoodError(
+                    f"{self.NAME} cannot lower a Product: a product of quasiseparable kernels is "
+                    f"not quasiseparable. Where the factors act on different axes — which is "
+                    f"what a Product is for — the result is not a function of one ordered "
+                    f"coordinate at all, and where they act on the same one the semiseparable "
+                    f"rank multiplies and is not recoverable from the factors' own "
+                    f"representations. Use DenseGP, or replace the Product with a Sum, which is "
+                    f"quasiseparable exactly when every term is."
+                )
+            if found is not None:
+                _, path = found
+                location = ".".join(path)
+                raise LikelihoodError(
+                    f"{self.NAME} cannot lower this {type(kernel).__name__}: its term "
+                    f"{location!r} is a Product, and a product of quasiseparable kernels is not "
+                    f"quasiseparable. Where the factors act on different axes — which is what a "
+                    f"Product is for — the result is not a function of one ordered coordinate at "
+                    f"all, and where they act on the same one the semiseparable rank multiplies "
+                    f"and is not recoverable from the factors' own representations. Use DenseGP, "
+                    f"or replace {location!r} with a Sum, which is quasiseparable exactly when "
+                    f"every term is."
+                )
         if self.REQUIRES_QUASISEPARABLE and not kernel.QUASISEPARABLE:
             raise LikelihoodError(
                 f"{self.NAME} needs a kernel with an exact quasiseparable representation, but "

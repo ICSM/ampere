@@ -467,6 +467,35 @@ class TestAlgebra:
             "Sum, which is quasiseparable exactly when every term is."
         )
 
+    def test_a_sum_containing_a_product_names_the_product_not_the_sum(self) -> None:
+        """W5.2: the sharper refusal follows the Product wherever it nests.
+
+        Before W5.2 this fell through to the generic ``not QUASISEPARABLE``
+        refusal (`QuasisepGP needs a kernel with an exact quasiseparable
+        representation, but Sum ...`), which names the *container* rather
+        than the term that is actually the problem.
+        """
+        data = Spectrum(
+            np.linspace(1.0, 10.0, 8) * u.um,
+            np.zeros(8) * u.Jy,
+            uncertainty=np.full(8, 0.1) * u.Jy,
+        )
+        product = Product(Matern32(1.0, 2.0), Matern12(0.4, 0.5), labels=("spatial", "spectral"))
+        noise = GaussianProcessNoise(
+            Sum(Matern32(0.3, 2.0), product, labels=("smooth", "coupled")), QuasisepGP()
+        )
+        with pytest.raises(LikelihoodError) as excinfo:
+            noise.check_compatible(GaussianFamily(), data)
+        assert str(excinfo.value) == (
+            "QuasisepGP cannot lower this Sum: its term 'coupled' is a Product, and a product "
+            "of quasiseparable kernels is not quasiseparable. Where the factors act on "
+            "different axes — which is what a Product is for — the result is not a function of "
+            "one ordered coordinate at all, and where they act on the same one the "
+            "semiseparable rank multiplies and is not recoverable from the factors' own "
+            "representations. Use DenseGP, or replace 'coupled' with a Sum, which is "
+            "quasiseparable exactly when every term is."
+        )
+
     def test_a_sum_with_one_unlowerable_term_is_refused_by_name(self) -> None:
         data = Spectrum(
             np.linspace(1.0, 10.0, 8) * u.um,
