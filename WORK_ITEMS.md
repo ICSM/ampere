@@ -1815,15 +1815,31 @@ table in the workflow comments and the docs; a docs-only PR provably runs
 only its subset (the report shows the job list for three synthetic diffs);
 the required-check names for branch protection listed in the report.
 
-## Phase 5 — early drafts (2026-09-10; the rest of Phase 5 is drafted at its start)
+Ordering: W4.0 ∥ W4.1 ∥ W4.5 ∥ W4.6 from the start (file ownership:
+W4.0 — `core/transform.py`, `core/simulate.py`, `core/dataset.py`'s
+`__setstate__`, `backends/reference/instrument.py`'s LSF, the docs;
+W4.1 — `core/results_schema.py`, `core/likelihood.py` *families*,
+`backends/reference/interferometry.py`; W4.5 — `core/likelihood.py`
+*kernels* and the backends' kernel/GP modules; W4.6 —
+`core/astropy_compat.py` and its page; `core/__init__.py` exports are
+appended by each and merged by hand); W4.11 after W4.0; W4.2 after W4.5
+and W4.1; W4.3 after W4.1 and W4.2; W4.7 after W4.6; W4.4 after W4.3 and
+W4.11; W4.9 after W4.4 (ruled in); W4.10 any time; W4.8 last.
 
-### W5.1 — A latent GP on closure phases (drafted 2026-09-11 from memo §7.2; ruled Phase 5 by Peter)
-`VonMisesFamily` consumes a latent GP (`CONSUMES_LATENT_GP`, the Poisson
-pattern of W2.14) over `ClosurePhases`' five axes on the native path, so the
-flexible likelihood reaches wrapped observables under NUTS/VI; never on the
-numpy path. **Depends:** W4.3, and the matrix-free GP question below if N is
-large. Drafted properly at Phase 5's start.
 
+## Phase 5 — Scale-out & advanced inference (drafted 2026-09-15 by Fable for Peter's approval; nothing dispatched)
+
+The plan's §5 Phase 5 bullets, the design horizons (b), (e)–(i), the
+inference-extensions memo's §5 adaptations and §6 ranking, the modality
+sketches' Phase 5 dispositions (IFU gaps 1–2, the astrometric sketch's
+joint-noise gap, `hierarchical_population.md` Q2/Q5) and the owed list,
+as agent-sized items. **Read `DEVELOPMENT_PLAN.md` §5 "Phase 5" first**:
+each item below names the bullet it executes. Sized under
+`docs/orchestration.md`'s token-economy rules: two agents at a time,
+targeted tests on the branch, one merged-master gate per wave. Every
+`GPSolver`, `NoiseModel` or results change is a §4 change (ground rule 9):
+a decision-log row and the conformance rows in the same PR. The eight
+decisions **D1–D8** at the end are the ones the drafting could not take.
 
 ### W5.0 — The results contract for approximate and evidence-producing engines [S; Sonnet] (ruled by Peter 2026-09-10 on the inference-extensions memo §5, §7.1–7.2)
 The three contract adaptations every tier-1 sampler and every approximate
@@ -1849,18 +1865,414 @@ an `optimum` group (ruled), not a separate type. **Depends:** nothing.
 **Accept:** the three attrs on a dynesty run (evidence), a VI run
 (approximation and proposal density) and an SBI run; an importance-corrected
 VI posterior computed from stored draws alone agrees with an emcee reference
-on the toy problem; all four gates plus sbi green; lint/format/pyrefly clean.
+on the toy problem; gates dev + sbi on the merged wave; lint/format/pyrefly
+clean.
 
-Ordering: W4.0 ∥ W4.1 ∥ W4.5 ∥ W4.6 from the start (file ownership:
-W4.0 — `core/transform.py`, `core/simulate.py`, `core/dataset.py`'s
-`__setstate__`, `backends/reference/instrument.py`'s LSF, the docs;
-W4.1 — `core/results_schema.py`, `core/likelihood.py` *families*,
-`backends/reference/interferometry.py`; W4.5 — `core/likelihood.py`
-*kernels* and the backends' kernel/GP modules; W4.6 —
-`core/astropy_compat.py` and its page; `core/__init__.py` exports are
-appended by each and merged by hand); W4.11 after W4.0; W4.2 after W4.5
-and W4.1; W4.3 after W4.1 and W4.2; W4.7 after W4.6; W4.4 after W4.3 and
-W4.11; W4.9 after W4.4 (ruled in); W4.10 any time; W4.8 last.
+### W5.1 — A latent GP on closure phases [M; Opus] (ruled Phase 5 by Peter 2026-09-11, placement memo §7.2)
+`VonMisesFamily` gains `CONSUMES_LATENT_GP = True` — the Poisson pattern of
+W2.14 — so a `GaussianProcessNoise` over `ClosurePhases`' five axes
+composes on the **native path only** (NUTS/VI on torch and jax through
+`ampere.core.realise`; the numpy path keeps its refusal by name, reworded
+to say *where* the composition is available): the latent phase error
+`f ~ GP(0, K)` on the `DenseGP` solver (dense by W4.2's structural
+argument — no ordered 1-D coordinate exists), the observed closure phase
+wrapped von Mises around `model + f`, `latent_transform` whitening the N
+latent variables. The kernel binds through W4.5's `axes=` selector
+(`Matern32(axes=("u1", "v1", "u2", "v2"))`, or the product with a spectral
+block). `simulate(observe=True)` draws the latent first, then the wrapped
+draw. The channel pairing between visibilities and closure phases
+(`extra_coords`' `triangle`/`baseline` labels, horizon (h)) is read, not
+changed. **Depends:** nothing (W4.3 merged); W5.4's reduced-rank latent
+question does not gate it at the study's N. **Accept:** conformance rows on
+the torch and jax fixtures — the latent composition's log-density against a
+from-scratch von Mises-around-GP-draw formula at `tolerances.cross_solver`,
+the numpy refusal word for word, `simulate` producing wrapped values with
+the injected correlation visible in a periodogram of the residuals; NUTS
+on the W4.4 binary with an injected smooth per-triangle phase error: the
+flexible fit's central-90 % coverage of separation and flux ratio pinned
+where the rigid von Mises fit's is not (SBC over 12 simulations, W4.4's
+pattern); `likelihoods.md` §4 and §14 amended, one decision-log row;
+gates: all four.
+
+### W5.2 — Phase 5 housekeeping: the owed list [S; Sonnet]
+W4.0's shape: the small items owed at the Phase 4 close, each a commit.
+`NUTSEngine` exposes `target_accept` and `max_tree_depth` (W4.11's variant
+ran past 19 min at a 40/80 budget); `examples/` brought under ruff (fix
+what it finds); `dataset.py`'s `part_name` docstring (`ampere.core.kernels`);
+a `Sum` containing a `Product` gets the sharper O(N) refusal; `derived.py`
+treats a complex value one way in all three places (refuse, as
+`add_posterior_predictive` does — a component or modulus is the caller's
+choice, W5.3's); `von_mises` into `_TWINNED_FAMILIES` on both backends;
+`encoding._sanitised`'s summary line made true; `RiceFamily` given either a
+schedule (a line in §5) or a refusal that says "no schedule"; the two docs-
+build warning pairs; `interferometry.rst`'s non-verbatim quotation; the
+Phase 3 owed items — a native sampler failure flags one draw not a chunk
+(`_SimulateNatively.run`), a value-based `Instrument._declarations()`
+fingerprint, the unreachable "no uncertainty" branch of both
+`_check_gp_uncertainty`s, torch `noise.py`'s redundant device check. Not
+in scope: anything with a decision-log row. **Depends:** nothing.
+**Accept:** one targeted test per behaviour change; the docs build's
+warning list shorter than the base commit's; lint/format/pyrefly clean in
+every environment; gates dev + torch + jax on the merged wave.
+
+### W5.3 — Multi-axis diagnostics: the four plots on a point kind with several axes [M; Sonnet]
+`results.md` §13 item 14 lifted. `plot_posterior_predictive`,
+`plot_residuals`, `plot_gp_localisation` and `plot_anomaly_score` gain a
+`coordinate=` argument — an axis name, or a callable of the container's
+axes to one ordered coordinate — with per-kind defaults declared on the
+kind (`VisibilitySet`: baseline length `hypot(u, v)`; `ClosurePhases`: the
+longest of the three baselines; `TimeSeries`: `time`, unchanged), so the
+default keeps every existing plot byte-identical; complex values are
+plotted as the component the caller names (`component="real" | "imag" |
+"abs" | "phase"`, default refuse with the four names), and `derived.py`'s
+three complex branches agree (W5.2 makes them refuse; this item gives them
+the argument). `results._plotting.coordinate_of` is the one place the rule
+lives. **Depends:** W5.2 (the `derived.py` alignment). **Accept:** the
+W4.4 study's four missing figures render for the binary's `VisibilitySet`
+and `ClosurePhases` on the reference backend; the existing `tests/results`
+plot rows unchanged; a refusal row for a kind with no default and no
+`coordinate=`; `results.md` §4/§13 amended, one decision-log row; gates
+dev + sbi.
+
+### W5.4 — The first approximate solver: `HilbertSpaceGP` on all three backends [L; Opus]
+The plan's first Phase 5 bullet, executed for the cheapest candidate
+(horizon notes §2's recommendation: HSGP first, the most useful for NUTS).
+A `GPSolver` with `EXACT = False`, `IMPLEMENTED = True`, the kernel's
+spectral density at the Laplacian eigenvalues of a bounded box
+(`m` basis functions per axis, tensor-product in 2–3 axes; a boundary
+factor `c` from the data extent), `K ≈ Φ diag(S) Φᵀ` solved by Woodbury at
+O(N m + m³); `provenance_config()` records `m` and `c`, never hashed
+(fold-in 10); `conditional_loo` exact-in-the-approximation (the Woodbury
+form of the leave-one-out identity) — refused by name only if the
+mathematics fails, with the reason; `latent_transform` of dimension `m`
+(**settles horizon notes §2 question (b)**: the latent size fixed at
+composition may be the basis size, and `simulate(observe=True)` and the
+latent path use the same whitening — a conformance row asserts it).
+Stationary families with a closed-form spectral density only (the Matérn
+family, `SHO`, and `Sum`s of them); others refused by name. Written once
+in `ampere.core` against W4.5's `ArrayOps`, so numpy, torch and jax share
+the basis construction and the backends contribute only their solves.
+**The approximation-aware conformance tolerance class is part of this
+item** (horizon notes §2 question (a)): a row compares to `DenseGP` at a
+sequence of `m` and asserts monotone convergence to within a tolerance
+that tightens with `m`, never a fixed number; `tests/conformance/README.md`
+gains the class. The 1-D validation is against `QuasisepGP` on the M2
+spectra (exact reference at O(N)); the 2-D customer is W5.5's image.
+**Depends:** nothing for 1-D; W5.5 for the 2-D rows. **Accept:** the
+convergence rows on all three fixtures in 1-D and 2-D; the latent-path
+agreement row; NUTS on torch and jax over the hyperparameters with `m`
+latents recovering the M2 `strong_smooth` scenario's coverage within the
+`DenseGP` result's; `likelihoods.md` §7's table row for HSGP filled and
+the `_SolverSlot` list amended (`HilbertSpaceGP` added beside the three
+slots, which remain slots); one decision-log row; gates: all four.
+
+### W5.5 — A gridded customer: `Image` data by the template, with PSF convolution [M; Opus]
+No image *dataset* has ever been fitted: `Image` and `Cube` are kinds, the
+Phase 4 image models feed `FourierSample`, and `transformations.md` §10's
+PSF-convolution slot is empty. This item follows `interferometry.rst`'s
+template for a gridded observable: a `PSFConvolution` step on the
+reference path (kind-preserving, requirements the negotiation can meet —
+a padded grid of the PSF's support; the FFT route with the padding stated),
+its inheriting twins on torch and jax (W4.3's pattern), **mask propagation
+on `Layout.GRID`** (IFU gap 2: `propagate_mask_grid`, the additive helper
+the freeze precluded nowhere), the three Phase 4 image models reused as
+the sources, `examples/image/` with a misspecification arm (a smooth
+background the model omits; the flexible arm on `DenseGP` at small N and
+on W5.4's HSGP at realistic N, the comparison being the phase's benchmark
+per the plan's rule "chosen by measurement"), and a page in the
+template's order closing with what the template did not say about a
+gridded kind. **Depends:** W5.4 for the HSGP arm (the `DenseGP` arm and
+the step land first). **Accept:** the template's four conformance rows
+(the step against a direct convolution, the requirement and its refusal,
+the mask row, `simulate`), the twins at `tolerances.cross_backend`, the
+study's coverage pinned on the flexible arm at small N, the HSGP arm
+informational with its wall-clock and memory beside `DenseGP`'s at three N;
+`transformations.md` §10/§13.5 amended; gates: all four.
+
+### W5.6 — Solver bake-off: EFGP and Vecchia against HSGP on the image [M; Opus] (D2)
+The plan's rule made concrete: on W5.5's image at realistic N (10⁴–10⁵
+pixels), a second reduced-rank or sparse solver — EFGP (equispaced Fourier
+features with the Toeplitz normal equations solved by FFT; O(N + m log m))
+or Vecchia (not rank-limited, the one for rough processes) — implemented
+far enough to measure (numpy reference only, `EXACT = False`, the
+convergence tolerance class of W5.4), benchmarked against HSGP and
+`DenseGP` on bias, coverage, localisation, wall clock and memory across N
+and kernel smoothness (Matérn-1/2 through 5/2). The outcome is a
+decision-log row naming which lands as a full three-backend solver (a
+follow-on item) and which stays a slot, with the table; not a fourth
+solver landed on judgement. **Depends:** W5.4, W5.5. **Accept:** the
+benchmark script under `tests/benchmarks/` with `pixi run bench`
+attaching it; the table in `likelihoods.md` §7; one decision-log row;
+gates dev only (nothing ships on the modern backends).
+
+### W5.7 — `WarpedKernel`: input and amplitude warping preserving quasiseparability [L; Opus]
+The plan's third Phase 5 bullet, the kernel half. `WarpedKernel(base,
+input_warp=, amplitude_warp=)` in `ampere.core.kernels`: a monotone input
+warp `x → w(x)` (a few knots, monotone by construction — cumulative
+softplus increments — so `QuasisepGP`'s ordering precondition survives)
+and an amplitude warp `D K D` with `D = diag(a(x))` (log-amplitude at
+knots, linearly interpolated), both keeping the O(N) exact solve on every
+backend through the term registry (the warped generators are the base
+generators evaluated at `w(x)`, scaled by `a(x)`); the knots are ordinary
+`Parameter`s in the kernel's own namespace, so NUTS on torch/jax gets them
+for free and the `KernelSpec` hash carries them. **The degrees-of-freedom
+guard is in the item**: the knots' priors are hierarchical shrinkage to
+the identity warp (`HierarchicalPrior`, the non-centred form offered by a
+`lowering.md` §3 note), and the whiteness and localisation diagnostics
+(family B/C) run on the *warped* residuals — a `Likelihood.conditional`
+that reports in warped coordinates with the warp recorded. **Depends:**
+nothing (W4.5's registry is the extension point). **Accept:** conformance
+rows — the warped kernel against `DenseGP` on the explicitly warped
+coordinates at `tolerances.cross_solver` on all three fixtures, the
+identity warp bit-identical to the base kernel and to its pre-W5.7 spec
+hash, a non-monotone knot set refused at composition, the O(N) path
+exercised; NUTS on torch and jax over knots and hyperparameters; the
+diagnostics row on warped residuals; `likelihoods.md` §6–§8 amended, one
+decision-log row; gates: all four.
+
+### W5.8 — The M2 extension "many lines / one band", and the sparsity prior on summed noise components [M; Sonnet]
+The plan's third bullet, the validation half, and its generalisation. An
+`examples/m2_misspecification/` scenario with a forest of narrow lines in
+one band and a smooth continuum error elsewhere, comparing stationary
+Matérn, W5.7's warped Matérn and W4.5's `Sum` of two kernels on bias,
+calibration and localisation — the M2 pattern, pinned as W4.5's fringing
+study was (the margin, not the number). The sparsity guard for sums: the
+regularised horseshoe (Piironen & Vehtari 2017) on component amplitudes,
+expressed with `HierarchicalPrior` today and documented as the
+recommended prior for any `Sum` of noise terms, with `lowering.md` §3
+gaining the non-centred note NUTS wants and a `tests/m2` row showing the
+spurious component's amplitude shrinks to zero when the truth has one
+component. **Depends:** W5.7. **Accept:** the scenario in the driver and
+`tests/m2` with the pinned margin; the horseshoe row; SBC on injected
+misspecification for the warped fit; the M2 page's section; gates dev +
+torch (NUTS over the knots) on the merged wave.
+
+### W5.9 — Joint noise over a tuple of channels: the shared-grid intrinsic coregionalisation model [L; Opus] (D3)
+The plan's fourth bullet and `likelihoods.md` §15's recorded limitation
+lifted for the exact case. A `NoiseModel` bound to **several channels of
+one model on a shared grid** — `JointGaussianProcessNoise(kernel, B=…)`
+with `K = B ⊗ K_x`, `B` a T×T positive-definite matrix parameterised
+physically (a rotation and two log-variances for T = 2; a Cholesky
+parameterisation as the general fallback) — solved exactly and at O(N)
+by diagonalising `B`, rotating the T residual vectors and solving T scalar
+GPs with the bound solver (`QuasisepGP` where the grid is ordered 1-D,
+`DenseGP` otherwise). It is the first use of `DatasetCollection.
+contributions` as something other than a sum: `inference.md` §4 gains the
+`"joint"` decomposition entry (`"mixed"`'s precedent), the pointwise group
+carries the rotated outputs, family B/C diagnostics run per rotated output.
+**The first customer is astrometry** (recommended, D3): W4.9's reflex orbit
+already produces `ra`/`dec` from one evaluation on one epoch grid, so a
+correlated per-epoch error (a centroiding systematic shared by both axes)
+is the injected misspecification and no new kind is needed; polarimetry
+(a Stokes kind) is the second test, and the general LMC and mismatched
+grids stay recorded as the dense/reduced-rank follow-on. **Depends:**
+nothing; W4.9's astrometry twins are read only. **Accept:** conformance
+rows on all three fixtures — the joint density against `DenseGP` on the
+materialised `B ⊗ K_x` at `tolerances.cross_solver`, the rotation
+recovering T independent solves, `B = I` bit-identical to two independent
+noise models, `simulate` drawing correlated channels; NUTS on torch and
+jax over `B`'s parameters and the kernel's; the astrometry example's
+`--joint` arm with SBC-pinned coverage under an injected correlated
+error where the independent GPs' coverage is not; `likelihoods.md`
+§7/§15, `inference.md` §4, `results.md` §6 amended; the decision-log row;
+gates: all four.
+
+### W5.10 — Amortisation over observation context [L; Opus]
+The plan's fifth bullet; horizon (i)'s reserved `context=` slot filled.
+A `ContextPrior` protocol with three shipped instances — scaled copies of
+the observed σ-pattern, an archive of real error arrays, a parametric S/N
+model — drawn per simulation by `simulate_many(context=…)`, recorded on
+the `Simulation` and in the training-set provenance, passed to `sample` in
+place of the container's σ, the chain re-negotiated per context grouped by
+`chunk_size`; the encoding already carries σ, `log σ` and whitened values
+per row (W3.3), so the network sees the context without a layout change,
+and a per-set conditioning vector (FiLM) is the opt-in second route. SBC
+per observation (W3.6) is the check that the context prior covered the
+observation at hand, and the tutorial says so. **Depends:** W5.0 (the
+provenance attrs land first so the schema moves once — D7 decides whether
+W5.11's axis identity also rides this bump). **Accept:** an NPE posterior
+trained under the σ-pattern prior stays calibrated (SBC, TARP) on an
+observation whose σ is rescaled by a factor the prior covers, and its
+coverage degrades measurably on one it does not — both pinned as
+inequalities; the `context` recorded on every `Simulation` and in the
+training set; `inference.md` and `encoding.md` amended, the decision-log
+row, `PROVENANCE_SCHEMA_VERSION` unchanged if W5.0's bump carries the
+attrs; gates dev + sbi + torch.
+
+### W5.11 — The encoding's axis identity [S; Opus] (D7)
+`encoding.md` §9 item 6: the packing aligns axes by position, so a layout
+mixing a kind whose column 0 is `x` with one whose column 0 is `u` shows a
+network two unrelated quantities in one slot. This item adds a per-column
+axis-identity feature (the axis's physical type from its unit, one small
+integer code per column, part of the frozen `Layout` and its hash) so an
+embedding can tell the columns apart, with the code table in the contract.
+Every existing layout hash moves once — which is why D7 asks whether it
+lands in the same wave as W5.10 or not at all in Phase 5. **Depends:**
+nothing. **Accept:** the code table pinned; a mixed-kind layout's columns
+distinguishable in `unpack`; the W4.3 five-axis rows still passing; the
+cache invalidation of a pre-W5.11 training set refused by name; one
+decision-log row; gates dev + sbi.
+
+### W5.12 — `Population`: the hierarchical container and the joint fit on the native path [L; Opus] (D4)
+`hierarchical_population.md` H-1, ruled to land with Phase 5 (2026-09-03).
+`Population(members, hyperpriors)` as the container the sketch designs —
+plate-aware parameter groups (`parameters.md` §9's `members`), per-member
+nuisance parameters, `Binding.index` (H-2) routing each member's element,
+the hyperpriors ordinary `Parameter`s — lowered to numpyro/pyro plates by
+the realisation so NUTS on torch and jax fits a population jointly, and the
+IFU sketch's gap 1 ("a plate of datasets") met by the same construct: a
+`DatasetCollection` built over a plate. The numpy path fits small
+populations by the tie-based pattern (the documented route until now),
+refusing beyond a member count it states. **Depends:** nothing frozen;
+W5.0 for the results attrs. **Accept:** conformance rows — a two-level
+population's joint log-density against the sum of members plus the
+hyperprior on all three fixtures, the plate lowering on torch and jax
+bit-consistent with the flattened form; NUTS recovering the population
+hyperparameters of a 50-member synthetic sample inside the central 95 %;
+`hierarchical_population.md` Q2 closed and Q5's joint-fit half landed;
+`parameters.md`/`inference.md` amended, the decision-log row; gates: all
+four.
+
+### W5.13 — Population inference by reweighting archived fits [M; Sonnet] (D4)
+Horizon (b), buildable entirely on stored files (`results.md` §13.15): an
+`ampere.results.population` module that takes a collection of run
+`DataTree`s sharing a spec hash, reads each run's per-draw `log_prior`,
+`log_likelihood` and — for approximate engines — W5.0's proposal
+log-density, and returns a population-hyperparameter posterior by
+importance reweighting under hyperpriors (Hogg-style), with the effective
+sample size per object reported and a refusal when it collapses. Reads
+from a directory of files *or* from any object with the same column
+interface, so the columnar store of horizon (b)'s constraint is not
+excluded — the reader is a protocol, one file-backed implementation
+shipped. **Depends:** W5.0. **Accept:** on 200 synthetic single-object
+emcee fits, the reweighted hyperparameters agree with W5.12's joint fit
+(where both exist) and with the truth inside the central 95 %; the ESS
+refusal row; the columnar-reader protocol test with an in-memory
+implementation; `results.md` §13.15 amended; gates dev + sbi.
+
+### W5.14 — Tier-1 engines behind extras: nested sampling, VI guides, blackjax [M; Opus] (D5)
+The memo's §6 tier 1 on W5.0's contract, each behind its own extra
+(ruled): `nautilus` and `ultranest` on a shared `_nested.py` (evidence into
+the engine-neutral attrs; multimodality by construction); `VIEngine` guides
+`laplace` and `flow` (pyro/numpyro autoguides); the `blackjax` route on jax
+(MCLMC as a sampler, Pathfinder as initialiser and as an approximation). The
+engine battery that comes with them: every new engine SBC-ranked through
+`calibration.sbc` on the conformance toy problems, its evidence checked
+against the closed-form linear-Gaussian case W3.6 uses, one cost record
+per run (evaluations; horizon (g)'s hook). **Depends:** W5.0. **Accept:**
+the battery green for each engine; the evidence rows within the stated
+error; the extras in `pyproject.toml` with pixi features and CI legs path-
+gated to the engine's files; `inference.md` §5 amended, one decision-log
+row; gates dev + sbi + jax.
+
+### W5.15 — Periodic models: the astrometry example under nested sampling, and the guidance [S; Sonnet] (D6)
+W4.9's measured finding (period aliasing under a `loguniform(50, 2000)`
+prior on an 860-day baseline; emcee and NUTS both lock onto a spurious
+mode) is written into `interferometry.rst` and `astrometry.rst` as a
+hazard with one remedy: an informed prior. Nested sampling is the standard
+second remedy and ships already: this item runs `examples/astrometry`'s
+wide-prior case under `DynestyEngine` (and W5.14's nested samplers when
+they land), reports the modes and their evidences, adds a `--wide-prior`
+arm, and rewrites both hazard sections as guidance with the measurement:
+which engine to reach for, how the multimodal posterior looks in the
+corner plot, and how an informed prior compares in evidence. **Depends:**
+nothing (W5.14 optional). **Accept:** the arm's smoke test; the posterior's
+mode structure pinned (the true period among the recovered modes, its
+evidence the largest); both pages amended; gates dev.
+
+### W5.16 — RHMF exploratory trial [S; Sonnet]
+Peter's ratification note of 2026-09-08 on the W2.7 deferral: the pre-fit
+robust-factorisation family (`diagnostics.md` §2) tried against a pinned
+`robusta-hmf` commit behind a non-default `rhmf` extra — the adapter over
+`Robusta(...)`/`robust_weights` producing an `AnomalyScore` with
+`provenance="rhmf_prefit"` (the renderer already accepts it), run on the M2
+spectra and W5.5's image, with the adoptability re-check (§2.2: licence,
+maturity, API) re-run and recorded. The outcome is a report, not a
+namespace: `ampere.diagnostics` lands only if the maturity gate is met.
+**Depends:** W5.5 optional. **Accept:** the trial script under `examples/`,
+its findings in `diagnostics.md` §7, the re-check in the decision-log row;
+no change to the base install; gates dev.
+
+### W5.17 — The benchmark-driven optimisation pass [M; Opus]
+The plan's last Phase 5 bullet: profile first against the pytest-benchmark
+baselines (W2.11) on the M2 driver, the interferometry study and W5.5's
+image, then attack the levers in evidence order — requirements-negotiation
+compilation and caching (§4.3), batched evaluation, solver selection,
+precision policy, resampling (issues #12, #29, #67). No speculative
+optimisation: every change carries its before/after benchmark row.
+**Depends:** W5.5 (the image is the load). **Accept:** the profile report
+in `docs/`; each landed lever with its benchmark delta; no conformance row
+moves; gates: all four.
+
+### W5.18 — CI/CD Phase 5 [S; Sonnet]
+The new extras (W5.14) as path-gated legs; the GPU job kept skip-clean; the
+sbi leg's budget re-measured after W5.10; `test-fast` (the token-economy
+proposal's last rule) as a pixi task excluding the `m2_full`,
+`interferometry_full` and SBI-training rows, with each item's Accept line
+naming its suites. **Depends:** W5.14. **Accept:** `actionlint` clean;
+the path table in `path_filters.py` covering the new files; `test-fast`
+under 4 min in dev; the docs' CI section updated; no five-suite gate.
+
+### W5.19 — Phase 5 documentation pass [M; Sonnet]
+Last, W4.8's shape: every Phase 5 claim in the frozen documents checked
+against the merged code and annotated *Amended W5.19*; the kernel page
+gains warping; a solvers page (exact, approximate, joint) with the
+tolerance classes; the population tutorial; `overview.rst`, README and
+`index.rst` say what Phase 5 shipped; the plan's §5 Phase 5 paragraph is
+the landed summary. **Depends:** everything merged. **Accept:** docs build
+with a warning list no longer than the base commit's; spec doctests and
+`tests/examples` green; gates dev.
+
+**Not drafted, on a trigger**: matrix-free exact GPs (conjugate-gradient
+solves with stochastic trace estimators, gpytorch/gpjax-style) for the 3-
+and 5-axis interferometric kernels — taken up when a Phase 5 case
+exceeds the dense path's memory (the plan's second bullet, "not
+immediate"); the general LMC and mismatched-grid joint noise (W5.9's
+follow-on); the second three-backend approximate solver (W5.6's outcome);
+the terra reviews owed on W4.1, W4.2 and W4.5 when the quota returns.
+
+**Decisions for Peter before dispatch.**
+- **D1 — the native model surface's spelling** (W4.3's decision-log row):
+  (a) `native_flux`/`native_grid` canonical, `flux`/`grid` an alias kept
+  indefinitely (a docs and new-code rule; the eight existing modules keep
+  working; a Haiku sweep renames them when convenient); (b) narrow
+  `Parameterised._check_free_name` so a parameter may shadow a method;
+  (c) leave both spellings as documented. Recommendation: (a) — the
+  shadowing rule caught a real ambiguity in `model.flux`, and the collision
+  recurs for any model whose physical parameter is a flux.
+- **D2 — the first 2-D+ solver and its customer**: HSGP first on a single
+  `Image` (W5.4 + W5.5, recommended) with the bake-off (W5.6) in-phase; or
+  the IFU cube as the customer (needs W5.12's plate first, so the solver
+  waits half a phase).
+- **D3 — the joint-noise first customer**: astrometry's two channels
+  (recommended; exists, shared grid, no new kind) or polarimetry (a Stokes
+  kind and a reference instrument to write first).
+- **D4 — population scope**: both routes (W5.12 the joint fit, W5.13 the
+  reweighting module — the memo's Q5 left both open for Phase 5);
+  recommendation: both, W5.13 first since it is small and exercises W5.0.
+- **D5 — tier-1 engines in Phase 5**: the memo's ruling scheduled nothing
+  beyond W5.0; W5.14 is drafted as opt-in. Recommendation: in, after W5.0,
+  because W5.15's periodic case and W5.13's evidences both want a nested
+  sampler with evidence, and the phase is titled advanced inference. The
+  `Optimum` result and warm start (memo §5.4) stay out until an optimiser
+  item exists.
+- **D6 — the periodic-model hazard**: leave as the hazard note W4.8
+  wrote, or run W5.15 (recommended: it turns a warning into a measured
+  recommendation and costs a Sonnet afternoon).
+- **D7 — the encoding's axis identity**: W5.11 in W5.10's wave so every
+  layout hash moves once (recommended), or deferred past Phase 5.
+- **D8 — warping as one item or two**: W5.7 (kernel) and W5.8 (study and
+  sparsity prior) as drafted, or merged into one Opus item; and whether
+  W5.8's M2 margins are pinned or informational at the per-PR budget
+  (recommendation: pinned as margins, W4.5's precedent).
+
+Ordering (two agents at a time): **wave 1** W5.0 ∥ W5.2; **wave 2** W5.4
+(1-D) ∥ W5.3, then W5.5 ∥ W5.13; **wave 3** W5.7 ∥ W5.9; **wave 4** W5.10
+(+ W5.11 if D7) ∥ W5.8; **wave 5** W5.12 ∥ W5.14; **wave 6** W5.6 ∥ W5.15,
+W5.16, W5.17, W5.18 as they free; W5.19 last. File ownership per wave in
+the dispatch prompts; the sole shared file across waves is
+`core/likelihood.py` (W5.4, W5.7, W5.9 each own a section — the solver,
+the kernel, the noise-model — and merge in that order).
 
 
 ## Status
