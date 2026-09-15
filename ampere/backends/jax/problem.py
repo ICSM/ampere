@@ -102,6 +102,7 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 import numpy as np
+import numpyro.distributions as npd
 
 from ampere.core import (
     BatchedPrediction,
@@ -113,6 +114,7 @@ from ampere.core import (
     LikelihoodFamily,
     PoissonFamily,
     StudentTFamily,
+    VonMisesFamily,
     chunk_bounds,
     foreign_parts_refusal,
 )
@@ -206,6 +208,7 @@ _TWINNED_FAMILIES: dict[str, type[LikelihoodFamily]] = {
     "poisson": PoissonFamily,
     "student_t": StudentTFamily,
     "complex_gaussian": ComplexGaussianFamily,
+    "von_mises": VonMisesFamily,
 }
 
 
@@ -563,14 +566,15 @@ class _LoweredDataset:
         the core's own refusal text is what the caller meets.
 
         **Amended W3.14**, when the core acquired three more ``sample``
-        implementations. The set is now ``gaussian``, ``poisson``,
-        ``student_t`` and ``complex_gaussian`` — :data:`_TWINNED_FAMILIES`,
+        implementations, and again **W5.2**, when ``von_mises`` joined them.
+        The set is now ``gaussian``, ``poisson``, ``student_t``,
+        ``complex_gaussian`` and ``von_mises`` — :data:`_TWINNED_FAMILIES`,
         which is the one place this backend names them — and the test is still
         the same test: the family's ``sample`` must be the *core's own* method
         for that family. That keeps two properties at once. A family the core
-        refuses (``cauchy``, ``rice``, ``von_mises``, a user family with no
-        ``sample``) is refused here, so the caller meets the core's refusal
-        text. A family whose ``sample`` a *user* has overridden is refused too,
+        refuses (``cauchy``, ``rice``, a user family with no ``sample``) is
+        refused here, so the caller meets the core's refusal text. A family
+        whose ``sample`` a *user* has overridden is refused too,
         and deliberately: it is a numpy function, it is the observation process
         its author wrote, and running something else instead would be worse
         than running it slowly (§13's "a user with an exotic observation
@@ -650,6 +654,12 @@ class _LoweredDataset:
         * ``complex_gaussian`` (*W3.14*) — independent ``Normal(0, sigma**2)``
           on each component, ``sigma`` being the per-component standard
           deviation the density's ``-|r|**2 / (2 sigma**2)`` implies.
+        * ``von_mises`` (**W5.2**) — ``VonMises(predicted, kappa)`` through
+          ``numpyro.distributions`` (``jax.random`` has no ``vonmises``
+          primitive), with ``kappa = 1/sigma**2`` read exactly as
+          ``ampere.core.VonMisesFamily.sample`` reads it (its
+          ``rng.vonmises(mean, kappa)``), and the draw already in
+          ``(-pi, pi]`` around the wrapped position of ``predicted``.
         """
         values = dict(self._dataset_values(routed).get(LIKELIHOOD_COMPONENT, {}))
         name = self.likelihood.family.NAME
@@ -659,6 +669,8 @@ class _LoweredDataset:
             return self._sample_student_t(predicted, values, key)
         if name == "complex_gaussian":
             return self._sample_complex_gaussian(predicted, values, key)
+        if name == "von_mises":
+            return self._sample_von_mises(predicted, values, key)
         return self._sample_gaussian(predicted, values, key)
 
     def _sample_gaussian(
@@ -734,6 +746,30 @@ class _LoweredDataset:
         independent = jax.random.normal(noise_key, (size, 2), dtype=jnp.float64)
         components = correlated + scale[:, None] * independent
         return predicted + components[:, 0] + 1j * components[:, 1]
+
+    def _sample_von_mises(
+        self, predicted: jax.Array, values: Mapping[str, Any], key: jax.Array
+    ) -> jax.Array:
+        """``VonMises(predicted, kappa)``, matching the family's own ``sample``.
+
+        ``jax.random`` has no ``vonmises`` primitive (unlike numpy's
+        ``Generator``), so this draws through
+        ``numpyro.distributions.VonMises`` instead -- already a dependency of
+        the ``jax`` feature (``pyproject.toml``, for NUTS) and already used
+        elsewhere in this backend (:mod:`ampere.backends.jax.distributions`,
+        :mod:`ampere.backends.jax.parameters`) -- whose ``.sample`` sits a
+        draw around the *wrapped* position of ``loc`` and returns it in
+        ``(-pi, pi]``, exactly ``ampere.core.VonMisesFamily.sample``'s own
+        convention for ``rng.vonmises(mean, kappa)``.
+
+        A correlated noise model is refused at composition (**W5.1**'s gap,
+        unchanged here), so ``sigma`` is always the independent one and this
+        needs no GP branch, unlike :meth:`_sample_gaussian`.
+        """
+        sigma = self._sigma(predicted, values)
+        assert sigma is not None  # REQUIRES_UNCERTAINTY, checked at composition
+        kappa = 1.0 / sigma**2
+        return npd.VonMises(predicted, kappa).sample(key)
 
     def _gp_realisation(
         self, values: Mapping[str, Any], key: jax.Array, size: int, components: int = 1
