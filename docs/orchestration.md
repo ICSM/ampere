@@ -73,7 +73,7 @@ work.
 - Reviews of merged-candidate PRs: orchestrator (Fable) pass always;
   cross-model pass for contract/maths-touching changes.
 
-## Token economy (proposed by Fable 2026-09-13, for Peter's ruling; from Phase 4's first wave)
+## Token economy (proposed by Fable 2026-09-13 from Phase 4's first wave; **ruled by Peter 2026-09-15: the rules have worked well — continue as at present and re-evaluate a little later**; all seven stay in force as practised, none struck)
 
 **What happened.** The first Phase 4 wave dispatched four agents at once
 (one Sonnet, three Opus). Each coded for about an hour, then spent one to
