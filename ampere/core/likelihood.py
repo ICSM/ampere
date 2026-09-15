@@ -2704,14 +2704,20 @@ class PoissonFamily(LikelihoodFamily):
 class RiceFamily(LikelihoodFamily):
     """Rician amplitude noise — polarised intensity, debiased visibility amplitudes.
 
-    Declared, not implemented (the implementation is Phase 4's). The interface
-    is fixed (ruled 2026-09-03, ``likelihoods.md`` §17 Q3): the *model*
-    predicts the underlying complex value — which is what an interferometric
-    model actually produces — and an ``Amplitude`` step in the instrument
-    chain takes the modulus, so this family receives real, non-negative
-    amplitudes as its prediction. It consumes the *same* per-sample sigma as
-    the Gaussian family (it is the amplitude of a circular complex Gaussian),
-    so a ``VisibilitySet`` needs no extra structure to support it.
+    **Declared, not implemented, with no scheduled phase** (amended **W5.2**:
+    the previous wording promised "the implementation is Phase 4's", and
+    Phase 4 closed 2026-09-15 without implementing it). The interface is
+    fixed (ruled 2026-09-03, ``likelihoods.md`` §17 Q3) because fixing it cost
+    nothing and a future implementation should not have to relitigate the
+    shape: the *model* predicts the underlying complex value — which is what
+    an interferometric model actually produces — and an ``Amplitude`` step in
+    the instrument chain takes the modulus, so this family receives real,
+    non-negative amplitudes as its prediction. It consumes the *same*
+    per-sample sigma as the Gaussian family (it is the amplitude of a
+    circular complex Gaussian), so a ``VisibilitySet`` needs no extra
+    structure to support it. Fixing the interface is not the same as
+    scheduling the work; ask for it, with the use case that needs it, if you
+    want it put on a phase's plan.
     """
 
     NAME: ClassVar[str] = "rice"
@@ -2724,6 +2730,25 @@ class RiceFamily(LikelihoodFamily):
         noise: NoiseParams,
     ) -> float:
         raise self._unimplemented()
+
+    def _unimplemented(self) -> LikelihoodError:
+        """The sharper refusal **W5.2** gives this one declared-but-scheduleless family.
+
+        Overrides the base :meth:`LikelihoodFamily._unimplemented`, whose
+        wording ("stages the implementation") reads as a promise of a phase —
+        true of the *mechanism* a declared-but-unimplemented family uses, but
+        not of this family's own situation, which has no phase attached.
+        :meth:`Likelihood.__init__`'s composition-time refusal calls this same
+        method, so both entry points (composing a ``Likelihood`` and calling
+        ``log_prob`` on a bare instance) say the same true thing.
+        """
+        return LikelihoodError(
+            f"the {self.NAME} family is declared but not implemented, and unlike a family "
+            f"staged for a specific phase, it has no scheduled one. The interface is fixed "
+            f"(likelihoods.md §17 Q3) so a future implementation has a shape to target, but "
+            f"nobody has asked for it with a use case yet — that is what would put it on a "
+            f"phase's plan. It is visible in list_families() so the target set is on record."
+        )
 
 
 @register_family
@@ -2903,12 +2928,11 @@ class Likelihood(Parameterised):
                 f"custom family with @register_family; it needs one method, log_prob."
             )
         if not family.IMPLEMENTED:
-            raise LikelihoodError(
-                f"the {family.NAME} family is declared but not implemented, so it cannot be "
-                f"composed into a Likelihood yet (DEVELOPMENT_PLAN.md §4.4 stages the "
-                f"implementation). It is visible in list_families() so the target set is on "
-                f"record."
-            )
+            # W5.2: delegated to the family's own _unimplemented() rather than
+            # a message hardcoded here, so a family with no scheduled phase
+            # (RiceFamily) can say so plainly instead of composition
+            # promising a schedule that does not exist for it.
+            raise family._unimplemented()
         noise = IndependentNoise() if noise is None else noise
         if not isinstance(noise, NoiseModel):
             raise LikelihoodError(f"Likelihood needs a NoiseModel, got {type(noise).__name__}.")
