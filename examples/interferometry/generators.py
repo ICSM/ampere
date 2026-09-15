@@ -225,7 +225,9 @@ def dispersed_visibility_coverage() -> tuple[np.ndarray, np.ndarray, np.ndarray]
     (u, v) plane at each wavelength, which is what makes wavelength a genuine
     third coordinate rather than one absorbed into (u, v) (memo §3.6).
     """
-    wavelengths = np.linspace(LINE_CENTRE - 3.0 * LINE_WIDTH, LINE_CENTRE + 3.0 * LINE_WIDTH, N_CHANNELS)
+    wavelengths = np.linspace(
+        LINE_CENTRE - 3.0 * LINE_WIDTH, LINE_CENTRE + 3.0 * LINE_WIDTH, N_CHANNELS
+    )
     metres = wavelengths[:, None, None] * 1e-6
     pairs = np.array(
         [

@@ -22,6 +22,8 @@ def _itf() -> Any:
     return interferometry
 
 
-def build(x: Any, y: Any, *, disc_flux: float, disc_fwhm: float, **binary_kwargs: Any) -> BinaryWithDisc:
+def build(
+    x: Any, y: Any, *, disc_flux: float, disc_fwhm: float, **binary_kwargs: Any
+) -> BinaryWithDisc:
     """``BinaryWithDisc`` on the torch backend's own ``Binary``/``GaussianSource``."""
     return binary_with_disc(_itf(), x, y, disc_flux=disc_flux, disc_fwhm=disc_fwhm, **binary_kwargs)

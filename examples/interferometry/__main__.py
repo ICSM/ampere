@@ -16,7 +16,12 @@ from __future__ import annotations
 
 import os
 
-for _threads in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+for _threads in (
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+):
     os.environ.setdefault(_threads, "1")
 
 import argparse  # noqa: E402
@@ -32,8 +37,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--backend", default="reference", choices=list(study.BACKENDS))
     parser.add_argument("--arms", nargs="+", default=list(study.ARMS), choices=list(study.ARMS))
     parser.add_argument("--chromatic", action="store_true", help="run arm (d) instead of (a)-(c)")
-    parser.add_argument("--calibration", action="store_true", help="run the SBC coverage row instead")
-    parser.add_argument("--doc-budget", action="store_true", help="use the longer documentation budget")
+    parser.add_argument(
+        "--calibration", action="store_true", help="run the SBC coverage row instead"
+    )
+    parser.add_argument(
+        "--doc-budget", action="store_true", help="use the longer documentation budget"
+    )
     parser.add_argument("--figures", default=None, help="write the figures into this directory")
     parser.add_argument("--seed", type=int, default=study.gen.SEED, help="the data/run seed")
     return parser
@@ -46,11 +55,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if arguments.calibration:
         print(f"# interferometry calibration: {arguments.backend} backend, arms {arguments.arms}")
-        calibrations = {arm: study.run_calibration(arm, backend=arguments.backend, seed=arguments.seed) for arm in arguments.arms}
+        calibrations = {
+            arm: study.run_calibration(arm, backend=arguments.backend, seed=arguments.seed)
+            for arm in arguments.arms
+        }
         print(f"# ran in {time.perf_counter() - started:.1f} s")
         for arm, calibration in calibrations.items():
             coverage = study.coverage_at(calibration, 0.9)
-            print(f"{arm:<12s} coverage@0.9 = {coverage} failures={int(calibration.attrs['ampere_calibration_failures'])}")
+            failures = int(calibration.attrs["ampere_calibration_failures"])
+            print(f"{arm:<12s} coverage@0.9 = {coverage} failures={failures}")
         if arguments.figures is not None:
             from . import figures
 
@@ -61,7 +74,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.chromatic:
         budget = study.DOC_BUDGET if arguments.doc_budget else study.CHROMATIC_BUDGET
         print(f"# interferometry chromatic arm: {arguments.backend} backend, {budget}")
-        results = study.run_chromatic_arm(backend=arguments.backend, budget=budget, seed=arguments.seed)
+        results = study.run_chromatic_arm(
+            backend=arguments.backend, budget=budget, seed=arguments.seed
+        )
         print(f"# sampled in {time.perf_counter() - started:.1f} s")
         _print_table(results)
         if arguments.figures is not None:
@@ -73,7 +88,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     budget = study.DOC_BUDGET if arguments.doc_budget else study.CI_BUDGET
     print(f"# interferometry study: {arguments.backend} backend, arms {arguments.arms}, {budget}")
-    results = study.run_study(backend=arguments.backend, arms=arguments.arms, budget=budget, seed=arguments.seed)
+    results = study.run_study(
+        backend=arguments.backend, arms=arguments.arms, budget=budget, seed=arguments.seed
+    )
     print(f"# sampled in {time.perf_counter() - started:.1f} s")
     _print_table(results)
     if arguments.figures is not None:

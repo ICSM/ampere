@@ -244,17 +244,17 @@ def run(
     """Simulate *count* draws through a pool of *workers* subprocesses."""
     problem = build_problem(sleep=sleep)
     executor = ProcessExecutor(workers, timeout=timeout)
-    batch = problem.simulate_many(
-        count, observe=True, executor=executor, chunk_size=chunk_size
-    )
+    batch = problem.simulate_many(count, observe=True, executor=executor, chunk_size=chunk_size)
     return problem, batch
 
 
 def report(problem: FittingProblem, batch: SimulationBatch) -> str:
     """What a driver should print after a budget: usable pairs, and why the rest are not."""
     lines = [
-        f"{len(batch)} draw(s) simulated, {len(batch.usable)} usable "
-        f"({int(batch.failed.sum())} failed)",
+        (
+            f"{len(batch)} draw(s) simulated, {len(batch.usable)} usable "
+            f"({int(batch.failed.sum())} failed)"
+        ),
     ]
     for reason, number in sorted(problem.failure_counts.items()):
         lines.append(f"  {number:>4} x {reason}")

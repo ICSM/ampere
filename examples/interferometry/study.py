@@ -286,7 +286,7 @@ def build_problem(backend: str, arm: str, *, seed: int = gen.SEED) -> FittingPro
     fitted = model_for(backend, arm, grid, grid)
     vis_noise, t3_noise = _noise_models(backend, arm)
 
-    import interferometry_fixtures as fixtures  # noqa: PLC0415 (see .generators)
+    import interferometry_fixtures as fixtures
 
     vis_instrument = fixtures.chain(itf, observed_vis, "vis")
     t3_instrument = fixtures.chain(itf, observed_t3, "t3")
@@ -328,7 +328,11 @@ def run(problem: FittingProblem, budget: EmceeBudget, *, progress: bool = False)
 
 
 def run_study(
-    *, backend: str = "reference", arms: Sequence[str] = ARMS, budget: EmceeBudget = CI_BUDGET, seed: int = gen.SEED
+    *,
+    backend: str = "reference",
+    arms: Sequence[str] = ARMS,
+    budget: EmceeBudget = CI_BUDGET,
+    seed: int = gen.SEED,
 ) -> dict[str, dict[str, Any]]:
     """One run per arm, keeping what the figures and the report need."""
     results: dict[str, dict[str, Any]] = {}
@@ -388,7 +392,9 @@ def summarise(run: Any, *, names: Sequence[str] | None = None) -> dict[str, Summ
     for name in wanted:
         draws = np.asarray(posterior[name].values, dtype=float).ravel()
         low, median, high = (float(v) for v in np.percentile(draws, (16.0, 50.0, 84.0)))
-        summaries[name] = Summary(name=name, median=median, low=low, high=high, truth=truths.get(name))
+        summaries[name] = Summary(
+            name=name, median=median, low=low, high=high, truth=truths.get(name)
+        )
     return summaries
 
 
@@ -421,17 +427,23 @@ def _calibration_factory(arm: str, backend: str) -> Any:
         fitted = model_for(backend, arm, grid, grid)
         vis_noise, t3_noise = _noise_models(backend, arm)
 
-        import interferometry_fixtures as fixtures  # noqa: PLC0415
+        import interferometry_fixtures as fixtures
 
         vis_instrument = fixtures.chain(itf, observed_vis, "vis")
         t3_instrument = fixtures.chain(itf, observed_t3, "t3")
         datasets = DatasetCollection(
             {
                 "vis": Dataset(
-                    observed_vis, vis_instrument, likelihood=_likelihood(vis_noise, complex_=True), label="vis"
+                    observed_vis,
+                    vis_instrument,
+                    likelihood=_likelihood(vis_noise, complex_=True),
+                    label="vis",
                 ),
                 "t3": Dataset(
-                    observed_t3, t3_instrument, likelihood=_likelihood(t3_noise, complex_=False), label="t3"
+                    observed_t3,
+                    t3_instrument,
+                    likelihood=_likelihood(t3_noise, complex_=False),
+                    label="t3",
                 ),
             }
         )
@@ -500,15 +512,23 @@ def _chromatic_kernel(backend: str, kind: str) -> Any:
     """
     module = _backend_module(backend)
     spatial = module.Matern32(
-        st.halfnorm(scale=GP_AMPLITUDE_SCALE), st.loguniform(*GP_LENGTH_SCALE_RANGE), axes=("u", "v")
+        st.halfnorm(scale=GP_AMPLITUDE_SCALE),
+        st.loguniform(*GP_LENGTH_SCALE_RANGE),
+        axes=("u", "v"),
     )
-    spectral = module.Matern32(1.0, st.loguniform(1.0e-3, 0.1), axes=("spectral_axis",), length_scale_unit=u.micron)
+    spectral = module.Matern32(
+        1.0, st.loguniform(1.0e-3, 0.1), axes=("spectral_axis",), length_scale_unit=u.micron
+    )
     if kind == "spatial":
         return spatial
     if kind == "spectral":
         return spectral
     if kind == "product":
-        return Product(spatial, spectral) if backend == "reference" else module.Product(spatial, spectral)
+        return (
+            Product(spatial, spectral)
+            if backend == "reference"
+            else module.Product(spatial, spectral)
+        )
     raise ValueError(f"unknown chromatic kernel {kind!r}; the three are {CHROMATIC_KERNELS!r}.")
 
 
@@ -531,16 +551,22 @@ def chromatic_problem(backend: str, kind: str, *, seed: int = gen.SEED) -> Fitti
     kernel = _chromatic_kernel(backend, kind)
     noise = module.GaussianProcessNoise(kernel, module.DenseGP())
 
-    import interferometry_fixtures as fixtures  # noqa: PLC0415
+    import interferometry_fixtures as fixtures
 
     vis_instrument = fixtures.chain(itf, observed, "vis")
     datasets = DatasetCollection(
-        {"vis": Dataset(observed, vis_instrument, likelihood=_likelihood(noise, complex_=True), label="vis")}
+        {
+            "vis": Dataset(
+                observed, vis_instrument, likelihood=_likelihood(noise, complex_=True), label="vis"
+            )
+        }
     )
     return FittingProblem(fitted, datasets, seed=seed)
 
 
-def run_chromatic_arm(*, backend: str = "reference", budget: EmceeBudget = CHROMATIC_BUDGET, seed: int = gen.SEED) -> dict[str, dict[str, Any]]:
+def run_chromatic_arm(
+    *, backend: str = "reference", budget: EmceeBudget = CHROMATIC_BUDGET, seed: int = gen.SEED
+) -> dict[str, dict[str, Any]]:
     """One run per chromatic kernel: the ranking the item asks be measured."""
     results: dict[str, dict[str, Any]] = {}
     for kind in CHROMATIC_KERNELS:
