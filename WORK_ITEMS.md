@@ -1827,7 +1827,7 @@ and W4.1; W4.3 after W4.1 and W4.2; W4.7 after W4.6; W4.4 after W4.3 and
 W4.11; W4.9 after W4.4 (ruled in); W4.10 any time; W4.8 last.
 
 
-## Phase 5 — Scale-out & advanced inference (drafted 2026-09-15 by Fable; **approved by Peter 2026-09-15 with rulings D2–D8 confirmed as recommended, D1 provisionally (a) pending the consequences analysis, D8 as two Opus items**; W5.20 proposed the same day from the D1 analysis, awaiting his ruling; nothing dispatched)
+## Phase 5 — Scale-out & advanced inference (drafted 2026-09-15 by Fable; **approved by Peter 2026-09-15 with rulings D1–D8 as recommended — D1 as (a) and (b) together, carried by W5.20; D8 as two Opus items**; wave 1 dispatched 2026-09-15)
 
 The plan's §5 Phase 5 bullets, the design horizons (b), (e)–(i), the
 inference-extensions memo's §5 adaptations and §6 ranking, the modality
@@ -2223,7 +2223,7 @@ the landed summary. **Depends:** everything merged. **Accept:** docs build
 with a warning list no longer than the base commit's; spec doctests and
 `tests/examples` green; gates dev.
 
-### W5.20 — A backend-invariant parameter namespace [S; Opus] (proposed 2026-09-15 from the D1 analysis; awaiting Peter)
+### W5.20 — A backend-invariant parameter namespace [S; Opus] (proposed 2026-09-15 from the D1 analysis; **ruled in by Peter the same day**: both options, (a) and (b))
 `Parameterised._check_free_name` refuses a parameter or buffer whose name is
 an attribute of `type(self)`, over the whole MRO — so the set of legal
 parameter names depends on which backend's base class a model inherits
@@ -2268,7 +2268,7 @@ the terra reviews owed on W4.1, W4.2 and W4.5 when the quota returns.
   `Parameterised._check_free_name` so a parameter may shadow a method;
   (c) leave both spellings as documented. Recommendation: (a) — the
   shadowing rule caught a real ambiguity in `model.flux`, and the collision
-  recurs for any model whose physical parameter is a flux. **Ruled 2026-09-15: (a) provisionally**, pending the consequences analysis (plan §2's W4.3 row; W5.20 below).
+  recurs for any model whose physical parameter is a flux. **Ruled 2026-09-15: (a) and (b) together, as W5.20** (plan §2's W4.3 row carries the analysis).
 - **D2 — the first 2-D+ solver and its customer**: HSGP first on a single
   `Image` (W5.4 + W5.5, recommended) with the bake-off (W5.6) in-phase; or
   the IFU cube as the customer (needs W5.12's plate first, so the solver
@@ -2295,7 +2295,7 @@ the terra reviews owed on W4.1, W4.2 and W4.5 when the quota returns.
   W5.8's M2 margins are pinned or informational at the per-PR budget
   (recommendation: pinned as margins, W4.5's precedent). **Ruled 2026-09-15: two Opus items; W5.8's margins pinned.**
 
-Ordering (two agents at a time): **wave 1** W5.0 ∥ W5.2, then W5.20 if ruled in; **wave 2** W5.4
+Ordering (two agents at a time): **wave 1** W5.0 ∥ W5.2, then W5.20; **wave 2** W5.4
 (1-D) ∥ W5.3, then W5.5 ∥ W5.13; **wave 3** W5.7 ∥ W5.9; **wave 4** W5.10
 (+ W5.11 if D7) ∥ W5.8; **wave 5** W5.12 ∥ W5.14; **wave 6** W5.6 ∥ W5.15,
 W5.16, W5.17, W5.18 as they free; W5.19 last. File ownership per wave in
