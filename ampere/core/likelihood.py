@@ -96,8 +96,8 @@ from .kernels import (
     lookup_quasiseparable_term,
     quantile_knots,
     quasiseparable_families,
-    register_quasiseparable_term,
     refuse_warped_composite,
+    register_quasiseparable_term,
     registered_quasiseparable_terms,
     term_provenance_entries,
 )
