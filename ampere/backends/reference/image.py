@@ -163,14 +163,15 @@ def _fft_convolve(image: np.ndarray, kernel: np.ndarray) -> np.ndarray:
     :meth:`PSFConvolution.apply` crops back to the observed pixels, so no
     returned pixel ever sees one of them.
     """
-    shape = tuple(n + m - 1 for n, m in zip(image.shape, kernel.shape, strict=True))
+    axes = (-2, -1)
+    shape = tuple(image.shape[axis] + kernel.shape[axis] - 1 for axis in axes)
     fast = tuple(next_fast_len(length) for length in shape)
-    spectrum = np.fft.rfftn(image, fast) * np.fft.rfftn(kernel, fast)
-    full = np.fft.irfftn(spectrum, fast)
+    spectrum = np.fft.rfft2(image, fast, axes=axes) * np.fft.rfft2(kernel, fast, axes=axes)
+    full = np.fft.irfft2(spectrum, fast, axes=axes)
     centre = tuple(
-        slice(m // 2, m // 2 + n) for n, m in zip(image.shape, kernel.shape, strict=True)
+        slice(kernel.shape[axis] // 2, kernel.shape[axis] // 2 + image.shape[axis]) for axis in axes
     )
-    return np.asarray(full[centre], dtype=DTYPE)
+    return np.asarray(full[..., centre[0], centre[1]], dtype=DTYPE)
 
 
 class PSFConvolution(Transformation):

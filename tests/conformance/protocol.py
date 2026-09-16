@@ -489,6 +489,13 @@ class BackendCapabilities:
         default, for the same reason ``interferometry`` is: one modality's
         slice must not be a change to every other track's fixture. Added at
         W4.9.
+    ``image``
+        Whether :meth:`ConformanceBackend.image` can return this backend's
+        PSF-convolution step and the image-emitting source models it convolves.
+        ``False`` by default, for the same reason ``interferometry`` and
+        ``astrometry`` are: one modality's slice must not be a change to every
+        other track's fixture. Added at **W5.5**, the item that made an
+        ``Image`` an observation rather than only an intermediate.
     ``picklable``
         Whether a problem composed from this backend's pieces can be sent to a
         worker process (W3.1). ``True`` by default, because a backend whose
@@ -515,6 +522,7 @@ class BackendCapabilities:
     complex_models: bool = False
     interferometry: bool = False
     astrometry: bool = False
+    image: bool = False
     picklable: bool = True
     solvers: frozenset[SolverKind] = frozenset({SolverKind.DENSE})
     tolerances: Tolerances = DEFAULT_TOLERANCES
@@ -589,13 +597,39 @@ class AstrometryPieces:
     reflex_orbit: type
 
 
+@dataclasses.dataclass(frozen=True)
+class ImagePieces:
+    """The gridded-image classes one backend supplies (*W5.5*).
+
+    The same shape as :class:`InterferometryPieces` and :class:`AstrometryPieces`,
+    and for the same reason: there is no step registry, so association with the
+    reference implementation is by class name in the backend's own ``image``
+    module, the native surface it exposes, and its ``BACKEND`` declaration.
+
+    ``psf_convolution``
+        ``Image -> Image``, kind-preserving and grid-cropping, built with
+        ``from_observed(container, fwhm=...)`` or
+        ``from_observed(container, kernel=...)``.
+    ``gaussian_source``, ``binary``
+        Two of W4.1's three image-emitting source models, reused unchanged as
+        the things a PSF is convolved *with*. Band-limited, both of them, which
+        is what makes a convolution of them comparable against a direct sum to
+        the solver tolerance rather than to a convergence rate — the
+        uniform disc's sharp edge is the exception W4.1's own rows record, and
+        it is deliberately not in this record.
+    """
+
+    psf_convolution: type
+    gaussian_source: type
+    binary: type
+
+
 @runtime_checkable
 class ConformanceBackend(Protocol):
     """Everything the conformance battery asks of a backend.
 
-    Twelve members (W4.9 added :meth:`astrometry`, the eleventh having been
-    W4.1's :meth:`interferometry` — the count was last stated, and last
-    correct, before either). Implement them and every row in
+    Thirteen members (W5.5 added :meth:`image`; W4.9 added :meth:`astrometry`,
+    and W4.1 :meth:`interferometry` before it). Implement them and every row in
     ``tests/conformance/``
     runs against your backend; register the instance in
     ``tests/conformance/backends/__init__.py`` and nothing else changes —
@@ -719,6 +753,17 @@ class ConformanceBackend(Protocol):
         in, :class:`~ampere.core.TimeSeries`, is ``ampere.core``'s own — the
         same placement D1 ruled for interferometry, applied to the modality
         that was chosen to test the ruling.
+        """
+
+    def image(self) -> ImagePieces:
+        """This backend's PSF-convolution step and its image sources (*W5.5*).
+
+        Only called when :attr:`BackendCapabilities.image` is declared; a
+        backend that has not written them may raise, and every gridded row then
+        skips with a reason naming what is owed. The kind these speak in,
+        :class:`~ampere.core.Image`, is ``ampere.core``'s own — D1's placement
+        again, applied to the first modality whose observed container has a
+        ``Layout.GRID``.
         """
 
     def to_numpy(self, values: Any) -> np.ndarray:
