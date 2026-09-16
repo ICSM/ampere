@@ -440,8 +440,12 @@ def _warped_report(
     if record is None:
         return None, None
     points = _as_points(target, "conditioning grid")
-    selected = np.asarray(kernel.select(points), dtype=DTYPE)
-    axis = selected[:, 0] if selected.ndim == 2 else selected
+    # A one-column grid is already the coordinate, whatever the *container*'s
+    # axes are: ``at=`` is handed to the solver as a bare 1-D array, and
+    # selecting column ``k`` of it would be an index error rather than a
+    # selection. Anything wider is a container's own coordinate block, where
+    # the kernel's binding says which column it warps.
+    axis = points[:, 0] if points.shape[1] == 1 else np.asarray(kernel.select(points))[:, 0]
     return np.asarray(kernel.warped_coordinate(axis, values), dtype=DTYPE), record
 
 

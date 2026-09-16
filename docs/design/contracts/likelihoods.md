@@ -890,7 +890,11 @@ is free gets used to absorb signal, so:
 * **non-centred by default**: `uₖ = s · zₖ` with `zₖ ~ Normal(0, 1)`, the same
   prior with the geometry NUTS wants. `non_centred=False` declares the centred
   form directly with `HierarchicalPrior`, which is what the plan names and what
-  a strongly identified warp can afford;
+  a strongly identified warp can afford — its default knot declaration *is*
+  that hierarchical prior. In that form the scale reaches the knots only
+  through the reference, so overriding the knots with an ordinary prior while
+  the scale is still free is refused: a scale nothing depends on is a sampled
+  dimension with no posterior;
 * **warped diagnostics** — §8.
 
 Two redundancies are named rather than constrained away, exactly as `Product`'s

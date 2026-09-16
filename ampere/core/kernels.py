@@ -2130,7 +2130,11 @@ class WarpedKernel(Kernel):
       declares the centred form directly, with
       :class:`~ampere.core.parameter.HierarchicalPrior` — offered because it
       is what the plan names, and because a strongly identified warp samples
-      fine either way.
+      fine either way — its default knot declaration *is* that hierarchical
+      prior. In that form the scale reaches the knots only through the
+      reference, so overriding the knots with an ordinary prior while the
+      scale is still free is refused: a scale nothing depends on is a sampled
+      dimension with no posterior.
     * **Warped diagnostics.** ``Likelihood.conditional`` reports in
       :math:`w(x)` and records the warp, so the whiteness (family B) and
       localisation (family C) diagnostics are run in the coordinate the
@@ -2302,12 +2306,25 @@ class WarpedKernel(Kernel):
             if self._non_centred
             else HierarchicalPrior("norm", {"scale": scale_name}, kwds={"loc": 0.0})
         )
+        hierarchical = False
         for index, declaration in enumerate(
             _warp_values(given, count, default, f"{prefix} {stem}s")
         ):
-            self.register_parameter(
-                _warp_hyperparameter(f"{prefix}.{stem}{index}", declaration, positive=False)
-            )
+            parameter = _warp_hyperparameter(f"{prefix}.{stem}{index}", declaration, positive=False)
+            hierarchical = hierarchical or isinstance(parameter.prior, HierarchicalPrior)
+            self.register_parameter(parameter)
+        if self._non_centred or hierarchical or self.parameters[scale_name].fixed:
+            return
+        raise LikelihoodError(
+            f"{scale_name!r} is a free parameter that nothing depends on: with "
+            f"non_centred=False the shrinkage scale reaches the knot variables only through a "
+            f"HierarchicalPrior referencing it, and none of the {prefix} {stem}s declares one. "
+            f"An unidentified sampled dimension has no posterior and costs a sampler real "
+            f"work, so it is refused here. Either leave non_centred=True (the default, where "
+            f"the kernel forms {stem}_k = {scale_name.split('.')[-1]} * z_k itself), pass "
+            f"{stem}s=HierarchicalPrior('norm', {{'scale': {scale_name!r}}}, "
+            f"kwds={{'loc': 0.0}}), or hold the scale at a number."
+        )
 
     @property
     def base(self) -> Kernel:

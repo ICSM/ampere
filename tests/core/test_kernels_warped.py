@@ -265,6 +265,20 @@ class TestTheWarpComposesWithTheAlgebra:
         DenseGP().check_compatible(kernel, observed)
         assert kernel.selected_axes([axis.name for axis in observed.axes]) == ("spectral_axis",)
 
+        # End to end through the binding: the covariance a solver would build
+        # on this container's own (n, 3) coordinate block must be the base
+        # kernel on the warped *spectral* column and nothing else. The base
+        # stays unbound and is handed the one column, which is why its own
+        # ``axes`` is recorded (for the unit rule) but never resolved.
+        bound = kernel.for_axes([axis.name for axis in observed.axes])
+        points = np.column_stack([np.asarray(axis.values, dtype=float) for axis in observed.axes])
+        values = bound.resolve(None)
+        got = np.asarray(bound.matrix(points, points, values))
+        moved = np.asarray(bound.warped_coordinate(points[:, 2], values), dtype=float)
+        plain = Matern32(0.1, 0.05)
+        expected = plain.matrix(moved[:, None], moved[:, None], plain.resolve(None))
+        assert got == pytest.approx(expected, abs=0.0, rel=0.0)
+
 
 # ---------------------------------------------------------------------------
 # Refusals
@@ -378,6 +392,39 @@ class TestTheShrinkageDeclaration:
         prior = kernel.parameters["input_warp.increment0"].prior
         assert isinstance(prior, HierarchicalPrior)
         assert prior.references == ("input_warp.scale",)
+
+    def test_the_centred_form_defaults_to_the_hierarchical_prior(self) -> None:
+        """``non_centred=False`` alone is already the shrinkage declaration."""
+        kernel = WarpedKernel(Matern32(0.4, 2.0), input_warp=KNOTS, non_centred=False)
+        assert isinstance(kernel.parameters["input_warp.increment1"].prior, HierarchicalPrior)
+
+    def test_the_centred_form_refuses_a_scale_nothing_depends_on(self) -> None:
+        """A flat prior on the knots with a free scale leaves a sampled dimension idle.
+
+        In the non-centred form the kernel *uses* the scale, so it is always
+        identified; in the centred form the only route from the scale to the
+        knots is a ``HierarchicalPrior`` naming it. Overriding the knots'
+        declaration with an ordinary prior and leaving the scale free gives a
+        parameter with no posterior, which costs a sampler real work for
+        nothing — so it is refused where it is declared, rather than found in
+        a trace plot afterwards.
+        """
+        with pytest.raises(LikelihoodError, match="nothing depends on"):
+            WarpedKernel(
+                Matern32(0.4, 2.0),
+                input_warp=KNOTS,
+                increments=st.norm(0.0, 1.0),
+                non_centred=False,
+            )
+        # Holding the scale at a number is the other way out, and is accepted.
+        held = WarpedKernel(
+            Matern32(0.4, 2.0),
+            input_warp=KNOTS,
+            increments=st.norm(0.0, 1.0),
+            input_scale=0.5,
+            non_centred=False,
+        )
+        assert "input_warp.scale" not in held.parameters.free_names
 
     def test_the_two_forms_are_the_same_prior(self) -> None:
         """``u = s·z`` with ``z ~ N(0, 1)`` is ``u ~ N(0, s)``: the same model, better geometry."""
