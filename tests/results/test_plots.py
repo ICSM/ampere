@@ -32,13 +32,17 @@ import scipy.stats as st
 matplotlib.use("Agg")
 
 from ampere.core import (
+    AxisSpec,
+    ClosurePhases,
     ComplexGaussianFamily,
     Dataset,
     DatasetCollection,
     DenseGP,
     FittingProblem,
+    FunctionSamples,
     GaussianFamily,
     GaussianProcessNoise,
+    Layout,
     Likelihood,
     Matern32,
     Model,
@@ -47,6 +51,7 @@ from ampere.core import (
     QuasisepGP,
     Spectrum,
     VisibilitySet,
+    VonMisesFamily,
 )
 from ampere.core.exceptions import ResultsError
 from ampere.results import (
@@ -59,10 +64,16 @@ from ampere.results import (
     ResultsWarning,
     add_pointwise_log_likelihood,
     add_posterior_predictive,
+    add_residuals,
     figure_metadata,
     from_netcdf,
+    gp_localisation,
+    gp_localisation_score,
+    plot_anomaly_score,
     plot_corner,
+    plot_gp_localisation,
     plot_posterior_predictive,
+    plot_residuals,
     plot_trace,
     pointwise_as_log_likelihood,
     to_netcdf,
@@ -167,6 +178,152 @@ def visibility_problem() -> FittingProblem:
         ),
         seed=1,
     )
+
+
+def gp_visibility_problem() -> FittingProblem:
+    """:func:`visibility_problem`, GP-fitted over ``(u, v)`` — W5.3's family C row."""
+    axes = (np.array([1.0, 2.0, -3.0]), np.array([3.0, -4.0, 1.5]), np.array([2.2, 2.2, 2.2]))
+    noise = GaussianProcessNoise(Matern32(0.3, 1.0, axes=("u", "v")), solver=DenseGP())
+    return FittingProblem(
+        PointSource(*axes),
+        DatasetCollection(
+            {
+                "vis": Dataset(
+                    VisibilitySet(
+                        axes[0],
+                        axes[1],
+                        axes[2] * u.micron,
+                        np.array([1 + 0j, 1 + 0j, 1 + 0j]),
+                        uncertainty=np.array([0.1, 0.1, 0.1]),
+                    ),
+                    label="vis",
+                    likelihood=Likelihood(ComplexGaussianFamily(), noise),
+                )
+            }
+        ),
+        seed=1,
+    )
+
+
+class ClosureSource(Model):
+    """A flat closure phase — the smallest :class:`~ampere.core.ClosurePhases` channel."""
+
+    def __init__(
+        self,
+        u1: np.ndarray,
+        v1: np.ndarray,
+        u2: np.ndarray,
+        v2: np.ndarray,
+        wave: np.ndarray,
+    ) -> None:
+        self.register_buffer("u1", np.asarray(u1, dtype=float))
+        self.register_buffer("v1", np.asarray(v1, dtype=float))
+        self.register_buffer("u2", np.asarray(u2, dtype=float))
+        self.register_buffer("v2", np.asarray(v2, dtype=float))
+        self.register_buffer("wave", np.asarray(wave, dtype=float), unit=u.micron)
+        self.register_parameter(Parameter("phase", st.uniform(-1.0, 2.0)))
+
+    def evaluate(self, **values: Any) -> ModelResult:
+        ctx = self.context(values)
+        return ModelResult(
+            ClosurePhases(
+                ctx["u1"],
+                ctx["v1"],
+                ctx["u2"],
+                ctx["v2"],
+                ctx["wave"] * u.micron,
+                ctx["phase"] * np.ones(ctx["u1"].size) * u.rad,
+            )
+        )
+
+
+def closure_problem() -> FittingProblem:
+    axes = (
+        np.array([1.0, 2.0]),
+        np.array([3.0, -4.0]),
+        np.array([-1.0, 0.5]),
+        np.array([2.0, 1.5]),
+        np.array([2.2, 2.2]),
+    )
+    return FittingProblem(
+        ClosureSource(*axes),
+        DatasetCollection(
+            {
+                "t3": Dataset(
+                    ClosurePhases(
+                        *axes[:4],
+                        axes[4] * u.micron,
+                        np.array([0.1, -0.2]) * u.rad,
+                        uncertainty=np.array([0.05, 0.05]) * u.rad,
+                    ),
+                    label="t3",
+                    likelihood=Likelihood(VonMisesFamily()),
+                )
+            }
+        ),
+        seed=2,
+    )
+
+
+class TwoAxisPoint(FunctionSamples):
+    """An out-of-tree point kind with two axes and no default coordinate.
+
+    ``tests/core/thirdparty_polarimeter.py`` is the pattern for declaring a
+    kind outside ``ampere`` itself; this one is deliberately local to this
+    test module rather than a shared fixture, since its only job is to prove
+    :func:`~ampere.results._plotting.coordinate_of` refuses a multi-axis kind
+    that names no default and is given no ``coordinate=`` — DEVELOPMENT_PLAN.md
+    §4.3's "a kind is class attributes" applies exactly the same to a kind
+    that declares nothing beyond ``AXES``/``LAYOUT``/``ALLOW_COMPLEX``.
+    """
+
+    AXES = (
+        AxisSpec("p", physical_types=("dimensionless",)),
+        AxisSpec("q", physical_types=("dimensionless",)),
+    )
+    LAYOUT = Layout.POINTS
+    ALLOW_COMPLEX = False
+
+    def __init__(self, p: np.ndarray, q: np.ndarray, values: np.ndarray, **kwargs: Any) -> None:
+        super().__init__({"p": p, "q": q}, values, **kwargs)
+
+
+class PairSource(Model):
+    """A flat level on a ``(p, q)`` point set — the smallest two-axis channel."""
+
+    def __init__(self, p: np.ndarray, q: np.ndarray) -> None:
+        self.register_buffer("p", np.asarray(p, dtype=float))
+        self.register_buffer("q", np.asarray(q, dtype=float))
+        self.register_parameter(Parameter("level", st.uniform(-1.0, 2.0)))
+
+    def evaluate(self, **values: Any) -> ModelResult:
+        ctx = self.context(values)
+        return ModelResult(TwoAxisPoint(ctx["p"], ctx["q"], ctx["level"] * np.ones(ctx["p"].size)))
+
+
+def pair_problem() -> FittingProblem:
+    p, q = np.array([1.0, 2.0, 3.0]), np.array([4.0, 5.0, 6.0])
+    return FittingProblem(
+        PairSource(p, q),
+        DatasetCollection(
+            {
+                "pair": Dataset(
+                    TwoAxisPoint(p, q, np.array([0.1, 0.2, 0.3]), uncertainty=np.full(3, 0.05)),
+                    label="pair",
+                    likelihood=Likelihood(GaussianFamily()),
+                )
+            }
+        ),
+        seed=3,
+    )
+
+
+def _tiny_run(problem: FittingProblem, *, values: dict[str, float], draws: int = 3) -> Any:
+    """The smallest genuine run for a fixture whose only free names are *values*'."""
+    recorder = DrawRecorder(problem, chains=1)
+    for _ in range(draws):
+        recorder.record(dict(values))
+    return recorder.emit(engine="fixture")
 
 
 def run(problem: FittingProblem, *, chains: int = 2, draws: int = 30, reject: bool = False) -> Any:
@@ -616,3 +773,139 @@ class TestPointwiseLogLikelihood:
     def test_the_bridge_names_its_precondition(self) -> None:
         with pytest.raises(ResultsError, match="add_pointwise_log_likelihood"):
             pointwise_as_log_likelihood(run(toy(), draws=2))
+
+
+# ---------------------------------------------------------------------------
+# W5.3: the four plots on a point kind with several axes
+# ---------------------------------------------------------------------------
+
+
+class TestMultiAxisCoordinate:
+    """``VisibilitySet``/``ClosurePhases`` (several axes) against a plain
+    single-axis kind's existing rows, which stay exactly as they were.
+    """
+
+    def test_a_single_axis_kind_still_resolves_exactly_as_before(self) -> None:
+        # The byte-identical guarantee, pinned: passing coordinate=None (the
+        # new default) to a Spectrum-backed run is the pre-W5.3 call.
+        problem = toy()
+        tree = add_posterior_predictive(run(problem, draws=6), problem)
+        figure = plot_posterior_predictive(tree)
+        assert figure is not None
+        pyplot.close(figure)
+
+    def test_visibility_set_renders_with_its_default_baseline_length_coordinate(
+        self,
+    ) -> None:
+        problem = visibility_problem()
+        tree = _tiny_run(problem, values={"model.flux": 1.0})
+        tree = add_posterior_predictive(tree, problem, datasets=["vis"], component="abs")
+        figure = plot_posterior_predictive(tree, datasets=["vis"], component="abs")
+        try:
+            assert figure is not None
+            axis = figure.axes[0]
+            assert "baseline length" in axis.get_xlabel()
+        finally:
+            pyplot.close(figure)
+
+    def test_visibility_set_residuals_render_with_the_default_coordinate(self) -> None:
+        problem = visibility_problem()
+        tree = _tiny_run(problem, values={"model.flux": 1.0})
+        tree = add_residuals(tree, problem, datasets=["vis"], component="abs")
+        figure = plot_residuals(tree, datasets=["vis"], component="abs", whiteness=False)
+        try:
+            assert "baseline length" in figure.axes[0].get_xlabel()
+        finally:
+            pyplot.close(figure)
+
+    def test_closure_phases_renders_with_its_default_longest_baseline_coordinate(
+        self,
+    ) -> None:
+        problem = closure_problem()
+        tree = _tiny_run(problem, values={"model.phase": 0.1})
+        tree = add_posterior_predictive(tree, problem, datasets=["t3"])
+        figure = plot_posterior_predictive(tree, datasets=["t3"])
+        try:
+            assert "longest baseline" in figure.axes[0].get_xlabel()
+        finally:
+            pyplot.close(figure)
+
+    def test_closure_phases_residuals_render_with_the_default_coordinate(self) -> None:
+        problem = closure_problem()
+        tree = _tiny_run(problem, values={"model.phase": 0.1})
+        tree = add_residuals(tree, problem, datasets=["t3"])
+        figure = plot_residuals(tree, datasets=["t3"], whiteness=False)
+        try:
+            assert "longest baseline" in figure.axes[0].get_xlabel()
+        finally:
+            pyplot.close(figure)
+
+    def test_gp_localisation_and_anomaly_score_render_for_the_gp_fitted_visibility_set(
+        self,
+    ) -> None:
+        problem = gp_visibility_problem()
+        tree = _tiny_run(problem, values={"model.flux": 1.0})
+        tree = gp_localisation(tree, problem, datasets=["vis"], component="abs")
+        figure = plot_gp_localisation(tree, datasets=["vis"], component="abs")
+        try:
+            assert "baseline length" in figure.axes[0].get_xlabel()
+        finally:
+            pyplot.close(figure)
+        score = gp_localisation_score(tree, dataset="vis", component="abs")
+        axes = plot_anomaly_score(score)
+        try:
+            assert axes.get_legend() is not None
+        finally:
+            pyplot.close(axes.get_figure())
+
+    def test_it_refuses_a_multi_axis_kind_with_no_default_and_no_coordinate(self) -> None:
+        # tests/core/thirdparty_polarimeter.py's pattern, applied to a kind
+        # that declares nothing beyond AXES/LAYOUT/ALLOW_COMPLEX (TwoAxisPoint
+        # above): results.md §13 item 14's refusal, lifted everywhere else,
+        # still stands where a kind opts into nothing.
+        problem = pair_problem()
+        tree = _tiny_run(problem, values={"model.level": 0.15})
+        tree = add_posterior_predictive(tree, problem, datasets=["pair"])
+        with pytest.raises(ResultsError, match="no default plotted coordinate"):
+            plot_posterior_predictive(tree, datasets=["pair"])
+
+    def test_a_coordinate_argument_names_one_of_the_kinds_own_axes(self) -> None:
+        problem = pair_problem()
+        tree = _tiny_run(problem, values={"model.level": 0.15})
+        tree = add_posterior_predictive(tree, problem, datasets=["pair"])
+        figure = plot_posterior_predictive(tree, datasets=["pair"], coordinate="p")
+        try:
+            assert figure.axes[0].get_xlabel() == "p"
+        finally:
+            pyplot.close(figure)
+
+    def test_a_coordinate_callable_computes_one_from_the_kinds_axes(self) -> None:
+        def total(axes: Any) -> tuple[np.ndarray, str]:
+            return axes["p"].values + axes["q"].values, "p + q"
+
+        problem = pair_problem()
+        tree = _tiny_run(problem, values={"model.level": 0.15})
+        tree = add_posterior_predictive(tree, problem, datasets=["pair"])
+        figure = plot_posterior_predictive(tree, datasets=["pair"], coordinate=total)
+        try:
+            assert figure.axes[0].get_xlabel() == "p + q"
+        finally:
+            pyplot.close(figure)
+
+    def test_a_complex_dataset_with_no_component_names_the_four_choices(self) -> None:
+        problem = visibility_problem()
+        tree = _tiny_run(problem, values={"model.flux": 1.0})
+        with pytest.raises(ResultsError, match='"real", "imag", "abs" or "phase"'):
+            add_posterior_predictive(tree, problem, datasets=["vis"])
+
+    def test_component_on_a_real_dataset_is_refused(self) -> None:
+        problem = closure_problem()
+        tree = _tiny_run(problem, values={"model.phase": 0.1})
+        with pytest.raises(ResultsError, match="real-valued"):
+            add_posterior_predictive(tree, problem, datasets=["t3"], component="abs")
+
+    def test_an_unknown_component_is_refused_by_name(self) -> None:
+        problem = visibility_problem()
+        tree = _tiny_run(problem, values={"model.flux": 1.0})
+        with pytest.raises(ResultsError, match="component must be one of"):
+            add_posterior_predictive(tree, problem, datasets=["vis"], component="modulus")

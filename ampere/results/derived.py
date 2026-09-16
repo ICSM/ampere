@@ -83,8 +83,9 @@ import numpy as np
 from ampere.core.dataset import LIKELIHOOD_COMPONENT, Dataset, FittingProblem
 from ampere.core.exceptions import LikelihoodError, ResultsError
 from ampere.core.likelihood import GaussianProcessNoise, Marginalisation
-from ampere.core.results_schema import FunctionSamples
+from ampere.core.results_schema import FunctionSamples, format_axis_label
 
+from . import _plotting as _p
 from .emission import (
     CHAIN_DIM,
     DRAW_DIM,
@@ -96,6 +97,7 @@ from .emission import (
 from .provenance import ATTR_PREFIX, hash_of, problem_fingerprint
 
 __all__ = [
+    "COMPONENTS",
     "CONDITIONAL_LOO_DECOMPOSITION",
     "FACTORISED_DECOMPOSITION",
     "GP_LOCALISATION_GROUP",
@@ -105,6 +107,8 @@ __all__ = [
     "add_pointwise_log_likelihood",
     "add_posterior_predictive",
     "add_residuals",
+    "base_label",
+    "component_variable",
     "gp_localisation",
     "pointwise_as_log_likelihood",
 ]
@@ -141,32 +145,103 @@ FACTORISED_DECOMPOSITION = "factorised"
 CONDITIONAL_LOO_DECOMPOSITION = "conditional_loo"
 
 
-def _refuse_complex(label: str, complex_valued: bool, group: str, alternative: str) -> None:
-    """Refuse, by name, a complex-valued dataset for a group that holds one real variable.
+#: The four views a complex dataset's derived variable may be stored as
+#: (**W5.3**). The order matches ``results.md`` §8's list, and every refusal
+#: message that names them uses this tuple, so the two cannot drift apart.
+COMPONENTS: tuple[str, ...] = ("real", "imag", "abs", "phase")
 
-    **W5.2.** Before this, the three derived groups disagreed:
-    :func:`add_posterior_predictive` refused explicitly, while
-    :func:`add_residuals` and :func:`gp_localisation` let plain numpy casting
-    (``observed.values`` or a conditioned mean, cast to ``float``) silently
-    discard the imaginary part, with only a ``ComplexWarning`` — the kind of
-    warning a script redirecting stderr never sees. All three now refuse the
-    same way: ``results.md`` §4 splits a complex *observed* container into
-    ``<label>_real`` and ``<label>_imag`` at emission time, and none of the
-    derived groups mirror that split, so there is nowhere for the second
-    component to go. Which component to derive, or the modulus, is the
-    caller's choice and not this function's to guess — deferred to W5.3's
-    ``component=`` argument on the plotting side; until then, the caller
-    supplies a real dataset by name or computes the complex one directly.
+
+def _component_of(values: np.ndarray, component: str) -> np.ndarray:
+    """One of :data:`COMPONENTS` of complex-valued *values* — the one helper.
+
+    **W5.3.** :func:`add_posterior_predictive`, :func:`add_residuals` and
+    :func:`gp_localisation` all reach this, so the four views mean the same
+    thing wherever a caller asks for one.
     """
+    if component == "real":
+        return values.real
+    if component == "imag":
+        return values.imag
+    if component == "abs":
+        return np.abs(values)
+    return np.angle(values)  # "phase"
+
+
+def _resolve_complex(
+    label: str, complex_valued: bool, component: str | None, group: str, alternative: str
+) -> None:
+    """Refuse a complex-valued dataset unless *component* names how to view it.
+
+    **W5.2** made the three derived groups refuse a complex-valued dataset the
+    same way, deferring the "which component" question. **W5.3** answers it:
+    ``component="real" | "imag" | "abs" | "phase"`` names the view, and the
+    derived variable is stored as ``<label>_<component>`` — ``results.md`` §4
+    splits a complex *observed* container into ``<label>_real`` and
+    ``<label>_imag`` at emission time, and a derived group still holds one
+    real variable per dataset, so the split is the caller's *choice* of
+    which view rather than "both, always". ``component=None`` on a
+    complex-valued dataset keeps the plain W5.2 refusal, naming the four
+    choices; ``component=`` on a *real*-valued dataset is refused too — there
+    is nothing to pick a component of.
+    """
+    if component is not None and component not in COMPONENTS:
+        raise ResultsError(f"component must be one of {COMPONENTS}, got {component!r}.")
     if not complex_valued:
+        if component is not None:
+            raise ResultsError(
+                f"dataset {label!r} is real-valued; component= only applies to a "
+                f"complex-valued dataset, and there is nothing to pick a component of here."
+            )
         return
-    raise ResultsError(
-        f"dataset {label!r} is complex-valued, and a {group} group holds one real variable "
-        f"per dataset. results.md §4 splits a complex observed container into <label>_real "
-        f"and <label>_imag; the derived groups do not do that yet, and which component -- or "
-        f"the modulus -- is the right one to derive is the caller's choice (deferred to "
-        f"W5.3). {alternative}"
-    )
+    if component is None:
+        raise ResultsError(
+            f"dataset {label!r} is complex-valued, and a {group} group holds one real "
+            f"variable per dataset. results.md §4 splits a complex observed container into "
+            f"<label>_real and <label>_imag; the derived groups store one caller-named view "
+            f'instead — pass component="real", "imag", "abs" or "phase" (W5.3), '
+            f"stored as <label>_<component>. {alternative}"
+        )
+
+
+def component_variable(label: str, component: str | None) -> str:
+    """The stored variable name for *label*, given an optional *component*.
+
+    Public (no leading underscore) because :mod:`ampere.results.plots`'s
+    three plot functions need the same naming to find what an ``add_*`` call
+    with the same ``component=`` stored — the inverse, :func:`base_label`, is
+    the other half.
+    """
+    return f"{label}_{component}" if component else label
+
+
+def base_label(name: str, component: str | None) -> str:
+    """Undo :func:`component_variable`: the dataset label a stored *name* is for.
+
+    ``component=None`` is a no-op (a real dataset's variable is never
+    suffixed), so a caller who never asked for a component sees the group's
+    variable names unchanged — the byte-identical path W5.3 promises.
+    """
+    if component and name.endswith(f"_{component}") and len(name) > len(component) + 1:
+        return name[: -(len(component) + 1)]
+    return name
+
+
+def _rename_for_component(
+    mapping: Mapping[str, Any],
+    labels: Sequence[str],
+    complex_valued: Mapping[str, bool],
+    component: str | None,
+) -> dict[str, Any]:
+    """*mapping* (keyed by base label), with a complex label's key renamed.
+
+    Applied identically to the ``variables`` payload and to ``dims``, so a
+    variable and its own dimension list are found under the same key.
+    """
+    renamed = dict(mapping)
+    for label in labels:
+        if complex_valued.get(label, False) and label in renamed:
+            renamed[component_variable(label, component)] = renamed.pop(label)
+    return renamed
 
 
 def add_posterior_predictive(
@@ -176,6 +251,7 @@ def add_posterior_predictive(
     datasets: Sequence[str] | None = None,
     thin: int = 1,
     seed_stream: str = "posterior_predictive",
+    component: str | None = None,
 ) -> Any:
     """Draw ``y_rep`` for the stored posterior and attach them to ``tree``.
 
@@ -200,16 +276,20 @@ def add_posterior_predictive(
         The named RNG sub-stream (``lowering.md`` §9.2) the draws come from.
         Separate from ``"simulate"`` on purpose: adding a predictive check must
         not change an SBI budget's draws.
+    component
+        For a complex-valued dataset, which view to store —
+        ``"real"``, ``"imag"``, ``"abs"`` or ``"phase"`` (**W5.3**); the
+        derived variable is named ``<label>_<component>``. Required when any
+        requested dataset is complex-valued; refused (there is nothing to
+        pick a component of) when none is.
 
     Raises
     ------
     ampere.core.exceptions.ResultsError
         If the problem is not the one the run was over, if a requested dataset
-        is not in it, or if a requested dataset's observed container is
-        complex-valued (a replicate of a visibility set is two real arrays, and
-        this group's one-variable-per-dataset shape has nowhere to put the
-        second — see ``results.md`` §4's real/imag splitting, which the derived
-        groups do not yet mirror).
+        is not in it, if a requested dataset's observed container is
+        complex-valued and ``component`` is not one of the four named above,
+        or if ``component`` is given and no requested dataset is complex.
 
     Notes
     -----
@@ -228,20 +308,26 @@ def add_posterior_predictive(
     """
     _require_same_problem(tree, problem)
     labels = _requested(problem, datasets)
+    complex_valued: dict[str, bool] = {}
     for label in labels:
         observed = problem.datasets[label].observed
-        _refuse_complex(
+        is_complex = np.asarray(observed.values).dtype.kind == "c"
+        _resolve_complex(
             label,
-            np.asarray(observed.values).dtype.kind == "c",
+            is_complex,
+            component,
             "posterior-predictive",
             "Replicate the real datasets by name, or draw the replicates yourself with "
             "FittingProblem.simulate(observe=True).",
         )
+        complex_valued[label] = is_complex
     thetas, kept = _stored_thetas(tree, problem, thin)
     chains, draws = thetas.shape[0], thetas.shape[1]
     variables = {
         label: np.full(
-            (chains, draws, problem.datasets[label].observed.n_samples), np.nan, dtype=float
+            (chains, draws, problem.datasets[label].observed.n_samples),
+            np.nan,
+            dtype=complex if complex_valued[label] else float,
         )
         for label in labels
     }
@@ -256,12 +342,20 @@ def add_posterior_predictive(
                 drawn = simulation.observations.get(label)
                 if drawn is None:  # pragma: no cover - a failure short-circuits above
                     continue
-                replicate = np.asarray(drawn.values, dtype=float).ravel()
+                replicate = np.asarray(
+                    drawn.values, dtype=complex if complex_valued[label] else float
+                ).ravel()
                 excluded = problem.datasets[label].effective_mask
                 if excluded is not None:
                     replicate = np.where(np.asarray(excluded).ravel(), np.nan, replicate)
                 variables[label][chain, draw] = replicate
+    for label in labels:
+        if complex_valued[label]:
+            variables[label] = _component_of(variables[label], component)
+    variables = _rename_for_component(variables, labels, complex_valued, component)
     dims, coords = _observed_axes(problem, labels)
+    dims = _rename_for_component(dims, labels, complex_valued, component)
+    extra_variables, variable_attrs, extra_attrs = _multi_axis_extras(problem, labels)
     return _attach(
         tree,
         POSTERIOR_PREDICTIVE_GROUP,
@@ -277,7 +371,10 @@ def add_posterior_predictive(
                 "with (inference.md §13); masked samples are NaN, never dropped "
                 "(results.md §7)."
             ),
+            **extra_attrs,
         },
+        variable_attrs,
+        extra_variables,
     )
 
 
@@ -288,6 +385,7 @@ def add_residuals(
     datasets: Sequence[str] | None = None,
     thin: int = 1,
     standardised: bool = True,
+    component: str | None = None,
 ) -> Any:
     """Compute signed per-point residuals for the stored posterior.
 
@@ -331,29 +429,37 @@ def add_residuals(
         Divide by ``sigma``. Recorded on the group, because a residual panel
         and a whiteness statistic want different answers and neither should
         have to guess which it was handed.
+    component
+        For a complex-valued dataset, which view to store —
+        ``"real"``, ``"imag"``, ``"abs"`` or ``"phase"`` (**W5.3**); the
+        derived variable is named ``<label>_<component>``. Required when any
+        requested dataset is complex-valued; refused when none is.
 
     Raises
     ------
     ampere.core.exceptions.ResultsError
         If the problem is not the one the run was over, if a requested dataset
         is not in it, if a requested dataset's observed container is
-        complex-valued (**W5.2**: this group holds one real variable per
-        dataset, exactly as :func:`add_posterior_predictive` and
-        :func:`gp_localisation` refuse for the same reason), or if
+        complex-valued and ``component`` is not one of the four named above,
+        if ``component`` is given and no requested dataset is complex, or if
         ``standardised=True`` and a dataset has no uncertainties to
         standardise by.
     """
     _require_same_problem(tree, problem)
     labels = _requested(problem, datasets)
+    complex_valued: dict[str, bool] = {}
     for label in labels:
         observed = problem.datasets[label].observed
-        _refuse_complex(
+        is_complex = np.asarray(observed.values).dtype.kind == "c"
+        _resolve_complex(
             label,
-            np.asarray(observed.values).dtype.kind == "c",
+            is_complex,
+            component,
             "residuals",
             "Residualise the real datasets by name, or compute observed - predicted "
             "yourself with FittingProblem.simulate() and Likelihood.conditional's inputs.",
         )
+        complex_valued[label] = is_complex
         if standardised and observed.uncertainty is None:
             raise ResultsError(
                 f"dataset {label!r} has no uncertainties, so a standardised residual is "
@@ -364,7 +470,9 @@ def add_residuals(
     chains, draws = thetas.shape[0], thetas.shape[1]
     variables = {
         label: np.full(
-            (chains, draws, problem.datasets[label].observed.n_samples), np.nan, dtype=float
+            (chains, draws, problem.datasets[label].observed.n_samples),
+            np.nan,
+            dtype=complex if complex_valued[label] else float,
         )
         for label in labels
     }
@@ -378,8 +486,16 @@ def add_residuals(
                 predicted = simulation.predicted.get(label)
                 if predicted is None:  # pragma: no cover - a failure short-circuits above
                     continue
-                variables[label][chain, draw] = _residual_of(dataset, predicted, standardised)
+                variables[label][chain, draw] = _residual_of(
+                    dataset, predicted, standardised, complex_valued=complex_valued[label]
+                )
+    for label in labels:
+        if complex_valued[label]:
+            variables[label] = _component_of(variables[label], component)
+    variables = _rename_for_component(variables, labels, complex_valued, component)
     dims, coords = _observed_axes(problem, labels)
+    dims = _rename_for_component(dims, labels, complex_valued, component)
+    extra_variables, variable_attrs, extra_attrs = _multi_axis_extras(problem, labels)
     return _attach(
         tree,
         RESIDUALS_GROUP,
@@ -396,11 +512,20 @@ def add_residuals(
                 else "observed - predicted(theta), per retained draw, in the data's own units; "
                 "masked samples are NaN, never dropped (results.md §7)."
             ),
+            **extra_attrs,
         },
+        variable_attrs,
+        extra_variables,
     )
 
 
-def _residual_of(dataset: Dataset, predicted: FunctionSamples, standardised: bool) -> np.ndarray:
+def _residual_of(
+    dataset: Dataset,
+    predicted: FunctionSamples,
+    standardised: bool,
+    *,
+    complex_valued: bool = False,
+) -> np.ndarray:
     """One draw's signed residual for one dataset, masked samples NaN.
 
     ``masked_uncertainty()`` inflates a masked sample's sigma to ``inf``, which
@@ -409,11 +534,15 @@ def _residual_of(dataset: Dataset, predicted: FunctionSamples, standardised: boo
     mask is therefore applied as NaN afterwards, which is what ``results.md``
     §7 asks for and what lets the statistic "decide for itself what to do with
     a gap".
+
+    ``complex_valued`` (**W5.3**) keeps the subtraction complex rather than
+    truncating it, for a caller who is about to reduce it with ``component=``.
     """
+    dtype = complex if complex_valued else float
     observed = dataset.observed
     residual = (
-        np.asarray(observed.values, dtype=float).ravel()
-        - np.asarray(predicted.values, dtype=float).ravel()
+        np.asarray(observed.values, dtype=dtype).ravel()
+        - np.asarray(predicted.values, dtype=dtype).ravel()
     )
     if standardised:
         residual = residual / np.asarray(observed.masked_uncertainty(), dtype=float).ravel()
@@ -423,6 +552,34 @@ def _residual_of(dataset: Dataset, predicted: FunctionSamples, standardised: boo
     return residual
 
 
+def _rename_roles_for_component(
+    mapping: Mapping[str, Any],
+    labels: Sequence[str],
+    complex_valued: Mapping[str, bool],
+    component: str | None,
+    roles: Sequence[str] = ("mean", "variance"),
+) -> dict[str, Any]:
+    """:func:`_rename_for_component`, for a mapping keyed by ``<label>_<role>``.
+
+    ``gp_localisation``'s own naming (``<label>_mean``, ``<label>_variance``)
+    is role-suffixed rather than bare, so the component goes **between** the
+    label and the role — ``<label>_<component>_mean`` — keeping both roles of
+    one label discoverable under the one renamed base
+    (:func:`component_variable`), which is what lets a reader recover "the
+    label" from either half of the pair the same way.
+    """
+    renamed = dict(mapping)
+    for label in labels:
+        if not complex_valued.get(label, False):
+            continue
+        stored = component_variable(label, component)
+        for role in roles:
+            old_key = f"{label}_{role}"
+            if old_key in renamed:
+                renamed[f"{stored}_{role}"] = renamed.pop(old_key)
+    return renamed
+
+
 def gp_localisation(
     tree: Any,
     problem: FittingProblem,
@@ -430,6 +587,7 @@ def gp_localisation(
     datasets: Sequence[str] | None = None,
     thin: int = 1,
     at: Any = None,
+    component: str | None = None,
 ) -> Any:
     """Evaluate the conditioned GP mean and variance across posterior draws.
 
@@ -465,29 +623,41 @@ def gp_localisation(
     at
         A 1-D array of coordinates to evaluate on instead of the data's own
         axis. Handed to the solver untouched, so one place decides what a bare
-        array of coordinates means.
+        array of coordinates means. Not combined with a multi-axis kind's own
+        default coordinate (an explicit grid already says what to plot
+        against).
+    component
+        For a complex-valued dataset's conditioned mean, which view to store
+        — ``"real"``, ``"imag"``, ``"abs"`` or ``"phase"`` (**W5.3**); stored
+        as ``<label>_<component>_mean`` beside ``<label>_<component>_variance``
+        (the variance itself is always real and untouched — see
+        :class:`~ampere.core.VisibilitySet`). Required when any requested
+        dataset is complex-valued; refused when none is.
 
     Raises
     ------
     ampere.core.exceptions.ResultsError
         If the problem is not the one the run was over, if no dataset has a
-        ``GaussianProcessNoise`` model, or if a requested dataset's observed
-        container is complex-valued (**W5.2**: the conditioned mean of a
-        circular complex GP comes back complex too, and this group holds one
-        real variable per dataset — the same reason
-        :func:`add_posterior_predictive` and :func:`add_residuals` refuse).
+        ``GaussianProcessNoise`` model, if a requested dataset's observed
+        container is complex-valued and ``component`` is not one of the four
+        named above, or if ``component`` is given and no requested dataset is
+        complex.
     """
     _require_same_problem(tree, problem)
     labels = _gp_requested(problem, datasets)
+    complex_valued: dict[str, bool] = {}
     for label in labels:
         observed = problem.datasets[label].observed
-        _refuse_complex(
+        is_complex = np.asarray(observed.values).dtype.kind == "c"
+        _resolve_complex(
             label,
-            np.asarray(observed.values).dtype.kind == "c",
+            is_complex,
+            component,
             "gp_localisation",
             "Localise the real datasets by name, or call Likelihood.conditional yourself "
             "and choose a component of the complex conditioned mean.",
         )
+        complex_valued[label] = is_complex
     thetas, kept = _stored_thetas(tree, problem, thin)
     chains, draws = thetas.shape[0], thetas.shape[1]
     grid = None if at is None else np.asarray(at, dtype=float)
@@ -497,10 +667,10 @@ def gp_localisation(
     }
     variables: dict[str, np.ndarray] = {}
     for label in labels:
-        for role in ("mean", "variance"):
-            variables[f"{label}_{role}"] = np.full(
-                (chains, draws, size[label]), np.nan, dtype=float
-            )
+        variables[f"{label}_mean"] = np.full(
+            (chains, draws, size[label]), np.nan, dtype=complex if complex_valued[label] else float
+        )
+        variables[f"{label}_variance"] = np.full((chains, draws, size[label]), np.nan, dtype=float)
     for chain in range(chains):
         for draw in range(draws):
             simulation = problem.simulate(thetas[chain, draw])
@@ -519,12 +689,23 @@ def gp_localisation(
                     split.get(LIKELIHOOD_COMPONENT),
                     at=grid,
                 )
-                variables[f"{label}_mean"][chain, draw] = np.asarray(conditional.mean).ravel()
-                variables[f"{label}_variance"][chain, draw] = np.asarray(
-                    conditional.variance
+                variables[f"{label}_mean"][chain, draw] = np.asarray(
+                    conditional.mean, dtype=complex if complex_valued[label] else float
                 ).ravel()
+                variables[f"{label}_variance"][chain, draw] = np.asarray(
+                    conditional.variance, dtype=float
+                ).ravel()
+    for label in labels:
+        if complex_valued[label]:
+            variables[f"{label}_mean"] = _component_of(variables[f"{label}_mean"], component)
+    variables = _rename_roles_for_component(variables, labels, complex_valued, component)
+    extra_attrs: dict[str, str] = {}
+    variable_attrs: dict[str, dict[str, str]] = {}
+    extra_variables: dict[str, tuple[list[str], np.ndarray]] = {}
     if grid is None:
         dims, coords = _observed_axes(problem, labels, roles=("mean", "variance"))
+        dims = _rename_roles_for_component(dims, labels, complex_valued, component)
+        extra_variables, variable_attrs, extra_attrs = _multi_axis_extras(problem, labels)
     else:
         dims = {}
         coords = {}
@@ -533,6 +714,7 @@ def gp_localisation(
             coords[name] = grid
             dims[f"{label}_mean"] = [name]
             dims[f"{label}_variance"] = [name]
+        dims = _rename_roles_for_component(dims, labels, complex_valued, component)
     return _attach(
         tree,
         GP_LOCALISATION_GROUP,
@@ -546,7 +728,10 @@ def gp_localisation(
                 "The conditioned GP mean is signed and localises where the model is deficient; "
                 "it does not say why. See ampere.results.gp_localisation_caveat()."
             ),
+            **extra_attrs,
         },
+        variable_attrs,
+        extra_variables,
     )
 
 
@@ -888,11 +1073,96 @@ def _observed_axes(
     for label in labels:
         observed = problem.datasets[label].observed
         names = list(_container_dims(label, observed))
-        for axis, name in zip(observed.axes, names, strict=False):
-            coords[name] = np.asarray(axis.values, dtype=float).ravel()
+        if len(names) == len(observed.axes):
+            # One axis: it doubles as the dimension's own coordinate, exactly
+            # as observed_data's does (emission._data_groups). A kind with
+            # several axes takes the *other* branch below (_container_dims
+            # gives it one joint ``<label>_index`` dimension, and its axes are
+            # ordinary variables rather than that dimension's index) — zipping
+            # the two mismatched-length sequences here would silently pair
+            # only the first axis with the index dimension, which is wrong
+            # rather than merely incomplete: it would put ``u``'s values on a
+            # dimension that means "position in the sample list, arbitrary
+            # order" (results.md §4).
+            for axis, name in zip(observed.axes, names, strict=True):
+                coords[name] = np.asarray(axis.values, dtype=float).ravel()
         for role in roles or ("",):
             dims[f"{label}_{role}" if role else label] = names
     return dims, coords
+
+
+#: One extra (non-draw) variable for :func:`_attach` to assign onto a group
+#: after arviz has built it: ``(dims, values)``, exactly xarray's own
+#: ``Dataset.assign`` shorthand.
+_ExtraVariable = tuple[list[str], np.ndarray]
+
+
+def _multi_axis_extras(
+    problem: FittingProblem, labels: Sequence[str]
+) -> tuple[dict[str, _ExtraVariable], dict[str, dict[str, str]], dict[str, str]]:
+    """A multi-axis kind's raw axes and precomputed default coordinate.
+
+    **W5.3.** Each of the kind's own axes becomes an ordinary variable on the
+    shared ``<label>_index`` dimension, mirroring what
+    ``emission._data_groups`` already does for ``observed_data``/
+    ``constant_data`` (results.md §4), so a derived group carries the same
+    information its ``observed_data`` sibling does. Where the kind declares
+    :attr:`~ampere.core.results_schema.FunctionSamples.PLOT_COORDINATE`, it is
+    resolved **here**, against the *live* container (the only place its real
+    axis units are available), and stored as a further variable —
+    ``ampere.results._plotting.coordinate_of`` reads it back at plot time
+    without needing to know which kind produced it.
+
+    These are returned separately from the per-draw ``variables``/``dims``
+    passed to ``arviz.from_dict`` rather than merged into them: arviz assumes
+    *every* variable named there carries the group's own leading
+    ``(chain, draw)`` dimensions, and a kind's raw axes do not — they are one
+    value per sample, not per draw. :func:`_attach` assigns them onto the
+    built group afterwards, as plain xarray variables.
+
+    Single-axis kinds return nothing (``_observed_axes`` already gives them
+    their one coordinate), which is what keeps every existing plot
+    byte-identical.
+
+    Returns ``(extra_variables, variable_attrs, group_attrs)``:
+    *extra_variables* for :func:`_attach`'s post-hoc assignment; the per-axis
+    unit and the :data:`~ampere.results._plotting.PLOT_AXIS_ATTR` marker for
+    each; the default coordinate's axis label, on the group itself.
+    """
+    extra_variables: dict[str, _ExtraVariable] = {}
+    variable_attrs: dict[str, dict[str, str]] = {}
+    group_attrs: dict[str, str] = {}
+    for label in labels:
+        observed = problem.datasets[label].observed
+        names = list(_container_dims(label, observed))
+        if len(names) == len(observed.axes):
+            continue
+        index_dim = names[0]
+        axes_map = {axis.name: axis for axis in observed.axes}
+        for axis in observed.axes:
+            axis_variable = f"{label}_{axis.name}"
+            extra_variables[axis_variable] = (
+                [index_dim],
+                np.asarray(axis.values, dtype=float).ravel(),
+            )
+            attrs = {_p.PLOT_AXIS_ATTR: axis.name}
+            if axis.unit is not None:
+                attrs["units"] = str(axis.unit.to_string())
+            variable_attrs[axis_variable] = attrs
+        default = type(observed).PLOT_COORDINATE
+        if default is None:
+            continue
+        if isinstance(default, str):
+            axis = axes_map[default]
+            coordinate = np.asarray(axis.values, dtype=float).ravel()
+            coordinate_label = format_axis_label(axis.name, axis.unit)
+        else:
+            raw_coordinate, coordinate_label = default(axes_map)
+            coordinate = np.asarray(raw_coordinate, dtype=float).ravel()
+        coordinate_variable = f"{label}{_p.PLOT_COORDINATE_VARIABLE_SUFFIX}"
+        extra_variables[coordinate_variable] = ([index_dim], coordinate)
+        group_attrs[f"{_p.PLOT_COORDINATE_LABEL_ATTR_PREFIX}{label}"] = str(coordinate_label)
+    return extra_variables, variable_attrs, group_attrs
 
 
 def _attach(
@@ -903,12 +1173,24 @@ def _attach(
     coords: Mapping[str, Any],
     kept: np.ndarray,
     attrs: Mapping[str, Any],
+    variable_attrs: Mapping[str, Mapping[str, str]] | None = None,
+    extra_variables: Mapping[str, _ExtraVariable] | None = None,
 ) -> Any:
     """Build one derived group and hang it off the run, coordinates and all.
 
     The retained draw indices become the group's own ``draw`` coordinate, so a
     thinned group states which draws it holds rather than renumbering them from
     zero and quietly losing the correspondence to the posterior.
+
+    *variable_attrs* (**W5.3**) sets per-variable attributes afterwards — a
+    multi-axis kind's raw axes carry their unit and the
+    :data:`~ampere.results._plotting.PLOT_AXIS_ATTR` marker this way, which
+    ``arviz.from_dict``'s own ``dims``/``coords`` arguments have no slot for.
+
+    *extra_variables* (**W5.3**) assigns further variables onto the built
+    group *after* arviz has built it, as plain xarray variables with their own
+    dims — bypassing arviz's assumption that every variable named in the
+    ``group`` dict above carries the group's own leading ``(chain, draw)``.
     """
     arviz = _require_arviz()
     resolved = dict(coords)
@@ -917,4 +1199,12 @@ def _attach(
     for name, child in built.children.items():
         tree[name] = child
     tree[group].attrs.update(dict(attrs))
+    if extra_variables:
+        dataset = tree[group].dataset.assign(
+            {name: tuple(spec) for name, spec in extra_variables.items()}
+        )
+        tree[group] = dataset
+        tree[group].attrs.update(dict(attrs))
+    for name, extra in (variable_attrs or {}).items():
+        tree[group][name].attrs.update(dict(extra))
     return tree

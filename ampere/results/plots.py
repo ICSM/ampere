@@ -62,7 +62,15 @@ from .calibration import (
     SIMULATION_DIM,
     TARP_LEVEL_DIM,
 )
-from .derived import GP_LOCALISATION_GROUP, POSTERIOR_PREDICTIVE_GROUP, RESIDUALS_GROUP
+from .derived import (
+    COMPONENTS,
+    GP_LOCALISATION_GROUP,
+    POSTERIOR_PREDICTIVE_GROUP,
+    RESIDUALS_GROUP,
+    _component_of,
+    base_label,
+    component_variable,
+)
 from .diagnostics import residual_whiteness
 from .provenance import ATTR_PREFIX
 
@@ -742,6 +750,8 @@ def plot_posterior_predictive(
     datasets: Sequence[str] | None = None,
     statistic: Any = None,
     band: float = 0.68,
+    coordinate: str | Callable[[dict[str, Any]], tuple[np.ndarray, str]] | None = None,
+    component: str | None = None,
     **kwargs: Any,
 ) -> Any:
     """Replicate data against the observations — ``diagnostics.md`` family B.
@@ -786,6 +796,16 @@ def plot_posterior_predictive(
         dataset carries no uncertainties.
     band
         Credible-interval mass of the replicate band, in ``(0, 1)``.
+    coordinate
+        **W5.3.** For a point kind with several axes (``results.md`` §4), an
+        axis name or a callable resolving the plotted coordinate — see
+        :func:`ampere.results._plotting.coordinate_of`. Ignored, as before
+        this argument existed, for a kind with one axis.
+    component
+        **W5.3.** ``"real"``, ``"imag"``, ``"abs"`` or ``"phase"`` — must
+        match whatever :func:`~ampere.results.derived.add_posterior_predictive`
+        was called with for a complex dataset, so this function can find the
+        ``<label>_<component>`` variable it stored.
     **kwargs
         Forwarded to the replicate-median line artist.
 
@@ -798,6 +818,7 @@ def plot_posterior_predictive(
     """
     if not 0.0 < band < 1.0:
         raise ResultsError(f"band is a credible-interval mass in (0, 1), got {band!r}.")
+    _check_component(component)
     group = _p.require_group(
         tree,
         POSTERIOR_PREDICTIVE_GROUP,
@@ -811,22 +832,18 @@ def plot_posterior_predictive(
         remedy="emit the run with observed=True (the default), which stores each dataset's "
         "observations; a predictive check has nothing to check against without them.",
     )
-    available = [str(name) for name in group.data_vars]
+    available = [base_label(str(name), component) for name in group.data_vars]
     labels = _p.select_datasets(available, datasets, what=POSTERIOR_PREDICTIVE_GROUP)
     measure = _standardised_sum_of_squares if statistic is None else statistic
     figure, axes = _p.grid_axes(len(labels), 2, size=(6.0, 2.6))
     lower, upper = 50.0 * (1.0 - band), 50.0 * (1.0 + band)
     for index, label in enumerate(labels):
-        if label not in observed_group.variables:
-            raise ResultsError(
-                f"this run holds replicates for dataset {label!r} but no observations of it, so "
-                f"there is nothing to compare them against."
-            )
-        axis_name, coordinates = _p.coordinate_of(group, label)
+        observations = _observed_values(observed_group, label, component)
+        variable = component_variable(label, component)
+        axis_name, coordinates = _p.coordinate_of(group, variable, coordinate=coordinate)
         coordinate_unit, value_unit = _p.dataset_units(tree, label, axis_name)
-        replicates = np.asarray(group[label].values, dtype=float)
+        replicates = np.asarray(group[variable].values, dtype=float)
         flat = replicates.reshape(-1, replicates.shape[-1])
-        observations = np.asarray(observed_group[label].values, dtype=float).ravel()
         sigma = _stored_uncertainty(tree, label)
         _draw_replicates(
             axes[index, 0],
@@ -862,6 +879,46 @@ def _stored_uncertainty(tree: Any, label: str) -> np.ndarray | None:
     if name not in constant.variables:
         return None
     return np.asarray(constant[name].values, dtype=float).ravel()
+
+
+def _observed_values(observed_group: Any, label: str, component: str | None) -> np.ndarray:
+    """*label*'s observations from ``observed_data``, as the same view *component* names.
+
+    **W5.3.** A complex-valued dataset is split into ``<label>_real`` and
+    ``<label>_imag`` at emission time (``results.md`` §4), never as a bare
+    ``<label>``, so a caller comparing replicates stored under ``component=``
+    needs the observations reduced the same way before the two are compared.
+    """
+    if component is None:
+        if label not in observed_group.variables:
+            raise ResultsError(
+                f"this run holds replicates for dataset {label!r} but no observations of it, "
+                f"so there is nothing to compare them against."
+            )
+        return np.asarray(observed_group[label].values, dtype=float).ravel()
+    real_name, imag_name = f"{label}_real", f"{label}_imag"
+    if real_name not in observed_group.variables or imag_name not in observed_group.variables:
+        raise ResultsError(
+            f"this run holds replicates for dataset {label!r} but no observations of it, so "
+            f"there is nothing to compare them against."
+        )
+    complex_values = (
+        np.asarray(observed_group[real_name].values, dtype=float)
+        + 1j * np.asarray(observed_group[imag_name].values, dtype=float)
+    ).ravel()
+    return _component_of(complex_values, component)
+
+
+def _check_component(component: str | None) -> None:
+    """Refuse a ``component=`` that is not one of :data:`~ampere.results.derived.COMPONENTS`.
+
+    **W5.3.** Without this, a typo reaches ``group[f"{label}_{component}"]``
+    as a bare :class:`KeyError` naming neither the caller's mistake nor what
+    to do about it — the same "refuse by name" standard this module holds
+    everywhere else.
+    """
+    if component is not None and component not in COMPONENTS:
+        raise ResultsError(f"component must be one of {COMPONENTS}, got {component!r}.")
 
 
 def _standardised_sum_of_squares(values: np.ndarray, sigma: np.ndarray | None) -> float:
@@ -984,6 +1041,8 @@ def plot_residuals(
     *,
     datasets: Sequence[str] | None = None,
     whiteness: bool = True,
+    coordinate: str | Callable[[dict[str, Any]], tuple[np.ndarray, str]] | None = None,
+    component: str | None = None,
     **kwargs: Any,
 ) -> Any:
     """Signed residuals against coordinate, plus the whiteness panel.
@@ -1008,6 +1067,17 @@ def plot_residuals(
     ``max_draws``, ``seed``), so the figure and the number can never disagree
     about what was computed.
 
+    coordinate
+        **W5.3.** For a point kind with several axes, an axis name or a
+        callable resolving the plotted coordinate — see
+        :func:`ampere.results._plotting.coordinate_of`. Ignored, as before
+        this argument existed, for a kind with one axis.
+    component
+        **W5.3.** Must match whatever
+        :func:`~ampere.results.derived.add_residuals` was called with for a
+        complex dataset, and is forwarded to
+        :func:`~ampere.results.diagnostics.residual_whiteness`.
+
     Returns
     -------
     matplotlib.figure.Figure
@@ -1015,6 +1085,7 @@ def plot_residuals(
         ``(statistic, p_value)``, so a caller reading numbers off the figure
         does not have to re-run the test to get them.
     """
+    _check_component(component)
     group = _p.require_group(
         tree,
         RESIDUALS_GROUP,
@@ -1022,7 +1093,7 @@ def plot_residuals(
         "signed standardised residuals from the stored draws and the problem "
         "(results.md §7).",
     )
-    available = [str(name) for name in group.data_vars]
+    available = [base_label(str(name), component) for name in group.data_vars]
     labels = _p.select_datasets(available, datasets, what=RESIDUALS_GROUP)
     fitted_with_gp = [label for label in labels if label in _p.gp_datasets(tree)]
     if fitted_with_gp:
@@ -1039,9 +1110,10 @@ def plot_residuals(
     panels = 2 if whiteness else 1
     figure, axes = _p.new_axes(nrows=panels * len(labels))
     for index, label in enumerate(labels):
-        axis_name, coordinates = _p.coordinate_of(group, label)
+        variable = component_variable(label, component)
+        axis_name, coordinates = _p.coordinate_of(group, variable, coordinate=coordinate)
         coordinate_unit, value_unit = _p.dataset_units(tree, label, axis_name)
-        values = np.asarray(group[label].values, dtype=float)
+        values = np.asarray(group[variable].values, dtype=float)
         flat = values.reshape(-1, values.shape[-1])
         panel = axes[panels * index]
         with warnings.catch_warnings():
@@ -1064,7 +1136,9 @@ def plot_residuals(
         panel.legend(loc="best", fontsize="small")
         if not whiteness:
             continue
-        test = residual_whiteness(tree, dataset=label, **kwargs)
+        test = residual_whiteness(
+            tree, dataset=label, coordinate=coordinate, component=component, **kwargs
+        )
         _draw_whiteness(axes[panels * index + 1], test, coordinate_unit)
         _p.attach_metadata(figure, f"{label}.whiteness_statistic", f"{test.statistic:.6g}")
         _p.attach_metadata(figure, f"{label}.whiteness_p_value", f"{test.p_value:.6g}")
@@ -1081,8 +1155,16 @@ def _draw_whiteness(panel: Any, test: Any, coordinate_unit: str) -> None:
     were run cannot tell the two apart.
     """
     panel.axhline(0.0, color="0.6", linewidth=0.8)
-    width = float(np.min(np.diff(test.separations))) * 0.6 if test.separations.size > 1 else None
-    panel.bar(test.separations, test.autocorrelation, width=width, alpha=0.7)
+    # A single separation bin (a dataset whose coordinate spacing is tight
+    # enough that everything falls in one window — found running this item
+    # against the interferometry study's closure phases) has no neighbour to
+    # measure a bar width from; matplotlib's own default width applies then,
+    # which needs the keyword omitted rather than passed as None (recent
+    # matplotlib refuses to broadcast a None width against a float64 x).
+    bar_kwargs: dict[str, float] = {}
+    if test.separations.size > 1:
+        bar_kwargs["width"] = float(np.min(np.diff(test.separations))) * 0.6
+    panel.bar(test.separations, test.autocorrelation, alpha=0.7, **bar_kwargs)
     panel.set_xlabel(_p.axis_label("separation", coordinate_unit))
     panel.set_ylabel("binned autocorrelation")
     verdict = "structure detected" if test.p_value < 0.05 else "consistent with white"
@@ -1105,6 +1187,8 @@ def plot_gp_localisation(
     datasets: Sequence[str] | None = None,
     band: float = 0.68,
     show_caveat: bool = True,
+    coordinate: str | Callable[[dict[str, Any]], tuple[np.ndarray, str]] | None = None,
+    component: str | None = None,
     **kwargs: Any,
 ) -> Any:
     """Where the flexible likelihood says the model is deficient.
@@ -1133,24 +1217,34 @@ def plot_gp_localisation(
     shape, and a large amplitude at a short length-scale may equally mean that
     the kernel's smooth global component is under-amplitude and compensating
     locally. See :data:`GP_LOCALISATION_CAVEAT`.
+
+    ``coordinate`` and ``component`` are **W5.3**: for a point kind with
+    several axes, ``coordinate`` names or computes the plotted axis (see
+    :func:`ampere.results._plotting.coordinate_of`); for a complex-valued
+    dataset's conditioned mean, ``component`` must match whatever
+    :func:`~ampere.results.derived.gp_localisation` was called with.
     """
     if not 0.0 < band < 1.0:
         raise ResultsError(f"band is a credible-interval mass in (0, 1), got {band!r}.")
+    _check_component(component)
     group = _p.require_group(
         tree,
         GP_LOCALISATION_GROUP,
         remedy="call ampere.results.gp_localisation(tree, problem) first, which evaluates "
         "Likelihood.conditional across the stored draws (results.md §7).",
     )
-    available = sorted({str(name).rsplit("_", 1)[0] for name in group.data_vars})
+    available = sorted(
+        {base_label(str(name).rsplit("_", 1)[0], component) for name in group.data_vars}
+    )
     labels = _p.select_datasets(available, datasets, what=GP_LOCALISATION_GROUP)
     figure, axes = _p.new_axes(nrows=len(labels))
     z = float(st.norm.ppf(0.5 + band / 2.0))
     for index, label in enumerate(labels):
-        axis_name, coordinates = _p.coordinate_of(group, f"{label}_mean")
+        stored = component_variable(label, component)
+        axis_name, coordinates = _p.coordinate_of(group, f"{stored}_mean", coordinate=coordinate)
         coordinate_unit, value_unit = _p.dataset_units(tree, label, axis_name)
-        means = np.asarray(group[f"{label}_mean"].values, dtype=float)
-        variances = np.asarray(group[f"{label}_variance"].values, dtype=float)
+        means = np.asarray(group[f"{stored}_mean"].values, dtype=float)
+        variances = np.asarray(group[f"{stored}_variance"].values, dtype=float)
         flat_mean = means.reshape(-1, means.shape[-1])
         flat_variance = variances.reshape(-1, variances.shape[-1])
         with warnings.catch_warnings():
