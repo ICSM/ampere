@@ -23,6 +23,7 @@ from ampere.core import (
     Identity,
     Log,
     Logit,
+    Model,
     Parameter,
     Parameterised,
     ParameterMapping,
@@ -35,7 +36,9 @@ from ampere.core import (
     describe_prior,
     log_density,
     prior_from_spec,
+    reserved_names,
 )
+from ampere.core.parameter import TORCH_MODULE_NAMES
 from ampere.core.exceptions import (
     OptionalDependencyError,
     ParameterError,
@@ -694,7 +697,7 @@ class TestBuffers:
 
     def test_a_declaration_cannot_shadow_the_mixins_api(self) -> None:
         model = ToyModel(np.array([1.0]))
-        with pytest.raises(ParameterError, match="shadows an attribute"):
+        with pytest.raises(ParameterError, match="is a reserved name"):
             model.register_buffer("context", np.array([1.0]))
 
     def test_buffer_set_is_immutable_and_ordered(self) -> None:
@@ -1319,12 +1322,107 @@ class TestDescribeHook:
         class Shadowed(Parameterised):
             pass
 
-        with pytest.raises(ParameterError, match="shadows an attribute"):
+        with pytest.raises(ParameterError, match="is a reserved name"):
             Shadowed().register_parameter(Parameter("describe", st.norm(0.0, 1.0)))
 
     def test_describe_may_not_be_used_as_a_buffer_name(self) -> None:
         class Shadowed(Parameterised):
             pass
 
-        with pytest.raises(ParameterError, match="shadows an attribute"):
+        with pytest.raises(ParameterError, match="is a reserved name"):
             Shadowed().register_buffer("describe", np.arange(3.0))
+
+
+# ---------------------------------------------------------------------------
+# W5.20: a backend-invariant parameter namespace
+# ---------------------------------------------------------------------------
+
+
+class TestTheReservedNamespace:
+    """``parameters.md`` §10, as amended by W5.20.
+
+    The rule used to be ``hasattr(type(self), name)`` over the whole MRO, so
+    the legal parameter names depended on which backend's base class a model
+    inherited: a torch spectral model reserved ``grid`` and ``grid_tensor``, a
+    jax one did not, and an interferometric source model could not call its
+    total flux density ``flux`` on a twin while it could on the reference
+    class the twin inherits from. These rows fix the answer: **one stated,
+    finite set, identical on every backend**.
+    """
+
+    def test_the_set_is_the_two_core_classes_plus_the_pinned_torch_names(self) -> None:
+        reserved = reserved_names()
+        assert {"parameters", "buffers", "context", "describe", "register_buffer"} <= reserved
+        assert {"evaluate", "compile_for", "BACKEND", "BATCHABLE", "DEVICE"} <= reserved
+        assert set(TORCH_MODULE_NAMES) <= reserved
+        assert not any(name.startswith("_") for name in reserved)
+        computed = {name for name in dir(Parameterised) if not name.startswith("_")}
+        computed |= {name for name in dir(Model) if not name.startswith("_")}
+        assert reserved == computed | set(TORCH_MODULE_NAMES)
+
+    def test_it_is_computed_from_the_classes_rather_than_transcribed(self) -> None:
+        """Every public name on the two classes is in the set, by construction.
+
+        So a future method on either class joins the reserved set the moment it
+        is written, and the contract cannot drift away from the code.
+        """
+        for owner in (Parameterised, Model):
+            for name in dir(owner):
+                if not name.startswith("_"):
+                    assert name in reserved_names(), name
+
+    @pytest.mark.parametrize("name", ["to", "type", "apply", "float", "train", "forward"])
+    def test_a_torch_module_name_is_refused_in_core(self, name: str) -> None:
+        """Refused *here*, in core, so the answer cannot vary by backend.
+
+        These are the names torch's lowering could not carry — it nests every
+        parameter as an attribute of an ``nn.Module`` — and before W5.20 they
+        were caught only on torch, only at lowering, by torch's own ``KeyError``.
+        """
+
+        class Toy(Parameterised):
+            pass
+
+        with pytest.raises(ParameterError, match="is a reserved name"):
+            Toy().register_parameter(Parameter(name, st.norm(0.0, 1.0)))
+
+    @pytest.mark.parametrize("name", ["flux", "grid", "grid_tensor", "AXIS", "evaluate_tensor"])
+    def test_a_subclass_attribute_no_longer_blocks_a_parameter(self, name: str) -> None:
+        """The point of the change, on the core path.
+
+        A class that *has* an attribute of this name may still declare a
+        parameter of that name: nothing in ampere reads a parameter as an
+        attribute — values arrive through ``context()`` — so the old rule was
+        guarding a convention, and a core contract's convention must not be
+        spelled differently per backend.
+        """
+
+        class Toy(Parameterised):
+            AXIS = "spectral_axis"
+
+            def evaluate_tensor(self, **values: object) -> None: ...
+
+            def flux(self, channel: str) -> None: ...
+
+            def grid(self, channel: str) -> None: ...
+
+            def grid_tensor(self, channel: str) -> None: ...
+
+        model = Toy()
+        model.register_parameter(Parameter(name, st.norm(0.0, 1.0)))
+        assert name in model.parameters
+        assert model.context({name: 1.0})[name] == 1.0
+
+    def test_the_collision_checks_that_remain(self) -> None:
+        """Parameters and buffers still occupy one namespace (§10)."""
+
+        class Toy(Parameterised):
+            pass
+
+        model = Toy()
+        model.register_parameter(Parameter("flux", st.norm(0.0, 1.0)))
+        with pytest.raises(ParameterError, match="already declares a parameter"):
+            model.register_buffer("flux", np.arange(3.0))
+        model.register_buffer("grid", np.arange(3.0))
+        with pytest.raises(ParameterError, match="already declares a buffer"):
+            model.register_parameter(Parameter("grid", st.norm(0.0, 1.0)))

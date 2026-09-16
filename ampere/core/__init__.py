@@ -184,6 +184,7 @@ from .parameter import (
     describe_prior,
     log_density,
     prior_from_spec,
+    reserved_names,
 )
 from ._pickling import register as _register_pickle_support
 from .rng import (
@@ -417,6 +418,7 @@ __all__ = [
     "registered_lowerings",
     "registered_quasiseparable_terms",
     "registered_realisations",
+    "reserved_names",
     "run_registrant_battery",
     "sample_observations_of",
     "simulate_batched_of",
