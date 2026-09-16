@@ -116,7 +116,7 @@ from __future__ import annotations
 import dataclasses
 import enum
 import types
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from typing import Any, ClassVar
 
 import astropy.units as u
@@ -526,6 +526,19 @@ def _unit_suffix(unit: u.UnitBase | None) -> str:
     return f" {text}" if text else ""
 
 
+def format_axis_label(name: str, unit: u.UnitBase | None) -> str:
+    """``"baseline length [m]"``, or just *name* where there is no unit.
+
+    **W5.3.** The exact convention :func:`ampere.results._plotting.axis_label`
+    uses for a stored axis; a kind's :attr:`FunctionSamples.PLOT_COORDINATE`
+    default lives in ``ampere.core`` and cannot import that plotting helper
+    (``architecture.md`` §4 rule 1), so the one-line format is duplicated here
+    rather than shared, and the two must be kept in step by inspection.
+    """
+    text = "" if unit is None else str(unit)
+    return f"{name} [{text}]" if text else name
+
+
 def _spacing(values: np.ndarray) -> tuple[bool, float | None]:
     """Return ``(evenly_spaced, step)`` for a 1D coordinate array."""
     if values.size < 2:
@@ -574,6 +587,10 @@ def _ordering_message(values: np.ndarray, spec: AxisSpec, kind: str, requirement
 # ---------------------------------------------------------------------------
 # The container base
 # ---------------------------------------------------------------------------
+
+#: The callable form of :attr:`FunctionSamples.PLOT_COORDINATE`: the kind's
+#: own axes, by name, to one ordered coordinate and its axis label.
+_PlotCoordinateFn = Callable[[Mapping[str, "Axis"]], tuple[np.ndarray, str]]
 
 
 @dataclasses.dataclass(frozen=True, eq=False, init=False)
@@ -624,6 +641,22 @@ class FunctionSamples:
     LAYOUT: ClassVar[Layout] = Layout.POINTS
     #: Whether values may be complex.
     ALLOW_COMPLEX: ClassVar[bool] = False
+    #: The default coordinate a diagnostic plot draws this kind's values
+    #: against, for a kind with **several** axes (``results.md`` §4/§13 item
+    #: 14, *Amended W5.3*). A single-axis kind needs nothing here — the one
+    #: axis is already the plotted coordinate, exactly as before this
+    #: attribute existed, which is what keeps every such plot byte-identical.
+    #: Either an axis name (one of :attr:`AXES`), or a callable taking a
+    #: ``Mapping[str, Axis]`` (the kind's own axes, by name) and returning
+    #: ``(coordinates, label)`` — one ordered 1-D array and the string a plot
+    #: puts on its axis (:func:`format_axis_label` is the label convention).
+    #: ``None`` (the default) means the kind has no default: a caller must
+    #: pass ``coordinate=`` to any of the four diagnostics that need one, or
+    #: they refuse by name, listing :attr:`AXES`. Resolved once, by
+    #: ``ampere.results.derived``, from the live container at the point a
+    #: derived group is built — plotting-side infrastructure, not part of the
+    #: frozen §4 contract's shape (D1 of Phase 4: a kind is class attributes).
+    PLOT_COORDINATE: ClassVar[str | _PlotCoordinateFn | None] = None
 
     axes: tuple[Axis, ...]
     values: np.ndarray
@@ -1474,6 +1507,19 @@ class Cube(FunctionSamples):
         return self.axis("spectral_axis")
 
 
+def _visibility_plot_coordinate(axes: Mapping[str, Axis]) -> tuple[np.ndarray, str]:
+    """**W5.3.** ``VisibilitySet``'s default plotted coordinate: baseline length.
+
+    ``hypot(u, v)``, labelled with the ``u``/``v`` axes' own unit — they are
+    forced equal by construction (both dimensionless-or-``rad**-1``), so
+    either's is the right one to show.
+    """
+    u_axis, v_axis = axes["u"], axes["v"]
+    u_values = np.asarray(u_axis.values, dtype=float)
+    v_values = np.asarray(v_axis.values, dtype=float)
+    return np.hypot(u_values, v_values), format_axis_label("baseline length", u_axis.unit)
+
+
 class VisibilitySet(FunctionSamples):
     """Complex visibilities at scattered ``(u, v, spectral_axis)`` points.
 
@@ -1543,6 +1589,7 @@ class VisibilitySet(FunctionSamples):
     )
     LAYOUT = Layout.POINTS
     ALLOW_COMPLEX = True
+    PLOT_COORDINATE = staticmethod(_visibility_plot_coordinate)
 
     def __init__(
         self,
@@ -1596,6 +1643,24 @@ class VisibilitySet(FunctionSamples):
     def phase(self) -> np.ndarray:
         """Visibility phases in radians. A view for plotting, not a likelihood."""
         return _readonly(np.angle(self.values))
+
+
+def _closure_phases_plot_coordinate(axes: Mapping[str, Axis]) -> tuple[np.ndarray, str]:
+    """**W5.3.** ``ClosurePhases``'s default plotted coordinate: the longest baseline.
+
+    The triangle's three baseline lengths, ``ij``, ``jk`` and the implied
+    ``ki = -(ij + jk)`` (:meth:`ClosurePhases.implied_baseline`'s own
+    formula, restated here against an axes mapping rather than a live
+    instance), the largest of the three per sample — the one the closure
+    phase's own resolution is set by.
+    """
+    u1, v1 = np.asarray(axes["u1"].values, dtype=float), np.asarray(axes["v1"].values, dtype=float)
+    u2, v2 = np.asarray(axes["u2"].values, dtype=float), np.asarray(axes["v2"].values, dtype=float)
+    b_ij = np.hypot(u1, v1)
+    b_jk = np.hypot(u2, v2)
+    b_ki = np.hypot(u1 + u2, v1 + v2)
+    longest = np.maximum(np.maximum(b_ij, b_jk), b_ki)
+    return longest, format_axis_label("longest baseline", axes["u1"].unit)
 
 
 class ClosurePhases(FunctionSamples):
@@ -1680,6 +1745,7 @@ class ClosurePhases(FunctionSamples):
     )
     LAYOUT = Layout.POINTS
     ALLOW_COMPLEX = False
+    PLOT_COORDINATE = staticmethod(_closure_phases_plot_coordinate)
 
     def __init__(
         self,

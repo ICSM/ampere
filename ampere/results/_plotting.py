@@ -26,12 +26,14 @@ from __future__ import annotations
 
 import json
 import weakref
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
+import astropy.units as u
 import numpy as np
 
 from ampere.core.exceptions import OptionalDependencyError, ResultsError
+from ampere.core.results_schema import Axis
 
 from .provenance import ATTR_PREFIX
 
@@ -379,14 +381,76 @@ def select_datasets(
     return chosen
 
 
-def coordinate_of(dataset: Any, variable: str) -> tuple[str, np.ndarray]:
-    """The single coordinate axis a dataset variable is indexed by.
+#: **W5.3.** Attribute on a stored per-axis variable naming which of a
+#: multi-axis kind's :attr:`~ampere.core.results_schema.FunctionSamples.AXES`
+#: it is (``"u"``, ``"v"``, ...) — the marker that tells one of the kind's
+#: own raw axes apart from anything else sharing its joint sample dimension
+#: (a role-suffixed value variable such as ``<label>_variance``, in
+#: particular). Written by ``ampere.results.derived`` at the point a group is
+#: built, from the *live* container, where the real axis units are.
+PLOT_AXIS_ATTR = f"{ATTR_PREFIX}plot_axis"
 
-    Point kinds with one axis carry it as ``<label>_<axis>``; the diagnostics
-    of families B and C are 1-D by scope (``diagnostics.md`` §9 limitation 1;
-    ``DEVELOPMENT_PLAN.md`` §4.8's "1D implementation lands with Phase 2"), so
-    anything else is refused here, once, rather than producing a figure whose
-    x-axis means nothing.
+#: Suffix of the variable a kind's own
+#: :attr:`~ampere.core.results_schema.FunctionSamples.PLOT_COORDINATE`
+#: default is precomputed into. Precomputed at group-build time rather than
+#: here, for the same reason: only there is the live container available.
+PLOT_COORDINATE_VARIABLE_SUFFIX = "__plot_coordinate"
+
+#: Group attribute prefix carrying that precomputed default's axis label
+#: (``"baseline length [m]"``), keyed by dataset label.
+PLOT_COORDINATE_LABEL_ATTR_PREFIX = f"{ATTR_PREFIX}plot_coordinate_label__"
+
+
+def _stored_axes(dataset: Any, label: str, index_dim: str) -> dict[str, Axis]:
+    """A multi-axis kind's own raw axes, as real :class:`Axis` objects.
+
+    Found by :data:`PLOT_AXIS_ATTR` rather than by name pattern, so a
+    role-suffixed value variable that happens to share the joint sample
+    dimension (``<label>_variance``, for instance) is never mistaken for one
+    of the kind's axes.
+    """
+    prefix = f"{label}_"
+    found: dict[str, Axis] = {}
+    for name, variable in dataset.variables.items():
+        axis_name = variable.attrs.get(PLOT_AXIS_ATTR)
+        if axis_name is None or tuple(variable.dims) != (index_dim,):
+            continue
+        if not str(name).startswith(prefix):
+            continue
+        unit_text = str(variable.attrs.get("units", ""))
+        unit = u.Unit(unit_text) if unit_text else None
+        found[str(axis_name)] = Axis.build(
+            str(axis_name), np.asarray(variable.values, dtype=float), unit
+        )
+    return found
+
+
+def coordinate_of(
+    dataset: Any,
+    variable: str,
+    *,
+    coordinate: str | Callable[[dict[str, Axis]], tuple[np.ndarray, str]] | None = None,
+) -> tuple[str, np.ndarray]:
+    """The coordinate axis a dataset variable is plotted against.
+
+    A point kind with **one** axis carries it as ``<label>_<axis>`` and
+    ``coordinate`` plays no part — that single axis is the answer, exactly as
+    before this argument existed (**W5.3**), which is what keeps every
+    existing plot byte-identical.
+
+    A point kind with **several** axes (``results.md`` §4's ``<label>_index``
+    joint sample dimension) has no coordinate of its own, and this is the one
+    place the rule for finding one lives, in order:
+
+    1. ``coordinate``, if given: an axis name (one of the kind's own,
+       :class:`str`), or a callable taking a mapping of axis name to
+       :class:`~ampere.core.results_schema.Axis` and returning
+       ``(coordinates, label)``.
+    2. The kind's own default, :attr:`~ampere.core.results_schema.
+       FunctionSamples.PLOT_COORDINATE`, precomputed by ``ampere.results.derived``
+       at the point the group was built and stored on it.
+    3. Refused by name, listing the kind's own axes — never a silent 1-D
+       projection of data with no natural order.
     """
     data = dataset[variable]
     spatial = [name for name in data.dims if name not in ("chain", "draw")]
@@ -394,22 +458,51 @@ def coordinate_of(dataset: Any, variable: str) -> tuple[str, np.ndarray]:
         raise ResultsError(
             f"dataset {variable!r} is indexed by {spatial}, and the 1-D diagnostics of "
             f"diagnostics.md families B and C need exactly one ordered coordinate axis. "
-            f"Gridded and multi-axis kinds are the Phase 5 staging (DEVELOPMENT_PLAN.md §4.4)."
+            f"Gridded kinds are out of scope here (DEVELOPMENT_PLAN.md §4.4)."
         )
     name = str(spatial[0])
-    if name.endswith("_index"):
+    if not name.endswith("_index"):
+        if coordinate is not None:
+            raise ResultsError(
+                f"dataset {variable!r} already has one ordered coordinate axis ({name!r}); "
+                f"coordinate= is for a point kind with several axes (results.md §4), which "
+                f"this one is not."
+            )
+        if name not in data.coords:
+            raise ResultsError(
+                f"dataset {variable!r} has no coordinate values on its {name!r} axis, so there "
+                f"is nothing to measure separations against."
+            )
+        return name, np.asarray(data.coords[name].values, dtype=float)
+    label = name[: -len("_index")]
+    axes = _stored_axes(dataset, label, name)
+    if coordinate is None:
+        default_variable = f"{label}{PLOT_COORDINATE_VARIABLE_SUFFIX}"
+        if default_variable in dataset.variables:
+            label_text = dataset.attrs.get(
+                f"{PLOT_COORDINATE_LABEL_ATTR_PREFIX}{label}", default_variable
+            )
+            return str(label_text), np.asarray(dataset[default_variable].values, dtype=float)
         raise ResultsError(
-            f"dataset {variable!r} is indexed by {name!r}, the joint sample dimension a point "
-            f"kind with several axes takes (results.md §4) — its integers are not a coordinate, "
-            f"and a separation-binned statistic computed against them would be meaningless. "
-            f"The 1-D diagnostics need one ordered coordinate axis."
+            f"dataset {variable!r} is a point kind with several axes {sorted(axes)} "
+            f"(results.md §4) and this kind declares no default plotted coordinate. Pass "
+            f"coordinate= naming one of {sorted(axes)}, or a callable(axes) -> "
+            f"(coordinates, label) computing one."
         )
-    if name not in data.coords:
-        raise ResultsError(
-            f"dataset {variable!r} has no coordinate values on its {name!r} axis, so there is "
-            f"nothing to measure separations against."
+    if isinstance(coordinate, str):
+        if coordinate not in axes:
+            raise ResultsError(
+                f"dataset {variable!r} has no axis named {coordinate!r}; its axes are "
+                f"{sorted(axes)}."
+            )
+        axis = axes[coordinate]
+        return axis_label(axis.name, "" if axis.unit is None else str(axis.unit)), np.asarray(
+            axis.values, dtype=float
         )
-    return name, np.asarray(data.coords[name].values, dtype=float)
+    if callable(coordinate):
+        coordinates, label_text = coordinate(axes)
+        return str(label_text), np.asarray(coordinates, dtype=float)
+    raise ResultsError(f"coordinate= must be a string or a callable, got {type(coordinate)!r}.")
 
 
 def dataset_units(tree: Any, label: str, axis: str) -> tuple[str, str]:
