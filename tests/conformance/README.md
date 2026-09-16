@@ -140,10 +140,16 @@ The kernel's `QUASISEPARABLE` class flag must be truthful — the
 `DenseGP`↔`QuasisepGP` row selects on it, and `GPSolver.check_compatible`
 refuses a quasiseparable solver a kernel that has no such representation.
 
-### `gp_solver(kind: SolverKind) -> GPSolver`
+### `gp_solver(kind, *, basis_size=32, boundary_factor=2.0) -> GPSolver`
 
-`DENSE` or `QUASISEP`. Only called for a kind present in
+`DENSE`, `QUASISEP` or `HILBERT`. Only called for a kind present in
 `capabilities.solvers`; you may raise for anything else.
+
+The two keywords describe the **approximation** and so mean nothing to the
+exact kinds — ignore them unless `kind is SolverKind.HILBERT`. They are on
+this one method rather than on a second one because W5.4's convergence rows
+ask for the same solver at four basis sizes, and a row that had to know which
+method to call for which kind would be naming solvers rather than kinds.
 
 ### `parameter_space(declaration: ParameterSet) -> ParameterSpace`
 
@@ -202,6 +208,36 @@ anyone else's.
 | `cross_solver` | `1e-6` | two `GPSolver` strategies by genuinely different recursions — dense Cholesky against the quasiseparable state-space solve. |
 | `cross_backend` | `1e-9` | two backends' independent arithmetic, and in Phase 2 a different autodiff accumulation order. Cross-backend rows use the **looser** of the pair. |
 | `monte_carlo_sigmas` | `5.0` | not a tolerance but a multiple: how many standard errors an empirical moment may sit from its analytic value. The standard error is computed from the estimator, so the assertion stays honest as the draw count changes. |
+| `approximation_order` | `1.5` | **the `EXACT = False` class** (W5.4), first of three. The rate the envelope tightens at: refining the approximation by a factor `f` must buy at least `f ** order`. See below. |
+| `approximation_floor` | `1e-2` | the envelope's floor. A Hilbert-space basis converges to the kernel *on a finite box*, and the box's own truncation error does not go away with more basis members, so an envelope with no floor would assert something false about the method rather than something demanding about the implementation. |
+| `approximation_final` | `5e-2` | the separate, absolute claim: whatever the envelope allowed on the way, the finest setting a row sweeps must actually be close to `DenseGP`. Without it a row would pass on a solver that converged beautifully to the wrong number. |
+
+### The approximation class (W5.4)
+
+An approximate solver cannot be held to a number. How close `HilbertSpaceGP`
+comes to `DenseGP` depends on the kernel, on the data and on the
+approximation's own parameters, so a fixed tolerance would be either so loose
+it asserted nothing or so tight it encoded one fixture's arithmetic. What *is*
+a property of the method — and what a wrong implementation breaks — is that
+the error **falls as the approximation is refined**, at a rate the method's own
+analysis predicts.
+
+So the class is a function rather than a constant, `protocol.approximation_envelope`:
+
+```
+allowed(m) = error(m_0) * (m_0 / m) ** approximation_order + approximation_floor
+```
+
+anchored on the error **measured at the coarsest setting of the same sweep**,
+plus the absolute claim `error(m_last) <= approximation_final`. A row states
+both through the `converges(...)` helper in `test_likelihoods.py`.
+
+Why this catches what a fixed tolerance would not: a basis built on the wrong
+box, a spectral density carrying the wrong dimension, or a Woodbury solve
+missing a factor each gives an error that is *stable* under refinement rather
+than falling — more basis members converge to the wrong process just as
+happily as to the right one — and a stable error sails through any tolerance
+loose enough to admit the coarsest setting.
 
 ---
 

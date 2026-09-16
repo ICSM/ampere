@@ -784,6 +784,60 @@ class Kernel(Parameterised, abc.ABC):
         resolved = self.resolve(values)
         return self._covariance(ops.zeros(ops.n_points(coordinates)), resolved)
 
+    def spectral_density(
+        self, frequency: Any, values: Mapping[str, Any], *, dimensions: int = 1
+    ) -> Any:
+        r"""The kernel's power spectral density :math:`S(\omega)`, in ``dimensions`` axes.
+
+        **W5.4's addition**, and the one thing a reduced-rank spectral solver
+        needs that the dense path never did. The convention is the plain
+        Fourier transform of the covariance over :math:`\mathbb{R}^d`,
+
+        .. math::
+            S(\boldsymbol\omega) = \int k(\|\mathbf r\|)\,
+            e^{-i \boldsymbol\omega \cdot \mathbf r}\, \mathrm d^d \mathbf r,
+
+        so that :math:`k(\mathbf r) = (2\pi)^{-d} \int S e^{i \boldsymbol\omega
+        \cdot \mathbf r}\,\mathrm d^d\boldsymbol\omega` and
+        :math:`S \ge 0` by Bochner's theorem. For an isotropic kernel it
+        depends on :math:`\|\boldsymbol\omega\|` alone, which is what
+        ``frequency`` carries, and on the number of axes the kernel acts on,
+        which is what ``dimensions`` carries — the same covariance has a
+        *different* spectral density in one axis and in two, and a solver that
+        forgot the dimension would build a basis for the wrong process.
+
+        Written in :attr:`ops`, so a backend's kernel inherits a
+        differentiable one from the same source the closed form comes from:
+        :class:`~ampere.core.hsgp.HilbertSpaceGP` is written once and the
+        backends contribute only the linear algebra.
+
+        The default **refuses by name**, the same declared-slot discipline an
+        unimplemented solver follows: a family with no closed-form spectral
+        density (a :class:`Product`, a :class:`RotationTerm`, or a user's own)
+        must say so rather than have a reduced-rank solver guess. A
+        :class:`SpectralMixture` needs nothing of its own -- it *is* a
+        :class:`Sum` of :class:`SHO` terms in this codebase, so it inherits
+        the sum's, which is the same structural fact the quasiseparable
+        registry already exploits.
+
+        Parameters
+        ----------
+        frequency
+            Non-negative angular frequencies :math:`\|\boldsymbol\omega\|`, in
+            radians per unit of the coordinate axis. Any shape.
+        values
+            The hyperparameter mapping, as for :meth:`matrix`.
+        dimensions
+            How many axes the kernel acts on — ``len(kernel.selected_axes(...))``.
+        """
+        raise LikelihoodError(
+            f"{type(self).__name__} ({self.FAMILY}) has no closed-form spectral density, so a "
+            f"reduced-rank spectral solver (HilbertSpaceGP) cannot represent it. The families "
+            f"that do are Matern12, Matern32, Matern52, SquaredExponential, SHO and any Sum of "
+            f"them — a SpectralMixture included, being a Sum of SHOs; use DenseGP, which needs "
+            f"no spectral density at all."
+        )
+
     def __repr__(self) -> str:
         declared = ", ".join(repr(self.parameters[name]) for name in self.parameters.names)
         selection = "" if self._axes is None else f", axes={self._axes!r}"
@@ -805,7 +859,18 @@ class StationaryKernel(Kernel):
     ``QUASISEPARABLE``, implement ``_covariance``, and — if the kernel is
     exactly quasiseparable — register its representation with
     :func:`register_quasiseparable_term`.
+
+    **Since W5.4** a subclass may also declare :attr:`SPECTRAL_NU`, the Matérn
+    smoothness ``nu``, and inherit :meth:`spectral_density` from the one
+    closed form below rather than transcribing it — which is what puts
+    Matérn-1/2, -3/2 and -5/2 on ``HilbertSpaceGP`` in three lines.
     """
+
+    #: The Matérn smoothness this family is, or ``None`` for a stationary
+    #: kernel that is not a Matérn (:class:`SquaredExponential` overrides
+    #: :meth:`spectral_density` instead). Read only by
+    #: :meth:`spectral_density`.
+    SPECTRAL_NU: ClassVar[float | None] = None
 
     def __init__(
         self,
@@ -821,6 +886,47 @@ class StationaryKernel(Kernel):
             _as_hyperparameter("length_scale", length_scale, length_scale_unit),
         )
         self._declare_axes(axes)
+
+    def spectral_density(
+        self, frequency: Any, values: Mapping[str, Any], *, dimensions: int = 1
+    ) -> Any:
+        r"""The Matérn spectral density, for a family that declares :attr:`SPECTRAL_NU`.
+
+        With ampere's normalisation (:math:`k(0) = a^2`, length scale
+        :math:`\ell`), the isotropic Matérn-:math:`\nu` transform in ``d``
+        dimensions is
+
+        .. math::
+            S(\omega) = a^2\,
+            \frac{2^d \pi^{d/2}\,\Gamma(\nu + d/2)\,(2\nu)^\nu}
+                 {\Gamma(\nu)\,\ell^{2\nu}}
+            \left(\frac{2\nu}{\ell^2} + \omega^2\right)^{-(\nu + d/2)} ,
+
+        which for :math:`\nu = 1/2`, :math:`d = 1` is the familiar
+        :math:`2 a^2 \ell / (1 + \ell^2\omega^2)`. The :math:`\Gamma`\ s and the
+        powers of two are ordinary Python floats — they depend on ``nu`` and
+        ``d``, never on a fitted value — so only the amplitude and the length
+        scale carry a gradient, and they do so in this kernel's own namespace.
+        """
+        nu = self.SPECTRAL_NU
+        if nu is None:
+            return super().spectral_density(frequency, values, dimensions=dimensions)
+        resolved = self.resolve(values)
+        amplitude = self._hyperparameter(resolved, "amplitude", allow_zero=True)
+        length_scale = self._hyperparameter(resolved, "length_scale")
+        omega = self.ops.scalar(frequency)
+        half = 0.5 * float(dimensions)
+        constant = (
+            2.0 ** float(dimensions)
+            * math.pi**half
+            * math.gamma(nu + half)
+            * (2.0 * nu) ** nu
+            / math.gamma(nu)
+        )
+        pole = 2.0 * nu / (length_scale * length_scale) + omega * omega
+        return (
+            amplitude * amplitude * constant * length_scale ** (-2.0 * nu) * pole ** (-(nu + half))
+        )
 
 
 class Matern12(StationaryKernel):
@@ -848,6 +954,8 @@ class Matern12(StationaryKernel):
     FAMILY: ClassVar[str] = "matern12"
     HYPERPARAMETERS: ClassVar[tuple[str, ...]] = ("amplitude", "length_scale")
     QUASISEPARABLE: ClassVar[bool] = True
+    #: W5.4: the smoothness ``StationaryKernel.spectral_density`` reads.
+    SPECTRAL_NU: ClassVar[float | None] = 0.5
 
     def _covariance(self, separation: Any, values: Mapping[str, Any]) -> Any:
         amplitude = self._hyperparameter(values, "amplitude", allow_zero=True)
@@ -908,6 +1016,8 @@ class Matern32(StationaryKernel):
     FAMILY: ClassVar[str] = "matern32"
     HYPERPARAMETERS: ClassVar[tuple[str, ...]] = ("amplitude", "length_scale")
     QUASISEPARABLE: ClassVar[bool] = True
+    #: W5.4: the smoothness ``StationaryKernel.spectral_density`` reads.
+    SPECTRAL_NU: ClassVar[float | None] = 1.5
 
     def _covariance(self, separation: Any, values: Mapping[str, Any]) -> Any:
         amplitude = self._hyperparameter(values, "amplitude", allow_zero=True)
@@ -939,6 +1049,8 @@ class Matern52(StationaryKernel):
     FAMILY: ClassVar[str] = "matern52"
     HYPERPARAMETERS: ClassVar[tuple[str, ...]] = ("amplitude", "length_scale")
     QUASISEPARABLE: ClassVar[bool] = True
+    #: W5.4: the smoothness ``StationaryKernel.spectral_density`` reads.
+    SPECTRAL_NU: ClassVar[float | None] = 2.5
 
     def _covariance(self, separation: Any, values: Mapping[str, Any]) -> Any:
         amplitude = self._hyperparameter(values, "amplitude", allow_zero=True)
@@ -971,6 +1083,31 @@ class SquaredExponential(StationaryKernel):
         length_scale = self._hyperparameter(values, "length_scale")
         scaled = self.ops.scalar(separation) / length_scale
         return amplitude * amplitude * self.ops.exp(-0.5 * scaled * scaled)
+
+    def spectral_density(
+        self, frequency: Any, values: Mapping[str, Any], *, dimensions: int = 1
+    ) -> Any:
+        r"""A Gaussian in frequency: :math:`S(\omega) = a^2 (2\pi)^{d/2} \ell^d
+        e^{-\ell^2\omega^2/2}`.
+
+        The one family whose reduced-rank approximation converges
+        *exponentially* in the basis size, because its spectral density does —
+        which is the compensation for its having no quasiseparable form at
+        all. ``HilbertSpaceGP`` is therefore the scaling answer for a squared
+        exponential in the way ``QuasisepGP`` is for a Matérn.
+        """
+        resolved = self.resolve(values)
+        amplitude = self._hyperparameter(resolved, "amplitude", allow_zero=True)
+        length_scale = self._hyperparameter(resolved, "length_scale")
+        scaled = length_scale * self.ops.scalar(frequency)
+        constant = (2.0 * math.pi) ** (0.5 * float(dimensions))
+        return (
+            amplitude
+            * amplitude
+            * constant
+            * length_scale ** float(dimensions)
+            * self.ops.exp(-0.5 * scaled * scaled)
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1081,6 +1218,42 @@ class SHO(Kernel):
         tau = ops.scalar(separation)
         oscillation = cosine * ops.cos(frequency * tau) + sine * ops.sin(frequency * tau)
         return ops.exp(-decay * tau) * oscillation
+
+    def spectral_density(
+        self, frequency: Any, values: Mapping[str, Any], *, dimensions: int = 1
+    ) -> Any:
+        r"""The celerite term's own transform, from the same :meth:`coefficients`.
+
+        For the celerite form :math:`k(\tau) = e^{-c|\tau|}(a\cos d\tau +
+        b\sin d|\tau|)` the one-sided integrals are elementary and give
+
+        .. math::
+            S(\omega) = \frac{a c + b\,(d - \omega)}{c^2 + (d-\omega)^2}
+                      + \frac{a c + b\,(d + \omega)}{c^2 + (d+\omega)^2},
+
+        the two Lorentzians a damped oscillator's power sits in, one at each
+        signed resonance. It is non-negative for every ``Q > 1/2``, which is
+        what makes the term a covariance in the first place, and it is written
+        from :meth:`coefficients` rather than from the closed form so the
+        dense, quasiseparable and reduced-rank paths cannot drift apart.
+
+        Refused in more than one axis: a damped oscillator is a function of an
+        ordered coordinate, and there is no isotropic form of it on a plane.
+        """
+        if int(dimensions) != 1:
+            raise LikelihoodError(
+                f"SHO has a spectral density in one axis only, but it was asked for one in "
+                f"{int(dimensions)}. A damped oscillator is a process in an ordered coordinate "
+                f"(time, wavelength); on a two-axis container select the single axis it runs "
+                f"along with axes=(...), or use a Matérn, which is isotropic in any dimension."
+            )
+        cosine, sine, decay, rate = self.coefficients(self.resolve(values))
+        omega = self.ops.scalar(frequency)
+        lower = rate - omega
+        upper = rate + omega
+        return (decay * cosine + sine * lower) / (decay * decay + lower * lower) + (
+            decay * cosine + sine * upper
+        ) / (decay * decay + upper * upper)
 
 
 class RotationTerm(Kernel):
@@ -1416,6 +1589,30 @@ class Sum(_Composite):
         total = diagonals[0]
         for block in diagonals[1:]:
             total = total + block
+        return total
+
+    def spectral_density(
+        self, frequency: Any, values: Mapping[str, Any], *, dimensions: int = 1
+    ) -> Any:
+        """The spectral density of a sum is the sum of its terms' (W5.4).
+
+        Linearity of the Fourier transform, and the reason ``Sum`` is the
+        composite a reduced-rank spectral solver can take while ``Product``
+        is not: a product's transform is a *convolution* of the factors',
+        which has no closed form in general and none at all when the factors
+        act on different axes. One term with no closed-form density refuses
+        the whole sum, by its own name, exactly as the quasiseparable path
+        refuses an unregistered term.
+        """
+        parts = [
+            child.spectral_density(frequency, child_values, dimensions=dimensions)
+            for (_, child), child_values in zip(
+                self._terms, self._child_values_all(values), strict=True
+            )
+        ]
+        total = parts[0]
+        for part in parts[1:]:
+            total = total + part
         return total
 
     def select(self, points: Any) -> Any:

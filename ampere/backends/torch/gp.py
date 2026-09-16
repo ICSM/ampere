@@ -88,6 +88,17 @@ from ampere.core import RotationTerm as _CoreRotationTerm
 from ampere.core import SpectralMixture as _CoreSpectralMixture
 from ampere.core import SquaredExponential as _CoreSquaredExponential
 from ampere.core.exceptions import LikelihoodError
+from ampere.core.hsgp import (
+    DEFAULT_BASIS_SIZE,
+    DEFAULT_BOUNDARY_FACTOR,
+    HilbertSpaceBasis,
+    basis_matrix,
+    basis_size,
+    check_spectral_support,
+    hilbert_basis,
+    normalise_counts,
+    spectral_values,
+)
 from ampere.core.kernels import lookup_quasiseparable_term
 
 from . import _celerite
@@ -106,6 +117,7 @@ from ._config import (
 __all__ = [
     "SHO",
     "DenseGP",
+    "HilbertSpaceGP",
     "Matern12",
     "Matern32",
     "Matern52",
@@ -1579,3 +1591,378 @@ class QuasisepGP(GPSolver):
         restored = torch.empty_like(transformed)
         restored[order] = transformed
         return to_numpy(restored).astype(DTYPE, copy=False)
+
+
+# ---------------------------------------------------------------------------
+# The reduced-rank spectral solver (W5.4)
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass(frozen=True)
+class HilbertSpaceGP(GPSolver):
+    r"""Approximate ``O(N m + m³)`` by a Hilbert-space basis, in torch.
+
+    The torch twin of :class:`ampere.core.HilbertSpaceGP`: the same
+    declaration, the same basis, the same Woodbury algebra, and the same
+    answer to ``tolerances.cross_backend``. What this class adds is the two
+    things ``ampere.core``'s cannot have — a solve whose every step carries a
+    gradient in the kernel hyperparameters, and a
+    :meth:`log_marginal_likelihood_native` surface with no exception control
+    flow for :mod:`ampere.backends.torch.problem` to compose into a NUTS
+    density.
+
+    **Why this is the solver a reduced-rank latent path wants.** The whitening
+    is ``f = Phi z`` with ``z`` of length ``m``, so the sampler's dimension is
+    the basis size rather than the sample count; the factorisation is an
+    ``m`` by ``m`` Cholesky whose cost does not grow with ``N`` at all; and
+    there is nothing to stabilise, because the reduced-rank factor times its
+    own transpose is positive semi-definite by construction. A 10^4-point
+    spectrum under NUTS is then a few dozen latent dimensions and one small
+    dense factorisation per leapfrog step.
+
+    See ``ampere.core.HilbertSpaceGP`` for the mathematics, the parameters and
+    the warning about choosing ``basis_size`` and ``boundary_factor``
+    together; nothing here changes any of it.
+    """
+
+    basis_size: int | tuple[int, ...] = DEFAULT_BASIS_SIZE
+    boundary_factor: float = DEFAULT_BOUNDARY_FACTOR
+    jitter: float = 0.0
+
+    #: Class-level policy, never dataclass fields — see :class:`DenseGP`.
+    TENSOR_DTYPE: ClassVar[torch.dtype] = DEFAULT_DTYPE
+    TENSOR_DEVICE: ClassVar[torch.device] = DEFAULT_DEVICE
+
+    NAME: ClassVar[str] = "HilbertSpaceGP"
+    EXACT: ClassVar[bool] = False
+    IMPLEMENTED: ClassVar[bool] = True
+    STACKED_RESIDUALS: ClassVar[bool] = True
+
+    DIFFERENTIABLE: ClassVar[bool] = True
+    #: Not batchable. ``torch.linalg.cholesky_ex`` would map over a stack of
+    #: capacitance matrices happily enough, but the basis is built from the
+    #: *coordinates*, which are shared across a batch of parameter vectors and
+    #: would have to be broadcast against them; nothing in the library needs it
+    #: yet, and a flag claiming it would be a promise this class does not keep.
+    BATCHABLE: ClassVar[bool] = False
+    DEVICE: ClassVar[str] = "cpu"
+    BACKEND: ClassVar[str] = BACKEND
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "basis_size", normalise_counts(self.basis_size))
+        if not math.isfinite(self.boundary_factor) or self.boundary_factor <= 0.0:
+            raise LikelihoodError(
+                f"HilbertSpaceGP's boundary_factor must be finite and > 0, got "
+                f"{self.boundary_factor!r}."
+            )
+        if not math.isfinite(self.jitter) or self.jitter < 0.0:
+            raise LikelihoodError(
+                f"HilbertSpaceGP's jitter must be finite and >= 0, got {self.jitter!r}."
+            )
+
+    # -- declarations ----------------------------------------------------------
+
+    @property
+    def counts(self) -> tuple[int, ...]:
+        """Basis members per axis, normalised to a tuple."""
+        return normalise_counts(self.basis_size)
+
+    def latent_size(self, kernel: Kernel, n_samples: int) -> int:
+        """``m``, not ``N``. See ``ampere.core.HilbertSpaceGP.latent_size``."""
+        del kernel, n_samples
+        return basis_size(self.counts)
+
+    def provenance_config(self) -> Mapping[str, Any]:
+        """The approximation *and* how this backend computed it.
+
+        ``basis_size`` and ``boundary_factor`` are declarations and so are also
+        dataclass fields, which is what keeps this backend's spec hash equal to
+        the reference one's for the same problem (``results.md`` §14); the
+        dtype and the device are configuration and are not.
+        """
+        return {
+            "basis_size": [int(count) for count in self.counts],
+            "boundary_factor": float(self.boundary_factor),
+            "dtype": str(self.TENSOR_DTYPE),
+            "device": str(self.TENSOR_DEVICE),
+        }
+
+    def configured(self, *, dtype: Any = None, device: Any = None) -> HilbertSpaceGP:
+        """A copy computing elsewhere or in another precision. See :meth:`DenseGP.configured`."""
+        return _configured(self, dtype, device)
+
+    def check_compatible(self, kernel: Kernel, observed: Any) -> None:
+        """The core solver's checks, unchanged — they are declarations, not arithmetic."""
+        super().check_compatible(kernel, observed)
+        selected = kernel.selected_axes([axis.name for axis in observed.axes])
+        check_spectral_support(kernel, len(selected), owner=self.NAME)
+        if len(self.counts) != len(selected):
+            raise LikelihoodError(
+                f"{self.NAME} was declared with basis_size={self.basis_size!r} — "
+                f"{len(self.counts)} axis count(s) — but the kernel selects {len(selected)} "
+                f"axis/axes {selected!r} of this {type(observed).__name__}. The basis is a "
+                f"tensor product with one count per axis."
+            )
+
+    # -- internals -------------------------------------------------------------
+
+    def _tensor(self, value: Any) -> torch.Tensor:
+        return as_tensor(value, dtype=self.TENSOR_DTYPE, device=self.TENSOR_DEVICE)
+
+    def _points(self, coordinates: Any) -> torch.Tensor:
+        tensor = self._tensor(coordinates)
+        return tensor.reshape(-1, 1) if tensor.ndim == 1 else tensor
+
+    def _basis(self, kernel: Kernel, coordinates: Any) -> HilbertSpaceBasis:
+        """The box and the frequency grid — numpy, because they are data.
+
+        ``to_numpy`` rather than ``np.asarray``: a coordinate block may be a
+        tensor on another device, and it never carries a gradient (a fitted
+        coordinate is not a thing ampere has), so nothing is detached that
+        anything wanted.
+        """
+        points = kernel.select(self._points(coordinates))
+        return hilbert_basis(to_numpy(points), self.counts, self.boundary_factor)
+
+    def _scaled_basis(
+        self,
+        kernel: Kernel,
+        basis: HilbertSpaceBasis,
+        coordinates: Any,
+        values: Mapping[str, Any],
+    ) -> torch.Tensor:
+        r"""The basis scaled by the square root of the spectral density, graph intact.
+
+        ``Phi`` is built through :class:`TorchOps`, so it lands on this
+        solver's own dtype and device whatever namespace the coordinates
+        arrived in; ``S`` comes from the *kernel*'s namespace, which is where
+        the gradient in the amplitude and the length scale lives.
+        ``clamp(min=0)`` rather than a check: a realised density must not
+        raise, and a spectral density is non-negative for every admissible
+        hyperparameter, so a negative one is a hyperparameter outside its
+        prior and is already on its way to ``-inf``.
+        """
+        ops = TorchOps(self.TENSOR_DTYPE, self.TENSOR_DEVICE)
+        matrix = basis_matrix(basis, kernel.select(self._points(coordinates)), ops)
+        density = self._tensor(spectral_values(kernel, basis, values))
+        return matrix * torch.sqrt(torch.clamp(density, min=0.0))[None, :]
+
+    def _diagonal(self, variance: Any) -> torch.Tensor:
+        return self._tensor(variance) + self.jitter**2
+
+    def _factor(
+        self, scaled: torch.Tensor, diagonal: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        r"""``(D^-1 Phi, chol(I + Phi^T D^-1 Phi), info)`` — the one factorisation."""
+        weighted = scaled / diagonal[:, None]
+        identity = torch.eye(scaled.shape[1], dtype=self.TENSOR_DTYPE, device=self.TENSOR_DEVICE)
+        capacitance = identity + scaled.transpose(0, 1) @ weighted
+        factor, info = torch.linalg.cholesky_ex(capacitance)
+        return weighted, factor, info
+
+    @staticmethod
+    def _solve(
+        scaled: torch.Tensor,
+        diagonal: torch.Tensor,
+        weighted: torch.Tensor,
+        factor: torch.Tensor,
+        right: torch.Tensor,
+    ) -> torch.Tensor:
+        r"""``(K + D)^-1 right`` by Woodbury, for an ``(n,)`` or ``(n, k)`` block."""
+        vector = right.ndim == 1
+        block = right.reshape(-1, 1) if vector else right
+        direct = block / diagonal[:, None]
+        inner = torch.cholesky_solve(scaled.transpose(0, 1) @ direct, factor, upper=False)
+        solved = direct - weighted @ inner
+        return solved.reshape(-1) if vector else solved
+
+    def _guard(self, message: str, ok: Any) -> None:
+        if not bool(ok):
+            raise LikelihoodError(message)
+
+    # -- the interface ---------------------------------------------------------
+
+    def log_marginal_likelihood_native(
+        self,
+        kernel: Kernel,
+        coordinates: Any,
+        residual: Any,
+        variance: Any,
+        values: Mapping[str, Any],
+    ) -> torch.Tensor:
+        """The marginal likelihood of the approximation, **without exceptions** (W2.13).
+
+        The surface :mod:`ampere.backends.torch.problem` composes. A
+        factorisation that fails becomes ``-inf`` through :func:`torch.where`,
+        exactly as :meth:`DenseGP.log_marginal_likelihood_native` does, so a
+        NUTS step that wanders into an inadmissible hyperparameter is rejected
+        rather than raising in the middle of the hot loop.
+        """
+        basis = self._basis(kernel, coordinates)
+        scaled = self._scaled_basis(kernel, basis, coordinates, values)
+        diagonal = self._diagonal(variance)
+        weighted, factor, info = self._factor(scaled, diagonal)
+        residuals = _right_hand_side(self._tensor(residual))
+        alpha = self._solve(scaled, diagonal, weighted, factor, residuals)
+        log_determinant = torch.log(diagonal).sum() + 2.0 * torch.log(torch.diagonal(factor)).sum()
+        quadratic = (residuals * alpha).sum()
+        value = -0.5 * (
+            quadratic + _columns(residuals) * log_determinant + residuals.numel() * _LOG_2PI
+        )
+        failed = torch.logical_or(info != 0, torch.logical_not(torch.isfinite(value)))
+        failed = torch.logical_or(failed, torch.logical_not(torch.all(diagonal > 0.0)))
+        return torch.where(failed, torch.full_like(value, -math.inf), value)
+
+    def log_marginal_likelihood_tensor(
+        self,
+        kernel: Kernel,
+        coordinates: np.ndarray,
+        residual: Any,
+        variance: np.ndarray,
+        values: Mapping[str, Any],
+    ) -> torch.Tensor:
+        """The same quantity as a differentiable tensor, with the loud refusals."""
+        diagonal = self._diagonal(variance)
+        self._guard(
+            f"{self.NAME} needs a strictly positive noise diagonal: the Woodbury identity it "
+            f"solves by inverts diag(sigma^2 + jitter^2) directly, so a zero uncertainty is a "
+            f"division by zero rather than an ill-conditioned matrix. Pass "
+            f"{self.NAME}(jitter=...), or use DenseGP.",
+            bool(torch.all(torch.isfinite(diagonal))) and bool(torch.all(diagonal > 0.0)),
+        )
+        value = self.log_marginal_likelihood_native(kernel, coordinates, residual, variance, values)
+        self._guard(
+            "the reduced-rank capacitance matrix I + Phi^T D^-1 Phi is not positive definite, "
+            "so the Woodbury solve failed. It is positive definite for every admissible "
+            "hyperparameter, so this is a numerical rather than a structural failure: reduce "
+            "basis_size, or raise the jitter.",
+            torch.isfinite(value),
+        )
+        return value
+
+    def log_marginal_likelihood(
+        self,
+        kernel: Kernel,
+        coordinates: np.ndarray,
+        residual: np.ndarray,
+        variance: np.ndarray,
+        values: Mapping[str, Any],
+    ) -> float:
+        return float(
+            self.log_marginal_likelihood_tensor(kernel, coordinates, residual, variance, values)
+        )
+
+    def conditional_loo(
+        self,
+        kernel: Kernel,
+        coordinates: np.ndarray,
+        residual: np.ndarray,
+        variance: np.ndarray,
+        values: Mapping[str, Any],
+    ) -> np.ndarray:
+        """Sundararajan & Keerthi from the Woodbury diagonal. See the core solver."""
+        points = _as_points(coordinates, "data coordinates")
+        basis = self._basis(kernel, points)
+        scaled = self._scaled_basis(kernel, basis, points, values)
+        diagonal = self._diagonal(variance)
+        weighted, factor, info = self._factor(scaled, diagonal)
+        self._guard(
+            "the reduced-rank capacitance matrix I + Phi^T D^-1 Phi is not positive definite, "
+            "so the Woodbury solve failed.",
+            int(info) == 0,
+        )
+        residuals = _right_hand_side(self._tensor(residual))
+        alpha = self._solve(scaled, diagonal, weighted, factor, residuals)
+        triangular = torch.linalg.solve_triangular(factor, weighted.transpose(0, 1), upper=False)
+        precision_diagonal = 1.0 / diagonal - (triangular * triangular).sum(dim=0)
+        rows = int(residuals.shape[0])
+        columns = _columns(residuals)
+        quadratic = (alpha.reshape(rows, columns) ** 2).sum(dim=1)
+        terms = columns * (0.5 * torch.log(precision_diagonal) - 0.5 * _LOG_2PI) - quadratic / (
+            2.0 * precision_diagonal
+        )
+        return to_numpy(terms).astype(DTYPE, copy=False)
+
+    def condition(
+        self,
+        kernel: Kernel,
+        coordinates: np.ndarray,
+        residual: np.ndarray,
+        variance: np.ndarray,
+        values: Mapping[str, Any],
+        at: np.ndarray | None = None,
+    ) -> GPConditional:
+        """The posterior of the rank-``m`` process. See the core solver."""
+        points = _as_points(coordinates, "data coordinates")
+        basis = self._basis(kernel, points)
+        scaled = self._scaled_basis(kernel, basis, points, values)
+        diagonal = self._diagonal(variance)
+        weighted, factor, info = self._factor(scaled, diagonal)
+        self._guard(
+            "the reduced-rank capacitance matrix I + Phi^T D^-1 Phi is not positive definite, "
+            "so the Woodbury solve failed.",
+            int(info) == 0,
+        )
+        residuals = _right_hand_side(self._tensor(residual))
+        alpha = self._solve(scaled, diagonal, weighted, factor, residuals)
+        target = points if at is None else _as_points(at, "conditioning grid", points.shape[1])
+        target_scaled = self._scaled_basis(kernel, basis, target, values)
+        mean = target_scaled @ (scaled.transpose(0, 1) @ alpha)
+        triangular = torch.linalg.solve_triangular(
+            factor, target_scaled.transpose(0, 1), upper=False
+        )
+        posterior = (triangular * triangular).sum(dim=0)
+        return GPConditional(
+            mean=to_numpy(mean).astype(DTYPE, copy=False),
+            variance=to_numpy(posterior).astype(DTYPE, copy=False),
+        )
+
+    def latent_transform_native(
+        self,
+        kernel: Kernel,
+        coordinates: Any,
+        whitened: Any,
+        values: Mapping[str, Any],
+        *,
+        jitter: float = 1e-10,
+    ) -> torch.Tensor:
+        r"""``f = Phi z`` as a differentiable tensor, without exceptions (W2.14).
+
+        ``z`` carries :meth:`latent_size` entries. There is no factorisation
+        here at all — the reduced-rank factor *is* the whitening — so the
+        ``jitter`` argument the two exact solvers need is accepted and unused,
+        and this surface has nothing that can fail to sanitise into NaN.
+        """
+        del jitter
+        basis = self._basis(kernel, coordinates)
+        scaled = self._scaled_basis(kernel, basis, coordinates, values)
+        draws = self._tensor(whitened)
+        vector = draws.ndim == 1
+        drawn = scaled @ (draws.reshape(-1, 1) if vector else draws)
+        return drawn.reshape(-1) if vector else drawn
+
+    def latent_transform(
+        self,
+        kernel: Kernel,
+        coordinates: np.ndarray,
+        whitened: np.ndarray,
+        values: Mapping[str, Any],
+        *,
+        jitter: float = 1e-10,
+    ) -> np.ndarray:
+        """``f = Phi z`` — the contract surface, so it raises where the native one does not."""
+        points = _as_points(coordinates, "data coordinates")
+        expected = self.latent_size(kernel, points.shape[0])
+        if int(np.shape(whitened)[0]) != expected:
+            raise LikelihoodError(
+                f"{self.NAME} whitens {expected} basis coefficient(s), but it was handed "
+                f"{int(np.shape(whitened)[0])} whitened value(s). This solver's latent block is "
+                f"the basis size m, not the sample count — see GPSolver.latent_size."
+            )
+        drawn = self.latent_transform_native(kernel, points, whitened, values, jitter=jitter)
+        if not bool(torch.all(torch.isfinite(drawn))):
+            raise LikelihoodError(
+                "the reduced-rank whitening f = Phi diag(sqrt(S)) z is not finite. The usual "
+                "cause is a kernel amplitude large enough that amplitude**2 overflows float64."
+            )
+        return to_numpy(drawn).astype(DTYPE, copy=False)

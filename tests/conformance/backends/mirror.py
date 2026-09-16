@@ -41,7 +41,7 @@ silently degenerating to a single-backend suite again.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar
 
 import astropy.units as u
@@ -66,6 +66,7 @@ from ampere.backends.reference import (
     UniformDiscVisibilities,
 )
 from ampere.core import DenseGP as _CoreDenseGP
+from ampere.core import HilbertSpaceGP as _CoreHilbertSpaceGP
 from ampere.core import GaussianProcessNoise as _CoreGaussianProcessNoise
 from ampere.core import IndependentNoise as _CoreIndependentNoise
 from ampere.core import SHO as _CoreSHO
@@ -396,6 +397,12 @@ class QuasisepGP(_CoreQuasisepGP):
     BACKEND: ClassVar[str] = BACKEND
 
 
+class HilbertSpaceGP(_CoreHilbertSpaceGP):
+    """The reduced-rank spectral solver, declared as this backend's (W5.4)."""
+
+    BACKEND: ClassVar[str] = BACKEND
+
+
 # The kernels, for the same reason one step further down. **W3.8** (ruled by
 # Peter 2026-09-08) put the kernel on ``Likelihood.capability_parts`` too: a
 # solver builds the covariance by calling ``Kernel.matrix``, so a core kernel
@@ -482,8 +489,18 @@ class MirrorBackend(ReferenceBackend):
     def kernel(self, spec: CovarianceSpec) -> Kernel:
         return build_kernel(spec, _KERNELS)
 
-    def gp_solver(self, kind: SolverKind) -> GPSolver:
-        return DenseGP() if kind is SolverKind.DENSE else QuasisepGP()
+    def gp_solver(
+        self,
+        kind: SolverKind,
+        *,
+        basis_size: int | Sequence[int] = 32,
+        boundary_factor: float = 2.0,
+    ) -> GPSolver:
+        if kind is SolverKind.DENSE:
+            return DenseGP()
+        if kind is SolverKind.HILBERT:
+            return HilbertSpaceGP(basis_size=basis_size, boundary_factor=boundary_factor)
+        return QuasisepGP()
 
     def independent_noise(self) -> NoiseModel:
         return IndependentNoise()

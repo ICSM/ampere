@@ -62,9 +62,7 @@ TRUE_SLOPE = 1.0
 TRUE_INTERCEPT = 1.0
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SPECTRUM_FILE = (
-    REPO_ROOT / "examples" / "test_data" / "cassis_yaaar_spcfw_14191360t.fits"
-)
+SPECTRUM_FILE = REPO_ROOT / "examples" / "test_data" / "cassis_yaaar_spcfw_14191360t.fits"
 FILTER_NAMES = np.array(["WISE_RSR_W1", "SPITZER_MIPS_70"])
 
 
@@ -135,9 +133,7 @@ def build_linear_sed_problem(seed=SEED, stride=SPECTRUM_STRIDE):
     mod_sed = []
     for f in filters:
         lp = f.lpivot.to("micron").value
-        fphot = f.get_flux(
-            wavelengths * get_unit("micron"), flam * get_unit("flam"), axis=-1
-        ).value
+        fphot = f.get_flux(wavelengths * get_unit("micron"), flam * get_unit("flam"), axis=-1).value
         mod_sed.append(fphot * lp**2)
     mod_sed = np.array(mod_sed)
     phot_unc = 0.1 * mod_sed

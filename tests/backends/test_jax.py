@@ -66,6 +66,7 @@ from ampere.backends.jax import (  # noqa: E402
     CalibrationScale,
     DenseGP,
     GaussianProcessNoise,
+    HilbertSpaceGP,
     IndependentNoise,
     LoweredParameterSet,
     LoweringFallbackWarning,
@@ -81,6 +82,8 @@ from ampere.backends.jax import (  # noqa: E402
     lower_problem,
 )
 from ampere.backends.jax._declare import as_parameter  # noqa: E402
+from ampere.core import HilbertSpaceGP as CoreHilbertSpaceGP  # noqa: E402
+from ampere.core import Matern32 as CoreMatern32  # noqa: E402
 from ampere.backends.jax.distributions import has_native_icdf, lower_prior  # noqa: E402
 from ampere.backends.jax.families import lower_family  # noqa: E402
 from ampere.backends.jax.rng import fold, key  # noqa: E402
@@ -1390,6 +1393,158 @@ class TestTheQuasiseparableSolver:
         )
         assert completed.returncode == 0, completed.stderr
         assert "ok" in completed.stdout
+
+
+class TestTheReducedRankSolver:
+    """``HilbertSpaceGP`` in jax (W5.4): the twin rows, the trace and the batch.
+
+    The neutral battery states the convergence claim on every column. What it
+    cannot say is anything about *jax*: that the traced surface signals failure
+    with ``-inf`` rather than raising, that the box survives ``jit`` (it is
+    numpy, read from concrete coordinates, and a ``jnp`` operation on a
+    closed-over constant inside a trace would have made it a tracer), that
+    ``vmap`` maps the solve, and that the hyperparameters the method exists to
+    fit are differentiable through the spectral density.
+    """
+
+    def test_it_agrees_with_the_reference_solver(self) -> None:
+        kernel = Matern32(0.7, 2.0)
+        core = CoreMatern32(0.7, 2.0)
+        grid = QUASISEP_GRID
+        residual = QUASISEP_RESIDUAL
+        variance = np.full(grid.size, 0.04)
+        assert HilbertSpaceGP(basis_size=32).log_marginal_likelihood(
+            kernel, grid, residual, variance, kernel.resolve(None)
+        ) == pytest.approx(
+            CoreHilbertSpaceGP(basis_size=32).log_marginal_likelihood(
+                core, grid, residual, variance, core.resolve(None)
+            ),
+            abs=1e-9,
+        )
+
+    def test_the_conditional_and_the_leave_one_out_terms_agree(self) -> None:
+        kernel = Matern32(0.7, 2.0)
+        core = CoreMatern32(0.7, 2.0)
+        grid = QUASISEP_GRID
+        residual = QUASISEP_RESIDUAL
+        variance = np.full(grid.size, 0.04)
+        solver, reference = HilbertSpaceGP(basis_size=32), CoreHilbertSpaceGP(basis_size=32)
+        assert solver.conditional_loo(
+            kernel, grid, residual, variance, kernel.resolve(None)
+        ) == pytest.approx(
+            reference.conditional_loo(core, grid, residual, variance, core.resolve(None)),
+            abs=1e-9,
+        )
+        at = np.linspace(float(grid.min()) - 1.0, float(grid.max()) + 1.0, 31)
+        got = solver.condition(kernel, grid, residual, variance, kernel.resolve(None), at=at)
+        expected = reference.condition(core, grid, residual, variance, core.resolve(None), at=at)
+        assert got.mean == pytest.approx(expected.mean, abs=1e-9)
+        assert got.variance == pytest.approx(expected.variance, abs=1e-9)
+
+    def test_the_whitening_takes_the_basis_size(self) -> None:
+        kernel = Matern32(0.7, 2.0)
+        solver = HilbertSpaceGP(basis_size=20)
+        assert solver.latent_size(kernel, QUASISEP_GRID.size) == 20
+        drawn = solver.latent_transform(
+            kernel, QUASISEP_GRID, np.linspace(-1.0, 1.0, 20), kernel.resolve(None)
+        )
+        assert drawn.shape == (QUASISEP_GRID.size,)
+        from ampere.core.exceptions import LikelihoodError
+
+        with pytest.raises(LikelihoodError, match="basis size m, not the sample count"):
+            solver.latent_transform(
+                kernel, QUASISEP_GRID, np.zeros(QUASISEP_GRID.size), kernel.resolve(None)
+            )
+
+    def test_the_traced_surface_survives_jit_and_signals_failure_with_minus_infinity(
+        self,
+    ) -> None:
+        """Both halves in one row, because they are the same mechanism.
+
+        The box is computed in numpy from the *raw* coordinates, which is what
+        makes the first half work: ``jnp.asarray`` applied to a closed-over
+        constant inside a trace returns a tracer, and numpy refuses to convert
+        one. The second half is ``inference.md`` §10a — a realised density must
+        not raise.
+        """
+        kernel = Matern32(0.7, 2.0)
+        grid = QUASISEP_GRID
+        residual = QUASISEP_RESIDUAL
+        variance = np.full(grid.size, 0.04)
+        solver = HilbertSpaceGP(basis_size=24)
+        values = kernel.resolve(None)
+
+        def density(sigma_squared: Any) -> Any:
+            return solver.log_marginal_likelihood_jax(kernel, grid, residual, sigma_squared, values)
+
+        assert float(jax.jit(density)(jnp.asarray(variance))) == pytest.approx(
+            solver.log_marginal_likelihood(kernel, grid, residual, variance, values), abs=1e-9
+        )
+        assert float(jax.jit(density)(jnp.zeros(grid.size))) == -np.inf
+
+    def test_vmap_maps_the_solve_which_is_why_it_declares_batchable(self) -> None:
+        kernel = Matern32(0.7, 2.0)
+        grid = QUASISEP_GRID
+        residual = QUASISEP_RESIDUAL
+        variance = np.full(grid.size, 0.04)
+        solver = HilbertSpaceGP(basis_size=24)
+        assert solver.BATCHABLE
+
+        def density(amplitude: Any) -> Any:
+            return solver.log_marginal_likelihood_jax(
+                kernel, grid, residual, variance, {"amplitude": amplitude, "length_scale": 2.0}
+            )
+
+        amplitudes = jnp.asarray([0.5, 0.7, 0.9])
+        batched = np.asarray(jax.vmap(density)(amplitudes))
+        looped = np.asarray([float(density(value)) for value in amplitudes])
+        assert batched == pytest.approx(looped, abs=1e-9)
+
+    def test_the_hyperparameters_are_differentiable_against_central_differences(self) -> None:
+        """The spectral density is where the amplitude and the length scale enter,
+        so this row says ``Kernel.spectral_density`` kept the graph. The oracle is
+        a finite difference on the *reference* solver, not another jax quantity."""
+        kernel = Matern32(0.7, 2.0)
+        grid = QUASISEP_GRID
+        residual = QUASISEP_RESIDUAL
+        variance = np.full(grid.size, 0.04)
+        solver = HilbertSpaceGP(basis_size=32)
+        reference = CoreHilbertSpaceGP(basis_size=32)
+
+        def density(amplitude: Any, length_scale: Any) -> Any:
+            return solver.log_marginal_likelihood_jax(
+                kernel,
+                grid,
+                residual,
+                variance,
+                {"amplitude": amplitude, "length_scale": length_scale},
+            )
+
+        gradient = jax.grad(density, argnums=(0, 1))(0.7, 2.0)
+
+        def exact(amplitude: float, length_scale: float) -> float:
+            core = CoreMatern32(amplitude, length_scale)
+            return reference.log_marginal_likelihood(
+                core, grid, residual, variance, core.resolve(None)
+            )
+
+        step = 1e-6
+        assert float(gradient[0]) == pytest.approx(
+            (exact(0.7 + step, 2.0) - exact(0.7 - step, 2.0)) / (2.0 * step), rel=1e-5
+        )
+        assert float(gradient[1]) == pytest.approx(
+            (exact(0.7, 2.0 + step) - exact(0.7, 2.0 - step)) / (2.0 * step), rel=1e-5
+        )
+
+    def test_the_declaration_matches_the_reference_solver_field_for_field(self) -> None:
+        import dataclasses
+
+        assert [field.name for field in dataclasses.fields(HilbertSpaceGP())] == [
+            field.name for field in dataclasses.fields(CoreHilbertSpaceGP())
+        ]
+        config = HilbertSpaceGP(basis_size=(4, 4)).provenance_config()
+        assert config["basis_size"] == [4, 4]
+        assert config["library"] == "jax"
 
 
 class TestPrecisionAndDevice:

@@ -66,8 +66,8 @@ W2.4/W2.5 through `ampere.core.lowering`'s registry.)*
 >>> import astropy.units as u
 >>> from ampere.core import (
 ...     SHO, Censoring, ComplexGaussianFamily, DenseGP, GaussianFamily, GaussianProcessNoise,
-...     IndependentNoise, InducingPointGP, Likelihood, LikelihoodFamily, LimitKind,
-...     Marginalisation, Matern12, Matern32, Matern52, NoiseParams, PhotometricPoints,
+...     HilbertSpaceGP, IndependentNoise, InducingPointGP, Likelihood, LikelihoodFamily,
+...     LimitKind, Marginalisation, Matern12, Matern32, Matern52, NoiseParams, PhotometricPoints,
 ...     PoissonFamily, Product, QuasisepGP, RiceFamily, RotationTerm, SpectralMixture,
 ...     Spectrum, SquaredExponential, StationaryKernel, StudentTFamily, Sum, VisibilitySet,
 ...     WindowedSparseGP, family_named, list_families, quasiseparable_families,
@@ -800,14 +800,17 @@ definition of the right answer.
 |---|---|---|---|
 | `DenseGP` | yes | anything, O(N³) | **implemented** — the correctness anchor |
 | `QuasisepGP` | yes | one ordered axis, quasiseparable kernels and `Sum`s of them, O(N) | **implemented** (W2.3, celerite2; six families and `Sum` since W4.5) — `conditional_loo` deferred on the numpy solver; supplied by both differentiable backends' own |
+| `HilbertSpaceGP` | **no** | stationary kernels with a closed-form spectral density (the three Matérns, `SquaredExponential`, `SHO`, `Sum`s of those, and so `SpectralMixture`), 1–3 axes, O(N m + m³) | **implemented** (W5.4) on all three backends — `conditional_loo` exact in the approximation; latent block of size `m` |
 | `WindowedSparseGP` | no | any kernel, any dimension | slot; see below |
 | `InducingPointGP` (SVGP) | no | 2D+ | slot; Phase 5 |
 | `StructuredGridGP` (SKI) | no | gridded 2D+ | slot; Phase 5 |
 | `VecchiaGP` | no | 2D+ | slot; Phase 5 |
 
 ```pycon
->>> (DenseGP.EXACT, QuasisepGP.EXACT, WindowedSparseGP.EXACT, InducingPointGP.EXACT)
+>>> (DenseGP.EXACT, QuasisepGP.EXACT, HilbertSpaceGP.EXACT, WindowedSparseGP.EXACT)
 (True, True, False, False)
+>>> (HilbertSpaceGP.IMPLEMENTED, WindowedSparseGP.IMPLEMENTED)
+(True, False)
 
 ```
 
@@ -854,6 +857,92 @@ Traceback (most recent call last):
 ampere.core.exceptions.LikelihoodError: QuasisepGP needs a kernel with an exact quasiseparable representation, but SquaredExponential (squared_exponential) has none. ...
 
 ```
+
+### The first approximate strategy (*Amended W5.4*)
+
+`HilbertSpaceGP` is the first strategy in this table with `EXACT = False` and
+`IMPLEMENTED = True`, and it makes concrete three things the contract had only
+declared. It is the reduced-rank spectral method of Solin & Särkkä (2020) in
+the practical form Riutort-Mayol et al. (2023) give: on a box containing the
+data, the Dirichlet Laplacian's eigenfunctions diagonalise any stationary
+kernel through its spectral density, so `K ≈ Φ diag(S) Φᵀ` with `m` basis
+members and every quantity below follows from Woodbury at `O(N m + m³)`.
+
+**What "approximate" means here, and what it does not.** It is the *exact*
+marginal likelihood of a rank-`m` Gaussian process that converges to the
+declared kernel as the basis fills the box. It is therefore not a different
+quantity, and not a heuristic: `conditional_loo` is computed from the same
+Woodbury factorisation and is exact in the approximation, rather than refused
+the way `QuasisepGP`'s is; `condition` returns the approximation's own prior
+variance, so the posterior variance it reports is non-negative at every `m`,
+which mixing an exact prior with an approximate correction would not be.
+
+**The approximation is a declaration, not configuration.** `basis_size` (the
+members per axis; the total `m` is their product) and `boundary_factor` (the
+box's half-width as a multiple of the data's own half-extent) are dataclass
+fields, so `Likelihood.to_spec` records them and two runs at different `m` have
+different spec hashes — they change the answer, and fold-in 10's test is
+whether two backends may legitimately differ on a value, which here they may
+not. They are repeated in `provenance_config()` because a stored run's attrs
+are where a reader looks for "what approximation produced this".
+
+```pycon
+>>> solver = HilbertSpaceGP(basis_size=64, boundary_factor=6.0)
+>>> approximate = Likelihood(
+...     GaussianFamily(), GaussianProcessNoise(Matern32(0.3, 2.0), solver)
+... )
+>>> exact = Likelihood(
+...     GaussianFamily(), GaussianProcessNoise(Matern32(0.3, 2.0), DenseGP())
+... )
+>>> abs(approximate.log_prob(model, data) - exact.log_prob(model, data)) < 1e-2
+True
+>>> HilbertSpaceGP(basis_size=(16, 16)).provenance_config()
+{'basis_size': [16, 16], 'boundary_factor': 2.0}
+
+```
+
+The `boundary_factor=6.0` above is not decoration, and it is the trap worth
+seeing once. `data` spans 1–4 µm, so its half-extent is 1.5 µm — *smaller*
+than the kernel's 2 µm length scale — and at the default `boundary_factor` the
+error stalls at 0.27 nat however large `basis_size` grows, because what limits
+it is the box and not the basis. The measured sweep, `|Δ log p|` against
+`DenseGP`:
+
+| `boundary_factor` | `m = 32` | `m = 64` | `m = 128` |
+|---|---|---|---|
+| 2.0 (the default) | 2.7e-1 | 2.7e-1 | 2.7e-1 |
+| 3.0 | 3.2e-2 | 3.2e-2 | 3.2e-2 |
+| 6.0 | 2.6e-3 | 4.3e-4 | 8.8e-5 |
+
+Only when the box is wide enough does refining the basis buy anything at all.
+The two parameters are one approximation, and refining one of them alone
+converges to the wrong answer rather than slowly — which is why neither has a
+value ampere picks for you, and why the conformance rows sweep `m` at a box
+chosen for the fixture rather than sweeping it at the default.
+
+The conformance battery holds it to a **convergence** rather than to a number,
+which is the only honest assertion about an approximation: the disagreement
+with `DenseGP` must fall as the basis is refined, inside an envelope anchored
+on the coarsest setting of the same sweep and floored at the box's own
+truncation error, and the finest setting must actually be close. See
+`tests/conformance/README.md` §3's approximation class.
+
+A kernel with no closed-form spectral density is refused **by name, at
+composition**, and the refusal names the node rather than the leaf: a
+`Product`'s factors each have a spectral density and the product does not,
+because its transform is a convolution.
+
+```pycon
+>>> product = Product(Matern32(0.3, 2.0), Matern12(0.2, 0.5))
+>>> GaussianProcessNoise(product, HilbertSpaceGP()).check_compatible(GaussianFamily(), data)
+Traceback (most recent call last):
+    ...
+ampere.core.exceptions.LikelihoodError: HilbertSpaceGP needs a stationary kernel with a closed-form spectral density, but Product (product) has none. ...
+
+```
+
+The latent block this strategy declares is the **basis size**, not the sample
+count; `inference.md` §17.4 carries that ruling and its consequences.
 
 ### The right-hand side may carry several realisations (*Amended W4.2*)
 

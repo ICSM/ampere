@@ -188,6 +188,7 @@ from .astropy import TRANSLATIONS, NativeAstropyModel, from_astropy
 from .gp import (
     SHO,
     DenseGP,
+    HilbertSpaceGP,
     Matern12,
     Matern32,
     Matern52,
@@ -285,6 +286,7 @@ __all__ = [
     "GaussianProcessNoise",
     "GaussianSource",
     "GaussianSourceVisibilities",
+    "HilbertSpaceGP",
     "IndependentNoise",
     "LSFConvolution",
     "LoweredParameters",
