@@ -88,6 +88,7 @@ from .calibration import (
     uniformity_pvalues,
 )
 from .derived import (
+    COMPONENTS,
     CONDITIONAL_LOO_DECOMPOSITION,
     FACTORISED_DECOMPOSITION,
     GP_LOCALISATION_GROUP,
@@ -97,6 +98,8 @@ from .derived import (
     add_pointwise_log_likelihood,
     add_posterior_predictive,
     add_residuals,
+    base_label,
+    component_variable,
     gp_localisation,
     pointwise_as_log_likelihood,
 )
@@ -197,6 +200,7 @@ __all__ = [
     "CALIBRATION_SCHEMA_VERSION",
     "CALIBRATION_STREAM",
     "CHAIN_DIM",
+    "COMPONENTS",
     "CONDITIONAL_LOO_DECOMPOSITION",
     "CONSTANT_DATA_GROUP",
     "CONTAINER_SCHEMA_VERSION",
@@ -245,10 +249,12 @@ __all__ = [
     "append_training_set",
     "artefact_key",
     "attach_calibration",
+    "base_label",
     "buffer_fingerprint",
     "calibration_dataset",
     "canonical_json",
     "chi_square_pvalue",
+    "component_variable",
     "container_fingerprint",
     "container_from_dict",
     "container_to_dict",
