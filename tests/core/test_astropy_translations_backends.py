@@ -292,9 +292,9 @@ class TestTheNativeSurface:
         native = kit.module.from_astropy(
             model, grid=WAVELENGTH * u.micron, kind=Spectrum, output_unit=u.Jy
         )
-        grid = np.asarray(native.grid(native.channel))
+        grid = np.asarray(native.native_grid(native.channel))
         assert grid.shape == WAVELENGTH.shape
-        flux = np.asarray(native.flux(native.channel, values))
+        flux = np.asarray(native.native_flux(native.channel, values))
         expected = native(**values)["default"].values
         assert flux == pytest.approx(expected)
 
@@ -304,7 +304,7 @@ class TestTheNativeSurface:
             model, grid=WAVELENGTH * u.micron, kind=Spectrum, output_unit=u.Jy
         )
         with pytest.raises(Exception, match="other"):
-            native.flux("other", values)
+            native.native_flux("other", values)
 
 
 # ---------------------------------------------------------------------------

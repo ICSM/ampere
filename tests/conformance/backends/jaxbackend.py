@@ -178,9 +178,17 @@ class _CountingModel(_SpectralModel):
             return jnp.asarray(0.0, dtype=jnp.float64)
         return jnp.asarray(offsets, dtype=jnp.float64)[self.channels.index(channel)]
 
-    def flux(self, channel: str, values: Mapping[str, Any] | None = None) -> Any:
+    def native_flux(self, channel: str, values: Mapping[str, Any] | None = None) -> Any:
+        """The canonical spelling (*W5.20*), because the base class uses it.
+
+        This override adds the plate offset to ``_SpectralModel``'s own value
+        surface. Spelling it ``flux`` — as it was until W5.20 — would leave the
+        class carrying *both* names, and the realisation now refuses that as
+        ambiguous rather than picking one: two methods, one surface, and no way
+        to tell which the author meant.
+        """
         context = self.context(values)
-        return self._flux(self.grid(channel), context) + self._offset(context, channel)
+        return self._flux(self.native_grid(channel), context) + self._offset(context, channel)
 
     def evaluate(self, **values: Any) -> ModelResult:
         self.evaluations += 1

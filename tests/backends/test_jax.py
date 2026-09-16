@@ -1886,14 +1886,14 @@ class TestPerInstanceDevice:
     def test_the_model_grids_are_placed_on_the_chosen_device(self) -> None:
         """The flag is not merely a label: ``device_put`` actually ran."""
         model = PowerLaw(np.linspace(1.0, 5.0, 6), device="cpu")
-        assert {d.platform for d in model.grid("default").devices()} == {"cpu"}
+        assert {d.platform for d in model.native_grid("default").devices()} == {"cpu"}
 
     def test_a_negotiated_grid_stays_on_the_chosen_device(self) -> None:
         """``compile_for`` rebuilds the jax grid, so it must place it too."""
         model = PowerLaw(np.linspace(1.0, 5.0, 6), device="cpu")
         instrument = Instrument([Resample(np.linspace(1.5, 4.5, 4))], channel="default")
         compiled = model.compile_for(negotiate([instrument]))
-        assert {d.platform for d in compiled.grid("default").devices()} == {"cpu"}
+        assert {d.platform for d in compiled.native_grid("default").devices()} == {"cpu"}
 
     def test_a_step_places_its_influence_matrix(self) -> None:
         step = Resample(np.linspace(1.5, 4.5, 4), device="cpu")
@@ -1970,11 +1970,10 @@ class _PointSource(Model):
     prediction reaching the family through the realised path, with a gradient
     in both parameters.
 
-    The parameter is ``amplitude`` and not ``flux`` because ``flux`` is the
-    name of this backend's native evaluation surface, and
-    ``Parameterised.register_parameter`` refuses a parameter that would shadow
-    an attribute of its own class — which is the check working, not a
-    limitation.
+    It keeps the **legacy** ``flux``/``grid`` spelling of the native surface
+    on purpose (*W5.20*): ``native_flux``/``native_grid`` is canonical now, and
+    this class is the live proof that a model written before the ruling still
+    composes, realises and differentiates unchanged.
     """
 
     DIFFERENTIABLE = True

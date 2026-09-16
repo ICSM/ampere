@@ -139,9 +139,14 @@ def test_a_hand_written_model_lowers_into_a_differentiable_density(backend: str)
     """W2.10's structural finding, as an assertion rather than as prose.
 
     Neither ``ampere.backends.torch.problem`` nor its jax twin knows this class
-    exists. Both find its native surface by ``hasattr(model, "flux")``, so the
-    problem lowers, the density is finite, and the gradient is finite — which is
-    the whole reason the toy model did not have to ship inside a backend.
+    exists. Both find its native surface by duck typing, so the problem lowers,
+    the density is finite, and the gradient is finite — which is the whole
+    reason the toy model did not have to ship inside a backend.
+
+    These three variants keep the **legacy** ``flux``/``grid`` spelling that
+    *W5.20* replaced with ``native_flux``/``native_grid``, deliberately: this
+    row is then also the end-to-end proof that a model written before the
+    ruling still lowers and differentiates on both backends unchanged.
     """
     pytest.importorskip(backend)
     module = pytest.importorskip(f"ampere.backends.{backend}")

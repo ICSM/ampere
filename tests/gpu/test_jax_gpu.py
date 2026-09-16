@@ -138,7 +138,7 @@ class TestPlacement:
     def test_a_model_grid_lives_on_the_accelerator(self) -> None:
         model = PowerLaw(GRID, device=PLATFORM)
         assert model.DEVICE == PLATFORM
-        assert {d.platform for d in model.grid("default").devices()} == {PLATFORM}
+        assert {d.platform for d in model.native_grid("default").devices()} == {PLATFORM}
 
     def test_a_step_influence_matrix_lives_on_the_accelerator(self) -> None:
         step = CalibrationScale(1.0, device=PLATFORM)

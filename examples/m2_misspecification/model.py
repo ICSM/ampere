@@ -22,10 +22,13 @@ W2.10's scoping left this open — "if the toy model needs to ship in the
 backends instead (because the realised paths only lower shipped models), say so
 and put it there". It does not. Both differentiable backends' lowerings
 (:mod:`ampere.backends.torch.problem`, :mod:`ampere.backends.jax.problem`)
-resolve a model's native surface by **duck typing**: they check
-``hasattr(model, "flux")`` and then walk ``model.grid(channel)`` /
-``model.flux(channel, values)``. A hand-written model that offers those two
-methods therefore lowers into a differentiable log-density exactly as
+resolve a model's native surface by **duck typing**: they walk
+``model.native_grid(channel)`` / ``model.native_flux(channel, values)``, the
+canonical spelling since *W5.20*, or the legacy ``grid``/``flux`` pair these
+three variants deliberately keep — a model written before the ruling still
+lowers unchanged, and this study is where that is exercised end to end. A
+hand-written model that offers either pair lowers into a differentiable
+log-density exactly as
 ``PowerLaw`` does, with no registration and no subclassing of a backend class.
 That is a real property of the architecture — a user's own model gets NUTS —
 and demonstrating it in an example is worth more than shipping a fifth model

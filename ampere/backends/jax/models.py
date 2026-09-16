@@ -9,14 +9,14 @@ implementation. What differs is the arithmetic: every flux here is computed in
 
 Two evaluation surfaces, and why there are two
 ----------------------------------------------
-:meth:`~_SpectralModel.flux` is the **native** surface: coordinates and
+:meth:`~_SpectralModel.native_flux` is the **native** surface: coordinates and
 parameter values in, a ``jax`` array out, nothing else. It is pure, traceable,
 and is what :mod:`ampere.backends.jax.problem` composes into the differentiable
 log-density that NUTS consumes.
 
 :meth:`~_SpectralModel.evaluate` is the **contract** surface
-(``transformations.md``): it wraps ``flux`` in the ``ampere.core`` containers a
-``ModelResult`` is made of. Those containers convert their values with
+(``transformations.md``): it wraps ``native_flux`` in the ``ampere.core``
+containers a ``ModelResult`` is made of. Those containers convert their values with
 ``numpy.asarray`` (``results_schema.md``'s ``_as_array``), so a jax array
 becomes a numpy one at that boundary and **a gradient does not survive it**.
 That is a fact about the frozen container contract rather than a choice made
@@ -213,17 +213,17 @@ class _SpectralModel(Model):
 
     # -- the native surface -------------------------------------------------
 
-    def grid(self, channel: str) -> jax.Array:
+    def native_grid(self, channel: str) -> jax.Array:
         """The jax coordinates *channel* is evaluated on, micron."""
         return self.grids[channel]
 
-    def flux(self, channel: str, values: Mapping[str, Any] | None = None) -> jax.Array:
+    def native_flux(self, channel: str, values: Mapping[str, Any] | None = None) -> jax.Array:
         """This model's flux on *channel*, in Jy, as a jax array.
 
         Pure and traceable: the surface :mod:`ampere.backends.jax.problem`
         composes, and the one a gradient actually passes through.
         """
-        return self._flux(self.grid(channel), self.context(values))
+        return self._flux(self.native_grid(channel), self.context(values))
 
     def _flux(self, grid: jax.Array, context: Mapping[str, Any]) -> jax.Array:
         raise NotImplementedError

@@ -900,6 +900,58 @@ ampere.core.exceptions.ParameterError: ModifiedBlackbody already declares a buff
 
 ```
 
+#### The reserved names — *Amended W5.20*
+
+*Ruled by Peter 2026-09-15; decision-log entry in `DEVELOPMENT_PLAN.md` §2.*
+
+A parameter or buffer may not take a name from a **stated, finite reserved
+set**, and **that set is core's and identical on every backend**. It has three
+sources, spelled once in `ampere.core.parameter.reserved_names()`:
+
+* every public name of `Parameterised` — `parameters`, `buffers`, `context`,
+  `describe`, the `register_*`/`promote_buffer`/`demote_parameter` API;
+* every public name of `Model` — `evaluate`, `evaluate_batch`, `call_batch`,
+  `compile_for`, and the four capability flags;
+* `TORCH_MODULE_NAMES`, the public namespace of `torch.nn.Module` (`to`,
+  `type`, `float`, `apply`, `train`, `state_dict`, …). Torch's lowering nests
+  every parameter as an attribute of an `nn.Module` (`lowering.md` §6.1), so
+  these are the names no backend could carry whatever core thought of them.
+  Core must not import torch, so the list is pinned as a literal and a test in
+  the torch environment holds it to the real class.
+
+The first two are *computed from the classes*, so the set cannot drift from the
+code; the third is checked against torch. **A backend may add public attributes
+to its model classes freely without changing which parameter names are legal.**
+
+That last sentence is the amendment. The rule used to be
+`hasattr(type(self), name)` over the whole MRO, which made the legal parameter
+names a property of *which backend's base class a model inherits*: a torch
+spectral model reserved `grid`, `grid_tensor`, `to` and `AXIS`, a jax one
+reserved a different subset, and an interferometric source model could declare
+a parameter called `flux` on the reference class but not on its twin — the same
+declaration, legal on one backend and refused on another, which is not a thing
+a *core* contract may say. Nothing in ampere reads a parameter as an attribute
+(there is no `__getattr__` on `Parameterised`; values arrive as
+`context[name]`), so the old rule guarded a convention rather than a live
+defect, and the convention is now stated once:
+
+```pycon
+>>> class Native(Parameterised):
+...     AXIS = "spectral_axis"
+...     def flux(self, channel): ...          # a backend's native surface
+>>> _ = Native().register_parameter(Parameter("flux", st.norm(0.0, 1.0)))
+>>> Native().register_parameter(Parameter("to", st.norm(0.0, 1.0)))
+Traceback (most recent call last):
+    ...
+ampere.core.exceptions.ParameterError: 'to' is a reserved name: it belongs to the core parameter namespace (`parameters.md` §10), which is the same set on every backend. Pick another name.
+
+```
+
+The backends' own native value-and-coordinates surface is spelled
+`native_flux`/`native_grid` — canonical since the same ruling, `flux`/`grid`
+kept as a legacy alias — which is now a matter of taste rather than of
+necessity: `inference.md` §10a has the reasoning.
+
 Buffers are excluded from everything prior-related, and parameters from the
 buffer set — the separation this contract exists to make:
 

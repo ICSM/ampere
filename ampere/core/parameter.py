@@ -77,6 +77,7 @@ from .exceptions import (
 
 __all__ = [
     "SEPARATOR",
+    "TORCH_MODULE_NAMES",
     "Bijection",
     "Binding",
     "Buffer",
@@ -98,6 +99,7 @@ __all__ = [
     "describe_prior",
     "log_density",
     "prior_from_spec",
+    "reserved_names",
 ]
 
 #: Separator between a component label and a local parameter name in a merged
@@ -144,6 +146,130 @@ def _check_local_name(name: object, kind: str = "parameter") -> str:
             f"produced by ParameterSet.merge() and Plate expansion, never declared directly."
         )
     return checked
+
+
+#: Public attribute names of ``torch.nn.Module``, pinned here as a literal.
+#:
+#: ``ampere.core`` must never import torch (``architecture.md`` §4 rule 2), so
+#: this list was computed **offline** — ``sorted(n for n in dir(torch.nn.Module)
+#: if not n.startswith("_"))`` under torch 2.13.0 — plus ``training``, which
+#: ``nn.Module.__init__`` sets on the instance rather than the class and which
+#: collides just the same.
+#:
+#: It is part of the reserved set because torch's lowering nests every
+#: parameter as an attribute of an ``nn.Module`` (``lowering.md`` §6.1): a
+#: parameter called ``type`` or ``to`` cannot be carried there whatever the
+#: rest of ampere thinks of the name. Stating it in core is what makes the
+#: answer the same on every backend (*W5.20*) instead of a torch-only surprise
+#: discovered at lowering time.
+#:
+#: ``tests/backends/test_parameter_namespace.py`` asserts, in the torch
+#: environment, that this tuple still covers torch's namespace, so a torch
+#: upgrade that adds a name fails loudly in our suite rather than in a user's
+#: fit.
+TORCH_MODULE_NAMES: tuple[str, ...] = (
+    "T_destination",
+    "add_module",
+    "apply",
+    "bfloat16",
+    "buffers",
+    "call_super_init",
+    "children",
+    "compile",
+    "cpu",
+    "cuda",
+    "double",
+    "dump_patches",
+    "eval",
+    "extra_repr",
+    "float",
+    "forward",
+    "get_buffer",
+    "get_extra_state",
+    "get_parameter",
+    "get_submodule",
+    "half",
+    "ipu",
+    "load_state_dict",
+    "modules",
+    "mtia",
+    "named_buffers",
+    "named_children",
+    "named_modules",
+    "named_parameters",
+    "parameters",
+    "register_backward_hook",
+    "register_buffer",
+    "register_forward_hook",
+    "register_forward_pre_hook",
+    "register_full_backward_hook",
+    "register_full_backward_pre_hook",
+    "register_load_state_dict_post_hook",
+    "register_load_state_dict_pre_hook",
+    "register_module",
+    "register_parameter",
+    "register_state_dict_post_hook",
+    "register_state_dict_pre_hook",
+    "requires_grad_",
+    "set_extra_state",
+    "set_submodule",
+    "share_memory",
+    "state_dict",
+    "to",
+    "to_empty",
+    "train",
+    "training",
+    "type",
+    "xpu",
+    "zero_grad",
+)
+
+_RESERVED_NAMES: frozenset[str] | None = None
+
+
+def reserved_names() -> frozenset[str]:
+    """The names a parameter or a buffer may not take — on **every** backend.
+
+    Three sources, and the set is the union of all three (*W5.20*, amending
+    ``parameters.md`` §10):
+
+    * the public API of :class:`Parameterised` — ``parameters``, ``buffers``,
+      ``context``, ``describe``, the ``register_*`` methods, and so on;
+    * the public API of :class:`~ampere.core.transform.Model`, which every
+      model-like object in the v2 stack inherits — the capability flags and
+      ``evaluate``/``compile_for``/``call_batch``;
+    * :data:`TORCH_MODULE_NAMES`, the names torch's lowering could not carry.
+
+    The first two are *computed* from the classes rather than transcribed, so
+    the set cannot drift away from the code it describes; the third is pinned,
+    because core must not import torch, and is checked against the real
+    ``torch.nn.Module`` by a test in the torch environment.
+
+    What is deliberately **not** here is anything a *subclass* adds. Before
+    W5.20 the check was ``hasattr(type(self), name)`` over the whole MRO, which
+    made the legal parameter names depend on which backend's base class a model
+    happened to inherit: a torch spectral model reserved ``grid``, a jax one did
+    not reserve ``grid_tensor``, and an interferometric source model could not
+    call its total flux density ``flux`` on one backend while it could on
+    another. Nothing in ampere reads a parameter as an attribute — values
+    arrive through :meth:`Parameterised.context`, never ``model.temperature`` —
+    so the rule was guarding a convention, and a *core* contract's convention
+    must not be spelled differently per backend. A backend may now add public
+    attributes to its model classes freely without changing which parameter
+    names are legal.
+    """
+    global _RESERVED_NAMES
+    if _RESERVED_NAMES is None:
+        # Local import: ``transform`` imports this module, so ``Model`` cannot
+        # be named at module scope. By the time anything registers a parameter
+        # the cycle is closed, and the result is cached for the process.
+        from .transform import Model
+
+        names = {name for name in dir(Parameterised) if not name.startswith("_")}
+        names |= {name for name in dir(Model) if not name.startswith("_")}
+        names |= set(TORCH_MODULE_NAMES)
+        _RESERVED_NAMES = frozenset(names)
+    return _RESERVED_NAMES
 
 
 # ---------------------------------------------------------------------------
@@ -2663,9 +2789,11 @@ class Parameterised:
             raise ParameterError(f"{type(self).__name__} already declares a parameter {name!r}")
         if name in self.buffers:
             raise ParameterError(f"{type(self).__name__} already declares a buffer {name!r}")
-        if hasattr(type(self), name):
+        if name in reserved_names():
             raise ParameterError(
-                f"{name!r} shadows an attribute of {type(self).__name__}; pick another name."
+                f"{name!r} is a reserved name: it belongs to the core parameter namespace "
+                f"(`parameters.md` §10), which is the same set on every backend. Pick another "
+                f"name."
             )
 
     def register_parameter(self, parameter: Parameter) -> Parameter:

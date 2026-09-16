@@ -231,11 +231,12 @@ class TorchSpectralModel(Model):
 
     # -- the native surface a realisation composes (W2.13) --------------------
 
-    def grid(self, channel: str) -> torch.Tensor:
+    def native_grid(self, channel: str) -> torch.Tensor:
         """:meth:`grid_tensor` under the name the realisation looks for.
 
         :mod:`ampere.backends.torch.problem` walks a chain through
-        ``model.grid`` / ``model.flux`` / ``step.apply_flux``, and so does
+        ``model.native_grid`` / ``model.native_flux`` / ``step.apply_flux``,
+        and so does
         :mod:`ampere.backends.jax.problem`. The two spellings are the same
         surface deliberately: the two lowered problems are the same walk in
         two libraries, and a reviewer reading them side by side should see
@@ -243,7 +244,7 @@ class TorchSpectralModel(Model):
         """
         return self.grid_tensor(channel)
 
-    def flux(self, channel: str, values: Mapping[str, Any] | None = None) -> torch.Tensor:
+    def native_flux(self, channel: str, values: Mapping[str, Any] | None = None) -> torch.Tensor:
         """This model's flux on *channel*, in Jy, as a differentiable tensor.
 
         The surface a realisation composes, and the one the gradient passes

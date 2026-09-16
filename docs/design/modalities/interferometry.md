@@ -53,11 +53,16 @@ engine, which is what the sketch was a proof *of*:
   wrote that twice would eventually negotiate slightly different pixel scales
   for one declaration, and §4's own warning says why that would not look like an
   error;
-- the native model surface is spelled `native_flux` / `native_grid` rather than
-  `flux` / `grid`. Not a preference: every source model declares a *parameter*
-  called `flux`, and `Parameterised._check_free_name` refuses a parameter whose
-  name shadows a class attribute, so `flux` is unavailable as a method name on
-  exactly these classes. Both backends' `problem.py` accept either spelling;
+- the native model surface is spelled `native_flux` / `native_grid`. W4.3 had
+  no choice: every source model declares a *parameter* called `flux`, and the
+  shadow rule of the day then refused a method of that name on exactly these
+  classes. *W5.20* lifted the rule (`parameters.md` §10's reserved set is
+  core's and no longer grows with a class's own attributes) and made
+  `native_*` **canonical on every backend and every modality** rather than
+  reverting — a surface a realisation composes and a quantity a user fits
+  should not compete for one word. `flux` / `grid` remains a legacy alias both
+  backends' `problem.py` accept; a model offering both pairs is refused as
+  ambiguous;
 - §7's GP over a `VisibilitySet` **runs** now: W4.5's `axes=` selector landed,
   W4.2 implemented the circular complex closed form, and W4.3 samples it under
   NUTS on both backends. The GP on the *closure phases* is still refused by

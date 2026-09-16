@@ -31,10 +31,10 @@ widens it to every family ``ampere.core`` implements for real data**:
 ``complex_gaussian`` and the circular complex GP
 ------------------------------------------------
 W2.4 slice 2 refused this family outright, on the grounds that the realised
-path carried real tensors from the model's ``flux`` to the observed values.
+path carried real tensors from the model's ``native_flux`` to the observed values.
 Slice 3 makes both ends complex — :mod:`ampere.backends.torch.problem` keeps a
 complex observed tensor where the container is complex, and a model whose
-``flux`` returns a complex tensor composes — so the family is a transcription
+``native_flux`` returns a complex tensor composes — so the family is a transcription
 like any other:
 
 ``log p = sum[ -|y - mu|**2 / (2 sigma**2) - log(2 pi) - log(sigma**2) ]``,
