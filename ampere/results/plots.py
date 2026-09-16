@@ -82,6 +82,7 @@ __all__ = [
     "plot_residuals",
     "plot_sbc_ranks",
     "plot_trace",
+    "warn_if_approximate",
 ]
 
 #: How many scalar columns :func:`plot_corner` will draw on one figure before
@@ -257,6 +258,31 @@ def _warn_paged(*, what: str, total: int, limit: int, n_pages: int) -> None:
         ResultsWarning,
         stacklevel=3,
     )
+
+
+def warn_if_approximate(tree: Any, *, what: str) -> None:
+    """Loud, once, when *tree* did not come from an exact sampler.
+
+    ``ampere_approximation`` (``results.md`` §9, W5.0) is the one root
+    attribute a convergence-shaped plot or table must check before it reports
+    an R-hat, an ESS or a trace shape that means nothing: nested sampling's
+    equal-weighted draws and an ensemble sampler's chain are both ``"none"``
+    here, while a VI guide's fitted draws or an SBI density estimator's are
+    not a Markov chain at all, whatever shape they are stored in. Exported
+    (not a leading-underscore helper) because :func:`~ampere.results.
+    diagnostics.summary` needs the identical check and the two modules must
+    not each spell the wording differently.
+    """
+    approximation = getattr(tree, "attrs", {}).get(f"{ATTR_PREFIX}approximation", "none")
+    if approximation != "none":
+        warnings.warn(
+            f"{what} on a run whose ampere_approximation is {approximation!r}, not 'none' "
+            f"(results.md §9, W5.0): its draws are not a Markov chain, so any convergence "
+            f"diagnostic here (R-hat, ESS, a trace's shape) describes the optimiser or the "
+            f"density estimator that produced them, not sampling error against the target.",
+            ResultsWarning,
+            stacklevel=3,
+        )
 
 
 def plot_corner(
@@ -525,6 +551,13 @@ def plot_trace(
 ) -> Any:
     """Per-chain traces and marginals, the convergence eyeball.
 
+    **Warns, once, on a run that is not from an exact sampler** (``results.md``
+    §9, W5.0): ``ampere_approximation`` not ``"none"`` means the "chain" this
+    plot draws is a VI guide's independent draws or an SBI density
+    estimator's, and a trace of those shows an optimiser's or a network's
+    behaviour rather than the mixing this plot exists to catch. See
+    :func:`~ampere.results.plots.warn_if_approximate`.
+
     Reads ``sample_stats`` alongside the posterior, so a run whose draws include
     prior-rejected points shows them: those have ``lp = -inf`` and a **NaN**
     ``log_likelihood``, and rendering NaN as a gap rather than as zero is the
@@ -585,6 +618,7 @@ def plot_trace(
         paged figure's metadata also carries ``"page"``.
     """
     dataset = _p.require_sampling_group(tree, group)
+    warn_if_approximate(tree, what="a trace plot")
     names = _p.select_names(
         [str(name) for name in dataset.data_vars], var_names, what=f"{group} variable"
     )

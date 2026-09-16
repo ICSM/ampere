@@ -67,6 +67,7 @@ from ampere.results import (
     GP_LOCALISATION_GROUP,
     RESIDUALS_GROUP,
     DrawRecorder,
+    ResultsWarning,
     add_residuals,
     chi_square_pvalue,
     figure_metadata,
@@ -77,6 +78,7 @@ from ampere.results import (
     plot_residuals,
     residual_whiteness,
     separation_binned_autocorrelation,
+    summary,
 )
 
 pytest.importorskip("arviz", reason="ampere.results needs arviz")
@@ -742,6 +744,33 @@ class TestPlotAnomalyScore:
         )
         with pytest.raises(ResultsError, match="1-D deficiency map"):
             plot_anomaly_score(score)
+
+
+class TestSummary:
+    """W5.0: ``ampere.results.summary`` wraps ``arviz.summary`` with one guard."""
+
+    def test_it_returns_arvizs_own_table(self) -> None:
+        import arviz
+
+        tree = near_truth(white_problem())
+        assert summary(tree).equals(arviz.summary(tree))
+
+    def test_it_forwards_keyword_arguments(self) -> None:
+        tree = near_truth(white_problem())
+        table = summary(tree, var_names=["model.norm"])
+        assert list(table.index) == ["model.norm"]
+
+    def test_it_warns_once_on_an_approximate_run(self) -> None:
+        tree = near_truth(white_problem())
+        tree.attrs["ampere_approximation"] = "density_estimator"
+        with pytest.warns(ResultsWarning, match="density_estimator"):
+            summary(tree)
+
+    def test_it_says_nothing_for_an_exact_runs_default(self) -> None:
+        tree = near_truth(white_problem())
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", ResultsWarning)
+            summary(tree)
 
 
 class TestImportPolicy:

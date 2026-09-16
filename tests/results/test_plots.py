@@ -19,6 +19,7 @@ binary artefact belongs in this repository (``AGENTS.md`` ground rule 7).
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -396,6 +397,18 @@ class TestTrace:
     def test_it_refuses_a_tree_that_is_not_a_run(self) -> None:
         with pytest.raises(ResultsError, match="not an emitted run"):
             plot_trace(None)
+
+    def test_it_warns_once_on_an_approximate_run(self) -> None:
+        """W5.0: ``ampere_approximation`` not ``"none"`` is one loud warning."""
+        tree = run(toy())
+        tree.attrs["ampere_approximation"] = "mean_field"
+        with pytest.warns(ResultsWarning, match="mean_field"):
+            plot_trace(tree)
+
+    def test_it_says_nothing_for_an_exact_runs_default(self) -> None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", ResultsWarning)
+            plot_trace(run(toy()))
 
 
 class TestTracePaging:
