@@ -123,7 +123,7 @@ from ._plotting import (
     run_seed,
     select_datasets,
 )
-from .derived import GP_LOCALISATION_GROUP, RESIDUALS_GROUP
+from .derived import GP_LOCALISATION_GROUP, RESIDUALS_GROUP, base_label, component_variable
 from .emission import LOG_LIKELIHOOD_GROUP, _require_arviz
 
 __all__ = [
@@ -416,6 +416,8 @@ def residual_whiteness(
     max_draws: int = DEFAULT_MAX_DRAWS,
     max_pairs: int = DEFAULT_MAX_PAIRS,
     seed: int | None = None,
+    coordinate: Any = None,
+    component: str | None = None,
 ) -> WhitenessTest:
     """Test one dataset's signed residuals for leftover structure.
 
@@ -448,6 +450,14 @@ def residual_whiteness(
         Overrides the run's own recorded seed. With neither, the permutations
         are entropy-seeded and the p-value will move between calls — the
         honest behaviour for a run that did not ask to be reproducible.
+    coordinate
+        **W5.3.** For a point kind with several axes, an axis name or a
+        callable resolving the plotted coordinate — see
+        :func:`ampere.results._plotting.coordinate_of`.
+    component
+        **W5.3.** Must match whatever
+        :func:`~ampere.results.derived.add_residuals` was called with for a
+        complex dataset.
 
     Raises
     ------
@@ -463,10 +473,11 @@ def residual_whiteness(
         "signed standardised residuals from the stored draws and the problem "
         "(results.md §7).",
     )
-    available = [str(name) for name in group.data_vars]
+    available = [base_label(str(name), component) for name in group.data_vars]
     label = _one_dataset(available, dataset, RESIDUALS_GROUP)
-    axis, coordinates = coordinate_of(group, label)
-    values = np.asarray(group[label].values, dtype=float)
+    variable = component_variable(label, component)
+    axis, coordinates = coordinate_of(group, variable, coordinate=coordinate)
+    values = np.asarray(group[variable].values, dtype=float)
     flat = values.reshape(-1, values.shape[-1])
     scored = flat[np.any(np.isfinite(flat), axis=1)]
     if scored.size == 0:
@@ -815,6 +826,8 @@ def gp_localisation_score(
     *,
     dataset: str | None = None,
     standardise: bool = True,
+    coordinate: Any = None,
+    component: str | None = None,
 ) -> AnomalyScore:
     """The conditioned GP mean, as the shared :class:`~ampere.core.AnomalyScore`.
 
@@ -856,6 +869,14 @@ def gp_localisation_score(
         Divide by the total posterior standard deviation. ``False`` leaves the
         score in the data's own units, which is comparable across coordinates
         but not across datasets.
+    coordinate
+        **W5.3.** For a point kind with several axes, an axis name or a
+        callable resolving the plotted coordinate — see
+        :func:`ampere.results._plotting.coordinate_of`.
+    component
+        **W5.3.** Must match whatever
+        :func:`~ampere.results.derived.gp_localisation` was called with for a
+        complex-valued dataset's conditioned mean.
     """
     from .plots import GP_LOCALISATION_CAVEAT
 
@@ -865,11 +886,14 @@ def gp_localisation_score(
         remedy="call ampere.results.gp_localisation(tree, problem) first, which evaluates "
         "Likelihood.conditional across the stored draws (results.md §7).",
     )
-    available = sorted({str(name).rsplit("_", 1)[0] for name in group.data_vars})
+    available = sorted(
+        {base_label(str(name).rsplit("_", 1)[0], component) for name in group.data_vars}
+    )
     label = _one_dataset(available, dataset, GP_LOCALISATION_GROUP)
-    _, coordinates = coordinate_of(group, f"{label}_mean")
-    means = np.asarray(group[f"{label}_mean"].values, dtype=float)
-    variances = np.asarray(group[f"{label}_variance"].values, dtype=float)
+    stored = component_variable(label, component)
+    _, coordinates = coordinate_of(group, f"{stored}_mean", coordinate=coordinate)
+    means = np.asarray(group[f"{stored}_mean"].values, dtype=float)
+    variances = np.asarray(group[f"{stored}_variance"].values, dtype=float)
     flat_mean = means.reshape(-1, means.shape[-1])
     flat_variance = variances.reshape(-1, variances.shape[-1])
     keep = np.any(np.isfinite(flat_mean), axis=1)
