@@ -162,7 +162,7 @@ from ampere.core.hsgp import (
     normalise_counts,
     spectral_values,
 )
-from ampere.core.kernels import lookup_quasiseparable_term
+from ampere.core.kernels import lookup_quasiseparable_term, refuse_warped_composite
 
 from ._config import BACKEND, require_x64, x64_enabled
 from ._device import DEVICE, device_flag, place_on, resolve_device
@@ -873,9 +873,7 @@ def _ampere_term_type() -> Any:
     class _AmpereTerm(terms.Term):
         """An ampere :class:`~ampere.core.Kernel` presented as a celerite2 term."""
 
-        def __init__(
-            self, kernel: Kernel, values: Mapping[str, Any], axis: Any = None
-        ) -> None:
+        def __init__(self, kernel: Kernel, values: Mapping[str, Any], axis: Any = None) -> None:
             # Deliberately *not* coerced with float() anywhere below these
             # lines: the hyperparameters are what a gradient flows through, and
             # on the traced path they are tracers.
@@ -1047,6 +1045,8 @@ class QuasisepGP(GPSolver):
 
     def check_compatible(self, kernel: Kernel, observed: Any) -> None:
         super().check_compatible(kernel, observed)
+        # W5.7: a warp under a composite has no single recursion coordinate.
+        refuse_warped_composite(kernel, self.NAME)
         # Every family in the tree, not just the root: a Sum lowers term by
         # term, so one unregistered term stops it and must be named here.
         for leaf in kernel.leaves():

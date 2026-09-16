@@ -99,7 +99,7 @@ from ampere.core.hsgp import (
     normalise_counts,
     spectral_values,
 )
-from ampere.core.kernels import lookup_quasiseparable_term
+from ampere.core.kernels import lookup_quasiseparable_term, refuse_warped_composite
 
 from . import _celerite
 from ._config import (
@@ -1087,6 +1087,8 @@ class QuasisepGP(GPSolver):
 
     def check_compatible(self, kernel: Kernel, observed: Any) -> None:
         super().check_compatible(kernel, observed)
+        # W5.7: a warp under a composite has no single recursion coordinate.
+        refuse_warped_composite(kernel, self.NAME)
         # Every family in the tree, not just the root: a Sum lowers term by
         # term, so one unregistered term stops it and must be named here.
         for leaf in kernel.leaves():

@@ -1228,9 +1228,7 @@ def _oracle_input_warp(coordinates: np.ndarray) -> np.ndarray:
     slopes = np.log1p(np.exp(np.asarray(WARP_INCREMENTS, dtype=float))) / _SOFTPLUS_AT_ZERO
     warped = knots[0] + slopes[0] * (axis - knots[0])
     for index in range(1, slopes.size):
-        warped = warped + (slopes[index] - slopes[index - 1]) * np.maximum(
-            axis - knots[index], 0.0
-        )
+        warped = warped + (slopes[index] - slopes[index - 1]) * np.maximum(axis - knots[index], 0.0)
     return warped
 
 
@@ -1268,9 +1266,7 @@ class TestTheWarpedKernel:
         warped = warped_kernel(base, amplitude_warp=False)
         got = backend.to_numpy(warped.matrix(grid[:, None], grid[:, None], warped.resolve(None)))
         moved = _oracle_input_warp(grid)
-        expected = backend.to_numpy(
-            base.matrix(moved[:, None], moved[:, None], base.resolve(None))
-        )
+        expected = backend.to_numpy(base.matrix(moved[:, None], moved[:, None], base.resolve(None)))
         assert got == pytest.approx(expected, abs=tolerances.analytic)
 
     def test_the_amplitude_warp_is_a_diagonal_congruence(
@@ -1389,7 +1385,7 @@ class TestTheWarpedKernel:
         """Counted, not claimed: the representation stays rank-J as N grows.
 
         The whole O(N) story is that the solve factorises
-        ``K[n,m] = Σⱼ U[n,j] V[m,j] e^{−cⱼ(tₙ−tₘ)}`` with ``J`` fixed, so every
+        ``K[n,m] = Σⱼ U[n,j] V[m,j] exp(-cⱼ (tₙ - tₘ))`` with ``J`` fixed, so every
         array it builds is ``(n,)`` or ``(n, J)`` and the element count grows
         *linearly*. This row counts those elements at three sizes: a dense
         solver's largest array quadruples when ``n`` doubles, and this one

@@ -848,6 +848,18 @@ and `QuasisepGP`'s ordering precondition cannot be violated — there is no
 constraint to reject against and no rejection region in the posterior. Beyond
 the end knots the warp continues with the end segments' slopes.
 
+One honest caveat, the same kind as §7's midpoint re-referencing. Below about
+`u = −37` a segment's slope drops under machine epsilon, and the offset form
+that makes the identity exact then loses it to rounding: that segment becomes
+flat to within a ULP rather than merely very flat, so the warp is
+non-decreasing rather than strictly increasing. It is a property of float64 and
+not a defect — a slope of `1e-17` compresses the segment into less than one ULP
+of the coordinate, so the covariance it describes *is* the constant block a
+flat segment gives — and the shrinkage prior keeps a sampler orders of
+magnitude away from it. The other end has no such point: the softplus is
+evaluated in the overflow-safe form, so `u = 700` gives a slope of `1010`
+rather than `inf`.
+
 **The identity warp is the base kernel, bit for bit.** Dividing by `ζ(0)` puts
 the identity at `uₖ = 0`, and the map is written as an *offset*, `x ↦ x + δ(x)`,
 so at that point every gradient of `δ` is exactly `0.0`, `δ(x)` is exactly
@@ -886,6 +898,17 @@ amplitude redundancy is: a warp whose slopes are all equal is a rescaling of the
 coordinate, degenerate with the base `length_scale`; a constant `log a` is
 degenerate with the base `amplitude`. The shrinkage prior is proper, so both are
 identified by it.
+
+**Where a warp may sit.** A warp of a warp is a warp — two monotone maps
+compose into one, and `warped_coordinate` composes through the base — so
+`WarpedKernel(WarpedKernel(k, …), …)` reaches the O(N) path like any other. A
+warp *under a composite* does not, and is refused by name: two terms warped
+differently have two coordinates, and the recursion's propagators come from
+one axis, so the sum of their generators would be a matrix that is neither
+term's covariance and not obviously wrong either. The representable
+composition is the other way round — `WarpedKernel(Sum(...), input_warp=...)`,
+one warp of the coordinate with several kernels on it — and `DenseGP`, which
+evaluates each term on its own coordinate, takes either.
 
 A `WarpedKernel` warps **one** ordered coordinate — that is what keeps the
 ordering precondition and what makes "the coordinate the residuals are

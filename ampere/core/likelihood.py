@@ -97,6 +97,7 @@ from .kernels import (
     quantile_knots,
     quasiseparable_families,
     register_quasiseparable_term,
+    refuse_warped_composite,
     registered_quasiseparable_terms,
     term_provenance_entries,
 )
@@ -1168,6 +1169,7 @@ class QuasisepGP(GPSolver):
 
     def check_compatible(self, kernel: Kernel, observed: FunctionSamples) -> None:
         super().check_compatible(kernel, observed)
+        refuse_warped_composite(kernel, self.NAME)
         # Every family in the tree needs a registered representation, not just
         # the root: a Sum lowers term by term (``sum_representation``), so one
         # unregistered term is enough to stop it, and it must be named here

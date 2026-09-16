@@ -56,6 +56,7 @@ from __future__ import annotations
 import abc
 import copy
 import dataclasses
+import itertools
 import math
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any, ClassVar, Protocol
@@ -88,12 +89,14 @@ __all__ = [
     "Sum",
     "TermBuilder",
     "WarpedKernel",
+    "find_warped_composite",
     "lookup_quasiseparable_term",
     "matern12_representation",
     "matern32_representation",
     "matern52_representation",
     "quantile_knots",
     "quasiseparable_families",
+    "refuse_warped_composite",
     "register_quasiseparable_term",
     "registered_quasiseparable_terms",
     "rotation_representation",
@@ -504,6 +507,11 @@ class Kernel(Parameterised, abc.ABC):
     #: Which rung of the capability ladder supplies it (W2.12's fourth flag).
     BACKEND: ClassVar[str] = "reference"
 
+    #: Whether :meth:`warped_coordinate` is anything but the identity (W5.7).
+    #: A kernel that warps declares it, so a solver and a composite can *ask*
+    #: rather than compare coordinate arrays at solve time.
+    WARPS: ClassVar[bool] = False
+
     #: Class-level defaults so a subclass that never calls :meth:`_declare_axes`
     #: (every kernel written before W4.5) behaves exactly as it did.
     _axes: tuple[str, ...] | None = None
@@ -574,6 +582,11 @@ class Kernel(Parameterised, abc.ABC):
     def _selective(self) -> bool:
         """Whether anything in this tree names axes, and so needs binding."""
         return self._axes is not None or any(child._selective for _, child in self.terms)
+
+    @property
+    def warps(self) -> bool:
+        """Whether anything in this tree warps the coordinate (W5.7)."""
+        return self.WARPS or any(child.warps for _, child in self.terms)
 
     def for_axes(self, axis_names: Sequence[str]) -> Kernel:
         """This kernel bound to a container's axis order.
@@ -1609,6 +1622,29 @@ class _Composite(Kernel):
         resolved = self.resolve(values)
         return [self._child_values(label, resolved) for label, _ in self._terms]
 
+    def warped_coordinate(self, axis: Any, values: Mapping[str, Any]) -> Any:
+        """The identity, or a refusal when a term warps (W5.7).
+
+        A quasiseparable recursion runs on **one** coordinate, and a composite
+        whose terms warp differently has none: each term's generators would be
+        built at its own ``w_i(x)`` while the propagators came from a single
+        axis, giving a matrix that is not the composite's covariance and not
+        obviously wrong either. The direct-call guard, in the shape of
+        :meth:`Sum.select`'s; ``QuasisepGP.check_compatible`` refuses the same
+        declaration at composition, which is where a user should meet it.
+        """
+        if not self.warps:
+            return axis
+        raise LikelihoodError(
+            f"a {type(self).__name__} with a WarpedKernel among its terms has no single "
+            f"coordinate for a quasiseparable recursion to run on: each warped term's "
+            f"generators are built at its own w(x), while the recursion's propagators come "
+            f"from one axis. Warp the composite instead of its terms — "
+            f"WarpedKernel({type(self).__name__}(...), input_warp=...) is one warp of the "
+            f"coordinate with several kernels on it, which is what the O(N) path can "
+            f"represent — or use DenseGP, which evaluates each term on its own coordinate."
+        )
+
     def value(self, separation: Any, values: Mapping[str, Any]) -> Any:
         """``k(τ)`` of the composite, from its children's — same-axis terms only.
 
@@ -1946,7 +1982,7 @@ def _warp_knots(given: Any, what: str) -> tuple[float, ...]:
         )
     if not all(math.isfinite(knot) for knot in knots):
         raise LikelihoodError(f"WarpedKernel's {what}= knot locations must all be finite.")
-    for lower, upper in zip(knots, knots[1:], strict=False):
+    for lower, upper in itertools.pairwise(knots):
         if upper <= lower:
             raise LikelihoodError(
                 f"WarpedKernel's {what}= knot locations {knots} are not strictly increasing "
@@ -2169,6 +2205,8 @@ class WarpedKernel(Kernel):
     #: preserves an exact semiseparable representation, so a warped kernel is
     #: quasiseparable exactly when the kernel it warps is.
     QUASISEPARABLE: ClassVar[bool] = True
+    #: This is the family that warps, so a composite and a solver can ask.
+    WARPS: ClassVar[bool] = True
     #: The label the base kernel's hyperparameters are qualified with.
     LABEL: ClassVar[str] = "base"
 
@@ -2408,8 +2446,17 @@ class WarpedKernel(Kernel):
         return ops.exp(levels[0] + self._piecewise(axis, knots, gradients))
 
     def warped_coordinate(self, axis: Any, values: Mapping[str, Any]) -> Any:
-        """``w(x)``: the coordinate this kernel is stationary in (:meth:`Kernel.warped_coordinate`)."""
-        return self._warp_input(self.ops.scalar(axis), self.resolve(values))
+        """``w(x)``: the coordinate this kernel is stationary in.
+
+        Composed through the base, so a warp of a warp is a warp: the
+        recursion must run where the *innermost* kernel's generators were
+        built, which for ``WarpedKernel(WarpedKernel(k, w_i), w_o)`` is
+        ``w_i(w_o(x))``. Every base but another warping kernel contributes the
+        identity here, so the ordinary case is one map.
+        """
+        resolved = self.resolve(values)
+        moved = self._warp_input(self.ops.scalar(axis), resolved)
+        return self.base.warped_coordinate(moved, self._child_values(self.LABEL, resolved))
 
     def warp_provenance(self, values: Mapping[str, Any]) -> dict[str, Any] | None:
         """The warp as a JSON-plain record: knots in, knots out, amplitudes there.
@@ -2489,6 +2536,56 @@ class WarpedKernel(Kernel):
         if self._axes is not None:
             warps.append(f"axes={self._axes!r}")
         return f"WarpedKernel({self.base!r}, {', '.join(warps)})"
+
+
+def find_warped_composite(kernel: Kernel, path: tuple[str, ...] = ()) -> tuple[str, ...] | None:
+    """The label path to a warp that sits **under a composite**, or ``None``.
+
+    ``_find_nested_product``'s shape, and for the same kind of reason: a
+    quasiseparable solve needs one coordinate for its propagators, and a
+    :class:`Sum` or :class:`Product` whose terms warp differently has none. The
+    supported composition is the other way round —
+    ``WarpedKernel(Sum(...), input_warp=...)``, one warp of the coordinate with
+    several kernels on it — and a warp of a warp is fine too, because those
+    compose into a single monotone map.
+
+    Returned as a *path* so the refusal can name the offending term rather than
+    the enclosing kernel, which is what W5.2 established for products.
+    """
+    composite = isinstance(kernel, _Composite)
+    for label, child in kernel.terms:
+        # Depth first, so the *deepest* offending term is the one named: in
+        # ``Sum(k, Sum(k, WarpedKernel(...)))`` the useful answer is
+        # ``term1.term1``, not the enclosing sum that merely contains it.
+        found = find_warped_composite(child, (*path, label))
+        if found is not None:
+            return found
+        if composite and child.warps:
+            return (*path, label)
+    return None
+
+
+def refuse_warped_composite(kernel: Kernel, owner: str) -> None:
+    """Refuse a warp that sits under a composite, naming the term (W5.7).
+
+    Called by every backend's quasiseparable solver from ``check_compatible``,
+    so the refusal is one sentence rather than three. ``DenseGP`` evaluates each
+    term on its own coordinate and is unaffected, which is what the message
+    offers as the way out.
+    """
+    found = find_warped_composite(kernel)
+    if found is None:
+        return
+    location = ".".join(found)
+    raise LikelihoodError(
+        f"{owner} cannot lower this {type(kernel).__name__}: its term {location!r} is a "
+        f"WarpedKernel, and a composite whose terms warp has no single coordinate for the "
+        f"recursion to run on — each warped term's generators are built at its own w(x) while "
+        f"the propagators come from one axis. Warp the composite instead of its terms, as in "
+        f"WarpedKernel(Sum(...), input_warp=...), which is one warp of the coordinate with "
+        f"several kernels on it; or use DenseGP, which evaluates each term on its own "
+        f"coordinate."
+    )
 
 
 def _as_floats(array: Any) -> list[float]:
@@ -2828,7 +2925,11 @@ def warped_representation(
     base = kernel.terms[0][1]
     builder = lookup_quasiseparable_term(base.FAMILY, owner=type(kernel).__name__)
     label = kernel.terms[0][0]
-    warped = kernel.warped_coordinate(ops.scalar(axis), resolved)
+    # **This level's** warp only, not the composed one: the base's builder
+    # applies the base's own warp when the base is itself a warping kernel, so
+    # handing it the composed coordinate would warp twice. The composition is
+    # ``warped_coordinate``'s job, because that is what the *solver* needs.
+    warped = kernel._warp_input(ops.scalar(axis), resolved)  # type: ignore[attr-defined]
     block = builder(base, kernel._child_values(label, resolved), warped)
     scale = kernel._warp_amplitude(ops.scalar(axis), resolved)  # type: ignore[attr-defined]
     if scale is None:
