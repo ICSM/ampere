@@ -1399,6 +1399,66 @@ Each is a decision, not an oversight. Each has an extension point.
     the method has one, convergence diagnostics) are the optimiser item's to
     define against this ruling, not this one's to guess at ahead of a real
     method.
+16. **Design horizon (b), population inference by reweighting archived
+    fits, is built.** *(Added W5.13.)* §14's Phase 5 bullet below promised
+    this was "buildable entirely on stored runs"; `ampere.results.population`
+    is that build. `RunColumns` is a `typing.Protocol` — the named
+    parameter's flattened draws, `log_prior`, `log_likelihood`,
+    `proposal_log_density` (or `None`), and the run's `attrs` — so the
+    "buildable entirely on stored files" claim does not silently narrow to
+    "on an `xarray.DataTree`": `DataTreeRunColumns` reads a run already in
+    memory and `NetCDFRunColumns`/`runs_from_netcdf_directory` read a
+    directory of archived `.nc` files, and a third, bespoke columnar store
+    that builds neither can satisfy the protocol and be reweighted
+    unchanged (tested with a plain dataclass). `fit_population` turns a
+    collection of runs sharing `ampere_spec_hash` (refused by name
+    otherwise) into a population-hyperparameter posterior by
+    self-normalised importance reweighting under a declared
+    `PopulationModel` (Hogg, Myers & Bovy 2010): an exact sampler's stored
+    draws are already posterior draws under its *joint* interim prior (over
+    every free parameter the object's model declares) and carry uniform
+    weight, an approximate engine's draws are reweighted through
+    `exp(log_prior + log_likelihood − proposal_log_density)` (the run's
+    joint `log_prior` — correct here, because this step turns proposal
+    draws into posterior draws over the whole free vector) — W5.0's
+    contract is exactly what makes this half legal — and a run whose
+    `ampere_approximation` is not `"none"` and carries no
+    `proposal_log_density` is refused by name rather than treated as if it
+    were exact. **The reweighting ratio itself needs a second, different
+    prior**: the named parameter's own *marginal* interim prior
+    `π₀(θ)`, not the run's joint column — every other declared parameter's
+    interim prior cancels exactly against the population model's own
+    (unchanged) prior on it, leaving `π₀(θ)` alone in the denominator, and
+    dividing by the joint instead leaves an uncancelled, per-draw factor
+    that biases the population posterior whenever an object has more than
+    one free parameter (invisible on a single-parameter toy, where the two
+    priors coincide — found at review, W5.13, after the item's own
+    single-parameter tests had already gone green). Because a run's
+    provenance records only each parameter's name and a hash of its
+    declaration rather than the declaration itself (§9), `π₀(θ)` cannot be
+    read back off a run: `fit_population` takes it as an explicit, required
+    `interim_prior` argument (a `Prior` or a `PriorSpec`) instead. The
+    per-object effective sample size at the fitted
+    posterior mean is reported and a collapse below a stated floor
+    (`DEFAULT_ESS_FLOOR = 20`, an argument) is a refusal by name naming
+    the worst object, rather than a population posterior one
+    under-sampled object secretly controls. `GaussianPopulationModel` is
+    the one `PopulationModel` shipped; the hyperprior is read generically
+    off its `hyperparameters`' own declared `Parameter.prior`, needing no
+    bespoke method. **Not a `PROVENANCE_SCHEMA_VERSION` change**: a
+    population fit's output is a new derived `DataTree` (root attrs
+    `ampere_population_runs`/`ampere_population_model`/
+    `ampere_population_ess`/`ampere_population_parameter`), not a change
+    to what a single-object run stores, so no existing run's schema moves.
+    **What this item deliberately leaves out**, matching the module's own
+    "what is not here": no per-object nuisance re-sampling (only the one
+    named parameter is read back), no multi-level populations
+    (`parameters.md` §12.2's nested plates remain deferred), no selection
+    function (a population inferred this way is only ever a population of
+    the objects that were fit), and no joint fit across objects sharing
+    the population prior as a single sampler — that is design horizon
+    (b)'s sibling route, **W5.12**, cross-checked against this one where
+    both exist and never merged into one code path.
 
 ## 14. What this contract hands to the specs downstream
 
