@@ -183,9 +183,10 @@ class TestRoundTrip:
         assert len(stored.spec_hash) == 32
         assert len(stored.attrs[f"{ATTR_PREFIX}problem_hash"]) == 32
         assert len(stored.attrs[f"{ATTR_PREFIX}data_hash"]) == 32
-        # W3.12: ampere_model_hash joins the recipe at schema 6.
+        # W3.12: ampere_model_hash joined the recipe at schema 6; schema 7
+        # (W5.0) adds no root attribute this function's own recipe touches.
         assert len(stored.attrs[f"{ATTR_PREFIX}model_hash"]) == 32
-        assert stored.attrs[f"{ATTR_PREFIX}schema_version"] == PROVENANCE_SCHEMA_VERSION == 6
+        assert stored.attrs[f"{ATTR_PREFIX}schema_version"] == PROVENANCE_SCHEMA_VERSION == 7
         assert stored.attrs[f"{ATTR_PREFIX}seed"] == 20260908
         assert stored.attrs[f"{ATTR_PREFIX}training_set_version"] == TRAINING_SET_SCHEMA_VERSION
 

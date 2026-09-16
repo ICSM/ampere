@@ -63,7 +63,8 @@ from ampere.core import (
     Likelihood,
     Spectrum,
 )
-from ampere.inference import VIEngine
+from ampere.inference import EmceeEngine, VIEngine
+from ampere.inference.engine import unconstrained_jacobian_correction
 from ampere.inference.exceptions import EngineError
 
 SEED = 20260907
@@ -260,6 +261,11 @@ class TestWhatTheGuideFamilyAssumes:
         assert abs(correlation(mean_field)) < 0.15
         assert abs(correlation(full)) > 0.5
 
+    def test_the_full_covariance_guide_names_its_own_approximation_family(self, kit: Kit) -> None:
+        """W5.0: ``"multivariate"``, not the mean-field default — cheap budget, attrs only."""
+        full = fit(correlated_problem(kit), draws=10, steps=10, guide="multivariate")
+        assert full.attrs["ampere_approximation"] == "multivariate"
+
 
 # ---------------------------------------------------------------------------
 # 3. Every run emits the run
@@ -279,6 +285,17 @@ class TestTheRunItEmits:
         assert conjugate_run.attrs["ampere_vi_guide_class"] == "AutoNormal"
         assert conjugate_run.attrs["ampere_vi_steps"] == 3000
         assert conjugate_run.attrs["ampere_vi_library"] in {"pyro", "numpyro"}
+
+    def test_the_attrs_name_the_approximation_family(self, conjugate_run: Any) -> None:
+        """W5.0: ``ampere_approximation`` is the guide family, not ``"none"``."""
+        assert conjugate_run.attrs["ampere_approximation"] == "mean_field"
+
+    def test_the_proposal_log_density_is_beside_the_true_split(self, conjugate_run: Any) -> None:
+        """W5.0: one per draw, finite, in ``sample_stats`` beside ``lp``."""
+        stats = conjugate_run["sample_stats"].dataset
+        proposal = np.asarray(stats["proposal_log_density"])
+        assert proposal.shape == np.asarray(stats["lp"]).shape
+        assert np.all(np.isfinite(proposal))
 
     def test_the_draws_came_through_the_realisation(self, conjugate_run: Any) -> None:
         assert conjugate_run.attrs["ampere_realised"] == 1
@@ -382,3 +399,141 @@ class TestRefusals:
 
         assert kit.name in supported_backends()
         assert "reference" not in supported_backends()
+
+
+# ---------------------------------------------------------------------------
+# 5. The proposal density is really the guide's (review-caught regression)
+# ---------------------------------------------------------------------------
+
+
+def _unconstrained_draws(problem: FittingProblem, run: Any) -> np.ndarray:
+    """A run's stored (constrained) draws, mapped back to unconstrained space.
+
+    Nothing about a stored run keeps the unconstrained vector VI actually
+    fitted in — only ``unconstrain``'s own inverse of ``constrain`` recovers
+    it, exact up to floating point since the two are one bijection's forward
+    and inverse maps.
+    """
+    posterior = run["posterior"].dataset
+    names = list(problem.parameters.free_names)
+    constrained = np.stack([np.asarray(posterior[name]).ravel() for name in names], axis=1)
+    return np.stack(
+        [
+            problem.unconstrain(problem.parameters.pack(dict(zip(names, row, strict=True))))
+            for row in constrained
+        ]
+    )
+
+
+class TestTheProposalDensityIsReallyTheGuides:
+    """A review of this item caught a real bug here, twice, before this landed.
+
+    Both autoguide classes route a fitted draw through an **auxiliary**
+    sample site under the real ``Normal``/``MultivariateNormal`` the guide
+    optimised, and only then report ``_SITE`` itself — as a ``Delta`` at the
+    identity-transformed value, whose ``log_prob`` is the change-of-variables
+    term between the two sites (zero here, since the transform is the
+    identity), **not** the guide's density. Reading ``trace.nodes[_SITE]
+    ["fn"].log_prob(...)`` alone therefore stored a constant zero for every
+    draw on both the pyro and the numpyro route — the importance-reweighting
+    test below happened to still pass, for the wrong reason, because
+    ``proposal_log_density`` differed from the truth by exactly the same
+    (then-missing) constant on every draw and a self-normalised weight is
+    invariant to an additive constant in the log. ``np.ptp(proposal) > 0`` is
+    the one-line guard that would have caught it outright — a genuine
+    per-draw density is never constant across 500 independent draws from a
+    continuous guide — and the direct comparison against an independently
+    built ``scipy`` density is the check that the *value*, not merely its
+    variation, is right.
+    """
+
+    DRAWS = 500
+    STEPS = 200
+
+    def _check(self, kit: Kit, guide: str) -> None:
+        problem = correlated_problem(kit)
+        engine = VIEngine(problem)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            run = engine.run(draws=self.DRAWS, steps=self.STEPS, guide=guide)
+        stats = run["sample_stats"].dataset
+        proposal = np.asarray(stats["proposal_log_density"]).ravel()
+
+        # The cheap, always-on guard: a genuine per-draw density is not a
+        # constant, which is exactly what the Delta bug produced.
+        assert np.ptp(proposal) > 0.0
+
+        unconstrained = _unconstrained_draws(problem, run)
+        jacobian = unconstrained_jacobian_correction(problem, unconstrained)
+        if guide == "multivariate":
+            covariance = engine.guide_scale_tril @ engine.guide_scale_tril.T
+            independent = st.multivariate_normal(engine.guide_loc, covariance).logpdf(unconstrained)
+        else:
+            independent = (
+                st.norm(engine.guide_loc, engine.guide_scale).logpdf(unconstrained).sum(axis=1)
+            )
+        assert (proposal + jacobian) == pytest.approx(independent, abs=1e-6)
+
+    def test_the_mean_field_guides_stored_density_agrees_with_scipy(self, kit: Kit) -> None:
+        self._check(kit, "normal")
+
+    def test_the_full_covariance_guides_stored_density_agrees_with_scipy(self, kit: Kit) -> None:
+        self._check(kit, "multivariate")
+
+
+# ---------------------------------------------------------------------------
+# 6. W5.0's accept criterion: reweighting from stored groups alone
+# ---------------------------------------------------------------------------
+
+
+class TestImportanceCorrectedPosteriorAgreesWithEmcee:
+    """The contract's own check: not merely that the column exists, but that
+
+    ``exp(log_prior + log_likelihood - proposal_log_density)``, built from
+    nothing but ``run["sample_stats"]`` and ``run["posterior"]``, is a valid
+    importance weight that a genuinely biased VI fit can be corrected with.
+
+    The guide is deliberately **under-trained** (a handful of SVI steps) on
+    the *conjugate* problem, whose posterior is otherwise the one case a
+    mean-field guide fits essentially exactly (``TestAgreementWithTheClosedForm``
+    above) — so few steps in, its mean is measurably off, which is exactly
+    the room a real importance correction needs to demonstrate it does
+    something rather than passing because the raw fit was already right.
+    Widths are deliberately **not** checked here: self-normalised importance
+    sampling from an under-dispersed proposal is well known to underestimate
+    a target's second moment (finite draws in the tails), so a width
+    assertion would be testing a sampling-theory limitation, not this
+    formula's correctness — the mean is where the correction's arithmetic is
+    checkable against an independent reference.
+    """
+
+    def test_the_reweighted_mean_matches_an_emcee_reference(self, kit: Kit) -> None:
+        vi_run = fit(conjugate_problem(kit), draws=8000, steps=15, guide="normal")
+        reference = EmceeEngine(conjugate_problem(kit), walkers=16).run(steps=800, burn_in=200)
+
+        stats = vi_run["sample_stats"].dataset
+        log_prior = np.asarray(stats["log_prior"]).ravel()
+        log_likelihood = np.asarray(stats["log_likelihood"]).ravel()
+        proposal_log_density = np.asarray(stats["proposal_log_density"]).ravel()
+        log_weight = log_prior + log_likelihood - proposal_log_density
+        log_weight -= log_weight.max()
+        weight = np.exp(log_weight)
+        weight /= weight.sum()
+        # A degenerate weighting (all mass on a handful of draws) would pass
+        # a mean-agreement check for the wrong reason; guard against it.
+        effective_sample_size = 1.0 / np.sum(weight**2)
+        assert effective_sample_size > 500
+
+        drawn = np.asarray(vi_run["posterior"]["model.norm"]).ravel()
+        raw_mean = float(drawn.mean())
+        reweighted_mean = float(np.sum(weight * drawn))
+        reference_values = np.asarray(reference["posterior"]["model.norm"]).ravel()
+        reference_mean = float(reference_values.mean())
+        reference_sd = float(reference_values.std())
+
+        # The under-trained guide's raw mean is measurably off...
+        assert abs(raw_mean - reference_mean) > 0.5 * reference_sd
+        # ...the correction moves it substantially closer to the reference...
+        assert abs(reweighted_mean - reference_mean) < 0.5 * abs(raw_mean - reference_mean)
+        # ...and lands within one reference standard deviation of it.
+        assert reweighted_mean == pytest.approx(reference_mean, abs=reference_sd)

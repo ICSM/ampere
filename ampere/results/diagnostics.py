@@ -124,7 +124,7 @@ from ._plotting import (
     select_datasets,
 )
 from .derived import GP_LOCALISATION_GROUP, RESIDUALS_GROUP
-from .emission import LOG_LIKELIHOOD_GROUP
+from .emission import LOG_LIKELIHOOD_GROUP, _require_arviz
 
 __all__ = [
     "GP_LOCALISATION_PROVENANCE",
@@ -136,6 +136,7 @@ __all__ = [
     "gp_localisation_score",
     "residual_whiteness",
     "separation_binned_autocorrelation",
+    "summary",
 ]
 
 #: ``AnomalyScore.provenance`` for family C, as ``diagnostics.md`` §5 names it.
@@ -905,3 +906,36 @@ def gp_localisation_score(
 def gp_localisation_datasets(tree: Any) -> tuple[str, ...]:
     """Labels this run fitted with a GP — family C's applicable datasets."""
     return gp_datasets(tree)
+
+
+def summary(tree: Any, **kwargs: Any) -> Any:
+    """:func:`arviz.summary`, with ``results.md`` §9's one guard applied first.
+
+    ``ampere_approximation`` (W5.0) is the root attribute a plot or a table
+    must check before it reports an R-hat or an ESS that means nothing: both
+    are convergence diagnostics for a Markov chain, and a VI guide's draws or
+    an SBI density estimator's are independent samples from an approximation,
+    never a chain that could have failed to mix. This wrapper is exactly
+    ``arviz.summary`` — every keyword argument passes straight through, and
+    the returned table is arviz's own — plus that one warning, on the same
+    :class:`~ampere.results.plots.ResultsWarning`
+    :func:`~ampere.results.plots.plot_trace` raises for the identical reason,
+    so a caller catching one catches both.
+
+    Parameters
+    ----------
+    tree
+        The run.
+    **kwargs
+        Forwarded to :func:`arviz.summary` unchanged (``var_names``,
+        ``round_to``, ``kind``, ...).
+    """
+    # Lazy: avoids a module cycle with `.plots`, which imports `.diagnostics`
+    # at its own module level (`residual_whiteness`) -- deferring this one
+    # import to call time is what lets both modules import from each other's
+    # namespace without either failing to import on its own.
+    from .plots import warn_if_approximate
+
+    warn_if_approximate(tree, what="a summary table")
+    arviz = _require_arviz()
+    return arviz.summary(tree, **kwargs)

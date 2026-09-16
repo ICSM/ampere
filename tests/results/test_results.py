@@ -1868,8 +1868,8 @@ class TestModelHash:
 class TestSchemaSixAttributes:
     """W3.12: ``ampere_model_hash`` — the composition W3.5 built locally, promoted here."""
 
-    def test_the_schema_version_is_six(self) -> None:
-        assert PROVENANCE_SCHEMA_VERSION == 6
+    def test_the_schema_version_is_at_least_six(self) -> None:
+        assert PROVENANCE_SCHEMA_VERSION >= 6
 
     def test_a_run_records_it(self) -> None:
         attrs = provenance_attrs(joint_problem())
@@ -1884,3 +1884,65 @@ class TestSchemaSixAttributes:
     def test_an_emitted_run_carries_it(self) -> None:
         run = recorded(joint_problem())
         assert "ampere_model_hash" in run.attrs
+
+
+class TestSchemaSevenAttributes:
+    """W5.0: the results contract for approximate and evidence-producing engines."""
+
+    def test_the_schema_version_is_seven(self) -> None:
+        assert PROVENANCE_SCHEMA_VERSION == 7
+
+    def test_approximation_and_evidence_are_free_names_here(self) -> None:
+        """Neither key is one of ``provenance_attrs``'s own — an engine writes both.
+
+        ``ampere_approximation`` is `Engine.finish`'s default, not
+        `provenance_attrs`'s (``engine.py`` is the one shared place every
+        driver goes through, `ampere.inference`'s pointer); this only proves
+        the name is free for an engine to supply via ``extra=`` at all,
+        without colliding with what this function already writes.
+        """
+        attrs = provenance_attrs(
+            joint_problem(),
+            extra={
+                "approximation": "mean_field",
+                "log_evidence": -12.5,
+                "log_evidence_err": 0.1,
+                "evidence_method": "nested_sampling",
+            },
+        )
+        assert attrs["ampere_approximation"] == "mean_field"
+        assert attrs["ampere_log_evidence"] == pytest.approx(-12.5)
+        assert attrs["ampere_log_evidence_err"] == pytest.approx(0.1)
+        assert attrs["ampere_evidence_method"] == "nested_sampling"
+
+
+class TestEmitSampleStats:
+    """``emit``'s hook for a per-draw quantity beside ``lp``/``log_prior`` (W5.0)."""
+
+    def test_a_supplied_variable_lands_in_sample_stats(self) -> None:
+        problem = joint_problem()
+        draws = np.stack([problem.parameters.pack(TRUTH)] * 4)[np.newaxis, ...]
+        evaluations = [[problem.evaluate(draws[0, d]) for d in range(4)]]
+        proposal_log_density = np.linspace(-3.0, -1.0, 4)
+        run = emit(
+            problem,
+            draws,
+            evaluations,
+            engine="test",
+            sample_stats={"proposal_log_density": proposal_log_density},
+        )
+        stored = np.asarray(run["sample_stats"]["proposal_log_density"]).reshape(-1)
+        assert stored == pytest.approx(proposal_log_density)
+
+    def test_a_name_that_collides_with_a_built_in_one_is_refused(self) -> None:
+        problem = joint_problem()
+        draws = np.stack([problem.parameters.pack(TRUTH)] * 2)[np.newaxis, ...]
+        evaluations = [[problem.evaluate(draws[0, d]) for d in range(2)]]
+        with pytest.raises(ResultsError, match="would overwrite"):
+            emit(
+                problem,
+                draws,
+                evaluations,
+                engine="test",
+                sample_stats={"log_prior": np.zeros(2)},
+            )

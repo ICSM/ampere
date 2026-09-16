@@ -72,10 +72,27 @@ Every stored draw is scored on the numpy contract path through
 ``log_likelihood`` and the per-dataset decomposition are the **true** ones —
 computed by ``problem.evaluate``, not by the network. Beside them,
 ``sample_stats`` carries ``ampere_sbi_log_prob``: the *estimator's* own
-log-density at the same draw. Having both is what makes
-simulation-based calibration and importance reweighting possible later (W3.6,
-design horizon (b)) — the ratio of the two is the importance weight — and it is
-cheap to store now and impossible to recover afterwards.
+log-density at the same draw, in the **unconstrained** coordinates it was
+trained on. Having both is what makes simulation-based calibration and
+importance reweighting possible later (W3.6, design horizon (b)) — the ratio
+of the two is the importance weight — and it is cheap to store now and
+impossible to recover afterwards.
+
+**W5.0** adds ``sample_stats.proposal_log_density``, the results contract's
+engine-neutral name for the same idea (``results.md`` §9): the proposal's own
+log-density, in the same **constrained** coordinates the stored
+``log_prior``/``log_likelihood`` already are, so
+``exp(log_prior + log_likelihood - proposal_log_density)`` is a valid
+importance weight from the stored groups alone, on any engine. It is *not* a
+bare alias of ``ampere_sbi_log_prob``: the two differ by the change-of-
+variables term between the unconstrained parameterisation the estimator was
+trained on and the constrained one the rest of the run is stored in
+(:func:`~ampere.inference.engine.unconstrained_jacobian_correction`, the same
+correction :class:`~ampere.inference.VIEngine` applies to its guide).
+``ampere_sbi_log_prob`` stays exactly as it was — existing consumers (the
+calibration route, this module's own docs and examples) already read its
+unconstrained convention, and there is no reason to move it out from under
+them for a rename that a new, correctly-scoped field does better.
 
 That it is a per-draw **variable** rather than a provenance attribute is this
 item's one small departure from the item text's parenthesis, and the reason is
@@ -219,7 +236,7 @@ from ._tmnre import (
     pair_mesh,
     restricted_prior_class,
 )
-from .engine import DEFAULT_CACHE_SIZE, Engine
+from .engine import DEFAULT_CACHE_SIZE, Engine, unconstrained_jacobian_correction
 from .exceptions import EngineError, SamplingFailureWarning
 
 __all__ = [
@@ -1697,6 +1714,16 @@ class SBIEngine(Engine):
         )
         estimator_log_prob = self._estimator_log_prob(drawn, torch=torch)
         chain = np.stack([[problem.constrain(row) for row in unconstrained]])
+        # ampere_sbi_log_prob (below) is the estimator's own density in the
+        # *unconstrained* coordinates it was trained on (module docstring);
+        # the contract's proposal_log_density (results.md §9, W5.0) wants the
+        # same quantity in the *constrained* coordinates the stored
+        # log_prior/log_likelihood are already in, so the change-of-variables
+        # term is subtracted here exactly as VIEngine now does -- one shared
+        # formula, engine.unconstrained_jacobian_correction.
+        proposal_log_density = estimator_log_prob - unconstrained_jacobian_correction(
+            problem, unconstrained
+        )
 
         attrs = self._attrs(
             sbi_package,
@@ -1714,7 +1741,11 @@ class SBIEngine(Engine):
         if cache_key is not None:
             attrs["sbi_cache_hit"] = int(cache_hit)
             attrs["sbi_cache_key"] = cache_key.digest()
-        tree = self.finish(chain, extra_attrs=attrs)
+        tree = self.finish(
+            chain,
+            extra_attrs=attrs,
+            sample_stats={"proposal_log_density": proposal_log_density},
+        )
         tree = _with_estimator_log_prob(tree, estimator_log_prob)
         if self.marginal_summary is not None:
             attach_marginals(
@@ -2736,6 +2767,10 @@ class SBIEngine(Engine):
             "sbi_encoding_rows": layout.row_cap,
             "sbi_encoding_columns": layout.columns_total,
             "sbi_parameterisation": "unconstrained",
+            # results.md §9, W5.0: every SBI method here -- npe, nle, nre and
+            # tmnre alike -- draws from a trained network rather than from the
+            # target, so the engine-neutral family is the same for all four.
+            "approximation": "density_estimator",
             # Whether the trained estimator is still valid at *another*
             # observation. A single-round fit is; every multi-round one is not,
             # because its proposal (a trained posterior, or W3.4's truncation

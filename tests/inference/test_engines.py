@@ -605,6 +605,23 @@ class TestPosteriorAgreement:
         assert attrs["ampere_dynesty_logzerr"] > 0.0
         assert attrs["ampere_dynesty_dead_points"] > 0
 
+    def test_dynesty_also_writes_the_engine_neutral_evidence_triple(
+        self, agreement_runs: dict[str, Any]
+    ) -> None:
+        """W5.0: the same numbers, under the name every evidence-producing engine shares."""
+        attrs = agreement_runs["dynesty"].attrs
+        assert attrs["ampere_log_evidence"] == pytest.approx(attrs["ampere_dynesty_logz"])
+        assert attrs["ampere_log_evidence_err"] == pytest.approx(attrs["ampere_dynesty_logzerr"])
+        assert attrs["ampere_evidence_method"] == "nested_sampling"
+
+
+class TestApproximation:
+    """W5.0: ``ampere_approximation`` is ``"none"`` for every exact sampler here."""
+
+    @pytest.mark.parametrize("engine", ENGINES)
+    def test_an_exact_sampler_says_so(self, engine: str, joint_runs: dict[str, Any]) -> None:
+        assert joint_runs[engine].attrs["ampere_approximation"] == "none"
+
 
 class TestReproducibility:
     """``inference.md`` §12: one seed per run, named sub-streams derived from it."""

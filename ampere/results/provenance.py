@@ -161,7 +161,36 @@ __all__ = [
 #: under an earlier schema carries no ``ampere_model_hash`` at all, which is
 #: why :func:`~ampere.results.training.append_training_set` refuses such a
 #: file by name rather than guessing.
-PROVENANCE_SCHEMA_VERSION = 6
+#:
+#: **Two attributes joined at W5.0, and the constant is now 7** (ruled by
+#: Peter 2026-09-10 on the inference-extensions memo §5, §7.1-7.2;
+#: ``results.md`` §9, *Amended W5.0*). ``ampere_approximation`` is written by
+#: :meth:`~ampere.inference.engine.Engine.finish` on **every** run —
+#: ``"none"`` for an exact sampler, the approximating family otherwise
+#: (``"mean_field"``/``"multivariate"`` for :class:`~ampere.inference.VIEngine`,
+#: ``"density_estimator"`` for :class:`~ampere.inference.SBIEngine`) — so that
+#: a plot or a summary has one key to check before it reports an R-hat that
+#: means nothing for a run that was never a Markov chain. Conditional, for
+#: whichever engine estimates one: ``ampere_log_evidence``,
+#: ``ampere_log_evidence_err`` and ``ampere_evidence_method`` are the
+#: engine-neutral marginal-likelihood triple (`dynesty` today, from its
+#: ``logz``/``logzerr``; ``ampere_dynesty_logz`` stays as the engine's own,
+#: unprefixed by family, exactly as before). None of the four is an input to
+#: :func:`problem_fingerprint` — they describe how a run was produced, not
+#: what problem it was over — but the schema constant is, so
+#: ``ampere_problem_hash`` moves again at this bump as at every previous one.
+#: The same ruling adds a per-draw ``sample_stats.proposal_log_density`` (no
+#: ``ampere_`` prefix, alongside ``lp``/``log_prior``/``log_likelihood``) for
+#: every engine whose stored draws are not from the target: the proposal's own
+#: log-density at the draw, in the same **constrained** coordinates the stored
+#: ``log_prior``/``log_likelihood`` already are, so
+#: ``exp(log_prior + log_likelihood - proposal_log_density)`` is an importance
+#: weight computable from the stored groups alone. This one is not itself a
+#: root attribute -- :func:`provenance_attrs` does not write it -- but it rides
+#: the same schema bump because it is part of the same contract adaptation and
+#: a reader checking "does this file's shape match what I expect of schema 7"
+#: should find both halves of it.
+PROVENANCE_SCHEMA_VERSION = 7
 
 #: Every attribute this module writes starts with this, so ampere's provenance
 #: never collides with ArviZ's own (``created_at``, ``creation_library``, ...)

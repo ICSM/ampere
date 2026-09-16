@@ -136,6 +136,16 @@ or not, and only a call that actually pages returns a ``list`` of them, each
 carrying ``"page"`` as ``"i of n"`` in its
 :func:`~ampere.results.figure_metadata`.
 
+**W5.0**: :func:`~ampere.results.plot_trace` and the new
+:func:`~ampere.results.summary` (a thin wrapper around :func:`arviz.summary`)
+both warn, once and loudly, when a run's ``ampere_approximation`` root
+attribute is not ``"none"`` — an R-hat, an ESS or a trace's shape describes
+the optimiser or the density estimator that produced a
+:class:`~ampere.inference.VIEngine` or :class:`~ampere.inference.SBIEngine`
+run's draws, never sampling error against the target, and neither function
+can tell a reader that on its own. :func:`~ampere.results.warn_if_approximate`
+is the shared check both call.
+
 .. autodata:: ampere.results.diagnostics.WHITENESS_STREAM
 .. autodata:: ampere.results.diagnostics.GP_LOCALISATION_PROVENANCE
 .. autodata:: ampere.results.plots.GP_LOCALISATION_CAVEAT

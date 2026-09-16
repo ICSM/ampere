@@ -41,7 +41,11 @@ class DynestyEngine(Engine):
     worth it for a multimodal posterior, for a problem where a chain's
     convergence is hard to judge, or when the marginal likelihood is wanted —
     which the ensemble engines cannot give at all. The log-evidence and its
-    uncertainty are recorded in the run's provenance attrs.
+    uncertainty are recorded in the run's provenance attrs, under this
+    engine's own name (``ampere_dynesty_logz``/``_logzerr``) and, since W5.0,
+    under the engine-neutral triple every evidence-producing engine writes
+    (``ampere_log_evidence``, ``ampere_log_evidence_err``,
+    ``ampere_evidence_method`` — ``results.md`` §9).
 
     Parameters
     ----------
@@ -208,5 +212,14 @@ class DynestyEngine(Engine):
                 "dynesty_niter": int(results.niter),
                 "dynesty_ncall": int(np.sum(results.ncall)),
                 "dynesty_version": dynesty.__version__,
+                # The engine-neutral triple (results.md §9, W5.0): every
+                # engine that estimates a marginal likelihood writes these
+                # three under one name, so a reader (or a later engine's own
+                # accept criterion) need not know it was dynesty's `logz` in
+                # particular. `ampere_dynesty_logz`/`_logzerr` above stay,
+                # unrenamed, as the engine's own spelling.
+                "log_evidence": float(results.logz[-1]),
+                "log_evidence_err": float(results.logzerr[-1]),
+                "evidence_method": "nested_sampling",
             },
         )

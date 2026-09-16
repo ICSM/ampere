@@ -110,6 +110,7 @@ from .diagnostics import (
     gp_localisation_score,
     residual_whiteness,
     separation_binned_autocorrelation,
+    summary,
 )
 from .emission import (
     CHAIN_DIM,
@@ -142,6 +143,7 @@ from .plots import (
     plot_residuals,
     plot_sbc_ranks,
     plot_trace,
+    warn_if_approximate,
 )
 from .provenance import (
     ATTR_PREFIX,
@@ -292,9 +294,11 @@ __all__ = [
     "sbc",
     "separation_binned_autocorrelation",
     "spec_hashes",
+    "summary",
     "to_netcdf",
     "training_pair_from_dict",
     "training_pair_to_dict",
     "uniformity_pvalues",
+    "warn_if_approximate",
     "write_training_set",
 ]

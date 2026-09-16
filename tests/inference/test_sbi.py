@@ -590,6 +590,25 @@ class TestTheRunItEmits:
         assert not np.allclose(estimator, np.asarray(stats["lp"]))
         assert npe_run.attrs["ampere_sbi_log_prob_kind"] == "normalised"
 
+    def test_the_contract_name_is_beside_it_too(self, npe_run: Any) -> None:
+        """W5.0: the engine-neutral name, not a bare alias of the SBI-specific one.
+
+        Both are the estimator's own density at the same draw, but in
+        different coordinates (module docstring): ``ampere_sbi_log_prob`` is
+        unconstrained, ``proposal_log_density`` is moved into the same
+        constrained coordinates the stored ``log_prior``/``log_likelihood``
+        are, so the two are finite together and need not be numerically
+        equal.
+        """
+        stats = npe_run["sample_stats"].dataset
+        contract = np.asarray(stats["proposal_log_density"])
+        estimator = np.asarray(stats["ampere_sbi_log_prob"])
+        assert contract.shape == estimator.shape
+        assert np.all(np.isfinite(contract))
+
+    def test_it_writes_the_engine_neutral_approximation_family(self, npe_run: Any) -> None:
+        assert npe_run.attrs["ampere_approximation"] == "density_estimator"
+
     def test_the_log_likelihood_group_decomposes_per_dataset(self, npe_run: Any) -> None:
         group = npe_run["log_likelihood"].dataset
         assert sorted(group.data_vars) == ["blue", "red"]
@@ -1833,6 +1852,14 @@ class TestTMNRERecoversTheJointPosterior:
         assert posterior.sizes == {"chain": 1, "draw": TMNRE_DRAWS}
         assert float(np.asarray(posterior["model.norm"]).min()) > 0.0
         assert float(np.asarray(posterior["calibration"]).min()) > 0.0
+
+    def test_it_writes_the_engine_neutral_approximation_family_and_proposal_density(
+        self, tmnre_run: Any
+    ) -> None:
+        """W5.0: TMNRE runs the same code path as NPE/NLE/NRE, so it gets both too."""
+        assert tmnre_run.attrs["ampere_approximation"] == "density_estimator"
+        stats = tmnre_run["sample_stats"].dataset
+        assert np.all(np.isfinite(np.asarray(stats["proposal_log_density"])))
 
     @pytest.mark.parametrize("name", NAMES)
     def test_the_posterior_covers_the_reference(
