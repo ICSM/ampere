@@ -1519,8 +1519,20 @@ class TestTheCircularComplexGP:
 BASIS_SIZES: tuple[int, ...] = (16, 32, 64, 128)
 
 #: The per-axis counts of the 2-D row, on the ``(u, v)`` extent of
-#: :func:`visibility_pair`. The total basis is the square of each.
-UV_BASIS_SIZES: tuple[int, ...] = (4, 8, 16)
+#: :func:`visibility_pair`. The total basis is the square of each — 576
+#: members at the finest, for nine baselines, which is the tensor product's
+#: whole character: ``m`` grows as the *product* of the per-axis counts, so a
+#: spectral method is a low-dimension method and says so.
+UV_BASIS_SIZES: tuple[int, ...] = (4, 8, 16, 24)
+
+#: What the 2-D row's finest basis actually reaches. Looser than the 1-D
+#: default, and measured rather than chosen: the ``(u, v)`` box spans only
+#: about 1.5 length scales, so the *boundary* error dominates again and more
+#: basis members buy little — 32 per axis gets to 4e-2 and 24 to 6e-2. That is
+#: the regime ``horizon_notes.md`` §2 says a Vecchia approximation is for, and
+#: a row that hid it behind the 1-D number would be asserting something untrue
+#: about the method in two axes.
+UV_FINAL = 0.1
 
 #: The box for each. A wider box needs more basis members to reach the same
 #: frequency, so the 2-D row (whose per-axis counts are small) pays for its
@@ -1783,7 +1795,7 @@ class TestApproximateSolverConvergence:
             )
             for size in UV_BASIS_SIZES
         ]
-        converges(errors, UV_BASIS_SIZES, tolerances)
+        converges(errors, UV_BASIS_SIZES, tolerances, final=UV_FINAL)
 
     def test_the_latent_block_is_the_basis_size_and_one_whitening_serves_both_paths(
         self, backend: ConformanceBackend, tolerances: Tolerances
