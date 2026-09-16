@@ -30,11 +30,15 @@ import pytest
 import scipy.stats as st
 
 from ampere.core import (
+    Capabilities,
     ContainerBatch,
     Dataset,
     DatasetError,
     FailureReason,
     FittingProblem,
+    GaussianFamily,
+    IndependentNoise,
+    Likelihood,
     Model,
     ModelResult,
     Parameter,
@@ -45,7 +49,10 @@ from ampere.core import (
     Spectrum,
     ThreadExecutor,
     chunk_bounds,
+    register_realisation,
 )
+from ampere.core.exceptions import LoweringError
+from ampere.core.simulate import BatchedPrediction
 
 WAVELENGTH = np.array([1.0, 2.0, 4.0])
 SEED = 20260909
@@ -153,6 +160,104 @@ class TwoChannel(Model):
                 "red": Spectrum(grid * u.micron, np.full(grid.shape, 2 * ctx["level"]) * u.Jy),
             }
         )
+
+
+class FakeFlat(Flat):
+    """:class:`Flat`, declared on a fake native backend (W5.2's owed item 11).
+
+    Exists to exercise :meth:`~ampere.core.dataset._NativeBatch.run` without
+    torch or jax installed: a registered :func:`~ampere.core.register_realisation`
+    factory is all a backend is, so a minimal one that only ever runs in this
+    process is enough to stand in for one.
+    """
+
+    BACKEND = "fake"
+    BATCHABLE = True
+
+
+class FakeNoise(IndependentNoise):
+    """:class:`~ampere.core.IndependentNoise`, declared on the fake backend."""
+
+    BACKEND = "fake"
+    BATCHABLE = True
+
+
+class FakeGaussian(GaussianFamily):
+    """:class:`~ampere.core.GaussianFamily`, declared on the fake backend."""
+
+    BACKEND = "fake"
+    BATCHABLE = True
+
+
+class _FakeRealisation:
+    """A native twin minimal enough to run in ``dev``: batched prediction, native draws.
+
+    ``simulate_batched`` reproduces :class:`FakeFlat`'s own arithmetic exactly
+    (so the agreement check :meth:`~ampere.core.dataset._NativeBatch._check_agreement`
+    passes) and ``sample_observations`` is the row this item is about: a
+    *poisoned* level (99.0, chosen the way torch's Poisson twin's negative-rate
+    check would find a bad row) fails the whole vectorised call once, exactly
+    as ``torch.poisson`` checking a stacked rate array does — and the point of
+    :meth:`~ampere.core.dataset._NativeBatch._sample_chunk` is that this must
+    flag only the poisoned draw, not the chunk it travelled in.
+    """
+
+    def __init__(self, problem: FittingProblem) -> None:
+        self._problem = problem
+
+    @property
+    def backend(self) -> str:
+        return "fake"
+
+    @property
+    def free_size(self) -> int:
+        return self._problem.free_size
+
+    def log_prob_unconstrained(self, theta: Any) -> Any:
+        return self._problem.log_prob_unconstrained(np.asarray(theta))
+
+    def simulate_batched(
+        self, theta: Any, *, chunk_size: int | None = None, sharder: Any = None
+    ) -> BatchedPrediction:
+        levels = np.asarray(theta, dtype=float)[:, 0]
+        table = np.repeat(levels[:, None], WAVELENGTH.size, axis=1)
+        return BatchedPrediction(
+            channels={"model": {"default": table}}, predicted={"default": table}
+        )
+
+    def sample_observations(
+        self, theta: Any, predicted: Any, seeds: Sequence[int]
+    ) -> dict[str, np.ndarray]:
+        levels = np.asarray(theta, dtype=float)[:, 0]
+        if np.any(levels == POISONED_LEVEL):
+            raise LoweringError(
+                "sample_observations", backend="fake", detail="a poisoned row, by construction."
+            )
+        rows = np.asarray(predicted["default"], dtype=float)
+        rng = np.random.default_rng(0)
+        return {"default": rows + 0.01 * rng.standard_normal(rows.shape)}
+
+
+#: The level a stacked, whole-chunk check would reject -- torch's own
+#: Poisson-twin bug, reproduced in miniature: the failure carries no row
+#: index, and only isolating rows finds which one it was.
+POISONED_LEVEL = 99.0
+
+#: Registered once at import: every test in :class:`TestTheNativeSamplerIsolatesAFailingDraw`
+#: shares it, the way ``ampere.backends.torch``/``.jax`` register once on import.
+register_realisation("fake", _FakeRealisation)
+
+
+def fake_problem() -> FittingProblem:
+    """A fresh problem, declared entirely on the fake backend."""
+    return FittingProblem(
+        FakeFlat(),
+        [Dataset(observed(), likelihood=Likelihood(FakeGaussian(), FakeNoise()))],
+        seed=SEED,
+        capabilities=Capabilities(
+            differentiable=False, batchable=True, device="cpu", backend="fake"
+        ),
+    )
 
 
 def observed(values: Any = (1.0, 1.0, 1.0)) -> Spectrum:
@@ -903,3 +1008,65 @@ class TestTheNativePathIsAskedForByName:
         drawn = restored.simulate(observe=True)
         assert not drawn.failed
         assert drawn.observations is not None
+
+
+class TestTheNativeSamplerIsolatesAFailingDraw:
+    """Phase 3's owed item (W5.2): one bad draw flags one draw, natively too.
+
+    ``_NativeBatch.run`` vectorises the native sampler over a whole chunk, so
+    one θ's failure (a check on the *stacked* array — torch's Poisson twin's
+    finding at W3.14) carries no row index. Before this was fixed, that
+    exception propagated out of ``simulate_many`` and aborted every draw in
+    the chunk, native and non-native alike, rather than flagging the single
+    request that earned it — the asymmetry the numpy loop never had, since
+    ``Dataset.draw_observation`` already wraps each draw in its own ``try``.
+    ``_sample_chunk`` retries one row at a time after the batched call fails,
+    which is what these rows hold to :class:`FakeFlat`'s minimal native twin.
+    """
+
+    def test_only_the_poisoned_draw_is_flagged(self) -> None:
+        problem = fake_problem()
+        batch = problem.simulate_many(
+            4,
+            values=np.array([[1.0], [2.0], [POISONED_LEVEL], [3.0]]),
+            native=True,
+            observe=True,
+        )
+        assert list(batch.failed) == [False, False, True, False]
+        assert batch.provenance["simulate_batched"] is True
+        assert batch.provenance["sample_backend"] == "fake"
+
+    def test_the_surviving_draws_keep_their_native_observations(self) -> None:
+        """Not merely "not failed" — the native draw itself, not a fallback value."""
+        problem = fake_problem()
+        batch = problem.simulate_many(
+            4,
+            values=np.array([[1.0], [2.0], [POISONED_LEVEL], [3.0]]),
+            native=True,
+            observe=True,
+        )
+        kept = batch.usable
+        assert len(kept) == 3
+        observed_values = np.asarray(
+            [sim.observations["default"].values for sim in kept.simulations]
+        )
+        predicted_values = np.asarray([sim.predicted["default"].values for sim in kept.simulations])
+        # The fake sampler adds noise (0.01 * standard normal): the draw is
+        # close to, but not identical to, the noise-free prediction.
+        assert np.all(np.abs(observed_values - predicted_values) > 0.0)
+        assert np.all(np.abs(observed_values - predicted_values) < 0.1)
+
+    def test_a_chunk_with_no_poisoned_draw_takes_the_fast_batched_path(self) -> None:
+        """The retry is paid only when the batch actually fails once."""
+        problem = fake_problem()
+        batch = problem.simulate_many(
+            4, values=np.array([[1.0], [2.0], [3.0], [4.0]]), native=True, observe=True
+        )
+        assert not batch.failed.any()
+
+    def test_the_failure_is_recorded_like_any_other(self) -> None:
+        problem = fake_problem()
+        problem.simulate_many(
+            2, values=np.array([[1.0], [POISONED_LEVEL]]), native=True, observe=True
+        )
+        assert problem.failure_counts[FailureReason.LIKELIHOOD_FAILED] == 1
