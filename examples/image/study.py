@@ -122,13 +122,25 @@ BASIS_PER_AXIS = 8
 #: prior below is centred well inside that at ``c = 2``.
 BOUNDARY_FACTOR = 2.0
 
-#: The flexible arm's kernel priors. The length scale is centred on the
+#: The flexible arm's kernel amplitude prior, **in units of the observation's
+#: own declared uncertainty**. That scaling is not a convenience: an image of a
+#: source a few milliarcseconds across is measured in Jy/sr, so its values are
+#: of order 10^15, and a prior written as a bare number would be fifteen orders
+#: of magnitude from anything the data could support — a GP pinned at zero
+#: amplitude, indistinguishable at a glance from a flexible likelihood that
+#: simply did not help. (It is how this study's first run came out, and the
+#: fix is this constant.) The uncertainty is a *declared constant of the
+#: observation*, not a statistic of the values, so scaling a nuisance prior to
+#: it is the ordinary "a few times the noise" statement rather than a peek at
+#: the data.
+GP_AMPLITUDE_SIGMAS = 1.5
+
+#: The flexible arm's kernel length-scale prior, mas. Centred on the
 #: background's own width rather than left wide: a GP whose length scale is
 #: free to roam from a pixel to the whole field can trade off against the
 #: source itself, which is a second mode in the likelihood rather than a mixing
 #: problem — :mod:`examples.interferometry.study` records the same hazard in
 #: (u, v), and the fix is the same, an informed prior.
-GP_AMPLITUDE_PRIOR_SCALE = 0.25
 GP_LENGTH_PRIOR = (4.0, 20.0)
 
 
@@ -241,17 +253,27 @@ def model_for(backend: str, arm: str, *, fitted: bool = True) -> Any:
     return source_with_background(_itf_module(backend), grid, grid, **kwargs)
 
 
-def _noise_for(backend: str, arm: str, *, solver: Any = None) -> Any:
-    """Independent noise, or the flexible arm's two-axis GP over ``(x, y)``."""
+def _noise_for(backend: str, arm: str, *, sigma: float, solver: Any = None) -> Any:
+    """Independent noise, or the flexible arm's two-axis GP over ``(x, y)``.
+
+    *sigma* is the observation's declared per-pixel uncertainty, and the
+    kernel's amplitude prior is written in units of it; see
+    :data:`GP_AMPLITUDE_SIGMAS` for why that is required rather than tidy.
+    """
     module = _noise_module(backend)
     if arm != "flexible":
         return module.IndependentNoise()
     kernel = module.Matern32(
-        st.halfnorm(scale=GP_AMPLITUDE_PRIOR_SCALE),
+        st.halfnorm(scale=GP_AMPLITUDE_SIGMAS * float(sigma)),
         st.uniform(GP_LENGTH_PRIOR[0], GP_LENGTH_PRIOR[1] - GP_LENGTH_PRIOR[0]),
         axes=("x", "y"),
     )
     return module.GaussianProcessNoise(kernel, solver or GridDenseGP())
+
+
+def declared_sigma(observed: Any) -> float:
+    """The observation's declared per-pixel uncertainty, as one number."""
+    return float(np.median(np.asarray(observed.uncertainty, dtype=float)))
 
 
 def _likelihood(arm: str, noise: Any) -> Likelihood:
@@ -284,7 +306,7 @@ def build_problem(
     _, observed = gen.synthetic(module, _itf_module(backend), pixels, seed=seed)
     instrument = gen.camera(module, observed)
     fitted = model_for(backend, arm)
-    noise = _noise_for(backend, arm, solver=solver)
+    noise = _noise_for(backend, arm, sigma=declared_sigma(observed), solver=solver)
     datasets = DatasetCollection(
         {
             "image": Dataset(
@@ -405,7 +427,7 @@ def _calibration_factory(arm: str, backend: str, pixels: int, budget: EmceeBudge
         observed = replica.datasets["image"].observed
         instrument = gen.camera(module, observed)
         fitted = model_for(backend, arm)
-        noise = _noise_for(backend, arm)
+        noise = _noise_for(backend, arm, sigma=declared_sigma(observed))
         datasets = DatasetCollection(
             {
                 "image": Dataset(
@@ -535,7 +557,10 @@ def benchmark_solvers(
         fitted = model_for(backend, "flexible", fitted=False)
         compiled = fitted.compile_for(negotiate([instrument]))
         predicted = instrument(compiled.evaluate())
-        kernel = noise_module.Matern32(0.2, 8.0, axes=("x", "y"))
+        # The amplitude is in the data's own units, for :data:`GP_AMPLITUDE_SIGMAS`'
+        # reason; held fixed here rather than fitted, because the benchmark is
+        # about the cost of one solve and not about a posterior.
+        kernel = noise_module.Matern32(0.5 * declared_sigma(observed), 8.0, axes=("x", "y"))
         solvers: list[tuple[str, Any]] = []
         if include_dense:
             solvers.append(("DenseGP", GridDenseGP()))

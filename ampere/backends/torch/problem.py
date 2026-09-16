@@ -141,6 +141,7 @@ from ampere.core import (
     VonMisesFamily,
     chunk_bounds,
     foreign_parts_refusal,
+    sample_coordinates,
 )
 from ampere.core.dataset import (
     INSTRUMENT_COMPONENT,
@@ -416,7 +417,16 @@ class _LoweredDataset:
         # data. What kept that from happening was the family refusal at
         # construction, which is exactly why the refusal came first and the
         # dtype second. The container's own dtype kind decides now, once, here.
-        values = np.asarray(observed.values)
+        # ``.ravel()`` before the mask, not after: ``retain`` is flat, one entry
+        # per *sample*, and on a ``Layout.GRID`` container the values are not
+        # (W5.5). Without it a 12x12 image indexed by a 144-long mask raises an
+        # IndexError about axis 0 that says nothing about layouts.
+        #: How many axes the observed container's values carry: one for a
+        #: ``Layout.POINTS`` kind, two for an ``Image``, three for a ``Cube``.
+        #: What :meth:`predict` needs in order to flatten the container's own
+        #: axes without touching a batch axis in front of them (W5.5).
+        self._value_ndim = int(np.asarray(observed.values).ndim)
+        values = np.asarray(observed.values).ravel()
         self.complex_valued = values.dtype.kind == "c"
         self.observed_values = as_tensor(
             values[self.retain],
@@ -424,16 +434,21 @@ class _LoweredDataset:
             device=device,
         )
         # Every axis, stacked into the `(n, d)` block ``Likelihood._coordinates``
-        # builds -- **not** ``axes[0]`` (*W4.2*). A one-axis container is
-        # unchanged by this (`(n, 1)` and `(n,)` are the same point set to
-        # ``Kernel.matrix``), and a VisibilitySet has three axes, so taking the
-        # first would have handed the kernel the `u` column and called it the
-        # coordinates. The same stack is what makes ``axes=("u", "v")``
-        # meaningful here, since a selector resolves to *columns of this block*.
+        # builds -- **not** ``axes[0]`` (*W4.2*), and **not** a bare
+        # ``column_stack`` either (*W5.5*): on a ``Layout.GRID`` container the
+        # axes are the separable grids the samples are the product of, so a
+        # 24x24 image has two axes of 24 coordinates and 576 samples.
+        # ``ampere.core.sample_coordinates`` is that stacking made layout-aware,
+        # and it is the same function ``Dataset.draw_observation`` uses, so the
+        # coordinates a kernel sees here and there cannot drift. A one-axis
+        # point container is unchanged by either (``(n, 1)`` and ``(n,)`` are
+        # the same point set to ``Kernel.matrix``), and a VisibilitySet has
+        # three axes, so taking the first would have handed the kernel the `u`
+        # column and called it the coordinates. The same stack is what makes
+        # ``axes=("u", "v")`` meaningful here, since a selector resolves to
+        # *columns of this block*.
         self.observed_coordinates = _tensor(
-            np.column_stack([np.asarray(axis.values, dtype=float) for axis in observed.axes])[
-                self.retain
-            ],
+            sample_coordinates(observed)[self.retain],
             device=device,
         )
         # The kernel bound to this container's axis order, once, at lowering:
@@ -447,7 +462,9 @@ class _LoweredDataset:
         self.uncertainty = (
             None
             if observed.uncertainty is None
-            else _tensor(np.asarray(observed.uncertainty, dtype=float)[self.retain], device=device)
+            else _tensor(
+                np.asarray(observed.uncertainty, dtype=float).ravel()[self.retain], device=device
+            )
         )
         if self.gp_marginal and self.likelihood.family.REQUIRES_UNCERTAINTY:
             self._check_gp_uncertainty(observed, label)
@@ -580,8 +597,21 @@ class _LoweredDataset:
         effective mask once at construction and forbids a parameter-dependent
         one — so which samples are retained is a fact about the problem, not
         about θ, and can be a constant here.
+
+        ``retain`` is flat, one entry per *sample*, and on a ``Layout.GRID``
+        container the prediction is not (**W5.5**): a 24x24 image is a
+        ``(24, 24)`` tensor and a 576-long mask. The grid branch flattens the
+        container's own trailing axes — and only those, so a leading batch axis
+        rides through — before applying it. The point-set branch is left exactly
+        as it was rather than folded into the same expression, because a
+        one-axis container's indexing is what every other modality's rows are
+        written against and this is not the item to change it in.
         """
-        return self.predict_full(routed)[self.retain]
+        full = self.predict_full(routed)
+        if self._value_ndim == 1:
+            return full[self.retain]
+        flat = full.reshape(*full.shape[: full.ndim - self._value_ndim], -1)
+        return flat[..., self.retain]
 
     def predict_full(self, routed: Mapping[str, Mapping[str, Any]]) -> torch.Tensor:
         """The same chain, **before** the mask is applied (W3.1 slice 2).

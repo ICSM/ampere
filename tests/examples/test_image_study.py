@@ -80,7 +80,11 @@ class TestTheStepNegotiates:
         padded = np.asarray(needed["sky"]["x"].coordinates().to_value("mas"))
         assert padded.size > TINY_PIXELS
         compiled = generators.truth_model(itf, TINY_PIXELS).compile_for(needed)
-        assert compiled.native_grid("sky")[0].size == padded.size
+        model_image = compiled.evaluate()["sky"]
+        # The model adopted the padded grid, not the observed one: the native
+        # ``native_grid`` surface is the modern backends' and does not exist on
+        # the reference path, so the container's own axis is what to read here.
+        assert model_image.x.values.size == padded.size
         predicted = instrument(compiled.evaluate())
         assert predicted.values.shape == (TINY_PIXELS, TINY_PIXELS)
         assert np.array_equal(predicted.x.values, observed.x.values)
