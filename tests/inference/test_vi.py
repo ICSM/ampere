@@ -64,6 +64,7 @@ from ampere.core import (
     Spectrum,
 )
 from ampere.inference import EmceeEngine, VIEngine
+from ampere.inference.engine import unconstrained_jacobian_correction
 from ampere.inference.exceptions import EngineError
 
 SEED = 20260907
@@ -401,7 +402,87 @@ class TestRefusals:
 
 
 # ---------------------------------------------------------------------------
-# 5. W5.0's accept criterion: reweighting from stored groups alone
+# 5. The proposal density is really the guide's (review-caught regression)
+# ---------------------------------------------------------------------------
+
+
+def _unconstrained_draws(problem: FittingProblem, run: Any) -> np.ndarray:
+    """A run's stored (constrained) draws, mapped back to unconstrained space.
+
+    Nothing about a stored run keeps the unconstrained vector VI actually
+    fitted in — only ``unconstrain``'s own inverse of ``constrain`` recovers
+    it, exact up to floating point since the two are one bijection's forward
+    and inverse maps.
+    """
+    posterior = run["posterior"].dataset
+    names = list(problem.parameters.free_names)
+    constrained = np.stack([np.asarray(posterior[name]).ravel() for name in names], axis=1)
+    return np.stack(
+        [
+            problem.unconstrain(problem.parameters.pack(dict(zip(names, row, strict=True))))
+            for row in constrained
+        ]
+    )
+
+
+class TestTheProposalDensityIsReallyTheGuides:
+    """A review of this item caught a real bug here, twice, before this landed.
+
+    Both autoguide classes route a fitted draw through an **auxiliary**
+    sample site under the real ``Normal``/``MultivariateNormal`` the guide
+    optimised, and only then report ``_SITE`` itself — as a ``Delta`` at the
+    identity-transformed value, whose ``log_prob`` is the change-of-variables
+    term between the two sites (zero here, since the transform is the
+    identity), **not** the guide's density. Reading ``trace.nodes[_SITE]
+    ["fn"].log_prob(...)`` alone therefore stored a constant zero for every
+    draw on both the pyro and the numpyro route — the importance-reweighting
+    test below happened to still pass, for the wrong reason, because
+    ``proposal_log_density`` differed from the truth by exactly the same
+    (then-missing) constant on every draw and a self-normalised weight is
+    invariant to an additive constant in the log. ``np.ptp(proposal) > 0`` is
+    the one-line guard that would have caught it outright — a genuine
+    per-draw density is never constant across 500 independent draws from a
+    continuous guide — and the direct comparison against an independently
+    built ``scipy`` density is the check that the *value*, not merely its
+    variation, is right.
+    """
+
+    DRAWS = 500
+    STEPS = 200
+
+    def _check(self, kit: Kit, guide: str) -> None:
+        problem = correlated_problem(kit)
+        engine = VIEngine(problem)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            run = engine.run(draws=self.DRAWS, steps=self.STEPS, guide=guide)
+        stats = run["sample_stats"].dataset
+        proposal = np.asarray(stats["proposal_log_density"]).ravel()
+
+        # The cheap, always-on guard: a genuine per-draw density is not a
+        # constant, which is exactly what the Delta bug produced.
+        assert np.ptp(proposal) > 0.0
+
+        unconstrained = _unconstrained_draws(problem, run)
+        jacobian = unconstrained_jacobian_correction(problem, unconstrained)
+        if guide == "multivariate":
+            covariance = engine.guide_scale_tril @ engine.guide_scale_tril.T
+            independent = st.multivariate_normal(engine.guide_loc, covariance).logpdf(unconstrained)
+        else:
+            independent = (
+                st.norm(engine.guide_loc, engine.guide_scale).logpdf(unconstrained).sum(axis=1)
+            )
+        assert (proposal + jacobian) == pytest.approx(independent, abs=1e-6)
+
+    def test_the_mean_field_guides_stored_density_agrees_with_scipy(self, kit: Kit) -> None:
+        self._check(kit, "normal")
+
+    def test_the_full_covariance_guides_stored_density_agrees_with_scipy(self, kit: Kit) -> None:
+        self._check(kit, "multivariate")
+
+
+# ---------------------------------------------------------------------------
+# 6. W5.0's accept criterion: reweighting from stored groups alone
 # ---------------------------------------------------------------------------
 
 
