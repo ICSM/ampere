@@ -466,14 +466,19 @@ class PSFConvolution(Transformation):
 
     # -- the kernel ----------------------------------------------------------
 
-    def psf(self, x_mas: Any, y_mas: Any, values: Any = None) -> np.ndarray:
-        """The normalised kernel, tabulated on the pixel scale of ``(x, y)``.
+    def grid_steps(self, x_mas: Any, y_mas: Any) -> tuple[float, float]:
+        """The incoming grid's pixel scale, mas, once it has been checked.
 
-        Public because the conformance battery's direct-convolution row needs
-        the *same* kernel the FFT route uses, so that the row measures the
-        transform rather than two different Gaussians. What it must not share
-        with that row is the convolution itself, which the row computes for
-        itself as a plain sum over the support.
+        Two checks, and both are refusals rather than fallbacks. The grid must
+        be **evenly spaced**, because the FFT route needs it to be
+        (:func:`_uniform_step`). And a **tabulated** kernel's own pixel scale
+        must be the grid's, because a measured PSF is a buffer tied to the
+        coordinates it was tabulated on — ``transformations.md`` §10's second
+        rule — and rescaling one would invent information it does not carry.
+        An analytic kernel has neither problem and is simply retabulated.
+
+        Shared with the native twins, which need the same two answers in the
+        same two words before their own arithmetic starts.
         """
         steps = (
             _uniform_step(np.asarray(x_mas, dtype=DTYPE).reshape(-1), "the negotiated x axis"),
@@ -490,6 +495,19 @@ class PSFConvolution(Transformation):
                         f"does not carry. Either supply the kernel at the grid's own scale, or "
                         f"use the fwhm= form, whose kernel is analytic and can be retabulated."
                     )
+        return steps
+
+    def psf(self, x_mas: Any, y_mas: Any, values: Any = None) -> np.ndarray:
+        """The normalised kernel, tabulated on the pixel scale of ``(x, y)``.
+
+        Public because the conformance battery's direct-convolution row needs
+        the *same* kernel the FFT route uses, so that the row measures the
+        transform rather than two different Gaussians. What it must not share
+        with that row is the convolution itself, which the row computes for
+        itself as a plain sum over the support.
+        """
+        steps = self.grid_steps(x_mas, y_mas)
+        if "psf_kernel" in self.buffers:
             return self._data("psf_kernel")
         width = float(self.context(values)["fwhm"])
         if not np.isfinite(width) or width <= 0.0:
