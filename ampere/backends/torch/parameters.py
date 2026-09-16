@@ -83,6 +83,7 @@ from ampere.core.parameter import (
     Parameter,
     ParameterSet,
     describe_prior,
+    reserved_names,
 )
 
 from ._config import BACKEND, DEFAULT_DEVICE, DEFAULT_DTYPE, as_tensor, to_numpy
@@ -141,12 +142,22 @@ class LoweredParameters(nn.Module):
     fit's definition and belongs in a checkpoint.
     """
 
+    def _unusable(self, name: str) -> bool:
+        """Whether *name* cannot be an attribute of this module.
+
+        The core reserved set (``parameters.md`` §10, *W5.20*) contains every
+        public ``torch.nn.Module`` name, so it is the same list core refuses a
+        parameter by; ``hasattr`` catches the few names this subclass adds on
+        top of it.
+        """
+        return name in reserved_names() or hasattr(type(self), name)
+
     def child(self, name: str) -> LoweredParameters:
         """The named child component, created on first use."""
         existing = self._modules.get(name)
         if isinstance(existing, LoweredParameters):
             return existing
-        if existing is not None or hasattr(type(self), name):
+        if existing is not None or self._unusable(name):
             raise LoweringError(
                 name,
                 backend=BACKEND,
@@ -159,6 +170,36 @@ class LoweredParameters(nn.Module):
         created = LoweredParameters()
         self.add_module(name, created)
         return created
+
+    def check_leaf(self, name: str) -> str:
+        """*name*, if a parameter or buffer may be registered under it here.
+
+        The leaf half of :meth:`child`'s refusal, and the reason it exists is
+        the asymmetry W5.20 found: a *component* whose name collided with
+        ``nn.Module``'s namespace was refused with a message naming it, while a
+        *parameter* whose leaf collided fell through to torch, which raises a
+        bare ``KeyError("attribute 'type' already exists")`` — torch's
+        vocabulary, not ampere's, and not a :class:`LoweringError` the
+        conformance battery can match on.
+
+        Since W5.20 core refuses these names at declaration
+        (:func:`~ampere.core.parameter.reserved_names`), so nothing should
+        reach here; this is defence in depth for a declaration that was built
+        by some other route, and the guarantee that torch's own exception never
+        escapes lowering.
+        """
+        if self._unusable(name):
+            raise LoweringError(
+                name,
+                backend=BACKEND,
+                parameter=name,
+                detail=(
+                    f"parameter name {name!r} collides with an attribute of torch.nn.Module, so "
+                    f"it cannot be lowered onto one; it is in the core reserved set "
+                    f"(`parameters.md` §10) for exactly that reason — rename the parameter"
+                ),
+            )
+        return name
 
 
 def _fork_devices(device: torch.device) -> list[torch.device]:
@@ -189,7 +230,7 @@ def _place(root: LoweredParameters, name: str) -> tuple[LoweredParameters, str]:
     owner = root
     for part in path:
         owner = owner.child(part)
-    return owner, leaf
+    return owner, owner.check_leaf(leaf)
 
 
 def _initial_value(parameter: Parameter) -> Any:
