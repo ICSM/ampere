@@ -134,6 +134,7 @@ from __future__ import annotations
 import dataclasses
 import math
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
@@ -141,16 +142,19 @@ import numpy as np
 from ampere.core.exceptions import OptionalDependencyError, ResultsError
 from ampere.core.parameter import Parameter
 
+from .emission import from_netcdf
 from .provenance import ATTR_PREFIX, canonical_json
 
 __all__ = [
     "DEFAULT_ESS_FLOOR",
     "DataTreeRunColumns",
     "GaussianPopulationModel",
+    "NetCDFRunColumns",
     "PopulationModel",
     "RunColumns",
     "effective_sample_sizes",
     "fit_population",
+    "runs_from_netcdf_directory",
 ]
 
 #: The ESS floor :func:`fit_population` refuses below, absent an explicit
@@ -358,6 +362,56 @@ class DataTreeRunColumns:
         if name not in stats:
             raise ResultsError(f"this run's sample_stats has no {name!r} column.")
         return np.asarray(stats[name].values, dtype=float).reshape(-1)
+
+
+@dataclasses.dataclass(frozen=True)
+class NetCDFRunColumns:
+    """:class:`RunColumns` over one archived run, read from a netCDF file on disk.
+
+    Read eagerly, once, at construction: an archived single-object run is
+    small, so nothing is bought by deferring the read, and a bad path fails
+    at construction rather than partway through a population fit.
+    """
+
+    path: Path
+    _columns: DataTreeRunColumns = dataclasses.field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "path", Path(self.path))
+        object.__setattr__(self, "_columns", DataTreeRunColumns(from_netcdf(self.path)))
+
+    @property
+    def attrs(self) -> Mapping[str, Any]:
+        return self._columns.attrs
+
+    def parameter_draws(self, name: str) -> np.ndarray:
+        return self._columns.parameter_draws(name)
+
+    @property
+    def log_prior(self) -> np.ndarray:
+        return self._columns.log_prior
+
+    @property
+    def log_likelihood(self) -> np.ndarray:
+        return self._columns.log_likelihood
+
+    @property
+    def proposal_log_density(self) -> np.ndarray | None:
+        return self._columns.proposal_log_density
+
+
+def runs_from_netcdf_directory(directory: str | Path, *, pattern: str = "*.nc") -> list[RunColumns]:
+    """Every archived run in *directory*, one :class:`NetCDFRunColumns` per file.
+
+    Sorted by filename, so a population fit built from a directory is
+    reproducible from the directory alone rather than from whatever order
+    the filesystem happens to hand back.
+    """
+    root = Path(directory)
+    paths = sorted(root.glob(pattern))
+    if not paths:
+        raise ResultsError(f"no files matching {pattern!r} in {root}; nothing to reweight.")
+    return [NetCDFRunColumns(path) for path in paths]
 
 
 # ---------------------------------------------------------------------------

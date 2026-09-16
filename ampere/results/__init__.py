@@ -152,10 +152,12 @@ from .population import (
     DEFAULT_ESS_FLOOR,
     DataTreeRunColumns,
     GaussianPopulationModel,
+    NetCDFRunColumns,
     PopulationModel,
     RunColumns,
     effective_sample_sizes,
     fit_population,
+    runs_from_netcdf_directory,
 )
 from .provenance import (
     ATTR_PREFIX,
@@ -251,6 +253,7 @@ __all__ = [
     "DataTreeRunColumns",
     "DrawRecorder",
     "GaussianPopulationModel",
+    "NetCDFRunColumns",
     "PopulationModel",
     "ResultsError",
     "ResultsWarning",
@@ -313,6 +316,7 @@ __all__ = [
     "registered_kinds",
     "replace_observations",
     "residual_whiteness",
+    "runs_from_netcdf_directory",
     "sbc",
     "separation_binned_autocorrelation",
     "spec_hashes",
