@@ -85,6 +85,7 @@ from ampere.backends.torch import (
     Matern12,
     Matern32,
     Matern52,
+    PSFConvolution,
     PowerLaw,
     QuasisepGP,
     Resample,
@@ -115,6 +116,7 @@ from ampere.core import (
 from ._kernels import build_kernel
 from ..protocol import (
     AstrometryPieces,
+    ImagePieces,
     BackendCapabilities,
     CovarianceSpec,
     InterferometryPieces,
@@ -445,6 +447,13 @@ TORCH_INTERFEROMETRY = InterferometryPieces(
 #: This backend's astrometric vocabulary, as one record (*W4.9*). The shipped
 #: classes, unmodified: they declare ``BACKEND = "torch"``, for the same
 #: reason :data:`TORCH_INTERFEROMETRY` does above.
+TORCH_IMAGE = ImagePieces(
+    psf_convolution=PSFConvolution,
+    gaussian_source=GaussianSource,
+    binary=Binary,
+)
+
+#: The shipped gridded-image vocabulary, as one record (W5.5).
 TORCH_ASTROMETRY = AstrometryPieces(
     epoch_sample=EpochSample,
     reflex_orbit=ReflexOrbit,
@@ -489,6 +498,9 @@ class TorchBackend:
         interferometry=True,
         # **W4.9**: the native astrometric twins, likewise.
         astrometry=True,
+        # **W5.5**: the native PSF-convolution twin, so every row in
+        # ``test_image.py`` runs on this column instead of skipping.
+        image=True,
         # Both, since W2.4 slice 2: see the module docstring.
         solvers=frozenset({SolverKind.DENSE, SolverKind.QUASISEP, SolverKind.HILBERT}),
     )
@@ -535,6 +547,9 @@ class TorchBackend:
 
     def interferometry(self) -> InterferometryPieces:
         return TORCH_INTERFEROMETRY
+
+    def image(self) -> ImagePieces:
+        return TORCH_IMAGE
 
     def astrometry(self) -> AstrometryPieces:
         return TORCH_ASTROMETRY

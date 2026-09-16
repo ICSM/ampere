@@ -214,6 +214,26 @@ an additive helper the freeze precludes nowhere). PSF convolution's
 standard-library slot (`transformations.md` §10) should land it — or an
 equivalent — when the image steps are implemented.*
 
+***Closed at W5.5*, as that disposition anticipated and by the route it
+named: `ampere.core.propagate_mask_grid` landed beside `propagate_mask`,
+and `PSFConvolution` — the §10 image slot, filled in the same item — is its
+first caller. Two details of the shipped helper differ from the sketch's
+proposal below and are worth reading beside it. It takes the kernel's
+**half-support in pixels**, per axis, rather than the kernel itself: the
+ANY rule cares only which inputs reach an output, and a support is what a
+step already knows in order to publish its padding, so passing the array
+would have invited two answers to the question of what counts as "reached"
+(non-zero? above a threshold?). And it dilates **separably**, axis by axis,
+which is the same answer as a rectangular-support convolution at `O(k N)`
+rather than `O(N²)` — so the "grow the bad-spaxel mask by the kernel's
+support" logic this section predicted every author would reinvent now has
+one shared, tested primitive, with the boundary behaviour fixed by
+construction rather than by each caller's choice of `mode=`. What the
+helper deliberately does **not** cover, and what `transformations.md`
+§13.5's amended text now says: a grid step whose influence is not a local
+neighbourhood — an arbitrary warp, a non-separable resampling — still has
+to flatten its own mask.*
+
 **What is missing.** `transformations.md` limitation 13.5 already states
 this precisely: "`propagate_mask`'s influence matrix is `(n_out, n_in)`,
 which fits `Layout.POINTS`. A `Layout.GRID` container's mask must be

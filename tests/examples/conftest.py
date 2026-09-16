@@ -49,3 +49,20 @@ def wstat_example() -> Iterator[ModuleType]:
     finally:
         _likelihood_module._FAMILIES.clear()
         _likelihood_module._FAMILIES.update(snapshot)
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Skip the ``image_full`` rows unless ``-m image_full`` asked for them (W5.5).
+
+    ``tests/interferometry/conftest.py``'s hook, under this directory's roof
+    because that is where ``tests/examples/test_image_study.py`` lives: a local
+    hook rather than an ``addopts`` deselection, so it says why it skipped and
+    does not reach into any other suite's invocation.
+    """
+    selected = config.getoption("-m", default="") or ""
+    if "image_full" in selected:
+        return
+    skip = pytest.mark.skip(reason="the image study's full budget: run with `pytest -m image_full`")
+    for item in items:
+        if "image_full" in item.keywords:
+            item.add_marker(skip)

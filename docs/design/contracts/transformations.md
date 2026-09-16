@@ -1098,7 +1098,7 @@ the freeze, since each fits the existing `Transformation` surface exactly:
 
 | Transformation | Accepts → produces | Notes |
 |---|---|---|
-| PSF convolution | `Image` → `Image` | the image analogue of LSF convolution; the kernel is usually a buffer |
+| PSF convolution | `Image` → `Image` | the image analogue of LSF convolution; the kernel is usually a buffer. **Landed W5.5** in each backend's `image.py` — the first step whose observed container is a `Layout.GRID` one. It publishes *one* constraint in two forms, which is what the row above did not anticipate: `points=` at the observed pixel centres padded by the kernel's half-support (the coverage a convolution needs, and the exact coordinates `apply` looks up with `Axis.locate`), **and** `intervals`/`max_step` restating the observed pixel scale as a density, which is what makes a model holding its own coarser grid refuse by name — gap I-4's mechanism applied to an image being *observed* rather than Fourier-sampled. The two must agree to the last bit or their union is not evenly spaced and the FFT route refuses, so the padded grid is built the way `AxisRequirement.coordinates` builds one. Kind-preserving and grid-*changing*: it convolves on the padded grid and crops to the observed pixels, in that order. The kernel is a buffer either way — a tabulated pixel PSF, which is §10's second rule in its gridded form and so refuses a grid at a different pixel scale rather than rescaling a calibration product, or a Gaussian FWHM, which `promote_buffer` turns into an ordinary fitted parameter |
 | Spatial resampling | `Image` → `Image` | the image analogue of spectral resampling; publishes on `x`/`y` |
 | Affine transform (rotation/translation/scaling/warping) | `Image`/`Cube` → same | the point at which `results_schema.md` §17 Q3's WCS carrier on `Image`/`Cube` becomes necessary — a future *container* addition, not a change here |
 | Hankel transform | radial profile → visibility amplitudes | for radial profiles, and for visibilities as functions of u–v distance alone |
@@ -1215,7 +1215,25 @@ Each is a decision, not an oversight. Each has an extension point.
    argument is the natural extension if real pipelines want it.
 5. **Mask propagation is 1-D.** `propagate_mask`'s influence matrix is
    `(n_out, n_in)`, which fits `Layout.POINTS`. A `Layout.GRID` container's
-   mask must be flattened by the transformation itself.
+   mask must be flattened by the transformation itself. *(Amended W5.5 — no
+   longer a limitation for a local, separable kernel.)* `propagate_mask_grid`
+   is the gridded counterpart, and the amendment is about the **expression**
+   of the rule rather than the rule: an output sample touching any masked
+   input is still masked (§6, `results_schema.md` §7), unchanged and
+   unchangeable. What changed is that a convolution's influence is a
+   *neighbourhood* rather than a matrix. A 64×64 image against a 9×9 kernel
+   has a sixteen-million-entry influence matrix with eighty-one non-zero
+   entries per row, so building it in order to take an `any` along its rows is
+   the wrong shape of answer; the neighbourhood is carried through as a
+   separable **dilation** by the kernel's half-support, axis by axis, at
+   `O(k N)` instead of `O(N²)`. The support passed is the kernel's *bounding
+   box* rather than its non-zero set, so the rule stays conservative in the
+   same direction it always was. The IFU sketch records this as its gap 2
+   (`docs/design/modalities/ifu_cube.md`), and W5.5's `PSFConvolution` is the
+   first caller. What is **still** a limitation: a grid transformation whose
+   influence is *not* a local neighbourhood — an arbitrary warp, a
+   non-separable resampling — has neither helper and must still flatten its
+   own mask.
 6. **The influence matrix is dense.** `(n_out, n_in)` booleans are built in
    full. For the negotiated grids this contract is designed around (hundreds to
    thousands of samples) that is nothing; a 10⁵-sample resample would want a

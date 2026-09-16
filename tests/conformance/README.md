@@ -63,6 +63,7 @@ A frozen record:
 | `float64` | whether the likelihood linear algebra runs in double precision. `architecture.md` §5 makes float64 the policy for GP solves; a backend that opts out for GPU throughput says so here and widens `tolerances.cross_backend`. |
 | `solvers` | the `SolverKind`s `gp_solver` can return an *implemented* solver for. Rows for absent kinds skip with a reason naming what is owed. |
 | `interferometry` | whether `interferometry()` can return this backend's Fourier, closure-phase and smearing steps and its three source models (W4.1). `False` by default; `test_interferometry.py`'s rows then skip with a reason naming what is owed. The native twins are W4.3's. |
+| `image` | whether `image()` can return this backend's PSF-convolution step and the image models it convolves (W5.5). `False` by default; `test_image.py`'s rows then skip with a reason naming what is owed. |
 | `complex_models` | whether `model()` can realise `ModelKind.COMPLEX` — a channel of complex values, which the `complex_gaussian` rows need. `False` by default; those rows then skip with a reason. Added at W2.4 slice 3, and made a capability rather than a required protocol member so that one track's slice is not a change to every other track's fixture. |
 | `tolerances` | the per-comparison table (§3). |
 
@@ -176,6 +177,20 @@ skips with a reason naming what is owed. The two container kinds they speak in
 (`VisibilitySet`, `ClosurePhases`) are `ampere.core`'s, not a backend's — D1's
 ruling of 2026-09-11 — so a backend supplies only the arithmetic.
 
+### `image() -> ImagePieces`
+
+**Added at W5.5.** The three gridded-image classes this backend supplies: the
+`psf_convolution` step (`Image -> Image`, built with
+`from_observed(container, fwhm=...)` or `from_observed(container, kernel=...)`)
+and two of W4.1's image models — `gaussian_source` and `binary` — reused
+unchanged as the sources a PSF is convolved with. Only called when
+`capabilities.image` is declared; a backend that has not written them may raise,
+and every row in `test_image.py` then skips with a reason naming what is owed.
+`UniformDisc` is deliberately **not** in the record: a sharp-edged disc is not
+band-limited, so its convolution converges as a power of the pixel scale rather
+than to a solver tolerance, which is a fact about discs that would confuse a row
+about convolution.
+
 ### `to_numpy(values) -> np.ndarray`
 
 Bring a backend array back to numpy for comparison against an oracle. Only the
@@ -262,6 +277,10 @@ tests/conformance/
   test_cross_backend.py  the rows that compare two backends
   test_interferometry.py Phase 4's modality: the Fourier, closure-phase and
                          smearing steps, and the two-dataset composition
+  test_image.py          Phase 5's gridded modality (W5.5): the PSF-convolution
+                         step against a direct sum, its requirement and three
+                         refusals, the Layout.GRID mask rule, and an Image on
+                         both sides of a likelihood
 ```
 
 Two rules for writing a row:

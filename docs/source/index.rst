@@ -29,7 +29,8 @@ core of frozen contracts with three backends implementing it — pure
 numpy/scipy, torch, and jax — and six inference engines written once against
 the contracts and run on any of them, the sixth being
 :class:`~ampere.inference.SBIEngine` for models with no likelihood to write
-down at all (see :doc:`sbi`). :doc:`overview` is the map.
+down at all (see :doc:`sbi`). :doc:`overview` is the map, and :doc:`image`
+is the newest worked modality — an image fitted as a dataset, PSF and all.
 
 User guide
 ----------

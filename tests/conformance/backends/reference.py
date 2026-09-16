@@ -58,6 +58,7 @@ from ampere.backends.reference import (
     FourierSample,
     GaussianSource,
     GaussianSourceVisibilities,
+    PSFConvolution,
     PowerLaw,
     ReflexOrbit,
     Resample,
@@ -96,6 +97,7 @@ from ampere.core import (
 from ._kernels import build_kernel
 from ..protocol import (
     AstrometryPieces,
+    ImagePieces,
     BackendCapabilities,
     CovarianceSpec,
     InterferometryPieces,
@@ -383,6 +385,9 @@ class ReferenceBackend:
         # W4.9: likewise the only backend with an astrometric vocabulary
         # until the torch and jax fixtures declare their own twins below.
         astrometry=True,
+        # W5.5: likewise the only backend with a gridded-image vocabulary
+        # until the torch and jax fixtures declare their own twins below.
+        image=True,
     )
 
     def model(self, spec: ModelSpec) -> Model:
@@ -428,6 +433,9 @@ class ReferenceBackend:
         # which is the truth here and the reason this fixture alone keeps them.
         return REFERENCE_INTERFEROMETRY
 
+    def image(self) -> ImagePieces:
+        return REFERENCE_IMAGE
+
     def astrometry(self) -> AstrometryPieces:
         # The shipped classes, unmodified, for the same reason as above.
         return REFERENCE_ASTROMETRY
@@ -438,6 +446,13 @@ class ReferenceBackend:
 
 #: The shipped astrometric vocabulary, as one record (W4.9). Module-level so
 #: that :class:`MirrorBackend` can say which of it is its own.
+REFERENCE_IMAGE = ImagePieces(
+    psf_convolution=PSFConvolution,
+    gaussian_source=GaussianSource,
+    binary=Binary,
+)
+
+#: The shipped gridded-image vocabulary, as one record (W5.5).
 REFERENCE_ASTROMETRY = AstrometryPieces(
     epoch_sample=EpochSample,
     reflex_orbit=ReflexOrbit,

@@ -59,6 +59,7 @@ from ampere.backends.reference import (
     FourierSample,
     GaussianSource,
     GaussianSourceVisibilities,
+    PSFConvolution,
     ReflexOrbit,
     Resample,
     TimeSmearing,
@@ -89,6 +90,7 @@ from ampere.core import (
 from ._kernels import build_kernel
 from ..protocol import (
     AstrometryPieces,
+    ImagePieces,
     BackendCapabilities,
     CovarianceSpec,
     InterferometryPieces,
@@ -344,6 +346,22 @@ class MirrorReflexOrbit(ReflexOrbit):
     BACKEND: ClassVar[str] = BACKEND
 
 
+# The gridded-image vocabulary (W5.5), for the same reason as the two above.
+
+
+class MirrorPSFConvolution(PSFConvolution):
+    """The PSF-convolution step, declared as this backend's (W5.5)."""
+
+    BACKEND: ClassVar[str] = BACKEND
+
+
+MIRROR_IMAGE = ImagePieces(
+    psf_convolution=MirrorPSFConvolution,
+    gaussian_source=MirrorGaussianSource,
+    binary=MirrorBinary,
+)
+
+#: The shipped gridded-image vocabulary, as one record (W5.5).
 MIRROR_ASTROMETRY = AstrometryPieces(
     epoch_sample=MirrorEpochSample,
     reflex_orbit=MirrorReflexOrbit,
@@ -474,6 +492,7 @@ class MirrorBackend(ReferenceBackend):
         tolerances=ReferenceBackend.capabilities.tolerances,
         interferometry=True,
         astrometry=True,
+        image=True,
     )
 
     def model(self, spec: ModelSpec) -> Model:
@@ -510,6 +529,9 @@ class MirrorBackend(ReferenceBackend):
 
     def interferometry(self) -> InterferometryPieces:
         return MIRROR_INTERFEROMETRY
+
+    def image(self) -> ImagePieces:
+        return MIRROR_IMAGE
 
     def astrometry(self) -> AstrometryPieces:
         return MIRROR_ASTROMETRY

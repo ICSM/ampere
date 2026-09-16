@@ -203,6 +203,10 @@ from .astrometry import (
     EpochSample,
     ReflexOrbit,
 )
+from .image import (
+    PSFConvolution,
+    TorchImageStep,
+)
 from .instrument import (
     DETECTORS,
     CalibrationScale,
@@ -298,6 +302,7 @@ __all__ = [
     "Matern52",
     "ModifiedBlackBody",
     "NativeAstropyModel",
+    "PSFConvolution",
     "PowerLaw",
     "Product",
     "QuasisepGP",
@@ -310,6 +315,7 @@ __all__ = [
     "Sum",
     "SyntheticPhotometry",
     "TimeSmearing",
+    "TorchImageStep",
     "TorchInterferometryStep",
     "TorchParameterSpace",
     "TorchSpectralModel",

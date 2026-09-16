@@ -106,6 +106,7 @@ from .gp import (
     Sum,
 )
 from .astrometry import EpochSample, ReflexOrbit
+from .image import PSFConvolution
 from .instrument import CalibrationScale, LSFConvolution, Resample, SyntheticPhotometry
 from .interferometry import (
     Amplitude,
@@ -174,6 +175,7 @@ __all__ = [
     "MeshSharder",
     "ModifiedBlackBody",
     "NativeAstropyModel",
+    "PSFConvolution",
     "PowerLaw",
     "Product",
     "QuasisepGP",
