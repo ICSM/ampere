@@ -63,9 +63,7 @@ class TestTheExampleRuns:
             assert left.failed == right.failed
             if left.failed:
                 continue
-            assert np.array_equal(
-                left.observations["sed"].values, right.observations["sed"].values
-            )
+            assert np.array_equal(left.observations["sed"].values, right.observations["sed"].values)
 
     def test_a_simulator_crash_is_flagged_with_its_own_diagnostic(
         self, example: ModuleType
@@ -88,9 +86,7 @@ class TestTheExampleRuns:
     ) -> None:
         problem = example.build_problem(sleep=30.0)
         table = np.array([[-1.0, 2.0], [-2.4, 2.0], [-1.0, 3.0]])
-        batch = problem.simulate_many(
-            3, values=table, executor=ProcessExecutor(2, timeout=3.0)
-        )
+        batch = problem.simulate_many(3, values=table, executor=ProcessExecutor(2, timeout=3.0))
         assert batch.failed.tolist() == [False, True, False]
         failure = batch.failures[1]
         assert failure is not None
@@ -104,20 +100,14 @@ class TestTheExampleRuns:
         problem = example.build_problem()
         drawn = problem.simulate({"model.index": -1.0, "model.norm": 2.0})
         assert not drawn.failed
-        assert np.allclose(
-            drawn.predicted["sed"].values, 2.0 * example.GRID**-1.0, rtol=1e-12
-        )
+        assert np.allclose(drawn.predicted["sed"].values, 2.0 * example.GRID**-1.0, rtol=1e-12)
 
-    def test_the_working_directory_is_per_process_and_made_once(
-        self, example: ModuleType
-    ) -> None:
+    def test_the_working_directory_is_per_process_and_made_once(self, example: ModuleType) -> None:
         first = example.working_directory()
         assert first.is_dir()
         assert example.working_directory() == first
 
-    def test_the_report_names_the_usable_pairs_and_the_reasons(
-        self, example: ModuleType
-    ) -> None:
+    def test_the_report_names_the_usable_pairs_and_the_reasons(self, example: ModuleType) -> None:
         problem, batch = example.run(6, 2)
         text = example.report(problem, batch)
         assert "usable" in text and "theta stacked as (6, 2)" in text

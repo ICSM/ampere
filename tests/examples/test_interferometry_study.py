@@ -65,7 +65,9 @@ class TestATinyFitRunsEndToEnd:
 
 class TestTheChromaticArm:
     def test_the_three_kernels_are_distinguishable_objects(self) -> None:
-        kernels = {kind: study._chromatic_kernel("reference", kind) for kind in study.CHROMATIC_KERNELS}
+        kernels = {
+            kind: study._chromatic_kernel("reference", kind) for kind in study.CHROMATIC_KERNELS
+        }
         assert kernels["spatial"] is not kernels["spectral"]
         assert type(kernels["product"]).__name__ == "Product"
 
@@ -75,7 +77,9 @@ class TestTheChromaticArm:
 
 
 class TestTheCli:
-    def test_main_runs_a_tiny_study_and_prints_a_table(self, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_main_runs_a_tiny_study_and_prints_a_table(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         code = main(["--arms", "correct", "incomplete"])
         assert code == 0
         captured = capsys.readouterr().out
@@ -83,7 +87,9 @@ class TestTheCli:
         assert "correct" in captured
         assert "incomplete" in captured
 
-    def test_main_chromatic_flag_runs_the_three_kernels(self, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_main_chromatic_flag_runs_the_three_kernels(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         code = main(["--chromatic"])
         assert code == 0
         captured = capsys.readouterr().out
