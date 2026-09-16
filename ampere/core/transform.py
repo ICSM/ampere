@@ -81,6 +81,7 @@ __all__ = [
     "Transformation",
     "negotiate",
     "propagate_mask",
+    "propagate_mask_grid",
 ]
 
 # COORDINATE_RTOL is defined in results_schema.py and re-exported here, where
@@ -211,6 +212,113 @@ def propagate_mask(
             f"the transformation applies to the values, or None if the mapping is one-to-one."
         )
     return np.any((matrix != 0) & mask.reshape(1, -1), axis=1)
+
+
+def propagate_mask_grid(
+    source: FunctionSamples | ArrayLike | None,
+    support: int | Sequence[int],
+) -> np.ndarray | None:
+    """Carry a mask through a **gridded** transformation, conservatively.
+
+    The ``Layout.GRID`` counterpart of :func:`propagate_mask`, and the closing
+    of this contract's limitation 13.5 ("mask propagation is 1-D") for the one
+    case a grid actually needs — a *local, separable* kernel such as a PSF
+    (``transformations.md`` §13.5, amended W5.5; the gap the IFU sketch records
+    as gap 2, ``docs/design/modalities/ifu_cube.md`` §"gaps").
+
+    The rule is :func:`propagate_mask`'s, unchanged: **an output sample is
+    masked if any input sample that influences it is masked.** What differs is
+    only how "influences" is expressed. An ``(n_out, n_in)`` influence matrix
+    for a 64x64 image convolved with a 9x9 kernel is a 16-million-entry array
+    of which 81 entries per row are non-zero, so building it to take an ``any``
+    along its rows is the wrong shape of answer. A convolution's influence is a
+    *neighbourhood*: output pixel ``(i, j)`` sees input pixels within the
+    kernel's half-support on each axis. Carrying the mask through is therefore
+    a **dilation** by that neighbourhood, computed axis by axis because a
+    rectangular support is separable — ``O(k N)`` rather than ``O(N²)``, and
+    the same answer.
+
+    Conservative in the same direction, too: the support passed should be the
+    kernel's *bounding box*, not its non-zero set, so a radially symmetric
+    kernel masks the corners of its box as well. A masked pixel contaminating
+    one more output pixel than it strictly reaches is the failure this rule
+    prefers (``results_schema.md`` §7).
+
+    Parameters
+    ----------
+    source
+        The container whose mask is being propagated, or a boolean mask array,
+        or ``None``. An unmasked input propagates to ``None``.
+    support
+        Half-support of the kernel in **pixels**, per axis: one integer for
+        every axis, or a single integer applied to all of them. A kernel of
+        ``2k + 1`` pixels along an axis has half-support ``k`` there.
+
+    Returns
+    -------
+    numpy.ndarray or None
+        A boolean mask of the input's own shape, dilated by *support*, or
+        ``None`` if the input was unmasked. A step that crops to a smaller
+        output grid selects from this; the dilation has to happen on the input
+        grid, because that is where the masked pixels are.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> propagate_mask_grid(None, 1) is None
+    True
+
+    One masked pixel, a 3x3 kernel: the whole neighbourhood goes with it.
+
+    >>> mask = np.zeros((4, 4), dtype=bool)
+    >>> mask[1, 1] = True
+    >>> propagate_mask_grid(mask, 1).astype(int).tolist()
+    [[1, 1, 1, 0], [1, 1, 1, 0], [1, 1, 1, 0], [0, 0, 0, 0]]
+
+    A support of zero is the identity, which is what a one-to-one gridded step
+    should pass:
+
+    >>> bool(np.array_equal(propagate_mask_grid(mask, 0), mask))
+    True
+    """
+    mask = source.mask if isinstance(source, FunctionSamples) else source
+    if mask is None:
+        return None
+    dilated = np.asarray(mask, dtype=bool)
+    if dilated.ndim == 0:
+        raise TransformationError(
+            "propagate_mask_grid works on a gridded mask of at least one axis; it was given a "
+            "scalar. Use propagate_mask for a Layout.POINTS container."
+        )
+    widths = (
+        (int(support),) * dilated.ndim
+        if isinstance(support, (int, np.integer))
+        else tuple(int(width) for width in support)
+    )
+    if len(widths) != dilated.ndim:
+        raise TransformationError(
+            f"propagate_mask_grid needs one half-support per axis of the {dilated.ndim}-axis "
+            f"mask it was given, got {len(widths)}. Pass a single integer to apply the same "
+            f"half-support to every axis."
+        )
+    if any(width < 0 for width in widths):
+        raise TransformationError(
+            f"propagate_mask_grid's half-support is a count of pixels on each side of a kernel's "
+            f"centre and so is non-negative, got {widths}."
+        )
+    for axis, width in enumerate(widths):
+        if width == 0:
+            continue
+        length = dilated.shape[axis]
+        spread = np.zeros_like(dilated)
+        for shift in range(-width, width + 1):
+            take = [slice(None)] * dilated.ndim
+            put = [slice(None)] * dilated.ndim
+            take[axis] = slice(max(0, -shift), length - max(0, shift))
+            put[axis] = slice(max(0, shift), length - max(0, -shift))
+            spread[tuple(put)] |= dilated[tuple(take)]
+        dilated = spread
+    return dilated
 
 
 # ---------------------------------------------------------------------------

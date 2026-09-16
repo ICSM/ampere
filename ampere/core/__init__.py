@@ -49,6 +49,7 @@ from .dataset import (
     declared_capabilities,
     foreign_parts,
     part_name,
+    sample_coordinates,
 )
 from .encoding import (
     COLUMN_GROUPS,
@@ -232,6 +233,7 @@ from .transform import (
     Transformation,
     negotiate,
     propagate_mask,
+    propagate_mask_grid,
 )
 
 # ``mappingproxy`` has no pickle reduction of its own, and every frozen mapping
@@ -409,6 +411,7 @@ __all__ = [
     "part_name",
     "prior_from_spec",
     "propagate_mask",
+    "propagate_mask_grid",
     "provenance_entries",
     "quasiseparable_families",
     "realise",
@@ -422,6 +425,7 @@ __all__ = [
     "registered_realisations",
     "reserved_names",
     "run_registrant_battery",
+    "sample_coordinates",
     "sample_observations_of",
     "simulate_batched_of",
     "substream",

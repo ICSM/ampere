@@ -48,6 +48,12 @@ three emitting visibilities analytically — :class:`UniformDiscVisibilities`,
 the closed forms the direct transform is held to. The two container kinds they
 speak in, ``VisibilitySet`` and ``ClosurePhases``, are ``ampere.core``'s.
 
+Images (Phase 5, ``image.py``, W5.5): the PSF-convolution step
+:class:`PSFConvolution`, ``Image`` -> ``Image`` — ``transformations.md`` §10's
+image slot, and the first step whose observed container is a
+``Layout.GRID`` one. The source models it convolves are ``interferometry.py``'s
+three, reused unchanged.
+
 Astrometry (Phase 4, ``astrometry.py``, W4.9): the epoch-sampling step
 :class:`EpochSample` and the reflex-orbit model :class:`ReflexOrbit`, which
 emits two :class:`~ampere.core.TimeSeries` channels (``"ra"``, ``"dec"``) —
@@ -74,6 +80,9 @@ from __future__ import annotations
 from .astrometry import (
     EpochSample,
     ReflexOrbit,
+)
+from .image import (
+    PSFConvolution,
 )
 from .instrument import (
     DETECTORS,
@@ -133,6 +142,7 @@ __all__ = [
     "GaussianSourceVisibilities",
     "LSFConvolution",
     "ModifiedBlackBody",
+    "PSFConvolution",
     "PowerLaw",
     "ReflexOrbit",
     "Resample",

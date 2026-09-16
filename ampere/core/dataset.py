@@ -152,7 +152,7 @@ from .parameter import (
     Tie,
     Value,
 )
-from .results_schema import FunctionSamples, ModelResult
+from .results_schema import FunctionSamples, Layout, ModelResult
 from .rng import SEED_BYTES
 from .rng import generator as _generator
 from .realisation import realise, sample_observations_of, simulate_batched_of
@@ -897,6 +897,45 @@ class Simulation:
 # ---------------------------------------------------------------------------
 
 
+def sample_coordinates(container: FunctionSamples) -> np.ndarray:
+    """The ``(n_samples, n_axes)`` coordinate matrix of *container*, C-ordered.
+
+    One row per *sample*, in the same flattening order
+    :attr:`~ampere.core.FunctionSamples.values` ravels in, which is what every
+    consumer of coordinates here wants: a noise model's covariance, a draw's
+    correlated realisation, a diagnostic's residual position.
+
+    Layout-aware, and that is the whole reason it exists (**W5.5**). For a
+    :attr:`~ampere.core.Layout.POINTS` container the axes *are* the samples,
+    one coordinate each, and stacking them column-wise is the answer — which is
+    what this code was, inline, before an ``Image`` was ever a dataset. A
+    :attr:`~ampere.core.Layout.GRID` container's axes are the separable grids
+    the samples are the product of, so a 16x16 image has two axes of sixteen
+    coordinates and two hundred and fifty-six samples, and the inline form
+    raised an ``IndexError`` about a boolean mask rather than saying anything
+    about layouts. The grid branch broadcasts each axis over the others,
+    exactly as ``encoding.py``'s ``_coordinate_matrix`` does for the SBI
+    encoder — which had this right since W3.3 and is the reason the shape of
+    the answer was never in doubt.
+    """
+    axes = container.axes
+    if not axes:
+        return np.zeros((int(np.asarray(container.values).size), 0), dtype=DTYPE)
+    if container.LAYOUT is Layout.GRID:
+        indices = np.indices(tuple(axis.values.size for axis in axes))
+        return np.ascontiguousarray(
+            np.column_stack(
+                [
+                    np.asarray(axis.values, dtype=DTYPE)[indices[position]].reshape(-1)
+                    for position, axis in enumerate(axes)
+                ]
+            )
+        )
+    return np.ascontiguousarray(
+        np.column_stack([np.asarray(axis.values, dtype=DTYPE).reshape(-1) for axis in axes])
+    )
+
+
 class Dataset:
     """One observation, the instrument that predicts it, the likelihood that scores it.
 
@@ -1471,9 +1510,7 @@ class Dataset:
         if not np.any(retain):
             return observed.with_values(drawn.reshape(observed.shape))
 
-        coordinates = np.column_stack(
-            [np.asarray(axis.values, dtype=DTYPE) for axis in observed.axes]
-        )[retain]
+        coordinates = sample_coordinates(observed)[retain]
         realisation = np.asarray(predicted.values, dtype=dtype).ravel()[retain]
         # The NoiseParams are built from the noiseless prediction *before* noise
         # is added (ruled 2026-09-03, X-1 point 4): a prediction-dependent noise
