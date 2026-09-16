@@ -887,8 +887,9 @@ not. They are repeated in `provenance_config()` because a stored run's attrs
 are where a reader looks for "what approximation produced this".
 
 ```pycon
+>>> solver = HilbertSpaceGP(basis_size=64, boundary_factor=3.0)
 >>> approximate = Likelihood(
-...     GaussianFamily(), GaussianProcessNoise(Matern32(0.3, 2.0), HilbertSpaceGP(basis_size=64))
+...     GaussianFamily(), GaussianProcessNoise(Matern32(0.3, 2.0), solver)
 ... )
 >>> exact = Likelihood(
 ...     GaussianFamily(), GaussianProcessNoise(Matern32(0.3, 2.0), DenseGP())
@@ -899,6 +900,15 @@ True
 {'basis_size': [16, 16], 'boundary_factor': 2.0}
 
 ```
+
+The `boundary_factor=3.0` above is not decoration, and it is the trap worth
+seeing once: `data` spans 1–5 µm, so its half-extent is 2 µm — the *same* as
+the kernel's length scale — and at the default `boundary_factor` the error
+stalls at about 0.14 nat however large `basis_size` grows, because what limits
+it is the box rather than the basis. Widening the box to three half-extents
+brings it to 8e-3 at `basis_size=32` and it barely improves after that. The
+two parameters are one approximation, and refining only one of them converges
+to the wrong answer rather than slowly.
 
 The conformance battery holds it to a **convergence** rather than to a number,
 which is the only honest assertion about an approximation: the disagreement

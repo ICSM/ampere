@@ -1827,7 +1827,9 @@ class TestApproximateSolverConvergence:
         )
         assert factor.shape == (observed.n_samples, size)
         covariance = factor @ factor.T + np.diag(np.full(observed.n_samples, SIGMA**2))
-        residual = np.asarray(observed.values.value - predicted.values.value, dtype=float)
+        residual = np.asarray(observed.values, dtype=float) - np.asarray(
+            predicted.values, dtype=float
+        )
         oracle = float(
             multivariate_normal.logpdf(residual, mean=np.zeros(observed.n_samples), cov=covariance)
         )
