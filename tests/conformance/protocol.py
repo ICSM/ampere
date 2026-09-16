@@ -62,6 +62,7 @@ __all__ = [
     "Tolerances",
     "TransformationKind",
     "TransformationSpec",
+    "approximation_envelope",
     "complex_axes",
 ]
 
@@ -108,6 +109,12 @@ class Tolerances:
         moment may sit from its analytic value before the row fails. The
         standard error itself is computed from the estimator, so the assertion
         stays honest as the draw count changes.
+
+    ``approximation_order``, ``approximation_floor``, ``approximation_final``
+        **W5.4's class, for an ``EXACT = False`` solver.** These three do not
+        describe an agreement at all; they describe a *convergence*, which is
+        the only honest thing to assert about an approximation. See
+        :func:`approximation_envelope` and ``README.md`` §3.
     """
 
     exact: float = 1e-12
@@ -116,6 +123,62 @@ class Tolerances:
     cross_solver: float = 1e-6
     cross_backend: float = 1e-9
     monte_carlo_sigmas: float = 5.0
+    approximation_order: float = 1.0
+    approximation_floor: float = 1e-2
+    approximation_final: float = 5e-2
+
+
+def approximation_envelope(
+    coarsest_error: float,
+    coarsest_size: int,
+    size: int,
+    tolerances: Tolerances,
+    order: float | None = None,
+) -> float:
+    """The tolerance an approximate solver's error must sit inside at *size*.
+
+    **The ``EXACT = False`` comparison class** (W5.4; ``horizon_notes.md`` §2
+    question (a)). An approximate solver cannot be held to a number: how close
+    it comes to :class:`~ampere.core.DenseGP` depends on the kernel, the data
+    and the approximation's own parameters, and a fixed tolerance would either
+    be so loose it asserted nothing or so tight it encoded one fixture's
+    arithmetic. What *is* a property of the method — and what a wrong
+    implementation breaks — is that the error **falls as the approximation is
+    refined**, at a rate the method's own analysis predicts.
+
+    So the envelope is anchored on the error measured at the **coarsest**
+    setting of the same row, and tightens from there as
+    ``(coarsest_size / size) ** order``: refining by a factor of two must buy
+    at least ``2 ** order``. Below that sits ``approximation_floor``, because
+    a Hilbert-space basis converges to the kernel *on a finite box* and the
+    box's own truncation error does not go away with more basis members — an
+    envelope with no floor would assert something false about the method
+    rather than something demanding about the implementation. The floor also
+    protects against the other direction: a coarsest setting that happens to
+    agree well by accident would otherwise set an envelope nothing could meet.
+
+    **The rate is a property of the kernel, not of the solver**, which is why
+    ``approximation_order`` defaults to the *slowest* rate any supported
+    family has and a row may tighten it. For an isotropic Matérn-``nu`` in
+    ``d`` axes the spectral density decays as ``omega ** -(2 nu + d)``, so the
+    truncated tail — and with it the reduced-rank error — falls as
+    ``m ** -2nu``: order 1 for Matérn-1/2, 3 for Matérn-3/2, 5 for Matérn-5/2,
+    and exponentially for a squared exponential. The default is therefore
+    ``1.0``.
+
+    ``approximation_final`` is the separate, absolute claim: whatever the
+    envelope allowed on the way, the finest setting a row uses must actually
+    be close to the exact answer. A row that asserted only the envelope would
+    pass on a solver that converged beautifully to the wrong number. It too is
+    kernel-dependent — a Matérn-1/2 is the roughest process this method
+    supports and a few hundred basis members is not many for it — so a row
+    that sweeps a rough kernel states its own and says why.
+    """
+    if size <= coarsest_size:
+        return float(coarsest_error)
+    rate = tolerances.approximation_order if order is None else float(order)
+    ratio = float(coarsest_size) / float(size)
+    return float(coarsest_error) * ratio**rate + tolerances.approximation_floor
 
 
 DEFAULT_TOLERANCES = Tolerances()
@@ -131,6 +194,13 @@ class SolverKind(enum.StrEnum):
 
     DENSE = "dense"
     QUASISEP = "quasisep"
+    #: W5.4's reduced-rank spectral solver. The first ``EXACT = False`` kind
+    #: the battery carries, and the reason :class:`Tolerances` gained an
+    #: approximation class: a row that asks for it compares against ``DENSE``
+    #: inside an envelope that tightens with the basis size rather than at a
+    #: fixed number. ``ConformanceBackend.gp_solver`` takes ``basis_size`` and
+    #: ``boundary_factor`` for this kind and ignores them for the other two.
+    HILBERT = "hilbert"
 
 
 class KernelFamily(enum.StrEnum):
@@ -576,11 +646,25 @@ class ConformanceBackend(Protocol):
         that has no such representation.
         """
 
-    def gp_solver(self, kind: SolverKind) -> GPSolver:
+    def gp_solver(
+        self,
+        kind: SolverKind,
+        *,
+        basis_size: int | Sequence[int] = 32,
+        boundary_factor: float = 2.0,
+    ) -> GPSolver:
         """Return this backend's solver for *kind*.
 
         Only called for a kind present in ``capabilities.solvers``; a backend
         may raise for anything else.
+
+        **W5.4** adds the two keywords, which describe the *approximation* and
+        so mean nothing to the two exact kinds: a backend ignores them unless
+        *kind* is :attr:`SolverKind.HILBERT`. They are on this one method
+        rather than on a second one because the convergence rows ask for the
+        same solver at four basis sizes, and a row that had to know which
+        method to call for which kind would be naming solvers rather than
+        kinds.
         """
 
     def independent_noise(self) -> NoiseModel:

@@ -40,7 +40,7 @@ it is mixed in here rather than in the package.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar
 
 import astropy.units as u
@@ -69,6 +69,7 @@ from ampere.backends.reference.models import _SpectralModel
 from ampere.core import (
     SHO,
     DenseGP,
+    HilbertSpaceGP,
     GaussianProcessNoise,
     GPSolver,
     HierarchicalPrior,
@@ -374,7 +375,7 @@ class ReferenceBackend:
         # W2.3 filled the quasiseparable slot in with celerite2 (an exact
         # rank-2 representation of Matern-3/2, not celerite2's eps
         # approximation), so the DenseGP<->QuasisepGP agreement rows run.
-        solvers=frozenset({SolverKind.DENSE, SolverKind.QUASISEP}),
+        solvers=frozenset({SolverKind.DENSE, SolverKind.QUASISEP, SolverKind.HILBERT}),
         # W4.1: this is the only backend with an interferometric vocabulary
         # until W4.3 writes the native twins, so every interferometric row
         # skips elsewhere with a reason naming that.
@@ -397,8 +398,18 @@ class ReferenceBackend:
     def kernel(self, spec: CovarianceSpec) -> Kernel:
         return build_kernel(spec, _KERNELS)
 
-    def gp_solver(self, kind: SolverKind) -> GPSolver:
-        return DenseGP() if kind is SolverKind.DENSE else QuasisepGP()
+    def gp_solver(
+        self,
+        kind: SolverKind,
+        *,
+        basis_size: int | Sequence[int] = 32,
+        boundary_factor: float = 2.0,
+    ) -> GPSolver:
+        if kind is SolverKind.DENSE:
+            return DenseGP()
+        if kind is SolverKind.HILBERT:
+            return HilbertSpaceGP(basis_size=basis_size, boundary_factor=boundary_factor)
+        return QuasisepGP()
 
     def independent_noise(self) -> NoiseModel:
         # The core classes, unmodified: since W2.13 they declare

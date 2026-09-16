@@ -44,6 +44,7 @@ from ampere.backends.torch import (
     BlackBody,
     CalibrationScale,
     DenseGP,
+    HilbertSpaceGP,
     LSFConvolution,
     ModifiedBlackBody,
     PowerLaw,
@@ -61,6 +62,9 @@ from ampere.backends.torch import (
 )
 from ampere.core import (
     DenseGP as CoreDenseGP,
+)
+from ampere.core import (
+    HilbertSpaceGP as CoreHilbertSpaceGP,
 )
 from ampere.core import (
     QuasisepGP as CoreQuasisepGP,
@@ -602,6 +606,110 @@ class TestDenseGP:
         assert [field.name for field in dataclasses.fields(DenseGP())] == [
             field.name for field in dataclasses.fields(CoreDenseGP())
         ]
+
+
+class TestHilbertSpaceGP:
+    """W5.4's reduced-rank solver in torch: the twin rows, and the gradient.
+
+    The conformance battery states the convergence claim on every column; what
+    is asserted here is what belongs to *this* backend — that it computes the
+    same numbers ``ampere.core``'s does, that its declaration matches the
+    core's field for field (so the cross-backend spec hash agrees), and that
+    the hyperparameters it exists to make differentiable actually are.
+    """
+
+    def test_it_agrees_with_the_reference_solver(self) -> None:
+        kernel, coordinates, residual, variance = gp_case()
+        native = TorchMatern32(0.4, 2.0)
+        assert HilbertSpaceGP(basis_size=32).log_marginal_likelihood(
+            native, coordinates, residual, variance, {}
+        ) == pytest.approx(
+            CoreHilbertSpaceGP(basis_size=32).log_marginal_likelihood(
+                kernel, coordinates, residual, variance, {}
+            ),
+            abs=1e-9,
+        )
+
+    def test_the_leave_one_out_terms_and_the_conditional_agree(self) -> None:
+        kernel, coordinates, residual, variance = gp_case()
+        native = TorchMatern32(0.4, 2.0)
+        solver, core = HilbertSpaceGP(basis_size=32), CoreHilbertSpaceGP(basis_size=32)
+        assert solver.conditional_loo(native, coordinates, residual, variance, {}) == pytest.approx(
+            core.conditional_loo(kernel, coordinates, residual, variance, {}), abs=1e-9
+        )
+        at = np.linspace(-1.0, 13.0, 41)
+        got = solver.condition(native, coordinates, residual, variance, {}, at=at)
+        expected = core.condition(kernel, coordinates, residual, variance, {}, at=at)
+        assert got.mean == pytest.approx(expected.mean, abs=1e-9)
+        assert got.variance == pytest.approx(expected.variance, abs=1e-9)
+
+    def test_the_whitening_takes_the_basis_size_and_agrees(self) -> None:
+        kernel, coordinates, _, _ = gp_case()
+        native = TorchMatern32(0.4, 2.0)
+        solver = HilbertSpaceGP(basis_size=24)
+        assert solver.latent_size(native, coordinates.size) == 24
+        whitened = np.random.default_rng(7).normal(size=24)
+        assert solver.latent_transform(native, coordinates, whitened, {}) == pytest.approx(
+            CoreHilbertSpaceGP(basis_size=24).latent_transform(kernel, coordinates, whitened, {}),
+            abs=1e-9,
+        )
+
+    def test_the_hyperparameters_are_differentiable(self) -> None:
+        """The reason a torch reduced-rank solver exists at all.
+
+        Against **central differences on the reference solver**, not against
+        another torch quantity: a gradient that agreed with itself would prove
+        only that autograd is self-consistent. The spectral density is where
+        the amplitude and the length scale enter, so this is the row that says
+        ``Kernel.spectral_density`` kept the graph.
+        """
+        _, coordinates, residual, variance = gp_case(20)
+        native = TorchMatern32(0.4, 2.0)
+        solver = HilbertSpaceGP(basis_size=32)
+        amplitude = torch.tensor(0.4, dtype=torch.float64, requires_grad=True)
+        length_scale = torch.tensor(2.0, dtype=torch.float64, requires_grad=True)
+        solver.log_marginal_likelihood_tensor(
+            native,
+            coordinates,
+            residual,
+            variance,
+            {"amplitude": amplitude, "length_scale": length_scale},
+        ).backward()
+
+        core = CoreHilbertSpaceGP(basis_size=32)
+
+        def density(a: float, ell: float) -> float:
+            return core.log_marginal_likelihood(
+                Matern32(a, ell), coordinates, residual, variance, {}
+            )
+
+        step = 1e-6
+        assert float(amplitude.grad) == pytest.approx(
+            (density(0.4 + step, 2.0) - density(0.4 - step, 2.0)) / (2.0 * step), rel=1e-5
+        )
+        assert float(length_scale.grad) == pytest.approx(
+            (density(0.4, 2.0 + step) - density(0.4, 2.0 - step)) / (2.0 * step), rel=1e-5
+        )
+
+    def test_the_native_surface_signals_failure_rather_than_raising(self) -> None:
+        """``inference.md`` §10a: a realised density must not raise."""
+        _, coordinates, residual, _ = gp_case()
+        native = TorchMatern32(0.4, 2.0)
+        value = HilbertSpaceGP().log_marginal_likelihood_native(
+            native, coordinates, residual, np.zeros(coordinates.size), {}
+        )
+        assert float(value) == -math.inf
+
+    def test_the_declaration_matches_the_reference_solver_field_for_field(self) -> None:
+        """``results.md`` §14: the approximation is declaration, so it is in the
+        spec, so both backends must carry exactly the same fields."""
+        import dataclasses
+
+        assert [field.name for field in dataclasses.fields(HilbertSpaceGP())] == [
+            field.name for field in dataclasses.fields(CoreHilbertSpaceGP())
+        ]
+        assert HilbertSpaceGP().provenance_config()["basis_size"] == [32]
+        assert "dtype" in HilbertSpaceGP().provenance_config()
 
 
 class TestQuasisepGP:

@@ -53,7 +53,7 @@ different recursion from the dense one.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar
 
 import astropy.units as u
@@ -79,6 +79,7 @@ from ampere.backends.torch import (
     UniformDisc,
     UniformDiscVisibilities,
     DenseGP,
+    HilbertSpaceGP,
     GaussianProcessNoise,
     IndependentNoise,
     Matern12,
@@ -489,7 +490,7 @@ class TorchBackend:
         # **W4.9**: the native astrometric twins, likewise.
         astrometry=True,
         # Both, since W2.4 slice 2: see the module docstring.
-        solvers=frozenset({SolverKind.DENSE, SolverKind.QUASISEP}),
+        solvers=frozenset({SolverKind.DENSE, SolverKind.QUASISEP, SolverKind.HILBERT}),
     )
 
     def model(self, spec: ModelSpec) -> Model:
@@ -511,8 +512,18 @@ class TorchBackend:
         # had a gradient and the amplitude did not: W2.4's carried finding.
         return build_kernel(spec, _KERNELS)
 
-    def gp_solver(self, kind: SolverKind) -> GPSolver:
-        return DenseGP() if kind is SolverKind.DENSE else QuasisepGP()
+    def gp_solver(
+        self,
+        kind: SolverKind,
+        *,
+        basis_size: int | Sequence[int] = 32,
+        boundary_factor: float = 2.0,
+    ) -> GPSolver:
+        if kind is SolverKind.DENSE:
+            return DenseGP()
+        if kind is SolverKind.HILBERT:
+            return HilbertSpaceGP(basis_size=basis_size, boundary_factor=boundary_factor)
+        return QuasisepGP()
 
     def independent_noise(self) -> NoiseModel:
         # This backend's own, since W2.13: a noise model is a capability part

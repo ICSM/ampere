@@ -45,7 +45,7 @@ backend flag now catches too).
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar
 
 import astropy.units as u
@@ -70,6 +70,7 @@ from ampere.backends.jax import (
     UniformDisc,
     UniformDiscVisibilities,
     DenseGP,
+    HilbertSpaceGP,
     GaussianProcessNoise,
     IndependentNoise,
     Matern12,
@@ -458,7 +459,7 @@ class JaxBackend:
         # **W4.9**: the native astrometric twins, likewise.
         astrometry=True,
         # Both, since W2.5 slice 2 chose celerite2.jax for the O(N) solve.
-        solvers=frozenset({SolverKind.DENSE, SolverKind.QUASISEP}),
+        solvers=frozenset({SolverKind.DENSE, SolverKind.QUASISEP, SolverKind.HILBERT}),
     )
 
     def __init__(self) -> None:
@@ -481,11 +482,19 @@ class JaxBackend:
     def kernel(self, spec: CovarianceSpec) -> Kernel:
         return build_kernel(spec, _KERNELS)
 
-    def gp_solver(self, kind: SolverKind) -> GPSolver:
+    def gp_solver(
+        self,
+        kind: SolverKind,
+        *,
+        basis_size: int | Sequence[int] = 32,
+        boundary_factor: float = 2.0,
+    ) -> GPSolver:
         if kind is SolverKind.DENSE:
             return DenseGP()
         if kind is SolverKind.QUASISEP:
             return QuasisepGP()
+        if kind is SolverKind.HILBERT:
+            return HilbertSpaceGP(basis_size=basis_size, boundary_factor=boundary_factor)
         raise NotImplementedError(f"the {BACKEND!r} backend declares no {kind.value} solver.")
 
     def independent_noise(self) -> NoiseModel:

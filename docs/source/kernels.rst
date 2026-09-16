@@ -73,7 +73,28 @@ is what fixes the constant in front of the O(N) solve:
 (``likelihoods.md`` §14) as the point of comparison M2 needs, but it
 declares ``QUASISEPARABLE = False``: infinitely smooth, so no polynomial
 generator represents it exactly, and it composes on :class:`~ampere.core.DenseGP`
-only.
+only — or, since **W5.4**, on :class:`~ampere.core.HilbertSpaceGP`.
+
+Every stationary family above has a second representation too: its **power
+spectral density**, :meth:`~ampere.core.Kernel.spectral_density`, which is
+what :class:`~ampere.core.HilbertSpaceGP` builds a reduced-rank
+approximation from. The three Matérns, the squared exponential, the ``SHO``
+and any ``Sum`` of those have one in closed form; a ``Product``,
+a ``RotationTerm`` and a ``SpectralMixture`` do not, and say so by name at
+composition. It is the one route that makes a squared exponential scale —
+its spectral density is a Gaussian, so the approximation converges
+exponentially in the basis size, which is the opposite of the trade the O(N)
+path offers.
+
+.. code-block:: pycon
+
+    >>> from ampere.core import HilbertSpaceGP, Matern32, SquaredExponential
+    >>> float(Matern32(0.4, 2.0).spectral_density(0.0, {"amplitude": 0.4,
+    ...                                                 "length_scale": 2.0}))
+    0.7390...
+    >>> HilbertSpaceGP(basis_size=64).EXACT
+    False
+
 
 A default is not a restriction. Every family above is an ordinary
 :class:`~ampere.core.Kernel` with priors on its own hyperparameters, so
@@ -81,11 +102,16 @@ picking one (or several, see §2) is exactly as easy as picking the default:
 
 .. code-block:: python
 
-    from ampere.core import GaussianProcessNoise, Matern32, QuasisepGP, SHO
+    from ampere.core import (
+        GaussianProcessNoise, HilbertSpaceGP, Matern32, QuasisepGP, SHO,
+    )
 
     kernel = Matern32(amplitude=st.halfnorm(scale=0.1),
                        length_scale=st.loguniform(0.5, 10.0))
     noise = GaussianProcessNoise(kernel, QuasisepGP())      # exact, O(N)
+
+    # or, in two or three axes, or for a kernel with no quasiseparable form:
+    reduced = GaussianProcessNoise(kernel, HilbertSpaceGP(basis_size=64))
 
 2. ``Sum``, ``Product`` and ``SpectralMixture``
 ---------------------------------------------------

@@ -82,17 +82,12 @@ def test_zeus_minimal_working_example(tmp_path, monkeypatch):
     optimizer.sampler.mu = 1.0
 
     rng = np.random.default_rng(SEED + 5)
-    base_guess = np.array(
-        [problem["true_slope"], problem["true_intercept"], 1.0, 0.05, 0.05]
-    )
+    base_guess = np.array([problem["true_slope"], problem["true_intercept"], 1.0, 0.05, 0.05])
     guess = [
-        base_guess + 1e-3 * rng.standard_normal(optimizer.npars)
-        for _ in range(optimizer.nwalkers)
+        base_guess + 1e-3 * rng.standard_normal(optimizer.npars) for _ in range(optimizer.nwalkers)
     ]
 
-    optimizer.optimise(
-        nsamples=NSAMPLES, burnin=BURNIN, guess=guess, preopt=False, progress=False
-    )
+    optimizer.optimise(nsamples=NSAMPLES, burnin=BURNIN, guess=guess, preopt=False, progress=False)
 
     # --- output shapes ---
     assert optimizer.allSamples.shape == (NSAMPLES, NWALKERS, optimizer.npars)

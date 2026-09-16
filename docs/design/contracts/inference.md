@@ -2344,6 +2344,34 @@ Each is a decision, not an oversight. Each has an extension point.
    makes "mask everything" a free maximum. Supporting it properly would need a
    likelihood that renormalises over the retained subset, which is a modelling
    decision this contract should not make silently.
+
+   *(Amended W5.4, 2026-09-16.)* The limitation is unchanged; what changes is
+   a claim this item used to make in passing, that the latent size is one
+   whitened value **per retained sample**. That was a property of the two
+   exact solvers, not of the contract. The whitened block is whatever the
+   solver's whitening takes: a reduced-rank strategy factorises `K` as
+   `(N, m)` rather than `(N, N)`, so `m` whitened variables produce `N`
+   correlated ones and the block is `m`. `GPSolver.latent_size(kernel,
+   n_samples)` is the single place that answers it — `n_samples` by default,
+   which is what `DenseGP` and `QuasisepGP` return and why nothing about the
+   two exact paths changes, and the basis size for `HilbertSpaceGP`
+   (`likelihoods.md` §7). It settles `docs/design/horizon_notes.md` §2's
+   question (b).
+
+   The invariance the item is *about* is untouched and is what makes the
+   ruling safe: the size must be computable from the **declaration alone**,
+   before any container is in hand, because `Likelihood.latent_declaration`
+   is called at composition. `HilbertSpaceGP`'s `basis_size` is therefore a
+   per-axis declaration whose product is `m`, checked against the axes the
+   kernel selects at composition rather than discovered as a shape error
+   inside a solve. The obligation the horizon note attached to the ruling —
+   that `simulate(observe=True)` and the latent-GP likelihood path must agree
+   on which whitening they use — is met structurally: every family's `sample`
+   draws `solver.latent_size(...)` whitened values and applies
+   `solver.latent_transform` to them, which is the same transform
+   `GaussianProcessNoise.noise_params` applies to the declared latent block,
+   and a conformance row asserts that the covariance the marginal likelihood
+   scores is exactly the covariance that whitening draws from.
 5. **`simulate` is one draw.** A batched `simulate_many(n)` — which is what an
    SBI budget actually wants, and what a `batchable` backend could vectorise —
    is Phase 3's, and needs the capability flag to mean something first.

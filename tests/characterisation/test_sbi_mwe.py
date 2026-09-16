@@ -107,9 +107,7 @@ def test_sbi_minimal_working_example(tmp_path, monkeypatch):
 
     # --- output shapes ---
     samples = optimizer.samples
-    samples_np = (
-        samples.detach().numpy() if hasattr(samples, "detach") else np.asarray(samples)
-    )
+    samples_np = samples.detach().numpy() if hasattr(samples, "detach") else np.asarray(samples)
     assert samples_np.shape == (NSAMPLES_POST, optimizer.npars)
     assert np.all(np.isfinite(samples_np))
 

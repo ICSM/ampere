@@ -17,7 +17,7 @@ is either ``scipy`` or the kernel written out from its own defining formula.
 from __future__ import annotations
 
 import math
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from typing import Any
 
 import astropy.units as u
@@ -67,6 +67,7 @@ from .protocol import (
     KernelFamily,
     SolverKind,
     Tolerances,
+    approximation_envelope,
 )
 
 AMPLITUDE = 0.4
@@ -1503,3 +1504,381 @@ class TestTheCircularComplexGP:
         # And the draw is correlated: the nearest pair of baselines shares far
         # more than sigma**2 would give them.
         assert np.max(np.abs(expected - np.diag(np.diag(expected)))) > SIGMA**2
+
+
+# ---------------------------------------------------------------------------
+# The first approximate solver: HilbertSpaceGP (W5.4)
+# ---------------------------------------------------------------------------
+
+#: The basis sizes the 1-D convergence rows sweep, coarsest first. Chosen for
+#: this fixture rather than in general: on ``GP_GRID`` (half-extent 5.25) with
+#: ``boundary_factor`` 2 the basis reaches an angular frequency
+#: ``pi m / (2 c S)``, so ``m = 16`` barely resolves a length scale of 2 and
+#: ``m = 128`` resolves it comfortably. The row asserts the *shape* of that
+#: progression, never the numbers.
+BASIS_SIZES: tuple[int, ...] = (16, 32, 64, 128)
+
+#: The per-axis counts of the 2-D row, on the ``(u, v)`` extent of
+#: :func:`visibility_pair`. The total basis is the square of each.
+UV_BASIS_SIZES: tuple[int, ...] = (4, 8, 16)
+
+#: The box for each. A wider box needs more basis members to reach the same
+#: frequency, so the 2-D row (whose per-axis counts are small) pays for its
+#: boundary accuracy with a factor of three rather than two.
+BOUNDARY_FACTOR = 2.0
+UV_BOUNDARY_FACTOR = 3.0
+
+
+def hilbert_likelihood(
+    backend: ConformanceBackend,
+    covariance: CovarianceSpec = MATERN32,
+    *,
+    basis_size: Any = 32,
+    boundary_factor: float = BOUNDARY_FACTOR,
+    family: Any = None,
+) -> Likelihood:
+    """A likelihood over *backend*'s kernel and its reduced-rank solver."""
+    solver = backend.gp_solver(
+        SolverKind.HILBERT, basis_size=basis_size, boundary_factor=boundary_factor
+    )
+    noise = GaussianProcessNoise(backend.kernel(covariance), solver)
+    return Likelihood(GaussianFamily() if family is None else family, noise)
+
+
+def converges(
+    errors: Sequence[float],
+    sizes: Sequence[int],
+    tolerances: Tolerances,
+    *,
+    order: float | None = None,
+    final: float | None = None,
+) -> None:
+    """Assert the ``EXACT = False`` tolerance class on one measured sweep.
+
+    Two claims, both from :func:`approximation_envelope`: every refinement
+    sits inside an envelope anchored on the coarsest error and tightening as
+    the basis grows, and the finest setting actually reaches
+    ``tolerances.approximation_final``. Neither is a fixed number for the
+    quantity under test, which is the whole point — an approximate solver
+    held to a constant would be held to one fixture's arithmetic.
+
+    ``order`` and ``final`` let a row state what its own **kernel** predicts,
+    because the rate is a property of the kernel rather than of the solver: an
+    isotropic Matérn-``nu``'s spectral density decays as
+    ``omega ** -(2 nu + d)``, so its reduced-rank error falls as ``m ** -2nu``
+    — order 1 for Matérn-1/2, 3 for Matérn-3/2, 5 for Matérn-5/2. The defaults
+    are the slowest case, so a row that passes neither is asserting the
+    weakest honest claim rather than a convenient one.
+    """
+    coarsest = float(errors[0])
+    for size, error in zip(sizes[1:], errors[1:], strict=True):
+        allowed = approximation_envelope(coarsest, sizes[0], size, tolerances, order)
+        assert error <= allowed, (
+            f"the approximation's error at basis size {size} is {error:.3e}, outside the "
+            f"envelope {allowed:.3e} that the error {coarsest:.3e} at size {sizes[0]} sets. "
+            f"The sweep was {[f'{value:.3e}' for value in errors]}."
+        )
+    reached = tolerances.approximation_final if final is None else float(final)
+    assert float(errors[-1]) <= reached, (
+        f"the approximation's error at the finest basis size {sizes[-1]} is "
+        f"{errors[-1]:.3e}, which does not reach {reached:.3e}. The sweep was "
+        f"{[f'{value:.3e}' for value in errors]}."
+    )
+
+
+class TestApproximateSolverConvergence:
+    """``HilbertSpaceGP``↔``DenseGP``: the convergence rows W5.4 adds.
+
+    ``horizon_notes.md`` §2 asked what a conformance row can assert about an
+    ``EXACT = False`` solver, given that the battery compares the exact ones
+    bit-tightly and an approximation cannot meet that. The answer these rows
+    implement is that the assertion is about the *method*, not about a
+    number: refine the approximation and the disagreement with ``DenseGP``
+    must fall, at a rate the method's own analysis predicts, down to the floor
+    its finite box imposes; and the finest setting must actually be close.
+
+    A wrong implementation fails this in a way a fixed tolerance would not
+    catch. A basis built on the wrong box, a spectral density with the wrong
+    dimension in it, a Woodbury solve missing a factor — each gives an error
+    that is *stable* under refinement rather than falling, because more basis
+    members converge to the wrong process just as happily as to the right one.
+    """
+
+    def _skip_unless_available(self, backend: ConformanceBackend) -> None:
+        if SolverKind.HILBERT not in backend.capabilities.solvers:
+            pytest.skip(
+                f"backend {backend.name!r} declares no reduced-rank spectral solver. Supply one "
+                f"and add SolverKind.HILBERT to its capabilities; these rows then compare it "
+                f"against DenseGP at a sequence of basis sizes under the approximation "
+                f"tolerance class."
+            )
+
+    def test_the_solver_declares_itself_approximate(self, backend: ConformanceBackend) -> None:
+        """The declaration the rest of this class relies on, on every column."""
+        self._skip_unless_available(backend)
+        solver = backend.gp_solver(SolverKind.HILBERT, basis_size=32)
+        assert solver.NAME == "HilbertSpaceGP"
+        assert not solver.EXACT
+        assert solver.IMPLEMENTED
+        assert solver.STACKED_RESIDUALS
+        # The approximation is visible in the run's attrs, per fold-in 10.
+        config = solver.provenance_config()
+        assert config["basis_size"] == [32]
+        assert config["boundary_factor"] == pytest.approx(2.0)
+
+    def test_the_marginal_likelihood_converges_to_the_dense_one(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """The headline row: ``log p`` against ``DenseGP``'s, at four basis sizes."""
+        self._skip_unless_available(backend)
+        predicted, observed = spectra()
+        exact = gp_likelihood(backend, MATERN32, SolverKind.DENSE).log_prob(predicted, observed)
+        errors = [
+            abs(
+                hilbert_likelihood(backend, MATERN32, basis_size=size).log_prob(predicted, observed)
+                - exact
+            )
+            for size in BASIS_SIZES
+        ]
+        converges(errors, BASIS_SIZES, tolerances)
+
+    @pytest.mark.parametrize(
+        ("spec", "final"),
+        [
+            (CovarianceSpec(KernelFamily.MATERN12, AMPLITUDE, LENGTH_SCALE), 0.25),
+            (CovarianceSpec(KernelFamily.MATERN52, AMPLITUDE, LENGTH_SCALE), None),
+            (SQUARED_EXPONENTIAL, None),
+            (CovarianceSpec(KernelFamily.SHO, AMPLITUDE, LENGTH_SCALE), None),
+            (
+                CovarianceSpec(
+                    KernelFamily.SUM,
+                    terms=(
+                        CovarianceSpec(KernelFamily.MATERN32, 0.3, 3.0),
+                        CovarianceSpec(KernelFamily.MATERN52, 0.2, 1.5),
+                    ),
+                ),
+                None,
+            ),
+        ],
+        ids=["matern12", "matern52", "squared_exponential", "sho", "sum"],
+    )
+    def test_every_family_with_a_spectral_density_converges(
+        self,
+        backend: ConformanceBackend,
+        tolerances: Tolerances,
+        spec: CovarianceSpec,
+        final: float | None,
+    ) -> None:
+        """One row per family W5.4 gives a closed-form spectral density.
+
+        The squared exponential is the interesting column: it has no
+        quasiseparable form at all, so ``QuasisepGP`` refuses it and this is
+        the only strategy that makes it scale. Its spectral density is a
+        Gaussian, so it converges fastest of the five.
+
+        Matérn-1/2 is the interesting column in the other direction, and its
+        looser ``final`` is a *measurement rather than an excuse*: a
+        Matérn-1/2 is the roughest process this method supports, its spectral
+        density decays only as ``omega ** -2``, and the reduced-rank error
+        therefore falls as ``1/m`` — so 128 basis members over this grid still
+        leave a couple of tenths of a nat. That is exactly the regime
+        ``horizon_notes.md`` §2 says a Vecchia approximation is for, and a row
+        that hid it behind the same number as the smooth families would be
+        asserting something untrue about the method.
+        """
+        self._skip_unless_available(backend)
+        predicted, observed = spectra()
+        exact = gp_likelihood(backend, spec, SolverKind.DENSE).log_prob(predicted, observed)
+        errors = [
+            abs(
+                hilbert_likelihood(backend, spec, basis_size=size).log_prob(predicted, observed)
+                - exact
+            )
+            for size in BASIS_SIZES
+        ]
+        converges(errors, BASIS_SIZES, tolerances, final=final)
+
+    def test_the_conditioned_moments_converge(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """§4.8's localisation diagnostic must converge too, on and off the grid."""
+        self._skip_unless_available(backend)
+        predicted, observed = spectra()
+        expected = gp_likelihood(backend, MATERN32, SolverKind.DENSE).conditional(
+            predicted, observed
+        )
+        means: list[float] = []
+        variances: list[float] = []
+        for size in BASIS_SIZES:
+            got = hilbert_likelihood(backend, MATERN32, basis_size=size).conditional(
+                predicted, observed
+            )
+            means.append(float(np.max(np.abs(np.asarray(got.mean) - np.asarray(expected.mean)))))
+            variances.append(
+                float(np.max(np.abs(np.asarray(got.variance) - np.asarray(expected.variance))))
+            )
+        converges(means, BASIS_SIZES, tolerances)
+        converges(variances, BASIS_SIZES, tolerances)
+        # And the posterior variance is a variance at every basis size, which
+        # a subtracted quadratic form would not guarantee near the boundary.
+        for size in BASIS_SIZES:
+            got = hilbert_likelihood(backend, MATERN32, basis_size=size).conditional(
+                predicted, observed
+            )
+            assert np.all(np.asarray(got.variance) >= 0.0)
+
+    def test_the_leave_one_out_terms_converge_rather_than_refusing(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """W5.4 allowed a refusal and did not need one: Woodbury gives ``A_ii``.
+
+        The leave-one-out identity needs the diagonal of ``(K + diag(sigma**2))**-1``,
+        which is exactly what ``QuasisepGP`` has no O(N) route to and refuses
+        over. A reduced-rank representation has one in closed form, so these
+        terms exist and converge with everything else.
+        """
+        self._skip_unless_available(backend)
+        predicted, observed = spectra()
+        expected = gp_likelihood(backend, MATERN32, SolverKind.DENSE).pointwise_log_prob(
+            predicted, observed
+        )
+        errors: list[float] = []
+        for size in BASIS_SIZES:
+            got = hilbert_likelihood(backend, MATERN32, basis_size=size).pointwise_log_prob(
+                predicted, observed
+            )
+            assert got.shape == expected.shape
+            errors.append(float(np.max(np.abs(got - expected))))
+        converges(errors, BASIS_SIZES, tolerances)
+
+    def test_the_tensor_product_basis_converges_on_a_visibility_set(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """The 2-D row, on W4.2's ``(u, v)`` fixture — where ``QuasisepGP`` cannot go.
+
+        ``Matern32(axes=("u", "v"))`` on a three-axis ``VisibilitySet``, scored
+        by the circular complex Gaussian, so the right-hand side is the
+        ``(n, 2)`` block of ``STACKED_RESIDUALS`` as well. The basis is the
+        tensor product over the box spanning the ``(u, v)`` extent, and ``m``
+        is the square of the per-axis count — which is why a spectral method
+        is a low-dimension method and why this row's counts are small.
+        """
+        self._skip_unless_available(backend)
+        if not backend.capabilities.complex_models:
+            pytest.skip(f"backend {backend.name!r} declares no complex models")
+        predicted, observed = visibility_pair()
+        exact = circular_gp_likelihood(backend, UV_SPEC, SolverKind.DENSE).log_prob(
+            predicted, observed
+        )
+        errors = [
+            abs(
+                hilbert_likelihood(
+                    backend,
+                    UV_SPEC,
+                    basis_size=(size, size),
+                    boundary_factor=UV_BOUNDARY_FACTOR,
+                    family=ComplexGaussianFamily(),
+                ).log_prob(predicted, observed)
+                - exact
+            )
+            for size in UV_BASIS_SIZES
+        ]
+        converges(errors, UV_BASIS_SIZES, tolerances)
+
+    def test_the_latent_block_is_the_basis_size_and_one_whitening_serves_both_paths(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """W5.4's ruling on ``inference.md`` §17.4, asserted rather than asserted about.
+
+        Two halves, and they are the same fact seen twice. The declaration:
+        ``Likelihood.latent_declaration(n)`` gives ``m`` whitened variables,
+        not ``n``, because the solver says so. The arithmetic: the covariance
+        the marginal likelihood **scores** is exactly the covariance the
+        whitening **draws** from — ``scipy`` is handed
+        ``L Lᵀ + diag(sigma**2)`` built from the solver's own ``L`` and must
+        return the solver's own ``log_prob``. That is what ``simulate(observe=True)``
+        and the latent-GP path agreeing *means*, written so that a solver
+        whose two paths had drifted apart could not pass it.
+        """
+        self._skip_unless_available(backend)
+        predicted, observed = spectra()
+        size = 24
+        likelihood = hilbert_likelihood(backend, MATERN32, basis_size=size)
+        noise = likelihood.noise
+        assert isinstance(noise, GaussianProcessNoise)
+        assert noise.solver.latent_size(noise.kernel, observed.n_samples) == size
+        # The declaration half needs a family that actually takes the latent
+        # path: a Gaussian under a GP marginalises analytically and declares no
+        # latent values at all, which is §9's table rather than anything to do
+        # with this solver. Poisson + GP is the latent shape.
+        latent = hilbert_likelihood(
+            backend, MATERN32, basis_size=size, family=family_named("poisson")()
+        )
+        assert latent.marginalisation is Marginalisation.LATENT
+        assert latent.latent_declaration(observed.n_samples).size == size
+        assert latent.latent_declaration(observed.n_samples).parameter.shape == (size,)
+
+        points = np.asarray(observed.axes[0].values, dtype=float).reshape(-1, 1)
+        values = noise.kernel.resolve({})
+        # The whitening as a block: L = latent_transform applied to the
+        # identity, one column per whitened variable.
+        factor = np.asarray(
+            noise.solver.latent_transform(noise.kernel, points, np.eye(size), values), dtype=float
+        )
+        assert factor.shape == (observed.n_samples, size)
+        covariance = factor @ factor.T + np.diag(np.full(observed.n_samples, SIGMA**2))
+        residual = np.asarray(observed.values.value - predicted.values.value, dtype=float)
+        oracle = float(
+            multivariate_normal.logpdf(residual, mean=np.zeros(observed.n_samples), cov=covariance)
+        )
+        assert likelihood.log_prob(predicted, observed) == pytest.approx(
+            oracle, abs=tolerances.linear_algebra
+        )
+
+    def test_a_kernel_with_no_spectral_density_is_refused_by_name(
+        self, backend: ConformanceBackend
+    ) -> None:
+        """The declared-slot discipline, one level down from ``QuasisepGP``'s.
+
+        A ``Product``'s leaves each have a closed-form spectral density and
+        the product does not — its transform is a convolution — so the refusal
+        has to name the *node* rather than the leaf, and this row is what says
+        so on every column.
+        """
+        self._skip_unless_available(backend)
+        product = CovarianceSpec(
+            KernelFamily.PRODUCT,
+            terms=(
+                CovarianceSpec(KernelFamily.MATERN32, AMPLITUDE, LENGTH_SCALE),
+                CovarianceSpec(KernelFamily.MATERN12, 0.2, 0.5),
+            ),
+        )
+        _, observed = spectra()
+        for spec, named in (
+            (product, "Product"),
+            (CovarianceSpec(KernelFamily.ROTATION, AMPLITUDE, LENGTH_SCALE), "RotationTerm"),
+        ):
+            likelihood = hilbert_likelihood(backend, spec)
+            with pytest.raises(LikelihoodError) as refusal:
+                likelihood.noise.check_compatible(likelihood.family, observed)
+            message = str(refusal.value)
+            assert named in message
+            assert "spectral density" in message
+            assert "DenseGP" in message
+
+    def test_a_basis_size_of_the_wrong_rank_is_refused_at_composition(
+        self, backend: ConformanceBackend
+    ) -> None:
+        """One count per selected axis, checked against the container, not the arithmetic.
+
+        At **composition**, which is where it has to be: the latent block's
+        size comes from this declaration, so a rank that disagreed with the
+        container would be discovered as a matrix-shape error inside a solve
+        after a sampler had already been built around the wrong dimension.
+        """
+        self._skip_unless_available(backend)
+        _, observed = spectra()
+        likelihood = hilbert_likelihood(backend, MATERN32, basis_size=(8, 8))
+        with pytest.raises(LikelihoodError) as refusal:
+            likelihood.noise.check_compatible(likelihood.family, observed)
+        assert "tensor product" in str(refusal.value)

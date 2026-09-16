@@ -65,6 +65,7 @@ from ampere.core import (
     GaussianFamily,
     Instrument,
     Likelihood,
+    PoissonFamily,
     Spectrum,
     Tie,
 )
@@ -587,3 +588,177 @@ class TestTheDecompositionComesFromTheRealisation:
         run = sample(agreement_problem(kit), kit, draws=20, warmup=20, chains=1)
         assert run.attrs["ampere_engine_draws_recomputed"] == 20
         assert "ampere_nuts_decomposition" not in run.attrs
+
+
+# ---------------------------------------------------------------------------
+# 6. The reduced-rank GP solver under NUTS (W5.4)
+# ---------------------------------------------------------------------------
+
+#: The flexible-likelihood problem's grid. Deliberately the M2 study's own band
+#: and shape — a smooth fringe on a power law — at a size a short chain can
+#: afford: ``examples/m2_misspecification`` runs the full ladder, and this row
+#: asks only whether NUTS moves through the reduced-rank posterior and lands
+#: where the exact solver lands.
+HSGP_GRID = np.linspace(0.842, 0.872, 48)
+HSGP_SIGMA = 0.02
+HSGP_FRINGE = 0.07
+HSGP_PERIOD = 0.0028
+HSGP_BASIS = 24
+
+
+def hsgp_data() -> Spectrum:
+    """A power law with the M2 ``strong_smooth`` fringe on it, plus noise.
+
+    The deviation is exactly what the flexible likelihood exists to absorb: a
+    smooth, coherent, order-few-per-cent ripple that no term of the forward
+    model can produce.
+    """
+    truth = power_law(HSGP_GRID, TRUTH["norm"], TRUTH["index"])
+    fringe = 1.0 + HSGP_FRINGE * np.sin(2.0 * np.pi * HSGP_GRID / HSGP_PERIOD)
+    return noisy(HSGP_GRID, truth * fringe, HSGP_SIGMA, seed=31)
+
+
+def hsgp_problem(kit: Kit, solver: Any) -> FittingProblem:
+    """The flexible likelihood on *solver*, with the GP hyperparameters free."""
+    module = kit.module
+    kernel = module.Matern32(st.lognorm(0.6, scale=0.1), st.lognorm(0.6, scale=0.003))
+    return FittingProblem(
+        module.PowerLaw(
+            HSGP_GRID,
+            norm=st.lognorm(0.4, scale=2.0),
+            index=st.norm(-1.2, 0.5),
+            reference_wavelength=REFERENCE_WAVELENGTH,
+        ),
+        [
+            Dataset(
+                hsgp_data(),
+                likelihood=Likelihood(
+                    GaussianFamily(), module.GaussianProcessNoise(kernel, solver)
+                ),
+            )
+        ],
+        seed=SEED,
+    )
+
+
+class TestTheReducedRankSolverUnderNUTS:
+    """W5.4: ``HilbertSpaceGP`` composes natively and NUTS samples through it.
+
+    Three claims, in order of how much they matter.
+
+    It **runs**: a ``GaussianProcessNoise`` carrying this solver lowers to a
+    native density on both differentiable backends, with no exception control
+    flow in the hot loop, and NUTS moves through the joint posterior over the
+    model parameters *and* the GP hyperparameters. The hyperparameters are the
+    part that was not free before W5.4 gave every family a spectral density
+    written in ``ArrayOps`` — a solver whose amplitude and length scale got no
+    gradient would sample them against the prior alone and report nothing
+    wrong, which is the failure ``DEVELOPMENT_PLAN.md`` §2's W2.4 row records.
+
+    It **lands in the same place** as the exact solver: the posterior on the
+    model parameters under ``HilbertSpaceGP`` agrees with the one under
+    ``DenseGP`` to within the two chains' own Monte Carlo error. That is the
+    coverage claim in the form a test suite can afford — the full M2 ladder is
+    ``examples/m2_misspecification``'s, and running it per commit is not.
+
+    And the **latent block is the basis size**: a latent-GP problem on this
+    solver has ``k + m`` sampler dimensions, not ``k + N``, which is what
+    ``inference.md`` §17.4's W5.4 amendment rules and the whole reason the
+    method is worth having under NUTS.
+    """
+
+    def test_it_composes_natively_and_samples(self, kit: Kit) -> None:
+        problem = hsgp_problem(kit, kit.module.HilbertSpaceGP(basis_size=HSGP_BASIS))
+        assert problem.backend == kit.name
+        assert problem.differentiable is True
+        # norm, index, amplitude, length_scale -- the two GP hyperparameters
+        # are free, which is the point.
+        assert problem.free_size == 4
+        run = realised_sample(problem, draws=250, warmup=250, chains=2)
+        posterior = run["posterior"]
+        assert set(posterior.data_vars) >= {
+            "model.norm",
+            "model.index",
+            "sed.likelihood.noise.kernel.amplitude",
+            "sed.likelihood.noise.kernel.length_scale",
+        }
+        for name in posterior.data_vars:
+            draws = np.asarray(posterior[name])
+            assert np.all(np.isfinite(draws))
+            # The chain moved: a solver whose hyperparameters got no gradient
+            # would still produce draws, from the prior, but a stuck chain
+            # would not.
+            assert float(draws.std()) > 0.0
+
+    def test_the_posterior_agrees_with_the_exact_solver(self, kit: Kit) -> None:
+        """The coverage claim, as a comparison of two chains on one problem.
+
+        The reduced-rank posterior must sit inside the exact one: the criterion
+        is the two chains' own Monte Carlo error on the mean, widened to three
+        standard errors, so it stays honest as the draw count changes rather
+        than encoding this fixture's arithmetic.
+        """
+        settings = {"draws": 400, "warmup": 400, "chains": 2}
+        exact = realised_sample(hsgp_problem(kit, kit.module.DenseGP()), **settings)
+        approximate = realised_sample(
+            hsgp_problem(kit, kit.module.HilbertSpaceGP(basis_size=HSGP_BASIS)), **settings
+        )
+        for name in ("model.norm", "model.index"):
+            left = np.asarray(exact["posterior"][name]).ravel()
+            right = np.asarray(approximate["posterior"][name]).ravel()
+            error = math.sqrt(float(left.var()) / left.size + float(right.var()) / right.size)
+            assert abs(float(left.mean()) - float(right.mean())) < 3.0 * error + 0.05 * float(
+                left.std()
+            )
+            # And the widths agree to a quarter of a standard deviation, which
+            # is what "the approximation has not thrown away the correlation"
+            # means for a flexible likelihood.
+            assert abs(float(left.std()) - float(right.std())) < 0.25 * float(left.std())
+
+    def test_the_latent_block_is_the_basis_size_not_the_sample_count(self, kit: Kit) -> None:
+        """``inference.md`` §17.4, amended at W5.4, as a sampler dimension.
+
+        A Poisson family under a GP takes the latent path, so the problem
+        declares a whitened block. Under an exact solver that block is one
+        value per retained sample; under this one it is ``m``, and ``m`` does
+        not grow with ``N``. That is the difference between a 48-point
+        spectrum costing 48 latent dimensions and costing 12.
+        """
+        module = kit.module
+        kernel = module.Matern32(st.lognorm(0.6, scale=0.3), st.lognorm(0.6, scale=0.005))
+        counts = Spectrum(
+            HSGP_GRID * u.micron,
+            np.round(power_law(HSGP_GRID, 40.0, TRUTH["index"])) * u.Jy,
+        )
+
+        def built(solver: Any) -> FittingProblem:
+            return FittingProblem(
+                module.PowerLaw(
+                    HSGP_GRID,
+                    norm=st.lognorm(0.3, scale=40.0),
+                    index=TRUTH["index"],
+                    reference_wavelength=REFERENCE_WAVELENGTH,
+                ),
+                [
+                    Dataset(
+                        counts,
+                        likelihood=Likelihood(
+                            PoissonFamily(), module.GaussianProcessNoise(kernel, solver)
+                        ),
+                    )
+                ],
+                seed=SEED,
+            )
+
+        exact = built(module.DenseGP())
+        reduced = built(module.HilbertSpaceGP(basis_size=12))
+        assert exact.datasets["sed"].latent is not None
+        assert exact.datasets["sed"].latent.size == HSGP_GRID.size
+        assert reduced.datasets["sed"].latent is not None
+        assert reduced.datasets["sed"].latent.size == 12
+        assert reduced.free_size == exact.free_size - HSGP_GRID.size + 12
+        # And it samples: the whitened block reaches the solver's own whitening.
+        run = realised_sample(reduced, draws=120, warmup=200, chains=1)
+        latent = np.asarray(run["posterior"]["sed.latent"])
+        assert latent.shape[-1] == 12
+        assert np.all(np.isfinite(latent))
