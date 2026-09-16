@@ -145,6 +145,11 @@ from .likelihood import (
     register_quasiseparable_term,
     registered_quasiseparable_terms,
     term_provenance_entries,
+    # W5.9 -- joint noise over a tuple of channels (appended, not interleaved).
+    ChannelCoupling,
+    CholeskyCoupling,
+    JointGaussianProcessNoise,
+    RotationCoupling,
 )
 from .vecchia import (
     NeighbourStructure,
@@ -292,8 +297,10 @@ __all__ = [
     "CauchyFamily",
     "CeleriteRepresentation",
     "Censoring",
+    "ChannelCoupling",
     "ChannelError",
     "ChannelRequirements",
+    "CholeskyCoupling",
     "ChunkHook",
     "ChunkSharder",
     "ClosurePhases",
@@ -333,6 +340,7 @@ __all__ = [
     "IndependentNoise",
     "InducingPointGP",
     "Instrument",
+    "JointGaussianProcessNoise",
     "Kernel",
     "KernelSpec",
     "LatentDeclaration",
@@ -376,6 +384,7 @@ __all__ = [
     "Realisation",
     "RealisationFactory",
     "RiceFamily",
+    "RotationCoupling",
     "RotationTerm",
     "SchemaError",
     "SerialExecutor",
