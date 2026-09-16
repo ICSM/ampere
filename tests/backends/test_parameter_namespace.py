@@ -303,3 +303,67 @@ class TestTorchLoweringRefusesByTheSameList:
         root = parameters.LoweredParameters()
         with pytest.raises(LoweringError, match="collides with an attribute"):
             root.child("state_dict")
+
+
+# ---------------------------------------------------------------------------
+# The canonical spelling, and what the two lookup tables now refuse
+# ---------------------------------------------------------------------------
+
+
+native_only = pytest.mark.skipif(
+    BACKENDS == ["reference"], reason="the native-surface lookup lives in the modern backends"
+)
+
+#: The ambiguity refusal, word for word, for the value half. Written out rather
+#: than matched loosely because the wording *is* the deliverable: it has to name
+#: both methods and say which one to keep.
+AMBIGUOUS = (
+    "model 'model' offers both `native_flux` and `flux`, which are two spellings of one "
+    "surface: `native_flux` is canonical and `flux` is the legacy alias. A model that "
+    "defines both leaves nothing to choose between them — keep one, and prefer `native_flux`."
+)
+
+
+@native_only
+class TestTheCanonicalSpelling:
+    @pytest.fixture(params=[name for name in BACKENDS if name != "reference"])
+    def native(self, request: Any) -> Kit:
+        return Kit(request.param)
+
+    def test_every_shipped_model_offers_only_the_canonical_pair(self, native: Kit) -> None:
+        """No shipped class carries the legacy alias any more (*W5.20*)."""
+        model = native.model()
+        assert callable(model.native_flux) and callable(model.native_grid)
+        assert not hasattr(model, "flux") and not hasattr(model, "grid")
+
+    def test_a_model_offering_both_spellings_is_refused_as_ambiguous(self, native: Kit) -> None:
+        """Not taken at either: the author is asked which they meant.
+
+        Before W5.20 the table took the first match and said nothing, so a
+        model carrying a legacy ``flux`` beside a canonical ``native_flux`` —
+        the shape a half-finished rename leaves behind — composed at whichever
+        the table happened to list first.
+        """
+        model = native.model()
+        model.flux = model.native_flux  # a half-finished rename, in one line
+        lowered = importlib.import_module(f"ampere.backends.{native.name}.problem")
+        with pytest.raises(LoweringError) as raised:
+            lowered.lower_problem(native.problem(model))
+        assert AMBIGUOUS in str(raised.value)
+
+    def test_half_a_pair_is_still_refused_with_the_missing_half_named(self, native: Kit) -> None:
+        """Unchanged by W5.20 except that the canonical name is now named first.
+
+        The two go together — the first supplies the values and the second the
+        coordinates the instrument chain transforms them on — so a model with
+        only one of them is refused at composition rather than dying inside
+        ``predict`` on an ``AttributeError``.
+        """
+        gridless = type("GridlessPowerLaw", (type(native.model()),), {"native_grid": None})
+        model = gridless(GRID, norm=st.lognorm(0.4, scale=2.0), index=st.norm(-1.2, 0.3))
+        lowered = importlib.import_module(f"ampere.backends.{native.name}.problem")
+        with pytest.raises(LoweringError) as raised:
+            lowered.lower_problem(native.problem(model))
+        message = str(raised.value)
+        assert "`native_grid` (or `grid`) missing" in message
+        assert "native_flux" not in message  # the half it *does* have is not listed
