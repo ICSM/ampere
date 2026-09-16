@@ -79,9 +79,9 @@ Every stationary family above has a second representation too: its **power
 spectral density**, :meth:`~ampere.core.Kernel.spectral_density`, which is
 what :class:`~ampere.core.HilbertSpaceGP` builds a reduced-rank
 approximation from. The three Matérns, the squared exponential, the ``SHO``
-and any ``Sum`` of those have one in closed form; a ``Product``,
-a ``RotationTerm`` and a ``SpectralMixture`` do not, and say so by name at
-composition. It is the one route that makes a squared exponential scale —
+and any ``Sum`` of those have one in closed form — and so, for free, does
+``SpectralMixture``, which *is* a ``Sum`` of ``SHO`` terms here; a ``Product``
+and a ``RotationTerm`` do not, and say so by name at composition. It is the one route that makes a squared exponential scale —
 its spectral density is a Gaussian, so the approximation converges
 exponentially in the basis size, which is the opposite of the trade the O(N)
 path offers.

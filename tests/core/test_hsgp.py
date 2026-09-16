@@ -62,15 +62,19 @@ def numerical_spectral_density(kernel, frequency: float, values=None) -> float:
     The oracle. It calls the kernel's own ``value`` — its closed form in one
     separation — and nothing else of ampere's, so it is a transform of the
     covariance rather than a second copy of the spectral density.
+
+    ``weight="cos"`` rather than folding the cosine into the integrand: at the
+    higher frequencies the row sweeps, an integrand oscillating tens of times
+    across the interval defeats adaptive quadrature, and an oracle that is
+    itself inaccurate proves nothing. scipy's oscillatory weight integrates
+    the envelope and applies the cosine analytically.
     """
     resolved = kernel.resolve({} if values is None else values)
 
-    def integrand(tau: float) -> float:
-        return float(np.asarray(kernel.value(np.array([tau]), resolved))[0]) * math.cos(
-            frequency * tau
-        )
+    def envelope(tau: float) -> float:
+        return float(np.asarray(kernel.value(np.array([tau]), resolved))[0])
 
-    total, _ = scipy.integrate.quad(integrand, 0.0, 400.0, limit=4000)
+    total, _ = scipy.integrate.quad(envelope, 0.0, 400.0, limit=4000, weight="cos", wvar=frequency)
     return 2.0 * total
 
 
@@ -86,8 +90,17 @@ class TestSpectralDensities:
             SquaredExponential(AMPLITUDE, LENGTH_SCALE),
             SHO(0.5, 1.5, 3.0),
             Sum(Matern32(0.3, 3.0), Matern12(0.15, 0.6)),
+            SpectralMixture([0.4, 0.2], [2.0, 0.7], [3.0, 5.0]),
         ],
-        ids=["matern12", "matern32", "matern52", "squared_exponential", "sho", "sum"],
+        ids=[
+            "matern12",
+            "matern32",
+            "matern52",
+            "squared_exponential",
+            "sho",
+            "sum",
+            "spectral_mixture",
+        ],
     )
     @pytest.mark.parametrize("frequency", [0.0, 0.3, 1.0, 2.5, 6.0])
     def test_the_closed_form_is_the_fourier_transform_of_the_covariance(
@@ -145,9 +158,8 @@ class TestSpectralDensities:
         [
             (Product(Matern32(0.3, 2.0), Matern12(0.2, 0.5)), "Product"),
             (RotationTerm(0.4, 2.0, 3.0, 0.5, 0.3), "RotationTerm"),
-            (SpectralMixture(0.4, 2.0, 1.0), "SpectralMixture"),
         ],
-        ids=["product", "rotation", "spectral_mixture"],
+        ids=["product", "rotation"],
     )
     def test_a_family_without_one_refuses_by_name(self, kernel, named: str) -> None:
         with pytest.raises(LikelihoodError) as refusal:
@@ -159,7 +171,7 @@ class TestSpectralDensities:
         kernel = SHO(0.5, 1.5, 3.0)
         with pytest.raises(LikelihoodError) as refusal:
             kernel.spectral_density(np.array([1.0]), kernel.resolve({}), dimensions=2)
-        assert "one ordered coordinate" in str(refusal.value)
+        assert "one axis only" in str(refusal.value)
 
     def test_a_stationary_subclass_without_a_smoothness_declaration_refuses(self) -> None:
         """A user's own ``StationaryKernel`` must not silently inherit the Matérn

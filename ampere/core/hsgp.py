@@ -332,11 +332,11 @@ def check_spectral_support(kernel: Kernel, dimensions: int, *, owner: str) -> No
             raise LikelihoodError(
                 f"{owner} needs a stationary kernel with a closed-form spectral density, but "
                 f"{type(node).__name__} ({node.FAMILY}) has none. Matern12, Matern32, Matern52, "
-                f"SquaredExponential and SHO have one, and so does any Sum of them; a Product's "
-                f"is a convolution of its factors' with no closed form — and none at all when "
-                f"the factors act on different axes — while RotationTerm and SpectralMixture "
-                f"were left out of W5.4 deliberately. Use DenseGP, which needs no spectral "
-                f"density at all."
+                f"SquaredExponential and SHO have one, and so does any Sum of them — including "
+                f"a SpectralMixture, which is a Sum of SHOs. A Product's is a convolution of "
+                f"its factors' with no closed form, and none at all when the factors act on "
+                f"different axes; RotationTerm's celerite pair was left out of W5.4 "
+                f"deliberately. Use DenseGP, which needs no spectral density at all."
             )
         if node.FAMILY == "sho" and int(dimensions) != 1:
             raise LikelihoodError(

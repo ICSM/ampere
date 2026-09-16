@@ -813,9 +813,12 @@ class Kernel(Parameterised, abc.ABC):
 
         The default **refuses by name**, the same declared-slot discipline an
         unimplemented solver follows: a family with no closed-form spectral
-        density (a :class:`Product`, a :class:`RotationTerm`, a
-        :class:`SpectralMixture`, or a user's own) must say so rather than
-        have a reduced-rank solver guess.
+        density (a :class:`Product`, a :class:`RotationTerm`, or a user's own)
+        must say so rather than have a reduced-rank solver guess. A
+        :class:`SpectralMixture` needs nothing of its own -- it *is* a
+        :class:`Sum` of :class:`SHO` terms in this codebase, so it inherits
+        the sum's, which is the same structural fact the quasiseparable
+        registry already exploits.
 
         Parameters
         ----------
@@ -831,7 +834,8 @@ class Kernel(Parameterised, abc.ABC):
             f"{type(self).__name__} ({self.FAMILY}) has no closed-form spectral density, so a "
             f"reduced-rank spectral solver (HilbertSpaceGP) cannot represent it. The families "
             f"that do are Matern12, Matern32, Matern52, SquaredExponential, SHO and any Sum of "
-            f"them; use DenseGP, which needs no spectral density at all."
+            f"them — a SpectralMixture included, being a Sum of SHOs; use DenseGP, which needs "
+            f"no spectral density at all."
         )
 
     def __repr__(self) -> str:
