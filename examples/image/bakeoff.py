@@ -79,6 +79,8 @@ __all__ = [
     "BOUNDARY_FACTOR",
     "COST_SIZES",
     "LENGTH_SCALE",
+    "LENGTH_SCALES",
+    "RESOLUTIONS",
     "SMOOTHNESS",
     "GridEquispacedFourierGP",
     "GridVecchiaResponseGP",
@@ -88,6 +90,7 @@ __all__ = [
     "cost_table",
     "measure_accuracy",
     "measure_cost",
+    "measure_resolution",
     "measure_smoothness",
     "smoothness_table",
     "solver_arms",
@@ -140,6 +143,10 @@ class Case:
 
     pixels: int
     observed: Any
+    #: The source-only prediction the flexible arm scores its residual
+    #: against, as the instrument produced it — an ``Image``, so
+    #: ``Likelihood.log_prob`` takes it unchanged.
+    predicted: Any
     coordinates: np.ndarray
     residual: np.ndarray
     variance: np.ndarray
@@ -177,6 +184,7 @@ def study_case(pixels: int, *, backend: str = "reference", seed: int = gen.SEED)
     return Case(
         pixels=pixels,
         observed=observed,
+        predicted=partial,
         coordinates=np.ascontiguousarray(sample_coordinates(observed)),
         residual=values - partial_values,
         variance=np.full(values.shape[0], sigma * sigma),
@@ -185,7 +193,13 @@ def study_case(pixels: int, *, backend: str = "reference", seed: int = gen.SEED)
     )
 
 
-def kernel_for(case: Case, family: str = "Matern32", *, backend: str = "reference") -> Any:
+def kernel_for(
+    case: Case,
+    family: str = "Matern32",
+    *,
+    length_scale: float = LENGTH_SCALE,
+    backend: str = "reference",
+) -> Any:
     """The one kernel every arm is measured on: fixed, and the same for all.
 
     The amplitude is the truth field's own r.m.s. rather than a prior draw,
@@ -195,7 +209,7 @@ def kernel_for(case: Case, family: str = "Matern32", *, backend: str = "referenc
     """
     module = study._noise_module(backend)
     amplitude = float(np.sqrt(np.mean(case.truth**2)))
-    return getattr(module, family)(amplitude, LENGTH_SCALE, axes=("x", "y"))
+    return getattr(module, family)(amplitude, length_scale, axes=("x", "y"))
 
 
 def solver_arms(*, coarse: bool = False, include_dense: bool = True) -> list[tuple[str, Any]]:
@@ -249,7 +263,7 @@ class SolverAccuracy:
     def row(self) -> str:
         """One fixed-width line, for pasting into a report."""
         return (
-            f"{self.pixels:>3}x{self.pixels:<3} {self.samples:>6d}  {self.solver:<14s} "
+            f"{self.pixels:>3}x{self.pixels:<3} {self.samples:>6d}  {self.solver:<24s} "
             f"{self.d_log_prob:>11.3e}  {self.bias:>+8.3f}  {self.rmse:>7.3f}  "
             f"{self.coverage:>8.3f}  {self.localisation:>8.4f}"
         )
@@ -317,7 +331,7 @@ def measure_accuracy(
 def accuracy_table(rows: Sequence[SolverAccuracy]) -> str:
     """:func:`measure_accuracy`'s result as a fixed-width table."""
     header = (
-        f"{'image':>7} {'N':>6}  {'solver':<14s} {'|dlogp|':>11}  {'bias/s':>8}  "
+        f"{'image':>7} {'N':>6}  {'solver':<24s} {'|dlogp|':>11}  {'bias/s':>8}  "
         f"{'rmse/s':>7}  {'cover90':>8}  {'localis.':>8}"
     )
     return "\n".join([header, "-" * len(header), *(row.row() for row in rows)])
@@ -328,9 +342,19 @@ def accuracy_table(rows: Sequence[SolverAccuracy]) -> str:
 # ---------------------------------------------------------------------------
 
 
+#: The two correlation lengths the smoothness panel is measured at, mas, on a
+#: 24 mas field. They are not a refinement of one another: at 8 mas the kernel
+#: reaches a third of the image — the regime the flexible likelihood is
+#: actually used in, because that is the scale of the background it absorbs —
+#: and at 2 mas it reaches a twelfth, which is where a screening-based method
+#: has a near field to screen with.
+LENGTH_SCALES: tuple[float, ...] = (8.0, 2.0)
+
+
 def measure_smoothness(
     *,
     pixels: int = 64,
+    length_scales: Sequence[float] = LENGTH_SCALES,
     backend: str = "reference",
     coarse: bool = False,
     seed: int = gen.SEED,
@@ -347,32 +371,33 @@ def measure_smoothness(
     """
     case = study_case(pixels, backend=backend, seed=seed)
     results: list[SolverAccuracy] = []
-    for family in SMOOTHNESS:
-        kernel = kernel_for(case, family, backend=backend)
-        exact = GridDenseGP().log_marginal_likelihood(
-            kernel, case.coordinates, case.residual, case.variance, {}
-        )
-        for name, solver in solver_arms(coarse=coarse, include_dense=False):
-            measured = _accuracy(case, kernel, solver, exact)
-            results.append(
-                SolverAccuracy(
-                    pixels=pixels,
-                    samples=case.samples,
-                    solver=f"{family[6:]:<5s} {name}",
-                    d_log_prob=measured[0],
-                    bias=measured[1],
-                    rmse=measured[2],
-                    coverage=measured[3],
-                    localisation=measured[4],
-                )
+    for length_scale in length_scales:
+        for family in SMOOTHNESS:
+            kernel = kernel_for(case, family, length_scale=length_scale, backend=backend)
+            exact = GridDenseGP().log_marginal_likelihood(
+                kernel, case.coordinates, case.residual, case.variance, {}
             )
+            for name, solver in solver_arms(coarse=coarse, include_dense=False):
+                measured = _accuracy(case, kernel, solver, exact)
+                results.append(
+                    SolverAccuracy(
+                        pixels=pixels,
+                        samples=case.samples,
+                        solver=f"M{family[6:]} l={length_scale:g} {name}",
+                        d_log_prob=measured[0],
+                        bias=measured[1],
+                        rmse=measured[2],
+                        coverage=measured[3],
+                        localisation=measured[4],
+                    )
+                )
     return results
 
 
 def smoothness_table(rows: Sequence[SolverAccuracy]) -> str:
     """:func:`measure_smoothness`'s result as a fixed-width table."""
     header = (
-        f"{'image':>7} {'N':>6}  {'kernel/solver':<14s} {'|dlogp|':>11}  {'bias/s':>8}  "
+        f"{'image':>7} {'N':>6}  {'kernel/solver':<24s} {'|dlogp|':>11}  {'bias/s':>8}  "
         f"{'rmse/s':>7}  {'cover90':>8}  {'localis.':>8}"
     )
     return "\n".join([header, "-" * len(header), *(row.row() for row in rows)])
@@ -452,10 +477,9 @@ def measure_cost(
             likelihood = GridLikelihood(
                 GaussianFamily(), noise_module.GaussianProcessNoise(kernel, solver)
             )
-            predicted = _prediction(case)
 
             def call(
-                lik: Any = likelihood, pred: Any = predicted, obs: Any = case.observed
+                lik: Any = likelihood, pred: Any = case.predicted, obs: Any = case.observed
             ) -> float:
                 return lik.log_prob(pred, obs, values={})
 
@@ -475,14 +499,6 @@ def measure_cost(
     return results
 
 
-def _prediction(case: Case) -> Any:
-    """The source-only prediction the flexible arm scores its residual against."""
-    return case.observed.replace(
-        values=np.asarray(case.observed.values, dtype=float)
-        - case.residual.reshape(np.shape(case.observed.values))
-    )
-
-
 def cost_table(rows: Sequence[SolverCost]) -> str:
     """:func:`measure_cost`'s result as a fixed-width table."""
     header = (
@@ -490,3 +506,75 @@ def cost_table(rows: Sequence[SolverCost]) -> str:
         f"{'peak MiB':>9}  {'log_prob':>14}"
     )
     return "\n".join([header, "-" * len(header), *(row.row() for row in rows)])
+
+
+#: The resolution ladder the ``m``-scaling panel sweeps, **per axis**. The
+#: total ``m`` is the square, so this is 64, 256, 576 and 1024 basis members.
+RESOLUTIONS: tuple[int, ...] = (8, 16, 24, 32)
+
+
+def measure_resolution(
+    *,
+    pixels: int = 128,
+    resolutions: Sequence[int] = RESOLUTIONS,
+    backend: str = "reference",
+    seed: int = gen.SEED,
+) -> list[SolverCost]:
+    """Cost against ``m`` at fixed ``N``: the panel that decides the EFGP column.
+
+    The ``(N, solver)`` table alone cannot settle EFGP against HSGP, because
+    the two differ in their dependence on **m** rather than on N: HSGP forms
+    ``Phi^T D^-1 Phi`` at ``O(N m²)`` and stores an ``(N, m)`` block, EFGP
+    assembles the same matrix from a Toeplitz generator at ``O(N 2^d m)`` and
+    stores none. At small ``m`` the difference is swamped by EFGP's complex
+    exponentials costing several times what HSGP's sines do; the claim is
+    about where the quadratic term takes over, and a table that swept only
+    ``N`` would report the small-``m`` regime as though it were the method.
+
+    Both solvers are given the same frequency reach at each rung
+    (:func:`solver_arms`' 8-against-9 rule), so a row compares two
+    approximations of comparable quality and not merely two array sizes.
+    """
+    case = study_case(pixels, backend=backend, seed=seed)
+    kernel = kernel_for(case, "Matern32", backend=backend)
+    noise_module = study._noise_module(backend)
+    results: list[SolverCost] = []
+    for per_axis in resolutions:
+        arms: list[tuple[str, Any]] = [
+            (
+                f"HSGP m={per_axis**2}",
+                GridHilbertSpaceGP(
+                    basis_size=(per_axis, per_axis), boundary_factor=BOUNDARY_FACTOR
+                ),
+            ),
+            (
+                f"EFGP m={(per_axis + 1) ** 2}",
+                GridEquispacedFourierGP(
+                    basis_size=(per_axis + 1, per_axis + 1), boundary_factor=BOUNDARY_FACTOR
+                ),
+            ),
+        ]
+        for name, solver in arms:
+            likelihood = GridLikelihood(
+                GaussianFamily(), noise_module.GaussianProcessNoise(kernel, solver)
+            )
+
+            def call(
+                lik: Any = likelihood, pred: Any = case.predicted, obs: Any = case.observed
+            ) -> float:
+                return lik.log_prob(pred, obs, values={})
+
+            setup_seconds, _, _ = _measure(call)
+            seconds, peak, value = _measure(call)
+            results.append(
+                SolverCost(
+                    pixels=pixels,
+                    samples=case.samples,
+                    solver=name,
+                    setup_seconds=setup_seconds,
+                    seconds=seconds,
+                    peak_mib=peak,
+                    log_prob=value,
+                )
+            )
+    return results
