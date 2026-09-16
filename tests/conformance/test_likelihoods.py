@@ -43,8 +43,10 @@ from ampere.core import (
     Order,
     Spectrum,
     VisibilitySet,
+    WarpedKernel,
     family_named,
     list_families,
+    lookup_quasiseparable_term,
     register_quasiseparable_term,
     term_provenance_entries,
 )
@@ -53,7 +55,15 @@ from ampere.core.kernels import _forget_quasiseparable_term, matern12_representa
 
 from ampere.backends.reference import FractionalModelGPNoise, FractionalModelNoise
 
-from .backends._kernels import USER_FAMILY, user_kernel_type
+from .backends._kernels import (
+    USER_FAMILY,
+    WARP_AMPLITUDE_KNOTS,
+    WARP_AMPLITUDE_LEVELS,
+    WARP_INCREMENTS,
+    WARP_INPUT_KNOTS,
+    user_kernel_type,
+    warped_kernel,
+)
 from .composition import COORDINATE_UNIT, FLUX_UNIT, GP_GRID
 from .oracles import (
     analytic_diagonal_gaussian_log_prob,
@@ -1179,6 +1189,230 @@ class TestUserRegisteredTerm:
         assert len(entries) == 1
         assert entries[0]["builtin"] is False
         assert entries[0]["kind"] == "quasiseparable_term"
+
+
+# ---------------------------------------------------------------------------
+# The warped kernel (W5.7)
+# ---------------------------------------------------------------------------
+
+#: A Matérn-3/2 warped in its input and its amplitude, built from each fixture's
+#: own Matérn-3/2 by ``ampere.core.WarpedKernel`` — one class on every column,
+#: because a wrapping kernel has no arithmetic of its own and adopts its child's
+#: namespace, device and capability flags, exactly as ``Sum`` does.
+WARPED_SPEC = CovarianceSpec(KernelFamily.WARPED, terms=(MATERN32,))
+
+#: The spec hash of a bare ``Matern32(0.4, 2.0)`` **recorded on master
+#: a6a09c3**, the commit W5.7 branched from, before ``KernelSpec`` gained its
+#: ``metadata`` field. A literal rather than a recomputation, because that is
+#: the only form in which a pre-W5.7 value can be asserted after W5.7; it was
+#: produced by ``hash_of(Matern32(0.4, 2.0).spec().to_dict())`` against a
+#: checkout of a6a09c3.
+PRE_W5_7_MATERN32_SPEC_HASH = "2ff5c78e4dfe672df7e0eb81a156eeaf"
+
+#: ``softplus(0)``: the normaliser that puts the identity warp at ``u = 0``.
+_SOFTPLUS_AT_ZERO = math.log(2.0)
+
+
+def _oracle_input_warp(coordinates: np.ndarray) -> np.ndarray:
+    """``w(x)`` written out from §6's definition, not from ``WarpedKernel``.
+
+    Piecewise linear with segment slopes ``softplus(u_k)/softplus(0)``,
+    anchored at ``w(x_0) = x_0`` and extended linearly beyond the end knots.
+    Written in the *direct* form, where the implementation writes the
+    algebraically identical *offset* form ``x + delta(x)`` (which is what makes
+    its identity warp exact) — so a mistake in either one's hinge basis or knot
+    bookkeeping shows as a disagreement rather than as two identical mistakes.
+    """
+    axis = np.asarray(coordinates, dtype=float)
+    knots = np.asarray(WARP_INPUT_KNOTS, dtype=float)
+    slopes = np.log1p(np.exp(np.asarray(WARP_INCREMENTS, dtype=float))) / _SOFTPLUS_AT_ZERO
+    warped = knots[0] + slopes[0] * (axis - knots[0])
+    for index in range(1, slopes.size):
+        warped = warped + (slopes[index] - slopes[index - 1]) * np.maximum(
+            axis - knots[index], 0.0
+        )
+    return warped
+
+
+def _oracle_amplitude(coordinates: np.ndarray) -> np.ndarray:
+    """``a(x)``: ``exp`` of the piecewise-linear interpolant of the knot levels."""
+    axis = np.asarray(coordinates, dtype=float)
+    knots = np.asarray(WARP_AMPLITUDE_KNOTS, dtype=float)
+    levels = np.asarray(WARP_AMPLITUDE_LEVELS, dtype=float)
+    gradients = np.diff(levels) / np.diff(knots)
+    logarithm = levels[0] + gradients[0] * (axis - knots[0])
+    for index in range(1, gradients.size):
+        logarithm = logarithm + (gradients[index] - gradients[index - 1]) * np.maximum(
+            axis - knots[index], 0.0
+        )
+    return np.exp(logarithm)
+
+
+class TestTheWarpedKernel:
+    """W5.7's rows: non-stationary, still exact, still O(N), still the base kernel.
+
+    Each claim is its own row because each could fail on its own: the warped
+    covariance is what the explicit warp gives; the O(N) path reproduces the
+    dense one at ``tolerances.cross_solver``; the identity warp is the base
+    kernel *bit for bit* and does not disturb its spec hash; and a warp whose
+    knots are not monotone is refused at composition rather than at the first
+    factorisation.
+    """
+
+    def test_the_input_warp_is_the_base_kernel_on_warped_coordinates(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """The item's headline claim, against an oracle that applies no warp at all."""
+        grid = np.asarray(GP_GRID, dtype=float)
+        base = backend.kernel(MATERN32)
+        warped = warped_kernel(base, amplitude_warp=False)
+        got = backend.to_numpy(warped.matrix(grid[:, None], grid[:, None], warped.resolve(None)))
+        moved = _oracle_input_warp(grid)
+        expected = backend.to_numpy(
+            base.matrix(moved[:, None], moved[:, None], base.resolve(None))
+        )
+        assert got == pytest.approx(expected, abs=tolerances.analytic)
+
+    def test_the_amplitude_warp_is_a_diagonal_congruence(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """``D K D`` with ``D = diag(a(x))``, and a marginal variance that moves with it."""
+        grid = np.asarray(GP_GRID, dtype=float)
+        base = backend.kernel(MATERN32)
+        warped = warped_kernel(base, input_warp=False)
+        got = backend.to_numpy(warped.matrix(grid[:, None], grid[:, None], warped.resolve(None)))
+        scale = _oracle_amplitude(grid)
+        plain = backend.to_numpy(base.matrix(grid[:, None], grid[:, None], base.resolve(None)))
+        assert got == pytest.approx(
+            scale[:, None] * plain * scale[None, :], abs=tolerances.analytic
+        )
+        # The per-point marginal variance is what makes a CeleriteRepresentation's
+        # ``marginal`` an (n,) array here where it is a scalar everywhere else.
+        diagonal = backend.to_numpy(warped.diagonal(grid[:, None], warped.resolve(None)))
+        assert diagonal == pytest.approx(AMPLITUDE**2 * scale**2, abs=tolerances.analytic)
+
+    def test_the_quasiseparable_solve_agrees_with_the_dense_one(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """The O(N) path carries the warp, at the tolerance an *exact* solver owes.
+
+        Two genuinely different recursions — a dense Cholesky of
+        ``a(x) k(w(x), w(x')) a(x')`` against a semiseparable factorisation
+        whose generators were moved and scaled — so agreement at
+        ``cross_solver`` is evidence that the representation is the warped
+        kernel rather than near it.
+        """
+        if SolverKind.QUASISEP not in backend.capabilities.solvers:
+            pytest.skip(f"{backend.name} supplies no quasiseparable solver")
+        predicted, observed = spectra()
+        dense = gp_likelihood(backend, WARPED_SPEC, SolverKind.DENSE)
+        quasisep = gp_likelihood(backend, WARPED_SPEC, SolverKind.QUASISEP)
+        assert quasisep.log_prob(predicted, observed) == pytest.approx(
+            dense.log_prob(predicted, observed), abs=tolerances.cross_solver
+        )
+
+    def test_the_identity_warp_is_the_base_kernel_bit_for_bit(
+        self, backend: ConformanceBackend
+    ) -> None:
+        """Not ``approx``: ``array_equal``.
+
+        The parameterisation is chosen so that the identity is *exact* —
+        ``softplus(0)/softplus(0)`` is ``1.0``, the offsets it produces are
+        ``0.0``, ``x + 0.0`` is ``x``, ``exp(0.0)`` is ``1.0`` and
+        ``1.0 * K * 1.0`` is ``K``. Anything looser and "the data must pay to
+        leave the identity warp" would be a claim about a model that is not
+        quite the base model, which is what the shrinkage prior is for.
+        """
+        grid = np.asarray(GP_GRID, dtype=float)
+        base = backend.kernel(MATERN32)
+        identity = warped_kernel(base, identity=True)
+        plain = backend.to_numpy(base.matrix(grid[:, None], grid[:, None], base.resolve(None)))
+        same = backend.to_numpy(
+            identity.matrix(grid[:, None], grid[:, None], identity.resolve(None))
+        )
+        assert np.array_equal(plain, same)
+        assert np.array_equal(
+            backend.to_numpy(base.diagonal(grid[:, None], base.resolve(None))),
+            backend.to_numpy(identity.diagonal(grid[:, None], identity.resolve(None))),
+        )
+
+    def test_the_base_kernels_spec_hash_is_unchanged_by_w5_7(
+        self, backend: ConformanceBackend
+    ) -> None:
+        """A declaration written before W5.7 still hashes to what it hashed to.
+
+        ``KernelSpec`` gained a field, and a spec hash is what tells two runs
+        they are about the same model. The guard is that ``to_dict`` omits
+        ``metadata`` when it is empty, which is worth nothing unless something
+        checks the resulting digest against a recorded one.
+        """
+        from ampere.results import hash_of
+
+        assert hash_of(backend.kernel(MATERN32).spec().to_dict()) == PRE_W5_7_MATERN32_SPEC_HASH
+
+    def test_the_warp_declares_its_knots_in_the_spec(self, backend: ConformanceBackend) -> None:
+        """Two warps with different knots are different models, so they hash differently."""
+        from ampere.results import hash_of
+
+        base = backend.kernel(MATERN32)
+        described = warped_kernel(base).spec().to_dict()
+        assert described["family"] == "warped"
+        assert described["metadata"]["input_warp_knots"] == list(WARP_INPUT_KNOTS)
+        moved = WarpedKernel(
+            base,
+            input_warp=(1.0, 5.0, 11.5),
+            increments=WARP_INCREMENTS[:2],
+            input_scale=1.0,
+        )
+        assert hash_of(described) != hash_of(moved.spec().to_dict())
+
+    def test_a_non_monotone_knot_set_is_refused_at_composition(
+        self, backend: ConformanceBackend
+    ) -> None:
+        """Refused where it is declared, not where it would first produce nonsense.
+
+        Knot *locations* are positions on the coordinate axis and the warp
+        interpolates between consecutive ones; out of order there is no
+        monotone interpolant at all, so the covariance would silently stop
+        being one. The knot *variables* need no such check — every segment
+        slope is a softplus, and is positive whatever a sampler proposes.
+        """
+        base = backend.kernel(MATERN32)
+        with pytest.raises(LikelihoodError, match="strictly increasing"):
+            WarpedKernel(base, input_warp=(1.0, 8.0, 4.5, 11.5))
+        with pytest.raises(LikelihoodError, match="strictly increasing"):
+            WarpedKernel(base, amplitude_warp=(1.0, 1.0, 11.5))
+
+    def test_the_o_n_path_never_materialises_a_dense_block(
+        self, backend: ConformanceBackend
+    ) -> None:
+        """Counted, not claimed: the representation stays rank-J as N grows.
+
+        The whole O(N) story is that the solve factorises
+        ``K[n,m] = Σⱼ U[n,j] V[m,j] e^{−cⱼ(tₙ−tₘ)}`` with ``J`` fixed, so every
+        array it builds is ``(n,)`` or ``(n, J)`` and the element count grows
+        *linearly*. This row counts those elements at three sizes: a dense
+        solver's largest array quadruples when ``n`` doubles, and this one
+        doubles. The timing that goes with it is in
+        ``tests/core/test_kernels_warped.py``, where a wall clock is not being
+        asked to behave on three backends at once.
+        """
+        if SolverKind.QUASISEP not in backend.capabilities.solvers:
+            pytest.skip(f"{backend.name} supplies no quasiseparable solver")
+        base = backend.kernel(MATERN32)
+        warped = warped_kernel(base)
+        builder = lookup_quasiseparable_term(warped.FAMILY)
+        counted = []
+        for size in (128, 256, 512):
+            axis = np.linspace(1.0, 11.5, size)
+            representation = builder(warped, warped.resolve(None), axis)
+            left = backend.to_numpy(representation.left)
+            right = backend.to_numpy(representation.right)
+            assert left.shape == (size, representation.rank)
+            assert right.shape == (size, representation.rank)
+            counted.append(left.size + right.size)
+        assert counted[1] == 2 * counted[0]
+        assert counted[2] == 2 * counted[1]
 
 
 # ---------------------------------------------------------------------------
