@@ -134,7 +134,7 @@ against `DenseGP` bit-tightly, which an approximate solver cannot meet.
 
 **Where they fit.** Each is a `GPSolver` with `EXACT = False`, its own
 `provenance_config()` (the approximation parameters — `m`, the box factor
-— recorded, never hashed, per fold-in 10), a `latent_transform` of reduced
+— recorded, ~~never hashed~~ per fold-in 10; *Amended W5.4*: they are hashed, since an approximation changes the likelihood's value and two backends may not differ on it), a `latent_transform` of reduced
 dimension, and `conditional_loo` either exact-in-the-approximation or
 refused by name. Two contract questions to settle when the phase opens:
 (a) the conformance tolerance class for `EXACT = False` solvers — compare
