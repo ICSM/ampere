@@ -159,9 +159,7 @@ class ReflexOrbit(_ReferenceReflexOrbit):
         """:meth:`grid_tensor` under the name the realisation looks for."""
         return self.grid_tensor(channel)
 
-    def native_flux(
-        self, channel: str, values: Mapping[str, Any] | None = None
-    ) -> torch.Tensor:
+    def native_flux(self, channel: str, values: Mapping[str, Any] | None = None) -> torch.Tensor:
         """This model's offset on *channel*, mas, as a differentiable tensor."""
         return self._offset_native(
             channel, self.grid_tensor(channel), self._context_tensors(self.context(values))

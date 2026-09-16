@@ -109,7 +109,9 @@ class Kit:
         buffer, the channels and the native surface are whatever this backend
         already ships.
         """
-        model = self.module.PowerLaw(GRID, norm=st.lognorm(0.4, scale=2.0), index=st.norm(-1.2, 0.3))
+        model = self.module.PowerLaw(
+            GRID, norm=st.lognorm(0.4, scale=2.0), index=st.norm(-1.2, 0.3)
+        )
         for name in extra:
             model.register_parameter(Parameter(name, st.norm(0.0, 1.0)))
         return model

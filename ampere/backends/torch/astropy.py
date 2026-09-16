@@ -227,9 +227,7 @@ class NativeAstropyModel(Model):
         self._check_grid()
         return self._axis_grid_tensor
 
-    def native_flux(
-        self, channel: str, values: Mapping[str, Any] | None = None
-    ) -> torch.Tensor:
+    def native_flux(self, channel: str, values: Mapping[str, Any] | None = None) -> torch.Tensor:
         """This model's flux on *channel*, as a differentiable tensor.
 
         The surface a gradient passes through.

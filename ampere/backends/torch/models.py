@@ -244,9 +244,7 @@ class TorchSpectralModel(Model):
         """
         return self.grid_tensor(channel)
 
-    def native_flux(
-        self, channel: str, values: Mapping[str, Any] | None = None
-    ) -> torch.Tensor:
+    def native_flux(self, channel: str, values: Mapping[str, Any] | None = None) -> torch.Tensor:
         """This model's flux on *channel*, in Jy, as a differentiable tensor.
 
         The surface a realisation composes, and the one the gradient passes
