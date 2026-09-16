@@ -62,6 +62,7 @@ from ampere.backends.reference.noise import (
     FractionalModelNoise as _ReferenceFractionalModelNoise,
 )
 from ampere.core import GaussianProcessNoise as _CoreGaussianProcessNoise
+from ampere.core import JointGaussianProcessNoise as _CoreJointGaussianProcessNoise
 from ampere.core import IndependentNoise as _CoreIndependentNoise
 from ampere.core import FunctionSamples, GPSolver, Kernel, LikelihoodError, NoiseModel
 
@@ -74,6 +75,8 @@ __all__ = [
     "FractionalModelNoise",
     "GaussianProcessNoise",
     "IndependentNoise",
+    # W5.9 -- joint noise over a tuple of channels.
+    "JointGaussianProcessNoise",
 ]
 
 
@@ -451,6 +454,71 @@ class GaussianProcessNoise(_CoreGaussianProcessNoise):
         require_x64(f"a jax {type(self).__name__}")
         super().__init__(
             kernel, DenseGP() if solver is None else solver, scale=scale, jitter=jitter
+        )
+        resolved = resolve_device(device, f"a jax {type(self).__name__}")
+        object.__setattr__(self, "_device", resolved)
+        object.__setattr__(self, "DEVICE", device_flag(device, resolved))
+
+
+# ---------------------------------------------------------------------------
+# W5.9 -- joint noise over a tuple of channels
+# ---------------------------------------------------------------------------
+
+
+class JointGaussianProcessNoise(_CoreJointGaussianProcessNoise):
+    """The shared-grid intrinsic coregionalisation model, declared as this backend's.
+
+    The declaration is the core's — a kernel, a coupling ``B``, a solve
+    strategy and the tuple of datasets the process spans — and all the
+    arithmetic belongs to the kernel, the coupling and the solver, so there is
+    nothing to reimplement. What this class adds is the flags and one default
+    that matters: *solver* falls back to **this backend's**
+    :class:`~ampere.backends.jax.DenseGP` rather than ``ampere.core``'s, so the
+    obvious call cannot quietly put a scipy Cholesky in the middle of a jax
+    problem.
+
+    The ``T`` rotated scalar solves are composed natively by
+    :mod:`ampere.backends.jax.problem`, which reads the coupling's
+    eigendecomposition through :meth:`~ampere.core.ChannelCoupling.eigen` with
+    ``xp=jax.numpy`` — one implementation of each parameterisation, traced
+    here rather than transcribed, so ``B``'s parameters get a gradient and NUTS
+    can sample the channel coupling alongside the kernel's hyperparameters.
+
+    Parameters
+    ----------
+    kernel, solver, datasets, coupling, scale, jitter
+        As :class:`ampere.core.JointGaussianProcessNoise`. Use this backend's
+        kernel and solver so the covariance is built in jax.
+    device
+        Platform name (``"cpu"``, the default) or an explicit ``jax.Device``.
+        Never auto-detected; it sets the ``DEVICE`` capability flag and nothing
+        else here — the kernel and the solver own the arrays that move.
+    """
+
+    DIFFERENTIABLE: ClassVar[bool] = True
+    BATCHABLE: ClassVar[bool] = True
+    DEVICE: ClassVar[str] = DEVICE
+    BACKEND: ClassVar[str] = BACKEND
+
+    def __init__(
+        self,
+        kernel: Kernel,
+        solver: GPSolver | None = None,
+        *,
+        datasets: Any,
+        coupling: Any,
+        scale: Any = None,
+        jitter: Any = None,
+        device: Any = DEVICE,
+    ) -> None:
+        require_x64(f"a jax {type(self).__name__}")
+        super().__init__(
+            kernel,
+            DenseGP() if solver is None else solver,
+            datasets=datasets,
+            coupling=coupling,
+            scale=scale,
+            jitter=jitter,
         )
         resolved = resolve_device(device, f"a jax {type(self).__name__}")
         object.__setattr__(self, "_device", resolved)

@@ -2275,6 +2275,38 @@ class GaussianProcessNoise(NoiseModel):
 # ---------------------------------------------------------------------------
 
 
+def _as_coupling_parameter(name: str, given: Any) -> Parameter:
+    """A channel-coupling parameter: a prior, a fixed number, or a ready-made one.
+
+    Deliberately **not** :func:`_as_hyperparameter`, which imposes a ``Log``
+    bijection because a kernel hyperparameter is positive by construction
+    (``parameters.md`` §13). A coupling's parameters are not: an angle lives on
+    a bounded interval and a log-variance on the whole line, and forcing
+    ``Log`` on either produces ``NaN`` in the unconstrained parameterisation
+    the moment the value is negative -- which is every ordinary value of a
+    log-variance. So the bijection is read off the prior's **own support**,
+    which is :class:`~ampere.core.parameter.Parameter`'s default and gives an
+    angle on ``[0, pi)`` its logit and a log-variance its identity.
+    """
+    if isinstance(given, Parameter):
+        if given.name != name:
+            raise LikelihoodError(
+                f"channel-coupling parameter {name!r} was given a Parameter named "
+                f"{given.name!r}. The names are part of the parameterisation's declaration; "
+                f"rename it with .rename({name!r})."
+            )
+        return given
+    if isinstance(given, (int, float, np.floating, np.integer)) and not isinstance(given, bool):
+        return Parameter(name, value=float(given), fixed=True)
+    if hasattr(given, "ppf"):
+        return Parameter(name, given)
+    raise LikelihoodError(
+        f"channel-coupling parameter {name!r} must be a frozen scipy.stats distribution (a "
+        f"prior), a number (held fixed), or an ampere Parameter -- got "
+        f"{type(given).__name__}."
+    )
+
+
 class ChannelCoupling(Parameterised, abc.ABC):
     """The ``T x T`` positive-definite matrix ``B`` of an intrinsic coregionalisation model.
 
@@ -2420,9 +2452,9 @@ class RotationCoupling(ChannelCoupling):
 
     def __init__(self, angle: Any, log_variance_0: Any, log_variance_1: Any) -> None:
         super().__init__(2)
-        self.register_parameter(_as_hyperparameter("angle", angle, None))
-        self.register_parameter(_as_hyperparameter("log_variance_0", log_variance_0, None))
-        self.register_parameter(_as_hyperparameter("log_variance_1", log_variance_1, None))
+        self.register_parameter(_as_coupling_parameter("angle", angle))
+        self.register_parameter(_as_coupling_parameter("log_variance_0", log_variance_0))
+        self.register_parameter(_as_coupling_parameter("log_variance_1", log_variance_1))
 
     def eigen(self, resolved: Mapping[str, Any], *, xp: Any = np) -> tuple[Any, Any]:
         angle = resolved["angle"]
@@ -2501,9 +2533,9 @@ class CholeskyCoupling(ChannelCoupling):
                 f"{len(off_diagonal)}."
             )
         for index, declaration in enumerate(log_diagonal):
-            self.register_parameter(_as_hyperparameter(f"log_diagonal_{index}", declaration, None))
+            self.register_parameter(_as_coupling_parameter(f"log_diagonal_{index}", declaration))
         for index, declaration in enumerate(off_diagonal):
-            self.register_parameter(_as_hyperparameter(f"off_diagonal_{index}", declaration, None))
+            self.register_parameter(_as_coupling_parameter(f"off_diagonal_{index}", declaration))
 
     def eigen(self, resolved: Mapping[str, Any], *, xp: Any = np) -> tuple[Any, Any]:
         count = self.channels

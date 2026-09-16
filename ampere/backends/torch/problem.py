@@ -1081,6 +1081,127 @@ class _LoweredDataset:
         return torch.where(torch.isfinite(value), value, torch.full_like(value, -math.inf))
 
 
+# ---------------------------------------------------------------------------
+# W5.9 -- joint noise over a tuple of channels
+# ---------------------------------------------------------------------------
+
+
+class _LoweredJointGroup:
+    """One :class:`~ampere.core.JointGaussianProcessNoise` group's term, as torch.
+
+    The twin of ``DatasetCollection.group_log_likelihood`` on the contract
+    path, and it exists for one reason: without it, ``B``'s parameters would be
+    sampled by NUTS against a density that never saw them. The channels'
+    residuals come from the member datasets' own lowered forward chains, so the
+    physical model, the instrument steps and the mask rules are shared with
+    every other dataset on this backend; what is added here is the rotation and
+    the ``T`` rescaled scalar solves.
+
+    The coupling's eigendecomposition is evaluated through
+    :meth:`~ampere.core.ChannelCoupling.eigen` with ``xp=torch`` rather than
+    transcribed: the parameterisations use only ``cos``, ``sin``, ``exp``,
+    ``stack`` and ``linalg.eigh``, which numpy and torch spell identically, so
+    there is one implementation for both paths and no transcription to drift.
+    The resolved values are coerced to tensors first, because a coupling with
+    one parameter fixed and another free hands back a Python float beside a
+    tensor and ``torch.stack`` refuses the mixture outright.
+    """
+
+    def __init__(
+        self,
+        problem: FittingProblem,
+        label: str,
+        lowered: Mapping[str, _LoweredDataset],
+        *,
+        device: torch.device,
+    ) -> None:
+        self.label = label
+        self.device = device
+        self.noise = problem.datasets.joint[label]
+        if getattr(self.noise, "BACKEND", None) != BACKEND:
+            raise _refuse(
+                type(self.noise).__name__,
+                f"joint noise group {label!r} is declared by a {type(self.noise).__name__} "
+                f"whose BACKEND is {getattr(self.noise, 'BACKEND', None)!r}, not {BACKEND!r}. A "
+                f"torch problem whose joint GP solve ran in numpy would not be differentiable "
+                f"in B at all; pass ampere.backends.torch.JointGaussianProcessNoise.",
+            )
+        if not hasattr(self.noise.solver, "log_marginal_likelihood_native"):
+            raise _refuse(
+                type(self.noise.solver).__name__,
+                f"joint noise group {label!r} uses the {type(self.noise.solver).__name__} "
+                f"solver, which has no `log_marginal_likelihood_native`. Pass "
+                f"ampere.backends.torch.DenseGP or ampere.backends.torch.QuasisepGP.",
+            )
+        self.members = tuple(lowered[member] for member in self.noise.datasets)
+        first = self.members[0]
+        observed = first.dataset.observed
+        self.bound_kernel = self.noise.kernel_for(observed)
+        self.coordinates = first.observed_coordinates
+        self.size = int(np.count_nonzero(first.retain))
+        self.uncertainty = first.uncertainty
+        if self.uncertainty is not None:
+            retained = np.asarray(observed.uncertainty, dtype=float).ravel()[first.retain]
+            if np.any(retained <= 0.0):
+                raise _refuse(
+                    "uncertainty",
+                    f"joint noise group {label!r} was given zero or negative uncertainties on "
+                    f"{int(np.sum(retained <= 0.0))} retained sample(s). An infinitely precise "
+                    f"measurement is one no likelihood can normalise.",
+                )
+
+    def _sigma(self, values: Mapping[str, Any]) -> torch.Tensor | None:
+        """The group's shared per-sample sigma, in torch."""
+        own = {key: value for key, value in values.items() if key in self.noise.parameters}
+        resolved = self.noise.context(own)
+        sigma = self.uncertainty
+        if sigma is None:
+            if "jitter" not in resolved:
+                return None
+            floor = _tensor(resolved["jitter"], device=self.device)
+            return floor * torch.ones(self.size, dtype=DEFAULT_DTYPE, device=self.device)
+        if "scale" in resolved:
+            sigma = sigma * _tensor(resolved["scale"], device=self.device)
+        if "jitter" in resolved:
+            sigma = torch.sqrt(sigma**2 + _tensor(resolved["jitter"], device=self.device) ** 2)
+        return sigma
+
+    def log_likelihood(self, routed: Mapping[str, Mapping[str, Any]]) -> torch.Tensor:
+        """``log N(vec(R); 0, B (x) K_x + I (x) diag(sigma^2))``, differentiable."""
+        values = dict(routed.get(self.label, {}))
+        residuals = torch.stack(
+            [member.observed_values - member.predict(routed) for member in self.members],
+            dim=-1,
+        )
+        sigma = self._sigma(values)
+        variance = (
+            torch.zeros(self.size, dtype=DEFAULT_DTYPE, device=self.device)
+            if sigma is None
+            else sigma**2
+        )
+        coupling = self.noise.coupling
+        resolved = {
+            name: _tensor(value, device=self.device)
+            for name, value in coupling.resolved(values).items()
+        }
+        eigenvalues, rotation = coupling.eigen(resolved, xp=torch)
+        rotated = residuals @ rotation
+        kernel = self.bound_kernel
+        hyperparameters = kernel.resolve(values)
+        total = _tensor(0.0, device=self.device)
+        for index in range(len(self.members)):
+            scale = eigenvalues[index]
+            total = total + self.noise.solver.log_marginal_likelihood_native(
+                kernel,
+                self.coordinates,
+                rotated[:, index] / torch.sqrt(scale),
+                variance / scale,
+                hyperparameters,
+            )
+            total = total - 0.5 * self.size * torch.log(scale)
+        return torch.where(torch.isfinite(total), total, torch.full_like(total, -math.inf))
+
+
 class LoweredProblem:
     """A :class:`~ampere.core.FittingProblem`, lowered onto torch.
 
@@ -1133,6 +1254,18 @@ class LoweredProblem:
         self._datasets = tuple(
             _LoweredDataset(problem, label, device=self.device) for label in problem.datasets
         )
+        # W5.9: a dataset a joint noise group claims contributes its residual to
+        # the group's one term, not a term of its own -- `inference.md` section 4's
+        # "joint" decomposition, and the reason `_likelihood_terms` is not
+        # simply one entry per dataset any more.
+        lowered = {dataset.label: dataset for dataset in self._datasets}
+        self._joint = tuple(
+            _LoweredJointGroup(problem, label, lowered, device=self.device)
+            for label in problem.datasets.joint
+        )
+        self._grouped = frozenset(
+            member for group in self._joint for member in group.noise.datasets
+        )
 
     @property
     def backend(self) -> str:
@@ -1172,7 +1305,14 @@ class LoweredProblem:
     def _likelihood_terms(self, theta: Any) -> dict[str, torch.Tensor]:
         """Each dataset's own ``log p(data | θ)``, in the **constrained** space."""
         routed = self._route(self.parameters._tensor(theta))
-        return {dataset.label: dataset.log_likelihood(routed) for dataset in self._datasets}
+        terms = {
+            dataset.label: dataset.log_likelihood(routed)
+            for dataset in self._datasets
+            if dataset.label not in self._grouped
+        }
+        for group in self._joint:
+            terms[group.label] = group.log_likelihood(routed)
+        return terms
 
     def log_likelihood(self, theta: Any) -> torch.Tensor:
         """``log p(data | θ)``, summed over datasets."""
@@ -1449,6 +1589,22 @@ class LoweredProblem:
         then runs the numpy path, where ``ampere.core``'s own refusal text is
         what a user meets.
         """
+        if self._joint:
+            # W5.9. A joint noise group's channels are correlated, and this
+            # method draws dataset by dataset; drawing each channel from its
+            # own marginal would write a training set whose cross-covariance is
+            # zero -- data from a different model than the one being fitted.
+            # The numpy path draws the group correlated
+            # (``DatasetCollection.draw_group``) and is what the caller falls
+            # back to.
+            raise _refuse(
+                "joint",
+                f"this problem declares joint noise group(s) "
+                f"{sorted(group.label for group in self._joint)}, whose channels are correlated "
+                f"with one another. The native draw is per dataset, so it would produce "
+                f"observations with no cross-covariance at all; the contract path draws the "
+                f"group in one correlated call.",
+            )
         for dataset in self._datasets:
             refusal = dataset.sampling_refusal()
             if refusal is not None:

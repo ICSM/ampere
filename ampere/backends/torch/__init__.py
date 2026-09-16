@@ -251,6 +251,8 @@ from .noise import (
     FractionalModelNoise,
     GaussianProcessNoise,
     IndependentNoise,
+    # W5.9 -- joint noise over a tuple of channels.
+    JointGaussianProcessNoise,
 )
 from .parameters import LoweredParameters, TorchParameterSpace
 from .problem import LoweredProblem, lower_problem
@@ -292,6 +294,7 @@ __all__ = [
     "GaussianSourceVisibilities",
     "HilbertSpaceGP",
     "IndependentNoise",
+    "JointGaussianProcessNoise",
     "LSFConvolution",
     "LoweredParameters",
     "LoweredPrior",
