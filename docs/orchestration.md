@@ -156,6 +156,8 @@ surveys 123–152 k each on Opus.
   Batch the status-table, decision-log and handoff edits into one commit
   per wave.
 
+**Second incident (2026-09-16).** The *weekly* usage limit, not the 5-hour window, ended a day of Phase 5 work: two Opus agents (W5.4 at 42 % of its item, W5.20 at 25 %) and two finished Sonnet agents were terminated at once, and the harness's low-memory guard killed the orchestrator's jax gate leg while the agents' own test runs were competing for the 13 GB. Two rules follow. (8) **Budget the week, not the window**: an Opus item costs 400–750 k tokens; two in parallel with a four-environment gate on the same day is the ceiling, and a large Opus item (L) should start at the beginning of a week's allowance, not its end. (9) **Every pytest run goes through the lock while a gate runs** — dev runs included, not only torch and jax — because the memory guard does not distinguish who is at fault.
+
 **Expected effect.** Per agent, the waiting cost (the bulk) goes to zero;
 coding cost is unchanged; the gate wall clock is unchanged but no longer
 holds a context open. The first wave's four agents would have finished
