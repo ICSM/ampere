@@ -98,6 +98,17 @@ from .kernels import (
     registered_quasiseparable_terms,
     term_provenance_entries,
 )
+from .hsgp import (
+    DEFAULT_BASIS_SIZE,
+    DEFAULT_BOUNDARY_FACTOR,
+    HilbertSpaceBasis,
+    basis_matrix,
+    basis_size,
+    check_spectral_support,
+    hilbert_basis,
+    normalise_counts,
+    spectral_values,
+)
 from .parameter import (
     Identity,
     Parameter,
@@ -120,6 +131,7 @@ __all__ = [
     "GPSolver",
     "GaussianFamily",
     "GaussianProcessNoise",
+    "HilbertSpaceGP",
     "IndependentNoise",
     "InducingPointGP",
     "Kernel",
@@ -502,6 +514,27 @@ class GPSolver(abc.ABC):
             have no configuration beyond what they declare.
         """
         return {}
+
+    def latent_size(self, kernel: Kernel, n_samples: int) -> int:
+        """How many whitened variables :meth:`latent_transform` takes (**W5.4**).
+
+        ``inference.md`` §17.4 fixes the latent block at composition time, and
+        until W5.4 fixed it at *one value per retained sample* — which was a
+        property of the two exact solvers rather than of the contract. An
+        approximate solver's whitening need not be square: a reduced-rank
+        representation has a factor of shape ``(N, m)``, so ``m`` whitened
+        variables produce ``N`` correlated ones and the latent block is ``m``
+        (``docs/design/horizon_notes.md`` §2, question (b), settled at W5.4).
+
+        The default is ``n_samples``, which is what every exact solver
+        answers. An override must depend on the **declaration** alone —
+        ``Likelihood.latent_declaration`` asks before any container is in
+        hand — and must agree with what :meth:`latent_transform` accepts and
+        with what ``LikelihoodFamily.sample`` draws, because those two are the
+        halves ``simulate(observe=True)`` and the latent path have to share.
+        """
+        del kernel
+        return int(n_samples)
 
     def check_compatible(self, kernel: Kernel, observed: FunctionSamples) -> None:
         """Composition-time check that this strategy can run this problem.
@@ -1223,6 +1256,417 @@ class QuasisepGP(GPSolver):
         )
 
 
+@dataclasses.dataclass(frozen=True)
+class HilbertSpaceGP(GPSolver):
+    r"""Approximate ``O(N m + m³)`` by a Hilbert-space (reduced-rank spectral) basis.
+
+    **The first ``EXACT = False`` solver ampere implements** (W5.4), settling
+    the Phase 5 bullet ``DEVELOPMENT_PLAN.md`` §5 opens with and the two
+    contract questions ``docs/design/horizon_notes.md`` §2 left for the phase.
+    The method is Solin & Särkkä (2020), in the practical form Riutort-Mayol
+    et al. (2023) give: on a box that contains the data, the Dirichlet
+    Laplacian's eigenfunctions diagonalise any stationary kernel through its
+    spectral density, so
+
+    .. math::
+        K(\theta) \;\approx\; \Phi \operatorname{diag}\!\big(S_\theta\big)
+        \Phi^{\mathsf T},
+
+    with :math:`\Phi` a **fixed** ``(N, m)`` block of sines — it depends on the
+    coordinates and the box, never on a fitted value — and :math:`S_\theta` the
+    kernel's spectral density at the box's eigenvalues, which is where all the
+    hyperparameter dependence lives. Writing :math:`\tilde\Phi = \Phi
+    \operatorname{diag}(\sqrt{S_\theta})` and :math:`D = \operatorname{diag}
+    (\sigma^2 + \text{jitter}^2)`, Woodbury gives every quantity this contract
+    asks for from one ``m`` by ``m`` Cholesky of :math:`M = I_m + \tilde\Phi^{\mathsf
+    T} D^{-1} \tilde\Phi`:
+
+    * :math:`\log|K + D| = \log|D| + \log|M|`;
+    * :math:`(K + D)^{-1} r = D^{-1} r - D^{-1}\tilde\Phi\, M^{-1}
+      \tilde\Phi^{\mathsf T} D^{-1} r`;
+    * :math:`\tilde\Phi^{\mathsf T} (K+D)^{-1} \tilde\Phi = I_m - M^{-1}`,
+      which collapses the conditional variance to
+      :math:`\|L_M^{-1}\tilde\Phi_*^{\mathsf T}\|^2` — non-negative by
+      construction, which a subtracted quadratic form is not.
+
+    **What it is for.** Three things, in order of how much they matter.
+    It is the scaling answer for a kernel with *no* quasiseparable form —
+    :class:`~ampere.core.kernels.SquaredExponential` above all, where the
+    spectral density decays as a Gaussian and the approximation converges
+    exponentially in ``m``. It is the scaling answer in **two and three axes**,
+    where :class:`QuasisepGP` does not apply at all: the basis is a tensor
+    product, so ``m = m₁·m₂(·m₃)`` and the method stays cheap exactly while the
+    dimension stays low. And it is the natural **latent** representation under
+    NUTS, because the whitened block it needs is ``m`` variables rather than
+    ``N`` — see :meth:`latent_size`.
+
+    **What it is not.** It is not exact, and the error does not go to zero in
+    ``m`` alone: a finite box has a boundary, and the approximation is poor
+    within about one length scale of it, so ``basis_size`` and
+    ``boundary_factor`` must grow together. Riutort-Mayol et al. §3 give the
+    rule of thumb — roughly ``c >= 1.2 max(length_scale)/S`` for a data
+    half-extent ``S``, and ``m`` large enough that :math:`\pi m / (2 c S)`
+    reaches several times the inverse length scale. ampere does not choose
+    either for you, and will not: they *are* the
+    approximation, and an approximation chosen silently is the failure mode
+    ``DEVELOPMENT_PLAN.md`` §7 warns about. What ampere does instead is make
+    them *visible* — they are dataclass fields, so ``Likelihood.to_spec``
+    records them and two runs at different ``m`` have different spec hashes,
+    and they are repeated in :meth:`provenance_config` so a stored run says in
+    its attrs what approximation produced it.
+
+    **The conformance battery holds it to a convergence claim, not a number**
+    (horizon notes §2, question (a)): the marginal likelihood, the conditioned
+    moments and the leave-one-out terms are compared against :class:`DenseGP`
+    at a sequence of ``m``, inside an envelope that tightens as ``m`` grows and
+    down to a floor set by the box. See ``tests/conformance/README.md`` §3.
+
+    Parameters
+    ----------
+    basis_size
+        Basis members **per axis**: an integer for a one-axis kernel, or one
+        entry per selected axis. The total ``m`` is their product, and it is
+        this declaration — not the sample count — that fixes the latent
+        block's size, which is why it must be expressible without the data in
+        hand (``inference.md`` §17.4, amended at W5.4).
+    boundary_factor
+        The box's half-width on each axis, as a multiple of the data's own
+        half-extent. See :data:`~ampere.core.hsgp.DEFAULT_BOUNDARY_FACTOR`.
+    jitter
+        A standard deviation added in quadrature to the diagonal, the same
+        knob, meaning and default as :class:`DenseGP`'s.
+
+    Examples
+    --------
+    >>> solver = HilbertSpaceGP(basis_size=64, boundary_factor=2.0)
+    >>> solver.basis_size
+    (64,)
+    >>> solver.latent_size(Matern32(0.3, 2.0), 500)
+    64
+    >>> HilbertSpaceGP(basis_size=(16, 16)).provenance_config()
+    {'basis_size': [16, 16], 'boundary_factor': 2.0}
+    """
+
+    basis_size: int | tuple[int, ...] = DEFAULT_BASIS_SIZE
+    boundary_factor: float = DEFAULT_BOUNDARY_FACTOR
+    jitter: float = 0.0
+
+    NAME: ClassVar[str] = "HilbertSpaceGP"
+    #: The whole point. Every row that compares this solver against
+    #: :class:`DenseGP` reads it and asks for a convergence tolerance.
+    EXACT: ClassVar[bool] = False
+    IMPLEMENTED: ClassVar[bool] = True
+    #: The ``(n, k)`` right-hand side of the circular complex GP: the Woodbury
+    #: solve takes extra columns exactly as the dense Cholesky does — one
+    #: factorisation of ``M``, ``k`` solves, the log-determinant counted ``k``
+    #: times.
+    STACKED_RESIDUALS: ClassVar[bool] = True
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "basis_size", normalise_counts(self.basis_size))
+        if not math.isfinite(self.boundary_factor) or self.boundary_factor <= 0.0:
+            raise LikelihoodError(
+                f"HilbertSpaceGP's boundary_factor must be finite and > 0, got "
+                f"{self.boundary_factor!r}. It is the box's half-width as a multiple of the "
+                f"data's own half-extent, so it must be at least 1 for the box to contain the "
+                f"data at all."
+            )
+        if not math.isfinite(self.jitter) or self.jitter < 0.0:
+            raise LikelihoodError(
+                f"HilbertSpaceGP's jitter must be finite and >= 0, got {self.jitter!r}."
+            )
+
+    @property
+    def counts(self) -> tuple[int, ...]:
+        """Basis members per axis, normalised to a tuple."""
+        return normalise_counts(self.basis_size)
+
+    # -- declarations --------------------------------------------------------
+
+    def provenance_config(self) -> Mapping[str, Any]:
+        """The approximation, for the run's attrs (``inference.md`` §10a, fold-in 10).
+
+        Both numbers are *also* dataclass fields, and that is deliberate rather
+        than a duplication. Fold-in 10's test is whether two backends may
+        legitimately differ on a value: they may on a dtype or a device, which
+        is why those stay out of the spec, and they may **not** on ``m`` or
+        ``c`` — a torch and a jax run of one declared problem must build the
+        same basis or they are not computing the same quantity. So the
+        approximation is part of the declaration and enters
+        ``ampere_spec_hash``, where it belongs: two runs at ``m = 8`` and
+        ``m = 64`` are not the same model and must not hash alike. It is
+        repeated here because ``ampere_solver_config`` is where a reader looks
+        for "how was this computed", and an approximation is the first thing
+        they should find there.
+        """
+        return {
+            "basis_size": [int(count) for count in self.counts],
+            "boundary_factor": float(self.boundary_factor),
+        }
+
+    def latent_size(self, kernel: Kernel, n_samples: int) -> int:
+        """``m``, not ``N`` — the ruling W5.4 makes (horizon notes §2, question (b)).
+
+        ``inference.md`` §17.4 fixes the latent block's size at composition,
+        and said in passing that it was one value per retained sample. The
+        second half was a property of the two exact solvers, not of the
+        contract: the whitened block is whatever the solver's whitening takes,
+        and this solver's takes ``m`` basis coefficients. ``N`` plays no part,
+        which is the whole reason the method is worth having under NUTS —
+        a 10⁴-sample spectrum fits with a few dozen latent dimensions instead
+        of ten thousand.
+
+        The size is read off the **declaration** alone, never off the data, so
+        it is available where ``Likelihood.latent_declaration`` needs it and
+        cannot drift from what :meth:`latent_transform` will accept.
+        """
+        del kernel, n_samples
+        return basis_size(self.counts)
+
+    def check_compatible(self, kernel: Kernel, observed: FunctionSamples) -> None:
+        """The layout and axis rules, plus this solver's own two.
+
+        The kernel must have a closed-form spectral density in every leaf
+        (:func:`~ampere.core.hsgp.check_spectral_support` names the one that
+        does not), and ``basis_size`` must have one entry per axis the kernel
+        selects — the count that fixes the latent size, checked here against
+        the container rather than discovered as a shape error inside a solve.
+        """
+        super().check_compatible(kernel, observed)
+        selected = kernel.selected_axes([axis.name for axis in observed.axes])
+        dimensions = len(selected)
+        check_spectral_support(kernel, dimensions, owner=self.NAME)
+        counts = self.counts
+        if len(counts) != dimensions:
+            raise LikelihoodError(
+                f"{self.NAME} was declared with basis_size={self.basis_size!r} — "
+                f"{len(counts)} axis count(s) — but the kernel selects {dimensions} axis/axes "
+                f"{selected!r} of this {type(observed).__name__}. The basis is a tensor product "
+                f"with one count per axis, and the total m is their product, so the two must "
+                f"agree: pass basis_size={tuple([counts[0]] * dimensions)!r} for the same "
+                f"resolution on each."
+            )
+
+    # -- internals -----------------------------------------------------------
+
+    def _basis(self, kernel: Kernel, points: np.ndarray) -> HilbertSpaceBasis:
+        return hilbert_basis(kernel.select(points), self.counts, self.boundary_factor)
+
+    def _scaled_basis(
+        self,
+        kernel: Kernel,
+        basis: HilbertSpaceBasis,
+        points: np.ndarray,
+        values: Mapping[str, Any],
+    ) -> np.ndarray:
+        r""":math:`\tilde\Phi = \Phi\operatorname{diag}(\sqrt{S_\theta})`, ``(n, m)``.
+
+        Carried as one block rather than as ``Phi`` and ``S`` separately
+        because every use wants the product, and because scaling the basis
+        keeps a spectral density that has underflowed to zero out of a
+        denominator: an unused basis member contributes a zero column and a
+        unit diagonal to ``M``, which is exactly right.
+        """
+        density = np.asarray(spectral_values(kernel, basis, values), dtype=DTYPE)
+        if not np.all(np.isfinite(density)) or np.any(density < 0.0):
+            raise LikelihoodError(
+                "the kernel's spectral density is not finite and non-negative at the basis "
+                "frequencies, so the reduced-rank factorisation K ~ Phi diag(S) Phi^T is not a "
+                "covariance. The usual cause is a kernel amplitude or length scale outside its "
+                "prior's support; a spectral density is non-negative for every admissible "
+                "hyperparameter (Bochner)."
+            )
+        matrix = np.asarray(basis_matrix(basis, kernel.select(points), NUMPY_OPS), dtype=DTYPE)
+        return matrix * np.sqrt(density)[None, :]
+
+    def _diagonal(self, variance: np.ndarray) -> np.ndarray:
+        diagonal = _as_float64(variance, "noise variances") + self.jitter**2
+        if not np.all(np.isfinite(diagonal)) or np.any(diagonal <= 0.0):
+            raise LikelihoodError(
+                f"{self.NAME} needs a strictly positive noise diagonal: the Woodbury identity it "
+                f"solves by inverts diag(sigma^2 + jitter^2) directly, so a zero uncertainty is "
+                f"a division by zero rather than an ill-conditioned matrix. Pass "
+                f"{self.NAME}(jitter=...) — a standard deviation in the data's units — or use "
+                f"DenseGP, whose Cholesky needs only K + diag(sigma^2) to be positive definite."
+            )
+        return diagonal
+
+    def _factor(self, scaled: np.ndarray, diagonal: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        r"""``(D⁻¹ tilde-Phi, cho_factor(M))`` — the one factorisation everything uses."""
+        weighted = scaled / diagonal[:, None]
+        capacitance = np.eye(scaled.shape[1], dtype=DTYPE) + scaled.T @ weighted
+        try:
+            factor = scipy.linalg.cho_factor(capacitance, lower=True)
+        except scipy.linalg.LinAlgError as error:
+            raise LikelihoodError(
+                f"the reduced-rank capacitance matrix I + Phi^T D^-1 Phi is not positive "
+                f"definite, so the Woodbury solve failed ({error}). It is positive definite for "
+                f"every admissible hyperparameter, so this is a numerical rather than a "
+                f"structural failure: reduce basis_size, or raise the jitter."
+            ) from error
+        return weighted, factor
+
+    def _solve(
+        self,
+        scaled: np.ndarray,
+        diagonal: np.ndarray,
+        weighted: np.ndarray,
+        factor: tuple[np.ndarray, bool],
+        right: np.ndarray,
+    ) -> np.ndarray:
+        r"""``(K + D)⁻¹ right`` by Woodbury, for an ``(n,)`` or ``(n, k)`` block."""
+        divisor = diagonal if right.ndim == 1 else diagonal[:, None]
+        direct = right / divisor
+        return direct - weighted @ scipy.linalg.cho_solve(factor, scaled.T @ direct)
+
+    # -- the interface -------------------------------------------------------
+
+    def log_marginal_likelihood(
+        self,
+        kernel: Kernel,
+        coordinates: np.ndarray,
+        residual: np.ndarray,
+        variance: np.ndarray,
+        values: Mapping[str, Any],
+    ) -> float:
+        """The marginal likelihood **of the approximation**, summed over the columns.
+
+        Not of the declared kernel: :attr:`EXACT` is ``False`` and this is what
+        that means. It is the exact marginal likelihood of the rank-``m``
+        Gaussian process ``Phi diag(S) Phi^T``, which converges to the declared
+        one as the basis fills the box.
+        """
+        points = _as_points(coordinates, "data coordinates")
+        residuals = _as_float64(residual, "residuals")
+        basis = self._basis(kernel, points)
+        scaled = self._scaled_basis(kernel, basis, points, values)
+        diagonal = self._diagonal(variance)
+        weighted, factor = self._factor(scaled, diagonal)
+        alpha = self._solve(scaled, diagonal, weighted, factor, residuals)
+        log_determinant = float(np.sum(np.log(diagonal))) + 2.0 * float(
+            np.sum(np.log(np.abs(np.diag(factor[0]))))
+        )
+        quadratic = float(np.sum(residuals * alpha))
+        columns = _components(residuals)
+        return -0.5 * (quadratic + columns * log_determinant + residuals.size * _LOG_2PI)
+
+    def conditional_loo(
+        self,
+        kernel: Kernel,
+        coordinates: np.ndarray,
+        residual: np.ndarray,
+        variance: np.ndarray,
+        values: Mapping[str, Any],
+    ) -> np.ndarray:
+        r"""Sundararajan & Keerthi's identity, **exact in the approximation**.
+
+        The item that landed this solver allowed it to be refused if the
+        mathematics genuinely failed; it does not. Every leave-one-out term
+        needs one number the dense path gets from its Cholesky — the diagonal
+        of :math:`A^{-1}`, for :math:`A = K + D` — and Woodbury supplies it in
+        closed form without ever forming :math:`A`:
+
+        .. math::
+            (A^{-1})_{ii} = \frac{1}{D_i}
+                - \big\| L_M^{-1} \tilde\Phi_i^{\mathsf T} / D_i \big\|^2 ,
+
+        at ``O(N m²)``. The identity is then the dense one, applied to the
+        rank-``m`` covariance this solver actually scores, so the terms are as
+        exact as its marginal likelihood is and converge with it. **W4.2**'s
+        rule holds unchanged: one term per *sample*, the ``k`` components
+        summed.
+        """
+        points = _as_points(coordinates, "data coordinates")
+        residuals = _as_float64(residual, "residuals")
+        basis = self._basis(kernel, points)
+        scaled = self._scaled_basis(kernel, basis, points, values)
+        diagonal = self._diagonal(variance)
+        weighted, factor = self._factor(scaled, diagonal)
+        alpha = self._solve(scaled, diagonal, weighted, factor, residuals)
+        # ``weighted`` is D^-1 tilde-Phi, whose rows are the u_i above.
+        triangular = scipy.linalg.solve_triangular(factor[0], weighted.T, lower=True)
+        precision_diagonal = 1.0 / diagonal - np.sum(triangular * triangular, axis=0)
+        rows = np.shape(residuals)[0]
+        columns = _components(residuals)
+        quadratic = np.sum(np.reshape(alpha, (rows, columns)) ** 2, axis=1)
+        return np.asarray(
+            columns * (0.5 * np.log(precision_diagonal) - 0.5 * _LOG_2PI)
+            - quadratic / (2.0 * precision_diagonal),
+            dtype=DTYPE,
+        )
+
+    def condition(
+        self,
+        kernel: Kernel,
+        coordinates: np.ndarray,
+        residual: np.ndarray,
+        variance: np.ndarray,
+        values: Mapping[str, Any],
+        at: np.ndarray | None = None,
+    ) -> GPConditional:
+        r"""The posterior of the rank-``m`` process, at ``at`` or at the data.
+
+        The prior variance is the **approximation's** — the row sums of
+        :math:`\tilde\Phi^2` — rather than the declared kernel's ``k(0)``, and
+        deliberately so: mixing the exact prior with the approximate posterior
+        correction gives a variance that is not the variance of anything, and
+        can go negative near the box's edge. Taken consistently, the posterior
+        variance is :math:`\|L_M^{-1}\tilde\Phi_*^{\mathsf T}\|^2`, which is
+        non-negative whatever ``m`` is.
+        """
+        points = _as_points(coordinates, "data coordinates")
+        residuals = _as_float64(residual, "residuals")
+        basis = self._basis(kernel, points)
+        scaled = self._scaled_basis(kernel, basis, points, values)
+        diagonal = self._diagonal(variance)
+        weighted, factor = self._factor(scaled, diagonal)
+        alpha = self._solve(scaled, diagonal, weighted, factor, residuals)
+        if at is None:
+            target = points
+        else:
+            target = _as_points(at, "conditioning grid", dimensions=points.shape[1])
+        target_scaled = self._scaled_basis(kernel, basis, target, values)
+        mean = target_scaled @ (scaled.T @ alpha)
+        triangular = scipy.linalg.solve_triangular(factor[0], target_scaled.T, lower=True)
+        posterior = np.sum(triangular * triangular, axis=0)
+        return GPConditional(mean=mean, variance=np.asarray(posterior, dtype=DTYPE))
+
+    def latent_transform(
+        self,
+        kernel: Kernel,
+        coordinates: np.ndarray,
+        whitened: np.ndarray,
+        values: Mapping[str, Any],
+        *,
+        jitter: float = 1e-10,
+    ) -> np.ndarray:
+        r"""``f = tilde-Phi z`` — the reduced-rank whitening, from ``m`` variables.
+
+        The same factor the marginal-likelihood path scores against, which is
+        what makes :func:`~ampere.core.dataset.FittingProblem.simulate` with
+        ``observe=True`` and the latent-GP likelihood path agree under this
+        solver: both go through here, and there is only one :math:`\tilde\Phi`.
+
+        ``z`` has :meth:`latent_size` entries, not one per sample. The
+        stabilising ``jitter`` argument the two exact solvers take is accepted
+        and **unused**: :math:`\tilde\Phi\tilde\Phi^{\mathsf T}` is positive
+        semi-definite by construction with no factorisation to stabilise,
+        which is one of the quieter benefits of a reduced-rank representation.
+        """
+        del jitter
+        points = _as_points(coordinates, "data coordinates")
+        draws = _as_float64(whitened, "whitened latent draws")
+        basis = self._basis(kernel, points)
+        scaled = self._scaled_basis(kernel, basis, points, values)
+        if np.shape(draws)[0] != scaled.shape[1]:
+            raise LikelihoodError(
+                f"{self.NAME} whitens {scaled.shape[1]} basis coefficient(s), but it was handed "
+                f"{np.shape(draws)[0]} whitened value(s). This solver's latent block is the "
+                f"basis size m, not the sample count — see GPSolver.latent_size."
+            )
+        return scaled @ draws
+
+
 class WindowedSparseGP(_SolverSlot):
     """Approximate O(N) by tapering the kernel to zero beyond a cutoff radius.
 
@@ -1739,9 +2183,15 @@ class GaussianProcessNoise(NoiseModel):
         Both arrays are already the **retained** block: ``Likelihood.log_prob``
         excises before it calls this, and ``FittingProblem`` validation refuses
         a latent declaration whose size disagrees with the effective mask, so
-        one latent value per retained coordinate is an invariant rather than a
-        hope. It is checked anyway, because the failure it would otherwise
-        produce is a matrix-shape error from inside a solver.
+        the block's size is an invariant rather than a hope. It is checked
+        anyway, because the failure it would otherwise produce is a matrix-shape
+        error from inside a solver.
+
+        **W5.4** asks the solver how many whitened values it takes rather than
+        assuming one per retained sample: an approximate solver's whitening is
+        ``(N, m)`` rather than ``(N, N)``. :meth:`GPSolver.latent_size` answers
+        ``n_samples`` for both exact solvers, so nothing about the two exact
+        paths changes.
         """
         if latent is None:
             return None
@@ -1754,10 +2204,19 @@ class GaussianProcessNoise(NoiseModel):
                 "caller of noise_params must pass them too."
             )
         points = _as_points(coordinates, "data coordinates")
-        if whitened.shape != (points.shape[0],):
+        expected = self._solver.latent_size(kernel, int(points.shape[0]))
+        if whitened.shape != (expected,):
+            per_sample = expected == points.shape[0]
             raise LikelihoodError(
-                f"the whitened latent GP values have shape {whitened.shape} but there are "
-                f"{points.shape[0]} retained sample(s). One latent value per retained sample."
+                f"the whitened latent GP values have shape {whitened.shape} but "
+                f"{self._solver.NAME} whitens {expected} value(s) for "
+                f"{points.shape[0]} retained sample(s)."
+                + (
+                    " One latent value per retained sample."
+                    if per_sample
+                    else " This solver's latent block is its basis size, not the sample count "
+                    "(GPSolver.latent_size)."
+                )
             )
         return self._solver.latent_transform(kernel, points, whitened, values)
 
@@ -2217,7 +2676,13 @@ class GaussianFamily(LikelihoodFamily):
         if noise.correlated:
             assert noise.solver is not None and noise.kernel is not None  # narrowed by .correlated
             assert noise.coordinates is not None
-            whitened = rng.standard_normal(realisation.shape)
+            # W5.4: how many whitened variables the draw needs is the
+            # solver's to say -- ``N`` for both exact solvers, ``m`` for a
+            # reduced-rank one -- so that this draw and the latent-GP
+            # likelihood path go through one and the same whitening.
+            whitened = rng.standard_normal(
+                noise.solver.latent_size(noise.kernel, realisation.shape[0])
+            )
             realisation = realisation + noise.solver.latent_transform(
                 noise.kernel, noise.coordinates, whitened, noise.values
             )
@@ -2482,7 +2947,11 @@ class ComplexGaussianFamily(LikelihoodFamily):
             return mean + sigma * (real + 1j * imaginary)
         assert noise.solver is not None and noise.kernel is not None  # narrowed by .correlated
         assert noise.coordinates is not None
-        whitened = rng.standard_normal((mean.shape[0], 2))
+        # W5.4: ``latent_size`` rows, two columns -- the circular pair shares
+        # one covariance and so one whitening, whatever its rank.
+        whitened = rng.standard_normal(
+            (noise.solver.latent_size(noise.kernel, mean.shape[0]), 2)
+        )
         correlated = noise.solver.latent_transform(
             noise.kernel, noise.coordinates, whitened, noise.values
         )
@@ -2633,7 +3102,9 @@ class PoissonFamily(LikelihoodFamily):
             if latent is None:
                 assert noise.solver is not None and noise.kernel is not None  # .correlated
                 assert noise.coordinates is not None
-                whitened = rng.standard_normal(rate.shape)
+                whitened = rng.standard_normal(
+                    noise.solver.latent_size(noise.kernel, rate.shape[0])
+                )
                 latent = noise.solver.latent_transform(
                     noise.kernel, noise.coordinates, whitened, noise.values
                 )
@@ -3048,9 +3519,14 @@ class Likelihood(Parameterised):
                 f"a latent declaration needs a GaussianProcessNoise model to supply the "
                 f"whitening transform, but this Likelihood has a {type(self._noise).__name__}."
             )
+        # W5.4: *size* is the retained-sample count the caller has; how many
+        # whitened variables that becomes is the solver's to say, and for an
+        # approximate solver it is the basis size rather than the sample
+        # count. Both exact solvers answer ``size`` unchanged.
+        declared = self._noise.solver.latent_size(self._noise.kernel, int(size))
         return LatentDeclaration(
-            parameter=latent_parameter(name, size),
-            size=int(size),
+            parameter=latent_parameter(name, declared),
+            size=int(declared),
             solver=self._noise.solver,
         )
 
