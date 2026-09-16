@@ -19,6 +19,14 @@ this module's docstring makes is exercised against that toy:
 6. An object fitted by :class:`~ampere.inference.VIEngine` (mean-field guide,
    sbi environment) is reweighted through its ``proposal_log_density`` and
    agrees with the same object fitted by ``EmceeEngine``.
+7. A two-parameter object model (a nuisance parameter with a narrow,
+   non-flat prior, alongside the reweighted one) recovers the same
+   population posterior as the one-parameter case on the same objects, and
+   the truth inside its own central 95 % -- the regression test for
+   dividing by the named parameter's marginal interim prior rather than
+   the run's stored *joint* one (§ "why it needs the marginal interim
+   prior" above), a fix a single-parameter model's toy cannot exercise
+   because the two priors coincide there.
 
 Fits are deliberately tiny (a few hundred steps, few walkers): the 200
 per-object fits are timed in :class:`TestTheTwoHundredObjectsFit` and
@@ -46,7 +54,7 @@ from __future__ import annotations
 import importlib
 import time
 import warnings
-from typing import Any
+from typing import Any, ClassVar
 
 import astropy.units as u
 import numpy as np
@@ -83,6 +91,7 @@ N_OBJECTS = 200
 MU_TRUTH = 1.0
 TAU_TRUTH = 0.3
 SIGMA = 0.2
+INTERIM_PRIOR = st.norm(0.0, 10.0)  # ConstantModel's theta prior -- fit_population's marginal pi_0
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +113,55 @@ class ConstantModel(Model):
         return ModelResult(
             Spectrum(ctx["grid"] * u.micron, np.full_like(ctx["grid"], ctx["theta"]) * u.Jy)
         )
+
+
+NUISANCE_PRIOR = st.norm(0.0, 0.05)
+
+
+class TwoParameterModel(Model):
+    """``theta`` (reweighted) plus ``phi``, a pure nuisance the likelihood never touches.
+
+    ``phi``'s prior is narrow and non-flat (``NUISANCE_PRIOR``) precisely so
+    its marginal log-density varies materially from draw to draw: that
+    per-draw variation is the uncancelled factor the pre-fix code left in
+    the reweighting ratio whenever an object had more than one free
+    parameter (module docstring, "why it needs the marginal interim
+    prior"). ``phi`` never entering ``evaluate`` means its exact posterior
+    *is* its declared prior -- the likelihood carries no information about
+    it at all -- which is what makes the toy a clean regression check
+    rather than merely "a second parameter exists".
+    """
+
+    def __init__(self, theta_prior: Any = None, phi_prior: Any = None) -> None:
+        self.register_buffer("grid", np.array([1.0]), unit=u.micron)
+        self.register_parameter(
+            Parameter("theta", theta_prior if theta_prior is not None else st.norm(0.0, 10.0))
+        )
+        self.register_parameter(
+            Parameter("phi", phi_prior if phi_prior is not None else NUISANCE_PRIOR)
+        )
+
+    def evaluate(self, **values: Any) -> ModelResult:
+        ctx = self.context(values)
+        return ModelResult(
+            Spectrum(ctx["grid"] * u.micron, np.full_like(ctx["grid"], ctx["theta"]) * u.Jy)
+        )
+
+
+def _two_parameter_problem(datum: float, seed: int) -> FittingProblem:
+    observed = Spectrum(
+        np.array([1.0]) * u.micron,
+        np.array([datum]) * u.Jy,
+        uncertainty=np.array([SIGMA]) * u.Jy,
+    )
+    return FittingProblem(TwoParameterModel(), [Dataset(observed)], seed=seed)
+
+
+def _fit_two_parameter_object(
+    datum: float, seed: int, *, walkers: int = 8, steps: int = 300, burn_in: int = 100
+) -> Any:
+    problem = _two_parameter_problem(datum, seed)
+    return EmceeEngine(problem, walkers=walkers).run(steps=steps, burn_in=burn_in)
 
 
 def _truths_and_data(seed: int, n: int) -> tuple[np.ndarray, np.ndarray]:
@@ -193,6 +251,7 @@ class TestReweightedPopulationPosterior:
             columns,
             "model.theta",
             _population_model(),
+            INTERIM_PRIOR,
             walkers=8,
             steps=2000,
             burn_in=500,
@@ -247,14 +306,14 @@ class TestTheFileBackedReaderAgreesWithTheInMemoryOne:
         settings = dict(walkers=8, steps=200, burn_in=50, seed=SEED)
 
         in_memory = [DataTreeRunColumns(run) for run in object_runs]
-        result_memory = fit_population(in_memory, "model.theta", model, **settings)
+        result_memory = fit_population(in_memory, "model.theta", model, INTERIM_PRIOR, **settings)
 
         directory = tmp_path / "archived_runs"
         directory.mkdir()
         for index, run in enumerate(object_runs):
             to_netcdf(run, directory / f"object_{index:03d}.nc")
         file_backed = runs_from_netcdf_directory(directory)
-        result_file = fit_population(file_backed, "model.theta", model, **settings)
+        result_file = fit_population(file_backed, "model.theta", model, INTERIM_PRIOR, **settings)
 
         for name in ("mu", "tau"):
             np.testing.assert_array_equal(
@@ -377,6 +436,7 @@ class TestTheEffectiveSampleSizeRefusal:
                 [*good, adversarial],
                 "model.theta",
                 _population_model(),
+                INTERIM_PRIOR,
                 walkers=8,
                 steps=300,
                 burn_in=100,
@@ -404,6 +464,7 @@ def test_runs_that_do_not_share_a_spec_hash_are_refused() -> None:
             [DataTreeRunColumns(run_a), DataTreeRunColumns(run_b)],
             "model.theta",
             _population_model(),
+            INTERIM_PRIOR,
             walkers=8,
             steps=100,
             burn_in=20,
@@ -444,6 +505,7 @@ _VI_SIGMA = 0.2
 _VI_INDEX = -1.0
 _VI_REFERENCE_WAVELENGTH = 1.0
 _VI_TRUE_NORM = 2.0
+_VI_INTERIM_PRIOR = st.norm(2.0, 0.5)  # PowerLaw's declared norm prior; index is fixed, not free
 
 
 def _vi_observed(seed: int = 7) -> Spectrum:
@@ -499,10 +561,101 @@ class TestTheApproximateEngineRow:
         )
         settings = dict(walkers=8, steps=800, burn_in=200, seed=SEED)
         result_emcee = fit_population(
-            [DataTreeRunColumns(emcee_run)], "model.norm", model, **settings
+            [DataTreeRunColumns(emcee_run)], "model.norm", model, _VI_INTERIM_PRIOR, **settings
         )
-        result_vi = fit_population([vi_columns], "model.norm", model, **settings)
+        result_vi = fit_population([vi_columns], "model.norm", model, _VI_INTERIM_PRIOR, **settings)
 
         mu_emcee = float(np.asarray(result_emcee["posterior"]["mu"]).mean())
         mu_vi = float(np.asarray(result_vi["posterior"]["mu"]).mean())
         assert mu_vi == pytest.approx(mu_emcee, abs=0.1)
+
+
+# ---------------------------------------------------------------------------
+# 7. The marginal-vs-joint interim-prior fix: a two-parameter regression
+# ---------------------------------------------------------------------------
+
+
+class TestTheMarginalInterimPriorFix:
+    """A run's stored ``log_prior`` is the *joint* interim prior over every
+    free parameter; the reweighting ratio needs the named parameter's own
+    *marginal* interim prior alone (module docstring, "why it needs the
+    marginal interim prior"). ``ConstantModel`` has one free parameter, so
+    the joint and the marginal coincide and the earlier version of this
+    module -- which divided by the joint column -- passed every row above
+    without ever exercising the bug. ``TwoParameterModel`` adds ``phi``, a
+    pure nuisance with a narrow, non-flat prior that never enters the
+    likelihood, so its marginal log-density varies materially draw to draw
+    -- exactly the factor a joint-column denominator leaves uncancelled.
+
+    Reuses the first 50 of :func:`_truths_and_data`'s 200 (truth, datum)
+    pairs -- the same realisation :data:`object_runs` (``ConstantModel``)
+    already fitted -- so the one-parameter control costs no extra fitting,
+    and only the 50 two-parameter fits are new. Kept well under ten minutes
+    even alongside a concurrent gate: 50 tiny per-object fits plus two
+    small population fits (N = 50, not 200) is a fraction of
+    :class:`TestTheTwoHundredObjectsFit`'s own budget.
+    """
+
+    N = 50
+    POPULATION_SETTINGS: ClassVar[dict[str, int]] = dict(
+        walkers=8, steps=1500, burn_in=400, seed=SEED
+    )
+
+    @pytest.fixture(scope="class")
+    def two_parameter_runs(self) -> list[Any]:
+        _, data = _truths_and_data(SEED, N_OBJECTS)
+        return [
+            DataTreeRunColumns(_fit_two_parameter_object(float(datum), seed=SEED + index))
+            for index, datum in enumerate(data[: self.N])
+        ]
+
+    @pytest.fixture(scope="class")
+    def one_parameter_result(self, object_runs: list[Any]) -> Any:
+        """The one-parameter control, over the *same* first 50 objects."""
+        columns = [DataTreeRunColumns(run) for run in object_runs[: self.N]]
+        return fit_population(
+            columns, "model.theta", _population_model(), INTERIM_PRIOR, **self.POPULATION_SETTINGS
+        )
+
+    @pytest.fixture(scope="class")
+    def two_parameter_result(self, two_parameter_runs: list[Any]) -> Any:
+        return fit_population(
+            two_parameter_runs,
+            "model.theta",
+            _population_model(),
+            INTERIM_PRIOR,
+            **self.POPULATION_SETTINGS,
+        )
+
+    def test_truth_inside_the_central_95_percent(self, two_parameter_result: Any) -> None:
+        mu = np.asarray(two_parameter_result["posterior"]["mu"]).ravel()
+        tau = np.asarray(two_parameter_result["posterior"]["tau"]).ravel()
+        mu_lo, mu_hi = np.percentile(mu, [2.5, 97.5])
+        tau_lo, tau_hi = np.percentile(tau, [2.5, 97.5])
+        print(
+            f"\ntwo-parameter reweighted posterior: mu 95% = ({mu_lo:.4f}, {mu_hi:.4f}) "
+            f"[truth {MU_TRUTH}], tau 95% = ({tau_lo:.4f}, {tau_hi:.4f}) [truth {TAU_TRUTH}]"
+        )
+        assert mu_lo <= MU_TRUTH <= mu_hi, (mu_lo, MU_TRUTH, mu_hi)
+        assert tau_lo <= TAU_TRUTH <= tau_hi, (tau_lo, TAU_TRUTH, tau_hi)
+
+    def test_agrees_with_the_one_parameter_case(
+        self, one_parameter_result: Any, two_parameter_result: Any
+    ) -> None:
+        """The nuisance parameter is irrelevant to the likelihood, so a
+        correct reweighting must recover essentially the same (mu, tau) as
+        the one-parameter control on the same 50 objects. The tolerance is
+        generous (a fraction of the 50-object posterior's own width) because
+        this compares two independent short ``emcee`` runs on two
+        independently-sampled per-object fits, not a bitwise check.
+        """
+        mu_one = float(np.asarray(one_parameter_result["posterior"]["mu"]).mean())
+        mu_two = float(np.asarray(two_parameter_result["posterior"]["mu"]).mean())
+        tau_one = float(np.asarray(one_parameter_result["posterior"]["tau"]).mean())
+        tau_two = float(np.asarray(two_parameter_result["posterior"]["tau"]).mean())
+        print(
+            f"\none-parameter control: mu={mu_one:.4f} tau={tau_one:.4f}; "
+            f"two-parameter: mu={mu_two:.4f} tau={tau_two:.4f}"
+        )
+        assert mu_two == pytest.approx(mu_one, abs=0.15)
+        assert tau_two == pytest.approx(tau_one, abs=0.1)

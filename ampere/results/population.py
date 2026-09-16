@@ -11,22 +11,26 @@ the columns ``results.md`` §4/§6/§9 guarantees every run carries.
 The mathematics
 ----------------
 Object *i* has stored draws :math:`\\theta_{ik}`, :math:`k = 1 \\ldots K_i`,
-from its own run, together with that run's stored ``log_prior`` and
-``log_likelihood`` per draw (every run, unconditionally — ``results.md``
-§6) and, since W5.0, ``sample_stats.proposal_log_density`` when the run
-came from an approximate engine (``ampere_approximation != "none"``: a
+of the *named* parameter, from a run whose free vector is in general
+:math:`(\\theta, \\varphi)` — the named parameter plus every other (nuisance)
+parameter the object's own model declares. The run carries that run's stored
+``log_prior`` and ``log_likelihood`` per draw (every run, unconditionally —
+``results.md`` §6) — the **joint** interim log-prior
+:math:`\\log \\pi_0^{\\text{joint}}(\\theta_{ik}, \\varphi_{ik})` over the whole
+free vector, not the named parameter alone — and, since W5.0,
+``sample_stats.proposal_log_density`` when the run came from an approximate
+engine (``ampere_approximation != "none"``: a
 :class:`~ampere.inference.VIEngine` guide or an
 :class:`~ampere.inference.SBIEngine` density estimator).
 
 **Turning stored draws into (weighted) posterior draws.** For an *exact*
 sampler (an ensemble, NUTS, nested sampling — anything whose
-``ampere_approximation`` is ``"none"``) the stored :math:`\\theta_{ik}`
-already **are** draws from the single-object posterior under that run's
-*interim* prior :math:`\\pi_0` (the stored ``log_prior``), so each carries
-uniform weight :math:`w_{ik} = 1 / K_i`. For an *approximate* engine the
-stored draws are instead from the fitted proposal :math:`q`, and W5.0's
-contract is exactly what makes them usable here: the *self-normalised*
-importance weights
+``ampere_approximation`` is ``"none"``) the stored :math:`(\\theta_{ik},
+\\varphi_{ik})` already **are** draws from the single-object posterior under
+that run's *joint* interim prior, so each carries uniform weight
+:math:`w_{ik} = 1 / K_i`. For an *approximate* engine the stored draws are
+instead from the fitted proposal :math:`q`, and W5.0's contract is exactly
+what makes them usable here: the *self-normalised* importance weights
 
 .. math::
 
@@ -35,23 +39,48 @@ importance weights
     \\qquad \\sum_k w_{ik} = 1
 
 turn the proposal draws into (weighted) draws from the same single-object
-posterior :math:`\\pi_0(\\theta) \\, L_i(\\theta)` the exact-sampler case already
-has. A run whose ``ampere_approximation`` is not ``"none"`` and has no
-``proposal_log_density`` column is refused by name (§9's contract is not
-optional; a run built before W5.0 lacks the column it needs and there is no
-honest number to substitute for it).
+posterior :math:`\\pi_0^{\\text{joint}}(\\theta, \\varphi) \\, L_i(\\theta, \\varphi)`
+the exact-sampler case already has — the **joint** ``log_prior`` column is
+the correct and only correct term here. A run whose ``ampere_approximation``
+is not ``"none"`` and has no ``proposal_log_density`` column is refused by
+name (§9's contract is not optional; a run built before W5.0 lacks the
+column it needs and there is no honest number to substitute for it).
 
-**The population likelihood.** Under population hyperparameters
-:math:`\\alpha` with hyperprior :math:`p(\\alpha)` and population prior
-:math:`p(\\theta \\mid \\alpha)`, the standard importance-sampling identity
+**The population likelihood, and why it needs the *marginal* interim
+prior.** The population model replaces the interim prior on :math:`\\theta`
+alone with :math:`p(\\theta \\mid \\alpha)`; it says nothing about
+:math:`\\varphi`, whose interim prior :math:`\\pi(\\varphi)` (declared,
+unconditional on :math:`\\alpha`) is carried over unchanged. Since every
+object's free parameters are declared independently (§4.1), the joint
+interim prior factorises, :math:`\\pi_0^{\\text{joint}}(\\theta, \\varphi) =
+\\pi_0(\\theta)\\,\\pi(\\varphi)`, and the standard importance-sampling identity
 (the interim prior divided back out, one draw at a time) gives
 
 .. math::
 
     p(d_i \\mid \\alpha) \\;\\propto\\; \\sum_k w_{ik} \\,
+    \\frac{p(\\theta_{ik} \\mid \\alpha)\\,\\pi(\\varphi_{ik})}
+         {\\pi_0(\\theta_{ik})\\,\\pi(\\varphi_{ik})}
+    \\;=\\; \\sum_k w_{ik} \\,
     \\frac{p(\\theta_{ik} \\mid \\alpha)}{\\pi_0(\\theta_{ik})}
 
-and the population posterior this module samples is
+— :math:`\\pi(\\varphi_{ik})` cancels exactly, for every draw, leaving only
+:math:`\\pi_0(\\theta)`, the named parameter's own **marginal** interim
+prior, in the denominator. Dividing by the *joint* ``log_prior`` column
+instead (an earlier version of this module did) leaves an uncancelled
+:math:`1 / \\pi(\\varphi_{ik})` factor that varies draw to draw whenever the
+object's model has more than one free parameter, biasing the population
+posterior; a single-parameter model has no :math:`\\varphi` to cancel, which
+is why the mistake is invisible on a toy with one parameter. Because a run's
+provenance records only each parameter's *name* and a hash of its
+declaration (``results.md`` §9 — the full ``PriorSpec`` is deliberately not
+written, for the same "do not materialise what §16 says not to" reason
+``free_labels()`` is not either), :math:`\\pi_0` cannot be read back off a
+run: :func:`fit_population` takes it as an explicit, required
+``interim_prior`` argument instead of guessing at it, and refuses (via
+Python's own required-argument mechanism) rather than falling back to the
+joint column when one is not supplied. The population posterior this module
+samples is
 
 .. math::
 
@@ -59,10 +88,11 @@ and the population posterior this module samples is
     \\sum_i \\log \\Big[ \\sum_k w_{ik} \\,
     \\frac{p(\\theta_{ik} \\mid \\alpha)}{\\pi_0(\\theta_{ik})} \\Big]
 
-computed entirely from stored columns: :func:`fit_population` builds this
-once per object (:class:`_PreparedObject`, independent of :math:`\\alpha`)
-and re-evaluates only the :math:`p(\\theta_{ik} \\mid \\alpha)` term inside
-the ``emcee`` sampler's log-probability.
+computed entirely from stored columns plus the one supplied prior:
+:func:`fit_population` builds this once per object (:class:`_PreparedObject`,
+independent of :math:`\\alpha`) and re-evaluates only the
+:math:`p(\\theta_{ik} \\mid \\alpha)` term inside the ``emcee`` sampler's
+log-probability.
 
 **Effective sample size, and the refusal.** At a given :math:`\\alpha` (this
 module uses the population posterior mean, one evaluation, stated in
@@ -101,10 +131,10 @@ yet; §13's "what is not here" below is explicit about it.
 The reader is a protocol
 -------------------------
 :class:`RunColumns` is what this module needs from one archived run — the
-named parameter's flattened draws, ``log_prior``, ``log_likelihood``,
-``proposal_log_density`` (or ``None``), and the run's provenance
-``attrs`` — expressed as a :class:`typing.Protocol` rather than a base
-class, because horizon (b)'s "buildable entirely on stored files" claim
+named parameter's flattened draws, the run's **joint** ``log_prior`` and
+``log_likelihood``, ``proposal_log_density`` (or ``None``), and the run's
+provenance ``attrs`` — expressed as a :class:`typing.Protocol` rather than a
+base class, because horizon (b)'s "buildable entirely on stored files" claim
 must not secretly mean "on an ``xarray.DataTree`` and nothing else": a
 columnar store that never materialises a ``DataTree`` at all can satisfy
 this protocol and be reweighted here unchanged. Two implementations ship:
@@ -140,7 +170,8 @@ from typing import Any, Protocol, runtime_checkable
 import numpy as np
 
 from ampere.core.exceptions import OptionalDependencyError, ResultsError
-from ampere.core.parameter import Parameter
+from ampere.core.parameter import Parameter, Prior, PriorSpec, prior_from_spec
+from ampere.core.parameter import log_density as prior_log_density
 
 from .emission import from_netcdf
 from .provenance import ATTR_PREFIX, canonical_json
@@ -424,27 +455,36 @@ class _PreparedObject:
     """One object's columns, reduced to what :func:`_log_posterior` needs, computed once."""
 
     theta: np.ndarray
-    log_prior: np.ndarray
+    marginal_log_prior: np.ndarray  # log pi_0(theta), the *named parameter's own* interim prior
     log_w: np.ndarray  # self-normalised: sums to 1 in linear space
     problem_hash: str
     spec_hash: str
 
 
-def _self_normalised_log_weights(run: RunColumns, log_prior: np.ndarray) -> np.ndarray:
+def _as_prior(interim_prior: Prior | PriorSpec) -> Prior:
+    """Accept either a live prior or its neutral :class:`PriorSpec` description."""
+    if isinstance(interim_prior, PriorSpec):
+        return prior_from_spec(interim_prior)
+    return interim_prior
+
+
+def _self_normalised_log_weights(run: RunColumns, joint_log_prior: np.ndarray) -> np.ndarray:
     """Per-draw log importance weights, normalised to sum to 1 in linear space.
 
     Exact samplers (``ampere_approximation == "none"``): the stored draws are
-    already posterior draws under the interim prior, so the weights are
-    uniform. Approximate engines (W5.0): ``exp(log_prior + log_likelihood -
-    proposal_log_density)`` self-normalised is the importance weight that
-    turns proposal draws into (weighted) posterior draws first, per the
-    module docstring.
+    already posterior draws under the *joint* interim prior, so the weights
+    are uniform. Approximate engines (W5.0): ``exp(joint_log_prior +
+    log_likelihood - proposal_log_density)`` self-normalised is the
+    importance weight that turns proposal draws into (weighted) posterior
+    draws first, per the module docstring. This is the one place the run's
+    **joint** ``log_prior`` column is the correct term -- unlike the
+    marginal :math:`\\pi_0(\\theta)` :func:`_log_object_evidence` needs.
     """
     from scipy.special import logsumexp
 
     approximation = str(run.attrs.get(f"{ATTR_PREFIX}approximation", "none"))
     if approximation == "none":
-        raw = np.zeros_like(log_prior)
+        raw = np.zeros_like(joint_log_prior)
     else:
         proposal = run.proposal_log_density
         if proposal is None:
@@ -455,12 +495,20 @@ def _self_normalised_log_weights(run: RunColumns, log_prior: np.ndarray) -> np.n
                 f"weights; this run has no such column. Refusing rather than treating an "
                 f"approximate run's draws as if they were exact posterior draws."
             )
-        raw = log_prior + run.log_likelihood - proposal
+        raw = joint_log_prior + run.log_likelihood - proposal
     return raw - logsumexp(raw)
 
 
-def _prepare_objects(runs: Sequence[RunColumns], parameter: str) -> list[_PreparedObject]:
-    """Read every run's columns once, and refuse a mixture this module cannot reweight."""
+def _prepare_objects(
+    runs: Sequence[RunColumns], parameter: str, interim_prior: Prior
+) -> list[_PreparedObject]:
+    """Read every run's columns once, and refuse a mixture this module cannot reweight.
+
+    *interim_prior* is the named parameter's own **marginal** interim prior
+    :math:`\\pi_0(\\theta)` -- not the run's stored (joint) ``log_prior``
+    column, which is what :func:`_self_normalised_log_weights` alone uses.
+    See the module docstring's "why it needs the marginal interim prior".
+    """
     if not runs:
         raise ResultsError("fit_population needs at least one run.")
     prepared: list[_PreparedObject] = []
@@ -475,17 +523,18 @@ def _prepare_objects(runs: Sequence[RunColumns], parameter: str) -> list[_Prepar
             )
         spec_hashes.setdefault(str(spec_hash), []).append(index)
         theta = run.parameter_draws(parameter)
-        log_prior = run.log_prior
-        if theta.shape != log_prior.shape:
+        joint_log_prior = run.log_prior
+        if theta.shape != joint_log_prior.shape:
             raise ResultsError(
                 f"run {index}: parameter {parameter!r} has {theta.size} draws but log_prior has "
-                f"{log_prior.size}; they must come from the same run's columns."
+                f"{joint_log_prior.size}; they must come from the same run's columns."
             )
-        log_w = _self_normalised_log_weights(run, log_prior)
+        log_w = _self_normalised_log_weights(run, joint_log_prior)
+        marginal_log_prior = prior_log_density(interim_prior, theta)
         prepared.append(
             _PreparedObject(
                 theta=theta,
-                log_prior=log_prior,
+                marginal_log_prior=marginal_log_prior,
                 log_w=log_w,
                 problem_hash=str(attrs.get(f"{ATTR_PREFIX}problem_hash", "")),
                 spec_hash=str(spec_hash),
@@ -506,7 +555,7 @@ def _log_object_evidence(
     """``log p(d_i | alpha)`` and the per-draw normalised weights the ESS needs."""
     from scipy.special import logsumexp
 
-    log_c = obj.log_w + model.log_density(obj.theta, alpha) - obj.log_prior
+    log_c = obj.log_w + model.log_density(obj.theta, alpha) - obj.marginal_log_prior
     log_z = float(logsumexp(log_c))
     if not math.isfinite(log_z):
         return -math.inf, np.full(log_c.shape, 1.0 / log_c.size)
@@ -608,6 +657,7 @@ def fit_population(
     runs: Sequence[RunColumns],
     parameter: str,
     model: PopulationModel,
+    interim_prior: Prior | PriorSpec,
     *,
     walkers: int | None = None,
     steps: int = 3000,
@@ -628,6 +678,20 @@ def fit_population(
         back from every run's ``posterior`` group.
     model
         The population model — see :class:`GaussianPopulationModel`.
+    interim_prior
+        The named parameter's own **marginal** interim prior
+        :math:`\\pi_0(\\theta)` — the prior it was declared with in every
+        input run (guaranteed identical across them by the shared
+        ``ampere_spec_hash`` refusal above). A frozen ``scipy.stats``
+        distribution (a :class:`~ampere.core.parameter.Prior`) or a
+        :class:`~ampere.core.parameter.PriorSpec`. Required, and not read
+        off the runs themselves: a run's provenance records only each
+        parameter's name and a hash of its declaration, not the declaration
+        itself (``results.md`` §9), so there is nothing here to read back
+        from — see the module docstring's "why it needs the marginal
+        interim prior" for the identity this divides out and why the run's
+        stored (joint) ``log_prior`` column is the wrong thing to divide by
+        whenever the object's model has more than one free parameter.
     walkers, steps, burn_in, thin
         ``emcee.EnsembleSampler`` settings, in the same sense
         :class:`~ampere.inference.EmceeEngine` uses them; ``walkers``
@@ -666,7 +730,7 @@ def fit_population(
     """
     import emcee
 
-    prepared = _prepare_objects(runs, parameter)
+    prepared = _prepare_objects(runs, parameter, _as_prior(interim_prior))
     hyperparameters = list(model.hyperparameters)
     n_hyper = len(hyperparameters)
     chosen_walkers = _default_walkers(n_hyper) if walkers is None else int(walkers)

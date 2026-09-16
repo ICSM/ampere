@@ -1415,13 +1415,30 @@ Each is a decision, not an oversight. Each has an extension point.
     otherwise) into a population-hyperparameter posterior by
     self-normalised importance reweighting under a declared
     `PopulationModel` (Hogg, Myers & Bovy 2010): an exact sampler's stored
-    draws are already posterior draws under its interim prior and carry
-    uniform weight, an approximate engine's draws are reweighted through
-    `exp(log_prior + log_likelihood − proposal_log_density)` — W5.0's
+    draws are already posterior draws under its *joint* interim prior (over
+    every free parameter the object's model declares) and carry uniform
+    weight, an approximate engine's draws are reweighted through
+    `exp(log_prior + log_likelihood − proposal_log_density)` (the run's
+    joint `log_prior` — correct here, because this step turns proposal
+    draws into posterior draws over the whole free vector) — W5.0's
     contract is exactly what makes this half legal — and a run whose
     `ampere_approximation` is not `"none"` and carries no
     `proposal_log_density` is refused by name rather than treated as if it
-    were exact. The per-object effective sample size at the fitted
+    were exact. **The reweighting ratio itself needs a second, different
+    prior**: the named parameter's own *marginal* interim prior
+    `π₀(θ)`, not the run's joint column — every other declared parameter's
+    interim prior cancels exactly against the population model's own
+    (unchanged) prior on it, leaving `π₀(θ)` alone in the denominator, and
+    dividing by the joint instead leaves an uncancelled, per-draw factor
+    that biases the population posterior whenever an object has more than
+    one free parameter (invisible on a single-parameter toy, where the two
+    priors coincide — found at review, W5.13, after the item's own
+    single-parameter tests had already gone green). Because a run's
+    provenance records only each parameter's name and a hash of its
+    declaration rather than the declaration itself (§9), `π₀(θ)` cannot be
+    read back off a run: `fit_population` takes it as an explicit, required
+    `interim_prior` argument (a `Prior` or a `PriorSpec`) instead. The
+    per-object effective sample size at the fitted
     posterior mean is reported and a collapse below a stated floor
     (`DEFAULT_ESS_FLOOR = 20`, an argument) is a refusal by name naming
     the worst object, rather than a population posterior one
