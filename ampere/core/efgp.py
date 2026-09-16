@@ -416,14 +416,19 @@ def toeplitz_matvec(grid: FourierGrid, generator: np.ndarray, vector: np.ndarray
     """
     counts = grid.counts
     padded = tuple(2 * count - 1 for count in counts)
-    embedded = np.zeros(padded, dtype=CDTYPE)
-    # The first column of the circulant: T[j - k] laid out so index 0 is
-    # delta = 0, ascending deltas first and descending negatives wrapped to
-    # the end, which is what a cyclic convolution multiplies by.
+    # The circulant's first column: position ``i`` on an axis stands for the
+    # index difference ``i`` while ``i < n`` and for ``i - (2n - 1)``, a
+    # negative difference, after it. Every axis wraps **independently**, so the
+    # map is built per axis and taken as an outer index — a 2-D embedding has
+    # four corners, not two, and filling only the two that a 1-D one has is
+    # the mistake this comment exists to prevent recurring.
+    maps = []
+    for count in counts:
+        positions = np.arange(2 * count - 1)
+        difference = np.where(positions < count, positions, positions - (2 * count - 1))
+        maps.append(difference + (count - 1))
+    embedded = np.asarray(generator[np.ix_(*maps)], dtype=CDTYPE)
     forward = tuple(slice(0, count) for count in counts)
-    backward = tuple(slice(count, 2 * count - 1) for count in counts)
-    embedded[forward] = generator[tuple(slice(count - 1, 2 * count - 1) for count in counts)]
-    embedded[backward] = generator[tuple(slice(0, count - 1) for count in counts)]
     block = np.zeros(padded, dtype=CDTYPE)
     block[forward] = np.reshape(vector, counts)
     product = np.fft.ifftn(np.fft.fftn(embedded) * np.fft.fftn(block))

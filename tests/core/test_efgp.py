@@ -356,3 +356,59 @@ def test_module_docstring_examples_run() -> None:
     results = doctest.testmod(efgp_module, optionflags=doctest.ELLIPSIS, verbose=False)
     assert results.failed == 0
     assert results.attempted > 0
+
+
+def test_circulant_embedding_in_two_axes() -> None:
+    """The 2-D embedding has four corners, and a 1-D test cannot see the other two.
+
+    A multilevel circulant wraps each axis independently, so an embedding that
+    filled only the ``(forward, forward)`` and ``(backward, backward)`` blocks
+    is exactly right in one axis and wrong in two — and wrong in a way the
+    marginal likelihood, which factorises the explicit matrix, never notices:
+    only ``condition``'s mean and ``solve_iterative`` go through the FFT. That
+    is how it got past the 1-D row above once.
+    """
+    rng = np.random.default_rng(13)
+    points = rng.uniform(-1.0, 1.0, (120, 2))
+    variance = np.full(120, 0.04)
+    kernel = Matern32(0.4, 0.5, axes=None)
+    grid = fourier_grid(points, (7, 5), 2.0)
+    generator = toeplitz_generator(grid, points, 1.0 / variance)
+    dense = toeplitz_matrix(grid, generator)
+    vector = rng.normal(size=grid.size) + 1j * rng.normal(size=grid.size)
+    assert np.max(np.abs(dense @ vector - toeplitz_matvec(grid, generator, vector))) < 1e-8
+    del kernel
+
+
+def test_conditional_mean_in_two_axes_matches_dense() -> None:
+    """``condition`` takes the FFT route for its mean, so it needs its own 2-D row."""
+    rng = np.random.default_rng(17)
+    points = rng.uniform(-1.0, 1.0, (200, 2))
+    kernel = Matern32(0.4, 0.5)
+    values = kernel.resolve(None)
+    covariance = np.asarray(kernel.matrix(points, points, values))
+    lower = np.linalg.cholesky(covariance + 1e-10 * np.eye(200))
+    residual = lower @ rng.normal(size=200) + rng.normal(0.0, 0.05, 200)
+    variance = np.full(200, 0.05**2)
+    from ampere.core import HilbertSpaceGP
+
+    exact = DenseGP().condition(kernel, points, residual, variance, values)
+    coarse = EquispacedFourierGP(basis_size=(9, 9), boundary_factor=2.0).condition(
+        kernel, points, residual, variance, values
+    )
+    approximate = EquispacedFourierGP(basis_size=(33, 33), boundary_factor=2.0).condition(
+        kernel, points, residual, variance, values
+    )
+    hilbert = HilbertSpaceGP(basis_size=(33, 33), boundary_factor=2.0).condition(
+        kernel, points, residual, variance, values
+    )
+    assert np.max(np.abs(approximate.mean - exact.mean)) < np.max(np.abs(coarse.mean - exact.mean))
+    assert np.max(np.abs(approximate.mean - exact.mean)) < 2e-2
+    assert np.max(np.abs(approximate.variance - exact.variance)) < 1e-3
+    # The sharper statement, and the one the broken embedding failed by two
+    # orders of magnitude: the two reduced-rank solvers represent the same
+    # covariance, so at equal resolution their conditional means agree far
+    # more closely than either agrees with the exact one.
+    assert np.max(np.abs(approximate.mean - hilbert.mean)) < 0.2 * np.max(
+        np.abs(approximate.mean - exact.mean)
+    )
