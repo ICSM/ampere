@@ -255,7 +255,9 @@ def compare(
 
 def main(argv: Any = None) -> int:
     """Print the comparison table. Informational: nothing here asserts."""
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawTextHelpFormatter
+    )
     parser.add_argument("--scenario", default="strong_smooth")
     parser.add_argument("--size", type=int, default=200)
     parser.add_argument("--backend", default="reference")

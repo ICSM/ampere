@@ -392,7 +392,7 @@ def part_name(part: object) -> str:
     """A composed piece's fully qualified class name, for messages and provenance.
 
     Qualified rather than bare, because the bare name is *not* discriminating
-    where it matters most: ``ampere.core.likelihood.Matern32`` and
+    where it matters most: ``ampere.core.kernels.Matern32`` and
     ``ampere.backends.torch.gp.Matern32`` are both ``Matern32``, and a refusal
     reading "Matern32: Matern32" would tell a user nothing about which of the
     two they had composed by mistake (W3.8).

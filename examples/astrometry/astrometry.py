@@ -64,7 +64,14 @@ from typing import Any
 import numpy as np
 import scipy.stats as st
 
-from ampere.core import Dataset, DatasetCollection, FittingProblem, GaussianFamily, Instrument, Likelihood
+from ampere.core import (
+    Dataset,
+    DatasetCollection,
+    FittingProblem,
+    GaussianFamily,
+    Instrument,
+    Likelihood,
+)
 
 from . import generators
 

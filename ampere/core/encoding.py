@@ -996,16 +996,20 @@ def _fourier_features(coordinates: np.ndarray, bands: int) -> np.ndarray:
 
 
 def _sanitised(block: np.ndarray) -> np.ndarray:
-    """Zero every non-finite entry, and every entry of an excluded row.
+    """Replace every non-finite entry with zero (**W5.2**: the docstring said more than this).
 
-    ``encoding.md`` §3 leaves a masked sample's value as the container holds it
-    and lets the mask remove it downstream; **amended by W3.3**, because a
-    masked sample may legitimately be a NaN or an infinity in the observed
-    container (masking it is what a user does *about* that), and a non-finite
-    number in the stored tensor poisons the training loss, the netCDF round trip
-    and ``sbi``'s own shape validation even where the mask says the row is
-    absent. Finite values on excluded rows are kept, so the round trip is exact
-    there too.
+    Takes no mask and makes no decision about which row is excluded — it is
+    ``np.nan_to_num`` under one name, applied uniformly to every entry of
+    *block*. ``encoding.md`` §3 leaves a masked sample's value as the
+    container holds it and lets the mask remove it downstream; **amended by
+    W3.3**, because a masked sample may legitimately be a NaN or an infinity
+    in the observed container (masking it is what a user does *about* that),
+    and a non-finite number in the stored tensor poisons the training loss,
+    the netCDF round trip and ``sbi``'s own shape validation even where the
+    mask says the row is absent. A **finite** value on an excluded row is
+    left exactly as it was — this function has no way to zero "every entry of
+    an excluded row" even if it wanted to, since it is never told which rows
+    those are — so the round trip is exact there too.
     """
     out = np.nan_to_num(np.asarray(block, dtype=float), nan=0.0, posinf=0.0, neginf=0.0)
     return out

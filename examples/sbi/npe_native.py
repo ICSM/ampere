@@ -68,7 +68,7 @@ def build_problem(*, seed: int = 20260911) -> FittingProblem:
     from ampere.backends.torch import IndependentNoise, PowerLaw
 
     rng = np.random.default_rng(seed)
-    truth = TRUTH["model.norm"] * GRID**TRUTH["model.index"]
+    truth = TRUTH["model.norm"] * GRID ** TRUTH["model.index"]
     observed = Spectrum(
         GRID * u.um,
         (truth + rng.normal(0.0, UNCERTAINTY, GRID.size)) * u.Jy,
@@ -90,10 +90,12 @@ def report(run: Any) -> str:
     attrs = run.attrs
     posterior = run["posterior"].dataset
     lines = [
-        f"{attrs['ampere_sbi_method']} on {attrs['ampere_backend']} (native, batchable): "
-        f"{attrs['ampere_sbi_simulations']} simulation(s), "
-        f"{attrs['ampere_sbi_usable_simulations']} usable "
-        f"({attrs['ampere_sbi_failures']} failed)",
+        (
+            f"{attrs['ampere_sbi_method']} on {attrs['ampere_backend']} (native, batchable): "
+            f"{attrs['ampere_sbi_simulations']} simulation(s), "
+            f"{attrs['ampere_sbi_usable_simulations']} usable "
+            f"({attrs['ampere_sbi_failures']} failed)"
+        ),
         "  posterior (truth in brackets):",
     ]
     for name in sorted(posterior.data_vars):

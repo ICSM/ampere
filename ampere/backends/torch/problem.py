@@ -138,6 +138,7 @@ from ampere.core import (
     LikelihoodFamily,
     PoissonFamily,
     StudentTFamily,
+    VonMisesFamily,
     chunk_bounds,
     foreign_parts_refusal,
 )
@@ -250,6 +251,7 @@ _TWINNED_FAMILIES: dict[str, type[LikelihoodFamily]] = {
     "poisson": PoissonFamily,
     "student_t": StudentTFamily,
     "complex_gaussian": ComplexGaussianFamily,
+    "von_mises": VonMisesFamily,
 }
 
 
@@ -445,10 +447,9 @@ class _LoweredDataset:
         The twin of ``ampere.backends.jax.problem._LoweredDataset``'s method of
         the same name (W3.0 landed it there; the identical gap here is the
         carried finding W3.1 slice 2 closes). Same condition, same wording, for
-        the same reason: ``GaussianProcessNoise.sigma`` refuses a dataset with
-        no observed uncertainty at all, or with a retained uncertainty that is
-        zero or negative -- "an infinitely precise measurement, which no
-        likelihood can normalise" -- for any family that
+        the same reason: ``GaussianProcessNoise.sigma`` refuses a retained
+        uncertainty that is zero or negative -- "an infinitely precise
+        measurement, which no likelihood can normalise" -- for any family that
         ``REQUIRES_UNCERTAINTY``, and on the contract path that surfaces only
         when the density is evaluated. ``ampere.core.realise``'s one-point
         agreement check happens to catch it today, because the contract path
@@ -458,15 +459,21 @@ class _LoweredDataset:
         density the contract refuses. So the refusal belongs here, at
         construction, beside the ``REQUIRES_UNCERTAINTY``/sigma-is-None check
         :meth:`log_likelihood` already makes for the non-GP branch.
+
+        **W5.2**: no longer checks ``observed.uncertainty is None`` -- a
+        dataset with no observed uncertainty at all and a family that
+        ``REQUIRES_UNCERTAINTY`` is already refused unconditionally at
+        composition, by ``NoiseModel.check_compatible``
+        (``ampere.core.likelihood``), which every ``Likelihood`` calls before
+        a ``FittingProblem`` exists at all -- and a ``_LoweredDataset`` is
+        never built except from one. That branch (with its own "no jitter, so
+        sigma is undefined" wording, which core's unconditional refusal does
+        not honour anyway -- jitter never rescues a missing uncertainty at
+        composition, so the branch could not even have been reached the way
+        it was written) was dead code; removed rather than exercised, since
+        making it reachable would mean relaxing the core refusal, which is a
+        §4 contract change this item is not scoped to make.
         """
-        if observed.uncertainty is None:
-            if "jitter" not in self.noise.parameters:
-                raise _refuse(
-                    "uncertainty",
-                    f"dataset {label!r} has no observed uncertainties and its noise model "
-                    f"declares no jitter, so sigma is undefined.",
-                )
-            return
         retained = np.asarray(observed.uncertainty, dtype=float).ravel()[self.retain]
         bad = retained <= 0.0
         if np.any(bad):
@@ -721,13 +728,16 @@ class _LoweredDataset:
           generator and so make it depend on how the chunk was scheduled — so
           this is what makes a draw a pure function of its seed, which is what
           partition independence needs.
-        * **Two stage** (``poisson``, ``student_t``). Their variates are not
-          arithmetic on normals, so the transform computes each draw's
-          distribution *parameters* — the Poisson rate, ``exp(f)`` and all; the
-          Student-t location, scale and ``nu`` — and the variate is drawn after
-          it, per draw, from that draw's own seed. Same property, one stage
-          later. jax needs none of this: ``jax.random`` takes a traced rate and
-          a traced ``nu`` inside ``jax.vmap``.
+        * **Two stage** (``poisson``, ``student_t``, ``von_mises``). Their
+          variates are not arithmetic on normals, so the transform computes
+          each draw's distribution *parameters* — the Poisson rate,
+          ``exp(f)`` and all; the Student-t location, scale and ``nu``; the
+          von Mises mean angle and concentration ``kappa = 1/sigma**2``, read
+          exactly as ``ampere.core.VonMisesFamily.sample`` reads it — and the
+          variate is drawn after it, per draw, from that draw's own seed. Same
+          property, one stage later. jax needs none of this: ``jax.random``
+          takes a traced rate and a traced ``nu``/``kappa`` inside
+          ``jax.vmap``.
 
         The variates are drawn on the **CPU** and moved, exactly as the normals
         already were: a ``torch.Generator`` bound to a device would make a
@@ -735,7 +745,7 @@ class _LoweredDataset:
         """
         name = self.likelihood.family.NAME
         size = int(self.retain.sum())
-        if name in ("poisson", "student_t"):
+        if name in ("poisson", "student_t", "von_mises"):
 
             def parameters(vector: torch.Tensor, row: torch.Tensor, of: Any = self) -> Any:
                 return of.sample_parameters(route(vector), row)
@@ -743,6 +753,8 @@ class _LoweredDataset:
             resolved = torch.func.vmap(parameters)(stack, predicted)
             if name == "poisson":
                 return self._poisson_variates(resolved, seeds, device)
+            if name == "von_mises":
+                return self._von_mises_variates(resolved, seeds, size, device)
             return self._student_t_variates(resolved, seeds, size, device)
 
         # Two standard normals per draw, or **four** for the circular complex GP
@@ -835,7 +847,12 @@ class _LoweredDataset:
         ``exp(f)`` under a GP, with ``f`` the dataset's own latent block, so θ
         and the drawn counts describe one model); ``student_t`` returns the
         ``location``, the ``scale`` — the noise model's sigma, used as the
-        scale exactly as the density standardises by it — and ``nu``.
+        scale exactly as the density standardises by it — and ``nu``;
+        ``von_mises`` (**W5.2**) returns the ``mean`` angle (the prediction)
+        and the concentration ``kappa = 1/sigma**2``, read from the same
+        ``sigma`` its density standardises by — exactly
+        ``ampere.core.VonMisesFamily.sample``'s own ``rng.vonmises(mean,
+        1.0 / sigma**2)``, one family earlier.
         """
         values = dict(self._dataset_values(routed).get(LIKELIHOOD_COMPONENT, {}))
         family = self.likelihood.family
@@ -847,6 +864,8 @@ class _LoweredDataset:
             return {"rate": rate}
         sigma = self._sigma(predicted, values)
         assert sigma is not None  # REQUIRES_UNCERTAINTY, checked at composition
+        if family.NAME == "von_mises":
+            return {"mean": predicted, "kappa": 1.0 / sigma**2}
         own = {key: value for key, value in values.items() if key in family.parameters}
         return {
             "location": predicted,
@@ -903,6 +922,35 @@ class _LoweredDataset:
                 variates.append(torch.distributions.StudentT(degrees[index]).sample((size,)))
         standard = torch.stack(variates).to(device)
         return resolved["location"] + resolved["scale"] * standard
+
+    def _von_mises_variates(
+        self,
+        resolved: Mapping[str, torch.Tensor],
+        seeds: Sequence[int],
+        size: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        """``rng.vonmises(mean, kappa)`` per retained sample, one draw at a time (**W5.2**).
+
+        The same ``torch.random.fork_rng``/``manual_seed`` pattern
+        :meth:`_student_t_variates` uses -- ``torch.distributions.VonMises``
+        takes no generator either -- but unlike ``nu``, ``mean`` and ``kappa``
+        vary **per retained sample** within one draw, the circular analogue of
+        the Gaussian family's per-sample ``sigma``. So this distribution's
+        batch shape is already ``(size,)`` and a bare ``.sample()`` draws
+        exactly one variate per sample, where :meth:`_student_t_variates`'s
+        ``.sample((size,))`` instead draws ``size`` i.i.d. variates from one
+        shared scalar ``nu``.
+        """
+        mean = resolved["mean"].detach().to("cpu", dtype=DEFAULT_DTYPE)
+        kappa = resolved["kappa"].detach().to("cpu", dtype=DEFAULT_DTYPE)
+        variates = []
+        with torch.random.fork_rng(devices=[]):
+            for index, seed in enumerate(seeds):
+                torch.manual_seed(_seed(seed))
+                assert mean[index].shape == (size,)  # (chunk, size) after vmap, per (*W3.14*)
+                variates.append(torch.distributions.VonMises(mean[index], kappa[index]).sample())
+        return torch.stack(variates).to(device)
 
     def _gp_realisation(self, values: Mapping[str, Any], whitened: torch.Tensor) -> torch.Tensor:
         """``L(θ) z``, from the solver's own native whitening transform."""

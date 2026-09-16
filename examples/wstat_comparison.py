@@ -625,9 +625,7 @@ def coverage_study(
     """
     prior = COVERAGE_NORM_PRIOR if norm_prior is None else norm_prior
     source_counts, background_counts = synthetic_xray_counts()
-    truth = build_joint_problem(
-        source_counts, background_counts, seed=seed, norm_prior=prior
-    )
+    truth = build_joint_problem(source_counts, background_counts, seed=seed, norm_prior=prior)
     options = {"steps": steps, "burn_in": burn_in}
 
     def wstat_factory(replica: FittingProblem) -> Any:

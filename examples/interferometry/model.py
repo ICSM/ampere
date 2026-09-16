@@ -168,6 +168,8 @@ class BinaryWithDisc(Model):
         return self._binary.native_flux(channel, values) + self._disc.native_flux(channel, None)
 
 
-def binary_with_disc(itf: Any, x: Any, y: Any, *, disc_flux: float, disc_fwhm: float, **binary_kwargs: Any) -> BinaryWithDisc:
+def binary_with_disc(
+    itf: Any, x: Any, y: Any, *, disc_flux: float, disc_fwhm: float, **binary_kwargs: Any
+) -> BinaryWithDisc:
     """Convenience constructor: see :class:`BinaryWithDisc`."""
     return BinaryWithDisc(itf, x, y, disc_flux=disc_flux, disc_fwhm=disc_fwhm, **binary_kwargs)

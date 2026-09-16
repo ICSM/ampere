@@ -104,17 +104,23 @@ def report(run: Any) -> str:
     attrs = run.attrs
     posterior = run["posterior"].dataset
     lines = [
-        f"{attrs['ampere_sbi_method']} on {attrs['ampere_backend']}: "
-        f"{attrs['ampere_sbi_simulations']} simulation(s), "
-        f"{attrs['ampere_sbi_usable_simulations']} usable "
-        f"({attrs['ampere_sbi_failures']} failed)",
-        f"  network: {attrs['ampere_sbi_density_estimator']}, "
-        f"embedding {attrs['ampere_sbi_embedding']}, "
-        f"{attrs['ampere_sbi_epochs_trained']} epoch(s), "
-        f"summary layout {attrs['ampere_sbi_summary_layout']} "
-        f"({attrs['ampere_sbi_summary_features']} feature(s))",
-        f"  prior in {attrs['ampere_sbi_parameterisation']} coordinates; "
-        f"context {attrs['ampere_sbi_context']}",
+        (
+            f"{attrs['ampere_sbi_method']} on {attrs['ampere_backend']}: "
+            f"{attrs['ampere_sbi_simulations']} simulation(s), "
+            f"{attrs['ampere_sbi_usable_simulations']} usable "
+            f"({attrs['ampere_sbi_failures']} failed)"
+        ),
+        (
+            f"  network: {attrs['ampere_sbi_density_estimator']}, "
+            f"embedding {attrs['ampere_sbi_embedding']}, "
+            f"{attrs['ampere_sbi_epochs_trained']} epoch(s), "
+            f"summary layout {attrs['ampere_sbi_summary_layout']} "
+            f"({attrs['ampere_sbi_summary_features']} feature(s))"
+        ),
+        (
+            f"  prior in {attrs['ampere_sbi_parameterisation']} coordinates; "
+            f"context {attrs['ampere_sbi_context']}"
+        ),
         "  posterior:",
     ]
     for name in sorted(posterior.data_vars):
