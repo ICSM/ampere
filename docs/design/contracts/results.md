@@ -195,7 +195,7 @@ result, got float. ...
 | Group | Contents | Dims |
 |---|---|---|
 | `posterior` | one variable per **merged parameter name** | `(chain, draw)`, plus a named dimension for an array-valued parameter |
-| `sample_stats` | `lp` (= `log_prob`), `log_prior`, `log_likelihood` (the scalar joint), `failed`, `failure_reason`, `failure_where` | `(chain, draw)` |
+| `sample_stats` | `lp` (= `log_prob`), `log_prior`, `log_likelihood` (the scalar joint), `failed`, `failure_reason`, `failure_where`, and — *(Amended W5.0, engine-conditional)* — `proposal_log_density` | `(chain, draw)` |
 | `log_likelihood` | one variable per **dataset label** — the per-dataset decomposition (§5) | `(chain, draw)` |
 | `observed_data` | one variable per dataset: the observed values | the dataset's own coordinate axis |
 | `constant_data` | per dataset: uncertainties, mask, extra coordinates, and any axes that are not dimensions | as above |
@@ -206,6 +206,39 @@ None of the groups above is the root attributes themselves — those are §9's,
 and *(added W3.12)* they gain one more member there: `ampere_model_hash`,
 written on every run (and, §11, every training set) beside the spec, problem
 and data hashes.
+
+**The weighted/approximate-draw rule, stated once** *(added W5.0, ruled by
+Peter 2026-09-10 on the inference-extensions memo §5, §7.1–7.2)*. dynesty's
+own convention — nested sampling's dead points are *weighted*, and every
+consumer of the `posterior` group from `arviz.summary` to a corner plot
+assumes equal weight, so the emitted draws are `dynesty.utils.resample_equal`
+of the dead points, the *original* count recorded on the engine's own
+attribute (`ampere_dynesty_dead_points`) and the raw weighted output kept on
+the driver (`DynestyEngine.sampler.results`) rather than discarded — is now
+the contract's, for any future engine whose draws arrive weighted rather than
+one-for-one.
+
+The second half of the same rule is new at W5.0: **every engine whose stored
+draws are not draws from the target records the proposal's own log-density
+per draw**, in `sample_stats.proposal_log_density`, in the *same coordinates*
+the stored `log_prior`/`log_likelihood` already are — the constrained
+free-parameter vector, not an internal unconstrained one a fitted guide or a
+trained density estimator may have worked in. That one requirement is what
+makes
+
+```
+weight = exp(log_prior + log_likelihood - proposal_log_density)
+```
+
+a valid (self-normalising) importance weight computed from the stored groups
+alone, on any engine, without knowing which one produced the run:
+`VIEngine`'s fitted guide and `SBIEngine`'s trained density estimator both
+write it — checked, not merely asserted, by a test that reweights a VI run's
+stored draws with nothing but this formula and confirms the corrected mean
+agrees with an independent emcee reference on the same toy problem
+(`tests/inference/test_vi.py`). An exact sampler's draws *are* draws from the
+target, so the column is simply absent — there is no proposal distinct from
+the posterior to record a density for.
 
 The posterior is keyed by the merged name, which is the third of the three
 reasons `inference.md` §4.5 gives for the nested merge topology: a merged name
@@ -760,6 +793,36 @@ per-process and that a multiprocessing driver must aggregate before emitting —
 that aggregation is the driver's, and this contract's part is that there is
 somewhere for the answer to go.
 
+**Two attributes joined at W5.0, and the constant is now 7** *(Amended W5.0;
+ruled by Peter 2026-09-10 on the inference-extensions memo §5, §7.1–7.2)*.
+
+- **`ampere_approximation`** — written on **every** run, by the one shared
+  call every driver (gradient-free and gradient-based alike) goes through
+  (`ampere.inference.engine.Engine.finish`), so no driver can forget it:
+  `"none"` for an exact sampler (emcee, zeus, dynesty, NUTS — nested
+  sampling's *equal-weighted* draws count as exact here, per the rule above),
+  or the approximating family for one that is not —
+  `"mean_field"`/`"multivariate"` for `VIEngine`'s guide,
+  `"density_estimator"` for `SBIEngine`'s trained network, whichever of NPE,
+  NLE, NRE or TMNRE produced it. This is the one key `plot_trace` and the new
+  `ampere.results.summary` check before reporting an R-hat, an ESS or a
+  trace shape that means nothing for a run that was never a Markov chain.
+- **`ampere_log_evidence`**, **`ampere_log_evidence_err`** and
+  **`ampere_evidence_method`** — conditional, written by whichever engine
+  estimates a marginal likelihood (`DynestyEngine` today, from its
+  `logz`/`logzerr`, `evidence_method = "nested_sampling"`). Engine-neutral by
+  design, so a later evidence-producing engine needs no reader taught a new
+  attribute name; the engine's own spelling stays too
+  (`ampere_dynesty_logz`/`_logzerr`), unrenamed, for a reader who already
+  knows to look for it.
+
+None of the four is an input to `problem_fingerprint` — each describes how a
+run was produced, not what problem it was over — but the schema constant is,
+so `ampere_problem_hash` moved again at this bump as at every previous one.
+§4 above states the fifth piece of the same ruling,
+`sample_stats.proposal_log_density`: not a root attribute, so not listed here,
+but part of the same contract adaptation and riding the same schema bump.
+
 ### The hashing recipe
 
 Four steps, and each is a decision.
@@ -1271,6 +1334,19 @@ Each is a decision, not an oversight. Each has an extension point.
     modality — a gridded or multi-axis kind was never promised family B/C
     support before then. `interferometry.rst`'s "The plots: a found
     limitation, not assumed" section is the worked account.
+15. **Optimisation results are not implemented, and their shape is decided
+    without them.** *(Added W5.0, ruled by Peter 2026-09-10 on the
+    inference-extensions memo §7.1–7.2.)* Nothing in ampere runs an optimiser
+    yet, but when one lands its result is a `DataTree` like any other run's —
+    an `optimum` group rather than a separate return type — so that every
+    reader built against "a run is a `DataTree`" (`plot_trace`,
+    `ampere.results.summary`, `to_netcdf`/`from_netcdf`, an archive's own
+    tooling) keeps working without a second code path for "the answer was a
+    point estimate, not a distribution". This item implements nothing of it:
+    the group's own contents (the optimum, its covariance or Hessian where
+    the method has one, convergence diagnostics) are the optimiser item's to
+    define against this ruling, not this one's to guess at ahead of a real
+    method.
 
 ## 14. What this contract hands to the specs downstream
 
