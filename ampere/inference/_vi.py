@@ -301,6 +301,15 @@ class VIEngine(Engine):
         #: ``quantiles``, say. :attr:`sampler` holds the ``SVI`` object beside
         #: it, as it holds the ``MCMC`` object for the other drivers.
         self.guide: Any = None
+        #: The fitted guide's own parameters, as plain arrays rather than
+        #: library objects, so they outlive pyro's scoped param store and a
+        #: caller (or a test) can rebuild the guide's density independently
+        #: of which library fitted it. ``guide_scale`` is set for
+        #: ``guide="normal"``, ``guide_scale_tril`` for
+        #: ``guide="multivariate"`` — never both. **W5.0.**
+        self.guide_loc: np.ndarray | None = None
+        self.guide_scale: np.ndarray | None = None
+        self.guide_scale_tril: np.ndarray | None = None
         if density is None:
             try:
                 self.realisation = realise(problem)
@@ -478,11 +487,29 @@ class VIEngine(Engine):
         the fitted parameters :meth:`~pyro.params.param_store.ParamStoreDict.
         scope` isolated are gone the moment this ``with`` block exits — asking
         for ``guide.log_prob`` afterwards would look up parameters that no
-        longer exist in the (now-restored) global store. Reading ``fn`` off
-        the traced ``_SITE`` node rather than calling a convenience method
-        avoids depending on which internal shape a given autoguide subclass
-        happens to expose, at the one-time cost of a Python loop over the
-        draws.
+        longer exist in the (now-restored) global store.
+
+        **It is summed over every sample site in the trace, not read off
+        ``_SITE`` alone — this is not a stylistic choice, it is the fix for a
+        real bug a review caught.** An autoguide does not sample ``_SITE``
+        directly: it draws from an *auxiliary* site (``AutoNormal``'s own
+        unconstrained latent, ``AutoMultivariateNormal``'s
+        ``..._latent``) under the real ``Normal``/``MultivariateNormal`` the
+        guide fitted, then records ``_SITE`` itself as a :class:`pyro.
+        distributions.Delta` at the transformed value — here the identity
+        transform, since the carrier's support is already ``R**d``
+        (module docstring). ``trace.nodes[_SITE]["fn"].log_prob(...)`` is
+        therefore that ``Delta``'s log-density, which is the change-of-
+        variables term between the auxiliary site and ``_SITE`` — **zero**
+        for an identity transform, not the guide's density. Reading it alone
+        silently stored a constant zero for every draw, whatever the guide
+        actually fitted. The auxiliary site's own ``fn.log_prob`` *is* the
+        real density, but its distribution and value are only equal to
+        ``_SITE``'s **up to** exactly the ``Delta`` term the two together
+        cancel — so summing ``fn.log_prob(value)`` over **every** sample-type
+        node in the trace gives the guide's total log-density at ``_SITE``'s
+        drawn value by construction, without this method needing to know
+        which auxiliary site name a given autoguide subclass happens to use.
         """
         import pyro  # pyrefly: ignore[missing-import]
         import pyro.poutine as poutine  # pyrefly: ignore[missing-import]
@@ -527,8 +554,47 @@ class VIEngine(Engine):
                     trace = poutine.trace(guide).get_trace()
                     node = trace.nodes[_SITE]
                     values.append(np.asarray(node["value"].detach().cpu().numpy(), dtype=float))
-                    log_q[i] = float(node["fn"].log_prob(node["value"]).sum())
+                    # Every sample-type node, Delta included: see the
+                    # docstring's account of why the sum -- not `_SITE`
+                    # alone -- is the guide's density at `_SITE`'s value.
+                    log_q[i] = float(
+                        sum(
+                            site["fn"].log_prob(site["value"]).sum()
+                            for site in trace.nodes.values()
+                            if site["type"] == "sample"
+                        )
+                    )
                 drawn = np.stack(values)
+                # Kept as plain arrays (not the guide object, which is
+                # useless once the param-store scope below exits) so a
+                # caller -- or a test checking this method against an
+                # independent scipy density -- can read the fitted guide
+                # back without touching pyro's param store at all.
+                #
+                # The two autoguide classes expose their fit differently, and
+                # neither name is `.loc`/`.scale` on both: `AutoNormal` is
+                # not an `AutoContinuous` subclass and keeps one `Parameter`
+                # per *site name* under `.locs`/`.scales` (`guide.locs.theta`
+                # here); `AutoMultivariateNormal` is, and exposes `.loc`
+                # directly but its **covariance's** Cholesky factor is not
+                # `.scale_tril` alone -- that is a unit-diagonal correlation
+                # matrix, row-scaled by the separate `.scale` vector
+                # (pyro's own `get_posterior`: `scale[..., None] *
+                # scale_tril`). Combining the two here, once, is what let a
+                # review's own probe catch this method reconstructing the
+                # wrong covariance from `scale_tril` alone.
+                if settings.guide == "multivariate":
+                    self.guide_loc = np.asarray(guide.loc.detach().cpu().numpy(), dtype=float)
+                    scale = guide.scale.detach().cpu().numpy()
+                    correlation = guide.scale_tril.detach().cpu().numpy()
+                    self.guide_scale_tril = np.asarray(scale[..., None] * correlation, dtype=float)
+                else:
+                    self.guide_loc = np.asarray(
+                        getattr(guide.locs, _SITE).detach().cpu().numpy(), dtype=float
+                    )
+                    self.guide_scale = np.asarray(
+                        getattr(guide.scales, _SITE).detach().cpu().numpy(), dtype=float
+                    )
 
         attrs: dict[str, object] = {
             "vi_final_elbo": elbo[-1],
@@ -580,14 +646,26 @@ class VIEngine(Engine):
           this engine's own sub-stream, so a run repeats from the problem's
           seed exactly as every other driver's does.
 
-        The guide's own log-density (W5.0) is read off
-        :meth:`~numpyro.infer.autoguide.AutoContinuous.get_posterior`, numpyro's
-        own accessor for the fitted latent distribution — no scope to race
-        here, since the fitted parameters live in ``result.params`` rather
-        than a global store. ``posterior[_SITE]`` is exactly the latent
-        distribution's own sample space because the carrier's support is
-        ``real_vector`` (see above), so no further transform is needed before
-        scoring the draws against it.
+        The guide's own log-density (W5.0) is read off a **traced** draw, not
+        off ``get_posterior`` — a review's own probe of this environment
+        found ``AutoNormal`` has no such method at all
+        (``'AutoNormal' object has no attribute 'get_posterior'``): unlike
+        ``AutoMultivariateNormal``, numpyro's ``AutoNormal`` is not an
+        ``AutoContinuous`` subclass, so the two guide classes this driver
+        supports do not share one convenience accessor. Tracing does not need
+        one: :func:`numpyro.handlers.substitute` fixes the fitted parameters,
+        :func:`numpyro.handlers.seed` gives the draw its own key, and summing
+        ``fn.log_prob(value)`` over every ``type == "sample"`` node in the
+        resulting trace is the guide's total log-density at ``_SITE``'s drawn
+        value regardless of which internal shape a given autoguide happens
+        to use — the same reasoning, and the same fix for the same class of
+        bug, as the pyro route's identical sum. (``AutoNormal`` samples
+        ``_SITE`` directly under a real ``Normal``, so the sum there has one
+        term; ``AutoMultivariateNormal`` samples an auxiliary
+        ``..._latent`` under the real ``MultivariateNormal`` and reports
+        ``_SITE`` as a zero-density ``Delta`` at the identity-transformed
+        value, so the sum there has two, one of them zero — either way the
+        total is correct without this method needing to know which.)
         """
         import jax  # pyrefly: ignore[missing-import]
         import numpyro  # pyrefly: ignore[missing-import]
@@ -619,12 +697,49 @@ class VIEngine(Engine):
         self.guide = guide
         self.sampler = svi
 
-        posterior = guide.sample_posterior(keys[1], result.params, sample_shape=(settings.draws,))
-        drawn = np.asarray(posterior[_SITE], dtype=float).reshape(settings.draws, size)
-        posterior_distribution = guide.get_posterior(result.params)
-        log_q = np.asarray(posterior_distribution.log_prob(posterior[_SITE]), dtype=float).reshape(
-            settings.draws
-        )
+        draw_keys = jax.random.split(keys[1], settings.draws)
+        values: list[np.ndarray] = []
+        log_q = np.empty(settings.draws, dtype=float)
+        for i in range(settings.draws):
+            traced = numpyro.handlers.trace(
+                numpyro.handlers.seed(
+                    numpyro.handlers.substitute(guide, data=result.params),
+                    rng_seed=draw_keys[i],
+                )
+            ).get_trace()
+            site = traced[_SITE]
+            values.append(np.asarray(site["value"], dtype=float))
+            # Every sample-type node, Delta included: see the docstring's
+            # account of why the sum is the guide's density at `_SITE`'s
+            # value regardless of which autoguide class produced the trace.
+            log_q[i] = float(
+                sum(
+                    np.asarray(s["fn"].log_prob(s["value"])).sum()
+                    for s in traced.values()
+                    if s["type"] == "sample"
+                )
+            )
+        drawn = np.asarray(values, dtype=float).reshape(settings.draws, size)
+
+        # Kept as plain arrays, exactly as the pyro route keeps
+        # `guide_loc`/`guide_scale`/`guide_scale_tril`, so a caller can
+        # rebuild the guide's density independently of which library fitted
+        # it. numpyro's own naming for the two classes differs (`AutoNormal`
+        # keys one param per site name, `f"{site}_{prefix}_loc"`;
+        # `AutoMultivariateNormal` keys the flattened fit as
+        # `f"{prefix}_loc"`/`f"{prefix}_scale_tril"` — the Cholesky factor of
+        # the covariance directly, unlike pyro's row-scaled-correlation
+        # split above).
+        if settings.guide == "multivariate":
+            self.guide_loc = np.asarray(result.params[f"{guide.prefix}_loc"], dtype=float)
+            self.guide_scale_tril = np.asarray(
+                result.params[f"{guide.prefix}_scale_tril"], dtype=float
+            )
+        else:
+            self.guide_loc = np.asarray(result.params[f"{_SITE}_{guide.prefix}_loc"], dtype=float)
+            self.guide_scale = np.asarray(
+                result.params[f"{_SITE}_{guide.prefix}_scale"], dtype=float
+            )
 
         # numpyro's SVI *minimises* the negative ELBO, so its losses are -ELBO.
         # Recorded as the ELBO itself, which is what the pyro route records and
