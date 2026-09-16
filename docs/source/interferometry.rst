@@ -475,8 +475,10 @@ Four of the "six shipped plots" —
 :func:`ampere.results._plotting.coordinate_of`, which needs **exactly one
 ordered coordinate axis** and refuses a "point kind with several axes" by
 name, citing ``results.md`` §4 and ``DEVELOPMENT_PLAN.md`` §4.4/§4.8's own
-staging: *"Gridded and multi-axis kinds are the Phase 5 staging."* Both of
-this study's kinds are exactly that — a :class:`~ampere.core.VisibilitySet`
+staging — the plan's Phase 4 landed summary names this exact gap among what
+it carried to Phase 5: multi-axis point kinds refused by four of the six
+plots. Both of this study's kinds are exactly that — a
+:class:`~ampere.core.VisibilitySet`
 sample is a joint ``(u, v, spectral_axis)`` point with no natural order, and
 a :class:`~ampere.core.ClosurePhases` sample five such coordinates — so all
 four of those renderers refuse both datasets, on every arm, today. This is
