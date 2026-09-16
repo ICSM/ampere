@@ -310,6 +310,9 @@ markers = [
     # `-m interferometry_full` asks for them, in `tests/m2/conftest.py`'s own
     # shape and for its own reason.
     "interferometry_full: the interferometry study's full budget; run with `pytest -m interferometry_full`",
+    # W5.5. The image study's longer runs (the 128x128 benchmark cell, the
+    # full SBC count): the same reasoning as the line above.
+    "image_full: the image study's full budget; run with `pytest -m image_full`",
 ]
 
 # ---------------------------------------------------------------------------

@@ -11,6 +11,7 @@ Ampere v2
    m2_misspecification
    interferometry
    astrometry
+   image
    wstat_comparison
    sbi
 
@@ -29,7 +30,12 @@ built by following that template, to test the template's own claim — a
 reflex orbit on two ``TimeSeries`` channels, an epoch-sampling instrument,
 and the time-domain flexible likelihood on the O(N) ``QuasisepGP`` path a
 single ordered coordinate axis is exactly the right shape for; its closing
-section reports what the template did not say. :doc:`wstat_comparison`
+section reports what the template did not say. :doc:`image` is the third,
+and the first whose observed container is **gridded** — a PSF convolution on
+an ``Image``, the mask rule rewritten for a grid, and the
+``DenseGP``-against-Hilbert-space-GP benchmark Phase 5's "chosen by
+measurement" rule asks for; its closing section is about what a ``Layout``
+other than ``POINTS`` changes. :doc:`wstat_comparison`
 works through registering a **user-defined likelihood family** — a profiled
 Cash statistic with background — which is the extension point to reach for
 when your data are not Gaussian. :doc:`sbi` is for the opposite case — a
@@ -38,9 +44,9 @@ simulator with :class:`~ampere.inference.SBIEngine`, caching the trained
 posterior, truncated marginal ratio estimation, and checking that the
 result is calibrated.
 
-All six have runnable counterparts in the repository:
+All seven have runnable counterparts in the repository:
 ``examples/sed_composition``, ``examples/m2_misspecification``,
-``examples/interferometry``, ``examples/astrometry``,
+``examples/interferometry``, ``examples/astrometry``, ``examples/image``,
 ``examples/wstat_comparison.py`` and ``examples/sbi/``, each covered by its
 own test suite so that none can rot unnoticed.
 
