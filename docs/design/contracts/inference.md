@@ -1264,16 +1264,38 @@ model up to Phase 4 exposed its differentiable body and its compiled
 coordinate grid as `flux`/`grid`, and the realisation machinery looked those
 up by exactly those names. An interferometric source model cannot: every one
 of them already declares a *parameter* called `flux` (the object's own
-brightness), and `Parameterised._check_free_name`'s rule that a parameter may
-not shadow a class attribute (`parameters.md` §10) makes `flux`
-unavailable as a method name on exactly these classes. `flux`/`grid`
-therefore stopped being the only spelling: both backends' realisation
-machinery resolves `flux`/`grid` **or** `native_flux`/`native_grid` on a
-model, one decision-log row recording the choice — a model picks whichever
-pair does not collide with its own parameters, and the realisation asks for
-both before refusing. `ampere.backends.torch.interferometry` and
-`.jax.interferometry` are the first, and so far only, consumers of the
-second spelling.
+brightness), and `Parameterised._check_free_name`'s rule of the day — that a
+parameter may not shadow a class attribute — made `flux` unavailable as a
+method name on exactly these classes. `flux`/`grid` therefore stopped being
+the only spelling: both backends' realisation machinery resolves either pair
+on a model, and asks for both before refusing.
+
+**W5.20: `native_flux`/`native_grid` is the canonical spelling.** *Ruled by
+Peter 2026-09-15 (D1); decision-log entry in `DEVELOPMENT_PLAN.md` §2.* The
+constraint that forced W4.3's second spelling is gone — `parameters.md` §10's
+reserved set is core's, finite and stated, and no longer grows with a class's
+own attributes, so an interferometric model could now have a method called
+`flux` beside its parameter of that name. It still should not: a surface a
+*realisation* composes and a quantity a *user* fits competing for one word is
+a collision whether or not the namespace rule catches it. So the ruling keeps
+the spelling and promotes it, rather than reverting to one name:
+
+* **`native_flux`/`native_grid` is canonical.** Every shipped model on every
+  backend offers that pair — the spectral models, the astrometry twins, the
+  native astropy models, the interferometry twins — and both `problem.py`
+  lookup tables list it first.
+* **`flux`/`grid` remains a supported legacy alias.** A model written before
+  the ruling composes, realises and differentiates unchanged; the
+  documentation calls the pair *legacy*, and nothing shipped uses it.
+* **A model offering both pairs is refused as ambiguous**, naming both
+  methods. Before, the lookup took the first match and said nothing, so a
+  model carrying a legacy `flux` beside a canonical `native_flux` — the shape
+  a half-finished rename leaves behind — composed at whichever the table
+  happened to list first. Two methods, one surface, no way to tell which the
+  author meant: that is a question for the author.
+* **A model offering half of either pair is refused with the missing half
+  named**, as before. The two go together: the first supplies the values and
+  the second the coordinates the instrument chain transforms them on.
 
 ## 11. Failure signalling
 
