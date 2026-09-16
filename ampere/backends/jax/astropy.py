@@ -27,7 +27,7 @@ once, against a two-method namespace plus this backend's own
 built from the same dict (see that module's docstring, "one table serves both
 backends"). What is genuinely backend-specific, and lives here, is turning the
 translated declaration into an ``ampere.core.Model``: jax arrays, this
-backend's parameter/buffer registration, and the pure ``flux`` surface
+backend's parameter/buffer registration, and the pure ``native_flux`` surface
 (:mod:`ampere.backends.jax.models`'s convention) alongside the contract
 ``evaluate``.
 
@@ -215,18 +215,18 @@ class NativeAstropyModel(Model):
                 f"docs/design/contracts/astropy_compat.md)."
             )
 
-    def grid(self, channel: str) -> jax.Array:
+    def native_grid(self, channel: str) -> jax.Array:
         """The jax coordinates *channel* evaluates on: the negotiated axis, as buffered.
 
         :mod:`ampere.backends.jax.problem` walks a chain through
-        ``model.grid`` / ``model.flux`` / ``step.apply_flux``, and this is the
-        same surface every other native jax model here offers.
+        ``model.native_grid`` / ``model.native_flux`` / ``step.apply_flux``,
+        and this is the same surface every other native jax model here offers.
         """
         self._check_channel(channel)
         self._check_grid()
         return self._axis_grid_array
 
-    def flux(self, channel: str, values: Mapping[str, Any] | None = None) -> jax.Array:
+    def native_flux(self, channel: str, values: Mapping[str, Any] | None = None) -> jax.Array:
         """This model's flux on *channel*, pure and traceable.
 
         The surface a gradient passes through.
@@ -247,7 +247,7 @@ class NativeAstropyModel(Model):
         (:mod:`ampere.backends.jax.models`'s own rule): a gradient does not
         survive it.
         """
-        flux = np.asarray(self.flux(self.channel, values))
+        flux = np.asarray(self.native_flux(self.channel, values))
         emitted = self._probe.template.with_values(flux)
         return ModelResult({self.channel: emitted})
 

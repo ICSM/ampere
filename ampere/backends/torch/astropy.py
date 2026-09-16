@@ -215,18 +215,21 @@ class NativeAstropyModel(Model):
                 f"docs/design/contracts/astropy_compat.md)."
             )
 
-    def grid(self, channel: str) -> torch.Tensor:
+    def native_grid(self, channel: str) -> torch.Tensor:
         """The tensor grid *channel* evaluates on: the negotiated axis, as buffered.
 
         :mod:`ampere.backends.torch.problem` walks a chain through
-        ``model.grid`` / ``model.flux`` / ``step.apply_flux``, and this is the
-        same surface every other native torch model here offers.
+        ``model.native_grid`` / ``model.native_flux`` / ``step.apply_flux``,
+        and this is the same surface every other native torch model here
+        offers.
         """
         self._check_channel(channel)
         self._check_grid()
         return self._axis_grid_tensor
 
-    def flux(self, channel: str, values: Mapping[str, Any] | None = None) -> torch.Tensor:
+    def native_flux(
+        self, channel: str, values: Mapping[str, Any] | None = None
+    ) -> torch.Tensor:
         """This model's flux on *channel*, as a differentiable tensor.
 
         The surface a gradient passes through.

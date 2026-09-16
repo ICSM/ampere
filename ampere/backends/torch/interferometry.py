@@ -14,8 +14,8 @@ There is no step registry (``phase4_placement_memo.md`` §1.2): a twin
 associates with its reference by **the same class name in this backend's own
 module**, the duck-typed surface :mod:`ampere.backends.torch.problem` composes
 (``apply_flux`` on a step; values and coordinates on a model, under the
-``native_flux`` / ``native_grid`` spelling these use because ``flux`` is one of
-their own parameters — see :meth:`_TorchImageModel.native_grid`), and its
+``native_flux`` / ``native_grid`` spelling, canonical since *W5.20* — see
+:meth:`_TorchImageModel.native_grid`), and its
 ``BACKEND`` declaration. All three hold here. What the memo left open is whether these
 follow :mod:`ampere.backends.torch.instrument`, where the torch steps
 **re-declare** everything and are held to the reference by the conformance
@@ -690,7 +690,7 @@ class _TorchImageModel:
     Each concrete model writes one method, :meth:`_brightness_native`,
     returning a surface brightness in Jy/sr on the ``(x, y)`` tensors it is
     handed, in mas. :meth:`_brightness` routes the contract path through the
-    same expression, so ``evaluate`` and ``flux`` cannot disagree.
+    same expression, so ``evaluate`` and ``native_flux`` cannot disagree.
     """
 
     DIFFERENTIABLE: ClassVar[bool] = True
@@ -750,15 +750,16 @@ class _TorchImageModel:
         ``apply_flux`` calls without looking inside it, which is what lets one
         value-and-coordinates protocol serve a spectrum and an image.
 
-        **Why ``native_grid`` and not ``grid``**: its partner cannot be called
-        ``flux``. Every source model here declares a *parameter* named ``flux``
-        (it is the source's total flux density, which is the thing one fits),
-        and ``Parameterised._check_free_name`` refuses a parameter whose name
-        shadows a class attribute — correctly, since ``self.flux`` would then
-        mean two different things. So these models expose the pair under the
-        ``native_*`` spelling, which :mod:`ampere.backends.torch.problem`
-        accepts beside the original one, and the two names are moved together
-        so that a reader never has to wonder which half is which.
+        **Why ``native_grid`` and not ``grid``**: W4.3 had no choice — every
+        source model here declares a *parameter* named ``flux`` (the source's
+        total flux density, which is the thing one fits), and the shadow rule
+        of the day refused a parameter whose name matched any class attribute,
+        so the partner method could not be called ``flux``. *W5.20* removed
+        that constraint and then **kept this spelling**, promoting it to the
+        canonical one everywhere: a surface a realisation composes and a
+        quantity a user fits should not compete for one word, whatever the
+        namespace rule happens to allow. ``flux``/``grid`` survives as a
+        legacy alias :mod:`ampere.backends.torch.problem` still accepts.
         """
         found = self._grids.get(channel)
         if found is not None:
@@ -1013,9 +1014,9 @@ class _TorchVisibilityModel:
     def native_grid(self, channel: str) -> Coverage:
         """The ``(u, v, lambda)`` tensors this model already emits on.
 
-        ``native_*`` rather than ``grid``/``flux`` for the reason
-        :meth:`_TorchImageModel.native_grid` gives: ``flux`` is one of this
-        model's own parameters.
+        ``native_*`` because that is the canonical spelling of the surface
+        since *W5.20* — see :meth:`_TorchImageModel.native_grid` for how it
+        came to be one.
         """
         return (
             self.tensors.get_buffer("u_pts"),

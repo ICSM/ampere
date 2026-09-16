@@ -40,12 +40,15 @@ coordinates and values in, the transformed pair out, pure and traceable, and
 what :mod:`ampere.backends.jax.problem` composes into the differentiable
 log-density.
 
-The models' native surface is spelled ``native_flux`` / ``native_grid`` rather
-than ``flux`` / ``grid``, and not by preference: every source model here
-declares a *parameter* called ``flux`` — the source's total flux density, which
-is the thing one fits — and ``Parameterised._check_free_name`` refuses a
-parameter whose name shadows a class attribute. :mod:`ampere.backends.jax.problem`
-accepts either spelling.
+The models' native surface is spelled ``native_flux`` / ``native_grid``, which
+since *W5.20* is the canonical spelling everywhere. W4.3 arrived at it by
+force: every source model here declares a *parameter* called ``flux`` — the
+source's total flux density, which is the thing one fits — and the shadow rule
+of the day refused a parameter whose name matched a class attribute. W5.20
+removed that constraint and kept the spelling, because a surface a realisation
+composes and a quantity a user fits should not compete for one word.
+``flux`` / ``grid`` remains a legacy alias
+:mod:`ampere.backends.jax.problem` accepts.
 
 The transform as a native operator
 ----------------------------------
@@ -615,9 +618,9 @@ class _JaxImageModel:
 
         Two arrays rather than one, because an image lives on two axes; the
         realisation threads whatever this returns through the chain's
-        ``apply_flux`` calls without looking inside it. ``native_*`` rather than
-        ``grid``/``flux`` because ``flux`` is one of these models' own
-        parameters — see the module docstring.
+        ``apply_flux`` calls without looking inside it. ``native_*`` because
+        that is the canonical spelling of the surface — see the module
+        docstring for how it came to be one.
         """
         found = self._grids.get(channel)
         if found is not None:

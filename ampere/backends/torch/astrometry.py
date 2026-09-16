@@ -19,14 +19,13 @@ both classes here derive from their reference counterpart and override only
 the four capability flags, the dtype/device plumbing, and — for
 ``ReflexOrbit`` alone — the four lines that are actually differentiable.
 
-:class:`ReflexOrbit`'s native surface is spelled ``grid``/``flux`` rather than
-``native_grid``/``native_flux`` (the interferometry twins' spelling,
-:mod:`ampere.backends.torch.interferometry`): that spelling exists only
-because an interferometric source model already has a parameter called
-``flux``, and ``Parameterised._check_free_name`` refuses a method that would
-shadow it. Nothing this model declares is called ``grid`` or ``flux``, so the
-plain names are used, exactly as :class:`~ampere.backends.torch.models.
-TorchSpectralModel` uses them for the other one-axis, ``Layout.POINTS`` kind.
+:class:`ReflexOrbit`'s native surface is spelled
+``native_grid``/``native_flux``, which since *W5.20* is the canonical spelling
+on every backend and every modality — the same pair
+:class:`~ampere.backends.torch.models.TorchSpectralModel` offers for the other
+one-axis, ``Layout.POINTS`` kind, and no longer a special case the
+interferometry twins were driven into by a parameter of their own called
+``flux``.
 """
 
 from __future__ import annotations
@@ -156,11 +155,13 @@ class ReflexOrbit(_ReferenceReflexOrbit):
             return found
         return self.tensors.get_buffer("time")
 
-    def grid(self, channel: str) -> torch.Tensor:
+    def native_grid(self, channel: str) -> torch.Tensor:
         """:meth:`grid_tensor` under the name the realisation looks for."""
         return self.grid_tensor(channel)
 
-    def flux(self, channel: str, values: Mapping[str, Any] | None = None) -> torch.Tensor:
+    def native_flux(
+        self, channel: str, values: Mapping[str, Any] | None = None
+    ) -> torch.Tensor:
         """This model's offset on *channel*, mas, as a differentiable tensor."""
         return self._offset_native(
             channel, self.grid_tensor(channel), self._context_tensors(self.context(values))

@@ -22,8 +22,8 @@ vocabulary for:
   claim by comparing the two directly rather than by trusting the inheritance;
 * the two **honest downgrades** (``UniformDisc`` and ``UniformDiscVisibilities``
   declaring ``DIFFERENTIABLE = False``) and the refusal they produce;
-* the ``native_flux`` / ``native_grid`` spelling, and *why* it exists — which is
-  a fact about ``ampere.core``'s shadowing rule, not about a backend.
+* the ``native_flux`` / ``native_grid`` spelling, canonical everywhere since
+  *W5.20* — a fact about ``ampere.core``'s namespace rule, not about a backend.
 
 **Parametrised over the backends installed here**, in ``test_nuts.py``'s shape:
 the claim "this backend's interferometry is the reference backend's, with a
@@ -560,15 +560,17 @@ class TestTheOperatorIsBuiltOnce:
 class TestTheNativeSurface:
     """``native_flux`` / ``native_grid``, and the reason they are not ``flux`` / ``grid``."""
 
-    def test_a_source_model_cannot_have_a_method_called_flux(self, kit: Kit) -> None:
-        """The collision, stated as a row rather than only in a docstring.
+    def test_a_source_model_declares_flux_and_offers_the_native_pair(self, kit: Kit) -> None:
+        """The shape of the thing, stated as a row rather than only in a docstring.
 
         Every source model here declares a *parameter* named ``flux`` — the
-        total flux density, which is the thing one fits — and
-        ``Parameterised._check_free_name`` refuses a parameter whose name
-        shadows a class attribute. So ``flux`` is unavailable as a method name
-        on this class, which is why the native pair is spelled ``native_*`` and
-        why :mod:`ampere.backends.torch.problem` accepts either spelling.
+        total flux density, which is the thing one fits. Under W4.3's shadow
+        rule that made ``flux`` unusable as a method name, which is how the
+        ``native_*`` spelling was arrived at; *W5.20* lifted the rule (the
+        reserved set is core's, and no longer grows with a class's own
+        attributes) and made ``native_*`` canonical anyway, so the class still
+        looks exactly like this — the parameter and the method no longer
+        compete for one word by accident, but by design.
         """
         assert "flux" in kit_data.truth_model(kit.itf).parameters.names
         assert not hasattr(type(kit_data.truth_model(kit.itf)), "flux")

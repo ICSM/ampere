@@ -29,7 +29,7 @@ taken *through the contract path*, on any backend.
 one-way translation of a composed problem into a native object exposing the
 log density as a pure function of the unconstrained free vector — and this
 module is torch's. It composes the same quantity out of this backend's own
-surfaces: ``model.flux``, ``step.apply_flux``, ``noise.sigma_tensor`` where a
+surfaces: ``model.native_flux``, ``step.apply_flux``, ``noise.sigma_tensor`` where a
 noise model has one, ``DenseGP.log_marginal_likelihood_native``, and
 ``TorchParameterSpace.log_prior_unconstrained_tensor``.
 
@@ -180,25 +180,47 @@ def _seed(seed: int) -> int:
 
 
 #: The two spellings of a native model's value-and-coordinates surface, in the
-#: order they are looked for (*W4.3*). ``flux``/``grid`` is the original pair;
-#: ``native_flux``/``native_grid`` exists because a model may not have a method
-#: whose name one of its own parameters already uses —
-#: ``Parameterised._check_free_name`` refuses a parameter that shadows a class
-#: attribute, and ``flux`` is precisely what an interferometric source model
-#: calls its total flux density. Either pair composes; a model that offers
-#: both is taken at the first, and one that offers half of either is refused
-#: with the missing half named, because the two go together.
-_FLUX_NAMES: tuple[str, ...] = ("flux", "native_flux")
-_GRID_NAMES: tuple[str, ...] = ("grid", "native_grid")
+#: order they are looked for (*W4.3*, reordered by *W5.20*).
+#: ``native_flux``/``native_grid`` is the **canonical** pair; ``flux``/``grid``
+#: is the original spelling, kept as a supported **legacy alias** so that
+#: models written before the ruling still compose.
+#:
+#: W4.3 introduced ``native_*`` because a model could not then have a method
+#: whose name one of its own parameters used, and ``flux`` is precisely what an
+#: interferometric source model calls its total flux density. W5.20 removed
+#: that constraint — the reserved set is core's and no longer grows with a
+#: backend's class attributes — but kept ``native_*`` as the canonical name,
+#: because a surface a *realisation* composes and a quantity a *user* fits
+#: should not compete for one word.
+#:
+#: Either pair composes; a model that offers **both** is refused as ambiguous,
+#: naming both methods, rather than silently taken at one of them; one that
+#: offers half of either is refused with the missing half named, because the
+#: two go together.
+_FLUX_NAMES: tuple[str, ...] = ("native_flux", "flux")
+_GRID_NAMES: tuple[str, ...] = ("native_grid", "grid")
 
 
-def _native_surface(model: Any, names: tuple[str, ...]) -> Any | None:
-    """The first callable *model* offers under *names*, or ``None``."""
-    for name in names:
-        found = getattr(model, name, None)
-        if callable(found):
-            return found
-    return None
+def _native_surface(model: Any, names: tuple[str, ...], label: str) -> Any | None:
+    """*model*'s surface under the first of *names* it offers, or ``None``.
+
+    Refuses a model that offers both spellings (*W5.20*). Before the ruling
+    the lookup took the first match and said nothing, so a model carrying a
+    legacy ``flux`` beside a canonical ``native_flux`` — the shape a
+    half-finished rename leaves behind — composed at whichever the table
+    happened to list first. Two methods, one surface, and no way to tell which
+    the author meant: that is a question for the author, not a coin toss.
+    """
+    offered = [name for name in names if callable(getattr(model, name, None))]
+    if len(offered) > 1:
+        raise _refuse(
+            type(model).__name__,
+            f"model {label!r} offers both `{names[0]}` and `{names[1]}`, which are two "
+            f"spellings of one surface: `{names[0]}` is canonical and `{names[1]}` is the "
+            f"legacy alias. A model that defines both leaves nothing to choose between them "
+            f"— keep one, and prefer `{names[0]}`.",
+        )
+    return getattr(model, offered[0]) if offered else None
 
 
 def _require_flux(model: Any, label: str) -> Any:
@@ -211,7 +233,7 @@ def _require_flux(model: Any, label: str) -> Any:
     which at least said which attribute was missing, and a bare ``None`` call
     would say nothing at all.
     """
-    found = _native_surface(model, _FLUX_NAMES)
+    found = _native_surface(model, _FLUX_NAMES, label)
     if found is None:
         raise _refuse(
             type(model).__name__,
@@ -285,8 +307,8 @@ class _LoweredDataset:
         self.noise = dataset.likelihood.noise
         self.steps = tuple(dataset.instrument.steps)
 
-        self.model_flux = _native_surface(self.model, _FLUX_NAMES)
-        self.model_grid = _native_surface(self.model, _GRID_NAMES)
+        self.model_flux = _native_surface(self.model, _FLUX_NAMES, self.model_label)
+        self.model_grid = _native_surface(self.model, _GRID_NAMES, self.model_label)
         if self.model_flux is None or self.model_grid is None:
             missing = ", ".join(
                 f"`{names[0]}` (or `{names[1]}`)"

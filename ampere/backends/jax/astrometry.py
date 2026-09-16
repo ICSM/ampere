@@ -15,10 +15,10 @@ derive from their reference counterpart and override only the capability
 flags, this backend's device placement, and — for ``ReflexOrbit`` alone — the
 four-line expression a gradient passes through.
 
-``ReflexOrbit``'s native surface is spelled ``grid``/``flux`` rather than
-``native_grid``/``native_flux`` (the interferometry twins' spelling): that
-spelling exists only because an interferometric source model already has a
-parameter called ``flux``. Nothing this model declares shadows either name.
+``ReflexOrbit``'s native surface is spelled ``native_grid``/``native_flux``,
+which since *W5.20* is the canonical spelling on every backend and every
+modality — not a special case the interferometry twins were driven into by a
+parameter of their own called ``flux``.
 """
 
 from __future__ import annotations
@@ -119,11 +119,11 @@ class ReflexOrbit(_ReferenceReflexOrbit):
             return found
         return self._own_grid
 
-    def grid(self, channel: str) -> jax.Array:
+    def native_grid(self, channel: str) -> jax.Array:
         """:meth:`grid_tensor` under the name the realisation looks for."""
         return self.grid_tensor(channel)
 
-    def flux(self, channel: str, values: Mapping[str, Any] | None = None) -> jax.Array:
+    def native_flux(self, channel: str, values: Mapping[str, Any] | None = None) -> jax.Array:
         """This model's offset on *channel*, mas, as a differentiable array."""
         return self._offset_native(channel, self.grid_tensor(channel), self.context(values))
 

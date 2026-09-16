@@ -134,7 +134,7 @@ class TestTheGradient:
         compiled = model.compile_for({})
 
         def offset_sum(pmra: Any) -> Any:
-            return compiled.flux("ra", {**kit_data.ORBIT, "pmra": pmra}).sum()
+            return compiled.native_flux("ra", {**kit_data.ORBIT, "pmra": pmra}).sum()
 
         got = kit.gradient(offset_sum, 1.0)
         expected = float(np.sum(kit_data.EPOCHS / 365.25))
@@ -145,7 +145,7 @@ class TestTheGradient:
         compiled = model.compile_for({})
 
         def offset_sum(amp_dec: Any) -> Any:
-            return compiled.flux("dec", {**kit_data.ORBIT, "amp_dec": amp_dec}).sum()
+            return compiled.native_flux("dec", {**kit_data.ORBIT, "amp_dec": amp_dec}).sum()
 
         got = kit.gradient(offset_sum, kit_data.ORBIT["amp_dec"])
         cycle = 2.0 * np.pi * kit_data.EPOCHS / kit_data.ORBIT["period"] + kit_data.ORBIT["phase"]
