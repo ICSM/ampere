@@ -103,13 +103,18 @@ def _run(problem: FittingProblem, *, draws: int = 3) -> Any:
 
 
 def _message_shape(group: str) -> str:
-    """The prefix common to all three refusals; only the group name varies here."""
+    """The prefix common to all three refusals; only the group name varies here.
+
+    **Updated at W5.3**: the refusal now names the escape hatch
+    (``component=``) rather than deferring to it — this item is the one that
+    lands it.
+    """
     return (
-        f"dataset 'vis' is complex-valued, and a {group} group holds one real variable "
-        f"per dataset. results.md §4 splits a complex observed container into <label>_real "
-        f"and <label>_imag; the derived groups do not do that yet, and which component -- "
-        f"or the modulus -- is the right one to derive is the caller's choice (deferred to "
-        f"W5.3)."
+        f"dataset 'vis' is complex-valued, and a {group} group holds one real "
+        f"variable per dataset. results.md §4 splits a complex observed container into "
+        f"<label>_real and <label>_imag; the derived groups store one caller-named view "
+        f'instead — pass component="real", "imag", "abs" or "phase" (W5.3), stored as '
+        f"<label>_<component>."
     )
 
 
