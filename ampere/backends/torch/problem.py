@@ -447,10 +447,9 @@ class _LoweredDataset:
         The twin of ``ampere.backends.jax.problem._LoweredDataset``'s method of
         the same name (W3.0 landed it there; the identical gap here is the
         carried finding W3.1 slice 2 closes). Same condition, same wording, for
-        the same reason: ``GaussianProcessNoise.sigma`` refuses a dataset with
-        no observed uncertainty at all, or with a retained uncertainty that is
-        zero or negative -- "an infinitely precise measurement, which no
-        likelihood can normalise" -- for any family that
+        the same reason: ``GaussianProcessNoise.sigma`` refuses a retained
+        uncertainty that is zero or negative -- "an infinitely precise
+        measurement, which no likelihood can normalise" -- for any family that
         ``REQUIRES_UNCERTAINTY``, and on the contract path that surfaces only
         when the density is evaluated. ``ampere.core.realise``'s one-point
         agreement check happens to catch it today, because the contract path
@@ -460,15 +459,21 @@ class _LoweredDataset:
         density the contract refuses. So the refusal belongs here, at
         construction, beside the ``REQUIRES_UNCERTAINTY``/sigma-is-None check
         :meth:`log_likelihood` already makes for the non-GP branch.
+
+        **W5.2**: no longer checks ``observed.uncertainty is None`` -- a
+        dataset with no observed uncertainty at all and a family that
+        ``REQUIRES_UNCERTAINTY`` is already refused unconditionally at
+        composition, by ``NoiseModel.check_compatible``
+        (``ampere.core.likelihood``), which every ``Likelihood`` calls before
+        a ``FittingProblem`` exists at all -- and a ``_LoweredDataset`` is
+        never built except from one. That branch (with its own "no jitter, so
+        sigma is undefined" wording, which core's unconditional refusal does
+        not honour anyway -- jitter never rescues a missing uncertainty at
+        composition, so the branch could not even have been reached the way
+        it was written) was dead code; removed rather than exercised, since
+        making it reachable would mean relaxing the core refusal, which is a
+        §4 contract change this item is not scoped to make.
         """
-        if observed.uncertainty is None:
-            if "jitter" not in self.noise.parameters:
-                raise _refuse(
-                    "uncertainty",
-                    f"dataset {label!r} has no observed uncertainties and its noise model "
-                    f"declares no jitter, so sigma is undefined.",
-                )
-            return
         retained = np.asarray(observed.uncertainty, dtype=float).ravel()[self.retain]
         bad = retained <= 0.0
         if np.any(bad):
