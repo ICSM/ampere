@@ -108,7 +108,14 @@ BACKENDS: tuple[str, ...] = ("reference", "torch", "jax")
 SMALL_PIXELS = 24
 
 #: The three sizes the benchmark reports, as the item asks. 128x128 is 16,384
-#: pixels, which is where an exact solve stops being a choice.
+#: pixels, which is where an exact solve stops being a choice — and that is
+#: meant literally about the machine as well as about the method. Measured at
+#: the two smaller sizes, the dense cell's peak allocation is a steady **five
+#: copies of its own N x N covariance** (12.7 MiB where the matrix is 2.5,
+#: 640.3 where it is 128.0), so the largest cell projects to about **10 GiB**
+#: and, by N^3, to about four minutes. Run it alone, or pass
+#: ``include_dense=False`` (``--no-dense`` on the command line) to measure the
+#: approximate solver at that size without it.
 BENCHMARK_SIZES: tuple[int, ...] = (24, 64, 128)
 
 #: Basis functions **per axis** for the HSGP arm; the total is the square.

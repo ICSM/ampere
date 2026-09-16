@@ -31,6 +31,7 @@ yourself::
     python -m examples.image                    # 3 arms, reference, emcee
     python -m examples.image --calibration      # the SBC coverage row
     python -m examples.image --benchmark        # DenseGP vs HSGP at three N
+    python -m examples.image --benchmark --no-dense   # ... skipping the ~10 GiB cell
     python -m examples.image --backend torch    # NUTS
 
 ``tests/conformance/test_image.py`` and
@@ -219,10 +220,39 @@ else, so a component the flexible likelihood is meant to absorb has to be
 smooth in the coordinates the container actually carries. A periodic detector
 fringe would not be, and no widening of the kernel would make it so.
 
-``python -m examples.image --calibration`` runs the SBC row;
-``tests/examples/test_image_study.py`` pins it. Twelve simulations is a smoke
-budget in Talts et al.'s sense — evidence of a gross effect, not a fine one —
-and what is pinned is the *direction*, not a figure.
+**Measured, one seed, the per-PR budget** (``python -m examples.image``:
+reference backend, 24×24 pixels, ``CI_BUDGET``; each entry is
+``|median - truth|`` in units of that posterior's own 68 % half-width)::
+
+    arm           model.flux   model.fwhm
+    correct             0.74         0.45
+    incomplete          7.92         4.68
+    flexible            0.78         0.13
+
+The incomplete arm is confidently wrong — its 68 % interval covers neither
+truth — and the flexible arm lands within one posterior width of both, which
+is M2's result restated on a gridded dataset in two spatial axes. That the
+GP recovers the correct arm's accuracy rather than merely widening the
+interval is the claim worth checking, and it is why the coverage row below
+exists: a bias measured in posterior widths would also fall if the arm simply
+inflated its own uncertainty.
+
+``python -m examples.image --calibration`` runs the SBC row. Measured at the
+pinned seed over twelve replicas, the empirical coverage of the central 90 %
+interval, on ``(model.flux, model.fwhm)`` (``--arms incomplete flexible
+--pixels 16``; 16×16 rather than the study's own 24×24, which is what makes
+this row two minutes rather than half an hour — the 24×24 version is behind
+the ``image_full`` marker)::
+
+    incomplete   [0.00, 0.58]
+    flexible     [0.92, 0.92]
+
+So the flexible arm is not buying its accuracy with width: it covers at
+close to its nominal rate on both parameters while the incomplete arm's
+interval misses ``model.flux`` in every replica. Twelve simulations is a
+smoke budget in Talts et al.'s sense — evidence of a gross effect, not a fine
+one — and what ``tests/examples/test_image_study.py`` pins is the
+*direction*, not a figure.
 
 7. The benchmark: the phase's own "chosen by measurement"
 -------------------------------------------------------------
@@ -235,6 +265,45 @@ likelihood on the *same* image under the exact :class:`~ampere.core.DenseGP`
 and under W5.4's approximate
 :class:`~ampere.core.HilbertSpaceGP` with a tensor-product basis, at three
 image sizes.
+
+**Measured, reference backend, one** ``log_prob`` **per cell** (``python -m
+examples.image --benchmark --sizes 24 64``, and ``--sizes 128 --no-dense``
+for the last row; the memory column is ``tracemalloc``'s peak, so it is
+what the solve itself allocates rather than the process's high-water mark.
+The memory and log-density columns are deterministic and reproduce exactly;
+the seconds column is one run on one machine and moves by tens of per cent
+with load)::
+
+      image      N  solver         seconds   peak MiB        log_prob
+    -----------------------------------------------------------------
+     24x24     576  DenseGP          0.031       12.7       -19672.90
+     24x24     576  HSGP(8x8)        0.003        0.7       -19672.69
+     64x64    4096  DenseGP          3.925      640.3      -140047.13
+     64x64    4096  HSGP(8x8)        0.006        4.4      -140044.29
+    128x128  16384  DenseGP        (not run — see below)
+    128x128  16384  HSGP(8x8)        0.038       17.6      -560077.36
+
+The approximation is flat and the exact solver is not: sixty-four basis
+functions cost the same at every N, so HSGP's two columns barely move across
+a twenty-eight-fold increase in N while the dense solve's time grows as N³
+and its memory as N². Its accuracy here is worth stating precisely rather
+than in a ratio — the approximate log-density exceeds the exact one by 0.21
+at 576 samples and by 2.84 at 4,096, the same sign both times. That is
+negligible beside the densities themselves, and it is one number per N at
+one point in parameter space, which is exactly what it cannot tell you: what
+moves a posterior is how that error varies with the hyperparameters, and how
+it behaves as a function of N and kernel smoothness is one of the things
+W5.6's bake-off exists to measure.
+
+The missing cell is itself a measurement. The dense solve's peak is a steady
+five copies of its own ``N × N`` covariance (12.7 MiB against 2.5, 640.3
+against 128.0), so 16,384 samples project to ≈10 GiB and, by N³, to ≈4
+minutes. That is why ``benchmark_solvers`` takes
+``include_dense=False`` and ``--no-dense`` exposes it, and why the table
+above leaves that cell unmeasured rather than allocating ten gigabytes on a
+shared machine: **at the size where the solver choice actually matters, the
+exact solver is not something to run by accident**, which is the benchmark's
+conclusion as much as any number in it.
 
 Note what neither solver is doing: **neither exploits the grid.** Both treat an
 image as N scattered points that happen to lie on a lattice. A Kronecker or SKI

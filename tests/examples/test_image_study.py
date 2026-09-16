@@ -222,6 +222,20 @@ class TestTheCli:
         assert "DenseGP" in captured
         assert "peak MiB" in captured
 
+    def test_no_dense_leaves_the_exact_solver_out(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """The escape from the largest cell's ~10 GiB, reachable from the CLI.
+
+        ``benchmark_solvers`` has had ``include_dense`` since the study landed;
+        without this flag the documented entry point could not reach it, so the
+        only way to measure the approximate solver at 128x128 was to allocate
+        five copies of a 16,384-square covariance first.
+        """
+        code = main_with(["--benchmark", "--sizes", "12", "--no-dense"])
+        assert code == 0
+        captured = capsys.readouterr().out
+        assert "HSGP" in captured
+        assert "DenseGP" not in captured
+
 
 def main_with(argv: list[str]) -> int:
     """The CLI, imported lazily so this module's collection stays cheap."""

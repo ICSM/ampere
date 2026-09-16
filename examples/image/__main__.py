@@ -3,6 +3,7 @@
     python -m examples.image                        # 3 arms, reference, emcee
     python -m examples.image --calibration          # the SBC coverage row
     python -m examples.image --benchmark            # DenseGP vs HSGP at three N
+    python -m examples.image --benchmark --no-dense # ... without the ~10 GiB cell
     python -m examples.image --backend torch        # NUTS
     python -m examples.image --figures /tmp/img
 
@@ -53,6 +54,14 @@ def _parser() -> argparse.ArgumentParser:
         help="image sizes (pixels on a side) for --benchmark",
     )
     parser.add_argument(
+        "--no-dense",
+        action="store_true",
+        help=(
+            "skip the exact DenseGP cells of --benchmark: its peak is five copies of an "
+            "N x N covariance, which at 128x128 is about 10 GiB"
+        ),
+    )
+    parser.add_argument(
         "--doc-budget", action="store_true", help="use the longer documentation budget"
     )
     parser.add_argument("--pixels", type=int, default=study.SMALL_PIXELS, help="fitted image size")
@@ -69,7 +78,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.benchmark:
         print(f"# image solver benchmark: {arguments.backend} backend, BLAS threads unrestricted")
         costs = study.benchmark_solvers(
-            sizes=arguments.sizes, backend=arguments.backend, seed=arguments.seed
+            sizes=arguments.sizes,
+            backend=arguments.backend,
+            seed=arguments.seed,
+            include_dense=not arguments.no_dense,
         )
         print(f"# measured in {time.perf_counter() - started:.1f} s\n")
         print(study.benchmark_table(costs))
