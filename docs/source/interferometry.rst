@@ -464,7 +464,7 @@ marginal test and fails TARP, which is the failure mode that matters for a
 two-parameter fit whose parameters are exactly as correlated as a binary's
 separation and flux ratio are.
 
-The plots: a found limitation, not assumed
+The plots: a found limitation, lifted at W5.3
 -----------------------------------------------
 
 Four of the "six shipped plots" —
@@ -472,38 +472,59 @@ Four of the "six shipped plots" —
 :func:`~ampere.results.plot_residuals`,
 :func:`~ampere.results.plot_gp_localisation` and
 :func:`~ampere.results.plot_anomaly_score` — read a stored group through
-:func:`ampere.results._plotting.coordinate_of`, which needs **exactly one
-ordered coordinate axis** and refuses a "point kind with several axes" by
+:func:`ampere.results._plotting.coordinate_of`, which used to need **exactly
+one ordered coordinate axis** and refuse a "point kind with several axes" by
 name, citing ``results.md`` §4 and ``DEVELOPMENT_PLAN.md`` §4.4/§4.8's own
-staging — the plan's Phase 4 landed summary names this exact gap among what
+staging — the plan's Phase 4 landed summary named this exact gap among what
 it carried to Phase 5: multi-axis point kinds refused by four of the six
 plots. Both of this study's kinds are exactly that — a
 :class:`~ampere.core.VisibilitySet`
 sample is a joint ``(u, v, spectral_axis)`` point with no natural order, and
-a :class:`~ampere.core.ClosurePhases` sample five such coordinates — so all
-four of those renderers refuse both datasets, on every arm, today. This is
+a :class:`~ampere.core.ClosurePhases` sample five such coordinates. This was
 not the complex-valued gap W4.2's own carried note anticipated ("W4.4's
 figures must pick a component or modulus of the complex conditional mean")
 — that note undersold it: even a real, single-component view of the same
-data still has no ordered axis to plot against, because the refusal is about
-the *coordinate*, not the *value type*.
+data still had no ordered axis to plot against, because the refusal was
+about the *coordinate*, not the *value type*.
 
-What this leaves, and what ``examples/interferometry/figures.py`` renders,
-is :func:`~ampere.results.plot_corner` and :func:`~ampere.results.plot_trace`
-(posterior-only — neither needs a data coordinate) for every arm, plus
-:func:`~ampere.results.plot_sbc_ranks` and :func:`~ampere.results.plot_coverage`
-for the calibration study of the previous section, which live in *parameter*
-space and do not hit the same wall. ``python -m examples.interferometry
---figures DIR`` (add ``--calibration`` for the coverage figures) writes
-them; nothing is committed (ground rule 7).
+**W5.3 lifts both halves.** The four renderers gain a ``coordinate=``
+argument — an axis name, or a callable resolving one from the kind's own
+axes — and ``coordinate_of`` resolves it in one place: the argument, if
+given; else a **default** the kind itself may declare
+(``FunctionSamples.PLOT_COORDINATE``, a ``ClassVar`` beside ``AXES``);
+else a refusal naming the kind's own axes, unchanged in spirit from before.
+:class:`~ampere.core.VisibilitySet` declares baseline length
+(``hypot(u, v)``); :class:`~ampere.core.ClosurePhases` declares the longest
+of its three baselines (the implied third, ``-(ij + jk)``, included) — both
+default coordinates this study's figures now use without passing
+``coordinate=`` at all. The complex-valued half gets its own answer:
+``component="real"|"imag"|"abs"|"phase"``, threaded through
+:func:`~ampere.results.derived.add_posterior_predictive`,
+:func:`~ampere.results.derived.add_residuals` and
+:func:`~ampere.results.derived.gp_localisation` alongside the plotting
+functions themselves — this study's ``vis`` arm uses ``component="abs"``,
+the visibility amplitude, the same view :meth:`~ampere.core.VisibilitySet.amplitude`
+exposes on the container itself. A dataset with no default and no
+``coordinate=`` still refuses, listing its axes; a complex dataset with no
+``component=`` still refuses, naming the four choices — the guard did not
+go away, it gained an escape hatch.
 
-**The transferable lesson for the next modality**: if your kind is a
-multi-axis point set (an interferometric visibility, a set of astrometric
-positions), budget for exactly this gap before promising "the six plots" —
-``ampere.results``'s family B/C diagnostics are staged for Phase 5 and are
-not yet a modality-agnostic surface. Checking ``ampere/results/`` for this
-restriction before relying on any of the four above is worth the two minutes
-it costs.
+``examples/interferometry/figures.py`` now renders all six of the shipped
+plots for every arm: the two posterior-only ones
+(:func:`~ampere.results.plot_corner`, :func:`~ampere.results.plot_trace`)
+as before, and the four data-coordinate ones for both ``vis`` (``component=
+"abs"``) and ``t3`` (its default longest-baseline coordinate, no
+``component=`` needed — closure phases are real). ``python -m
+examples.interferometry --figures DIR`` (add ``--calibration`` for the
+coverage figures) writes them; nothing is committed (ground rule 7).
+
+**The transferable lesson for the next modality**: a multi-axis point set (an
+interferometric visibility, a set of astrometric positions) needs its
+default plotted coordinate stated somewhere a plot can find it without being
+told each time — ``PLOT_COORDINATE`` is that "somewhere", and a kind that
+declares nothing simply keeps asking its caller by name. Checking whether a
+new kind wants one, and what its natural default is, is worth the two
+minutes it costs.
 
 A hazard the models here never raise: periodic models and prior width
 -----------------------------------------------------------------------------

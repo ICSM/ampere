@@ -146,9 +146,29 @@ run's draws, never sampling error against the target, and neither function
 can tell a reader that on its own. :func:`~ampere.results.warn_if_approximate`
 is the shared check both call.
 
+**W5.3**: :func:`~ampere.results.plot_posterior_predictive`,
+:func:`~ampere.results.plot_residuals` and
+:func:`~ampere.results.plot_gp_localisation` gain ``coordinate=`` (an axis
+name, or a callable resolving one from a point kind's own axes — see
+:func:`ampere.results._plotting.coordinate_of`) for a point kind with
+several axes, such as :class:`~ampere.core.VisibilitySet` or
+:class:`~ampere.core.ClosurePhases`; a kind may declare a default via
+:attr:`~ampere.core.results_schema.FunctionSamples.PLOT_COORDINATE`, in which
+case the argument is unnecessary. The same three, and
+:func:`~ampere.results.add_posterior_predictive`,
+:func:`~ampere.results.add_residuals` and
+:func:`~ampere.results.gp_localisation`, gain ``component=`` — one of
+:data:`~ampere.results.derived.COMPONENTS` — for a complex-valued dataset,
+stored and read back as ``<label>_<component>``.
+:func:`~ampere.results.plot_anomaly_score` needs neither: the
+:class:`~ampere.core.AnomalyScore` it draws has already been reduced to one
+real coordinate by :func:`~ampere.results.gp_localisation_score`, using the
+same rule.
+
 .. autodata:: ampere.results.diagnostics.WHITENESS_STREAM
 .. autodata:: ampere.results.diagnostics.GP_LOCALISATION_PROVENANCE
 .. autodata:: ampere.results.plots.GP_LOCALISATION_CAVEAT
 .. autodata:: ampere.results.plots.MAX_CORNER_VARIABLES
 .. autodata:: ampere.results.plots.MAX_RANK_PANELS
 .. autodata:: ampere.results.plots.MAX_TRACE_VARIABLES
+.. autodata:: ampere.results.derived.COMPONENTS

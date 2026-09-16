@@ -281,6 +281,19 @@ _index`, and its axes become ordinary variables on it. Complex values are split
 into `<label>_real` and `<label>_imag` because netCDF has no complex type, and
 named so that nothing mistakes one part for the whole.
 
+**A kind may declare a default plotted coordinate** *(Amended W5.3)*.
+`FunctionSamples.PLOT_COORDINATE` is a `ClassVar` beside `AXES`/`LAYOUT`/
+`ALLOW_COMPLEX` — `None` (nothing declared), an axis name, or a callable
+taking the kind's own axes (`Mapping[str, Axis]`) and returning
+`(coordinates, label)` — resolved once, against the *live* container, at the
+point `ampere.results.derived` builds a group for it, and stored on the group
+alongside the axes themselves. It is a kind attribute exactly as `AXES` is
+(D1 of Phase 4: "a kind is class attributes"), not a change to this section's
+shape: a single-axis kind needs nothing here, because it already has its one
+coordinate. `VisibilitySet` declares baseline length (`hypot(u, v)`);
+`ClosurePhases` declares the longest of its three baselines. §8 is where a
+plot resolves it.
+
 ### Array-valued parameters are never 10⁵ names
 
 `likelihoods.md` §16(a) is explicit: "the latent block cannot be labelled with
@@ -538,6 +551,18 @@ backend. They consume a stored run and a problem through the contract
 surfaces, which every backend already satisfies, so there was nothing for a
 backend to supply.)*
 
+*(**Amended W5.3**, lifting §13 item 14: all three of `add_posterior_predictive`,
+`add_residuals` and `gp_localisation` gain `component=` — `"real"`, `"imag"`,
+`"abs"` or `"phase"` — deriving `<label>_<component>` for a complex-valued
+dataset instead of refusing outright (the refusal, naming the four choices,
+stands when `component` is not given). And where the observed container is a
+point kind with several axes, its own axes now become ordinary variables on
+the group too — mirroring `observed_data`/`constant_data`'s own convention
+(§4) — plus, where the kind declares one, its `PLOT_COORDINATE` default,
+precomputed here against the live container and stored alongside them. §8 is
+where a plot resolves `coordinate=`/`component=` against what is stored
+here.)*
+
 *(**Added W3.6**, 2026-09-09: a fourth group joins the three, on the same
 terms. `diagnostics.md` §11's family D — posterior calibration — writes
 `calibration`, and it is not stored by default for the reason none of these
@@ -583,9 +608,9 @@ Six functions, each taking the emitted run and nothing else. *(Amended W3.6: eig
 |---|---|---|
 | `plot_corner` | — | selects by merged parameter name; an array-valued block is one variable, and a corner plot of a 10⁵-element latent block must be paged, with a warning *(Amended W3.10; was "refused loudly rather than attempted")* |
 | `plot_trace` | — | reads `sample_stats` too, so a prior-rejected draw shows as a gap (NaN), not as zero; pages above its own cap exactly as `plot_corner` does *(Amended W3.10)* |
-| `plot_posterior_predictive` | B | consumes `posterior_predictive`; its precondition is `add_posterior_predictive`, and its refusal must say so rather than reporting a missing group |
-| `plot_residuals` | B | consumes `residuals`; warns when the run's likelihood provenance says a GP was fitted, because `diagnostics.md` §3.1 scopes family B to standard-likelihood fits |
-| `plot_gp_localisation` | C | carries the degeneracy caveat by construction |
+| `plot_posterior_predictive` | B | consumes `posterior_predictive`; its precondition is `add_posterior_predictive`, and its refusal must say so rather than reporting a missing group; `coordinate=`/`component=` *(Amended W5.3)* |
+| `plot_residuals` | B | consumes `residuals`; warns when the run's likelihood provenance says a GP was fitted, because `diagnostics.md` §3.1 scopes family B to standard-likelihood fits; `coordinate=`/`component=` *(Amended W5.3)* |
+| `plot_gp_localisation` | C | carries the degeneracy caveat by construction; `coordinate=`/`component=` *(Amended W5.3)* |
 | `plot_anomaly_score` | A and C | one renderer, both provenances |
 | `plot_sbc_ranks` | D | *(added W3.6)* consumes the `calibration` group, or a run carrying it |
 | `plot_coverage` | D | *(added W3.6)* the same group read as a coverage curve, with TARP's joint curve beside it where there is one |
@@ -628,6 +653,29 @@ depending on the other. *(R4 granted and landed at the freeze, 2026-09-03:
 the protocol.)* `plot_anomaly_score` stays typed against the *shape*
 (`AnomalyScoreLike`, a runtime-checkable `Protocol`), so a caller may hand
 it the real class or anything matching.
+
+**A point kind with several axes gets a coordinate to plot against**
+*(Amended W5.3, lifting §13 item 14)*. `plot_posterior_predictive`,
+`plot_residuals` and `plot_gp_localisation` gain `coordinate=`: an axis name,
+or a callable taking the kind's own axes (`Mapping[str, Axis]`) and
+returning `(coordinates, label)` — the same shape §4's `PLOT_COORDINATE`
+takes, so a caller's override and a kind's default are read the same way.
+`ampere.results._plotting.coordinate_of` is the one place the rule lives:
+the argument, if given; else the kind's own `PLOT_COORDINATE` default,
+precomputed and stored on the group by `ampere.results.derived` at the point
+it was built (the live container is what carries real axis units, and only
+`derived` has it); else refused by name, listing the kind's own axes. A
+single-axis kind resolves exactly as before this argument existed — the
+`tests/results/test_plots.py` rows from before W5.3 are unchanged and
+byte-identical. A complex-valued dataset takes `component=` too — `"real"`,
+`"imag"`, `"abs"` or `"phase"` — which must match whatever
+`add_posterior_predictive`/`add_residuals`/`gp_localisation` (§7) was called
+with for that dataset, since that is where the named view is actually
+derived, stored as `<label>_<component>`; `component=None` on a
+complex-valued dataset keeps refusing, naming the four choices.
+`plot_anomaly_score` needs neither argument itself — the `AnomalyScore`
+family C hands it has already been reduced to one coordinate by
+`gp_localisation_score` (§7), using the same rule.
 
 **Above the cap, `plot_corner` and `plot_trace` page rather than refuse**
 *(Amended W3.10, ruled by Peter 2026-09-08 on W2.8's confirmed caps)*.
@@ -1314,26 +1362,30 @@ Each is a decision, not an oversight. Each has an extension point.
     contract's blind spot.
 14. **Four of the six plotting functions need exactly one ordered coordinate
     axis, and a point kind with several axes has none.** *(Added W4.8, from
-    W4.4's finding.)* §4's dimension rule above says how a multi-axis point
-    kind is *stored* — one sample dimension, its axes ordinary variables on
-    it — and storage is fine. Reading it back for a plot is not:
-    `ampere.results._plotting.coordinate_of` picks a single coordinate to
-    plot a value against, which a `Spectrum` or a `TimeSeries` has and a
-    `VisibilitySet` (u, v, spectral_axis jointly) or a `ClosurePhases`
-    (five axes) does not. `plot_posterior_predictive`, `plot_residuals`,
-    `plot_gp_localisation` and `plot_anomaly_score` all refuse such a kind by
-    name; only `plot_corner`, `plot_trace`, `plot_sbc_ranks` and
-    `plot_coverage` are unaffected, because none of the four needs a data
-    coordinate at all. This is not the complex-valued gap §8 might suggest —
-    a real, single-component view of the same data still has no ordered axis
-    to plot against, because the refusal is about the coordinate, not the
-    value type. The extension point is family B/C support for a
-    multi-axis point kind (a coordinate the caller picks, or a projection
-    onto one), which `DEVELOPMENT_PLAN.md` §4.4's "future strategies for
-    2D+" list already stages for Phase 5 rather than for Phase 4's proof
-    modality — a gridded or multi-axis kind was never promised family B/C
-    support before then. `interferometry.rst`'s "The plots: a found
-    limitation, not assumed" section is the worked account.
+    W4.4's finding; **lifted at W5.3**.)* §4's dimension rule above says how
+    a multi-axis point kind is *stored* — one sample dimension, its axes
+    ordinary variables on it — and storage was always fine. Reading it back
+    for a plot was not: `ampere.results._plotting.coordinate_of` picks a
+    single coordinate to plot a value against, which a `Spectrum` or a
+    `TimeSeries` has and a `VisibilitySet` (u, v, spectral_axis jointly) or a
+    `ClosurePhases` (five axes) does not. `plot_posterior_predictive`,
+    `plot_residuals` and `plot_gp_localisation` used to refuse such a kind by
+    name unconditionally; `plot_corner`, `plot_trace`, `plot_sbc_ranks` and
+    `plot_coverage` were and remain unaffected, because none of them needs a
+    data coordinate at all. This was not the complex-valued gap §8 might
+    suggest — a real, single-component view of the same data still had no
+    ordered axis to plot against, because the refusal was about the
+    coordinate, not the value type — and W5.3 answers both, separately:
+    `coordinate=` (an axis name, a kind's own `PLOT_COORDINATE` default, or a
+    refusal naming the kind's axes) for the first, `component=` (one of
+    `"real"|"imag"|"abs"|"phase"`, threaded through the three `add_*`
+    functions too) for the second. `plot_anomaly_score` needed neither
+    argument itself: the `AnomalyScore` it renders has already been reduced
+    to one coordinate by `gp_localisation_score` before it gets there, using
+    the same rule. `interferometry.rst`'s "The plots: a found limitation,
+    lifted at W5.3" section is the worked account, including the transferable
+    lesson for the next multi-axis modality: budget for a `PLOT_COORDINATE`
+    default before promising "the six plots" work out of the box.
 15. **Optimisation results are not implemented, and their shape is decided
     without them.** *(Added W5.0, ruled by Peter 2026-09-10 on the
     inference-extensions memo §7.1–7.2.)* Nothing in ampere runs an optimiser
