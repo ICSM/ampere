@@ -2949,9 +2949,7 @@ class ComplexGaussianFamily(LikelihoodFamily):
         assert noise.coordinates is not None
         # W5.4: ``latent_size`` rows, two columns -- the circular pair shares
         # one covariance and so one whitening, whatever its rank.
-        whitened = rng.standard_normal(
-            (noise.solver.latent_size(noise.kernel, mean.shape[0]), 2)
-        )
+        whitened = rng.standard_normal((noise.solver.latent_size(noise.kernel, mean.shape[0]), 2))
         correlated = noise.solver.latent_transform(
             noise.kernel, noise.coordinates, whitened, noise.values
         )

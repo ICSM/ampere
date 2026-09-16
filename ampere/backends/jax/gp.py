@@ -151,6 +151,17 @@ from ampere.core import RotationTerm as _CoreRotationTerm
 from ampere.core import SpectralMixture as _CoreSpectralMixture
 from ampere.core import SquaredExponential as _CoreSquaredExponential
 from ampere.core.exceptions import LikelihoodError
+from ampere.core.hsgp import (
+    DEFAULT_BASIS_SIZE,
+    DEFAULT_BOUNDARY_FACTOR,
+    HilbertSpaceBasis,
+    basis_matrix,
+    basis_size,
+    check_spectral_support,
+    hilbert_basis,
+    normalise_counts,
+    spectral_values,
+)
 from ampere.core.kernels import lookup_quasiseparable_term
 
 from ._config import BACKEND, require_x64, x64_enabled
@@ -160,6 +171,7 @@ __all__ = [
     "DEVICE",
     "SHO",
     "DenseGP",
+    "HilbertSpaceGP",
     "JaxOps",
     "Matern12",
     "Matern32",
@@ -1484,3 +1496,359 @@ class QuasisepGP(GPSolver):
         precision = self._precision_diagonal(sorted_axis, c, U, d, W)
         terms = 0.5 * jnp.log(precision) - alpha**2 / (2.0 * precision) - 0.5 * _LOG_2PI
         return np.asarray(self._unsort(terms, order))
+
+
+# ---------------------------------------------------------------------------
+# The reduced-rank spectral solve: a Hilbert-space basis in jax (W5.4)
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass(frozen=True)
+class HilbertSpaceGP(GPSolver):
+    r"""Approximate ``O(N m + m³)`` by a Hilbert-space basis, in ``jax.numpy``.
+
+    The jax twin of :class:`ampere.core.HilbertSpaceGP` — same declaration,
+    same basis, same Woodbury algebra — with the traced surfaces
+    :mod:`ampere.backends.jax.problem` composes:
+    :meth:`log_marginal_likelihood_jax` and :meth:`latent_transform_jax`.
+
+    Two properties make it the reduced-rank latent path's natural home here.
+    The whitening ``f = Phi z`` takes ``m`` variables rather than ``N``, so a
+    NUTS chain over a long spectrum has a manageable dimension; and every step
+    is ``jnp`` on whole arrays with an ``m`` by ``m`` Cholesky at the end, so
+    :func:`jax.vmap` maps it as it maps the dense solve — :attr:`BATCHABLE` is
+    ``True`` for the same measured reason :class:`DenseGP`'s is.
+
+    The box is computed in **numpy**, from concrete coordinates: it is data,
+    fixed before the fit, and never differentiated. Coordinates reach a
+    lowered problem as closed-over constants, so this holds under ``jit``;
+    ``vmap``\ ping over the *coordinates* themselves is the one thing it would
+    not survive, and nothing in ampere does that.
+
+    See ``ampere.core.HilbertSpaceGP`` for the mathematics and for the warning
+    about choosing ``basis_size`` and ``boundary_factor`` together.
+    """
+
+    basis_size: int | tuple[int, ...] = DEFAULT_BASIS_SIZE
+    boundary_factor: float = DEFAULT_BOUNDARY_FACTOR
+    jitter: float = 0.0
+    precision: dataclasses.InitVar[str] = "float64"
+    device: dataclasses.InitVar[Any] = DEVICE
+
+    NAME: ClassVar[str] = "HilbertSpaceGP"
+    EXACT: ClassVar[bool] = False
+    IMPLEMENTED: ClassVar[bool] = True
+    STACKED_RESIDUALS: ClassVar[bool] = True
+    BACKEND: ClassVar[str] = BACKEND
+    DIFFERENTIABLE: ClassVar[bool] = True
+    BATCHABLE: ClassVar[bool] = True
+    DEVICE: ClassVar[str] = DEVICE
+
+    def __post_init__(self, precision: str, device: Any) -> None:
+        require_x64("the jax reduced-rank GP solver")
+        object.__setattr__(self, "basis_size", normalise_counts(self.basis_size))
+        if not math.isfinite(self.boundary_factor) or self.boundary_factor <= 0.0:
+            raise LikelihoodError(
+                f"HilbertSpaceGP's boundary_factor must be finite and > 0, got "
+                f"{self.boundary_factor!r}."
+            )
+        if not math.isfinite(self.jitter) or self.jitter < 0.0:
+            raise LikelihoodError(
+                f"HilbertSpaceGP's jitter must be finite and >= 0, got {self.jitter!r}."
+            )
+        object.__setattr__(self, "_dtype", _solve_dtype(precision, self.NAME))
+        object.__setattr__(self, "_precision", str(precision))
+        resolved = resolve_device(device, self.NAME)
+        object.__setattr__(self, "_device", resolved)
+        object.__setattr__(self, "DEVICE", device_flag(device, resolved))
+
+    # -- declarations -------------------------------------------------------
+
+    @property
+    def counts(self) -> tuple[int, ...]:
+        """Basis members per axis, normalised to a tuple."""
+        return normalise_counts(self.basis_size)
+
+    @property
+    def precision_name(self) -> str:
+        """``"float64"`` or ``"float32"``: which precision this solve runs in."""
+        return str(getattr(self, "_precision", "float64"))
+
+    @property
+    def dtype(self) -> Any:
+        """The jax dtype the capacitance matrix is factorised in."""
+        return getattr(self, "_dtype", jnp.float64)
+
+    def place(self, array: Any) -> jax.Array:
+        """*array* on this solver's device, as its solve dtype."""
+        return place_on(jnp.asarray(array, dtype=self.dtype), getattr(self, "_device", None))
+
+    def latent_size(self, kernel: Kernel, n_samples: int) -> int:
+        """``m``, not ``N``. See ``ampere.core.HilbertSpaceGP.latent_size``."""
+        del kernel, n_samples
+        return basis_size(self.counts)
+
+    def provenance_config(self) -> Mapping[str, Any]:
+        """The approximation, and how this backend computed it.
+
+        ``basis_size`` and ``boundary_factor`` are dataclass fields as well,
+        deliberately: they are declaration, not configuration, and two
+        backends computing one problem must agree on them or they are not
+        computing the same quantity (``results.md`` §14). Precision and device
+        are configuration and stay out of the spec, as they do for
+        :class:`DenseGP`.
+        """
+        return {
+            "library": "jax",
+            "basis_size": [int(count) for count in self.counts],
+            "boundary_factor": float(self.boundary_factor),
+            "dtype": self.precision_name,
+            "device": self.DEVICE,
+            "x64_policy_opt_out": self.precision_name != "float64",
+        }
+
+    def check_compatible(self, kernel: Kernel, observed: Any) -> None:
+        """The core solver's checks, unchanged — they are declarations, not arithmetic."""
+        super().check_compatible(kernel, observed)
+        selected = kernel.selected_axes([axis.name for axis in observed.axes])
+        check_spectral_support(kernel, len(selected), owner=self.NAME)
+        if len(self.counts) != len(selected):
+            raise LikelihoodError(
+                f"{self.NAME} was declared with basis_size={self.basis_size!r} — "
+                f"{len(self.counts)} axis count(s) — but the kernel selects {len(selected)} "
+                f"axis/axes {selected!r} of this {type(observed).__name__}. The basis is a "
+                f"tensor product with one count per axis."
+            )
+
+    # -- internals ----------------------------------------------------------
+
+    def _basis(self, kernel: Kernel, coordinates: Any) -> HilbertSpaceBasis:
+        """The box and the frequency grid, in numpy, from the *raw* coordinates.
+
+        ``np.asarray`` on what arrives rather than on ``_points(...)``, and
+        that is load-bearing under ``jit``: a ``jnp`` operation applied to a
+        closed-over constant inside a trace returns a **tracer**, which numpy
+        then refuses to convert, whereas the concrete array the trace closed
+        over converts happily. Coordinates are data — a lowered problem holds
+        them as a device array built once, before any tracing — so reading
+        them here costs nothing and detaches nothing.
+        """
+        block = np.asarray(coordinates, dtype=np.float64)
+        if block.ndim == 1:
+            block = block[:, None]
+        return hilbert_basis(kernel.select(block), self.counts, self.boundary_factor)
+
+    def _scaled_basis(
+        self,
+        kernel: Kernel,
+        basis: HilbertSpaceBasis,
+        coordinates: Any,
+        values: Mapping[str, Any],
+    ) -> jax.Array:
+        r"""The basis scaled by the square root of the spectral density.
+
+        ``Phi`` is built through :class:`JaxOps`, so it is a jax array on this
+        solver's device; ``S`` comes from the *kernel*'s namespace, which is
+        where the gradient in the amplitude and the length scale lives. The
+        clamp is the traced counterpart of the reference solver's check: a
+        realised density must not raise, so an inadmissible hyperparameter
+        travels to ``-inf`` rather than to an exception.
+        """
+        ops = JaxOps(getattr(self, "_device", None))
+        matrix = basis_matrix(basis, kernel.select(_points(coordinates)), ops)
+        density = jnp.asarray(spectral_values(kernel, basis, values), dtype=jnp.float64)
+        return self.place(matrix * jnp.sqrt(jnp.clip(density, 0.0, None))[None, :])
+
+    def _diagonal(self, variance: Any) -> jax.Array:
+        return self.place(variance) + self.jitter**2
+
+    def _factor_jax(self, scaled: jax.Array, diagonal: jax.Array) -> tuple[jax.Array, jax.Array]:
+        r"""``(D^-1 Phi, chol(I + Phi^T D^-1 Phi))``. **NaN** where it is not definite."""
+        weighted = scaled / diagonal[:, None]
+        identity = jnp.eye(int(scaled.shape[1]), dtype=self.dtype)
+        return weighted, jnp.linalg.cholesky(identity + scaled.T @ weighted)
+
+    @staticmethod
+    def _solve(
+        scaled: jax.Array,
+        diagonal: jax.Array,
+        weighted: jax.Array,
+        lower: jax.Array,
+        right: jax.Array,
+    ) -> jax.Array:
+        r"""``(K + D)^-1 right`` by Woodbury, for an ``(n,)`` or ``(n, k)`` block."""
+        divisor = diagonal if jnp.ndim(right) == 1 else diagonal[:, None]
+        direct = right / divisor
+        return direct - weighted @ jsl.cho_solve((lower, True), scaled.T @ direct)
+
+    def _refuse(self, lower: jax.Array, diagonal: jax.Array) -> None:
+        """The contract path's guard: a :class:`LikelihoodError` where jax gives NaN."""
+        if not bool(jnp.all(jnp.isfinite(diagonal)) & jnp.all(diagonal > 0.0)):
+            raise LikelihoodError(
+                f"{self.NAME} needs a strictly positive noise diagonal: the Woodbury identity it "
+                f"solves by inverts diag(sigma^2 + jitter^2) directly, so a zero uncertainty is "
+                f"a division by zero rather than an ill-conditioned matrix. Pass "
+                f"{self.NAME}(jitter=...), or use DenseGP."
+            )
+        if not bool(jnp.all(jnp.isfinite(lower))):
+            raise LikelihoodError(
+                "the reduced-rank capacitance matrix I + Phi^T D^-1 Phi is not positive "
+                "definite, so the Woodbury solve failed (jax reports this as NaN rather than by "
+                "raising). It is positive definite for every admissible hyperparameter, so this "
+                "is a numerical rather than a structural failure: reduce basis_size, or raise "
+                "the jitter."
+            )
+
+    # -- the native, traced surface -----------------------------------------
+
+    def log_marginal_likelihood_jax(
+        self,
+        kernel: Kernel,
+        coordinates: Any,
+        residual: Any,
+        variance: Any,
+        values: Mapping[str, Any],
+    ) -> jax.Array:
+        """The marginal likelihood of the approximation, as a traceable jax scalar.
+
+        No exception control flow: a factorisation that fails leaves NaN in
+        ``lower`` and the final :func:`jax.numpy.where` turns it into ``-inf``,
+        which is §4.5's failure signal computed the only way a traced function
+        can compute it.
+        """
+        basis = self._basis(kernel, coordinates)
+        scaled = self._scaled_basis(kernel, basis, coordinates, values)
+        diagonal = self._diagonal(variance)
+        weighted, lower = self._factor_jax(scaled, diagonal)
+        r = self.place(residual)
+        alpha = self._solve(scaled, diagonal, weighted, lower, r)
+        log_determinant = jnp.sum(jnp.log(diagonal)) + 2.0 * jnp.sum(
+            jnp.log(jnp.abs(jnp.diag(lower)))
+        )
+        quadratic = jnp.sum(r * alpha)
+        value = jnp.asarray(
+            -0.5 * (quadratic + _columns(r) * log_determinant + r.size * _LOG_2PI),
+            dtype=jnp.float64,
+        )
+        admissible = jnp.all(diagonal > 0.0) & jnp.isfinite(value)
+        return jnp.where(admissible, value, -jnp.inf)
+
+    def latent_transform_jax(
+        self,
+        kernel: Kernel,
+        coordinates: Any,
+        whitened: Any,
+        values: Mapping[str, Any],
+        *,
+        jitter: float = 1e-10,
+    ) -> jax.Array:
+        r"""``f = Phi z`` as a traceable, differentiable jax array.
+
+        ``z`` carries :meth:`latent_size` entries. The reduced-rank factor *is*
+        the whitening, so there is no factorisation to stabilise and the
+        ``jitter`` argument the two exact solvers need is accepted and unused.
+        """
+        del jitter
+        basis = self._basis(kernel, coordinates)
+        scaled = self._scaled_basis(kernel, basis, coordinates, values)
+        return scaled @ jnp.asarray(whitened, dtype=jnp.float64)
+
+    # -- the contract surface -----------------------------------------------
+
+    def log_marginal_likelihood(
+        self,
+        kernel: Kernel,
+        coordinates: Any,
+        residual: Any,
+        variance: Any,
+        values: Mapping[str, Any],
+    ) -> float:
+        basis = self._basis(kernel, coordinates)
+        scaled = self._scaled_basis(kernel, basis, coordinates, values)
+        diagonal = self._diagonal(variance)
+        weighted, lower = self._factor_jax(scaled, diagonal)
+        self._refuse(lower, diagonal)
+        r = self.place(residual)
+        alpha = self._solve(scaled, diagonal, weighted, lower, r)
+        log_determinant = float(jnp.sum(jnp.log(diagonal))) + 2.0 * float(
+            jnp.sum(jnp.log(jnp.abs(jnp.diag(lower))))
+        )
+        quadratic = float(jnp.sum(r * alpha))
+        return -0.5 * (quadratic + _columns(r) * log_determinant + r.size * _LOG_2PI)
+
+    def conditional_loo(
+        self,
+        kernel: Kernel,
+        coordinates: Any,
+        residual: Any,
+        variance: Any,
+        values: Mapping[str, Any],
+    ) -> np.ndarray:
+        """Sundararajan & Keerthi from the Woodbury diagonal. See the core solver."""
+        basis = self._basis(kernel, coordinates)
+        scaled = self._scaled_basis(kernel, basis, coordinates, values)
+        diagonal = self._diagonal(variance)
+        weighted, lower = self._factor_jax(scaled, diagonal)
+        self._refuse(lower, diagonal)
+        r = self.place(residual)
+        alpha = self._solve(scaled, diagonal, weighted, lower, r)
+        triangular = jsl.solve_triangular(lower, weighted.T, lower=True)
+        precision_diagonal = 1.0 / diagonal - jnp.sum(triangular * triangular, axis=0)
+        rows = int(jnp.shape(r)[0])
+        columns = _columns(r)
+        quadratic = jnp.sum(jnp.reshape(alpha, (rows, columns)) ** 2, axis=1)
+        return np.asarray(
+            columns * (0.5 * jnp.log(precision_diagonal) - 0.5 * _LOG_2PI)
+            - quadratic / (2.0 * precision_diagonal)
+        )
+
+    def condition(
+        self,
+        kernel: Kernel,
+        coordinates: Any,
+        residual: Any,
+        variance: Any,
+        values: Mapping[str, Any],
+        at: Any = None,
+    ) -> GPConditional:
+        """The posterior of the rank-``m`` process. See the core solver."""
+        points = _points(coordinates)
+        basis = self._basis(kernel, points)
+        scaled = self._scaled_basis(kernel, basis, points, values)
+        diagonal = self._diagonal(variance)
+        weighted, lower = self._factor_jax(scaled, diagonal)
+        self._refuse(lower, diagonal)
+        r = self.place(residual)
+        alpha = self._solve(scaled, diagonal, weighted, lower, r)
+        target = points if at is None else _points(at)
+        target_scaled = self._scaled_basis(kernel, basis, target, values)
+        mean = target_scaled @ (scaled.T @ alpha)
+        triangular = jsl.solve_triangular(lower, target_scaled.T, lower=True)
+        posterior = jnp.sum(triangular * triangular, axis=0)
+        return GPConditional(mean=np.asarray(mean), variance=np.asarray(posterior))
+
+    def latent_transform(
+        self,
+        kernel: Kernel,
+        coordinates: Any,
+        whitened: Any,
+        values: Mapping[str, Any],
+        *,
+        jitter: float = 1e-10,
+    ) -> np.ndarray:
+        """``f = Phi z`` — the contract surface, so it raises where the traced one does not."""
+        points = _points(coordinates)
+        expected = self.latent_size(kernel, int(jnp.shape(points)[0]))
+        if int(np.shape(whitened)[0]) != expected:
+            raise LikelihoodError(
+                f"{self.NAME} whitens {expected} basis coefficient(s), but it was handed "
+                f"{int(np.shape(whitened)[0])} whitened value(s). This solver's latent block is "
+                f"the basis size m, not the sample count — see GPSolver.latent_size."
+            )
+        realised = self.latent_transform_jax(kernel, points, whitened, values, jitter=jitter)
+        if not bool(jnp.all(jnp.isfinite(realised))):
+            raise LikelihoodError(
+                "the reduced-rank whitening f = Phi diag(sqrt(S)) z is not finite. The usual "
+                "cause is a kernel amplitude large enough that amplitude**2 overflows float64."
+            )
+        return np.asarray(realised)

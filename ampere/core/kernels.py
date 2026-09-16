@@ -921,11 +921,7 @@ class StationaryKernel(Kernel):
         )
         pole = 2.0 * nu / (length_scale * length_scale) + omega * omega
         return (
-            amplitude
-            * amplitude
-            * constant
-            * length_scale ** (-2.0 * nu)
-            * pole ** (-(nu + half))
+            amplitude * amplitude * constant * length_scale ** (-2.0 * nu) * pole ** (-(nu + half))
         )
 
 
