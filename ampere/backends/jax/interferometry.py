@@ -766,8 +766,7 @@ class Binary(_JaxImageModel, _ReferenceBinary):
 
     Parameters
     ----------
-    x, y, separation, position_angle, flux_ratio, flux, component_fwhm,
-    channels, adopt_grid
+    x, y, separation, position_angle, flux_ratio, flux, component_fwhm, channels, adopt_grid
         As the reference model.
     device
         Where this model's grids live.
