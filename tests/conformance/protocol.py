@@ -220,6 +220,13 @@ class KernelFamily(enum.StrEnum):
     SUM = "sum"
     PRODUCT = "product"
     SPECTRAL_MIXTURE = "spectral_mixture"
+    #: **W5.7.** A non-stationary wrapper: ``a(x) k(w(x), w(x')) a(x')`` over
+    #: the single term in ``CovarianceSpec.terms``, with the knot locations and
+    #: knot values fixed in ``tests/conformance/backends/_kernels.py``. Like
+    #: ``SUM``, it is built from ``ampere.core`` on every fixture, because a
+    #: wrapping kernel has no arithmetic of its own and adopts its child's
+    #: namespace, device and capability flags.
+    WARPED = "warped"
     #: A kernel declared **outside** ampere, whose celerite representation a
     #: user registers with ``register_quasiseparable_term``. Every backend
     #: builds it from its own ``Matern12`` under a family name of its own, so

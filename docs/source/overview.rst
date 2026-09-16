@@ -384,7 +384,7 @@ Where to go next
 * :doc:`interferometry` — the template for adding a new observable kind,
   proved end to end on interferometric visibilities and closure phases;
   :doc:`astrometry` is the second modality built by following it.
-* :doc:`kernels` — the kernel algebra in full: the seven quasiseparable
+* :doc:`kernels` — the kernel algebra in full: the quasiseparable
   families, ``Sum``/``Product``/``SpectralMixture``, the ``axes=`` selector,
   and registering your own term.
 * :doc:`astropy` — wrapping an ``astropy.modeling`` model as an ampere

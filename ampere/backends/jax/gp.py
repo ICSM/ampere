@@ -142,7 +142,7 @@ import jax.numpy as jnp
 import jax.scipy.linalg as jsl
 import numpy as np
 
-from ampere.core import GPConditional, GPSolver, Kernel, Product, Sum
+from ampere.core import GPConditional, GPSolver, Kernel, Product, Sum, WarpedKernel
 from ampere.core import SHO as _CoreSHO
 from ampere.core import Matern12 as _CoreMatern12
 from ampere.core import Matern32 as _CoreMatern32
@@ -162,7 +162,7 @@ from ampere.core.hsgp import (
     normalise_counts,
     spectral_values,
 )
-from ampere.core.kernels import lookup_quasiseparable_term
+from ampere.core.kernels import lookup_quasiseparable_term, refuse_warped_composite
 
 from ._config import BACKEND, require_x64, x64_enabled
 from ._device import DEVICE, device_flag, place_on, resolve_device
@@ -182,6 +182,7 @@ __all__ = [
     "SpectralMixture",
     "SquaredExponential",
     "Sum",
+    "WarpedKernel",
 ]
 
 _LOG_2PI = math.log(2.0 * math.pi)
@@ -295,6 +296,12 @@ class JaxOps:
 
     def sin(self, array: Any) -> jax.Array:
         return jnp.sin(jnp.asarray(array, dtype=jnp.float64))
+
+    def log1p(self, array: Any) -> jax.Array:
+        return jnp.log1p(jnp.asarray(array, dtype=jnp.float64))
+
+    def absolute(self, array: Any) -> jax.Array:
+        return jnp.abs(jnp.asarray(array, dtype=jnp.float64))
 
 
 class _JaxKernel(Kernel):
@@ -866,13 +873,20 @@ def _ampere_term_type() -> Any:
     class _AmpereTerm(terms.Term):
         """An ampere :class:`~ampere.core.Kernel` presented as a celerite2 term."""
 
-        def __init__(self, kernel: Kernel, values: Mapping[str, Any]) -> None:
+        def __init__(self, kernel: Kernel, values: Mapping[str, Any], axis: Any = None) -> None:
             # Deliberately *not* coerced with float() anywhere below these
             # lines: the hyperparameters are what a gradient flows through, and
             # on the traced path they are tracers.
             self.kernel = kernel.with_ops(JaxOps(None))
             self.values = dict(values)
             self.builder = lookup_quasiseparable_term(kernel.FAMILY)
+            # **W5.7.** ``x`` comes back from celerite2 as the coordinate
+            # ``compute`` was given — w(x) for a warped kernel — while the
+            # registry's builders are documented to receive the *raw* sorted
+            # coordinate and apply any warp themselves. Carrying the raw axis
+            # keeps that contract as written and keeps the two evaluations of
+            # w in one place, the kernel.
+            self.axis = axis
 
         def get_value(self, tau: Any) -> jax.Array:
             separation = jnp.abs(jnp.atleast_1d(jnp.asarray(tau, dtype=jnp.float64)))
@@ -884,7 +898,8 @@ def _ampere_term_type() -> Any:
             diag: Any,
             **kwargs: Any,
         ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
-            points = jnp.atleast_1d(jnp.asarray(x, dtype=jnp.float64))
+            given = x if self.axis is None else self.axis
+            points = jnp.atleast_1d(jnp.asarray(given, dtype=jnp.float64))
             diagonal = jnp.atleast_1d(jnp.asarray(diag, dtype=jnp.float64))
             # x arrives sorted (QuasisepGP sorts before calling), which is what
             # the builders' midpoint centring assumes.
@@ -899,9 +914,9 @@ def _ampere_term_type() -> Any:
     return _AmpereTerm
 
 
-def _celerite_term(kernel: Kernel, values: Mapping[str, Any]) -> Any:
+def _celerite_term(kernel: Kernel, values: Mapping[str, Any], axis: Any = None) -> Any:
     """Build the exact celerite representation of a resolved kernel, in jax."""
-    return _ampere_term_type()(kernel, kernel.resolve(values))
+    return _ampere_term_type()(kernel, kernel.resolve(values), axis)
 
 
 def _bare_coordinates(coordinates: Any, kernel: Kernel | None = None) -> Any:
@@ -1030,6 +1045,8 @@ class QuasisepGP(GPSolver):
 
     def check_compatible(self, kernel: Kernel, observed: Any) -> None:
         super().check_compatible(kernel, observed)
+        # W5.7: a warp under a composite has no single recursion coordinate.
+        refuse_warped_composite(kernel, self.NAME)
         # Every family in the tree, not just the root: a Sum lowers term by
         # term, so one unregistered term stops it and must be named here.
         for leaf in kernel.leaves():
@@ -1121,9 +1138,17 @@ class QuasisepGP(GPSolver):
         returns quiet NaN where a Cholesky raises (measured), which is the
         reason both callers guard.
         """
-        term = _celerite_term(kernel, values)
+        term = _celerite_term(kernel, values, ordered_axis)
         gp = _celerite2_jax().GaussianProcess(term, mean=0.0)
-        gp.compute(ordered_axis, diag=ordered_diagonal, check_sorted=False)
+        # **W5.7.** The recursion's propagators come from the coordinate handed
+        # to ``compute``, and a warped kernel is stationary in w(x) rather than
+        # in x. ``warped_coordinate`` is the identity for every other kernel;
+        # a warp is monotone by construction, so the sorted axis stays sorted.
+        gp.compute(
+            kernel.warped_coordinate(ordered_axis, values),
+            diag=ordered_diagonal,
+            check_sorted=False,
+        )
         return gp
 
     @staticmethod
@@ -1342,9 +1367,13 @@ class QuasisepGP(GPSolver):
         ``K + diag(a) = L D Lᵀ`` with ``L`` **unit** lower triangular,
         ``L_{nm} = U_n · W_m Π_{n>k>m} p_k``.
         """
-        term = _celerite_term(kernel, values)
+        term = _celerite_term(kernel, values, ordered_axis)
         c, a, U, V = term.get_celerite_matrices(ordered_axis, ordered_diagonal)
-        d, W = _celerite2_jax().ops.factor(ordered_axis, c, a, U, V)
+        # W5.7: the generators come from the raw coordinate (the term carries
+        # it), the recursion from w(x) — the identity for an unwarped kernel.
+        d, W = _celerite2_jax().ops.factor(
+            kernel.warped_coordinate(ordered_axis, values), c, a, U, V
+        )
         return c, U, d, W
 
     def _apply_inverse(
@@ -1492,8 +1521,11 @@ class QuasisepGP(GPSolver):
         # non-finite D, quietly, exactly as it does for the log-likelihood.
         if not bool(jnp.all(jnp.isfinite(d)) & jnp.all(d > 0.0)):
             self._refuse_nan(jnp.asarray(jnp.nan))
-        alpha = self._apply_inverse(sorted_axis, c, U, d, W, jnp.take(r, order))
-        precision = self._precision_diagonal(sorted_axis, c, U, d, W)
+        # W5.7: the recursion below walks the factorisation, so it runs on the
+        # same coordinate the factorisation did — w(x), the identity unwarped.
+        solve_axis = kernel.warped_coordinate(sorted_axis, values)
+        alpha = self._apply_inverse(solve_axis, c, U, d, W, jnp.take(r, order))
+        precision = self._precision_diagonal(solve_axis, c, U, d, W)
         terms = 0.5 * jnp.log(precision) - alpha**2 / (2.0 * precision) - 0.5 * _LOG_2PI
         return np.asarray(self._unsort(terms, order))
 
