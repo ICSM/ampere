@@ -2235,11 +2235,31 @@ class LatentDeclaration:
     :meth:`GPSolver.latent_transform` as ``f = L(θ) z``. See
     :func:`latent_parameter` for why this, and not a
     :class:`~ampere.core.parameter.HierarchicalPrior`, is the declaration.
+
+    **Two sizes since W5.4**, because the two stopped being the same number
+    when an approximate solver landed. :attr:`size` is the **retained sample
+    count** this declaration was built for — what
+    ``Dataset._declare_latent`` passes and what
+    ``FittingProblem`` validation checks the effective mask against, so that a
+    transformation which masks more than the data do is caught before a run
+    starts. :attr:`whitened_size` is how many **whitened variables** the
+    sampler actually carries, which is the solver's to say
+    (:meth:`GPSolver.latent_size`): ``size`` for both exact solvers, and the
+    basis size for :class:`HilbertSpaceGP`, whose whitening is ``(N, m)``
+    rather than ``(N, N)``. The parameter itself always has
+    :attr:`whitened_size` elements, so the sampler's dimension, ArviZ's
+    coordinate and ``latent_transform``'s argument agree by construction.
     """
 
     parameter: Parameter
     size: int
     solver: GPSolver
+
+    @property
+    def whitened_size(self) -> int:
+        """How many whitened variables the sampler carries: ``m``, not always ``N``."""
+        shape = self.parameter.shape
+        return 1 if not shape else int(shape[0])
 
     def as_parameter_set(self) -> ParameterSet:
         """The declaration as a set, ready for ``ParameterSet.merge``."""
@@ -3517,14 +3537,17 @@ class Likelihood(Parameterised):
                 f"a latent declaration needs a GaussianProcessNoise model to supply the "
                 f"whitening transform, but this Likelihood has a {type(self._noise).__name__}."
             )
-        # W5.4: *size* is the retained-sample count the caller has; how many
-        # whitened variables that becomes is the solver's to say, and for an
-        # approximate solver it is the basis size rather than the sample
-        # count. Both exact solvers answer ``size`` unchanged.
-        declared = self._noise.solver.latent_size(self._noise.kernel, int(size))
+        # W5.4: *size* is the retained-sample count the caller has, and it
+        # stays the declaration's ``size`` because that is what the mask
+        # invariance is checked against. How many *whitened variables* it
+        # implies is the solver's to say — the same number for both exact
+        # solvers, and the basis size for a reduced-rank one — and that is
+        # what the parameter is shaped by.
         return LatentDeclaration(
-            parameter=latent_parameter(name, declared),
-            size=int(declared),
+            parameter=latent_parameter(
+                name, self._noise.solver.latent_size(self._noise.kernel, int(size))
+            ),
+            size=int(size),
             solver=self._noise.solver,
         )
 

@@ -1827,8 +1827,13 @@ class TestApproximateSolverConvergence:
             backend, MATERN32, basis_size=size, family=family_named("poisson")()
         )
         assert latent.marginalisation is Marginalisation.LATENT
-        assert latent.latent_declaration(observed.n_samples).size == size
-        assert latent.latent_declaration(observed.n_samples).parameter.shape == (size,)
+        declaration = latent.latent_declaration(observed.n_samples)
+        # ``size`` stays the retained-sample count -- it is what the mask
+        # invariance is checked against -- while the whitened block the
+        # sampler carries is the solver's basis size.
+        assert declaration.size == observed.n_samples
+        assert declaration.whitened_size == size
+        assert declaration.parameter.shape == (size,)
 
         points = np.asarray(observed.axes[0].values, dtype=float).reshape(-1, 1)
         values = noise.kernel.resolve({})
