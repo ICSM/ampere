@@ -132,7 +132,7 @@ from ampere.results import emit
 
 from .exceptions import EngineError, SamplingFailureWarning
 
-__all__ = ["DEFAULT_CACHE_SIZE", "Engine"]
+__all__ = ["DEFAULT_CACHE_SIZE", "Engine", "unconstrained_jacobian_correction"]
 
 #: How many scored θ an engine remembers so that the stored draws need not be
 #: re-evaluated. An ``Evaluation`` is a handful of floats plus one term per
@@ -141,6 +141,48 @@ __all__ = ["DEFAULT_CACHE_SIZE", "Engine"]
 #: the bound the oldest go and the affected draws are recomputed; nothing is
 #: lost but time.
 DEFAULT_CACHE_SIZE = 100_000
+
+
+def unconstrained_jacobian_correction(problem: FittingProblem, unconstrained: Any) -> np.ndarray:
+    """The change-of-variables term alone, per row of an unconstrained draw.
+
+    ``ParameterSet.lnprior_unconstrained(y) = lnprior(constrain(y)) +
+    Σ log|d constrain / dy|`` is the reference-path oracle every realisation
+    already agrees with (``ampere.core.realisation``); this is that sum term
+    on its own, recovered as the difference of two numpy-contract-path calls
+    rather than restated, so there is exactly one place that knows the
+    formula.
+
+    What it is for (``results.md`` §9, W5.0): a proposal fitted in
+    **unconstrained** coordinates — a VI guide, an SBI density estimator —
+    has its own log-density there, and that density is *not* what
+    ``sample_stats.proposal_log_density`` must hold, because the stored
+    ``log_prior``/``log_likelihood`` are in the **constrained** free-parameter
+    space (``Engine._evaluations_from_terms`` scores ``lnprior`` at the
+    constrained θ, as every gradient-free driver's cache does too). Subtracting
+    this term from the proposal's unconstrained-space density moves it into
+    the same coordinates, which is what makes
+    ``exp(log_prior + log_likelihood - proposal_log_density)`` a valid
+    importance weight computed from the stored groups alone — the two
+    Jacobian terms cancel by construction, so a driver that skipped this step
+    would silently bias every reweighting by exactly the change of variables
+    it forgot.
+
+    Backend-neutral: :meth:`~ampere.core.parameter.ParameterSet.constrain`,
+    ``.lnprior`` and ``.lnprior_unconstrained`` are all numpy-contract-path
+    calls on ``ampere.core``, so a driver may call this without importing a
+    backend, wherever in its own routine it happens to hold the unconstrained
+    draws.
+    """
+    parameters = problem.parameters
+    array = np.atleast_2d(np.asarray(unconstrained, dtype=float))
+    out = np.empty(array.shape[0], dtype=float)
+    for row, y in enumerate(array):
+        constrained = parameters.constrain(y)
+        unconstrained_prior = float(parameters.lnprior_unconstrained(y))
+        constrained_prior = float(parameters.lnprior(constrained))
+        out[row] = unconstrained_prior - constrained_prior
+    return out
 
 
 class _EvaluationCache:
@@ -582,6 +624,7 @@ class Engine(abc.ABC):
         realised: bool | None = None,
         registered_lowerings: Sequence[Mapping[str, Any]] | None = None,
         log_likelihood_terms: Sequence[Sequence[Mapping[str, float]]] | None = None,
+        sample_stats: Mapping[str, Any] | None = None,
     ) -> Any:
         """Assemble the stored draws into the run's ``DataTree``.
 
@@ -618,6 +661,22 @@ class Engine(abc.ABC):
         file, and :attr:`last_failure_summary` for a script that wants to
         branch on it. The counts and the bounded history are in the attrs
         already, by ``inference.md`` §18(b)'s request to W1.8.
+
+        *sample_stats* is ``ampere.results.emit``'s hook for a per-draw
+        quantity beside ``lp``/``log_prior``/``log_likelihood`` — passed
+        straight through, shaped ``(chains, draws)`` (``results.md`` §4/§9,
+        W5.0). ``proposal_log_density`` is the one every approximate driver
+        supplies here.
+
+        ``ampere_approximation`` defaults to ``"none"`` — this base class's
+        five gradient-free and gradient-based samplers are exact — and a
+        driver whose draws are not from the target overrides it through
+        *extra_attrs* (``"mean_field"``/``"multivariate"`` for
+        :class:`~ampere.inference.VIEngine`, ``"density_estimator"`` for
+        :class:`~ampere.inference.SBIEngine`). Writing the default here rather
+        than on each driver is the point: the key ``results.md`` §9 asks every
+        run to carry is carried by construction, not by five drivers
+        remembering to say "none".
         """
         array = np.asarray(draws, dtype=float)
         if array.ndim == 2:
@@ -633,6 +692,7 @@ class Engine(abc.ABC):
             "engine_evaluations": self._cache.calls,
             "engine_draws_recomputed": self._cache.recomputed,
             "engine_realised_evaluations": self._cache.realised_calls,
+            "approximation": "none",
         }
         attrs.update(extra_attrs or {})
         if summary:
@@ -649,6 +709,7 @@ class Engine(abc.ABC):
             realised=self._cache.realised if realised is None else realised,
             registered_lowerings=registered_lowerings,
             extra_attrs=attrs,
+            sample_stats=sample_stats,
         )
         if summary:
             warnings.warn(

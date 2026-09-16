@@ -465,6 +465,7 @@ def emit(
     coords: Mapping[str, Sequence[Any]] | None = None,
     observed: bool = True,
     extra_attrs: Mapping[str, object] | None = None,
+    sample_stats: Mapping[str, Any] | None = None,
 ) -> Any:
     """Build the run's :class:`xarray.DataTree` from its draws and evaluations.
 
@@ -510,6 +511,20 @@ def emit(
         half a record.
     extra_attrs
         Engine-specific provenance (step size, live points, walker count).
+    sample_stats
+        Extra ``(chain, draw)``-shaped per-draw quantities to add to
+        ``sample_stats`` beside ``lp``/``log_prior``/``log_likelihood`` — the
+        hook ``results.md`` §4/§9 names for ``proposal_log_density`` (W5.0):
+        an engine whose stored draws are not from the target (VI's fitted
+        guide, SBI's trained density estimator) records the proposal's own
+        log-density at each draw here, in the same coordinates the stored
+        ``log_prior``/``log_likelihood`` are, so
+        ``exp(log_prior + log_likelihood - proposal_log_density)`` is an
+        importance weight computable from the emitted groups alone. Each value
+        is reshaped to ``(chains, count)`` before being written; a name that
+        collides with a built-in ``sample_stats`` variable raises, the same
+        rule :func:`~ampere.results.provenance.provenance_attrs`'s ``extra=``
+        applies to the root attrs.
 
     Raises
     ------
@@ -524,9 +539,18 @@ def emit(
     grid = _as_evaluation_grid(evaluations, chains, count)
 
     posterior, dims, resolved = _posterior_variables(problem, array, coords)
+    stats = _sample_stats(grid)
+    if sample_stats:
+        for key, value in sample_stats.items():
+            if key in stats:
+                raise ResultsError(
+                    f"sample_stats key {key!r} would overwrite the one ampere writes for every "
+                    f"run; choose another name."
+                )
+            stats[key] = np.asarray(value, dtype=float).reshape(chains, count)
     sampling: dict[str, dict[str, np.ndarray]] = {
         POSTERIOR_GROUP: posterior,
-        SAMPLE_STATS_GROUP: _sample_stats(grid),
+        SAMPLE_STATS_GROUP: stats,
         LOG_LIKELIHOOD_GROUP: _log_likelihood_variables(problem, grid),
     }
     tree = arviz.from_dict(
