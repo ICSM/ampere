@@ -23,7 +23,16 @@ underestimates marginal variances when it is wrong. ``AutoMultivariateNormal``
 captures the correlations and costs O(d²) parameters. Neither captures a
 non-Gaussian posterior at all. That is why ``ampere_engine`` names the driver
 and ``vi_guide`` names the family: a reader of an archived run must be able to
-tell what was assumed.
+tell what was assumed. Since W5.0 the same fact is also machine-readable, in
+the engine-neutral ``ampere_approximation`` root attribute
+(``"mean_field"``/``"multivariate"``) every non-exact engine writes
+(``results.md`` §9), and the guide's own log-density at each draw is stored
+per draw as ``sample_stats.proposal_log_density`` — the fitted guide's density
+moved into the same constrained coordinates the stored ``log_prior``/
+``log_likelihood`` are, so
+``exp(log_prior + log_likelihood - proposal_log_density)`` is an importance
+weight an importance-corrected posterior can be built from using nothing but
+the stored groups.
 
 How it reaches a backend
 ------------------------
@@ -113,7 +122,12 @@ from ampere.core.realisation import (
     registered_realisations,
 )
 
-from .engine import DEFAULT_CACHE_SIZE, Engine, _refuse_foreign_parts
+from .engine import (
+    DEFAULT_CACHE_SIZE,
+    Engine,
+    _refuse_foreign_parts,
+    unconstrained_jacobian_correction,
+)
 from .exceptions import EngineError
 
 __all__ = ["GUIDE_FAMILIES", "VARIATIONAL_LIBRARIES", "VIEngine", "supported_backends"]
@@ -139,6 +153,17 @@ VARIATIONAL_LIBRARIES: dict[str, str] = {"torch": "pyro", "jax": "numpyro"}
 GUIDE_FAMILIES: dict[str, str] = {
     "normal": "AutoNormal",
     "multivariate": "AutoMultivariateNormal",
+}
+
+#: ``ampere_approximation`` (``results.md`` §9, W5.0): the family a plot or a
+#: summary checks before it reports an R-hat that means nothing for a run
+#: that was never a Markov chain. Named for what the guide *assumes* rather
+#: than for its class, which is why this is a second table from
+#: :data:`GUIDE_FAMILIES` rather than a re-use of it — ``vi_guide_class``
+#: already carries the library's own name.
+_APPROXIMATION_FAMILIES: dict[str, str] = {
+    "normal": "mean_field",
+    "multivariate": "multivariate",
 }
 
 #: The single site the whole unconstrained vector travels under. See the module
@@ -377,11 +402,18 @@ class VIEngine(Engine):
         )
         library = VARIATIONAL_LIBRARIES[self.problem.backend]
         if library == "pyro":
-            drawn, attrs = self._fit_pyro(unconstrained, settings)
+            drawn, log_q, attrs = self._fit_pyro(unconstrained, settings)
         else:
-            drawn, attrs = self._fit_numpyro(unconstrained, settings)
+            drawn, log_q, attrs = self._fit_numpyro(unconstrained, settings)
 
         chain = np.stack([[self.problem.constrain(y) for y in drawn]])
+        # The guide's own density is fitted in *unconstrained* coordinates
+        # (module docstring); the stored log_prior/log_likelihood are in the
+        # *constrained* ones (`_evaluations_from_terms` scores `lnprior` at
+        # `chain`, not at `drawn`). Moving log_q into the same coordinates is
+        # what makes sample_stats.proposal_log_density usable directly in
+        # results.md §9's importance-weight formula (engine.py, W5.0).
+        proposal_log_density = log_q - unconstrained_jacobian_correction(self.problem, drawn)
         attrs.update(
             {
                 "vi_draws": settings.draws,
@@ -391,6 +423,7 @@ class VIEngine(Engine):
                 "vi_optimiser": "adam",
                 "vi_learning_rate": settings.learning_rate,
                 "vi_library": library,
+                "approximation": _APPROXIMATION_FAMILIES[settings.guide],
             }
         )
         decomposition = self._decomposition(np.asarray([drawn]))
@@ -400,13 +433,14 @@ class VIEngine(Engine):
             realised=self.realisation is not None,
             registered_lowerings=self._realisation_provenance(),
             log_likelihood_terms=decomposition,
+            sample_stats={"proposal_log_density": proposal_log_density},
         )
 
     # -- the pyro route -------------------------------------------------------
 
     def _fit_pyro(
         self, unconstrained: np.ndarray, settings: _Settings
-    ) -> tuple[np.ndarray, dict[str, object]]:
+    ) -> tuple[np.ndarray, np.ndarray, dict[str, object]]:
         """pyro's SVI over a torch realisation.
 
         Lazy imports, exactly as ``_nuts.py`` imports pyro: ``import
@@ -438,8 +472,20 @@ class VIEngine(Engine):
           — a seeded draw from the joint prior — makes the run reproducible from
           the problem's seed *and* comparable with an emcee or NUTS run of the
           same problem.
+
+        A fourth thing is new at W5.0: **the guide's own log-density is read
+        off the same trace the draw comes from**, inside the scope, because
+        the fitted parameters :meth:`~pyro.params.param_store.ParamStoreDict.
+        scope` isolated are gone the moment this ``with`` block exits — asking
+        for ``guide.log_prob`` afterwards would look up parameters that no
+        longer exist in the (now-restored) global store. Reading ``fn`` off
+        the traced ``_SITE`` node rather than calling a convenience method
+        avoids depending on which internal shape a given autoguide subclass
+        happens to expose, at the one-time cost of a Python loop over the
+        draws.
         """
         import pyro  # pyrefly: ignore[missing-import]
+        import pyro.poutine as poutine  # pyrefly: ignore[missing-import]
         import torch  # pyrefly: ignore[missing-import]
         from pyro.distributions import Normal  # pyrefly: ignore[missing-import]
         from pyro.infer import SVI, Trace_ELBO  # pyrefly: ignore[missing-import]
@@ -475,12 +521,14 @@ class VIEngine(Engine):
             self.guide = guide
             self.sampler = svi
             with torch.no_grad():
-                drawn = np.stack(
-                    [
-                        np.asarray(guide()[_SITE].detach().cpu().numpy(), dtype=float)
-                        for _ in range(settings.draws)
-                    ]
-                )
+                values: list[np.ndarray] = []
+                log_q = np.empty(settings.draws, dtype=float)
+                for i in range(settings.draws):
+                    trace = poutine.trace(guide).get_trace()
+                    node = trace.nodes[_SITE]
+                    values.append(np.asarray(node["value"].detach().cpu().numpy(), dtype=float))
+                    log_q[i] = float(node["fn"].log_prob(node["value"]).sum())
+                drawn = np.stack(values)
 
         attrs: dict[str, object] = {
             "vi_final_elbo": elbo[-1],
@@ -488,13 +536,13 @@ class VIEngine(Engine):
             "pyro_version": str(pyro.__version__),
             "torch_version": str(torch.__version__),
         }
-        return drawn, attrs
+        return drawn, log_q, attrs
 
     # -- the numpyro route ----------------------------------------------------
 
     def _fit_numpyro(
         self, unconstrained: np.ndarray, settings: _Settings
-    ) -> tuple[np.ndarray, dict[str, object]]:
+    ) -> tuple[np.ndarray, np.ndarray, dict[str, object]]:
         """numpyro's SVI over a jax realisation.
 
         The same three steps as the pyro route, in numpyro's spelling, and
@@ -531,6 +579,15 @@ class VIEngine(Engine):
           of the library rather than an omission. The seed still comes from
           this engine's own sub-stream, so a run repeats from the problem's
           seed exactly as every other driver's does.
+
+        The guide's own log-density (W5.0) is read off
+        :meth:`~numpyro.infer.autoguide.AutoContinuous.get_posterior`, numpyro's
+        own accessor for the fitted latent distribution — no scope to race
+        here, since the fitted parameters live in ``result.params`` rather
+        than a global store. ``posterior[_SITE]`` is exactly the latent
+        distribution's own sample space because the carrier's support is
+        ``real_vector`` (see above), so no further transform is needed before
+        scoring the draws against it.
         """
         import jax  # pyrefly: ignore[missing-import]
         import numpyro  # pyrefly: ignore[missing-import]
@@ -564,6 +621,10 @@ class VIEngine(Engine):
 
         posterior = guide.sample_posterior(keys[1], result.params, sample_shape=(settings.draws,))
         drawn = np.asarray(posterior[_SITE], dtype=float).reshape(settings.draws, size)
+        posterior_distribution = guide.get_posterior(result.params)
+        log_q = np.asarray(posterior_distribution.log_prob(posterior[_SITE]), dtype=float).reshape(
+            settings.draws
+        )
 
         # numpyro's SVI *minimises* the negative ELBO, so its losses are -ELBO.
         # Recorded as the ELBO itself, which is what the pyro route records and
@@ -575,7 +636,7 @@ class VIEngine(Engine):
             "numpyro_version": str(numpyro.__version__),
             "jax_version": str(jax.__version__),
         }
-        return drawn, attrs
+        return drawn, log_q, attrs
 
     # -- shared plumbing ------------------------------------------------------
 
