@@ -62,9 +62,10 @@ from typing import Any, ClassVar, Protocol
 
 import astropy.units as u
 import numpy as np
+import scipy.stats as st
 
 from .exceptions import LikelihoodError
-from .parameter import Identity, Log, Parameter, Parameterised
+from .parameter import HierarchicalPrior, Identity, Log, Parameter, Parameterised
 
 __all__ = [
     "DTYPE",
@@ -86,10 +87,12 @@ __all__ = [
     "StationaryKernel",
     "Sum",
     "TermBuilder",
+    "WarpedKernel",
     "lookup_quasiseparable_term",
     "matern12_representation",
     "matern32_representation",
     "matern52_representation",
+    "quantile_knots",
     "quasiseparable_families",
     "register_quasiseparable_term",
     "registered_quasiseparable_terms",
@@ -97,6 +100,7 @@ __all__ = [
     "sho_representation",
     "sum_representation",
     "term_provenance_entries",
+    "warped_representation",
 ]
 
 #: The dtype every array in the kernel algebra is held in. ``DEVELOPMENT_PLAN.md``
@@ -242,6 +246,14 @@ class ArrayOps(Protocol):
         """Elementwise sine."""
         ...
 
+    def log1p(self, array: Any) -> Any:
+        """Elementwise ``log(1 + x)``, accurate for small ``x``."""
+        ...
+
+    def absolute(self, array: Any) -> Any:
+        """Elementwise absolute value."""
+        ...
+
 
 class NumpyOps:
     """:class:`ArrayOps` in numpy. The reference path's namespace, and the default."""
@@ -279,6 +291,12 @@ class NumpyOps:
 
     def sin(self, array: Any) -> np.ndarray:
         return np.sin(array)
+
+    def log1p(self, array: Any) -> np.ndarray:
+        return np.log1p(array)
+
+    def absolute(self, array: Any) -> np.ndarray:
+        return np.abs(array)
 
 
 #: The reference namespace. One instance, because it holds no state.
@@ -322,6 +340,18 @@ class KernelSpec:
         cannot be compared claim one identity, which is the thing the hash
         exists to prevent.
 
+    **W5.7 adds a third**, on the same terms — omitted from :meth:`to_dict`
+    when unused, so every spec hash minted before W5.7 is unchanged:
+
+    ``metadata``
+        ``(key, value)`` pairs of JSON-plain, **non-parameter** structure a
+        family needs in its declaration. :class:`WarpedKernel` is what asked
+        for it: a warp's knot *locations* are not hyperparameters (they are
+        fixed positions, not things a sampler moves) and they are not
+        hyperparameter *names* either, yet two warps with different knots are
+        different models and must hash differently. Values are tuples rather
+        than lists so a spec stays hashable; :meth:`to_dict` converts.
+
     Examples
     --------
     >>> KernelSpec("matern32", ("amplitude", "length_scale"), True).to_dict()
@@ -334,6 +364,7 @@ class KernelSpec:
     quasiseparable: bool
     axes: tuple[str, ...] | None = None
     terms: tuple[tuple[str, KernelSpec], ...] = ()
+    metadata: tuple[tuple[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         """A plain-data form for provenance attrs and spec hashing."""
@@ -348,6 +379,11 @@ class KernelSpec:
             described["terms"] = [
                 {"label": label, "kernel": spec.to_dict()} for label, spec in self.terms
             ]
+        if self.metadata:
+            described["metadata"] = {
+                key: list(value) if isinstance(value, tuple) else value
+                for key, value in self.metadata
+            }
         return described
 
 
@@ -733,6 +769,21 @@ class Kernel(Parameterised, abc.ABC):
         selected = {name: values[name] for name in self.parameters.names if name in values}
         return self.context(selected)
 
+    def _child_values(self, label: str, resolved: Mapping[str, Any]) -> dict[str, Any]:
+        """A labelled child's own, unqualified hyperparameter mapping.
+
+        On :class:`Kernel` rather than on :class:`_Composite` since W5.7, when
+        a second kind of wrapping kernel — :class:`WarpedKernel` — needed the
+        same unqualification, and :func:`sum_representation` stopped needing a
+        ``type: ignore`` to reach it.
+        """
+        prefix = f"{label}."
+        return {
+            name[len(prefix) :]: value
+            for name, value in resolved.items()
+            if name.startswith(prefix)
+        }
+
     def _hyperparameter(self, values: Mapping[str, Any], name: str, **kwargs: Any) -> Any:
         """One resolved hyperparameter, validated where the backend wants it validated.
 
@@ -783,6 +834,54 @@ class Kernel(Parameterised, abc.ABC):
         ops = self.ops
         resolved = self.resolve(values)
         return self._covariance(ops.zeros(ops.n_points(coordinates)), resolved)
+
+    # -- the warp hooks (W5.7) ----------------------------------------------
+
+    def warped_coordinate(self, axis: Any, values: Mapping[str, Any]) -> Any:
+        """The coordinate this kernel is **stationary in**. The identity by default.
+
+        **W5.7's one extension to the term-registry contract**, and the
+        smallest that makes :class:`WarpedKernel` reach the O(N) path. A
+        quasiseparable solve factorises a matrix whose off-diagonal decay is
+        :math:`e^{-c_j (t_n - t_m)}`, and *the solver*, not the generator
+        builder, supplies that :math:`t`: celerite2 forms the propagators from
+        the coordinate handed to ``compute``/``factor``, so a kernel that is
+        stationary in :math:`w(x)` rather than in :math:`x` cannot express
+        itself through the generators alone. Folding the difference into
+        ``U`` and ``V`` would mean multiplying by :math:`e^{\\pm c t}`, which
+        is exactly the overflow celerite's factored form exists to avoid.
+
+        So a solver asks the kernel, once per solve, for the coordinate its
+        recursion runs on, and the registered builder still receives the
+        **raw** sorted axis its docstring promises. Every warp must be
+        **monotone increasing**, so the sorting permutation is unchanged and
+        ``QuasisepGP``'s ordering precondition survives; :class:`WarpedKernel`
+        is monotone by construction.
+
+        The same map is what ``Likelihood.conditional`` reports in, so the
+        whiteness and localisation diagnostics see the coordinate in which the
+        residuals are supposed to be stationary.
+
+        Parameters
+        ----------
+        axis
+            The bare ``(n,)`` coordinate, in this kernel's own namespace.
+        values
+            The hyperparameter mapping, as for :meth:`matrix`.
+        """
+        return axis
+
+    def warp_provenance(self, values: Mapping[str, Any]) -> dict[str, Any] | None:
+        """A JSON-plain record of the warp this kernel applies, or ``None``.
+
+        ``None`` — the default, and every kernel but :class:`WarpedKernel` —
+        means "I am stationary in the coordinate you gave me", which is what
+        lets ``Likelihood.conditional`` leave its output untouched for every
+        declaration written before W5.7. A warping kernel returns enough to
+        reconstruct the map: the knot locations, the realised knot values and
+        the warped knot images.
+        """
+        return None
 
     def spectral_density(
         self, frequency: Any, values: Mapping[str, Any], *, dimensions: int = 1
@@ -1371,6 +1470,36 @@ def _default_labels(count: int) -> tuple[str, ...]:
     return tuple(f"term{index}" for index in range(count))
 
 
+def _adopted_capabilities(owner: str, terms: Sequence[Kernel]) -> dict[str, Any]:
+    """The capability flags and namespace a wrapping kernel takes from its children.
+
+    Shared by :class:`_Composite` and :class:`WarpedKernel` (W5.7), which face
+    the same question for the same reason: neither has arithmetic of its own —
+    each builds on what its children compute — so a ``Sum`` of two torch
+    kernels, and a ``WarpedKernel`` over one, *are* torch kernels however they
+    were constructed. The flags go into the instance ``__dict__``, shadowing
+    the class-level declarations, because ``declared_capabilities`` reads them
+    off the instance.
+    """
+    devices = {term.DEVICE for term in terms}
+    backends = {term.BACKEND for term in terms}
+    if len(devices) > 1 or len(backends) > 1:
+        raise LikelihoodError(
+            f"{owner} was given kernels from different places — devices "
+            f"{sorted(devices)}, backends {sorted(backends)}. A composed covariance is one "
+            f"array computation; ampere will not move arrays between devices or between "
+            f"array libraries on your behalf (architecture.md §5)."
+        )
+    return {
+        "DIFFERENTIABLE": all(term.DIFFERENTIABLE for term in terms),
+        "BATCHABLE": all(term.BATCHABLE for term in terms),
+        "DEVICE": devices.pop(),
+        "BACKEND": backends.pop(),
+        "VALIDATES": all(term.VALIDATES for term in terms),
+        "_ops": terms[0].ops,
+    }
+
+
 class _Composite(Kernel):
     """Shared machinery for :class:`Sum` and :class:`Product`.
 
@@ -1440,25 +1569,7 @@ class _Composite(Kernel):
 
     def _adopt(self, terms: Sequence[Kernel]) -> None:
         """Take the children's capability flags, conjunctively, and their namespace."""
-        devices = {term.DEVICE for term in terms}
-        backends = {term.BACKEND for term in terms}
-        if len(devices) > 1 or len(backends) > 1:
-            raise LikelihoodError(
-                f"{type(self).__name__} was given kernels from different places — devices "
-                f"{sorted(devices)}, backends {sorted(backends)}. A composed covariance is one "
-                f"array computation; ampere will not move arrays between devices or between "
-                f"array libraries on your behalf (architecture.md §5)."
-            )
-        self.__dict__.update(
-            {
-                "DIFFERENTIABLE": all(term.DIFFERENTIABLE for term in terms),
-                "BATCHABLE": all(term.BATCHABLE for term in terms),
-                "DEVICE": devices.pop(),
-                "BACKEND": backends.pop(),
-                "VALIDATES": all(term.VALIDATES for term in terms),
-                "_ops": terms[0].ops,
-            }
-        )
+        self.__dict__.update(_adopted_capabilities(type(self).__name__, terms))
 
     @property
     def terms(self) -> tuple[tuple[str, Kernel], ...]:
@@ -1472,15 +1583,6 @@ class _Composite(Kernel):
             (label, child.for_axes(axis_names)) for label, child in self._terms
         )
         return bound
-
-    def _child_values(self, label: str, resolved: Mapping[str, Any]) -> dict[str, Any]:
-        """The child's own, unqualified hyperparameter mapping."""
-        prefix = f"{label}."
-        return {
-            name[len(prefix) :]: value
-            for name, value in resolved.items()
-            if name.startswith(prefix)
-        }
 
     def _child_matrices(self, left: Any, right: Any, values: Mapping[str, Any]) -> list[Any]:
         resolved = self.resolve(values)
@@ -1763,6 +1865,655 @@ class SpectralMixture(Sum):
 
 
 # ---------------------------------------------------------------------------
+# Non-stationarity: the warps (W5.7)
+# ---------------------------------------------------------------------------
+
+
+def _relu(ops: ArrayOps, value: Any) -> Any:
+    """``max(value, 0)``, written so that it is exactly ``0.0`` at ``value <= 0``.
+
+    Branch-free and in :class:`ArrayOps`, so one expression serves numpy, torch
+    and jax and is differentiable on the latter two. ``0.5 * (v + |v|)`` is the
+    standard form; it is exact in IEEE-754 arithmetic (the sum is either
+    ``2v`` or ``0``, and halving is exact).
+    """
+    return 0.5 * (value + ops.absolute(value))
+
+
+def _softplus(ops: ArrayOps, value: Any) -> Any:
+    r""":math:`\log(1 + e^v)`, in the overflow-safe form.
+
+    ``max(v, 0) + log1p(exp(-|v|))``: the naive ``log(1 + exp(v))`` overflows
+    for ``v`` above about 709 and returns ``inf`` where the answer is ``v``,
+    which a sampler reaches by proposing a wide warp increment. The identity is
+    exact rather than approximate.
+    """
+    magnitude = ops.absolute(value)
+    return 0.5 * (value + magnitude) + ops.log1p(ops.exp(-magnitude))
+
+
+def quantile_knots(coordinates: Any, count: int) -> tuple[float, ...]:
+    """*count* knot locations at evenly spaced quantiles of *coordinates*.
+
+    The convenience half of W5.7's knot-placement decision. The knots
+    themselves are **fixed numbers in the declaration** — a kernel is a
+    declaration, and one whose knots were computed from the data it is about to
+    be fitted to would have a different spec hash for every dataset, and would
+    silently change model when a sample was masked. So ampere does not place
+    knots for you; it gives you this, which you call **once**, on your
+    coordinate, and paste (or pass) the result into the declaration, where it
+    is recorded.
+
+    Quantiles rather than an even grid because the warp's resolution should
+    follow the data's: an even grid over a coordinate with a sparse tail spends
+    most of its degrees of freedom where there is nothing to fit.
+
+    Parameters
+    ----------
+    coordinates
+        Any 1-D coordinate set. Not stored; only its quantiles are used.
+    count
+        How many knots, at least two. The first and last are the coordinate's
+        own minimum and maximum, so the warp interpolates rather than
+        extrapolating over the data.
+
+    Examples
+    --------
+    >>> quantile_knots(np.arange(11.0), 3)
+    (0.0, 5.0, 10.0)
+    """
+    if count < 2:
+        raise LikelihoodError(
+            f"a warp needs at least two knots to have a slope at all, got {count}."
+        )
+    axis = np.asarray(coordinates, dtype=DTYPE).ravel()
+    if axis.size == 0:
+        raise LikelihoodError("quantile_knots was given an empty coordinate set.")
+    quantiles = np.linspace(0.0, 1.0, count)
+    return tuple(float(value) for value in np.quantile(axis, quantiles))
+
+
+def _warp_knots(given: Any, what: str) -> tuple[float, ...]:
+    """Validate and freeze one warp's knot locations. ``None`` means "no warp"."""
+    if given is None:
+        return ()
+    knots = tuple(float(value) for value in np.asarray(given, dtype=DTYPE).ravel())
+    if len(knots) < 2:
+        raise LikelihoodError(
+            f"WarpedKernel's {what}= needs at least two knot locations to have a slope at "
+            f"all, got {len(knots)}. Use ampere.core.quantile_knots(coordinate, count) to "
+            f"place them once, on your own coordinate, and record the result."
+        )
+    if not all(math.isfinite(knot) for knot in knots):
+        raise LikelihoodError(f"WarpedKernel's {what}= knot locations must all be finite.")
+    for lower, upper in zip(knots, knots[1:], strict=False):
+        if upper <= lower:
+            raise LikelihoodError(
+                f"WarpedKernel's {what}= knot locations {knots} are not strictly increasing "
+                f"({upper} follows {lower}). The knots are positions on the coordinate axis and "
+                f"the warp interpolates between consecutive ones; an out-of-order or repeated "
+                f"knot has no monotone interpolant, so it is refused here rather than producing "
+                f"a covariance that is silently not a covariance."
+            )
+    return knots
+
+
+def _warp_hyperparameter(name: str, given: Any, *, positive: bool) -> Parameter:
+    """:func:`_as_hyperparameter`, widened to accept a :class:`HierarchicalPrior`.
+
+    The shrinkage declaration needs it: ``increment_k ~ Normal(0, s)`` with
+    ``s`` an ampere parameter *is* a hierarchical prior, and those carry
+    references by name rather than a frozen ``scipy`` object, so they have no
+    ``ppf`` for :func:`_as_hyperparameter` to recognise.
+    """
+    if isinstance(given, HierarchicalPrior):
+        return Parameter(name, given, bijection=Log() if positive else Identity())
+    return _as_hyperparameter(name, given, None, positive=positive)
+
+
+def _warp_values(given: Any, count: int, default: Any, what: str) -> list[Any]:
+    """One declaration per knot variable: broadcast a single one, or check a sequence."""
+    if given is None:
+        return [default] * count
+    if isinstance(given, (list, tuple, np.ndarray)):
+        chosen = list(given)
+        if len(chosen) != count:
+            raise LikelihoodError(
+                f"WarpedKernel's {what}= was given {len(chosen)} declaration(s) for {count} "
+                f"knot variable(s). Pass one per variable, or a single prior or number to be "
+                f"used for all of them."
+            )
+        return chosen
+    if isinstance(given, Parameter):
+        raise LikelihoodError(
+            f"WarpedKernel's {what}= cannot broadcast a single Parameter across {count} knot "
+            f"variables: a Parameter carries its own name, and each knot variable needs its "
+            f"own. Pass a prior (shared by declaration, not by identity), a number, or a "
+            f"sequence of {count} Parameters."
+        )
+    return [given] * count
+
+
+def _selected_copy(kernel: Kernel, axes: tuple[str, ...] | None) -> Kernel:
+    """A copy of *kernel*'s tree with *axes* recorded on every node.
+
+    The warp acts on one coordinate, so every kernel underneath it acts on that
+    same coordinate. Recording the selection on the children rather than only
+    on the wrapper is what makes :meth:`Kernel.check_units` compare a base
+    kernel's ``length_scale`` against the unit of the axis the warp actually
+    selects, instead of against the container's first axis.
+    """
+    clone = copy.copy(kernel)
+    clone.__dict__["_axes"] = axes
+    clone.__dict__["_bound_cache"] = {}
+    if kernel.terms:
+        clone.__dict__["_terms"] = tuple(
+            (label, _selected_copy(child, axes)) for label, child in kernel.terms
+        )
+    return clone
+
+
+class WarpedKernel(Kernel):
+    r"""A kernel warped in its input, its amplitude, or both — still O(N).
+
+    The plan's Phase-5 "non-stationary flexible likelihood" bullet, landed at
+    **W5.7**. Two wrappers around any base kernel, each of which keeps the
+    exact quasiseparable solve:
+
+    **Input warping.** A monotone map :math:`w` of the coordinate, so that
+    :math:`k_{\mathrm{warped}}(x, x') = k(w(x), w(x'))`. A Matérn-3/2 whose
+    length scale should be short in one band and long in another is *this*,
+    not a new family: :math:`w` compresses the coordinate where the process
+    varies fast and stretches it where it varies slowly. Because :math:`w` is
+    monotone **by construction**, the sorting permutation of the warped axis is
+    the sorting permutation of the raw one, so ``QuasisepGP``'s ordering
+    precondition survives untouched, and the generators of the base kernel
+    evaluated at :math:`w(x)` are the generators of the warped one.
+
+    **Amplitude warping.** :math:`D K D` with :math:`D = \mathrm{diag}(a(x))`:
+    a smooth, positive, per-coordinate scaling of the marginal standard
+    deviation. A residual whose *size* varies across the band — a noisier
+    region, a badly calibrated order — is this. A diagonal congruence of a
+    rank-:math:`J` semiseparable matrix is rank-:math:`J` semiseparable, with
+    :math:`U \to \mathrm{diag}(a) U` and :math:`V \to \mathrm{diag}(a) V`, so
+    this one is free.
+
+    Both together give ``a(x) k(w(x), w(x')) a(x')``, which is the general
+    non-stationary form this item buys — and it is **not** a new solver, a new
+    approximation or a new representation: it is the registry's own extension
+    point (W4.5) used as intended, plus one hook
+    (:meth:`Kernel.warped_coordinate`) for the coordinate the recursion runs
+    on.
+
+    Parameterisation
+    ----------------
+    **The input warp**, over ``K`` knot locations :math:`x_0 < \dots <
+    x_{K-1}`, is piecewise linear with segment slopes
+
+    .. math::
+        m_k = \frac{\zeta(u_k)}{\zeta(0)}, \qquad
+        \zeta(u) = \log(1 + e^u),
+
+    anchored at :math:`w(x_0) = x_0` and extended linearly beyond the end
+    knots with the end segments' slopes. Every slope is strictly positive
+    whatever :math:`u_k` is, so **monotonicity is structural rather than
+    checked**; there is no constraint for a sampler to violate and no rejection
+    region in the posterior. Normalising by :math:`\zeta(0) = \log 2` puts the
+    identity warp at :math:`u_k = 0` — and puts it there *exactly*: the ratio
+    is computed as one expression evaluated at the proposal and at zero, so at
+    :math:`u_k = 0` it is bit-for-bit ``1.0``, the offsets are bit-for-bit
+    ``0.0``, and ``w(x)`` is ``x`` with no rounding at all. The identity warp
+    is therefore not merely close to the base kernel, it **is** the base
+    kernel, which is what makes the shrinkage prior below a prior on "how far
+    from the base model did the data make me go".
+
+    **The amplitude warp**, over ``J`` knot locations, is :math:`\log a`
+    piecewise linear through per-knot levels :math:`\ell_j`, likewise extended
+    linearly. :math:`\ell_j = 0` gives :math:`a \equiv 1` exactly, the same
+    bit-identity at the same identity point.
+
+    The degrees-of-freedom guard
+    ----------------------------
+    Warps are flexible, and flexibility that is free is flexibility that will
+    be used to absorb signal. The guard is in the declaration, not in advice:
+
+    * **Few knots.** ``K`` and ``J`` are yours to choose and should be small —
+      three to six. The knots are not sampled, so each one costs exactly one
+      dimension.
+    * **Shrinkage to the identity.** Every knot variable's default prior is
+      hierarchical, with a single scale shared across a warp's knots and its
+      own half-normal prior: ``u_k ~ Normal(0, s)``, ``s ~ HalfNormal(0.5)``.
+      The identity warp is the point of maximum prior density, so the data must
+      *pay* to leave it — the horizon note's answer to §1's
+      degrees-of-freedom risk, and the same shape the regularised horseshoe on
+      summed noise components takes.
+    * **Non-centred by default.** ``non_centred=True`` declares
+      ``u_k = s · z_k`` with ``z_k ~ Normal(0, 1)``, which is the same prior
+      and a far better posterior geometry: the centred form's funnel is
+      exactly the pathology NUTS reports as divergences. ``non_centred=False``
+      declares the centred form directly, with
+      :class:`~ampere.core.parameter.HierarchicalPrior` — offered because it
+      is what the plan names, and because a strongly identified warp samples
+      fine either way.
+    * **Warped diagnostics.** ``Likelihood.conditional`` reports in
+      :math:`w(x)` and records the warp, so the whiteness (family B) and
+      localisation (family C) diagnostics are run in the coordinate the
+      residuals are supposed to be stationary in. A warp that has been used to
+      hide structure shows up there.
+
+    Two redundancies are worth naming, both the same kind as
+    :class:`Product`'s amplitude redundancy and both handled by the shrinkage
+    prior rather than by a constraint: a warp whose slopes are all equal is a
+    rescaling of the coordinate, degenerate with the base ``length_scale``;
+    and a constant ``log a`` is degenerate with the base ``amplitude``.
+
+    Parameters
+    ----------
+    base
+        The kernel to warp. Any :class:`Kernel` — including a :class:`Sum`, and
+        including another :class:`WarpedKernel` — provided it declares no
+        ``axes`` of its own (declare the selection here instead; the warp acts
+        on one coordinate and so does everything under it).
+    input_warp
+        Knot **locations** for the input warp, in the coordinate's own units,
+        strictly increasing; ``None`` for no input warp. See
+        :func:`quantile_knots`.
+    amplitude_warp
+        Knot locations for the amplitude warp; ``None`` for no amplitude warp.
+    increments
+        The declaration of each of the ``K-1`` input-warp knot variables: a
+        prior, a number (held fixed), a
+        :class:`~ampere.core.parameter.HierarchicalPrior`, or a sequence of
+        ``K-1`` of those. The default is the shrinkage declaration above.
+    levels
+        The same for the ``J`` amplitude-warp levels.
+    input_scale, amplitude_scale
+        The shrinkage scale of each warp: a prior, a number, or a
+        :class:`~ampere.core.parameter.Parameter`. Defaults to a half-normal.
+    non_centred
+        Whether the knot variables are declared as standard normals scaled by
+        the shrinkage scale (the default) or directly under a
+        :class:`~ampere.core.parameter.HierarchicalPrior`.
+    axes
+        The single container axis this kernel warps, as for every other kernel.
+
+    Examples
+    --------
+    >>> import scipy.stats as st
+    >>> base = Matern32(st.loguniform(1e-3, 1e1), st.loguniform(0.1, 10.0))
+    >>> kernel = WarpedKernel(base, input_warp=(0.0, 5.0, 10.0))
+    >>> kernel.parameters.names
+    ('base.amplitude', 'base.length_scale', 'input_warp.scale', \
+'input_warp.increment0', 'input_warp.increment1')
+    >>> kernel.QUASISEPARABLE
+    True
+    >>> WarpedKernel(base, input_warp=(0.0, 5.0, 2.0))
+    Traceback (most recent call last):
+        ...
+    ampere.core.exceptions.LikelihoodError: WarpedKernel's input_warp= knot locations ...
+
+    The identity warp is the base kernel, exactly:
+
+    >>> import numpy as np
+    >>> fixed = Matern32(0.4, 2.0)
+    >>> warped = WarpedKernel(
+    ...     fixed, input_warp=(0.0, 5.0, 10.0), increments=0.0, input_scale=1.0
+    ... )
+    >>> grid = np.linspace(0.0, 10.0, 7)[:, None]
+    >>> plain = fixed.matrix(grid, grid, fixed.resolve(None))
+    >>> bool(np.array_equal(warped.matrix(grid, grid, warped.resolve(None)), plain))
+    True
+    """
+
+    FAMILY: ClassVar[str] = "warped"
+    #: A class-level *capability*, narrowed per instance from the base: warping
+    #: preserves an exact semiseparable representation, so a warped kernel is
+    #: quasiseparable exactly when the kernel it warps is.
+    QUASISEPARABLE: ClassVar[bool] = True
+    #: The label the base kernel's hyperparameters are qualified with.
+    LABEL: ClassVar[str] = "base"
+
+    #: Default shrinkage scales. Modest rather than vague on purpose: the
+    #: identity warp must be the prior's centre of mass, not merely inside it.
+    DEFAULT_INPUT_SCALE: ClassVar[float] = 0.5
+    DEFAULT_AMPLITUDE_SCALE: ClassVar[float] = 0.3
+
+    def __init__(
+        self,
+        base: Kernel,
+        *,
+        input_warp: Any = None,
+        amplitude_warp: Any = None,
+        increments: Any = None,
+        levels: Any = None,
+        input_scale: Any = None,
+        amplitude_scale: Any = None,
+        non_centred: bool = True,
+        axes: Sequence[str] | None = None,
+    ) -> None:
+        if not isinstance(base, Kernel):
+            raise LikelihoodError(
+                f"WarpedKernel warps a Kernel, got {type(base).__name__}. Kernels are declared "
+                f"neutrally (family name plus Parameter hyperparameters) so that a lowering rule "
+                f"can translate them."
+            )
+        if base._selective:
+            raise LikelihoodError(
+                "WarpedKernel's base kernel declares axes= of its own. A warp is a map of one "
+                "ordered coordinate and everything under it acts on that same coordinate, so "
+                "the selection belongs on the WarpedKernel: "
+                "WarpedKernel(Matern32(...), input_warp=..., axes=('spectral_axis',))."
+            )
+        self._declare_axes(axes)
+        self._input_knots = _warp_knots(input_warp, "input_warp")
+        self._amplitude_knots = _warp_knots(amplitude_warp, "amplitude_warp")
+        if not self._input_knots and not self._amplitude_knots:
+            raise LikelihoodError(
+                "WarpedKernel was given neither input_warp= nor amplitude_warp=, so it is its "
+                "base kernel wearing an extra parameter namespace. Declare at least one warp, "
+                "or use the base kernel directly."
+            )
+        self._non_centred = bool(non_centred)
+        child = _selected_copy(base, self._axes)
+        self._terms: tuple[tuple[str, Kernel], ...] = ((self.LABEL, child),)
+        for parameter in child.parameters:
+            self.register_parameter(parameter.rename(f"{self.LABEL}.{parameter.name}"))
+        if self._input_knots:
+            self._declare_warp(
+                "input_warp",
+                "increment",
+                len(self._input_knots) - 1,
+                increments,
+                input_scale,
+                self.DEFAULT_INPUT_SCALE,
+            )
+        if self._amplitude_knots:
+            self._declare_warp(
+                "amplitude_warp",
+                "level",
+                len(self._amplitude_knots),
+                levels,
+                amplitude_scale,
+                self.DEFAULT_AMPLITUDE_SCALE,
+            )
+        self.__dict__["HYPERPARAMETERS"] = tuple(self.parameters.names)
+        self.__dict__.update(_adopted_capabilities(type(self).__name__, (base,)))
+        self.__dict__["QUASISEPARABLE"] = bool(base.QUASISEPARABLE)
+
+    # -- declaration ---------------------------------------------------------
+
+    def _declare_warp(
+        self,
+        prefix: str,
+        stem: str,
+        count: int,
+        given: Any,
+        scale_given: Any,
+        default_scale: float,
+    ) -> None:
+        """Declare one warp's shrinkage scale and its ``count`` knot variables."""
+        scale_name = f"{prefix}.scale"
+        self.register_parameter(
+            _warp_hyperparameter(
+                scale_name,
+                st.halfnorm(scale=default_scale) if scale_given is None else scale_given,
+                positive=True,
+            )
+        )
+        default = (
+            st.norm(0.0, 1.0)
+            if self._non_centred
+            else HierarchicalPrior("norm", {"scale": scale_name}, kwds={"loc": 0.0})
+        )
+        for index, declaration in enumerate(
+            _warp_values(given, count, default, f"{prefix} {stem}s")
+        ):
+            self.register_parameter(
+                _warp_hyperparameter(f"{prefix}.{stem}{index}", declaration, positive=False)
+            )
+
+    @property
+    def base(self) -> Kernel:
+        """The kernel being warped."""
+        return self._terms[0][1]
+
+    @property
+    def terms(self) -> tuple[tuple[str, Kernel], ...]:
+        return self._terms
+
+    @property
+    def input_knots(self) -> tuple[float, ...]:
+        """The input warp's knot locations; empty when there is no input warp."""
+        return self._input_knots
+
+    @property
+    def amplitude_knots(self) -> tuple[float, ...]:
+        """The amplitude warp's knot locations; empty when there is no amplitude warp."""
+        return self._amplitude_knots
+
+    def spec(self) -> KernelSpec:
+        """The neutral description, with the knot locations in ``metadata``.
+
+        The knots are not hyperparameters — nothing samples them — but two
+        warps with different knots are different models, so they must hash
+        differently. ``non_centred`` is recorded for the same reason it is a
+        keyword rather than a convention: the two forms declare different
+        parameters (``z_k`` against ``u_k``), so a chain stored under one
+        cannot be read as the other.
+        """
+        metadata: list[tuple[str, Any]] = []
+        if self._input_knots:
+            metadata.append(("input_warp_knots", self._input_knots))
+        if self._amplitude_knots:
+            metadata.append(("amplitude_warp_knots", self._amplitude_knots))
+        metadata.append(("non_centred", self._non_centred))
+        return dataclasses.replace(super().spec(), metadata=tuple(metadata))
+
+    # -- composition-time checks --------------------------------------------
+
+    def check_axes(self, observed: Any, *, owner: str) -> None:
+        """One coordinate, and the base kernel's own rule on that coordinate.
+
+        The single-unit rule is discharged by the stronger requirement: a warp
+        is a monotone map of **one** ordered coordinate — that is what keeps
+        the quasiseparable ordering precondition, and what makes "the
+        coordinate the residuals are stationary in" a well-posed idea at all —
+        so anything but one selected axis is refused by name.
+        """
+        axis_names = tuple(axis.name for axis in observed.axes)
+        self._resolve_columns(axis_names)
+        selected = axis_names if self._axes is None else self._axes
+        if len(selected) != 1:
+            raise LikelihoodError(
+                f"{owner} was given a WarpedKernel over a {type(observed).__name__} whose "
+                f"selected axes are {selected}. A warp is a monotone map of one ordered "
+                f"coordinate; name the axis it acts on with axes=(...), and compose across "
+                f"axes with Product."
+            )
+        self.base.check_axes(observed, owner=owner)
+
+    # -- the warp ------------------------------------------------------------
+
+    def _column(self, points: Any) -> Any:
+        """The one coordinate column this kernel warps, as an ``(n,)`` array."""
+        selected = self.select(points)
+        width = int(np.shape(selected)[1])
+        if width != 1:
+            raise LikelihoodError(
+                f"WarpedKernel warps one ordered coordinate, but was handed points with "
+                f"{width} coordinates each. check_axes refuses this at composition time; a "
+                f"direct call with hand-built coordinates reaches it here. Pass axes=(...) so "
+                f"the kernel knows which column to warp."
+            )
+        return selected[:, 0]
+
+    def _knot_variables(self, prefix: str, stem: str, count: int, resolved: Any) -> list[Any]:
+        """The realised knot variables, non-centring undone where it was declared."""
+        ops = self.ops
+        raw = [ops.scalar(resolved[f"{prefix}.{stem}{index}"]) for index in range(count)]
+        if not self._non_centred:
+            return raw
+        scale = ops.scalar(resolved[f"{prefix}.scale"])
+        return [scale * value for value in raw]
+
+    def _piecewise(self, axis: Any, knots: tuple[float, ...], gradients: list[Any]) -> Any:
+        """The piecewise-linear function with these segment gradients, anchored at zero.
+
+        Written in the hinge basis — ``g_0 (x - x_0) + Σ_k (g_k - g_{k-1})
+        relu(x - x_k)`` — rather than by bucketing the coordinate, because the
+        hinge form needs no ``searchsorted``, is one expression in every array
+        namespace, is differentiable in the gradients everywhere and in the
+        coordinate away from the knots, and extends linearly past both ends
+        with the end segments' own gradients, which is the behaviour a warp
+        wants outside its knot range.
+        """
+        ops = self.ops
+        total = gradients[0] * (axis - knots[0])
+        previous = gradients[0]
+        for index in range(1, len(gradients)):
+            total = total + (gradients[index] - previous) * _relu(ops, axis - knots[index])
+            previous = gradients[index]
+        return total
+
+    def _warp_input(self, axis: Any, resolved: Any) -> Any:
+        """``w(x)``: the monotone input warp, the identity when none is declared.
+
+        Written as ``x + δ(x)`` rather than as a cumulative sum of knot images.
+        The two are the same function; only the offset form makes the identity
+        warp *exact*, because at the identity point every gradient of ``δ`` is
+        bit-for-bit zero, so ``δ(x)`` is zero and ``x + 0.0`` is ``x``.
+        """
+        if not self._input_knots:
+            return axis
+        ops = self.ops
+        normaliser = _softplus(ops, ops.scalar(0.0))
+        gradients = [
+            _softplus(ops, value) / normaliser - 1.0
+            for value in self._knot_variables(
+                "input_warp", "increment", len(self._input_knots) - 1, resolved
+            )
+        ]
+        return axis + self._piecewise(axis, self._input_knots, gradients)
+
+    def _warp_amplitude(self, axis: Any, resolved: Any) -> Any | None:
+        """``a(x)``, or ``None`` when no amplitude warp is declared."""
+        if not self._amplitude_knots:
+            return None
+        ops = self.ops
+        knots = self._amplitude_knots
+        levels = self._knot_variables("amplitude_warp", "level", len(knots), resolved)
+        gradients = [
+            (levels[index + 1] - levels[index]) / (knots[index + 1] - knots[index])
+            for index in range(len(knots) - 1)
+        ]
+        return ops.exp(levels[0] + self._piecewise(axis, knots, gradients))
+
+    def warped_coordinate(self, axis: Any, values: Mapping[str, Any]) -> Any:
+        """``w(x)``: the coordinate this kernel is stationary in (:meth:`Kernel.warped_coordinate`)."""
+        return self._warp_input(self.ops.scalar(axis), self.resolve(values))
+
+    def warp_provenance(self, values: Mapping[str, Any]) -> dict[str, Any] | None:
+        """The warp as a JSON-plain record: knots in, knots out, amplitudes there.
+
+        Enough to reconstruct and to plot the map, and small enough to travel
+        as an attribute on a diagnostics group. Called with concrete values —
+        it is a reporting surface, not part of any traced evaluation.
+        """
+        resolved = self.resolve(values)
+        record: dict[str, Any] = {
+            "kind": "warped",
+            "base": self.base.FAMILY,
+            "non_centred": self._non_centred,
+        }
+        if self._input_knots:
+            knots = self.ops.scalar(np.asarray(self._input_knots, dtype=DTYPE))
+            record["input_warp_knots"] = list(self._input_knots)
+            record["input_warp_images"] = _as_floats(self._warp_input(knots, resolved))
+        if self._amplitude_knots:
+            knots = self.ops.scalar(np.asarray(self._amplitude_knots, dtype=DTYPE))
+            record["amplitude_warp_knots"] = list(self._amplitude_knots)
+            record["amplitude_warp_values"] = _as_floats(self._warp_amplitude(knots, resolved))
+        return record
+
+    # -- evaluation ----------------------------------------------------------
+
+    def _covariance(self, separation: Any, values: Mapping[str, Any]) -> Any:
+        raise LikelihoodError(
+            "a WarpedKernel is not stationary, so it has no closed form in one separation: "
+            "k(x, x') depends on where x and x' are, not only on how far apart they are — "
+            "that is what a warp is for. Call matrix() or diagonal(), which is what every "
+            "solver does."
+        )
+
+    def value(self, separation: Any, values: Mapping[str, Any]) -> Any:
+        """Refused: ``k(τ)`` presumes stationarity, which is exactly what a warp drops."""
+        return self._covariance(separation, values)
+
+    def matrix(self, left: Any, right: Any, values: Mapping[str, Any]) -> Any:
+        """``a(x) k(w(x), w(x')) a(x')`` — the dense face of the warp."""
+        ops = self.ops
+        resolved = self.resolve(values)
+        points = ops.points(left)
+        other = ops.points(right, dimensions=int(np.shape(points)[1]))
+        left_axis = self._column(points)
+        right_axis = self._column(other)
+        block = self.base.matrix(
+            self._warp_input(left_axis, resolved)[:, None],
+            self._warp_input(right_axis, resolved)[:, None],
+            self._child_values(self.LABEL, resolved),
+        )
+        left_scale = self._warp_amplitude(left_axis, resolved)
+        if left_scale is None:
+            return block
+        right_scale = self._warp_amplitude(right_axis, resolved)
+        return left_scale[:, None] * block * right_scale[None, :]
+
+    def diagonal(self, coordinates: Any, values: Mapping[str, Any]) -> Any:
+        """``a(x)² k(0)``: the prior variance, which the amplitude warp moves."""
+        ops = self.ops
+        resolved = self.resolve(values)
+        points = ops.points(coordinates)
+        axis = self._column(points)
+        prior = self.base.diagonal(
+            self._warp_input(axis, resolved)[:, None],
+            self._child_values(self.LABEL, resolved),
+        )
+        scale = self._warp_amplitude(axis, resolved)
+        return prior if scale is None else prior * scale * scale
+
+    def __repr__(self) -> str:
+        warps = []
+        if self._input_knots:
+            warps.append(f"input_warp={self._input_knots!r}")
+        if self._amplitude_knots:
+            warps.append(f"amplitude_warp={self._amplitude_knots!r}")
+        if self._axes is not None:
+            warps.append(f"axes={self._axes!r}")
+        return f"WarpedKernel({self.base!r}, {', '.join(warps)})"
+
+
+def _as_floats(array: Any) -> list[float]:
+    """A concrete array — numpy, torch or jax — as a list of Python floats."""
+    return [float(value) for value in np.asarray(_to_numpy(array), dtype=DTYPE).ravel()]
+
+
+def _to_numpy(array: Any) -> Any:
+    """``array`` as something numpy can read, without importing any backend.
+
+    ``np.asarray`` handles jax arrays and numpy arrays directly; a torch tensor
+    needs ``detach``/``cpu`` first, and duck-typing for those two methods is
+    how a core module asks for them without importing torch.
+    """
+    detach = getattr(array, "detach", None)
+    if detach is not None:
+        array = detach()
+        to_cpu = getattr(array, "cpu", None)
+        if to_cpu is not None:
+            array = to_cpu()
+    return array
+
+
+# ---------------------------------------------------------------------------
 # The semiseparable representations, and the public registry
 # ---------------------------------------------------------------------------
 
@@ -1794,7 +2545,11 @@ class CeleriteRepresentation:
     right
         ``V``, shape ``(n, J)``.
     marginal
-        ``k(0)``, a scalar; the solver adds it to the noise diagonal.
+        ``k(0)``, a scalar — or, since **W5.7**, an ``(n,)`` array where the
+        kernel's marginal variance varies along the coordinate (an amplitude
+        warp's ``a(x)² k(0)``). Every consumer adds it to the noise diagonal,
+        so the two shapes broadcast identically and nothing downstream has to
+        distinguish them.
 
     Notes
     -----
@@ -2026,8 +2781,7 @@ def sum_representation(
     blocks: list[CeleriteRepresentation] = []
     for label, child in kernel.terms:
         builder = lookup_quasiseparable_term(child.FAMILY, owner=type(kernel).__name__)
-        child_values = kernel._child_values(label, resolved)  # type: ignore[attr-defined]
-        blocks.append(builder(child, child_values, axis))
+        blocks.append(builder(child, kernel._child_values(label, resolved), axis))
     marginal = blocks[0].marginal
     for block in blocks[1:]:
         marginal = marginal + block.marginal
@@ -2036,6 +2790,55 @@ def sum_representation(
         left=ops.concatenate([block.left for block in blocks], axis=-1),
         right=ops.concatenate([block.right for block in blocks], axis=-1),
         marginal=marginal,
+    )
+
+
+def warped_representation(
+    kernel: Kernel, values: Mapping[str, Any], axis: Any
+) -> CeleriteRepresentation:
+    r"""A warped kernel is the base kernel's generators, moved and scaled (W5.7).
+
+    Two algebraic facts, both exact, and neither costing a rank:
+
+    **Input warping.** If :math:`K_{nm} = \sum_j U_{nj} V_{mj} e^{-c_j (t_n -
+    t_m)}` represents :math:`k`, then evaluating the *same* builder at
+    :math:`w(t)` represents :math:`k(w(\cdot), w(\cdot))` — provided the
+    recursion's own propagators are formed from :math:`w(t)` too, which is
+    what :meth:`Kernel.warped_coordinate` tells the solver. Monotonicity is
+    what makes this legal: it is the condition under which :math:`w(t)` is
+    still sorted, which the recursion requires. The builder here receives the
+    **raw** sorted axis (the registry's documented contract, unchanged) and
+    applies the warp itself, so the two agree by construction rather than by
+    the caller remembering.
+
+    **Amplitude warping.** :math:`D K D` with :math:`D = \mathrm{diag}(a)` has
+    entries :math:`a_n K_{nm} a_m = \sum_j (a_n U_{nj})(a_m V_{mj}) e^{-c_j
+    (t_n - t_m)}`, so scaling both generator blocks by :math:`a` is the whole
+    of it, at unchanged rank :math:`J` and unchanged decays. The marginal
+    variance becomes per-point, :math:`a_n^2 k(0)`, which is why
+    :class:`CeleriteRepresentation`'s ``marginal`` is allowed to be an
+    ``(n,)`` array as well as a scalar: every consumer adds it to the noise
+    diagonal, and the two shapes broadcast identically.
+
+    The base term is fetched through the registry like any other, so a warp
+    over a user-registered kernel works with no further registration, and a
+    warp over a family with no representation is refused **by name** here.
+    """
+    ops = kernel.ops
+    resolved = kernel.resolve(values)
+    base = kernel.terms[0][1]
+    builder = lookup_quasiseparable_term(base.FAMILY, owner=type(kernel).__name__)
+    label = kernel.terms[0][0]
+    warped = kernel.warped_coordinate(ops.scalar(axis), resolved)
+    block = builder(base, kernel._child_values(label, resolved), warped)
+    scale = kernel._warp_amplitude(ops.scalar(axis), resolved)  # type: ignore[attr-defined]
+    if scale is None:
+        return block
+    return CeleriteRepresentation(
+        decay=block.decay,
+        left=scale[:, None] * block.left,
+        right=scale[:, None] * block.right,
+        marginal=scale * scale * block.marginal,
     )
 
 
@@ -2243,6 +3046,7 @@ for _kernel_type, _builder in (
     (RotationTerm, rotation_representation),
     (Sum, sum_representation),
     (SpectralMixture, sum_representation),
+    (WarpedKernel, warped_representation),
 ):
     register_quasiseparable_term(_kernel_type, _builder, builtin=True)
 del _kernel_type, _builder
