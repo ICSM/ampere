@@ -70,6 +70,7 @@ W2.4/W2.5 through `ampere.core.lowering`'s registry.)*
 ...     LimitKind, Marginalisation, Matern12, Matern32, Matern52, NoiseParams, PhotometricPoints,
 ...     PoissonFamily, Product, QuasisepGP, RiceFamily, RotationTerm, SpectralMixture,
 ...     Spectrum, SquaredExponential, StationaryKernel, StudentTFamily, Sum, VisibilitySet,
+...     EquispacedFourierGP, VecchiaResponseGP,
 ...     WindowedSparseGP, family_named, list_families, quasiseparable_families,
 ...     register_family, register_quasiseparable_term,
 ... )
@@ -801,10 +802,12 @@ definition of the right answer.
 | `DenseGP` | yes | anything, O(N³) | **implemented** — the correctness anchor |
 | `QuasisepGP` | yes | one ordered axis, quasiseparable kernels and `Sum`s of them, O(N) | **implemented** (W2.3, celerite2; six families and `Sum` since W4.5) — `conditional_loo` deferred on the numpy solver; supplied by both differentiable backends' own |
 | `HilbertSpaceGP` | **no** | stationary kernels with a closed-form spectral density (the three Matérns, `SquaredExponential`, `SHO`, `Sum`s of those, and so `SpectralMixture`), 1–3 axes, O(N m + m³) | **implemented** (W5.4) on all three backends — `conditional_loo` exact in the approximation; latent block of size `m` |
+| `EquispacedFourierGP` | **no** | as `HilbertSpaceGP`, on an *equispaced* frequency grid, `O(N 2^d m + m³)` | **implemented** (W5.6) — a bake-off prototype on the reference backend only, not a shipped strategy |
+| `VecchiaResponseGP` | **no** | any kernel, any dimension, no rank limit, `O(N k³)` | **implemented** (W5.6) — a bake-off prototype on the reference backend only, not a shipped strategy |
 | `WindowedSparseGP` | no | any kernel, any dimension | slot; see below |
 | `InducingPointGP` (SVGP) | no | 2D+ | slot; Phase 5 |
 | `StructuredGridGP` (SKI) | no | gridded 2D+ | slot; Phase 5 |
-| `VecchiaGP` | no | 2D+ | slot; Phase 5 |
+| `VecchiaGP` | no | 2D+ | slot; Phase 5 — **measured at W5.6** as `VecchiaResponseGP`, and the bake-off's ruling is that it stays a slot (below) |
 
 ```pycon
 >>> (DenseGP.EXACT, QuasisepGP.EXACT, HilbertSpaceGP.EXACT, WindowedSparseGP.EXACT)
@@ -943,6 +946,212 @@ ampere.core.exceptions.LikelihoodError: HilbertSpaceGP needs a stationary kernel
 
 The latent block this strategy declares is the **basis size**, not the sample
 count; `inference.md` §17.4 carries that ruling and its consequences.
+
+### The W5.6 bake-off: EFGP and Vecchia, measured (*Amended W5.6*)
+
+`DEVELOPMENT_PLAN.md` §5's rule for Phase 5 is that a 2–3D approximate solver
+is **chosen by measurement, as celerite2 was**, and that "the first 2–3D solver
+landed is the one that wins a benchmark ... at realistic N". W5.4 landed the
+cheapest candidate; W5.6 measured the other two the plan names — EFGP, "the one
+to reach for at image scale", and Vecchia, "the one that handles rough
+processes without a rank limit" — far enough to decide between them.
+
+Both prototypes are in this repository: `ampere.core.efgp`
+(`EquispacedFourierGP`) and `ampere.core.vecchia` (`VecchiaResponseGP`), the
+reference path only. The measurement is `examples/image/bakeoff.py`, attached
+to `pixi run bench` by `tests/benchmarks/test_solver_bakeoff.py`. Every number
+below was measured in one run on W5.5's image — a compact source on an omitted
+smooth background, the misspecification the flexible likelihood exists for —
+and the kernel is held **fixed** across every arm, so a difference in any
+column is the approximation and nothing else.
+
+```pycon
+>>> (EquispacedFourierGP.EXACT, VecchiaResponseGP.EXACT)
+(False, False)
+>>> (EquispacedFourierGP.DIFFERENTIABLE, VecchiaResponseGP.DIFFERENTIABLE)
+(False, False)
+>>> EquispacedFourierGP(basis_size=(17, 17)).provenance_config()
+{'basis_size': [17, 17], 'boundary_factor': 2.0}
+>>> VecchiaResponseGP(neighbours=30).provenance_config()
+{'neighbours': 30, 'ordering': 'random', 'seed': 0}
+
+```
+
+**What EFGP is.** Greengard, Rachh & Barnett (2023): the same Bochner
+factorisation `K ≈ Φ diag(w) Φᴴ` HSGP uses, but on an *equispaced* frequency
+grid, so the Woodbury normal matrix `Φᴴ D⁻¹ Φ` depends on the index difference
+alone and is block-Toeplitz. It is therefore assembled from one generator array
+by separable GEMMs at `O(N 2^d m)` instead of `O(N m²)`, the `(N, m)` block is
+never formed for the marginal likelihood at all, and the matrix multiplies a
+vector by FFT in `O(m log m)`.
+
+**What Vecchia is.** Vecchia (1988), in Guinness's (2018) response form: each
+sample's conditional on its `k` nearest predecessors, `O(N k³)`, no basis, no
+rank, no spectral density and no box. The chain is a sparse inverse Cholesky,
+so `conditional_loo` is exact in the approximation at `O(N k)` — cheaper than
+either spectral solver's, whose identity needs the `(N, m)` block. The
+**ordering** is a declared field, not an internal choice, because Guinness's
+result is that it matters more than `k` does.
+
+#### Accuracy: against the truth, not against `DenseGP`
+
+The omitted component is a known field, so "did the GP find it?" has an answer
+that does not depend on which solver is asked. `bias` and `rmse` are of the
+conditional mean against that field in units of the declared per-pixel
+uncertainty, `coverage` is the fraction of pixels whose truth lies inside the
+solver's own central 90% interval, `localisation` is the correlation between
+the conditional mean and the true field (M2's question, asked of a plane), and
+`|Δ log p|` is the disagreement with `DenseGP`'s marginal likelihood in nats.
+Kernel: Matérn-3/2, length scale 8 mas on a 24 mas field.
+
+| N | solver | \|Δ log p\| | bias/σ | rmse/σ | cover 90% | localisation |
+|---|---|---|---|---|---|---|
+| 576 | `DenseGP` (exact) | — | +0.029 | 0.142 | 0.934 | 0.878 |
+| 576 | `HilbertSpaceGP` m=256 | 2.2e-2 | +0.029 | 0.142 | 0.929 | 0.878 |
+| 576 | `EquispacedFourierGP` m=289 | 9.7e-2 | +0.029 | 0.142 | 0.931 | 0.878 |
+| 576 | `VecchiaResponseGP` k=30 | 5.5 | −0.007 | 0.161 | 0.950 | 0.814 |
+| 2 304 | `DenseGP` (exact) | — | +0.009 | 0.089 | 0.966 | 0.916 |
+| 2 304 | `HilbertSpaceGP` m=256 | 3.2e-1 | +0.009 | 0.089 | 0.964 | 0.917 |
+| 2 304 | `EquispacedFourierGP` m=289 | 4.0e-1 | +0.009 | 0.089 | 0.965 | 0.917 |
+| 2 304 | `VecchiaResponseGP` k=30 | 10.4 | −0.043 | 0.184 | 0.888 | 0.705 |
+| 4 096 | `DenseGP` (exact) | — | −0.027 | 0.097 | 0.899 | 0.895 |
+| 4 096 | `HilbertSpaceGP` m=256 | 2.1e-1 | −0.027 | 0.097 | 0.885 | 0.896 |
+| 4 096 | `EquispacedFourierGP` m=289 | 1.1e-2 | −0.027 | 0.097 | 0.885 | 0.896 |
+| 4 096 | `VecchiaResponseGP` k=30 | 30.2 | −0.076 | 0.190 | 0.865 | 0.680 |
+
+The two spectral solvers are **indistinguishable from the exact one** on every
+science column at every size — bias, r.m.s. error, coverage and localisation
+agree to the third decimal — and differ from it only in the last fraction of a
+nat. Vecchia does not: at `k = 30` its localisation is 0.68–0.81 against
+0.88–0.92, and its likelihood is tens of nats away. The reason is not the
+implementation but the problem: the field being absorbed has a correlation
+length a third of the image, and a conditioning set of 30 near neighbours
+cannot screen a process that long-range.
+
+#### Smoothness, and the correlation length that turns the answer over
+
+The item asks for Matérn-1/2 through 5/2. Sweeping smoothness alone would have
+been misleading, because the two methods fail along a second axis as well: a
+reduced-rank spectral error is the truncated tail of the spectral density,
+which for an isotropic Matérn-ν in `d` axes decays as `ω^-(2ν+d)`, while a
+Vecchia error is the far field its conditioning sets fail to screen — and
+Stein (2002) shows screening works **better** the rougher and shorter-range the
+process is. So the table below is smoothness × correlation length, at N = 4 096.
+
+| kernel | ℓ (mas) | `HilbertSpaceGP` m=256 | `EquispacedFourierGP` m=289 | `VecchiaResponseGP` k=30 |
+|---|---|---|---|---|
+| Matérn-1/2 | 8 | 1.24 | 0.70 | 24.5 |
+| Matérn-3/2 | 8 | 0.21 | 1.1e-2 | 30.2 |
+| Matérn-5/2 | 8 | 0.13 | 3.9e-3 | 32.4 |
+| Matérn-1/2 | 2 | 10.8 | 9.9 | 11.9 |
+| Matérn-3/2 | 2 | 10.4 | 9.5 | 8.0 |
+| Matérn-5/2 | 2 | 8.8 | 7.9 | 8.0 |
+
+(`|Δ log p|` in nats against `DenseGP`.) Both predictions hold, and they point
+in opposite directions. Down the long-range column the spectral error falls by
+two orders of magnitude as the kernel smooths and Vecchia's *rises*; at a
+correlation length a twelfth of the field the three are within a factor of 1.5
+of one another and Vecchia is the best of them on Matérn-3/2. A 1-D row in
+`tests/core/test_vecchia.py` makes the same point sharply where there is room
+for it: on a Matérn-1/2 with ℓ one eighth of the span, Vecchia reaches 1e-6
+nats at `k = 32` while a 513-point Fourier grid is still 8.5 nats away.
+
+**The consequence for ampere is specific rather than general.** The flexible
+likelihood's kernel exists to absorb *unmodelled structure*, and unmodelled
+structure in an image, an SED or a visibility set is broad by construction — a
+missing component, a calibration drift, a scattered-light halo. That is the
+long-range column, and it is the one the spectral methods win by two orders of
+magnitude.
+
+#### Cost at realistic N
+
+One `log_prob` through `Likelihood`, at the kernel above. `setup` is the first
+call, reported separately because a Vecchia solver builds its conditioning sets
+once per coordinate set and caches them (they are a constant of the data, as a
+spectral solver's box is), and charging that to every evaluation would
+misreport the method by the length of a fit.
+
+| N | solver | setup (s) | per call (s) | peak MiB |
+|---|---|---|---|---|
+| 4 096 | `DenseGP` | 3.74 | 3.44 | 640.3 |
+| 4 096 | `HilbertSpaceGP` m=256 | 0.04 | 0.11 | 17.3 |
+| 4 096 | `EquispacedFourierGP` m=289 | 0.15 | 0.30 | 7.7 |
+| 4 096 | `VecchiaResponseGP` k=30 | 1.11 | 1.08 | 147.1 |
+| 16 384 | `HilbertSpaceGP` m=256 | 0.21 | 0.19 | 66.3 |
+| 16 384 | `EquispacedFourierGP` m=289 | 0.54 | 0.43 | 30.7 |
+| 16 384 | `VecchiaResponseGP` k=30 | 5.00 | 4.19 | 184.6 |
+| 65 536 | `HilbertSpaceGP` m=256 | 0.51 | 0.41 | 262.6 |
+| 65 536 | `EquispacedFourierGP` m=289 | 0.51 | 0.64 | 122.6 |
+| 65 536 | `VecchiaResponseGP` k=30 | 20.87 | 14.28 | 201.5 |
+
+`DenseGP` is not run above 4 096: W5.5 measured its peak allocation at a steady
+five copies of its own `N × N` covariance, so 16 384 pixels projects to about
+10 GiB. At 65 536 pixels both spectral solvers evaluate in well under a second
+where the exact one cannot be run at all, and Vecchia costs 25–35 times more
+than either while being less accurate on this problem.
+
+#### Where EFGP overtakes HSGP — and where it stops
+
+The `N` table cannot separate the two spectral solvers, because they differ in
+`m` rather than in `N`. At fixed N = 16 384:
+
+| m (HSGP / EFGP) | HSGP (s) | EFGP (s) | HSGP MiB | EFGP MiB |
+|---|---|---|---|---|
+| 64 / 81 | 0.03 | 0.14 | 17.6 | 16.7 |
+| 256 / 289 | 0.16 | 0.18 | 66.3 | 30.7 |
+| 576 / 625 | 0.44 | 0.45 | 150.4 | 44.7 |
+| 1 024 / 1 089 | 0.92 | 0.59 | 273.3 | 58.7 |
+| 1 600 / 1 681 | 2.00 | 1.92 | 440.4 | 131.0 |
+| 2 304 / 2 401 | 3.37 | 2.64 | 658.4 | 265.7 |
+
+(Matched by frequency reach: HSGP's `m` members per axis run over positive
+frequencies to `π m / 2L`, EFGP's `2M + 1` over `± M π / L`, so 8 against 9 and
+16 against 17 reach the same place.) The time crossover is near `m = 576` and
+the advantage past it is a factor of 1.3–1.6; the **memory** advantage is
+present from `m = 256` and reaches 4.7× — EFGP never forms the `(N, m)` block,
+so its storage is `O(N m^{1/d} d + m²)` where HSGP's is `O(N m)`.
+
+A factor of 1.3 is not what the published `O(N + m log m)` promises, and the
+reason is the one measurement that decides this item. Timing the *same*
+Toeplitz normal equations two ways, on the 128×128 image:
+
+| m | assemble generator (s) | + matrix & Cholesky (s) | Cholesky MiB | CG solve (s) | CG iters | CG MiB |
+|---|---|---|---|---|---|---|
+| 1 089 | 0.12 | 1.12 | 36.3 | 0.065 | 70 | 0.4 |
+| 2 401 | 0.15 | 1.59 | 176.0 | 0.154 | 71 | 1.0 |
+| 4 225 | 0.27 | 3.81 | 544.9 | 0.137 | 71 | 1.7 |
+| 6 561 | 0.24 | 10.95 | 1 313.8 | 0.158 | 69 | 2.6 |
+
+The assembly is essentially flat in `m`, exactly as advertised, and the
+conjugate-gradient solve on FFT matvecs (`ampere.core.efgp.solve_iterative`) is
+flat too: 70 iterations, 0.16 s and 2.6 MiB at `m = 6 561`, against 10.9 s and
+1.3 GiB for the factorisation — 70× faster and 500× lighter. **All of EFGP's
+remaining cost is the log-determinant.** `log|M|` is half of a marginal
+likelihood and a Toeplitz matrix has no FFT for it; the honest alternatives are
+the `O(m³)` Cholesky this solver uses or a stochastic Lanczos-quadrature
+estimate, and a stochastic log-determinant is a *noisy* likelihood, which every
+engine `inference.md` describes — ensemble MCMC, nested sampling, NUTS —
+takes as a correctness failure rather than as a cheaper target.
+
+So Greengard et al.'s headline is a claim about **posterior-mean regression**,
+and this contract's `GPSolver` is not that. What EFGP delivers to ampere is a
+cheaper assembly and a much smaller footprint, not a change of complexity class.
+
+#### The ruling
+
+`HilbertSpaceGP` stays the phase's reduced-rank solver and neither prototype
+is promoted at W5.6. `EquispacedFourierGP` is the one worth a follow-on item —
+it is strictly better than HSGP in memory, better in time past `m ≈ 576`, and
+better in accuracy at matched frequency reach on every smooth kernel measured
+— but its advantage is a constant factor on the same complexity class, so it
+buys a three-backend implementation less than the phase's other open items do.
+`VecchiaGP` stays a **slot**: it is the right method for a short-range rough
+process and this project's flexible likelihood is not that, it costs 25–35×
+more per evaluation at 65 536 points, and its latent block is `N` rather than
+`m`, which is the opposite of what the NUTS path needs. Both prototypes stay in
+the tree, tested and documented, so a future modality that *is* short-range and
+rough — and `hierarchical_population.md`'s and the IFU sketch's cases are the
+candidates — reopens the question with the measurement already written.
 
 ### The right-hand side may carry several realisations (*Amended W4.2*)
 

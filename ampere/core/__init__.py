@@ -51,6 +51,11 @@ from .dataset import (
     part_name,
     sample_coordinates,
 )
+from .efgp import (
+    EquispacedFourierGP,
+    FourierGrid,
+    fourier_grid,
+)
 from .encoding import (
     COLUMN_GROUPS,
     DEFAULT_FOURIER_BANDS,
@@ -140,6 +145,11 @@ from .likelihood import (
     register_quasiseparable_term,
     registered_quasiseparable_terms,
     term_provenance_entries,
+)
+from .vecchia import (
+    NeighbourStructure,
+    VecchiaResponseGP,
+    neighbour_structure,
 )
 from .lowering import (
     BatteryReport,
@@ -303,12 +313,14 @@ __all__ = [
     "Encoded",
     "EncodingError",
     "EncodingLayout",
+    "EquispacedFourierGP",
     "Evaluation",
     "ExecutionFailure",
     "Executor",
     "Failure",
     "FailureReason",
     "FittingProblem",
+    "FourierGrid",
     "FunctionSamples",
     "GPConditional",
     "GPSolver",
@@ -340,6 +352,7 @@ __all__ = [
     "Matern52",
     "Model",
     "ModelResult",
+    "NeighbourStructure",
     "NoiseModel",
     "NoiseParams",
     "NumpyOps",
@@ -384,6 +397,7 @@ __all__ = [
     "TyingError",
     "Unpacked",
     "VecchiaGP",
+    "VecchiaResponseGP",
     "VisibilitySet",
     "VonMisesFamily",
     "WindowedSparseGP",
@@ -398,6 +412,7 @@ __all__ = [
     "family_named",
     "foreign_parts",
     "foreign_parts_refusal",
+    "fourier_grid",
     "from_astropy",
     "generator",
     "latent_parameter",
@@ -408,6 +423,7 @@ __all__ = [
     "lookup_lowering",
     "lookup_quasiseparable_term",
     "negotiate",
+    "neighbour_structure",
     "part_name",
     "prior_from_spec",
     "propagate_mask",
