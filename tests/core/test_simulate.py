@@ -171,21 +171,21 @@ class FakeFlat(Flat):
     process is enough to stand in for one.
     """
 
-    BACKEND = "fake"
+    BACKEND = "w52-native-fake"
     BATCHABLE = True
 
 
 class FakeNoise(IndependentNoise):
     """:class:`~ampere.core.IndependentNoise`, declared on the fake backend."""
 
-    BACKEND = "fake"
+    BACKEND = "w52-native-fake"
     BATCHABLE = True
 
 
 class FakeGaussian(GaussianFamily):
     """:class:`~ampere.core.GaussianFamily`, declared on the fake backend."""
 
-    BACKEND = "fake"
+    BACKEND = "w52-native-fake"
     BATCHABLE = True
 
 
@@ -207,7 +207,7 @@ class _FakeRealisation:
 
     @property
     def backend(self) -> str:
-        return "fake"
+        return "w52-native-fake"
 
     @property
     def free_size(self) -> int:
@@ -231,7 +231,9 @@ class _FakeRealisation:
         levels = np.asarray(theta, dtype=float)[:, 0]
         if np.any(levels == POISONED_LEVEL):
             raise LoweringError(
-                "sample_observations", backend="fake", detail="a poisoned row, by construction."
+                "sample_observations",
+                backend="w52-native-fake",
+                detail="a poisoned row, by construction.",
             )
         rows = np.asarray(predicted["default"], dtype=float)
         rng = np.random.default_rng(0)
@@ -245,7 +247,7 @@ POISONED_LEVEL = 99.0
 
 #: Registered once at import: every test in :class:`TestTheNativeSamplerIsolatesAFailingDraw`
 #: shares it, the way ``ampere.backends.torch``/``.jax`` register once on import.
-register_realisation("fake", _FakeRealisation)
+register_realisation("w52-native-fake", _FakeRealisation)
 
 
 def fake_problem() -> FittingProblem:
@@ -255,7 +257,7 @@ def fake_problem() -> FittingProblem:
         [Dataset(observed(), likelihood=Likelihood(FakeGaussian(), FakeNoise()))],
         seed=SEED,
         capabilities=Capabilities(
-            differentiable=False, batchable=True, device="cpu", backend="fake"
+            differentiable=False, batchable=True, device="cpu", backend="w52-native-fake"
         ),
     )
 
@@ -1034,7 +1036,7 @@ class TestTheNativeSamplerIsolatesAFailingDraw:
         )
         assert list(batch.failed) == [False, False, True, False]
         assert batch.provenance["simulate_batched"] is True
-        assert batch.provenance["sample_backend"] == "fake"
+        assert batch.provenance["sample_backend"] == "w52-native-fake"
 
     def test_the_surviving_draws_keep_their_native_observations(self) -> None:
         """Not merely "not failed" — the native draw itself, not a fallback value."""
