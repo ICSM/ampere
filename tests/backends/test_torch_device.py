@@ -293,12 +293,17 @@ class TestTheDeviceRuleComposesAProblem:
             GaussianProcessNoise(Matern32(0.4, 2.0), DenseGP().configured(device=OTHER))
 
     def test_a_kernel_elsewhere_is_refused_by_the_noise_model_itself(self) -> None:
-        """A kernel is not a capability part, so the noise model checks it.
+        """The noise model catches it first, exactly as it does for the solver above.
 
-        ``Likelihood.capability_parts`` carries the noise model and the solver
-        onto the problem, deliberately and by ruling — a kernel is a
-        declaration. So a kernel left behind would reach torch rather than
-        ``declared_capabilities``, and the message would be about strides.
+        **W5.2: this docstring used to say "a kernel is not a capability
+        part", which was true before W3.8 and stopped being true when it
+        joined the solver and the noise model on
+        ``Likelihood.capability_parts`` (ruled by Peter 2026-09-08, precisely
+        so a foreign kernel is caught rather than silently detaching a
+        gradient). So ``declared_capabilities`` would in fact catch this one
+        too, a step later — the same "worth having at both altitudes" reason
+        the solver test above gives, not the sharper "never otherwise caught"
+        claim this docstring made until now.**
         """
         with pytest.raises(LikelihoodError, match="Matern32 on 'meta'"):
             GaussianProcessNoise(Matern32(0.4, 2.0, device=OTHER), DenseGP(), device="cpu")
