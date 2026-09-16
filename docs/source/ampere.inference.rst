@@ -36,12 +36,20 @@ Three things about an SBI run are worth knowing before reading one:
   through ``constrain`` before anything is stored, so the ``posterior`` group
   is in the user's own coordinates like every other run's. The run records
   ``ampere_sbi_parameterisation``;
-* **the run carries two log-densities per draw.** ``lp``, ``log_prior`` and
+* **the run carries three log-densities per draw.** ``lp``, ``log_prior`` and
   ``log_likelihood`` in ``sample_stats`` are the *true* ones, scored on the
   numpy contract path after the fit; ``ampere_sbi_log_prob`` beside them is
-  the *estimator's* own, which is what makes calibration and importance
-  reweighting possible. ``ampere_sbi_log_prob_kind`` says whether it is
-  normalised (NPE) or known only up to the evidence (NLE, NRE);
+  the *estimator's* own, in the **unconstrained** coordinates it was trained
+  on, which is what makes calibration and (with care about that coordinate
+  choice) importance reweighting possible. ``ampere_sbi_log_prob_kind`` says
+  whether it is normalised (NPE) or known only up to the evidence (NLE, NRE).
+  **W5.0** adds ``sample_stats.proposal_log_density``, the results contract's
+  engine-neutral name for the same idea, moved into the same **constrained**
+  coordinates ``log_prior``/``log_likelihood`` are already in — so
+  ``exp(log_prior + log_likelihood - proposal_log_density)`` is a valid
+  importance weight from the stored groups alone, on any engine, and
+  ``ampere_approximation`` is ``"density_estimator"`` for every method here
+  (npe, nle, nre and tmnre alike);
 * **the summary the network saw has a name.** ``ampere_sbi_summary_layout``
   is ``"flat"`` today — each dataset's observed values, masked samples
   dropped, concatenated in ``datasets`` order — and a network trained on one
