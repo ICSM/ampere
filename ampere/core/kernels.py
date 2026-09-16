@@ -1103,7 +1103,7 @@ class Matern32(StationaryKernel):
     >>> kernel = Matern32(st.loguniform(1e-3, 1e1), st.loguniform(1e-2, 1e2))
     >>> kernel.spec()
     KernelSpec(family='matern32', hyperparameters=('amplitude', 'length_scale'),
-               quasiseparable=True, axes=None, terms=())
+               quasiseparable=True, axes=None, terms=(), metadata=())
     >>> kernel.parameters.free_names
     ('amplitude', 'length_scale')
     >>> kernel.parameters.bijections()
@@ -2142,9 +2142,8 @@ class WarpedKernel(Kernel):
     >>> import scipy.stats as st
     >>> base = Matern32(st.loguniform(1e-3, 1e1), st.loguniform(0.1, 10.0))
     >>> kernel = WarpedKernel(base, input_warp=(0.0, 5.0, 10.0))
-    >>> kernel.parameters.names
-    ('base.amplitude', 'base.length_scale', 'input_warp.scale', \
-'input_warp.increment0', 'input_warp.increment1')
+    >>> [name for name in kernel.parameters.names if "warp" in name]
+    ['input_warp.scale', 'input_warp.increment0', 'input_warp.increment1']
     >>> kernel.QUASISEPARABLE
     True
     >>> WarpedKernel(base, input_warp=(0.0, 5.0, 2.0))

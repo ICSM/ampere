@@ -78,7 +78,7 @@ from typing import Any, ClassVar
 import numpy as np
 import torch
 
-from ampere.core import DTYPE, GPConditional, GPSolver, Kernel, Product, Sum
+from ampere.core import DTYPE, GPConditional, GPSolver, Kernel, Product, Sum, WarpedKernel
 from ampere.core import SHO as _CoreSHO
 from ampere.core import StationaryKernel as _CoreStationary
 from ampere.core import Matern12 as _CoreMatern12
@@ -128,6 +128,7 @@ __all__ = [
     "SquaredExponential",
     "Sum",
     "TorchOps",
+    "WarpedKernel",
 ]
 
 _LOG_2PI = math.log(2.0 * math.pi)
@@ -235,6 +236,12 @@ class TorchOps:
 
     def sin(self, array: Any) -> torch.Tensor:
         return torch.sin(self.scalar(array))
+
+    def log1p(self, array: Any) -> torch.Tensor:
+        return torch.log1p(self.scalar(array))
+
+    def absolute(self, array: Any) -> torch.Tensor:
+        return torch.abs(self.scalar(array))
 
 
 class _TorchKernel(Kernel):
@@ -1157,6 +1164,14 @@ class QuasisepGP(GPSolver):
                 "diag(sigma^2) is not a covariance matrix at all. Variances are squares; this "
                 "is a caller error rather than an ill-conditioned problem."
             )
+        # **W5.7.** ``axis`` is the *raw* sorted coordinate, which is what the
+        # registry's builders are documented to receive; the recursion runs on
+        # ``kernel.warped_coordinate(axis, values)``, which is the identity for
+        # every kernel but a warped one. celerite2 forms its propagators
+        # ``exp(-c (t_n - t_m))`` from the coordinate handed to ``factor``, so
+        # a kernel stationary in ``w(x)`` cannot express itself through the
+        # generators alone.
+        solve_axis = kernel.warped_coordinate(axis, values)
         c, a, U, V = self._matrices(kernel, axis, diagonal, values)
         finite = (
             bool(torch.all(torch.isfinite(a)))
@@ -1171,7 +1186,7 @@ class QuasisepGP(GPSolver):
                 "enough that amplitude**2 overflows float64; constrain the amplitude prior to "
                 "the data's own scale."
             )
-        d, W = _celerite.factor(axis, c, a, U, V)
+        d, W = _celerite.factor(solve_axis, c, a, U, V)
         if not bool(torch.all(torch.isfinite(d))) or bool(torch.any(d <= 0.0)):
             if whitening:
                 raise LikelihoodError(
@@ -1222,8 +1237,11 @@ class QuasisepGP(GPSolver):
         axis, order = self._axis(coordinates, kernel)
         residuals = self._tensor(residual).reshape(-1)
         diagonal = self._tensor(variance).reshape(-1) + self.jitter**2
-        c, U, d, W = self._guarded_factor(kernel, axis[order], diagonal[order], values)
-        return self._marginal(axis[order], c, U, d, W, residuals[order])
+        sorted_axis = axis[order]
+        c, U, d, W = self._guarded_factor(kernel, sorted_axis, diagonal[order], values)
+        return self._marginal(
+            kernel.warped_coordinate(sorted_axis, values), c, U, d, W, residuals[order]
+        )
 
     def log_marginal_likelihood_native(
         self,
@@ -1250,6 +1268,8 @@ class QuasisepGP(GPSolver):
         axis, order = self._axis(coordinates, kernel)
         residuals = self._tensor(residual).reshape(-1)[order]
         sorted_axis = axis[order]
+        # W5.7: the builders get the raw coordinate, the recursion gets w(x).
+        solve_axis = kernel.warped_coordinate(sorted_axis, values)
         diagonal = self._tensor(variance).reshape(-1)[order] + self.jitter**2
 
         # Sanitise, remembering that we did. A diagonal celerite2 cannot
@@ -1274,12 +1294,12 @@ class QuasisepGP(GPSolver):
         V = torch.where(finite, V, torch.zeros_like(V))
         c = torch.where(finite, c, torch.ones_like(c))
 
-        d, W = _celerite.factor(sorted_axis, c, a, U, V)
+        d, W = _celerite.factor(solve_axis, c, a, U, V)
         refused = refused | torch.logical_not(torch.isfinite(d).all()) | (d <= 0.0).any()
         safe_d = torch.where(torch.isfinite(d) & (d > 0.0), d, torch.ones_like(d))
         safe_W = torch.where(torch.isfinite(W), W, torch.zeros_like(W))
 
-        value = self._marginal(sorted_axis, c, U, safe_d, safe_W, residuals)
+        value = self._marginal(solve_axis, c, U, safe_d, safe_W, residuals)
         failed = refused | torch.logical_not(torch.isfinite(value))
         return torch.where(failed, torch.full_like(value, -math.inf), value)
 
@@ -1449,9 +1469,10 @@ class QuasisepGP(GPSolver):
         residuals = self._tensor(residual).reshape(-1)
         diagonal = self._tensor(variance).reshape(-1) + self.jitter**2
         sorted_axis = axis[order]
+        solve_axis = kernel.warped_coordinate(sorted_axis, values)
         c, U, d, W = self._guarded_factor(kernel, sorted_axis, diagonal[order], values)
-        alpha = self._apply_inverse(sorted_axis, c, U, d, W, residuals[order].reshape(-1, 1))[:, 0]
-        precision = self._precision_diagonal(sorted_axis, c, U, d, W)
+        alpha = self._apply_inverse(solve_axis, c, U, d, W, residuals[order].reshape(-1, 1))[:, 0]
+        precision = self._precision_diagonal(solve_axis, c, U, d, W)
         terms = 0.5 * torch.log(precision) - alpha**2 / (2.0 * precision) - 0.5 * _LOG_2PI
         restored = torch.empty_like(terms)
         restored[order] = terms
@@ -1478,8 +1499,9 @@ class QuasisepGP(GPSolver):
         residuals = self._tensor(residual).reshape(-1)
         diagonal = self._tensor(variance).reshape(-1) + self.jitter**2
         sorted_axis = axis[order]
+        solve_axis = kernel.warped_coordinate(sorted_axis, values)
         c, U, d, W = self._guarded_factor(kernel, sorted_axis, diagonal[order], values)
-        alpha = self._apply_inverse(sorted_axis, c, U, d, W, residuals[order].reshape(-1, 1))[:, 0]
+        alpha = self._apply_inverse(solve_axis, c, U, d, W, residuals[order].reshape(-1, 1))[:, 0]
         target = points if at is None else _points(at).to(dtype=self.TENSOR_DTYPE)
         if target.shape[1] != 1:
             raise LikelihoodError(
@@ -1487,7 +1509,7 @@ class QuasisepGP(GPSolver):
                 f"data have 1."
             )
         cross = self._tensor(kernel.matrix(target, points, values))[:, order]
-        solved = self._apply_inverse(sorted_axis, c, U, d, W, cross.transpose(0, 1))
+        solved = self._apply_inverse(solve_axis, c, U, d, W, cross.transpose(0, 1))
         prior_variance = self._tensor(kernel.diagonal(target, values))
         return GPConditional(
             mean=to_numpy(cross @ alpha).astype(DTYPE, copy=False),
@@ -1527,6 +1549,7 @@ class QuasisepGP(GPSolver):
         mean_variance = torch.mean(self._tensor(kernel.diagonal(points, values)))
         scale = torch.where(mean_variance != 0.0, mean_variance, torch.ones_like(mean_variance))
         sorted_axis = axis[order]
+        solve_axis = kernel.warped_coordinate(sorted_axis, values)
         stabiliser = torch.ones_like(sorted_axis) * (jitter * scale)
         usable = torch.isfinite(stabiliser) & (stabiliser >= 0.0)
         safe_stabiliser = torch.where(usable, stabiliser, torch.zeros_like(stabiliser))
@@ -1545,13 +1568,13 @@ class QuasisepGP(GPSolver):
         V = torch.where(finite, V, torch.zeros_like(V))
         c = torch.where(finite, c, torch.ones_like(c))
 
-        d, W = _celerite.factor(sorted_axis, c, a, U, V)
+        d, W = _celerite.factor(solve_axis, c, a, U, V)
         refused = refused | torch.logical_not(torch.isfinite(d).all()) | (d <= 0.0).any()
         safe_d = torch.where(torch.isfinite(d) & (d > 0.0), d, torch.ones_like(d))
         safe_W = torch.where(torch.isfinite(W), W, torch.zeros_like(W))
 
         scaled = (draws[order] * torch.sqrt(safe_d)).reshape(-1, 1)
-        transformed = (scaled + _celerite.matmul_lower(sorted_axis, c, U, safe_W, scaled))[:, 0]
+        transformed = (scaled + _celerite.matmul_lower(solve_axis, c, U, safe_W, scaled))[:, 0]
         restored = torch.empty_like(transformed)
         restored[order] = transformed
         failed = refused | torch.logical_not(torch.isfinite(restored).all())
@@ -1584,10 +1607,11 @@ class QuasisepGP(GPSolver):
         draws = self._tensor(whitened).reshape(-1)
         scale = float(torch.mean(self._tensor(kernel.diagonal(points, values)))) or 1.0
         sorted_axis = axis[order]
+        solve_axis = kernel.warped_coordinate(sorted_axis, values)
         stabiliser = torch.full_like(sorted_axis, jitter * scale)
         c, U, d, W = self._guarded_factor(kernel, sorted_axis, stabiliser, values, whitening=True)
         scaled = (draws[order] * torch.sqrt(d)).reshape(-1, 1)
-        transformed = (scaled + _celerite.matmul_lower(sorted_axis, c, U, W, scaled))[:, 0]
+        transformed = (scaled + _celerite.matmul_lower(solve_axis, c, U, W, scaled))[:, 0]
         restored = torch.empty_like(transformed)
         restored[order] = transformed
         return to_numpy(restored).astype(DTYPE, copy=False)

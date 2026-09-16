@@ -70,9 +70,9 @@ W2.4/W2.5 through `ampere.core.lowering`'s registry.)*
 ...     LimitKind, Marginalisation, Matern12, Matern32, Matern52, NoiseParams, PhotometricPoints,
 ...     PoissonFamily, Product, QuasisepGP, RiceFamily, RotationTerm, SpectralMixture,
 ...     Spectrum, SquaredExponential, StationaryKernel, StudentTFamily, Sum, VisibilitySet,
-...     EquispacedFourierGP, VecchiaResponseGP,
-...     WindowedSparseGP, family_named, list_families, quasiseparable_families,
-...     register_family, register_quasiseparable_term,
+...     EquispacedFourierGP, VecchiaResponseGP, WarpedKernel,
+...     WindowedSparseGP, family_named, list_families, quantile_knots,
+...     quasiseparable_families, register_family, register_quasiseparable_term,
 ... )
 >>> from ampere.core.exceptions import LikelihoodError
 
@@ -590,11 +590,20 @@ across all three.
 >>> kernel = Matern32(st.loguniform(1e-3, 1e1), st.loguniform(0.1, 10.0))
 >>> kernel.spec()
 KernelSpec(family='matern32', hyperparameters=('amplitude', 'length_scale'),
-           quasiseparable=True, axes=None, terms=())
+           quasiseparable=True, axes=None, terms=(), metadata=())
 >>> kernel.spec().to_dict()
 {'family': 'matern32', 'hyperparameters': ['amplitude', 'length_scale'], 'quasiseparable': True}
 
 ```
+
+`KernelSpec` has three optional fields — `axes` (W4.5), `terms` (W4.5) and
+`metadata` (**W5.7**) — and `to_dict` omits each one when it is unused, so
+every spec hash minted before the field existed is unchanged. `metadata`
+carries JSON-plain, **non-parameter** structure a family needs in its
+declaration: `WarpedKernel`'s knot *locations* are not hyperparameters (nothing
+samples them) and not hyperparameter names either, yet two warps with different
+knots are different models and must hash differently. Values are tuples so a
+spec stays hashable; `to_dict` converts them to lists.
 
 `parameters.md` §13 instructed this contract that "GP hyperparameters
 (amplitude, length-scale) are ordinary parameters on a `Parameterised` noise
@@ -685,6 +694,7 @@ semiseparable representation for it.
 | `RotationTerm` | two `SHO`s, at a damped period and its first harmonic | 4 | non-sinusoidal periodic |
 | `SquaredExponential` | `a² e^{−τ²/2ℓ²}` | — | analytic; **no** exact form |
 | `SpectralMixture` | `Σᵢ SHOᵢ` with free frequencies | Σ ranks | as its components |
+| `WarpedKernel` | `a(x) k_base(w(x), w(x′)) a(x′)` (W5.7) | as its base | **non-stationary**; as its base |
 
 `amplitude` is the marginal standard deviation in every one of them, so
 `k(0) == a²` throughout and a prior on it is a prior in the data's own units.
@@ -696,7 +706,7 @@ celerite2's own parameterisation and exactly `period` by construction.
 >>> float(SHO(0.5, 2.0, 4.0).diagonal(np.zeros(1), {})[0])
 0.25
 >>> quasiseparable_families()
-('matern12', 'matern32', 'matern52', 'rotation', 'sho', 'spectral_mixture', 'sum')
+('matern12', 'matern32', 'matern52', 'rotation', 'sho', 'spectral_mixture', 'sum', 'warped')
 
 ```
 
@@ -787,6 +797,107 @@ instance-level conjunction of its terms', not a class-level claim.
 ...                     Matern32(0.3, 0.05, axes=("spectral_axis",)))
 >>> chromatic.QUASISEPARABLE
 False
+
+```
+
+### Non-stationarity: `WarpedKernel` (*Added W5.7*)
+
+Everything above is stationary: `k` is a function of `|x − x′|` alone. Real
+residuals often are not — a spectrum whose model is good in the continuum and
+poor across a line forest has structure on two different scales in two
+different places, and a noisier order has a different *size* of residual, not a
+different correlation length. `WarpedKernel` is the two smallest departures
+from stationarity that keep the exact O(N) solve:
+
+```
+k_warped(x, x′) = a(x) · k_base(w(x), w(x′)) · a(x′)
+```
+
+with `w` a **monotone** map of the coordinate (the *input* warp) and `a` a
+smooth positive function of it (the *amplitude* warp). Either may be declared
+alone.
+
+```pycon
+>>> warped = WarpedKernel(Matern32(st.loguniform(1e-3, 1e1), st.loguniform(0.1, 10.0)),
+...                       input_warp=(0.0, 5.0, 10.0))
+>>> [name for name in warped.parameters.free_names if "warp" in name]
+['input_warp.scale', 'input_warp.increment0', 'input_warp.increment1']
+>>> warped.QUASISEPARABLE
+True
+
+```
+
+**Both keep the O(N) path, and neither costs a rank.** For the input warp, the
+base family's generators evaluated at `w(t)` represent the warped kernel — the
+same registered builder, the same rank, the same decays — *provided the
+recursion's own propagators `e^{−cⱼ(tₙ−tₘ)}` are formed from `w(t)` too. That
+is a fact about the solver rather than about the generators: celerite2 builds
+its propagators from the coordinate handed to `compute`/`factor`, so the warp
+has to reach the solver, and §7 records the one hook that carries it. For the
+amplitude warp, `D K D` with `D = diag(a)` has entries
+`aₙ Kₙₘ aₘ = Σⱼ (aₙ Uₙⱼ)(aₘ Vₘⱼ) e^{−cⱼ(tₙ−tₘ)}`: scaling both generator
+blocks is the whole of it, at unchanged rank. `CeleriteRepresentation.marginal`
+may consequently be an `(n,)` array as well as a scalar; every consumer adds it
+to the noise diagonal, so the two broadcast identically.
+
+**Monotonicity is structural, not checked.** The input warp is piecewise linear
+over `K` fixed knot locations with segment slopes `mₖ = ζ(uₖ)/ζ(0)`,
+`ζ(u) = log(1 + eᵘ)`. Every slope is strictly positive whatever a sampler
+proposes, so the warped axis has the *same sorting permutation* as the raw one
+and `QuasisepGP`'s ordering precondition cannot be violated — there is no
+constraint to reject against and no rejection region in the posterior. Beyond
+the end knots the warp continues with the end segments' slopes.
+
+**The identity warp is the base kernel, bit for bit.** Dividing by `ζ(0)` puts
+the identity at `uₖ = 0`, and the map is written as an *offset*, `x ↦ x + δ(x)`,
+so at that point every gradient of `δ` is exactly `0.0`, `δ(x)` is exactly
+`0.0`, and `w(x)` is `x` with no rounding. The amplitude warp is `log a`
+piecewise linear through per-knot levels, so `ℓⱼ = 0` gives `a ≡ 1.0` exactly.
+This is a conformance row, not an aspiration: the identity-warped kernel's
+covariance matrix is `array_equal` to the base kernel's, and a base kernel's
+spec hash is unchanged from before W5.7.
+
+**The knots are declaration, not data.** Their *locations* are fixed numbers
+given at construction and recorded in `KernelSpec.metadata` (§6 above), because
+a kernel is a declaration: knots computed from the data would give one model a
+different spec hash per dataset, and would silently change the model when a
+sample was masked. `quantile_knots(coordinate, count)` places them at even
+quantiles of a coordinate you pass it, **once**, so quantile placement is
+available as a user act that ends up in the declaration rather than as a hidden
+dependence on the data.
+
+**The degrees-of-freedom guard is part of the declaration.** Flexibility that
+is free gets used to absorb signal, so:
+
+* few knots — three to six; each costs one sampler dimension and no more;
+* **hierarchical shrinkage to the identity**: one scale per warp with a
+  half-normal prior, every knot variable normal about zero under it, so the
+  identity warp is the point of maximum prior density and the data must pay to
+  leave it (the `horizon_notes.md` §1 answer, and the same shape the
+  regularised horseshoe takes on summed noise components);
+* **non-centred by default**: `uₖ = s · zₖ` with `zₖ ~ Normal(0, 1)`, the same
+  prior with the geometry NUTS wants. `non_centred=False` declares the centred
+  form directly with `HierarchicalPrior`, which is what the plan names and what
+  a strongly identified warp can afford;
+* **warped diagnostics** — §8.
+
+Two redundancies are named rather than constrained away, exactly as `Product`'s
+amplitude redundancy is: a warp whose slopes are all equal is a rescaling of the
+coordinate, degenerate with the base `length_scale`; a constant `log a` is
+degenerate with the base `amplitude`. The shrinkage prior is proper, so both are
+identified by it.
+
+A `WarpedKernel` warps **one** ordered coordinate — that is what keeps the
+ordering precondition and what makes "the coordinate the residuals are
+stationary in" well posed — so it names it with `axes=` on a multi-axis
+container, refuses a base kernel that selects axes of its own, and refuses
+anything but a single selected axis at composition:
+
+```pycon
+>>> WarpedKernel(Matern32(0.4, 2.0), input_warp=(0.0, 5.0, 2.0))
+Traceback (most recent call last):
+    ...
+ampere.core.exceptions.LikelihoodError: WarpedKernel's input_warp= knot locations ...
 
 ```
 
@@ -1272,6 +1383,33 @@ implementation:
   the whole contract as "refuses by name **or** agrees with `DenseGP` at
   `tolerances.cross_solver`".
 
+**The coordinate the recursion runs on (*Added W5.7*).** The generators are
+only half of a semiseparable representation; the other half is the propagator
+`e^{−cⱼ(tₙ−tₘ)}`, which celerite2 builds from the coordinate handed to
+`compute`/`factor` and never from the term. A kernel that is stationary in
+`w(x)` rather than in `x` therefore cannot express itself through its
+generators alone, and folding the difference into `U` and `V` would mean
+multiplying by `e^{±c t}`, which is exactly the overflow the factored form
+exists to avoid. So the kernel is asked, once per solve:
+
+```
+Kernel.warped_coordinate(axis, values) -> axis
+```
+
+the identity on `Kernel`, and on every family but `WarpedKernel`. Every
+quasiseparable solver on every backend maps its **sorted** axis through it
+before factorising, and every registered *builder* still receives the raw
+sorted coordinate its contract promises — a warping kernel applies the same
+map itself, so the two agree by construction rather than by the caller
+remembering. The hook's one obligation is that the map be **monotone
+increasing**, because the sorting permutation must survive it; `WarpedKernel`
+is monotone by construction and a user's own implementation must be too.
+
+It is one method, not a builder-signature change, precisely so that a
+representation registered before W5.7 keeps working untouched: the registry's
+`(kernel, values, axis) -> CeleriteRepresentation` is unchanged, and so is the
+meaning of `axis`.
+
 ### Windowed-sparse truncation: a named slot, and why it is not the default
 
 `prior_art.md` lesson S2 asked this contract either to give Starfish's actual
@@ -1511,6 +1649,37 @@ Traceback (most recent call last):
 ampere.core.exceptions.LikelihoodError: observed values contains non-finite entries. ...
 
 ```
+
+### The conditioned GP reports in the coordinate it is stationary in (*Added W5.7*)
+
+`Likelihood.conditional` returns a `GPConditional`, which is what §4.8's
+family C (localisation) consumes and what a family-B whiteness test is run
+beside. Both ask the same question — *is there structure the smooth model did
+not capture, and where?* — and both presume the residuals are stationary in
+the coordinate they are indexed by. Under a `WarpedKernel` they are not: they
+are stationary in `w(x)`.
+
+So `GPConditional` gained two fields, both defaulting to `None`:
+
+| Field | Meaning |
+|---|---|
+| `coordinates` | Where `mean` and `variance` are reported, when that is **not** the coordinate the caller passed |
+| `warp` | The JSON-plain record of the map that produced them (`Kernel.warp_provenance`) |
+
+`None` means "the coordinates you gave me", so every declaration written
+before W5.7 and every unwarped kernel since is untouched — including the
+`gp_localisation` derived group, which reads `mean` and `variance` alone.
+Where a warp *is* declared, the two travel together by construction: a reported
+coordinate whose warp was not recorded would be a diagnostic nobody could
+reproduce, and a warp used to hide structure is precisely what a whiteness test
+run in `w(x)` is there to expose. The test is
+`Kernel.warp_provenance(values) is None`, not an `isinstance`, so a user's own
+warping kernel is covered by implementing the two hooks rather than by being
+recognised.
+
+The bullet above still holds and is unchanged: the conditioned mean is computed
+on the **full** axis, masked samples included, and the warped report covers the
+same full axis.
 
 ### Per-observation terms: `pointwise_log_prob`
 
