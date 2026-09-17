@@ -2284,15 +2284,15 @@ Two changes. (1) The 200-object row in `tests/results/test_population.py`
 gets a `population_full` marker on the `image_full`/`m2_full` pattern
 (registered in `pyproject.toml`, skipped by default in `test-all`, run on
 request; a reduced sibling — 20 objects — stays in the default gate).
-(2) A run's provenance stores each parameter's `PriorSpec` (schema 7 —
-`PROVENANCE_SCHEMA_VERSION` bumped, the append check and the
+(2) A run's provenance stores each parameter's `PriorSpec` (the next schema
+version — `PROVENANCE_SCHEMA_VERSION` is already 7 at drafting, so 8 — bumped, the append check and the
 pre-schema refusal by name as W3.12's precedent), so
 `ampere.results.population.fit_population` can *verify* a supplied
 `interim_prior` against the archive and, when none is supplied, use the
 stored one; the argument becomes optional, and a mismatch is refused by
 name. **Depends:** nothing (W5.13 merged). **Accept:** the marker
 present and the default dev gate no longer running the 200-object row
-(time it: the `tests/results` suite before/after); the schema-7 rows in
+(time it: the `tests/results` suite before/after); the new-schema rows in
 `tests/results/test_provenance*.py` (round trip, the append check, the
 old-schema refusal); `fit_population` with no `interim_prior` reproducing
 W5.13's measured μ/τ intervals on the reduced row; a supplied prior that
