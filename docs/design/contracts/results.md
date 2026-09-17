@@ -891,6 +891,27 @@ so `ampere_problem_hash` moved again at this bump as at every previous one.
 `sample_stats.proposal_log_density`: not a root attribute, so not listed here,
 but part of the same contract adaptation and riding the same schema bump.
 
+**One attribute joined at W5.22, and the constant is now 8** (ruled by Peter
+2026-09-16 on W5.13's proposals). **`ampere_free_priors`** is canonical JSON
+of `{parameter name: PriorSpec.to_dict()}` for every free parameter in
+`problem.parameters` (`free_priors(problem)`, `ampere.results.provenance`):
+an ordinary declared prior is described neutrally by `describe_prior` and
+recorded as `{"kind": "prior_spec", ...}`; a `HierarchicalPrior` member is
+recorded as `{"kind": "hierarchical", ...}` instead, its own `to_dict()`,
+since its distribution parameters are references to other parameters rather
+than numbers a marginal prior can be built from directly — a reader tells
+the two kinds apart by this key. This closes the gap §13 item 16 named at
+W5.13: "a run's provenance records only each parameter's name and a hash of
+its declaration, not the declaration itself... so `π₀(θ)` cannot be read
+back off a run" — it now can, for any parameter whose prior is not itself
+hierarchical, and `ampere.results.population.fit_population`'s
+`interim_prior` becomes optional accordingly (see the amendment to item 16
+below). Not an input to `problem_fingerprint` — the parameter *declaration*
+is already hashed into `ampere_spec_hash`; this attribute exists so the
+declaration can be read back, not so it can be compared — but the schema
+constant is, so `ampere_problem_hash` moves again at this bump as at every
+previous one.
+
 ### The hashing recipe
 
 Four steps, and each is a decision.
@@ -1453,23 +1474,46 @@ Each is a decision, not an oversight. Each has an extension point.
     that biases the population posterior whenever an object has more than
     one free parameter (invisible on a single-parameter toy, where the two
     priors coincide — found at review, W5.13, after the item's own
-    single-parameter tests had already gone green). Because a run's
-    provenance records only each parameter's name and a hash of its
-    declaration rather than the declaration itself (§9), `π₀(θ)` cannot be
-    read back off a run: `fit_population` takes it as an explicit, required
-    `interim_prior` argument (a `Prior` or a `PriorSpec`) instead. The
-    per-object effective sample size at the fitted
+    single-parameter tests had already gone green).
+
+    **Where `π₀(θ)` comes from, amended W5.22** (ruled by Peter 2026-09-16
+    on this item's own proposals). At W5.13, a run's provenance recorded
+    only each parameter's name and a hash of its declaration rather than
+    the declaration itself, so `π₀(θ)` could not be read back off a run and
+    `fit_population` took it as an explicit, required `interim_prior`
+    argument (a `Prior` or a `PriorSpec`). **W5.22** promotes each free
+    parameter's own neutrally-described prior into provenance (§9, schema
+    8, `ampere_free_priors`), so `interim_prior` is now **optional**:
+    omitted, the named parameter's prior — agreed across every input run,
+    guaranteed by the shared `ampere_spec_hash` refusal above — is read
+    back off the archive and used directly; supplied, it is checked against
+    the stored one and a disagreement is refused by name, naming both
+    specs, rather than silently preferring the caller's guess. A run whose
+    provenance predates schema 8 has nothing to read back; if
+    `interim_prior` is also omitted, that is refused by name too, on
+    `append_training_set`'s (§11, W3.12) "refused rather than guessed"
+    precedent for a file that predates the attribute it needs. A named
+    parameter whose stored prior is a `HierarchicalPrior` is refused the
+    same way when no `interim_prior` is supplied: this module needs only
+    the parameter's own marginal prior, which a hierarchical declaration's
+    references to other parameters do not fix by themselves.
+
+    The per-object effective sample size at the fitted
     posterior mean is reported and a collapse below a stated floor
     (`DEFAULT_ESS_FLOOR = 20`, an argument) is a refusal by name naming
     the worst object, rather than a population posterior one
     under-sampled object secretly controls. `GaussianPopulationModel` is
     the one `PopulationModel` shipped; the hyperprior is read generically
     off its `hyperparameters`' own declared `Parameter.prior`, needing no
-    bespoke method. **Not a `PROVENANCE_SCHEMA_VERSION` change**: a
-    population fit's output is a new derived `DataTree` (root attrs
+    bespoke method. **Not a `PROVENANCE_SCHEMA_VERSION` change at W5.13**
+    (amended at W5.22, above): a population fit's own output is a new
+    derived `DataTree` (root attrs
     `ampere_population_runs`/`ampere_population_model`/
     `ampere_population_ess`/`ampere_population_parameter`), not a change
-    to what a single-object run stores, so no existing run's schema moves.
+    to what a single-object run stores, so no existing run's schema moved
+    for *that* reason — `ampere_free_priors` is a separate, later change to
+    what a single-object run itself stores, and that one does move the
+    schema constant, as §9 above says.
     **What this item deliberately leaves out**, matching the module's own
     "what is not here": no per-object nuisance re-sampling (only the one
     named parameter is read back), no multi-level populations
