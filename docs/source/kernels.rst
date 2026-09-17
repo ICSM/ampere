@@ -3,24 +3,25 @@ The kernel algebra
 
 :doc:`concept` introduces the flexible likelihood and its default kernel in
 a paragraph; this page is the full reference for :mod:`ampere.core.kernels`
-(landed at W4.5): the seven quasiseparable families and their ranks,
+(landed at W4.5, extended at W5.7): the quasiseparable families and their ranks,
 ``Sum``/``Product``/``SpectralMixture``, the ``axes=`` selector and the
 per-leaf unit rule, and ``register_quasiseparable_term`` for reaching the
 O(N) path from outside ``ampere``. ``tests/core/test_kernels.py`` is this
 page's own coverage, and every code block below is drawn from a test or a
 docstring that already runs there.
 
-1. The seven families, and their ranks
+1. The families, and their ranks
 ------------------------------------------
 
 A kernel is a covariance function plus, optionally, an exact representation
-on the O(N) path. :func:`~ampere.core.quasiseparable_families` lists the
-seven that have one:
+on the O(N) path. :func:`~ampere.core.quasiseparable_families` lists those
+that have one:
 
 .. code-block:: pycon
 
     >>> quasiseparable_families()
-    ('matern12', 'matern32', 'matern52', 'rotation', 'sho', 'spectral_mixture', 'sum')
+    ('matern12', 'matern32', 'matern52', 'rotation', 'sho', 'spectral_mixture',
+     'sum', 'warped')
 
 Each is a semiseparable matrix of a fixed **rank** — the size of the
 generator vectors celerite2's solver factorises the covariance into, which
@@ -68,6 +69,12 @@ is what fixes the constant in front of the O(N) solve:
      - Not a kernel family in its own right; registered so that a **sum of
        quasiseparable terms** reaches the O(N) path by concatenating its
        children's generators (§2 below).
+   * - :class:`~ampere.core.WarpedKernel`
+     - as its base
+     - **W5.7**, and likewise not a family in its own right: a monotone input
+       warp and a diagonal amplitude warp around any base kernel, so the
+       flexible likelihood stops being stationary without leaving the O(N)
+       path. ``likelihoods.md`` §6 is the full account.
 
 :class:`~ampere.core.SquaredExponential` ships too, retained deliberately
 (``likelihoods.md`` §14) as the point of comparison M2 needs, but it

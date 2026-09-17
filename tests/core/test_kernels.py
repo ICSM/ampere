@@ -711,6 +711,7 @@ class TestRegistry:
             "sho",
             "spectral_mixture",
             "sum",
+            "warped",
         )
 
     def test_built_in_rows_say_so_and_are_not_stamped_in_provenance(self) -> None:

@@ -87,13 +87,16 @@ from .kernels import (
     StationaryKernel,
     Sum,
     TermBuilder,
+    WarpedKernel,
     _as_float64,
     _as_hyperparameter,
     _as_points,
     _check_finite,
     _positive,
     lookup_quasiseparable_term,
+    quantile_knots,
     quasiseparable_families,
+    refuse_warped_composite,
     register_quasiseparable_term,
     registered_quasiseparable_terms,
     term_provenance_entries,
@@ -166,11 +169,13 @@ __all__ = [
     "TermBuilder",
     "VecchiaGP",
     "VonMisesFamily",
+    "WarpedKernel",
     "WindowedSparseGP",
     "family_named",
     "latent_parameter",
     "list_families",
     "lookup_quasiseparable_term",
+    "quantile_knots",
     "quasiseparable_families",
     "register_family",
     "register_quasiseparable_term",
@@ -403,11 +408,49 @@ class GPConditional:
 
     mean: np.ndarray
     variance: np.ndarray
+    #: **W5.7.** Where the mean and variance are reported, when that is *not*
+    #: the coordinate the caller passed: a warping kernel
+    #: (:class:`~ampere.core.kernels.WarpedKernel`) is stationary in ``w(x)``,
+    #: and the whiteness and localisation diagnostics must be run in the
+    #: coordinate the residuals are supposed to be stationary in rather than
+    #: in the one they were observed on. ``None`` — every declaration written
+    #: before W5.7 — means "the coordinates you gave me", so nothing
+    #: downstream changes for an unwarped kernel.
+    coordinates: np.ndarray | None = None
+    #: The warp that produced :attr:`coordinates`, as a JSON-plain record
+    #: (:meth:`~ampere.core.kernels.Kernel.warp_provenance`), or ``None``. A
+    #: reported coordinate whose warp was not recorded would be a diagnostic
+    #: nobody could reproduce, so the two travel together.
+    warp: Mapping[str, Any] | None = None
 
     @property
     def standard_deviation(self) -> np.ndarray:
         """Pointwise 1sigma band on :attr:`mean`."""
         return np.sqrt(np.clip(self.variance, 0.0, None))
+
+
+def _warped_report(
+    kernel: Kernel, target: Any, values: Mapping[str, Any]
+) -> tuple[np.ndarray | None, dict[str, Any] | None]:
+    """``(warped coordinates, warp record)`` for a conditioned GP, or ``(None, None)``.
+
+    ``(None, None)`` for every kernel that is stationary in the coordinate it
+    was given, which is every kernel written before W5.7 and every unwarped one
+    since — :meth:`~ampere.core.kernels.Kernel.warp_provenance` returning
+    ``None`` is the test, so a user's own warping kernel is covered by
+    implementing the two hooks rather than by being recognised here.
+    """
+    record = kernel.warp_provenance(values)
+    if record is None:
+        return None, None
+    points = _as_points(target, "conditioning grid")
+    # A one-column grid is already the coordinate, whatever the *container*'s
+    # axes are: ``at=`` is handed to the solver as a bare 1-D array, and
+    # selecting column ``k`` of it would be an index error rather than a
+    # selection. Anything wider is a container's own coordinate block, where
+    # the kernel's binding says which column it warps.
+    axis = points[:, 0] if points.shape[1] == 1 else np.asarray(kernel.select(points))[:, 0]
+    return np.asarray(kernel.warped_coordinate(axis, values), dtype=DTYPE), record
 
 
 def _find_nested_product(
@@ -951,10 +994,20 @@ def _ampere_term_type() -> Any:
     class _AmpereTerm(celerite2.terms.Term):
         """An ampere :class:`Kernel` presented as a celerite2 term."""
 
-        def __init__(self, kernel: Kernel, values: Mapping[str, Any]) -> None:
+        def __init__(
+            self, kernel: Kernel, values: Mapping[str, Any], axis: np.ndarray | None = None
+        ) -> None:
             self.kernel = kernel
             self.values = dict(values)
             self.builder = lookup_quasiseparable_term(kernel.FAMILY)
+            # **W5.7.** The axis celerite2 hands back to
+            # ``get_celerite_matrices`` is the one ``compute`` was given, which
+            # for a warped kernel is w(x) — while the registry's builders are
+            # documented to receive the *raw* sorted coordinate and apply any
+            # warp themselves. Carrying the raw axis here keeps that contract
+            # exactly as written, and keeps the two evaluations of w in one
+            # place (the kernel) rather than two.
+            self.axis = axis
 
         def get_value(self, tau: Any) -> np.ndarray:
             separation = np.abs(np.atleast_1d(np.asarray(tau, dtype=DTYPE)))
@@ -970,7 +1023,8 @@ def _ampere_term_type() -> Any:
             U: Any = None,
             V: Any = None,
         ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-            points = np.ascontiguousarray(np.atleast_1d(np.asarray(x, dtype=DTYPE)))
+            given = x if self.axis is None else self.axis
+            points = np.ascontiguousarray(np.atleast_1d(np.asarray(given, dtype=DTYPE)))
             diagonal = np.ascontiguousarray(np.atleast_1d(np.asarray(diag, dtype=DTYPE)))
             # x arrives sorted (QuasisepGP sorts before calling), which is what
             # the builders' midpoint centring assumes.
@@ -985,7 +1039,9 @@ def _ampere_term_type() -> Any:
     return _AmpereTerm
 
 
-def _celerite_term(kernel: Kernel, values: Mapping[str, Any]) -> Any:
+def _celerite_term(
+    kernel: Kernel, values: Mapping[str, Any], axis: np.ndarray | None = None
+) -> Any:
     """Build the exact celerite representation of a resolved kernel.
 
     The overflow guard is here rather than inside a builder because it applies
@@ -1012,7 +1068,7 @@ def _celerite_term(kernel: Kernel, values: Mapping[str, Any]) -> Any:
                 f"float64, so the quasiseparable representation cannot be built. Constrain the "
                 f"amplitude prior to the data's own scale."
             )
-    return _ampere_term_type()(kernel, values)
+    return _ampere_term_type()(kernel, values, axis)
 
 
 class _SolverSlot(GPSolver):
@@ -1121,6 +1177,7 @@ class QuasisepGP(GPSolver):
 
     def check_compatible(self, kernel: Kernel, observed: FunctionSamples) -> None:
         super().check_compatible(kernel, observed)
+        refuse_warped_composite(kernel, self.NAME)
         # Every family in the tree needs a registered representation, not just
         # the root: a Sum lowers term by term (``sum_representation``), so one
         # unregistered term is enough to stop it, and it must be named here
@@ -1185,10 +1242,18 @@ class QuasisepGP(GPSolver):
                 "is a caller error rather than an ill-conditioned problem."
             )
 
-        term = _celerite_term(kernel, values)
+        term = _celerite_term(kernel, values, ordered_axis)
         gp = celerite2.GaussianProcess(term, mean=0.0)
+        # **W5.7.** The recursion's propagators come from the coordinate handed
+        # to ``compute``, and a warped kernel is stationary in w(x) rather than
+        # in x. ``warped_coordinate`` is the identity for every other kernel,
+        # so this line changes nothing for them; a warp is monotone by
+        # construction, so the sorted axis stays sorted.
+        solve_axis = np.ascontiguousarray(
+            np.asarray(kernel.warped_coordinate(ordered_axis, values), dtype=DTYPE)
+        )
         try:
-            gp.compute(ordered_axis, diag=ordered_diagonal, check_sorted=False)
+            gp.compute(solve_axis, diag=ordered_diagonal, check_sorted=False)
         except LinAlgError as error:
             if whitening:
                 raise LikelihoodError(
@@ -5013,18 +5078,31 @@ class Likelihood(Parameterised):
             if at is None
             else at
         )
+        kernel = self._noise.kernel_for(observed)
         conditioned = self._noise.solver.condition(
-            self._noise.kernel_for(observed),
+            kernel,
             coordinates,
             _stacked_components(residual),
             sigma**2,
             resolved,
             at=target,
         )
+        # **W5.7.** A warping kernel is stationary in w(x), so this is where the
+        # conditioned mean stops being indexed by the observed coordinate and
+        # starts being indexed by the warped one. The warp travels with it:
+        # family B (whiteness) and family C (localisation) both need to know
+        # which coordinate they are looking at, and a reader of the stored
+        # diagnostic needs to be able to get back to the observed axis.
+        warped_axis, warp = _warped_report(kernel, target, resolved)
         if not complex_residual:
-            return conditioned
+            return dataclasses.replace(conditioned, coordinates=warped_axis, warp=warp)
         columns = np.asarray(conditioned.mean, dtype=DTYPE)
-        return GPConditional(mean=columns[:, 0] + 1j * columns[:, 1], variance=conditioned.variance)
+        return GPConditional(
+            mean=columns[:, 0] + 1j * columns[:, 1],
+            variance=conditioned.variance,
+            coordinates=warped_axis,
+            warp=warp,
+        )
 
     # -- internals -----------------------------------------------------------
 

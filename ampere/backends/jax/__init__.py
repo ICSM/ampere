@@ -104,6 +104,7 @@ from .gp import (
     SpectralMixture,
     SquaredExponential,
     Sum,
+    WarpedKernel,
 )
 from .astrometry import EpochSample, ReflexOrbit
 from .image import PSFConvolution
@@ -193,6 +194,7 @@ __all__ = [
     "TimeSmearing",
     "UniformDisc",
     "UniformDiscVisibilities",
+    "WarpedKernel",
     "available_devices",
     "configure_x64",
     "filter_spec",

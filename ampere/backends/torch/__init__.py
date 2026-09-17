@@ -198,6 +198,7 @@ from .gp import (
     SpectralMixture,
     SquaredExponential,
     Sum,
+    WarpedKernel,
 )
 from .astrometry import (
     EpochSample,
@@ -324,6 +325,7 @@ __all__ = [
     "TorchSpectralModel",
     "UniformDisc",
     "UniformDiscVisibilities",
+    "WarpedKernel",
     "as_tensor",
     "available_devices",
     "bin_edges",
