@@ -54,9 +54,11 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import itertools
+import json
 import math
 import subprocess
 import sys
+import warnings
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -94,6 +96,7 @@ from ampere.inference._tmnre import (
     pair_mesh,
 )
 from ampere.results import PROVENANCE_SCHEMA_VERSION
+from ampere.results.artefacts import ArtefactCacheWarning
 
 
 class _Observed:
@@ -1453,6 +1456,107 @@ class TestTheArtefactCache:
             draws=10, training={"max_num_epochs": 2}
         )
         assert run.attrs["ampere_sbi_cache_hit"] == 1
+
+
+@needs_sbi
+class TestServingANamedArtefact:
+    """W5.23: ``serve_artefact=`` restores one named digest regardless of match.
+
+    ``joint_problem()``'s ``budget=`` is the single key ingredient moved here
+    (as ``TestTheArtefactCache.test_a_different_budget_is_a_miss`` above
+    already does) rather than a ``HilbertSpaceGP`` ``basis_size``: this
+    module's fixtures have no HSGP problem, and budget is already the
+    established "one differing ingredient" case in this file.
+    """
+
+    def test_a_served_artefact_from_a_different_budget_is_restored_and_sampled(
+        self, tmp_path: Path
+    ) -> None:
+        from ampere.results.artefacts import ArtefactStore
+
+        store = ArtefactStore(tmp_path / "artefacts")
+        trained = SBIEngine(joint_problem(), method="npe", budget=150, cache=store).run(
+            draws=20, training={"max_num_epochs": 3}
+        )
+        served_digest = trained.attrs["ampere_sbi_cache_key"]
+
+        engine = SBIEngine(
+            joint_problem(),
+            method="npe",
+            budget=160,
+            cache=store,
+            serve_artefact=served_digest,
+        )
+        with pytest.warns(ArtefactCacheWarning, match="budget"):
+            served_run = engine.run(draws=20, training={"max_num_epochs": 3})
+
+        # Restored, not trained: nothing simulated, and the posterior is set.
+        assert engine.posterior is not None
+        assert served_run.attrs["ampere_sbi_simulations"] == 0
+        assert served_run.attrs["ampere_sbi_artefact_served"] == served_digest
+        assert served_run.attrs["ampere_sbi_cache_key"] != served_digest
+        mismatch = json.loads(served_run.attrs["ampere_sbi_artefact_mismatch"])
+        assert mismatch == {"budget": [150, 160]}
+
+        # Calibration works on the served posterior exactly as on a trained one.
+        # ``calibrate()`` samples the posterior for its SBC ranks through
+        # ``sbi.diagnostics.run_sbc`` without going through ``self._seeded``
+        # (unlike ``run()``, which reseeds torch's *global* generator before
+        # every draw and restores it afterwards) -- an existing gap, out of
+        # this item's scope, that leaves torch's global RNG advanced by
+        # however many draws SBC took. Saved and restored here so this test
+        # does not perturb an unrelated, later test's own calibration numbers
+        # by way of shared global state (found while adding this test: it
+        # intermittently moved ``TestTheCalibrationFastPath``'s TARP
+        # thresholds when run earlier in the same session).
+        import torch
+
+        torch_state = torch.get_rng_state()
+        try:
+            report = engine.calibrate(count=8, posterior_draws=8, tarp=False)
+        finally:
+            torch.set_rng_state(torch_state)
+        assert report is not None
+
+    def test_a_matching_digest_serves_with_an_empty_mismatch_and_no_warning(
+        self, tmp_path: Path
+    ) -> None:
+        from ampere.results.artefacts import ArtefactStore
+
+        store = ArtefactStore(tmp_path / "artefacts")
+        trained = SBIEngine(joint_problem(), method="npe", budget=150, cache=store).run(
+            draws=10, training={"max_num_epochs": 2}
+        )
+        served_digest = trained.attrs["ampere_sbi_cache_key"]
+
+        engine = SBIEngine(
+            joint_problem(), method="npe", budget=150, cache=store, serve_artefact=served_digest
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", ArtefactCacheWarning)
+            served_run = engine.run(draws=10, training={"max_num_epochs": 2})
+        assert served_run.attrs["ampere_sbi_artefact_mismatch"] == "{}"
+
+    def test_a_wrong_digest_is_refused_by_name(self, tmp_path: Path) -> None:
+        from ampere.results.artefacts import ArtefactStore
+
+        store = ArtefactStore(tmp_path / "artefacts")
+        SBIEngine(joint_problem(), method="npe", budget=150, cache=store).run(
+            draws=10, training={"max_num_epochs": 2}
+        )
+        engine = SBIEngine(
+            joint_problem(),
+            method="npe",
+            budget=150,
+            cache=store,
+            serve_artefact="0" * 32,
+        )
+        with pytest.raises(EngineError, match="serve_artefact"):
+            engine.run(draws=10, training={"max_num_epochs": 2})
+
+    def test_serve_artefact_without_a_cache_is_refused_by_name(self) -> None:
+        with pytest.raises(EngineError, match="cache"):
+            SBIEngine(joint_problem(), method="npe", budget=150, serve_artefact="0" * 32)
 
 
 # ---------------------------------------------------------------------------
