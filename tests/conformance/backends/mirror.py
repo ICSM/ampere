@@ -69,6 +69,7 @@ from ampere.backends.reference import (
 from ampere.core import DenseGP as _CoreDenseGP
 from ampere.core import HilbertSpaceGP as _CoreHilbertSpaceGP
 from ampere.core import GaussianProcessNoise as _CoreGaussianProcessNoise
+from ampere.core import JointGaussianProcessNoise as _CoreJointGaussianProcessNoise
 from ampere.core import IndependentNoise as _CoreIndependentNoise
 from ampere.core import SHO as _CoreSHO
 from ampere.core import Matern12 as _CoreMatern12
@@ -116,6 +117,7 @@ __all__ = [
     "DenseGP",
     "GaussianProcessNoise",
     "IndependentNoise",
+    "JointGaussianProcessNoise",
     "MirrorAmplitude",
     "MirrorBackend",
     "MirrorBandwidthSmearing",
@@ -403,6 +405,12 @@ class GaussianProcessNoise(_CoreGaussianProcessNoise):
     BACKEND: ClassVar[str] = BACKEND
 
 
+class JointGaussianProcessNoise(_CoreJointGaussianProcessNoise):
+    """The joint noise composition, declared as this backend's (W5.9)."""
+
+    BACKEND: ClassVar[str] = BACKEND
+
+
 class DenseGP(_CoreDenseGP):
     """The dense solver, declared as this backend's (W2.13)."""
 
@@ -492,6 +500,7 @@ class MirrorBackend(ReferenceBackend):
         tolerances=ReferenceBackend.capabilities.tolerances,
         interferometry=True,
         astrometry=True,
+        joint_noise=True,  # W5.9
         image=True,
     )
 
@@ -526,6 +535,17 @@ class MirrorBackend(ReferenceBackend):
 
     def gp_noise(self, kernel: Kernel, solver: GPSolver, *, jitter: Any = None) -> NoiseModel:
         return GaussianProcessNoise(kernel, solver, jitter=jitter)
+
+    def joint_gp_noise(
+        self,
+        kernel: Kernel,
+        solver: GPSolver,
+        *,
+        datasets: Sequence[str],
+        coupling: Any,
+    ) -> NoiseModel:
+        # W5.9 -- appended.
+        return JointGaussianProcessNoise(kernel, solver, datasets=datasets, coupling=coupling)
 
     def interferometry(self) -> InterferometryPieces:
         return MIRROR_INTERFEROMETRY

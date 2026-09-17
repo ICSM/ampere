@@ -128,6 +128,8 @@ __all__ = [
     "CauchyFamily",
     "CeleriteRepresentation",
     "Censoring",
+    "ChannelCoupling",
+    "CholeskyCoupling",
     "ComplexGaussianFamily",
     "DenseGP",
     "GPConditional",
@@ -137,6 +139,7 @@ __all__ = [
     "HilbertSpaceGP",
     "IndependentNoise",
     "InducingPointGP",
+    "JointGaussianProcessNoise",
     "Kernel",
     "KernelSpec",
     "LatentDeclaration",
@@ -155,6 +158,7 @@ __all__ = [
     "QuasisepGP",
     "QuasiseparableTerm",
     "RiceFamily",
+    "RotationCoupling",
     "RotationTerm",
     "SpectralMixture",
     "SquaredExponential",
@@ -2331,6 +2335,1003 @@ class GaussianProcessNoise(NoiseModel):
 
 
 # ---------------------------------------------------------------------------
+# Joint noise over a tuple of channels: the shared-grid intrinsic
+# coregionalisation model (W5.9)
+# ---------------------------------------------------------------------------
+
+
+def _as_coupling_parameter(name: str, given: Any) -> Parameter:
+    """A channel-coupling parameter: a prior, a fixed number, or a ready-made one.
+
+    Deliberately **not** :func:`_as_hyperparameter`, which imposes a ``Log``
+    bijection because a kernel hyperparameter is positive by construction
+    (``parameters.md`` §13). A coupling's parameters are not: an angle lives on
+    a bounded interval and a log-variance on the whole line, and forcing
+    ``Log`` on either produces ``NaN`` in the unconstrained parameterisation
+    the moment the value is negative -- which is every ordinary value of a
+    log-variance. So the bijection is read off the prior's **own support**,
+    which is :class:`~ampere.core.parameter.Parameter`'s default and gives an
+    angle on ``[0, pi)`` its logit and a log-variance its identity.
+    """
+    if isinstance(given, Parameter):
+        if given.name != name:
+            raise LikelihoodError(
+                f"channel-coupling parameter {name!r} was given a Parameter named "
+                f"{given.name!r}. The names are part of the parameterisation's declaration; "
+                f"rename it with .rename({name!r})."
+            )
+        return given
+    if isinstance(given, (int, float, np.floating, np.integer)) and not isinstance(given, bool):
+        return Parameter(name, value=float(given), fixed=True)
+    if hasattr(given, "ppf"):
+        return Parameter(name, given)
+    raise LikelihoodError(
+        f"channel-coupling parameter {name!r} must be a frozen scipy.stats distribution (a "
+        f"prior), a number (held fixed), or an ampere Parameter -- got "
+        f"{type(given).__name__}."
+    )
+
+
+class ChannelCoupling(Parameterised, abc.ABC):
+    """The ``T x T`` positive-definite matrix ``B`` of an intrinsic coregionalisation model.
+
+    ``K = B ⊗ K_x`` is the covariance of ``T`` channels observed on one shared
+    grid: ``K_x`` says how a channel correlates with itself along the grid, and
+    ``B`` says how the channels correlate with each other. This class is ``B``,
+    and it is a :class:`~ampere.core.parameter.Parameterised` for the reason
+    every other knob in this contract is — tying, fixing, priors and W1.9's
+    lowering then work on its parameters unchanged.
+
+    Two things it must supply, and the second is why it is a class rather than
+    a matrix. :meth:`matrix` is the declaration; :meth:`eigen` is the
+    **eigendecomposition**, which is what makes the joint solve exact and
+    O(N) rather than O((NT)³): rotating the ``T`` residual vectors by ``Qᵀ``
+    decouples them into ``T`` scalar GPs sharing ``K_x``
+    (:class:`JointGaussianProcessNoise`). A parameterisation that knows its own
+    eigenvectors in closed form — :class:`RotationCoupling` does — hands them
+    over without a numerical ``eigh`` at every evaluation, which matters
+    because ``eigh``'s gradient is ill-conditioned exactly where two
+    eigenvalues coincide, and "the two channels have equal variance" is a
+    perfectly ordinary point of the posterior.
+
+    ``xp`` is the array namespace the arithmetic happens in: :mod:`numpy` on
+    the reference path, ``jax.numpy`` or :mod:`torch` when a backend lowers the
+    same declaration for NUTS. Only ``cos``, ``sin``, ``exp``, ``stack`` and
+    (for :class:`CholeskyCoupling`) ``linalg.eigh`` are used, which all three
+    spell identically — so there is **one** implementation of each
+    parameterisation and no per-backend transcription to drift.
+    """
+
+    #: Neutral name, for provenance and error messages.
+    NAME: ClassVar[str] = ""
+
+    def __init__(self, channels: int) -> None:
+        count = int(channels)
+        if count < 2:
+            raise LikelihoodError(
+                f"a channel coupling describes how two or more channels correlate, got "
+                f"{count}. One channel is an ordinary GaussianProcessNoise."
+            )
+        self._channels = count
+
+    @property
+    def channels(self) -> int:
+        """``T`` — how many channels this coupling spans."""
+        return self._channels
+
+    def resolved(self, values: Mapping[str, Any]) -> dict[str, Any]:
+        """This coupling's own parameters, resolved out of a likelihood-wide mapping.
+
+        The same filter-then-``context`` idiom :class:`IndependentNoise` and
+        :class:`GaussianProcessNoise` use: the mapping handed down carries the
+        kernel's hyperparameters too, and completing a declaration against
+        names it does not own is exactly what the idiom exists to avoid.
+        """
+        return self.context({k: v for k, v in values.items() if k in self.parameters})
+
+    @abc.abstractmethod
+    def eigen(self, resolved: Mapping[str, Any], *, xp: Any = np) -> tuple[Any, Any]:
+        """``(eigenvalues, Q)`` of ``B``, with ``B = Q diag(eigenvalues) Qᵀ``.
+
+        The eigenvalues are strictly positive (``B`` is positive definite) and
+        ``Q`` is orthogonal. Both are ``xp`` arrays of shape ``(T,)`` and
+        ``(T, T)``; column ``s`` of ``Q`` is the eigenvector of eigenvalue
+        ``s``.
+        """
+
+    def matrix(self, resolved: Mapping[str, Any], *, xp: Any = np) -> Any:
+        """``B`` itself, reassembled from :meth:`eigen`.
+
+        Used by the conformance battery — which materialises ``B ⊗ K_x`` and
+        scores it densely as the definition of the right answer — and by
+        anybody who wants to read the fitted cross-covariance off a posterior
+        draw. Never on the hot path: the solve uses the eigendecomposition and
+        never forms ``B``.
+        """
+        eigenvalues, rotation = self.eigen(resolved, xp=xp)
+        return (rotation * eigenvalues) @ rotation.T
+
+    def __repr__(self) -> str:
+        declared = ", ".join(repr(self.parameters[name]) for name in self.parameters.names)
+        return f"{type(self).__name__}({declared})"
+
+
+class RotationCoupling(ChannelCoupling):
+    """``T = 2``: a rotation angle and two log-variances — the physical parameterisation.
+
+    ``B = Q(θ) diag(exp(v₀), exp(v₁)) Q(θ)ᵀ`` with ``Q(θ)`` the plane rotation.
+    Three parameters, which is the full ``T(T+1)/2`` of a 2x2 positive-definite
+    matrix — so nothing is given up — but expressed in the coordinates the
+    *physics* is stated in rather than as three entries of a matrix that must
+    then be checked for positive-definiteness. ``DEVELOPMENT_PLAN.md`` §5's
+    Phase 5 bullet asks for exactly this: "``B`` parameterised physically (a
+    rotation for Q/U leakage) rather than a free ``T(T+1)/2``".
+
+    The two cases this ships for read directly off the parameters. For
+    **astrometry** (W5.9's first customer) the angle is the position angle of a
+    centroiding systematic's major axis on the sky and the two variances are
+    its semi-axes: an error that is elongated along one direction and shared by
+    the ``ra`` and ``dec`` channels is ``θ`` away from the axes and is
+    invisible to two independent GPs, which can only inflate each axis
+    separately. For **polarimetry** the angle is the Q/U leakage angle and the
+    rotation is literally the one the instrument applies.
+
+    **The parameterisation has a symmetry, and it is not a defect.** Adding
+    ``π`` to ``θ`` is the same ``B``; adding ``π/2`` is the same ``B`` with the
+    two variances exchanged. So ``B`` is identified while ``(θ, v_0, v_1)`` is
+    identified only up to that relabelling, and a posterior over the three
+    comes back with two equivalent modes — exactly the label switching a
+    mixture model has, and dealt with the same way: summarise ``B`` (through
+    :meth:`ChannelCoupling.matrix`) rather than the angle, or fix the angle
+    where the instrument's own is known. ``scipy.stats.uniform(0.0, np.pi)``
+    is the recommended prior; this class does not impose one. The joint
+    *density* is unaffected either way, which is why the symmetry costs a fit
+    nothing but a bimodal marginal.
+
+    The **log**-variances, rather than variances with a positive support, are
+    what a NUTS chain wants: the eigenvalues of a coupling matrix span orders
+    of magnitude and a positivity constraint handled by a bijection on a log
+    scale is the parameterisation ``lowering.md`` §3 recommends everywhere else
+    for the same reason. They are variances in the observed values' **squared
+    unit**, and they carry the joint model's overall scale — see
+    :class:`JointGaussianProcessNoise` on why the kernel's own amplitude must
+    not also be free.
+
+    Parameters
+    ----------
+    angle
+        ``θ``, radians. A frozen ``scipy.stats`` distribution to fit it, a
+        number to hold it fixed.
+    log_variance_0, log_variance_1
+        The natural logarithms of ``B``'s two eigenvalues.
+
+    Examples
+    --------
+    >>> import numpy as np, scipy.stats as st
+    >>> coupling = RotationCoupling(
+    ...     st.uniform(0.0, np.pi), st.norm(-7.0, 2.0), st.norm(-7.0, 2.0)
+    ... )
+    >>> coupling.parameters.free_names
+    ('angle', 'log_variance_0', 'log_variance_1')
+    >>> at = {"angle": 0.0, "log_variance_0": 0.0, "log_variance_1": np.log(4.0)}
+    >>> bool(np.allclose(coupling.matrix(at), np.diag([1.0, 4.0])))
+    True
+    """
+
+    NAME: ClassVar[str] = "rotation"
+
+    def __init__(self, angle: Any, log_variance_0: Any, log_variance_1: Any) -> None:
+        super().__init__(2)
+        self.register_parameter(_as_coupling_parameter("angle", angle))
+        self.register_parameter(_as_coupling_parameter("log_variance_0", log_variance_0))
+        self.register_parameter(_as_coupling_parameter("log_variance_1", log_variance_1))
+
+    def eigen(self, resolved: Mapping[str, Any], *, xp: Any = np) -> tuple[Any, Any]:
+        angle = resolved["angle"]
+        cosine = xp.cos(angle)
+        sine = xp.sin(angle)
+        rotation = xp.stack([xp.stack([cosine, -sine]), xp.stack([sine, cosine])])
+        variances = xp.stack([resolved["log_variance_0"], resolved["log_variance_1"]])
+        return xp.exp(variances), rotation
+
+
+class CholeskyCoupling(ChannelCoupling):
+    """The general ``T``: ``B = L Lᵀ`` with ``L`` lower-triangular, positive diagonal.
+
+    The fallback :class:`RotationCoupling` is the special case of. Any
+    positive-definite ``B`` is ``L Lᵀ`` for exactly one such ``L``, so this
+    parameterisation is complete, unconstrained (the ``T`` diagonal entries are
+    fitted as logarithms and the ``T(T-1)/2`` strictly-lower ones are free on
+    the whole line) and needs no positive-definiteness check at all — which is
+    the whole reason to prefer it to fitting ``B``'s entries.
+
+    What it gives up is the closed-form eigenvectors: :meth:`eigen` calls
+    ``xp.linalg.eigh``, whose gradient is ill-conditioned where two eigenvalues
+    coincide. That is not a problem for a ``B`` whose channels genuinely differ
+    and it is a real one for a ``B`` near a multiple of the identity, so for
+    ``T = 2`` prefer :class:`RotationCoupling`, which never forms an ``eigh``
+    at all.
+
+    Priors. ``off_diagonal`` entries are recommended a ``norm(0, s)`` whose
+    scale is comparable with ``exp(log_diagonal / 2)``, which makes the implied
+    prior on the channel *correlations* roughly flat rather than piled at
+    ±1; ``log_diagonal`` entries take the same log-scale prior
+    :class:`RotationCoupling`'s log-variances do. This class imposes neither.
+
+    Parameters
+    ----------
+    channels
+        ``T``.
+    log_diagonal
+        ``T`` priors or numbers: the logarithms of ``L``'s diagonal.
+    off_diagonal
+        ``T(T-1)/2`` priors or numbers, in row-major order over the strictly
+        lower triangle (``(1,0), (2,0), (2,1), (3,0), ...``).
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> coupling = CholeskyCoupling(2, log_diagonal=[0.0, 0.0], off_diagonal=[0.5])
+    >>> coupling.parameters.names
+    ('log_diagonal_0', 'log_diagonal_1', 'off_diagonal_0')
+    >>> resolved = coupling.resolved({})
+    >>> np.allclose(coupling.matrix(resolved), np.array([[1.0, 0.5], [0.5, 1.25]]))
+    True
+    """
+
+    NAME: ClassVar[str] = "cholesky"
+
+    def __init__(
+        self,
+        channels: int,
+        *,
+        log_diagonal: Sequence[Any],
+        off_diagonal: Sequence[Any] = (),
+    ) -> None:
+        super().__init__(channels)
+        count = self.channels
+        below = count * (count - 1) // 2
+        if len(log_diagonal) != count:
+            raise LikelihoodError(
+                f"a CholeskyCoupling over {count} channels needs {count} log_diagonal "
+                f"entries, got {len(log_diagonal)}."
+            )
+        if len(off_diagonal) != below:
+            raise LikelihoodError(
+                f"a CholeskyCoupling over {count} channels needs {below} off_diagonal "
+                f"entries — the strictly lower triangle of L, row-major — got "
+                f"{len(off_diagonal)}."
+            )
+        for index, declaration in enumerate(log_diagonal):
+            self.register_parameter(_as_coupling_parameter(f"log_diagonal_{index}", declaration))
+        for index, declaration in enumerate(off_diagonal):
+            self.register_parameter(_as_coupling_parameter(f"off_diagonal_{index}", declaration))
+
+    def eigen(self, resolved: Mapping[str, Any], *, xp: Any = np) -> tuple[Any, Any]:
+        count = self.channels
+        # A zero of whatever type the values are: a Python ``0.0`` in a
+        # ``torch.stack`` is a TypeError and in a traced jax computation is a
+        # constant of the wrong dtype, and this coupling has exactly one
+        # implementation for all three namespaces.
+        zero = 0.0 * resolved["log_diagonal_0"]
+        rows = []
+        below = 0
+        for row in range(count):
+            entries = []
+            for column in range(count):
+                if column < row:
+                    entries.append(resolved[f"off_diagonal_{below + column}"])
+                elif column == row:
+                    entries.append(xp.exp(resolved[f"log_diagonal_{row}"]))
+                else:
+                    entries.append(zero)
+            rows.append(xp.stack(entries))
+            below += row
+        lower = xp.stack(rows)
+        eigenvalues, rotation = xp.linalg.eigh(lower @ lower.T)
+        return eigenvalues, rotation
+
+
+def _amplitude_names(kernel: Kernel) -> tuple[str, ...]:
+    """Which of *kernel*'s parameters carry the covariance's overall scale.
+
+    ``Kernel.VALUE_SCALED`` is the per-leaf declaration of which
+    hyperparameters are measured in the observed values' unit — the amplitude,
+    for every kernel that ships — and a composite qualifies its children's
+    names (``term0.amplitude``), so the test is on the last segment.
+    """
+    scaled = {name for leaf in (*kernel.leaves(), kernel) for name in leaf.VALUE_SCALED}
+    return tuple(name for name in kernel.parameters.names if name.rsplit(".", 1)[-1] in scaled)
+
+
+def _stack_channels(arrays: Sequence[Any], what: str) -> np.ndarray:
+    """``T`` equal-length vectors as one ``(n, T)`` block, float64."""
+    columns = [_as_float64(np.asarray(array).ravel(), what) for array in arrays]
+    sizes = {column.size for column in columns}
+    if len(sizes) != 1:
+        raise LikelihoodError(
+            f"the {what} of a joint noise model's channels have different lengths "
+            f"({sorted(sizes)}). The channels share one grid by declaration — that is what "
+            f"makes B ⊗ K_x exact — so they have the same number of retained samples."
+        )
+    return np.ascontiguousarray(np.column_stack(columns))
+
+
+def _channel_block(residuals: Any, channels: int) -> np.ndarray:
+    """A sequence of ``T`` vectors, or an ``(n, T)`` block, as an ``(n, T)`` block."""
+    array = np.asarray(residuals)
+    if array.ndim == 2 and array.shape[1] == channels:
+        return _as_float64(array, "residuals")
+    return _stack_channels(list(residuals), "residuals")
+
+
+class JointGaussianProcessNoise(NoiseModel):
+    """One correlated process over ``T`` channels of one model on a shared grid.
+
+    ``likelihoods.md`` §15's eleventh limitation, lifted for the case it is
+    exact in. A noise model belongs to one :class:`Likelihood`, which belongs
+    to one dataset, so a single correlated process over ``T``-vectors — the
+    ``(RA, Dec)`` residuals of an astrometric solution perturbed together by a
+    centroiding systematic, Stokes ``Q``/``U`` mixed by an instrumental
+    leakage, a calibration error shared across bands — had no expression, and
+    "two scalar GPs with tied hyperparameters" is a *different model*: it can
+    inflate each channel but it cannot express the cross-covariance, which is
+    the whole of the systematic.
+
+    This class is that process, scoped to the case ``DEVELOPMENT_PLAN.md`` §5
+    scopes it to: ``K = B ⊗ K_x``, the **shared-grid intrinsic**
+    coregionalisation model, with ``B`` a ``TxT`` positive-definite
+    :class:`ChannelCoupling` and ``K_x`` one ordinary :class:`Kernel` on the
+    grid every channel shares.
+
+    **Why it is still O(N).** Diagonalise ``B = Q Λ Qᵀ`` and rotate the
+    residuals by ``Qᵀ``. Because ``(Qᵀ ⊗ I)(B ⊗ K_x)(Q ⊗ I) = Λ ⊗ K_x`` is
+    block-diagonal, the ``T`` rotated residual vectors are **independent**, and
+    each is scored by an ordinary scalar GP with covariance ``λ_s K_x +
+    diag(sigma^2)`` — so the joint density is ``T`` calls to the bound
+    :class:`GPSolver`, with ``QuasisepGP`` on an ordered one-dimensional grid
+    giving ``T·O(N)`` rather than the ``O((NT)³)`` of the materialised matrix.
+    Nothing is approximated: :meth:`log_prob` and a dense Cholesky of
+    ``B ⊗ K_x + diag(sigma^2)`` agree to the solver tolerance, which is a
+    conformance row.
+
+    Each scalar solve is handed the **rescaled** problem ``u = r̃_s / √λ_s``
+    against ``K_x + diag(sigma^2/λ_s)``, with ``-(N/2) log λ_s`` added back, rather
+    than a kernel whose amplitude has been multiplied by ``√λ_s``. The two are
+    the same number; the first works for *any* kernel — a ``Sum``, a kernel
+    with no amplitude at all, a user's own — whereas the second would have to
+    reach into a kernel tree and rescale it, which is neither general nor
+    something a kernel's declaration promises.
+
+    **The one restriction, and it is a restriction rather than an oversight.**
+    The rotation only leaves the *diagonal* noise term diagonal when the
+    channels share one per-sample variance: the rotated ``(s, s')`` block of
+    ``diag(sigma_t²)`` is ``Σ_t Q_{ts} Q_{ts'} diag(sigma_t²)``, which is
+    ``δ_{ss'} diag(sigma^2)`` when every ``sigma_t`` is the same vector and is a full
+    coupling otherwise. So the channels must carry **equal uncertainties**
+    (heteroscedastic along the grid as much as you like — it is the *channels*
+    that must agree, not the samples), which is exactly what a shared-grid
+    astrometric solution or a Stokes ``Q``/``U`` pair from one polarimeter
+    produces. Unequal per-channel errors lose the Kronecker structure
+    altogether and belong with the general LMC and mismatched grids on the
+    dense/reduced-rank follow-on (``likelihoods.md`` §15). This is checked at
+    composition, by name.
+
+    **Where it lives.** Not in a :class:`Likelihood` — a likelihood scores one
+    dataset and this scores ``T`` of them. It is declared on the
+    :class:`~ampere.core.dataset.DatasetCollection` instead::
+
+        DatasetCollection(
+            {"ra": Dataset(...), "dec": Dataset(...)},
+            joint={"astrom": JointGaussianProcessNoise(kernel, QuasisepGP(),
+                                                       datasets=("ra", "dec"),
+                                                       coupling=RotationCoupling(...))},
+        )
+
+    which is the first use of
+    :meth:`~ampere.core.dataset.DatasetCollection.contributions` as something
+    other than a sum: the group contributes **one** term, keyed by the group's
+    own label, in place of its members' separate ones (``inference.md`` §4,
+    the ``"joint"`` decomposition).
+
+    Parameters
+    ----------
+    kernel
+        ``K_x``, the covariance along the shared grid. Its hyperparameters
+        become this noise model's own, as for
+        :class:`GaussianProcessNoise`. Its overall **amplitude must not be
+        free**: ``B ⊗ (a² K̃) = (a² B) ⊗ K̃``, so a free amplitude and a free
+        ``B`` are exactly degenerate and the posterior has a ridge rather than
+        a mode. Fix it — ``Matern32(1.0, length_scale_prior)`` — and let ``B``
+        carry the scale, which is what ``B``'s log-variances are for. Refused
+        at construction.
+    solver
+        The strategy each rotated scalar solve uses. ``DenseGP()`` by default,
+        because that is the one that is right rather than the one that is fast;
+        pass ``QuasisepGP()`` on an ordered one-dimensional grid — a
+        ``TimeSeries``'s ``time`` axis — to get the O(N) path. The bound solver
+        decides, once, for every rotated output: they all live on the same
+        grid and see the same kernel, so a per-output choice could only differ
+        by accident.
+    datasets
+        The labels of the datasets this process spans, **in channel order**:
+        ``B``'s row ``t`` is ``datasets[t]``. Two or more, distinct, and the
+        same count as the coupling's ``T``.
+    coupling
+        ``B``. :class:`RotationCoupling` for ``T = 2``,
+        :class:`CholeskyCoupling` in general.
+    scale, jitter
+        As :class:`IndependentNoise`, applied to the channels' shared diagonal
+        before ``B ⊗ K_x`` is added. One pair for the whole group, not one per
+        channel: the exactness condition above is that the group has **one**
+        diagonal, so a per-channel scale would be a per-channel diagonal and
+        would take the group off the exact path.
+
+    Examples
+    --------
+    >>> import numpy as np, scipy.stats as st
+    >>> noise = JointGaussianProcessNoise(
+    ...     Matern32(1.0, st.loguniform(1.0, 1e3), axes=("time",)),
+    ...     QuasisepGP(),
+    ...     datasets=("ra", "dec"),
+    ...     coupling=RotationCoupling(
+    ...         st.uniform(0.0, np.pi), st.norm(-7.0, 2.0), st.norm(-7.0, 2.0)
+    ...     ),
+    ... )
+    >>> noise.datasets
+    ('ra', 'dec')
+    >>> noise.parameters.free_names
+    ('length_scale', 'angle', 'log_variance_0', 'log_variance_1')
+    >>> noise.JOINT, noise.CORRELATED
+    (True, True)
+    """
+
+    CORRELATED: ClassVar[bool] = True
+    #: This noise model scores several datasets at once. The flag is what
+    #: :class:`Likelihood` refuses on and what
+    #: :class:`~ampere.core.dataset.DatasetCollection` routes on; it is a
+    #: declaration rather than an ``isinstance`` so that a user's own joint
+    #: noise model composes without subclassing this one.
+    JOINT: ClassVar[bool] = True
+
+    def __init__(
+        self,
+        kernel: Kernel,
+        solver: GPSolver | None = None,
+        *,
+        datasets: Sequence[str],
+        coupling: ChannelCoupling,
+        scale: Any = None,
+        jitter: Any = None,
+    ) -> None:
+        if not isinstance(kernel, Kernel):
+            raise LikelihoodError(
+                f"JointGaussianProcessNoise needs a Kernel for K_x, got {type(kernel).__name__}."
+            )
+        if not isinstance(coupling, ChannelCoupling):
+            raise LikelihoodError(
+                f"JointGaussianProcessNoise needs a ChannelCoupling for B, got "
+                f"{type(coupling).__name__}. Use RotationCoupling for two channels, "
+                f"CholeskyCoupling in general."
+            )
+        labels = tuple(str(label) for label in datasets)
+        if len(labels) < 2:
+            raise LikelihoodError(
+                f"a joint noise model spans two or more datasets, got {list(labels)}. One "
+                f"channel is an ordinary GaussianProcessNoise."
+            )
+        if len(set(labels)) != len(labels):
+            raise LikelihoodError(
+                f"the datasets a joint noise model spans must be distinct, got {list(labels)}. "
+                f"B's row t is datasets[t], so a repeated label is a channel correlated with "
+                f"itself through two different rows."
+            )
+        if len(labels) != coupling.channels:
+            raise LikelihoodError(
+                f"the coupling B is {coupling.channels}x{coupling.channels} but the joint noise "
+                f"model spans {len(labels)} datasets ({list(labels)})."
+            )
+        self._kernel = kernel
+        self._solver = DenseGP() if solver is None else solver
+        self._coupling = coupling
+        self._datasets = labels
+        for parameter in kernel.parameters:
+            self.register_parameter(parameter)
+        for parameter in coupling.parameters:
+            if parameter.name in self.parameters:
+                raise LikelihoodError(
+                    f"the kernel and the coupling both declare a parameter named "
+                    f"{parameter.name!r}. A noise model holds one flat namespace "
+                    f"(parameters.md §12.4), so rename one of them."
+                )
+            self.register_parameter(parameter)
+        if scale is not None:
+            self.register_parameter(_as_hyperparameter("scale", scale, None))
+        if jitter is not None:
+            self.register_parameter(_as_hyperparameter("jitter", jitter, None))
+        self._check_identifiable()
+
+    # -- declarations --------------------------------------------------------
+
+    @property
+    def kernel(self) -> Kernel:
+        """``K_x``: the covariance along the grid every channel shares."""
+        return self._kernel
+
+    @property
+    def solver(self) -> GPSolver:
+        """The strategy each rotated scalar solve goes through."""
+        return self._solver
+
+    @property
+    def coupling(self) -> ChannelCoupling:
+        """``B``: how the channels correlate with one another."""
+        return self._coupling
+
+    @property
+    def datasets(self) -> tuple[str, ...]:
+        """The dataset labels this process spans, in channel order."""
+        return self._datasets
+
+    @property
+    def channels(self) -> int:
+        """``T``."""
+        return len(self._datasets)
+
+    def _check_identifiable(self) -> None:
+        """Refuse a free kernel amplitude beside a free ``B``.
+
+        ``B ⊗ (a² K̃) = (a² B) ⊗ K̃`` exactly, so the overall amplitude of the
+        kernel and the overall scale of the coupling are the same number
+        written twice. Fitting both gives a posterior with a ridge along
+        ``(a², B) -> (c a², B/c)``: a chain wanders along it, ``R̂`` never
+        settles, and the marginal on either looks like its prior. One
+        *fixed* amplitude anywhere in the tree pins the scale, which is why
+        a ``Sum`` with one term's amplitude fixed and another's free is
+        accepted — the relative amplitudes of a sum are identified.
+        """
+        amplitudes = _amplitude_names(self._kernel)
+        if not amplitudes:
+            return
+        free = set(self._kernel.parameters.free_names)
+        if not all(name in free for name in amplitudes):
+            return
+        if self._coupling.parameters.free_size == 0:
+            return
+        raise LikelihoodError(
+            f"JointGaussianProcessNoise was given a kernel whose amplitude(s) "
+            f"{list(amplitudes)} are all free, beside a coupling B with "
+            f"{self._coupling.parameters.free_size} free parameter(s). Those are the same "
+            f"degree of freedom twice: B ⊗ (a² K̃) = (a² B) ⊗ K̃, so the posterior has a ridge "
+            f"along (a², B) -> (c a², B/c) rather than a mode, and both marginals come back "
+            f"looking like their priors. Fix the kernel's amplitude — Matern32(1.0, "
+            f"length_scale_prior) — and let B's log-variances carry the scale, which is what "
+            f"they are for. (Fixing one term's amplitude in a Sum is enough: the relative "
+            f"amplitudes of a sum are identified.)"
+        )
+
+    # -- the diagonal --------------------------------------------------------
+
+    def sigma(
+        self,
+        observed: FunctionSamples,
+        retain: np.ndarray,
+        values: Mapping[str, Any],
+        *,
+        predicted: np.ndarray | None = None,
+    ) -> np.ndarray | None:
+        """The group's shared per-sample standard deviation, on one channel's container.
+
+        Every channel returns the same vector by declaration — that is what
+        :meth:`check_group` enforces — so which container it is asked of does
+        not matter, and the group's own ``scale`` and ``jitter`` are applied
+        here exactly as :class:`IndependentNoise` applies its own.
+        """
+        resolved = self.context({k: v for k, v in values.items() if k in self.parameters})
+        if observed.uncertainty is None:
+            if "jitter" not in resolved:
+                return None
+            floor = _positive(resolved["jitter"], "jitter", "JointGaussianProcessNoise")
+            return np.full(int(np.count_nonzero(retain)), floor, dtype=DTYPE)
+        sigma = _observed_sigma(observed, retain, "JointGaussianProcessNoise")
+        if "scale" in resolved:
+            sigma = sigma * _positive(resolved["scale"], "scale", "JointGaussianProcessNoise")
+        if "jitter" in resolved:
+            floor = _positive(
+                resolved["jitter"], "jitter", "JointGaussianProcessNoise", allow_zero=True
+            )
+            sigma = np.sqrt(sigma**2 + floor**2)
+        return sigma
+
+    def noise_params(
+        self,
+        observed: FunctionSamples,
+        retain: np.ndarray,
+        values: Mapping[str, Any],
+        *,
+        predicted: np.ndarray | None = None,
+        coordinates: np.ndarray | None = None,
+        latent: np.ndarray | None = None,
+        limits: np.ndarray | None = None,
+    ) -> NoiseParams:
+        """Refused: this noise model has no per-dataset record to give.
+
+        A :class:`NoiseParams` describes the covariance of *one* container's
+        samples, and this model's covariance couples ``T`` containers. Scoring
+        one channel out of it would be scoring ``B_{tt} K_x``, which is the
+        marginal of the joint process and is *not* the joint density — the
+        cross-covariance is precisely what it drops, and the cross-covariance
+        is the whole model.
+        """
+        raise LikelihoodError(
+            f"JointGaussianProcessNoise scores {self.channels} channels "
+            f"({list(self._datasets)}) jointly and has no single-dataset NoiseParams to give: "
+            f"the cross-covariance between the channels is the model, and a per-dataset record "
+            f"would silently drop it. Declare it on the DatasetCollection — "
+            f"DatasetCollection({{...}}, joint={{'label': noise}}) — which routes the group "
+            f"through log_prob() instead of through Likelihood.log_prob."
+        )
+
+    # -- composition-time checks ---------------------------------------------
+
+    def check_compatible(self, family: LikelihoodFamily, observed: FunctionSamples) -> None:
+        """Refused for the same reason :meth:`noise_params` is."""
+        raise LikelihoodError(
+            f"JointGaussianProcessNoise cannot be the noise model of a single Likelihood: it "
+            f"spans {self.channels} datasets ({list(self._datasets)}). Pass it to the "
+            f"DatasetCollection as joint={{'label': noise}}, and leave each member dataset's "
+            f"own likelihood as Likelihood(GaussianFamily())."
+        )
+
+    def kernel_for(self, observed: FunctionSamples) -> Kernel:
+        """``K_x`` bound to *observed*'s axis order — :meth:`GaussianProcessNoise.kernel_for`."""
+        return self._kernel.for_axes([axis.name for axis in observed.axes])
+
+    def check_group(
+        self,
+        observed: Mapping[str, FunctionSamples],
+        likelihoods: Mapping[str, Likelihood],
+        *,
+        group: str,
+    ) -> None:
+        """Every composition-time rule this model has, checked once, loudly.
+
+        Called by :class:`~ampere.core.dataset.DatasetCollection` at
+        construction with the member datasets' observed containers and
+        likelihoods, in this model's own channel order.
+        """
+        missing = [label for label in self._datasets if label not in observed]
+        if missing:
+            raise LikelihoodError(
+                f"joint noise group {group!r} spans datasets {list(self._datasets)}, but "
+                f"{missing} are not in this collection."
+            )
+        containers = [observed[label] for label in self._datasets]
+        reference = containers[0]
+        self._check_shared_grid(containers, group=group)
+        for label in self._datasets:
+            self._check_member_likelihood(label, likelihoods[label], group=group)
+        self._check_shared_diagonal(containers, group=group)
+        bound = self.kernel_for(reference)
+        self._solver.check_compatible(bound, reference)
+        bound.check_units(reference)
+
+    def _check_shared_grid(self, containers: Sequence[FunctionSamples], *, group: str) -> None:
+        """One grid, not ``T`` grids that happen to agree to nine decimal places.
+
+        Exact equality, the same rule ``Likelihood.check_alignment`` applies
+        between a predicted and an observed container and for the same reason
+        (``transformations.md`` §10, W1.11 gap I-2): coordinates recomputed
+        from first principles differ in their last bits, and a covariance built
+        on one grid and applied to another is wrong in a way no tolerance
+        describes. Mismatched grids are the general LMC's problem, not this
+        model's (``likelihoods.md`` §15).
+        """
+        reference = containers[0]
+        if reference.LAYOUT is not Layout.POINTS:
+            raise LikelihoodError(
+                f"joint noise group {group!r} is bound to a "
+                f"{type(reference).__name__}, whose layout is {reference.LAYOUT.value}. The "
+                f"shared-grid intrinsic model works on point-set containers, as every GP solver "
+                f"in this contract does."
+            )
+        names = tuple(axis.name for axis in reference.axes)
+        for label, container in zip(self._datasets[1:], containers[1:], strict=True):
+            other = tuple(axis.name for axis in container.axes)
+            if other != names:
+                raise LikelihoodError(
+                    f"joint noise group {group!r}: dataset {self._datasets[0]!r} has axes "
+                    f"{list(names)} and dataset {label!r} has {list(other)}. B ⊗ K_x is a "
+                    f"covariance over one grid shared by every channel."
+                )
+            if container.shape != reference.shape:
+                raise LikelihoodError(
+                    f"joint noise group {group!r}: dataset {self._datasets[0]!r} holds "
+                    f"{reference.n_samples} sample(s) and dataset {label!r} holds "
+                    f"{container.n_samples}. The channels share one grid."
+                )
+            for axis, reference_axis in zip(container.axes, reference.axes, strict=True):
+                if not np.array_equal(
+                    np.asarray(axis.values, dtype=DTYPE),
+                    np.asarray(reference_axis.values, dtype=DTYPE),
+                ):
+                    raise LikelihoodError(
+                        f"joint noise group {group!r}: the {axis.name!r} axis of dataset "
+                        f"{label!r} is not identical to dataset {self._datasets[0]!r}'s. The "
+                        f"shared-grid model needs one grid, compared exactly — build every "
+                        f"channel's container from the same coordinate array rather than from "
+                        f"two computations that agree to nine decimal places. Genuinely "
+                        f"different grids are the general (non-Kronecker) LMC, recorded as a "
+                        f"follow-on in likelihoods.md §15."
+                    )
+            if not _masks_agree(container, reference):
+                raise LikelihoodError(
+                    f"joint noise group {group!r}: dataset {label!r} and dataset "
+                    f"{self._datasets[0]!r} mask different samples. A rotation mixes the "
+                    f"channels sample by sample, so a sample masked in one channel and not in "
+                    f"another has no rotated value at all; mask it in every channel, or in "
+                    f"none."
+                )
+
+    def _check_member_likelihood(self, label: str, likelihood: Likelihood, *, group: str) -> None:
+        """A member dataset supplies the family; the group supplies all the noise."""
+        family = likelihood.family
+        if not family.ANALYTIC_WITH_GP or not family.GP_ANALYTIC_IMPLEMENTED:
+            raise LikelihoodError(
+                f"joint noise group {group!r}: dataset {label!r} uses the {family.NAME!r} "
+                f"family, whose GP marginalisation is not the analytic one this model needs. "
+                f"B ⊗ K_x is marginalised in closed form under a Gaussian family and under no "
+                f"other; a latent formulation over T coupled channels is not implemented."
+            )
+        if likelihood.censoring is not None:
+            raise LikelihoodError(
+                f"joint noise group {group!r}: dataset {label!r} carries a censoring "
+                f"declaration. A limit is a statement about one sample's own sampling "
+                f"distribution, and this model's samples are not independent across channels; "
+                f"the composition is refused rather than silently scored as if they were."
+            )
+        noise = likelihood.noise
+        if noise.CORRELATED:
+            raise LikelihoodError(
+                f"joint noise group {group!r}: dataset {label!r} also carries its own "
+                f"correlated noise model ({type(noise).__name__}). The group *is* the "
+                f"correlated process; a second one on the same residual would be counted twice. "
+                f"Leave the member's likelihood as Likelihood(GaussianFamily())."
+            )
+        if len(noise.parameters.names) != 0:
+            raise LikelihoodError(
+                f"joint noise group {group!r}: dataset {label!r}'s own noise model "
+                f"({type(noise).__name__}) declares parameters "
+                f"{list(noise.parameters.names)}. The group owns the whole covariance, "
+                f"diagonal included, so a per-channel scale or jitter would give the channels "
+                f"different diagonals — and the rotation is exact only where they share one "
+                f"(see this class's docstring). Declare scale=/jitter= on the joint noise "
+                f"model instead, where they apply to the group."
+            )
+
+    def _check_shared_diagonal(self, containers: Sequence[FunctionSamples], *, group: str) -> None:
+        """The channels' uncertainties must agree, because the rotation says so."""
+        reference = containers[0]
+        if reference.uncertainty is None:
+            return
+        first = np.asarray(reference.uncertainty, dtype=DTYPE).ravel()
+        for label, container in zip(self._datasets[1:], containers[1:], strict=True):
+            if container.uncertainty is None or not np.array_equal(
+                np.asarray(container.uncertainty, dtype=DTYPE).ravel(), first
+            ):
+                raise LikelihoodError(
+                    f"joint noise group {group!r}: dataset {label!r} and dataset "
+                    f"{self._datasets[0]!r} carry different per-sample uncertainties. The "
+                    f"rotation Q^T (x) I leaves diag(sigma^2) diagonal only when every channel "
+                    f"has the same sigma vector; otherwise the rotated noise couples the outputs "
+                    f"again and "
+                    f"the T scalar solves are not the joint density. Heteroscedasticity *along* "
+                    f"the grid is fine; it is the channels that must agree. Unequal per-channel "
+                    f"errors need the dense or reduced-rank solver, recorded with the general "
+                    f"LMC as a follow-on in likelihoods.md §15."
+                )
+
+    # -- evaluation ----------------------------------------------------------
+
+    def eigen(self, values: Mapping[str, Any], *, xp: Any = np) -> tuple[Any, Any]:
+        """``B``'s eigenvalues and eigenvectors at *values* — :meth:`ChannelCoupling.eigen`."""
+        return self._coupling.eigen(self._coupling.resolved(values), xp=xp)
+
+    def coupling_matrix(self, values: Mapping[str, Any], *, xp: Any = np) -> Any:
+        """``B`` itself at *values*. Never on the hot path; see :meth:`ChannelCoupling.matrix`."""
+        return self._coupling.matrix(self._coupling.resolved(values), xp=xp)
+
+    def rotate(self, residuals: Any, values: Mapping[str, Any]) -> np.ndarray:
+        """``R Q``: the ``T`` residual columns in ``B``'s eigenbasis.
+
+        Column ``s`` of the result is ``Σ_t Q_{ts} r_t``, which is the ``s``-th
+        block of ``(Qᵀ ⊗ I) r`` for a channel-major stacking — the rotated
+        output the diagnostics and the pointwise group are indexed by.
+        """
+        block = _channel_block(residuals, self.channels)
+        _, rotation = self.eigen(values)
+        return np.ascontiguousarray(block @ np.asarray(rotation, dtype=DTYPE))
+
+    def _rotated_problems(
+        self, residuals: Any, variance: Any, values: Mapping[str, Any]
+    ) -> tuple[list[tuple[np.ndarray, np.ndarray]], np.ndarray]:
+        """The ``T`` decoupled scalar problems, rescaled to a unit eigenvalue.
+
+        Returns ``[(u_s, w_s), ...]`` and the eigenvalues. Scoring ``u_s``
+        against ``K_x + diag(w_s)`` and adding ``-(N/2) log λ_s`` is
+        ``log N(r̃_s; 0, λ_s K_x + diag(sigma^2))`` — see the class docstring on why
+        the rescaling happens here rather than inside the kernel.
+        """
+        eigenvalues = np.asarray(self.eigen(values)[0], dtype=DTYPE).ravel()
+        if eigenvalues.size != self.channels:
+            raise LikelihoodError(
+                f"the coupling returned {eigenvalues.size} eigenvalue(s) for "
+                f"{self.channels} channels."
+            )
+        if not np.all(np.isfinite(eigenvalues)) or np.any(eigenvalues <= 0.0):
+            raise LikelihoodError(
+                f"the coupling B has eigenvalues {eigenvalues.tolist()}, which are not all "
+                f"finite and positive — so B is not a covariance at this parameter vector and "
+                f"B ⊗ K_x is not a covariance either."
+            )
+        rotated = self.rotate(residuals, values)
+        diagonal = _as_float64(np.asarray(variance).ravel(), "shared variance")
+        return (
+            [
+                (rotated[:, index] / np.sqrt(eigenvalues[index]), diagonal / eigenvalues[index])
+                for index in range(self.channels)
+            ],
+            eigenvalues,
+        )
+
+    def log_prob(
+        self,
+        residuals: Any,
+        variance: Any,
+        coordinates: np.ndarray,
+        values: Mapping[str, Any],
+        *,
+        kernel: Kernel | None = None,
+    ) -> float:
+        """``log N(vec(R); 0, B ⊗ K_x + I_T ⊗ diag(variance))``.
+
+        Parameters
+        ----------
+        residuals
+            ``observed - predicted`` per channel, in this model's own channel
+            order: a sequence of ``T`` vectors or one ``(n, T)`` block.
+        variance
+            The shared per-sample variance, ``(n,)``.
+        coordinates
+            The shared grid, ``(n, d)``.
+        values
+            The resolved parameter mapping — the kernel's hyperparameters and
+            the coupling's together.
+        kernel
+            The axis-bound kernel, when the caller has already built it.
+        """
+        bound = self._kernel if kernel is None else kernel
+        points = _as_points(coordinates, "data coordinates")
+        problems, eigenvalues = self._rotated_problems(residuals, variance, values)
+        resolved = bound.resolve(values)
+        total = 0.0
+        for index, (rotated, diagonal) in enumerate(problems):
+            total += self._solver.log_marginal_likelihood(
+                bound, points, rotated, diagonal, resolved
+            )
+            total -= 0.5 * rotated.size * float(np.log(eigenvalues[index]))
+        return float(total)
+
+    def pointwise_log_prob(
+        self,
+        residuals: Any,
+        variance: Any,
+        coordinates: np.ndarray,
+        values: Mapping[str, Any],
+        *,
+        kernel: Kernel | None = None,
+    ) -> np.ndarray:
+        """Per-sample leave-one-out conditional terms, **per rotated output**.
+
+        An ``(n, T)`` block: column ``s`` is
+        :meth:`GPSolver.conditional_loo` for the ``s``-th rotated output.
+        ``results.md`` §6's pointwise group is what consumes it, and the
+        rotated outputs rather than the channels are what it is indexed by
+        because the rotated outputs are the things that are independent: a
+        leave-one-out conditional of channel ``ra`` alone would condition on
+        ``dec``'s value at the same epoch without saying so.
+        """
+        bound = self._kernel if kernel is None else kernel
+        points = _as_points(coordinates, "data coordinates")
+        problems, eigenvalues = self._rotated_problems(residuals, variance, values)
+        resolved = bound.resolve(values)
+        columns = [
+            self._solver.conditional_loo(bound, points, rotated, diagonal, resolved)
+            - 0.5 * float(np.log(eigenvalues[index]))
+            for index, (rotated, diagonal) in enumerate(problems)
+        ]
+        return np.ascontiguousarray(np.column_stack(columns))
+
+    def sample(
+        self,
+        predicted: Sequence[Any],
+        variance: Any,
+        coordinates: np.ndarray,
+        values: Mapping[str, Any],
+        rng: np.random.Generator,
+        *,
+        kernel: Kernel | None = None,
+    ) -> np.ndarray:
+        """One **correlated** draw of all ``T`` channels: an ``(n, T)`` block.
+
+        Drawn in the rotated basis and rotated back, which is the generative
+        statement of the same factorisation :meth:`log_prob` scores with: each
+        rotated output is an independent draw from
+        ``N(0, λ_s K_x + diag(variance))`` — the GP part through
+        :meth:`GPSolver.latent_transform`, the same whitening the latent
+        declaration uses, and the diagonal part white — and ``R = R̃ Qᵀ``
+        puts the correlation back. The solver's own jitter is folded in
+        exactly as :meth:`GaussianFamily.sample` folds it in, and for the same
+        reason: it is part of the covariance the density scores.
+        """
+        bound = self._kernel if kernel is None else kernel
+        points = _as_points(coordinates, "data coordinates")
+        eigenvalues, rotation = self.eigen(values)
+        eigenvalues = np.asarray(eigenvalues, dtype=DTYPE).ravel()
+        resolved = bound.resolve(values)
+        diagonal = _as_float64(np.asarray(variance).ravel(), "shared variance")
+        stabiliser = float(getattr(self._solver, "jitter", 0.0) or 0.0)
+        size = int(points.shape[0])
+        columns = []
+        for index in range(self.channels):
+            whitened = rng.standard_normal(self._solver.latent_size(bound, size))
+            draw = np.sqrt(eigenvalues[index]) * np.asarray(
+                self._solver.latent_transform(bound, points, whitened, resolved), dtype=DTYPE
+            )
+            white = diagonal + eigenvalues[index] * stabiliser**2
+            columns.append(draw + np.sqrt(white) * rng.standard_normal(size))
+        rotated = np.column_stack(columns)
+        block = rotated @ np.asarray(rotation, dtype=DTYPE).T
+        means = _stack_channels(predicted, "predicted values")
+        return np.ascontiguousarray(means + block)
+
+    # -- provenance ----------------------------------------------------------
+
+    def to_spec(self) -> dict[str, Any]:
+        """The declaration, as JSON-normalisable data — ``results.md`` §14's shape."""
+        return {
+            "noise": type(self).__name__,
+            "joint": True,
+            "datasets": list(self._datasets),
+            "coupling": {
+                "parameterisation": self._coupling.NAME,
+                "channels": self._coupling.channels,
+                "parameters": list(self._coupling.parameters.names),
+            },
+            "kernel": self._kernel.spec().to_dict(),
+            "solver": self._solver.NAME,
+            "parameters": list(self.parameters.names),
+        }
+
+    def __repr__(self) -> str:
+        return (
+            f"JointGaussianProcessNoise({type(self._kernel).__name__}, "
+            f"{self._solver.NAME}, datasets={list(self._datasets)}, "
+            f"coupling={type(self._coupling).__name__})"
+        )
+
+
+def _masks_agree(left: FunctionSamples, right: FunctionSamples) -> bool:
+    """Whether two containers call the same samples valid."""
+    return bool(
+        np.array_equal(
+            np.asarray(left.valid).ravel(),
+            np.asarray(right.valid).ravel(),
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
 # The latent-GP declaration
 # ---------------------------------------------------------------------------
 
@@ -3490,6 +4491,20 @@ class Likelihood(Parameterised):
         noise = IndependentNoise() if noise is None else noise
         if not isinstance(noise, NoiseModel):
             raise LikelihoodError(f"Likelihood needs a NoiseModel, got {type(noise).__name__}.")
+        # W5.9. A joint noise model's covariance couples several datasets, and a
+        # Likelihood scores one; accepting it here would silently score the
+        # marginal B_tt K_x of one channel, which drops the cross-covariance
+        # that is the whole model. Declared rather than isinstance-checked, so a
+        # user's own joint noise model is refused here too.
+        if getattr(noise, "JOINT", False):
+            raise LikelihoodError(
+                f"{type(noise).__name__} declares JOINT = True: it is one correlated process "
+                f"over several datasets' channels, and a Likelihood scores one dataset. Declare "
+                f"it on the DatasetCollection instead — DatasetCollection({{...}}, "
+                f"joint={{'label': noise}}) — and leave each member dataset's own likelihood as "
+                f"Likelihood(GaussianFamily()). Scoring one channel through a Likelihood would "
+                f"drop the cross-covariance between the channels, which is the model."
+            )
         if censoring is not None and not family.SUPPORTS_CENSORING:
             raise LikelihoodError(
                 f"the {family.NAME} family does not consume a censoring declaration, but one was "

@@ -1548,6 +1548,121 @@ The refusal is raised **before** the generic `QUASISEPARABLE` one, because
 not" — and because a user who reaches for a product is usually reaching for the
 two-axis case, where no amount of registering would help.
 
+### Joint noise over a tuple of channels: the shared-grid intrinsic coregionalisation model (*added W5.9*)
+
+§15's eleventh limitation — "no cross-channel (vector-valued) correlated noise
+model" — is **lifted for the case in which it is exact**. A noise model belongs
+to one `Likelihood`, which belongs to one dataset, so a single correlated
+process over `T`-vectors had no expression; and "two scalar GPs with tied
+hyperparameters" is not an approximation of one, it is a different model, since
+it cannot express the cross-covariance at all — and the cross-covariance *is*
+the systematic.
+
+`JointGaussianProcessNoise(kernel, solver, datasets=…, coupling=…)` is that
+process, with
+
+```
+K = B ⊗ K_x
+```
+
+over `T` channels of one model observed on **one shared grid**: `K_x` is an
+ordinary `Kernel` along the grid and `B` is a `T × T` positive-definite
+`ChannelCoupling`.
+
+**Why it is still O(N).** Diagonalise `B = Q Λ Qᵀ` and rotate the residuals by
+`Qᵀ`. Because `(Qᵀ ⊗ I)(B ⊗ K_x)(Q ⊗ I) = Λ ⊗ K_x` is block-diagonal, the `T`
+rotated residual vectors are **independent**, and each is scored by an ordinary
+scalar GP with covariance `λ_s K_x + diag(σ²)` — `T` calls to the bound
+`GPSolver`, with `QuasisepGP` on an ordered one-dimensional grid giving `T·O(N)`
+rather than the `O((NT)³)` of the materialised matrix. Nothing is approximated,
+and the conformance battery holds the two to `tolerances.cross_solver` on every
+fixture.
+
+Each rotated solve is handed the **rescaled** problem `u = r̃_s / √λ_s` against
+`K_x + diag(σ²/λ_s)`, with `−(N/2) log λ_s` added back, rather than a kernel
+whose amplitude has been multiplied by `√λ_s`. The two are the same number; the
+first works for *any* kernel — a `Sum`, a kernel with no amplitude at all, a
+user's own — whereas the second would have to reach into a kernel tree and
+rescale it, which is neither general nor something a kernel's declaration
+promises.
+
+**The parameterisation of `B`.** `RotationCoupling(angle, log_variance_0,
+log_variance_1)` is the `T = 2` case: `B = Q(θ) diag(e^{v₀}, e^{v₁}) Q(θ)ᵀ`.
+Three parameters, which is the full `T(T+1)/2` of a 2×2 positive-definite
+matrix — nothing is given up — expressed in the coordinates the physics is
+stated in: the position angle of a centroiding systematic on the sky, or the
+Q/U leakage angle a polarimeter applies. It knows its own eigenvectors in
+closed form, which matters because `eigh`'s gradient is ill-conditioned exactly
+where two eigenvalues coincide and "the two channels have equal variance" is an
+ordinary point of the posterior. `CholeskyCoupling(T, log_diagonal=…,
+off_diagonal=…)` is the general fallback: `B = L Lᵀ`, complete, unconstrained,
+and needing no positive-definiteness check — at the price of a numerical `eigh`.
+
+The parameterisation has a symmetry: adding `π/2` to the angle is the same `B`
+with the two variances exchanged. So `B` is identified and `(θ, v₀, v₁)` is
+identified only up to that relabelling, and a posterior over the three comes
+back bimodal — the label switching a mixture model has, dealt with the same
+way: summarise `B`, or fix the angle where the instrument's own is known. The
+density is unaffected.
+
+**The one restriction, and it is a restriction rather than an oversight.** The
+rotation leaves the diagonal noise term diagonal only when the channels share
+one per-sample variance: the rotated `(s, s')` block of `diag(σ_t²)` is
+`Σ_t Q_{ts} Q_{ts'} diag(σ_t²)`, which is `δ_{ss'} diag(σ²)` when every `σ_t`
+is the same vector and a full coupling otherwise. So the channels must carry
+**equal uncertainties** — heteroscedastic *along* the grid as much as you like;
+it is the channels that must agree — which is exactly what a shared-grid
+astrometric solution or a Stokes `Q`/`U` pair from one polarimeter produces.
+This is checked at composition, by name, together with the shared grid (exact
+axis equality, `transformations.md` §10's rule) and the shared mask (a rotation
+mixes the channels sample by sample, so a sample the channels disagree about
+has no rotated value at all). Unequal per-channel errors, mismatched grids and
+the general LMC (`Σ_q B_q ⊗ k_q`) stay together on the dense/reduced-rank
+follow-on §15 records.
+
+**The kernel's amplitude must not be free.** `B ⊗ (a² K̃) = (a² B) ⊗ K̃`
+exactly, so a free amplitude beside a free `B` is one degree of freedom written
+twice and the posterior has a ridge rather than a mode. Refused at
+construction, naming the fix: fix the amplitude and let `B`'s log-variances
+carry the scale, which is what they are for. One *fixed* amplitude anywhere in
+a `Sum` pins the scale, so a sum's relative amplitudes stay fittable.
+
+**Where it is declared.** Not on a `Likelihood` — a likelihood scores one
+dataset and this scores `T` of them, and `Likelihood` refuses a noise model
+declaring `JOINT = True` by name. It goes on the `DatasetCollection`:
+
+```python
+DatasetCollection(
+    {"ra": Dataset(...), "dec": Dataset(...)},
+    joint={"astrom": JointGaussianProcessNoise(
+        Matern32(1.0, length_scale, axes=("time",)), QuasisepGP(),
+        datasets=("ra", "dec"),
+        coupling=RotationCoupling(angle_prior, variance_prior, variance_prior),
+    )},
+)
+```
+
+Each member dataset keeps an ordinary `Likelihood(GaussianFamily())`; its own
+noise model must declare **no parameters**, because the group owns the whole
+covariance, diagonal included, and a per-channel `scale` or `jitter` would give
+the channels different diagonals — the one thing the rotation may not have. The
+group's own `scale` and `jitter` are where those go.
+
+The group is one further component of the joint parameter space (so its
+parameters are `astrom.angle`, `astrom.log_variance_0`, …) and **one further
+entry of `DatasetCollection.contributions`, in place of its members'** — the
+first use of `contributions` as something other than one term per dataset. See
+`inference.md` §4 for the `"joint"` decomposition, and `results.md` §6 for what
+the pointwise group stores.
+
+**Simulation draws the channels correlated.** `DatasetCollection.draw_group`
+draws in the rotated basis and rotates back, which is the generative statement
+of the same factorisation the density is scored with. Drawing each channel from
+its own marginal instead would produce data whose cross-covariance is zero —
+a training set from a *different* model than the one being fitted — so the
+native per-dataset draw on torch and jax refuses a problem with joint groups by
+name and the caller falls back to the contract path.
+
 ## 8. Masks: `weights()`, and excision
 
 `results_schema.md` §16 asked this contract to pick one of `weights()` and
@@ -2358,16 +2473,24 @@ Each is a decision, not an oversight. Each has an extension point.
    transformation. Retained deliberately (X-1's ruling keeps it): widening
    the argument to model internals would re-fuse the pieces this contract
    exists to separate.
-11. **No cross-channel (vector-valued) correlated noise model.** A noise
-   model belongs to one `Likelihood`, which belongs to one dataset, so a
-   single correlated process over 2-vectors — astrometric (RA, Dec)
-   residuals perturbed together, Stokes Q/U leakage, a calibration
-   systematic shared across bands — is not expressible; two scalar GPs
-   with tied hyperparameters is the nearest approximation and is a
-   different model (it cannot express the cross-covariance). Recorded from
-   the W1.11 astrometric sketch at the freeze; the extension point is a
-   `JointGP` solver-strategy slot spanning datasets, deferred to
-   **Phase 5** with the other advanced strategies.
+11. ~~**No cross-channel (vector-valued) correlated noise model.**~~
+   **Lifted at W5.9 for the shared-grid intrinsic case.** A noise model still
+   belongs to one `Likelihood`, but a *joint* one no longer does: a
+   `JointGaussianProcessNoise` with `K = B ⊗ K_x` is declared on the
+   `DatasetCollection` and scores `T` channels of one model on one shared grid
+   together, exactly and at O(N) (§7). Astrometric `(RA, Dec)` residuals
+   perturbed together by a centroiding systematic — the W1.11 sketch this
+   limitation was recorded from — and Stokes `Q`/`U` mixed by an instrumental
+   leakage are both expressible now, in `B`'s own physical parameterisation.
+
+   **What remains a limitation**, and is the dense/reduced-rank follow-on:
+   the **general LMC** (`Σ_q B_q ⊗ k_q`, several coupling matrices with
+   different kernels), **mismatched grids** between the channels, and
+   **unequal per-channel uncertainties**. All three break the Kronecker
+   structure the exact O(N) rotation rests on — the first two by having no
+   single `K_x`, the third because `Qᵀ ⊗ I` leaves `diag(σ_t²)` diagonal only
+   where every channel's `σ_t` is the same vector. Each is refused by name at
+   composition rather than approximated.
 
 ## 16. What this contract hands to the specs downstream
 

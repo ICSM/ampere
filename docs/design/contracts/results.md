@@ -499,6 +499,27 @@ is a different program and not a slower answer.
 deliberately keeps the per-dataset split (§15 R6), so the swap has to be
 explicit rather than discovered by experiment.*)
 
+*(Amended W5.9.* A third decomposition, `"joint"`, for a
+`JointGaussianProcessNoise` group (`likelihoods.md` §7). A group's `T` channels
+are **not** independent, so a leave-one-out conditional of one channel alone
+would condition on its sibling's value at the same sample without saying so.
+What is independent is the group's **rotated outputs** — the residuals in `B`'s
+eigenbasis, which is what makes the joint solve `T` scalar solves — so those
+are what the pointwise group stores: output `s` under the group's `s`-th member
+label, on the grid every channel shares, with the per-variable
+`ampere_decomposition` reading `"joint"`. Like `conditional_loo` the terms do
+not sum to the joint value.
+
+Storing output `s` under member `s` is a storage convention, not a claim that
+the output "is" that channel: the eigenbasis rotates with θ. The convention is
+the right one because there are exactly `T` of each and they share one grid, so
+the group needs no coordinate axis of its own; and the rotation itself is
+recovered per draw from `JointGaussianProcessNoise.eigen(values)`, which is
+where a consumer that needs it should look. The per-dataset `log_likelihood`
+group a run always carries is where the group's own single term lives, keyed by
+the group's label — `inference.md` §4.9's `"joint"` entry. Family B and C
+diagnostics read the pointwise group, so they run per rotated output too.)*
+
 ## 7. Groups a run does not store, and the rule for getting them
 
 `diagnostics.md` §7 puts two questions to this contract.

@@ -21,13 +21,18 @@ import pytest
 from examples.astrometry import generators
 from examples.astrometry.astrometry import (
     QUALIFIED_TRUTH,
+    SBC_DIRECTION,
+    SBC_PARAMETERS,
     build_instruments,
     build_model,
     build_problem,
+    calibrate,
+    coverage_at,
     fit,
     main,
     recovers_truth,
     report,
+    sbc_problem,
 )
 
 #: emcee needs at least 2 x n_dim walkers to span this six-parameter problem.
@@ -134,3 +139,174 @@ class TestMain:
         assert "free parameters:" in out
         assert "emcee on reference" in out
         assert "wall clock" in out
+
+
+# ---------------------------------------------------------------------------
+# The joint arm (W5.9)
+# ---------------------------------------------------------------------------
+
+#: The tiny budget the always-on calibration rows use. Twelve refits is a
+#: smoke test of the *machinery*, not a calibration result, and the row that
+#: uses it says so: `ampere.results.sbc` itself warns below a hundred.
+TINY_SBC = {"count": 12, "draws": 120, "walkers": 12, "steps": 250, "burn_in": 100}
+
+#: The budget the pinned claim is measured at. Two arms x 48 refits of a
+#: five-parameter problem is well over ten minutes on one core, which is why
+#: this row carries the ``astrometry_full`` marker and the row above does not.
+FULL_SBC = {"count": 48, "draws": 200}
+
+#: Pinned margins, measured on the reference backend at
+#: ``examples.astrometry.generators.SEED``. The study is seeded end to end ---
+#: the prior draws, each replica's walkers --- so these are reproducible rather
+#: than sampled, and the margins cover dependency-version drift rather than
+#: Monte-Carlo noise. Measured at the 0.90 level on ``model.direction``:
+#:
+#: ===================  ========  =============
+#: arm                  coverage  KS p(ranks)
+#: ===================  ========  =============
+#: joint                0.917     0.235
+#: independent GPs      0.729     0.021
+#: rigid (white noise)  0.479     0.000
+#: ===================  ========  =============
+#:
+#: The independent arm's 0.729 is close to the ``1/sqrt(1 + rho)`` an omitted
+#: cross-covariance of 0.86 predicts (about 0.77), which is the check that the
+#: mechanism is the one claimed rather than an artefact.
+JOINT_COVERAGE_FLOOR = 0.80
+COVERAGE_GAP = 0.10
+
+
+class TestTheJointArm:
+    """One correlated process over both channels, on injected correlated data."""
+
+    def test_the_joint_arm_composes_and_scores(self) -> None:
+        problem = build_problem("reference", joint=True)
+        assert set(problem.datasets) == {"ra", "dec"}
+        # The group is one component of the parameter space...
+        assert set(problem.parameters.free_names) >= {
+            "astrom.angle",
+            "astrom.log_variance_0",
+            "astrom.log_variance_1",
+        }
+        # ... and one contribution, in place of its members'.
+        assert problem.datasets.contribution_labels() == ("astrom",)
+        assert problem.datasets.group_of("ra") == "astrom"
+        theta = {
+            **QUALIFIED_TRUTH,
+            "astrom.angle": generators.JOINT_TRUTH["angle"],
+            "astrom.log_variance_0": generators.JOINT_TRUTH["log_variance_0"],
+            "astrom.log_variance_1": generators.JOINT_TRUTH["log_variance_1"],
+        }
+        evaluation = problem.evaluate(theta)
+        assert set(evaluation.contributions) == {"astrom"}
+        assert np.isfinite(evaluation.log_likelihood)
+
+    def test_the_injected_systematic_is_correlated_between_the_channels(self) -> None:
+        """The data the study fits really do carry a cross-channel error."""
+        model = build_model("reference")
+        ra_instrument, dec_instrument = build_instruments("reference")
+        plain = generators.synthetic_data(model, ra_instrument, dec_instrument)
+        injected = generators.synthetic_joint_data(model, ra_instrument, dec_instrument)
+        differences = [
+            np.asarray(injected[index].values, dtype=float)
+            - np.asarray(plain[index].values, dtype=float)
+            for index in (0, 1)
+        ]
+        # The difference between the two generators is exactly the injected
+        # systematic (they share a white-noise stream), so it is a draw from
+        # B (x) K_x and nothing else.
+        assert np.max(np.abs(differences[0])) > generators.SIGMA
+        correlation = float(np.corrcoef(differences[0], differences[1])[0, 1])
+        implied = generators.coupling_matrix()
+        expected = implied[0, 1] / np.sqrt(implied[0, 0] * implied[1, 1])
+        assert correlation == pytest.approx(expected, abs=0.25)
+        assert correlation > 0.5
+
+    def test_the_joint_fit_recovers_the_orbit_at_a_small_budget(self) -> None:
+        """A short chain on the joint arm runs and returns the six parameters."""
+        problem = build_problem("reference", joint=True)
+        # Nine dimensions here, not six: emcee needs 2 x n_dim walkers, and the
+        # group's three parameters are three of them.
+        run = fit(problem, backend="reference", **{**TINY, "walkers": 24})
+        posterior = run["posterior"].dataset
+        assert set(posterior.data_vars) >= set(QUALIFIED_TRUTH)
+        assert "astrom.angle" in posterior.data_vars
+
+    def test_simulate_draws_the_channels_together(self) -> None:
+        problem = build_problem("reference", joint=True)
+        theta = {
+            **QUALIFIED_TRUTH,
+            "astrom.angle": generators.JOINT_TRUTH["angle"],
+            "astrom.log_variance_0": generators.JOINT_TRUTH["log_variance_0"],
+            "astrom.log_variance_1": generators.JOINT_TRUTH["log_variance_1"],
+        }
+        simulation = problem.simulate(theta, observe=True)
+        assert not simulation.failed
+        assert simulation.observations is not None
+        assert set(simulation.observations) == {"ra", "dec"}
+
+
+class TestTheCalibrationStudy:
+    """SBC on each arm, against the joint generator (*W5.9*)."""
+
+    def test_the_study_runs_at_a_smoke_budget(self) -> None:
+        """The machinery, not the claim: twelve refits is not a calibration result."""
+        calibration = calibrate("reference", arm="joint", seed=generators.SEED, **TINY_SBC)
+        assert calibration["ranks"].shape == (TINY_SBC["count"], len(SBC_PARAMETERS) + 1)
+        coverage = coverage_at(calibration, 0.9, SBC_DIRECTION)
+        assert 0.0 <= coverage <= 1.0
+
+    def test_the_independent_arm_refits_the_same_data(self) -> None:
+        """The comparison arm is a different *model* on the simulating arm's data."""
+        joint = sbc_problem("reference", arm="joint")
+        independent = sbc_problem(
+            "reference",
+            arm="independent",
+            observed=(joint.datasets["ra"].observed, joint.datasets["dec"].observed),
+        )
+        assert independent.datasets.contribution_labels() == ("ra", "dec")
+        assert independent.datasets.group_of("ra") is None
+        # The comparison arm carries a GP per channel, at the *correct*
+        # marginal amplitude rather than a fitted one -- which is the whole
+        # design: a fitted amplitude would let each GP over-inflate and hide
+        # the missing cross-covariance under a nuisance parameter.
+        amplitudes = generators.marginal_amplitudes()
+        for label in ("ra", "dec"):
+            noise = independent.datasets[label].likelihood.noise
+            assert noise.CORRELATED
+            assert noise.parameters["amplitude"].value == pytest.approx(amplitudes[label])
+        assert set(independent.parameters.free_names) == {"model.pmra", "model.pmdec"}
+        for label in ("ra", "dec"):
+            assert np.array_equal(
+                np.asarray(independent.datasets[label].observed.values),
+                np.asarray(joint.datasets[label].observed.values),
+            )
+
+    @pytest.mark.astrometry_full
+    def test_the_joint_arm_is_calibrated_where_the_independent_one_is_not(self) -> None:
+        """The pinned claim, at the count where SBC has power.
+
+        Under an injected centroiding systematic shared by the two sky axes,
+        the joint fit's interval on the **direction** of the proper motion ---
+        ``(pmra + pmdec)/sqrt(2)``, the projection along which the two
+        channels' errors add --- covers at its nominal rate and the
+        independent-GP fit's does not. Both arms are given the noise process
+        they are entitled to know, the comparison arm each channel's correct
+        marginal amplitude, so the missing cross-covariance is the only
+        difference between them; and both arms' *marginal* coverage on
+        ``pmra`` and ``pmdec`` is nominal, which is why the claim is pinned on
+        the derived quantity and not on a parameter (see ``SBC_DIRECTION``).
+        """
+        joint = calibrate("reference", arm="joint", seed=generators.SEED, **FULL_SBC)
+        independent = calibrate("reference", arm="independent", seed=generators.SEED, **FULL_SBC)
+        joint_coverage = coverage_at(joint, 0.9, SBC_DIRECTION)
+        independent_coverage = coverage_at(independent, 0.9, SBC_DIRECTION)
+        assert joint_coverage >= JOINT_COVERAGE_FLOOR, (
+            f"the joint arm covered {joint_coverage:.3f} at the 0.90 level, below the pinned "
+            f"floor of {JOINT_COVERAGE_FLOOR}."
+        )
+        assert independent_coverage <= joint_coverage - COVERAGE_GAP, (
+            f"the independent arm covered {independent_coverage:.3f} against the joint arm's "
+            f"{joint_coverage:.3f}: a gap of {joint_coverage - independent_coverage:.3f}, below "
+            f"the pinned {COVERAGE_GAP}."
+        )

@@ -80,8 +80,13 @@ from typing import Any
 
 import numpy as np
 
-from ampere.core.dataset import LIKELIHOOD_COMPONENT, Dataset, FittingProblem
-from ampere.core.exceptions import LikelihoodError, ResultsError
+from ampere.core.dataset import (
+    LIKELIHOOD_COMPONENT,
+    Dataset,
+    FittingProblem,
+    sample_coordinates,
+)
+from ampere.core.exceptions import DatasetError, LikelihoodError, ResultsError
 from ampere.core.likelihood import GaussianProcessNoise, Marginalisation
 from ampere.core.results_schema import FunctionSamples, format_axis_label
 
@@ -101,6 +106,7 @@ __all__ = [
     "CONDITIONAL_LOO_DECOMPOSITION",
     "FACTORISED_DECOMPOSITION",
     "GP_LOCALISATION_GROUP",
+    "JOINT_DECOMPOSITION",
     "POINTWISE_LOG_LIKELIHOOD_GROUP",
     "POSTERIOR_PREDICTIVE_GROUP",
     "RESIDUALS_GROUP",
@@ -143,6 +149,18 @@ FACTORISED_DECOMPOSITION = "factorised"
 #: they deliberately do **not** sum to the joint value — a GP likelihood has no
 #: per-observation factorisation (``likelihoods.md`` §16).
 CONDITIONAL_LOO_DECOMPOSITION = "conditional_loo"
+
+#: The joint decomposition (**W5.9**): the leave-one-out conditional terms of a
+#: :class:`~ampere.core.JointGaussianProcessNoise` group's **rotated outputs**.
+#: A group's ``T`` channels are not independent, so a leave-one-out conditional
+#: of one channel alone would condition on its sibling's value at the same
+#: sample without saying so; the rotated outputs are the things that *are*
+#: independent, and they are what this decomposition is indexed by — output
+#: ``s`` stored under the group's ``s``-th member's label, on the grid every
+#: channel shares. Like ``conditional_loo`` the terms do not sum to the joint
+#: value. The rotation itself is parameter-dependent: recover it per draw with
+#: ``JointGaussianProcessNoise.eigen(values)``.
+JOINT_DECOMPOSITION = "joint"
 
 
 #: The four views a complex dataset's derived variable may be stored as
@@ -809,6 +827,7 @@ def add_pointwise_log_likelihood(
     _require_same_problem(tree, problem)
     labels = _requested(problem, datasets)
     decompositions = {label: _decomposition_of(problem, label) for label in labels}
+    groups = _requested_groups(problem, labels)
     thetas, kept = _stored_thetas(tree, problem, thin)
     chains, draws = thetas.shape[0], thetas.shape[1]
     variables = {
@@ -828,10 +847,20 @@ def add_pointwise_log_likelihood(
                 predicted = simulation.predicted.get(label)
                 if predicted is None:  # pragma: no cover - a failure short-circuits above
                     continue
+                # W5.9: a channel of a joint noise group has no per-observation
+                # decomposition of its own; the group's rotated outputs are the
+                # independent things, and they are taken once per group below.
+                if problem.datasets.group_of(label) is not None:
+                    continue
                 split = dataset.route(routed.get(label, {}))
                 variables[label][chain, draw] = _pointwise_of(
                     dataset, predicted, split.get(LIKELIHOOD_COMPONENT)
                 )
+            for group in groups:
+                rotated = _joint_pointwise_of(problem, group, simulation.predicted, routed)
+                for member, column in rotated.items():
+                    if member in variables:
+                        variables[member][chain, draw] = column
     dims, coords = _observed_axes(problem, labels)
     distinct = sorted(set(decompositions.values()))
     attached = _attach(
@@ -853,7 +882,11 @@ def add_pointwise_log_likelihood(
                 "one term per retained observation, on the observed container's own coordinate "
                 "axis with masked samples as NaN. 'factorised' terms sum to the dataset's joint "
                 "log-likelihood; 'conditional_loo' terms deliberately do not, because a GP "
-                "likelihood has no per-observation factorisation (results.md §6)."
+                "likelihood has no per-observation factorisation (results.md §6). 'joint' terms "
+                "are a JointGaussianProcessNoise group's rotated outputs -- output s under the "
+                "group's s-th member's label, on the grid every channel shares -- and likewise "
+                "do not sum to the joint value; the rotation is parameter-dependent and is "
+                "recovered per draw from JointGaussianProcessNoise.eigen(values)."
             ),
         },
     )
@@ -879,9 +912,82 @@ def _decomposition_of(problem: FittingProblem, label: str) -> str:
             f"than this contract (likelihoods.md §7). Use the per-dataset log_likelihood group "
             f"every run already carries."
         )
+    if problem.datasets.group_of(label) is not None:
+        return JOINT_DECOMPOSITION
     if isinstance(likelihood.noise, GaussianProcessNoise):
         return CONDITIONAL_LOO_DECOMPOSITION
     return FACTORISED_DECOMPOSITION
+
+
+def _requested_groups(problem: FittingProblem, labels: Sequence[str]) -> tuple[str, ...]:
+    """The joint noise groups any requested dataset belongs to (**W5.9**).
+
+    A group's rotated outputs are computed together or not at all, so asking
+    for one channel of a group asks for the group; the other channels' columns
+    are simply not stored when they were not requested.
+    """
+    found: list[str] = []
+    for label in labels:
+        group = problem.datasets.group_of(label)
+        if group is not None and group not in found:
+            found.append(group)
+    return tuple(found)
+
+
+def _joint_pointwise_of(
+    problem: FittingProblem,
+    group: str,
+    predicted: Mapping[str, FunctionSamples],
+    routed: Mapping[str, Any],
+) -> dict[str, np.ndarray]:
+    """One draw's rotated-output terms for one joint noise group (**W5.9**).
+
+    Returns one full-length row per member label, masked samples NaN, with the
+    ``s``-th member carrying the ``s``-th rotated output. That pairing is a
+    storage convention rather than a claim that output ``s`` "is" channel
+    ``s``: the outputs live in ``B``'s eigenbasis, which rotates with θ, and
+    the decomposition attribute says so. What makes it the right convention is
+    that there are exactly ``T`` of each and they share one grid, so the group
+    needs no coordinate axis of its own.
+    """
+    noise = problem.datasets.joint[group]
+    members = noise.datasets
+    first = problem.datasets[members[0]]
+    values = dict(routed.get(group, {}))
+    rows = {
+        label: np.full(problem.datasets[label].observed.n_samples, np.nan, dtype=float)
+        for label in members
+    }
+    missing = [label for label in members if predicted.get(label) is None]
+    if missing:  # pragma: no cover - a failure short-circuits the caller
+        return rows
+    try:
+        retain = problem.datasets._group_retained(group, predicted)
+        residuals = [
+            problem.datasets._group_residual(label, predicted[label], retain) for label in members
+        ]
+        if not np.any(retain):
+            return rows
+        sigma = noise.sigma(first.observed, retain, values)
+        variance = (
+            np.zeros(int(np.count_nonzero(retain)))
+            if sigma is None
+            else np.asarray(sigma, dtype=float) ** 2
+        )
+        terms = noise.pointwise_log_prob(
+            residuals,
+            variance,
+            sample_coordinates(first.observed)[retain],
+            values,
+            kernel=noise.kernel_for(first.observed),
+        )
+    except (DatasetError, LikelihoodError) as error:
+        raise ResultsError(
+            f"joint noise group {group!r} cannot supply the per-observation decomposition: {error}"
+        ) from error
+    for index, label in enumerate(members):
+        rows[label][retain] = np.asarray(terms, dtype=float)[:, index]
+    return rows
 
 
 def _pointwise_of(

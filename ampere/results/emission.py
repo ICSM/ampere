@@ -305,7 +305,11 @@ def _log_likelihood_variables(
     problem: FittingProblem, grid: Sequence[Sequence[Evaluation]]
 ) -> dict[str, np.ndarray]:
     shape = (len(grid), len(grid[0]))
-    variables = {label: np.full(shape, np.nan) for label in problem.datasets}
+    # W5.9: keyed by the problem's *contribution* labels rather than by its
+    # datasets. A dataset a joint noise group claims has no term of its own --
+    # its residual enters the group's one term -- so a variable named for it
+    # would be a column of NaN, and the group's would be dropped.
+    variables = {label: np.full(shape, np.nan) for label in problem.datasets.contribution_labels()}
     for c, chain in enumerate(grid):
         for d, evaluation in enumerate(chain):
             for label, value in evaluation.contributions.items():

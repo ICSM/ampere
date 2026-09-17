@@ -24,7 +24,17 @@ here; distinct labels are given anyway, for symmetry with the other pages.
 
 The likelihood
 --------------
-Two arms, chosen with ``--gp``: independent Gaussian noise (the rigid
+Three arms. ``--gp`` and the default are described below; ``--joint``
+(**W5.9**) is one correlated process over *both* channels,
+:class:`~ampere.core.JointGaussianProcessNoise` with ``K = B (x) K_x``,
+fitted to data carrying an injected centroiding systematic shared by the two
+sky axes. ``--sbc`` runs the calibration study that compares the arms: the
+joint fit's proper-motion intervals cover at their nominal rate under that
+systematic and two independent GPs' do not, because two independent GPs can
+reproduce each axis's marginal scatter exactly and can say nothing at all
+about the correlation between them.
+
+The other two arms: independent Gaussian noise (the rigid
 comparison), or :class:`~ampere.core.GaussianProcessNoise` with
 :class:`~ampere.core.Matern32` on the ``QuasisepGP`` solver — the O(N) path a
 :class:`~ampere.core.TimeSeries`'s one ordered ``time`` axis is exactly the
@@ -46,6 +56,8 @@ Run it::
     python -m examples.astrometry                      # reference, emcee
     python -m examples.astrometry --backend torch       # NUTS
     python -m examples.astrometry --gp                  # the flexible likelihood
+    python -m examples.astrometry --joint               # the joint channel noise (W5.9)
+    python -m examples.astrometry --sbc joint           # the calibration study
 
 :mod:`tests.examples.test_astrometry_example` is this module's own coverage:
 a fast, always-on suite at a tiny budget. The full-budget recovery this item
@@ -71,6 +83,7 @@ from ampere.core import (
     GaussianFamily,
     Instrument,
     Likelihood,
+    RotationCoupling,
 )
 
 from . import generators
@@ -80,19 +93,32 @@ __all__ = [
     "DEFAULT_BURN_IN",
     "DEFAULT_CHAINS",
     "DEFAULT_DRAWS",
+    "DEFAULT_SBC_BURN_IN",
+    "DEFAULT_SBC_COUNT",
+    "DEFAULT_SBC_DRAWS",
+    "DEFAULT_SBC_STEPS",
+    "DEFAULT_SBC_WALKERS",
     "DEFAULT_STEPS",
     "DEFAULT_WALKERS",
     "DEFAULT_WARMUP",
+    "JOINT_LOG_VARIANCE_PRIOR",
     "QUALIFIED_TRUTH",
+    "SBC_DIRECTION",
+    "SBC_PARAMETERS",
     "backend_module",
     "build_instruments",
     "build_model",
     "build_problem",
+    "calibrate",
+    "coverage_at",
+    "direction_of",
     "fit",
+    "joint_noise",
     "main",
     "noise_module",
     "recovers_truth",
     "report",
+    "sbc_problem",
 ]
 
 BACKENDS = ("reference", "torch", "jax")
@@ -122,6 +148,80 @@ DEFAULT_CHAINS = 2
 #: of this study is recovering the orbit, not fitting the noise process).
 GP_AMPLITUDE = 0.03
 GP_LENGTH_SCALE = 120.0
+
+# -- the joint arm (W5.9) ---------------------------------------------------
+
+#: Prior on each of ``B``'s log-eigenvalues. It contains both of
+#: :data:`~examples.astrometry.generators.JOINT_TRUTH`'s (-7.0 and -9.7, at one
+#: and 1.7 standard deviations) and it is *informative*, deliberately: a
+#: centroiding systematic is known a priori to be of order tens of microarcsec,
+#: and a coupling free to reach a milliarcsecond would simply absorb the reflex
+#: wobble instead --- the flexible likelihood's standing hazard, which M2 studies
+#: at length and which a prior on the noise *scale* is the ordinary answer to.
+#: On the **log** scale for the reason ``RotationCoupling`` asks for
+#: log-variances at all: a variance spans orders of magnitude and NUTS wants the
+#: parameterisation that makes it a location.
+JOINT_LOG_VARIANCE_PRIOR = st.norm(-8.0, 1.0)
+
+#: The comparison arm's GP amplitudes are **not** fitted: they are held at
+#: :func:`~examples.astrometry.generators.marginal_amplitudes`, the standard
+#: deviation the injected systematic actually gives each channel. That is the
+#: whole design of the comparison. Two independent GPs can reproduce each
+#: axis's marginal scatter exactly, and giving them a prior to discover it
+#: instead would let them *over*-inflate and hide the effect under a fitted
+#: nuisance --- which is what an earlier version of this study measured, and
+#: why it measured nothing. Handing them the right marginals leaves the missing
+#: cross-covariance as the only difference between the arms.
+
+#: What the SBC study ranks. The orbital parameters only: the claim under test
+#: is that the *physical* posterior is calibrated, and the noise model's own
+#: parameters mean different things in the two arms (there is no coupling in an
+#: independent-GP fit at all), so ranking them would compare two different
+#: questions.
+SBC_PARAMETERS: tuple[str, ...] = ("model.pmra", "model.pmdec")
+
+#: The derived quantity the comparison is pinned on, and the reason it is a
+#: *derived* one rather than a parameter.
+#:
+#: A cross-channel systematic does not bias a single channel's own parameter ---
+#: it correlates the **errors** of the two channels' parameters. ``pmra`` enters
+#: only ``ra`` and ``pmdec`` only ``dec``, and both are measured with the same
+#: weight along the epoch grid (a proper motion is a linear trend), so a
+#: centroiding error shared by the two axes makes their two errors move
+#: together. Each *marginal* posterior is then still about the right width ---
+#: which is why both arms' marginal coverage comes out nominal, and this study
+#: reports that --- while the **joint** posterior has the wrong shape: the
+#: independent-GP fit reports two errors as uncorrelated when they are
+#: correlated at about 0.86.
+#:
+#: The projection that sees it is the one along which the two errors add:
+#: ``(pmra + pmdec)/sqrt(2)``, the **diagonal** of the proper-motion plane. Its
+#: true variance is ``v(1 + rho)``; a model that believes the errors
+#: independent reports ``v``, understating the interval by ``sqrt(1 + rho)`` ---
+#: about 1.36 here. That is undercoverage, and it is what a shared centroiding
+#: systematic does to the *direction* of a measured proper motion, which is a
+#: quantity astronomers publish.
+SBC_DIRECTION = "model.direction"
+
+#: SBC budgets. Deliberately small enough to run inside a test: 32 refits of a
+#: two-parameter problem over 28 epochs. `python -m examples.astrometry --sbc`
+#: with `--sbc-count` raised is the real study.
+#: How much of ``B`` the calibration study fits: **none of it**. Both arms are
+#: given the noise process they are entitled to know --- the joint arm the whole
+#: of ``B``, the comparison arm each channel's correct marginal --- so that the
+#: one thing that differs between them is the cross-covariance, which is the one
+#: thing the study is about. Fitting ``B`` as well is what ``--joint`` does and
+#: what the NUTS rows in ``tests/inference`` exercise; doing it *here* would mix
+#: a question about the model with a question about a sampler's ability to
+#: explore a bimodal noise sector (the coupling's own relabelling symmetry, see
+#: ``RotationCoupling``) at a budget a test can afford.
+COUPLING_FIT = "none"
+
+DEFAULT_SBC_COUNT = 32
+DEFAULT_SBC_DRAWS = 200
+DEFAULT_SBC_WALKERS = 16
+DEFAULT_SBC_STEPS = 900
+DEFAULT_SBC_BURN_IN = 400
 
 
 def backend_module(backend: str) -> Any:
@@ -194,23 +294,83 @@ def build_instruments(backend: str) -> tuple[Instrument, Instrument]:
     return ra_instrument, dec_instrument
 
 
+def joint_noise(backend: str, *, fit: str = "full") -> Any:
+    """The joint noise model over the two channels (**W5.9**).
+
+    ``K = B (x) K_x``: one correlated process over ``ra`` and ``dec``, with
+    ``B`` in :class:`~ampere.core.RotationCoupling`'s physical parameterisation
+    (a position angle and two log-variances) and ``K_x`` a Matern-3/2 along the
+    shared epoch grid.
+
+    ``fit`` chooses how much of ``B`` is fitted: ``"full"`` frees the angle and
+    both log-variances, ``"variances"`` holds the angle at the injected value
+    (which is what the calibration study does --- see :func:`sbc_problem` for
+    why), and ``"none"`` holds all three.
+
+    Two things are held fixed and both are deliberate. The **kernel's
+    amplitude** must be: ``B (x) (a^2 K) = (a^2 B) (x) K``, so a free amplitude
+    beside a free ``B`` is one degree of freedom written twice, and
+    ``JointGaussianProcessNoise`` refuses the pair by name. The **length
+    scale** is fixed at the injected one because this study is about the
+    cross-channel structure rather than about the correlation length --- the
+    flexible likelihood's own calibration claim is M2's question, asked of a
+    misspecified physical model, not of this modality's known systematic.
+    """
+    noise = noise_module(backend)
+    kernel = noise.Matern32(1.0, generators.JOINT_LENGTH_SCALE, axes=("time",))
+    angle: Any = st.uniform(0.0, np.pi) if fit == "full" else generators.JOINT_TRUTH["angle"]
+    variances: list[Any] = (
+        [JOINT_LOG_VARIANCE_PRIOR, JOINT_LOG_VARIANCE_PRIOR]
+        if fit in ("full", "variances")
+        else [generators.JOINT_TRUTH["log_variance_0"], generators.JOINT_TRUTH["log_variance_1"]]
+    )
+    coupling = RotationCoupling(angle, *variances)
+    return noise.JointGaussianProcessNoise(
+        kernel, noise.QuasisepGP(), datasets=("ra", "dec"), coupling=coupling
+    )
+
+
 def build_problem(
-    backend: str = "reference", *, gp: bool = False, seed: int = generators.SEED
+    backend: str = "reference",
+    *,
+    gp: bool = False,
+    joint: bool = False,
+    injected: bool | None = None,
+    seed: int = generators.SEED,
 ) -> FittingProblem:
     """The composed problem: one model, two channels, distinct labels.
 
     ``gp=True`` swaps independent noise for the flexible likelihood
     (``GaussianProcessNoise(Matern32(...), QuasisepGP())``) on both channels.
+
+    ``joint=True`` is **W5.9**'s arm: one correlated process over both
+    channels (:func:`joint_noise`), declared on the ``DatasetCollection``
+    rather than on either dataset's likelihood, because it is one covariance
+    over two datasets. It also switches the data to the ones carrying an
+    injected correlated centroiding systematic
+    (:func:`~examples.astrometry.generators.synthetic_joint_data`) --- there is
+    no point fitting a cross-channel model to data with no cross-channel
+    structure. ``injected=`` overrides that pairing, which is how the
+    comparison arm is built: ``build_problem(gp=True, injected=True)`` fits the
+    *same* systematic-bearing data with two independent GPs, and is the fit
+    whose coverage the study shows is not nominal.
     """
     model = build_model(backend)
     ra_instrument, dec_instrument = build_instruments(backend)
-    observed_ra, observed_dec = generators.synthetic_data(
-        model, ra_instrument, dec_instrument, seed=seed
+    generate = (
+        generators.synthetic_joint_data
+        if (joint if injected is None else injected)
+        else generators.synthetic_data
     )
+    observed_ra, observed_dec = generate(model, ra_instrument, dec_instrument, seed=seed)
     noise = noise_module(backend)
 
     def likelihood() -> Likelihood:
-        if not gp:
+        if joint or not gp:
+            # A channel of a joint group carries the family and nothing else:
+            # the group owns the whole covariance, diagonal included, and a
+            # per-channel scale or jitter would give the channels different
+            # diagonals, which is the one thing the rotation may not have.
             return Likelihood(GaussianFamily(), noise.IndependentNoise())
         kernel = noise.Matern32(GP_AMPLITUDE, GP_LENGTH_SCALE, axes=("time",))
         return Likelihood(GaussianFamily(), noise.GaussianProcessNoise(kernel, noise.QuasisepGP()))
@@ -219,7 +379,8 @@ def build_problem(
         {
             "ra": Dataset(observed_ra, ra_instrument, likelihood=likelihood(), label="ra"),
             "dec": Dataset(observed_dec, dec_instrument, likelihood=likelihood(), label="dec"),
-        }
+        },
+        joint={"astrom": joint_noise(backend)} if joint else None,
     )
     return FittingProblem(model, datasets, seed=seed)
 
@@ -294,10 +455,235 @@ def report(run: Any) -> str:
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# The calibration study: does the joint model buy coverage back? (W5.9)
+# ---------------------------------------------------------------------------
+
+
+def sbc_problem(
+    backend: str = "reference",
+    *,
+    arm: str = "joint",
+    observed: tuple[Any, Any] | None = None,
+    seed: int = generators.SEED,
+) -> FittingProblem:
+    """The **two-parameter** problem the calibration study simulates and fits.
+
+    Not :func:`build_problem`. Simulation-based calibration refits once per
+    simulation, so the problem has to be small; and it draws the truth from the
+    prior, so the problem has to be *unimodal*, which a reflex orbit with a free
+    period is emphatically not at this modality's sparse sampling (see the
+    closing section of :doc:`the tutorial page </astrometry>`). So the orbit's
+    period, phase and semi-amplitudes are held at the truth and the two proper
+    motions are fitted --- which is the pair the coverage claim is about
+    anyway, because they are the physical parameters a shared centroiding
+    systematic actually biases.
+
+    Three arms:
+
+    Two parameters are fitted, one per channel: the proper motions. Everything
+    else about the orbit is held at the truth, so that a study which refits once
+    per simulation stays affordable and stays unimodal --- a reflex orbit with a
+    free period is neither (see the closing section of :doc:`the tutorial page
+    </astrometry>`).
+
+    ``"joint"``
+        ``JointGaussianProcessNoise`` over both channels: the model that
+        matches the generating process.
+    ``"independent"``
+        Two ordinary ``GaussianProcessNoise`` likelihoods, each with the
+        **correct marginal amplitude** for its own axis (see
+        :data:`JOINT_LOG_VARIANCE_PRIOR`'s neighbour above). Each reproduces
+        its own axis's scatter exactly and neither can say anything about the
+        correlation between them, so this arm treats two strongly dependent
+        measurements as independent --- and that, and nothing else, is what
+        separates it from the joint arm. ``likelihoods.md`` §15's "two scalar
+        GPs with tied hyperparameters is the nearest approximation and is a
+        different model", made into an experiment.
+    ``"rigid"``
+        Independent white noise, the arm with no flexible likelihood at all.
+        Kept because it is the comparison a reader reaches for first.
+
+    *observed* replaces the two containers, which is how the comparison arm
+    refits the simulating arm's own data.
+    """
+    module = backend_module(backend)
+    noise = noise_module(backend)
+    model = module.ReflexOrbit(
+        generators.EPOCHS,
+        pmra=st.norm(0.0, 5.0),
+        pmdec=st.norm(0.0, 5.0),
+        period=generators.TRUTH["period"],
+        phase=generators.TRUTH["phase"],
+        amp_ra=generators.TRUTH["amp_ra"],
+        amp_dec=generators.TRUTH["amp_dec"],
+    )
+    ra_instrument, dec_instrument = build_instruments(backend)
+    if observed is None:
+        observed = generators.synthetic_joint_data(
+            module.ReflexOrbit(generators.EPOCHS, **generators.TRUTH),
+            ra_instrument,
+            dec_instrument,
+            seed=seed,
+        )
+    observed_ra, observed_dec = observed
+
+    amplitudes = generators.marginal_amplitudes()
+
+    def likelihood(channel: str) -> Likelihood:
+        if arm == "independent":
+            kernel = noise.Matern32(
+                amplitudes[channel], generators.JOINT_LENGTH_SCALE, axes=("time",)
+            )
+            return Likelihood(
+                GaussianFamily(), noise.GaussianProcessNoise(kernel, noise.QuasisepGP())
+            )
+        return Likelihood(GaussianFamily(), noise.IndependentNoise())
+
+    datasets = DatasetCollection(
+        {
+            "ra": Dataset(observed_ra, ra_instrument, likelihood=likelihood("ra"), label="ra"),
+            "dec": Dataset(observed_dec, dec_instrument, likelihood=likelihood("dec"), label="dec"),
+        },
+        joint={"astrom": joint_noise(backend, fit=COUPLING_FIT)} if arm == "joint" else None,
+    )
+    return FittingProblem(model, datasets, seed=seed)
+
+
+def direction_of(pmra: Any, pmdec: Any) -> Any:
+    """``(pmra + pmdec)/sqrt(2)``: the diagonal of the proper-motion plane.
+
+    The projection along which the two channels' errors *add*, and therefore
+    the one a cross-channel systematic corrupts. See :data:`SBC_DIRECTION`.
+    """
+    return (np.asarray(pmra, dtype=float) + np.asarray(pmdec, dtype=float)) / np.sqrt(2.0)
+
+
+def _thinned(values: Any, draws: int) -> np.ndarray:
+    """*draws* posterior samples, taken evenly out of a run's chains.
+
+    Evenly rather than from the head, which is what breaks the autocorrelation
+    an MCMC run's neighbouring draws carry --- ``ampere.results.sbc``'s own
+    rule, applied here because this study ranks a *derived* quantity and so
+    walks the runs itself.
+    """
+    flat = np.asarray(values, dtype=float).reshape(-1)
+    if flat.size < draws:
+        raise ValueError(
+            f"a rank against {draws} draw(s) needs at least that many, got {flat.size}."
+        )
+    return flat[np.linspace(0, flat.size - 1, draws).astype(int)]
+
+
+def calibrate(
+    backend: str = "reference",
+    *,
+    arm: str = "joint",
+    count: int = DEFAULT_SBC_COUNT,
+    draws: int = DEFAULT_SBC_DRAWS,
+    walkers: int = DEFAULT_SBC_WALKERS,
+    steps: int = DEFAULT_SBC_STEPS,
+    burn_in: int = DEFAULT_SBC_BURN_IN,
+    seed: int = generators.SEED,
+) -> Any:
+    """Simulation-based calibration of one arm, against the **joint** generator.
+
+    Talts et al. (2018) by refitting, in ``ampere.results.sbc``'s own shape and
+    returning its own ``calibration`` group (built with the library's
+    :func:`~ampere.results.calibration_dataset`, so the schema is one schema).
+    The loop is written out here rather than delegated for one reason: what
+    this study ranks is a **derived** quantity, ``(pmra + pmdec)/sqrt(2)``, and
+    ``sbc`` ranks posterior *variables*. See :data:`SBC_DIRECTION` for why the
+    derived one is where the answer is.
+
+    The simulating problem is always the joint one, so every replicate's data
+    carry a correlated centroiding systematic drawn from ``B (x) K_x`` --- the
+    correlated draw ``DatasetCollection.draw_group`` makes, not two marginal
+    ones. What changes between arms is only what is *fitted*: the same data,
+    scored by a model that knows about the cross-channel structure or by one
+    that does not.
+    """
+    from ampere.inference import EmceeEngine
+    from ampere.results import REFIT_ROUTE, calibration_dataset, replace_observations
+
+    simulating = sbc_problem(backend, arm="joint", seed=seed)
+    rng = np.random.default_rng(seed)
+    rows: list[list[int]] = []
+    for index in range(int(count)):
+        theta = simulating.sample_prior(rng)
+        simulation = simulating.simulate(theta, observe=True)
+        if simulation.failed or simulation.observations is None:
+            continue
+        replica = replace_observations(simulating, simulation.observations, seed=seed + index)
+        fitted = (
+            replica
+            if arm == "joint"
+            else sbc_problem(
+                backend,
+                arm=arm,
+                observed=(replica.datasets["ra"].observed, replica.datasets["dec"].observed),
+                seed=seed + index,
+            )
+        )
+        run = EmceeEngine(fitted, walkers=walkers).run(steps, burn_in=burn_in, progress=False)
+        posterior = run["posterior"].dataset
+        row = [
+            int(np.sum(_thinned(posterior[name], draws) < float(theta[name])))
+            for name in SBC_PARAMETERS
+        ]
+        drawn = direction_of(
+            _thinned(posterior["model.pmra"], draws), _thinned(posterior["model.pmdec"], draws)
+        )
+        row.append(
+            int(np.sum(drawn < float(direction_of(theta["model.pmra"], theta["model.pmdec"]))))
+        )
+        rows.append(row)
+    if not rows:
+        raise RuntimeError("no simulation produced a usable fit.")
+    return calibration_dataset(
+        np.asarray(rows, dtype=int),
+        [*SBC_PARAMETERS, SBC_DIRECTION],
+        posterior_draws=int(draws),
+        route=REFIT_ROUTE,
+        attrs={"ampere_calibration_label": f"astrometry {arm} arm"},
+    )
+
+
+def coverage_at(calibration: Any, level: float = 0.9, parameter: str | None = None) -> float:
+    """Empirical coverage at a nominal *level*, for one parameter or averaged.
+
+    One number, because the claim is one claim: "the central *level* interval
+    contains the truth *level* of the time". *parameter* names one of
+    :data:`SBC_PARAMETERS` or :data:`SBC_DIRECTION` --- pass the latter for the
+    one the comparison turns on --- and ``None`` averages over all of them. The curve is
+    on the returned dataset for anyone who wants the rest of it.
+    """
+    coverage = calibration["coverage"]
+    nearest = int(np.argmin(np.abs(np.asarray(coverage["level"], dtype=float) - float(level))))
+    row = coverage.isel(level=nearest)
+    if parameter is not None:
+        names = [str(name) for name in np.asarray(coverage["parameter"])]
+        return float(np.asarray(row, dtype=float)[names.index(parameter)])
+    return float(np.mean(np.asarray(row, dtype=float)))
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--backend", default="reference", choices=list(BACKENDS))
     parser.add_argument("--gp", action="store_true", help="the flexible likelihood")
+    parser.add_argument(
+        "--joint",
+        action="store_true",
+        help="one correlated process over both channels, on injected correlated data (W5.9)",
+    )
+    parser.add_argument(
+        "--sbc",
+        choices=("joint", "independent", "rigid"),
+        default=None,
+        help="run the calibration study for one arm instead of a single fit",
+    )
+    parser.add_argument("--sbc-count", type=int, default=DEFAULT_SBC_COUNT)
+    parser.add_argument("--sbc-draws", type=int, default=DEFAULT_SBC_DRAWS)
     parser.add_argument("--seed", type=int, default=generators.SEED)
     parser.add_argument("--walkers", type=int, default=None, help="emcee only")
     parser.add_argument("--steps", type=int, default=None, help="emcee only")
@@ -311,7 +697,27 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(sys.argv[1:] if argv is None else argv)
 
-    problem = build_problem(args.backend, gp=args.gp, seed=args.seed)
+    if args.sbc is not None:
+        started = time.perf_counter()
+        calibration = calibrate(
+            args.backend, arm=args.sbc, count=args.sbc_count, draws=args.sbc_draws, seed=args.seed
+        )
+        elapsed = time.perf_counter() - started
+        print(f"SBC, {args.sbc} arm: {args.sbc_count} simulation(s), {args.sbc_draws} draw(s)")
+        for level in (0.5, 0.9, 0.95):
+            direction = coverage_at(calibration, level, SBC_DIRECTION)
+            print(
+                f"  coverage at {level:.2f}: {coverage_at(calibration, level):.3f} "
+                f"(mean), {direction:.3f} ({SBC_DIRECTION})"
+            )
+        pvalues = np.asarray(calibration["ks_pvalue"], dtype=float)
+        names = [*SBC_PARAMETERS, SBC_DIRECTION]
+        for name, pvalue in zip(names, pvalues, strict=True):
+            print(f"  rank uniformity p({name}) = {pvalue:.3f}")
+        print(f"  {elapsed:.1f} s wall clock")
+        return 0
+
+    problem = build_problem(args.backend, gp=args.gp, joint=args.joint, seed=args.seed)
     print(f"negotiated channels: {list(problem.requirements['model'])}")
     for channel_name in problem.requirements["model"]:
         req = problem.requirements["model"][channel_name]
