@@ -240,10 +240,23 @@ from .simulate import (
     ChunkHook,
     ChunkSharder,
     ContainerBatch,
+    # -- W5.10: the observation context --------------------------------------
+    ContextPrior,
+    # ------------------------------------------------------------------------
     ExecutionFailure,
     Executor,
+    # -- W5.10: the observation context --------------------------------------
+    ObservationContext,
+    # ------------------------------------------------------------------------
     ProcessExecutor,
+    # -- W5.10: the observation context --------------------------------------
+    ScaledSigma,
+    # ------------------------------------------------------------------------
     SerialExecutor,
+    # -- W5.10: the observation context --------------------------------------
+    SigmaArchive,
+    SignalToNoise,
+    # ------------------------------------------------------------------------
     SimulationBatch,
     ThreadExecutor,
     chunk_bounds,
@@ -321,6 +334,7 @@ __all__ = [
     "ComplexGaussianFamily",
     "CompositionError",
     "ContainerBatch",
+    "ContextPrior",
     "ContractError",
     "Cube",
     "Dataset",
@@ -377,6 +391,7 @@ __all__ = [
     "NoiseModel",
     "NoiseParams",
     "NumpyOps",
+    "ObservationContext",
     "OptionalDependencyError",
     "Order",
     "Parameter",
@@ -399,8 +414,11 @@ __all__ = [
     "RiceFamily",
     "RotationCoupling",
     "RotationTerm",
+    "ScaledSigma",
     "SchemaError",
     "SerialExecutor",
+    "SigmaArchive",
+    "SignalToNoise",
     "Simulation",
     "SimulationBatch",
     "SpectralMixture",

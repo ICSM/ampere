@@ -77,6 +77,7 @@ from ampere.core import (
     Model,
     Parameter,
     ProcessExecutor,
+    ScaledSigma,
     Spectrum,
     VisibilitySet,
     encode_observations,
@@ -2405,3 +2406,247 @@ class TestTorchIsSeededFromTheProblem:
     def test_the_attr_is_an_int_for_a_seeded_problem(self) -> None:
         run = SBIEngine(bounded_problem(SEED), **self.NPE_SETTINGS).run(**self.NPE_OPTIONS)
         assert isinstance(run.attrs["ampere_sbi_torch_seed"], int)
+
+
+# ---------------------------------------------------------------------------
+# W5.10: amortisation over the observation context
+# ---------------------------------------------------------------------------
+
+#: The context prior the amortised fixture trains under: half to twice the
+#: observed error bars, log-uniformly. Stated once because three rows quote it.
+CONTEXT_LOW, CONTEXT_HIGH = 0.5, 2.0
+
+#: Where the acceptance row asks the question. ``1.5`` is inside
+#: ``[0.5, 2.0]``; ``12`` is a long way outside it, and deliberately so — the
+#: claim under test is not "coverage degrades the moment you leave the range"
+#: (it should not, and a posterior that brittle would be useless) but "a noise
+#: level the prior never showed the network is not one it can be believed at".
+COVERED_FACTOR = 1.5
+UNCOVERED_FACTOR = 12.0
+
+#: The same floor ``sbi``'s own checks warn below (see ``CALIBRATION_COUNT``),
+#: at the smaller budget this pair of checks can afford twice over.
+CONTEXT_CALIBRATION_COUNT = 100
+CONTEXT_CALIBRATION_DRAWS = 100
+
+
+class TestTheContextPriorRefusals:
+    """The vocabulary, in ``dev``: what ``context=`` accepts and what it does not."""
+
+    def test_something_that_is_not_a_context_prior_is_refused_by_name(self) -> None:
+        with pytest.raises(EngineError, match="ContextPrior"):
+            SBIEngine(bounded_problem(), context="noisier")
+
+    def test_a_shipped_prior_is_accepted_and_kept(self) -> None:
+        prior = ScaledSigma(CONTEXT_LOW, CONTEXT_HIGH)
+        engine = SBIEngine(bounded_problem(), context=prior)
+        assert engine.context is prior
+
+    def test_no_context_is_still_the_default(self) -> None:
+        assert SBIEngine(bounded_problem()).context is None
+
+
+@pytest.fixture(scope="module")
+def amortised_engine() -> Any:
+    """One NPE engine trained under a sigma-pattern context prior (**W5.10**).
+
+    ``layout="set"`` with the set embedding, and that is the point rather than
+    a detail: the ``"flat"`` summary is the observed *values* and nothing else,
+    so a network trained under it cannot see which noise level it is looking
+    at however hard the simulator varies one. The set packing carries each
+    sample's ``log sigma``, so this network can — with no layout change, which
+    is the claim the item makes.
+    """
+    engine = SBIEngine(
+        bounded_problem(),
+        method="npe",
+        budget=1500,
+        embedding="set",
+        layout="set",
+        context=ScaledSigma(CONTEXT_LOW, CONTEXT_HIGH),
+    )
+    engine.run(200, training={"max_num_epochs": 150})
+    return engine
+
+
+@pytest.fixture(scope="module")
+def covered_calibration(amortised_engine: Any) -> Any:
+    """SBC and TARP at a rescale the training context prior covers."""
+    return amortised_engine.calibrate(
+        count=CONTEXT_CALIBRATION_COUNT,
+        posterior_draws=CONTEXT_CALIBRATION_DRAWS,
+        context=ScaledSigma(COVERED_FACTOR, COVERED_FACTOR),
+    )
+
+
+@pytest.fixture(scope="module")
+def uncovered_calibration(amortised_engine: Any) -> Any:
+    """The same check at a rescale it does not."""
+    return amortised_engine.calibrate(
+        count=CONTEXT_CALIBRATION_COUNT,
+        posterior_draws=CONTEXT_CALIBRATION_DRAWS,
+        context=ScaledSigma(UNCOVERED_FACTOR, UNCOVERED_FACTOR),
+    )
+
+
+@needs_sbi
+class TestAmortisationOverTheObservationContext:
+    """W5.10's acceptance row: calibrated where the prior reaches, and not beyond.
+
+    Both arms are pinned as **inequalities** rather than as numbers, and the
+    pair is the claim: a posterior trained under a sigma-pattern prior stays
+    calibrated at a noise level inside that prior, and its coverage degrades
+    measurably at one outside it. Either half alone proves nothing — a
+    posterior that failed everywhere would pass the second, and one that
+    ignored the data would pass the first.
+    """
+
+    def test_the_run_records_the_context_prior_and_its_digest(self, amortised_engine: Any) -> None:
+        run = amortised_engine.run(10, training={"max_num_epochs": 2})
+        recorded = json.loads(run.attrs["ampere_sbi_context"])
+        assert recorded == ScaledSigma(CONTEXT_LOW, CONTEXT_HIGH).describe()
+        assert len(run.attrs["ampere_sbi_context_hash"]) == 32
+
+    def test_a_contextless_run_still_records_none(self) -> None:
+        engine = SBIEngine(bounded_problem(), method="npe", budget=40)
+        run = engine.run(5, training={"max_num_epochs": 2})
+        assert run.attrs["ampere_sbi_context"] == "none"
+        assert run.attrs["ampere_sbi_context_hash"] == ""
+
+    def test_the_budget_was_actually_drawn_under_the_prior(self, amortised_engine: Any) -> None:
+        """The simulated observations carry the drawn sigma, not the observed one."""
+        batch = amortised_engine.batch
+        assert batch is not None
+        sigmas = {
+            float(np.asarray(draw.observations["default"].uncertainty)[0]) for draw in batch.usable
+        }
+        assert len(sigmas) > 1
+        assert min(sigmas) < 0.3 < max(sigmas)
+
+    def test_it_stays_calibrated_at_a_rescale_the_prior_covers(
+        self, covered_calibration: Any
+    ) -> None:
+        """Arm one: SBC ranks uniform and TARP flat at ``COVERED_FACTOR``."""
+        assert covered_calibration.attrs["ampere_calibration_context"] != "none"
+        assert float(np.min(covered_calibration["ks_pvalue"].values)) > 0.01
+        assert abs(float(covered_calibration.attrs["ampere_calibration_tarp_atc"])) < 0.06
+
+    def test_its_coverage_degrades_at_one_the_prior_does_not(
+        self, covered_calibration: Any, uncovered_calibration: Any
+    ) -> None:
+        """Arm two: the same network, the same check, a noise level it never saw.
+
+        Under-dispersion is a **negative** area-to-curve in TARP's convention
+        — the posterior is too narrow, because it is reading error bars an
+        order of magnitude smaller than the ones the observation actually has
+        — and the 68 % coverage curve says the same thing in the units a
+        reader quotes.
+        """
+        covered = float(covered_calibration.attrs["ampere_calibration_tarp_atc"])
+        uncovered = float(uncovered_calibration.attrs["ampere_calibration_tarp_atc"])
+        assert uncovered < covered - 0.05
+        assert float(np.min(uncovered_calibration["ks_pvalue"].values)) < float(
+            np.min(covered_calibration["ks_pvalue"].values)
+        )
+        levels = np.asarray(covered_calibration.coords["level"].values, dtype=float)
+        at_68 = lambda group: float(  # noqa: E731
+            np.interp(0.68, levels, np.asarray(group["coverage"].values)[:, 0])
+        )
+        assert at_68(uncovered_calibration) < at_68(covered_calibration) - 0.05
+
+    def test_calibrate_inherits_the_runs_prior_by_default(self, amortised_engine: Any) -> None:
+        report = amortised_engine.calibrate(count=20, posterior_draws=20, tarp=False)
+        recorded = json.loads(report.attrs["ampere_calibration_context"])
+        assert recorded == ScaledSigma(CONTEXT_LOW, CONTEXT_HIGH).describe()
+
+    def test_calibrate_at_no_context_is_spelled_none(self, amortised_engine: Any) -> None:
+        report = amortised_engine.calibrate(count=20, posterior_draws=20, tarp=False, context=None)
+        assert report.attrs["ampere_calibration_context"] == "none"
+
+
+@needs_sbi
+class TestTheFilmConditioningRoute:
+    """W5.10's opt-in second route: off by default, and it trains when on."""
+
+    @staticmethod
+    def built(spec: Any) -> Any:
+        import torch
+
+        from ampere.inference._sbi import _embedding_of
+
+        torch.manual_seed(SEED)
+        problem = two_dataset_problem()
+        layout = EncodingLayout.from_datasets(problem.datasets)
+        resolved = _embedding_of(
+            spec, torch=torch, features=0, free_size=problem.free_size, layout=layout
+        )
+        return layout, resolved.module
+
+    def test_it_is_off_unless_asked_for(self) -> None:
+        _, module = self.built("set")
+        assert module.film is None
+        _, transformer = self.built("transformer")
+        assert transformer.film is None
+
+    def test_asking_for_it_builds_a_conditioner(self) -> None:
+        _, module = self.built({"type": "set", "film": True})
+        assert module.film is not None
+        _, transformer = self.built({"type": "transformer", "film": True})
+        assert transformer.film is not None
+
+    def test_it_starts_as_the_identity(self) -> None:
+        """Switching the option on must not perturb a run before it has learnt.
+
+        The conditioner's output layer is zero-initialised, so ``gamma`` and
+        ``beta`` are zero and ``x * (1 + 0) + 0`` is ``x``: an untrained FiLM
+        embedding produces exactly what the same embedding without one does.
+        """
+        import torch
+
+        problem = two_dataset_problem()
+        layout, plain = self.built("set")
+        _, conditioned = self.built({"type": "set", "film": True})
+        conditioned.net = plain.net
+        x = torch.as_tensor(
+            np.asarray(encode_observations(problem.datasets, layout=layout).values),
+            dtype=torch.float32,
+        )
+        plain.eval()
+        conditioned.eval()
+        with torch.no_grad():
+            assert torch.allclose(plain(x), conditioned(x), atol=1e-6)
+
+    def test_the_set_embedding_trains_with_film(self) -> None:
+        engine = SBIEngine(
+            two_dataset_problem(),
+            method="npe",
+            budget=80,
+            layout="set",
+            embedding={"type": "set", "film": True},
+        )
+        run = engine.run(draws=10, training={"max_num_epochs": 5})
+        assert run["posterior"].dataset.sizes["draw"] == 10
+        assert run.attrs["ampere_sbi_embedding"] == "set"
+
+    def test_the_transformer_embedding_trains_with_film(self) -> None:
+        engine = SBIEngine(
+            two_dataset_problem(),
+            method="npe",
+            budget=60,
+            layout="set",
+            embedding={"type": "transformer", "film": True},
+        )
+        run = engine.run(draws=8, training={"max_num_epochs": 3})
+        assert run["posterior"].dataset.sizes["draw"] == 8
+
+    def test_a_film_embedding_pickles(self) -> None:
+        """The wrappers carry the conditioner through ``__reduce__``, as W3.5's cache needs."""
+        import pickle
+
+        import torch
+
+        _, module = self.built({"type": "set", "film": True})
+        restored = pickle.loads(pickle.dumps(module))
+        assert restored.film is not None
+        assert restored.layout.hash == module.layout.hash
+        assert isinstance(restored.film.net, torch.nn.Sequential)
