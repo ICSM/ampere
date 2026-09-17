@@ -880,8 +880,9 @@ def provenance_attrs(
     >>> attrs["ampere_free_names"]
     '["model.slope"]'
     >>> import json
-    >>> json.loads(attrs["ampere_free_priors"])["model.slope"]
-    {'args': [], 'discrete': False, 'family': 'norm', 'kind': 'prior_spec', 'kwds': {'loc': 1.0, 'scale': 1.0}}
+    >>> slope_prior = json.loads(attrs["ampere_free_priors"])["model.slope"]
+    >>> slope_prior["kind"], slope_prior["family"], slope_prior["kwds"]
+    ('prior_spec', 'norm', {'loc': 1.0, 'scale': 1.0})
     >>> attrs["ampere_log_likelihood_decomposition"]
     'per_dataset'
 

@@ -389,7 +389,6 @@ class TestReweightedPopulationPosterior:
 
 class TestTheStoredInterimPrior:
     """``fit_population`` reads ``model.theta``'s prior back off the archive's
-
     own provenance (schema 8, ``ampere_free_priors``) when ``interim_prior``
     is omitted, on the same :data:`N_OBJECTS_REDUCED`-object archive
     :class:`TestReweightedPopulationPosterior` uses -- module docstring
@@ -429,7 +428,8 @@ class TestTheStoredInterimPrior:
         )
         for name in ("mu", "tau"):
             np.testing.assert_array_equal(
-                np.asarray(with_prior["posterior"][name]), np.asarray(without_prior["posterior"][name])
+                np.asarray(with_prior["posterior"][name]),
+                np.asarray(without_prior["posterior"][name]),
             )
 
     def test_omitting_interim_prior_recovers_the_truth(self, without_prior: Any) -> None:
@@ -445,7 +445,9 @@ class TestTheStoredInterimPrior:
     def test_a_disagreeing_supplied_prior_is_refused(self, columns: list[Any]) -> None:
         disagreeing = st.norm(0.0, 20.0)  # every object's declared prior is norm(0.0, 10.0)
         with pytest.raises(ResultsError, match="disagrees"):
-            fit_population(columns, "model.theta", _population_model(), disagreeing, **self.SETTINGS)
+            fit_population(
+                columns, "model.theta", _population_model(), disagreeing, **self.SETTINGS
+            )
 
     def test_no_supplied_and_no_stored_prior_is_refused(self, object_runs: list[Any]) -> None:
         """A schema-7-style archive (no ``ampere_free_priors``) with no
@@ -468,7 +470,13 @@ class TestTheStoredInterimPrior:
             )
         with pytest.raises(ResultsError, match="no stored prior"):
             fit_population(
-                pre_schema_8, "model.theta", _population_model(), walkers=8, steps=100, burn_in=20, seed=SEED
+                pre_schema_8,
+                "model.theta",
+                _population_model(),
+                walkers=8,
+                steps=100,
+                burn_in=20,
+                seed=SEED,
             )
 
 

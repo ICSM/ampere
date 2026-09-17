@@ -19,7 +19,8 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     if "population_full" in selected:
         return
     skip = pytest.mark.skip(
-        reason="the population study's full 200-object archive: run with `pytest -m population_full`"
+        reason="the population study's full 200-object archive: run with "
+        "`pytest -m population_full`"
     )
     for item in items:
         if "population_full" in item.keywords:
