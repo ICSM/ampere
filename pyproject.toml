@@ -313,6 +313,12 @@ markers = [
     # W5.5. The image study's longer runs (the 128x128 benchmark cell, the
     # full SBC count): the same reasoning as the line above.
     "image_full: the image study's full budget; run with `pytest -m image_full`",
+    # W5.22. The population study's full 200-object archive (fitting and
+    # timing 200 emcee runs): minutes, so deliberately NOT in the PR gate.
+    # `tests/results/conftest.py` skips these unless `-m population_full`
+    # asks for them, in the same shape as the marker above; a 50-object
+    # reduced sibling stays in the default gate.
+    "population_full: the population study's full 200-object archive; run with `pytest -m population_full`",
     # W5.9. The astrometry example's calibration study at the count where SBC
     # has power (two arms x 48 refits, tens of minutes): the same reasoning as
     # the three lines above, with a reduced-budget sibling that always runs.

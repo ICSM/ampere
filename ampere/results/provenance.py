@@ -83,6 +83,7 @@ import numpy as np
 
 from ampere.core.dataset import Dataset, FittingProblem
 from ampere.core.likelihood import Likelihood
+from ampere.core.parameter import HierarchicalPrior, describe_prior
 from ampere.core.results_schema import FunctionSamples
 from ampere.core.transform import Instrument
 
@@ -98,6 +99,7 @@ __all__ = [
     "dataset_fingerprint",
     "describe_likelihood",
     "digest",
+    "free_priors",
     "hash_array",
     "hash_container",
     "hash_of",
@@ -190,7 +192,30 @@ __all__ = [
 #: the same schema bump because it is part of the same contract adaptation and
 #: a reader checking "does this file's shape match what I expect of schema 7"
 #: should find both halves of it.
-PROVENANCE_SCHEMA_VERSION = 7
+#:
+#: **One attribute joined at W5.22, and the constant is now 8** (ruled by
+#: Peter 2026-09-16 on W5.13's proposals; ``results.md`` §9, §13 item 16).
+#: ``ampere_free_priors`` is canonical JSON of ``{parameter name:
+#: PriorSpec.to_dict()}`` for every free parameter in ``problem.parameters``
+#: -- an ordinary declared prior's own neutral description
+#: (:func:`~ampere.core.parameter.describe_prior`), tagged
+#: ``{"kind": "prior_spec", ...}``; a :class:`~ampere.core.parameter.
+#: HierarchicalPrior` member's own :meth:`~ampere.core.parameter.
+#: HierarchicalPrior.to_dict`, tagged ``{"kind": "hierarchical", ...}``,
+#: since its distribution parameters are themselves references to other
+#: parameters rather than numbers a marginal prior can be built from
+#: directly. This closes the gap ``ampere.results.population``'s module
+#: docstring named at W5.13: "a run's provenance records only each
+#: parameter's name and a hash of its declaration, not the declaration
+#: itself, so pi_0 cannot be read back off a run" -- it now can, for any
+#: parameter whose prior is not itself hierarchical, and
+#: :func:`~ampere.results.population.fit_population`'s ``interim_prior``
+#: becomes optional accordingly. Not an input to :func:`problem_fingerprint`
+#: (the parameter *declaration* is already hashed into ``ampere_spec_hash``;
+#: this attribute exists so the declaration can be read back, not so it can
+#: be compared) -- but the schema constant is, so ``ampere_problem_hash``
+#: moves again at this bump as at every previous one.
+PROVENANCE_SCHEMA_VERSION = 8
 
 #: Every attribute this module writes starts with this, so ampere's provenance
 #: never collides with ArviZ's own (``created_at``, ``creation_library``, ...)
@@ -726,6 +751,36 @@ def solver_configs(problem: FittingProblem) -> dict[str, Any]:
     return configs
 
 
+def free_priors(problem: FittingProblem) -> dict[str, dict[str, Any]]:
+    """Each free parameter's own declared prior, neutrally described (W5.22, schema 8).
+
+    One entry per name in ``problem.parameters.free_names``. An ordinary
+    declared prior (a frozen ``scipy.stats`` distribution) is described by
+    :func:`~ampere.core.parameter.describe_prior` and recorded as
+    ``{"kind": "prior_spec", **PriorSpec.to_dict()}``; a
+    :class:`~ampere.core.parameter.HierarchicalPrior` member is recorded as
+    ``{"kind": "hierarchical", **HierarchicalPrior.to_dict()}`` instead,
+    since its distribution parameters are references to other parameters
+    rather than numbers, and no marginal prior can be built from that alone
+    -- a reader wanting one (:func:`ampere.results.population.fit_population`
+    among them) can tell the two kinds apart by this key rather than by the
+    shape of the rest of the mapping.
+
+    A ``FittingProblem`` handed to :func:`provenance_attrs` is fully
+    resolved (``problem.parameters.is_resolved``), so every name in
+    ``free_names`` has a prior that is one of these two kinds -- never
+    ``None`` (that is what makes a parameter *deferred* rather than free).
+    """
+    priors: dict[str, dict[str, Any]] = {}
+    for name in problem.parameters.free_names:
+        prior = problem.parameters[name].prior
+        if isinstance(prior, HierarchicalPrior):
+            priors[name] = {"kind": "hierarchical", **prior.to_dict()}
+        else:
+            priors[name] = {"kind": "prior_spec", **describe_prior(prior).to_dict()}
+    return priors
+
+
 def provenance_attrs(
     problem: FittingProblem,
     *,
@@ -739,10 +794,11 @@ def provenance_attrs(
 
     Every value is a netCDF-safe scalar: an ``int``, or a ``str`` holding
     canonical JSON for anything structured. Nothing here is large — in
-    particular the free-parameter *names* are recorded (one per parameter) and
-    the per-element ``free_labels()`` are not, because a 10⁵-element latent
-    block's labels are exactly what ``likelihoods.md`` §16 tells this contract
-    not to materialise.
+    particular the free-parameter *names* are recorded (one per parameter,
+    alongside each one's own declared prior since W5.22 — see
+    :func:`free_priors`) and the per-element ``free_labels()`` are not,
+    because a 10⁵-element latent block's labels are exactly what
+    ``likelihoods.md`` §16 tells this contract not to materialise.
 
     Parameters
     ----------
@@ -823,6 +879,10 @@ def provenance_attrs(
     32
     >>> attrs["ampere_free_names"]
     '["model.slope"]'
+    >>> import json
+    >>> slope_prior = json.loads(attrs["ampere_free_priors"])["model.slope"]
+    >>> slope_prior["kind"], slope_prior["family"], slope_prior["kwds"]
+    ('prior_spec', 'norm', {'loc': 1.0, 'scale': 1.0})
     >>> attrs["ampere_log_likelihood_decomposition"]
     'per_dataset'
 
@@ -886,6 +946,10 @@ def provenance_attrs(
         "capabilities": canonical_json(problem.capabilities.to_dict()),
         "free_size": int(problem.free_size),
         "free_names": canonical_json(list(problem.parameters.free_names)),
+        # W5.22, schema 8: each free parameter's own declared prior, neutrally
+        # described -- what lets a reader (fit_population among them) read
+        # pi_0 back off a run rather than take it as a required argument.
+        "free_priors": canonical_json(free_priors(problem)),
         "plates": canonical_json(problem.parameters.plates),
         "tied_names": canonical_json(list(problem.tied_names)),
         "sites": canonical_json({name: list(v) for name, v in problem.sites().items()}),
