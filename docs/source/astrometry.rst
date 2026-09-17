@@ -358,25 +358,39 @@ general LMC belong to the dense/reduced-rank follow-on
 What it buys: the calibration study
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``python -m examples.astrometry --sbc joint`` (and ``--sbc independent``)
-runs simulation-based calibration of each arm against data carrying an
-injected correlated centroiding systematic. What is ranked is the
-**orbital phase**, and the reason is the whole mechanism:
+``python -m examples.astrometry --sbc joint`` (and ``--sbc independent``,
+``--sbc rigid``) runs simulation-based calibration of each arm against data
+carrying an injected correlated centroiding systematic. Both arms are given
+the noise process they are entitled to know — the joint arm the whole of
+``B``, the comparison arm each channel's *correct marginal* amplitude — so
+that the one thing which differs between them is the cross-covariance.
 
-* ``pmra`` enters only the ``ra`` channel and ``pmdec`` only ``dec``, so
-  each is constrained by one channel. Ignoring a correlation between two
-  channels that constrain *different* parameters throws information away,
-  which makes an interval too wide — conservative, not wrong.
-* The **phase** is shared: both channels measure it. There, ignoring the
-  correlation is double-counting — two error-laden estimates that move
-  together are combined as though they moved independently — and the
-  combined interval comes out narrower than the truth's own scatter.
+What is ranked is not a parameter. It is
+``(pmra + pmdec)/sqrt(2)``, the **diagonal of the proper-motion plane**, and
+the reason is the mechanism:
 
-That is undercoverage, and it is what a cross-channel systematic does to
-every parameter a multi-channel instrument measures jointly.
-``tests/examples/test_astrometry_example.py`` pins the comparison.
+* A cross-channel systematic does not bias either channel's own parameter.
+  It **correlates their errors**. ``pmra`` is measured from ``ra`` alone and
+  ``pmdec`` from ``dec`` alone, both with the same weight along the epoch
+  grid — a proper motion is a linear trend — so an error shared by the two
+  sky axes makes the two parameter errors move together, at about 0.86 here.
+* Each *marginal* posterior is therefore still about the right width, and
+  the study reports that: both arms' marginal coverage on ``pmra`` and
+  ``pmdec`` comes out nominal. That is a real and easily missed finding —
+  checking marginals alone would have said the independent model was fine.
+* The **joint** posterior is where the difference lives, and the projection
+  that sees it is the one along which the two errors add. Its true variance
+  is ``v(1 + rho)``; a model that believes the errors independent reports
+  ``v``, understating the interval by ``sqrt(1 + rho)``, about 1.36. That is
+  undercoverage of the *direction* of a measured proper motion, which is a
+  quantity astronomers publish.
 
-A note on the parameterisation. Adding ``π/2`` to the angle and exchanging
+``tests/examples/test_astrometry_example.py`` pins the comparison, behind
+the ``astrometry_full`` marker because two arms of forty-eight refits each
+is well over ten minutes; a reduced-budget sibling runs on every PR and
+checks the machinery rather than the claim.
+
+A note on the parameterisation. Adding ``pi/2`` to the angle and exchanging
 the two log-variances gives the same ``B``, so the *matrix* is identified
 while the three parameters are identified only up to that relabelling —
 the label switching a mixture model has. The density is unaffected; the

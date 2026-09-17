@@ -21,8 +21,8 @@ import pytest
 from examples.astrometry import generators
 from examples.astrometry.astrometry import (
     QUALIFIED_TRUTH,
+    SBC_DIRECTION,
     SBC_PARAMETERS,
-    SBC_SHARED_PARAMETER,
     build_instruments,
     build_model,
     build_problem,
@@ -242,8 +242,8 @@ class TestTheCalibrationStudy:
     def test_the_study_runs_at_a_smoke_budget(self) -> None:
         """The machinery, not the claim: twelve refits is not a calibration result."""
         calibration = calibrate("reference", arm="joint", seed=generators.SEED, **TINY_SBC)
-        assert calibration["ranks"].shape == (TINY_SBC["count"], len(SBC_PARAMETERS))
-        coverage = coverage_at(calibration, 0.9, SBC_SHARED_PARAMETER)
+        assert calibration["ranks"].shape == (TINY_SBC["count"], len(SBC_PARAMETERS) + 1)
+        coverage = coverage_at(calibration, 0.9, SBC_DIRECTION)
         assert 0.0 <= coverage <= 1.0
 
     def test_the_independent_arm_refits_the_same_data(self) -> None:
@@ -256,10 +256,16 @@ class TestTheCalibrationStudy:
         )
         assert independent.datasets.contribution_labels() == ("ra", "dec")
         assert independent.datasets.group_of("ra") is None
-        assert set(independent.parameters.free_names) >= {
-            "ra.likelihood.amplitude",
-            "dec.likelihood.amplitude",
-        }
+        # The comparison arm carries a GP per channel, at the *correct*
+        # marginal amplitude rather than a fitted one -- which is the whole
+        # design: a fitted amplitude would let each GP over-inflate and hide
+        # the missing cross-covariance under a nuisance parameter.
+        amplitudes = generators.marginal_amplitudes()
+        for label in ("ra", "dec"):
+            noise = independent.datasets[label].likelihood.noise
+            assert noise.CORRELATED
+            assert noise.parameters["amplitude"].value == pytest.approx(amplitudes[label])
+        assert set(independent.parameters.free_names) == {"model.pmra", "model.pmdec"}
         for label in ("ra", "dec"):
             assert np.array_equal(
                 np.asarray(independent.datasets[label].observed.values),
@@ -271,17 +277,20 @@ class TestTheCalibrationStudy:
         """The pinned claim, at the count where SBC has power.
 
         Under an injected centroiding systematic shared by the two sky axes,
-        the joint fit's interval on the **shared** orbital phase covers at its
-        nominal rate and the independent-GP fit's does not. Two independent
-        GPs reproduce each axis's marginal scatter exactly and can say nothing
-        about the correlation between them, so they combine two error-laden
-        estimates of the phase as though the errors were independent --- and
-        the combined interval comes out narrower than the truth's own scatter.
+        the joint fit's interval on the **direction** of the proper motion ---
+        ``(pmra + pmdec)/sqrt(2)``, the projection along which the two
+        channels' errors add --- covers at its nominal rate and the
+        independent-GP fit's does not. Both arms are given the noise process
+        they are entitled to know, the comparison arm each channel's correct
+        marginal amplitude, so the missing cross-covariance is the only
+        difference between them; and both arms' *marginal* coverage on
+        ``pmra`` and ``pmdec`` is nominal, which is why the claim is pinned on
+        the derived quantity and not on a parameter (see ``SBC_DIRECTION``).
         """
         joint = calibrate("reference", arm="joint", seed=generators.SEED, **FULL_SBC)
         independent = calibrate("reference", arm="independent", seed=generators.SEED, **FULL_SBC)
-        joint_coverage = coverage_at(joint, 0.9, SBC_SHARED_PARAMETER)
-        independent_coverage = coverage_at(independent, 0.9, SBC_SHARED_PARAMETER)
+        joint_coverage = coverage_at(joint, 0.9, SBC_DIRECTION)
+        independent_coverage = coverage_at(independent, 0.9, SBC_DIRECTION)
         assert joint_coverage >= JOINT_COVERAGE_FLOOR, (
             f"the joint arm covered {joint_coverage:.3f} at the 0.90 level, below the pinned "
             f"floor of {JOINT_COVERAGE_FLOOR}."

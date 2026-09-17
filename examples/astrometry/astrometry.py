@@ -103,15 +103,15 @@ __all__ = [
     "DEFAULT_WARMUP",
     "JOINT_LOG_VARIANCE_PRIOR",
     "QUALIFIED_TRUTH",
+    "SBC_DIRECTION",
     "SBC_PARAMETERS",
-    "SBC_PHASE_WIDTH",
-    "SBC_SHARED_PARAMETER",
     "backend_module",
     "build_instruments",
     "build_model",
     "build_problem",
     "calibrate",
     "coverage_at",
+    "direction_of",
     "fit",
     "joint_noise",
     "main",
@@ -178,30 +178,30 @@ JOINT_LOG_VARIANCE_PRIOR = st.norm(-8.0, 1.0)
 #: parameters mean different things in the two arms (there is no coupling in an
 #: independent-GP fit at all), so ranking them would compare two different
 #: questions.
+SBC_PARAMETERS: tuple[str, ...] = ("model.pmra", "model.pmdec")
+
+#: The derived quantity the comparison is pinned on, and the reason it is a
+#: *derived* one rather than a parameter.
 #:
-#: ``model.phase`` is the one that carries the result, and the reason is worth
-#: stating because it is the whole mechanism. ``pmra`` enters only the ``ra``
-#: channel and ``pmdec`` only ``dec``, so **each is constrained by one channel**
-#: --- and ignoring a correlation between two channels that constrain different
-#: parameters throws information away, which makes an interval too *wide*, not
-#: too narrow. The orbital phase is shared by both channels, so both constrain
-#: it, and there ignoring the correlation is **double-counting**: two error-laden
-#: estimates that move together are combined as though they moved independently,
-#: and the combined interval is narrower than the truth's own scatter. That is
-#: undercoverage, and it is what a cross-channel systematic does to every
-#: parameter a multi-channel instrument measures jointly.
-SBC_PARAMETERS: tuple[str, ...] = ("model.pmra", "model.pmdec", "model.phase")
-
-#: The parameter the coverage comparison is pinned on --- see above.
-SBC_SHARED_PARAMETER = "model.phase"
-
-#: Prior width on the shared orbital phase in the calibration study, radians.
-#: Informative for :func:`build_model`'s own reason for the period: a phase
-#: search over the whole circle at this sampling is a different (and harder)
-#: problem, and the realistic case is a phase already known to a tenth of a
-#: radian from a previous epoch. Ten times wider than the likelihood's own
-#: width, so the posterior is the data's and not the prior's.
-SBC_PHASE_WIDTH = 0.15
+#: A cross-channel systematic does not bias a single channel's own parameter ---
+#: it correlates the **errors** of the two channels' parameters. ``pmra`` enters
+#: only ``ra`` and ``pmdec`` only ``dec``, and both are measured with the same
+#: weight along the epoch grid (a proper motion is a linear trend), so a
+#: centroiding error shared by the two axes makes their two errors move
+#: together. Each *marginal* posterior is then still about the right width ---
+#: which is why both arms' marginal coverage comes out nominal, and this study
+#: reports that --- while the **joint** posterior has the wrong shape: the
+#: independent-GP fit reports two errors as uncorrelated when they are
+#: correlated at about 0.86.
+#:
+#: The projection that sees it is the one along which the two errors add:
+#: ``(pmra + pmdec)/sqrt(2)``, the **diagonal** of the proper-motion plane. Its
+#: true variance is ``v(1 + rho)``; a model that believes the errors
+#: independent reports ``v``, understating the interval by ``sqrt(1 + rho)`` ---
+#: about 1.36 here. That is undercoverage, and it is what a shared centroiding
+#: systematic does to the *direction* of a measured proper motion, which is a
+#: quantity astronomers publish.
+SBC_DIRECTION = "model.direction"
 
 #: SBC budgets. Deliberately small enough to run inside a test: 32 refits of a
 #: two-parameter problem over 28 epochs. `python -m examples.astrometry --sbc`
@@ -481,9 +481,11 @@ def sbc_problem(
 
     Three arms:
 
-    Three parameters are fitted: the two proper motions, one per channel, and
-    the orbital **phase**, which both channels measure --- see
-    :data:`SBC_PARAMETERS` for why the shared one is where the result lives.
+    Two parameters are fitted, one per channel: the proper motions. Everything
+    else about the orbit is held at the truth, so that a study which refits once
+    per simulation stays affordable and stays unimodal --- a reflex orbit with a
+    free period is neither (see the closing section of :doc:`the tutorial page
+    </astrometry>`).
 
     ``"joint"``
         ``JointGaussianProcessNoise`` over both channels: the model that
@@ -512,7 +514,7 @@ def sbc_problem(
         pmra=st.norm(0.0, 5.0),
         pmdec=st.norm(0.0, 5.0),
         period=generators.TRUTH["period"],
-        phase=st.norm(generators.TRUTH["phase"], SBC_PHASE_WIDTH),
+        phase=generators.TRUTH["phase"],
         amp_ra=generators.TRUTH["amp_ra"],
         amp_dec=generators.TRUTH["amp_dec"],
     )
@@ -548,6 +550,31 @@ def sbc_problem(
     return FittingProblem(model, datasets, seed=seed)
 
 
+def direction_of(pmra: Any, pmdec: Any) -> Any:
+    """``(pmra + pmdec)/sqrt(2)``: the diagonal of the proper-motion plane.
+
+    The projection along which the two channels' errors *add*, and therefore
+    the one a cross-channel systematic corrupts. See :data:`SBC_DIRECTION`.
+    """
+    return (np.asarray(pmra, dtype=float) + np.asarray(pmdec, dtype=float)) / np.sqrt(2.0)
+
+
+def _thinned(values: Any, draws: int) -> np.ndarray:
+    """*draws* posterior samples, taken evenly out of a run's chains.
+
+    Evenly rather than from the head, which is what breaks the autocorrelation
+    an MCMC run's neighbouring draws carry --- ``ampere.results.sbc``'s own
+    rule, applied here because this study ranks a *derived* quantity and so
+    walks the runs itself.
+    """
+    flat = np.asarray(values, dtype=float).reshape(-1)
+    if flat.size < draws:
+        raise ValueError(
+            f"a rank against {draws} draw(s) needs at least that many, got {flat.size}."
+        )
+    return flat[np.linspace(0, flat.size - 1, draws).astype(int)]
+
+
 def calibrate(
     backend: str = "reference",
     *,
@@ -561,43 +588,64 @@ def calibrate(
 ) -> Any:
     """Simulation-based calibration of one arm, against the **joint** generator.
 
-    The simulating problem is always the joint one, so every replicate's data
-    carry a correlated centroiding systematic drawn from ``B (x) K_x`` at a
-    ``B`` drawn from its own prior --- the correlated draw
-    ``DatasetCollection.draw_group`` makes, not two marginal ones. What changes
-    between arms is only what is *fitted*: the same data, scored by a model
-    that knows about the cross-channel structure or by one that does not.
+    Talts et al. (2018) by refitting, in ``ampere.results.sbc``'s own shape and
+    returning its own ``calibration`` group (built with the library's
+    :func:`~ampere.results.calibration_dataset`, so the schema is one schema).
+    The loop is written out here rather than delegated for one reason: what
+    this study ranks is a **derived** quantity, ``(pmra + pmdec)/sqrt(2)``, and
+    ``sbc`` ranks posterior *variables*. See :data:`SBC_DIRECTION` for why the
+    derived one is where the answer is.
 
-    Returns the ``calibration`` group :func:`ampere.results.sbc` produces:
-    ranks, the coverage curve and the uniformity p-value, for
-    :data:`SBC_PARAMETERS`.
+    The simulating problem is always the joint one, so every replicate's data
+    carry a correlated centroiding systematic drawn from ``B (x) K_x`` --- the
+    correlated draw ``DatasetCollection.draw_group`` makes, not two marginal
+    ones. What changes between arms is only what is *fitted*: the same data,
+    scored by a model that knows about the cross-channel structure or by one
+    that does not.
     """
     from ampere.inference import EmceeEngine
-    from ampere.results import sbc
+    from ampere.results import REFIT_ROUTE, calibration_dataset, replace_observations
 
     simulating = sbc_problem(backend, arm="joint", seed=seed)
-
-    def factory(replica: FittingProblem) -> Any:
-        if arm == "joint":
-            fitted = replica
-        else:
-            fitted = sbc_problem(
+    rng = np.random.default_rng(seed)
+    rows: list[list[int]] = []
+    for index in range(int(count)):
+        theta = simulating.sample_prior(rng)
+        simulation = simulating.simulate(theta, observe=True)
+        if simulation.failed or simulation.observations is None:
+            continue
+        replica = replace_observations(simulating, simulation.observations, seed=seed + index)
+        fitted = (
+            replica
+            if arm == "joint"
+            else sbc_problem(
                 backend,
                 arm=arm,
                 observed=(replica.datasets["ra"].observed, replica.datasets["dec"].observed),
-                seed=seed,
+                seed=seed + index,
             )
-        return EmceeEngine(fitted, walkers=walkers)
-
-    return sbc(
-        simulating,
-        factory,
-        count=count,
-        draws=draws,
-        run_options={"steps": steps, "burn_in": burn_in},
-        parameters=list(SBC_PARAMETERS),
-        seed=seed,
-        label=f"astrometry {arm} arm",
+        )
+        run = EmceeEngine(fitted, walkers=walkers).run(steps, burn_in=burn_in, progress=False)
+        posterior = run["posterior"].dataset
+        row = [
+            int(np.sum(_thinned(posterior[name], draws) < float(theta[name])))
+            for name in SBC_PARAMETERS
+        ]
+        drawn = direction_of(
+            _thinned(posterior["model.pmra"], draws), _thinned(posterior["model.pmdec"], draws)
+        )
+        row.append(
+            int(np.sum(drawn < float(direction_of(theta["model.pmra"], theta["model.pmdec"]))))
+        )
+        rows.append(row)
+    if not rows:
+        raise RuntimeError("no simulation produced a usable fit.")
+    return calibration_dataset(
+        np.asarray(rows, dtype=int),
+        [*SBC_PARAMETERS, SBC_DIRECTION],
+        posterior_draws=int(draws),
+        route=REFIT_ROUTE,
+        attrs={"ampere_calibration_label": f"astrometry {arm} arm"},
     )
 
 
@@ -606,8 +654,8 @@ def coverage_at(calibration: Any, level: float = 0.9, parameter: str | None = No
 
     One number, because the claim is one claim: "the central *level* interval
     contains the truth *level* of the time". *parameter* names one of
-    :data:`SBC_PARAMETERS` --- pass :data:`SBC_SHARED_PARAMETER` for the one the
-    comparison turns on --- and ``None`` averages over all of them. The curve is
+    :data:`SBC_PARAMETERS` or :data:`SBC_DIRECTION` --- pass the latter for the
+    one the comparison turns on --- and ``None`` averages over all of them. The curve is
     on the returned dataset for anyone who wants the rest of it.
     """
     coverage = calibration["coverage"]
@@ -657,13 +705,14 @@ def main(argv: list[str] | None = None) -> int:
         elapsed = time.perf_counter() - started
         print(f"SBC, {args.sbc} arm: {args.sbc_count} simulation(s), {args.sbc_draws} draw(s)")
         for level in (0.5, 0.9, 0.95):
-            shared = coverage_at(calibration, level, SBC_SHARED_PARAMETER)
+            direction = coverage_at(calibration, level, SBC_DIRECTION)
             print(
                 f"  coverage at {level:.2f}: {coverage_at(calibration, level):.3f} "
-                f"(mean), {shared:.3f} ({SBC_SHARED_PARAMETER})"
+                f"(mean), {direction:.3f} ({SBC_DIRECTION})"
             )
         pvalues = np.asarray(calibration["ks_pvalue"], dtype=float)
-        for name, pvalue in zip(SBC_PARAMETERS, pvalues, strict=True):
+        names = [*SBC_PARAMETERS, SBC_DIRECTION]
+        for name, pvalue in zip(names, pvalues, strict=True):
             print(f"  rank uniformity p({name}) = {pvalue:.3f}")
         print(f"  {elapsed:.1f} s wall clock")
         return 0
