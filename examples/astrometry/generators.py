@@ -23,6 +23,7 @@ __all__ = [
     "SIGMA",
     "TRUTH",
     "coupling_matrix",
+    "marginal_amplitudes",
     "synthetic_data",
     "synthetic_joint_data",
 ]
@@ -160,6 +161,21 @@ def coupling_matrix(truth: dict[str, float] | None = None) -> np.ndarray:
     return np.asarray(
         RotationCoupling(0.0, 0.0, 0.0).matrix(JOINT_TRUTH if truth is None else truth)
     )
+
+
+def marginal_amplitudes(truth: dict[str, float] | None = None) -> dict[str, float]:
+    """Each channel's own standard deviation under ``B (x) K_x``, in mas.
+
+    ``sqrt(B_tt)``: the marginal scatter the injected systematic gives channel
+    ``t``, with the cross-covariance ``B_01`` dropped. This is exactly what two
+    *independent* GPs can reproduce and exactly where they stop --- which is why
+    the comparison arm of the calibration study is given these numbers rather
+    than a prior over them. Handing the independent model the right marginals
+    leaves the missing cross-covariance as the only difference between the two
+    arms, which is the difference the study is about.
+    """
+    matrix = coupling_matrix(truth)
+    return {"ra": float(np.sqrt(matrix[0, 0])), "dec": float(np.sqrt(matrix[1, 1]))}
 
 
 def synthetic_joint_data(

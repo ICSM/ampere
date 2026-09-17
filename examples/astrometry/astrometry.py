@@ -101,7 +101,6 @@ __all__ = [
     "DEFAULT_STEPS",
     "DEFAULT_WALKERS",
     "DEFAULT_WARMUP",
-    "JOINT_AMPLITUDE_PRIOR",
     "JOINT_LOG_VARIANCE_PRIOR",
     "QUALIFIED_TRUTH",
     "SBC_PARAMETERS",
@@ -164,9 +163,15 @@ GP_LENGTH_SCALE = 120.0
 #: parameterisation that makes it a location.
 JOINT_LOG_VARIANCE_PRIOR = st.norm(-8.0, 1.0)
 
-#: Prior on each independent GP's amplitude in the comparison arm --- a
-#: standard deviation in mas, so the same range the two eigenvalues span.
-JOINT_AMPLITUDE_PRIOR = st.loguniform(1e-3, 1e-1)
+#: The comparison arm's GP amplitudes are **not** fitted: they are held at
+#: :func:`~examples.astrometry.generators.marginal_amplitudes`, the standard
+#: deviation the injected systematic actually gives each channel. That is the
+#: whole design of the comparison. Two independent GPs can reproduce each
+#: axis's marginal scatter exactly, and giving them a prior to discover it
+#: instead would let them *over*-inflate and hide the effect under a fitted
+#: nuisance --- which is what an earlier version of this study measured, and
+#: why it measured nothing. Handing them the right marginals leaves the missing
+#: cross-covariance as the only difference between the arms.
 
 #: What the SBC study ranks. The orbital parameters only: the claim under test
 #: is that the *physical* posterior is calibrated, and the noise model's own
@@ -201,16 +206,16 @@ SBC_PHASE_WIDTH = 0.15
 #: SBC budgets. Deliberately small enough to run inside a test: 32 refits of a
 #: two-parameter problem over 28 epochs. `python -m examples.astrometry --sbc`
 #: with `--sbc-count` raised is the real study.
-#: How much of ``B`` the calibration study fits. ``"variances"``: the two
-#: log-eigenvalues are fitted and the angle is held at the injected value. The
-#: angle is held because the parameterisation is invariant under
-#: ``(angle -> angle + pi/2, v_0 <-> v_1)`` (see ``RotationCoupling``), so its
-#: marginal is bimodal by construction and an emcee budget a test can afford
-#: does not cross between the modes --- which would cost the *physical*
-#: parameters' chains their mixing and turn a study of the noise model into a
-#: study of the sampler. The angle of an instrumental systematic is also the
-#: part of it a real analysis most often does know.
-COUPLING_FIT = "variances"
+#: How much of ``B`` the calibration study fits: **none of it**. Both arms are
+#: given the noise process they are entitled to know --- the joint arm the whole
+#: of ``B``, the comparison arm each channel's correct marginal --- so that the
+#: one thing that differs between them is the cross-covariance, which is the one
+#: thing the study is about. Fitting ``B`` as well is what ``--joint`` does and
+#: what the NUTS rows in ``tests/inference`` exercise; doing it *here* would mix
+#: a question about the model with a question about a sampler's ability to
+#: explore a bimodal noise sector (the coupling's own relabelling symmetry, see
+#: ``RotationCoupling``) at a budget a test can afford.
+COUPLING_FIT = "none"
 
 DEFAULT_SBC_COUNT = 32
 DEFAULT_SBC_DRAWS = 200
@@ -484,10 +489,15 @@ def sbc_problem(
         ``JointGaussianProcessNoise`` over both channels: the model that
         matches the generating process.
     ``"independent"``
-        Two ordinary ``GaussianProcessNoise`` likelihoods with free
-        amplitudes. Each can absorb its own axis's marginal scatter exactly
-        and neither can say anything about the correlation between them, so
-        this arm treats two strongly dependent measurements as independent.
+        Two ordinary ``GaussianProcessNoise`` likelihoods, each with the
+        **correct marginal amplitude** for its own axis (see
+        :data:`JOINT_LOG_VARIANCE_PRIOR`'s neighbour above). Each reproduces
+        its own axis's scatter exactly and neither can say anything about the
+        correlation between them, so this arm treats two strongly dependent
+        measurements as independent --- and that, and nothing else, is what
+        separates it from the joint arm. ``likelihoods.md`` §15's "two scalar
+        GPs with tied hyperparameters is the nearest approximation and is a
+        different model", made into an experiment.
     ``"rigid"``
         Independent white noise, the arm with no flexible likelihood at all.
         Kept because it is the comparison a reader reaches for first.
@@ -516,10 +526,12 @@ def sbc_problem(
         )
     observed_ra, observed_dec = observed
 
-    def likelihood() -> Likelihood:
+    amplitudes = generators.marginal_amplitudes()
+
+    def likelihood(channel: str) -> Likelihood:
         if arm == "independent":
             kernel = noise.Matern32(
-                JOINT_AMPLITUDE_PRIOR, generators.JOINT_LENGTH_SCALE, axes=("time",)
+                amplitudes[channel], generators.JOINT_LENGTH_SCALE, axes=("time",)
             )
             return Likelihood(
                 GaussianFamily(), noise.GaussianProcessNoise(kernel, noise.QuasisepGP())
@@ -528,8 +540,8 @@ def sbc_problem(
 
     datasets = DatasetCollection(
         {
-            "ra": Dataset(observed_ra, ra_instrument, likelihood=likelihood(), label="ra"),
-            "dec": Dataset(observed_dec, dec_instrument, likelihood=likelihood(), label="dec"),
+            "ra": Dataset(observed_ra, ra_instrument, likelihood=likelihood("ra"), label="ra"),
+            "dec": Dataset(observed_dec, dec_instrument, likelihood=likelihood("dec"), label="dec"),
         },
         joint={"astrom": joint_noise(backend, fit=COUPLING_FIT)} if arm == "joint" else None,
     )
