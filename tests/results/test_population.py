@@ -27,6 +27,12 @@ this module's docstring makes is exercised against that toy:
    the run's stored *joint* one (§ "why it needs the marginal interim
    prior" above), a fix a single-parameter model's toy cannot exercise
    because the two priors coincide there.
+8. **W5.22**: :func:`~ampere.results.fit_population` with no ``interim_prior``
+   reads the named parameter's marginal prior back off the archive's own
+   provenance (schema 8, ``ampere_free_priors``) and reproduces the same
+   recovery as claim 1; a supplied ``interim_prior`` that disagrees with the
+   stored one is refused by name; an archive with no stored priors and no
+   supplied ``interim_prior`` is refused by name too.
 
 Fits are deliberately tiny (a few hundred steps, few walkers): the 200
 per-object fits are timed in :class:`TestTheTwoHundredObjectsFit` and
@@ -35,6 +41,20 @@ asserted to complete inside a generous ceiling -- not a budget from
 contention this machine's concurrent gates create, but tight enough that a
 regression which made per-object fitting expensive by orders of magnitude
 would fail a test rather than only a stopwatch.
+
+**W5.22**: fitting and timing the full 200-object archive is minutes of
+wall clock a per-PR gate should not pay for by default, so
+:class:`TestTheTwoHundredObjectsFit` carries a ``population_full`` marker
+(``pyproject.toml``, skipped by default -- ``tests/results/conftest.py``;
+run with ``pytest -m population_full``), on the ``image_full``/``m2_full``
+pattern. Every other test in this module -- the reweighted-posterior
+recovery, the netCDF round trip, the ESS refusal, the marginal-interim-prior
+regression -- shares a *reduced* archive of :data:`N_OBJECTS_REDUCED` (50)
+objects instead, a bitwise prefix of the same 200-draw realisation, since
+none of their assertions actually need the full count; only the timing
+regression itself does, and :class:`TestTheReducedObjectsFit` pins the same
+guard at the reduced count, always in the default gate, at a
+proportionally looser ceiling.
 
 The population truth (:math:`\\mu=1.0,\\ \\tau=0.3`) is the *generating*
 hyperparameter, not the empirical mean/std of any one realised sample of
@@ -74,6 +94,7 @@ from ampere.core import (
 from ampere.core.exceptions import ResultsError
 from ampere.inference import EmceeEngine
 from ampere.results import (
+    ATTR_PREFIX,
     DataTreeRunColumns,
     GaussianPopulationModel,
     RunColumns,
@@ -87,7 +108,13 @@ from ampere.results.population import _self_normalised_log_weights
 pytest.importorskip("arviz", reason="ampere.results needs arviz")
 
 SEED = 28  # realised sample close to (MU_TRUTH, TAU_TRUTH); see module docstring
-N_OBJECTS = 200
+N_OBJECTS = 200  # the full archive; population_full only (TestTheTwoHundredObjectsFit)
+#: The default-gate archive size: a bitwise prefix of the N_OBJECTS realisation
+#: (same seed, same per-object seeds), so every test below that does not
+#: itself need the full count shares this smaller one instead (W5.22).
+#: TestTheMarginalInterimPriorFix's own N reuses this constant, since its
+#: 50-object subset predates this item and is exactly this size already.
+N_OBJECTS_REDUCED = 50
 MU_TRUTH = 1.0
 TAU_TRUTH = 0.3
 SIGMA = 0.2
@@ -200,14 +227,31 @@ def _population_model() -> GaussianPopulationModel:
     )
 
 
-@pytest.fixture(scope="module")
-def timed_object_runs() -> tuple[list[Any], float]:
-    """The 200 archived per-object runs, and the wall clock it took to build them."""
-    _, data = _truths_and_data(SEED, N_OBJECTS)
+def _fit_archive(n: int) -> tuple[list[Any], float]:
+    """Fit and time *n* per-object runs, timed as one archive.
+
+    :func:`_truths_and_data` draws from a freshly-seeded generator, so its
+    first *n* truths/data are bitwise the same as the first *n* of a larger
+    draw from the same seed (e.g. :data:`N_OBJECTS`'s 200) -- fitting *n*
+    directly, rather than fitting 200 and slicing, is the identical data for
+    a fraction of the cost (W5.22).
+    """
+    _, data = _truths_and_data(SEED, n)
     start = time.perf_counter()
     runs = [_fit_object(float(datum), seed=SEED + index) for index, datum in enumerate(data)]
     elapsed = time.perf_counter() - start
     return runs, elapsed
+
+
+@pytest.fixture(scope="module")
+def timed_object_runs() -> tuple[list[Any], float]:
+    """The default-gate archive: :data:`N_OBJECTS_REDUCED` per-object runs, timed.
+
+    A bitwise prefix of the full :data:`N_OBJECTS` realisation used under
+    ``population_full`` -- see :class:`TestTheTwoHundredObjectsFit` and
+    :class:`TestTheReducedObjectsFit`.
+    """
+    return _fit_archive(N_OBJECTS_REDUCED)
 
 
 @pytest.fixture(scope="module")
@@ -216,9 +260,29 @@ def object_runs(timed_object_runs: tuple[list[Any], float]) -> list[Any]:
     return runs
 
 
+@pytest.fixture(scope="module")
+def full_timed_object_runs() -> tuple[list[Any], float]:
+    """The full 200-object archive, and the wall clock it took to build it.
+
+    ``population_full`` only (skipped by default -- W5.22): only
+    :class:`TestTheTwoHundredObjectsFit` needs the full count, so nothing
+    else in this module requests this fixture.
+    """
+    return _fit_archive(N_OBJECTS)
+
+
+@pytest.mark.population_full
 class TestTheTwoHundredObjectsFit:
+    """The population_full row: the full archive, fit and timed (W5.22).
+
+    Skipped by default (``pyproject.toml``'s ``population_full`` marker,
+    ``tests/results/conftest.py``'s hook); run with
+    ``pytest -m population_full``. :class:`TestTheReducedObjectsFit` pins
+    the same guard, unmarked, at the default-gate archive size.
+    """
+
     def test_two_hundred_objects_fit_without_a_gross_regression(
-        self, timed_object_runs: tuple[list[Any], float]
+        self, full_timed_object_runs: tuple[list[Any], float]
     ) -> None:
         """A coarse regression guard, not a wall-clock SLA.
 
@@ -229,12 +293,35 @@ class TestTheTwoHundredObjectsFit:
         order-of-magnitude regression in per-object fitting cost, not to
         enforce a specific wall clock.
         """
-        runs, elapsed = timed_object_runs
+        runs, elapsed = full_timed_object_runs
         assert len(runs) == N_OBJECTS
         print(f"\n200 emcee single-object fits: {elapsed:.2f} s wall clock.")
         assert elapsed < 600.0, (
             f"200 tiny emcee fits took {elapsed:.2f} s -- more than ten minutes, which is no "
             f"longer explainable by ordinary machine contention alone."
+        )
+
+
+class TestTheReducedObjectsFit:
+    """The default-gate sibling of :class:`TestTheTwoHundredObjectsFit` (W5.22).
+
+    :data:`N_OBJECTS_REDUCED` objects instead of the full :data:`N_OBJECTS`:
+    pins the same regression guard, always in the default gate, at a
+    looser ceiling stated as a fraction of the full row's -- 1/4 the
+    objects, a little more than 1/4 the time budget, to absorb this
+    machine's own contention the same way the full row's ceiling does.
+    """
+
+    def test_fifty_objects_fit_without_a_gross_regression(
+        self, timed_object_runs: tuple[list[Any], float]
+    ) -> None:
+        runs, elapsed = timed_object_runs
+        assert len(runs) == N_OBJECTS_REDUCED
+        print(f"\n{N_OBJECTS_REDUCED} emcee single-object fits: {elapsed:.2f} s wall clock.")
+        assert elapsed < 200.0, (
+            f"{N_OBJECTS_REDUCED} tiny emcee fits took {elapsed:.2f} s -- more than the "
+            f"proportionally-scaled ceiling, which is no longer explainable by ordinary "
+            f"machine contention alone."
         )
 
 
@@ -285,14 +372,104 @@ class TestReweightedPopulationPosterior:
 
         assert result.attrs["ampere_population_parameter"] == "model.theta"
         runs_attr = json.loads(result.attrs["ampere_population_runs"])
-        assert len(runs_attr) == N_OBJECTS
+        assert len(runs_attr) == N_OBJECTS_REDUCED
         assert all("problem_hash" in row and "spec_hash" in row for row in runs_attr)
         ess_attr = json.loads(result.attrs["ampere_population_ess"])
-        assert len(ess_attr["per_object"]) == N_OBJECTS
+        assert len(ess_attr["per_object"]) == N_OBJECTS_REDUCED
         assert ess_attr["min"] <= ess_attr["median"]
         model_attr = json.loads(result.attrs["ampere_population_model"])
         assert model_attr["kind"] == "GaussianPopulationModel"
         assert model_attr["hyperparameters"] == ["mu", "tau"]
+
+
+# ---------------------------------------------------------------------------
+# 8. The stored interim prior (W5.22): optional, verified, refused when absent
+# ---------------------------------------------------------------------------
+
+
+class TestTheStoredInterimPrior:
+    """``fit_population`` reads ``model.theta``'s prior back off the archive's
+
+    own provenance (schema 8, ``ampere_free_priors``) when ``interim_prior``
+    is omitted, on the same :data:`N_OBJECTS_REDUCED`-object archive
+    :class:`TestReweightedPopulationPosterior` uses -- module docstring
+    claim 8.
+    """
+
+    SETTINGS: ClassVar[dict[str, int]] = dict(walkers=8, steps=2000, burn_in=500, seed=SEED)
+
+    @pytest.fixture(scope="class")
+    def columns(self, object_runs: list[Any]) -> list[Any]:
+        return [DataTreeRunColumns(run) for run in object_runs]
+
+    @pytest.fixture(scope="class")
+    def without_prior(self, columns: list[Any]) -> Any:
+        """One ``fit_population`` call with no ``interim_prior``, shared by
+        both tests below -- the same settings and archive
+        :class:`TestReweightedPopulationPosterior`'s own ``result`` fixture
+        uses, so a second, independent population fit is not paid for
+        twice."""
+        return fit_population(columns, "model.theta", _population_model(), **self.SETTINGS)
+
+    def test_omitting_interim_prior_reproduces_the_supplied_result(
+        self, columns: list[Any], without_prior: Any
+    ) -> None:
+        """No ``interim_prior`` reproduces the explicit-prior row bitwise.
+
+        ``ConstantModel``'s declared prior (every object in ``object_runs``)
+        and :data:`INTERIM_PRIOR` are the same ``norm(0.0, 10.0)``, so the
+        stored prior :func:`~ampere.results.fit_population` reads back and
+        the one :class:`TestReweightedPopulationPosterior` supplies
+        explicitly are one declaration -- the two runs are the same
+        ``emcee`` ensemble at the same seed and must agree exactly, not just
+        within a tolerance.
+        """
+        with_prior = fit_population(
+            columns, "model.theta", _population_model(), INTERIM_PRIOR, **self.SETTINGS
+        )
+        for name in ("mu", "tau"):
+            np.testing.assert_array_equal(
+                np.asarray(with_prior["posterior"][name]), np.asarray(without_prior["posterior"][name])
+            )
+
+    def test_omitting_interim_prior_recovers_the_truth(self, without_prior: Any) -> None:
+        """The same central-95 % claim :class:`TestReweightedPopulationPosterior` pins,
+        with the prior read back from provenance instead of supplied."""
+        mu = np.asarray(without_prior["posterior"]["mu"]).ravel()
+        tau = np.asarray(without_prior["posterior"]["tau"]).ravel()
+        mu_lo, mu_hi = np.percentile(mu, [2.5, 97.5])
+        tau_lo, tau_hi = np.percentile(tau, [2.5, 97.5])
+        assert mu_lo <= MU_TRUTH <= mu_hi, (mu_lo, MU_TRUTH, mu_hi)
+        assert tau_lo <= TAU_TRUTH <= tau_hi, (tau_lo, TAU_TRUTH, tau_hi)
+
+    def test_a_disagreeing_supplied_prior_is_refused(self, columns: list[Any]) -> None:
+        disagreeing = st.norm(0.0, 20.0)  # every object's declared prior is norm(0.0, 10.0)
+        with pytest.raises(ResultsError, match="disagrees"):
+            fit_population(columns, "model.theta", _population_model(), disagreeing, **self.SETTINGS)
+
+    def test_no_supplied_and_no_stored_prior_is_refused(self, object_runs: list[Any]) -> None:
+        """A schema-7-style archive (no ``ampere_free_priors``) with no
+        ``interim_prior`` supplied either: nothing here to read back and
+        nothing to fall back on, refused by name (W3.12's append-refusal
+        precedent for a file that predates the attribute it needs)."""
+        pre_schema_8 = []
+        for run in object_runs[:5]:
+            columns_run = DataTreeRunColumns(run)
+            attrs = dict(columns_run.attrs)
+            del attrs[f"{ATTR_PREFIX}free_priors"]
+            pre_schema_8.append(
+                ManualRunColumns(
+                    theta=columns_run.parameter_draws("model.theta"),
+                    log_prior=columns_run.log_prior,
+                    log_likelihood=columns_run.log_likelihood,
+                    proposal_log_density=columns_run.proposal_log_density,
+                    attrs=attrs,
+                )
+            )
+        with pytest.raises(ResultsError, match="no stored prior"):
+            fit_population(
+                pre_schema_8, "model.theta", _population_model(), walkers=8, steps=100, burn_in=20, seed=SEED
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -587,16 +764,16 @@ class TestTheMarginalInterimPriorFix:
     likelihood, so its marginal log-density varies materially draw to draw
     -- exactly the factor a joint-column denominator leaves uncancelled.
 
-    Reuses the first 50 of :func:`_truths_and_data`'s 200 (truth, datum)
-    pairs -- the same realisation :data:`object_runs` (``ConstantModel``)
-    already fitted -- so the one-parameter control costs no extra fitting,
-    and only the 50 two-parameter fits are new. Kept well under ten minutes
-    even alongside a concurrent gate: 50 tiny per-object fits plus two
-    small population fits (N = 50, not 200) is a fraction of
-    :class:`TestTheTwoHundredObjectsFit`'s own budget.
+    Reuses :data:`N_OBJECTS_REDUCED` of :func:`_truths_and_data`'s 200
+    (truth, datum) pairs -- the same realisation :data:`object_runs`
+    (``ConstantModel``) already fitted, and since W5.22 that fixture *is*
+    exactly this size rather than a larger archive sliced down -- so the
+    one-parameter control costs no extra fitting, and only the
+    :data:`N_OBJECTS_REDUCED` two-parameter fits are new. Kept well under
+    ten minutes even alongside a concurrent gate.
     """
 
-    N = 50
+    N = N_OBJECTS_REDUCED
     POPULATION_SETTINGS: ClassVar[dict[str, int]] = dict(
         walkers=8, steps=1500, burn_in=400, seed=SEED
     )
@@ -611,7 +788,7 @@ class TestTheMarginalInterimPriorFix:
 
     @pytest.fixture(scope="class")
     def one_parameter_result(self, object_runs: list[Any]) -> Any:
-        """The one-parameter control, over the *same* first 50 objects."""
+        """The one-parameter control, over the *same* N_OBJECTS_REDUCED objects."""
         columns = [DataTreeRunColumns(run) for run in object_runs[: self.N]]
         return fit_population(
             columns, "model.theta", _population_model(), INTERIM_PRIOR, **self.POPULATION_SETTINGS
