@@ -156,14 +156,24 @@ TINY_SBC = {"count": 12, "draws": 120, "walkers": 12, "steps": 250, "burn_in": 1
 FULL_SBC = {"count": 48, "draws": 200}
 
 #: Pinned margins, measured on the reference backend at
-#: ``examples.astrometry.generators.SEED`` (the run the branch report quotes):
-#: the joint arm covers 1.000 and the independent arm 0.646 at the 0.90 level
-#: on ``model.phase``. The margin below nominal is generous because 48
-#: simulations give a standard error of about 0.043 on a coverage of 0.9, and
-#: the *gap* is what the claim is about --- it is 0.35 as measured and the row
-#: asks for a fifth of that.
+#: ``examples.astrometry.generators.SEED``. The study is seeded end to end ---
+#: the prior draws, each replica's walkers --- so these are reproducible rather
+#: than sampled, and the margins cover dependency-version drift rather than
+#: Monte-Carlo noise. Measured at the 0.90 level on ``model.direction``:
+#:
+#: ===================  ========  =============
+#: arm                  coverage  KS p(ranks)
+#: ===================  ========  =============
+#: joint                0.917     0.235
+#: independent GPs      0.729     0.021
+#: rigid (white noise)  0.479     0.000
+#: ===================  ========  =============
+#:
+#: The independent arm's 0.729 is close to the ``1/sqrt(1 + rho)`` an omitted
+#: cross-covariance of 0.86 predicts (about 0.77), which is the check that the
+#: mechanism is the one claimed rather than an artefact.
 JOINT_COVERAGE_FLOOR = 0.80
-COVERAGE_GAP = 0.07
+COVERAGE_GAP = 0.10
 
 
 class TestTheJointArm:
