@@ -1957,9 +1957,7 @@ class TestSchemaEightAttributes:
             def evaluate(self, **values: Any) -> ModelResult:
                 ctx = self.context(values)
                 return ModelResult(
-                    Spectrum(
-                        ctx["grid"] * u.micron, np.full_like(ctx["grid"], ctx["theta"]) * u.Jy
-                    )
+                    Spectrum(ctx["grid"] * u.micron, np.full_like(ctx["grid"], ctx["theta"]) * u.Jy)
                 )
 
         grid = np.array([1.0])
