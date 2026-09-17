@@ -319,6 +319,10 @@ markers = [
     # asks for them, in the same shape as the marker above; a 50-object
     # reduced sibling stays in the default gate.
     "population_full: the population study's full 200-object archive; run with `pytest -m population_full`",
+    # W5.9. The astrometry example's calibration study at the count where SBC
+    # has power (two arms x 48 refits, tens of minutes): the same reasoning as
+    # the three lines above, with a reduced-budget sibling that always runs.
+    "astrometry_full: the astrometry calibration study's full budget; run with `pytest -m astrometry_full`",
 ]
 
 # ---------------------------------------------------------------------------

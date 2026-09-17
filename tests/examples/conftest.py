@@ -52,7 +52,7 @@ def wstat_example() -> Iterator[ModuleType]:
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Skip the ``image_full`` rows unless ``-m image_full`` asked for them (W5.5).
+    """Skip the full-budget rows unless their marker asked for them (W5.5, W5.9).
 
     ``tests/interferometry/conftest.py``'s hook, under this directory's roof
     because that is where ``tests/examples/test_image_study.py`` lives: a local
@@ -60,9 +60,18 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     does not reach into any other suite's invocation.
     """
     selected = config.getoption("-m", default="") or ""
-    if "image_full" in selected:
-        return
-    skip = pytest.mark.skip(reason="the image study's full budget: run with `pytest -m image_full`")
-    for item in items:
-        if "image_full" in item.keywords:
-            item.add_marker(skip)
+    # W5.9 adds the second marker this hook guards. One loop, one reason per
+    # marker: a row skipped for the wrong reason is worse than one not skipped.
+    reasons = {
+        "image_full": "the image study's full budget: run with `pytest -m image_full`",
+        "astrometry_full": (
+            "the astrometry calibration study's full budget: run with `pytest -m astrometry_full`"
+        ),
+    }
+    for marker, reason in reasons.items():
+        if marker in selected:
+            continue
+        skip = pytest.mark.skip(reason=reason)
+        for item in items:
+            if marker in item.keywords:
+                item.add_marker(skip)

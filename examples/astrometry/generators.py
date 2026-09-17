@@ -13,14 +13,19 @@ from __future__ import annotations
 import astropy.units as u
 import numpy as np
 
-from ampere.core import Instrument, Model, TimeSeries, negotiate
+from ampere.core import Instrument, Matern32, Model, RotationCoupling, TimeSeries, negotiate
 
 __all__ = [
     "EPOCHS",
+    "JOINT_LENGTH_SCALE",
+    "JOINT_TRUTH",
     "SEED",
     "SIGMA",
     "TRUTH",
+    "coupling_matrix",
+    "marginal_amplitudes",
     "synthetic_data",
+    "synthetic_joint_data",
 ]
 
 #: Reproducible everywhere this example is run.
@@ -117,6 +122,114 @@ def synthetic_data(
     )
     observed_dec = TimeSeries(
         dec_truth.time.values * u.day,
+        dec_noisy * u.mas,
+        uncertainty=np.full(dec_noisy.shape, SIGMA) * u.mas,
+    )
+    return observed_ra, observed_dec
+
+
+# ---------------------------------------------------------------------------
+# The injected correlated error (W5.9)
+# ---------------------------------------------------------------------------
+
+#: Correlation length of the injected centroiding systematic, days. Long
+#: compared with the epoch spacing, so the systematic is *smooth* -- which is
+#: what makes it a systematic rather than extra white noise, and what an
+#: independent GP on each axis can partly absorb.
+JOINT_LENGTH_SCALE = 150.0
+
+#: The injected coupling ``B``, in the physical parameterisation
+#: :class:`~ampere.core.RotationCoupling` declares: a centroiding error
+#: elongated along a position angle of 0.7 rad, with semi-axis standard
+#: deviations of 0.030 mas and 0.008 mas.
+#:
+#: The correlation it implies between the ``ra`` and ``dec`` residuals at one
+#: epoch is about 0.8, which is the number the whole study turns on: two
+#: independent GPs can reproduce each axis's *marginal* scatter exactly and
+#: can say nothing at all about that 0.8, so they treat two strongly dependent
+#: measurements as two independent ones and report intervals that are too
+#: narrow.
+JOINT_TRUTH: dict[str, float] = {
+    "angle": 0.7,
+    "log_variance_0": float(np.log(0.030**2)),
+    "log_variance_1": float(np.log(0.008**2)),
+}
+
+
+def coupling_matrix(truth: dict[str, float] | None = None) -> np.ndarray:
+    """``B`` at *truth* (:data:`JOINT_TRUTH` by default), as a 2x2 array."""
+    return np.asarray(
+        RotationCoupling(0.0, 0.0, 0.0).matrix(JOINT_TRUTH if truth is None else truth)
+    )
+
+
+def marginal_amplitudes(truth: dict[str, float] | None = None) -> dict[str, float]:
+    """Each channel's own standard deviation under ``B (x) K_x``, in mas.
+
+    ``sqrt(B_tt)``: the marginal scatter the injected systematic gives channel
+    ``t``, with the cross-covariance ``B_01`` dropped. This is exactly what two
+    *independent* GPs can reproduce and exactly where they stop --- which is why
+    the comparison arm of the calibration study is given these numbers rather
+    than a prior over them. Handing the independent model the right marginals
+    leaves the missing cross-covariance as the only difference between the two
+    arms, which is the difference the study is about.
+    """
+    matrix = coupling_matrix(truth)
+    return {"ra": float(np.sqrt(matrix[0, 0])), "dec": float(np.sqrt(matrix[1, 1]))}
+
+
+def synthetic_joint_data(
+    model: Model,
+    ra_instrument: Instrument,
+    dec_instrument: Instrument,
+    *,
+    seed: int = SEED,
+) -> tuple[TimeSeries, TimeSeries]:
+    """:func:`synthetic_data` with a **correlated** centroiding systematic injected.
+
+    The misspecification W5.9's study is about. On top of the orbit and the
+    per-epoch white noise, both channels are perturbed by one draw from
+    ``B (x) K_x`` -- a smooth error shared by the two sky axes, of the kind a
+    centroiding solution with a preferred direction produces. The draw is made
+    here, in numpy, from the materialised Kronecker covariance rather than
+    through the noise model, so that the data this study fits are generated
+    independently of the code that scores them.
+    """
+    # Two streams, and the split is deliberate: the **white** noise comes from
+    # the same generator, in the same order, as :func:`synthetic_data`'s, so
+    # the difference between the two data sets is *exactly* the injected
+    # systematic and nothing else. That makes the injection inspectable --- a
+    # reader (and ``tests/examples``) can subtract one from the other and look
+    # at what was added --- rather than something only the code knows.
+    systematic_rng = np.random.default_rng(seed + 1)
+    rng = np.random.default_rng(seed)
+    requirements = negotiate([ra_instrument, dec_instrument])
+    compiled = model.compile_for(requirements)
+    truth = compiled(**TRUTH)
+    ra_truth = np.asarray(ra_instrument(truth).values).ravel()
+    dec_truth = np.asarray(dec_instrument(truth).values).ravel()
+
+    kernel = Matern32(1.0, JOINT_LENGTH_SCALE, axes=("time",))
+    covariance = kernel.matrix(EPOCHS[:, None], EPOCHS[:, None], kernel.resolve({}))
+    stacked = np.kron(coupling_matrix(), covariance)
+    # A relative floor on the diagonal: a Matern-3/2 covariance over twenty-odd
+    # epochs at a 150-day length scale is near-singular in float64, and this is
+    # a data generator rather than a likelihood, so the stabiliser is the
+    # honest thing rather than a hidden one.
+    stacked = stacked + np.eye(stacked.shape[0]) * 1e-10 * float(np.max(np.diag(stacked)))
+    systematic = systematic_rng.multivariate_normal(np.zeros(stacked.shape[0]), stacked).reshape(
+        2, -1
+    )
+
+    ra_noisy = ra_truth + systematic[0] + rng.normal(0.0, SIGMA, ra_truth.shape)
+    dec_noisy = dec_truth + systematic[1] + rng.normal(0.0, SIGMA, dec_truth.shape)
+    observed_ra = TimeSeries(
+        EPOCHS * u.day,
+        ra_noisy * u.mas,
+        uncertainty=np.full(ra_noisy.shape, SIGMA) * u.mas,
+    )
+    observed_dec = TimeSeries(
+        EPOCHS * u.day,
         dec_noisy * u.mas,
         uncertainty=np.full(dec_noisy.shape, SIGMA) * u.mas,
     )

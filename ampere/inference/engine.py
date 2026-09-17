@@ -259,14 +259,14 @@ class _EvaluationCache:
             supplied = set(terms(problem.unconstrain(problem.reference_values)))
         except Exception:
             return
-        expected = set(problem.datasets)
+        expected = set(problem.datasets.contribution_labels())
         if supplied != expected:
             raise EngineError(
                 f"the realisation registered for backend {problem.backend!r} supplied a "
                 f"per-dataset decomposition keyed {sorted(supplied)}, but this problem's "
-                f"datasets are {sorted(expected)}. The two must agree exactly: a missing label "
-                f"would be a dataset silently dropped from the run's log_likelihood group, and "
-                f"an extra one a group with no data behind it."
+                f"contribution labels are {sorted(expected)}. The two must agree exactly: a "
+                f"missing label would be a dataset silently dropped from the run's "
+                f"log_likelihood group, and an extra one a group with no data behind it."
             )
         self.realisation = realisation
         self._terms = terms
@@ -583,12 +583,15 @@ class Engine(abc.ABC):
         driver that demanded one would be requiring more of a backend than the
         contract does.
 
-        Every label is checked against the problem's own datasets. A
-        realisation whose keys had drifted would otherwise emit a
+        Every label is checked against the problem's own
+        :meth:`~ampere.core.dataset.DatasetCollection.contribution_labels` — a
+        dataset's own label, or, for a dataset a **joint noise group** claims,
+        the group's (W5.9; ``inference.md`` §4.9's ``"joint"`` decomposition).
+        A realisation whose keys had drifted would otherwise emit a
         ``log_likelihood`` group that silently omitted a dataset, which is a
         quieter failure than it should be.
         """
-        expected = set(self.problem.datasets)
+        expected = set(self.problem.datasets.contribution_labels())
         built: list[list[Evaluation]] = []
         for chain, chain_terms in zip(draws, terms, strict=True):
             row: list[Evaluation] = []
@@ -597,7 +600,7 @@ class Engine(abc.ABC):
                 if labels != expected:
                     raise EngineError(
                         f"{self.NAME}'s realisation supplied a per-dataset decomposition keyed "
-                        f"{sorted(labels)}, but this problem's datasets are "
+                        f"{sorted(labels)}, but this problem's contribution labels are "
                         f"{sorted(expected)}. The two must agree exactly: a missing label would "
                         f"be a dataset silently dropped from the run's log_likelihood group, and "
                         f"an extra one a group with no data behind it."

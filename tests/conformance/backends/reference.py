@@ -72,6 +72,7 @@ from ampere.core import (
     DenseGP,
     HilbertSpaceGP,
     GaussianProcessNoise,
+    JointGaussianProcessNoise,
     GPSolver,
     HierarchicalPrior,
     IndependentNoise,
@@ -385,6 +386,7 @@ class ReferenceBackend:
         # W4.9: likewise the only backend with an astrometric vocabulary
         # until the torch and jax fixtures declare their own twins below.
         astrometry=True,
+        joint_noise=True,  # W5.9
         # W5.5: likewise the only backend with a gridded-image vocabulary
         # until the torch and jax fixtures declare their own twins below.
         image=True,
@@ -424,6 +426,17 @@ class ReferenceBackend:
 
     def gp_noise(self, kernel: Kernel, solver: GPSolver, *, jitter: Any = None) -> NoiseModel:
         return GaussianProcessNoise(kernel, solver, jitter=jitter)
+
+    def joint_gp_noise(
+        self,
+        kernel: Kernel,
+        solver: GPSolver,
+        *,
+        datasets: Sequence[str],
+        coupling: Any,
+    ) -> NoiseModel:
+        # W5.9 -- appended.
+        return JointGaussianProcessNoise(kernel, solver, datasets=datasets, coupling=coupling)
 
     def parameter_space(self, declaration: ParameterSet) -> ReferenceParameterSpace:
         return ReferenceParameterSpace(declaration)

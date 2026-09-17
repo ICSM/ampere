@@ -144,6 +144,7 @@ from .likelihood import (
     LatentDeclaration,
     Likelihood,
     Marginalisation,
+    NoiseModel,
 )
 from .parameter import (
     SEPARATOR,
@@ -1678,12 +1679,13 @@ class DatasetCollection(Mapping[str, Dataset]):
     ['sed', 'spectrum']
     """
 
-    __slots__ = ("_datasets", "_shared", "_shared_label")
+    __slots__ = ("_datasets", "_group_of", "_joint", "_shared", "_shared_label")
 
     def __init__(
         self,
         datasets: Mapping[str, Dataset] | Iterable[Dataset],
         *,
+        joint: Mapping[str, NoiseModel] | None = None,
         shared: ParameterSet | None = None,
         shared_label: str = SHARED_COMPONENT,
     ) -> None:
@@ -1746,6 +1748,91 @@ class DatasetCollection(Mapping[str, Dataset]):
                 f"the shared parameters are labelled {self._shared_label!r}, which is also a "
                 f"dataset label. Pass shared_label='...' to separate them."
             )
+        self._joint, self._group_of = self._register_joint(joint)
+
+    # -- joint noise groups (W5.9) -------------------------------------------
+
+    def _register_joint(
+        self, joint: Mapping[str, NoiseModel] | None
+    ) -> tuple[dict[str, NoiseModel], dict[str, str]]:
+        """Check and record the joint noise groups, or return two empty mappings.
+
+        Every rule that can be checked without a prediction is checked here,
+        because a joint noise model is the one piece of this contract whose
+        *composition* can be silently wrong: a group whose channels sit on two
+        different grids, or carry two different diagonals, still evaluates —
+        it simply evaluates a covariance that is not the one declared.
+        """
+        groups: dict[str, NoiseModel] = {}
+        owner: dict[str, str] = {}
+        if not joint:
+            return groups, owner
+        for label, noise in joint.items():
+            checked = _check_label(label, "joint noise group label")
+            if checked in self._datasets:
+                raise DatasetError(
+                    f"joint noise group {checked!r} is also a dataset label. A group is one "
+                    f"further component of the joint parameter space and one further entry of "
+                    f"contributions(), so the two namespaces are one; name the group "
+                    f"differently."
+                )
+            if checked == self._shared_label and self._shared is not None:
+                raise DatasetError(
+                    f"joint noise group {checked!r} is also the shared-parameter label. Pass "
+                    f"shared_label='...' or name the group differently."
+                )
+            if not isinstance(noise, NoiseModel) or not getattr(noise, "JOINT", False):
+                raise DatasetError(
+                    f"joint noise group {checked!r} holds {type(noise).__name__}, which is not a "
+                    f"joint noise model (a NoiseModel declaring JOINT = True). "
+                    f"JointGaussianProcessNoise is the one this contract ships; an ordinary "
+                    f"noise model belongs on its dataset's own Likelihood."
+                )
+            for member in noise.datasets:
+                if member not in self._datasets:
+                    raise DatasetError(
+                        f"joint noise group {checked!r} spans dataset {member!r}, which is not "
+                        f"in this collection ({list(self._datasets)})."
+                    )
+                if member in owner:
+                    raise DatasetError(
+                        f"dataset {member!r} is claimed by two joint noise groups, "
+                        f"{owner[member]!r} and {checked!r}. A dataset's residual has one "
+                        f"covariance; two groups over it would score it twice."
+                    )
+                owner[member] = checked
+            noise.check_group(
+                {member: self._datasets[member].observed for member in noise.datasets},
+                {member: self._datasets[member].likelihood for member in noise.datasets},
+                group=checked,
+            )
+            groups[checked] = noise
+        return groups, owner
+
+    @property
+    def joint(self) -> Mapping[str, NoiseModel]:
+        """The joint noise groups, by label. Empty for a collection that declares none."""
+        return types.MappingProxyType(self._joint)
+
+    def group_of(self, label: str) -> str | None:
+        """Which joint noise group scores dataset *label*, or ``None`` if it scores itself."""
+        return self._group_of.get(label)
+
+    def contribution_labels(self) -> tuple[str, ...]:
+        """The keys :meth:`contributions` returns, in order.
+
+        Datasets that score themselves keep their own labels; a joint noise
+        group replaces its members with **one** key, its own. This is
+        ``inference.md`` §4's ``"joint"`` decomposition, and it is why this
+        method exists rather than callers assuming ``tuple(self)``.
+        """
+        seen: list[str] = []
+        for label in self._datasets:
+            group = self._group_of.get(label)
+            key = label if group is None else group
+            if key not in seen:
+                seen.append(key)
+        return tuple(seen)
 
     # -- Mapping protocol -----------------------------------------------------
 
@@ -1786,6 +1873,12 @@ class DatasetCollection(Mapping[str, Dataset]):
         components: dict[str, ParameterSet | ParameterMapping] = {
             label: dataset.mapping for label, dataset in self._datasets.items()
         }
+        # W5.9: a joint noise group owns parameters no dataset owns -- the
+        # kernel's, the coupling's, the group's shared scale and jitter -- so it
+        # joins the merge as one further top-level component, exactly as
+        # *shared* does and for the same reason.
+        for label, noise in self._joint.items():
+            components[label] = noise.parameters
         if self._shared is not None:
             components[self._shared_label] = self._shared
         return components
@@ -1793,8 +1886,13 @@ class DatasetCollection(Mapping[str, Dataset]):
     @property
     def capability_parts(self) -> tuple[object, ...]:
         """Every object whose capability declarations the collection depends on."""
-        return tuple(
-            part for dataset in self._datasets.values() for part in dataset.capability_parts
+        return (
+            tuple(part for dataset in self._datasets.values() for part in dataset.capability_parts)
+            # W5.9: a joint noise group is a capability part of the collection
+            # for the reason W2.13 made a noise model one of the dataset's --
+            # a nominally native problem whose joint GP solve ran in numpy is
+            # exactly what that widening exists to catch.
+            + tuple(self._joint.values())
         )
 
     def model_labels(self) -> tuple[str | None, ...]:
@@ -1829,6 +1927,7 @@ class DatasetCollection(Mapping[str, Dataset]):
             :attr:`Dataset.model`.
         """
         contributions: dict[str, float] = {}
+        predicted: dict[str, FunctionSamples] = {}
         for label, dataset in self._datasets.items():
             model_label = dataset.model if models is None else models[label]
             if model_label is None or model_label not in results:
@@ -1836,8 +1935,147 @@ class DatasetCollection(Mapping[str, Dataset]):
                     f"dataset {label!r} names model {model_label!r}, which was not evaluated; "
                     f"the available results are {sorted(results)}."
                 )
-            contributions[label] = dataset.log_likelihood(results[model_label], routed.get(label))
+            prediction = dataset.predict(results[model_label], routed.get(label))
+            if self._group_of.get(label) is None:
+                contributions[label] = dataset.log_likelihood_of(prediction, routed.get(label))
+            else:
+                predicted[label] = prediction
+        for group in self._joint:
+            contributions[group] = self.group_log_likelihood(group, predicted, routed)
         return contributions
+
+    def group_log_likelihood(
+        self,
+        group: str,
+        predicted: Mapping[str, FunctionSamples],
+        routed: Mapping[str, Mapping[str, Value]],
+    ) -> float:
+        """One joint noise group's log-likelihood — the ``T`` channels scored together.
+
+        The term that replaces its members' separate ones. Everything the joint
+        model needs is assembled here because this is the only level that holds
+        all ``T`` datasets: the shared retained mask, the ``T`` residual
+        vectors in the group's own channel order, the one diagonal they share,
+        and the shared coordinate grid.
+        """
+        noise = self._joint[group]
+        values = dict(routed.get(group, {}))
+        retain = self._group_retained(group, predicted)
+        if not np.any(retain):
+            return 0.0
+        first = self._datasets[noise.datasets[0]]
+        residuals = [
+            self._group_residual(label, predicted[label], retain) for label in noise.datasets
+        ]
+        sigma = noise.sigma(first.observed, retain, values)
+        if sigma is None:
+            raise DatasetError(
+                f"joint noise group {group!r} has no per-sample sigma: its channels' containers "
+                f"carry no uncertainties and the group declares no jitter. Attach uncertainties, "
+                f"or give the joint noise model a jitter."
+            )
+        coordinates = sample_coordinates(first.observed)[retain]
+        return float(
+            noise.log_prob(
+                residuals,
+                np.asarray(sigma, dtype=DTYPE) ** 2,
+                coordinates,
+                values,
+                kernel=noise.kernel_for(first.observed),
+            )
+        )
+
+    def _group_retained(self, group: str, predicted: Mapping[str, FunctionSamples]) -> np.ndarray:
+        """The inclusion indicator every channel of *group* agrees on.
+
+        A rotation mixes the channels sample by sample, so a sample retained in
+        one channel and masked in another has no rotated value at all. The
+        observed side is checked at composition; the *predicted* side is a
+        transformation's to decide, so it is checked here — loudly, rather than
+        by intersecting and quietly fitting a different set of data.
+        """
+        noise = self._joint[group]
+        indicators: dict[str, np.ndarray] = {}
+        for label in noise.datasets:
+            dataset = self._datasets[label]
+            if label not in predicted:
+                raise DatasetError(
+                    f"joint noise group {group!r} was not given a prediction for its channel "
+                    f"{label!r}."
+                )
+            indicators[label] = dataset.retained_mask(dataset._masked_pair(predicted[label]))
+        reference = indicators[noise.datasets[0]]
+        for label, indicator in indicators.items():
+            if not np.array_equal(indicator, reference):
+                raise DatasetError(
+                    f"joint noise group {group!r}: channel {label!r} retains "
+                    f"{int(np.count_nonzero(indicator))} sample(s) and channel "
+                    f"{noise.datasets[0]!r} retains {int(np.count_nonzero(reference))}. The "
+                    f"rotation that decouples the channels mixes them sample by sample, so a "
+                    f"sample the channels disagree about has no rotated value; mask it in every "
+                    f"channel, or in none."
+                )
+        return reference
+
+    def _group_residual(
+        self, label: str, predicted: FunctionSamples, retain: np.ndarray
+    ) -> np.ndarray:
+        """``observed - predicted`` on the retained samples of one channel."""
+        dataset = self._datasets[label]
+        observed = np.asarray(dataset.observed.values, dtype=DTYPE).ravel()[retain]
+        values = np.asarray(predicted.values, dtype=DTYPE).ravel()[retain]
+        return observed - values
+
+    def draw_group(
+        self,
+        group: str,
+        predicted: Mapping[str, FunctionSamples],
+        routed: Mapping[str, Mapping[str, Value]],
+        rng: np.random.Generator,
+    ) -> dict[str, FunctionSamples]:
+        """One **correlated** draw of a joint noise group's ``T`` channels.
+
+        :meth:`Dataset.draw_observation`'s counterpart for a group, and it has
+        to be one call rather than ``T`` of them for the reason the group
+        exists: the channels' noise is correlated, and drawing each channel
+        from its own marginal would produce a training set whose
+        cross-covariance is zero — data from a *different* model than the one
+        being fitted, which is the failure mode SBC exists to catch.
+        """
+        noise = self._joint[group]
+        values = dict(routed.get(group, {}))
+        retain = self._group_retained(group, predicted)
+        first = self._datasets[noise.datasets[0]]
+        drawn: dict[str, FunctionSamples] = {}
+        if not np.any(retain):
+            for label in noise.datasets:
+                dataset = self._datasets[label]
+                drawn[label] = dataset.place_observation(predicted[label], np.zeros(0, dtype=DTYPE))
+            return drawn
+        means = [
+            np.asarray(predicted[label].values, dtype=DTYPE).ravel()[retain]
+            for label in noise.datasets
+        ]
+        sigma = noise.sigma(first.observed, retain, values)
+        variance = (
+            np.zeros(int(np.count_nonzero(retain)), dtype=DTYPE)
+            if sigma is None
+            else np.asarray(sigma, dtype=DTYPE) ** 2
+        )
+        coordinates = sample_coordinates(first.observed)[retain]
+        block = noise.sample(
+            means,
+            variance,
+            coordinates,
+            values,
+            rng,
+            kernel=noise.kernel_for(first.observed),
+        )
+        for index, label in enumerate(noise.datasets):
+            drawn[label] = self._datasets[label].place_observation(
+                predicted[label], block[:, index]
+            )
+        return drawn
 
     def log_likelihood(
         self,
@@ -1851,7 +2089,8 @@ class DatasetCollection(Mapping[str, Dataset]):
 
     def __repr__(self) -> str:
         shared = "" if self._shared is None else f", shared={self._shared_label!r}"
-        return f"<DatasetCollection {list(self._datasets)}{shared}>"
+        groups = "" if not self._joint else f", joint={list(self._joint)}"
+        return f"<DatasetCollection {list(self._datasets)}{groups}{shared}>"
 
 
 # ---------------------------------------------------------------------------
@@ -2705,12 +2944,33 @@ class FittingProblem:
         if observe:
             observations = {}
             for label, dataset in self.datasets.items():
+                # W5.9: a channel of a joint noise group is drawn with its
+                # siblings, below. Drawing it here from its own marginal would
+                # produce data whose cross-covariance is zero — a training set
+                # from a different model than the one being fitted.
+                if self.datasets.group_of(label) is not None:
+                    continue
                 try:
                     observations[label] = dataset.draw_observation(
                         predicted[label], routed.get(label), generator
                     )
                 except self._failure_types as error:
                     failure = _failure_from(FailureReason.LIKELIHOOD_FAILED, error, label)
+                    self._record(failure)
+                    return Simulation(
+                        parameters=resolved,
+                        theta=theta,
+                        results=evaluated,
+                        predicted=predicted,
+                        failure=failure,
+                    )
+            for group in self.datasets.joint:
+                try:
+                    observations.update(
+                        self.datasets.draw_group(group, predicted, routed, generator)
+                    )
+                except self._failure_types as error:
+                    failure = _failure_from(FailureReason.LIKELIHOOD_FAILED, error, group)
                     self._record(failure)
                     return Simulation(
                         parameters=resolved,
@@ -3383,6 +3643,7 @@ class FittingProblem:
         # whether the sampler's first proposal happened to be scoreable.
         validating = not self._validated
         contributions: dict[str, float] = {}
+        grouped: dict[str, FunctionSamples] = {}
         total = 0.0
         for label, dataset in self.datasets.items():
             values = routed.get(label)
@@ -3405,6 +3666,13 @@ class FittingProblem:
                 # mismatch is a broken problem, not an unscoreable point — and
                 # fixes the retained-sample count this dataset is held to.
                 dataset.check_alignment(predicted)
+            # W5.9: a dataset a joint noise group claims is not scored here.
+            # Its residual enters the group's one term instead, which is taken
+            # after this loop — the first time this contract's per-dataset
+            # decomposition is not one term per dataset (inference.md §4).
+            if self.datasets.group_of(label) is not None:
+                grouped[label] = predicted
+                continue
             try:
                 contribution = dataset.log_likelihood_of(predicted, routed=split)
             except self._failure_types as error:
@@ -3429,6 +3697,28 @@ class FittingProblem:
                     ),
                 )
             contributions[label] = contribution
+            total += contribution
+        for group in self.datasets.joint:
+            try:
+                contribution = self.datasets.group_log_likelihood(group, grouped, routed)
+            except self._failure_types as error:
+                return (
+                    -math.inf,
+                    contributions,
+                    _failure_from(FailureReason.LIKELIHOOD_FAILED, error, group, routed.get(group)),
+                )
+            if math.isnan(contribution) or contribution == math.inf:
+                return (
+                    -math.inf,
+                    contributions,
+                    Failure(
+                        FailureReason.NON_FINITE_LOG_LIKELIHOOD,
+                        f"the joint noise group returned {contribution}, which is neither a "
+                        f"density nor an impossibility.",
+                        where=group,
+                    ),
+                )
+            contributions[group] = contribution
             total += contribution
         if validating:
             self._validated = True

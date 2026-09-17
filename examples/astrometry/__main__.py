@@ -3,6 +3,8 @@
     python -m examples.astrometry                      # reference, emcee
     python -m examples.astrometry --backend torch       # NUTS
     python -m examples.astrometry --gp                  # the flexible likelihood
+    python -m examples.astrometry --joint               # the joint channel noise (W5.9)
+    python -m examples.astrometry --sbc joint           # the calibration study
     python -m examples.astrometry --walkers 32 --steps 2000
 
 Restricts every BLAS thread pool to one thread **before numpy is imported
