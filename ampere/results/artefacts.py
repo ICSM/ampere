@@ -524,12 +524,94 @@ class ArtefactStore:
             latest = json.loads(latest_path.read_text())
         except (OSError, json.JSONDecodeError):
             return {}
-        old = latest.get("ingredients", {})
-        new = key.ingredients()
+        return self.diff_ingredients(latest.get("ingredients", {}), key.ingredients())
+
+    @staticmethod
+    def diff_ingredients(
+        old: Mapping[str, Any], new: Mapping[str, Any]
+    ) -> dict[str, tuple[Any, Any]]:
+        """Field-wise disagreement between two :meth:`ArtefactKey.ingredients` mappings.
+
+        The comparison :meth:`diff` itself uses (against ``latest.json``),
+        factored out so there is exactly one field-wise comparison in this
+        module rather than two that could drift apart. The other caller is
+        :meth:`get_by_digest`'s consumer — ``SBIEngine(serve_artefact=...)``
+        (W5.23) — which has no ``latest.json`` to compare against: it compares
+        a freshly computed key's ingredients against a *specific*, explicitly
+        named artefact's own recorded ingredients instead.
+        """
         names = sorted(set(old) | set(new))
         return {
             name: (old.get(name), new.get(name)) for name in names if old.get(name) != new.get(name)
         }
+
+    def get_by_digest(self, digest: str) -> tuple[Any, dict[str, Any]] | None:
+        """The artefact and its recorded ingredients filed under *digest*, addressed directly.
+
+        Unlike :meth:`get`, this asks for no :class:`ArtefactKey` at all —
+        only the digest an entry is filed under, which is all
+        ``SBIEngine(cache=..., serve_artefact=<digest>)`` (W5.23) has: the
+        whole point of that explicit route is restoring a *named* artefact
+        regardless of whether it matches the caller's own computed key, so
+        the caller cannot supply a key this method would need to agree with.
+
+        "Trust" here is therefore not :meth:`get`'s "the sidecar's ingredients
+        equal the caller's key" — a mismatch is exactly what a
+        ``serve_artefact`` caller is asking for — but the narrower guarantee
+        this store can still make unconditionally: the sidecar was not
+        corrupted or hand-edited *relative to itself*. Concretely, its
+        recorded ingredients must hash, via :func:`~ampere.results.provenance.
+        hash_of` (the same function :meth:`~ArtefactKey.digest` calls), back
+        to the very digest they are filed under. A sidecar that fails this
+        self-check, or a ``.pkl`` that fails to unpickle, is a refusal
+        (``None``) with an :class:`ArtefactCacheWarning`, exactly as every
+        other kind of untrustworthy entry in this store is — never a crash.
+
+        Returns
+        -------
+        A ``(artefact, ingredients)`` pair on success — *ingredients* is the
+        stored sidecar's own :meth:`~ArtefactKey.ingredients` mapping, for a
+        caller that wants to compare it field by field (:meth:`diff_ingredients`)
+        against a key of its own. ``None`` if no entry is filed under *digest*,
+        or the entry cannot be trusted.
+        """
+        digest = str(digest)
+        artefact_path = self.root / f"{digest}.pkl"
+        sidecar_path = self.root / f"{digest}.json"
+        if not artefact_path.exists() or not sidecar_path.exists():
+            return None
+        try:
+            sidecar = json.loads(sidecar_path.read_text())
+        except (OSError, json.JSONDecodeError) as error:
+            warnings.warn(
+                f"the cache sidecar at {sidecar_path} could not be read ({error!r}); refusing "
+                f"to serve artefact {digest}.",
+                ArtefactCacheWarning,
+                stacklevel=2,
+            )
+            return None
+        ingredients = sidecar.get("ingredients")
+        if not isinstance(ingredients, dict) or hash_of(ingredients) != digest:
+            warnings.warn(
+                f"the cache sidecar at {sidecar_path} does not self-verify against the digest "
+                f"it is filed under (hand-edited, or written by an incompatible version of "
+                f"this module); refusing to serve artefact {digest}.",
+                ArtefactCacheWarning,
+                stacklevel=2,
+            )
+            return None
+        try:
+            with artefact_path.open("rb") as handle:
+                artefact = pickle.load(handle)
+        except Exception as error:  # any unpickling failure is a refusal, not a crash
+            warnings.warn(
+                f"the cached artefact at {artefact_path} could not be loaded ({error!r}); "
+                f"refusing to serve artefact {digest}.",
+                ArtefactCacheWarning,
+                stacklevel=2,
+            )
+            return None
+        return artefact, dict(ingredients)
 
     def train_or_load(
         self,

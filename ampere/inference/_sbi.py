@@ -206,7 +206,7 @@ from ampere.core.encoding import (
 )
 from ampere.core.exceptions import OptionalDependencyError
 from ampere.core.simulate import Executor, SimulationBatch
-from ampere.results.artefacts import ArtefactKey, ArtefactStore, artefact_key
+from ampere.results.artefacts import ArtefactCacheWarning, ArtefactKey, ArtefactStore, artefact_key
 from ampere.results.calibration import (
     PARAMETER_DIM,
     SBI_ROUTE,
@@ -1296,6 +1296,37 @@ class SBIEngine(Engine):
         time, so a budget larger than memory reaches the file without being
         held. Failed draws are written too: ``inference.md`` §13's
         reject-and-record needs the record.
+    cache
+        A trained-artefact store (:class:`~ampere.results.artefacts.ArtefactStore`,
+        W3.5) keyed on the problem's own hashes plus this run's settings. A
+        hit skips simulation and training entirely and restores the stored
+        posterior (or, for ``method="tmnre"``, the whole
+        :class:`~ampere.inference._tmnre.TMNREArtefact` bundle); a miss trains
+        as usual and stores the result under the computed key.
+        ``None`` (the default) trains every time.
+    serve_artefact
+        **W5.23.** A digest naming one specific entry in *cache* to restore
+        regardless of whether it matches this run's own computed key -- the
+        explicit route for a user who accepts the risk of reusing an
+        artefact trained under different settings (a different ``basis_size``
+        on a Hilbert-space GP, say). The ordinary key is still computed (and
+        still recorded), but the entry actually restored is the one filed
+        under *serve_artefact*, found by
+        :meth:`~ampere.results.artefacts.ArtefactStore.get_by_digest` alone --
+        no key of this run's needs to agree with it. Requires *cache*; refused
+        by name if *cache* is ``None``, if no entry is filed under that
+        digest, or if its sidecar cannot be trusted (the self-verification
+        :meth:`~ampere.results.artefacts.ArtefactStore.get_by_digest`
+        performs). The run's attrs then carry ``sbi_cache_key`` (the digest
+        this run's own settings would have used), ``sbi_artefact_served``
+        (the digest actually restored -- *serve_artefact* echoed back) and
+        ``sbi_artefact_mismatch`` (which
+        :class:`~ampere.results.artefacts.ArtefactKey` fields differ between
+        the two, by name -- empty when they agree), together with a loud
+        :class:`~ampere.results.artefacts.ArtefactCacheWarning` naming the
+        same fields when the record is non-empty. Calibration works on a
+        served posterior exactly as on a freshly trained one -- it is just a
+        posterior once restored.
     cache_size, use_realisation
         See :class:`~ampere.inference.engine.Engine`. They govern the scoring
         of the *stored draws*, which happens on the numpy contract path after
@@ -1401,6 +1432,7 @@ class SBIEngine(Engine):
         context: Any = None,
         training_set: str | Path | None = None,
         cache: ArtefactStore | None = None,
+        serve_artefact: str | None = None,
         cache_size: int = DEFAULT_CACHE_SIZE,
         use_realisation: bool = True,
     ) -> None:
@@ -1487,6 +1519,12 @@ class SBIEngine(Engine):
                     "different things about one network. Pass the embedding to your builder, or "
                     "name the architecture as a string and let embedding= wrap it."
                 )
+        if serve_artefact is not None and cache is None:
+            raise EngineError(
+                f"sbi's serve_artefact={serve_artefact!r} names one specific stored artefact to "
+                f"restore regardless of whether it matches this run's own computed key; it can "
+                f"only look inside a cache=, and none was given."
+            )
         super().__init__(problem, cache_size=cache_size, use_realisation=use_realisation)
         self.method = chosen
         self.budget = int(budget)
@@ -1511,6 +1549,11 @@ class SBIEngine(Engine):
         #: W3.5: a trained-artefact store keyed on the problem's own hashes, or
         #: ``None`` to train every time. A hit skips simulation and training.
         self.cache = cache
+        #: W5.23: an explicit digest naming one artefact in ``self.cache`` to
+        #: restore regardless of whether it matches this run's own computed
+        #: key. ``None`` (the default) leaves the ordinary cache lookup
+        #: unchanged.
+        self.serve_artefact = None if serve_artefact is None else str(serve_artefact)
         #: ``sbi``'s trained posterior, network and trainer after a run.
         self.posterior: Any = None
         self.estimator: Any = None
@@ -1661,8 +1704,48 @@ class SBIEngine(Engine):
                 sample_with=self.sample_with if self.method == TMNRE else None,
             )
         )
-        cached = None if cache_key is None or self.cache is None else self.cache.get(cache_key)
-        cache_hit = cached is not None
+        # W5.23: an explicit named artefact, restored regardless of whether it
+        # matches this run's own computed key -- the ordinary lookup below is
+        # skipped entirely rather than tried first, since the whole point of
+        # naming a digest is bypassing that comparison.
+        artefact_mismatch: dict[str, tuple[Any, Any]] = {}
+        if self.serve_artefact is not None:
+            cache_store = self.cache
+            if cache_store is None:  # pragma: no cover - refused already at __init__
+                raise EngineError(
+                    "sbi's serve_artefact= requires cache=, which __init__ already refused to "
+                    "let through without one."
+                )
+            served = cache_store.get_by_digest(self.serve_artefact)
+            if served is None:
+                raise EngineError(
+                    f"sbi's serve_artefact={self.serve_artefact!r} names no trustworthy "
+                    f"artefact in this cache: either no entry is filed under that digest, or "
+                    f"its sidecar could not be trusted (see the ArtefactCacheWarning above, if "
+                    f"one was raised). serve_artefact restores a *named* artefact and refuses "
+                    f"rather than falling back to training, because serving exactly the one "
+                    f"asked for is the whole point."
+                )
+            cached, served_ingredients = served
+            cache_hit = True
+            if cache_key is not None:
+                artefact_mismatch = ArtefactStore.diff_ingredients(
+                    served_ingredients, cache_key.ingredients()
+                )
+                if artefact_mismatch:
+                    warnings.warn(
+                        f"sbi is serving the artefact named by "
+                        f"serve_artefact={self.serve_artefact!r} even though it does not match "
+                        f"this run's own computed key -- differing field(s): "
+                        f"{sorted(artefact_mismatch)}. This was requested explicitly "
+                        f"(serve_artefact=), so the run proceeds, but the served posterior may "
+                        f"not describe this problem.",
+                        ArtefactCacheWarning,
+                        stacklevel=2,
+                    )
+        else:
+            cached = None if cache_key is None or self.cache is None else self.cache.get(cache_key)
+            cache_hit = cached is not None
         if cache_hit:
             self._restore(cached, observation_tensor)
         elif self.method == TMNRE:
@@ -1741,6 +1824,9 @@ class SBIEngine(Engine):
         if cache_key is not None:
             attrs["sbi_cache_hit"] = int(cache_hit)
             attrs["sbi_cache_key"] = cache_key.digest()
+        if self.serve_artefact is not None:
+            attrs["sbi_artefact_served"] = self.serve_artefact
+            attrs["sbi_artefact_mismatch"] = dict(artefact_mismatch)
         tree = self.finish(
             chain,
             extra_attrs=attrs,

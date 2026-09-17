@@ -834,6 +834,26 @@ file has nothing to compare against. Not itself an input to
 `problem_fingerprint`, but the schema constant is, so `ampere_problem_hash`
 moved again at this bump as at every previous one.
 
+**`SBIEngine`'s cache attributes, none of them schema-counted.** Written
+through `extra=` exactly as `ampere_dynesty_logz` is (below), so a reader who
+does not know `SBIEngine` sees nothing rather than an attribute meaning "not
+applicable": all three are absent from a run given no `cache=` at all. A run
+given `cache=` (§7 above) records **`ampere_sbi_cache_key`** — the digest
+this run's own settings compute (`ArtefactKey.digest()`) — whether the run
+trained or hit. **W5.23** adds the explicit route,
+`SBIEngine(cache=..., serve_artefact=<digest>)`: the run restores the
+artefact filed under *that* digest regardless of whether it matches, and
+records two more — **`ampere_sbi_artefact_served`** (the digest actually
+restored, i.e. `serve_artefact` echoed back) and
+**`ampere_sbi_artefact_mismatch`** (canonical JSON of the
+`ArtefactKey.ingredients()` fields that differ between this run's own
+computed key and the served artefact's own recorded ingredients —
+`ArtefactStore.diff_ingredients`'s field-wise comparison; an empty record
+when they agree). None of the three is an input to `problem_fingerprint` —
+each describes how a run was *served*, not what problem it was over — and
+none moves the schema constant, being ordinary engine-specific `extra=`
+attributes rather than part of the fixed set above.
+
 **Failures travel.** `ampere_failure_counts` is the unbounded count per
 `FailureReason`; `ampere_failures` is the bounded history, each entry
 `Failure.to_dict()`. `inference.md` limitation 17.7 notes that the history is
