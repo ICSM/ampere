@@ -1586,6 +1586,23 @@ False
 `seed=None` means every stream is entropy-seeded and nothing is reproducible,
 which is the honest behaviour for a run that did not ask to be.
 
+***Amended W5.10***, one sub-stream. A **context prior draws from the run's
+own seed derivation and never from a generator of its own**: the contexts of
+`simulate_many(count, context=prior)` come off `"<stream>.context"`, spawned
+by index exactly as the draws are. Two properties follow, and both are the
+reason it is a separate stream rather than the draw stream:
+
+- a budget's θ and its noise are **bit-for-bit what they were without the
+  argument**, so adding a context prior to a study does not silently re-draw
+  the parameters it was comparing against;
+- draw *i*'s context does not depend on the chunking, which is the same
+  partition independence §13's batched form promises of everything else.
+
+`rng=` names the *draw* stream, and therefore leaves the context stream alone:
+a caller overriding the draws still gets contexts from the problem's own
+derivation, because a prior that reached for `default_rng()` would make a
+seeded budget irreproducible in the one place nobody would look.
+
 **Placement.** `lowering.md` §9.2 puts `substream` "once in `ampere.core`"; its
 §12.7 asked W1.13 to ratify that rather than let it be assumed. It lives in
 `ampere/core/rng.py`, and **the home is ratified** (ruled 2026-09-03, §19.5):
@@ -1914,6 +1931,54 @@ ampere.core.exceptions.DatasetError: simulate_many's values= is one θ per draw 
 
 ```
 
+**The observation context (*Amended W5.10*).** `context=` was reserved by
+`simulate_many`'s signature and refused any value but `None`; it now takes a
+**`ContextPrior`** — `draw(rng, observed) -> ObservationContext` and
+`describe() -> mapping`, structural like `Executor` — and draws **one context
+per simulation** from it. `None` remains the default and means what it always
+did: every observation drawn at the observed containers' own uncertainties.
+
+An `ObservationContext` is a σ array per dataset label plus a small JSON-safe
+`record` of what the prior drew. The σ reaches exactly one place — the
+observed container of that dataset is replaced, **for that draw**, by one
+carrying it (`Dataset.contextual_observed`) — so every family's `sample`
+receives `NoiseParams` built from the context's σ and the drawn observation
+carries it. That is what makes this a draw at a different noise *level* rather
+than a draw at the observed level rescaled afterwards, and it is also why
+`encoding.md` needs no new column: the packing already carries each sample's
+`log σ` and whitened value, so a network reading `unpack` sees the context of
+the observation it is conditioned on, and the reserved `context` column group
+stays width 0.
+
+Three shipped priors, and the list is the item's rather than a taxonomy:
+`ScaledSigma` (scaled copies of the observed σ pattern), `SigmaArchive` (real
+error arrays, drawn from uniformly) and `SignalToNoise` (a parametric S/N
+model, which needs no observed σ at all). A user's own is any object with the
+two methods.
+
+The context is recorded **on every `Simulation`** (`Simulation.context`,
+failures included — a draw that crashed in a context is evidence about that
+context) and the *prior* in `SimulationBatch.provenance['simulation_context']`,
+as canonical JSON of `describe()` or the string `"none"`. `results.md` §11's
+training set stores the per-draw records in its optional `context` group and
+the prior in `ampere_simulation_context`; the σ arrays are not stored twice,
+because a drawn observation carries its own uncertainties.
+
+Three refusals, each a claim the code could not honestly make:
+
+- `observe=False` with a context — the context *is* the level the observations
+  are drawn at, so a budget drawing none would record a context that did
+  nothing;
+- `native=True` with a context — the native path draws its noise from the
+  realised problem's own σ, in the backend's arithmetic, which a per-draw
+  container σ does not reach. With the default `native=None` the loop runs
+  (which draws the context correctly) and the provenance records both facts;
+- a problem declaring a **joint noise group** (W5.9) — a group's σ is read
+  from the first of its datasets and its channels are drawn in one correlated
+  call, so what a per-dataset context means for the cross-covariance is a
+  design question rather than a detail, and guessing would put a training set
+  on disk whose covariance and whose values came from two different contexts.
+
 **Chunking.** `chunk_size` bounds how many simulations exist at once;
 `as_chunks=True` yields `SimulationBatch` chunks lazily, and
 `write_training_set`/`append_training_set` take the iterator, so a budget larger
@@ -1972,8 +2037,9 @@ because one sentence could not be true of both halves:
 exactly, which is the way that claim stays checkable; `native=True` requires the
 fast path and **refuses by name** when a part is not `BATCHABLE`, when an
 executor was given (a pool partitions the draws and a `vmap` evaluates them
-together — they are alternative ways of spending one chunk), or when the backend
-registers no realisation. The default, `native=None`, uses it where it is
+together — they are alternative ways of spending one chunk), when the backend
+registers no realisation, or — ***W5.10*** — when a `context=` was given as
+well. The default, `native=None`, uses it where it is
 available and falls back to the loop where it is not, recording which happened
 in `SimulationBatch.provenance['simulate_batched']` — written to a training set
 as `ampere_simulate_batched`, and merged conservatively across chunks so a mixed

@@ -338,6 +338,99 @@ failing simulation-based calibration (Kolmogorov–Smirnov :math:`p =
 4\times10^{-4}`) where the equivalent two-dataset Bayesian fit, on the same
 simulations, does not (:math:`p = 0.18`); see :doc:`wstat_comparison`.
 
+Amortising over the observation context
+-----------------------------------------
+
+A budget simulated the ordinary way draws every observation at **the error
+bars your data actually have**. The posterior that trains on it is therefore
+amortised over noise *realisations* — show it a different draw of the same
+instrument and it answers without retraining — but not over noise *levels*:
+the same instrument on a brighter night, a longer exposure, or a different
+object is a distribution it has never seen, and a network is entitled to be
+wrong about data unlike its training set.
+
+``context=`` closes that gap. It takes a
+:class:`~ampere.core.simulate.ContextPrior` — an object with
+``draw(rng, observed)`` and ``describe()`` — and every simulated draw is made
+under one draw of it. Three ship, and they answer the three ways an
+uncertainty pattern is usually known:
+
+.. code-block:: python
+
+    from ampere.core import ScaledSigma, SigmaArchive, SignalToNoise
+
+    # Half to twice the observed error bars, log-uniformly: the same
+    # instrument, brighter or fainter.
+    ScaledSigma(0.5, 2.0)
+
+    # The error columns of observations you already have -- structure a
+    # factor cannot reproduce (a read-noise floor, one bad order).
+    SigmaArchive([{"sed": sigma_a}, {"sed": sigma_b}])
+
+    # A survey specified rather than observed: "S/N 20 to 100 on a source
+    # like this". Needs no observed uncertainties at all.
+    SignalToNoise(20.0, 100.0)
+
+.. code-block:: python
+
+    engine = SBIEngine(
+        problem,
+        method="npe",
+        budget=2000,
+        layout="set",
+        embedding="set",
+        context=ScaledSigma(0.5, 2.0),
+    )
+    run = engine.run(draws=1000)
+
+``layout="set"`` is not decoration here. The default ``"flat"`` summary is the
+observed *values* and nothing else, so a network trained under it cannot see
+which noise level it is looking at however hard the simulator varies one. The
+set packing carries each sample's :math:`\log \sigma` and its whitened value
+already (``docs/design/contracts/encoding.md`` §3), so **no
+layout change is needed**: the context prior varies what those columns hold
+across the budget, and the embedding conditions on them. For a network that
+wants the context as one vector per dataset rather than per row, FiLM
+conditioning is the opt-in second route —
+``embedding={"type": "set", "film": True}`` — off by default, and the identity
+before it has learnt anything.
+
+Everything is recorded. The run's attrs carry the prior and its digest
+(``ampere_sbi_context``, ``ampere_sbi_context_hash``); a training set carries
+the prior in ``ampere_simulation_context`` and *which* context produced each
+row in its ``context`` group; and every
+:class:`~ampere.core.Simulation` carries its own.
+
+**SBC per observation is the check that the prior covered the observation at
+hand.** This is the important sentence of the section. An amortised posterior
+is a claim about a distribution of observations, and the only honest way to
+find out whether yours is inside it is to calibrate *there*:
+
+.. code-block:: python
+
+    # Inside the training prior: the posterior should stay calibrated.
+    covered = engine.calibrate(count=100, posterior_draws=100,
+                               context=ScaledSigma(1.5, 1.5))
+
+    # Far outside it: the coverage degrades, and says so.
+    uncovered = engine.calibrate(count=100, posterior_draws=100,
+                                 context=ScaledSigma(12.0, 12.0))
+
+``calibrate()`` inherits the run's own prior when you pass nothing, which asks
+the fair question — is this posterior calibrated over the distribution it was
+trained on? — and records which distribution each verdict is about in
+``ampere_calibration_context``. A posterior reading error bars an order of
+magnitude smaller than the observation's really has will be too narrow, and
+both the SBC ranks and TARP's coverage curve show it;
+``tests/inference/test_sbi.py``'s
+``TestAmortisationOverTheObservationContext`` pins exactly that pair as
+inequalities.
+
+Two things a context prior will refuse, by name, rather than quietly do:
+``observe=False`` (the context *is* the level the observations are drawn at)
+and a problem with a joint noise group, whose channels are drawn in one
+correlated call from one dataset's uncertainties.
+
 Embedding choices
 --------------------
 

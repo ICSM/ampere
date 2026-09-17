@@ -444,6 +444,17 @@ containers through their public attributes, and a container schema change
 that keeps `axes`/`values`/`uncertainty`/`mask` leaves every encoding and
 every hash unchanged.
 
+***W5.10 moved no hash at all***, and it is worth saying why, because it is
+the clearest statement of what this packing is for. Amortising over the
+observation context means simulating each draw at a σ pattern drawn from a
+context prior (`inference.md` §13). A drawn observation carries its own
+uncertainties, so the *values* of the `log_sigma` and `value` columns vary
+across the budget while the *layout* — every field of §5, and therefore the
+hash — is unchanged: it is a function of the observed problem, and the
+problem did not change. A network trained on that budget reads the context
+through columns it was already reading. The reserved `context` group stays
+width 0, for a context that is genuinely not already a column.
+
 ## 9. Deliberate limitations of this draft
 
 1. **One tensor for the whole collection, and one pooling rule.** A long
