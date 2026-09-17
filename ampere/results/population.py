@@ -71,16 +71,32 @@ instead (an earlier version of this module did) leaves an uncancelled
 :math:`1 / \\pi(\\varphi_{ik})` factor that varies draw to draw whenever the
 object's model has more than one free parameter, biasing the population
 posterior; a single-parameter model has no :math:`\\varphi` to cancel, which
-is why the mistake is invisible on a toy with one parameter. Because a run's
-provenance records only each parameter's *name* and a hash of its
-declaration (``results.md`` §9 — the full ``PriorSpec`` is deliberately not
-written, for the same "do not materialise what §16 says not to" reason
-``free_labels()`` is not either), :math:`\\pi_0` cannot be read back off a
-run: :func:`fit_population` takes it as an explicit, required
-``interim_prior`` argument instead of guessing at it, and refuses (via
-Python's own required-argument mechanism) rather than falling back to the
-joint column when one is not supplied. The population posterior this module
-samples is
+is why the mistake is invisible on a toy with one parameter.
+
+**Where** :math:`\\pi_0` **comes from (W5.22).** Every run's provenance now
+records each free parameter's own declared prior, neutrally described
+(``results.md`` §9, schema 8, ``ampere_free_priors`` —
+:func:`~ampere.results.provenance.free_priors`), so :math:`\\pi_0` can be
+read back off the archive itself rather than only ever supplied by the
+caller. :func:`fit_population`'s ``interim_prior`` is accordingly
+**optional**: omitted, the named parameter's stored prior (agreed across
+every input run — guaranteed by the shared ``ampere_spec_hash`` refusal, since
+two runs sharing a spec hash share a parameter declaration) is read back and
+used directly; supplied, it is compared against the stored one and a
+disagreement is refused by name rather than silently preferring the
+caller's guess over the archive's own record. A run whose provenance
+predates schema 8 (no ``ampere_free_priors`` attribute at all) has nothing
+to read back; if no ``interim_prior`` is supplied either, that is refused
+by name too — the same "refused rather than guessed" precedent
+``ampere.results.training.append_training_set`` set at W3.12 for a training
+set that predates ``ampere_model_hash``. A named parameter whose stored
+prior is a :class:`~ampere.core.parameter.HierarchicalPrior` is also refused
+when no ``interim_prior`` is supplied: this module only ever needs the
+parameter's own *marginal* prior, and a hierarchical declaration's
+distribution parameters are references to other parameters rather than
+numbers a marginal can be built from without also resolving those
+references, which is out of scope here. The population posterior this
+module samples is
 
 .. math::
 
@@ -162,6 +178,7 @@ never merged into one code path.
 from __future__ import annotations
 
 import dataclasses
+import json
 import math
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -170,7 +187,7 @@ from typing import Any, Protocol, runtime_checkable
 import numpy as np
 
 from ampere.core.exceptions import OptionalDependencyError, ResultsError
-from ampere.core.parameter import Parameter, Prior, PriorSpec, prior_from_spec
+from ampere.core.parameter import Parameter, Prior, PriorSpec, describe_prior, prior_from_spec
 from ampere.core.parameter import log_density as prior_log_density
 
 from .emission import from_netcdf
@@ -468,6 +485,133 @@ def _as_prior(interim_prior: Prior | PriorSpec) -> Prior:
     return interim_prior
 
 
+def _refuse_unless_shared_spec_hash(runs: Sequence[RunColumns]) -> None:
+    """Refuse, by name, unless every run in *runs* carries the same ``ampere_spec_hash``.
+
+    Run **before** :func:`_resolve_interim_prior`, so that two runs
+    declaring *different* priors for the same named parameter are refused
+    for the reason that actually applies -- a shared-declaration mixture --
+    rather than for a prior disagreement that is really just one symptom of
+    it. :func:`_prepare_objects` repeats this same check on the way to
+    building :class:`_PreparedObject`\\ s; the duplication is cheap (a
+    handful of string comparisons) and keeps that function's own contract
+    self-contained for anyone calling it directly.
+    """
+    if not runs:
+        raise ResultsError("fit_population needs at least one run.")
+    spec_hashes: dict[str, list[int]] = {}
+    for index, run in enumerate(runs):
+        spec_hash = run.attrs.get(f"{ATTR_PREFIX}spec_hash")
+        if spec_hash is None:
+            raise ResultsError(
+                f"run {index} has no {ATTR_PREFIX}spec_hash attribute; is it an ampere run "
+                f"(ampere.results.emit or from_netcdf)?"
+            )
+        spec_hashes.setdefault(str(spec_hash), []).append(index)
+    if len(spec_hashes) > 1:
+        raise ResultsError(
+            f"these runs do not share {ATTR_PREFIX}spec_hash ({sorted(spec_hashes)}); reweighting "
+            f"together assumes the same parameter declaration (and hence the same interim prior "
+            f"convention) for every object. Refusing rather than silently mixing declarations."
+        )
+
+
+def _stored_marginal_prior(
+    runs: Sequence[RunColumns], parameter: str, *, required: bool
+) -> PriorSpec | None:
+    """*parameter*'s own stored :class:`PriorSpec`, agreed by every run that has one.
+
+    ``None`` when **none** of *runs* carries ``ampere_free_priors`` at all
+    (every one predates ``PROVENANCE_SCHEMA_VERSION`` 8, W5.22) -- or, when
+    *required* is ``False``, also when every run's stored entry for
+    *parameter* is a :class:`~ampere.core.parameter.HierarchicalPrior`.
+    Callers with a shared-``ampere_spec_hash`` archive (guaranteed by
+    :func:`_refuse_unless_shared_spec_hash`, called first in
+    :func:`fit_population`) can rely on every schema-8-or-later run in the
+    mixture recording the identical stored prior, since the same
+    declaration hashes the same way; this function still checks, rather
+    than assumes, and refuses by name on a genuine disagreement.
+
+    *required* is ``True`` for the one caller with nothing else to fall
+    back on (``interim_prior`` omitted): a stored ``HierarchicalPrior`` is
+    then refused, since there is no marginal to build from its references
+    to other parameters alone and no supplied prior to use instead.
+    ``False`` when this is only *verifying* a caller-supplied prior: a
+    stored ``HierarchicalPrior`` is then skipped, exactly like a run with
+    no stored prior at all, since the caller's own prior is what gets used
+    either way and there is nothing to compare it against.
+
+    Raises
+    ------
+    ampere.core.exceptions.ResultsError
+        If a run that does carry ``ampere_free_priors`` has no entry for
+        *parameter* at all (a data problem, not a schema one, and fatal
+        regardless of *required*), if *required* and some run's stored
+        prior is hierarchical, or if two runs disagree on the stored prior.
+    """
+    specs: list[PriorSpec] = []
+    for index, run in enumerate(runs):
+        raw = run.attrs.get(f"{ATTR_PREFIX}free_priors")
+        if raw is None:
+            continue
+        entry = json.loads(raw).get(parameter)
+        if entry is None:
+            raise ResultsError(
+                f"run {index} records {ATTR_PREFIX}free_priors but has no entry for parameter "
+                f"{parameter!r}."
+            )
+        if entry.get("kind") == "hierarchical":
+            if required:
+                raise ResultsError(
+                    f"run {index}'s stored prior for {parameter!r} is a HierarchicalPrior "
+                    f"({entry!r}); fit_population needs {parameter!r}'s own marginal interim "
+                    f"prior, which a hierarchical declaration's references to other parameters "
+                    f"do not fix by themselves. Pass interim_prior= explicitly."
+                )
+            continue
+        specs.append(PriorSpec.from_dict(entry))
+    if not specs:
+        return None
+    first = specs[0]
+    if any(spec != first for spec in specs[1:]):
+        raise ResultsError(
+            f"these runs do not agree on the stored interim prior for {parameter!r}: "
+            f"{[spec.to_dict() for spec in specs]}."
+        )
+    return first
+
+
+def _resolve_interim_prior(
+    runs: Sequence[RunColumns], parameter: str, interim_prior: Prior | PriorSpec | None
+) -> Prior:
+    """The prior to reweight *parameter* by: supplied, stored, or refused (W5.22).
+
+    See :func:`fit_population`'s ``interim_prior`` for the full contract;
+    this is where it is enforced.
+    """
+    if interim_prior is None:
+        stored = _stored_marginal_prior(runs, parameter, required=True)
+        if stored is None:
+            raise ResultsError(
+                f"no interim_prior was supplied for {parameter!r}, and these runs have no "
+                f"stored prior to read back either (predates PROVENANCE_SCHEMA_VERSION 8, "
+                f"W5.22, {ATTR_PREFIX}free_priors). Pass interim_prior= explicitly, or re-fit "
+                f"these objects so their provenance records it."
+            )
+        return prior_from_spec(stored)
+    stored = _stored_marginal_prior(runs, parameter, required=False)
+    supplied = (
+        interim_prior if isinstance(interim_prior, PriorSpec) else describe_prior(interim_prior)
+    )
+    if stored is not None and supplied != stored:
+        raise ResultsError(
+            f"the supplied interim_prior for {parameter!r} ({supplied.to_dict()}) disagrees "
+            f"with these runs' stored prior ({stored.to_dict()}); pass the archive's own prior, "
+            f"or omit interim_prior= to use the stored one directly."
+        )
+    return _as_prior(interim_prior)
+
+
 def _self_normalised_log_weights(run: RunColumns, joint_log_prior: np.ndarray) -> np.ndarray:
     """Per-draw log importance weights, normalised to sum to 1 in linear space.
 
@@ -657,7 +801,7 @@ def fit_population(
     runs: Sequence[RunColumns],
     parameter: str,
     model: PopulationModel,
-    interim_prior: Prior | PriorSpec,
+    interim_prior: Prior | PriorSpec | None = None,
     *,
     walkers: int | None = None,
     steps: int = 3000,
@@ -684,14 +828,23 @@ def fit_population(
         input run (guaranteed identical across them by the shared
         ``ampere_spec_hash`` refusal above). A frozen ``scipy.stats``
         distribution (a :class:`~ampere.core.parameter.Prior`) or a
-        :class:`~ampere.core.parameter.PriorSpec`. Required, and not read
-        off the runs themselves: a run's provenance records only each
-        parameter's name and a hash of its declaration, not the declaration
-        itself (``results.md`` §9), so there is nothing here to read back
-        from — see the module docstring's "why it needs the marginal
-        interim prior" for the identity this divides out and why the run's
-        stored (joint) ``log_prior`` column is the wrong thing to divide by
-        whenever the object's model has more than one free parameter.
+        :class:`~ampere.core.parameter.PriorSpec`. **Optional since W5.22**:
+        every run's provenance now stores each free parameter's own prior
+        (``results.md`` §9, schema 8, ``ampere_free_priors``), so when this
+        is omitted the stored prior is read back off the runs and used
+        directly. When supplied, it is checked against the stored one and a
+        disagreement is refused by name, naming both specs, rather than
+        silently preferring the caller's guess over the archive's own
+        record. A run whose provenance predates schema 8 (no
+        ``ampere_free_priors`` attribute) has no stored prior to read or
+        check against; if *interim_prior* is also omitted in that case, this
+        is refused by name, on ``ampere.results.training.
+        append_training_set``'s "refused rather than guessed" precedent for
+        a run that predates the attribute it needs. See the module
+        docstring's "why it needs the marginal interim prior" for the
+        identity this divides out and why the run's stored (joint)
+        ``log_prior`` column is the wrong thing to divide by whenever the
+        object's model has more than one free parameter.
     walkers, steps, burn_in, thin
         ``emcee.EnsembleSampler`` settings, in the same sense
         :class:`~ampere.inference.EmceeEngine` uses them; ``walkers``
@@ -725,12 +878,16 @@ def fit_population(
     ------
     ampere.core.exceptions.ResultsError
         A spec-hash mixture, a missing parameter or column, an approximate
-        run with no ``proposal_log_density``, or an effective sample size
-        collapsed below ``ess_floor``.
+        run with no ``proposal_log_density``, an effective sample size
+        collapsed below ``ess_floor``, a supplied ``interim_prior`` that
+        disagrees with the stored one, or no ``interim_prior`` and no
+        stored prior to fall back on (schema < 8).
     """
     import emcee
 
-    prepared = _prepare_objects(runs, parameter, _as_prior(interim_prior))
+    _refuse_unless_shared_spec_hash(runs)
+    prior = _resolve_interim_prior(runs, parameter, interim_prior)
+    prepared = _prepare_objects(runs, parameter, prior)
     hyperparameters = list(model.hyperparameters)
     n_hyper = len(hyperparameters)
     chosen_walkers = _default_walkers(n_hyper) if walkers is None else int(walkers)
