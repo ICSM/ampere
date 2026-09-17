@@ -2447,7 +2447,7 @@ class TestTheContextPriorRefusals:
 
 
 @pytest.fixture(scope="module")
-def amortised_engine() -> Any:
+def amortised() -> Any:
     """One NPE engine trained under a sigma-pattern context prior (**W5.10**).
 
     ``layout="set"`` with the set embedding, and that is the point rather than
@@ -2456,6 +2456,10 @@ def amortised_engine() -> Any:
     at however hard the simulator varies one. The set packing carries each
     sample's ``log sigma``, so this network can — with no layout change, which
     is the claim the item makes.
+
+    The fitted run is returned beside the engine rather than left to a row to
+    produce, because ``run()`` **retrains**: a test calling it again would
+    quietly replace the network every other row here is about.
     """
     engine = SBIEngine(
         bounded_problem(),
@@ -2465,14 +2469,14 @@ def amortised_engine() -> Any:
         layout="set",
         context=ScaledSigma(CONTEXT_LOW, CONTEXT_HIGH),
     )
-    engine.run(200, training={"max_num_epochs": 150})
-    return engine
+    run = engine.run(200, training={"max_num_epochs": 150})
+    return engine, run
 
 
 @pytest.fixture(scope="module")
-def covered_calibration(amortised_engine: Any) -> Any:
+def covered_calibration(amortised: Any) -> Any:
     """SBC and TARP at a rescale the training context prior covers."""
-    return amortised_engine.calibrate(
+    return amortised[0].calibrate(
         count=CONTEXT_CALIBRATION_COUNT,
         posterior_draws=CONTEXT_CALIBRATION_DRAWS,
         context=ScaledSigma(COVERED_FACTOR, COVERED_FACTOR),
@@ -2480,9 +2484,9 @@ def covered_calibration(amortised_engine: Any) -> Any:
 
 
 @pytest.fixture(scope="module")
-def uncovered_calibration(amortised_engine: Any) -> Any:
+def uncovered_calibration(amortised: Any) -> Any:
     """The same check at a rescale it does not."""
-    return amortised_engine.calibrate(
+    return amortised[0].calibrate(
         count=CONTEXT_CALIBRATION_COUNT,
         posterior_draws=CONTEXT_CALIBRATION_DRAWS,
         context=ScaledSigma(UNCOVERED_FACTOR, UNCOVERED_FACTOR),
@@ -2501,8 +2505,8 @@ class TestAmortisationOverTheObservationContext:
     ignored the data would pass the first.
     """
 
-    def test_the_run_records_the_context_prior_and_its_digest(self, amortised_engine: Any) -> None:
-        run = amortised_engine.run(10, training={"max_num_epochs": 2})
+    def test_the_run_records_the_context_prior_and_its_digest(self, amortised: Any) -> None:
+        run = amortised[1]
         recorded = json.loads(run.attrs["ampere_sbi_context"])
         assert recorded == ScaledSigma(CONTEXT_LOW, CONTEXT_HIGH).describe()
         assert len(run.attrs["ampere_sbi_context_hash"]) == 32
@@ -2513,9 +2517,9 @@ class TestAmortisationOverTheObservationContext:
         assert run.attrs["ampere_sbi_context"] == "none"
         assert run.attrs["ampere_sbi_context_hash"] == ""
 
-    def test_the_budget_was_actually_drawn_under_the_prior(self, amortised_engine: Any) -> None:
+    def test_the_budget_was_actually_drawn_under_the_prior(self, amortised: Any) -> None:
         """The simulated observations carry the drawn sigma, not the observed one."""
-        batch = amortised_engine.batch
+        batch = amortised[0].batch
         assert batch is not None
         sigmas = {
             float(np.asarray(draw.observations["default"].uncertainty)[0]) for draw in batch.usable
@@ -2554,13 +2558,13 @@ class TestAmortisationOverTheObservationContext:
         )
         assert at_68(uncovered_calibration) < at_68(covered_calibration) - 0.05
 
-    def test_calibrate_inherits_the_runs_prior_by_default(self, amortised_engine: Any) -> None:
-        report = amortised_engine.calibrate(count=20, posterior_draws=20, tarp=False)
+    def test_calibrate_inherits_the_runs_prior_by_default(self, amortised: Any) -> None:
+        report = amortised[0].calibrate(count=20, posterior_draws=20, tarp=False)
         recorded = json.loads(report.attrs["ampere_calibration_context"])
         assert recorded == ScaledSigma(CONTEXT_LOW, CONTEXT_HIGH).describe()
 
-    def test_calibrate_at_no_context_is_spelled_none(self, amortised_engine: Any) -> None:
-        report = amortised_engine.calibrate(count=20, posterior_draws=20, tarp=False, context=None)
+    def test_calibrate_at_no_context_is_spelled_none(self, amortised: Any) -> None:
+        report = amortised[0].calibrate(count=20, posterior_draws=20, tarp=False, context=None)
         assert report.attrs["ampere_calibration_context"] == "none"
 
 

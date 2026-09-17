@@ -2348,6 +2348,15 @@ class SBIEngine(Engine):
             values=values,
             observe=True,
             rng=rng,
+            # W5.10: naming the stream matters here even though ``rng=``
+            # overrides the draw stream, because a context prior derives its
+            # own sub-stream from this name (inference.md §12). Left at the
+            # default it would be "simulate.context" -- the *fit's* context
+            # stream -- so calibrating would consume the contexts a later
+            # round would have drawn, which is exactly the shared-stream bug
+            # §12 exists to prevent. It is also the honest value for the
+            # batch's own record: these draws are the calibrate stream's.
+            stream="sbi.calibrate",
             executor=self.executor,
             chunk_size=self.chunk_size,
             as_chunks=True,
