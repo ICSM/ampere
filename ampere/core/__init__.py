@@ -57,6 +57,10 @@ from .efgp import (
     fourier_grid,
 )
 from .encoding import (
+    # -- W5.11: the axis identity -------------------------------------------
+    AXIS_TYPE_CODES,
+    AXIS_TYPE_NAMES,
+    # -----------------------------------------------------------------------
     COLUMN_GROUPS,
     DEFAULT_FOURIER_BANDS,
     ENCODING_VERSION,
@@ -70,6 +74,9 @@ from .encoding import (
     EncodingError,
     EncodingLayout,
     Unpacked,
+    # -- W5.11: the axis identity -------------------------------------------
+    axis_type_code,
+    # -----------------------------------------------------------------------
     decode,
     encode,
     encode_observations,
@@ -261,6 +268,10 @@ _register_pickle_support()
 
 __all__ = [
     "ADAPTABLE_KINDS",
+    # -- W5.11: the axis identity -------------------------------------------
+    "AXIS_TYPE_CODES",
+    "AXIS_TYPE_NAMES",
+    # -----------------------------------------------------------------------
     "COLUMN_GROUPS",
     "COORDINATE_RTOL",
     "DEFAULT_CHANNEL",
@@ -414,6 +425,9 @@ __all__ = [
     "WarpedKernel",
     "WindowedSparseGP",
     "astropy_components",
+    # -- W5.11: the axis identity -------------------------------------------
+    "axis_type_code",
+    # -----------------------------------------------------------------------
     "chunk_bounds",
     "declared_capabilities",
     "decode",

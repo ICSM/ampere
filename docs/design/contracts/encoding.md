@@ -101,29 +101,71 @@ in brackets; `A` is the layout's coordinate count (§5).
    `cos(0) = 1` its zero-filled coordinate column would give. An axis that
    does not exist must not look like an axis sitting at the centre of its
    range.
-4. **`value`** [1 or 2] — the whitened value `y/σ` (real and imaginary
+4. **`axis_identity`** [A] — ***added W5.11***. One small integer code per
+   coordinate column, saying what that column physically *is* for the
+   dataset whose rows it sits on: the axis's physical type, read from its
+   unit. A dataset with fewer axes than `A` leaves the rest at `0`
+   (`absent`), which is a different code from `1` (`unknown`: an axis that
+   exists and whose physical type the table cannot name). **The code table
+   is contract** — the numbers below are frozen into every layout's hash
+   and every trained network's input, so a code may be *added* as the next
+   free integer but never renumbered or reused:
+
+   | code | name | what it is |
+   |---:|---|---|
+   | 0 | `absent` | no axis in this column for this dataset (padding) |
+   | 1 | `unknown` | an axis with no unit, or a physical type not below |
+   | 2 | `dimensionless` | a dimensionless coordinate |
+   | 3 | `length` | wavelength, a spatial coordinate in metres, a baseline |
+   | 4 | `frequency` | a spectral axis in Hz |
+   | 5 | `energy` | a spectral axis in keV |
+   | 6 | `time` | a light curve's time axis |
+   | 7 | `angle` | an image's `x`/`y` on the sky |
+   | 8 | `spatial frequency` | interferometric `u`, `v` (wavelengths or rad⁻¹) |
+   | 9 | `wavenumber` | a spectral axis in cm⁻¹ |
+   | 10 | `speed` | a velocity axis |
+   | 11 | `temperature` | |
+   | 12 | `mass` | |
+
+   The code comes **from the unit**, through
+   `astropy.units.get_physical_type`, because that is the one statement of
+   what a coordinate is that every container already carries: a `Spectrum`
+   in `um` and one in `Hz` hold different quantities in the same column and
+   the codes say so. The single exception is `spatial frequency`, which
+   astropy cannot name — a radian is dimensionless, so `u` in wavelengths
+   is `dimensionless` and `u` in `rad**-1` is `unknown` — and which a
+   container kind therefore declares by putting `rad**-1` in its
+   `AxisSpec.equivalent_units`; an axis of such a kind whose unit is
+   dimensionless-equivalent is coded 8. A `u` given in metres is a baseline
+   **length** and is coded 3, which is the honest answer.
+5. **`value`** [1 or 2] — the whitened value `y/σ` (real and imaginary
    columns when the container is complex, else one column). Where the
    dataset has no uncertainties, the asinh-scaled value (§4) stands in and
-   the `has_sigma` feature (group 8) says so.
-5. **`value_asinh`** [1 or 2] — `asinh(y / s)` with `s` the dataset's
+   the `has_sigma` feature (group 9) says so.
+6. **`value_asinh`** [1 or 2] — `asinh(y / s)` with `s` the dataset's
    value scale (§4): the magnitude of the measurement on a scale that is
    linear near zero and logarithmic far from it, so a network can tell a
    bright line from a faint one without the raw unit.
-6. **`log_sigma`** [1] — `log(σ / s)`; 0 where there is no σ.
-7. **`mask`** [1] — 1 for a row that counts, 0 for a row the dataset's
+7. **`log_sigma`** [1] — `log(σ / s)`; 0 where there is no σ.
+8. **`mask`** [1] — 1 for a row that counts, 0 for a row the dataset's
    `effective_mask` excludes **and** for every padded row. There is
    exactly one mask convention in the contract; §7 says how wrappers
    convert it.
-8. **`set_features`** [3] — per-dataset quantities broadcast onto every
+9. **`set_features`** [3] — per-dataset quantities broadcast onto every
    row of that dataset: `log(N_valid)` (valid rows in this dataset),
    `has_sigma` (1/0), and `is_complex` (1/0). They exist because a masked
    mean (§7) deliberately removes the row count from the pooled
    embedding, and the count is information.
-9. **`context`** [0 today] — the reserved observation-context group.
-   Width 0 until the context item lands; its presence at position 9 is
-   what makes adding it a layout-hash change and nothing else.
+10. **`context`** [0 today] — the reserved observation-context group.
+    Width 0 until the context item lands; its presence at position 10 is
+    what makes adding it a layout-hash change and nothing else.
+    ***W5.10*** amortises over the observation context **without widening
+    it**: the context prior varies the σ-pattern of each simulated draw,
+    and the per-row `log_sigma` and whitened-value columns are what the
+    network then sees it through. The group stays reserved for a context
+    that is *not* already a column.
 
-The values in groups 4–6 are computed from the container the row belongs
+The values in groups 5–7 are computed from the container the row belongs
 to, with masked samples' values **left as the container holds them** and
 then zeroed by the mask at unpack time (§7) — the contract does not invent
 values for masked samples, mirroring `inference.md` §13's rule for
@@ -191,10 +233,13 @@ wander far outside the observed scale is encoded at the tails of `asinh`
 
 A frozen, plain-data record (`EncodingLayout`) with, at least:
 
-- `kind` (`"set"` | `"flat"`), `version` (`ENCODING_VERSION`, 1);
+- `kind` (`"set"` | `"flat"`), `version` (`ENCODING_VERSION`, **2 since
+  W5.11**);
 - `datasets`: for each label in order — `kind` (container class name),
-  `axes` (names, count), `rows` (valid sample count of the observation),
-  `is_complex`, `has_sigma`, the coordinate ranges and the value scale;
+  `axes` (names, count), `axis_codes` (***added W5.11***: one §3 group 4
+  code per axis, in the same order), `rows` (valid sample count of the
+  observation), `is_complex`, `has_sigma`, the coordinate ranges and the
+  value scale;
 - `coordinates` (`A`, the maximum axis count), `fourier_bands` (`B`),
   `row_cap` (`R`; default the total observed row count, so the default
   layout fits the observation exactly and a differently-sampled
@@ -385,8 +430,16 @@ structure, and writes up the result as guidance).
 
 `ENCODING_VERSION` is bumped when a column group is added, removed,
 reordered or redefined; the reserved `context` group exists so that the
-first real context is a width change under version 1, not a version
-bump. The packing is independent of `CONTAINER_SCHEMA_VERSION`: it reads
+first real context is a width change under the current version, not a
+version bump. ***W5.11*** is the first such bump: adding the
+`axis_identity` group took the version from 1 to 2, and **every layout
+hash written under version 1 moved once**. That is what the version is
+for — a stored layout, training set or trained network from before the
+bump is refused *by name*, saying that the axis identity is the
+difference, rather than reported as a hash that does not match
+(`EncodingLayout.from_dict`, `append_training_set`). The code table
+itself is frozen the same way: a code may be added as the next free
+integer, never renumbered. The packing is independent of `CONTAINER_SCHEMA_VERSION`: it reads
 containers through their public attributes, and a container schema change
 that keeps `axes`/`values`/`uncertainty`/`mask` leaves every encoding and
 every hash unchanged.
@@ -422,7 +475,8 @@ every hash unchanged.
 2. **Coordinate features are per axis.** Multi-axis kinds get independent
    Fourier features per axis, not mixed 2D features; sufficient for a
    first encoder, and a wrapper may add its own.
-3. **No context yet** (group 9 is width 0).
+3. **No context yet** (group 10 is width 0). W5.10 amortises over the
+   observation context through the σ columns instead; see §3 group 10.
 4. **Standardisation from the observation only.** A layout built for one
    observation and reused for a very differently-scaled one is honest but
    not optimal; the remedy is a layout built from the new observation,
@@ -446,7 +500,15 @@ every hash unchanged.
    the same input slot. Whether the packing should carry axis *identity*
    (a physical-type or axis-name feature per column, not just position) is
    a genuine design question this draft leaves open rather than answers —
-   a Phase 5 question, not a defect in what shipped.
+   a Phase 5 question, not a defect in what shipped. ***Closed by W5.11***,
+   which answers it with a physical-type code per column: §3 group 4 is the
+   packing's own statement of what each coordinate column holds, the code
+   table there is contract, and `DatasetLayout.axis_codes` puts it in the
+   layout and therefore in the hash. What remains open is deliberately
+   narrower — the codes name a *physical type*, not a role, so two `length`
+   axes of one collection (a wavelength and a baseline) still share a code,
+   and a kind that wants them distinguished needs a new code rather than a
+   new mechanism.
 
 ## 10. Handoffs
 
@@ -464,7 +526,15 @@ every hash unchanged.
 - **W3.5** hashes the layout into the artefact key.
 - **W3.6** encodes the calibration batches with the run's own layout, so
   a coverage test is a test of the network as trained.
-- **The context item** (reserved) fills group 9 and adds the context prior
-  to `simulate_many`.
+- **W5.11 landed** the axis identity: `AXIS_TYPE_CODES` and
+  `axis_type_code` in `ampere/core/encoding.py`, `DatasetLayout.axis_codes`
+  in the layout and its hash, the `axis_identity` column group (§3 group
+  4), `ENCODING_VERSION` 2, and the two by-name refusals of a pre-W5.11
+  record (`EncodingLayout.from_dict`,
+  `ampere.results.training.append_training_set`), which share one message
+  through `axis_identity_complaint`.
+- **The context item** (reserved) fills group 10 and adds the context prior
+  to `simulate_many`. ***W5.10*** added the prior without filling the
+  group; see §3 group 10.
 - **Later encoders** (horizon notes, follow-up §4/5) are wrappers over
   `unpack`; none needs this document to change.

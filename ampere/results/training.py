@@ -82,6 +82,7 @@ from typing import Any
 import numpy as np
 
 from ampere.core.dataset import FittingProblem, Simulation
+from ampere.core.encoding import axis_identity_complaint
 from ampere.core.exceptions import OptionalDependencyError, ResultsError
 from ampere.core.results_schema import FunctionSamples, ModelResult
 from ampere.core.simulate import SimulationBatch
@@ -407,7 +408,7 @@ def append_training_set(
 ) -> str:
     """Grow an existing training set by one batch. The ``sample`` dimension grows.
 
-    Two checks run first, and either can **refuse**. The spec hash: appending
+    Three checks run first, and any of them can **refuse**. The spec hash: appending
     draws from an edited model to a budget written before the edit produces a
     file whose two halves came from different simulators and whose
     provenance says they did not — precisely ``DEVELOPMENT_PLAN.md`` §7's
@@ -422,13 +423,21 @@ def append_training_set(
     ``ampere_model_hash`` attribute at all) is refused too, by name, rather
     than treated as an agreement it cannot actually make.
 
+    And, since **W5.11**, the recorded **encoding layout**
+    (:func:`_check_encoding_layout`): a budget packed before the
+    axis-identity columns existed has narrower rows than one packed now, so
+    appending would put two packings in one file under one hash. That
+    refusal names the axis identity rather than reporting a hash mismatch,
+    because the reason is knowable and the remedy follows from it.
+
     Raises
     ------
     ampere.core.exceptions.ResultsError
         If the file's spec hash differs from the problem's, if the file's
         model hash differs from the problem's, if the file predates the
-        model hash, if the file is not a training set, or if the batch's
-        channels do not match the file's.
+        model hash, if the file records an encoding layout from before
+        W5.11, if the file is not a training set, or if the batch's channels
+        do not match the file's.
     """
     chunks = [chunk for chunk in _chunks_of(simulations) if chunk]
     if not chunks:
@@ -472,6 +481,7 @@ def append_training_set(
             f"stale-artefact trap the hash exists to catch (DEVELOPMENT_PLAN.md §7). Write a new "
             f"set."
         )
+    _check_encoding_layout(existing)
     offset = int(existing.attrs.get(f"{ATTR_PREFIX}samples", 0))
     slots = _slots_from(batch)
     if slots:
@@ -486,6 +496,41 @@ def append_training_set(
     merged = _concatenate(xarray, existing, addition)
     merged.attrs[f"{ATTR_PREFIX}samples"] = offset + len(batch)
     return _write(merged, path, engine=engine)
+
+
+def _check_encoding_layout(existing: Any) -> None:
+    """Refuse a training set whose recorded packing predates **W5.11**.
+
+    A budget written under an older encoding was packed without the
+    axis-identity columns, so its rows are narrower than this ampere's and
+    every layout hash it recorded moved when W5.11 landed. Appending would
+    leave one file whose halves were encoded under two packings — the
+    poisoned cache of ``DEVELOPMENT_PLAN.md`` §7 again, arriving by the
+    encoding's door rather than the model's — and a reader comparing the two
+    hashes would see only that they differ.
+
+    The refusal therefore names the reason:
+    :func:`~ampere.core.encoding.axis_identity_complaint` writes it once and
+    this raises it as the results-layer refusal every other check here
+    raises. A file that records no layout at all (a budget written without an
+    SBI run's encoding provenance) is not refused: there is nothing to compare,
+    and inventing a disagreement would be as dishonest as missing one.
+    """
+    stored = existing.attrs.get(f"{ATTR_PREFIX}encoding_layout")
+    if not stored:
+        return
+    try:
+        record = json.loads(stored) if isinstance(stored, str) else stored
+    except (TypeError, ValueError):
+        return
+    complaint = axis_identity_complaint(record)
+    if complaint is not None:
+        raise ResultsError(
+            f"this training set was written under a different encoding: {complaint} The rows "
+            f"already in this file are narrower than the ones being appended, so the two halves "
+            f"would be packed differently under one hash (DEVELOPMENT_PLAN.md §7). Write a new "
+            f"set."
+        )
 
 
 def _slots_from(batch: Sequence[Simulation]) -> dict[str, _Slot]:

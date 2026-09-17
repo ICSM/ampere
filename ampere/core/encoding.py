@@ -61,14 +61,18 @@ import dataclasses
 import math
 import sys
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Any
 
+import astropy.units as u
 import numpy as np
 
 from .exceptions import ContractError
 from .results_schema import Layout as ContainerLayout
 
 __all__ = [
+    "AXIS_TYPE_CODES",
+    "AXIS_TYPE_NAMES",
     "COLUMN_GROUPS",
     "DEFAULT_FOURIER_BANDS",
     "ENCODING_VERSION",
@@ -82,6 +86,8 @@ __all__ = [
     "EncodingError",
     "EncodingLayout",
     "Unpacked",
+    "axis_identity_complaint",
+    "axis_type_code",
     "decode",
     "encode",
     "encode_observations",
@@ -90,9 +96,14 @@ __all__ = [
 
 #: Bumped when a column group is added, removed, reordered or redefined. The
 #: reserved zero-width ``context`` group exists precisely so that the first real
-#: observation context is a *width* change under version 1 rather than a version
-#: bump (``encoding.md`` §8).
-ENCODING_VERSION = 1
+#: observation context is a *width* change under this version rather than a
+#: version bump (``encoding.md`` §8).
+#:
+#: **2 (W5.11)**: the ``axis_identity`` group was added, so every layout hash
+#: written under version 1 moves. The version is what lets a refusal say *why*
+#: — a stored layout that predates the axis identity is named as such rather
+#: than reported as a bare hash mismatch.
+ENCODING_VERSION = 2
 
 #: ``B`` in ``encoding.md`` §3 group 3: how many NeRF-style Fourier bands each
 #: standardised coordinate is expanded into. ``0`` removes the group.
@@ -113,6 +124,7 @@ COLUMN_GROUPS: tuple[str, ...] = (
     "dataset",
     "coordinate",
     "coordinate_features",
+    "axis_identity",
     "value",
     "value_asinh",
     "log_sigma",
@@ -125,6 +137,55 @@ COLUMN_GROUPS: tuple[str, ...] = (
 #: ``is_complex``.
 _SET_FEATURE_WIDTH = 3
 
+#: **The axis-identity code table** (W5.11; ``encoding.md`` §3 group 4). One
+#: small integer per *coordinate* column, saying what physical quantity that
+#: column holds for the dataset whose rows it is on.
+#:
+#: The packing aligns axes by **position**: column ``k`` is whichever axis a
+#: container kind declares in position ``k``. Nothing stopped a collection
+#: mixing an ``Image`` (column 0 is ``x``, an angle on the sky) with a
+#: ``VisibilitySet`` (column 0 is ``u``, a spatial frequency), and a network saw
+#: two unrelated quantities in one input slot (``encoding.md`` §9 item 6, the
+#: limitation this table lifts). The code is what tells them apart.
+#:
+#: **The numbers are contract**: they are frozen into every layout's hash and a
+#: trained network's input, so a code may be *added* (the next free integer)
+#: but never renumbered or reused. ``0`` is the padded column of a dataset with
+#: fewer axes than the layout's widest, and is deliberately distinct from
+#: ``1`` (an axis that exists and whose physical type this table cannot name).
+AXIS_TYPE_CODES: Mapping[str, int] = MappingProxyType(
+    {
+        "absent": 0,
+        "unknown": 1,
+        "dimensionless": 2,
+        "length": 3,
+        "frequency": 4,
+        "energy": 5,
+        "time": 6,
+        "angle": 7,
+        "spatial frequency": 8,
+        "wavenumber": 9,
+        "speed": 10,
+        "temperature": 11,
+        "mass": 12,
+    }
+)
+
+#: :data:`AXIS_TYPE_CODES` inverted: code to name, for a reader of a stored
+#: layout and for the refusals that print one.
+AXIS_TYPE_NAMES: Mapping[int, str] = MappingProxyType(
+    {code: name for name, code in AXIS_TYPE_CODES.items()}
+)
+
+#: The one physical quantity astropy's own physical types cannot name, and the
+#: reason :func:`axis_type_code` consults the container kind's
+#: :class:`~ampere.core.results_schema.AxisSpec` as well as the unit. An
+#: interferometric ``u`` is spelled either in wavelengths (``dimensionless``) or
+#: in ``rad**-1`` (astropy: ``"unknown"``, because a radian is dimensionless);
+#: both are the same quantity, and a kind declares it by putting ``rad**-1``
+#: in its axis spec's ``equivalent_units``.
+_SPATIAL_FREQUENCY_UNIT = u.rad**-1
+
 
 class EncodingError(ContractError):
     """The encoding refused: a layout mismatch, a row cap, or unencodable data.
@@ -135,6 +196,139 @@ class EncodingError(ContractError):
     :class:`~ampere.core.exceptions.ContractError` like every other contract
     refusal, so a caller catching that catches this.
     """
+
+
+# ---------------------------------------------------------------------------
+# Axis identity (W5.11)
+# ---------------------------------------------------------------------------
+
+
+def axis_type_code(unit: Any, *, spec: Any = None) -> int:
+    """The :data:`AXIS_TYPE_CODES` entry for a coordinate axis in *unit*.
+
+    The code comes **from the unit**, through
+    :func:`astropy.units.get_physical_type`, because that is the one statement
+    of what a coordinate *is* that every container carries and no kind can
+    forget to make: a ``Spectrum`` whose spectral axis is in ``um`` and one
+    whose axis is in ``Hz`` hold different quantities in the same column, and
+    the codes say so.
+
+    Parameters
+    ----------
+    unit
+        The axis's unit, or ``None`` for an axis that carries none (code
+        ``"unknown"``: an axis with no unit makes no claim about its physical
+        type, and pretending it is dimensionless would be inventing one).
+    spec
+        The container kind's :class:`~ampere.core.results_schema.AxisSpec` for
+        this position, where there is one. It is consulted for exactly one
+        thing — the spatial-frequency case astropy cannot name (see
+        :data:`_SPATIAL_FREQUENCY_UNIT`) — and never to override a unit whose
+        physical type the table does know.
+
+    Notes
+    -----
+    A physical type with several names (``keV`` is ``"energy/torque/work"``)
+    is matched name by name in the table's own order, so the astronomical
+    reading wins and a future astropy that reorders its aliases changes
+    nothing.
+    """
+    if _is_spatial_frequency(unit, spec):
+        return AXIS_TYPE_CODES["spatial frequency"]
+    if unit is None:
+        return AXIS_TYPE_CODES["unknown"]
+    for name in _physical_type_names(unit):
+        if name in AXIS_TYPE_CODES:
+            return AXIS_TYPE_CODES[name]
+    return AXIS_TYPE_CODES["unknown"]
+
+
+def _physical_type_names(unit: Any) -> tuple[str, ...]:
+    """Every name astropy gives *unit*'s physical type, in the table's order.
+
+    ``str(PhysicalType)`` is ``"energy/torque/work"`` for an ambiguous one, and
+    splitting it is deliberately more conservative than iterating the object:
+    the string form is stable across astropy versions and the iteration
+    protocol has not always been.
+    """
+    try:
+        physical = u.get_physical_type(unit)
+    except Exception:  # pragma: no cover - astropy refuses only exotic units
+        return ()
+    names = tuple(part.strip() for part in str(physical).split("/"))
+    return tuple(name for name in AXIS_TYPE_CODES if name in names) or names
+
+
+def _is_spatial_frequency(unit: Any, spec: Any) -> bool:
+    """Whether this axis is an interferometric spatial frequency.
+
+    True when the container kind declares ``rad**-1`` among its axis spec's
+    ``equivalent_units`` *and* the axis's own unit is one of the two spellings
+    of that quantity — wavelengths (dimensionless) or an inverse angle. A
+    ``u`` given in metres is a baseline **length** and is coded as one, which
+    is the honest answer: it is a different quantity, and a network should not
+    be told otherwise.
+    """
+    declared = tuple(getattr(spec, "equivalent_units", ()) or ())
+    if not any(candidate.is_equivalent(_SPATIAL_FREQUENCY_UNIT) for candidate in declared):
+        return False
+    if unit is None:
+        return True
+    return bool(u.Unit(unit).is_equivalent(u.dimensionless_unscaled))
+
+
+def axis_identity_complaint(record: Any) -> str | None:
+    """Why a stored layout record predates W5.11, or ``None`` if it does not.
+
+    One sentence of refusal, written **once** and raised in two vocabularies:
+    :meth:`EncodingLayout.from_dict` raises it as an
+    :class:`EncodingError`, and
+    :func:`ampere.results.training.append_training_set` as a
+    :class:`~ampere.core.exceptions.ResultsError`, because a training set's
+    refusals are results-layer refusals. Both say *the axis identity* rather
+    than reporting a bare hash mismatch, which is the whole point: the two
+    hashes differ for a knowable reason, and the remedy (a new training set
+    and a retrained network) follows from it.
+    """
+    if not isinstance(record, Mapping):
+        return None
+    version = record.get("version")
+    datasets = record.get("datasets")
+    stale = isinstance(version, int) and version < ENCODING_VERSION
+    if not stale and isinstance(datasets, Sequence):
+        stale = any(
+            isinstance(one, Mapping) and "axis_codes" not in one
+            for one in datasets
+            if not isinstance(one, str)
+        )
+    if not stale:
+        return None
+    return (
+        f"this encoding layout was written under ENCODING_VERSION {version}, before W5.11 "
+        f"added the axis-identity columns, and this ampere packs version {ENCODING_VERSION}. "
+        f"The axis identity is one small code per coordinate column saying what that column "
+        f"physically is (encoding.md §3 group 4), so every layout hash written before it "
+        f"moved: the two hashes differ for that reason and not because the problem changed. "
+        f"A network or a training set from before W5.11 therefore describes a different "
+        f"packing; write a new training set and retrain."
+    )
+
+
+def _check_axis_identity(record: Any) -> None:
+    """Raise :class:`EncodingError` if *record* predates W5.11."""
+    complaint = axis_identity_complaint(record)
+    if complaint is not None:
+        raise EncodingError(complaint)
+
+
+def _axis_codes(observed: Any) -> tuple[int, ...]:
+    """One code per declared axis of *observed*, in the kind's own axis order."""
+    specs = tuple(getattr(type(observed), "AXES", ()) or ())
+    codes: list[int] = []
+    for position, axis in enumerate(observed.axes):
+        spec = specs[position] if position < len(specs) else None
+        codes.append(axis_type_code(getattr(axis, "unit", None), spec=spec))
+    return tuple(codes)
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +374,13 @@ class DatasetLayout:
         by value, so the record stays plain data.
     axes
         The axis names, in the container kind's declared order.
+    axis_codes
+        **W5.11**: one :data:`AXIS_TYPE_CODES` entry per axis, in the same
+        order — what each coordinate column physically *is*, read from the
+        axis's unit at layout construction like every other field here. It is
+        part of this record and therefore of the layout's hash, so two
+        collections whose coordinate columns hold different quantities are
+        two layouts and two networks.
     grid_shape
         The container's value shape for a grid kind, else ``None``. It is what
         lets :attr:`Unpacked.per_dataset` reshape a slice back to its axes
@@ -208,6 +409,7 @@ class DatasetLayout:
     kind: str
     container_layout: str
     axes: tuple[str, ...]
+    axis_codes: tuple[int, ...]
     grid_shape: tuple[int, ...] | None
     rows: int
     valid: int
@@ -221,6 +423,11 @@ class DatasetLayout:
     def axis_count(self) -> int:
         """How many coordinate axes this dataset's container declares."""
         return len(self.axes)
+
+    @property
+    def axis_type_names(self) -> tuple[str, ...]:
+        """:attr:`axis_codes` in words, for a reader of a stored layout."""
+        return tuple(AXIS_TYPE_NAMES.get(code, "unknown") for code in self.axis_codes)
 
     def mask_column(self) -> np.ndarray:
         """``1.0`` where a row counts, ``0.0`` where the effective mask excludes it."""
@@ -236,6 +443,7 @@ class DatasetLayout:
             "kind": self.kind,
             "container_layout": self.container_layout,
             "axes": list(self.axes),
+            "axis_codes": list(self.axis_codes),
             "grid_shape": None if self.grid_shape is None else list(self.grid_shape),
             "rows": self.rows,
             "valid": self.valid,
@@ -432,7 +640,15 @@ class EncodingLayout:
 
     @classmethod
     def from_dict(cls, record: Mapping[str, Any]) -> EncodingLayout:
-        """Rebuild a layout from :meth:`to_dict` -- a stored run's attrs, say."""
+        """Rebuild a layout from :meth:`to_dict` -- a stored run's attrs, say.
+
+        A record written **before W5.11** is refused here by name rather than
+        rebuilt without its axis identity: the resulting layout would have a
+        different width, a different hash and a different meaning from the one
+        that was stored, and a silent rebuild is exactly how a stale artefact
+        gets believed (``DEVELOPMENT_PLAN.md`` §7).
+        """
+        _check_axis_identity(record)
         return cls(
             kind=str(record["kind"]),
             version=int(record["version"]),
@@ -442,6 +658,7 @@ class EncodingLayout:
                     kind=str(one["kind"]),
                     container_layout=str(one["container_layout"]),
                     axes=tuple(str(name) for name in one["axes"]),
+                    axis_codes=tuple(int(code) for code in one["axis_codes"]),
                     grid_shape=(
                         None
                         if one["grid_shape"] is None
@@ -504,7 +721,15 @@ class EncodingLayout:
                     f"{len(theirs.excluded)} there (the mask is frozen into the layout, so a "
                     f"differently masked observation is a different layout)"
                 )
-            for field in ("kind", "axes", "rows", "is_complex", "has_sigma", "grid_shape"):
+            for field in (
+                "kind",
+                "axes",
+                "axis_codes",
+                "rows",
+                "is_complex",
+                "has_sigma",
+                "grid_shape",
+            ):
                 left = getattr(mine, field)
                 right = getattr(theirs, field)
                 if left != right:
@@ -614,6 +839,7 @@ class DatasetView:
     dataset: Any
     coordinate: Any
     coordinate_features: Any
+    axis_identity: Any
     value: Any
     value_asinh: Any
     log_sigma: Any
@@ -629,6 +855,7 @@ class DatasetView:
                 self.dataset,
                 self.coordinate,
                 self.coordinate_features,
+                self.axis_identity,
                 self.value,
                 self.value_asinh,
                 self.log_sigma,
@@ -657,6 +884,7 @@ class Unpacked:
     dataset: Any
     coordinate: Any
     coordinate_features: Any
+    axis_identity: Any
     value: Any
     value_asinh: Any
     log_sigma: Any
@@ -673,6 +901,7 @@ class Unpacked:
                 self.dataset,
                 self.coordinate,
                 self.coordinate_features,
+                self.axis_identity,
                 self.value,
                 self.value_asinh,
                 self.log_sigma,
@@ -888,6 +1117,16 @@ def _set_tensor(
             features = _fourier_features(coordinates, layout.fourier_bands)
             block[:, :, group.offset : group.offset + features.shape[1]] = features
 
+        # W5.11: what each coordinate column *is*, broadcast onto every row of
+        # this dataset. The padded axes of a dataset with fewer axes than the
+        # layout's widest keep code 0 ("absent"), which is why the slice stops
+        # at this record's own axis count rather than at the group's width.
+        group = groups["axis_identity"]
+        if record.axis_count:
+            block[:, :, group.offset : group.offset + record.axis_count] = np.asarray(
+                record.axis_codes, dtype=float
+            )
+
         group = groups["set_features"]
         block[:, :, group.offset] = math.log(max(record.valid, 1))
         block[:, :, group.offset + 1] = 1.0 if record.has_sigma else 0.0
@@ -1075,6 +1314,7 @@ def _dataset_layout(label: str, dataset: Any) -> DatasetLayout:
         kind=type(observed).__name__,
         container_layout=container_layout.value,
         axes=tuple(axis.name for axis in observed.axes),
+        axis_codes=_axis_codes(observed),
         grid_shape=tuple(int(size) for size in values.shape) if is_grid else None,
         rows=int(values.size),
         valid=int(np.count_nonzero(keep)),
@@ -1181,12 +1421,13 @@ def _one_count(counts: Sequence[int], *, labels: Sequence[str]) -> int:
 def _column_groups(
     *, axis_count: int, bands: int, complex_columns: bool
 ) -> tuple[ColumnGroup, ...]:
-    """The nine groups of ``encoding.md`` §3, in order, with their widths."""
+    """The ten groups of ``encoding.md`` §3, in order, with their widths."""
     value_width = 2 if complex_columns else 1
     widths = {
         "dataset": 1,
         "coordinate": axis_count,
         "coordinate_features": axis_count * 2 * bands,
+        "axis_identity": axis_count,
         "value": value_width,
         "value_asinh": value_width,
         "log_sigma": 1,

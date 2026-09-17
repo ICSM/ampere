@@ -26,6 +26,7 @@ here does.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import warnings
 from typing import Any
@@ -35,6 +36,8 @@ import numpy as np
 import pytest
 
 from ampere.core import (
+    AXIS_TYPE_CODES,
+    AXIS_TYPE_NAMES,
     Cube,
     EncodingError,
     EncodingLayout,
@@ -43,12 +46,17 @@ from ampere.core import (
     Spectrum,
     TimeSeries,
     VisibilitySet,
+    axis_type_code,
     decode,
     encode,
     encode_observations,
     unpack,
 )
-from ampere.core.encoding import DEFAULT_FOURIER_BANDS
+from ampere.core.encoding import (
+    DEFAULT_FOURIER_BANDS,
+    ENCODING_VERSION,
+    axis_identity_complaint,
+)
 
 
 class _Holder:
@@ -371,7 +379,9 @@ class TestStandardisation:
         datasets = one("spectrum")
         layout = EncodingLayout.from_datasets(datasets, fourier_bands=0)
         assert layout.group("coordinate_features").width == 0
-        assert layout.columns_total == 1 + 1 + 0 + 1 + 1 + 1 + 1 + 3 + 0
+        # dataset, coordinate, coordinate_features, axis_identity, value,
+        # value_asinh, log_sigma, mask, set_features, context.
+        assert layout.columns_total == 1 + 1 + 0 + 1 + 1 + 1 + 1 + 1 + 3 + 0
 
     def test_a_dataset_with_fewer_axes_than_the_widest_is_padded_with_zeros(self) -> None:
         datasets = {"cube": _Holder(a_cube()), "spec": _Holder(a_spectrum())}
@@ -658,3 +668,184 @@ class TestMaskedPathology:
         assert np.all(np.isfinite(values))
         assert values[0, 2, layout.group("log_sigma").offset] == 0.0
         assert values[0, 2, layout.group("mask").offset] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# 8. W5.11: the axis identity
+# ---------------------------------------------------------------------------
+
+
+class TestTheAxisIdentityCodeTable:
+    """The code table is contract, so this test is the pin (**W5.11**).
+
+    ``encoding.md`` §3 group 4 prints these numbers, and they are frozen into
+    every layout's hash and every trained network's input. A code may be
+    *added* as the next free integer; renumbering one silently reinterprets
+    every archived run, which is what this row exists to stop.
+    """
+
+    def test_the_table_is_exactly_this(self) -> None:
+        assert dict(AXIS_TYPE_CODES) == {
+            "absent": 0,
+            "unknown": 1,
+            "dimensionless": 2,
+            "length": 3,
+            "frequency": 4,
+            "energy": 5,
+            "time": 6,
+            "angle": 7,
+            "spatial frequency": 8,
+            "wavenumber": 9,
+            "speed": 10,
+            "temperature": 11,
+            "mass": 12,
+        }
+
+    def test_the_names_are_the_table_inverted(self) -> None:
+        assert dict(AXIS_TYPE_NAMES) == {code: name for name, code in AXIS_TYPE_CODES.items()}
+
+    @pytest.mark.parametrize(
+        ("unit", "name"),
+        [
+            (u.um, "length"),
+            (u.m, "length"),
+            (u.Hz, "frequency"),
+            (u.keV, "energy"),
+            (u.s, "time"),
+            (u.arcsec, "angle"),
+            (u.deg, "angle"),
+            (u.dimensionless_unscaled, "dimensionless"),
+            (u.m**-1, "wavenumber"),
+            (u.km / u.s, "speed"),
+            (u.K, "temperature"),
+            (u.kg, "mass"),
+            (u.Jy, "unknown"),
+            (None, "unknown"),
+        ],
+    )
+    def test_the_code_comes_from_the_unit(self, unit: Any, name: str) -> None:
+        assert axis_type_code(unit) == AXIS_TYPE_CODES[name]
+
+    def test_a_kind_declaring_inverse_radians_gets_the_spatial_frequency_code(self) -> None:
+        """The one case astropy cannot name: ``u`` is dimensionless or ``1/rad``.
+
+        A radian is dimensionless to astropy, so ``u`` in wavelengths is
+        ``dimensionless`` and ``u`` in ``rad**-1`` is ``unknown`` -- the same
+        quantity under two names, neither of them right. The container kind
+        settles it by declaring ``rad**-1`` in its axis spec.
+        """
+        spec = VisibilitySet.AXES[0]
+        spatial = AXIS_TYPE_CODES["spatial frequency"]
+        assert axis_type_code(u.dimensionless_unscaled, spec=spec) == spatial
+        assert axis_type_code(u.rad**-1, spec=spec) == spatial
+        # A baseline in metres really is a length, and is coded as one.
+        assert axis_type_code(u.m, spec=spec) == AXIS_TYPE_CODES["length"]
+
+    def test_every_shipped_kind_codes_its_own_axes(self) -> None:
+        expected = {
+            "spectrum": ("length",),
+            "photometry": ("length",),
+            "light_curve": ("time",),
+            "image": ("angle", "angle"),
+            "cube": ("angle", "angle", "length"),
+            "visibilities": ("spatial frequency", "spatial frequency", "length"),
+        }
+        for name, names in expected.items():
+            record = EncodingLayout.from_datasets(one(name)).datasets[0]
+            assert record.axis_type_names == names, name
+            assert record.axis_codes == tuple(AXIS_TYPE_CODES[entry] for entry in names)
+
+
+class TestTheAxisIdentityColumns:
+    """§3 group 4: one code per coordinate column, on every row of its dataset."""
+
+    def test_a_mixed_kind_layout_tells_column_zero_apart(self) -> None:
+        """The whole point (``encoding.md`` §9 item 6, closed here).
+
+        An ``Image``'s column 0 is ``x``, an angle on the sky; a
+        ``VisibilitySet``'s column 0 is ``u``, a spatial frequency. Before
+        W5.11 a network saw the two in one input slot with nothing to tell
+        them apart; now ``unpack`` hands it the codes.
+        """
+        datasets = {"img": _Holder(an_image()), "vis": _Holder(visibilities())}
+        layout = EncodingLayout.from_datasets(datasets)
+        view = unpack(np.asarray(encode_observations(datasets, layout=layout).values), layout)
+        image, vis = view.per_dataset
+        assert (image.label, vis.label) == ("img", "vis")
+        image_codes = np.asarray(image.axis_identity)[0]
+        vis_codes = np.asarray(vis.axis_identity)[0]
+        # Column 0 is an angle on one dataset's rows and a spatial frequency
+        # on the other's -- two different numbers in the same input slot.
+        assert set(image_codes[:, 0].tolist()) == {float(AXIS_TYPE_CODES["angle"])}
+        assert set(vis_codes[:, 0].tolist()) == {float(AXIS_TYPE_CODES["spatial frequency"])}
+        assert image_codes[0, 0] != vis_codes[0, 0]
+        # And the image's third column is padding, not an axis it happens to
+        # share with the visibility set's spectral axis.
+        assert set(image_codes[:, 2].tolist()) == {float(AXIS_TYPE_CODES["absent"])}
+        assert set(vis_codes[:, 2].tolist()) == {float(AXIS_TYPE_CODES["length"])}
+
+    def test_the_group_is_as_wide_as_the_coordinate_group(self) -> None:
+        layout = EncodingLayout.from_datasets({"cube": _Holder(a_cube())})
+        assert layout.group("axis_identity").width == 3
+        assert layout.group("coordinate").width == 3
+
+    def test_the_codes_are_features_a_network_sees(self) -> None:
+        datasets = {"img": _Holder(an_image()), "vis": _Holder(visibilities())}
+        layout = EncodingLayout.from_datasets(datasets)
+        view = unpack(np.asarray(encode_observations(datasets, layout=layout).values), layout)
+        # features is every non-mask group, so the codes travel with the rest
+        # and no wrapper has to be taught about them.
+        assert view.features.shape[-1] == layout.columns_total - 1
+        group = layout.group("axis_identity")
+        assert group.offset < layout.group("mask").offset
+        assert np.array_equal(
+            np.asarray(view.features)[..., group.offset : group.stop],
+            np.asarray(view.axis_identity),
+        )
+
+    def test_the_codes_are_in_the_layout_and_therefore_in_the_hash(self) -> None:
+        """Two collections whose column 0 differs are two layouts.
+
+        What this pins is that the codes are part of the record ``to_dict``
+        hashes and that ``compare`` names them when they differ.
+        """
+        layout = EncodingLayout.from_datasets({"vis": _Holder(visibilities())})
+        assert layout.to_dict()["datasets"][0]["axis_codes"] == [8, 8, 3]
+        relabelled = dataclasses.replace(
+            layout.datasets[0], axis_codes=(AXIS_TYPE_CODES["angle"], 8, 3)
+        )
+        other = dataclasses.replace(layout, datasets=(relabelled,))
+        assert other.hash != layout.hash
+        assert any("axis_codes" in line for line in layout.compare(other))
+
+
+class TestThePreW511Refusals:
+    """A record from before the axis identity is refused **by name**."""
+
+    def test_from_dict_names_the_axis_identity_rather_than_the_hash(self) -> None:
+        layout = EncodingLayout.from_datasets(one("spectrum"))
+        stale = layout.to_dict()
+        stale["version"] = 1
+        for record in stale["datasets"]:
+            record.pop("axis_codes")
+        with pytest.raises(EncodingError, match="axis-identity") as raised:
+            EncodingLayout.from_dict(stale)
+        assert "W5.11" in str(raised.value)
+        assert "retrain" in str(raised.value)
+
+    def test_a_record_missing_only_the_codes_is_refused_too(self) -> None:
+        """The version alone is not the check: a hand-built record has none."""
+        layout = EncodingLayout.from_datasets(one("spectrum"))
+        stale = layout.to_dict()
+        for record in stale["datasets"]:
+            record.pop("axis_codes")
+        assert axis_identity_complaint(stale) is not None
+
+    def test_a_current_record_is_not_refused(self) -> None:
+        layout = EncodingLayout.from_datasets(one("spectrum"))
+        assert axis_identity_complaint(layout.to_dict()) is None
+        assert EncodingLayout.from_dict(layout.to_dict()).hash == layout.hash
+
+    def test_the_encoding_version_is_two(self) -> None:
+        assert ENCODING_VERSION == 2
+        assert EncodingLayout.from_datasets(one("spectrum")).version == 2
