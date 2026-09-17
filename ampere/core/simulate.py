@@ -64,6 +64,7 @@ import functools
 import multiprocessing
 import os
 import time
+import types
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Protocol, TypeVar, runtime_checkable
 
@@ -80,10 +81,15 @@ __all__ = [
     "ChunkHook",
     "ChunkSharder",
     "ContainerBatch",
+    "ContextPrior",
     "ExecutionFailure",
     "Executor",
+    "ObservationContext",
     "ProcessExecutor",
+    "ScaledSigma",
     "SerialExecutor",
+    "SigmaArchive",
+    "SignalToNoise",
     "SimulationBatch",
     "ThreadExecutor",
     "chunk_bounds",
@@ -868,6 +874,351 @@ def chunk_bounds(count: int, chunk_size: int | None) -> list[tuple[int, int]]:
             f"got {chunk_size!r}. Pass chunk_size=None for a single chunk."
         )
     return [(start, min(start + size, count)) for start in range(0, count, size)]
+
+
+# ---------------------------------------------------------------------------
+# The observation context (W5.10)
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass(frozen=True)
+class ObservationContext:
+    """One draw's observation context: a sigma pattern, and what drew it.
+
+    The **reserved** ``simulate_many(context=...)`` slot, filled by W5.10.
+    ``inference.md`` §13's simulator draws each observation under the observed
+    container's own uncertainties; a posterior trained on that budget has seen
+    exactly one error bar per sample and is amortised over *noise
+    realisations* but not over *noise levels*. A context prior varies them, and
+    this is one draw of it.
+
+    Two fields, and the split is the point.
+
+    ``sigma``
+        Label to a sigma array of the observed container's shape, in the
+        container's own value unit. It is substituted for the container's
+        uncertainty at :meth:`~ampere.core.dataset.Dataset.draw_observation`,
+        so every family's ``sample`` receives ``NoiseParams`` built from *it*
+        rather than from the observation — which is what makes this a draw
+        from a different noise level and not a rescaling applied afterwards.
+        A label the mapping omits keeps the observed container's own sigma.
+    ``record``
+        A small **JSON-safe** description of what the prior drew — a factor,
+        an archive index, a signal-to-noise ratio. This is what a training set
+        stores per draw (:data:`~ampere.results.training.CONTEXT_GROUP`) and
+        what a reader needs to answer "which context was this draw made
+        under?". The sigma arrays themselves are not stored twice: a drawn
+        observation *carries* its uncertainties, and they are already in the
+        file.
+
+    Plain data with no generator and no prior inside it, so it pickles to a
+    worker process like every other part of a ``_DrawRequest``.
+    """
+
+    sigma: Mapping[str, np.ndarray]
+    record: Mapping[str, Any]
+
+    def __post_init__(self) -> None:
+        frozen: dict[str, np.ndarray] = {}
+        for label, values in dict(self.sigma).items():
+            array = np.array(np.asarray(values, dtype=float), copy=True)
+            array.setflags(write=False)
+            frozen[str(label)] = array
+        object.__setattr__(self, "sigma", types.MappingProxyType(frozen))
+        object.__setattr__(self, "record", types.MappingProxyType(dict(self.record)))
+
+    def for_label(self, label: str) -> np.ndarray | None:
+        """This dataset's sigma, or ``None`` where the context does not vary it."""
+        return self.sigma.get(label)
+
+    def to_dict(self) -> dict[str, Any]:
+        """The JSON-safe record a training set stores (the sigma arrays excluded)."""
+        return dict(self.record)
+
+
+@runtime_checkable
+class ContextPrior(Protocol):
+    """What ``simulate_many(context=...)`` draws each simulation's context from.
+
+    Two methods, and no more: a prior that can draw a context and describe
+    itself is everything the simulation path, the training set's provenance
+    and an SBI run's attrs need.
+
+    Implementations ship in this module — :class:`ScaledSigma`,
+    :class:`SigmaArchive`, :class:`SignalToNoise` — and a user's own is any
+    object with these two methods, checked structurally
+    (``runtime_checkable``) rather than by inheritance, exactly as
+    :class:`Executor` is.
+
+    **The generator is given, never created.** ``inference.md`` §12: a context
+    prior draws from the run's own seed derivation, so a seeded problem's
+    budget is reproducible with contexts exactly as it is without them. An
+    implementation that reaches for ``np.random.default_rng()`` breaks that,
+    silently.
+    """
+
+    def draw(
+        self, rng: np.random.Generator, observed: Mapping[str, FunctionSamples]
+    ) -> ObservationContext:
+        """One draw's context, given *observed*, the problem's own containers."""
+        ...  # pragma: no cover - protocol
+
+    def describe(self) -> Mapping[str, Any]:
+        """A JSON-safe description of **this prior**, for the provenance."""
+        ...  # pragma: no cover - protocol
+
+
+def _observed_sigma(container: FunctionSamples, label: str, *, prior: str) -> np.ndarray:
+    """The observed sigma a context prior scales, refused by name where there is none."""
+    if container.uncertainty is None:
+        raise DatasetError(
+            f"the {prior} context prior varies dataset {label!r}'s uncertainties and that "
+            f"dataset's observed container has none. A context prior over sigma needs an observed "
+            f"sigma pattern to work from; give the dataset uncertainties, or use a context prior "
+            f"that builds sigma from the values (SignalToNoise) instead."
+        )
+    return np.asarray(container.uncertainty, dtype=float)
+
+
+def _draw_factor(rng: np.random.Generator, low: float, high: float, *, log: bool) -> float:
+    """One factor in ``[low, high]``, log-uniform by default."""
+    if low == high:
+        return float(low)
+    if log:
+        return float(np.exp(rng.uniform(np.log(low), np.log(high))))
+    return float(rng.uniform(low, high))
+
+
+@dataclasses.dataclass(frozen=True)
+class ScaledSigma:
+    """Scaled copies of the **observed** sigma pattern: the simplest context prior.
+
+    One factor per draw, applied to every dataset's uncertainties, so the
+    *shape* of the error bars across a spectrum is the observation's own and
+    only their overall level varies. That is the context a network most often
+    needs to be amortised over — the same instrument on a brighter or a
+    fainter night — and the one whose coverage is easiest to state: a
+    posterior trained under ``ScaledSigma(0.5, 2.0)`` is being asked to hold
+    for observations between half and twice the observed noise, and W5.10's
+    acceptance row is exactly that claim and its failure outside the range.
+
+    Parameters
+    ----------
+    low, high
+        The factor range. ``low == high`` is a fixed rescale, which is what a
+        calibration check at one noise level uses.
+    log
+        Draw the factor log-uniformly (the default: a factor is a scale).
+    per_dataset
+        Draw an independent factor for each dataset rather than one shared by
+        all. Off by default, because the usual physical statement is "this
+        observation is noisier", not "these instruments are independently
+        noisier".
+    """
+
+    low: float = 0.5
+    high: float = 2.0
+    log: bool = True
+    per_dataset: bool = False
+
+    def __post_init__(self) -> None:
+        if not (self.low > 0.0 and self.high >= self.low):
+            raise DatasetError(
+                f"ScaledSigma needs 0 < low <= high (a sigma factor is a positive scale), got "
+                f"low={self.low!r}, high={self.high!r}."
+            )
+
+    def draw(
+        self, rng: np.random.Generator, observed: Mapping[str, FunctionSamples]
+    ) -> ObservationContext:
+        """One factor (or one per dataset), applied to the observed sigma."""
+        shared = _draw_factor(rng, self.low, self.high, log=self.log)
+        sigma: dict[str, np.ndarray] = {}
+        factors: dict[str, float] = {}
+        for label, container in observed.items():
+            factor = (
+                _draw_factor(rng, self.low, self.high, log=self.log) if self.per_dataset else shared
+            )
+            factors[label] = factor
+            sigma[label] = factor * _observed_sigma(container, label, prior="ScaledSigma")
+        record: dict[str, Any] = {"kind": "scaled_sigma"}
+        if self.per_dataset:
+            record["factors"] = factors
+        else:
+            record["factor"] = shared
+        return ObservationContext(sigma=sigma, record=record)
+
+    def describe(self) -> Mapping[str, Any]:
+        """This prior, as the provenance records it."""
+        return {
+            "kind": "scaled_sigma",
+            "low": float(self.low),
+            "high": float(self.high),
+            "log": bool(self.log),
+            "per_dataset": bool(self.per_dataset),
+        }
+
+
+@dataclasses.dataclass(frozen=True)
+class SigmaArchive:
+    """An archive of **real** error arrays, drawn from uniformly.
+
+    The honest context prior where the noise has structure a factor cannot
+    reproduce — a detector's read-noise floor beside a photon-limited
+    continuum, a night with one bad order — and the one a real survey can
+    actually supply: the error columns of the observations it already has.
+
+    Parameters
+    ----------
+    entries
+        A sequence of contexts. Each entry is a mapping of dataset label to a
+        sigma array of that dataset's observed shape. A label an entry omits keeps
+        the observed container's own sigma, so an archive over one dataset of a
+        two-dataset problem is written as such rather than padded.
+    names
+        Optional one name per entry (a file name, a night, a programme id),
+        recorded per draw so a stored budget says *which* archived error array
+        each simulation used. Indices are recorded either way.
+    """
+
+    entries: Sequence[Mapping[str, np.ndarray]]
+    names: Sequence[str] | None = None
+
+    def __post_init__(self) -> None:
+        if not len(self.entries):
+            raise DatasetError(
+                "SigmaArchive is an archive of real error arrays and this one is empty; give it "
+                "at least one entry, or use ScaledSigma to vary the observed sigma instead."
+            )
+        if self.names is not None and len(self.names) != len(self.entries):
+            raise DatasetError(
+                f"SigmaArchive was given {len(self.entries)} entry(s) and "
+                f"{len(self.names)} name(s); there must be one name per entry or none at all."
+            )
+
+    def draw(
+        self, rng: np.random.Generator, observed: Mapping[str, FunctionSamples]
+    ) -> ObservationContext:
+        """One archived error array per draw, uniformly over the archive."""
+        index = int(rng.integers(len(self.entries)))
+        entry = self.entries[index]
+        sigma: dict[str, np.ndarray] = {}
+        for label, values in entry.items():
+            if label not in observed:
+                raise DatasetError(
+                    f"SigmaArchive entry {index} carries sigma for dataset {label!r}, which this "
+                    f"problem does not have; its datasets are {sorted(observed)}."
+                )
+            array = np.asarray(values, dtype=float)
+            expected = np.asarray(observed[label].values).shape
+            if array.shape != expected:
+                raise DatasetError(
+                    f"SigmaArchive entry {index}: dataset {label!r}'s sigma array has shape "
+                    f"{array.shape} and the observed container has shape {expected}. An "
+                    f"archived error array stands in for the observation's own, so it has to "
+                    f"have the observation's shape."
+                )
+            sigma[label] = array
+        record: dict[str, Any] = {"kind": "sigma_archive", "index": index}
+        if self.names is not None:
+            record["name"] = str(self.names[index])
+        return ObservationContext(sigma=sigma, record=record)
+
+    def describe(self) -> Mapping[str, Any]:
+        """This prior, as the provenance records it.
+
+        The arrays are **not** described: an archive is data, and a provenance
+        attribute that carried it would put a survey's error columns in every
+        run's attrs. Its size, its labels and its names are what identify it.
+        """
+        found: dict[str, Any] = {
+            "kind": "sigma_archive",
+            "entries": len(self.entries),
+            "labels": sorted({label for entry in self.entries for label in entry}),
+        }
+        if self.names is not None:
+            found["names"] = [str(name) for name in self.names]
+        return found
+
+
+@dataclasses.dataclass(frozen=True)
+class SignalToNoise:
+    """A parametric S/N model: sigma from the *values*, at a drawn signal-to-noise.
+
+    The context prior for a survey that is specified rather than observed —
+    "this instrument reaches S/N 20 to 100 on a source like this" — and the
+    one that needs no observed uncertainties at all, which is why it is the
+    answer when a dataset has none.
+
+    sigma is ``|y| / snr`` per sample, with a **floor** of
+    ``floor * median(|y|) / snr`` so that a sample whose value is near zero
+    does not get a sigma of zero: the encoding refuses a retained sample whose
+    sigma is not strictly positive (``encoding.md`` §6), and a likelihood that
+    divides by it would not survive one either.
+
+    Parameters
+    ----------
+    low, high
+        The signal-to-noise range. ``low == high`` is a fixed S/N.
+    log
+        Draw log-uniformly (the default: S/N is a ratio).
+    floor
+        The floor, as a fraction of the median ``|y|``. ``0`` removes it and
+        is refused where it would produce a zero sigma, by the encoding, by name.
+    reference
+        ``"values"`` (the default) puts sigma proportional to ``|y|``, a constant fractional
+        error; ``"median"`` puts one sigma on every sample, ``median(|y|) / snr``,
+        which is the flat error bar of a background-limited observation.
+    """
+
+    low: float = 10.0
+    high: float = 100.0
+    log: bool = True
+    floor: float = 1e-3
+    reference: str = "values"
+
+    def __post_init__(self) -> None:
+        if not (self.low > 0.0 and self.high >= self.low):
+            raise DatasetError(
+                f"SignalToNoise needs 0 < low <= high (a signal-to-noise ratio is positive), "
+                f"got low={self.low!r}, high={self.high!r}."
+            )
+        if self.reference not in ("values", "median"):
+            raise DatasetError(
+                f"SignalToNoise's reference= is 'values' (sigma proportional to |y|, a "
+                f"constant fractional error) or 'median' (one flat sigma, the "
+                f"background-limited case), got {self.reference!r}."
+            )
+
+    def draw(
+        self, rng: np.random.Generator, observed: Mapping[str, FunctionSamples]
+    ) -> ObservationContext:
+        """One S/N per draw, turned into a sigma array per dataset."""
+        snr = _draw_factor(rng, self.low, self.high, log=self.log)
+        sigma: dict[str, np.ndarray] = {}
+        for label, container in observed.items():
+            magnitude = np.abs(np.asarray(container.values, dtype=float))
+            finite = magnitude[np.isfinite(magnitude)]
+            median = float(np.median(finite)) if finite.size else 1.0
+            if not (median > 0.0):
+                median = 1.0
+            if self.reference == "median":
+                sigma[label] = np.full(magnitude.shape, median / snr)
+                continue
+            floor = float(self.floor) * median
+            sigma[label] = np.maximum(magnitude, floor) / snr
+        return ObservationContext(sigma=sigma, record={"kind": "signal_to_noise", "snr": snr})
+
+    def describe(self) -> Mapping[str, Any]:
+        """This prior, as the provenance records it."""
+        return {
+            "kind": "signal_to_noise",
+            "low": float(self.low),
+            "high": float(self.high),
+            "log": bool(self.log),
+            "floor": float(self.floor),
+            "reference": str(self.reference),
+        }
 
 
 # ---------------------------------------------------------------------------

@@ -20,7 +20,15 @@ root attrs            :func:`~ampere.results.provenance.provenance_attrs` —
 ``sample_stats``      ``failed`` and the failure record, per draw
 ``observations``      *(added W2.8)* the noisy draws, one subgroup per
                       dataset label, when the budget drew any
+``context``           *(added W5.10)* one ``record`` variable: the per-draw
+                      observation context as JSON, when the budget was drawn
+                      under a context prior
 ===================== ======================================================
+
+Both of the last two are **optional groups**, written only when the budget
+has them, which is why neither cost a ``TRAINING_SET_SCHEMA_VERSION`` bump: a
+reader of an older file finds them absent, exactly as it finds
+``observations`` absent from a budget drawn with ``observe=False``.
 
 Three properties are why the format is netCDF and not JSON or a pickle, and
 each of them is a decision the writer has to keep true rather than a fact about
@@ -88,10 +96,16 @@ from ampere.core.results_schema import FunctionSamples, ModelResult
 from ampere.core.simulate import SimulationBatch
 
 from .emission import SAMPLE_STATS_GROUP, _container_dims
-from .provenance import ATTR_PREFIX, PROVENANCE_SCHEMA_VERSION, provenance_attrs
+from .provenance import (
+    ATTR_PREFIX,
+    PROVENANCE_SCHEMA_VERSION,
+    canonical_json,
+    provenance_attrs,
+)
 from .serialisation import CONTAINER_SCHEMA_VERSION, container_from_dict
 
 __all__ = [
+    "CONTEXT_GROUP",
     "COORDINATES_GROUP",
     "OBSERVATIONS_GROUP",
     "SAMPLE_DIM",
@@ -112,6 +126,16 @@ THETA_GROUP = "theta"
 
 #: Every channel's coordinate arrays, stored once for the whole set.
 COORDINATES_GROUP = "coordinates"
+
+#: *(added W5.10)* One variable, ``record``: the per-draw observation context
+#: as canonical JSON, written only for a budget simulated with a context prior
+#: (``simulate_many(context=...)``). The sigma arrays themselves are **not**
+#: stored here — a drawn observation carries its own uncertainties and they are
+#: already in the ``observations`` group — so what this group adds is the one
+#: thing the arrays cannot say: *which* draw of the context prior produced
+#: them. The prior itself is in the root attrs
+#: (``ampere_simulation_context``), because it is a property of the budget.
+CONTEXT_GROUP = "context"
 
 # SAMPLE_STATS_GROUP ("failed" and the failure record, per draw) is defined
 # once in ampere.results.emission and imported above, so the two run-record
@@ -482,6 +506,7 @@ def append_training_set(
             f"set."
         )
     _check_encoding_layout(existing)
+    _check_context(existing, batch)
     offset = int(existing.attrs.get(f"{ATTR_PREFIX}samples", 0))
     slots = _slots_from(batch)
     if slots:
@@ -533,6 +558,37 @@ def _check_encoding_layout(existing: Any) -> None:
         )
 
 
+def _check_context(existing: Any, batch: Sequence[Simulation]) -> None:
+    """Refuse a batch whose observation context disagrees with the file's (**W5.10**).
+
+    A training set is one budget. Half of it drawn under a context prior and
+    half at the observation's own uncertainties is two budgets in one file,
+    and a network trained on the union would be amortised over a noise
+    distribution that is neither of them — the same stale-artefact trap the
+    spec and model hashes are checked for, arriving by the context's door.
+    The mismatch is refused in both directions, because both are the same
+    mistake seen from either end.
+    """
+    stored = CONTEXT_GROUP in existing.children
+    incoming = any(simulation.context is not None for simulation in batch)
+    if stored == incoming:
+        return
+    if stored:
+        raise ResultsError(
+            "this training set was drawn under an observation context (its 'context' group "
+            "records one per draw) and this batch was not. A set is one budget: appending would "
+            "leave a file half of whose rows came from a context prior and half from the "
+            "observation's own uncertainties, and a network trained on the union would be "
+            "amortised over neither distribution. Simulate the batch with the same context=, or "
+            "write a new set."
+        )
+    raise ResultsError(
+        "this batch was drawn under an observation context and this training set was not. A "
+        "set is one budget (see the mirror of this message), so appending would put two noise "
+        "distributions in one file under one provenance. Write a new set."
+    )
+
+
 def _slots_from(batch: Sequence[Simulation]) -> dict[str, _Slot]:
     """The slots a batch implies, checked for consistency across its samples."""
     slots: dict[str, _Slot] = {}
@@ -571,6 +627,9 @@ def _tree_from(
         THETA_GROUP: xarray.Dataset(_theta_variables(batch, problem)),
         SAMPLE_STATS_GROUP: xarray.Dataset(_sample_stats(batch)),
     }
+    contexts = _context_variables(batch)
+    if contexts is not None:
+        groups[CONTEXT_GROUP] = xarray.Dataset(contexts)
     coordinates: dict[str, Any] = {}
     for path, slot in slots.items():
         groups[path] = _slot_dataset(xarray, slot, batch, count)
@@ -595,6 +654,40 @@ def _tree_from(
         )
     )
     return tree
+
+
+def _context_variables(batch: Sequence[Simulation]) -> dict[str, Any] | None:
+    """The ``context`` group's one variable, or ``None`` for a budget without one.
+
+    **W5.10.** One JSON string per draw — what the context prior drew for that
+    simulation (:attr:`ampere.core.simulate.ObservationContext.record`) — and
+    an empty string for a draw made at the observation's own uncertainties, so
+    a budget in which only some draws carry a context is still one rectangular
+    variable. The sigma arrays are deliberately not written: a drawn
+    observation carries its own uncertainties and the ``observations`` group
+    already holds them, so storing them twice would double a budget's size to
+    say the same thing.
+    """
+    records = [
+        {} if simulation.context is None else dict(simulation.context.to_dict())
+        for simulation in batch
+    ]
+    if not any(records):
+        return None
+    return {
+        "record": (
+            SAMPLE_DIM,
+            np.array(
+                # canonical_json rather than json.dumps: it is the recipe every
+                # other ampere record uses, it normalises a numpy scalar a
+                # user's prior put in its record, and it **refuses by name**
+                # anything it cannot represent -- which is the right answer for
+                # a context record that could not be read back.
+                [canonical_json(dict(record)) if record else "" for record in records],
+                dtype=object,
+            ).astype(str),
+        )
+    }
 
 
 def _theta_variables(batch: Sequence[Simulation], problem: FittingProblem) -> dict[str, Any]:
@@ -772,6 +865,12 @@ class TrainingSet:
         Model-channel paths, in file order (``"model.blue"``).
     observed
         Dataset labels whose observations were carried, or an empty tuple.
+    contexts
+        *(W5.10)* One observation-context record per draw — what the context
+        prior drew for that simulation — or an empty tuple for a budget
+        simulated at the observations' own uncertainties. ``None`` in a slot
+        means that draw carried no context. The *prior* is in
+        ``attrs['ampere_simulation_context']``.
     """
 
     attrs: Mapping[str, Any]
@@ -780,6 +879,7 @@ class TrainingSet:
     failures: tuple[Mapping[str, Any] | None, ...]
     channels: tuple[str, ...]
     observed: tuple[str, ...]
+    contexts: tuple[Mapping[str, Any] | None, ...] = ()
     _groups: Mapping[str, Any] = dataclasses.field(repr=False, default_factory=dict)
     _coordinates: Any = dataclasses.field(repr=False, default=None)
 
@@ -840,6 +940,8 @@ class TrainingSet:
         record = self.failures[index]
         if record is not None:
             pair["failure"] = dict(record)
+        if index < len(self.contexts) and self.contexts[index] is not None:
+            pair["context"] = dict(self.contexts[index] or {})
         return pair
 
     def _container(self, path: str, index: int) -> FunctionSamples:
@@ -871,7 +973,14 @@ def read_training_set(path: str | Path, *, engine: str | None = None) -> Trainin
     groups = {
         str(name): tree[name].dataset
         for name in tree.children
-        if name not in (THETA_GROUP, SAMPLE_STATS_GROUP, COORDINATES_GROUP, OBSERVATIONS_GROUP)
+        if name
+        not in (
+            THETA_GROUP,
+            SAMPLE_STATS_GROUP,
+            COORDINATES_GROUP,
+            OBSERVATIONS_GROUP,
+            CONTEXT_GROUP,
+        )
     }
     observed: list[str] = []
     if OBSERVATIONS_GROUP in tree.children:
@@ -882,6 +991,7 @@ def read_training_set(path: str | Path, *, engine: str | None = None) -> Trainin
     stats = tree[SAMPLE_STATS_GROUP].dataset
     failed = np.asarray(stats["failed"].values).astype(bool)
     return TrainingSet(
+        contexts=_context_records(tree),
         attrs=dict(tree.attrs),
         theta={
             str(name): np.asarray(tree[THETA_GROUP][name].values)
@@ -894,6 +1004,26 @@ def read_training_set(path: str | Path, *, engine: str | None = None) -> Trainin
         _groups=groups,
         _coordinates=coordinates,
     )
+
+
+def _context_records(tree: Any) -> tuple[Mapping[str, Any] | None, ...]:
+    """The ``context`` group read back, one record per draw (**W5.10**).
+
+    An empty tuple for a file written without one, and ``None`` in the slot of
+    a draw that carried none, so ``contexts[i] is None`` reads as "this draw
+    was made at the observation's own uncertainties" rather than as "the file
+    forgot".
+    """
+    if CONTEXT_GROUP not in tree.children:
+        return ()
+    dataset = tree[CONTEXT_GROUP].dataset
+    if "record" not in dataset.variables:  # pragma: no cover - a hand-edited file
+        return ()
+    found: list[Mapping[str, Any] | None] = []
+    for raw in np.asarray(dataset["record"].values):
+        text = str(raw)
+        found.append(json.loads(text) if text else None)
+    return tuple(found)
 
 
 def _failure_records(stats: Any, failed: np.ndarray) -> list[Mapping[str, Any] | None]:
