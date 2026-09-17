@@ -40,6 +40,7 @@ from ampere.core import (
     GaussianFamily,
     Instrument,
     Likelihood,
+    RotationCoupling,
     TimeSeries,
     negotiate,
 )
@@ -359,3 +360,310 @@ class TestTwoChannelsOneModel:
         dense_lp = dense.log_prob(predicted, observed, values={})
         quasisep_lp = quasisep.log_prob(predicted, observed, values={})
         assert abs(dense_lp - quasisep_lp) < tolerances.cross_solver
+
+
+# ---------------------------------------------------------------------------
+# Joint noise over the two channels (W5.9)
+# ---------------------------------------------------------------------------
+
+#: The coupling every joint row below is evaluated at: an error elongated
+#: along a position angle of 0.7 rad with semi-axis variances a factor of nine
+#: apart, which is a systematic two independent GPs cannot express at all.
+COUPLING: dict[str, float] = {
+    "angle": 0.7,
+    "log_variance_0": float(np.log(9.0e-4)),
+    "log_variance_1": float(np.log(1.0e-4)),
+}
+
+#: The shared-grid kernel. Amplitude **fixed** at one: ``B (x) (a^2 K) =
+#: (a^2 B) (x) K``, so a free amplitude beside a free ``B`` is the same degree
+#: of freedom twice and ``JointGaussianProcessNoise`` refuses it by name.
+JOINT_KERNEL = CovarianceSpec(KernelFamily.MATERN32, 1.0, 180.0, axes=("time",))
+
+
+def joint_or_skip(backend: ConformanceBackend) -> None:
+    """Skip a joint row on a backend that has not written the noise model."""
+    if not backend.capabilities.joint_noise:
+        pytest.skip(
+            f"{backend.name} declares no joint noise model "
+            f"(BackendCapabilities.joint_noise), so the shared-grid intrinsic coregionalisation "
+            f"model W5.9 adds is not there."
+        )
+
+
+def kronecker_covariance(
+    backend: ConformanceBackend, noise: Any, coordinates: np.ndarray, variance: np.ndarray
+) -> np.ndarray:
+    """``B (x) K_x + I_T (x) diag(variance)``, materialised — the definition of the answer.
+
+    Channel-major: block ``(s, t)`` is ``B[s, t] K_x``. Built from the
+    *declarations* — the coupling's own :meth:`~ampere.core.ChannelCoupling.
+    matrix` and the kernel's own ``matrix`` — so this is not a second call to
+    the thing under test but the same declaration assembled the obvious,
+    ``O((NT)^3)`` way.
+    """
+    coupling = np.asarray(backend.to_numpy(noise.coupling_matrix(COUPLING)), dtype=float)
+    kernel = np.asarray(
+        backend.to_numpy(noise.kernel.matrix(coordinates, coordinates, noise.kernel.resolve({}))),
+        dtype=float,
+    )
+    channels = coupling.shape[0]
+    return np.kron(coupling, kernel) + np.eye(channels * kernel.shape[0]) * np.tile(
+        variance, channels
+    )
+
+
+def dense_log_density(covariance: np.ndarray, residual: np.ndarray) -> float:
+    """``log N(residual; 0, covariance)`` by a plain numpy Cholesky."""
+    factor = np.linalg.cholesky(covariance)
+    solved = np.linalg.solve(covariance, residual)
+    log_determinant = 2.0 * float(np.sum(np.log(np.diag(factor))))
+    return float(
+        -0.5 * (float(residual @ solved) + log_determinant + residual.size * np.log(2.0 * np.pi))
+    )
+
+
+class TestJointChannelNoise:
+    """One correlated process over ``ra`` and ``dec``: ``K = B (x) K_x`` (*W5.9*)."""
+
+    def _pieces(
+        self,
+        backend: ConformanceBackend,
+        pieces: AstrometryPieces,
+        *,
+        solver: SolverKind = SolverKind.DENSE,
+        coupling: Any = None,
+        kernel: CovarianceSpec | None = None,
+    ) -> tuple[FittingProblem, Any, np.ndarray, np.ndarray]:
+        """A joint problem, its noise model, the residual block and the variance."""
+        ra_instrument = chain(pieces, observed_channel("ra"), "ra", "astrom_ra")
+        dec_instrument = chain(pieces, observed_channel("dec"), "dec", "astrom_dec")
+        truth = orbit_model(pieces)
+        compiled = truth.compile_for(negotiate([ra_instrument, dec_instrument]))
+        result = compiled.evaluate()
+        noiseless = {
+            "ra": backend.to_numpy(ra_instrument(result).values).ravel(),
+            "dec": backend.to_numpy(dec_instrument(result).values).ravel(),
+        }
+        rng = np.random.default_rng(20260916)
+        observed = {
+            name: observed_channel(name, values + rng.normal(0.0, SIGMA, values.shape))
+            for name, values in noiseless.items()
+        }
+        joint = backend.joint_gp_noise(
+            backend.kernel(JOINT_KERNEL if kernel is None else kernel),
+            backend.gp_solver(solver),
+            datasets=("ra", "dec"),
+            coupling=RotationCoupling(*COUPLING.values()) if coupling is None else coupling,
+        )
+        model = pieces.reflex_orbit(
+            EPOCHS * u.day,
+            pmra=st.norm(0.0, 5.0),
+            pmdec=st.norm(0.0, 5.0),
+            period=ORBIT["period"],
+            phase=ORBIT["phase"],
+            amp_ra=ORBIT["amp_ra"],
+            amp_dec=ORBIT["amp_dec"],
+        )
+        datasets = DatasetCollection(
+            {
+                "ra": Dataset(
+                    observed["ra"],
+                    ra_instrument,
+                    likelihood=Likelihood(GaussianFamily(), backend.independent_noise()),
+                    label="ra",
+                ),
+                "dec": Dataset(
+                    observed["dec"],
+                    dec_instrument,
+                    likelihood=Likelihood(GaussianFamily(), backend.independent_noise()),
+                    label="dec",
+                ),
+            },
+            joint={"astrom": joint},
+        )
+        problem = FittingProblem(model, datasets, seed=20260916)
+        residual = np.concatenate(
+            [
+                np.asarray(observed[name].values, dtype=float).ravel() - noiseless[name]
+                for name in ("ra", "dec")
+            ]
+        )
+        variance = np.full(EPOCHS.size, SIGMA**2)
+        return problem, joint, residual, variance
+
+    def test_the_joint_density_matches_a_dense_kronecker_solve(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """The rotated ``T`` solves against ``B (x) K_x`` materialised and factorised."""
+        pieces = pieces_or_skip(backend)
+        joint_or_skip(backend)
+        problem, noise, residual, variance = self._pieces(backend, pieces)
+        coordinates = EPOCHS.reshape(-1, 1)
+        reference = dense_log_density(
+            kronecker_covariance(backend, noise, coordinates, variance), residual
+        )
+        got = noise.log_prob(
+            [residual[: EPOCHS.size], residual[EPOCHS.size :]],
+            variance,
+            coordinates,
+            COUPLING,
+        )
+        assert abs(got - reference) < tolerances.cross_solver * max(1.0, abs(reference))
+        # And the same number arrives through the composed problem, which is
+        # the thing a fit actually evaluates.
+        through = problem.log_likelihood(
+            {
+                "model.pmra": ORBIT["pmra"],
+                "model.pmdec": ORBIT["pmdec"],
+                "astrom.angle": COUPLING["angle"],
+                "astrom.log_variance_0": COUPLING["log_variance_0"],
+                "astrom.log_variance_1": COUPLING["log_variance_1"],
+            }
+        )
+        assert abs(through - reference) < tolerances.cross_solver * max(1.0, abs(reference))
+
+    def test_the_quasiseparable_solver_scores_the_same_joint_density(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """``QuasisepGP`` on the rotated outputs: the O(N) path this model keeps."""
+        pieces = pieces_or_skip(backend)
+        joint_or_skip(backend)
+        if SolverKind.QUASISEP not in backend.capabilities.solvers:
+            pytest.skip(f"{backend.name} declares no QuasisepGP solver.")
+        _, dense, residual, variance = self._pieces(backend, pieces)
+        _, quasisep, _, _ = self._pieces(backend, pieces, solver=SolverKind.QUASISEP)
+        coordinates = EPOCHS.reshape(-1, 1)
+        columns = [residual[: EPOCHS.size], residual[EPOCHS.size :]]
+        assert (
+            abs(
+                dense.log_prob(columns, variance, coordinates, COUPLING)
+                - quasisep.log_prob(columns, variance, coordinates, COUPLING)
+            )
+            < tolerances.cross_solver
+        )
+
+    def test_the_rotation_recovers_t_independent_solves(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """Scored as two ordinary scalar GPs on the rotated residuals, it is the same number.
+
+        The mechanism, checked rather than assumed: rotating by ``Q^T``
+        decouples the channels, so the joint density is the sum of ``T``
+        *ordinary* ``GaussianProcessNoise`` densities on the rotated residuals,
+        each with the kernel scaled by its own eigenvalue. This row builds
+        those ``T`` likelihoods from the shipped scalar noise model — no joint
+        machinery at all — and adds them up.
+        """
+        pieces = pieces_or_skip(backend)
+        joint_or_skip(backend)
+        _, noise, residual, variance = self._pieces(backend, pieces)
+        coordinates = EPOCHS.reshape(-1, 1)
+        columns = [residual[: EPOCHS.size], residual[EPOCHS.size :]]
+        eigenvalues, rotation = noise.eigen(COUPLING)
+        eigenvalues = np.asarray(backend.to_numpy(eigenvalues), dtype=float).ravel()
+        rotated = np.column_stack(columns) @ np.asarray(backend.to_numpy(rotation), dtype=float)
+        total = 0.0
+        for index, eigenvalue in enumerate(eigenvalues):
+            # k(0) is amplitude**2, so an eigenvalue of the coupling is an
+            # amplitude of its square root.
+            scalar = backend.gp_noise(
+                backend.kernel(
+                    CovarianceSpec(
+                        KernelFamily.MATERN32,
+                        float(np.sqrt(eigenvalue)),
+                        JOINT_KERNEL.length_scale,
+                        axes=("time",),
+                    )
+                ),
+                backend.gp_solver(SolverKind.DENSE),
+            )
+            likelihood = Likelihood(GaussianFamily(), scalar)
+            observed = observed_channel("ra", rotated[:, index])
+            predicted = observed_channel("ra", np.zeros(EPOCHS.size))
+            total += likelihood.log_prob(predicted, observed, values={})
+        got = noise.log_prob(columns, variance, coordinates, COUPLING)
+        assert abs(got - total) < tolerances.cross_solver * max(1.0, abs(total))
+
+    def test_an_identity_coupling_is_two_independent_noise_models(
+        self, backend: ConformanceBackend
+    ) -> None:
+        """``B = I``: **bit-identical** to two independent ``GaussianProcessNoise`` datasets.
+
+        Not "agrees to a tolerance". With ``B = I`` the rotation is the
+        identity and the eigenvalues are one, so every floating-point operation
+        the joint path performs is the one the scalar path performs, in the
+        same order — and any difference at all would mean the joint path had
+        introduced an operation that does not belong to the model.
+        """
+        pieces = pieces_or_skip(backend)
+        joint_or_skip(backend)
+        spec = CovarianceSpec(KernelFamily.MATERN32, 0.02, 180.0, axes=("time",))
+        _, noise, residual, variance = self._pieces(
+            backend,
+            pieces,
+            coupling=RotationCoupling(0.0, 0.0, 0.0),
+            kernel=spec,
+        )
+        columns = [residual[: EPOCHS.size], residual[EPOCHS.size :]]
+        got = noise.log_prob(
+            columns,
+            variance,
+            EPOCHS.reshape(-1, 1),
+            {"angle": 0.0, "log_variance_0": 0.0, "log_variance_1": 0.0},
+        )
+        separate = 0.0
+        for column in columns:
+            scalar = Likelihood(
+                GaussianFamily(),
+                backend.gp_noise(backend.kernel(spec), backend.gp_solver(SolverKind.DENSE)),
+            )
+            separate += scalar.log_prob(
+                observed_channel("ra", np.zeros(EPOCHS.size)),
+                observed_channel("ra", column),
+                values={},
+            )
+        assert got == separate
+
+    def test_simulate_draws_correlated_channels(self, backend: ConformanceBackend) -> None:
+        """The sample covariance of ``simulate(observe=True)`` against ``B (x) K_x``.
+
+        The row that catches the failure this whole model exists to prevent: a
+        draw taken channel by channel is a draw from a covariance whose
+        off-diagonal block is **zero**, and every marginal of it looks right.
+        So the statistic compared here is the whole ``2N x 2N`` covariance,
+        cross-channel block included, and the row also asserts that the block
+        is not zero — a run that had quietly dropped the correlation would pass
+        a marginal check and fail this one.
+        """
+        pieces = pieces_or_skip(backend)
+        joint_or_skip(backend)
+        problem, noise, _, variance = self._pieces(backend, pieces)
+        theta = {
+            "model.pmra": ORBIT["pmra"],
+            "model.pmdec": ORBIT["pmdec"],
+            "astrom.angle": COUPLING["angle"],
+            "astrom.log_variance_0": COUPLING["log_variance_0"],
+            "astrom.log_variance_1": COUPLING["log_variance_1"],
+        }
+        draws = 800
+        rows = np.empty((draws, 2 * EPOCHS.size))
+        simulations = problem.simulate_many(draws, values=[theta] * draws, observe=True)
+        for index, simulation in enumerate(simulations):
+            assert not simulation.failed
+            assert simulation.observations is not None
+            rows[index] = np.concatenate(
+                [
+                    np.asarray(simulation.observations[name].values, dtype=float).ravel()
+                    - np.asarray(simulation.predicted[name].values, dtype=float).ravel()
+                    for name in ("ra", "dec")
+                ]
+            )
+        expected = kronecker_covariance(backend, noise, EPOCHS.reshape(-1, 1), variance)
+        empirical = np.cov(rows, rowvar=False)
+        scale = float(np.max(np.abs(expected)))
+        error = float(np.max(np.abs(empirical - expected))) / scale
+        assert error < 0.25, f"sample covariance is {error:.3f} away from B (x) K_x"
+        # ... and the cross-channel block is genuinely there.
+        cross = empirical[: EPOCHS.size, EPOCHS.size :]
+        assert float(np.max(np.abs(cross))) > 0.2 * scale

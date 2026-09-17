@@ -313,6 +313,10 @@ markers = [
     # W5.5. The image study's longer runs (the 128x128 benchmark cell, the
     # full SBC count): the same reasoning as the line above.
     "image_full: the image study's full budget; run with `pytest -m image_full`",
+    # W5.9. The astrometry example's calibration study at the count where SBC
+    # has power (two arms x 48 refits, tens of minutes): the same reasoning as
+    # the three lines above, with a reduced-budget sibling that always runs.
+    "astrometry_full: the astrometry calibration study's full budget; run with `pytest -m astrometry_full`",
 ]
 
 # ---------------------------------------------------------------------------

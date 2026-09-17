@@ -280,7 +280,111 @@ comparable or tighter intervals than emcee — unsurprising given the
 gradient, and the same relationship :doc:`sed_composition` and
 :doc:`interferometry` both report.
 
-10. What the template now says, and where
+10. One correlated process over both channels (W5.9)
+-----------------------------------------------------------
+
+The design sketch this modality came from recorded a gap and dispositioned
+it to Phase 5: a **single** correlated noise process over RA and Dec
+together, rather than the two independent ones W4.9 shipped. W5.9 closes
+it, and astrometry is the first customer because this page's composition
+already has the shape the model needs — one evaluation producing two
+channels on one epoch grid.
+
+The model is the **shared-grid intrinsic coregionalisation model**::
+
+    K = B ⊗ K_x
+
+with ``K_x`` an ordinary :class:`~ampere.core.Matern32` along the epochs and
+``B`` a 2×2 positive-definite matrix saying how the two sky axes move
+together. ``B`` is declared in the coordinates the physics is stated in —
+:class:`~ampere.core.RotationCoupling` takes a position angle and two
+log-variances, so ``B`` is an error ellipse on the sky with a major axis, a
+minor axis and an orientation.
+
+Why this is not two GPs with tied hyperparameters
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Two independent GPs can reproduce each axis's *marginal* scatter exactly.
+What they cannot express is the **cross-covariance**: that the RA and Dec
+residuals at one epoch move together. A centroiding systematic with a
+preferred direction — the ordinary case for a ground-based astrometric
+solution — is almost entirely cross-covariance, so "two GPs with tied
+hyperparameters" is not an approximation of the joint model. It is a
+different model, which happens to agree about every marginal.
+
+Where it is declared, and why not on the likelihood
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A :class:`~ampere.core.Likelihood` scores one dataset and this scores two,
+so the joint noise model goes on the
+:class:`~ampere.core.DatasetCollection`::
+
+    DatasetCollection(
+        {"ra": Dataset(...), "dec": Dataset(...)},
+        joint={"astrom": JointGaussianProcessNoise(
+            Matern32(1.0, 150.0, axes=("time",)), QuasisepGP(),
+            datasets=("ra", "dec"),
+            coupling=RotationCoupling(angle_prior, variance_prior, variance_prior),
+        )},
+    )
+
+Each member dataset keeps a bare ``Likelihood(GaussianFamily())``. The group
+joins the joint parameter space as one further component, so its parameters
+are ``astrom.angle``, ``astrom.log_variance_0`` and
+``astrom.log_variance_1``, and it contributes **one** log-likelihood term
+under the label ``"astrom"`` in place of ``"ra"`` and ``"dec"``'s separate
+ones — the first use of ``DatasetCollection.contributions`` as something
+other than one term per dataset.
+
+It is still O(N)
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+Diagonalise ``B = Q Λ Qᵀ`` and rotate the two residual vectors by ``Qᵀ``.
+The rotated outputs are independent, each an ordinary scalar GP with
+covariance ``λ_s K_x + diag(σ²)``, so the joint density is two
+``QuasisepGP`` solves rather than one dense factorisation of a 2N×2N
+matrix. Exact, not approximate: ``tests/conformance/test_astrometry.py``
+scores the same residual both ways on every backend and holds them to the
+solver tolerance.
+
+One restriction follows from the rotation itself and is checked at
+composition: the two channels must carry the **same per-epoch
+uncertainties**. ``Qᵀ ⊗ I`` leaves ``diag(σ²)`` diagonal only where every
+channel's ``σ`` is the same vector; heteroscedasticity *along* the epoch
+grid is unaffected. Unequal per-channel errors, mismatched grids and the
+general LMC belong to the dense/reduced-rank follow-on
+(``likelihoods.md`` §15).
+
+What it buys: the calibration study
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``python -m examples.astrometry --sbc joint`` (and ``--sbc independent``)
+runs simulation-based calibration of each arm against data carrying an
+injected correlated centroiding systematic. What is ranked is the
+**orbital phase**, and the reason is the whole mechanism:
+
+* ``pmra`` enters only the ``ra`` channel and ``pmdec`` only ``dec``, so
+  each is constrained by one channel. Ignoring a correlation between two
+  channels that constrain *different* parameters throws information away,
+  which makes an interval too wide — conservative, not wrong.
+* The **phase** is shared: both channels measure it. There, ignoring the
+  correlation is double-counting — two error-laden estimates that move
+  together are combined as though they moved independently — and the
+  combined interval comes out narrower than the truth's own scatter.
+
+That is undercoverage, and it is what a cross-channel systematic does to
+every parameter a multi-channel instrument measures jointly.
+``tests/examples/test_astrometry_example.py`` pins the comparison.
+
+A note on the parameterisation. Adding ``π/2`` to the angle and exchanging
+the two log-variances gives the same ``B``, so the *matrix* is identified
+while the three parameters are identified only up to that relabelling —
+the label switching a mixture model has. The density is unaffected; the
+marginal on the angle is bimodal. Summarise ``B`` itself, or fix the angle
+where the instrument's own is known, which is what the calibration study
+does.
+
+11. What the template now says, and where
 -------------------------------------------------
 
 This section originally listed every gap, ambiguity or missing instruction
@@ -335,6 +439,5 @@ See also
 * :doc:`sed_composition` — the simple composition case both pages cite.
 * ``docs/design/modalities/astrometric_timeseries.md`` — the design sketch
   this item's ``ReflexOrbit`` and ``EpochSample`` are drawn from, including
-  the joint 2-vector GP gap dispositioned to Phase 5 (a single correlated
-  noise process over RA and Dec together, rather than the two independent
-  processes this item ships).
+  the joint 2-vector GP gap dispositioned to Phase 5. **W5.9 closed that
+  gap**; section 10 above is the result.

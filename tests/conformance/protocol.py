@@ -526,6 +526,14 @@ class BackendCapabilities:
     picklable: bool = True
     solvers: frozenset[SolverKind] = frozenset({SolverKind.DENSE})
     tolerances: Tolerances = DEFAULT_TOLERANCES
+    # W5.9 -- appended, not interleaved.
+    #: Whether :meth:`ConformanceBackend.joint_gp_noise` can return this
+    #: backend's ``JointGaussianProcessNoise`` -- one correlated process over
+    #: several channels of one model on a shared grid. ``False`` by default,
+    #: for the same reason ``interferometry``, ``astrometry`` and ``image``
+    #: are: one item's slice must not be a change to every other track's
+    #: fixture.
+    joint_noise: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
@@ -727,6 +735,24 @@ class ConformanceBackend(Protocol):
         backend on which ``sigma_eff² = (scale·sigma_data)² + jitter²`` means
         something else. ``None`` (the default) registers no such parameter,
         which is what every row written before this keyword existed asks for.
+        """
+
+    def joint_gp_noise(
+        self,
+        kernel: Kernel,
+        solver: GPSolver,
+        *,
+        datasets: Sequence[str],
+        coupling: Any,
+    ) -> NoiseModel:
+        """This backend's joint noise model over *datasets* (**W5.9**).
+
+        Only called when :attr:`BackendCapabilities.joint_noise` is declared.
+        *kernel* and *solver* are this fixture's own, from :meth:`kernel` and
+        :meth:`gp_solver`; *coupling* is ``ampere.core``'s, because a
+        :class:`~ampere.core.ChannelCoupling` declares parameters and an
+        eigendecomposition written once for every array namespace and so has no
+        per-backend twin to supply.
         """
 
     def parameter_space(self, declaration: ParameterSet) -> ParameterSpace:

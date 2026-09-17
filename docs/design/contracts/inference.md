@@ -401,6 +401,58 @@ Estimate: half an agent session now. Considerably more once W1.8 is emitting
 these names into stored `InferenceData` and W1.10's conformance suite asserts
 them. **Reverse now or not at all** is the honest summary.
 
+### 4.9 A third kind of top-level component: a joint noise group (*added W5.9*)
+
+The merge topology above has two kinds of top-level component — one per model,
+one per dataset — plus the optional `shared` set §9 uses. **W5.9 adds a third**,
+and it is the first thing in this contract that is not one term per dataset.
+
+A `JointGaussianProcessNoise` (`likelihoods.md` §7) is one correlated process
+over `T` channels of one model on a shared grid, so it belongs to no single
+dataset. It is declared on the `DatasetCollection`:
+
+```python
+DatasetCollection({"ra": …, "dec": …}, joint={"astrom": noise})
+```
+
+and joins the merge as one further component under its own label, exactly as
+`shared` does and for the same reason: it owns parameters no dataset owns (the
+kernel's, the coupling's, the group's `scale` and `jitter`). Its merged names
+are therefore `astrom.angle`, `astrom.log_variance_0`, `astrom.length_scale`
+and so on, and ties, plates, priors and W1.9's lowering reach them exactly as
+they reach any other component's.
+
+**The `"joint"` decomposition.** `DatasetCollection.contributions` returns one
+log-likelihood per *key*, and a joint group replaces its members with **one**
+key, its own:
+
+```python
+collection = DatasetCollection({"ra": ..., "dec": ...}, joint={"astrom": noise})
+collection.contribution_labels()   # ('astrom',)  -- not ('ra', 'dec')
+collection.group_of("ra")          # 'astrom'
+```
+
+The sum is unchanged — `log_likelihood` is still the sum of `contributions`'
+values — and what changes is the *decomposition*. That widening is the same one
+`"mixed"` was for `results.md` §6's pointwise group: a name for the case where
+the obvious per-dataset reading does not apply, so that a consumer is told
+rather than left to infer it. A run's per-dataset `log_likelihood` group
+therefore carries a variable named for the **group** where a joint fit is
+concerned, and `results.md` §6 says what the pointwise group holds (the rotated
+outputs, one per member label, declared `"joint"`).
+
+**`contribution_labels()` is the API**, not `tuple(collection)`: a caller that
+assumed one term per dataset gets the right answer from it for a collection
+with no groups and stays right for one with them.
+
+**Simulation.** `DatasetCollection.draw_group` draws a group's `T` channels in
+**one correlated call**, and `FittingProblem.simulate` routes grouped datasets
+through it instead of through `Dataset.draw_observation`. This is not an
+optimisation: drawing each channel from its own marginal produces observations
+whose cross-covariance is zero, which is data from a different model than the
+one being fitted — the precise failure an SBC study of a joint fit exists to
+catch, and one that every marginal check passes.
+
 ## 5. `Dataset`
 
 ```pycon
@@ -552,6 +604,17 @@ A `Mapping` from label to `Dataset`, so `len`, iteration, `in`, `keys`/`values`
 It does **not** own the ties (§6), and it does not perform the problem's merge:
 merging here would produce a mapping the problem then had to merge *again*,
 which is precisely the associativity trap.
+
+**A third thing, since W5.9**: it owns the **joint noise groups**, passed as
+`joint={label: noise}`. A group is checked at construction — the members exist,
+no dataset belongs to two groups, the channels share a grid, a mask and a
+per-sample uncertainty, and each member's own likelihood is a bare family — and
+it is then one further component of the merge and one further entry of
+`contributions()`, in place of its members'. See §4.9. The first bullet above
+is unchanged in substance and sharper in wording: the joint log-likelihood is
+still a **sum**, but a sum over `contribution_labels()` rather than over
+datasets, because the datasets a group spans are not conditionally independent
+given the parameters — which is exactly what the group says about them.
 
 ## 8. The lifecycle: when negotiation and checking happen
 

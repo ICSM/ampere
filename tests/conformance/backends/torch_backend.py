@@ -81,6 +81,7 @@ from ampere.backends.torch import (
     DenseGP,
     HilbertSpaceGP,
     GaussianProcessNoise,
+    JointGaussianProcessNoise,
     IndependentNoise,
     Matern12,
     Matern32,
@@ -498,6 +499,7 @@ class TorchBackend:
         interferometry=True,
         # **W4.9**: the native astrometric twins, likewise.
         astrometry=True,
+        joint_noise=True,  # W5.9
         # **W5.5**: the native PSF-convolution twin, so every row in
         # ``test_image.py`` runs on this column instead of skipping.
         image=True,
@@ -544,6 +546,17 @@ class TorchBackend:
 
     def gp_noise(self, kernel: Kernel, solver: GPSolver, *, jitter: Any = None) -> NoiseModel:
         return GaussianProcessNoise(kernel, solver, jitter=jitter)
+
+    def joint_gp_noise(
+        self,
+        kernel: Kernel,
+        solver: GPSolver,
+        *,
+        datasets: Sequence[str],
+        coupling: Any,
+    ) -> NoiseModel:
+        # W5.9 -- appended.
+        return JointGaussianProcessNoise(kernel, solver, datasets=datasets, coupling=coupling)
 
     def interferometry(self) -> InterferometryPieces:
         return TORCH_INTERFEROMETRY

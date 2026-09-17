@@ -442,7 +442,13 @@ def replace_observations(
         )
     return FittingProblem(
         problem.models,
-        DatasetCollection(rebuilt),
+        # W5.9: the joint noise groups are carried over with everything else.
+        # Dropping them would rebuild the replica with *independent* channels
+        # while its data still carried the cross-channel structure the original
+        # simulated -- so the study would report the calibration of a model
+        # nobody asked about, and would report it as undercoverage, which is
+        # exactly the signal a joint noise model exists to remove.
+        DatasetCollection(rebuilt, joint=dict(problem.datasets.joint) or None),
         ties=problem.ties,
         seed=seed,
         strict=problem.strict,

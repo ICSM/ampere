@@ -2411,12 +2411,17 @@ class RotationCoupling(ChannelCoupling):
     separately. For **polarimetry** the angle is the Q/U leakage angle and the
     rotation is literally the one the instrument applies.
 
-    ``θ`` is identified on ``[0, π)``: adding ``π`` is the same matrix, and
-    adding ``π/2`` is the same matrix with the two variances exchanged — so a
-    prior wider than ``[0, π)`` samples a label-switched copy of the same
-    posterior. ``scipy.stats.uniform(0.0, np.pi)`` is the recommended prior;
-    this class does not impose one, because a problem with a known instrumental
-    angle should fix it.
+    **The parameterisation has a symmetry, and it is not a defect.** Adding
+    ``π`` to ``θ`` is the same ``B``; adding ``π/2`` is the same ``B`` with the
+    two variances exchanged. So ``B`` is identified while ``(θ, v_0, v_1)`` is
+    identified only up to that relabelling, and a posterior over the three
+    comes back with two equivalent modes — exactly the label switching a
+    mixture model has, and dealt with the same way: summarise ``B`` (through
+    :meth:`ChannelCoupling.matrix`) rather than the angle, or fix the angle
+    where the instrument's own is known. ``scipy.stats.uniform(0.0, np.pi)``
+    is the recommended prior; this class does not impose one. The joint
+    *density* is unaffected either way, which is why the symmetry costs a fit
+    nothing but a bimodal marginal.
 
     The **log**-variances, rather than variances with a positive support, are
     what a NUTS chain wants: the eigenvalues of a coupling matrix span orders
