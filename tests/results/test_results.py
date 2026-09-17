@@ -37,6 +37,7 @@ from ampere.core import (
     GaussianProcessNoise,
     HierarchicalPrior,
     IndependentNoise,
+    describe_prior,
     Image,
     Instrument,
     Likelihood,
@@ -49,6 +50,7 @@ from ampere.core import (
     Plate,
     PlateBinding,
     PoissonFamily,
+    PriorSpec,
     Spectrum,
     SquaredExponential,
     Tie,
@@ -104,7 +106,7 @@ from ampere.results import (
     training_pair_to_dict,
 )
 from ampere.results.emission import _dimension_names, _index_coordinate
-from ampere.results.provenance import PROVENANCE_SCHEMA_VERSION, solver_configs
+from ampere.results.provenance import PROVENANCE_SCHEMA_VERSION, free_priors, solver_configs
 
 arviz = pytest.importorskip("arviz", reason="ampere.results needs ampere[arviz]")
 
@@ -1889,8 +1891,8 @@ class TestSchemaSixAttributes:
 class TestSchemaSevenAttributes:
     """W5.0: the results contract for approximate and evidence-producing engines."""
 
-    def test_the_schema_version_is_seven(self) -> None:
-        assert PROVENANCE_SCHEMA_VERSION == 7
+    def test_the_schema_version_is_at_least_seven(self) -> None:
+        assert PROVENANCE_SCHEMA_VERSION >= 7
 
     def test_approximation_and_evidence_are_free_names_here(self) -> None:
         """Neither key is one of ``provenance_attrs``'s own — an engine writes both.
@@ -1914,6 +1916,80 @@ class TestSchemaSevenAttributes:
         assert attrs["ampere_log_evidence"] == pytest.approx(-12.5)
         assert attrs["ampere_log_evidence_err"] == pytest.approx(0.1)
         assert attrs["ampere_evidence_method"] == "nested_sampling"
+
+
+class TestSchemaEightAttributes:
+    """W5.22: ``ampere_free_priors`` -- each free parameter's own declared prior.
+
+    Closes the gap ``ampere.results.population``'s module docstring named at
+    W5.13: a run's provenance used to record only each parameter's name and
+    a hash of its declaration, so the declaration itself could not be read
+    back off a run; ``fit_population``'s ``interim_prior`` is optional
+    accordingly.
+    """
+
+    def test_the_schema_version_is_eight(self) -> None:
+        assert PROVENANCE_SCHEMA_VERSION == 8
+
+    def test_a_run_records_every_free_parameters_prior(self) -> None:
+        problem = joint_problem()
+        stored = json.loads(provenance_attrs(problem)["ampere_free_priors"])
+        assert set(stored) == set(problem.parameters.free_names)
+        for name in problem.parameters.free_names:
+            expected = describe_prior(problem.parameters[name].prior).to_dict()
+            assert stored[name] == {"kind": "prior_spec", **expected}
+
+    def test_it_is_the_promoted_free_priors_function(self) -> None:
+        problem = joint_problem()
+        assert provenance_attrs(problem)["ampere_free_priors"] == canonical_json(
+            free_priors(problem)
+        )
+
+    def test_a_hierarchical_prior_member_is_recorded_by_its_own_to_dict(self) -> None:
+        class Population(Model):
+            def __init__(self, grid: np.ndarray) -> None:
+                self.register_buffer("grid", grid, unit=u.micron)
+                self.register_parameter(Parameter("mu", st.norm(0.0, 5.0)))
+                self.register_parameter(
+                    Parameter("theta", HierarchicalPrior("norm", {"loc": "mu"}))
+                )
+
+            def evaluate(self, **values: Any) -> ModelResult:
+                ctx = self.context(values)
+                return ModelResult(
+                    Spectrum(
+                        ctx["grid"] * u.micron, np.full_like(ctx["grid"], ctx["theta"]) * u.Jy
+                    )
+                )
+
+        grid = np.array([1.0])
+        observed = Spectrum(grid * u.micron, [1.0] * u.Jy, uncertainty=[0.1] * u.Jy)
+        problem = FittingProblem(Population(grid), [Dataset(observed)], seed=1)
+        stored = json.loads(provenance_attrs(problem)["ampere_free_priors"])
+        assert stored["model.mu"] == {
+            "kind": "prior_spec",
+            **describe_prior(st.norm(0.0, 5.0)).to_dict(),
+        }
+        # The hierarchical member's *resolved* prior (references qualified to
+        # the merged set's own names by the model -> problem merge) is what
+        # is recorded -- not the bare local declaration.
+        resolved = problem.parameters["model.theta"].prior
+        assert isinstance(resolved, HierarchicalPrior)
+        assert stored["model.theta"] == {"kind": "hierarchical", **resolved.to_dict()}
+        assert stored["model.theta"]["hyperparameters"] == {"loc": "model.mu"}
+
+    def test_an_emitted_run_carries_it_through_netcdf(self, tmp_path: Any) -> None:
+        problem = joint_problem()
+        tree = recorded(problem)
+        path = tmp_path / "schema_eight.nc"
+        to_netcdf(tree, path)
+        back = from_netcdf(path)
+        assert back.attrs["ampere_free_priors"] == tree.attrs["ampere_free_priors"]
+        stored = json.loads(back.attrs["ampere_free_priors"])
+        for name in problem.parameters.free_names:
+            assert PriorSpec.from_dict(stored[name]) == describe_prior(
+                problem.parameters[name].prior
+            )
 
 
 class TestEmitSampleStats:
