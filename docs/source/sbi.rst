@@ -195,6 +195,27 @@ and ``ampere_sbi_cache_key`` in the run's attrs — ``cached_fit.py`` is worth
 reading for the mechanism, not because it is how a caller normally reaches
 for it.
 
+**Serving one artefact by name, mismatch and all (W5.23).** The ordinary
+cache above is deliberately unforgiving — a miss on any single ingredient
+trains again rather than serving something close enough — but sometimes a
+close-enough posterior is exactly what is wanted, such as reusing a run
+trained at a slightly different setting while iterating on a plot.
+``SBIEngine(cache=store, serve_artefact=<digest>)`` is that explicit route:
+it still computes this run's own key as usual, then restores whatever is
+filed under *that digest*, whether or not it matches. There is no silent
+fallback — a digest the store does not hold, or whose sidecar cannot be
+trusted, is refused by name, as is ``serve_artefact=`` given without a
+``cache=`` at all — and the run's attrs say exactly what happened:
+``ampere_sbi_cache_key`` (the digest this run's own settings would have
+used), ``ampere_sbi_artefact_served`` (the digest actually restored —
+``serve_artefact`` echoed back) and ``ampere_sbi_artefact_mismatch`` (which
+:class:`~ampere.results.ArtefactKey` fields differ between the two, by name;
+empty when they agree), alongside a loud
+:class:`~ampere.results.ArtefactCacheWarning` naming the same fields when
+the record is non-empty. Sampling and calibration both work on the served
+posterior exactly as on a freshly trained one — it is just a posterior once
+restored.
+
 Truncated marginal ratio estimation (TMNRE)
 ----------------------------------------------
 
