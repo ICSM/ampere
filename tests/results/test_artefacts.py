@@ -511,6 +511,106 @@ class TestArtefactStore:
 
 
 # ---------------------------------------------------------------------------
+# W5.23: looking an artefact up by digest alone, and the field-wise
+# comparison ``SBIEngine(serve_artefact=...)`` reuses to name a mismatch.
+# ---------------------------------------------------------------------------
+
+
+class TestGetByDigest:
+    def test_a_digest_nothing_is_stored_under_is_a_miss(self, tmp_path: Path) -> None:
+        store = ArtefactStore(tmp_path)
+        assert store.get_by_digest("0" * 32) is None
+
+    def test_round_trips_the_artefact_and_its_recorded_ingredients(self, tmp_path: Path) -> None:
+        store = ArtefactStore(tmp_path)
+        key = _key(_problem())
+        store.put(key, "the trained posterior")
+
+        result = store.get_by_digest(key.digest())
+
+        assert result is not None
+        artefact, ingredients = result
+        assert artefact == "the trained posterior"
+        assert ingredients == key.ingredients()
+
+    def test_serves_an_artefact_whose_own_key_the_caller_never_supplies(
+        self, tmp_path: Path
+    ) -> None:
+        """The whole point: no ``ArtefactKey`` is needed, only its digest."""
+        store = ArtefactStore(tmp_path)
+        stored_key = _key(_problem(), budget=200)
+        store.put(stored_key, "trained at budget 200")
+
+        # A caller with a *different* key still reaches the entry, by digest.
+        different_key = _key(_problem(), budget=999)
+        assert store.get(different_key) is None  # the ordinary route: a miss
+        result = store.get_by_digest(stored_key.digest())
+        assert result is not None
+        assert result[0] == "trained at budget 200"
+
+    def test_a_sidecar_that_no_longer_hashes_to_its_own_filename_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """Hand-edited (or written by an incompatible version): never trusted."""
+        store = ArtefactStore(tmp_path)
+        key = _key(_problem())
+        store.put(key, "an artefact")
+        sidecar_path = tmp_path / f"{key.digest()}.json"
+        payload = json.loads(sidecar_path.read_text())
+        payload["ingredients"]["budget"] = 999999
+        sidecar_path.write_text(json.dumps(payload))
+
+        with pytest.warns(ArtefactCacheWarning):
+            result = store.get_by_digest(key.digest())
+        assert result is None
+
+    def test_an_unreadable_sidecar_is_refused(self, tmp_path: Path) -> None:
+        store = ArtefactStore(tmp_path)
+        key = _key(_problem())
+        store.put(key, "an artefact")
+        (tmp_path / f"{key.digest()}.json").write_text("{not valid json")
+
+        with pytest.warns(ArtefactCacheWarning):
+            result = store.get_by_digest(key.digest())
+        assert result is None
+
+    def test_a_corrupted_pickle_is_refused(self, tmp_path: Path) -> None:
+        store = ArtefactStore(tmp_path)
+        key = _key(_problem())
+        store.put(key, "an artefact")
+        (tmp_path / f"{key.digest()}.pkl").write_bytes(b"not a pickle at all")
+
+        with pytest.warns(ArtefactCacheWarning):
+            result = store.get_by_digest(key.digest())
+        assert result is None
+
+
+class TestDiffIngredients:
+    """The field-wise comparison shared by :meth:`ArtefactStore.diff` and
+    ``SBIEngine(serve_artefact=...)``'s mismatch record."""
+
+    def test_only_the_changed_field_is_named(self) -> None:
+        old = _key(_problem()).ingredients()
+        new = _key(_problem(), budget=500).ingredients()
+        diff = ArtefactStore.diff_ingredients(old, new)
+        assert diff == {"budget": (200, 500)}
+
+    def test_identical_ingredients_diff_to_nothing(self) -> None:
+        ingredients = _key(_problem()).ingredients()
+        assert ArtefactStore.diff_ingredients(ingredients, dict(ingredients)) == {}
+
+    def test_diff_agrees_with_the_stores_own_diff_against_latest(self, tmp_path: Path) -> None:
+        store = ArtefactStore(tmp_path)
+        base_key = _key(_problem())
+        store.put(base_key, "artefact-v1")
+        changed_key = _key(_problem(), budget=500)
+
+        assert store.diff(changed_key) == ArtefactStore.diff_ingredients(
+            base_key.ingredients(), changed_key.ingredients()
+        )
+
+
+# ---------------------------------------------------------------------------
 # A real, trained sbi posterior: the round trip the item's Accept line asks for.
 # ---------------------------------------------------------------------------
 
