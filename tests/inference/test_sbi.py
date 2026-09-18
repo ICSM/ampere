@@ -2673,3 +2673,65 @@ class TestTheFilmConditioningRoute:
         assert restored.film is not None
         assert restored.layout.hash == module.layout.hash
         assert isinstance(restored.film.net, torch.nn.Sequential)
+
+
+@needs_sbi
+class TestTheContextIsInTheCacheKey:
+    """W5.10: the store must not serve a network trained under another context.
+
+    The three rows are the three ways the key could have got this wrong, and
+    each of them was true before ``context=`` became an ingredient: a
+    context-amortised run served a context-free network, a context-free run
+    served a context-amortised one, and a run under one prior served a
+    network trained under another. Cheap to check — the digest is computed
+    before any simulation, so these run at a two-epoch budget.
+    """
+
+    @staticmethod
+    def settings(**overrides: Any) -> dict[str, Any]:
+        base: dict[str, Any] = {"method": "npe", "budget": 40, "layout": "set", "embedding": "set"}
+        base.update(overrides)
+        return base
+
+    def test_a_context_run_misses_a_context_free_entry(self, tmp_path: Any) -> None:
+        from ampere.results.artefacts import ArtefactStore
+
+        store = ArtefactStore(tmp_path / "artefacts")
+        plain = SBIEngine(bounded_problem(), cache=store, **self.settings()).run(
+            draws=5, training={"max_num_epochs": 2}
+        )
+        amortised = SBIEngine(
+            bounded_problem(),
+            cache=store,
+            context=ScaledSigma(CONTEXT_LOW, CONTEXT_HIGH),
+            **self.settings(),
+        )
+        run = amortised.run(draws=5, training={"max_num_epochs": 2})
+        assert run.attrs["ampere_sbi_cache_hit"] == 0
+        # Filed apart, which is the property that stops the second run from
+        # ever being handed the first's network. *Which* field differs is
+        # named by ArtefactStore.diff -- asserted, with the pair of values, in
+        # tests/results/test_artefacts.py.
+        assert run.attrs["ampere_sbi_cache_key"] != plain.attrs["ampere_sbi_cache_key"]
+
+    def test_the_same_context_prior_is_a_hit(self, tmp_path: Any) -> None:
+        from ampere.results.artefacts import ArtefactStore
+
+        store = ArtefactStore(tmp_path / "artefacts")
+        settings = self.settings(cache=store, context=ScaledSigma(CONTEXT_LOW, CONTEXT_HIGH))
+        SBIEngine(bounded_problem(), **settings).run(draws=5, training={"max_num_epochs": 2})
+        run = SBIEngine(bounded_problem(), **settings).run(draws=5, training={"max_num_epochs": 2})
+        assert run.attrs["ampere_sbi_cache_hit"] == 1
+
+    def test_two_different_priors_do_not_share_an_entry(self, tmp_path: Any) -> None:
+        from ampere.results.artefacts import ArtefactStore
+
+        store = ArtefactStore(tmp_path / "artefacts")
+        SBIEngine(
+            bounded_problem(), cache=store, context=ScaledSigma(0.5, 2.0), **self.settings()
+        ).run(draws=5, training={"max_num_epochs": 2})
+        wider = SBIEngine(
+            bounded_problem(), cache=store, context=ScaledSigma(0.1, 10.0), **self.settings()
+        )
+        run = wider.run(draws=5, training={"max_num_epochs": 2})
+        assert run.attrs["ampere_sbi_cache_hit"] == 0

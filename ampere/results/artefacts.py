@@ -216,6 +216,21 @@ class ArtefactKey:
     #: mode would sample the wrong way and record the wrong sampler in the
     #: run's attrs. ``None`` for every other method. Last field, as above.
     sample_with: str | None = None
+    #: **W5.10's observation-context prior**, as its digest. A budget drawn
+    #: under a context prior trains a *different* network from one drawn at
+    #: the observed uncertainties — that is the whole of what amortising over
+    #: the context means — and two priors covering different ranges train two
+    #: different networks again. Without this field a run with ``context=``
+    #: computed exactly the key of the same run without one, and the store
+    #: would serve whichever was trained first: ``DEVELOPMENT_PLAN.md`` §7's
+    #: stale artefact, and precisely what the key exists to prevent.
+    #: Recording ``ampere_sbi_context_hash`` in a run's attrs says *after the
+    #: fact* which prior a stored run used; only the key stops the wrong
+    #: network being served in the first place. ``None`` for a budget drawn
+    #: without one, which is the default and every run before W5.10, so every
+    #: digest minted before this field existed is unchanged. Last field, for
+    #: the reason the three above are.
+    context: str | None = None
 
     def ingredients(self) -> dict[str, Any]:
         """Every field as a JSON-safe mapping — what the sidecar records.
@@ -225,6 +240,11 @@ class ArtefactKey:
         its :meth:`digest` — are byte-for-byte what they were before W3.4's
         two fields existed, since the two keys simply do not appear in the
         mapping rather than appearing as ``null``.
+
+        ``context`` (**W5.10**) follows the same rule for the same reason: a
+        run drawn without an observation-context prior omits it, so every
+        digest minted before the field existed is unchanged, and a run drawn
+        *with* one can never collide with a run drawn without.
         """
         ingredients: dict[str, Any] = {
             "prior_hash": self.prior_hash,
@@ -244,6 +264,8 @@ class ArtefactKey:
             ingredients["truncation_epsilon"] = float(self.truncation_epsilon)
         if self.sample_with is not None:
             ingredients["sample_with"] = str(self.sample_with)
+        if self.context is not None:
+            ingredients["context"] = str(self.context)
         return ingredients
 
     def digest(self) -> str:
@@ -269,16 +291,18 @@ def artefact_key(
     marginals: int | None = None,
     truncation_epsilon: float | None = None,
     sample_with: str | None = None,
+    context: str | None = None,
 ) -> ArtefactKey:
     """Build the one complete :class:`ArtefactKey` for *problem* and a run's settings.
 
     Every argument beyond *problem* is required and keyword-only: "a partial
     key is never accepted" (the item text) is enforced here, at the one place
     a key is built, so a caller cannot construct one that silently omits an
-    ingredient and compares equal to a run that differed in it. The three
+    ingredient and compares equal to a run that differed in it. The
     exceptions are *marginals*, *truncation_epsilon* and *sample_with*, which
-    are optional because they mean nothing outside TMNRE — see their own
-    parameters below.
+    are optional because they mean nothing outside TMNRE, and *context*,
+    which is optional because most budgets are drawn without one — see their
+    own parameters below.
 
     Parameters
     ----------
@@ -322,6 +346,18 @@ def artefact_key(
         key: the second would be served the first's sampler and record its
         own in the attrs. Any non-empty string is accepted; which modes exist
         is ``ampere.inference``'s business, not this module's.
+    context
+        **W5.10.** The digest of the observation-context prior every
+        simulated draw was made under
+        (:meth:`~ampere.core.simulate.ContextPrior.describe`, hashed), or
+        ``None`` — the default — for a budget drawn at the observed
+        uncertainties. A context prior changes what the network is trained
+        on, so a run with one must not be served a network trained without,
+        nor one trained under a different prior; without this ingredient the
+        two computed the same key. A digest rather than the description
+        itself, so that an archive of ten thousand error arrays does not end
+        up in every sidecar. Any non-empty string is accepted: what a context
+        prior *is* is ``ampere.core``'s business, not this module's.
 
     Raises
     ------
@@ -329,8 +365,9 @@ def artefact_key(
         If *layout*, *method* or *architecture* is empty, if *budget* or
         *rounds* is less than 1, if *marginals* is given and not ``1`` or
         ``2``, if *truncation_epsilon* is given and not strictly between 0
-        and 1, or if *sample_with* is given and empty — the ingredients a
-        caller could otherwise leave meaninglessly blank or nonsensical.
+        and 1, or if *sample_with* or *context* is given and empty — the
+        ingredients a caller could otherwise leave meaninglessly blank or
+        nonsensical.
     """
     layout = str(layout)
     method = str(method)
@@ -367,6 +404,12 @@ def artefact_key(
             "string, or None for a method whose posterior has no sampling mode to choose. "
             "Got an empty string."
         )
+    if context is not None and not str(context):
+        raise ResultsError(
+            "artefact_key's context= is the digest of the observation-context prior the "
+            "budget was drawn under, a non-empty string, or None for a budget drawn at the "
+            "observed uncertainties. Got an empty string."
+        )
 
     data_hashes = {
         label: hash_container(problem.datasets[label].observed) for label in problem.datasets
@@ -385,6 +428,7 @@ def artefact_key(
         marginals=None if marginals is None else int(marginals),
         truncation_epsilon=None if truncation_epsilon is None else float(truncation_epsilon),
         sample_with=None if sample_with is None else str(sample_with),
+        context=None if context is None else str(context),
     )
 
 

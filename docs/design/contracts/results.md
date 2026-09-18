@@ -1658,8 +1658,19 @@ Each is a decision, not an oversight. Each has an extension point.
   two hashes **and a third, `data_hash`, of the observed containers** — a
   trained posterior is stored conditioned on the observation it was built
   for, unlike a training set — plus the run's own settings (method, estimator architecture,
-  budget, rounds, encoding layout, `sbi`/torch versions, and TMNRE's
-  `marginals`/`truncation_epsilon`/`sample_with`, W3.12).
+  budget, rounds, encoding layout, `sbi`/torch versions, TMNRE's
+  `marginals`/`truncation_epsilon`/`sample_with` (W3.12), and — ***W5.10*** —
+  `context`, the digest of the observation-context prior the budget was
+  drawn under. That last one is not a note about the run but part of what
+  was trained: a budget drawn under a context prior trains a different
+  network from one drawn at the observed uncertainties, and two priors
+  covering different ranges train two more, so without it all three
+  computed the same key and the store served whichever was trained first
+  — §7's stale artefact arriving by the one door the key exists to shut.
+  `None` for a budget drawn without one, and omitted from
+  `ingredients()` rather than written as `null`, so every digest minted
+  before W5.10 is unchanged (the rule W3.12's three fields already
+  follow).
 - **Phase 5 (population inference)** — design horizon (b) is buildable entirely
   on stored runs: `sample_stats` carries the scalar `log_prior` and
   `log_likelihood` per draw, the NaN convention distinguishes an unevaluated

@@ -1908,6 +1908,15 @@ class SBIEngine(Engine):
                 marginals=self.marginals if self.method == TMNRE else None,
                 truncation_epsilon=self.truncation_epsilon if self.method == TMNRE else None,
                 sample_with=self.sample_with if self.method == TMNRE else None,
+                # W5.10: the context prior is part of what was trained, not a
+                # note about it. A budget drawn under one trains a different
+                # network from one drawn at the observed uncertainties, and two
+                # priors train two more; without this ingredient all three
+                # computed the same key and the store served whichever came
+                # first (DEVELOPMENT_PLAN.md §7). `or None` rather than the
+                # empty string so that a contextless run's digest is exactly
+                # what it was before this item existed.
+                context=_context_hash(self.context) or None,
             )
         )
         # W5.23: an explicit named artefact, restored regardless of whether it
