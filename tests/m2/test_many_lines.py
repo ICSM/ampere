@@ -430,6 +430,36 @@ class TestTheHorseshoeShrinksASpuriousComponent:
 
 
 # ---------------------------------------------------------------------------
+# The figure the documentation section points at.
+# ---------------------------------------------------------------------------
+
+
+def test_the_figure_draws_every_flexible_arm_over_the_injected_deviation(
+    comparison: many_lines.Comparison, agg_backend: None, tmp_path: Any
+) -> None:
+    """The figure is the argument in one picture, so it must not rot silently.
+
+    It is written at run time and never committed (ground rule 7), so what a
+    test can hold it to is that it builds from the *stored* runs — one line per
+    flexible arm, drawn from the ``gp_localisation`` group
+    :func:`~examples.m2_misspecification.study.diagnose` derived, with nothing
+    re-fitted — and that it lands on disk when asked.
+    """
+    from examples.m2_misspecification import figures
+
+    figure = figures.figure_many_lines(comparison.entries, comparison.data, band=comparison.band)
+    lower, upper = figure.axes
+    drawn = {line.get_label() for line in upper.get_lines()}
+    assert set(FLEXIBLE_ARMS) <= drawn, drawn
+    assert "injected deviation" in {line.get_label() for line in lower.get_lines()}
+    written = figures.save_many_lines_figure(
+        comparison.entries, comparison.data, tmp_path, suffix="png"
+    )
+    assert [path.name for path in written] == [f"{figures.MANY_LINES_FIGURE}.png"]
+    assert written[0].stat().st_size > 0
+
+
+# ---------------------------------------------------------------------------
 # The full budget: the same claims with ten times the data.
 # ---------------------------------------------------------------------------
 

@@ -832,9 +832,9 @@ scales' spike at zero is what lets one component escape while the rest
 collapse.
 
 **Why a hook is needed at all**, and why it is this one. A
-`HierarchicalPrior` references a parameter by name and a `ParameterSet` refuses
-a reference that is not already in it, which is what stops a dangling reference
-reaching a sampler. A kernel registers a summand's `amplitude` in its own
+`HierarchicalPrior` references a parameter by name and `register_parameter`
+refuses, on each addition, a reference that is not already declared — which is
+what stops a dangling reference reaching a sampler. A kernel registers a summand's `amplitude` in its own
 `__init__`, before anything a horseshoe would give it to reference, so
 `Matern32(Parameter("amplitude", HierarchicalPrior(...)), …)` is refused at
 construction. The scale levels therefore have to be registered *ahead of* the

@@ -3196,8 +3196,8 @@ def with_shrinkage(kernel: Kernel, declaration: Sequence[Parameter]) -> Kernel:
 
     **Why a hook is needed at all.** A hierarchical prior references a
     parameter *by name*, and a :class:`~ampere.core.parameter.ParameterSet`
-    refuses a reference that is not already in it — which is what stops a
-    dangling reference reaching a sampler. A kernel registers its
+    refuses, **on each registration**, a reference that is not already in it —
+    which is what stops a dangling reference reaching a sampler. A kernel registers its
     hyperparameters in its own ``__init__``, and a summand's ``amplitude`` is
     registered before anything a horseshoe would give it to reference, so
     ``Matern32(Parameter("amplitude", HierarchicalPrior(...)), ...)`` is
