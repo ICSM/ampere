@@ -62,11 +62,18 @@ from typing import Any
 import pytest
 
 from examples.m2_misspecification import study
-from examples.m2_misspecification.generators import generate
+from examples.m2_misspecification.generators import MANY_LINES, generate
 
 #: The scenario the comparison is made on: the one the milestone is about, and
 #: the one whose flexible posterior is the hardest to sample.
 SCENARIO = "strong_smooth"
+
+#: W5.8's arm: the scenario with two length scales, fitted with W5.7's warped
+#: Matérn. It is the one declaration in the study whose parameters a gradient
+#: sampler reaches *through the warp* — five increments and a shrinkage scale,
+#: all ordinary ``Parameter`` objects — so it is where "NUTS over
+#: the knots for free" is either true on both backends or not true at all.
+WARPED_SCENARIO = MANY_LINES
 
 pytestmark = pytest.mark.parametrize("backend", ["torch", "jax"])
 
@@ -117,6 +124,67 @@ def test_the_native_run_records_its_own_backend_and_sampler(comparisons: Any, ba
     run = study.run(problem, study.NutsBudget(draws=30, warmup=30, chains=1))
     assert run.attrs["ampere_backend"] == backend
     assert run.attrs["ampere_engine"] == "nuts"
+
+
+def test_nuts_samples_the_warp_knots_on_this_backend(backend: str) -> None:
+    """W5.8: the warp's knot variables are ordinary parameters, so NUTS gets them free.
+
+    W5.7's claim about the warp was structural — the knot variables are
+    ``Parameter`` objects like any other, so a differentiable
+    backend reaches them through :func:`ampere.core.realise` with nothing added
+    — and this is where it is exercised end to end rather than described. A
+    short budget: what is asserted is that the six warp dimensions are in the
+    posterior under the names the declaration gives them, and that the run
+    records the backend and sampler that produced it.
+    """
+    pytest.importorskip(backend)
+    data = generate(WARPED_SCENARIO, size=200)
+    problem = study.build_problem(data, backend=backend, likelihood="flexible", kernel="warped")
+    assert problem.backend == backend
+    prefix = f"{study.DATASET_LABEL}.likelihood.input_warp"
+    expected = (f"{prefix}.scale", *(f"{prefix}.increment{i}" for i in range(4)))
+    run = study.run(problem, study.NutsBudget(draws=40, warmup=40, chains=1))
+    assert run.attrs["ampere_backend"] == backend
+    assert run.attrs["ampere_engine"] == "nuts"
+    available = {str(name) for name in run["posterior"].dataset.data_vars}
+    assert set(expected) <= available, sorted(available)
+
+
+def test_the_warped_arm_reaches_the_same_posterior_on_this_backend(backend: str) -> None:
+    """The cross-backend row, extended to W5.8's warped arm.
+
+    Reference emcee against this environment's NUTS, on the same spectrum, the
+    same priors and the same warped kernel — the comparison the rest of this
+    module makes of the stationary one, now over a declaration with six more
+    dimensions and a non-centred parameterisation between them. The tolerances
+    are :data:`~examples.m2_misspecification.study.CI_MEDIAN_TOLERANCE` and
+    :data:`~examples.m2_misspecification.study.CI_INTERVAL_TOLERANCE`, the same
+    per-PR pair the stationary comparison uses.
+    """
+    pytest.importorskip(backend)
+    data = generate(WARPED_SCENARIO, size=200)
+    reference = study.summarise(
+        study.run(
+            study.build_problem(data, likelihood="flexible", kernel="warped"),
+            study.MANY_LINES_EMCEE,
+        ),
+        names=study.PHYSICAL_NAMES,
+    )
+    native = study.summarise(
+        study.run(
+            study.build_problem(data, backend=backend, likelihood="flexible", kernel="warped"),
+            study.MANY_LINES_NUTS,
+        ),
+        names=study.PHYSICAL_NAMES,
+    )
+    result = study.agreement(reference, native)
+    for name, entry in result.items():
+        print(f"\n{backend} warped {name}: {entry!r}")
+    for name, entry in result.items():
+        assert entry.median <= study.CI_MEDIAN_TOLERANCE, f"{backend} warped {name}: {entry!r}"
+        assert entry.worst_interval <= study.CI_INTERVAL_TOLERANCE, (
+            f"{backend} warped {name}: {entry!r}"
+        )
 
 
 def test_the_flexible_likelihood_is_honest_on_every_backend(comparisons: Any, backend: str) -> None:
