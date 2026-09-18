@@ -729,17 +729,23 @@ class TestTheAxisIdentityCodeTable:
     def test_a_kind_declaring_inverse_radians_gets_the_spatial_frequency_code(self) -> None:
         """The one case astropy cannot name: ``u`` is dimensionless or ``1/rad``.
 
-        A radian is dimensionless to astropy, so ``u`` in wavelengths is
-        ``dimensionless`` and ``u`` in ``rad**-1`` is ``unknown`` -- the same
-        quantity under two names, neither of them right. The container kind
-        settles it by declaring ``rad**-1`` in its axis spec.
+        ``u`` in wavelengths is a baseline over a wavelength and reads
+        ``dimensionless``; ``u`` in ``rad**-1`` reads ``unknown``, because a
+        radian is an *angle* to astropy and the reciprocal of an angle has no
+        name. The same quantity under two names, neither of them right, and
+        the container kind settles it by declaring ``rad**-1`` in its axis
+        spec.
         """
         spec = VisibilitySet.AXES[0]
         spatial = AXIS_TYPE_CODES["spatial frequency"]
         assert axis_type_code(u.dimensionless_unscaled, spec=spec) == spatial
         assert axis_type_code(u.rad**-1, spec=spec) == spatial
+        assert axis_type_code(u.arcsec**-1, spec=spec) == spatial
         # A baseline in metres really is a length, and is coded as one.
         assert axis_type_code(u.m, spec=spec) == AXIS_TYPE_CODES["length"]
+        # And the spec is consulted for this and nothing else: a kind that
+        # declares no inverse angle gets the unit's own answer, always.
+        assert axis_type_code(u.rad**-1) == AXIS_TYPE_CODES["unknown"]
 
     def test_every_shipped_kind_codes_its_own_axes(self) -> None:
         expected = {

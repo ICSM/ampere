@@ -180,10 +180,11 @@ AXIS_TYPE_NAMES: Mapping[int, str] = MappingProxyType(
 #: The one physical quantity astropy's own physical types cannot name, and the
 #: reason :func:`axis_type_code` consults the container kind's
 #: :class:`~ampere.core.results_schema.AxisSpec` as well as the unit. An
-#: interferometric ``u`` is spelled either in wavelengths (``dimensionless``) or
-#: in ``rad**-1`` (astropy: ``"unknown"``, because a radian is dimensionless);
-#: both are the same quantity, and a kind declares it by putting ``rad**-1``
-#: in its axis spec's ``equivalent_units``.
+#: interferometric ``u`` is spelled either in wavelengths (a baseline over a
+#: wavelength, so ``dimensionless``) or in ``rad**-1`` — for which astropy
+#: answers ``"unknown"``, because a radian is an *angle* to it and the
+#: reciprocal of an angle has no name. Both are the same quantity, and a kind
+#: declares it by putting ``rad**-1`` in its axis spec's ``equivalent_units``.
 _SPATIAL_FREQUENCY_UNIT = u.rad**-1
 
 
@@ -264,17 +265,27 @@ def _is_spatial_frequency(unit: Any, spec: Any) -> bool:
 
     True when the container kind declares ``rad**-1`` among its axis spec's
     ``equivalent_units`` *and* the axis's own unit is one of the two spellings
-    of that quantity — wavelengths (dimensionless) or an inverse angle. A
-    ``u`` given in metres is a baseline **length** and is coded as one, which
-    is the honest answer: it is a different quantity, and a network should not
-    be told otherwise.
+    of that quantity — wavelengths (which is dimensionless: a baseline divided
+    by a wavelength) or an inverse angle (``rad**-1``, ``arcsec**-1``, which
+    astropy's physical types cannot name, because a radian is an *angle* to
+    astropy and its reciprocal is therefore "unknown" rather than
+    dimensionless). A ``u`` given in metres is a baseline **length** and is
+    coded as one, which is the honest answer: it is a different quantity, and
+    a network should not be told otherwise.
     """
-    declared = tuple(getattr(spec, "equivalent_units", ()) or ())
-    if not any(candidate.is_equivalent(_SPATIAL_FREQUENCY_UNIT) for candidate in declared):
+    declared = [
+        candidate
+        for candidate in tuple(getattr(spec, "equivalent_units", ()) or ())
+        if candidate.is_equivalent(_SPATIAL_FREQUENCY_UNIT)
+    ]
+    if not declared:
         return False
     if unit is None:
         return True
-    return bool(u.Unit(unit).is_equivalent(u.dimensionless_unscaled))
+    resolved = u.Unit(unit)
+    if resolved.is_equivalent(u.dimensionless_unscaled):
+        return True
+    return any(resolved.is_equivalent(candidate) for candidate in declared)
 
 
 def axis_identity_complaint(record: Any) -> str | None:

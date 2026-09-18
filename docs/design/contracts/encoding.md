@@ -132,11 +132,13 @@ in brackets; `A` is the layout's coordinate count (§5).
    what a coordinate is that every container already carries: a `Spectrum`
    in `um` and one in `Hz` hold different quantities in the same column and
    the codes say so. The single exception is `spatial frequency`, which
-   astropy cannot name — a radian is dimensionless, so `u` in wavelengths
-   is `dimensionless` and `u` in `rad**-1` is `unknown` — and which a
-   container kind therefore declares by putting `rad**-1` in its
-   `AxisSpec.equivalent_units`; an axis of such a kind whose unit is
-   dimensionless-equivalent is coded 8. A `u` given in metres is a baseline
+   astropy cannot name: `u` in wavelengths is a baseline over a wavelength
+   and reads `dimensionless`, while `u` in `rad**-1` reads `unknown`,
+   because a radian is an *angle* to astropy and the reciprocal of an angle
+   has no name. Both spell the same quantity, so a container kind declares
+   it by putting `rad**-1` in its `AxisSpec.equivalent_units`, and an axis
+   of such a kind whose unit is dimensionless-equivalent **or** equivalent
+   to that declared unit is coded 8. A `u` given in metres is a baseline
    **length** and is coded 3, which is the honest answer.
 5. **`value`** [1 or 2] — the whitened value `y/σ` (real and imaginary
    columns when the container is complex, else one column). Where the
