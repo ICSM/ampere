@@ -1257,6 +1257,29 @@ class TestABudgetDrawnUnderAContext:
         assert encoded.layout.hash == layout.hash
         assert len(set(np.round(column[:, 0], 9).tolist())) == 4
 
+    def test_a_context_pickles_to_a_worker(self) -> None:
+        """A ``_DrawRequest`` carries one, so a pool has to be able to send it.
+
+        Plain data by construction -- arrays and a small mapping, no generator
+        and no prior -- which is what makes this cheap rather than a design
+        constraint on what a context prior may be.
+        """
+        drawn = ScaledSigma(2.0, 2.0).draw(np.random.default_rng(11), {"default": observed()})
+        restored = pickle.loads(pickle.dumps(drawn))
+        assert dict(restored.record) == dict(drawn.record)
+        assert np.allclose(restored.sigma["default"], drawn.sigma["default"])
+
+    def test_a_budget_under_a_pool_carries_its_contexts(self) -> None:
+        """The whole point of the pickling row, end to end."""
+        with ProcessExecutor(max_workers=2) as pool:
+            batch = build().simulate_many(
+                4, observe=True, executor=pool, context=ScaledSigma(0.5, 2.0)
+            )
+        assert all(draw.context is not None for draw in batch)
+        for draw in batch:
+            factor = float(draw.context.record["factor"])
+            assert np.allclose(draw.observations["default"].uncertainty, factor * 0.1)
+
 
 class TestTheContextRefusals:
     """Each one a claim the code could not honestly make, refused by name."""
