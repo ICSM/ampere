@@ -35,11 +35,25 @@ The sparsity guard
 ------------------
 The same freedom that makes the ``Sum`` arm possible is the freedom to add a
 component the data do not need. :func:`shrinkage` is the demonstration of the
-guard: the same ``Sum`` of a broad and a narrow term, fitted to a spectrum
-whose deviation is **smooth only**, under
-:func:`~ampere.core.regularised_horseshoe` and under the study's ordinary
-half-normal amplitude prior. The narrow term is spurious in both fits; under
-the horseshoe its amplitude collapses.
+guard, and it is set up where the guard is the only thing that can decide the
+answer: two **nearly degenerate** Matérn terms (:data:`DEGENERATE_SCALES`)
+fitted to :data:`SMOOTH_ONLY`, a spectrum whose deviation has exactly **one**
+smooth component. The likelihood pins the two terms' *total* and says almost
+nothing about how it is divided between them, so what divides it is the prior.
+
+Under a flat prior on both amplitudes the fit spreads itself across both terms;
+under :func:`~ampere.core.regularised_horseshoe` it does not. The statistic is
+the smaller amplitude over the larger — 1 is "split evenly between two
+components the truth does not have two of", 0 is "chose one" — and it is
+reported both as a posterior median and as the posterior **mass** below a tenth,
+because a mass is far less sensitive to how well an ensemble sampler explored a
+hierarchical posterior than a quantile of it is.
+
+Why a degenerate pair rather than a spurious term at some far-off length scale:
+a term the data can positively *exclude* is switched off by the likelihood, not
+by the prior, and measuring it would be measuring the likelihood. Both priors
+switch such a term off and they agree to three digits when they do — which is
+correct behaviour and no demonstration at all.
 
 Run it as::
 
@@ -57,6 +71,8 @@ import dataclasses
 from typing import Any
 
 import astropy.units as u
+import numpy as np
+import scipy.stats as st
 
 from ampere.core import (
     Dataset,
@@ -71,6 +87,7 @@ from ampere.core import (
 from .generators import MANY_LINES, LineForest, SyntheticSpectrum, generate
 from .study import (
     DATASET_LABEL,
+    GP_AMPLITUDE_SCALE,
     MANY_LINES_EMCEE,
     MANY_LINES_KERNELS,
     PHYSICAL_NAMES,
@@ -89,12 +106,17 @@ from .study import (
 
 __all__ = [
     "ARMS",
+    "DEGENERATE_LABELS",
+    "DEGENERATE_SCALES",
     "HORSESHOE_GLOBAL_SCALE",
+    "SHRINKAGE_EMCEE",
     "SMOOTH_ONLY",
+    "SPARSE_FRACTION",
     "Comparison",
     "Shrinkage",
     "build_arm",
     "compare",
+    "degenerate_pair",
     "horseshoe_kernel",
     "main",
     "shrinkage",
@@ -127,19 +149,71 @@ SMOOTH_ONLY: LineForest = dataclasses.replace(
     amplitude=0.0,
 )
 
+#: The two length-scale prior scales of :func:`degenerate_pair`, micron. Close
+#: enough together that a 200-point spectrum cannot say which of the two
+#: absorbed the smooth error — which is the situation a sparsity prior exists
+#: for — and far enough apart that the two terms are not exchangeable, so the
+#: posterior has one mode rather than two mirror images of one.
+DEGENERATE_SCALES: tuple[float, float] = (0.010, 0.008)
+
+#: The labels those two terms carry into the posterior.
+DEGENERATE_LABELS: tuple[str, str] = ("first", "second")
+
+#: "Chose one component" — the ratio below which the smaller amplitude is
+#: counted as switched off, for the posterior-mass statistic.
+SPARSE_FRACTION = 0.10
+
+#: The shrinkage demonstration's budget. Longer than
+#: :data:`~examples.m2_misspecification.study.MANY_LINES_EMCEE`, and it has to
+#: be: the horseshoe's three extra levels give the posterior a funnel, which is
+#: the geometry an ensemble sampler explores worst, and at a shorter budget the
+#: measured factors moved by more than the effect being measured. About three
+#: and a half minutes for the pair of fits.
+SHRINKAGE_EMCEE = EmceeBudget(walkers=32, steps=2_000, burn_in=1_000)
+
+
+def degenerate_pair(backend: str = "reference") -> Kernel:
+    """Two nearly degenerate Matérn-3/2 terms, under a **flat** amplitude prior.
+
+    The contrast fit, and the reason its amplitude prior is uniform rather than
+    the study's half-normal: a half-normal is *itself* a shrinkage prior — the
+    study says so, and it is why M2's control scenario works — so comparing a
+    horseshoe against one would be comparing two shrinkage priors. A flat prior
+    is the honest "no opinion", and it is what a reader who had not thought
+    about sparsity would write.
+
+    The ceiling is the study's own
+    :data:`~examples.m2_misspecification.study.GP_AMPLITUDE_SCALE`: wide enough
+    that the posterior never reaches it, so the prior is flat where the answer
+    is.
+    """
+    module = _backend_module(backend)
+    return module.Sum(
+        *[
+            module.Matern32(
+                st.uniform(0.0, GP_AMPLITUDE_SCALE),
+                st.halfnorm(scale=scale),
+                amplitude_unit=u.Jy,
+                length_scale_unit=u.micron,
+            )
+            for scale in DEGENERATE_SCALES
+        ],
+        labels=DEGENERATE_LABELS,
+    )
+
 
 def horseshoe_kernel(backend: str = "reference", *, tail: str = "regularised") -> Kernel:
-    """The study's ``Sum`` arm with a regularised horseshoe over its amplitudes.
+    """:func:`degenerate_pair` with a regularised horseshoe over its amplitudes.
 
-    The kernel is :func:`~examples.m2_misspecification.study.build_kernel`'s
-    ``"sum"`` exactly — same two terms, same two length-scale priors — so the
-    only difference between this fit and the unshrunk one is the prior on the
-    two amplitudes. That is what makes the contrast a contrast.
+    Same two terms, same two length-scale priors, same flat ceiling underneath
+    — :func:`~ampere.core.with_shrinkage` replaces the two amplitudes'
+    declarations and adds the two scale levels, and changes nothing else. That
+    is what makes the contrast a contrast.
     """
     return with_shrinkage(
-        build_kernel(backend, "sum"),
+        degenerate_pair(backend),
         regularised_horseshoe(
-            ("broad.amplitude", "narrow.amplitude"),
+            tuple(f"{label}.amplitude" for label in DEGENERATE_LABELS),
             global_scale=HORSESHOE_GLOBAL_SCALE,
             tail=tail,
             unit=u.Jy,
@@ -325,52 +399,78 @@ def compare(
 
 @dataclasses.dataclass(frozen=True)
 class Shrinkage:
-    """What the sparsity prior did to a spurious noise component.
+    """What a sparsity prior did to a redundant noise component.
 
     Attributes
     ----------
     size
         Points in the fitted spectrum.
     amplitudes
-        ``{"horseshoe" | "unshrunk": {"broad": Summary, "narrow": Summary}}``.
+        ``{"flat" | "horseshoe": {label: Summary}}``, one entry per term of
+        :func:`degenerate_pair`.
+    ratios
+        ``{"flat" | "horseshoe": array}`` — the smaller amplitude over the
+        larger one, **per posterior draw**. Per draw rather than a ratio of
+        summaries because that is what a posterior mass can be computed from,
+        and the mass is the statistic that survives an ensemble sampler's
+        difficulty with a hierarchical geometry.
 
     Notes
     -----
-    ``broad`` is the component the truth has — the smooth continuum error —
-    and ``narrow`` is the spurious one. :attr:`ratio` is the statistic the test
-    pins, and it is a *ratio* rather than an amplitude because an amplitude in
-    Jy is a statement about this spectrum's flux scale while the ratio is a
-    statement about the prior.
+    The truth has one smooth component, so one of the two terms is redundant
+    whichever it turns out to be. Which one it is is not part of the claim —
+    the two are nearly degenerate, and a prior that chose the *named* one would
+    be a prior that had been told the answer — so every statistic here is over
+    ``min`` and ``max`` rather than over ``first`` and ``second``.
     """
 
     size: int
     amplitudes: dict[str, dict[str, Summary]]
+    ratios: dict[str, Any] = dataclasses.field(default_factory=dict, repr=False)
 
     @property
     def ratio(self) -> dict[str, float]:
-        """``median(narrow) / median(broad)``, per prior: how much of the fit is spurious."""
+        """The posterior median of ``min(a) / max(a)``, per prior."""
+        return {prior: float(np.median(values)) for prior, values in self.ratios.items()}
+
+    @property
+    def sparse_mass(self) -> dict[str, float]:
+        """The posterior mass with ``min(a) / max(a)`` below :data:`SPARSE_FRACTION`."""
         return {
-            prior: float(pair["narrow"].median / pair["broad"].median)
+            prior: float(np.mean(np.asarray(values) < SPARSE_FRACTION))
+            for prior, values in self.ratios.items()
+        }
+
+    @property
+    def largest(self) -> dict[str, float]:
+        """The median of the *larger* amplitude, per prior: the component the truth has."""
+        return {
+            prior: max(summary.median for summary in pair.values())
             for prior, pair in self.amplitudes.items()
         }
 
     def table(self) -> str:
         """The demonstration as plain text."""
+        ratio = self.ratio
+        mass = self.sparse_mass
+        largest = self.largest
         rows = [
-            f"A Sum of two noise terms on a one-component truth, {self.size} points",
-            f"{'prior':<14}{'broad (Jy)':>16}{'narrow (Jy)':>16}{'narrow/broad':>16}",
+            f"Two nearly degenerate noise terms on a one-component truth, {self.size} points",
+            (
+                f"{'prior':<12}{'larger (Jy)':>14}{'median min/max':>16}"
+                f"{f'P(min/max < {SPARSE_FRACTION})':>20}"
+            ),
             "-" * 62,
         ]
-        for prior in ("unshrunk", "horseshoe"):
-            pair = self.amplitudes[prior]
+        for prior in ("flat", "horseshoe"):
             rows.append(
-                f"{prior:<14}{pair['broad'].median:>16.5f}{pair['narrow'].median:>16.5f}"
-                f"{self.ratio[prior]:>16.3f}"
+                f"{prior:<12}{largest[prior]:>14.5f}{ratio[prior]:>16.3f}{mass[prior]:>20.3f}"
             )
         rows.append("-" * 62)
         rows.append(
-            f"the horseshoe shrinks the spurious component by a further factor of "
-            f"{self.ratio['unshrunk'] / self.ratio['horseshoe']:.1f}"
+            f"the horseshoe divides the redundant component by "
+            f"{ratio['flat'] / ratio['horseshoe']:.1f} and multiplies the sparse mass by "
+            f"{mass['horseshoe'] / mass['flat']:.1f}"
         )
         return "\n".join(rows)
 
@@ -384,28 +484,36 @@ def shrinkage(
     progress: bool = False,
     tail: str = "regularised",
 ) -> Shrinkage:
-    """Fit a two-term ``Sum`` to a one-component truth, with and without the horseshoe.
+    """Fit two degenerate terms to a one-component truth, with and without the horseshoe.
 
     Both fits are over :data:`SMOOTH_ONLY` — W5.8's scenario with the line
-    forest switched off — so the broad term has the smooth continuum error to
-    absorb and the narrow term has nothing. The two kernels are the same two
-    Matérns with the same two length-scale priors; only the prior on their
-    amplitudes differs.
+    forest switched off — so there is one smooth component to find and two
+    terms that can both find it. The two kernels are the same two Matérns with
+    the same two length-scale priors and the same flat ceiling; only the prior
+    on their amplitudes differs.
     """
     data = generate(SMOOTH_ONLY, size=size)
-    chosen = budget or MANY_LINES_EMCEE
+    chosen = budget or SHRINKAGE_EMCEE
     kernels = {
-        "unshrunk": build_kernel(backend, "sum"),
+        "flat": degenerate_pair(backend),
         "horseshoe": horseshoe_kernel(backend, tail=tail),
     }
-    names = {part: f"{DATASET_LABEL}.likelihood.{part}.amplitude" for part in ("broad", "narrow")}
+    names = {label: f"{DATASET_LABEL}.likelihood.{label}.amplitude" for label in DEGENERATE_LABELS}
     amplitudes: dict[str, dict[str, Summary]] = {}
+    ratios: dict[str, Any] = {}
     for prior, kernel in kernels.items():
         problem = _problem(data, kernel, backend=backend, seed=seed)
         stored = run(problem, chosen, progress=progress)
         found = summarise(stored, names=list(names.values()))
-        amplitudes[prior] = {part: found[name] for part, name in names.items()}
-    return Shrinkage(size=size, amplitudes=amplitudes)
+        amplitudes[prior] = {label: found[name] for label, name in names.items()}
+        drawn = np.vstack(
+            [
+                np.asarray(stored["posterior"][name].values, dtype=float).ravel()
+                for name in names.values()
+            ]
+        )
+        ratios[prior] = drawn.min(axis=0) / drawn.max(axis=0)
+    return Shrinkage(size=size, amplitudes=amplitudes, ratios=ratios)
 
 
 def main(argv: Any = None) -> int:
@@ -424,9 +532,7 @@ def main(argv: Any = None) -> int:
         action="store_true",
         help="also run the horseshoe demonstration on a one-component truth",
     )
-    parser.add_argument(
-        "--figures", default=None, help="write W5.8's figure into this directory"
-    )
+    parser.add_argument("--figures", default=None, help="write W5.8's figure into this directory")
     args = parser.parse_args(argv)
     budget = EmceeBudget(args.walkers, args.steps, args.burn_in)
     comparison = compare(
@@ -442,14 +548,7 @@ def main(argv: Any = None) -> int:
         print(f"\nWrote {len(written)} figure to {args.figures}")
     if args.shrinkage:
         print()
-        print(
-            shrinkage(
-                size=args.size,
-                backend=args.backend,
-                budget=budget,
-                progress=args.progress,
-            ).table()
-        )
+        print(shrinkage(size=args.size, backend=args.backend, progress=args.progress).table())
     return 0
 
 

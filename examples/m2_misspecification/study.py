@@ -105,9 +105,17 @@ __all__ = [
     "LIKELIHOODS",
     "LOCALISATION_CONTRAST",
     "LOCALISATION_TOLERANCE_POINTS",
+    "MANY_LINES_BIAS_MARGIN",
     "MANY_LINES_EMCEE",
+    "MANY_LINES_FULL_SHRINKAGE_FACTOR",
+    "MANY_LINES_FULL_SHRINKAGE_MASS_FACTOR",
     "MANY_LINES_KERNELS",
+    "MANY_LINES_LOCALISATION_CONTRAST",
     "MANY_LINES_NUTS",
+    "MANY_LINES_SHRINKAGE_FACTOR",
+    "MANY_LINES_SHRINKAGE_MASS_FACTOR",
+    "MANY_LINES_SIGNAL_FLOOR",
+    "MANY_LINES_STATIONARY_MIN_BIAS",
     "MEASURED_SCATTER",
     "MILESTONE_EMCEE",
     "MILESTONE_INTERVAL_TOLERANCE",
@@ -307,6 +315,81 @@ LOCALISATION_TOLERANCE_POINTS = 3.0
 #: so that "it peaked somewhere" is not mistaken for "it found something".
 #: Measured: 36.6x.
 LOCALISATION_CONTRAST = 5.0
+
+# ---------------------------------------------------------------------------
+# W5.8's thresholds. Every one of them is a **margin** — a ratio between two
+# arms of the comparison, or a distance from a threshold the study already had
+# — rather than a number one arm happened to reach, which is W4.5's fringing
+# precedent and the reason those assertions survive a change of budget. The
+# measured value at MANY_LINES_EMCEE / SHRINKAGE_EMCEE, 200 points, is recorded
+# beside each.
+# ---------------------------------------------------------------------------
+
+#: On the ``many_lines`` scenario the **stationary** flexible likelihood must
+#: miss the truth by at least this many posterior widths on at least one
+#: parameter. This is the scenario's whole point — one length scale is not
+#: enough for a deviation that has two — and it is the first assertion in this
+#: study that a flexible likelihood is required to *fail*. Measured: 2.84,
+#: against :data:`FLEXIBLE_MAX_BIAS_WIDTHS` of 1.5.
+MANY_LINES_STATIONARY_MIN_BIAS = 2.0
+
+#: ... and each non-stationary arm must beat it by at least this factor.
+#: Measured: 3.1x for the warped Matérn (2.84 -> 0.92) and 3.6x for the ``Sum``
+#: (2.84 -> 0.78). A ratio rather than two thresholds because both arms are
+#: fitted to the same spectrum at the same budget, so a change in the sampler
+#: moves both worst biases together and leaves the ratio alone.
+MANY_LINES_BIAS_MARGIN = 2.0
+
+#: The GP-localisation score inside the line band must exceed the score outside
+#: it by this factor. Within one fit rather than against the control scenario
+#: (:data:`LOCALISATION_CONTRAST`'s comparison), because this scenario has a
+#: deviation everywhere: the question is not "did the GP find anything?" but
+#: "did it find more where the forest is?". Measured: 2.76 for the stationary
+#: arm (7.20 against 2.61), 1.90 for the warped one (2.15 against 1.13) and
+#: 3.02 for the ``Sum`` (1.84 against 0.61). The warped arm is the smallest of
+#: the three and should be: a warp that has compressed the coordinate under the
+#: forest reports a *flatter* score there, because the score is measured in the
+#: GP's own posterior standard deviation and the warp has given the GP less to
+#: be surprised by.
+MANY_LINES_LOCALISATION_CONTRAST = 1.4
+
+#: The sparsity guard, as a factor. The posterior median of ``min(a) / max(a)``
+#: over two nearly degenerate noise components, under a flat amplitude prior,
+#: divided by the same quantity under the regularised horseshoe. Measured over
+#: **three run seeds** on identical data, at
+#: :data:`~examples.m2_misspecification.many_lines.SHRINKAGE_EMCEE`: 2.78, 2.96
+#: and 1.90 (and 2.93 at the study's own prior ceiling, which
+#: ``tests/m2/test_many_lines.py`` runs at). The threshold sits a third below
+#: the worst of those, and it has to
+#: sit that far below: the horseshoe's three levels give the posterior a funnel,
+#: which an ensemble sampler explores unevenly, and the scatter this leaves is
+#: what the margin is against.
+MANY_LINES_SHRINKAGE_FACTOR = 1.3
+
+#: The same guard as a posterior **mass**: the mass with ``min(a) / max(a)``
+#: below :data:`~examples.m2_misspecification.many_lines.SPARSE_FRACTION`, under
+#: the horseshoe, divided by the mass under the flat prior. Measured over the
+#: same three seeds: 2.15, 2.09 and 1.68 (2.09 in the suite) — a *relative*
+#: scatter of 13 % against
+#: the median ratio's 22 %, which is why this is the statistic the module calls
+#: primary. Two statistics moving the same way is what says the effect is the
+#: prior's rather than the sampler's.
+MANY_LINES_SHRINKAGE_MASS_FACTOR = 1.2
+
+#: What the same two factors reach at the marked budget, where the funnel is
+#: explored properly. Asserted by the ``m2_full`` row.
+MANY_LINES_FULL_SHRINKAGE_FACTOR = 2.0
+MANY_LINES_FULL_SHRINKAGE_MASS_FACTOR = 1.6
+
+#: ... and the component the truth *does* have must survive, Jy. A prior that
+#: shrank everything would satisfy both factors above and be useless. Measured:
+#: 0.0077 Jy under the horseshoe against 0.0118 under the flat prior, with a
+#: per-point noise sigma of about 0.0099 Jy. The global scale shrinks the real
+#: component a little too, which is what a *global* scale does and why the
+#: floor is set well below what either prior reaches rather than at "the same
+#: amplitude either way".
+MANY_LINES_SIGNAL_FLOOR = 0.003
+
 
 #: Cross-backend agreement, in units of the posterior's own 68 % half-width.
 #: The first pair is what ``tests/m2/test_backend_agreement.py`` asserts at

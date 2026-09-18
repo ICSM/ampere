@@ -294,6 +294,63 @@ rule 2. The rows are unchanged as statements about the libraries;
 `ampere/backends/torch/lowering.py` and
 `ampere/backends/jax/distributions.py` are the implementations.)*
 
+### 3.2.1 Hierarchical priors, and the parameterisation NUTS wants (*Added W5.8*)
+
+Everything above is a *frozen* distribution, whose arguments are numbers. A
+`HierarchicalPrior` (§8) supplies one or more of them from another parameter's
+value instead, and lowers through exactly the same table: the family name is
+the same name, the referenced value is what the lowered constructor receives,
+and the ordering §8 imposes is what guarantees it has a value by then. Nothing
+in §3.2 changes; this subsection exists because *which* of two equivalent
+declarations is written changes how well a gradient sampler explores the
+result, and that is a lowering concern rather than a modelling one.
+
+**The funnel.** `θ_k | s ~ Normal(0, s)` with `s` itself sampled has a
+posterior whose width in `θ_k` is proportional to `s` — a funnel, narrowing to
+a point at `s = 0`. NUTS chooses one step size for the whole geometry, so a
+step that works in the mouth of the funnel overshoots its neck and a step that
+works in the neck cannot cross the mouth: the reported symptom is divergences,
+sometimes many, and the silent symptom is a chain that never visits small `s`.
+The **non-centred** parameterisation is the same prior written so that the
+sampled coordinates are independent of each other:
+
+| centred (what is modelled) | non-centred (what is sampled) |
+|---|---|
+| `s ~ HalfNormal(σ)`, `θ_k | s ~ Normal(0, s)` | `s ~ HalfNormal(σ)`, `z_k ~ Normal(0, 1)`, `θ_k = s · z_k` |
+
+The right-hand column has no funnel, because `z_k` and `s` are a priori
+independent, and it lowers to two ordinary rows of §3.2 (`halfnorm` and `norm`)
+with a multiplication in between.
+
+**Where the multiplication lives.** This contract has no deterministic node —
+`parameters.md` §9 — so `θ_k = s · z_k` is formed by whatever consumes the
+knot variables, not declared. `WarpedKernel` does exactly that and it is the
+reason `non_centred=True` is its default: the kernel declares `z_k ~ Normal(0,
+1)` and forms `s · z_k` itself, so the sampler sees the right-hand column while
+the model is the left-hand one. `non_centred=False` declares the left-hand
+column directly with `HierarchicalPrior`, which is what a strongly identified
+warp can afford and what the plan names.
+
+**The horseshoe's chain lowers, its slab does not.**
+`regularised_horseshoe` (`parameters.md` §9) is three hierarchical levels, and
+its default `tail="regularised"` is chosen so that every one of them is in the
+table above: `halfcauchy` for the global scale, `gamma` for each local scale,
+`halfnorm` for each amplitude. Two of those three lower on both backends today
+and **`halfcauchy` lowers on neither** — it is not in §3.2 and not in either
+backend's registration — so the global level needs a
+`register_lowering("halfcauchy", backend, …)` row, which is §3.4's fallback
+rule used as intended (`torch.distributions.HalfCauchy` and `numpyro.distributions.HalfCauchy`
+are both exact). `tail="cauchy"` needs the same row for the local level as
+well. The horseshoe's own funnel is the one described above, one level deeper,
+and it is why `tests/m2`'s shrinkage rows run at a longer emcee budget than
+the rest of that suite and pin a margin a third below what they measure.
+
+Spike-and-slab — the other classical sparsity prior, and the one a reader may
+expect here — stays out, for the reason `horizon_notes.md` §1 gives and §12 Q1
+rules: its inclusion indicator is **discrete**, so it has no default bijection
+(`parameters.md` §6) and no gradient path. A continuous shrinkage prior is what
+this contract can lower, which is why it is the one `parameters.md` §9 ships.
+
 ### 3.3 The parametrisation traps, spelled out
 
 Every row above that says "must be 0" is a trap, and they share one cause:

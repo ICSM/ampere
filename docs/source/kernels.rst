@@ -76,6 +76,24 @@ is what fixes the constant in front of the O(N) solve:
        flexible likelihood stops being stationary without leaving the O(N)
        path. ``likelihoods.md`` §6 is the full account.
 
+A ``Sum`` of noise terms should carry the **sparsity prior** that goes with it,
+so that a component the data do not need is switched off by the prior rather
+than fitted to whatever is left over. That prior is
+:func:`~ampere.core.regularised_horseshoe` — one global scale shared by every
+component, one local scale per component under it, each amplitude under its own
+local scale — and :func:`~ampere.core.with_shrinkage` puts it on a kernel
+without changing anything else about it::
+
+    kernel = with_shrinkage(
+        Sum(Matern32(...), Matern32(...), labels=("broad", "narrow")),
+        regularised_horseshoe(("broad.amplitude", "narrow.amplitude")),
+    )
+
+It is the recommended prior for any sum of noise components (**W5.8**);
+``likelihoods.md`` §6 gives the account, including which part of Piironen &
+Vehtari's regularised horseshoe is declarable today and which is not, and
+``examples/m2_misspecification/many_lines.py`` is the demonstration.
+
 :class:`~ampere.core.SquaredExponential` ships too, retained deliberately
 (``likelihoods.md`` §14) as the point of comparison M2 needs, but it
 declares ``QUASISEPARABLE = False``: infinitely smooth, so no polynomial
