@@ -36,6 +36,8 @@ from ampere.core import (
     describe_prior,
     log_density,
     prior_from_spec,
+    # W5.8 -- the sparsity prior for summed noise components (appended).
+    regularised_horseshoe,
     reserved_names,
 )
 from ampere.core.parameter import TORCH_MODULE_NAMES
@@ -1426,3 +1428,129 @@ class TestTheReservedNamespace:
         model.register_buffer("grid", np.arange(3.0))
         with pytest.raises(ParameterError, match="already declares a buffer"):
             model.register_parameter(Parameter("grid", st.norm(0.0, 1.0)))
+
+
+# ---------------------------------------------------------------------------
+# W5.8: the sparsity-inducing prior for summed noise components. Appended, as
+# its own block; nothing above this line changes.
+# ---------------------------------------------------------------------------
+
+
+class TestTheRegularisedHorseshoe:
+    """``regularised_horseshoe`` is a declaration, and these are its properties.
+
+    The *science* of it — that it shrinks a redundant noise component — is
+    ``tests/m2/test_many_lines.py``'s to establish, and it costs chains.
+    What is here is what has to hold before those chains mean anything: the
+    three levels reference each other in the right direction, they can be put
+    into a ``ParameterSet`` in the order the helper returns them (and not in
+    any other), and every family it names is one this contract can describe.
+    """
+
+    NAMES = ("broad.amplitude", "narrow.amplitude")
+
+    def test_it_declares_three_levels_in_dependency_order(self) -> None:
+        declaration = regularised_horseshoe(self.NAMES)
+        assert [p.name for p in declaration] == [
+            "shrinkage.global_scale",
+            "shrinkage.broad",
+            "shrinkage.narrow",
+            "broad.amplitude",
+            "narrow.amplitude",
+        ]
+        assert declaration[0].references == ()
+        assert declaration[1].references == ("shrinkage.global_scale",)
+        assert declaration[2].references == ("shrinkage.global_scale",)
+        assert declaration[3].references == ("shrinkage.broad",)
+        assert declaration[4].references == ("shrinkage.narrow",)
+
+    def test_the_order_is_the_one_incremental_registration_needs(self) -> None:
+        """Why the helper returns a *list* rather than a set.
+
+        A ``ParameterSet`` built in one call sorts its own evaluation order, so
+        the order is free there; ``register_parameter`` validates each addition
+        against what is already declared, so it is not free there — and that
+        is the route a kernel takes. Registering an amplitude before the local
+        scale it references is refused, which is why the helper returns the
+        levels outermost first and ``ampere.core.with_shrinkage`` keeps them
+        that way.
+        """
+        declaration = regularised_horseshoe(self.NAMES)
+        declared = ParameterSet(declaration)
+        assert declared.free_size == 5
+        assert declared.names[:3] == (
+            "shrinkage.global_scale",
+            "shrinkage.broad",
+            "shrinkage.narrow",
+        )
+
+        class Toy(Parameterised):
+            pass
+
+        incremental = Toy()
+        for parameter in declaration:
+            incremental.register_parameter(parameter)
+        assert incremental.parameters.free_size == 5
+
+        backwards = Toy()
+        with pytest.raises(ParameterError, match="which is not in this set"):
+            for parameter in reversed(declaration):
+                backwards.register_parameter(parameter)
+
+    def test_every_level_is_positive_and_log_bijected(self) -> None:
+        """An amplitude and the scales of an amplitude all live on the half-line."""
+        for parameter in regularised_horseshoe(self.NAMES):
+            assert isinstance(parameter.unconstraining_bijection(), Log)
+
+    def test_the_unit_reaches_every_level(self) -> None:
+        """A scale and the thing it scales are the same kind of quantity."""
+        for parameter in regularised_horseshoe(self.NAMES, unit=u.Jy):
+            assert parameter.unit == u.Jy
+
+    @pytest.mark.parametrize(
+        ("tail", "family"), [("regularised", "gamma"), ("cauchy", "halfcauchy")]
+    )
+    def test_the_tail_chooses_the_local_level_family(self, tail: str, family: str) -> None:
+        """The one thing ``tail=`` changes, and the reason the default is ``gamma``.
+
+        Piironen & Vehtari's slab is a deterministic function of two sampled
+        parameters and §9 has no node for it; the declarable form of the same
+        guard is a lighter-tailed local level, and ``gamma`` is in
+        ``lowering.md`` §3.2's table for both torch and jax where ``halfcauchy``
+        is in neither.
+        """
+        declaration = regularised_horseshoe(self.NAMES, tail=tail)
+        assert declaration[1].prior.family == family
+        assert declaration[0].prior.dist.name == "halfcauchy"
+        assert declaration[3].prior.family == "halfnorm"
+
+    def test_the_global_scale_sets_the_prior_scale_of_the_global_level(self) -> None:
+        declaration = regularised_horseshoe(self.NAMES, global_scale=0.05)
+        assert describe_prior(declaration[0].prior).kwds["scale"] == pytest.approx(0.05)
+
+    def test_it_samples_from_its_own_joint(self) -> None:
+        """The chain evaluates: three levels resolved in order, finite throughout."""
+        declared = ParameterSet(regularised_horseshoe(self.NAMES, global_scale=0.05))
+        drawn = declared.sample(np.random.default_rng(0))
+        assert set(drawn) == set(declared.names)
+        assert all(math.isfinite(float(value)) and float(value) >= 0.0 for value in drawn.values())
+        assert math.isfinite(float(declared.lnprior(drawn)))
+
+    def test_one_component_is_refused_by_name(self) -> None:
+        """A horseshoe over one amplitude has nothing to be sparse against."""
+        with pytest.raises(ParameterError, match="sparsity prior"):
+            regularised_horseshoe(("only.amplitude",))
+
+    def test_colliding_local_names_are_refused_by_name(self) -> None:
+        """Two unlabelled amplitudes would share a local scale silently."""
+        with pytest.raises(ParameterError, match="collide"):
+            regularised_horseshoe(("a.amplitude", "a.length_scale"))
+
+    @pytest.mark.parametrize("bad", [0.0, -1.0, float("inf")])
+    def test_a_global_scale_that_is_not_a_positive_number_is_refused(self, bad: float) -> None:
+        with pytest.raises(ParameterError, match="positive, finite"):
+            regularised_horseshoe(self.NAMES, global_scale=bad)
+
+    def test_an_unknown_tail_is_refused_naming_the_two(self) -> None:
+        with pytest.raises(ParameterError, match="is not one of"):
+            regularised_horseshoe(self.NAMES, tail="slab")

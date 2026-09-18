@@ -66,7 +66,14 @@ import numpy as np
 import scipy.stats as st
 
 from .exceptions import LikelihoodError
-from .parameter import HierarchicalPrior, Identity, Log, Parameter, Parameterised
+from .parameter import (
+    HierarchicalPrior,
+    Identity,
+    Log,
+    Parameter,
+    Parameterised,
+    ParameterSet,
+)
 
 __all__ = [
     "DTYPE",
@@ -104,6 +111,7 @@ __all__ = [
     "sum_representation",
     "term_provenance_entries",
     "warped_representation",
+    "with_shrinkage",
 ]
 
 #: The dtype every array in the kernel algebra is held in. ``DEVELOPMENT_PLAN.md``
@@ -3167,3 +3175,113 @@ for _kernel_type, _builder in (
 ):
     register_quasiseparable_term(_kernel_type, _builder, builtin=True)
 del _kernel_type, _builder
+
+
+# ---------------------------------------------------------------------------
+# W5.8: putting a shrinkage declaration on a composite kernel
+#
+# Appended as its own block. Nothing above this line changes; in particular
+# ``_Composite.__init__`` is untouched, and a kernel built without this
+# function has exactly the parameters, spec and hash it had before.
+# ---------------------------------------------------------------------------
+
+
+def with_shrinkage(kernel: Kernel, declaration: Sequence[Parameter]) -> Kernel:
+    """A copy of *kernel* carrying a shrinkage declaration over its amplitudes.
+
+    :func:`~ampere.core.regularised_horseshoe` returns the declaration; this
+    puts it on a kernel. The two are separate because the declaration is a
+    statement about parameters (``parameters.md`` §9) and this is the one hook
+    the kernel contract needs for it.
+
+    **Why a hook is needed at all.** A hierarchical prior references a
+    parameter *by name*, and a :class:`~ampere.core.parameter.ParameterSet`
+    refuses, **on each registration**, a reference that is not already in it —
+    which is what stops a dangling reference reaching a sampler. A kernel registers its
+    hyperparameters in its own ``__init__``, and a summand's ``amplitude`` is
+    registered before anything a horseshoe would give it to reference, so
+    ``Matern32(Parameter("amplitude", HierarchicalPrior(...)), ...)`` is
+    refused at construction. The scale levels therefore have to be registered
+    *ahead of* the amplitudes, and only something that rebuilds the whole set
+    can do that. This function is that something, and it is **functional**: the
+    kernel it is given is unchanged, so one declaration can be shared between
+    problems, exactly as :meth:`Kernel.for_axes` is.
+
+    What it does, in order: take every parameter in *declaration* that the
+    kernel does not already declare (the scale levels) as the new set's first
+    entries, then walk the kernel's own parameters in declaration order,
+    substituting any that *declaration* re-declares (the amplitudes). The
+    kernel's children, terms, capability flags, axes and
+    :attr:`~ampere.core.Kernel.FAMILY` are untouched, so it lowers exactly as
+    it did: the quasiseparable builders read :attr:`Kernel.terms`, and the
+    extra names never reach a child, because
+    :meth:`Kernel._child_values` selects on the ``label.`` prefix and the scale
+    levels carry a prefix of their own.
+
+    Parameters
+    ----------
+    kernel
+        The kernel to re-declare. Usually a :class:`Sum`; anything with the
+        named amplitudes works.
+    declaration
+        Parameters, **outermost first** — what
+        :func:`~ampere.core.regularised_horseshoe` returns. Every name that
+        the kernel already declares replaces that parameter; every name it does
+        not is added ahead of them.
+
+    Returns
+    -------
+    Kernel
+        A copy. *kernel* is not modified.
+
+    Raises
+    ------
+    LikelihoodError
+        If *declaration* re-declares nothing the kernel has — which would mean
+        the amplitude names are misspelled, and a shrinkage prior that shrinks
+        nothing is worth a message rather than a silent extra dimension.
+
+    Examples
+    --------
+    >>> from ampere.core.parameter import regularised_horseshoe
+    >>> kernel = Sum(Matern32(0.3, 0.01), Matern32(0.3, 0.001),
+    ...              labels=("broad", "narrow"))
+    >>> shrunk = with_shrinkage(
+    ...     kernel, regularised_horseshoe(("broad.amplitude", "narrow.amplitude"))
+    ... )
+    >>> shrunk.parameters.names[:3]
+    ('shrinkage.global_scale', 'shrinkage.broad', 'shrinkage.narrow')
+    >>> shrunk.parameters.names[3:]
+    ('broad.amplitude', 'broad.length_scale', 'narrow.amplitude', 'narrow.length_scale')
+    >>> kernel.parameters.names[:2]                 # the original is untouched
+    ('broad.amplitude', 'broad.length_scale')
+    >>> shrunk.FAMILY == kernel.FAMILY, shrunk.QUASISEPARABLE
+    (True, True)
+    """
+    if not isinstance(kernel, Kernel):
+        raise LikelihoodError(f"with_shrinkage takes a Kernel, got {type(kernel).__name__}.")
+    given = list(declaration)
+    for parameter in given:
+        if not isinstance(parameter, Parameter):
+            raise LikelihoodError(
+                f"with_shrinkage's declaration must be Parameters — what "
+                f"regularised_horseshoe returns — got {type(parameter).__name__}."
+            )
+    replacements = {parameter.name: parameter for parameter in given}
+    existing = tuple(kernel.parameters.names)
+    replaced = [name for name in existing if name in replacements]
+    if not replaced:
+        raise LikelihoodError(
+            f"with_shrinkage's declaration re-declares none of {list(existing)}; it names "
+            f"{sorted(replacements)}. A shrinkage prior that shrinks nothing is a set of extra "
+            f"sampled dimensions with no effect on the covariance, so it is refused here. "
+            f"Amplitude names are qualified by their term's label inside a composite — "
+            f"'broad.amplitude', not 'amplitude'."
+        )
+    rebuilt = [parameter for parameter in given if parameter.name not in existing]
+    rebuilt += [replacements.get(parameter.name, parameter) for parameter in kernel.parameters]
+    shrunk = copy.copy(kernel)
+    shrunk.__dict__["_parameters"] = ParameterSet(rebuilt)
+    shrunk.__dict__["_bound_cache"] = {}
+    shrunk.__dict__["HYPERPARAMETERS"] = tuple(shrunk.parameters.names)
+    return shrunk

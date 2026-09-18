@@ -8,6 +8,15 @@ written anywhere unless ``--figures`` names a directory.
     python -m examples.m2_misspecification --backend jax   # NUTS, if the extra is there
     python -m examples.m2_misspecification --figures /tmp/m2
 
+W5.8's extension is reached from here too — one scenario, one kernel at a time::
+
+    python -m examples.m2_misspecification --scenario many_lines --kernel matern32
+    python -m examples.m2_misspecification --scenario many_lines --kernel warped
+    python -m examples.m2_misspecification --scenario many_lines --kernel sum
+
+and the comparison of the three, side by side in one table, is
+``python -m examples.m2_misspecification.many_lines``.
+
 The default budget is the milestone one
 (:data:`~examples.m2_misspecification.study.MILESTONE_EMCEE`), which is what
 the numbers in ``docs/source/m2_misspecification.rst`` were measured at and
@@ -23,7 +32,7 @@ import time
 from collections.abc import Sequence
 
 from . import study
-from .generators import SIZES
+from .generators import EXTENDED_SCENARIOS, SIZES
 from .model import PARAMETER_NAMES
 
 
@@ -32,13 +41,22 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--size", type=int, default=SIZES[0], help="points in the spectrum")
     parser.add_argument("--backend", default="reference", choices=list(study.BACKENDS))
     parser.add_argument(
+        "--scenario",
+        default=None,
+        choices=[scenario.key for scenario in EXTENDED_SCENARIOS],
+        help="run one scenario rather than the four; 'many_lines' is W5.8's",
+    )
+    parser.add_argument(
         "--solver",
         default="quasisep",
         choices=list(study.SOLVERS),
         help="GP solver for the flexible likelihood; 'dense' is O(N^3)",
     )
     parser.add_argument(
-        "--kernel", default="matern32", choices=list(study.KERNELS), help="GP kernel"
+        "--kernel",
+        default="matern32",
+        choices=list(study.KERNELS),
+        help="GP kernel; 'warped' is W5.7's and 'sum' is W4.5's",
     )
     parser.add_argument("--quick", action="store_true", help="use tests/m2's short budget")
     parser.add_argument("--figures", default=None, help="write the figures into this directory")
@@ -46,24 +64,39 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _budget(backend: str, quick: bool) -> study.EmceeBudget | study.NutsBudget:
-    if backend == "reference":
-        return study.TEST_EMCEE if quick else study.MILESTONE_EMCEE
-    return study.TEST_NUTS if quick else study.MILESTONE_NUTS
+def _budget(backend: str, quick: bool, kernel: str) -> study.EmceeBudget | study.NutsBudget:
+    """The sampler budget for this backend, this kernel and this ``--quick``.
+
+    W5.8's two arms are why *kernel* is an argument. ``warped`` carries six
+    more free parameters than the stationary kernel and ``sum`` two, and an
+    emcee ensemble needs more than twice the dimension in walkers — so
+    ``TEST_EMCEE``'s twenty cannot run either of them, and
+    :data:`~examples.m2_misspecification.study.MANY_LINES_EMCEE` is the budget
+    sized for the widest of them. It is also short enough to serve as the quick
+    look, so both arms get it either way.
+    """
+    if backend != "reference":
+        return study.TEST_NUTS if quick else study.MILESTONE_NUTS
+    if kernel in ("warped", "sum"):
+        return study.MANY_LINES_EMCEE
+    return study.TEST_EMCEE if quick else study.MILESTONE_EMCEE
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the study, print the recovery and diagnostics tables, return an exit code."""
     arguments = _parser().parse_args(argv)
-    budget = _budget(arguments.backend, arguments.quick)
+    budget = _budget(arguments.backend, arguments.quick, arguments.kernel)
+    chosen = None if arguments.scenario is None else [arguments.scenario]
     print(
         f"# M2: {arguments.backend} backend, {arguments.size} points, "
-        f"{arguments.kernel}/{arguments.solver}, {budget}"
+        f"{arguments.kernel}/{arguments.solver}, "
+        f"{'the four scenarios' if chosen is None else arguments.scenario}, {budget}"
     )
     started = time.perf_counter()
     results = study.run_study(
         size=arguments.size,
         backend=arguments.backend,
+        scenarios=chosen,
         budget=budget,
         kernel=arguments.kernel,
         solver=arguments.solver,
@@ -98,19 +131,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     print("\nGP hyperparameters, flexible likelihood:")
+    prefix = f"{study.DATASET_LABEL}.likelihood."
     for (key, kind), entry in results.items():
         if kind != "flexible":
             continue
-        names = [
-            f"{study.DATASET_LABEL}.likelihood.amplitude",
-            f"{study.DATASET_LABEL}.likelihood.length_scale",
-        ]
+        # Read the names off the problem rather than spelling them. W5.8's
+        # ``warped`` and ``sum`` arms declare a different set from the
+        # stationary kernel's amplitude-and-length-scale pair — six warp
+        # variables, or two labelled terms — and a hard-coded pair is a
+        # KeyError the moment --kernel names one of them.
+        declared = entry["problem"].parameters
+        names = [name for name in declared.free_names if name.startswith(prefix)]
         summaries = study.summarise(entry["run"], names=names)
-        amplitude, length = (summaries[name] for name in names)
-        print(
-            f"  {key:<16s} amplitude = {amplitude.median:.5g} +- {amplitude.width:.3g} Jy, "
-            f"length scale = {length.median:.5g} +- {length.width:.3g} um"
-        )
+        print(f"  {key}:")
+        for name in names:
+            summary = summaries[name]
+            unit = declared[name].unit
+            suffix = "" if unit is None else f" {unit}"
+            print(
+                f"    {name[len(prefix) :]:<26s} "
+                f"{summary.median:>12.5g} +- {summary.width:.3g}{suffix}"
+            )
 
     if arguments.figures is not None:
         from . import figures

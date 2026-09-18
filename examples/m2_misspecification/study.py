@@ -105,6 +105,17 @@ __all__ = [
     "LIKELIHOODS",
     "LOCALISATION_CONTRAST",
     "LOCALISATION_TOLERANCE_POINTS",
+    "MANY_LINES_BIAS_MARGIN",
+    "MANY_LINES_EMCEE",
+    "MANY_LINES_FULL_SHRINKAGE_FACTOR",
+    "MANY_LINES_FULL_SHRINKAGE_MASS_FACTOR",
+    "MANY_LINES_KERNELS",
+    "MANY_LINES_LOCALISATION_CONTRAST",
+    "MANY_LINES_NUTS",
+    "MANY_LINES_SHRINKAGE_FACTOR",
+    "MANY_LINES_SHRINKAGE_MASS_FACTOR",
+    "MANY_LINES_SIGNAL_FLOOR",
+    "MANY_LINES_STATIONARY_MIN_BIAS",
     "MEASURED_SCATTER",
     "MILESTONE_EMCEE",
     "MILESTONE_INTERVAL_TOLERANCE",
@@ -115,8 +126,11 @@ __all__ = [
     "SEED",
     "SOLVERS",
     "STANDARD_MIN_BIAS_WIDTHS",
+    "SUM_LONG_LENGTH_SCALE",
+    "SUM_SHORT_LENGTH_SCALE",
     "TEST_EMCEE",
     "TEST_NUTS",
+    "WARP_KNOTS",
     "WHITENESS_STRUCTURE_LEVEL",
     "WHITENESS_WHITE_LEVEL",
     "Diagnosis",
@@ -156,12 +170,47 @@ BACKENDS: tuple[str, ...] = ("reference", "torch", "jax")
 SOLVERS: tuple[str, ...] = ("quasisep", "dense")
 #: The kernels. ``matern32`` is the reproduction's; ``squared_exponential`` is
 #: legacy's, kept for the 200-point cross-check and refused by ``quasisep``.
-KERNELS: tuple[str, ...] = ("matern32", "squared_exponential")
+#: ``warped`` (W5.7) and ``sum`` (W4.5) are W5.8's two answers to a deviation
+#: with two length scales, and both are quasiseparable, so both reach the O(N)
+#: solver the reproduction's does.
+KERNELS: tuple[str, ...] = ("matern32", "squared_exponential", "warped", "sum")
+
+#: The three kernels W5.8's ``many_lines`` scenario compares, in the order its
+#: tables and its figure use them.
+MANY_LINES_KERNELS: tuple[str, ...] = ("matern32", "warped", "sum")
 
 #: The flexible likelihood's hyperparameter prior scales — the paper study's
 #: ``covWeightPrior`` and ``scaleLengthPrior``, as half-normal scales.
 GP_AMPLITUDE_SCALE = 0.3
 GP_LENGTH_SCALE = 0.003
+
+#: W5.8's input-warp knots, micron: ``quantile_knots`` evaluated **once**, on
+#: this study's own fixed band, and recorded here as the numbers it returned.
+#: That is W5.7's rule and its reason — a kernel whose knots were computed from
+#: the data it is about to be fitted to would have a different spec hash for
+#: every dataset — and it costs nothing here, because
+#: :func:`~examples.m2_misspecification.generators.wavelength_grid` spans the
+#: same range at every size, so the quantiles of a uniform grid over it are the
+#: same six numbers at 200 points and at 20 000. Six knots is the top of W5.7's
+#: "three to six": five increments plus one shrinkage scale, six sampled
+#: dimensions, and the first and last knot are the band's own ends, so the warp
+#: interpolates over the data rather than extrapolating into it. Five knots was
+#: measured too — the warp could still reach the two length scales, at a worst
+#: bias of 1.22 posterior widths against six knots' 0.92 — and six is kept
+#: because it resolves the ``many_lines`` line band without being *placed* on
+#: it: these are the plain quantiles of a uniform grid, not knots tuned to
+#: where the answer is.
+WARP_KNOTS: tuple[float, ...] = (0.842, 0.848, 0.854, 0.860, 0.866, 0.872)
+
+#: W5.8's ``Sum`` arm: a long-scale term for a continuum error and a short one
+#: for a line forest. The two length-scale priors **differ**, and must: two
+#: terms declared with identical priors are exchangeable, so the posterior is
+#: bimodal under swapping their labels and every summary of it would be a
+#: summary of two modes rather than of one. Differing priors also state the
+#: expectation the sum encodes, which is the honest form of the comparison
+#: against a kernel that has only one scale to spend.
+SUM_LONG_LENGTH_SCALE = 0.01
+SUM_SHORT_LENGTH_SCALE = 0.0005
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +271,16 @@ MILESTONE_NUTS = NutsBudget(draws=1_000, warmup=1_000, chains=4)
 DOC_EMCEE = MILESTONE_EMCEE
 DOC_NUTS = MILESTONE_NUTS
 
+#: W5.8's per-PR budget, for the ``many_lines`` comparison. Longer than
+#: :data:`TEST_EMCEE` for one structural reason: the warped arm has eleven free
+#: parameters against the stationary arm's six, and emcee needs more walkers
+#: than twice the dimension to move at all. Thirty-two walkers covers the
+#: widest arm, and every arm is run at the same budget, because a comparison in
+#: which one fit got more sampler than another is a comparison of budgets.
+MANY_LINES_EMCEE = EmceeBudget(walkers=32, steps=1_100, burn_in=550)
+#: The gradient path's equivalent, for the torch/jax rows.
+MANY_LINES_NUTS = NutsBudget(draws=400, warmup=400, chains=2)
+
 
 # ---------------------------------------------------------------------------
 # The thresholds every assertion in ``tests/m2`` is written against. They live
@@ -256,6 +315,81 @@ LOCALISATION_TOLERANCE_POINTS = 3.0
 #: so that "it peaked somewhere" is not mistaken for "it found something".
 #: Measured: 36.6x.
 LOCALISATION_CONTRAST = 5.0
+
+# ---------------------------------------------------------------------------
+# W5.8's thresholds. Every one of them is a **margin** — a ratio between two
+# arms of the comparison, or a distance from a threshold the study already had
+# — rather than a number one arm happened to reach, which is W4.5's fringing
+# precedent and the reason those assertions survive a change of budget. The
+# measured value at MANY_LINES_EMCEE / SHRINKAGE_EMCEE, 200 points, is recorded
+# beside each.
+# ---------------------------------------------------------------------------
+
+#: On the ``many_lines`` scenario the **stationary** flexible likelihood must
+#: miss the truth by at least this many posterior widths on at least one
+#: parameter. This is the scenario's whole point — one length scale is not
+#: enough for a deviation that has two — and it is the first assertion in this
+#: study that a flexible likelihood is required to *fail*. Measured: 2.84,
+#: against :data:`FLEXIBLE_MAX_BIAS_WIDTHS` of 1.5.
+MANY_LINES_STATIONARY_MIN_BIAS = 2.0
+
+#: ... and each non-stationary arm must beat it by at least this factor.
+#: Measured: 3.1x for the warped Matérn (2.84 -> 0.92) and 3.6x for the ``Sum``
+#: (2.84 -> 0.78). A ratio rather than two thresholds because both arms are
+#: fitted to the same spectrum at the same budget, so a change in the sampler
+#: moves both worst biases together and leaves the ratio alone.
+MANY_LINES_BIAS_MARGIN = 2.0
+
+#: The GP-localisation score inside the line band must exceed the score outside
+#: it by this factor. Within one fit rather than against the control scenario
+#: (:data:`LOCALISATION_CONTRAST`'s comparison), because this scenario has a
+#: deviation everywhere: the question is not "did the GP find anything?" but
+#: "did it find more where the forest is?". Measured: 2.76 for the stationary
+#: arm (7.20 against 2.61), 1.90 for the warped one (2.15 against 1.13) and
+#: 3.02 for the ``Sum`` (1.84 against 0.61). The warped arm is the smallest of
+#: the three and should be: a warp that has compressed the coordinate under the
+#: forest reports a *flatter* score there, because the score is measured in the
+#: GP's own posterior standard deviation and the warp has given the GP less to
+#: be surprised by.
+MANY_LINES_LOCALISATION_CONTRAST = 1.4
+
+#: The sparsity guard, as a factor. The posterior median of ``min(a) / max(a)``
+#: over two nearly degenerate noise components, under a flat amplitude prior,
+#: divided by the same quantity under the regularised horseshoe. Measured over
+#: **three run seeds** on identical data, at
+#: :data:`~examples.m2_misspecification.many_lines.SHRINKAGE_EMCEE`: 2.78, 2.96
+#: and 1.90 (and 2.93 at the study's own prior ceiling, which
+#: ``tests/m2/test_many_lines.py`` runs at). The threshold sits a third below
+#: the worst of those, and it has to
+#: sit that far below: the horseshoe's three levels give the posterior a funnel,
+#: which an ensemble sampler explores unevenly, and the scatter this leaves is
+#: what the margin is against.
+MANY_LINES_SHRINKAGE_FACTOR = 1.3
+
+#: The same guard as a posterior **mass**: the mass with ``min(a) / max(a)``
+#: below :data:`~examples.m2_misspecification.many_lines.SPARSE_FRACTION`, under
+#: the horseshoe, divided by the mass under the flat prior. Measured over the
+#: same three seeds: 2.15, 2.09 and 1.68 (2.09 in the suite) — a *relative*
+#: scatter of 13 % against
+#: the median ratio's 22 %, which is why this is the statistic the module calls
+#: primary. Two statistics moving the same way is what says the effect is the
+#: prior's rather than the sampler's.
+MANY_LINES_SHRINKAGE_MASS_FACTOR = 1.2
+
+#: What the same two factors reach at the marked budget, where the funnel is
+#: explored properly. Asserted by the ``m2_full`` row.
+MANY_LINES_FULL_SHRINKAGE_FACTOR = 2.0
+MANY_LINES_FULL_SHRINKAGE_MASS_FACTOR = 1.6
+
+#: ... and the component the truth *does* have must survive, Jy. A prior that
+#: shrank everything would satisfy both factors above and be useless. Measured:
+#: 0.0077 Jy under the horseshoe against 0.0118 under the flat prior, with a
+#: per-point noise sigma of about 0.0099 Jy. The global scale shrinks the real
+#: component a little too, which is what a *global* scale does and why the
+#: floor is set well below what either prior reaches rather than at "the same
+#: amplitude either way".
+MANY_LINES_SIGNAL_FLOOR = 0.003
+
 
 #: Cross-backend agreement, in units of the posterior's own 68 % half-width.
 #: The first pair is what ``tests/m2/test_backend_agreement.py`` asserts at
@@ -350,6 +484,16 @@ _KERNEL_CLASSES = {"matern32": "Matern32", "squared_exponential": "SquaredExpone
 _SOLVER_CLASSES = {"quasisep": "QuasisepGP", "dense": "DenseGP"}
 
 
+def _matern32(backend: str, length_scale: float) -> Kernel:
+    """A Matérn-3/2 on *backend* with the study's amplitude prior and this scale."""
+    return _backend_module(backend).Matern32(
+        st.halfnorm(scale=GP_AMPLITUDE_SCALE),
+        st.halfnorm(scale=length_scale),
+        amplitude_unit=u.Jy,
+        length_scale_unit=u.micron,
+    )
+
+
 def build_kernel(backend: str = "reference", kernel: str = "matern32") -> Kernel:
     """The named kernel, on *backend*, with the study's hyperparameter priors.
 
@@ -357,9 +501,41 @@ def build_kernel(backend: str = "reference", kernel: str = "matern32") -> Kernel
     :class:`~ampere.core.GaussianProcessNoise` checks them against the observed
     container: a length scale silently in the wrong unit is the sort of error
     that produces a plausible number rather than a crash.
+
+    Four names, all reached through the backend's own namespace rather than
+    through a branch on the backend (W2.12), so every arm runs on the
+    reference, torch and jax paths unchanged:
+
+    ``matern32``
+        The reproduction's kernel. One amplitude, one length scale.
+    ``squared_exponential``
+        Legacy's, dense-only.
+    ``warped`` (W5.7)
+        A Matérn-3/2 under a monotone input warp over :data:`WARP_KNOTS`. The
+        base has the same two hyperparameters and the same two priors as
+        ``matern32``: what the warp adds is a coordinate that can be compressed
+        where the residual varies fast and stretched where it varies slowly, so
+        *one* length scale covers two. Only the input warp is declared — the
+        amplitude warp would buy a varying marginal variance, which this
+        scenario does not need, and four more sampled dimensions, which it
+        would notice.
+    ``sum`` (W4.5)
+        ``Matern32 + Matern32``, long plus short (:data:`SUM_LONG_LENGTH_SCALE`
+        and :data:`SUM_SHORT_LENGTH_SCALE`). The other answer to two length
+        scales: add two kernels rather than bend the coordinate under one.
     """
+    if kernel == "warped":
+        module = _backend_module(backend)
+        return module.WarpedKernel(_matern32(backend, GP_LENGTH_SCALE), input_warp=WARP_KNOTS)
+    if kernel == "sum":
+        module = _backend_module(backend)
+        return module.Sum(
+            _matern32(backend, SUM_LONG_LENGTH_SCALE),
+            _matern32(backend, SUM_SHORT_LENGTH_SCALE),
+            labels=("broad", "narrow"),
+        )
     if kernel not in _KERNEL_CLASSES:
-        raise ValueError(f"unknown kernel {kernel!r}; the two are {list(KERNELS)}.")
+        raise ValueError(f"unknown kernel {kernel!r}; the four are {list(KERNELS)}.")
     cls = getattr(_backend_module(backend), _KERNEL_CLASSES[kernel])
     return cls(
         st.halfnorm(scale=GP_AMPLITUDE_SCALE),
@@ -392,6 +568,8 @@ def build_likelihood(
         raise ValueError(f"unknown likelihood {kind!r}; the two are {list(LIKELIHOODS)}.")
     if solver not in _SOLVER_CLASSES:
         raise ValueError(f"unknown solver {solver!r}; the two are {list(SOLVERS)}.")
+    if kernel not in KERNELS:
+        raise ValueError(f"unknown kernel {kernel!r}; the four are {list(KERNELS)}.")
     if kernel == "squared_exponential" and solver == "quasisep":
         raise ValueError(
             "the squared exponential is not quasiseparable, so QuasisepGP refuses it. That "
@@ -466,6 +644,16 @@ def run(
 
     if problem.backend == "reference":
         chosen = budget if isinstance(budget, EmceeBudget) else TEST_EMCEE
+        needed = 2 * problem.free_size
+        if chosen.walkers < needed:
+            raise ValueError(
+                f"an ensemble of {chosen.walkers} walkers cannot move in {problem.free_size} "
+                f"dimensions: emcee's stretch move proposes from the other walkers, so it needs "
+                f"more than twice the dimension of them and refuses fewer. This problem needs at "
+                f"least {needed}. W5.8's warped and Sum arms are why this check is here — they "
+                f"have six and two more free parameters than the stationary kernel — and "
+                f"MANY_LINES_EMCEE is the budget sized for them."
+            )
         engine = EmceeEngine(problem, walkers=chosen.walkers)
         return engine.run(chosen.steps, burn_in=chosen.burn_in, progress=progress)
     nuts = budget if isinstance(budget, NutsBudget) else TEST_NUTS

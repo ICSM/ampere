@@ -1,4 +1,4 @@
-"""The misspecified data: four scenarios, one truth, any number of points.
+"""The misspecified data: the four scenarios and W5.8's, at any number of points.
 
 Milestone M2's controlled experiment needs data whose *deviation from the
 model* is known exactly, because the whole claim under test is about what a
@@ -37,6 +37,19 @@ posterior when there was nothing to absorb, the comparison against the standard
 likelihood would be a comparison of a wide posterior with a narrow one rather
 than of a wrong answer with a right one.
 
+A fifth scenario, W5.8's
+-------------------------
+Each of the four injects **one** scale of deviation, which is why one
+stationary length scale copes with all of them. :data:`MANY_LINES`
+(:class:`LineForest`, ``key="many_lines"``) injects two, an order of magnitude
+apart, and confines one of them to one band: a forest of five narrow lines
+between 0.860 and 0.870 µm, and a smooth continuum error across the whole
+range. It is the scenario W5.7's warped Matérn and W4.5's ``Sum`` of two
+kernels exist to be compared on, and it is deliberately **not** in
+:data:`SCENARIOS`: ``run_study`` still defaults to the four, so the milestone's
+figures, tables and CI session are unchanged, and this one is asked for by name
+(``--scenario many_lines``), exactly as W4.5's fringing comparison is.
+
 Parametrised by size
 --------------------
 :func:`wavelength_grid` spans the same physical range (a Gaia-RVS-like
@@ -65,12 +78,15 @@ from ampere.core import Spectrum
 from .model import FLUX_UNIT, TRUTH, WAVELENGTH_UNIT, flux_at
 
 __all__ = [
+    "EXTENDED_SCENARIOS",
+    "MANY_LINES",
     "NOISE_FRACTION",
     "SCENARIOS",
     "SEED",
     "SIZES",
     "WAVELENGTH_MAX",
     "WAVELENGTH_MIN",
+    "LineForest",
     "Scenario",
     "SyntheticSpectrum",
     "generate",
@@ -180,12 +196,126 @@ SCENARIOS: tuple[Scenario, ...] = (
 )
 
 
+@dataclasses.dataclass(frozen=True)
+class LineForest(Scenario):
+    """W5.8's deviation: a forest of narrow lines in one band, and a smooth error.
+
+    The four original scenarios each inject **one** scale of deviation, which
+    is why a stationary kernel copes with all of them: it has one length scale
+    to spend and one length scale to spend it on. This one injects **two**, far
+    apart, and puts only one of them in one part of the band:
+
+    * a forest of :attr:`count` narrow Gaussian bumps of fractional height
+      :attr:`Scenario.amplitude` and Gaussian sigma :attr:`line_width`, evenly
+      spaced inside :attr:`band` and nowhere else — an unmodelled blend of weak
+      features, which is what a real spectrum of a cool star has and a
+      two-line toy model does not;
+    * a smooth continuum error across the **whole** range —
+      :attr:`continuum_amplitude` at a period of :attr:`continuum_period`,
+      long enough that only half a cycle fits in the band, so it is a gentle
+      arch rather than a ripple and no part of it is a straight line the
+      model's own continuum could absorb.
+
+    So outside the band the only deviation is the smooth one, and inside it the
+    two are superposed. A stationary Matérn must choose: a length scale short
+    enough to follow the forest cannot see the arch, and one long enough to
+    follow the arch cannot follow the forest. That is the point of the
+    scenario, and it is what W5.7's warped Matérn (one length scale, a
+    coordinate that is compressed where the lines are) and W4.5's ``Sum`` of
+    two kernels (two length scales, added) are two different answers to.
+
+    Attributes
+    ----------
+    band
+        ``(lower, upper)`` of the band the forest is confined to, micron.
+    count
+        How many lines. They sit at the centres of ``count`` equal
+        subdivisions of *band*, so none lands on a band edge.
+    line_width
+        Each line's Gaussian sigma, micron.
+    continuum_amplitude, continuum_period
+        The smooth error's fractional amplitude and its period in micron.
+    """
+
+    band: tuple[float, float] = (0.8600, 0.8700)
+    count: int = 5
+    line_width: float = 0.00035
+    continuum_amplitude: float = 0.025
+    continuum_period: float = 0.06
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        lower, upper = (float(edge) for edge in self.band)
+        if not lower < upper:
+            raise ValueError(
+                f"scenario {self.key!r} declares band {self.band!r}, which is not an interval; "
+                f"the forest is confined to it, so it needs a width."
+            )
+        if self.count < 2:
+            raise ValueError(
+                f"scenario {self.key!r} declares {self.count} line(s). A forest is what a "
+                f"stationary kernel cannot follow at the same length scale as the continuum "
+                f"error, and one line is the strong_sharp scenario, which already exists."
+            )
+        if self.line_width <= 0.0:
+            raise ValueError(f"scenario {self.key!r} declares a non-positive line width.")
+        if self.continuum_period <= 0.0:
+            raise ValueError(f"scenario {self.key!r} declares a non-positive continuum period.")
+
+    @property
+    def centres(self) -> tuple[float, ...]:
+        """The line centres, micron: the midpoints of *count* equal subdivisions."""
+        lower, upper = (float(edge) for edge in self.band)
+        step = (upper - lower) / self.count
+        return tuple(lower + (index + 0.5) * step for index in range(self.count))
+
+    @property
+    def localised_at(self) -> float:
+        """The band's centre.
+
+        A forest has several locations, so "where is the deviation?" has
+        several answers; what the study can hold a diagnostic to is that the
+        answer is **in the band**, and that is what
+        ``tests/m2/test_many_lines.py`` asserts. This value is the band's
+        midpoint, which is the one number a figure's annotation wants.
+        """
+        lower, upper = (float(edge) for edge in self.band)
+        return 0.5 * (lower + upper)
+
+    def deviation(self, wavelength: Any) -> np.ndarray:
+        """The forest plus the smooth arch, as a fractional deviation."""
+        grid = np.asarray(wavelength, dtype=float)
+        smooth = self.continuum_amplitude * np.sin(
+            2.0 * np.pi * grid / self.continuum_period + self.phase
+        )
+        forest = np.zeros_like(grid)
+        for centre in self.centres:
+            forest = forest + np.exp(-0.5 * ((grid - centre) / self.line_width) ** 2)
+        return smooth + self.amplitude * forest
+
+
+#: W5.8's scenario. Kept **out** of :data:`SCENARIOS` on purpose, exactly as
+#: W4.5 kept its fringing comparison out of the four: ``run_study`` defaults to
+#: the four, so the milestone's figures, tables and session fixture are the
+#: eight runs they always were, and this one is asked for by name.
+MANY_LINES = LineForest(
+    "many_lines",
+    "Many lines in one band, plus a smooth continuum error",
+    amplitude=0.10,
+)
+
+#: Every scenario :func:`scenario_named` will resolve: the four, then W5.8's.
+EXTENDED_SCENARIOS: tuple[Scenario, ...] = (*SCENARIOS, MANY_LINES)
+
+
 def scenario_named(key: str) -> Scenario:
-    """The :class:`Scenario` called *key*, or a ``KeyError`` naming the four."""
-    for scenario in SCENARIOS:
+    """The :class:`Scenario` called *key*, or a ``KeyError`` naming them all."""
+    for scenario in EXTENDED_SCENARIOS:
         if scenario.key == key:
             return scenario
-    raise KeyError(f"unknown scenario {key!r}; the four are {[s.key for s in SCENARIOS]}.")
+    raise KeyError(
+        f"unknown scenario {key!r}; the known ones are {[s.key for s in EXTENDED_SCENARIOS]}."
+    )
 
 
 def wavelength_grid(size: int = 200) -> np.ndarray:

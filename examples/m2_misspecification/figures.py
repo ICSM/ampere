@@ -54,10 +54,14 @@ from .study import PHYSICAL_NAMES, summarise
 __all__ = [
     "COLOUR_FLEXIBLE",
     "COLOUR_STANDARD",
+    "MANY_LINES_COLOURS",
+    "MANY_LINES_FIGURE",
     "PAPER_FIGURES",
+    "figure_many_lines",
     "figure_parameter_recovery",
     "figure_posteriors_1d",
     "figure_spectra_residuals",
+    "save_many_lines_figure",
     "save_paper_figures",
     "save_result_figures",
 ]
@@ -74,12 +78,26 @@ PAPER_FIGURES: tuple[str, ...] = (
     "fig_posteriors_1d",
 )
 
+#: W5.8's three kernels, one colour each. The stationary arm keeps the paper's
+#: red so that the extension's figure reads as a continuation of the study's:
+#: the red curve is "the flexible likelihood as M2 ran it", and the other two
+#: are what W5.7 and W4.5 added.
+MANY_LINES_COLOURS = {
+    "matern32": COLOUR_FLEXIBLE,
+    "warped": "#1a9850",
+    "sum": "#7b3294",
+}
+
+#: The stem :func:`save_many_lines_figure` writes under.
+MANY_LINES_FIGURE = "fig_many_lines"
+
 _LATEX = {"A": r"$A$", "B": r"$B$", "d1": r"$d_1$", "d2": r"$d_2$"}
 _SHORT = {
     "none": "None",
     "mild": "Mild\n(smooth)",
     "strong_smooth": "Strong\n(smooth)",
     "strong_sharp": "Strong\n(sharp)",
+    "many_lines": "Many lines\n(one band)",
 }
 
 
@@ -314,6 +332,98 @@ def figure_posteriors_1d(results: Mapping[tuple[str, str], Mapping[str, Any]]) -
                 panel.legend(fontsize=6, loc="upper left")
     figure.tight_layout()
     return figure
+
+
+def figure_many_lines(
+    entries: Mapping[str, Mapping[str, Any]],
+    data: Any,
+    *,
+    band: tuple[float, float] | None = None,
+) -> Any:
+    """W5.8's figure: one deviation with two length scales, and three kernels on it.
+
+    Two panels sharing the wavelength axis.
+
+    **Top** — what was injected and what was observed: the deviation
+    ``truth * delta`` as a solid line, the observed residual from the
+    *undeviated* truth as points, and the line band shaded. A reader can see in
+    one glance that the deviation has two scales and that only one of them is
+    in the band.
+
+    **Bottom** — what each flexible fit made of it: the median conditioned GP
+    mean of each arm, drawn over the same injected deviation. This is the
+    figure's whole argument. The stationary Matérn has one length scale to
+    spend and must spend it on one of the two features; the warped Matérn and
+    the ``Sum`` follow both.
+
+    Every curve comes out of the stored runs' ``gp_localisation`` group, which
+    :func:`~examples.m2_misspecification.study.diagnose` derived — nothing here
+    re-fits or re-conditions anything.
+
+    Parameters
+    ----------
+    entries
+        ``{arm: entry}``, an entry being the ``run``/``problem``/``data``
+        mapping the study passes around. Arms with no GP (the standard
+        likelihood) are skipped rather than refused, so the comparison's whole
+        result can be handed over unfiltered.
+    data
+        The :class:`~examples.m2_misspecification.generators.SyntheticSpectrum`
+        the arms were fitted to.
+    band
+        The line band to shade; read off *data*'s scenario when omitted.
+    """
+    plt = _pyplot()
+    grid = np.asarray(data.wavelength, dtype=float)
+    injected = np.asarray(data.deviated, dtype=float) - np.asarray(data.truth, dtype=float)
+    observed = np.asarray(data.observed, dtype=float) - np.asarray(data.truth, dtype=float)
+    shaded = band if band is not None else getattr(data.scenario, "band", None)
+
+    figure, axes = plt.subplots(2, 1, figsize=(7.5, 6.0), sharex=True)
+    for axis in axes:
+        if shaded is not None:
+            axis.axvspan(shaded[0], shaded[1], color="0.9", zorder=0)
+        axis.axhline(0.0, color="0.6", linewidth=0.8, zorder=1)
+
+    axes[0].plot(grid, observed, ".", color="0.45", markersize=2.5, label="observed - truth")
+    axes[0].plot(grid, injected, "-", color="k", linewidth=1.2, label="injected deviation")
+    axes[0].set_ylabel("flux deviation (Jy)")
+    axes[0].legend(loc="upper left", fontsize=8, framealpha=0.9)
+    axes[0].set_title("many lines in one band, plus a smooth continuum error")
+
+    axes[1].plot(grid, injected, "-", color="k", linewidth=1.0, alpha=0.6)
+    for arm, entry in entries.items():
+        conditioned = _localisation(entry)
+        if conditioned is None:
+            continue
+        median, low, high = conditioned
+        colour = MANY_LINES_COLOURS.get(arm, "0.3")
+        axes[1].plot(grid, median, "-", color=colour, linewidth=1.3, label=arm)
+        axes[1].fill_between(grid, low, high, color=colour, alpha=0.15, linewidth=0)
+    axes[1].set_xlabel(r"wavelength ($\mu$m)")
+    axes[1].set_ylabel("conditioned GP mean (Jy)")
+    axes[1].legend(loc="upper left", fontsize=8, ncol=3, framealpha=0.9)
+    figure.tight_layout()
+    return figure
+
+
+def save_many_lines_figure(
+    entries: Mapping[str, Mapping[str, Any]],
+    data: Any,
+    directory: str | pathlib.Path,
+    *,
+    suffix: str = "pdf",
+    band: tuple[float, float] | None = None,
+) -> list[pathlib.Path]:
+    """Write :func:`figure_many_lines` into *directory* and return its path."""
+    plt = _pyplot()
+    target = pathlib.Path(directory)
+    target.mkdir(parents=True, exist_ok=True)
+    figure = figure_many_lines(entries, data, band=band)
+    path = target / f"{MANY_LINES_FIGURE}.{suffix}"
+    figure.savefig(path, bbox_inches="tight", dpi=150)
+    plt.close(figure)
+    return [path]
 
 
 def save_paper_figures(

@@ -766,6 +766,26 @@ True
 
 ```
 
+### `regularised_horseshoe` — sparsity over a set of amplitudes (*Added W5.8*)
+
+The one named declaration this contract ships, because it is the one the plan
+asks for by name: the sparsity guard on the amplitudes of a `Sum` of noise
+components (`likelihoods.md` §6). It is `HierarchicalPrior` used three levels
+deep and nothing else — `τ ~ C⁺(0, τ₀)`, `s_j | τ ~ C⁺(0, τ)`, `a_j | s_j ~
+N⁺(0, s_j)` — returning the `Parameter`s in that order, because a
+`ParameterSet` refuses a reference that is not already in it and the levels
+therefore have to be registered outermost first. The horseshoe's multiplicative
+`s_j = τ λ_j` is written as one declaration rather than as a product, which it
+may be because the half-Cauchy is a **scale family**: `τ·C⁺(0,1)` and
+`C⁺(0, τ)` are the same distribution. That is what lets the whole prior be
+declared with a construct that references a parameter by name and has no
+product node. Piironen & Vehtari's slab is the one part that cannot: `λ̃_j² =
+c²λ_j²/(c² + τ²λ_j²)` is a deterministic function of two sampled parameters,
+and this contract declares parameters and priors, not deterministic nodes —
+`tail="regularised"` gives the declarable form of the same guard instead (a
+`gamma(a=½, scale=τ)` local level: the same spike at zero, an exponential tail
+rather than a Cauchy one), and a `Derived` node is what would close the gap.
+
 ### Which construct to use
 
 Both patterns are expressible, and they serve different data layouts:

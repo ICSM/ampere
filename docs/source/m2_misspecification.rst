@@ -233,6 +233,119 @@ The ladder is only reachable because of the O(N) solver. A dense Gaussian
 process at 20 000 points is a 20 000 × 20 000 Cholesky factorisation per
 likelihood evaluation, and NUTS needs one per leapfrog step.
 
+When one length scale is not enough
+-----------------------------------
+
+Every one of the four scenarios injects **one** scale of deviation, which is
+why one stationary length scale copes with all four and everything above holds
+with a plain Matérn-3/2. W5.8 adds the scenario where it does not:
+``many_lines``, a forest of five narrow lines confined to 0.860–0.870 µm — whose
+correlation length is their width, 0.00035 µm — plus a smooth continuum error
+across the whole band, whose correlation length is a hundred times larger. A
+kernel with one ``length_scale`` must choose, and whichever it chooses the
+other feature is left in the residual with nothing to absorb it.
+
+Three kernels are compared on it, all three quasiseparable and so all three
+O(N): the stationary Matérn-3/2 the study has used throughout, a **warped**
+Matérn-3/2 (one monotone map of the coordinate, so one length scale covers two)
+and a **sum** of two Matérn-3/2 terms (two length scales, added). Reference
+backend, 200 points, 32 walkers x 1 100 steps (550 discarded):
+
+============ ======================================= ================== ========
+likelihood   kernel                                  worst offset       covered
+============ ======================================= ================== ========
+standard     —                                       35.70              1 / 4
+flexible     ``Matern32``                            2.84               3 / 4
+flexible     ``WarpedKernel(Matern32, input_warp=)`` 0.92               4 / 4
+flexible     ``Matern32 + Matern32``                 0.78               4 / 4
+============ ======================================= ================== ========
+
+The second row is the one to read carefully. It is the **only** place in this
+study where a flexible likelihood misses the 1.5-posterior-width threshold the
+rest of the page is built on, and it misses it for a structural reason rather
+than a numerical one: the kernel is the wrong *shape* for the deviation, not
+too small or too slow. Both of the other two recover it, by factors of 3.1 and
+3.7 on the worst offset, and both keep the truth inside all four 68 % intervals.
+
+All three flexible fits localise the deviation **inside the line band** — all
+three peak at 0.86295 µm, and each reports a higher anomaly score inside the
+band than outside it — so the two non-stationary kernels are not winning by
+having been handed somewhere else to put the residual. The standard fit's
+residual-whiteness p-value is 0.005, the 199-permutation floor, as in the other
+misspecified scenarios.
+
+What the warp actually learned is worth reading off its posterior, because it
+is the mechanism rather than the outcome. The six knots are the plain quantiles
+of the band, 0.842 to 0.872 in steps of 0.006, so they were **not** placed
+where the answer is; the fitted increments are
+
+.. code-block:: text
+
+    input_warp.scale         1.559 +- 0.25
+    input_warp.increment0   -1.649 +- 0.54     0.842 - 0.848
+    input_warp.increment1   -1.675 +- 0.50     0.848 - 0.854
+    input_warp.increment2   -1.613 +- 0.52     0.854 - 0.860
+    input_warp.increment3    1.345 +- 0.50     0.860 - 0.866
+    input_warp.increment4    1.117 +- 0.50     0.866 - 0.872
+
+and a segment's slope is :math:`\zeta(s\,u_k)/\zeta(0)` with
+:math:`\zeta(u) = \log(1+e^u)`. The first three segments come out at a slope
+of about 0.10 — the coordinate is compressed, so distances shrink and the
+effective length scale there is ten times the base — and the last two at about
+3.2, so the effective length scale in the line band is three times *shorter*.
+The base length scale is 0.0029 µm, which puts the fit at roughly 0.028 µm
+where the smooth arch is and 0.0009 µm where the forest is: a ratio of thirty
+between two halves of one band, found by the data, from one length scale and
+five increments under a prior centred on the identity warp. The three knots
+that switch sign do so at 0.860 µm, which is where the forest starts.
+
+The figure, written by ``--figures``, is the argument in one picture: the
+injected deviation over each arm's conditioned GP mean, with the line band
+shaded.
+
+.. code-block:: text
+
+    python -m examples.m2_misspecification.many_lines
+    python -m examples.m2_misspecification.many_lines --figures /tmp/m2
+    python -m examples.m2_misspecification --scenario many_lines --kernel warped
+
+A sum of noise components needs a sparsity guard
+-------------------------------------------------
+
+The kernel algebra that makes the third arm possible is also the freedom to add
+a component the data do not need, and the guard against it is a prior:
+``ampere.core.regularised_horseshoe``, put on a kernel by
+``ampere.core.with_shrinkage``. It is the recommended prior for any ``Sum`` of
+noise terms — one global scale shared by every component, one local scale per
+component under it, and each component's amplitude under its local scale.
+
+The demonstration fits **two nearly degenerate** Matérn terms to a spectrum
+whose deviation has exactly one smooth component, so the likelihood pins their
+total and says almost nothing about how it is divided. What divides it is the
+prior:
+
+============ ==================== ==================== ====================
+prior        larger amplitude     median min/max       P(min/max < 0.1)
+============ ==================== ==================== ====================
+flat         0.0118 Jy            0.254                0.257
+horseshoe    0.0077 Jy            0.087                0.537
+============ ==================== ==================== ====================
+
+The redundant component's share falls by a factor of 2.9 and the posterior mass
+at "the fit chose one component" rises by 2.1 — while the component the truth
+*does* have survives, which matters: a prior that shrank everything would move
+both numbers the same way and be useless. Both factors are asserted well below
+what they measure, because the horseshoe's three levels give the posterior a
+funnel and an ensemble sampler explores one unevenly; the numbers above were
+reproduced across three run seeds and the assertions sit a third below the
+worst of them.
+
+``python -m examples.m2_misspecification.many_lines --shrinkage`` prints that
+table. ``tests/m2/test_many_lines_calibration.py`` asks the harder question of
+the warped arm — over many spectra drawn from the prior and deviated the same
+way, do its credible intervals contain the truth as often as they claim? — by
+simulation-based calibration, and pins that they do not come back too narrow.
+
 What it costs
 -------------
 
@@ -316,7 +429,7 @@ Reproducing it
 
 .. code-block:: text
 
-    pixi run test-m2                       # the assertions, ~100 s
+    pixi run test-m2                       # the assertions, ~10 min
     pixi run -e jax test-m2                # and the jax cross-backend rows
     pixi run -e torch test-m2              # and the torch ones
     pixi run bench                         # the benchmark table -> benchmark.json

@@ -800,6 +800,75 @@ False
 
 ```
 
+### The sparsity guard on a sum of noise components (*Added W5.8*)
+
+A kernel algebra makes "two noise terms" as easy to write as one, and that is
+exactly the freedom that needs a guard: a summand the data do not need should
+be **switched off by the prior**, not fitted to whatever is left over. The
+recommended prior for any `Sum` of noise terms is `regularised_horseshoe`
+(`parameters.md` §9), put on the kernel by `with_shrinkage`:
+
+```pycon
+>>> from ampere.core import regularised_horseshoe, with_shrinkage
+>>> pair = Sum(Matern32(st.uniform(0.0, 0.3), st.halfnorm(0.0, 0.01)),
+...            Matern32(st.uniform(0.0, 0.3), st.halfnorm(0.0, 0.008)),
+...            labels=("broad", "narrow"))
+>>> shrunk = with_shrinkage(
+...     pair, regularised_horseshoe(("broad.amplitude", "narrow.amplitude"))
+... )
+>>> shrunk.parameters.names[:3]
+('shrinkage.global_scale', 'shrinkage.broad', 'shrinkage.narrow')
+>>> shrunk.FAMILY == pair.FAMILY, shrunk.QUASISEPARABLE
+(True, True)
+
+```
+
+Three levels: one global scale shared by every component, one local scale per
+component under it, and each component's own `amplitude` under its local scale.
+The shared global scale is what makes this a *sparsity* prior rather than N
+independent shrinkage priors — a component the data insist on drags it up, and
+every other component is then shrunk against that same scale — and the local
+scales' spike at zero is what lets one component escape while the rest
+collapse.
+
+**Why a hook is needed at all**, and why it is this one. A
+`HierarchicalPrior` references a parameter by name and `register_parameter`
+refuses, on each addition, a reference that is not already declared — which is
+what stops a dangling reference reaching a sampler. A kernel registers a summand's `amplitude` in its own
+`__init__`, before anything a horseshoe would give it to reference, so
+`Matern32(Parameter("amplitude", HierarchicalPrior(...)), …)` is refused at
+construction. The scale levels therefore have to be registered *ahead of* the
+amplitudes, and only something that rebuilds the whole set can do that.
+`with_shrinkage` is that something, and it is **functional**: the kernel it is
+given is unchanged, `_Composite.__init__` is untouched, and a kernel built
+without it has exactly the parameters, spec and hash it had before. The
+children's terms, capability flags, axes and `FAMILY` are untouched too, so it
+lowers exactly as it did — the quasiseparable builders read `Kernel.terms`, and
+the extra names never reach a child because `_child_values` selects on the
+`label.` prefix.
+
+**What is and is not Piironen & Vehtari's.** The global-local chain is theirs
+exactly, including the multiplicative `s_j = τ λ_j`, which is written as one
+declaration rather than as a product because the half-Cauchy is a scale family.
+Their **slab** is not expressible: `λ̃_j² = c²λ_j²/(c² + τ²λ_j²)` is a
+deterministic function of two sampled parameters, and §4.1 declares parameters
+and priors, not deterministic nodes. `tail="regularised"` — the default — is
+the declarable form of the same guard: a `gamma(a=1/2, scale=τ)` local level,
+which keeps the horseshoe's `s^{-1/2}` spike at zero and replaces its Cauchy
+tail with an exponential one at the global scale. It also lowers, where
+`tail="cauchy"` does not (`lowering.md` §3.2 has `gamma` and `halfnorm` for
+both backends and `halfcauchy` for neither). Spike-and-slab stays out either
+way (`lowering.md` §12 Q1).
+
+The validation is `tests/m2/test_many_lines.py`: two nearly degenerate Matérn
+terms on a truth with one smooth component, so the likelihood pins their total
+and says almost nothing about the split. Under a flat prior the fit spreads
+itself across both; under the horseshoe it does not, by a factor of 2.9 on the
+posterior median of `min(a)/max(a)` (0.254 to 0.087) and 2.1 on the posterior
+mass below a tenth (0.257 to 0.537) — and the component the truth *does* have
+survives, because a prior that shrank everything would satisfy both and be
+useless.
+
 ### Non-stationarity: `WarpedKernel` (*Added W5.7*)
 
 Everything above is stationary: `k` is a function of `|x − x′|` alone. Real
@@ -886,7 +955,8 @@ is free gets used to absorb signal, so:
   half-normal prior, every knot variable normal about zero under it, so the
   identity warp is the point of maximum prior density and the data must pay to
   leave it (the `horizon_notes.md` §1 answer, and the same shape the
-  regularised horseshoe takes on summed noise components);
+  regularised horseshoe takes on summed noise components — discharged at W5.8,
+  the subsection above);
 * **non-centred by default**: `uₖ = s · zₖ` with `zₖ ~ Normal(0, 1)`, the same
   prior with the geometry NUTS wants. `non_centred=False` declares the centred
   form directly with `HierarchicalPrior`, which is what the plan names and what
@@ -2328,6 +2398,44 @@ Note what is *not* checked per evaluation: `check_alignment` compares
 coordinates, units and kinds in O(N), and is a composition-time obligation
 W1.7's `Dataset` discharges once. `log_prob` re-checks only shapes, mirroring
 `results_schema.md` §10's compile-once/evaluate-many split.
+
+### When one length scale is not enough (*Added W5.8*)
+
+The example above has **one** unmodelled feature at **one** scale, which is the
+regime the whole of M2 works in and the regime a stationary kernel is enough
+for. W5.8's `many_lines` scenario is the one where it is not: a forest of five
+narrow lines confined to 0.860–0.870 µm, whose correlation length is their
+width, *plus* a smooth continuum error across the whole band, whose correlation
+length is a hundred times larger. A Matérn-3/2 has one `length_scale` to spend,
+and whichever of the two it spends it on the other is left in the residual with
+nothing to absorb it.
+
+Measured, at 200 points on the reference backend (32 walkers, 1 100 steps, 550
+discarded), as the worst `|median − truth|` over the four physical parameters
+in units of the posterior's own 68 % half-width, with the number of parameters
+whose 68 % interval contains the truth beside it:
+
+| likelihood | kernel | worst offset (widths) | covered |
+|---|---|---|---|
+| standard | — | 35.70 | 1 / 4 |
+| flexible | `Matern32` | 2.84 | 3 / 4 |
+| flexible | `WarpedKernel(Matern32, input_warp=…)` | 0.92 | 4 / 4 |
+| flexible | `Matern32 + Matern32` | 0.78 | 4 / 4 |
+
+The second row is the point. It is the **only** place in this study where a
+flexible likelihood fails M2's own threshold of 1.5 posterior widths, and it
+fails it for a structural reason rather than a numerical one: the kernel is the
+wrong *shape* for the deviation. Both answers §6 offers recover it — one warp
+of the coordinate under one length scale, or two length scales added — and both
+stay quasiseparable, so both cost O(N).
+
+All three flexible arms localise the deviation inside the line band (all three
+peak at 0.86295 µm), so the improvement is not the non-stationary kernels
+having been handed somewhere else to put the residual; and the standard fit's
+residual-whiteness p-value is 0.005, the 199-permutation floor. The assertions
+are `tests/m2/test_many_lines.py`, and the calibration half — SBC over refits
+of the warped fit with the deviation injected — is
+`tests/m2/test_many_lines_calibration.py`.
 
 ## 14. Decisions and their reasoning
 
