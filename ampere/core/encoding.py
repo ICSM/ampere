@@ -264,17 +264,27 @@ def _is_spatial_frequency(unit: Any, spec: Any) -> bool:
 
     True when the container kind declares ``rad**-1`` among its axis spec's
     ``equivalent_units`` *and* the axis's own unit is one of the two spellings
-    of that quantity — wavelengths (dimensionless) or an inverse angle. A
-    ``u`` given in metres is a baseline **length** and is coded as one, which
-    is the honest answer: it is a different quantity, and a network should not
-    be told otherwise.
+    of that quantity — wavelengths (which is dimensionless: a baseline divided
+    by a wavelength) or an inverse angle (``rad**-1``, ``arcsec**-1``, which
+    astropy's physical types cannot name, because a radian is an *angle* to
+    astropy and its reciprocal is therefore "unknown" rather than
+    dimensionless). A ``u`` given in metres is a baseline **length** and is
+    coded as one, which is the honest answer: it is a different quantity, and
+    a network should not be told otherwise.
     """
-    declared = tuple(getattr(spec, "equivalent_units", ()) or ())
-    if not any(candidate.is_equivalent(_SPATIAL_FREQUENCY_UNIT) for candidate in declared):
+    declared = [
+        candidate
+        for candidate in tuple(getattr(spec, "equivalent_units", ()) or ())
+        if candidate.is_equivalent(_SPATIAL_FREQUENCY_UNIT)
+    ]
+    if not declared:
         return False
     if unit is None:
         return True
-    return bool(u.Unit(unit).is_equivalent(u.dimensionless_unscaled))
+    resolved = u.Unit(unit)
+    if resolved.is_equivalent(u.dimensionless_unscaled):
+        return True
+    return any(resolved.is_equivalent(candidate) for candidate in declared)
 
 
 def axis_identity_complaint(record: Any) -> str | None:

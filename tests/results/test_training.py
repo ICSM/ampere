@@ -382,6 +382,16 @@ class TestTheObservationContext:
         write_training_set(tmp_path / "budget.nc", budget(problem, 2), problem)
         stored = read_training_set(tmp_path / "budget.nc")
         assert stored.contexts == ()
+        # A plain list of draws carries no batch provenance at all, so the
+        # attribute is *absent* rather than 'none' -- which is the honest
+        # distinction, and why this pair checks both spellings of no context.
+        assert f"{ATTR_PREFIX}simulation_context" not in stored.attrs
+
+    def test_a_contextless_simulate_many_records_none(self, tmp_path: Path) -> None:
+        problem = toy()
+        write_training_set(tmp_path / "budget.nc", problem.simulate_many(2, observe=True), problem)
+        stored = read_training_set(tmp_path / "budget.nc")
+        assert stored.contexts == ()
         assert stored.attrs[f"{ATTR_PREFIX}simulation_context"] == "none"
 
     def test_appending_a_contextless_batch_to_a_contextual_set_refuses(

@@ -972,10 +972,17 @@ class TestTheNativePathIsAskedForByName:
         batch = build().simulate_many(2, context=None)
         assert batch.provenance["simulation_context"] == "none"
 
-    def test_a_supplied_context_is_refused_rather_than_ignored(self) -> None:
-        """Reserving a keyword is not the same as accepting one and dropping it."""
-        with pytest.raises(DatasetError, match="reserved"):
-            build().simulate_many(2, context={"sigma": 0.1})
+    def test_something_that_is_not_a_context_prior_is_still_refused(self) -> None:
+        """**W5.10** filled the reserved slot; it did not widen it to anything.
+
+        The row this replaces asserted that *every* value but ``None`` was
+        refused, which was the right check while the slot was reserved. What
+        the slot takes now is a ``ContextPrior``, and a bare mapping of
+        settings -- the shape a user would most plausibly reach for -- is
+        still refused, by a message that says what one is.
+        """
+        with pytest.raises(DatasetError, match="ContextPrior"):
+            build().simulate_many(2, observe=True, context={"sigma": 0.1})
 
     def test_the_provenance_of_a_mixed_budget_claims_least(self) -> None:
         """Concatenation is conservative: a mixture must not read as a native run."""
