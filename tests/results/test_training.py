@@ -20,6 +20,7 @@ repository (``AGENTS.md`` ground rule 7).
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,7 @@ from ampere.core import (
 )
 from ampere.core.dataset import Failure, FailureReason, Simulation
 from ampere.core.exceptions import ResultsError
+from ampere.core.simulate import ScaledSigma
 from ampere.results import (
     ATTR_PREFIX,
     PROVENANCE_SCHEMA_VERSION,
@@ -338,6 +340,88 @@ class TestAppend:
 
         append_training_set(path, budget(problem, 1), problem)
         assert len(read_training_set(path)) == 3
+
+
+class TestTheObservationContext:
+    """**W5.10**: the ``context`` group, and what it deliberately does not store."""
+
+    def test_a_contextual_budget_round_trips_its_records(self, tmp_path: Path) -> None:
+        problem = toy()
+        drawn = problem.simulate_many(4, observe=True, context=ScaledSigma(0.5, 2.0))
+        write_training_set(tmp_path / "budget.nc", drawn, problem)
+        stored = read_training_set(tmp_path / "budget.nc")
+        assert [dict(record or {}) for record in stored.contexts] == [
+            dict(draw.context.record) for draw in drawn
+        ]
+        assert stored.pair(0)["context"]["kind"] == "scaled_sigma"
+
+    def test_the_prior_is_in_the_root_attributes(self, tmp_path: Path) -> None:
+        problem = toy()
+        drawn = problem.simulate_many(3, observe=True, context=ScaledSigma(0.5, 2.0))
+        write_training_set(tmp_path / "budget.nc", drawn, problem)
+        stored = read_training_set(tmp_path / "budget.nc")
+        recorded = json.loads(stored.attrs[f"{ATTR_PREFIX}simulation_context"])
+        assert recorded == ScaledSigma(0.5, 2.0).describe()
+
+    def test_the_sigma_arrays_are_not_stored_twice(self, tmp_path: Path) -> None:
+        """The drawn observation carries them; the group says which draw they came from.
+
+        A context group that also held the sigma arrays would double a
+        budget's size to say what the ``observations`` group already says.
+        """
+        problem = toy()
+        drawn = problem.simulate_many(2, observe=True, context=ScaledSigma(2.0, 2.0))
+        write_training_set(tmp_path / "budget.nc", drawn, problem)
+        stored = read_training_set(tmp_path / "budget.nc")
+        assert set(stored.contexts[0] or {}) == {"kind", "factor"}
+        carried = stored.observations(0)["sed"].uncertainty
+        assert np.allclose(carried, 2.0 * 0.02)
+
+    def test_a_budget_without_a_context_writes_no_group(self, tmp_path: Path) -> None:
+        problem = toy()
+        write_training_set(tmp_path / "budget.nc", budget(problem, 2), problem)
+        stored = read_training_set(tmp_path / "budget.nc")
+        assert stored.contexts == ()
+        # A plain list of draws carries no batch provenance at all, so the
+        # attribute is *absent* rather than 'none' -- which is the honest
+        # distinction, and why this pair checks both spellings of no context.
+        assert f"{ATTR_PREFIX}simulation_context" not in stored.attrs
+
+    def test_a_contextless_simulate_many_records_none(self, tmp_path: Path) -> None:
+        problem = toy()
+        write_training_set(tmp_path / "budget.nc", problem.simulate_many(2, observe=True), problem)
+        stored = read_training_set(tmp_path / "budget.nc")
+        assert stored.contexts == ()
+        assert stored.attrs[f"{ATTR_PREFIX}simulation_context"] == "none"
+
+    def test_appending_a_contextless_batch_to_a_contextual_set_refuses(
+        self, tmp_path: Path
+    ) -> None:
+        problem = toy()
+        drawn = problem.simulate_many(2, observe=True, context=ScaledSigma(0.5, 2.0))
+        write_training_set(tmp_path / "budget.nc", drawn, problem)
+        with pytest.raises(ResultsError, match="observation context"):
+            append_training_set(tmp_path / "budget.nc", budget(problem, 1), problem)
+
+    def test_appending_a_contextual_batch_to_a_contextless_set_refuses(
+        self, tmp_path: Path
+    ) -> None:
+        problem = toy()
+        write_training_set(tmp_path / "budget.nc", budget(problem, 2), problem)
+        drawn = problem.simulate_many(1, observe=True, context=ScaledSigma(0.5, 2.0))
+        with pytest.raises(ResultsError, match="observation context"):
+            append_training_set(tmp_path / "budget.nc", drawn, problem)
+
+    def test_two_contextual_batches_append(self, tmp_path: Path) -> None:
+        problem = toy()
+        first = problem.simulate_many(2, observe=True, context=ScaledSigma(0.5, 2.0))
+        write_training_set(tmp_path / "budget.nc", first, problem)
+        second = problem.simulate_many(2, observe=True, context=ScaledSigma(0.5, 2.0))
+        append_training_set(tmp_path / "budget.nc", second, problem)
+        stored = read_training_set(tmp_path / "budget.nc")
+        assert len(stored) == 4
+        assert len(stored.contexts) == 4
+        assert all(record is not None for record in stored.contexts)
 
 
 # ---------------------------------------------------------------------------

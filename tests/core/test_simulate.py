@@ -16,6 +16,7 @@ constraint a user's own simulator is under, and
 
 from __future__ import annotations
 
+import json
 import math
 import multiprocessing
 import os
@@ -32,6 +33,7 @@ import scipy.stats as st
 from ampere.core import (
     Capabilities,
     ContainerBatch,
+    ContextPrior,
     Dataset,
     DatasetError,
     FailureReason,
@@ -43,7 +45,10 @@ from ampere.core import (
     ModelResult,
     Parameter,
     ProcessExecutor,
+    ScaledSigma,
     SerialExecutor,
+    SigmaArchive,
+    SignalToNoise,
     Simulation,
     SimulationBatch,
     Spectrum,
@@ -51,6 +56,7 @@ from ampere.core import (
     chunk_bounds,
     register_realisation,
 )
+from ampere.core.encoding import EncodingLayout, encode
 from ampere.core.exceptions import LoweringError
 from ampere.core.simulate import BatchedPrediction
 
@@ -966,10 +972,17 @@ class TestTheNativePathIsAskedForByName:
         batch = build().simulate_many(2, context=None)
         assert batch.provenance["simulation_context"] == "none"
 
-    def test_a_supplied_context_is_refused_rather_than_ignored(self) -> None:
-        """Reserving a keyword is not the same as accepting one and dropping it."""
-        with pytest.raises(DatasetError, match="reserved"):
-            build().simulate_many(2, context={"sigma": 0.1})
+    def test_something_that_is_not_a_context_prior_is_still_refused(self) -> None:
+        """**W5.10** filled the reserved slot; it did not widen it to anything.
+
+        The row this replaces asserted that *every* value but ``None`` was
+        refused, which was the right check while the slot was reserved. What
+        the slot takes now is a ``ContextPrior``, and a bare mapping of
+        settings -- the shape a user would most plausibly reach for -- is
+        still refused, by a message that says what one is.
+        """
+        with pytest.raises(DatasetError, match="ContextPrior"):
+            build().simulate_many(2, observe=True, context={"sigma": 0.1})
 
     def test_the_provenance_of_a_mixed_budget_claims_least(self) -> None:
         """Concatenation is conservative: a mixture must not read as a native run."""
@@ -1072,3 +1085,230 @@ class TestTheNativeSamplerIsolatesAFailingDraw:
             2, values=np.array([[1.0], [POISONED_LEVEL]]), native=True, observe=True
         )
         assert problem.failure_counts[FailureReason.LIKELIHOOD_FAILED] == 1
+
+
+# ---------------------------------------------------------------------------
+# W5.10: the observation context
+# ---------------------------------------------------------------------------
+
+
+class TestTheShippedContextPriors:
+    """The three instances the item ships, each drawing what it says it does."""
+
+    def test_they_satisfy_the_protocol(self) -> None:
+        for prior in (ScaledSigma(), SigmaArchive([{"default": np.full(3, 0.2)}]), SignalToNoise()):
+            assert isinstance(prior, ContextPrior), prior
+
+    def test_scaled_sigma_multiplies_the_observed_pattern(self) -> None:
+        prior = ScaledSigma(0.5, 2.0)
+        containers = {"default": observed()}
+        rng = np.random.default_rng(0)
+        for _ in range(20):
+            context = prior.draw(rng, containers)
+            factor = float(context.record["factor"])
+            assert 0.5 <= factor <= 2.0
+            assert np.allclose(context.sigma["default"], factor * 0.1)
+
+    def test_a_fixed_scaled_sigma_is_one_factor(self) -> None:
+        context = ScaledSigma(3.0, 3.0).draw(np.random.default_rng(1), {"default": observed()})
+        assert context.record == {"kind": "scaled_sigma", "factor": 3.0}
+        assert np.allclose(context.sigma["default"], 0.3)
+
+    def test_per_dataset_draws_one_factor_each(self) -> None:
+        containers = {"a": observed(), "b": observed()}
+        context = ScaledSigma(0.1, 10.0, per_dataset=True).draw(
+            np.random.default_rng(2), containers
+        )
+        factors = context.record["factors"]
+        assert set(factors) == {"a", "b"}
+        assert factors["a"] != factors["b"]
+
+    def test_scaled_sigma_refuses_a_dataset_with_no_uncertainties(self) -> None:
+        bare = Spectrum(WAVELENGTH * u.micron, np.ones(3) * u.Jy)
+        with pytest.raises(DatasetError, match="has none"):
+            ScaledSigma().draw(np.random.default_rng(3), {"default": bare})
+
+    def test_the_archive_draws_one_of_its_entries(self) -> None:
+        entries = [{"default": np.full(3, 0.05)}, {"default": np.array([0.1, 0.2, 0.3])}]
+        prior = SigmaArchive(entries, names=("quiet", "noisy"))
+        rng = np.random.default_rng(4)
+        seen = set()
+        for _ in range(30):
+            context = prior.draw(rng, {"default": observed()})
+            index = int(context.record["index"])
+            seen.add(index)
+            assert context.record["name"] == ("quiet", "noisy")[index]
+            assert np.allclose(context.sigma["default"], entries[index]["default"])
+        assert seen == {0, 1}
+
+    def test_an_empty_archive_is_refused(self) -> None:
+        with pytest.raises(DatasetError, match="empty"):
+            SigmaArchive([])
+
+    def test_an_archive_entry_of_the_wrong_shape_is_refused_by_name(self) -> None:
+        prior = SigmaArchive([{"default": np.full(5, 0.1)}])
+        with pytest.raises(DatasetError, match="shape"):
+            prior.draw(np.random.default_rng(5), {"default": observed()})
+
+    def test_an_archive_entry_for_an_unknown_dataset_is_refused_by_name(self) -> None:
+        prior = SigmaArchive([{"other": np.full(3, 0.1)}])
+        with pytest.raises(DatasetError, match="does not have"):
+            prior.draw(np.random.default_rng(6), {"default": observed()})
+
+    def test_signal_to_noise_builds_sigma_from_the_values(self) -> None:
+        containers = {"default": observed((1.0, 2.0, 4.0))}
+        context = SignalToNoise(20.0, 20.0).draw(np.random.default_rng(7), containers)
+        assert context.record == {"kind": "signal_to_noise", "snr": 20.0}
+        assert np.allclose(context.sigma["default"], np.array([1.0, 2.0, 4.0]) / 20.0)
+
+    def test_signal_to_noise_floors_a_near_zero_value(self) -> None:
+        """The encoding refuses a retained sample whose sigma is not positive."""
+        containers = {"default": observed((0.0, 2.0, 4.0))}
+        context = SignalToNoise(10.0, 10.0, floor=0.5).draw(np.random.default_rng(8), containers)
+        assert float(context.sigma["default"][0]) > 0.0
+        # floor * median(|y|) / snr, with median(|0, 2, 4|) = 2.
+        assert float(context.sigma["default"][0]) == pytest.approx(0.5 * 2.0 / 10.0)
+
+    def test_signal_to_noise_median_reference_is_one_flat_sigma(self) -> None:
+        containers = {"default": observed((1.0, 2.0, 4.0))}
+        context = SignalToNoise(10.0, 10.0, reference="median").draw(
+            np.random.default_rng(9), containers
+        )
+        assert np.allclose(context.sigma["default"], 0.2)
+
+    def test_signal_to_noise_needs_no_observed_uncertainties(self) -> None:
+        bare = Spectrum(WAVELENGTH * u.micron, np.array([1.0, 2.0, 4.0]) * u.Jy)
+        context = SignalToNoise(10.0, 10.0).draw(np.random.default_rng(10), {"default": bare})
+        assert np.all(context.sigma["default"] > 0.0)
+
+    def test_each_prior_describes_itself_for_the_provenance(self) -> None:
+        assert ScaledSigma(0.5, 2.0).describe()["kind"] == "scaled_sigma"
+        assert SignalToNoise().describe()["kind"] == "signal_to_noise"
+        record = SigmaArchive([{"default": np.full(3, 0.1)}]).describe()
+        # An archive is data: its size and labels identify it, its arrays do not
+        # belong in every run's attributes.
+        assert record == {"kind": "sigma_archive", "entries": 1, "labels": ["default"]}
+
+
+class TestABudgetDrawnUnderAContext:
+    """``simulate_many(context=...)``: the reserved slot, filled (**W5.10**)."""
+
+    def test_every_draw_carries_its_own_context(self) -> None:
+        batch = build().simulate_many(6, observe=True, context=ScaledSigma(0.5, 2.0))
+        factors = [float(draw.context.record["factor"]) for draw in batch]
+        assert len(set(factors)) == 6
+        assert all(0.5 <= factor <= 2.0 for factor in factors)
+
+    def test_the_drawn_observation_carries_the_context_sigma(self) -> None:
+        """Which is the whole reason the encoding needs no new column.
+
+        A simulated observation's own ``uncertainty`` is what the packing's
+        ``log_sigma`` column is built from, so varying it across the budget is
+        what a network conditions on -- with no layout change at all.
+        """
+        batch = build().simulate_many(4, observe=True, context=ScaledSigma(0.5, 2.0))
+        for draw in batch:
+            factor = float(draw.context.record["factor"])
+            sigma = np.asarray(draw.observations["default"].uncertainty)
+            assert np.allclose(sigma, factor * 0.1)
+
+    def test_a_context_is_partition_independent(self) -> None:
+        """Draw *i*'s context does not depend on how the budget was chunked."""
+        whole = build().simulate_many(6, observe=True, context=ScaledSigma(0.5, 2.0))
+        split = build().simulate_many(6, observe=True, context=ScaledSigma(0.5, 2.0), chunk_size=2)
+        assert [dict(draw.context.record) for draw in whole] == [
+            dict(draw.context.record) for draw in split
+        ]
+        assert np.allclose(
+            whole.observations["default"].values, split.observations["default"].values
+        )
+
+    def test_the_context_stream_leaves_theta_alone(self) -> None:
+        """The contexts come off their own sub-stream, so a budget's theta is unchanged.
+
+        This is the property that lets the argument exist at all: adding a
+        context to a study must not silently re-draw the parameters it was
+        comparing against.
+        """
+        with_context = build().simulate_many(6, observe=True, context=ScaledSigma(0.5, 2.0))
+        without = build().simulate_many(6, observe=True)
+        assert np.allclose(with_context.theta, without.theta)
+        assert not np.allclose(
+            with_context.observations["default"].values, without.observations["default"].values
+        )
+
+    def test_the_batch_provenance_names_the_prior(self) -> None:
+        batch = build().simulate_many(3, observe=True, context=ScaledSigma(0.5, 2.0))
+        recorded = json.loads(batch.provenance["simulation_context"])
+        assert recorded == ScaledSigma(0.5, 2.0).describe()
+        assert build().simulate_many(1, observe=True).provenance["simulation_context"] == "none"
+
+    def test_a_budget_without_a_context_records_none_on_its_draws(self) -> None:
+        batch = build().simulate_many(2, observe=True)
+        assert [draw.context for draw in batch] == [None, None]
+
+    def test_the_encoding_sees_the_context_through_log_sigma(self) -> None:
+        """No layout change: the same hash, a different ``log_sigma`` per draw."""
+        problem = build()
+        batch = problem.simulate_many(4, observe=True, context=ScaledSigma(0.25, 4.0))
+        layout = EncodingLayout.from_datasets(problem.datasets)
+        encoded = encode(batch.observations, layout=layout, batched=True)
+        column = np.asarray(encoded.values)[:, :, layout.group("log_sigma").offset]
+        assert encoded.layout.hash == layout.hash
+        assert len(set(np.round(column[:, 0], 9).tolist())) == 4
+
+    def test_a_context_pickles_to_a_worker(self) -> None:
+        """A ``_DrawRequest`` carries one, so a pool has to be able to send it.
+
+        Plain data by construction -- arrays and a small mapping, no generator
+        and no prior -- which is what makes this cheap rather than a design
+        constraint on what a context prior may be.
+        """
+        drawn = ScaledSigma(2.0, 2.0).draw(np.random.default_rng(11), {"default": observed()})
+        restored = pickle.loads(pickle.dumps(drawn))
+        assert dict(restored.record) == dict(drawn.record)
+        assert np.allclose(restored.sigma["default"], drawn.sigma["default"])
+
+    def test_a_budget_under_a_pool_carries_its_contexts(self) -> None:
+        """The whole point of the pickling row, end to end."""
+        with ProcessExecutor(max_workers=2) as pool:
+            batch = build().simulate_many(
+                4, observe=True, executor=pool, context=ScaledSigma(0.5, 2.0)
+            )
+        assert all(draw.context is not None for draw in batch)
+        for draw in batch:
+            factor = float(draw.context.record["factor"])
+            assert np.allclose(draw.observations["default"].uncertainty, factor * 0.1)
+
+
+class TestTheContextRefusals:
+    """Each one a claim the code could not honestly make, refused by name."""
+
+    def test_something_that_is_not_a_context_prior(self) -> None:
+        with pytest.raises(DatasetError, match="ContextPrior"):
+            build().simulate_many(2, observe=True, context="loud")
+
+    def test_a_context_without_observations(self) -> None:
+        with pytest.raises(DatasetError, match="observe=False"):
+            build().simulate_many(2, observe=False, context=ScaledSigma())
+
+    def test_a_context_with_the_native_path_demanded(self) -> None:
+        with pytest.raises(DatasetError, match="native=True"):
+            fake_problem().simulate_many(2, observe=True, native=True, context=ScaledSigma())
+
+    def test_the_default_falls_back_to_the_loop_rather_than_refusing(self) -> None:
+        batch = fake_problem().simulate_many(2, observe=True, context=ScaledSigma(0.5, 2.0))
+        assert batch.provenance["simulate_batched"] is False
+        assert all(draw.context is not None for draw in batch)
+
+    def test_a_sigma_of_the_wrong_shape_is_refused_by_the_dataset(self) -> None:
+        dataset = Dataset(observed())
+        with pytest.raises(DatasetError, match="has to have the observation's shape"):
+            dataset.contextual_observed(np.full(5, 0.1))
+
+    def test_a_contextual_container_keeps_everything_but_the_sigma(self) -> None:
+        dataset = Dataset(observed((1.0, 2.0, 4.0)))
+        swapped = dataset.contextual_observed(np.full(3, 0.5))
+        assert np.allclose(swapped.values, [1.0, 2.0, 4.0])
+        assert np.allclose(swapped.uncertainty, 0.5)
+        assert swapped.unit == dataset.observed.unit
