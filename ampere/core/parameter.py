@@ -76,6 +76,8 @@ from .exceptions import (
 )
 
 __all__ = [
+    "HORSESHOE_SPIKE_SHAPE",
+    "HORSESHOE_TAILS",
     "SEPARATOR",
     "TORCH_MODULE_NAMES",
     "Bijection",
@@ -99,6 +101,7 @@ __all__ = [
     "describe_prior",
     "log_density",
     "prior_from_spec",
+    "regularised_horseshoe",
     "reserved_names",
 ]
 
@@ -2956,3 +2959,204 @@ class Parameterised:
         merged: dict[str, Value] = self.buffers.values()
         merged.update(resolved)
         return merged
+
+
+# ---------------------------------------------------------------------------
+# W5.8: the sparsity-inducing prior for summed noise components
+#
+# Appended as its own block. Nothing above this line changes: the helper below
+# composes the Parameter / HierarchicalPrior declarations already in this
+# module and declares no new machinery.
+# ---------------------------------------------------------------------------
+
+
+#: The local level's shape in the regularised form: ``gamma(a=1/2, scale=tau)``
+#: keeps the horseshoe's own ``s ** -0.5`` spike at zero — a Gamma of shape one
+#: half *is* the chi-square with one degree of freedom that the half-Cauchy's
+#: own scale-mixture representation puts there — while replacing its Cauchy
+#: tail with an exponential one at the global scale.
+HORSESHOE_SPIKE_SHAPE = 0.5
+
+#: The two declarable tails, in the order :func:`regularised_horseshoe`
+#: documents them. ``"regularised"`` is the default and the recommended one.
+HORSESHOE_TAILS: tuple[str, ...] = ("regularised", "cauchy")
+
+
+def _horseshoe_leaf(name: str) -> str:
+    """The local-scale stem for an amplitude called *name*.
+
+    ``"broad.amplitude"`` becomes ``"broad"``; ``"amplitude"`` stays
+    ``"amplitude"``. A summand's amplitude is already qualified by its term
+    label inside a composite, and that label is the name a reader recognises in
+    a posterior, so it is the one the local scale borrows. A name with no label
+    keeps its own stem rather than inventing one.
+    """
+    head, _, tail = name.rpartition(SEPARATOR)
+    return head if head else tail
+
+
+def regularised_horseshoe(
+    amplitudes: Sequence[str],
+    *,
+    prefix: str = "shrinkage",
+    global_scale: float = 1.0,
+    tail: str = "regularised",
+    unit: Any = None,
+) -> list[Parameter]:
+    r"""The sparsity-inducing prior for a sum of noise components (W5.8).
+
+    :class:`~ampere.core.Sum`'s kernel algebra (W4.5) makes "two noise terms"
+    as easy to write as one, and that freedom is exactly what needs a guard: a
+    summand the data do not need should be *switched off* by the prior rather
+    than fitted to whatever is left over. This is the declaration that does it,
+    and it is the recommended prior for any :class:`~ampere.core.Sum` of noise
+    terms.
+
+    The shape is the horseshoe's (Carvalho, Polson & Scott 2010; Piironen &
+    Vehtari 2017): one **global** scale shared by every component, one
+    **local** scale per component, and a half-normal amplitude under each local
+    scale,
+
+    .. math::
+
+        \tau \sim \mathcal{C}^{+}(0, \tau_0), \qquad
+        s_j \mid \tau \sim \mathcal{C}^{+}(0, \tau), \qquad
+        a_j \mid s_j \sim \mathcal{N}^{+}(0, s_j).
+
+    The shared global scale is what makes this a *sparsity* prior rather than N
+    independent shrinkage priors: a component the data insist on drags
+    :math:`\tau` up, and every other component is then shrunk against that same
+    scale. The middle line is the horseshoe's :math:`s_j = \tau\lambda_j`
+    written as one declaration rather than as a product, which it may be
+    because the half-Cauchy is a **scale family** — :math:`\tau\,\mathcal{C}^+
+    (0, 1)` and :math:`\mathcal{C}^+(0, \tau)` are the same distribution. That
+    is what lets the whole prior be declared with :class:`HierarchicalPrior`,
+    which references a parameter by name and has no product node, with no
+    change to any class in this module.
+
+    **The regularisation.** Piironen & Vehtari's slab replaces the local
+    scale's Cauchy tail beyond a slab scale :math:`c` with a Gaussian one,
+    through
+
+    .. math::
+
+        \tilde\lambda_j^2 = \frac{c^2\lambda_j^2}{c^2 + \tau^2\lambda_j^2},
+
+    which is a **deterministic function of two sampled parameters**. §4.1
+    declares parameters and priors, not deterministic nodes, so that exact form
+    is not declarable today; the decision log records the gap and names the
+    node (a ``Derived`` parameter) that would close it.
+
+    What *is* declarable is the same guard in one level, and it is what
+    ``tail="regularised"`` — the default — gives: the local scale's family
+    becomes ``gamma(a=1/2, scale=tau)``. That keeps the horseshoe's
+    :math:`s^{-1/2}` spike at zero, which is where all of the shrinkage comes
+    from, and replaces the Cauchy tail with an exponential one whose scale is
+    the global scale itself: bounded tails and a benign geometry, which is what
+    the slab is *for*. It also lowers, where the plain horseshoe does not —
+    ``gamma`` and ``halfnorm`` are in ``lowering.md`` §3.2's table for both
+    torch and jax, and ``halfcauchy`` is in neither.
+
+    ``tail="cauchy"`` declares the plain horseshoe instead, half-Cauchy at both
+    levels. It evaluates on the reference path; lowering it needs a
+    ``register_lowering("halfcauchy", backend, ...)`` row (``lowering.md`` §3).
+
+    Parameters
+    ----------
+    amplitudes
+        The names of the amplitude parameters to shrink, **as the kernel that
+        will carry them spells them** — ``("broad.amplitude",
+        "narrow.amplitude")`` for a ``Sum(..., labels=("broad", "narrow"))``.
+        At least two: a horseshoe over one component is a prior with nothing to
+        be sparse against.
+    prefix
+        The namespace the two scale levels are declared under. ``"shrinkage"``
+        gives ``shrinkage.global_scale`` and ``shrinkage.broad``.
+    global_scale
+        :math:`\tau_0`, the global scale's own prior scale, in the amplitudes'
+        unit: the prior guess at "how big is a component that is really there".
+        The data move it.
+    tail
+        ``"regularised"`` (the default) or ``"cauchy"``, above.
+    unit
+        The unit the amplitudes carry, applied to both scale levels too — a
+        scale and the thing it scales are the same kind of quantity, and
+        :class:`~ampere.core.GaussianProcessNoise` checks an amplitude's unit
+        against its container.
+
+    Returns
+    -------
+    list of Parameter
+        The global scale, then one local scale per component, then one
+        re-declared amplitude per component, **in that order**. The order is
+        part of the answer: a :class:`ParameterSet` refuses a hierarchical
+        reference that is not already in it, so the levels have to be
+        registered outermost first. :func:`ampere.core.with_shrinkage` is what
+        puts them on a kernel in that order.
+
+    Examples
+    --------
+    >>> declaration = regularised_horseshoe(("broad.amplitude", "narrow.amplitude"))
+    >>> [parameter.name for parameter in declaration[:3]]
+    ['shrinkage.global_scale', 'shrinkage.broad', 'shrinkage.narrow']
+    >>> [parameter.name for parameter in declaration[3:]]
+    ['broad.amplitude', 'narrow.amplitude']
+    >>> declaration[1].references
+    ('shrinkage.global_scale',)
+    >>> declaration[3].references
+    ('shrinkage.broad',)
+    >>> regularised_horseshoe(("only.amplitude",))
+    Traceback (most recent call last):
+        ...
+    ampere.core.exceptions.ParameterError: regularised_horseshoe was given 1 amplitude name(s)...
+    """
+    names = [_check_name(name, "horseshoe amplitude") for name in amplitudes]
+    if len(names) < 2:
+        raise ParameterError(
+            f"regularised_horseshoe was given {len(names)} amplitude name(s). The global scale "
+            f"is what makes this a sparsity prior — a component the data insist on raises the "
+            f"scale every other component is shrunk against — so it takes at least two "
+            f"components to be one, rather than an ordinary shrinkage prior on a single "
+            f"amplitude."
+        )
+    if len(set(names)) != len(names):
+        raise ParameterError(
+            f"regularised_horseshoe was given a repeated amplitude name in {names}; every "
+            f"component needs its own amplitude and its own local scale."
+        )
+    if tail not in HORSESHOE_TAILS:
+        raise ParameterError(
+            f"regularised_horseshoe's tail={tail!r} is not one of {list(HORSESHOE_TAILS)}."
+        )
+    scale = _numeric(global_scale, "regularised_horseshoe's global_scale")
+    if not math.isfinite(scale) or scale <= 0.0:
+        raise ParameterError(
+            f"regularised_horseshoe's global_scale must be a positive, finite number, got "
+            f"{global_scale!r}: it is the prior scale of a scale, so zero pins every component "
+            f"to zero and infinity declines to shrink anything."
+        )
+    leaves = [_horseshoe_leaf(name) for name in names]
+    if len(set(leaves)) != len(leaves):
+        raise ParameterError(
+            f"regularised_horseshoe derived local-scale names {leaves} from {names}, and two of "
+            f"them collide. Label the summands distinctly — Sum(..., labels=('broad', "
+            f"'narrow')) — so that each component's local scale has a name of its own."
+        )
+    global_name = f"{prefix}{SEPARATOR}global_scale"
+    local_names = [f"{prefix}{SEPARATOR}{leaf}" for leaf in leaves]
+    local_prior = (
+        HierarchicalPrior("halfcauchy", {"scale": global_name})
+        if tail == "cauchy"
+        else HierarchicalPrior("gamma", {"scale": global_name}, kwds={"a": HORSESHOE_SPIKE_SHAPE})
+    )
+    declaration = [
+        Parameter(global_name, _stats.halfcauchy(scale=scale), unit=unit, bijection=Log())
+    ]
+    declaration += [
+        Parameter(local, local_prior, unit=unit, bijection=Log()) for local in local_names
+    ]
+    declaration += [
+        Parameter(name, HierarchicalPrior("halfnorm", {"scale": local}), unit=unit, bijection=Log())
+        for name, local in zip(names, local_names, strict=True)
+    ]
+    return declaration

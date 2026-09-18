@@ -153,6 +153,9 @@ from .likelihood import (
     JointGaussianProcessNoise,
     RotationCoupling,
 )
+# W5.8 -- the shrinkage hook for summed noise components; reached from .kernels
+# directly because .likelihood's re-export list is not this item's to touch.
+from .kernels import with_shrinkage
 from .vecchia import (
     NeighbourStructure,
     VecchiaResponseGP,
@@ -203,6 +206,8 @@ from .parameter import (
     describe_prior,
     log_density,
     prior_from_spec,
+    # W5.8 -- the sparsity prior for summed noise components (appended).
+    regularised_horseshoe,
     reserved_names,
 )
 from ._pickling import register as _register_pickle_support
@@ -452,6 +457,7 @@ __all__ = [
     "registered_lowerings",
     "registered_quasiseparable_terms",
     "registered_realisations",
+    "regularised_horseshoe",
     "reserved_names",
     "run_registrant_battery",
     "sample_coordinates",
@@ -462,4 +468,5 @@ __all__ = [
     "translate_astropy_parameters",
     "translation_refusal",
     "unpack",
+    "with_shrinkage",
 ]
