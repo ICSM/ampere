@@ -430,6 +430,45 @@ class TestTheHorseshoeShrinksASpuriousComponent:
 
 
 # ---------------------------------------------------------------------------
+# The driver: the command the documentation section tells a reader to run.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("kernel", list(study.MANY_LINES_KERNELS))
+def test_the_driver_runs_this_scenario_with_each_kernel(
+    kernel: str, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``python -m examples.m2_misspecification --scenario many_lines --kernel ...``.
+
+    A **tiny** run — the numbers are the other rows' business, and the budget is
+    monkeypatched down to a few dozen steps so this costs seconds — but a real
+    one through the driver's own code path, because that path has a step the
+    library API does not: it prints each flexible fit's GP hyperparameters, and
+    it has to find their names. The stationary kernel declares an ``amplitude``
+    and a ``length_scale``; the warped arm declares six warp variables under
+    ``input_warp``; the ``Sum`` declares two labelled terms. A driver that
+    spells the stationary pair raises ``KeyError`` on the other two — it did,
+    before this row — so what is asserted is that each arm's own hyperparameter
+    names reach the table.
+    """
+    from examples.m2_misspecification.__main__ import main
+
+    expected = {
+        "matern32": ("amplitude", "length_scale"),
+        "warped": ("base.amplitude", "input_warp.scale", "input_warp.increment0"),
+        "sum": ("broad.amplitude", "narrow.length_scale"),
+    }[kernel]
+    tiny = study.EmceeBudget(walkers=32, steps=80, burn_in=40)
+    monkeypatch.setattr(study, "TEST_EMCEE", tiny)
+    monkeypatch.setattr(study, "MANY_LINES_EMCEE", tiny)
+    assert main(["--scenario", "many_lines", "--kernel", kernel, "--size", "120", "--quick"]) == 0
+    printed = capsys.readouterr().out
+    assert "GP hyperparameters" in printed
+    for name in expected:
+        assert name in printed, printed
+
+
+# ---------------------------------------------------------------------------
 # The figure the documentation section points at.
 # ---------------------------------------------------------------------------
 

@@ -131,19 +131,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     print("\nGP hyperparameters, flexible likelihood:")
+    prefix = f"{study.DATASET_LABEL}.likelihood."
     for (key, kind), entry in results.items():
         if kind != "flexible":
             continue
-        names = [
-            f"{study.DATASET_LABEL}.likelihood.amplitude",
-            f"{study.DATASET_LABEL}.likelihood.length_scale",
-        ]
+        # Read the names off the problem rather than spelling them. W5.8's
+        # ``warped`` and ``sum`` arms declare a different set from the
+        # stationary kernel's amplitude-and-length-scale pair — six warp
+        # variables, or two labelled terms — and a hard-coded pair is a
+        # KeyError the moment --kernel names one of them.
+        declared = entry["problem"].parameters
+        names = [name for name in declared.free_names if name.startswith(prefix)]
         summaries = study.summarise(entry["run"], names=names)
-        amplitude, length = (summaries[name] for name in names)
-        print(
-            f"  {key:<16s} amplitude = {amplitude.median:.5g} +- {amplitude.width:.3g} Jy, "
-            f"length scale = {length.median:.5g} +- {length.width:.3g} um"
-        )
+        print(f"  {key}:")
+        for name in names:
+            summary = summaries[name]
+            unit = declared[name].unit
+            suffix = "" if unit is None else f" {unit}"
+            print(
+                f"    {name[len(prefix) :]:<26s} "
+                f"{summary.median:>12.5g} +- {summary.width:.3g}{suffix}"
+            )
 
     if arguments.figures is not None:
         from . import figures
