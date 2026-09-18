@@ -1,4 +1,4 @@
-"""The misspecified data: four scenarios, one truth, any number of points.
+"""The misspecified data: the four scenarios and W5.8's, at any number of points.
 
 Milestone M2's controlled experiment needs data whose *deviation from the
 model* is known exactly, because the whole claim under test is about what a
