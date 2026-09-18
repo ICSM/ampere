@@ -274,6 +274,31 @@ having been handed somewhere else to put the residual. The standard fit's
 residual-whiteness p-value is 0.005, the 199-permutation floor, as in the other
 misspecified scenarios.
 
+What the warp actually learned is worth reading off its posterior, because it
+is the mechanism rather than the outcome. The six knots are the plain quantiles
+of the band, 0.842 to 0.872 in steps of 0.006, so they were **not** placed
+where the answer is; the fitted increments are
+
+.. code-block:: text
+
+    input_warp.scale         1.559 +- 0.25
+    input_warp.increment0   -1.649 +- 0.54     0.842 - 0.848
+    input_warp.increment1   -1.675 +- 0.50     0.848 - 0.854
+    input_warp.increment2   -1.613 +- 0.52     0.854 - 0.860
+    input_warp.increment3    1.345 +- 0.50     0.860 - 0.866
+    input_warp.increment4    1.117 +- 0.50     0.866 - 0.872
+
+and a segment's slope is :math:`\zeta(s\,u_k)/\zeta(0)` with
+:math:`\zeta(u) = \log(1+e^u)`. The first three segments come out at a slope
+of about 0.10 — the coordinate is compressed, so distances shrink and the
+effective length scale there is ten times the base — and the last two at about
+3.2, so the effective length scale in the line band is three times *shorter*.
+The base length scale is 0.0029 µm, which puts the fit at roughly 0.028 µm
+where the smooth arch is and 0.0009 µm where the forest is: a ratio of thirty
+between two halves of one band, found by the data, from one length scale and
+five increments under a prior centred on the identity warp. The three knots
+that switch sign do so at 0.860 µm, which is where the forest starts.
+
 The figure, written by ``--figures``, is the argument in one picture: the
 injected deviation over each arm's conditioned GP mean, with the line band
 shaded.
