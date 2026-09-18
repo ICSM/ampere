@@ -180,10 +180,11 @@ AXIS_TYPE_NAMES: Mapping[int, str] = MappingProxyType(
 #: The one physical quantity astropy's own physical types cannot name, and the
 #: reason :func:`axis_type_code` consults the container kind's
 #: :class:`~ampere.core.results_schema.AxisSpec` as well as the unit. An
-#: interferometric ``u`` is spelled either in wavelengths (``dimensionless``) or
-#: in ``rad**-1`` (astropy: ``"unknown"``, because a radian is dimensionless);
-#: both are the same quantity, and a kind declares it by putting ``rad**-1``
-#: in its axis spec's ``equivalent_units``.
+#: interferometric ``u`` is spelled either in wavelengths (a baseline over a
+#: wavelength, so ``dimensionless``) or in ``rad**-1`` — for which astropy
+#: answers ``"unknown"``, because a radian is an *angle* to it and the
+#: reciprocal of an angle has no name. Both are the same quantity, and a kind
+#: declares it by putting ``rad**-1`` in its axis spec's ``equivalent_units``.
 _SPATIAL_FREQUENCY_UNIT = u.rad**-1
 
 
