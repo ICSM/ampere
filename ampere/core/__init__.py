@@ -153,6 +153,7 @@ from .likelihood import (
     JointGaussianProcessNoise,
     RotationCoupling,
 )
+
 # W5.8 -- the shrinkage hook for summed noise components; reached from .kernels
 # directly because .likelihood's re-export list is not this item's to touch.
 from .kernels import with_shrinkage
