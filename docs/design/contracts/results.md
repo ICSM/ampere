@@ -1257,6 +1257,7 @@ before the review, does not otherwise have a home for:
 | `coordinates` | each channel's coordinate arrays, with units as attributes | the channel's dimensions |
 | `sample_stats` | `failed`, and the whole `Failure` record — `failure_reason`, `failure_message`, `failure_where`, `failure_exception_type`, `failure_values` *(the last four amended W2.8)* | `(sample,)` |
 | `observations` *(added W2.8)* | one subgroup per dataset label, holding the noisy draws `simulate(observe=True)` produced: `values`, and `uncertainty`/`mask` where present. Absent from a set whose budget drew none | `(sample,)` + the dataset's coordinate dimensions |
+| `context` *(added W5.10)* | one variable, `record`: the observation context that draw was made under, as canonical JSON (empty for a draw made at the observation's own uncertainties). Absent from a set whose budget was drawn without a context prior | `(sample,)` |
 
 Three properties, each of which is why the format is netCDF and not JSON or a
 pickle. NaN is native, so a masked or crashed sample needs no sentinel. The
@@ -1276,6 +1277,33 @@ the fix in full). A file written before schema 6 carries no
 `ampere_model_hash` at all and is refused by name — "this training set
 predates the model hash" — rather than treated as an agreement it cannot
 actually make.
+
+*Amended W5.10*: a budget drawn under an observation-context prior
+(`simulate_many(context=...)`, `inference.md` §13) carries the prior in the
+root attribute `ampere_simulation_context` — canonical JSON of the prior's own
+`describe()`, or `"none"` — and **one record per draw** in the optional
+`context` group above, read back as `TrainingSet.contexts`. The σ arrays the
+prior drew are deliberately *not* stored there: a drawn observation carries its
+own uncertainties, so the `observations` group already holds them, and a second
+copy would double a budget's size to say the same thing. What the group adds is
+the one thing the arrays cannot say — which draw of the prior produced them.
+
+Neither `TRAINING_SET_SCHEMA_VERSION` nor `PROVENANCE_SCHEMA_VERSION` moved for
+it, and both non-moves are the same argument. The group is **optional**, in the
+sense `observations` has been optional since W2.8: a reader of an older file
+finds it absent exactly as it finds `observations` absent from a budget drawn
+with `observe=False`, so no file's meaning changed. And
+`ampere_simulation_context` is not a new schema-counted attribute but the
+existing batch-provenance key, whose value moved from the constant `"none"` to
+a description of the prior when there is one; the SBI run's own
+`ampere_sbi_context` and `ampere_sbi_context_hash` are engine-specific extras
+(§9's `extra=`), which is the same footing W5.23's artefact attributes sit on.
+
+`append_training_set` refuses, by name and **in both directions**, a batch
+whose context disagrees with the file's: a training set is one budget, and half
+of it drawn under a context prior and half at the observation's own
+uncertainties would leave a file over which a network is amortised to neither
+distribution — §7's stale-artefact trap arriving by the context's door.
 
 *Amended W3.1*: the two writers also take a
 `ampere.core.simulate.SimulationBatch`, and the **iterator of chunks**
@@ -1630,8 +1658,19 @@ Each is a decision, not an oversight. Each has an extension point.
   two hashes **and a third, `data_hash`, of the observed containers** — a
   trained posterior is stored conditioned on the observation it was built
   for, unlike a training set — plus the run's own settings (method, estimator architecture,
-  budget, rounds, encoding layout, `sbi`/torch versions, and TMNRE's
-  `marginals`/`truncation_epsilon`/`sample_with`, W3.12).
+  budget, rounds, encoding layout, `sbi`/torch versions, TMNRE's
+  `marginals`/`truncation_epsilon`/`sample_with` (W3.12), and — ***W5.10*** —
+  `context`, the digest of the observation-context prior the budget was
+  drawn under. That last one is not a note about the run but part of what
+  was trained: a budget drawn under a context prior trains a different
+  network from one drawn at the observed uncertainties, and two priors
+  covering different ranges train two more, so without it all three
+  computed the same key and the store served whichever was trained first
+  — §7's stale artefact arriving by the one door the key exists to shut.
+  `None` for a budget drawn without one, and omitted from
+  `ingredients()` rather than written as `null`, so every digest minted
+  before W5.10 is unchanged (the rule W3.12's three fields already
+  follow).
 - **Phase 5 (population inference)** — design horizon (b) is buildable entirely
   on stored runs: `sample_stats` carries the scalar `log_prior` and
   `log_likelihood` per draw, the NaN convention distinguishes an unevaluated

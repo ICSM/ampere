@@ -161,8 +161,10 @@ from .simulate import (
     BatchedPrediction,
     ChunkHook,
     ChunkSharder,
+    ContextPrior,
     ExecutionFailure,
     Executor,
+    ObservationContext,
     ProcessExecutor,
     SerialExecutor,
     SimulationBatch,
@@ -857,6 +859,15 @@ class Simulation:
         The noise-free prediction per dataset label, after the instrument chain.
     observations
         Noisy draws per dataset label, or ``None`` when ``observe=False``.
+    context
+        **W5.10**: the observation context this draw was made under -- the
+        sigma pattern a :class:`~ampere.core.simulate.ContextPrior` drew and
+        the small record saying what it drew -- or ``None`` for a budget
+        simulated at the observation's own uncertainties. Recorded on the
+        draw rather than only on the batch because a context is *per
+        simulation*: two draws of one chunk have two contexts, and a training
+        set that could only say which prior produced a budget could not say
+        which noise level produced a row.
     failure
         Why the simulation could not be completed, or ``None``.
     """
@@ -866,6 +877,7 @@ class Simulation:
     results: Mapping[str, ModelResult] = dataclasses.field(default_factory=_empty_mapping)
     predicted: Mapping[str, FunctionSamples] = dataclasses.field(default_factory=_empty_mapping)
     observations: Mapping[str, FunctionSamples] | None = None
+    context: ObservationContext | None = None
     failure: Failure | None = None
 
     def __post_init__(self) -> None:
@@ -890,7 +902,8 @@ class Simulation:
         if self.failure is not None:
             return f"<Simulation failed: {self.failure}>"
         drawn = "" if self.observations is None else ", observed"
-        return f"<Simulation {len(self.predicted)} dataset(s){drawn}>"
+        context = "" if self.context is None else ", in context"
+        return f"<Simulation {len(self.predicted)} dataset(s){drawn}{context}>"
 
 
 # ---------------------------------------------------------------------------
@@ -1469,6 +1482,8 @@ class Dataset:
         predicted: FunctionSamples,
         values: Mapping[str, Value] | ArrayLike | None,
         rng: np.random.Generator,
+        *,
+        sigma: ArrayLike | None = None,
     ) -> FunctionSamples:
         """Draw one noisy realisation of *predicted* under this dataset's likelihood.
 
@@ -1488,10 +1503,25 @@ class Dataset:
         masking beats censoring, applied here as it already is in
         :meth:`_declare_latent`, so that one class does not give two answers to
         one question.
+
+        Parameters
+        ----------
+        sigma
+            **W5.10**: one draw's observation context, as a sigma array of the
+            observed container's shape in its value unit. The whole of this
+            argument's effect is that the observed container is replaced, for
+            this draw, by one carrying *sigma* — so the ``NoiseParams`` every
+            family's ``sample`` receives are built from it and the returned
+            container carries it. That is what makes a context draw a draw at
+            a different noise *level*, rather than a draw at the observed
+            level rescaled afterwards; and because the returned container
+            carries its own sigma, the encoding's per-row ``log_sigma`` column
+            (``encoding.md`` §3) shows the network which context it is looking
+            at, with no layout change at all.
         """
         family = self.likelihood.family
         noise = self.likelihood.noise
-        observed = self.observed
+        observed = self.observed if sigma is None else self.contextual_observed(sigma)
         routed = {} if values is None else self.route(values)
         resolved = routed.get(LIKELIHOOD_COMPONENT, {})
         retain = self.retained_mask(predicted)
@@ -1531,6 +1561,30 @@ class Dataset:
             raise DatasetError(f"dataset {self.label!r}: {error}") from error
         drawn[retain] = np.asarray(realisation, dtype=dtype)
         return observed.with_values(drawn.reshape(observed.shape))
+
+    def contextual_observed(self, sigma: ArrayLike) -> FunctionSamples:
+        """This dataset's observed container with *sigma* in place of its own (**W5.10**).
+
+        The whole of what an observation context does to a dataset, in one
+        method, so that the substitution is one rule rather than one per
+        caller. :meth:`~ampere.core.results_schema.FunctionSamples.with_values`
+        is the constructor, so the axes, the unit, the mask, the extra
+        coordinates and the metadata are the observation's own and only the
+        uncertainties move; a shape that does not match the observation is
+        refused **by name**, because a context that does not fit the dataset
+        it is for is a mistake in the context prior rather than something to
+        broadcast quietly.
+        """
+        observed = self.observed
+        array = np.asarray(sigma, dtype=float)
+        if array.shape != observed.shape:
+            raise DatasetError(
+                f"dataset {self.label!r}: the observation context supplies a sigma array of "
+                f"shape {array.shape} and this dataset's observed container has shape "
+                f"{observed.shape}. A context's sigma stands in for the observation's own, so "
+                f"it has to have the observation's shape."
+            )
+        return observed.with_values(observed.values, uncertainty=array, mask=observed.mask)
 
     def _whitened_latent(self, routed: Mapping[str, Mapping[str, Value]]) -> np.ndarray | None:
         """The whitened ``z`` this dataset's θ carries, or ``None`` (*W3.14*).
@@ -2898,6 +2952,7 @@ class FittingProblem:
         *,
         observe: bool,
         results: Mapping[str, ModelResult] | None = None,
+        context: ObservationContext | None = None,
     ) -> Simulation:
         """:meth:`simulate` from a θ that has already been resolved.
 
@@ -2906,6 +2961,12 @@ class FittingProblem:
         worker is killed still records the θ it died on) and which, on the
         batched path, has already evaluated the models for the whole chunk in
         one call.
+
+        **W5.10**: *context* is this draw's observation context. It reaches
+        exactly one place -- the ``sigma=`` of each dataset's
+        :meth:`Dataset.draw_observation` -- and is then carried on the
+        returned :class:`Simulation`, failures included, because a draw that
+        crashed in a context is evidence about that context.
         """
         resolved = dict(resolved)
         theta = self._mapping.merged.pack(resolved)
@@ -2924,7 +2985,9 @@ class FittingProblem:
             except self._failure_types as error:
                 failure = _failure_from(_reason_for(error), error, _where(error))
                 self._record(failure)
-                return Simulation(parameters=resolved, theta=theta, failure=failure)
+                return Simulation(
+                    parameters=resolved, theta=theta, context=context, failure=failure
+                )
         else:
             evaluated = dict(results)
 
@@ -2937,7 +3000,11 @@ class FittingProblem:
                 failure = _failure_from(FailureReason.INSTRUMENT_FAILED, error, label)
                 self._record(failure)
                 return Simulation(
-                    parameters=resolved, theta=theta, results=evaluated, failure=failure
+                    parameters=resolved,
+                    theta=theta,
+                    results=evaluated,
+                    context=context,
+                    failure=failure,
                 )
 
         observations: dict[str, FunctionSamples] | None = None
@@ -2952,7 +3019,10 @@ class FittingProblem:
                     continue
                 try:
                     observations[label] = dataset.draw_observation(
-                        predicted[label], routed.get(label), generator
+                        predicted[label],
+                        routed.get(label),
+                        generator,
+                        sigma=None if context is None else context.for_label(label),
                     )
                 except self._failure_types as error:
                     failure = _failure_from(FailureReason.LIKELIHOOD_FAILED, error, label)
@@ -2962,6 +3032,7 @@ class FittingProblem:
                         theta=theta,
                         results=evaluated,
                         predicted=predicted,
+                        context=context,
                         failure=failure,
                     )
             for group in self.datasets.joint:
@@ -2977,6 +3048,7 @@ class FittingProblem:
                         theta=theta,
                         results=evaluated,
                         predicted=predicted,
+                        context=context,
                         failure=failure,
                     )
 
@@ -2986,6 +3058,7 @@ class FittingProblem:
             results=evaluated,
             predicted=predicted,
             observations=observations,
+            context=context,
         )
 
     # -- batched simulation (W3.1) --------------------------------------------
@@ -3125,16 +3198,30 @@ class FittingProblem:
             vectorised evaluation over several devices. ``None`` is the
             single-device case. Only the native path consults it.
         context
-            **Reserved** (Fable's horizon note of 2026-09-09, confirmed by
-            Peter): the per-draw observation context — sigma pattern, grid,
-            instrument settings — that amortising SBI over noise realisations
-            will draw from a context prior. ``None`` is the only accepted value
-            today and anything else is **refused by name** rather than
-            ignored — accepting a context and not using it would put a budget
-            in a training set whose provenance claimed one. The signature
-            exists ahead of the machinery so that the items which need it are
-            additions rather than changes, and the batch's provenance records
-            that no context was used.
+            **W5.10**, filling the slot Fable's horizon note of 2026-09-09
+            reserved: a :class:`~ampere.core.simulate.ContextPrior` the
+            per-draw observation context is drawn from. ``None`` — the default
+            — draws every observation at the observed containers' own
+            uncertainties, exactly as every budget before this item did.
+
+            A context is drawn **per simulation**, from the prior, on its own
+            ``f"{stream}.context"`` sub-stream spawned by index, so a budget's
+            θ and its noise are unchanged by the existence of the argument and
+            draw *i*'s context does not depend on the chunking; the contexts
+            are materialised a chunk at a time, so a budget larger than memory
+            never holds them all. Each draw's context replaces its datasets'
+            uncertainties for that draw only
+            (:meth:`Dataset.contextual_observed`), which is what makes the
+            drawn observation carry its own error bars — and therefore what
+            lets an embedding see the context through the encoding's per-row
+            ``log_sigma`` column with no layout change (``encoding.md`` §3).
+            It is recorded on every :class:`Simulation`, and the *prior's*
+            description in the batch's ``provenance["simulation_context"]``.
+
+            ``ampere.core.simulate`` ships three: :class:`ScaledSigma`,
+            :class:`SigmaArchive` and :class:`SignalToNoise`. A context with
+            ``observe=False``, with ``native=True``, or on a problem declaring
+            a joint noise group is **refused by name**.
 
         Returns
         -------
@@ -3217,19 +3304,7 @@ class FittingProblem:
         """The generator behind :meth:`simulate_many`; one chunk at a time."""
         if isinstance(count, bool) or not isinstance(count, (int, np.integer)):
             raise DatasetError(f"a simulation budget must be an integer, got {count!r}.")
-        if context is not None:
-            # The reserved hook, refused rather than ignored. Accepting a
-            # context and silently not using it would put a budget in a
-            # training set whose provenance claimed a per-draw observation
-            # context that never reached the simulator -- exactly the stale
-            # artefact the hook is being reserved to make possible to record.
-            raise DatasetError(
-                f"simulate_many's context= is reserved: the per-draw observation context "
-                f"(sigma pattern, grid, instrument settings) that amortising SBI over noise "
-                f"realisations will draw from a context prior. The signature exists ahead of "
-                f"the machinery so the items that need it are additions rather than changes, "
-                f"and None is the only value it accepts today; got {context!r}."
-            )
+        prior = self._context_prior(context, observe=observe)
         count = int(count)
         bounds = chunk_bounds(count, chunk_size)
         rows = self._batch_values(values, count)
@@ -3247,17 +3322,45 @@ class FittingProblem:
         wants_native = native is not False and not batched
         native_path = (
             self._native_batch(
-                required=bool(native), serial=serial, observe=observe, sharder=sharder
+                required=bool(native),
+                serial=serial,
+                observe=observe,
+                sharder=sharder,
+                context=prior,
             )
             if wants_native
             else None
         )
         parent = self.rng(stream) if rng is None else rng
+        # W5.10: the context prior draws on its **own** sub-stream, spawned by
+        # index exactly as the draws are. Two consequences, both deliberate.
+        # A budget's theta and its noise are bit-for-bit what they were before
+        # this item existed, because nothing was taken from the draw stream;
+        # and draw i's context is the same context however the budget was
+        # chunked, which is the partition independence simulate_many promises
+        # of everything else. inference.md §12: a context prior draws from the
+        # run's own seed derivation and never from a fresh generator, so an
+        # rng= override -- which names the *draw* stream -- leaves it here.
+        context_parent = None if prior is None else self.rng(f"{stream}.context")
+        observed = (
+            None
+            if prior is None
+            else {label: dataset.observed for label, dataset in self.datasets.items()}
+        )
 
         for index, (start, stop) in enumerate(bounds):
             if on_chunk is not None:
                 on_chunk(index)
             children = _spawn(parent, stop - start, stream)
+            contexts: list[ObservationContext | None] = [None] * (stop - start)
+            if prior is not None and context_parent is not None and observed is not None:
+                # One context per simulation, drawn a chunk at a time so that a
+                # budget larger than memory never holds the whole set of sigma
+                # patterns -- the grouping by chunk_size the item asks for.
+                contexts = [
+                    prior.draw(child, observed)
+                    for child in _spawn(context_parent, stop - start, f"{stream}.context")
+                ]
             requests: list[_DrawRequest] = []
             for position, child in enumerate(children):
                 draw = start + position
@@ -3266,9 +3369,9 @@ class FittingProblem:
                     if rows is None
                     else self._resolve(rows[draw])
                 )
-                requests.append(_DrawRequest(draw, resolved, child, observe))
+                requests.append(_DrawRequest(draw, resolved, child, observe, contexts[position]))
             provenance = self._batch_provenance(
-                native_path, batched=batched, observe=observe, context=context
+                native_path, batched=batched, observe=observe, context=prior
             )
             with self._suspend_recording():
                 if native_path is not None:
@@ -3287,7 +3390,7 @@ class FittingProblem:
                             raise
                         native_path = None
                         provenance = self._batch_provenance(
-                            None, batched=batched, observe=observe, context=context
+                            None, batched=batched, observe=observe, context=prior
                         )
                         outcomes = list(runner.map(task, requests))
                 elif batched:
@@ -3368,6 +3471,57 @@ class FittingProblem:
                 f"model at module scope, or run the budget with the serial or thread executor."
             ) from error
 
+    def _context_prior(self, context: Any, *, observe: bool) -> ContextPrior | None:
+        """Resolve ``simulate_many(context=...)`` into a prior, or refuse by name.
+
+        **W5.10** fills the slot this argument reserved. What is accepted is
+        ``None`` (the observation's own uncertainties, as every budget before
+        this item) or a :class:`~ampere.core.simulate.ContextPrior` — anything
+        with ``draw(rng, observed)`` and ``describe()``, checked structurally
+        like every other protocol here. Two things are refused rather than
+        worked around, and each of them is a claim this code could not honestly
+        make:
+
+        * **a context with** ``observe=False``. The context is the noise level
+          an observation is drawn at; a budget that draws no observations
+          would record a context that changed nothing, which is precisely the
+          provenance-claiming-more-than-happened trap the reserved slot was
+          refused for.
+        * **a context on a problem with a joint noise group** (W5.9). A
+          group's sigma is read from the *first* dataset's observed container
+          and its channels are drawn in one correlated call; substituting a
+          per-dataset sigma pattern under it is a design question about what a
+          context even means for correlated channels, and guessing at it would
+          put a training set on disk whose cross-covariance came from one
+          dataset's context and whose values came from another's.
+        """
+        if context is None:
+            return None
+        if not isinstance(context, ContextPrior):
+            raise DatasetError(
+                f"simulate_many's context= is a ContextPrior: an object with "
+                f"draw(rng, observed) -> ObservationContext and describe() -> mapping. "
+                f"ampere.core.simulate ships ScaledSigma, SigmaArchive and SignalToNoise, and "
+                f"a prior of your own needs only those two methods. Got {context!r}."
+            )
+        if not observe:
+            raise DatasetError(
+                "simulate_many was given a context= and observe=False. An observation context "
+                "is the noise level the observations are drawn at, so a budget that draws none "
+                "would record a context that did nothing. Pass observe=True, or drop context=."
+            )
+        if self.datasets.joint:
+            raise DatasetError(
+                f"simulate_many's context= is not implemented for a problem with a joint noise "
+                f"group, and this one declares {sorted(self.datasets.joint)}. A group's sigma is "
+                f"read from the first of its datasets and its channels are drawn in one "
+                f"correlated call (W5.9), so what a per-dataset context means for the "
+                f"cross-covariance is a design question rather than a detail. Simulate the "
+                f"group's datasets without a context, or vary the noise level through a fitted "
+                f"scale parameter instead."
+            )
+        return context
+
     def _native_batch(
         self,
         *,
@@ -3375,6 +3529,7 @@ class FittingProblem:
         serial: bool,
         observe: bool,
         sharder: ChunkSharder | None,
+        context: ContextPrior | None = None,
     ) -> _NativeBatch | None:
         """The realised backend's vectorised forward path, or ``None`` for the loop.
 
@@ -3400,7 +3555,29 @@ class FittingProblem:
         With ``native=None`` — the default — any of those failing means the
         loop runs and the batch's provenance says ``simulate_batched`` was
         false. Nothing is lost by that: the loop is the semantics.
+
+        **W5.10 adds a fourth**, and it is a refusal rather than a plan: an
+        **observation context**. The native path draws its noise in the
+        backend's own arithmetic, from the realised problem's sigma, and a
+        per-draw sigma pattern would have to reach that realisation rather
+        than the container — a different item. With ``native=True`` the caller
+        asked for the vectorised path by name and gets the refusal; with the
+        default the loop runs, which draws the context correctly, and the
+        batch's provenance records both facts (``simulate_batched`` false,
+        ``simulation_context`` naming the prior).
         """
+        if context is not None:
+            if required:
+                raise DatasetError(
+                    "simulate_many(native=True) was asked for the backend's vectorised forward "
+                    "path and given a context= as well. The native path draws its noise from "
+                    "the realised problem's own sigma, in the backend's arithmetic, and a "
+                    "per-draw context sigma reaches the container rather than the realisation "
+                    "(W5.10), so the two cannot both be honoured. Drop native=True -- the loop "
+                    "draws the context correctly and the batch records that it ran -- or drop "
+                    "context=."
+                )
+            return None
         if not serial:
             if required:
                 raise DatasetError(
@@ -3447,15 +3624,21 @@ class FittingProblem:
         ``sample_backend`` names the arithmetic that drew the noise, which is
         ``"reference"`` whenever ``LikelihoodFamily.sample`` did — including on
         a torch or jax problem whose observations came from the loop.
-        ``context`` is the reserved per-draw observation context (Fable's
-        horizon note of 2026-09-09, confirmed by Peter): ``None`` today, and
-        recorded as such so a stored budget can be told apart from one written
-        once the machinery exists.
+
+        ``simulation_context`` is the per-draw observation context (**W5.10**,
+        filling the slot Fable's horizon note of 2026-09-09 reserved):
+        ``"none"`` for a budget drawn at the observation's own uncertainties,
+        and otherwise the **prior's own** description
+        (:meth:`~ampere.core.simulate.ContextPrior.describe`) as canonical
+        JSON. The prior, not the draws: what each draw got is recorded on the
+        draw (:attr:`Simulation.context`) and, for a stored budget, in the
+        training set's ``context`` group, because a context is per simulation
+        and a batch attribute could only ever name the distribution.
         """
         provenance: dict[str, Any] = {
             "simulate_batched": native_path is not None,
             "evaluate_batch": bool(batched),
-            "simulation_context": "none" if context is None else str(context),
+            "simulation_context": _context_description(context),
         }
         if observe:
             provenance["sample_backend"] = (
@@ -3491,6 +3674,7 @@ class FittingProblem:
                 Simulation(
                     parameters=request.values,
                     theta=self._mapping.merged.pack(request.values),
+                    context=request.context,
                     failure=failure,
                 )
                 for request in requests
@@ -3501,6 +3685,7 @@ class FittingProblem:
                 request.generator,
                 observe=request.observe,
                 results={label: produced[position] for label, produced in per_model.items()},
+                context=request.context,
             )
             for position, request in enumerate(requests)
         ]
@@ -3522,6 +3707,7 @@ class FittingProblem:
                 draw = Simulation(
                     parameters=request.values,
                     theta=self._mapping.merged.pack(request.values),
+                    context=request.context,
                     failure=Failure(
                         reason=FailureReason.EXECUTION_FAILED,
                         message=outcome.message,
@@ -3830,6 +4016,10 @@ class _DrawRequest:
     values: Mapping[str, Value]
     generator: np.random.Generator
     observe: bool
+    #: **W5.10**: this draw's observation context, or ``None``. Plain data
+    #: (sigma arrays and a small record), so it pickles to a worker exactly as
+    #: the rest of the request does.
+    context: ObservationContext | None = None
 
 
 class _SimulateTask:
@@ -3848,7 +4038,10 @@ class _SimulateTask:
 
     def __call__(self, request: _DrawRequest) -> Simulation:
         return self._problem._run_simulation(
-            request.values, request.generator, observe=request.observe
+            request.values,
+            request.generator,
+            observe=request.observe,
+            context=request.context,
         )
 
 
@@ -3863,7 +4056,9 @@ def _simulate_shared(request: _DrawRequest) -> Simulation | ExecutionFailure:
             ),
             exception_type="RuntimeError",
         )
-    return problem._run_simulation(request.values, request.generator, observe=request.observe)
+    return problem._run_simulation(
+        request.values, request.generator, observe=request.observe, context=request.context
+    )
 
 
 #: How closely a native chunk must agree with the contract path at the one
@@ -4228,6 +4423,28 @@ class _NativeBatch:
             predicted=predicted,
             observations=observations,
         )
+
+
+def _context_description(prior: ContextPrior | None) -> str:
+    """A context prior, as a batch's provenance records it (**W5.10**).
+
+    Canonical JSON of :meth:`~ampere.core.simulate.ContextPrior.describe`, or
+    ``"none"`` -- the string a budget drawn at the observation's own
+    uncertainties has always recorded, kept exactly so that a reader can tell
+    "no context" from "a context nobody described". A prior whose
+    ``describe()`` cannot be normalised is recorded by its repr rather than
+    failing a budget: the provenance is evidence about the run, and losing a
+    10**4-draw budget to a user prior's unserialisable description would be
+    the wrong trade.
+    """
+    if prior is None:
+        return "none"
+    try:
+        from ampere.results.provenance import canonical_json
+
+        return canonical_json(dict(prior.describe()))
+    except Exception:
+        return repr(prior)
 
 
 def _spawn(generator: np.random.Generator, count: int, stream: str) -> list[np.random.Generator]:

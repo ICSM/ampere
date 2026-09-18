@@ -184,6 +184,9 @@ from .provenance import (
     spec_hashes,
 )
 from .training import (
+    # -- W5.10: the observation context --------------------------------------
+    CONTEXT_GROUP,
+    # -------------------------------------------------------------------------
     COORDINATES_GROUP,
     OBSERVATIONS_GROUP,
     SAMPLE_DIM,
@@ -217,6 +220,9 @@ __all__ = [
     "CONDITIONAL_LOO_DECOMPOSITION",
     "CONSTANT_DATA_GROUP",
     "CONTAINER_SCHEMA_VERSION",
+    # -- W5.10: the observation context --------------------------------------
+    "CONTEXT_GROUP",
+    # -------------------------------------------------------------------------
     "COORDINATES_GROUP",
     "DEFAULT_ESS_FLOOR",
     "DEFAULT_LEVELS",

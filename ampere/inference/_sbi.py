@@ -136,11 +136,28 @@ trains under and the one the observation is shown under are the same object
 rather than two computations that agree.
 
 ``context=`` is the observation-context slot the horizon notes reserve
-(confirmed by Peter 2026-09-09): a per-draw uncertainty pattern, grid or instrument
-setting drawn from a context prior, which the embedding would condition on.
-Only ``None`` is accepted today and the run records
-``ampere_sbi_context = "none"``, so that the signature exists before the
-machinery and a stored run from before it says so.
+(confirmed by Peter 2026-09-09), **filled by W5.10**: a
+:class:`~ampere.core.simulate.ContextPrior` every simulated draw's uncertainty
+pattern is drawn from, so that the trained posterior is amortised over noise
+*levels* and not only over noise realisations. ``None`` -- still the default --
+draws every observation at the observed uncertainties and records
+``ampere_sbi_context = "none"``, exactly as before.
+
+Nothing about the packing changes when a context is used, and that is the
+design rather than a convenience. The encoding already carries each sample's
+``log sigma`` and its whitened value (``encoding.md`` §3), so a network reading
+the tensor through :func:`~ampere.core.encoding.unpack` *already sees* the
+noise level of the observation it is conditioned on: a context prior varies
+what those columns hold across the budget, and the reserved ``context`` column
+group stays width 0 because there is nothing left for it to carry. The opt-in
+second route, for a network that wants the context as one vector per dataset
+rather than per row, is ``embedding_options={"film": True}`` -- FiLM
+conditioning on the per-set statistics of those same columns.
+
+**SBC per observation is the check** that the context prior covered the
+observation at hand: :meth:`SBIEngine.calibrate` inherits the run's prior by
+default and takes a ``context=`` of its own, so calibrating at a rescale the
+training prior covers and at one it does not is two calls and two verdicts.
 
 What a run looks like
 ---------------------
@@ -205,7 +222,7 @@ from ampere.core.encoding import (
     unpack,
 )
 from ampere.core.exceptions import OptionalDependencyError
-from ampere.core.simulate import Executor, SimulationBatch
+from ampere.core.simulate import ContextPrior, Executor, SimulationBatch
 from ampere.results.artefacts import ArtefactCacheWarning, ArtefactKey, ArtefactStore, artefact_key
 from ampere.results.calibration import (
     PARAMETER_DIM,
@@ -214,7 +231,7 @@ from ampere.results.calibration import (
     attach_calibration,
     calibration_dataset,
 )
-from ampere.results.provenance import ATTR_PREFIX
+from ampere.results.provenance import ATTR_PREFIX, canonical_json, hash_of
 from ampere.results.training import append_training_set, write_training_set
 
 from ._tmnre import (
@@ -394,6 +411,43 @@ _TMNRE_MCMC: Mapping[str, Any] = {"init_strategy": "proposal"}
 #: tensor: ampere's own arithmetic is float64 throughout, and the single
 #: narrowing happens at the boundary, here.
 _DTYPE = "float32"
+
+#: ``calibrate(context=...)``'s default, distinct from ``None`` (**W5.10**).
+#: The three answers are "the run's own prior" (inherit), "no context" and
+#: "this one", and ``None`` has to be the middle of them, because calibrating
+#: an amortised run at the observation's own uncertainties is a question a
+#: caller genuinely asks.
+_INHERIT_CONTEXT: Any = object()
+
+
+def _context_attr(prior: Any) -> str:
+    """A context prior as a run's attrs record it: canonical JSON, or ``"none"``.
+
+    **W5.10.** The same string ``simulate_many`` puts in a batch's
+    ``provenance["simulation_context"]``, deliberately: a run's attrs and the
+    training set it wrote should not describe one budget two ways.
+    """
+    if prior is None:
+        return "none"
+    try:
+        return canonical_json(dict(prior.describe()))
+    except Exception:
+        return repr(prior)
+
+
+def _context_hash(prior: Any) -> str:
+    """The digest of a context prior's description, or an empty string for none.
+
+    One string a reader can compare between two runs, and the thing a cached
+    artefact would have to agree on before it could be believed about a
+    context-amortised network.
+    """
+    if prior is None:
+        return ""
+    try:
+        return hash_of(dict(prior.describe()))
+    except Exception:
+        return hash_of({"repr": repr(prior)})
 
 
 # ---------------------------------------------------------------------------
@@ -792,6 +846,9 @@ _SET_KEYS: Mapping[str, str] = {
     "num_hiddens": "num_hiddens",
     "num_layers": "num_layers",
     "aggregation_fn": "aggregation_fn",
+    # W5.10, both nets: the opt-in FiLM conditioning route, off by default.
+    "film": "film",
+    "film_hidden": "film_hidden",
 }
 _TRANSFORMER_KEYS: Mapping[str, str] = {
     "feature_space_dim": "feature_space_dim",
@@ -799,6 +856,8 @@ _TRANSFORMER_KEYS: Mapping[str, str] = {
     "num_attention_heads": "num_attention_heads",
     "intermediate_size": "intermediate_size",
     "dropout": "dropout",
+    "film": "film",
+    "film_hidden": "film_hidden",
 }
 
 
@@ -859,6 +918,8 @@ def _set_embedding(
     num_hiddens: int = 40,
     num_layers: int = 2,
     aggregation_fn: str = "mean",
+    film: bool = False,
+    film_hidden: int = 16,
 ) -> _Embedding:
     """``PermutationInvariantEmbedding`` over the packing, masked by the wrapper.
 
@@ -902,7 +963,14 @@ def _set_embedding(
         aggregation_dim=1,
     )
     wrappers = _wrapper_classes(torch)
-    return _Embedding(module=wrappers[0](layout, net), name="set", output_dim=int(width))
+    conditioning = (
+        _film_module(torch, layout=layout, width=row_features, hidden=int(film_hidden))
+        if film
+        else None
+    )
+    return _Embedding(
+        module=wrappers[0](layout, net, conditioning), name="set", output_dim=int(width)
+    )
 
 
 def _transformer_embedding(
@@ -916,6 +984,8 @@ def _transformer_embedding(
     num_attention_heads: int = 4,
     intermediate_size: int = 64,
     dropout: float = 0.1,
+    film: bool = False,
+    film_hidden: int = 16,
 ) -> _Embedding:
     """``TransformerEmbedding`` over the packing, with W3.3's four corrections.
 
@@ -971,8 +1041,15 @@ def _transformer_embedding(
         intermediate_size=int(intermediate_size),
     )
     wrappers = _wrapper_classes(torch)
+    conditioning = (
+        _film_module(torch, layout=layout, width=row_features, hidden=int(film_hidden))
+        if film
+        else None
+    )
     return _Embedding(
-        module=wrappers[1](layout, projection, net), name="transformer", output_dim=int(width)
+        module=wrappers[1](layout, projection, net, conditioning),
+        name="transformer",
+        output_dim=int(width),
     )
 
 
@@ -1067,13 +1144,18 @@ def _transformer_masked_mean(net: Any, tokens: Any, keep: Any) -> Any:
 
 
 @functools.cache
-def _wrapper_classes(torch: Any) -> tuple[Any, Any]:
-    """The two ``nn.Module`` wrappers, defined once per interpreter.
+def _wrapper_classes(torch: Any) -> tuple[Any, Any, Any]:
+    """The ``nn.Module`` wrappers, defined once per interpreter.
 
     Inside a function for :func:`_prior_class`'s reason: they subclass
     ``torch.nn.Module``, and this module imports torch on use, never on import.
 
-    Both do the same three things and differ only in what they hand the net.
+    Three of them since **W5.10**: the two embedding wrappers, and the
+    optional FiLM conditioner either of them may carry (``_Film``, built by
+    :func:`_film_module` and off unless ``embedding_options={"film": True}``
+    asks for it).
+
+    Both wrappers do the same three things and differ only in what they hand the net.
     They unpack ``x`` by the layout (which also reshapes it, since ``sbi``
     flattens ``x`` on some paths), they narrow float64 to the network's float32
     **once, here, at the boundary**, and they convert the packing's single mask
@@ -1084,20 +1166,98 @@ def _wrapper_classes(torch: Any) -> tuple[Any, Any]:
     construction.
     """
 
-    class _SetEmbedding(torch.nn.Module):
-        """Mask as NaN rows, then ``sbi``'s permutation-invariant net."""
+    class _Film(torch.nn.Module):
+        """FiLM: a **per-set** conditioning vector modulating the row features.
 
-        def __init__(self, layout: EncodingLayout, net: Any) -> None:
+        **W5.10**'s opt-in second route to the observation context
+        (``embedding_options={"film": True}``), off by default. The first
+        route needs no module at all: a context prior varies the per-row
+        ``log_sigma`` and whitened-value columns of the packing, so any
+        network reading :func:`~ampere.core.encoding.unpack` already sees the
+        noise level of the observation it is conditioned on. What this adds is
+        the *summary* of that context as one vector per dataset, which a
+        pooled network cannot form for itself: a masked mean over rows is
+        taken after the per-row net, so a statistic of the context computed
+        before it is genuinely new information rather than a rearrangement.
+
+        Three statistics per dataset, all of them context and none of them
+        signal: the masked mean and standard deviation of ``log sigma``, and
+        ``log N_valid``. They go through a two-layer net to a per-dataset
+        ``(gamma, beta)``, and the rows of that dataset are modulated as
+        ``features * (1 + gamma) + beta`` -- the standard FiLM form, with the
+        ``1 +`` so that an untrained net is the identity and turning the
+        option on cannot make a run worse before it has learnt anything.
+
+        Padded rows (the tail past every dataset's block) are modulated by
+        zero, which is what they already are, and both wrappers mask them
+        afterwards regardless.
+        """
+
+        #: Masked mean of ``log sigma``, its masked standard deviation, and
+        #: ``log N_valid``. Named once because the net's input width is it.
+        STATS = 3
+
+        def __init__(self, layout: EncodingLayout, width: int, net: Any) -> None:
             super().__init__()
             self.layout = layout
+            self.width = int(width)
             self.net = net
 
         def __reduce__(self) -> tuple[Any, tuple[Any, ...]]:
-            return _rebuild_set_embedding, (self.layout, self.net)
+            return _rebuild_film, (self.layout, self.width, self.net)
+
+        def _statistics(self, block: Any) -> Any:
+            """``(batch, STATS)`` for one dataset's rows."""
+            keep = block.mask[..., 0] > 0.5
+            weights = keep.unsqueeze(-1).to(block.log_sigma.dtype)
+            counts = weights.sum(dim=1).clamp(min=1.0)
+            mean = (block.log_sigma * weights).sum(dim=1) / counts
+            spread = (
+                ((block.log_sigma - mean.unsqueeze(1)) ** 2 * weights).sum(dim=1) / counts
+            ).clamp(min=0.0) ** 0.5
+            size = torch.log(counts)
+            return torch.cat([mean, spread, size], dim=-1)
+
+        def forward(self, view: Any, features: Any) -> Any:
+            rows = int(features.shape[-2])
+            pieces = []
+            covered = 0
+            for block in view.per_dataset:
+                stats = self._statistics(block)
+                span = int(block.stop - block.start)
+                pieces.append(stats.unsqueeze(1).expand(-1, span, -1))
+                covered += span
+            if covered < rows:
+                pieces.append(
+                    torch.zeros(
+                        features.shape[0],
+                        rows - covered,
+                        self.STATS,
+                        dtype=features.dtype,
+                        device=features.device,
+                    )
+                )
+            modulation = self.net(torch.cat(pieces, dim=1))
+            gamma, beta = modulation.chunk(2, dim=-1)
+            return features * (1.0 + gamma) + beta
+
+    class _SetEmbedding(torch.nn.Module):
+        """Mask as NaN rows, then ``sbi``'s permutation-invariant net."""
+
+        def __init__(self, layout: EncodingLayout, net: Any, film: Any = None) -> None:
+            super().__init__()
+            self.layout = layout
+            self.net = net
+            self.film = film
+
+        def __reduce__(self) -> tuple[Any, tuple[Any, ...]]:
+            return _rebuild_set_embedding, (self.layout, self.net, self.film)
 
         def forward(self, x: Any) -> Any:
             view = unpack(x.to(getattr(torch, _DTYPE)), self.layout)
             features = view.features
+            if self.film is not None:
+                features = self.film(view, features)
             absent = torch.full_like(features, float("nan"))
             return self.net(torch.where(view.valid.unsqueeze(-1), features, absent))
 
@@ -1113,35 +1273,74 @@ def _wrapper_classes(torch: Any) -> tuple[Any, Any]:
         set changes.
         """
 
-        def __init__(self, layout: EncodingLayout, projection: Any, net: Any) -> None:
+        def __init__(
+            self, layout: EncodingLayout, projection: Any, net: Any, film: Any = None
+        ) -> None:
             super().__init__()
             self.layout = layout
             self.projection = projection
             self.net = net
+            self.film = film
 
         def __reduce__(self) -> tuple[Any, tuple[Any, ...]]:
-            return _rebuild_transformer_embedding, (self.layout, self.projection, self.net)
+            return _rebuild_transformer_embedding, (
+                self.layout,
+                self.projection,
+                self.net,
+                self.film,
+            )
 
         def forward(self, x: Any) -> Any:
             view = unpack(x.to(getattr(torch, _DTYPE)), self.layout)
             keep = view.valid
-            projected = self.projection(view.features)
+            features = view.features
+            if self.film is not None:
+                features = self.film(view, features)
+            projected = self.projection(features)
             tokens = projected * keep.unsqueeze(-1).to(projected.dtype)
             return _transformer_masked_mean(self.net, tokens, keep)
 
-    return _SetEmbedding, _TransformerEmbedding
+    return _SetEmbedding, _TransformerEmbedding, _Film
 
 
-def _rebuild_set_embedding(layout: EncodingLayout, net: Any) -> Any:
+def _film_module(torch: Any, *, layout: EncodingLayout, width: int, hidden: int) -> Any:
+    """The FiLM conditioner for a packing *width* features wide (**W5.10**).
+
+    Built here rather than inside the wrapper class so that everything with
+    learnable weights is an ordinary ``torch`` module -- which is what lets the
+    wrapper pickle through :func:`_rebuild_film` the way the other two do.
+    """
+    film = _wrapper_classes(torch)[2]
+    net = torch.nn.Sequential(
+        torch.nn.Linear(film.STATS, int(hidden)),
+        torch.nn.ReLU(),
+        torch.nn.Linear(int(hidden), 2 * int(width)),
+    )
+    # Start as the identity: FiLM is an option, and switching it on must not
+    # perturb a run before the first gradient step.
+    torch.nn.init.zeros_(net[-1].weight)
+    torch.nn.init.zeros_(net[-1].bias)
+    return film(layout, int(width), net)
+
+
+def _rebuild_set_embedding(layout: EncodingLayout, net: Any, film: Any = None) -> Any:
     """Unpickle hook for the lazily-built set wrapper (see its ``__reduce__``)."""
     _, torch = _require_sbi()
-    return _wrapper_classes(torch)[0](layout, net)
+    return _wrapper_classes(torch)[0](layout, net, film)
 
 
-def _rebuild_transformer_embedding(layout: EncodingLayout, projection: Any, net: Any) -> Any:
+def _rebuild_transformer_embedding(
+    layout: EncodingLayout, projection: Any, net: Any, film: Any = None
+) -> Any:
     """Unpickle hook for the lazily-built transformer wrapper (see its ``__reduce__``)."""
     _, torch = _require_sbi()
-    return _wrapper_classes(torch)[1](layout, projection, net)
+    return _wrapper_classes(torch)[1](layout, projection, net, film)
+
+
+def _rebuild_film(layout: EncodingLayout, width: int, net: Any) -> Any:
+    """Unpickle hook for the FiLM conditioner (**W5.10**; see its ``__reduce__``)."""
+    _, torch = _require_sbi()
+    return _wrapper_classes(torch)[2](layout, width, net)
 
 
 def _probe_width(module: Any, *, torch: Any, shape: tuple[int, ...]) -> int:
@@ -1498,13 +1697,13 @@ class SBIEngine(Engine):
                     f"for the family is used and posterior_options= is where its settings go. "
                     f"Got {sample_with!r}."
                 )
-        if context is not None:
+        if context is not None and not isinstance(context, ContextPrior):
             raise EngineError(
-                f"sbi's context= is the reserved per-draw observation-context slot (a sigma "
-                f"pattern, a grid, an instrument setting, drawn from a context prior and seen by "
-                f"the embedding). The signature exists so that runs recorded before the "
-                f"machinery say so -- every run today records ampere_sbi_context = 'none' -- but "
-                f"the machinery is a later item, so only None is accepted. Got {context!r}."
+                f"sbi's context= is a ContextPrior (W5.10): the per-draw observation context -- "
+                f"a sigma pattern -- every simulated draw is made under, so that the trained "
+                f"posterior is amortised over noise *levels* and not only over noise "
+                f"realisations. It needs draw(rng, observed) and describe(); ampere.core.simulate "
+                f"ships ScaledSigma, SigmaArchive and SignalToNoise. Got {context!r}."
             )
         if density_estimator is not None and not isinstance(density_estimator, str):
             if not callable(density_estimator):
@@ -1545,6 +1744,13 @@ class SBIEngine(Engine):
         self.device = str(device)
         self.executor = executor
         self.chunk_size = None if chunk_size is None else int(chunk_size)
+        #: **W5.10**: the observation-context prior every simulated draw is
+        #: made under, or ``None`` for a budget at the observed
+        #: uncertainties. The run records it (``ampere_sbi_context``, and its
+        #: digest ``ampere_sbi_context_hash``), and :meth:`calibrate`
+        #: inherits it unless told otherwise -- which is what makes SBC the
+        #: check that the prior covered the observation at hand.
+        self.context: Any = context
         self.training_set = None if training_set is None else str(training_set)
         #: W3.5: a trained-artefact store keyed on the problem's own hashes, or
         #: ``None`` to train every time. A hit skips simulation and training.
@@ -1702,6 +1908,15 @@ class SBIEngine(Engine):
                 marginals=self.marginals if self.method == TMNRE else None,
                 truncation_epsilon=self.truncation_epsilon if self.method == TMNRE else None,
                 sample_with=self.sample_with if self.method == TMNRE else None,
+                # W5.10: the context prior is part of what was trained, not a
+                # note about it. A budget drawn under one trains a different
+                # network from one drawn at the observed uncertainties, and two
+                # priors train two more; without this ingredient all three
+                # computed the same key and the store served whichever came
+                # first (DEVELOPMENT_PLAN.md §7). `or None` rather than the
+                # empty string so that a contextless run's digest is exactly
+                # what it was before this item existed.
+                context=_context_hash(self.context) or None,
             )
         )
         # W5.23: an explicit named artefact, restored regardless of whether it
@@ -1861,6 +2076,7 @@ class SBIEngine(Engine):
         posterior: Any = None,
         attach_to: Any = None,
         num_workers: int = 1,
+        context: Any = _INHERIT_CONTEXT,
     ) -> Any:
         """Family D on this run's trained posterior: SBC ranks and coverage.
 
@@ -1933,6 +2149,23 @@ class SBIEngine(Engine):
         num_workers
             Forwarded to ``sbi``, which uses it only on the non-batched
             sampling path (an NLE or NRE posterior).
+        context
+            **W5.10**: the observation context the calibration batch is drawn
+            under. The default **inherits the run's own**
+            :attr:`context`, so calibrating an amortised run asks the honest
+            question — is the posterior calibrated over the distribution it
+            was trained on? ``None`` calibrates at the observation's own
+            uncertainties, and a
+            :class:`~ampere.core.simulate.ContextPrior` of your own
+            calibrates *there*.
+
+            That last form is the check the tutorial names: **SBC per
+            observation is how you find out whether the context prior covered
+            the observation at hand**. Calibrate at a fixed rescale the
+            training prior covers and the posterior stays calibrated;
+            calibrate at one it does not and the coverage degrades, visibly,
+            in exactly the numbers this method returns
+            (``ampere_calibration_context`` records which was which).
 
         Returns
         -------
@@ -1995,7 +2228,10 @@ class SBIEngine(Engine):
         # box. The attrs say which of the two happened.
         truncated = self.method == TMNRE and self._proposal is not None
         given = self._truncated_theta(simulations) if truncated else None
-        thetas, summaries, simulated = self._calibration_batch(simulations, rng, values=given)
+        calibration_context = self.context if context is _INHERIT_CONTEXT else context
+        thetas, summaries, simulated = self._calibration_batch(
+            simulations, rng, values=given, context=calibration_context
+        )
         theta_tensor = torch.as_tensor(thetas, dtype=dtype, device=self.device)
         summary_tensor = torch.as_tensor(summaries, dtype=dtype, device=self.device)
         count_kept = int(thetas.shape[0])
@@ -2034,6 +2270,11 @@ class SBIEngine(Engine):
             f"{ATTR_PREFIX}calibration_parameterisation": "unconstrained",
             f"{ATTR_PREFIX}calibration_reference": "truncated_prior" if truncated else "prior",
             f"{ATTR_PREFIX}calibration_sampler": "mcmc" if rebuilt else "as_run",
+            # W5.10: which noise distribution this verdict is about. A
+            # coverage number means nothing without it once a run is
+            # amortised over contexts -- "calibrated" at the training prior
+            # and "calibrated" at one fixed rescale are two different claims.
+            f"{ATTR_PREFIX}calibration_context": _context_attr(calibration_context),
             f"{ATTR_PREFIX}calibration_c2st_dap": float(np.mean(_numpy(checks["c2st_dap"]))),
             f"{ATTR_PREFIX}calibration_sbi_version": str(
                 getattr(sbi_package, "__version__", "unknown")
@@ -2087,7 +2328,7 @@ class SBIEngine(Engine):
         return np.stack([self.problem.constrain(row) for row in rows])
 
     def _calibration_batch(
-        self, count: int, rng: Any, *, values: Any = None
+        self, count: int, rng: Any, *, values: Any = None, context: Any = None
     ) -> tuple[np.ndarray, np.ndarray, int]:
         """A fresh batch, unconstrained θ and layout-encoded x.
 
@@ -2098,6 +2339,14 @@ class SBIEngine(Engine):
 
         *values* is ``None`` for a prior batch and one constrained θ per draw
         for W3.4's truncated one; the rest of the method does not care which.
+
+        *context* is **W5.10**'s: the observation context the calibration
+        draws are made under. Passing the run's own prior asks whether the
+        posterior is calibrated over the distribution it was trained on;
+        passing a narrower one — a fixed rescale, say — asks whether it is
+        calibrated *at that noise level*, which is the question "did the
+        context prior cover the observation at hand?" in the only form that
+        has an answer.
         """
         problem = self.problem
         thetas: list[np.ndarray] = []
@@ -2108,9 +2357,19 @@ class SBIEngine(Engine):
             values=values,
             observe=True,
             rng=rng,
+            # W5.10: naming the stream matters here even though ``rng=``
+            # overrides the draw stream, because a context prior derives its
+            # own sub-stream from this name (inference.md §12). Left at the
+            # default it would be "simulate.context" -- the *fit's* context
+            # stream -- so calibrating would consume the contexts a later
+            # round would have drawn, which is exactly the shared-stream bug
+            # §12 exists to prevent. It is also the honest value for the
+            # batch's own record: these draws are the calibrate stream's.
+            stream="sbi.calibrate",
             executor=self.executor,
             chunk_size=self.chunk_size,
             as_chunks=True,
+            context=context,
         ):
             simulated += len(chunk)
             keep = chunk.usable
@@ -2716,6 +2975,11 @@ class SBIEngine(Engine):
             executor=self.executor,
             chunk_size=self.chunk_size,
             as_chunks=True,
+            # W5.10: every round's draws are made under the same context prior.
+            # The contexts themselves are drawn per simulation, on the
+            # problem's own "<stream>.context" sub-stream, so a round's budget
+            # is reproducible with them exactly as it was without them.
+            context=self.context,
         )
 
     def _write(self, chunk: SimulationBatch) -> None:
@@ -2864,7 +3128,13 @@ class SBIEngine(Engine):
             # be inferred from the round count, because TMNRE loses it at one
             # round too -- the box is applied to the posterior either way.
             "sbi_amortised": int(self.rounds == 1 and self.method != TMNRE),
-            "sbi_context": "none",
+            # W5.10: the context prior the budget was simulated under, in
+            # full, plus its digest. "none" is a budget at the observed
+            # uncertainties -- what every run recorded before this item, and
+            # still the default -- so a stored run says which of the two it
+            # is rather than leaving it to be inferred.
+            "sbi_context": _context_attr(self.context),
+            "sbi_context_hash": _context_hash(self.context),
             "sbi_device": self.device,
             "sbi_training_loss": thinned,
             "sbi_training_loss_stride": stride,

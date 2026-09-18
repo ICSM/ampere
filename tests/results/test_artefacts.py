@@ -718,3 +718,75 @@ def test_importing_artefacts_pulls_in_neither_torch_nor_sbi() -> None:
         text=True,
     )
     assert probe.stdout.strip() == "[]"
+
+
+# ---------------------------------------------------------------------------
+# W5.10: the observation-context prior is an ingredient
+# ---------------------------------------------------------------------------
+
+
+class TestTheObservationContextIngredient:
+    """A network trained under a context prior must not be served without one.
+
+    ``SBIEngine(context=...)`` changes what the budget *is*: every simulated
+    observation is drawn at a sigma pattern from the prior rather than at the
+    observed uncertainties, so the network that trains on it is a different
+    network. Before this item a run with a context computed exactly the key
+    of the same run without one, and the store served whichever was trained
+    first — ``DEVELOPMENT_PLAN.md`` §7's stale artefact, arriving by the one
+    door the key exists to shut. Recording the prior in a run's attrs says,
+    afterwards, which one a stored run used; only the key stops the wrong
+    network being handed over in the first place.
+    """
+
+    def test_a_context_free_digest_is_unchanged_by_this_item(self) -> None:
+        """The same pinned digest W3.12's row froze, still exact.
+
+        ``context`` is omitted from ``ingredients()`` rather than written as
+        ``null`` when there is none, so every digest minted before this field
+        existed — including the one recorded on ``ea7f1d7`` — is untouched.
+        """
+        with patch("ampere.results.artefacts.package_versions", return_value=dict(_FIXED_VERSIONS)):
+            key = _key(_problem())
+        assert key.context is None
+        assert "context" not in key.ingredients()
+        assert key.digest() == _BASE_COMMIT_NPE_DIGEST
+
+    def test_a_context_key_carries_it_and_differs(self) -> None:
+        plain = _key(_problem())
+        contextual = _key(_problem(), context="0123456789abcdef0123456789abcdef")
+        assert contextual.context == "0123456789abcdef0123456789abcdef"
+        assert contextual.ingredients()["context"] == "0123456789abcdef0123456789abcdef"
+        assert contextual.digest() != plain.digest()
+
+    def test_two_different_priors_are_two_different_keys(self) -> None:
+        first = _key(_problem(), context="aaaa")
+        second = _key(_problem(), context="bbbb")
+        assert first.digest() != second.digest()
+
+    def test_an_empty_context_is_refused_by_name(self) -> None:
+        with pytest.raises(ResultsError, match="context="):
+            _key(_problem(), context="")
+
+    def test_a_context_run_misses_a_context_free_entry_and_names_it(self, tmp_path: Path) -> None:
+        store = ArtefactStore(tmp_path)
+        plain = _key(_problem())
+        store.put(plain, {"trained": "without a context"})
+        contextual = _key(_problem(), context="aaaa")
+        assert store.get(contextual) is None
+        diff = store.diff(contextual)
+        assert "context" in diff
+        assert diff["context"] == (None, "aaaa")
+
+    def test_the_same_prior_is_a_hit(self, tmp_path: Path) -> None:
+        store = ArtefactStore(tmp_path)
+        key = _key(_problem(), context="aaaa")
+        store.put(key, {"trained": "under aaaa"})
+        assert store.get(_key(_problem(), context="aaaa")) == {"trained": "under aaaa"}
+
+    def test_a_different_prior_misses_and_names_it(self, tmp_path: Path) -> None:
+        store = ArtefactStore(tmp_path)
+        store.put(_key(_problem(), context="aaaa"), {"trained": "under aaaa"})
+        moved = _key(_problem(), context="bbbb")
+        assert store.get(moved) is None
+        assert store.diff(moved)["context"] == ("aaaa", "bbbb")
