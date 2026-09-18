@@ -354,9 +354,14 @@ irregular sampling, missing data, amortising across differently-configured
 instruments — the coordinate–value–mask **encoding**
 (:class:`~ampere.core.encoding.EncodingLayout`, ``docs/design/contracts/
 encoding.md``) packs every dataset into one tensor: standardised coordinates,
-Fourier coordinate features, whitened values, log σ and one mask column per
-sample, frozen and hashed from the **observed data alone**, before any
-simulation. Two embeddings read it (``layout="set"``, ``embedding="set"`` or
+Fourier coordinate features, an axis-identity code per coordinate column,
+whitened values, log σ and one mask column per sample, frozen and hashed from
+the **observed data alone**, before any simulation. The axis-identity codes
+(W5.11) are what stop a network reading two unrelated quantities in one input
+slot when a collection mixes container kinds — an image's ``x`` on the sky
+beside an interferometer's ``u`` — since the packing otherwise aligns axes by
+position alone; they are a small integer per column, taken from the axis's
+unit, and the table is in the contract's §3. Two embeddings read it (``layout="set"``, ``embedding="set"`` or
 ``"transformer"``): a permutation-invariant pooling network and an attention
 one, both `sbi` 0.27 nets wrapped so the one mask column becomes whatever the
 underlying net expects (a NaN-filled row for the set embedding, an

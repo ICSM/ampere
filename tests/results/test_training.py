@@ -284,6 +284,61 @@ class TestAppend:
         with pytest.raises(ResultsError, match="predates"):
             append_training_set(path, budget(problem, 1), problem)
 
+    def test_a_pre_w511_training_set_refuses_on_append_by_name(self, tmp_path: Path) -> None:
+        """**W5.11**: the axis identity moved every layout hash, once.
+
+        A budget written before it was packed without the axis-identity
+        columns, so its rows are narrower than the ones being appended. The
+        refusal has to say *that*, because the alternative — reporting two
+        hashes that differ — tells a reader nothing about why or what to do.
+        """
+        xarray = pytest.importorskip("xarray")
+        import json
+
+        from ampere.core.encoding import EncodingLayout
+
+        problem = toy()
+        path = tmp_path / "budget.nc"
+        write_training_set(path, budget(problem, 2), problem)
+
+        # A training set as an SBI run wrote it before W5.11: the layout it
+        # recorded is version 1 and its datasets carry no axis codes.
+        stale = EncodingLayout.from_datasets(problem.datasets).to_dict()
+        stale["version"] = 1
+        for record in stale["datasets"]:
+            record.pop("axis_codes")
+        opened = xarray.open_datatree(str(path))
+        tree = opened.load()
+        opened.close()
+        tree.attrs[f"{ATTR_PREFIX}encoding_layout"] = json.dumps(stale)
+        tree.to_netcdf(str(path))
+
+        with pytest.raises(ResultsError, match="axis-identity") as raised:
+            append_training_set(path, budget(problem, 1), problem)
+        message = str(raised.value)
+        assert "W5.11" in message
+        assert "encoding.md" in message
+
+    def test_a_training_set_recording_this_encoding_appends(self, tmp_path: Path) -> None:
+        """The other half: a current layout is not refused."""
+        xarray = pytest.importorskip("xarray")
+        import json
+
+        from ampere.core.encoding import EncodingLayout
+
+        problem = toy()
+        path = tmp_path / "budget.nc"
+        write_training_set(path, budget(problem, 2), problem)
+        current = EncodingLayout.from_datasets(problem.datasets).to_dict()
+        opened = xarray.open_datatree(str(path))
+        tree = opened.load()
+        opened.close()
+        tree.attrs[f"{ATTR_PREFIX}encoding_layout"] = json.dumps(current)
+        tree.to_netcdf(str(path))
+
+        append_training_set(path, budget(problem, 1), problem)
+        assert len(read_training_set(path)) == 3
+
 
 # ---------------------------------------------------------------------------
 # Failures, and the properties the format claims
