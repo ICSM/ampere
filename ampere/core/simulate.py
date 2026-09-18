@@ -1156,6 +1156,20 @@ class SignalToNoise:
     sigma is not strictly positive (``encoding.md`` §6), and a likelihood that
     divides by it would not survive one either.
 
+    **``|y|`` is the *observed* container's, not the draw's** (Fable's reading
+    at the W5.10 review, agreed). A :class:`ContextPrior` is handed the
+    problem's observed containers and nothing else, because a context is drawn
+    before the forward model runs — the sigma has to exist before there is
+    anything to add noise to. So under ``reference="values"`` every simulation
+    gets the *same* fractional-error **shape**, taken from the observation,
+    scaled by one drawn ``1/snr``: "this instrument's error pattern on this
+    source, at S/N between low and high", which is a real and useful context
+    prior but is **not** "each draw at its own S/N". ``reference="median"`` is
+    a plain level and is unaffected. A prior whose sigma tracked each draw's own
+    simulated signal would need to be drawn *after* the prediction, which is a
+    different protocol (``draw`` would have to receive the predicted
+    containers) and a later item.
+
     Parameters
     ----------
     low, high
@@ -1166,9 +1180,11 @@ class SignalToNoise:
         The floor, as a fraction of the median ``|y|``. ``0`` removes it and
         is refused where it would produce a zero sigma, by the encoding, by name.
     reference
-        ``"values"`` (the default) puts sigma proportional to ``|y|``, a constant fractional
-        error; ``"median"`` puts one sigma on every sample, ``median(|y|) / snr``,
-        which is the flat error bar of a background-limited observation.
+        ``"values"`` (the default) puts sigma proportional to the *observed*
+        ``|y|``, a constant fractional error whose shape is the observation's;
+        ``"median"`` puts one sigma on every sample, ``median(|y|) / snr``,
+        which is the flat error bar of a background-limited observation. See
+        the paragraph above on what each of the two does and does not claim.
     """
 
     low: float = 10.0
