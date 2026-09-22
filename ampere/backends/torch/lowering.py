@@ -298,6 +298,30 @@ def _build_halfnorm(
     return _shifted(base, loc, loc, dtype=dtype, device=device)
 
 
+def _build_halfcauchy(
+    spec: PriorSpec, *, dtype: torch.dtype, device: torch.device
+) -> dist.Distribution:
+    """``HalfCauchy(scale)``, shifted by ``loc`` when there is one (§3.3).
+
+    ``halfnorm``'s pattern exactly: ``torch.distributions.HalfCauchy`` is
+    native at ``loc == 0`` and the affine shift is exact otherwise, because a
+    half-Cauchy shifted by ``loc`` is (density and support both) a Cauchy
+    centred and truncated at ``loc``, which is what a translation of a
+    reflected-at-zero distribution *is* — the same reasoning §3.3's docstring
+    gives for ``halfnorm``, unmodified by which symmetric family is being
+    reflected. This is the recommended global scale of any horseshoe over a
+    :class:`~ampere.core.Sum` of noise terms (W5.8), and the fallback §3.4
+    describes as its intended use: no approximation, an exact construction
+    from ``torch.distributions`` primitives.
+    """
+    loc = _kwd(spec, "loc", 0.0)
+    scale = _kwd(spec, "scale", 1.0)
+    base = dist.HalfCauchy(as_tensor(scale, dtype=dtype, device=device), validate_args=False)
+    if loc == 0.0:
+        return base
+    return _shifted(base, loc, loc, dtype=dtype, device=device)
+
+
 def _build_loguniform(
     spec: PriorSpec, *, dtype: torch.dtype, device: torch.device
 ) -> dist.Distribution:
@@ -478,6 +502,10 @@ def _halfnorm(spec: PriorSpec) -> dist.Distribution:
     return _build_halfnorm(spec, dtype=DEFAULT_DTYPE, device=DEFAULT_DEVICE)
 
 
+def _halfcauchy(spec: PriorSpec) -> dist.Distribution:
+    return _build_halfcauchy(spec, dtype=DEFAULT_DTYPE, device=DEFAULT_DEVICE)
+
+
 def _loguniform(spec: PriorSpec) -> dist.Distribution:
     return _build_loguniform(spec, dtype=DEFAULT_DTYPE, device=DEFAULT_DEVICE)
 
@@ -512,6 +540,7 @@ _BUILTIN_BUILDERS = {
     "norm": _build_norm,
     "uniform": _build_uniform,
     "halfnorm": _build_halfnorm,
+    "halfcauchy": _build_halfcauchy,
     "loguniform": _build_loguniform,
     "poisson": _build_poisson,
     "lognorm": _build_lognorm,
@@ -525,6 +554,7 @@ _BUILTIN_PRIORS = {
     "norm": _norm,
     "uniform": _uniform,
     "halfnorm": _halfnorm,
+    "halfcauchy": _halfcauchy,
     "loguniform": _loguniform,
     "poisson": _poisson,
     "lognorm": _lognorm,
@@ -747,6 +777,18 @@ def _hierarchical_halfnorm(arguments: dict[str, torch.Tensor]) -> dist.Distribut
     )
 
 
+def _hierarchical_halfcauchy(arguments: dict[str, torch.Tensor]) -> dist.Distribution:
+    base = dist.HalfCauchy(arguments["scale"], validate_args=False)
+    loc = arguments["loc"]
+    if bool(torch.all(loc == 0.0)):
+        return base
+    return _SupportedTransformed(
+        base,
+        [transforms.AffineTransform(loc=loc, scale=torch.ones_like(loc))],
+        constraints.greater_than(loc),
+    )
+
+
 def _hierarchical_expon(arguments: dict[str, torch.Tensor]) -> dist.Distribution:
     base = dist.Exponential(1.0 / arguments["scale"], validate_args=False)
     loc = arguments["loc"]
@@ -778,6 +820,7 @@ _HIERARCHICAL_BUILDERS: dict[str, Any] = {
     "norm": _hierarchical_norm,
     "uniform": _hierarchical_uniform,
     "halfnorm": _hierarchical_halfnorm,
+    "halfcauchy": _hierarchical_halfcauchy,
     "expon": _hierarchical_expon,
 }
 

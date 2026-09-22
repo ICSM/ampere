@@ -91,7 +91,7 @@ __all__ = [
 #: :func:`has_native_icdf`). Advisory only: the decision is taken by probing the
 #: constructed object, because a declared method that raises is not an ``icdf``.
 NATIVE_ICDF: frozenset[str] = frozenset(
-    {"norm", "uniform", "halfnorm", "loguniform", "lognorm", "expon", "truncnorm"}
+    {"norm", "uniform", "halfnorm", "halfcauchy", "loguniform", "lognorm", "expon", "truncnorm"}
 )
 
 
@@ -192,6 +192,28 @@ def _halfnorm(spec: PriorSpec) -> npd.Distribution:
     # half-normal shifted to `loc` (§3.3). Preferred over the affine route
     # because its support is greater_than(loc), so biject_to is right for free.
     return npd.TruncatedNormal(loc=loc, scale=scale, low=loc)
+
+
+def _halfcauchy(spec: PriorSpec) -> npd.Distribution:
+    """``halfcauchy(loc, scale)`` → ``HalfCauchy(scale)``, or the exact shift.
+
+    ``halfnorm``'s pattern, unmodified: a Cauchy centred at ``loc`` and
+    truncated below at ``loc`` is exactly a half-Cauchy shifted to ``loc``
+    (§3.3), so the same ``TruncatedCauchy`` route is preferred over an affine
+    ``TransformedDistribution`` for the reason ``_halfnorm`` is — its support
+    is ``greater_than(loc)`` rather than the whole line, so ``biject_to`` is
+    right without anything being reasoned about by hand. This is the
+    recommended global scale for any horseshoe over a
+    :class:`~ampere.core.Sum` of noise terms (W5.8), and §3.4's fallback used
+    as intended: ``numpyro.distributions.HalfCauchy`` is exact, not an
+    approximation.
+    """
+    kwds = spec.kwds
+    scale = _argument(kwds, "scale", 1.0)
+    loc = _structural(_argument(kwds, "loc", 0.0), "loc", "halfcauchy")
+    if loc == 0.0:
+        return npd.HalfCauchy(scale)
+    return npd.TruncatedCauchy(loc=loc, scale=scale, low=loc)
 
 
 def _loguniform(spec: PriorSpec) -> npd.Distribution:
@@ -301,6 +323,7 @@ FAMILIES: Mapping[str, Callable[[PriorSpec], npd.Distribution]] = {
     "norm": _norm,
     "uniform": _uniform,
     "halfnorm": _halfnorm,
+    "halfcauchy": _halfcauchy,
     "loguniform": _loguniform,
     "poisson": _poisson,
     "truncnorm": _truncnorm,
