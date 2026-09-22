@@ -800,21 +800,21 @@ False
 
 ```
 
-### The sparsity guard on a sum of noise components (*Added W5.8*)
+### The sparsity guard on a sum of noise components (*Added W5.8; Amended W5.27*: the declaration below was renamed to `shrinkage_horseshoe`, the old name kept as a deprecated alias — it promised Piironen & Vehtari's slab and the default tail delivers a gamma-tailed sibling of it)
 
 A kernel algebra makes "two noise terms" as easy to write as one, and that is
 exactly the freedom that needs a guard: a summand the data do not need should
 be **switched off by the prior**, not fitted to whatever is left over. The
-recommended prior for any `Sum` of noise terms is `regularised_horseshoe`
+recommended prior for any `Sum` of noise terms is `shrinkage_horseshoe`
 (`parameters.md` §9), put on the kernel by `with_shrinkage`:
 
 ```pycon
->>> from ampere.core import regularised_horseshoe, with_shrinkage
+>>> from ampere.core import shrinkage_horseshoe, with_shrinkage
 >>> pair = Sum(Matern32(st.uniform(0.0, 0.3), st.halfnorm(0.0, 0.01)),
 ...            Matern32(st.uniform(0.0, 0.3), st.halfnorm(0.0, 0.008)),
 ...            labels=("broad", "narrow"))
 >>> shrunk = with_shrinkage(
-...     pair, regularised_horseshoe(("broad.amplitude", "narrow.amplitude"))
+...     pair, shrinkage_horseshoe(("broad.amplitude", "narrow.amplitude"))
 ... )
 >>> shrunk.parameters.names[:3]
 ('shrinkage.global_scale', 'shrinkage.broad', 'shrinkage.narrow')

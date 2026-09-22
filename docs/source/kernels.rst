@@ -79,14 +79,14 @@ is what fixes the constant in front of the O(N) solve:
 A ``Sum`` of noise terms should carry the **sparsity prior** that goes with it,
 so that a component the data do not need is switched off by the prior rather
 than fitted to whatever is left over. That prior is
-:func:`~ampere.core.regularised_horseshoe` — one global scale shared by every
+:func:`~ampere.core.shrinkage_horseshoe` — one global scale shared by every
 component, one local scale per component under it, each amplitude under its own
 local scale — and :func:`~ampere.core.with_shrinkage` puts it on a kernel
 without changing anything else about it::
 
     kernel = with_shrinkage(
         Sum(Matern32(...), Matern32(...), labels=("broad", "narrow")),
-        regularised_horseshoe(("broad.amplitude", "narrow.amplitude")),
+        shrinkage_horseshoe(("broad.amplitude", "narrow.amplitude")),
     )
 
 It is the recommended prior for any sum of noise components (**W5.8**);

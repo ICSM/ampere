@@ -314,7 +314,7 @@ A sum of noise components needs a sparsity guard
 
 The kernel algebra that makes the third arm possible is also the freedom to add
 a component the data do not need, and the guard against it is a prior:
-``ampere.core.regularised_horseshoe``, put on a kernel by
+``ampere.core.shrinkage_horseshoe``, put on a kernel by
 ``ampere.core.with_shrinkage``. It is the recommended prior for any ``Sum`` of
 noise terms — one global scale shared by every component, one local scale per
 component under it, and each component's amplitude under its local scale.

@@ -296,8 +296,10 @@ rule 2. The rows are unchanged as statements about the libraries;
 `ampere/backends/jax/distributions.py` are the implementations.)*
 
 *(**Added W5.25**: `halfcauchy` is the horseshoe's global scale under both of
-`regularised_horseshoe`'s tails (§3.2.1) and had no row on either modern
-backend, so the recommended prior for any `Sum` of noise terms was
+`shrinkage_horseshoe`'s tails (§3.2.1; *Amended W5.27* — renamed, the old
+name kept as a deprecated alias, because it promised Piironen & Vehtari's
+slab and the default tail is a gamma-tailed sibling of it) and had no row on
+either modern backend, so the recommended prior for any `Sum` of noise terms was
 reference-only on NUTS. `torch.distributions.HalfCauchy` and
 `numpyro.distributions.HalfCauchy` are both exact, so this is §3.4's fallback
 used as intended, on `halfnorm`'s own pattern: native at `loc == 0`, the
@@ -345,7 +347,7 @@ column directly with `HierarchicalPrior`, which is what a strongly identified
 warp can afford and what the plan names.
 
 **The horseshoe's chain now lowers, in full.** (*Amended W5.25*)
-`regularised_horseshoe` (`parameters.md` §9) is three hierarchical levels, and
+`shrinkage_horseshoe` (`parameters.md` §9) is three hierarchical levels, and
 its default `tail="regularised"` is chosen so that every one of them is in the
 table above: `halfcauchy` for the global scale, `gamma` for each local scale,
 `halfnorm` for each amplitude. `halfcauchy` was in neither backend's
@@ -366,7 +368,7 @@ than referenced in every declaration this contract writes, so it lowers as an
 ordinary tensor alongside `loc`/`scale`, exactly as §8's "arguments are other
 parameters' values" already allows; what it cannot do is acquire a bijection
 automatically (`_default_bijection_for_hierarchical` refuses any family with a
-shape argument, referenced or not), which is why `regularised_horseshoe`
+shape argument, referenced or not), which is why `shrinkage_horseshoe`
 supplies `bijection=Log()` explicitly rather than relying on the default. All
 three levels of both tails now reach NUTS on both backends. The horseshoe's
 own funnel is the one described above, one level deeper, and it is why
