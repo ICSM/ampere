@@ -2396,7 +2396,17 @@ budgets first and record them); (3) `ci.yml`'s `backend-suites` and
 `conformance+m2+studies` — each group that carries a registry-leak proof
 staying in one process (see `test-all`'s task comment for which two);
 (4) `actionlint` clean; (5) the gate recipe in `docs/development.md`
-updated to the new leg times. Minutes are free on the public repository,
+updated to the new leg times. (6) **The pixi `--locked` check** (found 2026-09-22 on
+the first `v2` CI run): pixi 0.68 and 0.81 both report the lock stale —
+"'torch' requires index pypi.org but the lock-file has
+download.pytorch.org" — because the satisfiability check sees the plain
+`torch` requirement pyro-ppl and sbi carry and does not apply W2.11's
+per-package CPU index, while the solver does (a re-solve reproduces the
+lock byte for byte; spelling the extras out and a feature-level
+`extra-index-urls` were both tried and do not help — the latter breaks the
+editable build). CI installs `frozen` meanwhile; find whether a pixi
+release or a manifest form (`index-strategy`, a workspace-level index)
+restores `--locked`, or record it as upstream and keep `frozen`. Minutes are free on the public repository,
 so the extra environment restores are accepted. **Not in scope:**
 pytest-xdist (needs per-worker registry snapshots — record it as a
 follow-on if the numbers say it is worth it); changing any pinned margin.

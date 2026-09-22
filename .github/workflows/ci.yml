@@ -144,6 +144,18 @@ jobs:
         with:
           environments: dev
           cache: true
+          # 2026-09-22: install from the lock as frozen. `--locked` (the action's
+          # default) failed every job on the first `v2` run -- and fails locally on
+          # pixi 0.68 and 0.81 alike -- with "'torch' requires index pypi.org but
+          # the lock-file has download.pytorch.org": the satisfiability check
+          # sees the plain `torch` requirement that pyro-ppl and sbi carry and does
+          # not apply the per-package CPU index the manifest pins (W2.11), while
+          # the solver does (a re-solve reproduces pixi.lock byte for byte). The
+          # lock is current; the check is not. A genuinely stale lock still fails
+          # loudly here (a missing dependency does not import). W5.26 owns the
+          # proper fix if a pixi release provides one.
+          locked: false
+          frozen: true
       - run: pixi run -e dev lint
       - run: pixi run -e dev format-check
 
@@ -166,6 +178,9 @@ jobs:
         with:
           environments: dev
           cache: true
+          # frozen, not locked: see the lint job's note (2026-09-22).
+          locked: false
+          frozen: true
       - run: pixi run -e dev actionlint
 
   typecheck:
@@ -183,6 +198,9 @@ jobs:
         with:
           environments: dev
           cache: true
+          # frozen, not locked: see the lint job's note (2026-09-22).
+          locked: false
+          frozen: true
       # W2.4/W2.5: this is the `dev` half of the typecheck, and `dev` has
       # neither backend extra -- so the task itself excludes
       # ampere/backends/torch and ampere/backends/jax here (they are piles of
@@ -226,6 +244,9 @@ jobs:
         with:
           environments: test-py${{ matrix.python }}
           cache: true
+          # frozen, not locked: see the lint job's note (2026-09-22).
+          locked: false
+          frozen: true
       - name: fast tests (with coverage)
         if: needs.changes.outputs.run_dev == 'true'
         run: pixi run -e test-py${{ matrix.python }} pytest tests/test_imports.py --cov=ampere --cov-report=xml --cov-report=term
@@ -333,6 +354,9 @@ jobs:
         with:
           environments: dev
           cache: true
+          # frozen, not locked: see the lint job's note (2026-09-22).
+          locked: false
+          frozen: true
       - run: pixi run -e dev test-all
         if: needs.changes.outputs.run_dev == 'true'
       # W2.11, DEVELOPMENT_PLAN.md §5 Phase 2: "benchmark suite ... with
@@ -393,6 +417,9 @@ jobs:
         with:
           environments: ${{ matrix.environment }}
           cache: true
+          # frozen, not locked: see the lint job's note (2026-09-22).
+          locked: false
+          frozen: true
       # The environment's own types, with its real libraries present. The
       # `dev` typecheck job above cannot do this -- it excludes both backends
       # precisely because neither library is installed there -- so this step
@@ -481,6 +508,9 @@ jobs:
         with:
           environments: ${{ matrix.environment }}
           cache: true
+          # frozen, not locked: see the lint job's note (2026-09-22).
+          locked: false
+          frozen: true
       - run: pixi run -e ${{ matrix.environment }} test-all
         if: steps.gate.outputs.run == 'true'
       # W3.7: `sbi`'s environment already contains `torch`, so running
@@ -536,6 +566,9 @@ jobs:
         with:
           environments: dev
           cache: true
+          # frozen, not locked: see the lint job's note (2026-09-22).
+          locked: false
+          frozen: true
       - run: pixi run -e dev docs
         if: needs.changes.outputs.run_docs == 'true'
 
@@ -615,4 +648,7 @@ jobs:
         with:
           environments: sbi
           cache: true
+          # frozen, not locked: see the lint job's note (2026-09-22).
+          locked: false
+          frozen: true
       - run: pixi run -e sbi test-characterisation
