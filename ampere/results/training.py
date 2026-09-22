@@ -871,6 +871,20 @@ class TrainingSet:
         simulated at the observations' own uncertainties. ``None`` in a slot
         means that draw carried no context. The *prior* is in
         ``attrs['ampere_simulation_context']``.
+
+        **W5.28(h), by design, not by oversight**: an empty tuple also means
+        "this file predates W5.10 and the concept did not exist yet", and the
+        two are deliberately not distinguished — no sentinel, no schema
+        attribute records which. The same parity :attr:`observed` already has
+        with a budget written under ``observe=False`` (this module's own
+        docstring states it as the format's rule for every optional group:
+        "a reader of an older file finds them absent, exactly as it finds
+        ``observations`` absent from a budget drawn with ``observe=False``").
+        Nothing downstream ever needs to ask "did this file's writer know
+        about contexts" independently of "does this budget have one" — an
+        empty ``contexts`` is handled identically either way by every
+        consumer this module has (:func:`_check_context` included) — so a
+        sentinel would be a distinction with no question it answers.
     """
 
     attrs: Mapping[str, Any]
