@@ -82,16 +82,32 @@ from ampere.core import (
     sample_coordinates,
 )
 
-__all__ = ["GridDenseGP", "GridHilbertSpaceGP", "GridLikelihood"]
+__all__ = ["GridDenseGP", "GridHilbertSpaceGP", "GridLikelihood", "GriddedSolver"]
 
 
-class _GriddedSolver:
+class GriddedSolver:
     """Lift *only* the ``Layout.POINTS`` gate in :meth:`GPSolver.check_compatible`.
 
     A mixin, so each concrete solver still inherits every other check its base
     class makes — and so that a point-set container still takes the base
     class's path, byte for byte, which is what keeps this module from changing
     the answer to any question anyone was already asking.
+
+    **W5.28(e): this is the extension point, not an implementation detail of
+    this module.** ``GridDenseGP`` and ``GridHilbertSpaceGP`` below are two
+    uses of it; ``examples/image/bakeoff.py`` is a third and fourth
+    (``GridEquispacedFourierGP``, ``GridVecchiaResponseGP``), imported from
+    here across the module boundary — which is what "public" means for a
+    mixin whose whole job is to be reused, and why it no longer carries the
+    leading underscore that said otherwise. A fifth solver joins the study the
+    same way any of these four did: ``class GridWhatever(GriddedSolver,
+    Whatever): ...``, no other override needed, as long as ``Whatever`` is a
+    :class:`~ampere.core.GPSolver` whose ``check_compatible`` is the base
+    class's own (this mixin's ``super().check_compatible(...)`` call is what
+    every other solver's checks still run through). It stops being needed the
+    day the module docstring's "what this module does about it" section
+    lands in the library instead — see there for why that has not happened
+    yet.
     """
 
     def check_compatible(self, kernel: Kernel, observed: FunctionSamples) -> None:
@@ -103,7 +119,7 @@ class _GriddedSolver:
         super().check_compatible(kernel, observed)  # type: ignore[misc]
 
 
-class GridDenseGP(_GriddedSolver, DenseGP):
+class GridDenseGP(GriddedSolver, DenseGP):
     """:class:`~ampere.core.DenseGP`, allowed to see an ``Image``.
 
     Exact, ``O(N³)``, and the study's small-N arm. At 24x24 that is a
@@ -112,7 +128,7 @@ class GridDenseGP(_GriddedSolver, DenseGP):
     """
 
 
-class GridHilbertSpaceGP(_GriddedSolver, HilbertSpaceGP):
+class GridHilbertSpaceGP(GriddedSolver, HilbertSpaceGP):
     """:class:`~ampere.core.HilbertSpaceGP`, allowed to see an ``Image``.
 
     W5.4's reduced-rank solver, whose tensor-product basis is exactly what two
