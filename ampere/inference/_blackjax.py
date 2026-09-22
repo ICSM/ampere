@@ -159,16 +159,6 @@ METHODS: dict[str, str] = {
 #: **W5.14.**
 _MCLMC_MIN_DIM = 2
 
-#: The smallest free dimension MCLMC can be run over. blackjax refuses fewer
-#: ("The target distribution must have more than 1 dimension for MCLMC"), and
-#: the reason is the method rather than the implementation: the isokinetic
-#: dynamics decorrelate a *direction* in the momentum, and in one dimension
-#: there is no direction to decorrelate. :meth:`BlackjaxEngine.run` refuses
-#: first, by name, exactly as :class:`~ampere.inference.NautilusEngine` does
-#: for nautilus's own two-parameter floor. Pathfinder has no such floor.
-#: **W5.14.**
-_MCLMC_MIN_DIM = 2
-
 #: ``ampere_approximation`` (``results.md`` §9) per method. See the module
 #: docstring on why MCLMC's is ``"none"`` and Pathfinder's is not.
 _APPROXIMATIONS: dict[str, str] = {"mclmc": "none", "pathfinder": "pathfinder"}
