@@ -391,7 +391,7 @@ def _warm_up(pool: concurrent.futures.Executor, workers: int) -> None:
         pass
 
 
-def _windowed_map(
+def _windowed_map[Item, Result](
     source: _PoolSource,
     fn: Callable[[_Item], _Result],
     items: Sequence[_Item],
@@ -416,7 +416,7 @@ def _windowed_map(
         source.release()
 
 
-def _windowed_loop(
+def _windowed_loop[Item, Result](
     source: _PoolSource,
     fn: Callable[[_Item], _Result],
     items: Sequence[_Item],
@@ -508,7 +508,7 @@ def _windowed_loop(
     return results
 
 
-def _rerun_alone(
+def _rerun_alone[Item, Result](
     source: _PoolSource,
     fn: Callable[[_Item], _Result],
     items: Sequence[_Item],

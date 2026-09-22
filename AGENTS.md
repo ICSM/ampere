@@ -86,11 +86,11 @@ non-trivial work, read:
   `test-m2` individually, `bench` (pytest-benchmark → `benchmark.json`),
   `scaling`, `test-characterisation` (legacy still works), `lint`,
   `format-check`, `typecheck`, `docs`. Plain `pixi run <task>` equals
-  `pixi run -e dev <task>`. `test-py311`/`test-py312`/`test-py313` are the
+  `pixi run -e dev <task>`. `test-py312`/`test-py313`/`test-py314` are the
   CI matrix; `sbi` adds the `sbi` extra. **Run five-suite gates one at a
   time** — two at once exhaust a 13 GB machine; torch's takes ~9 minutes.
-- Plain-pip alternative: `pip install -e ".[dev]"` (Python ≥ 3.11; CI
-  targets 3.11–3.13).
+- Plain-pip alternative: `pip install -e ".[dev]"` (Python ≥ 3.12; CI
+  targets 3.12–3.14).
 - Conda env **`ampere`** (`~/miniforge3/envs/ampere`, Python 3.13):
   `conda run -n ampere python ...`. Caution: that env has an editable
   install pointing at the main checkout — if you are working in a worktree

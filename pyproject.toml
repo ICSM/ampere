@@ -17,11 +17,11 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
 ]
-requires-python = ">=3.11"
+requires-python = ">=3.12"  # raised from 3.11 on 2026-09-22: arviz 1.x needs 3.12 (see "arviz" below)
 dependencies = [
     "numpy",
     "astropy>=4.0.0",
@@ -53,7 +53,11 @@ dependencies = [
     # names that gap). h5netcdf is the lighter of the two -- pure Python over
     # h5py -- and is the engine `ampere.results.emission` already names in its
     # missing-engine remedy.
-    "arviz",
+    # 2026-09-22: ampere.results is written against arviz 1.x (xarray DataTree
+    # results). arviz 1.x requires Python >= 3.12, and on 3.11 the resolver
+    # silently fell back to arviz 0.23 (InferenceData), which the first CI run
+    # on the v2 branch caught in tests/core. The floor above follows from this.
+    "arviz>=1",
     "h5netcdf",
     "celerite2",  # W2.3: the O(N) quasiseparable GP solve. architecture.md §2/§3 make celerite2's numpy interface a base dependency, never an extra -- a base install that still has the O(N^3) problem defeats the reference backend's purpose. Imported lazily, only when QuasisepGP is actually used.
 ]
@@ -178,7 +182,7 @@ ampere = ["ampere_allfilters.hd5"]
 # editing it, while still being a normal, deliberate line-length choice for
 # new code.
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 
 # Lint/format scope policy (W0.6, 2026-09-01): the legacy codebase carries
 # ~900 pre-existing ruff findings that are out of scope for this item and
@@ -451,15 +455,17 @@ docs = "sphinx-build -b html docs/source docs/_build/html"
 actionlint = "actionlint"
 
 # --- One feature per Python interpreter, driving the CI matrix (W0.3
-# packaging floor: requires-python >=3.11; CI targets 3.11-3.13) ---
-[tool.pixi.feature.py311.dependencies]
-python = "3.11.*"
-
+# packaging floor, raised 2026-09-22: requires-python >=3.12; CI targets
+# 3.12-3.14 -- 3.11 dropped because arviz 1.x needs 3.12 and 3.11 had a year
+# of security fixes left; the freed leg became 3.14) ---
 [tool.pixi.feature.py312.dependencies]
 python = "3.12.*"
 
 [tool.pixi.feature.py313.dependencies]
 python = "3.13.*"
+
+[tool.pixi.feature.py314.dependencies]
+python = "3.14.*"
 
 # --- One feature per [project.optional-dependencies] extra, mirrored 1:1
 # via the editable install's `extras`, never duplicated here. ---
@@ -549,8 +555,9 @@ ampere = { path = ".", editable = true, extras = ["jax"] }
 # synthesises one from only the base [tool.pixi.pypi-dependencies] table
 # (just the editable `ampere` install, no extras) -- no `python` feature
 # means no version pin, so it solves to conda-forge's newest available
-# interpreter (found to be 3.14 -- ahead of this project's tested 3.11-3.13
-# range, see [project.classifiers]), and no `dev` feature means no pytest.
+# interpreter (found to be 3.14 -- since 2026-09-22 inside this project's
+# tested 3.12-3.14 range, see [project.classifiers]), and no `dev` feature
+# means no pytest.
 # `pixi run <task>` with no `-e` targets that implicit `default`
 # environment; since pytest isn't present in it, the task falls through to
 # whatever `pytest` is first on $PATH -- typically an unrelated
@@ -579,9 +586,9 @@ dev = { features = ["py313", "dev", "zeus", "extinction", "netcdf"], solve-group
 # `sbi` extra here -- torch is a large download and sbi tests skip cleanly
 # by design (tests/characterisation/conftest.py's `requires_sbi` marker);
 # see ci.yml and this item's report for the full rationale.
-test-py311 = { features = ["py311", "dev", "zeus", "extinction"] }
 test-py312 = { features = ["py312", "dev", "zeus", "extinction"] }
 test-py313 = { features = ["py313", "dev", "zeus", "extinction"] }
+test-py314 = { features = ["py314", "dev", "zeus", "extinction"] }
 # Full characterisation run including the sbi flow. sbi (extras =
 # ["sbi"]) already depends on torch (pyproject.toml sbi = ["torch",
 # "sbi<0.28"]), so torch is not listed separately here. Kept out of the

@@ -218,19 +218,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Policy (Peter, 2026-09-03, W0.10): py3.11 stays here but may be
-        # dropped later if it proves problematic -- with 3.15 imminent it
-        # is not worth fighting for indefinitely. Nothing in this workflow
-        # or in pyproject.toml's [tool.pixi.*] tables is contorted to
-        # protect it; dropping it later, if it comes to that, is just
-        # deleting "311" from this list.
-        python: ["311", "312", "313"]
+        # Policy (Peter, 2026-09-03, W0.10): py3.11 stayed here while it was
+        # free and could be dropped by deleting it from this list. It was
+        # dropped on 2026-09-22 (Peter): the first run of this workflow on
+        # the v2 branch showed arviz 1.x -- which ampere.results is written
+        # against -- needs Python 3.12, so 3.11 silently resolved arviz 0.23
+        # and failed tests/core; with a year of security fixes left it was
+        # not worth a compatibility layer. The freed leg is 3.14.
+        python: ["312", "313", "314"]
     # Path-gated on `run_dev` (this matrix is a `dev`-feature-set
     # environment per Python version -- no torch/jax extra -- so it is
     # unaffected by a torch- or jax-only change; see the `changes` job and
     # .github/scripts/path_filters.py). Every step below carries the same
     # `if:` rather than the job itself, so an unaffected PR still reports
-    # "test (py311)" etc. as a green, completed check -- never skipped or
+    # "test (py312)" etc. as a green, completed check -- never skipped or
     # absent -- which is what keeps a required check honest for branch
     # protection.
     steps:

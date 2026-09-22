@@ -1,8 +1,9 @@
 Installing AMPERE
 =================
 
-Ampere runs on **Python 3.11, 3.12 and 3.13**; those are the versions CI
-tests. It is not yet published on PyPI, so every route below starts from a
+Ampere runs on **Python 3.12, 3.13 and 3.14**; those are the versions CI
+tests (the 3.11 floor was raised on 2026-09-22: the results layer needs
+arviz 1.x, which needs 3.12). It is not yet published on PyPI, so every route below starts from a
 clone.
 
 .. warning::
