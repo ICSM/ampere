@@ -13,9 +13,6 @@ after they have chosen their walker count and pressed go.
 
 from __future__ import annotations
 
-import contextlib
-import random
-from collections.abc import Iterator
 from typing import Any, ClassVar
 
 import numpy as np
@@ -23,53 +20,17 @@ import numpy as np
 from ampere.core.dataset import FittingProblem
 from ampere.core.exceptions import OptionalDependencyError
 
-from .engine import DEFAULT_CACHE_SIZE, Engine, _check_ensemble, _default_walkers, _kept
+from .engine import (
+    DEFAULT_CACHE_SIZE,
+    Engine,
+    _check_ensemble,
+    _default_walkers,
+    _kept,
+    global_seed,
+)
 from .exceptions import EngineError
 
 __all__ = ["ZeusEngine"]
-
-
-@contextlib.contextmanager
-def _global_seed(seed: int | None) -> Iterator[None]:
-    """Seed both global generators zeus draws from, then put both back.
-
-    zeus takes no generator and exposes no ``random_state``, so the only way to
-    make a run reproducible from ampere's seed is to seed the global state
-    around it — and the only way to do that without a side effect on the
-    caller's own streams is to save and restore, which is what this does.
-
-    **Both**, and finding the second one is the whole reason this function is
-    not one line. zeus's sampling loop draws from numpy's legacy global
-    (``np.random.uniform``/``exponential``/``shuffle``/``choice`` throughout
-    ``zeus/ensemble.py``), *and* its default ``DifferentialMove.get_direction``
-    picks its walker pairs with the standard library's ``random.sample``
-    (``zeus/moves.py``). Seeding numpy alone leaves the pair selection
-    entropy-seeded, and a run that is reproducible in every draw except which
-    walkers proposed for which is not reproducible at all — it just looks like
-    it might be until someone checks.
-
-    With ``seed=None`` both globals are left completely alone, which is the
-    honest behaviour: a problem built without a seed asked not to be
-    reproducible, and seeding-then-restoring would make its consecutive runs
-    identical instead.
-
-    Recorded as a limitation rather than hidden: this is *global* state, so a
-    zeus run is not thread-safe against other code drawing from ``np.random``
-    or ``random`` at the same time. emcee and dynesty have per-sampler streams
-    and need none of it.
-    """
-    if seed is None:
-        yield
-        return
-    numpy_state = np.random.get_state()
-    python_state = random.getstate()
-    try:
-        np.random.seed(seed)
-        random.seed(seed)
-        yield
-    finally:
-        np.random.set_state(numpy_state)
-        random.setstate(python_state)
 
 
 class ZeusEngine(Engine):
@@ -207,7 +168,7 @@ class ZeusEngine(Engine):
             **self.sampler_settings,
         )
         self.sampler = sampler
-        with _global_seed(None if self.problem.seed is None else self.integer_seed("sampler")):
+        with global_seed(None if self.problem.seed is None else self.integer_seed("sampler")):
             try:
                 sampler.run_mcmc(positions, int(steps), progress=progress)
             except RuntimeError as error:

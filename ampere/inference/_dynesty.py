@@ -17,21 +17,10 @@ import numpy as np
 
 from ampere.core.dataset import FittingProblem
 
-from .engine import DEFAULT_CACHE_SIZE, Engine
+from .engine import DEFAULT_CACHE_SIZE, Engine, default_live_points
 from .exceptions import EngineError
 
 __all__ = ["DynestyEngine"]
-
-
-def _default_live_points(free_size: int) -> int:
-    """25 per dimension plus a floor of 100.
-
-    Below roughly ``25 (n_dim + 1)`` the ellipsoidal bound is fitted from too
-    few points to be trustworthy, which is where nested sampling starts to
-    under-cover rather than merely run slowly; the floor keeps a one- or
-    two-dimensional problem from being sampled by a handful of points.
-    """
-    return max(100, 25 * (free_size + 1))
 
 
 class DynestyEngine(Engine):
@@ -127,9 +116,7 @@ class DynestyEngine(Engine):
         use_realisation: bool = True,
     ) -> None:
         super().__init__(problem, cache_size=cache_size, use_realisation=use_realisation)
-        chosen = (
-            _default_live_points(problem.free_size) if live_points is None else int(live_points)
-        )
+        chosen = default_live_points(problem.free_size) if live_points is None else int(live_points)
         if chosen < 2:
             raise EngineError(f"dynesty needs at least 2 live points, got {chosen}.")
         self.live_points = chosen

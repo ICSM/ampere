@@ -97,6 +97,70 @@ that space, ``AutoMultivariateNormal`` a full-covariance one; both are
 is already correctly warped by ampere's own bijections rather than by a second
 set of pyro's.
 
+Four guide families, and what each one costs (W5.14)
+-----------------------------------------------------
+W5.14 adds two families to W2.5's pair, from ``inference_extensions_memo.md``
+§6's tier 1. The four now span the choice a user actually has to make, and the
+choice **is** the approximation:
+
+* ``normal`` — a diagonal Gaussian. O(d) guide parameters, and wrong in
+  exactly the way a correlated posterior is correlated.
+* ``multivariate`` — a full-covariance Gaussian, O(d²) guide parameters,
+  fitted by maximising the ELBO.
+* ``laplace`` — a full-covariance Gaussian too, but fitted differently and
+  costing differently. SVI optimises a ``Delta`` guide to the MAP point (so
+  what the ELBO trace records along the way is the *log joint*: a ``Delta``
+  guide has no entropy, and its ELBO is therefore ``log p(x, z)`` at the
+  current iterate), and the covariance is then the inverse Hessian of the
+  negative log joint *at that point*, computed once at the end. It is a
+  **local** answer — the curvature at one point, not a fit to the mass --
+  which makes it cheap where the full-covariance ELBO fit is dear, exact when
+  the posterior really is Gaussian, and arbitrarily wrong when it is not. It
+  also needs a *second* derivative of the realised density, which is a real
+  demand on a backend's lowering rather than a free one.
+* ``flow`` — an inverse-autoregressive flow (Kingma et al. 2016) over a
+  standard-normal base: the only family here that can represent a skewed,
+  heavy-tailed or otherwise non-Gaussian posterior, at the cost of a small
+  neural network per transform. Two consequences matter enough to be stated
+  where a reader will meet them. It is autoregressive over the coordinates, so
+  it needs **at least two** of them and a one-dimensional problem is refused
+  by name (:meth:`VIEngine.run`); and **its fit is not a location and a
+  scale**, so the three fitted-parameter attributes this driver keeps for a
+  Gaussian guide (:attr:`VIEngine.guide_loc`, :attr:`VIEngine.guide_scale`,
+  :attr:`VIEngine.guide_scale_tril`) all stay ``None`` — which is why a run's
+  attrs carry ``vi_guide_parameters`` saying which of them were kept, rather
+  than leaving a reader to infer it from the guide's name.
+
+All four begin at the same place, and the flow gets there differently
+-----------------------------------------------------------------------
+Every driver in this package starts from a seeded draw from the joint prior,
+and the three Gaussian guides are put there by ``init_loc_fn``. A flow has no
+location parameter for ``init_loc_fn`` to set — pyro's ``AutoIAFNormal``
+documents that it ignores the argument and warns if one is passed, and
+numpyro's uses it for nothing the transform reads — because a flow's starting
+point *is its base distribution*: a standard normal at the origin, which the
+transforms must then learn to carry to wherever the posterior is.
+
+That is not a small matter in ampere's coordinates. The unconstrained
+coordinate of a parameter declared with an unbounded prior is the parameter
+itself, so a posterior at ``norm = 2.0 ± 0.1`` is twenty base standard
+deviations from the origin *and* a tenth of its width; measured while writing
+this driver, a flow left at the origin had reached ``norm ≈ 1.1`` after four
+thousand steps, while the mean-field guide, started at the prior draw, was
+converged in six hundred. A guide family that only works on a problem whose
+priors happen to be standardised would be a trap rather than a feature.
+
+So this driver moves the flow's **base** to the start point instead, which is
+the library-sanctioned hook for exactly this: ``get_base_dist`` is a method
+both ``AutoIAFNormal`` implementations define and both ``get_posterior``
+implementations call, and overriding it to return ``Normal(start, 1)`` in
+place of ``Normal(0, 1)`` changes where the flow starts without touching what
+it can represent or how its density is computed — ``TransformedDistribution``
+scores the base at the matching point either way, so ``proposal_log_density``
+needs no correction. The two routes make the identical one-line override, for
+the identical reason, which is why it is written twice rather than abstracted:
+each lives beside the lazy import of the library it overrides.
+
 What a run looks like
 ---------------------
 One "chain" of independent draws from the fitted guide. That is not a
@@ -130,7 +194,13 @@ from .engine import (
 )
 from .exceptions import EngineError
 
-__all__ = ["GUIDE_FAMILIES", "VARIATIONAL_LIBRARIES", "VIEngine", "supported_backends"]
+__all__ = [
+    "GAUSSIAN_GUIDES",
+    "GUIDE_FAMILIES",
+    "VARIATIONAL_LIBRARIES",
+    "VIEngine",
+    "supported_backends",
+]
 
 #: Which variational library drives which backend's realisation. Strings, not
 #: imports, for the reason ``_nuts.py``'s :data:`SAMPLER_LIBRARIES` gives: this
@@ -153,7 +223,35 @@ VARIATIONAL_LIBRARIES: dict[str, str] = {"torch": "pyro", "jax": "numpyro"}
 GUIDE_FAMILIES: dict[str, str] = {
     "normal": "AutoNormal",
     "multivariate": "AutoMultivariateNormal",
+    "laplace": "AutoLaplaceApproximation",
+    "flow": "AutoIAFNormal",
 }
+
+#: The guides whose fit this driver can write down as plain arrays: a location
+#: and one of a diagonal scale or a covariance Cholesky factor. Anything not
+#: named here fits something that is not a Gaussian — today only ``"flow"``,
+#: whose parameters are a neural network's weights — and leaves all three of
+#: :attr:`VIEngine.guide_loc`, :attr:`VIEngine.guide_scale` and
+#: :attr:`VIEngine.guide_scale_tril` at ``None``. **W5.14.**
+GAUSSIAN_GUIDES: frozenset[str] = frozenset({"normal", "multivariate", "laplace"})
+
+#: What each family leaves on the engine, spelled for the run's attrs
+#: (``vi_guide_parameters``) so that "no fitted parameters were kept" is a
+#: recorded fact rather than an absence a reader has to interpret. **W5.14.**
+_GUIDE_PARAMETERS: dict[str, str] = {
+    "normal": "loc, scale",
+    "multivariate": "loc, scale_tril",
+    "laplace": "loc, scale_tril",
+    "flow": "none",
+}
+
+#: The smallest free dimension an autoregressive flow can be built over: with
+#: one coordinate there is nothing to be autoregressive *about*, and both
+#: libraries say so — numpyro raises ``ValueError("latent dim = 1. Consider
+#: using AutoDiagonalNormal instead")`` and pyro's autoregressive network warns
+#: and degenerates. :meth:`VIEngine.run` refuses first, by name, so that the
+#: user reads ampere's diagnosis rather than a library's. **W5.14.**
+_FLOW_MIN_DIM = 2
 
 #: ``ampere_approximation`` (``results.md`` §9, W5.0): the family a plot or a
 #: summary checks before it reports an R-hat that means nothing for a run
@@ -164,6 +262,8 @@ GUIDE_FAMILIES: dict[str, str] = {
 _APPROXIMATION_FAMILIES: dict[str, str] = {
     "normal": "mean_field",
     "multivariate": "multivariate",
+    "laplace": "laplace",
+    "flow": "normalising_flow",
 }
 
 #: The single site the whole unconstrained vector travels under. See the module
@@ -306,7 +406,14 @@ class VIEngine(Engine):
         #: caller (or a test) can rebuild the guide's density independently
         #: of which library fitted it. ``guide_scale`` is set for
         #: ``guide="normal"``, ``guide_scale_tril`` for
-        #: ``guide="multivariate"`` — never both. **W5.0.**
+        #: ``guide="multivariate"`` and for ``guide="laplace"`` (whose fit is
+        #: a full-covariance Gaussian too) — never both. **W5.0**, extended
+        #: at **W5.14**: for ``guide="flow"`` all three stay ``None``,
+        #: because a normalising flow's fit is a neural network's weights and
+        #: not a location and a scale at all. A caller reading these must
+        #: therefore check for ``None`` rather than assume a Gaussian; the
+        #: run's ``ampere_vi_guide_parameters`` attribute records which of
+        #: them a given run left behind, so an archived run says it too.
         self.guide_loc: np.ndarray | None = None
         self.guide_scale: np.ndarray | None = None
         self.guide_scale_tril: np.ndarray | None = None
@@ -360,9 +467,13 @@ class VIEngine(Engine):
             whether this was enough; a trace still climbing at the last step
             means it was not.
         guide
-            ``"normal"`` (mean-field, diagonal) or ``"multivariate"``
-            (full-covariance). See :data:`GUIDE_FAMILIES` and the module
-            docstring: this argument *is* the approximation being made.
+            One of :data:`GUIDE_FAMILIES`: ``"normal"`` (mean-field,
+            diagonal), ``"multivariate"`` (full-covariance, ELBO-fitted),
+            ``"laplace"`` (full-covariance from the curvature at the MAP
+            point) or ``"flow"`` (an inverse-autoregressive flow, the only
+            non-Gaussian family, needing at least
+            ``_FLOW_MIN_DIM`` free parameters). See the module docstring on
+            what each costs: this argument *is* the approximation being made.
         learning_rate
             Adam's step size.
         initial
@@ -391,7 +502,17 @@ class VIEngine(Engine):
             raise EngineError(
                 f"{self.NAME} does not know the guide family {guide!r}. Available: {known}. "
                 f"'normal' assumes the posterior factorises over parameters; 'multivariate' "
-                f"captures their correlations at O(d**2) guide parameters."
+                f"captures their correlations at O(d**2) guide parameters; 'laplace' takes the "
+                f"same full covariance from the curvature at the MAP point rather than from an "
+                f"ELBO fit; 'flow' is the only one of the four that is not a Gaussian."
+            )
+        if guide == "flow" and int(self.problem.free_size) < _FLOW_MIN_DIM:
+            raise EngineError(
+                f"{self.NAME}'s 'flow' guide is an autoregressive flow over the free parameters, "
+                f"and this problem has {self.problem.free_size} of them: there is nothing for the "
+                f"flow to be autoregressive over below {_FLOW_MIN_DIM}. Use guide='normal' "
+                f"(identical to 'multivariate' in one dimension) or guide='laplace', both of "
+                f"which fit a one-dimensional posterior exactly when it is Gaussian."
             )
         if float(learning_rate) <= 0.0:
             raise EngineError(
@@ -429,6 +550,10 @@ class VIEngine(Engine):
                 "vi_steps": settings.steps,
                 "vi_guide": settings.guide,
                 "vi_guide_class": GUIDE_FAMILIES[settings.guide],
+                # W5.14: which fitted parameters this run left on the engine.
+                # A flow leaves none, and an archived run has to say so rather
+                # than leave a reader to infer it from the guide's name.
+                "vi_guide_parameters": _GUIDE_PARAMETERS[settings.guide],
                 "vi_optimiser": "adam",
                 "vi_learning_rate": settings.learning_rate,
                 "vi_library": library,
@@ -537,7 +662,43 @@ class VIEngine(Engine):
         elbo: list[float] = []
         with pyro.get_param_store().scope(), torch.random.fork_rng(devices=[]):
             torch.manual_seed(self.integer_seed("optimiser"))
-            guide = builder(model, init_loc_fn=lambda site: start)
+            if settings.guide == "flow":
+                # W5.14. `AutoIAFNormal` ignores `init_loc_fn` and warns if it
+                # is given one; a flow is started by moving its *base*, which
+                # is what `get_base_dist` exists for. See the module docstring
+                # on why starting it at the origin is not an option in
+                # ampere's unconstrained coordinates. The subclass is built
+                # here, beside the lazy import, because naming pyro's class at
+                # module level is exactly what `architecture.md` §4 rule 2
+                # forbids.
+                started = Normal(start, ones).to_event(1)
+
+                class _StartedFlow(builder):  # type: ignore[misc, valid-type]
+                    """``AutoIAFNormal``, started at the start point and in float64."""
+
+                    def get_base_dist(self) -> Any:
+                        return started
+
+                    def get_posterior(self, *args: Any, **kwargs: Any) -> Any:
+                        # pyro builds the flow's autoregressive network the
+                        # first time a posterior is asked for, at torch's
+                        # *default* dtype -- float32, while everything else in
+                        # this driver is float64, and the two meet as
+                        # "mat1 and mat2 must have the same dtype" the moment
+                        # the float64 base reaches the network. Building it
+                        # here and casting before the assignment registers its
+                        # parameters is the float64 that `lowering.md` §10.1
+                        # asks to be threaded explicitly rather than obtained
+                        # from `torch.set_default_dtype`, which this project
+                        # never calls. pyro's own `get_posterior` then finds
+                        # the transform already built and leaves it alone.
+                        if self.transform is None:
+                            self.transform = self._init_transform_fn(self.latent_dim).double()
+                        return super().get_posterior(*args, **kwargs)
+
+                guide = _StartedFlow(model)
+            else:
+                guide = builder(model, init_loc_fn=lambda site: start)
             svi = SVI(model, guide, Adam({"lr": settings.learning_rate}), loss=Trace_ELBO())
             report = max(1, settings.steps // 10)
             for step in range(settings.steps):
@@ -545,13 +706,26 @@ class VIEngine(Engine):
                 elbo.append(-float(svi.step()))
                 if settings.progress and step % report == 0:
                     print(f"{self.NAME}: step {step}/{settings.steps}  ELBO {elbo[-1]:.6g}")
-            self.guide = guide
+            # W5.14, and the one place the laplace family is not just another
+            # autoguide: what SVI fitted is a `Delta` at the MAP point, and
+            # drawing from *that* would return the same point `draws` times
+            # with a meaningless density. `laplace_approximation()` is pyro's
+            # own documented second step — it takes the Hessian of the
+            # negative log joint at the fitted `loc` and hands back an
+            # `AutoMultivariateNormal` carrying `loc`, `scale` and
+            # `scale_tril` as buffers. From here on it *is* an
+            # `AutoMultivariateNormal`, which is why the draw loop and the
+            # parameter extraction below need no further special case. It
+            # must run outside `no_grad` (it differentiates twice) and inside
+            # the param-store scope (it reads the fitted `loc`).
+            fitted = guide.laplace_approximation() if settings.guide == "laplace" else guide
+            self.guide = fitted
             self.sampler = svi
             with torch.no_grad():
                 values: list[np.ndarray] = []
                 log_q = np.empty(settings.draws, dtype=float)
                 for i in range(settings.draws):
-                    trace = poutine.trace(guide).get_trace()
+                    trace = poutine.trace(fitted).get_trace()
                     node = trace.nodes[_SITE]
                     values.append(np.asarray(node["value"].detach().cpu().numpy(), dtype=float))
                     # Every sample-type node, Delta included: see the
@@ -583,17 +757,26 @@ class VIEngine(Engine):
                 # scale_tril`). Combining the two here, once, is what let a
                 # review's own probe catch this method reconstructing the
                 # wrong covariance from `scale_tril` alone.
-                if settings.guide == "multivariate":
-                    self.guide_loc = np.asarray(guide.loc.detach().cpu().numpy(), dtype=float)
-                    scale = guide.scale.detach().cpu().numpy()
-                    correlation = guide.scale_tril.detach().cpu().numpy()
+                # `laplace` joins `multivariate` here rather than needing a
+                # branch of its own: `laplace_approximation()` above returned
+                # an `AutoMultivariateNormal`, and pyro builds it in exactly
+                # the same row-scaled-correlation split (`register_buffer`
+                # of `loc`, `scale` and a unit-diagonal `scale_tril`), so the
+                # same product is the same covariance's Cholesky factor.
+                # `flow` reaches neither branch: there is no location and no
+                # scale to keep, and all three attributes stay `None`
+                # (W5.14; `GAUSSIAN_GUIDES` is the predicate).
+                if settings.guide in {"multivariate", "laplace"}:
+                    self.guide_loc = np.asarray(fitted.loc.detach().cpu().numpy(), dtype=float)
+                    scale = fitted.scale.detach().cpu().numpy()
+                    correlation = fitted.scale_tril.detach().cpu().numpy()
                     self.guide_scale_tril = np.asarray(scale[..., None] * correlation, dtype=float)
-                else:
+                elif settings.guide == "normal":
                     self.guide_loc = np.asarray(
-                        getattr(guide.locs, _SITE).detach().cpu().numpy(), dtype=float
+                        getattr(fitted.locs, _SITE).detach().cpu().numpy(), dtype=float
                     )
                     self.guide_scale = np.asarray(
-                        getattr(guide.scales, _SITE).detach().cpu().numpy(), dtype=float
+                        getattr(fitted.scales, _SITE).detach().cpu().numpy(), dtype=float
                     )
 
         attrs: dict[str, object] = {
@@ -689,37 +872,34 @@ class VIEngine(Engine):
         builder = getattr(autoguide, GUIDE_FAMILIES[settings.guide])
         # The same start point the pyro route uses, and for the same reason:
         # a guide left at zero in unconstrained space can begin far enough
-        # from the mass that the ELBO's gradient is numerically flat.
-        guide = builder(model, init_loc_fn=init_to_value(values={_SITE: start}))
+        # from the mass that the ELBO's gradient is numerically flat. The flow
+        # is started the same way the pyro route starts it and for the same
+        # reason -- by its base rather than by a location parameter it does
+        # not have (W5.14; the module docstring has the measurement).
+        if settings.guide == "flow":
+            started = dist.Normal(start, jax.numpy.ones(size)).to_event(1)
+
+            class _StartedFlow(builder):  # type: ignore[misc, valid-type]
+                """``AutoIAFNormal`` whose base sits at the start point."""
+
+                def get_base_dist(self) -> Any:
+                    return started
+
+            guide = _StartedFlow(model)
+        else:
+            guide = builder(model, init_loc_fn=init_to_value(values={_SITE: start}))
         svi = SVI(model, guide, optim.Adam(settings.learning_rate), loss=Trace_ELBO())
         keys = jax.random.split(jax.random.key(self.integer_seed("optimiser")), 2)
         result = svi.run(keys[0], settings.steps, progress_bar=settings.progress)
         self.guide = guide
         self.sampler = svi
 
-        draw_keys = jax.random.split(keys[1], settings.draws)
-        values: list[np.ndarray] = []
-        log_q = np.empty(settings.draws, dtype=float)
-        for i in range(settings.draws):
-            traced = numpyro.handlers.trace(
-                numpyro.handlers.seed(
-                    numpyro.handlers.substitute(guide, data=result.params),
-                    rng_seed=draw_keys[i],
-                )
-            ).get_trace()
-            site = traced[_SITE]
-            values.append(np.asarray(site["value"], dtype=float))
-            # Every sample-type node, Delta included: see the docstring's
-            # account of why the sum is the guide's density at `_SITE`'s
-            # value regardless of which autoguide class produced the trace.
-            log_q[i] = float(
-                sum(
-                    np.asarray(s["fn"].log_prob(s["value"])).sum()
-                    for s in traced.values()
-                    if s["type"] == "sample"
-                )
+        if settings.guide == "laplace":
+            drawn, log_q = self._draw_numpyro_laplace(guide, result.params, settings, keys[1])
+        else:
+            drawn, log_q = self._draw_numpyro_traced(
+                numpyro, guide, result.params, settings, keys[1], size
             )
-        drawn = np.asarray(values, dtype=float).reshape(settings.draws, size)
 
         # Kept as plain arrays, exactly as the pyro route keeps
         # `guide_loc`/`guide_scale`/`guide_scale_tril`, so a caller can
@@ -730,12 +910,21 @@ class VIEngine(Engine):
         # `f"{prefix}_loc"`/`f"{prefix}_scale_tril"` — the Cholesky factor of
         # the covariance directly, unlike pyro's row-scaled-correlation
         # split above).
-        if settings.guide == "multivariate":
+        # `laplace` is read off the fitted transform rather than off a
+        # parameter, because the covariance is not a parameter: SVI fitted
+        # only the MAP location, and the Cholesky factor is the inverse
+        # Hessian computed there (W5.14). `flow` keeps nothing, for the
+        # reason `GAUSSIAN_GUIDES` records.
+        if settings.guide == "laplace":
+            transform = guide.get_transform(result.params)
+            self.guide_loc = np.asarray(transform.loc, dtype=float)
+            self.guide_scale_tril = np.asarray(transform.scale_tril, dtype=float)
+        elif settings.guide == "multivariate":
             self.guide_loc = np.asarray(result.params[f"{guide.prefix}_loc"], dtype=float)
             self.guide_scale_tril = np.asarray(
                 result.params[f"{guide.prefix}_scale_tril"], dtype=float
             )
-        else:
+        elif settings.guide == "normal":
             self.guide_loc = np.asarray(result.params[f"{_SITE}_{guide.prefix}_loc"], dtype=float)
             self.guide_scale = np.asarray(
                 result.params[f"{_SITE}_{guide.prefix}_scale"], dtype=float
@@ -752,6 +941,90 @@ class VIEngine(Engine):
             "jax_version": str(jax.__version__),
         }
         return drawn, log_q, attrs
+
+    def _draw_numpyro_traced(
+        self,
+        numpyro: Any,
+        guide: Any,
+        params: Any,
+        settings: _Settings,
+        key: Any,
+        size: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Draw from a fitted numpyro guide by **tracing** it, and read its density off the trace.
+
+        The route every family but ``laplace`` takes, unchanged since W5.0
+        and for W5.0's reason: :func:`numpyro.handlers.substitute` fixes the
+        fitted parameters, :func:`numpyro.handlers.seed` gives the draw its
+        own key, and summing ``fn.log_prob(value)`` over every ``type ==
+        "sample"`` node is the guide's total log-density at ``_SITE``'s drawn
+        value whatever internal shape the autoguide happens to use. The flow
+        joins the two Gaussian families here without a word of new code,
+        which is the property that makes the sum worth having: its auxiliary
+        latent is sampled under a
+        :class:`~numpyro.distributions.TransformedDistribution` whose
+        ``log_prob`` already carries the flow's log-Jacobian, and ``_SITE``
+        is the same zero-density ``Delta`` it is for
+        ``AutoMultivariateNormal``.
+        """
+        import jax  # pyrefly: ignore[missing-import]
+
+        draw_keys = jax.random.split(key, settings.draws)
+        values: list[np.ndarray] = []
+        log_q = np.empty(settings.draws, dtype=float)
+        for i in range(settings.draws):
+            traced = numpyro.handlers.trace(
+                numpyro.handlers.seed(
+                    numpyro.handlers.substitute(guide, data=params),
+                    rng_seed=draw_keys[i],
+                )
+            ).get_trace()
+            site = traced[_SITE]
+            values.append(np.asarray(site["value"], dtype=float))
+            # Every sample-type node, Delta included: see the docstring's
+            # account of why the sum is the guide's density at `_SITE`'s
+            # value regardless of which autoguide class produced the trace.
+            log_q[i] = float(
+                sum(
+                    np.asarray(s["fn"].log_prob(s["value"])).sum()
+                    for s in traced.values()
+                    if s["type"] == "sample"
+                )
+            )
+        return np.asarray(values, dtype=float).reshape(settings.draws, size), log_q
+
+    def _draw_numpyro_laplace(
+        self, guide: Any, params: Any, settings: _Settings, key: Any
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Draw from the **Laplace** Gaussian, which is not what tracing the guide would give.
+
+        **W5.14.** numpyro's ``AutoLaplaceApproximation`` is a ``Delta`` guide
+        during SVI — it fits the MAP location and nothing else — so the traced
+        route above would return the same point ``draws`` times and read a
+        ``Delta``'s log-density for it. The Gaussian this family is named for
+        exists only in :meth:`~numpyro.infer.autoguide.
+        AutoLaplaceApproximation.get_posterior`, which takes the Hessian of
+        the negative log joint at the fitted location and returns the
+        multivariate normal whose covariance is its inverse. Drawing from
+        *that* distribution, and asking *it* for the density, is therefore not
+        a shortcut around the trace: it is the only place the approximation
+        is. (pyro reaches the same object by a different road —
+        ``laplace_approximation()`` hands back a whole
+        ``AutoMultivariateNormal``, which the pyro route then traces like any
+        other — and the two roads agree because the distribution at the end of
+        them is the same one.)
+
+        The distribution is over the *latent* vector, and ``_SITE``'s support
+        is ``real_vector``, so the bijection between the two is the identity
+        (module docstring) and the drawn latent is the unconstrained vector
+        the rest of this driver expects, with no change-of-variables term to
+        add.
+        """
+        posterior = guide.get_posterior(params)
+        sample = posterior.sample(key, (settings.draws,))
+        drawn = np.asarray(sample, dtype=float)
+        log_q = np.asarray(posterior.log_prob(sample), dtype=float)
+        return drawn, log_q
 
     # -- shared plumbing ------------------------------------------------------
 

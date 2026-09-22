@@ -27,7 +27,20 @@ What this file claims, and how each claim is checked:
    ``inference.md`` §10a's ``log_likelihood_terms`` rather than recomputing the
    per-dataset split on the numpy path.
 4. **It refuses, by name, what it cannot fit**: a backend with no variational
-   library, a non-differentiable problem, an unknown guide family.
+   library, a non-differentiable problem, an unknown guide family, and (W5.14)
+   a flow over a single parameter.
+5. **Each guide family is what it says it is** (W5.14). ``laplace`` is a
+   curvature approximation, so it is checked where a curvature approximation
+   is *exact* — a Gaussian posterior — against the same closed form claim 1
+   uses; ``flow`` keeps no fitted parameters at all, so it is checked against
+   the one thing every guide has independently of its shape, the library's own
+   ELBO.
+6. **Every guide is SBC-ranked** through ``ampere.results.calibration.sbc``,
+   which is W5.14's engine battery applied to a driver whose "engine" is the
+   guide family. At the per-PR budget that is a check of the machinery (ranks
+   produced, nothing failed); the budget at which Talts et al.'s uniformity
+   test has power is behind ``-m engines_full``, as it is for the nested
+   samplers in ``test_nested.py``.
 
 Parametrised over the backends installed here that this driver supports, for
 the reason ``test_nuts.py`` gives: writing the claim once per backend by hand
@@ -46,6 +59,7 @@ from __future__ import annotations
 
 import dataclasses
 import importlib
+import json
 import math
 import warnings
 from typing import Any
@@ -64,6 +78,7 @@ from ampere.core import (
     Spectrum,
 )
 from ampere.inference import EmceeEngine, VIEngine
+from ampere.results.calibration import sbc
 from ampere.inference.engine import unconstrained_jacobian_correction
 from ampere.inference.exceptions import EngineError
 
@@ -375,9 +390,15 @@ class TestRefusals:
             VIEngine(problem)
 
     def test_an_unknown_guide_family_is_refused_by_name(self, kit: Kit) -> None:
+        """``"laplace"`` was this row's unknown family until W5.14 added it.
+
+        Which is the point of keeping the row parametrised on a name no
+        library here implements: the refusal must name what *is* available,
+        and the set of available families is now something that grows.
+        """
         engine = VIEngine(conjugate_problem(kit))
         with pytest.raises(EngineError, match="guide family"):
-            engine.run(draws=10, guide="laplace")
+            engine.run(draws=10, guide="student_t")
 
     def test_a_non_positive_step_count_is_refused(self, kit: Kit) -> None:
         engine = VIEngine(conjugate_problem(kit))
@@ -465,7 +486,7 @@ class TestTheProposalDensityIsReallyTheGuides:
 
         unconstrained = _unconstrained_draws(problem, run)
         jacobian = unconstrained_jacobian_correction(problem, unconstrained)
-        if guide == "multivariate":
+        if guide in {"multivariate", "laplace"}:
             covariance = engine.guide_scale_tril @ engine.guide_scale_tril.T
             independent = st.multivariate_normal(engine.guide_loc, covariance).logpdf(unconstrained)
         else:
@@ -479,6 +500,20 @@ class TestTheProposalDensityIsReallyTheGuides:
 
     def test_the_full_covariance_guides_stored_density_agrees_with_scipy(self, kit: Kit) -> None:
         self._check(kit, "multivariate")
+
+    def test_the_laplace_guides_stored_density_agrees_with_scipy(self, kit: Kit) -> None:
+        """W5.14: the same check for the family whose Gaussian is a *curvature*.
+
+        Worth making separately rather than trusting the row above, because
+        the two families arrive at their ``scale_tril`` by different roads and
+        only one of them is a fitted parameter: pyro hands back a whole
+        ``AutoMultivariateNormal`` from ``laplace_approximation()`` (so its
+        covariance is the row-scaled correlation split, as for the fitted
+        guide), while numpyro has no such object and the factor must be read
+        off ``get_transform``'s affine. A driver that read either wrongly
+        would store a density for a Gaussian it did not draw from.
+        """
+        self._check(kit, "laplace")
 
 
 # ---------------------------------------------------------------------------
@@ -537,3 +572,331 @@ class TestImportanceCorrectedPosteriorAgreesWithEmcee:
         assert abs(reweighted_mean - reference_mean) < 0.5 * abs(raw_mean - reference_mean)
         # ...and lands within one reference standard deviation of it.
         assert reweighted_mean == pytest.approx(reference_mean, abs=reference_sd)
+
+
+# ---------------------------------------------------------------------------
+# 7. W5.14's two guides: what each one is, and what each one keeps
+# ---------------------------------------------------------------------------
+
+#: The flow's budget. It is longer than the Gaussian families' because a flow
+#: has more to learn than a location and a scale, not because it is started
+#: badly -- ``_vi.py`` moves its base to the same start point the others are
+#: initialised at, and the measurement that made that necessary is in the
+#: module docstring there.
+FLOW_STEPS = 2000
+FLOW_LEARNING_RATE = 0.05
+
+#: Draws taken from a fitted flow, and deliberately far fewer than the two
+#: thousand the Gaussian families are asked for elsewhere in this file. A
+#: guide draw is cheap only when the guide is cheap: both routes take a flow
+#: draw by *tracing* the guide, once per draw in Python, and a trace of an
+#: inverse-autoregressive flow evaluates three autoregressive networks and
+#: their inverses where a trace of ``AutoNormal`` evaluates one Gaussian.
+#: Measured on the numpyro route, two thousand flow draws dominated this
+#: file's wall time; five hundred is well inside the Monte-Carlo error every
+#: claim below is asserted at.
+FLOW_DRAWS = 500
+
+
+@pytest.fixture(scope="module")
+def laplace_run(kit: Kit) -> Any:
+    """The laplace guide on the **conjugate** problem, where it is exact."""
+    return fit(conjugate_problem(kit), draws=2000, steps=1500, guide="laplace")
+
+
+@pytest.fixture(scope="module")
+def flow_run(kit: Kit) -> Any:
+    """The flow guide on the correlated problem, at a converged budget."""
+    return fit(
+        correlated_problem(kit),
+        draws=FLOW_DRAWS,
+        steps=FLOW_STEPS,
+        guide="flow",
+        learning_rate=FLOW_LEARNING_RATE,
+    )
+
+
+class TestTheLaplaceGuide:
+    """A Laplace approximation is the curvature at the mode, and nothing else.
+
+    Which is why the claim is made where it can be made exactly. On a
+    conjugate problem the posterior *is* Gaussian, so the inverse Hessian at
+    the MAP point is the posterior covariance to within arithmetic: a tight
+    agreement with ``analytic()`` here is therefore a check of the second
+    derivative the driver asked the backend for, and not merely of an
+    optimiser having got somewhere reasonable. A driver that took the Hessian
+    at the wrong point, or that forgot that pyro's ``AutoLaplaceApproximation``
+    is a ``Delta`` guide until ``laplace_approximation()`` is called on it,
+    fails this row rather than quietly returning the MAP point 2000 times.
+    """
+
+    def test_the_posterior_mean_matches_the_conjugate_answer(self, laplace_run: Any) -> None:
+        mean, _ = analytic()
+        drawn = np.asarray(laplace_run["posterior"]["model.norm"]).ravel()
+        assert float(drawn.mean()) == pytest.approx(mean, abs=0.02)
+
+    def test_the_posterior_width_matches_the_conjugate_answer(self, laplace_run: Any) -> None:
+        """The row the Hessian has to be right for: a MAP point has no width."""
+        _, sd = analytic()
+        drawn = np.asarray(laplace_run["posterior"]["model.norm"]).ravel()
+        assert float(drawn.std(ddof=1)) == pytest.approx(sd, rel=0.1)
+
+    def test_the_draws_are_not_the_mode_repeated(self, laplace_run: Any) -> None:
+        """The failure mode this family invites, asserted against directly."""
+        drawn = np.asarray(laplace_run["posterior"]["model.norm"]).ravel()
+        assert float(np.ptp(drawn)) > 0.0
+        assert len(np.unique(drawn)) > drawn.size // 2
+
+    def test_the_attrs_name_the_guide_and_its_approximation(self, laplace_run: Any) -> None:
+        attrs = laplace_run.attrs
+        assert attrs["ampere_vi_guide"] == "laplace"
+        assert attrs["ampere_vi_guide_class"] == "AutoLaplaceApproximation"
+        assert attrs["ampere_approximation"] == "laplace"
+        assert attrs["ampere_vi_guide_parameters"] == "loc, scale_tril"
+
+    def test_the_fit_is_kept_as_a_full_covariance(self, kit: Kit) -> None:
+        engine = VIEngine(correlated_problem(kit))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            engine.run(draws=200, steps=800, guide="laplace")
+        assert engine.guide_loc is not None
+        assert engine.guide_scale_tril is not None
+        assert engine.guide_scale is None
+        assert engine.guide_scale_tril.shape == (2, 2)
+
+    def test_the_curvature_sees_the_correlation(self, kit: Kit) -> None:
+        """On the correlated problem the off-diagonal is not an accident."""
+        engine = VIEngine(correlated_problem(kit))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            engine.run(draws=200, steps=800, guide="laplace")
+        covariance = engine.guide_scale_tril @ engine.guide_scale_tril.T
+        correlation = covariance[0, 1] / math.sqrt(covariance[0, 0] * covariance[1, 1])
+        assert correlation < -0.4
+
+
+class TestTheFlowGuide:
+    """The only family here that is not a Gaussian, and the only one that
+
+    leaves nothing behind that a ``scipy`` distribution could be rebuilt from.
+    That is the whole reason it is worth having and the whole reason it needs
+    its own rows: every check the Gaussian families get for free through
+    :attr:`VIEngine.guide_loc` has to be made some other way.
+
+    The way is the library's own ELBO. ``vi_elbo_trace`` is
+    ``E_q[log p - log q]`` as the *library* computed it, from its own guide
+    object and its own draws; the stored groups give the same expectation
+    from nothing but ``log_prior + log_likelihood`` and
+    ``proposal_log_density``, through the driver's own code path. The two
+    agreeing is a check of ``proposal_log_density``'s absolute value -- not
+    merely of its variation, which ``ptp > 0`` covers, and not merely up to a
+    constant, which an importance weight would be blind to.
+    """
+
+    def test_it_refuses_a_one_dimensional_problem_by_name(self, kit: Kit) -> None:
+        engine = VIEngine(conjugate_problem(kit))
+        with pytest.raises(EngineError, match="autoregressive"):
+            engine.run(draws=10, steps=10, guide="flow")
+
+    def test_the_attrs_name_the_guide_and_its_approximation(self, flow_run: Any) -> None:
+        attrs = flow_run.attrs
+        assert attrs["ampere_vi_guide"] == "flow"
+        assert attrs["ampere_vi_guide_class"] == "AutoIAFNormal"
+        assert attrs["ampere_approximation"] == "normalising_flow"
+
+    def test_it_keeps_no_fitted_parameters_and_says_so(self, kit: Kit) -> None:
+        """The contract W5.14 adds: all three attributes stay ``None``."""
+        engine = VIEngine(correlated_problem(kit))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            run = engine.run(
+                draws=50,
+                steps=FLOW_STEPS,
+                guide="flow",
+                learning_rate=FLOW_LEARNING_RATE,
+            )
+        assert engine.guide_loc is None
+        assert engine.guide_scale is None
+        assert engine.guide_scale_tril is None
+        assert run.attrs["ampere_vi_guide_parameters"] == "none"
+
+    def test_it_finds_the_correlated_posterior(self, kit: Kit, flow_run: Any) -> None:
+        """A flow that had not reached the mass would fail here, loudly."""
+        reference = EmceeEngine(correlated_problem(kit), walkers=16).run(steps=800, burn_in=200)
+        for name in ("model.norm", "model.index"):
+            values = np.asarray(reference["posterior"][name]).ravel()
+            drawn = np.asarray(flow_run["posterior"][name]).ravel()
+            assert float(drawn.mean()) == pytest.approx(
+                float(values.mean()), abs=float(values.std())
+            )
+
+    def test_the_stored_density_is_the_guides_own(self, flow_run: Any) -> None:
+        """``ptp > 0``, and the absolute value against the library's ELBO."""
+        stats = flow_run["sample_stats"].dataset
+        proposal = np.asarray(stats["proposal_log_density"]).ravel()
+        assert np.ptp(proposal) > 0.0
+
+        log_prior = np.asarray(stats["log_prior"]).ravel()
+        log_likelihood = np.asarray(stats["log_likelihood"]).ravel()
+        # E_q[log p - log q]. The Jacobian correction is the same on both
+        # terms -- `proposal_log_density` was moved into the constrained
+        # coordinates the stored log_prior/log_likelihood live in -- so it
+        # cancels in the difference and the estimate is the unconstrained
+        # ELBO the library reports.
+        estimate = float(np.mean(log_prior + log_likelihood - proposal))
+        trace = json.loads(flow_run.attrs["ampere_vi_elbo_trace"])
+        tail = float(np.mean(np.asarray(trace[-40:], dtype=float)))
+        assert estimate == pytest.approx(tail, abs=2.0)
+
+
+# ---------------------------------------------------------------------------
+# 8. W5.14's battery: every guide SBC-ranked
+# ---------------------------------------------------------------------------
+
+#: A deliberately small simulating problem: SBC costs one full fit per
+#: simulation, so it must be cheap rather than precise.
+SBC_GRID = np.geomspace(1.0, 10.0, 8)
+#: The reference wavelength at the grid's geometric centre, which is what
+#: makes ``norm`` and ``index`` nearly orthogonal rather than the strongly
+#: traded-off pair ``correlated_problem`` deliberately builds. The choice is
+#: the difference between asking "are these guides calibrated?" and asking
+#: "does a mean-field guide underestimate a correlation?" -- the second
+#: question has a known answer (section 2 above measures it) and would make
+#: the mean-field row fail by construction.
+SBC_REFERENCE = float(np.sqrt(SBC_GRID[0] * SBC_GRID[-1]))
+SBC_DATA = noisy(SBC_GRID, power_law(SBC_GRID, 2.0, INDEX), SIGMA, seed=11)
+
+#: Per-PR budget: below ``sbc``'s own goodness-of-fit power floor, and it says
+#: so. ``-m engines_full`` runs the budget that has power, exactly as
+#: ``test_nested.py`` does for the nested samplers.
+#:
+#: Four rather than the nested battery's eight, because the cost of a
+#: *refit* is not the same on the two routes and this was measured rather
+#: than assumed: a replica fit is a few seconds on the pyro route and some
+#: twenty on the numpyro one, where every replica problem is a fresh
+#: realisation and therefore a fresh jax compilation, which no budget inside
+#: the fit can shorten. Four simulations per guide over four guides is what
+#: keeps this section's share of the jax leg in minutes rather than a
+#: quarter of an hour, and at either count the row's claim is the same one:
+#: that ranks come out, well shaped, with nothing failed.
+SBC_COUNT = 4
+SBC_FULL_COUNT = 100
+SBC_DRAWS = 30
+
+#: What each guide is run at during calibration. The Gaussian families need
+#: only a short optimisation on a two-parameter problem; the flow needs the
+#: longer one section 7 uses, for the reason given there.
+SBC_RUN_OPTIONS: dict[str, dict[str, Any]] = {
+    "normal": {"steps": 600},
+    "multivariate": {"steps": 600},
+    "laplace": {"steps": 600},
+    "flow": {"steps": FLOW_STEPS, "learning_rate": FLOW_LEARNING_RATE},
+}
+
+#: The per-PR row's override, and the other half of this section's wall
+#: time. The reduced row asserts only that ranks come out well shaped with
+#: nothing failed -- a claim about the machinery, not about the fit -- which
+#: a short optimisation shows exactly as well. The ``engines_full`` row,
+#: which *is* a claim about the fit, uses the converged budgets above.
+SBC_REDUCED_OVERRIDES: dict[str, dict[str, Any]] = {
+    "normal": {"steps": 250},
+    "multivariate": {"steps": 250},
+    "laplace": {"steps": 250},
+    "flow": {"steps": 600},
+}
+
+#: Draws per fit. ``sbc``'s own ``draws`` is how many the rank is taken
+#: against, thinned out of what the fit produced, so the fit has to produce
+#: at least that many -- so this is that many with a little room, and no
+#: more: a draw is cheap for a Gaussian guide and not for a flow (see
+#: ``FLOW_DRAWS``), and nothing here ranks against more than ``SBC_DRAWS``.
+SBC_FIT_DRAWS = 40
+GUIDES = tuple(SBC_RUN_OPTIONS)
+
+
+def calibration_problem(kit: Kit, seed: int | None = SEED) -> FittingProblem:
+    """The simulating problem the SBC rows draw truths and data from."""
+    return FittingProblem(
+        kit.module.PowerLaw(
+            SBC_GRID,
+            norm=st.norm(2.0, 0.5),
+            index=st.norm(-1.0, 0.3),
+            reference_wavelength=SBC_REFERENCE,
+        ),
+        [Dataset(SBC_DATA, likelihood=kit.likelihood())],
+        seed=seed,
+    )
+
+
+def calibrate(kit: Kit, guide: str, *, count: int) -> Any:
+    options = dict(SBC_RUN_OPTIONS[guide])
+    if count <= SBC_COUNT:
+        options.update(SBC_REDUCED_OVERRIDES.get(guide, {}))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return sbc(
+            calibration_problem(kit),
+            VIEngine,
+            count=count,
+            draws=SBC_DRAWS,
+            run_options={"draws": SBC_FIT_DRAWS, "guide": guide, **options},
+            seed=515151,
+            label=f"W5.14 guide battery, {guide}",
+        )
+
+
+@pytest.fixture(scope="module")
+def calibrations(kit: Kit) -> dict[str, Any]:
+    """One SBC study per guide family, computed once for the whole module."""
+    return {guide: calibrate(kit, guide, count=SBC_COUNT) for guide in GUIDES}
+
+
+class TestEveryGuideIsRanked:
+    """W5.14's battery row: "every new engine SBC-ranked through ``calibration.sbc``".
+
+    A guide family is not an engine, but it is what an approximate run is an
+    approximation *by*, so the battery is applied per family rather than once
+    to the driver: a study that ranked ``normal`` only would say nothing about
+    the Hessian ``laplace`` takes or the network ``flow`` trains, which are
+    the two pieces of new machinery this item adds.
+    """
+
+    @pytest.mark.parametrize("guide", GUIDES)
+    def test_the_ranks_are_produced_and_shaped(
+        self, guide: str, calibrations: dict[str, Any]
+    ) -> None:
+        calibration = calibrations[guide]
+        ranks = np.asarray(calibration["ranks"].values)
+        assert ranks.shape == (SBC_COUNT, 2)
+        assert ranks.min() >= 0
+        assert ranks.max() <= SBC_DRAWS
+        assert sorted(str(name) for name in calibration["parameter"].values) == [
+            "model.index",
+            "model.norm",
+        ]
+        assert "VIEngine" in calibration.attrs["ampere_calibration_engine"]
+
+    @pytest.mark.parametrize("guide", GUIDES)
+    def test_nothing_failed_and_the_uniformity_test_ran(
+        self, guide: str, calibrations: dict[str, Any]
+    ) -> None:
+        calibration = calibrations[guide]
+        assert calibration.attrs["ampere_calibration_failures"] == 0
+        pvalues = np.asarray(calibration["ks_pvalue"].values)
+        assert pvalues.shape == (2,)
+        assert np.all((pvalues >= 0.0) & (pvalues <= 1.0))
+
+    @pytest.mark.engines_full
+    @pytest.mark.parametrize("guide", GUIDES)
+    def test_the_ranks_are_uniform_at_a_budget_with_power(self, kit: Kit, guide: str) -> None:
+        """The row the per-PR budget cannot make: Talts et al.'s actual test.
+
+        It is a fair test of *these* four families only because the simulating
+        problem's posterior is nearly Gaussian and nearly uncorrelated (see
+        ``SBC_REFERENCE``): each family can represent it, so a failure here is
+        a failure of the driver rather than the known and separately measured
+        limitation of a mean-field guide.
+        """
+        calibration = calibrate(kit, guide, count=SBC_FULL_COUNT)
+        pvalues = np.asarray(calibration["ks_pvalue"].values)
+        assert np.all(pvalues > 0.01), f"{guide}'s ranks are not uniform: KS p-values {pvalues}"

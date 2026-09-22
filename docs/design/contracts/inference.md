@@ -1056,6 +1056,127 @@ deliberate. "Not evaluated" and "impossible" are different statements, and a
 population-level importance-reweighting consumer (design horizon (b)) must be
 able to tell them apart; and zero prior mass is an answer, not an error.
 
+### Three nested samplers on one surface (*Added W5.14*)
+
+The claim this section makes is that an engine consuming only §4.5's surface
+runs on every backend, and `prior_transform` is the half of it that exists for
+nested sampling. W5.14 is the first time that half has had **three**
+consumers — `DynestyEngine` since W2.2, and `NautilusEngine` and
+`UltranestEngine` from the inference-extensions memo's §6 tier 1 — so it is
+the first time the claim has been checked by more than one library of the same
+kind.
+
+Nothing here changed to admit them, which is the finding. Both new drivers
+consume `prior_transform` and `log_likelihood` and nothing else; both are
+written against `ampere.inference.engine.Engine`'s shared machinery; and the
+one place they differ from dynesty is in what their libraries *report*, not in
+what they ask of a problem. The differences that did have to be absorbed are
+all on the driver side and are recorded in `ampere/inference/_nested.py`:
+
+* nautilus refuses a problem with fewer than two free parameters, so the
+  driver refuses one by name rather than letting a library `ValueError` out of
+  a constructor;
+* nautilus reports no evidence uncertainty, so the driver estimates the
+  importance-sampling one (`1/sqrt` of the library's own Kish effective sample
+  size) and records that it did;
+* ultranest draws from numpy's *process-global* generator, like zeus, so its
+  run is wrapped in `ampere.inference.engine.global_seed` — the helper W5.14
+  moved out of the zeus driver so that two engines share one implementation of
+  seed-and-restore rather than two.
+
+`results.md` §9's weighted-draw rule (W5.0) is obeyed by all three through
+**one** function, `dynesty.utils.resample_equal` on the engine's own
+`resample` stream: three nested samplers must not be able to produce three
+slightly different posteriors from the same dead points. Each library's own
+equal-weight output is deliberately unused, because each draws from its
+library's randomness rather than from the problem's seed.
+
+The engine-neutral evidence triple is written by all three, and
+`ampere_evidence_method` is `"nested_sampling"` for all three — W5.0 carried
+the question of whether that attribute should name the method family or the
+engine, and the second and third evidence engines are the occasion to answer
+it: the **family**, because `ampere_engine` already names the engine and what
+a reader needs from the second attribute is whether two archived evidences
+were estimated the same way.
+
+### Four guide families and a second gradient library (*Added W5.14*)
+
+The same claim, asked of the **realisation** surface (§10a) rather than of
+§4.5's: an engine that consumes `log_prob_unconstrained` and nothing else runs
+on any backend that registers one. W5.14's other two thirds are the first time
+that half has been asked for something other than a sampler.
+
+`VIEngine`'s `GUIDE_FAMILIES` gains `laplace` and `flow`, and nothing in the
+contract moved to admit them — the driver already had the one-site model, the
+unconstrained density and the emission shape. Two things had to be absorbed on
+the driver side, and both are properties of the libraries rather than of this
+surface:
+
+* a Laplace autoguide is a `Delta` guide during optimisation in **both**
+  libraries, so what SVI fits is the MAP location and the Gaussian exists only
+  afterwards — pyro's `laplace_approximation()` returns a whole
+  `AutoMultivariateNormal`, numpyro's `get_posterior(params)` builds the
+  distribution on demand from the Hessian at that location. The driver draws
+  from the Gaussian in each case, never from the `Delta`;
+* a flow autoguide has no location parameter, so `init_loc_fn` — the hook the
+  other three families are started with — does nothing for it. It is started
+  by its **base distribution** instead (`get_base_dist`, which both libraries
+  define and both `get_posterior` implementations call), placed at the same
+  seeded prior draw every other driver starts from. In ampere's unconstrained
+  coordinates that is not optional: a parameter declared with an unbounded
+  prior *is* its own coordinate, so a flow left at the origin is starting many
+  base standard deviations from the posterior, and the measurement that
+  prompted this is in `ampere/inference/_vi.py`'s module docstring.
+
+The contract consequence is one widened vocabulary, not a new key:
+`results.md` §9's `ampere_approximation` gains `"laplace"` and
+`"normalising_flow"` beside `"mean_field"` and `"multivariate"`. Every
+consumer in the repository tests it against `"none"`, so the widening needs no
+reader taught anything; what a reader gains is that the *family* is still
+recoverable from the one engine-neutral key. Beside it, and new at W5.14,
+`ampere_vi_guide_parameters` records which fitted parameters a run left on the
+engine (`"loc, scale"`, `"loc, scale_tril"`, or `"none"` for a flow, whose fit
+is a neural network's weights) — because "this run's guide has no location and
+no scale" is a fact about an archived run, and an absent attribute is not a
+statement.
+
+`BlackjaxEngine` is the second consumer of §10a's density on the jax side, and
+it is the first engine here that is **backend-specific by nature** rather than
+by what happens to be installed: blackjax is a jax library and
+`inference_extensions_memo.md` §2.2 records that torch has no counterpart to
+borrow, so the driver refuses any other backend by name in its constructor
+rather than reporting a missing library. `supported_backends()` is therefore a
+one-element intersection rather than a table, which is the honest shape for a
+driver with one route.
+
+Its two methods make the same point from opposite ends of the approximation
+question, and settle how `ampere_approximation` is to be read:
+
+* **MCLMC writes `"none"`.** An unadjusted microcanonical chain carries a
+  discretisation bias — there is no accept/reject step, and the tuner controls
+  the bias by holding the energy variance near a target. `ampere_approximation`
+  is nevertheless `"none"`, because the question that key answers is *"do
+  chain diagnostics mean anything for this run?"* — it is what `plot_trace`
+  and `ampere.results.summary` read before reporting an R-hat, an ESS or a
+  trace shape — and an MCLMC run is a Markov chain, so they do. The bias is
+  recorded as its own fact (`ampere_blackjax_adjusted`,
+  `ampere_blackjax_desired_energy_var`) and is *measured* by the engine
+  battery's SBC rather than asserted here.
+* **Pathfinder writes `"pathfinder"`** and the per-draw
+  `sample_stats.proposal_log_density` beside it, in the constrained
+  coordinates W5.0 fixed, so the stored groups alone reweight it. blackjax
+  returns the approximation's density beside its draws, so this costs the
+  driver nothing but the coordinate change.
+
+Neither writes the engine-neutral evidence triple, and that absence is
+deliberate rather than pending: MCLMC samples an unnormalised density like
+every other MCMC here, and Pathfinder's ELBO is a single L-BFGS path's *lower
+bound* on the log evidence, whose tightness is unknown. A bound recorded under
+the name a nested sampler's estimate uses would invite a comparison that has
+no meaning, so the ELBO is kept under the engine's own name. The triple stays
+what `results.md` §9 says it is: written by whichever engine *estimates* a
+marginal likelihood.
+
 ### Unconstrained space
 
 Gradient-based engines want the density on ℝⁿ with the change-of-variables term

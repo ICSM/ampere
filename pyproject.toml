@@ -130,6 +130,37 @@ torch = ["torch", "pyro-ppl"]
 jax = ["jax", "numpyro", "equinox"]
 sbi = ["torch", "sbi"]  # W0.9: forward-migrated -- pin lifted (PyPI's latest release is still 0.27.0, the version this was already tested against; see the W0.9 report)
 zeus = ["zeus-mcmc"]
+# W5.14: the inference-extensions memo's tier-1 engines, **one extra per
+# sampler** -- `inference_extensions_memo.md` §10, ruled by Peter 2026-09-10:
+# "every new sampler behind its own extra -- the base install stays quick to
+# start with, a user upgrades for a specific problem". So `nautilus` and
+# `ultranest` get an extra each even though one module (`ampere/inference/
+# _nested.py`) drives both: the shared driver is an implementation economy,
+# and the ruling is about what a user has to download.
+#
+# Both are genuinely light on the dependency side -- nautilus pulls
+# scikit-learn and threadpoolctl, ultranest matplotlib and corner, and
+# neither pulls torch or jax -- which is what the memo's §5.6 tier table
+# means by "no new deps of weight" and what lets them share one small pixi
+# environment (`nested`, below) rather than needing a backend one.
+nautilus = ["nautilus-sampler"]
+ultranest = ["ultranest"]
+# W5.14: the blackjax route (MCLMC as a sampler, Pathfinder as an initialiser
+# and as an approximation). blackjax itself depends on jax, but ampere's *jax
+# backend* -- which is what supplies the differentiable realisation this
+# driver consumes -- needs numpyro and equinox too, so the working
+# combination is `pip install "ampere[jax,blackjax]"`. Listing only the new
+# sampler here keeps one extra to one sampler, as the ruling asks; the
+# driver's refusal names the `jax` extra when the backend is missing.
+#
+# **Declared and locked ahead of its driver.** W5.14 landed the nested pair
+# (`_nested.py`) and handed the blackjax route on to a follow-on session;
+# `ampere/inference/_blackjax.py` does not exist yet, so nothing imports this
+# extra today. It is here, with its pixi feature and its place in the `jax`
+# environment, because that is the part of the work that costs a lock
+# re-solve: the follow-on adds a module and its tests, and needs no
+# packaging change at all.
+blackjax = ["blackjax"]
 # NOTE: there is deliberately no `arviz` extra any more -- arviz and a netCDF
 # engine are base dependencies as of W2.2 (see [project.dependencies] above).
 # The extra is not retained as an empty alias: `pip install "ampere[arviz]"`
@@ -160,7 +191,7 @@ dev = [
 ]
 # Every feature extra (not dev) composed; self-referential extras are
 # supported by pip and setuptools.
-all = ["ampere[torch,jax,sbi,zeus,extinction]"]
+all = ["ampere[torch,jax,sbi,zeus,extinction,nautilus,ultranest,blackjax]"]
 
 [tool.setuptools]
 include-package-data = false
@@ -327,6 +358,14 @@ markers = [
     # has power (two arms x 48 refits, tens of minutes): the same reasoning as
     # the three lines above, with a reduced-budget sibling that always runs.
     "astrometry_full: the astrometry calibration study's full budget; run with `pytest -m astrometry_full`",
+    # W5.14. The engine battery's SBC at the count where Talts et al.'s
+    # uniformity test has power (100 refits per engine, several minutes each):
+    # the same reasoning as the four lines above, with a reduced 8-simulation
+    # sibling that always runs and checks the machinery rather than the
+    # statistic. `tests/inference/conftest.py` skips these unless
+    # `-m engines_full` asks for them, in `tests/m2/conftest.py`'s own shape
+    # and for its own reason.
+    "engines_full: the engine battery's full SBC budget; run with `pytest -m engines_full`",
 ]
 
 # ---------------------------------------------------------------------------
@@ -508,6 +547,20 @@ torch = { version = "*", index = "https://download.pytorch.org/whl/cpu" }
 [tool.pixi.feature.extinction.pypi-dependencies]
 ampere = { path = ".", editable = true, extras = ["extinction"] }
 
+# W5.14: one feature per new sampler extra, mirrored the same 1:1 way. They
+# are separate features rather than one `nested` feature over both extras so
+# that the mirror stays exact -- a feature here names exactly one extra of
+# [project.optional-dependencies] -- and the *environment* below is where the
+# two are composed.
+[tool.pixi.feature.nautilus.pypi-dependencies]
+ampere = { path = ".", editable = true, extras = ["nautilus"] }
+
+[tool.pixi.feature.ultranest.pypi-dependencies]
+ampere = { path = ".", editable = true, extras = ["ultranest"] }
+
+[tool.pixi.feature.blackjax.pypi-dependencies]
+ampere = { path = ".", editable = true, extras = ["blackjax"] }
+
 # W2.2: arviz and h5netcdf are base dependencies now (see
 # [project.dependencies]), so this feature no longer carries the results
 # capability -- every environment has it, including the CI matrix. What is
@@ -616,4 +669,23 @@ sbi = { features = ["py313", "dev", "zeus", "extinction", "netcdf", "torch", "sb
 # Deliberately not sharing `dev`'s solve group: the point of the split is that
 # `dev` never resolves torch or jax at all (`architecture.md` §4 rule 2).
 torch = { features = ["py313", "dev", "zeus", "extinction", "netcdf", "torch"] }
-jax = { features = ["py313", "dev", "zeus", "extinction", "netcdf", "jax"] }
+# W5.14: blackjax is *folded into the existing jax environment* rather than
+# given one of its own. It is a jax-only driver over the jax backend's
+# realisation, so the only environment in which its rows can run at all is
+# this one, and a separate `blackjax` environment would be the jax
+# environment plus one small pure-python wheel -- a second half-gigabyte jax
+# install and a second CI leg for nothing. Its tests therefore run on the
+# existing `new-namespace suites (jax)` leg, whose path gate already covers
+# `ampere/inference/**` and `ampere/backends/jax/**`.
+jax = { features = ["py313", "dev", "zeus", "extinction", "netcdf", "jax", "blackjax"] }
+# W5.14: the nested-sampling pair, in their own small environment. Not folded
+# into `dev`, which is the environment every work item's gate runs and which
+# is deliberately the *base* toolchain: two more nested samplers there would
+# be a standing tax on every wave for engines most items do not touch.
+# Not folded into `torch`/`jax`/`sbi` either -- these two are gradient-free
+# and numpy-only, so they have no business behind a backend download. The
+# feature set is `dev`'s, exactly as the backend environments' is, so a count
+# taken here is comparable with one taken in `dev`, and the environment is
+# small: nautilus adds scikit-learn, ultranest adds corner, and matplotlib is
+# already here.
+nested = { features = ["py313", "dev", "zeus", "extinction", "netcdf", "nautilus", "ultranest"] }

@@ -112,8 +112,9 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
     item's scope to touch test budgets. `dev`'s own `typecheck` job is
     unchanged (it already ran on its own).
   - **W4.10 — path gating.** A `changes` job runs first and computes, from
-    a pull request's changed files, which of five buckets are touched —
-    `run_dev`, `run_torch`, `run_jax`, `run_sbi`, `run_docs` — using
+    a pull request's changed files, which of six buckets are touched —
+    `run_dev`, `run_torch`, `run_jax`, `run_sbi`, `run_nested`
+    (W5.14), `run_docs` — using
     `.github/scripts/path_filters.py` as the single executable source of
     the rule table (reproduced as a comment at the top of `ci.yml` and
     below). Every job in the workflow always runs; a bucket controls
@@ -134,7 +135,9 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
 
     | Path pattern | Runs |
     | --- | --- |
-    | `pyproject.toml`, `pixi.lock`, `.github/**`, `ampere/core/**`, `ampere/results/**`, `ampere/inference/**`, and the shared test suites (`tests/{core,results,inference,conformance,m2,benchmarks,scaling,gpu,characterisation}/**` | everything: dev, torch, jax, sbi, docs |
+    | `ampere/inference/_blackjax.py`, `tests/inference/test_blackjax.py` (W5.14; matched *before* the CORE row below) | dev, jax (blackjax installs into the existing jax environment, so it rides that leg) |
+    | `ampere/inference/_nested.py`, `tests/inference/test_nested.py` (W5.14; matched *before* the row below) | dev, nested |
+    | `pyproject.toml`, `pixi.lock`, `.github/**`, `ampere/core/**`, `ampere/results/**`, `ampere/inference/**`, and the shared test suites (`tests/{core,results,inference,conformance,m2,benchmarks,scaling,gpu,characterisation}/**` | everything: dev, torch, jax, sbi, nested, docs |
     | `ampere/backends/torch/**`, `tests/backends/*torch*` | torch, sbi (sbi's environment installs torch too) |
     | `ampere/backends/jax/**`, `tests/backends/*jax*` | jax |
     | `ampere/backends/reference/**`, remaining `tests/backends/**` | dev only |
@@ -166,6 +169,8 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
     `typecheck (pyrefly, torch)`, `typecheck (pyrefly, jax)`,
     `typecheck (pyrefly, sbi)`, `new-namespace suites (torch)`,
     `new-namespace suites (jax)`, `new-namespace suites (sbi)`,
+    `typecheck (pyrefly, nested)`, `new-namespace suites (nested)`
+    (both new at W5.14 — they need adding to branch protection),
     `docs build`, `minimal install (no extras)`. (`path filters` — the
     `changes` job itself — and the weekly/on-demand
     `characterisation suite (with sbi extra)` are not required checks: the

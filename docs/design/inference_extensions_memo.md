@@ -339,6 +339,53 @@ the conformance toy problems, SBC-ranked through `calibration.sbc`, and its
 evidence (where it has one) checked against the closed-form
 linear-Gaussian case W3.6 already uses.
 
+**Landed at W5.14 (2026-09-22): tier 1's nested-sampling pair.**
+`nautilus` and `ultranest` ship behind one extra each, over a shared
+`ampere/inference/_nested.py`, and the battery above is
+`tests/inference/test_nested.py` — with `DynestyEngine` in it as the
+*control*, because three nested samplers agreeing with each other proves
+nothing if all three are wrong the same way. Two adjustments the table did
+not anticipate, both recorded in that module: the closed-form
+linear-Gaussian case is run with **two** free parameters rather than W3.6's
+one, because nautilus refuses a one-dimensional problem; and "one cost
+record per run" (horizon (g)) is discharged by `engine_evaluations`, which
+`Engine.finish` already writes for every run, beside each sampler's own
+count of likelihood calls under its own name — no new engine-neutral
+attribute, as §10's ruling that (e) to (g) need no contract change
+requires.
+
+**Landed at W5.14 (2026-09-22): the rest of tier 1.** The VI guide families
+`laplace` and `flow`, and the blackjax route on jax with MCLMC and
+Pathfinder. Three things §2 did not anticipate, all found by running the
+code rather than by reading the libraries:
+
+1. §2.2 says Laplace is "a new entry in `GUIDE_FAMILIES` and nothing else".
+   It is not: in **both** libraries the autoguide is a `Delta` during
+   optimisation, so SVI fits the MAP location and the Gaussian the family is
+   named for exists only afterwards — pyro's `laplace_approximation()`
+   returns a whole `AutoMultivariateNormal`, numpyro's
+   `get_posterior(params)` builds the distribution on demand. A driver that
+   drew from what SVI fitted would return the mode `draws` times.
+2. A flow guide cannot be started with `init_loc_fn` (both libraries ignore
+   it), and in ampere's unconstrained coordinates it must be started
+   somehow: a parameter with an unbounded prior *is* its own coordinate, so
+   a flow left at the origin was measured at `norm ≈ 1.1` after four
+   thousand steps against a posterior at `2.01 ± 0.10`. Both routes move the
+   flow's **base** to the same seeded prior draw the other families are
+   initialised at, through `get_base_dist` — the hook both libraries define
+   for it.
+3. §2.1's "one `BlackjaxEngine(problem, method=...)`" holds, and the two
+   methods settle how `ampere_approximation` is to be read: Pathfinder
+   writes `"pathfinder"` with a per-draw `proposal_log_density` (blackjax
+   returns the density beside the draws, so §5.2b costs the driver only a
+   coordinate change), while MCLMC writes `"none"` **despite** being an
+   unadjusted chain with a discretisation bias — the key answers "do chain
+   diagnostics apply?", and for a Markov chain they do. The bias is recorded
+   under the engine's own names and measured by the battery's SBC. Neither
+   method writes the evidence triple: Pathfinder's ELBO is one path's lower
+   bound of unknown tightness, and recording it under a nested sampler's
+   attribute name would invite a meaningless comparison.
+
 ## 7. Questions for Peter
 
 1. Is an approximate engine's *stored proposal density* (§5.2b) wanted as

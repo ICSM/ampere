@@ -33,6 +33,34 @@ What is here
     Ensemble slice sampling. Needs the ``zeus`` extra -- ``pip install
     ".[zeus]"`` from a checkout (PyPI's ``ampere`` package is unrelated); the
     import is lazy and the refusal names the extra.
+:class:`NautilusEngine`, :class:`UltranestEngine`
+    Two more **nested** samplers, added at W5.14 from the inference-extensions
+    memo's tier 1, sharing one driver
+    (:mod:`ampere.inference._nested`) with each other and the evidence
+    convention with :class:`DynestyEngine`: the engine-neutral triple
+    (``ampere_log_evidence``, ``_err``, ``_method``), the equal-weight
+    resampling rule, and the live-point default. nautilus is importance nested
+    sampling with a neural boundary -- fewer likelihood calls to a given
+    effective sample size, which is the budget that matters for an expensive
+    forward model -- and refuses a one-dimensional problem. ultranest is
+    MLFriends region sampling with a bootstrapped termination criterion and an
+    evidence error whose two halves it keeps apart. **One extra each**
+    (``nautilus``, ``ultranest``), imported lazily in the constructor, and the
+    refusal names the extra.
+:class:`BlackjaxEngine`
+    The blackjax route, **jax only**, added at W5.14 from the inference-
+    extensions memo's §2.1: one dependency, two methods ampere does not
+    otherwise have. ``method="mclmc"`` is microcanonical Langevin Monte Carlo
+    (Robnik & Seljak) -- a Markov chain with no accept/reject step, tuned for
+    you, and reported at several times NUTS's efficiency per gradient on
+    smooth high-dimensional posteriors. ``method="pathfinder"`` is Zhang et
+    al.'s quasi-Newton approximation, used twice over: as an approximate
+    posterior in its own right (writing ``ampere_approximation =
+    "pathfinder"`` and the per-draw ``proposal_log_density`` that makes it
+    correctable) and, through ``initial="pathfinder"``, as the start-point
+    search for an MCLMC chain. Neither estimates an evidence and neither
+    pretends to. **One extra** (``blackjax``), imported lazily in the
+    constructor, and the refusal names the extra.
 :class:`NUTSEngine`
     The No-U-Turn sampler — numpyro's on a jax problem, pyro's on a torch one.
     The first **gradient-based** engine here, and the only one that cannot be
@@ -156,7 +184,7 @@ One caveat, and it is zeus's rather than ampere's: zeus takes no generator and
 draws from *two* process-global streams — numpy's legacy global for its slice
 sampling, and the standard library's ``random`` for the walker pairs its
 default move builds its directions from. :class:`ZeusEngine` seeds and restores
-both around the run (:func:`ampere.inference._zeus._global_seed`); seeding only
+both around the run (:func:`ampere.inference.engine.global_seed`); seeding only
 the first, which is what an inspection of ``zeus/ensemble.py`` alone suggests,
 leaves the run irreproducible in a way that is easy to miss. Being global
 state, a zeus run is not thread-safe against other code drawing from either
@@ -226,8 +254,11 @@ True
 
 from __future__ import annotations
 
+from ._blackjax import METHODS as BLACKJAX_METHODS
+from ._blackjax import BlackjaxEngine
 from ._dynesty import DynestyEngine
 from ._emcee import EmceeEngine
+from ._nested import NESTED_ENGINES, NautilusEngine, UltranestEngine
 from ._nuts import NUTSEngine
 from ._sbi import (
     DEFAULT_TRUNCATION_EPSILON,
@@ -246,22 +277,27 @@ from .engine import DEFAULT_CACHE_SIZE, Engine
 from .exceptions import EngineError, SamplingFailureWarning
 
 __all__ = [
+    "BLACKJAX_METHODS",
     "DEFAULT_CACHE_SIZE",
     "DEFAULT_TRUNCATION_EPSILON",
     "EMBEDDINGS",
     "LAYOUTS",
     "MARGINAL_ORDERS",
     "METHODS",
+    "NESTED_ENGINES",
     "SET_EMBEDDINGS",
     "SUMMARY_LAYOUT",
     "TMNRE_SAMPLERS",
+    "BlackjaxEngine",
     "DynestyEngine",
     "EmceeEngine",
     "Engine",
     "EngineError",
     "NUTSEngine",
+    "NautilusEngine",
     "SBIEngine",
     "SamplingFailureWarning",
+    "UltranestEngine",
     "VIEngine",
     "ZeusEngine",
 ]
