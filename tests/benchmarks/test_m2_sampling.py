@@ -22,8 +22,6 @@ seconds-long sampling runs a per-PR job should pay for.
 from __future__ import annotations
 
 import math
-import pathlib
-import sys
 from collections.abc import Callable
 from typing import Any
 
@@ -31,12 +29,9 @@ import pytest
 
 pytest.importorskip("pytest_benchmark")
 
-_ROOT = pathlib.Path(__file__).resolve().parents[2]
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
-
-from examples.m2_misspecification import study  # noqa: E402
-from examples.m2_misspecification.generators import generate  # noqa: E402
+# examples/ is on sys.path via tests/conftest.py (W5.28(k)).
+from examples.m2_misspecification import study
+from examples.m2_misspecification.generators import generate
 
 SCENARIO = "strong_smooth"
 SIZE = 200

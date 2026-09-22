@@ -49,8 +49,6 @@ from __future__ import annotations
 import dataclasses
 import importlib
 import math
-import pathlib
-import sys
 import warnings
 from typing import Any
 
@@ -74,16 +72,9 @@ from ampere.core import (
 from ampere.core.parameter import HORSESHOE_TAILS
 from ampere.inference import EngineError, NUTSEngine
 
-# ``examples/`` is not an installed package (the wheel declares ``include =
-# ["ampere*"]``), so the repository root goes on ``sys.path`` explicitly, as
-# ``tests/m2/conftest.py`` does for the same reason -- explicitly, rather than
-# relying on pytest's ``prepend`` import mode reaching this far, which it does
-# not from this module's directory.
-_ROOT = pathlib.Path(__file__).resolve().parents[2]
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
-
-from examples.m2_misspecification import many_lines  # noqa: E402
+# examples/ is not an installed package, but is on sys.path via
+# tests/conftest.py (W5.28(k)), which every test below this line relies on.
+from examples.m2_misspecification import many_lines
 
 REFERENCE_WAVELENGTH = 1.0
 TRUTH = {"norm": 2.0, "index": -1.2, "calibration": 1.0}

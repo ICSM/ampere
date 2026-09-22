@@ -5,9 +5,10 @@ reader is meant to run it, change an arm and see what happens.
 ``tests/m2/conftest.py``'s own two jobs, done here in its own shape.
 
 **Importing it.** ``examples/`` is not an installed package, so the
-repository root goes on ``sys.path`` explicitly, for that module's own
-reason (an editable install's path hook reaching this far would break the
-first time this ran against a wheel).
+repository root must reach ``sys.path`` some way that does not depend on
+how ``ampere`` itself was installed. ``tests/conftest.py`` (**W5.28(k)**)
+does this once for the whole suite now, rather than a copy of the
+insertion living here as well.
 
 **Paying for the calibration study once.** The three SBC runs (one per arm,
 :data:`~examples.interferometry.study.SIMULATIONS` simulations each) that the
@@ -19,17 +20,11 @@ assertions, so the fixture is **session**-scoped.
 
 from __future__ import annotations
 
-import pathlib
-import sys
 from typing import Any
 
 import pytest
 
-_ROOT = pathlib.Path(__file__).resolve().parents[2]
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
-
-from examples.interferometry import study  # noqa: E402
+from examples.interferometry import study
 
 
 @pytest.fixture(scope="session")
