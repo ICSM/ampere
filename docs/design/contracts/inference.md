@@ -924,9 +924,10 @@ The per-spaxel IFU decomposition W1.11's sketches describe — N datasets, N
 N sites collapse to one dimension and every spaxel's noise model reads it. What
 is awkward is the *construction*, not the merge: N `Dataset`s and N
 `Likelihood`s are built by a comprehension the user writes. A
-`DatasetCollection.plate(...)` factory is the obvious convenience and is
-deliberately not in v1.7 (limitation 17.6). Design B's contribution here is the
-naming: `spaxel_17.likelihood.amplitude` rather than a flattened
+`DatasetCollection.plate(...)` factory is the obvious convenience and was
+deliberately not in v1.7 (limitation 17.6) — **it landed at W5.12**, below.
+Design B's contribution here is the naming:
+`spaxel_17.likelihood.amplitude` rather than a flattened
 `spaxel_17_likelihood.amplitude`.
 
 **It does not scale, and the bound is sharp.** W1.11's population sketch
@@ -943,6 +944,57 @@ dataset *i*: `Binding` has no index field and `distribute` hands the whole
 contract's, and the sketch names an optional `Binding.index` as the
 critical-path item. Recorded here as limitation 17.6 so that nobody builds a
 10⁴-spaxel fit on the comprehension and discovers the cost at run time.
+
+*`Binding.index` landed at the freeze (2026-09-02) and the declaration that
+produces it landed at W5.12; the next subsection is the route this paragraph
+was waiting for. The bound itself has not moved — it has become a refusal.*
+
+### A population of datasets (*W5.12*)
+
+`parameters.md` §9's `Population` is the composition-time declaration of
+hierarchy, and it is what closes the paragraph above. A `FittingProblem`
+takes them beside the ties they are the counterpart of —
+`FittingProblem(models, datasets, populations=[...])` — and
+`DatasetCollection.plate(name, datasets, members=..., hyperpriors=...)`
+builds one from the datasets' own order, which is the factory limitation 17.6
+named.
+
+```pycon
+>>> from ampere.core import HierarchicalPrior, Parameter, Population
+>>> spaxels = [
+...     Dataset(observed, Instrument([], channel="blue", input_kind=Spectrum,
+...                                  label=f"scope{i}"),
+...             model=f"spaxel_{i}", label=f"spaxel_{i}")
+...     for i in range(3)
+... ]
+>>> plated = DatasetCollection.plate(
+...     "spaxels", spaxels,
+...     members=[Parameter("index",
+...                        HierarchicalPrior("norm", {"loc": "mu", "scale": "sigma"}))],
+...     hyperpriors=[Parameter("mu", st.norm(0.0, 1.0)),
+...                  Parameter("sigma", st.halfnorm(0.0, 1.0))],
+... )
+>>> plated.populations[0].over
+('spaxel_0', 'spaxel_1', 'spaxel_2')
+>>> plated.populations[0].size
+3
+
+```
+
+The draws are routed to the **models** the datasets name, not to the datasets
+themselves, and that is a rule rather than a default: a population addresses
+its members by *bare* local name, while a dataset joins the merge as a
+`ParameterMapping` whose names are qualified (`likelihood.scale`), so an
+element routed there would never reach a leaf. The merge refuses it by name.
+A quantity genuinely shared *across* the spaxels' noise models is still a
+`Tie`, as above — sharing and population are alternatives, not layers.
+
+What this buys over the comprehension is the scaling the paragraph above
+measured: the population's draws are **one** array-valued parameter, one
+sample site, and one `numpyro.plate` when the problem is realised on torch or
+jax (§10a). The N-component form remains available as
+`Population(layout="flat")`, refused above `MAX_FLAT_MEMBERS` for the reason
+this section has just given.
 
 ## 10. The engine-facing surface (`DEVELOPMENT_PLAN.md` §4.5)
 
@@ -1359,6 +1411,19 @@ the spelling and promotes it, rather than reverting to one name:
 * **A model offering half of either pair is refused with the missing half
   named**, as before. The two go together: the first supplies the values and
   the second the coordinates the instrument chain transforms them on.
+
+**W5.12: a realisation routes its own values through the merge's table.** Both
+backends' lowered problems call `ParameterMapping.distribute` on native
+values — the wiring is the merge's, and reproducing it in each backend would
+be two more places for the routing to be wrong. That makes `distribute` part
+of the traced path in one specific respect: an **element binding**
+(`Binding.index`, `parameters.md` §8) has to take its element *in the value's
+own array type*. Coercing to numpy first, which is what it did until a
+`Population` produced element bindings on a native path, raises on a torch
+tensor that requires grad and on a jax tracer, and would detach the graph if
+it did not. Nothing else in `distribute` touches values, so nothing else is
+affected; this is recorded because it is the one line of `ampere.core` that a
+backend's trace runs through by design rather than by accident.
 
 ## 11. Failure signalling
 
@@ -2533,13 +2598,22 @@ Each is a decision, not an oversight. Each has an extension point.
    vectorises. Kept in this list, like item 9, because the limitation it
    replaces was load-bearing in earlier discussion.
 6. **No `DatasetCollection.plate(...)`, and the comprehension does not scale.**
-   N per-spaxel datasets are built by a comprehension the user writes (§9). A
-   factory is convenience, not contract. What is *not* convenience is the cost:
-   N scalar components cost about 800 ms per `lnprior` at N = 1000 against about
-   0.6 ms as a `Plate` (`hierarchical_population.md` §7), so the pattern is right
-   for tens of datasets and wrong for thousands. Closing that needs per-element
-   routing of a plate's array-valued parameter — an optional `Binding.index` —
-   which is `parameters.md`'s to add.
+   ~~N per-spaxel datasets are built by a comprehension the user writes (§9). A
+   factory is convenience, not contract.~~ What is *not* convenience is the
+   cost: N scalar components cost about 800 ms per `lnprior` at N = 1000
+   against about 0.6 ms as a `Plate` (`hierarchical_population.md` §7), so the
+   pattern is right for tens of datasets and wrong for thousands. Closing that
+   needs per-element routing of a plate's array-valued parameter — an optional
+   `Binding.index` — which is `parameters.md`'s to add.
+
+   **Lifted at W5.12.** `Binding.index` landed at the freeze (2026-09-02) and
+   `parameters.md` §9's `Population` is the declaration that produces it; the
+   factory is `DatasetCollection.plate(...)` (§9). The caller still writes the
+   comprehension that builds the N `Dataset`s, because each carries its own
+   observations and nothing can guess them — what the factory removes is the
+   *wiring*, which was N hand-written `PlateBinding`s or N rewritten parameter
+   sets. The cost sentence survives as a refusal: `Population(layout="flat")`
+   is the comprehension's own shape and is refused above `MAX_FLAT_MEMBERS`.
 7. **The failure history is per-process.** Under multiprocessing (emcee's
    `Pool`), each worker accumulates its own counts and the driver must aggregate
    them. W1.8 owns the aggregation when it writes provenance.

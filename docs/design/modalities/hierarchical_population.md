@@ -470,14 +470,47 @@ rewritten from "needs an index-alignment concept that belongs with W1.7" to
 
 ### H-1 — hierarchy has no composition-time declaration
 
-*Dispositioned at the freeze (W1.13): **deferred, pending Peter's ruling**
-— §11 Q2 (freeze-vs-Phase-5) and Q5 (whether design horizon (b) is the
-primary population route) remain his, and W1.13's report carries them.
-The deferral is safe on the sketch's own severity assessment: the
-amendment is additive convenience ("could follow the freeze"), the
-tie-based pattern stands as the documented route (`inference.md` §19 R2,
-with the revisit design recorded in its limitation 17.2), and nothing in
-the frozen contracts precludes a `Population` declaration later.*
+*Dispositioned at the freeze (W1.13): deferred, pending Peter's ruling —
+§11 Q2 (freeze-vs-Phase-5) and Q5 (whether design horizon (b) is the
+primary population route) were his, and W1.13's report carried them. The
+deferral was safe on the sketch's own severity assessment: the amendment
+is additive convenience ("could follow the freeze"), the tie-based pattern
+stood as the documented route (`inference.md` §19 R2, with the revisit
+design recorded in its limitation 17.2), and nothing in the frozen
+contracts precluded a `Population` declaration later.*
+
+***Closed at W5.12 (Phase 5): approved and implemented.*** `Population`
+is in `ampere.core`, `ParameterSet.merge` takes `populations=[...]`, and
+`FittingProblem` takes them beside the ties. The shape the sketch proposed
+below is the shape that landed, with three deviations, each recorded in
+`parameters.md` §9:
+
+1. **`members` rather than `parameter` + `family`.** The sketch's form names
+   one parameter and one family; the landed form takes `Plate`'s own
+   `members` — a sequence of `Parameter`s — because Q4 (below) confirmed
+   that per-member *nuisance* parameters are the same construct, and a
+   population of one hierarchical draw plus two i.i.d. calibration scales
+   cannot be said in the sketch's form at all. `hyperparameters` became
+   `hyperpriors`, ordinary `Parameter`s, for the same reason: they are not
+   a mapping from a family's keyword to a parameter, they are just
+   parameters, and it is the member's own `HierarchicalPrior` that says
+   which keyword each one supplies.
+2. **`layout`.** The sketch describes only the rewrite-in-place form (what
+   is now `layout="flat"`). The landed default is `layout="plate"`, which
+   produces H-2's array-valued parameter and element bindings instead —
+   the form that lowers to a real `numpyro.plate` and the only one that
+   scales. Both declare the same joint density over the same dimensions,
+   which is a conformance row on every backend, and the flat form is
+   refused above `MAX_FLAT_MEMBERS` (128).
+3. **Members are addressed by bare local name**, so `over` names components
+   that own the parameter under one — models, joint noise groups, plain
+   shared sets — and a component merged as a `ParameterMapping` (a
+   `Dataset`) is refused by name. §3's gap 1, "a plate of datasets", is met
+   by `DatasetCollection.plate(...)`, which declares the population over
+   the models its datasets name.
+
+*Q3 (nested plates) is unchanged by this: a `Population` is one plate
+level, and `parameters.md` §12.2 still defers "objects within surveys".*
 
 **Severity: real composability cost; a convenience amendment, could follow the
 freeze.** §4 has the argument. A user with independently written per-object
@@ -646,7 +679,8 @@ declaration if that is granted. Q4 — confirmed: per-object nuisance
 parameters as plate members is the intended reading of `parameters.md`
 §9's `members` argument, and is how this sketch and W1.7's tests already
 use it. **Q2 and Q5 ruled by Peter, 2026-09-03** (at the freeze's
-escalations): Q2 — `Population` lands with **Phase 5**, and the timing is
+escalations), and **both closed at W5.12**, where `Population` and the
+joint fit landed: Q2 — `Population` lands with **Phase 5**, and the timing is
 deliberately adaptable: nothing in the frozen contracts precludes it (the
 disposition above verified that), so it may be pulled forward if a real
 need surfaces earlier, and the tie-based pattern of §3 is the documented
@@ -669,6 +703,13 @@ is deferred to Phase 5 alongside `Population` itself.
    changes `merge`'s signature, which argues for the freeze; nothing depends on
    it before Phase 5's hierarchical implementation, which argues against. The
    H-2 amendment is the one that must not wait.
+
+   ***Closed at W5.12.*** It landed with Phase 5, as Peter ruled, and it did
+   change `merge`'s signature — `populations=[...]`, a keyword-only argument
+   with an empty default, so every existing call is unaffected and the
+   conformance suite stayed green without a line. The concern the question
+   raised was therefore real and cheap: the signature change is additive,
+   which is why the timing could be left adaptable at all.
 3. **Nested plates.** `parameters.md` §12.2 defers "objects within surveys".
    Two surveys each holding a plate merge fine — `('survey0.objects.mu',
    'survey0.objects.theta', 'survey1.objects.mu', …)` — but `Parameter.plate` is
@@ -690,3 +731,24 @@ is deferred to Phase 5 alongside `Population` itself.
    primary route for large N, H-2 becomes a Phase 5 convenience rather than a
    freeze item. If the joint fit is the primary route, H-2 is on the critical
    path. The contracts should record which.
+
+   ***The joint-fit half landed at W5.12; both routes now exist and neither
+   is declared primary.*** Horizon (a) is `Population` + NUTS through a
+   realisation, and the suite holds it to recovering the hyperparameters of a
+   fifty-member synthetic sample inside the central 95 %
+   (`tests/inference/test_population_nuts.py`). Horizon (b) is
+   `ampere.results.population.fit_population` (W5.13). What the contracts
+   record, now that both have run, is the *choice between them* rather than a
+   winner, because they answer different questions:
+
+   - the **joint fit** is the one that conditions on the data, so it shrinks
+     each member towards the population and reports θ_i posteriors that
+     borrow strength. It costs one gradient evaluation of every member per
+     leapfrog step, which is why it wants a plate and a backend;
+   - the **reweighting** route costs nothing beyond fits you already have and
+     scales to any N, but it cannot move a member's posterior outside the
+     support its own run explored, and it needs each run's interim prior.
+
+   The practical rule: fit jointly when the members are being fitted anyway,
+   or when the shrinkage is part of the answer; reweight when the archive
+   already exists. Neither is a fallback for the other.

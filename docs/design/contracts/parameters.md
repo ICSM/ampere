@@ -47,7 +47,7 @@ so survives declaration, composition and serialisation.
 >>> import astropy.units as u
 >>> from ampere.core import (
 ...     Buffer, HierarchicalPrior, Identity, Log, Logit, Parameter,
-...     Parameterised, ParameterSet, Plate, PlateBinding, PriorSpec, Tie,
+...     Parameterised, ParameterSet, Plate, PlateBinding, Population, PriorSpec, Tie,
 ...     describe_prior, prior_from_spec,
 ... )
 >>> from ampere.core.exceptions import ParameterError, TyingError
@@ -656,8 +656,12 @@ the local name must not shadow anything the component already receives. Note
 the receiving component's own `ParameterSet` does **not** declare the local
 name: the element arrives as an extra key in `distribute`'s output, and
 consuming it is the composing caller's contract — the intended caller being
-W1.7's future plate-of-datasets construction, which will build these
-bindings from its own dataset ordering.
+the plate-of-datasets construction, which builds these bindings from its own
+dataset ordering. **Since W5.12 that caller exists**: `Population` (§9) is the
+declaration that produces these bindings, and `DatasetCollection.plate`
+(`inference.md` §9) is the convenience that derives them from the datasets'
+order, so writing them out by hand is the low-level route rather than the
+expected one.
 
 ## 9. Hierarchical structure: `HierarchicalPrior` and `Plate`
 
@@ -786,17 +790,132 @@ and this contract declares parameters and priors, not deterministic nodes —
 `gamma(a=½, scale=τ)` local level: the same spike at zero, an exponential tail
 rather than a Cauchy one), and a `Derived` node is what would close the gap.
 
+### `Population` — hierarchy declared at composition time (*Added W5.12*)
+
+**Ruled by Peter, 2026-09-03** (`hierarchical_population.md` §11 Q2): the
+sketch's gap **H-1** lands with Phase 5, and W5.12 is where it landed. The gap
+was an asymmetry. §8 supports tying in *both* directions, at declaration time
+and at composition time, "because the models were written independently — or
+came from a library — and the person composing the fit is the one who knows".
+Hierarchy had only one direction: a `HierarchicalPrior` must be on the site
+when its `ParameterSet` is built, and its references must already resolve
+there, so a user with N library models had to rewrite every one of them —
+each declaring population hyperparameters it never uses — before they could
+say "these are draws from a population". `Tie` is not the escape: it collapses
+N sites into **one**, which fits one θ for the whole survey, silently and
+plausibly.
+
+`Population` is the counterpart `Tie` never had. It names the members once,
+and `merge` does the rewriting:
+
+```pycon
+>>> def object_set():
+...     return ParameterSet([Parameter("theta", st.norm(0.0, 1.0)),
+...                          Parameter("cal", st.lognorm(0.1))])
+>>> objects = Population(
+...     "objects",
+...     members=[Parameter("theta", HierarchicalPrior("norm", {"loc": "mu", "scale": "sigma"}))],
+...     hyperpriors=[Parameter("mu", st.norm(0.0, 5.0)),
+...                  Parameter("sigma", st.halfnorm(0.0, 2.0))],
+...     over=["obj0", "obj1", "obj2"],
+... )
+>>> survey = ParameterSet.merge(
+...     {label: object_set() for label in ("obj0", "obj1", "obj2")},
+...     populations=[objects],
+... )
+>>> survey.merged.names
+('obj0.cal', 'obj1.cal', 'obj2.cal', 'objects.mu', 'objects.sigma', 'objects.theta')
+>>> survey.merged["objects.theta"].shape, survey.merged["objects.theta"].plate
+((3,), 'objects')
+>>> [(b.component, b.local_name, b.index) for b in survey.bindings if b.index is not None]
+[('obj0', 'theta', 0), ('obj1', 'theta', 1), ('obj2', 'theta', 2)]
+
+```
+
+Three things happened there, and each is the answer to one of H-1's
+complaints. The hyperpriors joined the merge as one further component, so no
+per-object model had to declare them. Each member component's *own* `theta` —
+an ordinary `Normal(0, 1)` a library model declared without knowing about this
+fit — was replaced by its draw from the population. And the draws are one
+array-valued parameter with three element bindings (§8), so `obj0` receives a
+scalar `theta` under its own local name and never learns that it is object
+zero of three.
+
+`members` is `Plate`'s `members`, and it means the same thing: one entry per
+quantity each member has its own value of. An entry whose prior is a
+`HierarchicalPrior` is the population draw; an entry with an ordinary prior is
+a **per-member nuisance parameter**, an i.i.d. array — "each object has its own
+calibration scale, from a common prior" — which is the reading §11 Q4
+confirms. `hyperpriors` are ordinary `Parameter`s: nothing about them is
+special, which is what lets the same machinery fit them.
+
+#### Two layouts, one density
+
+```pycon
+>>> flat = ParameterSet.merge(
+...     {label: object_set() for label in ("obj0", "obj1", "obj2")},
+...     populations=[Population(
+...         "objects", members=objects.members, hyperpriors=objects.hyperpriors,
+...         over=objects.over, layout="flat",
+...     )],
+... )
+>>> flat.merged.names  # doctest: +NORMALIZE_WHITESPACE
+('obj0.theta', 'obj0.cal', 'obj1.theta', 'obj1.cal', 'obj2.theta', 'obj2.cal',
+ 'objects.mu', 'objects.sigma')
+>>> flat.merged["obj0.theta"].references
+('objects.mu', 'objects.sigma')
+>>> flat.merged.free_size == survey.merged.free_size
+True
+
+```
+
+`layout="plate"` — the default above — is one array-valued site routed by
+element, which is what a `numpyro.plate` or a `pyro.plate` *is*, and is
+therefore what the torch and jax realisations lower (`inference.md` §10a).
+`layout="flat"` is the N-component pattern below: each member keeps its own
+scalar parameter, re-priored onto the shared hyperpriors. The two declare the
+same joint density over the same number of dimensions, and the conformance
+suite holds them to that on every backend, realised and unrealised.
+
+The flat layout is **refused above `MAX_FLAT_MEMBERS` (128)**, naming the
+plate layout as the remedy. This is the cost recorded below made into a
+guardrail: `lnprior` is O(number of `Parameter` objects), and past a hundred or
+so members the flat declaration is a mistake rather than a trade-off. The
+plate layout has no such limit — it is one object however many members it
+holds.
+
+#### What it refuses
+
+By name, at merge, because each of these is a different model from the one the
+caller meant: a component label the merge already has; a member component that
+does not exist, or the population's own; a member that disagrees with the
+component's own declaration about shape or unit; a **fixed** site (a fixed site
+has no draw); a site already tied or `shared_as` (sharing collapses N sites
+into one value, a population keeps them N — pick one); and a component merged
+as a `ParameterMapping`, because a composite's merged names are qualified
+(`likelihood.scale`) while a population addresses its members by bare local
+name, so the draw would never reach a leaf. For a plate of per-object
+*datasets*, declare the population over the models those datasets name —
+which is what `DatasetCollection.plate` does.
+
 ### Which construct to use
 
-Both patterns are expressible, and they serve different data layouts:
+Three patterns are expressible, and they serve different data layouts:
 
 - **One component, N members vectorised** (`Plate`): the N objects are fitted
   from one dataset, or from data already stacked. Lowers to a numpyro plate.
-- **N components, each with its own dataset** (`HierarchicalPrior` +
-  tying): each object gets its own `ParameterSet` with a scalar `theta`, whose
+- **N components, declared at composition time** (`Population`, *W5.12*): the
+  N objects were written independently and each has its own dataset, and the
+  person composing the fit is the one who knows they are a population. This is
+  the one to reach for when the models are somebody else's; it produces the
+  first pattern's plate (or, at `layout="flat"`, the third pattern's
+  parameters) without any of them being rewritten.
+- **N components, declared by hand** (`HierarchicalPrior` + tying): each
+  object gets its own `ParameterSet` with a scalar `theta`, whose
   `HierarchicalPrior` references `mu` and `sigma` — themselves tied across all
   components, so they collapse to one shared pair on merge. This is the shape
-  a `DatasetCollection` (W1.7) of per-object datasets naturally takes.
+  a `DatasetCollection` (W1.7) of per-object datasets naturally takes, and it
+  is what `Population(layout="flat")` builds for you.
 
 The second pattern in full, for two objects:
 
@@ -826,7 +945,9 @@ apart. That is not a defect (`ParameterSet` is a declaration container,
 not a hot-loop object, and an engine pays this once per proposal beside a
 model evaluation), but at genuinely population scale prefer the `Plate`
 layout where the data allow it, and expect the N-component layout's prior
-overhead to be visible beside a cheap model.
+overhead to be visible beside a cheap model. *W5.12* turned that guidance
+into a refusal for the one declaration that can always be expressed the other
+way: `Population(layout="flat")` is refused above `MAX_FLAT_MEMBERS`.
 
 ## 10. Buffers: explicit, and why
 

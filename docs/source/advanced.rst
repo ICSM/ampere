@@ -58,6 +58,66 @@ of tree, with no change to ``ampere.core``. :doc:`kernels` §5 walks through
 the registration with the same trivial worked example
 ``tests/core/test_kernels.py`` uses to prove the route.
 
+Populations: fitting many objects together
+------------------------------------------
+
+Sometimes the objects are not independent: a hundred discs, each with its own
+spectrum and its own fit, whose spectral indices you believe are drawn from
+*one* distribution. Fitting them separately throws that belief away; fitting
+them with a shared index asserts something much stronger than you believe.
+The middle is a hierarchical, or population, model — each object keeps its own
+value, and the values are draws from a parent distribution whose parameters
+are fitted too.
+
+:class:`~ampere.core.Population` is how you say that, and the point of it is
+that you say it **once, where you compose the fit**, not inside each object's
+model:
+
+.. code-block:: python
+
+   from ampere.core import FittingProblem, HierarchicalPrior, Parameter, Population
+   import scipy.stats as st
+
+   discs = Population(
+       "discs",
+       members=[Parameter("index", HierarchicalPrior("norm", {"loc": "mu", "scale": "sigma"}))],
+       hyperpriors=[Parameter("mu", st.norm(-1.0, 1.0)),
+                    Parameter("sigma", st.halfnorm(0.0, 1.0))],
+       over=[f"disc{i}" for i in range(50)],
+   )
+   problem = FittingProblem(models, datasets, populations=[discs])
+
+``models`` here is fifty ordinary models — library models, written by someone
+who had never heard of your survey. None of them declares ``mu`` or ``sigma``,
+and none of them is modified: the declaration replaces each one's own prior on
+``index`` with its draw from the population, and hands it back a plain scalar
+under the name it already uses. ``problem.parameters`` then holds ``discs.mu``,
+``discs.sigma`` and one array-valued ``discs.index`` of fifty elements — 52
+dimensions, three parameter objects.
+
+That last sentence is the reason to prefer this over writing the hierarchy out
+by hand. The fifty draws are **one** parameter, so they are one sample site,
+and on the torch and jax backends they lower to a real ``pyro``/``numpyro``
+plate; NUTS then fits the whole population jointly. The hand-written form —
+fifty scalar parameters sharing a prior — is still available as
+``Population(..., layout="flat")``, declares exactly the same density, and is
+refused above 128 members, because the prior evaluation is linear in the
+number of parameter *objects* and at a thousand members that is the difference
+between 0.6 ms and 800 ms per evaluation.
+
+Two companions are worth knowing about:
+
+- :meth:`DatasetCollection.plate <ampere.core.DatasetCollection.plate>` builds
+  the population from a list of datasets in order, which is the natural form
+  when each member *is* a dataset — a spaxel of an IFU cube, an échelle order,
+  one catalogue entry. The draws are routed to the models those datasets name.
+- :func:`ampere.results.fit_population` gets population hyperparameters out of
+  fits you have **already run**, by importance reweighting, with no joint fit
+  at all. It cannot shrink the members towards each other the way a joint fit
+  does, but it costs nothing beyond the archive and scales to any number of
+  objects. Fit jointly when the members are being fitted anyway or when the
+  shrinkage is part of the answer; reweight when the archive already exists.
+
 Very slow models
 ----------------
 
