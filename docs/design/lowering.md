@@ -344,7 +344,7 @@ the model is the left-hand one. `non_centred=False` declares the left-hand
 column directly with `HierarchicalPrior`, which is what a strongly identified
 warp can afford and what the plan names.
 
-**The horseshoe's chain now lowers.** (*Amended W5.25*)
+**The horseshoe's chain now lowers, in full.** (*Amended W5.25*)
 `regularised_horseshoe` (`parameters.md` §9) is three hierarchical levels, and
 its default `tail="regularised"` is chosen so that every one of them is in the
 table above: `halfcauchy` for the global scale, `gamma` for each local scale,
@@ -354,18 +354,24 @@ registration until W5.25 added one `register_lowering("halfcauchy", backend,
 §3.3 shift otherwise, which is §3.4's fallback rule used as intended
 (`torch.distributions.HalfCauchy` and `numpyro.distributions.HalfCauchy` are
 both exact). `tail="cauchy"`'s local level is the same family and needed no
-row of its own as a consequence — it lowers on both backends now too. On jax
-this closes the chain completely, because a `HierarchicalPrior`'s dispatch
-*is* the flat table above (§5): any family §3.2 has, a hierarchical reference
-to it gets for free. Torch's dispatch is a second, per-family registry
-(`_HIERARCHICAL_BUILDERS` in `ampere/backends/torch/lowering.py`) that this
-item extended for `halfcauchy` but that still has no `gamma` row, so
-`tail="regularised"`'s local level — the default — does not reach NUTS on
-torch; `tail="cauchy"`'s two half-Cauchy levels do, on both backends. Closing
-the `gamma` gap is not this item's scope. The horseshoe's own funnel is the
-one described above, one level deeper, and it is why `tests/m2`'s shrinkage
-rows run at a longer emcee budget than the rest of that suite and pin a
-margin a third below what they measure.
+row of its own as a consequence — it lowers on both backends too. On jax this
+closed the chain completely on its own, because a `HierarchicalPrior`'s
+dispatch *is* the flat table above (§5): any family §3.2 has, a hierarchical
+reference to it gets for free. Torch's dispatch is a second, per-family
+registry (`_HIERARCHICAL_BUILDERS` in `ampere/backends/torch/lowering.py`),
+which W5.25 extended with both `halfcauchy` and `gamma` — the latter found
+only once the former was in place and the default tail's local level still
+would not reach NUTS on torch. `gamma`'s shape argument (`a`) is fixed rather
+than referenced in every declaration this contract writes, so it lowers as an
+ordinary tensor alongside `loc`/`scale`, exactly as §8's "arguments are other
+parameters' values" already allows; what it cannot do is acquire a bijection
+automatically (`_default_bijection_for_hierarchical` refuses any family with a
+shape argument, referenced or not), which is why `regularised_horseshoe`
+supplies `bijection=Log()` explicitly rather than relying on the default. All
+three levels of both tails now reach NUTS on both backends. The horseshoe's
+own funnel is the one described above, one level deeper, and it is why
+`tests/m2`'s shrinkage rows run at a longer emcee budget than the rest of
+that suite and pin a margin a third below what they measure.
 
 Spike-and-slab — the other classical sparsity prior, and the one a reader may
 expect here — stays out, for the reason `horizon_notes.md` §1 gives and §12 Q1

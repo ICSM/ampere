@@ -857,24 +857,18 @@ class TestTheHorseshoeUnderNUTS:
     Before this item ``regularised_horseshoe``'s global scale — half-Cauchy
     under *both* tails (``ampere/core/parameter.py``) — raised
     :class:`~ampere.inference.EngineError` on both differentiable backends,
-    because ``halfcauchy`` was in neither's §3.2 table. This is that row: one
-    short chain per tail, per backend, fixed seeds, following the shape of
-    the NUTS rows above rather than the M2 study's own (longer, emcee-driven)
-    ones in ``tests/m2/test_many_lines.py``.
+    because ``halfcauchy`` was in neither's §3.2 table. ``tail="regularised"``
+    (the default) also needed a hierarchical ``gamma`` row on torch, found
+    while adding this one and closed in the same item
+    (``_HIERARCHICAL_BUILDERS`` in ``ampere/backends/torch/lowering.py``; jax
+    reaches it generically already). This is that row: one short chain per
+    tail, per backend, fixed seeds, following the shape of the NUTS rows
+    above rather than the M2 study's own (longer, emcee-driven) ones in
+    ``tests/m2/test_many_lines.py``.
     """
 
     @pytest.mark.parametrize("tail", list(HORSESHOE_TAILS))
     def test_it_samples(self, kit: Kit, tail: str) -> None:
-        if kit.name == "torch" and tail == "regularised":
-            pytest.skip(
-                "torch has no hierarchical lowering for 'gamma' "
-                "(_HIERARCHICAL_BUILDERS in ampere/backends/torch/lowering.py), so "
-                "regularised_horseshoe's default tail's local scale -- a "
-                "HierarchicalPrior('gamma', ...) -- cannot reach NUTS on this backend. "
-                "A pre-existing gap found while adding this row, unrelated to halfcauchy "
-                "(the global scale on this same problem lowers and samples fine, as the "
-                "'cauchy' tail below shows) and out of W5.25's scope; see the W5.25 report."
-            )
         problem = shrinkage_problem(kit, tail)
         assert problem.differentiable is True
         run = realised_sample(problem, draws=150, warmup=150, chains=1)

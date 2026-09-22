@@ -801,6 +801,33 @@ def _hierarchical_expon(arguments: dict[str, torch.Tensor]) -> dist.Distribution
     )
 
 
+def _hierarchical_gamma(arguments: dict[str, torch.Tensor]) -> dist.Distribution:
+    """``Gamma(concentration=a, rate=1/scale)``, with ``a`` a tensor like everything else.
+
+    ``regularised_horseshoe``'s local scale under ``tail="regularised"`` (the
+    default) is exactly this: ``HierarchicalPrior("gamma", {"scale": ...},
+    kwds={"a": HORSESHOE_SPIKE_SHAPE})`` — a fixed shape and a referenced
+    scale. ``lower_hierarchical`` already folds a constant ``kwds`` entry
+    into *arguments* as a tensor the same way it folds ``loc``/``scale``, so
+    nothing here treats ``a`` specially; it only needs a default for a
+    declaration that leaves it out, which none of the other rows in this
+    table has to do because scipy's own default (``a=1``, an exponential) is
+    what ``.get`` below supplies. ``loc`` composed away exactly as
+    :func:`_build_gamma`'s does, on the frozen path.
+    """
+    scale = arguments["scale"]
+    concentration = arguments.get("a", torch.ones_like(scale))
+    base = dist.Gamma(concentration, 1.0 / scale, validate_args=False)
+    loc = arguments["loc"]
+    if bool(torch.all(loc == 0.0)):
+        return base
+    return _SupportedTransformed(
+        base,
+        [transforms.AffineTransform(loc=loc, scale=torch.ones_like(loc))],
+        constraints.greater_than(loc),
+    )
+
+
 #: Hierarchical families this backend can build from *tensor* arguments.
 #:
 #: A ``HierarchicalPrior`` "cannot be lowered once and cached" (``lowering.md``
@@ -812,16 +839,23 @@ def _hierarchical_expon(arguments: dict[str, torch.Tensor]) -> dist.Distribution
 #: the §3.2 table rows use, and with it every family whose lowering needs a
 #: Python-level branch on an argument's value.
 #:
-#: What is left is close to what ``ampere.core`` can infer a bijection for, and
-#: that is not a coincidence: a hierarchical family taking shape arguments is
-#: already refused upstream by ``_default_bijection_for_hierarchical``, because
-#: its support is not determined by ``loc``/``scale`` alone.
+#: Every family here but ``gamma`` is also one ``ampere.core`` can infer a
+#: bijection for on its own — location-scale, no shape argument, so its
+#: support is determined by ``loc`` alone — and that is not a coincidence.
+#: ``gamma`` is the one exception (W5.25):
+#: ``_default_bijection_for_hierarchical`` still refuses it unconditionally,
+#: because its ``numargs`` is nonzero regardless of whether the shape is
+#: fixed or referenced, so a caller declaring a hierarchical ``gamma`` must
+#: supply ``bijection=`` explicitly — which is exactly what
+#: ``regularised_horseshoe`` does for its local scale under
+#: ``tail="regularised"``.
 _HIERARCHICAL_BUILDERS: dict[str, Any] = {
     "norm": _hierarchical_norm,
     "uniform": _hierarchical_uniform,
     "halfnorm": _hierarchical_halfnorm,
     "halfcauchy": _hierarchical_halfcauchy,
     "expon": _hierarchical_expon,
+    "gamma": _hierarchical_gamma,
 }
 
 #: scipy's defaults for the two location-scale arguments every family above
