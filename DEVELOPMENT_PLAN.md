@@ -798,6 +798,24 @@ the interferometry sketch's Q2 (per-visibility frequency as an
   here. Not needed before then, but a `tests/examples` smoke test of the
   composition may be worth adding earlier so the capability cannot regress
   unnoticed.
+- **Per-dataset nuisance populations, and the `Derived` parameter node**
+  (Peter, 2026-09-22, rulings on W5.12's (3) and W5.8's (2)). `Population.
+  over` addresses its members by bare local name and refuses a dataset or
+  any other composite, whose merged names are qualified — so "each
+  dataset's GP amplitude is a draw from one shared prior", the case the
+  flexible likelihood makes natural across many spectra, is not declarable
+  today; nor is a per-dataset calibration scale under a fitted spread. The
+  workarounds are a per-dataset model component that owns the nuisance, or
+  a `Tie`. Lifting it means `PlateBinding`/`Binding` carrying a qualified
+  path (a §4 change with a decision-log entry), not slicing in the dataset
+  collection — `hierarchical_population.md` §11 Q1 rejected routing in two
+  places at the freeze. Ruled: eventually, and the GP amplitude is the
+  motivating case, but Phase 6 rather than now. Beside it, the `Derived`
+  node — a parameter that is a pure function of other parameters — which
+  would make Piironen & Vehtari's slab declarable (`parameters.md` §9,
+  `lowering.md` §3.2.1) and the non-centred `θ_i = μ + σ z_i` expressible
+  for a population. Both are design items, not tasks: each needs a
+  contract page before an implementation.
 
 ### Cross-cutting workstream — CI/CD (grows with each phase)
 
