@@ -27,7 +27,7 @@ it:
 4. **A sum of noise components needs a sparsity guard, and the horseshoe is
    it.** Two nearly degenerate terms on a one-component truth: under a flat
    prior the fit splits itself between them, under
-   :func:`~ampere.core.regularised_horseshoe` it does not — and the component
+   :func:`~ampere.core.shrinkage_horseshoe` it does not — and the component
    the truth *does* have survives, because a prior that shrank everything would
    pass the same assertion and be useless.
 
@@ -328,7 +328,7 @@ class TestTheDiagnosticsAgree:
 class TestTheHorseshoeShrinksASpuriousComponent:
     """The plan's "same guard generalises to every sum of noise components".
 
-    The declaration is :func:`~ampere.core.regularised_horseshoe`, put on the
+    The declaration is :func:`~ampere.core.shrinkage_horseshoe`, put on the
     kernel by :func:`~ampere.core.with_shrinkage`. What is fitted is two nearly
     degenerate Matérn terms on a truth with **one** smooth component, so the
     likelihood constrains the total and says very little about the split — and
@@ -368,7 +368,7 @@ class TestTheHorseshoeShrinksASpuriousComponent:
         before = plain.parameters.names
         _ = many_lines.with_shrinkage(
             plain,
-            many_lines.regularised_horseshoe(
+            many_lines.shrinkage_horseshoe(
                 tuple(f"{label}.amplitude" for label in many_lines.DEGENERATE_LABELS)
             ),
         )

@@ -1,6 +1,6 @@
 """W5.25: ``halfcauchy`` agrees against ``scipy`` on every registered backend.
 
-``regularised_horseshoe``'s global scale (W5.8) is half-Cauchy under *both*
+``shrinkage_horseshoe``'s global scale (W5.8) is half-Cauchy under *both*
 of its tails (``ampere/core/parameter.py``), and until this item ``halfcauchy``
 was in neither modern backend's ``lowering.md`` §3.2 table -- reference-only
 on NUTS. This is the row §3 asks for: one declaration, ``loc == 0`` (native on

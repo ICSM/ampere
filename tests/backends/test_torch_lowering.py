@@ -714,11 +714,11 @@ class TestPlatesAndHierarchy:
             lower_hierarchical(prior, {"mu": tensor(0.0)}, parameter="theta")
 
     def test_a_hierarchical_gamma_lowers_against_the_flat_table(self) -> None:
-        """W5.25: ``regularised_horseshoe``'s local scale under its default tail.
+        """W5.25: ``shrinkage_horseshoe``'s local scale under its default tail.
 
         A fixed shape (``a``) and a referenced scale --
         ``HierarchicalPrior("gamma", {"scale": ...}, kwds={"a": ...})``, the
-        exact declaration ``ampere.core.regularised_horseshoe`` uses. jax's
+        exact declaration ``ampere.core.shrinkage_horseshoe`` uses. jax's
         hierarchical dispatch reaches the flat ``gamma`` row generically
         (``ampere/backends/jax/distributions.py``); torch's is a second,
         per-family registry (``_HIERARCHICAL_BUILDERS``), so this is the row
