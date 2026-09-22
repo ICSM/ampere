@@ -2406,7 +2406,21 @@ lock byte for byte; spelling the extras out and a feature-level
 `extra-index-urls` were both tried and do not help — the latter breaks the
 editable build). CI installs `frozen` meanwhile; find whether a pixi
 release or a manifest form (`index-strategy`, a workspace-level index)
-restores `--locked`, or record it as upstream and keep `frozen`. Minutes are free on the public repository,
+restores `--locked`, or record it as upstream and keep `frozen`. (7) **Two rows that pass locally and fail on the
+GitHub runner** (CI run `35684651060` on `17bb7df`, the same commit the
+local four-environment gate passed): `tests/inference/test_sbi.py::
+TestTheCalibrationFastPath::test_a_trained_npe_posterior_passes_check_sbc`
+(sbi leg: the KS p-value was 0.0198 against `> 0.05` — a threshold at
+0.05 on a p-value fails 5 % of calibrated posteriors by construction, so
+any new machine's floats re-roll that die; recommend `> 0.001`, keeping the
+contrast row's `< 0.01` separation) and `tests/inference/test_nuts.py::
+TestTheReducedRankSolverUnderNUTS::test_the_posterior_agrees_with_the_exact_solver[jax]`
+(jax leg: the HSGP posterior width 0.188 against the exact 0.137, pinned
+to a quarter — 400 draws × 2 chains; on a different CPU the trajectory
+differs and one chain's width moved 37 %; recommend a larger draw budget
+or a chain-pooled width with the margin set from measured across-machine
+scatter, not a looser pin alone). Both are seed-on-one-machine pins; the
+fix is a per-row change with the reason, run on the runner to confirm. Minutes are free on the public repository,
 so the extra environment restores are accepted. **Not in scope:**
 pytest-xdist (needs per-worker registry snapshots — record it as a
 follow-on if the numbers say it is worth it); changing any pinned margin.
