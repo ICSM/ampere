@@ -396,7 +396,11 @@ while the three parameters are identified only up to that relabelling —
 the label switching a mixture model has. The density is unaffected; the
 marginal on the angle is bimodal. Summarise ``B`` itself, or fix the angle
 where the instrument's own is known, which is what the calibration study
-does.
+does. **W5.28(c)** gives the first route a function:
+:func:`~ampere.results.diagnostics.coupling_matrix_summary` reassembles
+``B`` per posterior draw and hands it to :func:`~ampere.results.summary`'s
+own machinery, rather than reporting the angle's own mean and HDI across
+the relabelling jump.
 
 11. What the template now says, and where
 -------------------------------------------------
