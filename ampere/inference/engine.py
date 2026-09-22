@@ -114,9 +114,11 @@ Four things about it are deliberate.
 from __future__ import annotations
 
 import abc
+import contextlib
 import math
+import random
 import warnings
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Any, ClassVar
 
 import numpy as np
@@ -132,7 +134,13 @@ from ampere.results import emit
 
 from .exceptions import EngineError, SamplingFailureWarning
 
-__all__ = ["DEFAULT_CACHE_SIZE", "Engine", "unconstrained_jacobian_correction"]
+__all__ = [
+    "DEFAULT_CACHE_SIZE",
+    "Engine",
+    "default_live_points",
+    "global_seed",
+    "unconstrained_jacobian_correction",
+]
 
 #: How many scored θ an engine remembers so that the stored draws need not be
 #: re-evaluated. An ``Evaluation`` is a handful of floats plus one term per
@@ -779,6 +787,70 @@ def _check_ensemble(engine: str, walkers: int, free_size: int) -> int:
             f"the ensemble is confined to a subspace, which the sampler cannot leave."
         )
     return int(walkers)
+
+
+@contextlib.contextmanager
+def global_seed(seed: int | None) -> Iterator[None]:
+    """Seed the two *process-global* generators, then put both back.
+
+    Some sampling libraries take no generator and expose no ``random_state``:
+    they draw from process-global state. The only way to make such a run
+    reproducible from ampere's own seed is to seed that state around the run —
+    and the only way to do it without a side effect on the caller's streams is
+    to save and restore, which is what this does.
+
+    **Both** generators, and the second one is the whole reason this is not one
+    line. zeus's sampling loop draws from numpy's legacy global
+    (``np.random.uniform``/``exponential``/``shuffle``/``choice`` throughout
+    ``zeus/ensemble.py``), *and* its default ``DifferentialMove.get_direction``
+    picks its walker pairs with the standard library's ``random.sample``
+    (``zeus/moves.py``). Seeding numpy alone leaves the pair selection
+    entropy-seeded, and a run reproducible in every draw except which walkers
+    proposed for which is not reproducible at all — it just looks like it might
+    be until someone checks. ultranest (W5.14) needs the numpy half for the
+    same reason: its region sampling, its step samplers and its bootstrap all
+    call ``np.random.*`` directly.
+
+    With ``seed=None`` both globals are left completely alone, which is the
+    honest behaviour: a problem built without a seed asked not to be
+    reproducible, and seeding-then-restoring would make its consecutive runs
+    identical instead.
+
+    Recorded as a limitation rather than hidden: this is *global* state, so a
+    run under this context manager is not thread-safe against other code
+    drawing from ``np.random`` or ``random`` at the same time. emcee, dynesty
+    and nautilus have per-sampler streams and need none of it.
+    """
+    if seed is None:
+        yield
+        return
+    numpy_state = np.random.get_state()
+    python_state = random.getstate()
+    try:
+        np.random.seed(seed)
+        random.seed(seed)
+        yield
+    finally:
+        np.random.set_state(numpy_state)
+        random.setstate(python_state)
+
+
+def default_live_points(free_size: int) -> int:
+    """25 per dimension plus a floor of 100 — every nested sampler's default here.
+
+    Below roughly ``25 (n_dim + 1)`` the ellipsoidal (or neural, or
+    region-based) bound is fitted from too few points to be trustworthy, which
+    is where nested sampling starts to *under-cover* rather than merely run
+    slowly; the floor keeps a one- or two-dimensional problem from being
+    sampled by a handful of points.
+
+    Written here rather than in one driver because W5.14 gave ampere three
+    nested samplers (dynesty, nautilus, ultranest) and the reasoning is the
+    same for all three. Naming them the same default is also what makes the
+    engine battery's cross-engine evidence comparison a comparison of the
+    *samplers* rather than of three differently-sized live sets.
+    """
+    return max(100, 25 * (free_size + 1))
 
 
 def _default_walkers(free_size: int) -> int:

@@ -33,6 +33,20 @@ What is here
     Ensemble slice sampling. Needs the ``zeus`` extra -- ``pip install
     ".[zeus]"`` from a checkout (PyPI's ``ampere`` package is unrelated); the
     import is lazy and the refusal names the extra.
+:class:`NautilusEngine`, :class:`UltranestEngine`
+    Two more **nested** samplers, added at W5.14 from the inference-extensions
+    memo's tier 1, sharing one driver
+    (:mod:`ampere.inference._nested`) with each other and the evidence
+    convention with :class:`DynestyEngine`: the engine-neutral triple
+    (``ampere_log_evidence``, ``_err``, ``_method``), the equal-weight
+    resampling rule, and the live-point default. nautilus is importance nested
+    sampling with a neural boundary -- fewer likelihood calls to a given
+    effective sample size, which is the budget that matters for an expensive
+    forward model -- and refuses a one-dimensional problem. ultranest is
+    MLFriends region sampling with a bootstrapped termination criterion and an
+    evidence error whose two halves it keeps apart. **One extra each**
+    (``nautilus``, ``ultranest``), imported lazily in the constructor, and the
+    refusal names the extra.
 :class:`NUTSEngine`
     The No-U-Turn sampler — numpyro's on a jax problem, pyro's on a torch one.
     The first **gradient-based** engine here, and the only one that cannot be
@@ -156,7 +170,7 @@ One caveat, and it is zeus's rather than ampere's: zeus takes no generator and
 draws from *two* process-global streams — numpy's legacy global for its slice
 sampling, and the standard library's ``random`` for the walker pairs its
 default move builds its directions from. :class:`ZeusEngine` seeds and restores
-both around the run (:func:`ampere.inference._zeus._global_seed`); seeding only
+both around the run (:func:`ampere.inference.engine.global_seed`); seeding only
 the first, which is what an inspection of ``zeus/ensemble.py`` alone suggests,
 leaves the run irreproducible in a way that is easy to miss. Being global
 state, a zeus run is not thread-safe against other code drawing from either
@@ -228,6 +242,7 @@ from __future__ import annotations
 
 from ._dynesty import DynestyEngine
 from ._emcee import EmceeEngine
+from ._nested import NESTED_ENGINES, NautilusEngine, UltranestEngine
 from ._nuts import NUTSEngine
 from ._sbi import (
     DEFAULT_TRUNCATION_EPSILON,
@@ -252,6 +267,7 @@ __all__ = [
     "LAYOUTS",
     "MARGINAL_ORDERS",
     "METHODS",
+    "NESTED_ENGINES",
     "SET_EMBEDDINGS",
     "SUMMARY_LAYOUT",
     "TMNRE_SAMPLERS",
@@ -260,8 +276,10 @@ __all__ = [
     "Engine",
     "EngineError",
     "NUTSEngine",
+    "NautilusEngine",
     "SBIEngine",
     "SamplingFailureWarning",
+    "UltranestEngine",
     "VIEngine",
     "ZeusEngine",
 ]
