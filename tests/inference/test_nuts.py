@@ -820,7 +820,7 @@ def shrinkage_problem(kit: Kit, tail: str) -> FittingProblem:
     :func:`~examples.m2_misspecification.many_lines.horseshoe_kernel` is the
     same declaration the M2 study exercises on the reference backend under
     emcee — two nearly degenerate terms under
-    :func:`~ampere.core.regularised_horseshoe` — built here on *kit*'s
+    :func:`~ampere.core.shrinkage_horseshoe` — built here on *kit*'s
     backend instead, at a grid size a short NUTS chain can afford. *tail*
     selects which of the horseshoe's two levels of half-Cauchy is under test:
     ``"regularised"`` (the default) keeps the global scale half-Cauchy and
@@ -854,7 +854,7 @@ def shrinkage_problem(kit: Kit, tail: str) -> FittingProblem:
 class TestTheHorseshoeUnderNUTS:
     """W5.25: the horseshoe's half-Cauchy global scale reaches a gradient path.
 
-    Before this item ``regularised_horseshoe``'s global scale — half-Cauchy
+    Before this item ``shrinkage_horseshoe``'s global scale — half-Cauchy
     under *both* tails (``ampere/core/parameter.py``) — raised
     :class:`~ampere.inference.EngineError` on both differentiable backends,
     because ``halfcauchy`` was in neither's §3.2 table. ``tail="regularised"``

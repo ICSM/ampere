@@ -65,6 +65,7 @@ from __future__ import annotations
 import dataclasses
 import math
 import types
+import warnings
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from typing import Any, Protocol, runtime_checkable
 
@@ -84,6 +85,7 @@ __all__ = [
     "HORSESHOE_TAILS",
     "MAX_FLAT_MEMBERS",
     "SEPARATOR",
+    "SHRINKAGE_HELPER_FRAMEWORK",
     "TORCH_MODULE_NAMES",
     "Bijection",
     "Binding",
@@ -109,6 +111,7 @@ __all__ = [
     "prior_from_spec",
     "regularised_horseshoe",
     "reserved_names",
+    "shrinkage_horseshoe",
 ]
 
 #: Separator between a component label and a local parameter name in a merged
@@ -3446,9 +3449,31 @@ class Parameterised:
 #: tail with an exponential one at the global scale.
 HORSESHOE_SPIKE_SHAPE = 0.5
 
-#: The two declarable tails, in the order :func:`regularised_horseshoe`
+#: The two declarable tails, in the order :func:`shrinkage_horseshoe`
 #: documents them. ``"regularised"`` is the default and the recommended one.
 HORSESHOE_TAILS: tuple[str, ...] = ("regularised", "cauchy")
+
+
+# W5.27: the shrinkage-helper framework's shared note. Spliced onto
+# shrinkage_horseshoe's docstring below and, from ampere/core/kernels.py, onto
+# with_shrinkage's, rather than written out twice, so the two promises cannot
+# drift apart.
+SHRINKAGE_HELPER_FRAMEWORK = """
+The shrinkage-helper framework
+-------------------------------
+
+:func:`shrinkage_horseshoe` is the first of a family, not a one-off: every
+``shrinkage_*`` helper this module declares returns a ``list[Parameter]`` of
+the same shape — the global scale (or scales) first, then one local scale
+per shrunk component, then the re-declared components themselves — because
+that is the order in which a :class:`ParameterSet` can register a
+:class:`HierarchicalPrior` reference: outermost first, or the reference does
+not resolve. :func:`~ampere.core.kernels.with_shrinkage` accepts exactly
+that shape and does not care which ``shrinkage_*`` helper produced it, so a
+future ``shrinkage_spike_slab`` or ``shrinkage_dirichlet_laplace`` joins this
+family — and works with :func:`with_shrinkage` unchanged — the moment it
+returns a declaration in this order, with no further design round needed.
+"""
 
 
 def _horseshoe_leaf(name: str) -> str:
@@ -3464,7 +3489,7 @@ def _horseshoe_leaf(name: str) -> str:
     return head if head else tail
 
 
-def regularised_horseshoe(
+def shrinkage_horseshoe(
     amplitudes: Sequence[str],
     *,
     prefix: str = "shrinkage",
@@ -3568,7 +3593,7 @@ def regularised_horseshoe(
 
     Examples
     --------
-    >>> declaration = regularised_horseshoe(("broad.amplitude", "narrow.amplitude"))
+    >>> declaration = shrinkage_horseshoe(("broad.amplitude", "narrow.amplitude"))
     >>> [parameter.name for parameter in declaration[:3]]
     ['shrinkage.global_scale', 'shrinkage.broad', 'shrinkage.narrow']
     >>> [parameter.name for parameter in declaration[3:]]
@@ -3577,15 +3602,15 @@ def regularised_horseshoe(
     ('shrinkage.global_scale',)
     >>> declaration[3].references
     ('shrinkage.broad',)
-    >>> regularised_horseshoe(("only.amplitude",))
+    >>> shrinkage_horseshoe(("only.amplitude",))
     Traceback (most recent call last):
         ...
-    ampere.core.exceptions.ParameterError: regularised_horseshoe was given 1 amplitude name(s)...
+    ampere.core.exceptions.ParameterError: shrinkage_horseshoe was given 1 amplitude name(s)...
     """
     names = [_check_name(name, "horseshoe amplitude") for name in amplitudes]
     if len(names) < 2:
         raise ParameterError(
-            f"regularised_horseshoe was given {len(names)} amplitude name(s). The global scale "
+            f"shrinkage_horseshoe was given {len(names)} amplitude name(s). The global scale "
             f"is what makes this a sparsity prior — a component the data insist on raises the "
             f"scale every other component is shrunk against — so it takes at least two "
             f"components to be one, rather than an ordinary shrinkage prior on a single "
@@ -3593,24 +3618,24 @@ def regularised_horseshoe(
         )
     if len(set(names)) != len(names):
         raise ParameterError(
-            f"regularised_horseshoe was given a repeated amplitude name in {names}; every "
+            f"shrinkage_horseshoe was given a repeated amplitude name in {names}; every "
             f"component needs its own amplitude and its own local scale."
         )
     if tail not in HORSESHOE_TAILS:
         raise ParameterError(
-            f"regularised_horseshoe's tail={tail!r} is not one of {list(HORSESHOE_TAILS)}."
+            f"shrinkage_horseshoe's tail={tail!r} is not one of {list(HORSESHOE_TAILS)}."
         )
-    scale = _numeric(global_scale, "regularised_horseshoe's global_scale")
+    scale = _numeric(global_scale, "shrinkage_horseshoe's global_scale")
     if not math.isfinite(scale) or scale <= 0.0:
         raise ParameterError(
-            f"regularised_horseshoe's global_scale must be a positive, finite number, got "
+            f"shrinkage_horseshoe's global_scale must be a positive, finite number, got "
             f"{global_scale!r}: it is the prior scale of a scale, so zero pins every component "
             f"to zero and infinity declines to shrink anything."
         )
     leaves = [_horseshoe_leaf(name) for name in names]
     if len(set(leaves)) != len(leaves):
         raise ParameterError(
-            f"regularised_horseshoe derived local-scale names {leaves} from {names}, and two of "
+            f"shrinkage_horseshoe derived local-scale names {leaves} from {names}, and two of "
             f"them collide. Label the summands distinctly — Sum(..., labels=('broad', "
             f"'narrow')) — so that each component's local scale has a name of its own."
         )
@@ -3632,3 +3657,42 @@ def regularised_horseshoe(
         for name, local in zip(names, local_names, strict=True)
     ]
     return declaration
+
+
+shrinkage_horseshoe.__doc__ = f"{shrinkage_horseshoe.__doc__}\n{SHRINKAGE_HELPER_FRAMEWORK}"
+
+
+def regularised_horseshoe(
+    amplitudes: Sequence[str],
+    *,
+    prefix: str = "shrinkage",
+    global_scale: float = 1.0,
+    tail: str = "regularised",
+    unit: Any = None,
+) -> list[Parameter]:
+    """Deprecated alias for :func:`shrinkage_horseshoe` (W5.27).
+
+    The name ``regularised_horseshoe`` promised Piironen & Vehtari's slab tail;
+    the default (``tail="regularised"``) is in fact a gamma-tailed sibling of
+    it (see :func:`shrinkage_horseshoe`'s docstring, "The regularisation"), so
+    the name promised one prior and the code delivered another. W5.27 renamed
+    the function to :func:`shrinkage_horseshoe`, which also names the family
+    of ``shrinkage_*`` helpers it is the first of. This alias is kept, with a
+    :class:`DeprecationWarning`, for callers not yet migrated, and is
+    scheduled for removal in **Phase 6**. It takes the same arguments and
+    returns exactly what :func:`shrinkage_horseshoe` returns for them.
+    """
+    warnings.warn(
+        "ampere.core.regularised_horseshoe is deprecated since W5.27 and will be removed in "
+        "Phase 6; use ampere.core.shrinkage_horseshoe instead (same signature, same return "
+        "value).",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return shrinkage_horseshoe(
+        amplitudes,
+        prefix=prefix,
+        global_scale=global_scale,
+        tail=tail,
+        unit=unit,
+    )

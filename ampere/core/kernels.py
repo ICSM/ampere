@@ -67,6 +67,7 @@ import scipy.stats as st
 
 from .exceptions import LikelihoodError
 from .parameter import (
+    SHRINKAGE_HELPER_FRAMEWORK,
     HierarchicalPrior,
     Identity,
     Log,
@@ -3189,7 +3190,7 @@ del _kernel_type, _builder
 def with_shrinkage(kernel: Kernel, declaration: Sequence[Parameter]) -> Kernel:
     """A copy of *kernel* carrying a shrinkage declaration over its amplitudes.
 
-    :func:`~ampere.core.regularised_horseshoe` returns the declaration; this
+    :func:`~ampere.core.shrinkage_horseshoe` returns the declaration; this
     puts it on a kernel. The two are separate because the declaration is a
     statement about parameters (``parameters.md`` §9) and this is the one hook
     the kernel contract needs for it.
@@ -3225,7 +3226,7 @@ def with_shrinkage(kernel: Kernel, declaration: Sequence[Parameter]) -> Kernel:
         named amplitudes works.
     declaration
         Parameters, **outermost first** — what
-        :func:`~ampere.core.regularised_horseshoe` returns. Every name that
+        :func:`~ampere.core.shrinkage_horseshoe` returns. Every name that
         the kernel already declares replaces that parameter; every name it does
         not is added ahead of them.
 
@@ -3243,11 +3244,11 @@ def with_shrinkage(kernel: Kernel, declaration: Sequence[Parameter]) -> Kernel:
 
     Examples
     --------
-    >>> from ampere.core.parameter import regularised_horseshoe
+    >>> from ampere.core.parameter import shrinkage_horseshoe
     >>> kernel = Sum(Matern32(0.3, 0.01), Matern32(0.3, 0.001),
     ...              labels=("broad", "narrow"))
     >>> shrunk = with_shrinkage(
-    ...     kernel, regularised_horseshoe(("broad.amplitude", "narrow.amplitude"))
+    ...     kernel, shrinkage_horseshoe(("broad.amplitude", "narrow.amplitude"))
     ... )
     >>> shrunk.parameters.names[:3]
     ('shrinkage.global_scale', 'shrinkage.broad', 'shrinkage.narrow')
@@ -3265,7 +3266,7 @@ def with_shrinkage(kernel: Kernel, declaration: Sequence[Parameter]) -> Kernel:
         if not isinstance(parameter, Parameter):
             raise LikelihoodError(
                 f"with_shrinkage's declaration must be Parameters — what "
-                f"regularised_horseshoe returns — got {type(parameter).__name__}."
+                f"shrinkage_horseshoe returns — got {type(parameter).__name__}."
             )
     replacements = {parameter.name: parameter for parameter in given}
     existing = tuple(kernel.parameters.names)
@@ -3285,3 +3286,8 @@ def with_shrinkage(kernel: Kernel, declaration: Sequence[Parameter]) -> Kernel:
     shrunk.__dict__["_bound_cache"] = {}
     shrunk.__dict__["HYPERPARAMETERS"] = tuple(shrunk.parameters.names)
     return shrunk
+
+
+# W5.27: shared with ampere.core.parameter.shrinkage_horseshoe's docstring
+# rather than restated here.
+with_shrinkage.__doc__ = f"{with_shrinkage.__doc__}\n{SHRINKAGE_HELPER_FRAMEWORK}"

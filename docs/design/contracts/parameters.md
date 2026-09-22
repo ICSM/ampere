@@ -770,7 +770,7 @@ True
 
 ```
 
-### `regularised_horseshoe` — sparsity over a set of amplitudes (*Added W5.8*)
+### `shrinkage_horseshoe` — sparsity over a set of amplitudes (*Added W5.8; Amended W5.27*: renamed — its old name promised Piironen & Vehtari's slab and the default tail is a gamma-tailed sibling of it instead, so the name over-promised; the old name is kept as a deprecated alias)
 
 The one named declaration this contract ships, because it is the one the plan
 asks for by name: the sparsity guard on the amplitudes of a `Sum` of noise

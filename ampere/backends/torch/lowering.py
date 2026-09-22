@@ -804,7 +804,7 @@ def _hierarchical_expon(arguments: dict[str, torch.Tensor]) -> dist.Distribution
 def _hierarchical_gamma(arguments: dict[str, torch.Tensor]) -> dist.Distribution:
     """``Gamma(concentration=a, rate=1/scale)``, with ``a`` a tensor like everything else.
 
-    ``regularised_horseshoe``'s local scale under ``tail="regularised"`` (the
+    ``shrinkage_horseshoe``'s local scale under ``tail="regularised"`` (the
     default) is exactly this: ``HierarchicalPrior("gamma", {"scale": ...},
     kwds={"a": HORSESHOE_SPIKE_SHAPE})`` — a fixed shape and a referenced
     scale. ``lower_hierarchical`` already folds a constant ``kwds`` entry
@@ -847,7 +847,7 @@ def _hierarchical_gamma(arguments: dict[str, torch.Tensor]) -> dist.Distribution
 #: because its ``numargs`` is nonzero regardless of whether the shape is
 #: fixed or referenced, so a caller declaring a hierarchical ``gamma`` must
 #: supply ``bijection=`` explicitly — which is exactly what
-#: ``regularised_horseshoe`` does for its local scale under
+#: ``shrinkage_horseshoe`` does for its local scale under
 #: ``tail="regularised"``.
 _HIERARCHICAL_BUILDERS: dict[str, Any] = {
     "norm": _hierarchical_norm,

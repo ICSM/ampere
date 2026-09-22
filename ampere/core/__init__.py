@@ -215,9 +215,12 @@ from .parameter import (
     describe_prior,
     log_density,
     prior_from_spec,
-    # W5.8 -- the sparsity prior for summed noise components (appended).
-    regularised_horseshoe,
     reserved_names,
+    # W5.8 -- the sparsity prior for summed noise components (appended); W5.27
+    # renamed it to shrinkage_horseshoe and kept regularised_horseshoe as a
+    # deprecated alias (both exported here, new name first).
+    shrinkage_horseshoe,
+    regularised_horseshoe,
 )
 from ._pickling import register as _register_pickle_support
 from .rng import (
@@ -497,6 +500,7 @@ __all__ = [
     "run_registrant_battery",
     "sample_coordinates",
     "sample_observations_of",
+    "shrinkage_horseshoe",
     "simulate_batched_of",
     "substream",
     "term_provenance_entries",

@@ -36,9 +36,11 @@ from ampere.core import (
     describe_prior,
     log_density,
     prior_from_spec,
-    # W5.8 -- the sparsity prior for summed noise components (appended).
-    regularised_horseshoe,
     reserved_names,
+    # W5.8 -- the sparsity prior for summed noise components (appended); W5.27
+    # renamed it and kept the old name as a deprecated alias (both tested).
+    shrinkage_horseshoe,
+    regularised_horseshoe,
 )
 from ampere.core.parameter import TORCH_MODULE_NAMES
 from ampere.core.exceptions import (
@@ -1436,8 +1438,8 @@ class TestTheReservedNamespace:
 # ---------------------------------------------------------------------------
 
 
-class TestTheRegularisedHorseshoe:
-    """``regularised_horseshoe`` is a declaration, and these are its properties.
+class TestTheShrinkageHorseshoe:
+    """``shrinkage_horseshoe`` is a declaration, and these are its properties.
 
     The *science* of it — that it shrinks a redundant noise component — is
     ``tests/m2/test_many_lines.py``'s to establish, and it costs chains.
@@ -1450,7 +1452,7 @@ class TestTheRegularisedHorseshoe:
     NAMES = ("broad.amplitude", "narrow.amplitude")
 
     def test_it_declares_three_levels_in_dependency_order(self) -> None:
-        declaration = regularised_horseshoe(self.NAMES)
+        declaration = shrinkage_horseshoe(self.NAMES)
         assert [p.name for p in declaration] == [
             "shrinkage.global_scale",
             "shrinkage.broad",
@@ -1475,7 +1477,7 @@ class TestTheRegularisedHorseshoe:
         levels outermost first and ``ampere.core.with_shrinkage`` keeps them
         that way.
         """
-        declaration = regularised_horseshoe(self.NAMES)
+        declaration = shrinkage_horseshoe(self.NAMES)
         declared = ParameterSet(declaration)
         assert declared.free_size == 5
         assert declared.names[:3] == (
@@ -1499,12 +1501,12 @@ class TestTheRegularisedHorseshoe:
 
     def test_every_level_is_positive_and_log_bijected(self) -> None:
         """An amplitude and the scales of an amplitude all live on the half-line."""
-        for parameter in regularised_horseshoe(self.NAMES):
+        for parameter in shrinkage_horseshoe(self.NAMES):
             assert isinstance(parameter.unconstraining_bijection(), Log)
 
     def test_the_unit_reaches_every_level(self) -> None:
         """A scale and the thing it scales are the same kind of quantity."""
-        for parameter in regularised_horseshoe(self.NAMES, unit=u.Jy):
+        for parameter in shrinkage_horseshoe(self.NAMES, unit=u.Jy):
             assert parameter.unit == u.Jy
 
     @pytest.mark.parametrize(
@@ -1519,18 +1521,18 @@ class TestTheRegularisedHorseshoe:
         ``lowering.md`` §3.2's table for both torch and jax where ``halfcauchy``
         is in neither.
         """
-        declaration = regularised_horseshoe(self.NAMES, tail=tail)
+        declaration = shrinkage_horseshoe(self.NAMES, tail=tail)
         assert declaration[1].prior.family == family
         assert declaration[0].prior.dist.name == "halfcauchy"
         assert declaration[3].prior.family == "halfnorm"
 
     def test_the_global_scale_sets_the_prior_scale_of_the_global_level(self) -> None:
-        declaration = regularised_horseshoe(self.NAMES, global_scale=0.05)
+        declaration = shrinkage_horseshoe(self.NAMES, global_scale=0.05)
         assert describe_prior(declaration[0].prior).kwds["scale"] == pytest.approx(0.05)
 
     def test_it_samples_from_its_own_joint(self) -> None:
         """The chain evaluates: three levels resolved in order, finite throughout."""
-        declared = ParameterSet(regularised_horseshoe(self.NAMES, global_scale=0.05))
+        declared = ParameterSet(shrinkage_horseshoe(self.NAMES, global_scale=0.05))
         drawn = declared.sample(np.random.default_rng(0))
         assert set(drawn) == set(declared.names)
         assert all(math.isfinite(float(value)) and float(value) >= 0.0 for value in drawn.values())
@@ -1539,18 +1541,41 @@ class TestTheRegularisedHorseshoe:
     def test_one_component_is_refused_by_name(self) -> None:
         """A horseshoe over one amplitude has nothing to be sparse against."""
         with pytest.raises(ParameterError, match="sparsity prior"):
-            regularised_horseshoe(("only.amplitude",))
+            shrinkage_horseshoe(("only.amplitude",))
 
     def test_colliding_local_names_are_refused_by_name(self) -> None:
         """Two unlabelled amplitudes would share a local scale silently."""
         with pytest.raises(ParameterError, match="collide"):
-            regularised_horseshoe(("a.amplitude", "a.length_scale"))
+            shrinkage_horseshoe(("a.amplitude", "a.length_scale"))
 
     @pytest.mark.parametrize("bad", [0.0, -1.0, float("inf")])
     def test_a_global_scale_that_is_not_a_positive_number_is_refused(self, bad: float) -> None:
         with pytest.raises(ParameterError, match="positive, finite"):
-            regularised_horseshoe(self.NAMES, global_scale=bad)
+            shrinkage_horseshoe(self.NAMES, global_scale=bad)
 
     def test_an_unknown_tail_is_refused_naming_the_two(self) -> None:
         with pytest.raises(ParameterError, match="is not one of"):
-            regularised_horseshoe(self.NAMES, tail="slab")
+            shrinkage_horseshoe(self.NAMES, tail="slab")
+
+
+class TestTheRegularisedHorseshoeAlias:
+    """``regularised_horseshoe`` is W5.27's deprecated alias for the above.
+
+    It exists so that a caller who has not migrated yet still gets the same
+    declaration, with one warning naming the replacement and the phase the
+    alias goes in.
+    """
+
+    NAMES = ("broad.amplitude", "narrow.amplitude")
+
+    def test_it_warns_once_naming_the_replacement_and_the_phase(self) -> None:
+        with pytest.warns(DeprecationWarning, match="Phase 6") as caught:
+            regularised_horseshoe(self.NAMES)
+        assert len(caught) == 1
+        assert "shrinkage_horseshoe" in str(caught[0].message)
+
+    def test_it_returns_exactly_what_the_new_name_returns(self) -> None:
+        with pytest.warns(DeprecationWarning):
+            aliased = regularised_horseshoe(self.NAMES, global_scale=0.05, tail="cauchy", unit=u.Jy)
+        direct = shrinkage_horseshoe(self.NAMES, global_scale=0.05, tail="cauchy", unit=u.Jy)
+        assert aliased == direct
