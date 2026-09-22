@@ -1507,23 +1507,17 @@ class TestServingANamedArtefact:
         assert mismatch == {"budget": [150, 160]}
 
         # Calibration works on the served posterior exactly as on a trained one.
-        # ``calibrate()`` samples the posterior for its SBC ranks through
-        # ``sbi.diagnostics.run_sbc`` without going through ``self._seeded``
-        # (unlike ``run()``, which reseeds torch's *global* generator before
-        # every draw and restores it afterwards) -- an existing gap, out of
-        # this item's scope, that leaves torch's global RNG advanced by
-        # however many draws SBC took. Saved and restored here so this test
-        # does not perturb an unrelated, later test's own calibration numbers
-        # by way of shared global state (found while adding this test: it
-        # intermittently moved ``TestTheCalibrationFastPath``'s TARP
-        # thresholds when run earlier in the same session).
-        import torch
-
-        torch_state = torch.get_rng_state()
-        try:
-            report = engine.calibrate(count=8, posterior_draws=8, tarp=False)
-        finally:
-            torch.set_rng_state(torch_state)
+        # ``calibrate()`` used to sample the posterior for its SBC ranks
+        # through ``sbi.diagnostics.run_sbc`` without going through
+        # ``self._seeded`` (unlike ``run()``, which reseeds torch's *global*
+        # generator before every draw and restores it afterwards), leaving
+        # torch's global RNG advanced by however many draws SBC took --
+        # caught here first, by ``TestTheCalibrationFastPath``'s TARP
+        # thresholds intermittently moving when this test ran earlier in the
+        # same session. W5.28(j) closed the gap: ``calibrate()`` now saves
+        # and restores torch's (and numpy's legacy global) state itself, so
+        # this test no longer has to do it by hand to protect its neighbours.
+        report = engine.calibrate(count=8, posterior_draws=8, tarp=False)
         assert report is not None
 
     def test_a_matching_digest_serves_with_an_empty_mismatch_and_no_warning(
@@ -2413,6 +2407,56 @@ class TestTorchIsSeededFromTheProblem:
     def test_the_attr_is_an_int_for_a_seeded_problem(self) -> None:
         run = SBIEngine(bounded_problem(SEED), **self.NPE_SETTINGS).run(**self.NPE_OPTIONS)
         assert isinstance(run.attrs["ampere_sbi_torch_seed"], int)
+
+
+@needs_sbi
+class TestCalibrateReseedsTorch:
+    """W5.28(j): ``calibrate()`` reseeds torch as ``run()`` does, for the same reason.
+
+    Before this, the SBC batch's truncated-prior draws and ``sbi``'s own
+    ``run_sbc``/``run_tarp`` sampled through torch's (and, for a slice-MCMC
+    posterior, numpy's legacy global) generator with no reseed of their own --
+    found live in ``TestServingANamedArtefact``'s workaround, which had to
+    save and restore torch's RNG state by hand around a ``calibrate()`` call
+    to stop it perturbing this class's own TARP thresholds when run earlier in
+    the same session. Two calibrations of the *same trained posterior*, with
+    *different* torch global state walking in, must now agree bitwise --
+    calibrate() must not care what state it inherits, the same guarantee
+    ``run()``'s own final draw already has.
+    """
+
+    SETTINGS: ClassVar[dict[str, Any]] = {"method": "npe", "budget": 120}
+    OPTIONS: ClassVar[dict[str, Any]] = {"draws": 10, "training": {"max_num_epochs": 2}}
+
+    def test_two_calibrations_of_the_same_posterior_repeat_bitwise(self) -> None:
+        import torch
+
+        first_engine = SBIEngine(bounded_problem(SEED), **self.SETTINGS)
+        first_engine.run(**self.OPTIONS)
+        torch.manual_seed(1)  # an arbitrary global state walking into calibrate()
+        first = first_engine.calibrate(count=12, posterior_draws=8, tarp=True)
+
+        second_engine = SBIEngine(bounded_problem(SEED), **self.SETTINGS)
+        second_engine.run(**self.OPTIONS)
+        torch.manual_seed(999)  # a *different* arbitrary state
+        second = second_engine.calibrate(count=12, posterior_draws=8, tarp=True)
+
+        np.testing.assert_array_equal(np.asarray(first["ranks"]), np.asarray(second["ranks"]))
+        np.testing.assert_allclose(
+            np.asarray(first["tarp_coverage"]), np.asarray(second["tarp_coverage"]), atol=0.0
+        )
+
+    def test_calibrate_restores_torchs_global_state_on_exit(self) -> None:
+        """The other half of the contract ``_seeded`` states: nothing leaks out."""
+        import torch
+
+        engine = SBIEngine(bounded_problem(SEED), **self.SETTINGS)
+        engine.run(**self.OPTIONS)
+        torch.manual_seed(20260922)
+        before = torch.get_rng_state().clone()
+        engine.calibrate(count=12, posterior_draws=8, tarp=True)
+        after = torch.get_rng_state()
+        torch.testing.assert_close(before, after)
 
 
 # ---------------------------------------------------------------------------
