@@ -891,9 +891,16 @@ ruled by Peter 2026-09-10 on the inference-extensions memo §5, §7.1–7.2)*.
   `"none"` for an exact sampler (emcee, zeus, dynesty, NUTS — nested
   sampling's *equal-weighted* draws count as exact here, per the rule above),
   or the approximating family for one that is not —
-  `"mean_field"`/`"multivariate"` for `VIEngine`'s guide,
-  `"density_estimator"` for `SBIEngine`'s trained network, whichever of NPE,
-  NLE, NRE or TMNRE produced it. This is the one key `plot_trace` and the new
+  `"mean_field"`/`"multivariate"`/`"laplace"`/`"normalising_flow"` for
+  `VIEngine`'s four guide families (*Amended W5.14*: the last two), `"pathfinder"`
+  for `BlackjaxEngine(method="pathfinder")` (*Amended W5.14*; its MCLMC method
+  writes `"none"`, being a Markov chain whose discretisation bias is recorded
+  under the engine's own names — `inference.md` §10), `"density_estimator"`
+  for `SBIEngine`'s trained network, whichever of NPE, NLE, NRE or TMNRE
+  produced it. Its **absence** is not a state: every run carries it. The
+  evidence triple, by contrast, is absent on a run whose engine estimates no
+  evidence (MCLMC, Pathfinder, VI, SBI), and that absence is the meaningful
+  state the W5.14 battery asserts (*Amended W5.14*). This is the one key `plot_trace` and the new
   `ampere.results.summary` check before reporting an R-hat, an ESS or a
   trace shape that means nothing for a run that was never a Markov chain.
 - **`ampere_log_evidence`**, **`ampere_log_evidence_err`** and
