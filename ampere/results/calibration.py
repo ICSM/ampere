@@ -448,7 +448,16 @@ def replace_observations(
         # simulated -- so the study would report the calibration of a model
         # nobody asked about, and would report it as undercoverage, which is
         # exactly the signal a joint noise model exists to remove.
-        DatasetCollection(rebuilt, joint=dict(problem.datasets.joint) or None),
+        # W5.28(a): the shared/hyperprior parameter set is carried over the same
+        # way -- dropping it would silently turn a population-level replica into
+        # an independent one, reporting the calibration of a model nobody asked
+        # about (the same failure mode as the joint noise groups, above).
+        DatasetCollection(
+            rebuilt,
+            joint=dict(problem.datasets.joint) or None,
+            shared=problem.datasets.shared,
+            shared_label=problem.datasets.shared_label,
+        ),
         ties=problem.ties,
         seed=seed,
         strict=problem.strict,

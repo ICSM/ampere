@@ -48,9 +48,11 @@ matplotlib.use("Agg")
 
 from ampere.core import (
     Dataset,
+    DatasetCollection,
     FittingProblem,
     Model,
     Parameter,
+    ParameterSet,
     Spectrum,
 )
 from ampere.core.exceptions import ResultsError
@@ -205,6 +207,34 @@ class TestReplaceObservations:
         problem = toy_problem()
         with pytest.raises(ResultsError, match="line"):
             replace_observations(problem, {})
+
+    def test_the_shared_parameter_set_survives_the_replica(self) -> None:
+        """W5.28(a): a population-level ``shared`` set must not vanish on replay.
+
+        Before this fix, ``replace_observations`` rebuilt the collection with
+        only ``joint`` carried over, so a replica silently lost its
+        hyperprior component -- turning a population-level SBC run into an
+        independent one without any error.
+        """
+        observed = Spectrum(
+            GRID * u.um,
+            (2.0 * GRID + 0.5) * u.Jy,
+            uncertainty=np.full(GRID.size, 0.5) * u.Jy,
+        )
+        hyper = ParameterSet([Parameter("mu_slope", st.norm(2.0, 0.6))])
+        datasets = DatasetCollection(
+            {"line": Dataset(observed, label="line")},
+            shared=hyper,
+            shared_label="hyper",
+        )
+        problem = FittingProblem(Line(), datasets, seed=SEED)
+        simulation = problem.simulate(observe=True, rng=np.random.default_rng(2))
+        assert not simulation.failed and simulation.observations is not None
+
+        replica = replace_observations(problem, simulation.observations, seed=17)
+
+        assert replica.datasets.shared is hyper
+        assert replica.datasets.shared_label == "hyper"
 
 
 # ---------------------------------------------------------------------------
