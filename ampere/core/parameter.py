@@ -27,6 +27,10 @@ What lives here
 :class:`Plate`
     Declarative plate-aware grouping: N members sharing hyperparameters. The
     population-model hook the plan's design horizon (d) asks to keep open.
+:class:`Population`
+    The same hierarchy declared at *composition* time, over components that
+    were written independently — the counterpart :class:`Tie` has always had
+    for sharing (**W5.12**).
 :class:`Tie`, :class:`Binding`, :class:`ParameterMapping`
     Tying/sharing across models and datasets, and the result of merging.
 :class:`Parameterised`
