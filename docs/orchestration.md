@@ -110,7 +110,10 @@ surveys 123–152 k each on Opus.
 
 - **Agents never wait for gates.** An agent runs the quick checks (lint,
   format, typecheck, the import sweep) and the *targeted* test files its
-  item touches, each command under ten minutes, then commits and reports.
+  item touches, each command under **five** minutes (amended 2026-09-22
+  from ten — the subagent cache lives five; a longer run goes detached
+  with a keep-warm poll, see the re-evaluation below), then commits and
+  reports.
   The five-suite gates run **once per merged wave** on master, launched by
   the orchestrator as a detached shell chain (`nohup … flock … &`) that
   needs no model; failures come back to a cheap fix-up agent with the log
@@ -163,3 +166,73 @@ coding cost is unchanged; the gate wall clock is unchanged but no longer
 holds a context open. The first wave's four agents would have finished
 their reports within about ninety minutes each instead of three to four
 hours, well inside one usage window.
+
+### Re-evaluation (2026-09-22, Fable; **ruled by Peter the same day: all five adopted, the lifetime cap soft**)
+
+**Method.** Every request in the project's 126 session transcripts since
+31 August (22 419 requests; main sessions and subagents), weighted at the
+API's relative rates — cache read 0.1, cache write 1.25, fresh input 1,
+output 5. The script is not in the repository; the numbers are.
+
+**Where the tokens went.** Cache reads 71 %, cache writes 22 %, output
+6.5 %; subagents 89 % of the total, main sessions 11 %; Opus 61 %,
+Sonnet 26 %, Fable 13 %. The bill is context size × request count, not
+what is written.
+
+**Finding 1 — the cache tier.** Every main session since 11 September ran
+on the one-hour cache; **every subagent ran on the five-minute cache**
+(the transcripts record the tier). The "under ten minutes" rule was
+therefore wrong by construction for agents: since the 15 September
+ruling, 16 agents suffered 68 cold restarts after gaps of five minutes
+or more (median gap 9.8 min — a targeted test run), costing 16 % of all
+agent usage; touching the cache every four minutes instead would have
+cost a third of that.
+
+**Finding 2 — context size is first-order.** Requests over 300 k of
+context carried 63 % of all cost; capping every request at 200 k would
+have left the total at 63 % of what it was. The heaviest agents made 500
+to 850 requests at 280 to 390 k average context. Tool-result volume is
+small (about 9 M tokens across every agent ever), so contexts are not
+built from a few huge reads: they accumulate over hundreds of turns, and
+the largest single items are still whole reads of 60–75 k-character
+modules and design documents.
+
+**Rules adopted (in force from wave 5).**
+
+1. **Soft lifetime cap with a hand-off.** An agent past **250 k of
+   context, or about 300 tool uses, or 2.5 hours**, whichever first, does
+   not start a new unit of work: it finishes the unit in hand (never
+   mid-edit; a WIP commit if the boundary cannot be reached cleanly),
+   commits, and returns a report with a **Hand-off** section — what is
+   done, what remains per Accept criterion, the exact next step, the
+   files it owns, and anything learned that the item text lacks — the
+   same text in its last commit message body, so the state survives an
+   interruption. The orchestrator dispatches a successor on the same
+   branch within the hour, same tier unless the remainder is mechanical.
+   Two items are never sequenced through one agent (W5.11 → W5.10, 494
+   requests, 12 cold restarts, 4.7 hours, is the counter-example).
+2. **Five minutes, not ten.** Any command expected to exceed four minutes
+   runs detached (`nohup setsid bash -c "flock /tmp/ampere-gate.lock pixi
+   run -e <env> pytest <files> -q --tb=short > <log> 2>&1; echo DONE >>
+   <log>" &`) and is polled with `sleep 240; tail -3 <log>` — one poll
+   per turn, each a cached read; never a foreground sleep beyond the
+   cache. Split a targeted run that cannot fit by file.
+3. **Verify the tier on the next dispatch.** The orchestrator reads the
+   first wave-5 agent's transcript (`grep -c 'ephemeral_1h_input_tokens":[1-9]'
+   <transcript>` against the `5m` sibling) and records here whether
+   subagents can be given the one-hour cache; if a harness setting does
+   it, rule 2 becomes advice.
+4. **Design documents by section.** A contract or design page (60 k
+   characters each) is never read whole: the item's read-ranges are the
+   default, and anything beyond them is located with `grep -n` and read
+   as a range. The same for `likelihood.py` and `dataset.py`.
+5. **Batch verification.** Lint, format-check, typecheck and the import
+   sweep are one command; independent checks share a call; every
+   command's output is trimmed (`-q --tb=short`, `tail`, `grep`) before
+   it enters the context — never `cat` a log.
+
+**Expected effect.** Rule 1 is the large one — a quarter to a third of
+agent cost if the average context comes down toward 200 k; rule 2 removes
+about two thirds of the 16 %; rules 4 and 5 slow the growth that rule 1
+caps. Main-session cost is fine as it is. Re-measure after wave 6 with
+the same method.
