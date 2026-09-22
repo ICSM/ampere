@@ -1623,7 +1623,7 @@ class PlateBinding:
 #:
 #: The flat layout is the tie-based pattern ``parameters.md`` §9 documents —
 #: one :class:`Parameter` object per member — and ``lnprior`` is O(number of
-#: ``Parameter`` objects. ``hierarchical_population.md`` §7 measured about
+#: ``Parameter`` objects). ``hierarchical_population.md`` §7 measured about
 #: 800 ms per ``lnprior`` at N = 1000 against 0.6 ms for the same structure
 #: declared as one plate. The limit is deliberately generous (a population of
 #: a hundred objects still fits in well under a millisecond) and deliberately
