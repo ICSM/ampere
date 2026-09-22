@@ -1891,15 +1891,21 @@ class DatasetCollection(Mapping[str, Dataset]):
                     f"component; pass over=[...] if the sharing is deliberate."
                 )
             over = named
-        population = Population(
-            name,
-            members=members,
-            hyperpriors=hyperpriors,
-            over=over,
-            layout=layout,
-            label=label,
+        # Set on the collection just built rather than building a second one:
+        # ``joint`` noise groups are registered in ``__init__``, and running
+        # that twice to learn the dataset order would register them twice.
+        # Nothing else has seen this object yet.
+        collection._populations = (
+            Population(
+                name,
+                members=members,
+                hyperpriors=hyperpriors,
+                over=over,
+                layout=layout,
+                label=label,
+            ),
         )
-        return cls(dict(collection), populations=[population], **kwargs)
+        return collection
 
     @property
     def populations(self) -> tuple[Population, ...]:
