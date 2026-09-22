@@ -1247,9 +1247,34 @@ def _check_against_file(tree: Any, slots: Mapping[str, _Slot]) -> None:
 
 
 def _concatenate(xarray: Any, existing: Any, addition: Any) -> Any:
-    """Grow the ``sample`` dimension, leaving the shared coordinates alone."""
+    """Grow the ``sample`` dimension, leaving the shared coordinates alone.
+
+    W5.28(g): checked here, once, for every group there is or ever will be —
+    rather than left to each optional group's own guard
+    (:func:`_check_context` is today's only one). Indexing *addition* by
+    *existing*'s own group paths, unchecked, has two failure modes: a group
+    *existing* carries and *addition* does not raises a bare ``KeyError`` out
+    of ``addition[name]`` with no word of what training-set rule it broke, and
+    a group *addition* carries that *existing* does not is never looked at
+    (this loop only ever walks *existing*'s paths), so it is silently dropped
+    from the merged file. Both are the same mistake ``_check_against_file``
+    and ``_check_context`` refuse for the groups they already know about;
+    this refuses it for any group, known to this module or not.
+    """
+    existing_paths = set(_group_paths(existing))
+    addition_paths = set(_group_paths(addition))
+    if existing_paths != addition_paths:
+        missing = sorted(existing_paths - addition_paths)
+        extra = sorted(addition_paths - existing_paths)
+        raise ResultsError(
+            f"this batch's groups do not match the training set's: "
+            f"{f'the file has {missing} and the batch does not. ' if missing else ''}"
+            f"{f'the batch has {extra} and the file does not. ' if extra else ''}"
+            f"A set is one shape throughout, optional groups included; append a batch that "
+            f"carries exactly the same groups the file does, or write a new set."
+        )
     groups: dict[str, Any] = {}
-    for name in sorted(_group_paths(existing)):
+    for name in sorted(existing_paths):
         old = existing[name].dataset
         if name == COORDINATES_GROUP:
             _check_coordinates(old, addition[name].dataset)
