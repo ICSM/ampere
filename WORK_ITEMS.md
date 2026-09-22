@@ -2424,7 +2424,10 @@ fix is a per-row change with the reason, run on the runner to confirm.
 **The runner is deterministic**: the second run (`35688582595`, on
 `3cc97c7`) reproduced both values to every printed digit (0.01983926 and
 0.05119422), so a fix can be verified on CI by one push rather than by
-repetition. Minutes are free on the public repository,
+repetition. **Run `35785421357` on `3eeb2d3` (2026-09-22): the
+reduced-rank row now fails on torch too** (0.0443 against 0.0351 allowed,
+with jax at 0.0452 against 0.0341), so the fix is for the row itself, not
+for one backend's parametrisation. Minutes are free on the public repository,
 so the extra environment restores are accepted. **Not in scope:**
 pytest-xdist (needs per-worker registry snapshots — record it as a
 follow-on if the numbers say it is worth it); changing any pinned margin.
@@ -2467,8 +2470,7 @@ W5.2's pattern for the second half of the phase: the small owed items the
 wave-3 and wave-4 reviews recorded, each with a test where behaviour
 changes. (a) `replace_observations` also drops `shared=` / `shared_label=`
 (W5.9); (b) `ampere.results.sbc` ranks posterior variables only — state it
-or rank the derived groups too (W5.7's carried); (c) a `summarise`-side
-helper reporting the evidence `B` (W5.0/W5.13); (d) `QuasisepGP.condition
+or rank the derived groups too (W5.7's carried); (c) a `summarise`-side helper reporting `RotationCoupling`'s matrix `B` rather than its bimodal angle parameterisation (W5.9's carried note; the first draft of this item mis-cited it as "the evidence `B` (W5.0/W5.13)" — corrected 2026-09-22 at review; the agent read it correctly from the code); (d) `QuasisepGP.condition
 (at=...)` on a multi-axis container — refuse by name or implement (W5.3);
 (e) `_GriddedSolver` is private but is the extension point W5.5's template
 names — make it public with a docstring or name the public route;
