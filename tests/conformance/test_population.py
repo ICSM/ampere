@@ -181,8 +181,9 @@ class TestTheDeclaration:
         assert plated.references == ("objects.mu", "objects.sigma")
         # The members' own declaration of ``slope`` is gone: the element
         # binding is what reaches them now, which is H-2's whole point.
-        assert not any(name.endswith(".slope") for name in problem.parameters.names[:-1])
-        assert "objects.slope" in problem.parameters.names
+        assert [name for name in problem.parameters.names if name.endswith("slope")] == [
+            "objects.slope"
+        ]
 
     def test_every_member_is_addressed_by_its_own_index(self, backend: ConformanceBackend) -> None:
         problem = build_population_problem(backend)
