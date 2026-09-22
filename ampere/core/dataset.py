@@ -148,8 +148,10 @@ from .likelihood import (
 )
 from .parameter import (
     SEPARATOR,
+    Parameter,
     ParameterMapping,
     ParameterSet,
+    Population,
     Tie,
     Value,
 )
@@ -1733,7 +1735,14 @@ class DatasetCollection(Mapping[str, Dataset]):
     ['sed', 'spectrum']
     """
 
-    __slots__ = ("_datasets", "_group_of", "_joint", "_shared", "_shared_label")
+    __slots__ = (
+        "_datasets",
+        "_group_of",
+        "_joint",
+        "_populations",
+        "_shared",
+        "_shared_label",
+    )
 
     def __init__(
         self,
@@ -1742,6 +1751,7 @@ class DatasetCollection(Mapping[str, Dataset]):
         joint: Mapping[str, NoiseModel] | None = None,
         shared: ParameterSet | None = None,
         shared_label: str = SHARED_COMPONENT,
+        populations: Sequence[Population] = (),
     ) -> None:
         built: dict[str, Dataset] = {}
         pairs: Iterable[tuple[str, Dataset]]
@@ -1803,6 +1813,109 @@ class DatasetCollection(Mapping[str, Dataset]):
                 f"dataset label. Pass shared_label='...' to separate them."
             )
         self._joint, self._group_of = self._register_joint(joint)
+        for population in populations:
+            if not isinstance(population, Population):
+                raise DatasetError(
+                    f"a DatasetCollection's populations must be Population instances, got "
+                    f"{type(population).__name__}."
+                )
+        self._populations = tuple(populations)
+
+    # -- a plate of datasets (W5.12) -----------------------------------------
+
+    @classmethod
+    def plate(
+        cls,
+        name: str,
+        datasets: Mapping[str, Dataset] | Iterable[Dataset],
+        *,
+        members: Sequence[Parameter] = (),
+        hyperpriors: Sequence[Parameter] = (),
+        over: Sequence[str] | None = None,
+        layout: str = "plate",
+        label: str | None = None,
+        **kwargs: Any,
+    ) -> DatasetCollection:
+        """A collection of datasets fitted as one population (**W5.12**).
+
+        ``inference.md`` §9's *plate of datasets* — the IFU sketch's gap 1,
+        and limitation 17.6's named convenience. The N datasets are still
+        built by the caller, because each carries its own observations; what
+        this factory removes is the population wiring, which was otherwise N
+        hand-written :class:`~ampere.core.parameter.PlateBinding`\\ s or N
+        rewritten parameter sets.
+
+        Parameters
+        ----------
+        name
+            The population's name; see
+            :class:`~ampere.core.parameter.Population`.
+        datasets
+            As for the constructor: a mapping of label to dataset, or an
+            iterable of datasets. **Order is the plate order.**
+        members, hyperpriors, layout, label
+            Passed straight to :class:`~ampere.core.parameter.Population`.
+        over
+            The component labels the draws are routed to, in plate order. The
+            default is each dataset's ``model`` label, because a population
+            addresses its members by *bare* local name while a dataset's own
+            parameters are qualified (``"likelihood.scale"``) — see the
+            refusal in :meth:`~ampere.core.parameter.ParameterSet.merge`.
+            Every dataset must then name a distinct model.
+        **kwargs
+            The constructor's other arguments (``joint``, ``shared``,
+            ``shared_label``).
+        """
+        collection = cls(datasets, **kwargs)
+        if over is None:
+            labels = collection.model_labels()
+            if any(model_label is None for model_label in labels):
+                unnamed = [
+                    dataset_label
+                    for dataset_label, model_label in zip(collection, labels, strict=True)
+                    if model_label is None
+                ]
+                raise DatasetError(
+                    f"DatasetCollection.plate({name!r}, ...) defaults the population's member "
+                    f"components to each dataset's model, but dataset(s) {unnamed} name no "
+                    f"model. Give each dataset model='...', or pass over=[...] naming the "
+                    f"components explicitly."
+                )
+            named = [model_label for model_label in labels if model_label is not None]
+            if len(set(named)) != len(named):
+                raise DatasetError(
+                    f"DatasetCollection.plate({name!r}, ...) defaults the population's member "
+                    f"components to each dataset's model, but the datasets name only "
+                    f"{len(set(named))} distinct model(s) between {len(named)} of them. A "
+                    f"population keeps one draw per member, so each member needs its own "
+                    f"component; pass over=[...] if the sharing is deliberate."
+                )
+            over = named
+        # Set on the collection just built rather than building a second one:
+        # ``joint`` noise groups are registered in ``__init__``, and running
+        # that twice to learn the dataset order would register them twice.
+        # Nothing else has seen this object yet.
+        collection._populations = (
+            Population(
+                name,
+                members=members,
+                hyperpriors=hyperpriors,
+                over=over,
+                layout=layout,
+                label=label,
+            ),
+        )
+        return collection
+
+    @property
+    def populations(self) -> tuple[Population, ...]:
+        """The :class:`~ampere.core.parameter.Population` declarations (W5.12).
+
+        Carried here rather than applied here, for the reason
+        :meth:`components` gives: this class never merges on a problem's
+        behalf. :class:`FittingProblem` hands them to the one merge.
+        """
+        return self._populations
 
     # -- joint noise groups (W5.9) -------------------------------------------
 
@@ -2173,6 +2286,15 @@ class FittingProblem:
         because this is the only level at which every site is visible; a tie
         names sites by their **full merged path**, e.g.
         ``"sed.instrument.calibrate.scale"``.
+    populations
+        Composition-time :class:`~ampere.core.parameter.Population`\\ s
+        (**W5.12**) — the hierarchical counterpart of *ties*, declared at the
+        same level and for the same reason. Each adds its hyperpriors as one
+        further component and gives every component it names its own draw, so
+        N independently written per-object models become a population fit
+        without being rewritten. A collection built with
+        :meth:`DatasetCollection.plate` carries its own; the two are
+        concatenated, this argument first.
     model_label
         Component label for a single model.
     seed
@@ -2261,6 +2383,7 @@ class FittingProblem:
         datasets: DatasetCollection | Mapping[str, Dataset] | Iterable[Dataset],
         *,
         ties: Sequence[Tie] = (),
+        populations: Sequence[Population] = (),
         model_label: str = MODEL_COMPONENT,
         seed: int | None = None,
         capabilities: Capabilities | None = None,
@@ -2281,6 +2404,18 @@ class FittingProblem:
         for tie in self.ties:
             if not isinstance(tie, Tie):
                 raise DatasetError(f"ties must be Tie instances, got {type(tie).__name__}.")
+
+        # W5.12: a population may be declared here, beside the ties it is the
+        # hierarchical counterpart of, or carried by the collection
+        # (DatasetCollection.plate). Both reach the *one* merge below; the
+        # collection never applies one itself, for the reason its components()
+        # gives.
+        self.populations = (*populations, *self.datasets.populations)
+        for population in self.populations:
+            if not isinstance(population, Population):
+                raise DatasetError(
+                    f"populations must be Population instances, got {type(population).__name__}."
+                )
 
         # Loud, at composition (found by the freeze's adversarial review):
         # int(1.9) silently truncating, True counting as 1, or a seed outside
@@ -2349,7 +2484,9 @@ class FittingProblem:
         }
 
         # (4) The one merge.
-        self._mapping = ParameterSet.merge(self._components(), ties=self.ties)
+        self._mapping = ParameterSet.merge(
+            self._components(), ties=self.ties, populations=self.populations
+        )
         self._require_resolved()
 
         # W3.8's opt-in. Read before the aggregation, because it is what
