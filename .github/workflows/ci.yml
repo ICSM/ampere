@@ -59,7 +59,9 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    # `v2` mirrors the local v2 master on the remote (2026-09-22) so the
+    # workflow runs on it before the v2 line is merged to master.
+    branches: [master, v2]
   pull_request:
   # Non-blocking triggers for the sbi-characterisation job only (see its
   # `if:` guard below) -- push/pull_request never run it. Before W3.7 the

@@ -4,16 +4,24 @@ Ampere is a Bayesian fitting environment for heterogeneous astronomical data
 (SEDs, spectra, and more), whose distinguishing feature is a flexible,
 GP-based likelihood providing robustness to model misspecification.
 
-The project is undergoing a major redesign ("v2"). **Phases 0–3 are
-complete** (Phase 3, the SBI layer, closed 2026-09-10): the core contracts
-are frozen (`spec-v1.0`, 2026-09-03), both modern backends
+The project is undergoing a major redesign ("v2"). **Phases 0–4 are
+complete** (Phase 3, the SBI layer, closed 2026-09-10; Phase 4, the
+interferometric-visibility modality end to end, closed 2026-09-13): the
+core contracts are frozen (`spec-v1.0`, 2026-09-03), both modern backends
 (`ampere.backends.torch`, `.jax`) implement them alongside the numpy
 reference backend, milestone M2 (the flagship misspecification validation)
 is reached, `ampere.inference.SBIEngine` fits any problem by simulation-based
-inference with calibration, caching and reproducible runs, and the
-documentation reflects what landed. **Phase 4 (one new modality end to end —
-interferometric visibilities) is next**: its items are drafted for Peter's
-approval before any dispatch. The live state, what is in flight and what
+inference with calibration, caching and reproducible runs, visibilities and
+closure phases fit through the same stack, and the documentation reflects
+what landed. **Phase 5 (scale-out and advanced inference) is in flight**:
+approved 2026-09-15, dispatched in waves of two agents, fifteen of its
+items merged by 2026-09-18 (approximate GP solvers, image data, warped
+kernels, joint noise, context amortisation, population reweighting, the
+many-lines M2 extension); wave 5 (W5.12 ∥ W5.14) is next, with the filler
+items W5.25–W5.29 (added 2026-09-22) between waves and W5.19 last.
+Development happens on `master` locally; the remote branch `v2` mirrors it
+for CI and backup, and `origin/master` stays at the legacy code until
+Phase 6 says otherwise. The live state, what is in flight and what
 comes next are in `docs/development.md`'s "⚡ Pick up here". Before any
 non-trivial work, read:
 
