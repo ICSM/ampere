@@ -1743,11 +1743,17 @@ class HilbertSpaceGP(GPSolver):
         diagonal = self._diagonal(variance)
         weighted, factor = self._factor(scaled, diagonal)
         alpha = self._solve(scaled, diagonal, weighted, factor, residuals)
+        # W5.28(f): at the data (the default, and the hot path -- every
+        # log_prob/conditional call with no explicit at= lands here), the
+        # target *is* points, so target_scaled is scaled again, entry for
+        # entry: reuse it rather than paying _scaled_basis's O(N m) spectral
+        # density and basis-matrix work a second time for the same (N, m)
+        # block. Only an explicit, different at= rebuilds it.
         if at is None:
-            target = points
+            target_scaled = scaled
         else:
             target = _as_points(at, "conditioning grid", dimensions=points.shape[1])
-        target_scaled = self._scaled_basis(kernel, basis, target, values)
+            target_scaled = self._scaled_basis(kernel, basis, target, values)
         mean = target_scaled @ (scaled.T @ alpha)
         triangular = scipy.linalg.solve_triangular(factor[0], target_scaled.T, lower=True)
         posterior = np.sum(triangular * triangular, axis=0)
