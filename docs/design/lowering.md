@@ -282,6 +282,7 @@ relying on it.
 | `expon` | `loc`, `scale` | identity | `Exponential(rate=1/scale)`, **`loc` must be 0** — otherwise shift | `Exponential(rate=1/scale)`, **`loc` must be 0** — otherwise shift |
 | `gamma` | `a`, `loc`, `scale` | identity | `Gamma(concentration=a, rate=1/scale)`, **`loc` must be 0** | `Gamma(concentration=a, rate=1/scale)`, **`loc` must be 0** |
 | `beta` | `a`, `b`, `loc`, `scale` | identity | `Beta(concentration1=a, concentration0=b)`, **`loc`=0, `scale`=1** | `Beta(concentration1=a, concentration0=b)`, **`loc`=0, `scale`=1** |
+| `halfcauchy` | `loc`, `scale` | `halfcauchy(loc, scale)` — identity | `HalfCauchy(scale=scale)` when `loc == 0`; otherwise shift (§3.3) | `HalfCauchy(scale=scale)` when `loc == 0`; otherwise shift (§3.3) |
 
 *(**Amended W2.15**, 2026-09-08: "must be 0" describes what the *target
 library's* constructor takes, and both backends now do what §3.3 rule 1 says
@@ -293,6 +294,18 @@ a family with no exact construction from the target's primitives, which is
 rule 2. The rows are unchanged as statements about the libraries;
 `ampere/backends/torch/lowering.py` and
 `ampere/backends/jax/distributions.py` are the implementations.)*
+
+*(**Added W5.25**: `halfcauchy` is the horseshoe's global scale under both of
+`regularised_horseshoe`'s tails (§3.2.1) and had no row on either modern
+backend, so the recommended prior for any `Sum` of noise terms was
+reference-only on NUTS. `torch.distributions.HalfCauchy` and
+`numpyro.distributions.HalfCauchy` are both exact, so this is §3.4's fallback
+used as intended, on `halfnorm`'s own pattern: native at `loc == 0`, the
+§3.3 shift otherwise — for `torch`, `_shifted`'s affine route; for `numpyro`,
+`TruncatedCauchy(loc, scale, low=loc)`, preferred over an affine
+`TransformedDistribution` for the same reason `_halfnorm` is, in
+`ampere/backends/torch/lowering.py` and `ampere/backends/jax/distributions.py`
+respectively.)*
 
 ### 3.2.1 Hierarchical priors, and the parameterisation NUTS wants (*Added W5.8*)
 
@@ -331,19 +344,28 @@ the model is the left-hand one. `non_centred=False` declares the left-hand
 column directly with `HierarchicalPrior`, which is what a strongly identified
 warp can afford and what the plan names.
 
-**The horseshoe's chain lowers, its slab does not.**
+**The horseshoe's chain now lowers.** (*Amended W5.25*)
 `regularised_horseshoe` (`parameters.md` §9) is three hierarchical levels, and
 its default `tail="regularised"` is chosen so that every one of them is in the
 table above: `halfcauchy` for the global scale, `gamma` for each local scale,
-`halfnorm` for each amplitude. Two of those three lower on both backends today
-and **`halfcauchy` lowers on neither** — it is not in §3.2 and not in either
-backend's registration — so the global level needs a
-`register_lowering("halfcauchy", backend, …)` row, which is §3.4's fallback
-rule used as intended (`torch.distributions.HalfCauchy` and `numpyro.distributions.HalfCauchy`
-are both exact). `tail="cauchy"` needs the same row for the local level as
-well. The horseshoe's own funnel is the one described above, one level deeper,
-and it is why `tests/m2`'s shrinkage rows run at a longer emcee budget than
-the rest of that suite and pin a margin a third below what they measure.
+`halfnorm` for each amplitude. `halfcauchy` was in neither backend's
+registration until W5.25 added one `register_lowering("halfcauchy", backend,
+…)` row per backend, on `halfnorm`'s own pattern — native at `loc == 0`, the
+§3.3 shift otherwise, which is §3.4's fallback rule used as intended
+(`torch.distributions.HalfCauchy` and `numpyro.distributions.HalfCauchy` are
+both exact). `tail="cauchy"`'s local level is the same family and needed no
+row of its own as a consequence — it lowers on both backends now too. On jax
+this closes the chain completely, because a `HierarchicalPrior`'s dispatch
+*is* the flat table above (§5): any family §3.2 has, a hierarchical reference
+to it gets for free. Torch's dispatch is a second, per-family registry
+(`_HIERARCHICAL_BUILDERS` in `ampere/backends/torch/lowering.py`) that this
+item extended for `halfcauchy` but that still has no `gamma` row, so
+`tail="regularised"`'s local level — the default — does not reach NUTS on
+torch; `tail="cauchy"`'s two half-Cauchy levels do, on both backends. Closing
+the `gamma` gap is not this item's scope. The horseshoe's own funnel is the
+one described above, one level deeper, and it is why `tests/m2`'s shrinkage
+rows run at a longer emcee budget than the rest of that suite and pin a
+margin a third below what they measure.
 
 Spike-and-slab — the other classical sparsity prior, and the one a reader may
 expect here — stays out, for the reason `horizon_notes.md` §1 gives and §12 Q1

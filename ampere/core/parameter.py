@@ -3522,13 +3522,16 @@ def regularised_horseshoe(
     :math:`s^{-1/2}` spike at zero, which is where all of the shrinkage comes
     from, and replaces the Cauchy tail with an exponential one whose scale is
     the global scale itself: bounded tails and a benign geometry, which is what
-    the slab is *for*. It also lowers, where the plain horseshoe does not —
-    ``gamma`` and ``halfnorm`` are in ``lowering.md`` §3.2's table for both
-    torch and jax, and ``halfcauchy`` is in neither.
+    the slab is *for*. Both tails lower on both backends: ``gamma`` and
+    ``halfnorm`` were already in ``lowering.md`` §3.2's table, and
+    ``halfcauchy`` — the global scale under both tails, and the local scale's
+    family under ``tail="cauchy"`` — joined it at W5.25 (one
+    ``register_lowering("halfcauchy", backend, ...)`` row per backend, on
+    ``halfnorm``'s own pattern).
 
     ``tail="cauchy"`` declares the plain horseshoe instead, half-Cauchy at both
-    levels. It evaluates on the reference path; lowering it needs a
-    ``register_lowering("halfcauchy", backend, ...)`` row (``lowering.md`` §3).
+    levels; it lowers on both backends as a consequence, with no row of its
+    own beyond the global scale's (``lowering.md`` §3.2.1).
 
     Parameters
     ----------
