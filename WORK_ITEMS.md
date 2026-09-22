@@ -2558,14 +2558,14 @@ a `gamma` whose `a` is referenced still refuses; an explicit
 (harmless) and a row proves the helper's declaration infers the same
 bijection without it. The torch and jax hierarchical registries take the
 bijection from the parameter, so the W5.25 gamma and halfcauchy NUTS
-rows must stay green. **Not in scope:** anything a §4 contract names —
+rows must stay green. **(c) `replace_observations` and `populations=`** (W5.28's carried note): the replica rebuilt by `ampere.results.calibration.replace_observations` passes `ties=` but not `populations=` to the new `FittingProblem`, so a W5.12 population-level SBC replay would be fitted as independent objects — the same silent drop W5.28 (a) closed for the shared set. Carry it through and add the row beside W5.28 (a)'s (`tests/results/test_calibration.py`). Owns `ampere/results/calibration.py` for this line only. **Not in scope:** anything a §4 contract names —
 if the reviewer judges the inference rule to be a §4.1 statement, a
 decision-log line goes in the same PR; changing the cap; a general
 configuration system (one field, one module). **Owns:**
 `ampere/core/parameter.py`, the new `ampere/core/settings.py`,
 `tests/core/test_parameter.py`, `parameters.md` §9 (one line each),
 the populations and priors pages of the Sphinx site. **Depends:** W5.28
-merged (its item (i) edits the same file). **Accept:** the tests above
+merged (its item (i) edits the same file; its (a) is where (c) goes). **Accept:** the tests above
 green in dev; `tests/conformance` green in dev, torch and jax; the W5.25
 horseshoe-under-NUTS rows green on torch and jax; lint, format,
 typecheck clean in dev, torch, jax; gates: dev + torch + jax.
