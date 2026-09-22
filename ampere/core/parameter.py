@@ -2030,7 +2030,7 @@ class ParameterMapping:
                     f"no value supplied for merged parameter {binding.global_name!r}"
                 ) from exc
             if binding.index is not None:
-                value = np.asarray(value)[binding.index]
+                value = _element(value, binding.index)
             routed[binding.component][binding.local_name] = value
         return routed
 
@@ -2895,6 +2895,26 @@ def _merge(
         components=components,
         inner=types.MappingProxyType(inner),
     )
+
+
+def _element(value: Any, index: int | tuple[int, ...]) -> Any:
+    """``value[index]`` **without leaving the value's own array type** (W5.12).
+
+    ``distribute`` is not a numpy-only path: a backend's realisation routes its
+    *native* values through this same table (``inference.md`` §10a — the
+    lowering reuses the merge's wiring rather than reinventing it), so a torch
+    tensor that requires grad and a jax tracer both arrive here. Coercing with
+    ``numpy.asarray`` first — which is what this did before a population
+    produced element bindings on a native path — raises on the tensor ("Can't
+    call numpy() on Tensor that requires grad") and on the tracer, and would
+    detach the graph if it did not. Indexing the value directly is correct for
+    every array type, including numpy's; the fallback is for the plain Python
+    sequences ``Value`` also admits, which do not understand a tuple index.
+    """
+    try:
+        return value[index]
+    except TypeError:
+        return np.asarray(value)[index]
 
 
 def _apply_populations(
