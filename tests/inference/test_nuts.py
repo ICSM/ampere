@@ -49,6 +49,8 @@ from __future__ import annotations
 import dataclasses
 import importlib
 import math
+import pathlib
+import sys
 import warnings
 from typing import Any
 
@@ -69,7 +71,19 @@ from ampere.core import (
     Spectrum,
     Tie,
 )
+from ampere.core.parameter import HORSESHOE_TAILS
 from ampere.inference import EngineError, NUTSEngine
+
+# ``examples/`` is not an installed package (the wheel declares ``include =
+# ["ampere*"]``), so the repository root goes on ``sys.path`` explicitly, as
+# ``tests/m2/conftest.py`` does for the same reason -- explicitly, rather than
+# relying on pytest's ``prepend`` import mode reaching this far, which it does
+# not from this module's directory.
+_ROOT = pathlib.Path(__file__).resolve().parents[2]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+from examples.m2_misspecification import many_lines  # noqa: E402
 
 REFERENCE_WAVELENGTH = 1.0
 TRUTH = {"norm": 2.0, "index": -1.2, "calibration": 1.0}
@@ -788,3 +802,83 @@ class TestTheReducedRankSolverUnderNUTS:
         latent = np.asarray(run["posterior"]["default.latent.z"])
         assert latent.shape[-1] == 12
         assert np.all(np.isfinite(latent))
+
+
+# ---------------------------------------------------------------------------
+# 7. The horseshoe's half-Cauchy global scale under NUTS (W5.25)
+# ---------------------------------------------------------------------------
+
+#: Small enough for a short chain on a five-term ``Sum``-plus-horseshoe
+#: posterior (nine free dimensions): the same band ``hsgp_problem`` uses, at
+#: half its points.
+SHRINKAGE_GRID = np.linspace(0.842, 0.872, 24)
+
+
+def shrinkage_problem(kit: Kit, tail: str) -> FittingProblem:
+    """W5.8's horseshoe, on a small ``Sum`` of two Matérn-3/2 terms.
+
+    :func:`~examples.m2_misspecification.many_lines.horseshoe_kernel` is the
+    same declaration the M2 study exercises on the reference backend under
+    emcee — two nearly degenerate terms under
+    :func:`~ampere.core.regularised_horseshoe` — built here on *kit*'s
+    backend instead, at a grid size a short NUTS chain can afford. *tail*
+    selects which of the horseshoe's two levels of half-Cauchy is under test:
+    ``"regularised"`` (the default) keeps the global scale half-Cauchy and
+    gives the local scale a gamma tail instead; ``"cauchy"`` is the plain
+    horseshoe, half-Cauchy at both levels. Before this item neither tail
+    lowered on a differentiable backend, because the global scale's
+    half-Cauchy was in neither backend's table (``lowering.md`` §3.2).
+    """
+    module = kit.module
+    kernel = many_lines.horseshoe_kernel(kit.name, tail=tail)
+    truth = power_law(SHRINKAGE_GRID, TRUTH["norm"], TRUTH["index"])
+    return FittingProblem(
+        module.PowerLaw(
+            SHRINKAGE_GRID,
+            norm=st.lognorm(0.4, scale=2.0),
+            index=st.norm(-1.2, 0.5),
+            reference_wavelength=REFERENCE_WAVELENGTH,
+        ),
+        [
+            Dataset(
+                noisy(SHRINKAGE_GRID, truth, 0.05, seed=41),
+                likelihood=Likelihood(
+                    GaussianFamily(), module.GaussianProcessNoise(kernel, module.DenseGP())
+                ),
+            )
+        ],
+        seed=SEED,
+    )
+
+
+class TestTheHorseshoeUnderNUTS:
+    """W5.25: the horseshoe's half-Cauchy global scale reaches a gradient path.
+
+    Before this item ``regularised_horseshoe``'s global scale — half-Cauchy
+    under *both* tails (``ampere/core/parameter.py``) — raised
+    :class:`~ampere.inference.EngineError` on both differentiable backends,
+    because ``halfcauchy`` was in neither's §3.2 table. ``tail="regularised"``
+    (the default) also needed a hierarchical ``gamma`` row on torch, found
+    while adding this one and closed in the same item
+    (``_HIERARCHICAL_BUILDERS`` in ``ampere/backends/torch/lowering.py``; jax
+    reaches it generically already). This is that row: one short chain per
+    tail, per backend, fixed seeds, following the shape of the NUTS rows
+    above rather than the M2 study's own (longer, emcee-driven) ones in
+    ``tests/m2/test_many_lines.py``.
+    """
+
+    @pytest.mark.parametrize("tail", list(HORSESHOE_TAILS))
+    def test_it_samples(self, kit: Kit, tail: str) -> None:
+        problem = shrinkage_problem(kit, tail)
+        assert problem.differentiable is True
+        run = realised_sample(problem, draws=150, warmup=150, chains=1)
+        posterior = run["posterior"]
+        expected = {"default.likelihood.shrinkage.global_scale"}
+        expected |= {
+            f"default.likelihood.shrinkage.{label}" for label in many_lines.DEGENERATE_LABELS
+        }
+        assert expected <= set(posterior.data_vars)
+        for name in posterior.data_vars:
+            draws = np.asarray(posterior[name])
+            assert np.all(np.isfinite(draws))
+            assert float(draws.std()) > 0.0

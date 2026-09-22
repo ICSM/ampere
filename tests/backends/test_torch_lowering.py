@@ -713,6 +713,30 @@ class TestPlatesAndHierarchy:
         with pytest.raises(LoweringError, match="location-scale"):
             lower_hierarchical(prior, {"mu": tensor(0.0)}, parameter="theta")
 
+    def test_a_hierarchical_gamma_lowers_against_the_flat_table(self) -> None:
+        """W5.25: ``regularised_horseshoe``'s local scale under its default tail.
+
+        A fixed shape (``a``) and a referenced scale --
+        ``HierarchicalPrior("gamma", {"scale": ...}, kwds={"a": ...})``, the
+        exact declaration ``ampere.core.regularised_horseshoe`` uses. jax's
+        hierarchical dispatch reaches the flat ``gamma`` row generically
+        (``ampere/backends/jax/distributions.py``); torch's is a second,
+        per-family registry (``_HIERARCHICAL_BUILDERS``), so this is the row
+        that pins the two constructions to the same density directly, rather
+        than through the horseshoe's own three levels.
+        """
+        prior = HierarchicalPrior("gamma", {"scale": "tau"}, kwds={"a": 0.5})
+        resolved = tensor(1.5)
+        lowered = lower_hierarchical(prior, {"tau": resolved}, parameter="theta")
+        flat = lower_prior(describe_prior(st.gamma(0.5, scale=1.5)), parameter="theta")
+        point = tensor(0.8)
+        assert float(lowered.distribution.log_prob(point)) == pytest.approx(
+            float(flat.distribution.log_prob(point)), abs=1e-9
+        )
+        assert float(lowered.distribution.log_prob(point)) == pytest.approx(
+            float(st.gamma(0.5, scale=1.5).logpdf(0.8)), abs=1e-9
+        )
+
 
 # ---------------------------------------------------------------------------
 # §9: RNG
