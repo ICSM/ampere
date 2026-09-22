@@ -135,6 +135,7 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
 
     | Path pattern | Runs |
     | --- | --- |
+    | `ampere/inference/_blackjax.py`, `tests/inference/test_blackjax.py` (W5.14; matched *before* the CORE row below) | dev, jax (blackjax installs into the existing jax environment, so it rides that leg) |
     | `ampere/inference/_nested.py`, `tests/inference/test_nested.py` (W5.14; matched *before* the row below) | dev, nested |
     | `pyproject.toml`, `pixi.lock`, `.github/**`, `ampere/core/**`, `ampere/results/**`, `ampere/inference/**`, and the shared test suites (`tests/{core,results,inference,conformance,m2,benchmarks,scaling,gpu,characterisation}/**` | everything: dev, torch, jax, sbi, nested, docs |
     | `ampere/backends/torch/**`, `tests/backends/*torch*` | torch, sbi (sbi's environment installs torch too) |

@@ -23,6 +23,7 @@ import doctest
 import pytest
 
 import ampere.inference
+import ampere.inference._blackjax
 import ampere.inference._dynesty
 import ampere.inference._emcee
 import ampere.inference._nested
@@ -112,5 +113,24 @@ def test_the_nautilus_example_runs() -> None:
     """
     pytest.importorskip("nautilus")
     results = doctest.testmod(ampere.inference._nested, optionflags=OPTIONS, verbose=False)
+    assert results.failed == 0
+    assert results.attempted > 0
+
+
+def test_the_blackjax_example_runs() -> None:
+    """Separate, and skipped where the ``blackjax`` extra is absent (W5.14).
+
+    The same reasoning the three rows above state, with one difference worth
+    recording: ``BlackjaxEngine`` is jax-only *by nature* rather than by what
+    happens to be installed, so there is no second route this example could
+    have been written against. It demonstrates ``method="pathfinder"``,
+    because that is the cheaper of the two — one L-BFGS path rather than a
+    tuned chain — and the engine battery
+    (``tests/inference/test_blackjax.py``) runs both methods against a
+    closed-form posterior.
+    """
+    pytest.importorskip("jax")
+    pytest.importorskip("blackjax")
+    results = doctest.testmod(ampere.inference._blackjax, optionflags=OPTIONS, verbose=False)
     assert results.failed == 0
     assert results.attempted > 0

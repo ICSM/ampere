@@ -26,6 +26,11 @@ name: CI
 # truth; this table and docs/development.md's CI section are read-only
 # copies of it, kept for humans who are not about to run the script):
 #
+#   ampere/inference/_blackjax.py,                      -> dev, jax
+#   tests/inference/test_blackjax.py (W5.14; matched          (matched first,
+#   before the CORE rule below; blackjax is a jax             ahead of CORE)
+#   library and installs into the existing jax env,
+#   so it rides that leg rather than one of its own)
 #   ampere/inference/_nested.py,                        -> dev, nested
 #   tests/inference/test_nested.py (W5.14; matched            (matched first,
 #   before the CORE rule below)                               ahead of CORE)

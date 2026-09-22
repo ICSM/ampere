@@ -62,6 +62,92 @@ form, each engine SBC-ranked through
 :func:`~ampere.results.calibration.sbc`, and one cost record
 (``ampere_engine_evaluations``) asserted per run.
 
+Which variational guide to ask for
+-----------------------------------
+
+:class:`~ampere.inference.VIEngine`'s ``guide=`` argument **is** the
+approximation being made, and since W5.14 there are four of them. All four are
+fitted in the *unconstrained* space, so the constrained posterior each implies
+is already warped by ampere's own bijections; all four record what they were
+in ``ampere_vi_guide`` and in the engine-neutral ``ampere_approximation``.
+
+* ``"normal"`` — a diagonal Gaussian. O(d) parameters, fast, and wrong in
+  exactly the way a correlated posterior is correlated: it underestimates the
+  marginal variances. ``ampere_approximation = "mean_field"``.
+* ``"multivariate"`` — a full-covariance Gaussian fitted by maximising the
+  ELBO, O(d²) parameters. The first thing to reach for when a corner plot
+  shows the tilted ellipse every SED fit produces.
+  ``ampere_approximation = "multivariate"``.
+* ``"laplace"`` — a full-covariance Gaussian too, but taken from the
+  *curvature*: SVI optimises to the MAP point and the covariance is then the
+  inverse Hessian there, computed once. Cheap where the ELBO fit is dear,
+  **exact when the posterior really is Gaussian**, and arbitrarily wrong when
+  it is not — it describes one point, not the mass. It needs a second
+  derivative of the realised density, which is a real demand on a backend's
+  lowering. ``ampere_approximation = "laplace"``.
+* ``"flow"`` — an inverse-autoregressive flow over a standard-normal base, and
+  the only family here that can represent a skewed or heavy-tailed posterior.
+  It costs a small neural network per transform and wants a longer
+  optimisation than the Gaussian families (its ELBO trace is how you tell
+  whether it got one). It needs **at least two free parameters** — there is
+  nothing for an autoregressive flow to be autoregressive over below that, and
+  the driver refuses a one-dimensional problem by name.
+  ``ampere_approximation = "normalising_flow"``.
+
+One practical difference is worth knowing before reading a run back. A
+Gaussian guide's fit is kept on the engine as plain arrays
+(``engine.guide_loc`` with ``engine.guide_scale`` or
+``engine.guide_scale_tril``), so its density can be rebuilt with
+``scipy.stats`` independently of which library fitted it. **A flow's cannot**:
+its fit is a neural network's weights, all three attributes stay ``None``, and
+the run says so in ``ampere_vi_guide_parameters`` (``"loc, scale"``,
+``"loc, scale_tril"`` or ``"none"``). What every family does carry is the
+per-draw ``sample_stats.proposal_log_density``, so
+``exp(log_prior + log_likelihood - proposal_log_density)`` is an importance
+weight buildable from the stored groups whatever the guide was.
+
+The blackjax route, on jax
+---------------------------
+
+:class:`~ampere.inference.BlackjaxEngine` (the ``blackjax`` extra) is **jax
+only**, by nature rather than by what happens to be installed: blackjax is a
+jax library and there is no maintained torch counterpart to borrow, so a
+problem on another backend is refused at construction by name. One dependency
+buys two methods ampere does not otherwise have.
+
+* ``method="mclmc"`` — microcanonical Langevin Monte Carlo (Robnik & Seljak):
+  a deterministic isokinetic trajectory with periodic momentum decoherence and
+  **no accept/reject step**, reported at several times NUTS's efficiency per
+  gradient on smooth high-dimensional posteriors, which is what a latent GP
+  over a spectrum or a hierarchical plate is. It has no default step size, so
+  tuning is not optional: ``warmup`` is the tuner's budget in integrator
+  steps, and it chooses the step size, the momentum decoherence length ``L``
+  and a diagonal preconditioner. Because there is no Metropolis correction the
+  chain carries a discretisation bias, traded against the tuner's energy
+  variance target; the run records both facts
+  (``ampere_blackjax_adjusted``, ``ampere_blackjax_desired_energy_var``), and
+  ``ampere_approximation`` is still ``"none"`` because that key answers "do
+  chain diagnostics apply?" — and for a Markov chain they do.
+* ``method="pathfinder"`` — Zhang et al.'s quasi-Newton approximation: L-BFGS
+  on the log density, a Gaussian built from the inverse-Hessian factors at
+  every iterate, and the ELBO-best one kept. It emits one "chain" of i.i.d.
+  draws like a variational fit, writes ``ampere_approximation =
+  "pathfinder"``, and carries ``proposal_log_density`` so the approximation is
+  correctable from the stored groups.
+
+The second use for Pathfinder is as a **start-point search**:
+``run(..., initial="pathfinder")`` fits it first and starts each MCLMC chain
+at one of its draws, which is a far better start than a prior draw on a
+posterior the prior barely covers. The whole thing is still reproducible from
+the problem's seed — jax has no global RNG, so every stream is an explicit key
+and two runs of a seeded problem agree bitwise.
+
+Neither method estimates a marginal likelihood, and neither writes the
+engine-neutral evidence triple. Pathfinder's ELBO is a single path's lower
+bound of unknown tightness and is kept under
+``ampere_blackjax_pathfinder_elbo``, where nothing will mistake it for a
+nested sampler's estimate.
+
 Simulation-based inference
 --------------------------
 

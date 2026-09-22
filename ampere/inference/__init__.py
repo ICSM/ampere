@@ -47,6 +47,20 @@ What is here
     evidence error whose two halves it keeps apart. **One extra each**
     (``nautilus``, ``ultranest``), imported lazily in the constructor, and the
     refusal names the extra.
+:class:`BlackjaxEngine`
+    The blackjax route, **jax only**, added at W5.14 from the inference-
+    extensions memo's §2.1: one dependency, two methods ampere does not
+    otherwise have. ``method="mclmc"`` is microcanonical Langevin Monte Carlo
+    (Robnik & Seljak) -- a Markov chain with no accept/reject step, tuned for
+    you, and reported at several times NUTS's efficiency per gradient on
+    smooth high-dimensional posteriors. ``method="pathfinder"`` is Zhang et
+    al.'s quasi-Newton approximation, used twice over: as an approximate
+    posterior in its own right (writing ``ampere_approximation =
+    "pathfinder"`` and the per-draw ``proposal_log_density`` that makes it
+    correctable) and, through ``initial="pathfinder"``, as the start-point
+    search for an MCLMC chain. Neither estimates an evidence and neither
+    pretends to. **One extra** (``blackjax``), imported lazily in the
+    constructor, and the refusal names the extra.
 :class:`NUTSEngine`
     The No-U-Turn sampler — numpyro's on a jax problem, pyro's on a torch one.
     The first **gradient-based** engine here, and the only one that cannot be
@@ -240,6 +254,8 @@ True
 
 from __future__ import annotations
 
+from ._blackjax import METHODS as BLACKJAX_METHODS
+from ._blackjax import BlackjaxEngine
 from ._dynesty import DynestyEngine
 from ._emcee import EmceeEngine
 from ._nested import NESTED_ENGINES, NautilusEngine, UltranestEngine
@@ -261,6 +277,7 @@ from .engine import DEFAULT_CACHE_SIZE, Engine
 from .exceptions import EngineError, SamplingFailureWarning
 
 __all__ = [
+    "BLACKJAX_METHODS",
     "DEFAULT_CACHE_SIZE",
     "DEFAULT_TRUNCATION_EPSILON",
     "EMBEDDINGS",
@@ -271,6 +288,7 @@ __all__ = [
     "SET_EMBEDDINGS",
     "SUMMARY_LAYOUT",
     "TMNRE_SAMPLERS",
+    "BlackjaxEngine",
     "DynestyEngine",
     "EmceeEngine",
     "Engine",

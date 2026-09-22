@@ -586,6 +586,17 @@ class TestImportanceCorrectedPosteriorAgreesWithEmcee:
 FLOW_STEPS = 2000
 FLOW_LEARNING_RATE = 0.05
 
+#: Draws taken from a fitted flow, and deliberately far fewer than the two
+#: thousand the Gaussian families are asked for elsewhere in this file. A
+#: guide draw is cheap only when the guide is cheap: both routes take a flow
+#: draw by *tracing* the guide, once per draw in Python, and a trace of an
+#: inverse-autoregressive flow evaluates three autoregressive networks and
+#: their inverses where a trace of ``AutoNormal`` evaluates one Gaussian.
+#: Measured on the numpyro route, two thousand flow draws dominated this
+#: file's wall time; five hundred is well inside the Monte-Carlo error every
+#: claim below is asserted at.
+FLOW_DRAWS = 500
+
 
 @pytest.fixture(scope="module")
 def laplace_run(kit: Kit) -> Any:
@@ -598,7 +609,7 @@ def flow_run(kit: Kit) -> Any:
     """The flow guide on the correlated problem, at a converged budget."""
     return fit(
         correlated_problem(kit),
-        draws=2000,
+        draws=FLOW_DRAWS,
         steps=FLOW_STEPS,
         guide="flow",
         learning_rate=FLOW_LEARNING_RATE,
@@ -699,7 +710,7 @@ class TestTheFlowGuide:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             run = engine.run(
-                draws=200,
+                draws=50,
                 steps=FLOW_STEPS,
                 guide="flow",
                 learning_rate=FLOW_LEARNING_RATE,
@@ -758,7 +769,17 @@ SBC_DATA = noisy(SBC_GRID, power_law(SBC_GRID, 2.0, INDEX), SIGMA, seed=11)
 #: Per-PR budget: below ``sbc``'s own goodness-of-fit power floor, and it says
 #: so. ``-m engines_full`` runs the budget that has power, exactly as
 #: ``test_nested.py`` does for the nested samplers.
-SBC_COUNT = 8
+#:
+#: Four rather than the nested battery's eight, because the cost of a
+#: *refit* is not the same on the two routes and this was measured rather
+#: than assumed: a replica fit is a few seconds on the pyro route and some
+#: twenty on the numpyro one, where every replica problem is a fresh
+#: realisation and therefore a fresh jax compilation, which no budget inside
+#: the fit can shorten. Four simulations per guide over four guides is what
+#: keeps this section's share of the jax leg in minutes rather than a
+#: quarter of an hour, and at either count the row's claim is the same one:
+#: that ranks come out, well shaped, with nothing failed.
+SBC_COUNT = 4
 SBC_FULL_COUNT = 100
 SBC_DRAWS = 30
 
@@ -772,11 +793,24 @@ SBC_RUN_OPTIONS: dict[str, dict[str, Any]] = {
     "flow": {"steps": FLOW_STEPS, "learning_rate": FLOW_LEARNING_RATE},
 }
 
+#: The per-PR row's override, and the other half of this section's wall
+#: time. The reduced row asserts only that ranks come out well shaped with
+#: nothing failed -- a claim about the machinery, not about the fit -- which
+#: a short optimisation shows exactly as well. The ``engines_full`` row,
+#: which *is* a claim about the fit, uses the converged budgets above.
+SBC_REDUCED_OVERRIDES: dict[str, dict[str, Any]] = {
+    "normal": {"steps": 250},
+    "multivariate": {"steps": 250},
+    "laplace": {"steps": 250},
+    "flow": {"steps": 600},
+}
+
 #: Draws per fit. ``sbc``'s own ``draws`` is how many the rank is taken
 #: against, thinned out of what the fit produced, so the fit has to produce
-#: at least that many -- and for a guide they cost almost nothing, a draw
-#: being one reparametrised sample rather than a step of a chain.
-SBC_FIT_DRAWS = 200
+#: at least that many -- so this is that many with a little room, and no
+#: more: a draw is cheap for a Gaussian guide and not for a flow (see
+#: ``FLOW_DRAWS``), and nothing here ranks against more than ``SBC_DRAWS``.
+SBC_FIT_DRAWS = 40
 GUIDES = tuple(SBC_RUN_OPTIONS)
 
 
@@ -795,6 +829,9 @@ def calibration_problem(kit: Kit, seed: int | None = SEED) -> FittingProblem:
 
 
 def calibrate(kit: Kit, guide: str, *, count: int) -> Any:
+    options = dict(SBC_RUN_OPTIONS[guide])
+    if count <= SBC_COUNT:
+        options.update(SBC_REDUCED_OVERRIDES.get(guide, {}))
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         return sbc(
@@ -802,7 +839,7 @@ def calibrate(kit: Kit, guide: str, *, count: int) -> Any:
             VIEngine,
             count=count,
             draws=SBC_DRAWS,
-            run_options={"draws": SBC_FIT_DRAWS, "guide": guide, **SBC_RUN_OPTIONS[guide]},
+            run_options={"draws": SBC_FIT_DRAWS, "guide": guide, **options},
             seed=515151,
             label=f"W5.14 guide battery, {guide}",
         )
