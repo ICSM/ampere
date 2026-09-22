@@ -42,7 +42,7 @@ smooth component. The likelihood pins the two terms' *total* and says almost
 nothing about how it is divided between them, so what divides it is the prior.
 
 Under a flat prior on both amplitudes the fit spreads itself across both terms;
-under :func:`~ampere.core.regularised_horseshoe` it does not. The statistic is
+under :func:`~ampere.core.shrinkage_horseshoe` it does not. The statistic is
 the smaller amplitude over the larger — 1 is "split evenly between two
 components the truth does not have two of", 0 is "chose one" — and it is
 reported both as a posterior median and as the posterior **mass** below a tenth,
@@ -80,7 +80,7 @@ from ampere.core import (
     GaussianFamily,
     Kernel,
     Likelihood,
-    regularised_horseshoe,
+    shrinkage_horseshoe,
     with_shrinkage,
 )
 
@@ -212,7 +212,7 @@ def horseshoe_kernel(backend: str = "reference", *, tail: str = "regularised") -
     """
     return with_shrinkage(
         degenerate_pair(backend),
-        regularised_horseshoe(
+        shrinkage_horseshoe(
             tuple(f"{label}.amplitude" for label in DEGENERATE_LABELS),
             global_scale=HORSESHOE_GLOBAL_SCALE,
             tail=tail,
