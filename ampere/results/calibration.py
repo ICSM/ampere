@@ -536,6 +536,25 @@ def sbc(
         A short name for what was calibrated, recorded in
         ``ampere_calibration_label``. Free text for the figure's title.
 
+    Notes
+    -----
+    **W5.28(b): only the ``posterior`` group is ranked, by design, not by
+    oversight.** :mod:`ampere.results.derived`'s on-demand groups
+    (``posterior_predictive``, ``residuals``, ``gp_localisation``,
+    ``pointwise_log_likelihood``) are per-observation or per-draw quantities,
+    not one value per parameter with a single "truth" ``simulation.parameters``
+    can supply: a residual's truth is the noise realisation actually drawn for
+    *this* replica (not recorded anywhere), and a posterior-predictive
+    replicate's truth is the observed data itself — which is what a
+    posterior-predictive check already tests, by a different and
+    non-equivalent construction than Talts et al.'s rank statistic. Extending
+    SBC to them would mean inventing a "truth" Talts et al.'s construction does
+    not define, which is a design decision, not a parameter-column lookup;
+    it stays open rather than guessed at here. A caller can still rank any
+    *transformed* quantity that lands as its own named column inside the
+    ``posterior`` group itself (whatever the fitting engine's ``emit`` step
+    puts there) through ``parameters=``.
+
     Returns
     -------
     xarray.Dataset
