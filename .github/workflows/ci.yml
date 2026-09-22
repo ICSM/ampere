@@ -26,9 +26,12 @@ name: CI
 # truth; this table and docs/development.md's CI section are read-only
 # copies of it, kept for humans who are not about to run the script):
 #
+#   ampere/inference/_nested.py,                        -> dev, nested
+#   tests/inference/test_nested.py (W5.14; matched            (matched first,
+#   before the CORE rule below)                               ahead of CORE)
 #   pyproject.toml, pixi.lock, .github/**,              -> everything: dev,
 #   ampere/core/**, ampere/results/**,                     torch, jax, sbi,
-#   ampere/inference/**, and the shared test suites        docs
+#   ampere/inference/**, and the shared test suites        nested, docs
 #   (tests/{core,results,inference,conformance,m2,
 #   benchmarks,scaling,gpu,characterisation}/**)
 #   ampere/backends/torch/**,                           -> torch, sbi (sbi's
@@ -115,6 +118,7 @@ jobs:
       run_torch: ${{ steps.filter.outputs.run_torch }}
       run_jax: ${{ steps.filter.outputs.run_jax }}
       run_sbi: ${{ steps.filter.outputs.run_sbi }}
+      run_nested: ${{ steps.filter.outputs.run_nested }}
       run_docs: ${{ steps.filter.outputs.run_docs }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -398,15 +402,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        environment: [torch, jax, sbi]
+        environment: [torch, jax, sbi, nested]
     steps:
       - name: decide whether this leg's real work runs
         id: gate
         run: |
           case "${{ matrix.environment }}" in
-            torch) echo "run=${{ needs.changes.outputs.run_torch }}" >> "$GITHUB_OUTPUT" ;;
-            jax)   echo "run=${{ needs.changes.outputs.run_jax }}" >> "$GITHUB_OUTPUT" ;;
-            sbi)   echo "run=${{ needs.changes.outputs.run_sbi }}" >> "$GITHUB_OUTPUT" ;;
+            torch)  echo "run=${{ needs.changes.outputs.run_torch }}" >> "$GITHUB_OUTPUT" ;;
+            jax)    echo "run=${{ needs.changes.outputs.run_jax }}" >> "$GITHUB_OUTPUT" ;;
+            sbi)    echo "run=${{ needs.changes.outputs.run_sbi }}" >> "$GITHUB_OUTPUT" ;;
+            nested) echo "run=${{ needs.changes.outputs.run_nested }}" >> "$GITHUB_OUTPUT" ;;
           esac
       - name: "skip note (path-gated: no paths for this leg changed)"
         if: steps.gate.outputs.run != 'true'
@@ -436,8 +441,9 @@ jobs:
     name: new-namespace suites (${{ matrix.environment }})
     runs-on: ubuntu-latest
     needs: changes
-    # Path-gated per leg (`run_torch`/`run_jax`/`run_sbi`) -- see the
-    # `changes` job and .github/scripts/path_filters.py's rule table. The
+    # Path-gated per leg (`run_torch`/`run_jax`/`run_sbi`/`run_nested`) --
+    # see the `changes` job and .github/scripts/path_filters.py's rule
+    # table. The
     # `typecheck` step this job used to run first is now `backend-typecheck`
     # above, a separate job on the same matrix (W4.10 (1)): the two run
     # concurrently rather than one serialising in front of the other, so
@@ -489,15 +495,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        environment: [torch, jax, sbi]
+        environment: [torch, jax, sbi, nested]
     steps:
       - name: decide whether this leg's real work runs
         id: gate
         run: |
           case "${{ matrix.environment }}" in
-            torch) echo "run=${{ needs.changes.outputs.run_torch }}" >> "$GITHUB_OUTPUT" ;;
-            jax)   echo "run=${{ needs.changes.outputs.run_jax }}" >> "$GITHUB_OUTPUT" ;;
-            sbi)   echo "run=${{ needs.changes.outputs.run_sbi }}" >> "$GITHUB_OUTPUT" ;;
+            torch)  echo "run=${{ needs.changes.outputs.run_torch }}" >> "$GITHUB_OUTPUT" ;;
+            jax)    echo "run=${{ needs.changes.outputs.run_jax }}" >> "$GITHUB_OUTPUT" ;;
+            sbi)    echo "run=${{ needs.changes.outputs.run_sbi }}" >> "$GITHUB_OUTPUT" ;;
+            nested) echo "run=${{ needs.changes.outputs.run_nested }}" >> "$GITHUB_OUTPUT" ;;
           esac
       - name: "skip note (path-gated: no paths for this leg changed)"
         if: steps.gate.outputs.run != 'true'
@@ -518,11 +525,19 @@ jobs:
       # `tests/benchmarks/` there would benchmark the same backend code the
       # `torch` leg already covers -- a second copy of the same numbers, not
       # a new one -- so this step and the upload below are skipped for `sbi`.
-      - name: benchmarks (torch, jax only; sbi would duplicate torch's)
-        if: steps.gate.outputs.run == 'true' && matrix.environment != 'sbi'
+      # W5.14 adds `nested` to the exclusion for the same reason at one
+      # remove: that environment is `dev`'s package set plus nautilus and
+      # ultranest, so its benchmark rows would be the `dev` leg's own,
+      # re-run.
+      - name: benchmarks (torch, jax only; sbi and nested would duplicate)
+        if: >-
+          steps.gate.outputs.run == 'true' && matrix.environment != 'sbi'
+          && matrix.environment != 'nested'
         run: pixi run -e ${{ matrix.environment }} bench
       - name: upload benchmark results
-        if: steps.gate.outputs.run == 'true' && matrix.environment != 'sbi' && always()
+        if: >-
+          steps.gate.outputs.run == 'true' && matrix.environment != 'sbi'
+          && matrix.environment != 'nested' && always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: benchmarks-${{ matrix.environment }}

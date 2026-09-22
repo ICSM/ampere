@@ -37,13 +37,23 @@ The path-filter table
 Buckets, in priority order (a path is classified by the first rule that
 matches it):
 
+  NESTED   -- ``ampere/inference/_nested.py``,
+              ``tests/inference/test_nested.py`` (W5.14). Checked BEFORE
+              CORE, which would otherwise claim them: these two files are
+              the whole of the nautilus/ultranest drivers, they are reached
+              only through ``ampere/inference/__init__.py`` (itself CORE, so
+              a change there still runs everything), and nothing under
+              ``ampere/backends`` can be affected by them. Runs dev -- whose
+              ``test-all`` still imports the namespace and parses its import
+              graph -- and the nested leg.
   CORE     -- ``pyproject.toml``, ``pixi.lock``, ``.github/**``,
               ``ampere/core/**``, ``ampere/results/**``,
               ``ampere/inference/**``, and the shared/backend-neutral test
               suites (``tests/core``, ``tests/results``, ``tests/inference``,
               ``tests/conformance``, ``tests/m2``, ``tests/benchmarks``,
               ``tests/scaling``, ``tests/gpu``, ``tests/characterisation``).
-              Runs EVERYTHING: dev, torch, jax, sbi and the docs build.
+              Runs EVERYTHING: dev, torch, jax, sbi, nested and the docs
+              build.
               (A registry-leak regression in shared code is exactly what
               ``test-all``'s single-process suites exist to catch across
               every backend -- see ``pyproject.toml``'s ``test-all`` task
@@ -82,11 +92,13 @@ matches it):
               afford to get wrong, so it is treated like CORE and runs
               everything.
 
-``run_dev``   = CORE | DEV_ONLY | EXAMPLES | EX_SBI | EX_IFM | DOCS | OTHER
-``run_torch`` = CORE | TORCH | EX_IFM | OTHER
-``run_jax``   = CORE | JAX | EX_IFM | OTHER
-``run_sbi``   = CORE | TORCH | EX_SBI | EX_IFM | OTHER
-``run_docs``  = CORE | DOCS | OTHER
+``run_dev``    = CORE | DEV_ONLY | EXAMPLES | EX_SBI | EX_IFM | DOCS | NESTED
+                 | OTHER
+``run_torch``  = CORE | TORCH | EX_IFM | OTHER
+``run_jax``    = CORE | JAX | EX_IFM | OTHER
+``run_sbi``    = CORE | TORCH | EX_SBI | EX_IFM | OTHER
+``run_nested`` = CORE | NESTED | OTHER
+``run_docs``   = CORE | DOCS | OTHER
 
 Non-pull_request events (push to master, workflow_dispatch, schedule) and
 any failure to compute a diff (missing base/head, git error, or a genuinely
@@ -119,6 +131,10 @@ DEV_JOBS = [
 TORCH_JOBS = ["typecheck (pyrefly, torch)", "new-namespace suites (torch)"]
 JAX_JOBS = ["typecheck (pyrefly, jax)", "new-namespace suites (jax)"]
 SBI_JOBS = ["typecheck (pyrefly, sbi)", "new-namespace suites (sbi)"]
+# W5.14: the nautilus/ultranest environment. A small, numpy-only
+# environment (no torch, no jax), which is what makes a leg of its own
+# affordable rather than folding two nested samplers into `dev`.
+NESTED_JOBS = ["typecheck (pyrefly, nested)", "new-namespace suites (nested)"]
 DOCS_JOBS = ["docs build"]
 # Note: `characterisation suite (with sbi extra)` (sbi-characterisation) is
 # not listed here -- it is never path-gated (see ci.yml's job comment); it
@@ -126,6 +142,7 @@ DOCS_JOBS = ["docs build"]
 # script.
 
 CORE = "CORE"
+NESTED = "NESTED"
 TORCH = "TORCH"
 JAX = "JAX"
 DEV_ONLY = "DEV_ONLY"
@@ -136,6 +153,7 @@ DOCS = "DOCS"
 OTHER = "OTHER"
 
 _CORE_EXACT = {"pyproject.toml", "pixi.lock"}
+_NESTED_EXACT = {"ampere/inference/_nested.py", "tests/inference/test_nested.py"}
 _CORE_PREFIXES = (
     ".github/",
     "ampere/core/",
@@ -157,6 +175,10 @@ def classify(path: str) -> str:
     """Classify one changed path into a bucket. See the module docstring's table."""
     p = PurePosixPath(path)
     posix = p.as_posix()
+
+    # Before CORE, deliberately: see the module docstring's NESTED entry.
+    if posix in _NESTED_EXACT:
+        return NESTED
 
     if posix in _CORE_EXACT or posix.startswith(_CORE_PREFIXES):
         return CORE
@@ -192,10 +214,11 @@ def classify(path: str) -> str:
 
 def compute_flags(buckets: set[str]) -> dict[str, bool]:
     return {
-        "run_dev": bool(buckets & {CORE, DEV_ONLY, EXAMPLES, EX_SBI, EX_IFM, DOCS, OTHER}),
+        "run_dev": bool(buckets & {CORE, DEV_ONLY, EXAMPLES, EX_SBI, EX_IFM, DOCS, NESTED, OTHER}),
         "run_torch": bool(buckets & {CORE, TORCH, EX_IFM, OTHER}),
         "run_jax": bool(buckets & {CORE, JAX, EX_IFM, OTHER}),
         "run_sbi": bool(buckets & {CORE, TORCH, EX_SBI, EX_IFM, OTHER}),
+        "run_nested": bool(buckets & {CORE, NESTED, OTHER}),
         "run_docs": bool(buckets & {CORE, DOCS, OTHER}),
     }
 
@@ -209,6 +232,7 @@ def job_list(flags: dict[str, bool]) -> tuple[list[str], list[str]]:
         ("run_torch", TORCH_JOBS),
         ("run_jax", JAX_JOBS),
         ("run_sbi", SBI_JOBS),
+        ("run_nested", NESTED_JOBS),
         ("run_docs", DOCS_JOBS),
     )
     for key, jobs in buckets_and_jobs:
@@ -230,7 +254,14 @@ def git_diff_paths(base: str, head: str) -> list[str]:
 
 
 def run_all_flags() -> dict[str, bool]:
-    return {"run_dev": True, "run_torch": True, "run_jax": True, "run_sbi": True, "run_docs": True}
+    return {
+        "run_dev": True,
+        "run_torch": True,
+        "run_jax": True,
+        "run_sbi": True,
+        "run_nested": True,
+        "run_docs": True,
+    }
 
 
 def report(paths: list[str] | None, flags: dict[str, bool], reason: str) -> None:

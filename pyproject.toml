@@ -152,6 +152,14 @@ ultranest = ["ultranest"]
 # combination is `pip install "ampere[jax,blackjax]"`. Listing only the new
 # sampler here keeps one extra to one sampler, as the ruling asks; the
 # driver's refusal names the `jax` extra when the backend is missing.
+#
+# **Declared and locked ahead of its driver.** W5.14 landed the nested pair
+# (`_nested.py`) and handed the blackjax route on to a follow-on session;
+# `ampere/inference/_blackjax.py` does not exist yet, so nothing imports this
+# extra today. It is here, with its pixi feature and its place in the `jax`
+# environment, because that is the part of the work that costs a lock
+# re-solve: the follow-on adds a module and its tests, and needs no
+# packaging change at all.
 blackjax = ["blackjax"]
 # NOTE: there is deliberately no `arviz` extra any more -- arviz and a netCDF
 # engine are base dependencies as of W2.2 (see [project.dependencies] above).
@@ -350,6 +358,14 @@ markers = [
     # has power (two arms x 48 refits, tens of minutes): the same reasoning as
     # the three lines above, with a reduced-budget sibling that always runs.
     "astrometry_full: the astrometry calibration study's full budget; run with `pytest -m astrometry_full`",
+    # W5.14. The engine battery's SBC at the count where Talts et al.'s
+    # uniformity test has power (100 refits per engine, several minutes each):
+    # the same reasoning as the four lines above, with a reduced 8-simulation
+    # sibling that always runs and checks the machinery rather than the
+    # statistic. `tests/inference/conftest.py` skips these unless
+    # `-m engines_full` asks for them, in `tests/m2/conftest.py`'s own shape
+    # and for its own reason.
+    "engines_full: the engine battery's full SBC budget; run with `pytest -m engines_full`",
 ]
 
 # ---------------------------------------------------------------------------

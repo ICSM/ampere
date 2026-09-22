@@ -1004,6 +1004,49 @@ deliberate. "Not evaluated" and "impossible" are different statements, and a
 population-level importance-reweighting consumer (design horizon (b)) must be
 able to tell them apart; and zero prior mass is an answer, not an error.
 
+### Three nested samplers on one surface (*Added W5.14*)
+
+The claim this section makes is that an engine consuming only §4.5's surface
+runs on every backend, and `prior_transform` is the half of it that exists for
+nested sampling. W5.14 is the first time that half has had **three**
+consumers — `DynestyEngine` since W2.2, and `NautilusEngine` and
+`UltranestEngine` from the inference-extensions memo's §6 tier 1 — so it is
+the first time the claim has been checked by more than one library of the same
+kind.
+
+Nothing here changed to admit them, which is the finding. Both new drivers
+consume `prior_transform` and `log_likelihood` and nothing else; both are
+written against `ampere.inference.engine.Engine`'s shared machinery; and the
+one place they differ from dynesty is in what their libraries *report*, not in
+what they ask of a problem. The differences that did have to be absorbed are
+all on the driver side and are recorded in `ampere/inference/_nested.py`:
+
+* nautilus refuses a problem with fewer than two free parameters, so the
+  driver refuses one by name rather than letting a library `ValueError` out of
+  a constructor;
+* nautilus reports no evidence uncertainty, so the driver estimates the
+  importance-sampling one (`1/sqrt` of the library's own Kish effective sample
+  size) and records that it did;
+* ultranest draws from numpy's *process-global* generator, like zeus, so its
+  run is wrapped in `ampere.inference.engine.global_seed` — the helper W5.14
+  moved out of the zeus driver so that two engines share one implementation of
+  seed-and-restore rather than two.
+
+`results.md` §9's weighted-draw rule (W5.0) is obeyed by all three through
+**one** function, `dynesty.utils.resample_equal` on the engine's own
+`resample` stream: three nested samplers must not be able to produce three
+slightly different posteriors from the same dead points. Each library's own
+equal-weight output is deliberately unused, because each draws from its
+library's randomness rather than from the problem's seed.
+
+The engine-neutral evidence triple is written by all three, and
+`ampere_evidence_method` is `"nested_sampling"` for all three — W5.0 carried
+the question of whether that attribute should name the method family or the
+engine, and the second and third evidence engines are the occasion to answer
+it: the **family**, because `ampere_engine` already names the engine and what
+a reader needs from the second attribute is whether two archived evidences
+were estimated the same way.
+
 ### Unconstrained space
 
 Gradient-based engines want the density on ℝⁿ with the change-of-variables term

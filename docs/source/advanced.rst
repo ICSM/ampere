@@ -9,7 +9,9 @@ Model comparison
 Often our objective with inference is not only to determine which distribution of parameter values is supported by our observations, but instead to determine which model (out of some set of 2 or more models) is most probable, given our observations.
 This is the *model selection* problem, rather than parameter estimation.
 
-AMPERE natively supports model selection with Nested Sampling - use :class:`~ampere.inference.DynestyEngine` to do your inference instead of any of the other engines, and you will get an estimate of the *model evidence* at the end of the run.
+AMPERE natively supports model selection with Nested Sampling - use one of the three nested samplers, :class:`~ampere.inference.DynestyEngine`, :class:`~ampere.inference.NautilusEngine` or :class:`~ampere.inference.UltranestEngine`, instead of any of the other engines, and you will get an estimate of the *model evidence* at the end of the run.
+Whichever you use, the estimate is recorded under the same three names — ``ampere_log_evidence``, ``ampere_log_evidence_err`` and ``ampere_evidence_method`` — so comparing two archived runs never requires knowing which sampler produced them.
+See :doc:`ampere.inference` for which of the three to reach for; dynesty is in the base install and the other two are behind an extra each.
 Do this for multiple different models, and compare the logarithm of the evidence at the end - whichever model has the highest evidence is the preferred model (assuming all models are equally probable *a priori*).
 This is very convenient, since it automatically penalises models with different numbers of parameters, and doesn't require that models be nested.
 However, this is only well-justified if the model parameters have physical meaning.

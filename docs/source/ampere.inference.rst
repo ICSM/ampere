@@ -13,6 +13,55 @@ There is no way to sample through these drivers and not get a stored run:
 ``log_likelihood``, the per-dataset decomposition, the observed data and the
 full provenance attrs.
 
+Nested sampling: three engines, one convention
+-----------------------------------------------
+
+Three drivers here do nested sampling, and a run archived from any of them is
+comparable with a run archived from the others without a reader knowing which
+produced it. They share the live-point default (``max(100, 25 (n_dim + 1))``),
+the equal-weight resampling rule, and the engine-neutral evidence triple
+``ampere_log_evidence`` / ``ampere_log_evidence_err`` /
+``ampere_evidence_method`` (the last is ``"nested_sampling"`` for all three —
+the *family*, since ``ampere_engine`` already names the engine).
+
+* :class:`~ampere.inference.DynestyEngine` is in the **base install** and is
+  the one to reach for first. Static or dynamic, ellipsoidal or slice
+  sampling, and no extra to install.
+* :class:`~ampere.inference.NautilusEngine` (the ``nautilus`` extra) is
+  importance nested sampling with a neural boundary: it typically reaches a
+  given effective sample size in fewer likelihood calls than an ellipsoidal
+  decomposition, which is the budget that matters when the forward model is a
+  radiative-transfer code. It needs **at least two free parameters** — the
+  library refuses fewer, and the driver says so at construction — and it
+  reports no evidence uncertainty of its own, so ampere records the standard
+  importance-sampling estimate ``1/sqrt(n_eff)`` and notes in
+  ``ampere_nautilus_log_z_err_source`` that it did. ``options={"n_networks":
+  0}`` turns the neural boundary off, which is the right setting for a cheap,
+  low-dimensional problem.
+* :class:`~ampere.inference.UltranestEngine` (the ``ultranest`` extra) is
+  MLFriends region sampling with a bootstrapped termination criterion. It is
+  the conservative one: designed not to miss a mode, with an evidence error
+  whose bootstrap and tail halves are recorded separately
+  (``ampere_ultranest_logzerr_bs`` and ``_tail``) and an insertion-order test
+  (``ampere_ultranest_insertion_order_converged``) that says when they should
+  not be believed. Like zeus it draws from numpy's process-global generator,
+  so its run is not thread-safe against other code drawing from ``np.random``
+  at the same time; ampere seeds and restores that state around the run, so a
+  seeded problem still repeats exactly.
+
+All three resample their weighted dead points to equal weight for the
+``posterior`` group — ArviZ's ``posterior`` has no weight axis, so storing
+weighted draws there would silently misreport every summary — and record the
+original count (``ampere_<engine>_dead_points``) beside the resampled one. The
+raw weighted output stays on ``engine.sampler``.
+
+``tests/inference/test_nested.py`` is the **engine battery** these two landed
+with: each engine's evidence checked against a two-parameter conjugate
+linear-Gaussian problem whose marginal likelihood is written out in closed
+form, each engine SBC-ranked through
+:func:`~ampere.results.calibration.sbc`, and one cost record
+(``ampere_engine_evaluations``) asserted per run.
+
 Simulation-based inference
 --------------------------
 

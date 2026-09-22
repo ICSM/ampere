@@ -339,6 +339,21 @@ the conformance toy problems, SBC-ranked through `calibration.sbc`, and its
 evidence (where it has one) checked against the closed-form
 linear-Gaussian case W3.6 already uses.
 
+**Landed at W5.14 (2026-09-22): tier 1's nested-sampling pair.**
+`nautilus` and `ultranest` ship behind one extra each, over a shared
+`ampere/inference/_nested.py`, and the battery above is
+`tests/inference/test_nested.py` — with `DynestyEngine` in it as the
+*control*, because three nested samplers agreeing with each other proves
+nothing if all three are wrong the same way. Two adjustments the table did
+not anticipate, both recorded in that module: the closed-form
+linear-Gaussian case is run with **two** free parameters rather than W3.6's
+one, because nautilus refuses a one-dimensional problem; and "one cost
+record per run" (horizon (g)) is discharged by `engine_evaluations`, which
+`Engine.finish` already writes for every run, beside each sampler's own
+count of likelihood calls under its own name — no new engine-neutral
+attribute, as §10's ruling that (e) to (g) need no contract change
+requires.
+
 ## 7. Questions for Peter
 
 1. Is an approximate engine's *stored proposal density* (§5.2b) wanted as
