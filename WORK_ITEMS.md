@@ -2420,7 +2420,11 @@ to a quarter — 400 draws × 2 chains; on a different CPU the trajectory
 differs and one chain's width moved 37 %; recommend a larger draw budget
 or a chain-pooled width with the margin set from measured across-machine
 scatter, not a looser pin alone). Both are seed-on-one-machine pins; the
-fix is a per-row change with the reason, run on the runner to confirm. Minutes are free on the public repository,
+fix is a per-row change with the reason, run on the runner to confirm.
+**The runner is deterministic**: the second run (`35688582595`, on
+`3cc97c7`) reproduced both values to every printed digit (0.01983926 and
+0.05119422), so a fix can be verified on CI by one push rather than by
+repetition. Minutes are free on the public repository,
 so the extra environment restores are accepted. **Not in scope:**
 pytest-xdist (needs per-worker registry snapshots — record it as a
 follow-on if the numbers say it is worth it); changing any pinned margin.
