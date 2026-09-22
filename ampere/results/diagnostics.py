@@ -111,7 +111,8 @@ from typing import Any
 import numpy as np
 import scipy.stats as st
 
-from ampere.core.exceptions import ResultsError
+from ampere.core.exceptions import OptionalDependencyError, ResultsError
+from ampere.core.likelihood import ChannelCoupling
 from ampere.core.results_schema import AnomalyScore
 from ampere.core.rng import generator
 
@@ -124,7 +125,7 @@ from ._plotting import (
     select_datasets,
 )
 from .derived import GP_LOCALISATION_GROUP, RESIDUALS_GROUP, base_label, component_variable
-from .emission import LOG_LIKELIHOOD_GROUP, _require_arviz
+from .emission import CHAIN_DIM, DRAW_DIM, LOG_LIKELIHOOD_GROUP, _require_arviz
 
 __all__ = [
     "GP_LOCALISATION_PROVENANCE",
@@ -132,6 +133,7 @@ __all__ = [
     "ChiSquareCheck",
     "WhitenessTest",
     "chi_square_pvalue",
+    "coupling_matrix_summary",
     "gp_localisation_datasets",
     "gp_localisation_score",
     "residual_whiteness",
@@ -147,6 +149,28 @@ GP_LOCALISATION_PROVENANCE = "gp_localisation_postfit"
 #: ``"posterior_predictive"`` for the reason that policy exists: running a
 #: diagnostic must not change any other consumer's draws.
 WHITENESS_STREAM = "residual_whiteness"
+
+
+def _require_xarray() -> Any:
+    """Import xarray on use, never on import.
+
+    The same lazy-import pattern :mod:`ampere.results.calibration` and
+    :mod:`ampere.results.training` each keep their own copy of: xarray
+    arrives with arviz, a base dependency, so an environment without it is
+    incomplete rather than merely missing an extra.
+    """
+    try:
+        import xarray
+    except ImportError as error:  # pragma: no cover - exercised by a minimal install
+        raise OptionalDependencyError(
+            "xarray",
+            context="assembling a coupling matrix summary (ampere.results.diagnostics builds an "
+            "xarray.Dataset before handing it to arviz.summary). xarray arrives with arviz, "
+            "which is a base dependency of ampere, so this environment is incomplete rather "
+            "than merely missing an extra",
+        ) from error
+    return xarray
+
 
 #: Cap on the pair budget, so a 10^5-point spectrum does not silently ask for
 #: a gigabyte of permutation products. Pairs above it are subsampled uniformly
@@ -963,3 +987,117 @@ def summary(tree: Any, **kwargs: Any) -> Any:
     warn_if_approximate(tree, what="a summary table")
     arviz = _require_arviz()
     return arviz.summary(tree, **kwargs)
+
+
+def coupling_matrix_summary(
+    tree: Any,
+    coupling: ChannelCoupling,
+    *,
+    prefix: str | None = None,
+    **kwargs: Any,
+) -> Any:
+    """:func:`summary`'s table, but of ``B`` itself rather than its parameters.
+
+    W5.28(c): :class:`~ampere.core.likelihood.RotationCoupling`'s own docstring
+    names the trap this closes. ``B = Q(angle) diag(exp(log_variance_0),
+    exp(log_variance_1)) Q(angle)ᵀ`` is identified, but ``(angle,
+    log_variance_0, log_variance_1)`` is identified only up to adding ``pi/2``
+    to ``angle`` and exchanging the two variances -- the label switching a
+    mixture model has. :func:`summary` on those three columns reports a mean
+    and an HDI for ``angle`` computed straight across that jump, which is not
+    a number anyone should read: the same failure ``plot_trace`` and
+    ``summary`` already guard against for an approximate run's non-chain
+    draws, but here it is the *model*, not the sampler, that makes the raw
+    parameter meaningless. This is the "summarise ``B`` itself" side of that
+    docstring's advice, computed rather than left to the caller.
+
+    Every stored draw's ``B = coupling.matrix(...)`` is formed (looping over
+    draws in Python -- ``ChannelCoupling.matrix`` is built for one resolved
+    point, not a batch, and even a few thousand ``T x T`` reassemblies are
+    cheap), then handed to :func:`arviz.summary` as a ``(chain, draw, T, T)``
+    variable named ``"B"``, so a caller gets exactly :func:`summary`'s table
+    shape and keyword arguments (``hdi_prob``, ``round_to``, ``kind``, ...)
+    back, just computed over the identified quantity instead of the
+    parameters that only identify it jointly.
+
+    Parameters
+    ----------
+    tree
+        The run. Its ``posterior`` group must carry one stored variable per
+        name in ``coupling.parameters.free_names``.
+    coupling
+        The :class:`~ampere.core.likelihood.ChannelCoupling` the run's
+        ``posterior`` group was fitted with -- ``B``'s parameterisation, not
+        drawn from the tree itself, because a stored run does not carry the
+        Python object that built it.
+    prefix
+        The coupling's component label, when its parameters were merged
+        under one (:class:`~ampere.core.dataset.DatasetCollection`'s
+        ``joint={label: noise}``, ``likelihoods.md`` §7): posterior columns
+        are then named ``f"{prefix}.{parameter_name}"``. ``None`` (the
+        default) looks the parameters up by their bare names.
+    **kwargs
+        Forwarded to :func:`arviz.summary` unchanged, exactly as in
+        :func:`summary`.
+
+    Returns
+    -------
+    Whatever :func:`arviz.summary` returns for one ``(T, T)`` variable named
+    ``"B"`` -- one row per matrix entry.
+
+    Raises
+    ------
+    ampere.core.exceptions.ResultsError
+        If the run's ``posterior`` group is missing one of the coupling's
+        parameters.
+    """
+    from .plots import warn_if_approximate
+
+    if not isinstance(coupling, ChannelCoupling):
+        raise ResultsError(
+            f"coupling_matrix_summary needs a ChannelCoupling (B's own parameterisation), got "
+            f"{type(coupling).__name__}."
+        )
+    warn_if_approximate(tree, what="a coupling matrix summary")
+    posterior = tree["posterior"].dataset
+    # Only the *free* parameters are looked up in the posterior: a fixed one
+    # (RotationCoupling's own docstring names "fix the angle where the
+    # instrument's own is known" as the other way to dodge the relabelling)
+    # was never drawn, so it has no stored column, and coupling.resolved(...)
+    # below fills it back in from its own declared value.
+    names = coupling.parameters.free_names
+    if not names:
+        raise ResultsError(
+            f"every parameter of this {type(coupling).__name__} is fixed, so there is nothing "
+            f"to look up in the posterior; call coupling.matrix(coupling.resolved({{}})) directly."
+        )
+    columns = {name: f"{prefix}.{name}" if prefix else name for name in names}
+    missing = [column for column in columns.values() if column not in posterior.data_vars]
+    if missing:
+        raise ResultsError(
+            f"the run's posterior has no variable named {sorted(missing)}; it has "
+            f"{sorted(str(name) for name in posterior.data_vars)}. coupling_matrix_summary "
+            f"needs one stored column per free {type(coupling).__name__} parameter "
+            f"({list(names)}), named with prefix={prefix!r}."
+        )
+    arrays = {
+        name: np.asarray(posterior[column].values, dtype=float) for name, column in columns.items()
+    }
+    shape = next(iter(arrays.values())).shape
+    flat = {name: array.reshape(-1) for name, array in arrays.items()}
+    channels = coupling.channels
+    matrices = np.empty((flat[names[0]].size, channels, channels), dtype=float)
+    for draw_index in range(matrices.shape[0]):
+        values = {name: flat[name][draw_index] for name in names}
+        matrices[draw_index] = np.asarray(coupling.matrix(coupling.resolved(values)), dtype=float)
+    xarray = _require_xarray()
+    dataset = xarray.Dataset(
+        {
+            "B": (
+                (CHAIN_DIM, DRAW_DIM, "channel_i", "channel_j"),
+                matrices.reshape(*shape, channels, channels),
+            )
+        }
+    )
+    arviz = _require_arviz()
+    return arviz.summary(dataset, **kwargs)
