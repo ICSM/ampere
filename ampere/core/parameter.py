@@ -78,6 +78,7 @@ from .exceptions import (
 __all__ = [
     "HORSESHOE_SPIKE_SHAPE",
     "HORSESHOE_TAILS",
+    "MAX_FLAT_MEMBERS",
     "SEPARATOR",
     "TORCH_MODULE_NAMES",
     "Bijection",
@@ -94,6 +95,7 @@ __all__ = [
     "Parameterised",
     "Plate",
     "PlateBinding",
+    "Population",
     "Prior",
     "PriorSpec",
     "Tie",
@@ -1613,6 +1615,299 @@ class PlateBinding:
         object.__setattr__(self, "index", index)
 
 
+#: How many members a ``layout="flat"`` :class:`Population` may declare.
+#:
+#: The flat layout is the tie-based pattern ``parameters.md`` §9 documents —
+#: one :class:`Parameter` object per member — and ``lnprior`` is O(number of
+#: ``Parameter`` objects. ``hierarchical_population.md`` §7 measured about
+#: 800 ms per ``lnprior`` at N = 1000 against 0.6 ms for the same structure
+#: declared as one plate. The limit is deliberately generous (a population of
+#: a hundred objects still fits in well under a millisecond) and deliberately
+#: finite: past it the declaration is a mistake, not a trade-off, and
+#: ``layout="plate"`` expresses the same model as one site.
+MAX_FLAT_MEMBERS: int = 128
+
+
+@dataclasses.dataclass(frozen=True)
+class Population:
+    """N components whose same-named parameters are draws from one shared prior.
+
+    The composition-time declaration of hierarchy — gap **H-1** of
+    ``docs/design/modalities/hierarchical_population.md``, ruled to land with
+    Phase 5 (§11 Q2, 2026-09-03) and landed by W5.12. It is the hierarchical
+    counterpart of :class:`Tie` and exists for the same reason §8 gives for
+    ``Tie``: a library model cannot anticipate the fit it will be composed
+    into, and *"these N objects are draws from one population"* is a statement
+    the person composing the fit makes. Without it, every per-object model
+    must declare population hyperparameters it never uses, because a
+    :class:`HierarchicalPrior`'s references must resolve inside the component
+    that evaluates them.
+
+    ``Population`` declares the population **once** and
+    :meth:`ParameterSet.merge` wires it: the hyperpriors join the merge as one
+    further top-level component under :attr:`label`, and each member component
+    receives its own draw under the member's bare local name — so the
+    per-object models compose *unmodified*.
+
+    Parameters
+    ----------
+    name
+        The population's name. It is the plate tag every member parameter
+        carries (:attr:`Parameter.plate`) and the default component label, so
+        the merged names read ``"objects.mu"``, ``"objects.theta"``.
+    members
+        The per-member parameters, exactly as :class:`Plate`'s ``members``
+        (``parameters.md`` §9): one :class:`Parameter` per quantity each
+        member has its own value of. A member whose prior is a
+        :class:`HierarchicalPrior` referencing the hyperpriors by their bare
+        names is the population draw; a member with an ordinary prior is a
+        **per-member nuisance parameter** — an i.i.d. array, which §11 Q4
+        confirms is the intended reading of ``members``.
+    hyperpriors
+        The population hyperparameters, as ordinary :class:`Parameter`\\ s.
+        They are what the members' :class:`HierarchicalPrior`\\ s reference,
+        and what a population fit is usually *for*.
+    over
+        The component labels the members are routed to, **in plate order**:
+        element *i* reaches ``over[i]``. Empty means a population with no
+        per-member components — N members fitted from one stacked dataset,
+        which is :class:`Plate` with a component label attached.
+    size
+        The number of members; required only when *over* is empty.
+    layout
+        ``"plate"`` (the default) or ``"flat"``.
+
+        **plate** expands the members to one array-valued parameter of shape
+        ``(size,) + member.shape`` tagged with the plate, and routes element
+        *i* to ``over[i]`` through :attr:`Binding.index` (gap H-2). It is one
+        sample site, which is what a ``numpyro.plate``/``pyro.plate`` is, so
+        this is the layout the native realisations lower and the only one that
+        scales.
+
+        **flat** is the tie-based pattern ``parameters.md`` §9 documents and
+        the route the numpy path has had all along: each member component
+        keeps (or is given) its *own* scalar parameter, whose prior becomes
+        the member's with its references qualified onto the shared
+        hyperpriors. Identical joint density, N times as many
+        :class:`Parameter` objects, so it is refused beyond
+        :data:`MAX_FLAT_MEMBERS` members, by name, with the plate layout as
+        the remedy.
+    label
+        Component label for the hyperpriors (and, in the plate layout, for the
+        member array). Defaults to *name*.
+
+    Examples
+    --------
+    >>> import scipy.stats as st
+    >>> population = Population(
+    ...     "objects",
+    ...     members=[
+    ...         Parameter("theta", HierarchicalPrior("norm", {"loc": "mu", "scale": "sigma"}))
+    ...     ],
+    ...     hyperpriors=[
+    ...         Parameter("mu", st.norm(0.0, 5.0)),
+    ...         Parameter("sigma", st.halfnorm(0.0, 2.0)),
+    ...     ],
+    ...     over=["obj0", "obj1", "obj2"],
+    ... )
+    >>> population.size
+    3
+    >>> def object_set():
+    ...     return ParameterSet(
+    ...         [Parameter("theta", st.norm(0.0, 1.0)), Parameter("cal", st.lognorm(0.1))]
+    ...     )
+    >>> plated = ParameterSet.merge(
+    ...     {label: object_set() for label in ("obj0", "obj1", "obj2")},
+    ...     populations=[population],
+    ... )
+    >>> plated.merged.names
+    ('obj0.cal', 'obj1.cal', 'obj2.cal', 'objects.mu', 'objects.sigma', 'objects.theta')
+    >>> plated.merged["objects.theta"].shape, plated.merged["objects.theta"].plate
+    ((3,), 'objects')
+    >>> [(b.component, b.local_name, b.index) for b in plated.bindings if b.index is not None]
+    [('obj0', 'theta', 0), ('obj1', 'theta', 1), ('obj2', 'theta', 2)]
+
+    The flat layout declares the same population, and the same density, with N
+    scalar sites instead of one array:
+
+    >>> flat = ParameterSet.merge(
+    ...     {label: object_set() for label in ("obj0", "obj1", "obj2")},
+    ...     populations=[dataclasses.replace(population, layout="flat")],
+    ... )
+    >>> flat.merged.names  # doctest: +NORMALIZE_WHITESPACE
+    ('obj0.theta', 'obj0.cal', 'obj1.theta', 'obj1.cal', 'obj2.theta', 'obj2.cal',
+     'objects.mu', 'objects.sigma')
+    >>> flat.merged["obj0.theta"].references
+    ('objects.mu', 'objects.sigma')
+    """
+
+    name: str
+    members: Sequence[Parameter] = ()
+    hyperpriors: Sequence[Parameter] = ()
+    over: Sequence[str] = ()
+    size: int | None = None
+    layout: str = "plate"
+    label: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "name", _check_local_name(self.name, "population"))
+        object.__setattr__(self, "members", tuple(self.members))
+        object.__setattr__(self, "hyperpriors", tuple(self.hyperpriors))
+        object.__setattr__(self, "over", tuple(self.over))
+        if self.layout not in ("plate", "flat"):
+            raise ParameterError(
+                f"population {self.name!r}: layout must be 'plate' or 'flat', got {self.layout!r}."
+            )
+        if not self.members:
+            raise ParameterError(
+                f"population {self.name!r} declares no members; a population with only "
+                f"hyperparameters is a group of ordinary parameters — declare it as a "
+                f"ParameterSet and tie it."
+            )
+        seen: set[str] = set()
+        for parameter in (*self.hyperpriors, *self.members):
+            if not isinstance(parameter, Parameter):
+                raise ParameterError(
+                    f"population {self.name!r} takes Parameters, got {parameter!r}"
+                )
+            _check_local_name(parameter.name, "population member")
+            if parameter.name in seen:
+                raise ParameterError(f"population {self.name!r}: duplicate name {parameter.name!r}")
+            seen.add(parameter.name)
+        for parameter in self.members:
+            if parameter.plate is not None and parameter.plate != self.name:
+                raise ParameterError(
+                    f"population {self.name!r}: member {parameter.name!r} is already tagged "
+                    f"with plate {parameter.plate!r}; nested plates are out of scope "
+                    f"(parameters.md §12.2)."
+                )
+        for label in self.over:
+            _check_local_name(label, "population member component")
+        if len(set(self.over)) != len(self.over):
+            duplicated = sorted({c for c in self.over if self.over.count(c) > 1})
+            raise ParameterError(
+                f"population {self.name!r} names component(s) {duplicated} more than once; "
+                f"each member is one component, and its position is its plate index."
+            )
+        declared = self.size
+        if declared is not None:
+            if isinstance(declared, bool) or not isinstance(declared, (int, np.integer)):
+                raise ParameterError(
+                    f"population {self.name!r}: size must be an integer, got {declared!r}"
+                )
+            declared = int(declared)
+            if declared < 1:
+                raise ParameterError(f"population {self.name!r}: size must be >= 1")
+            if self.over and declared != len(self.over):
+                raise ParameterError(
+                    f"population {self.name!r} declares size={declared} but names "
+                    f"{len(self.over)} component(s) in `over`; the plate index is the position "
+                    f"in `over`, so the two must agree (drop `size`)."
+                )
+        elif self.over:
+            declared = len(self.over)
+        else:
+            raise ParameterError(
+                f"population {self.name!r} names no components in `over` and declares no "
+                f"`size`; one of the two must say how many members there are."
+            )
+        object.__setattr__(self, "size", declared)
+        if self.layout == "flat":
+            if not self.over:
+                raise ParameterError(
+                    f"population {self.name!r} has layout='flat' but names no components in "
+                    f"`over`: the flat layout *is* one scalar parameter per member component, "
+                    f"so with no components there is nothing to write it on. Use "
+                    f"layout='plate'."
+                )
+            if declared > MAX_FLAT_MEMBERS:
+                raise ParameterError(
+                    f"population {self.name!r} has {declared} members with layout='flat', above "
+                    f"the limit of {MAX_FLAT_MEMBERS}. The flat layout is the tie-based pattern "
+                    f"of parameters.md §9 — one Parameter object per member — and lnprior is "
+                    f"O(number of Parameter objects): hierarchical_population.md §7 measured "
+                    f"about 800 ms per lnprior at N = 1000 against 0.6 ms for the same "
+                    f"structure as one plate. Use layout='plate', which is one array-valued "
+                    f"site, routes element i to component i through Binding.index, and is what "
+                    f"the torch and jax realisations lower to a real plate."
+                )
+        object.__setattr__(
+            self,
+            "label",
+            self.name if self.label is None else _check_local_name(self.label, "population label"),
+        )
+
+    @property
+    def component(self) -> str:
+        """The component label the hyperpriors join the merge under."""
+        return self.label if self.label is not None else self.name
+
+    @property
+    def member_names(self) -> tuple[str, ...]:
+        """The bare local names each member component receives."""
+        return tuple(p.name for p in self.members)
+
+    @property
+    def hyperprior_names(self) -> tuple[str, ...]:
+        """The bare local hyperprior names, before qualification."""
+        return tuple(p.name for p in self.hyperpriors)
+
+    def qualified(self, local_name: str) -> str:
+        """The merged name *local_name* takes once this population is merged."""
+        return f"{self.component}{SEPARATOR}{local_name}"
+
+    def as_plate(self) -> Plate:
+        """This population as the equivalent :class:`Plate`, for inspection.
+
+        The merge does **not** go through it: a population's component label
+        already supplies exactly the one level of qualification a plate's name
+        would, and doubling it would name the draws
+        ``"objects.objects.theta"``. Offered because ``Plate`` is the construct
+        ``parameters.md`` §9 documents and the one a reader already knows.
+        """
+        return Plate(
+            self.name,
+            size=int(self.size or 1),
+            hyperparameters=self.hyperpriors,
+            members=self.members,
+        )
+
+    def parameter_set(self) -> ParameterSet:
+        """The component set this population contributes to the merge.
+
+        The hyperpriors always; in the plate layout the members too, each as
+        one array-valued parameter of shape ``(size,) + member.shape`` tagged
+        with :attr:`name`.
+        """
+        parameters: list[Parameter] = list(self.hyperpriors)
+        if self.layout == "plate":
+            size = int(self.size or 1)
+            parameters.extend(
+                dataclasses.replace(member, shape=(size, *member.shape), plate=self.name)
+                for member in self.members
+            )
+        return ParameterSet(parameters)
+
+    def plate_bindings(self) -> tuple[PlateBinding, ...]:
+        """The element bindings routing member *i*'s draw to component *i*.
+
+        Empty for the flat layout (whose members are each component's own
+        parameter) and for a population declaring no ``over`` components.
+        """
+        if self.layout != "plate":
+            return ()
+        return tuple(
+            PlateBinding(
+                parameter=self.qualified(member.name),
+                component=label,
+                local_name=member.name,
+                index=index,
+            )
+            for index, label in enumerate(self.over)
+            for member in self.members
+        )
+
+
 @dataclasses.dataclass(frozen=True)
 class ParameterMapping:
     """The result of :meth:`ParameterSet.merge`: a joint set plus its wiring.
@@ -2213,6 +2508,7 @@ class ParameterSet:
         *,
         ties: Sequence[Tie] = (),
         plate_bindings: Sequence[PlateBinding] = (),
+        populations: Sequence[Population] = (),
     ) -> ParameterMapping:
         """Compose several parameter sets into one joint set.
 
@@ -2236,6 +2532,13 @@ class ParameterSet:
             identifiers; iteration order fixes the merged declaration order.
         ties
             Composition-time ties, in addition to any ``shared_as`` labels.
+        populations
+            :class:`Population` declarations (**W5.12**, ``H-1``): each adds
+            its hyperpriors as one further component and gives every component
+            it names its own draw, so a population is declared once at
+            composition time rather than written into every per-object model.
+            Applied before qualification, so everything else here sees
+            ordinary parameters.
         plate_bindings
             :class:`PlateBinding` declarations (ruled 2026-09-02): each routes
             one element of a merged array-valued parameter to a component
@@ -2262,7 +2565,7 @@ class ParameterSet:
             out-of-range index, an unknown component, or a colliding local
             name.
         """
-        return _merge(sets, ties, plate_bindings)
+        return _merge(sets, ties, plate_bindings, populations)
 
     # -- serialisation -----------------------------------------------------
 
@@ -2441,6 +2744,7 @@ def _merge(
     sets: Mapping[str, ParameterSet | ParameterMapping],
     ties: Sequence[Tie],
     plate_bindings: Sequence[PlateBinding] = (),
+    populations: Sequence[Population] = (),
 ) -> ParameterMapping:
     components = tuple(sets)
     for component in components:
@@ -2460,9 +2764,23 @@ def _merge(
             resolved_sets[component] = given
     sets = resolved_sets
 
+    # W5.12: a composition-time Population is applied *here*, before anything
+    # is qualified, because it is a statement about the component sets
+    # themselves: it adds one component (the hyperpriors, and in the plate
+    # layout the array-valued draws) and rewrites — or removes, or injects —
+    # the member parameter on each component it names. Everything downstream
+    # of this call therefore sees ordinary parameters and ordinary bindings.
+    declarations: dict[str, list[Parameter]] = {
+        component: list(sets[component]) for component in components
+    }
+    if populations:
+        components, declarations, plate_bindings = _apply_populations(
+            populations, components, declarations, inner, ties, plate_bindings
+        )
+
     qualified: dict[str, tuple[str, Parameter]] = {}
     for component in components:
-        for parameter in sets[component]:
+        for parameter in declarations[component]:
             qualified[f"{component}{SEPARATOR}{parameter.name}"] = (component, parameter)
 
     # Which merged parameter does each site belong to?
@@ -2503,7 +2821,7 @@ def _merge(
     order: list[str] = []
     members: dict[str, list[tuple[str, Parameter]]] = {}
     for component in components:
-        for parameter in sets[component]:
+        for parameter in declarations[component]:
             site = f"{component}{SEPARATOR}{parameter.name}"
             group = group_of[site]
             if group not in members:
@@ -2529,10 +2847,10 @@ def _merge(
     merged_set = ParameterSet(merged)
     taken = {(b.component, b.local_name) for b in bindings}
     for pb in plate_bindings:
-        if pb.component not in resolved_sets:
+        if pb.component not in declarations:
             raise ParameterError(
                 f"plate binding routes {pb.parameter!r} to component {pb.component!r}, which "
-                f"this merge does not have; components are {sorted(resolved_sets)}."
+                f"this merge does not have; components are {sorted(declarations)}."
             )
         if pb.parameter not in merged_set.names:
             raise ParameterError(
@@ -2577,6 +2895,133 @@ def _merge(
         components=components,
         inner=types.MappingProxyType(inner),
     )
+
+
+def _apply_populations(
+    populations: Sequence[Population],
+    components: tuple[str, ...],
+    declarations: dict[str, list[Parameter]],
+    inner: Mapping[str, ParameterMapping],
+    ties: Sequence[Tie],
+    plate_bindings: Sequence[PlateBinding],
+) -> tuple[tuple[str, ...], dict[str, list[Parameter]], tuple[PlateBinding, ...]]:
+    """Apply each :class:`Population` to the component declarations (**W5.12**).
+
+    Gap H-1 of ``hierarchical_population.md``, made executable. The population
+    joins the merge as one further top-level component, and for every
+    component it names in ``over``:
+
+    * ``layout="plate"`` — the component's own declaration of the member (if
+      it has one) is **removed**, because element *i* of the population's
+      array-valued parameter reaches it instead, through
+      :attr:`Binding.index`;
+    * ``layout="flat"`` — the component's own declaration is **re-priored**
+      with the member's prior, its hierarchical references qualified onto the
+      population's hyperpriors; a component that does not declare it is given
+      one.
+
+    Either way each member component ends up receiving the draw under the
+    member's own bare local name, so per-object models compose unmodified,
+    which is the whole of H-1's argument.
+    """
+    ordered = list(components)
+    updated = {component: list(entries) for component, entries in declarations.items()}
+    extra: list[PlateBinding] = []
+    tied_sites = {site for tie in ties for site in tie.sites}
+    for population in populations:
+        if not isinstance(population, Population):
+            raise ParameterError(
+                f"populations must be Population instances, got {type(population).__name__}."
+            )
+        label = population.component
+        if label in updated:
+            raise ParameterError(
+                f"population {population.name!r} joins this merge as component {label!r}, but "
+                f"that label is already taken; pass label='...' to the Population, or rename "
+                f"the component."
+            )
+        if label in population.over:
+            raise ParameterError(
+                f"population {population.name!r} names its own component {label!r} in `over`; "
+                f"the hyperpriors are not one of their own draws."
+            )
+        for member_label in population.over:
+            if member_label not in updated:
+                raise ParameterError(
+                    f"population {population.name!r} routes a draw to component "
+                    f"{member_label!r}, which this merge does not have; components are "
+                    f"{sorted(updated)}."
+                )
+            if member_label in inner:
+                raise ParameterError(
+                    f"population {population.name!r} routes a draw to component "
+                    f"{member_label!r}, which was merged as a ParameterMapping (a Dataset, or "
+                    f"another composite). A population addresses its members by *bare* local "
+                    f"name, and a composite's merged names are qualified ('likelihood.scale'), "
+                    f"so the draw would never reach a leaf. Declare the population over the "
+                    f"models those datasets name, or share one quantity across them with a "
+                    f"Tie."
+                )
+        ordered.append(label)
+        updated[label] = list(population.parameter_set())
+        rename = {name: population.qualified(name) for name in population.hyperprior_names}
+        for member_label in population.over:
+            existing = {parameter.name: parameter for parameter in updated[member_label]}
+            for member in population.members:
+                site = f"{member_label}{SEPARATOR}{member.name}"
+                current = existing.get(member.name)
+                if current is not None:
+                    if current.shape != member.shape:
+                        raise ParameterError(
+                            f"population {population.name!r}: member {member.name!r} has shape "
+                            f"{member.shape} but {site} declares {current.shape}; a population "
+                            f"draw replaces the component's own declaration, so the two must "
+                            f"describe the same quantity."
+                        )
+                    if current.unit != member.unit:
+                        raise ParameterError(
+                            f"population {population.name!r}: member {member.name!r} is in "
+                            f"{member.unit} but {site} is in {current.unit}. Priors are "
+                            f"declared numerically in the parameter's unit, so ampere will not "
+                            f"guess a conversion."
+                        )
+                    if current.is_fixed:
+                        raise ParameterError(
+                            f"population {population.name!r} would make {site} a draw from the "
+                            f"population, but it is fixed. A fixed site has no draw; release "
+                            f"it, or leave it out of the population."
+                        )
+                    if current.shared_as is not None or site in tied_sites:
+                        raise ParameterError(
+                            f"population {population.name!r} would make {site} a draw from the "
+                            f"population, but it is already shared (shared_as / Tie). Sharing "
+                            f"collapses N sites into one value; a population keeps them N, "
+                            f"drawn from one prior — pick one."
+                        )
+                if population.layout == "plate":
+                    if current is not None:
+                        updated[member_label] = [
+                            parameter
+                            for parameter in updated[member_label]
+                            if parameter.name != member.name
+                        ]
+                    continue
+                prior = member.prior
+                if isinstance(prior, HierarchicalPrior):
+                    prior = prior.rename_references(rename)
+                updated[member_label] = _replace_or_append(
+                    updated[member_label],
+                    dataclasses.replace(member, prior=prior, plate=None),
+                )
+        extra.extend(population.plate_bindings())
+    return tuple(ordered), updated, (*plate_bindings, *extra)
+
+
+def _replace_or_append(entries: list[Parameter], parameter: Parameter) -> list[Parameter]:
+    """*entries* with *parameter* substituted in place, or appended if absent."""
+    if any(entry.name == parameter.name for entry in entries):
+        return [parameter if entry.name == parameter.name else entry for entry in entries]
+    return [*entries, parameter]
 
 
 def _qualified_prior(parameter: Parameter, rename: Mapping[str, str]) -> AnyPrior:
