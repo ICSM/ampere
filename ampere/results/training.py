@@ -871,6 +871,20 @@ class TrainingSet:
         simulated at the observations' own uncertainties. ``None`` in a slot
         means that draw carried no context. The *prior* is in
         ``attrs['ampere_simulation_context']``.
+
+        **W5.28(h), by design, not by oversight**: an empty tuple also means
+        "this file predates W5.10 and the concept did not exist yet", and the
+        two are deliberately not distinguished — no sentinel, no schema
+        attribute records which. The same parity :attr:`observed` already has
+        with a budget written under ``observe=False`` (this module's own
+        docstring states it as the format's rule for every optional group:
+        "a reader of an older file finds them absent, exactly as it finds
+        ``observations`` absent from a budget drawn with ``observe=False``").
+        Nothing downstream ever needs to ask "did this file's writer know
+        about contexts" independently of "does this budget have one" — an
+        empty ``contexts`` is handled identically either way by every
+        consumer this module has (:func:`_check_context` included) — so a
+        sentinel would be a distinction with no question it answers.
     """
 
     attrs: Mapping[str, Any]
@@ -1247,9 +1261,34 @@ def _check_against_file(tree: Any, slots: Mapping[str, _Slot]) -> None:
 
 
 def _concatenate(xarray: Any, existing: Any, addition: Any) -> Any:
-    """Grow the ``sample`` dimension, leaving the shared coordinates alone."""
+    """Grow the ``sample`` dimension, leaving the shared coordinates alone.
+
+    W5.28(g): checked here, once, for every group there is or ever will be —
+    rather than left to each optional group's own guard
+    (:func:`_check_context` is today's only one). Indexing *addition* by
+    *existing*'s own group paths, unchecked, has two failure modes: a group
+    *existing* carries and *addition* does not raises a bare ``KeyError`` out
+    of ``addition[name]`` with no word of what training-set rule it broke, and
+    a group *addition* carries that *existing* does not is never looked at
+    (this loop only ever walks *existing*'s paths), so it is silently dropped
+    from the merged file. Both are the same mistake ``_check_against_file``
+    and ``_check_context`` refuse for the groups they already know about;
+    this refuses it for any group, known to this module or not.
+    """
+    existing_paths = set(_group_paths(existing))
+    addition_paths = set(_group_paths(addition))
+    if existing_paths != addition_paths:
+        missing = sorted(existing_paths - addition_paths)
+        extra = sorted(addition_paths - existing_paths)
+        raise ResultsError(
+            f"this batch's groups do not match the training set's: "
+            f"{f'the file has {missing} and the batch does not. ' if missing else ''}"
+            f"{f'the batch has {extra} and the file does not. ' if extra else ''}"
+            f"A set is one shape throughout, optional groups included; append a batch that "
+            f"carries exactly the same groups the file does, or write a new set."
+        )
     groups: dict[str, Any] = {}
-    for name in sorted(_group_paths(existing)):
+    for name in sorted(existing_paths):
         old = existing[name].dataset
         if name == COORDINATES_GROUP:
             _check_coordinates(old, addition[name].dataset)

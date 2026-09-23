@@ -1305,7 +1305,16 @@ class QuasisepGP(GPSolver):
 
         alpha = np.empty(order.size, dtype=DTYPE)
         alpha[order] = gp.apply_inverse(residuals[order])
-        target = points if at is None else _as_points(at, "conditioning grid", dimensions=1)
+        # W5.28(d): dimensions=points.shape[1], not a hardcoded 1 -- points is
+        # the *unreduced* multi-axis container _axis() returned (kernel.select
+        # picks the one ordered column out of it for the solve), so at must
+        # match its column count the same way DenseGP.condition's target does,
+        # not the single ordered axis the solve itself factorises against.
+        target = (
+            points
+            if at is None
+            else _as_points(at, "conditioning grid", dimensions=points.shape[1])
+        )
         # The cross-covariance is dense whatever the solver: M outputs each
         # need all N inputs. Only the solve against it is O(N) per column.
         cross = kernel.matrix(target, points, values)
@@ -1734,11 +1743,17 @@ class HilbertSpaceGP(GPSolver):
         diagonal = self._diagonal(variance)
         weighted, factor = self._factor(scaled, diagonal)
         alpha = self._solve(scaled, diagonal, weighted, factor, residuals)
+        # W5.28(f): at the data (the default, and the hot path -- every
+        # log_prob/conditional call with no explicit at= lands here), the
+        # target *is* points, so target_scaled is scaled again, entry for
+        # entry: reuse it rather than paying _scaled_basis's O(N m) spectral
+        # density and basis-matrix work a second time for the same (N, m)
+        # block. Only an explicit, different at= rebuilds it.
         if at is None:
-            target = points
+            target_scaled = scaled
         else:
             target = _as_points(at, "conditioning grid", dimensions=points.shape[1])
-        target_scaled = self._scaled_basis(kernel, basis, target, values)
+            target_scaled = self._scaled_basis(kernel, basis, target, values)
         mean = target_scaled @ (scaled.T @ alpha)
         triangular = scipy.linalg.solve_triangular(factor[0], target_scaled.T, lower=True)
         posterior = np.sum(triangular * triangular, axis=0)

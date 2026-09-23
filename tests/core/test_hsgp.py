@@ -342,6 +342,38 @@ class TestTheSolver:
             conditioned = solver.condition(kernel, GRID, residuals(), variances(), values, at=at)
             assert np.all(np.asarray(conditioned.variance) >= 0.0)
 
+    def test_condition_at_none_reuses_the_training_blocks_scaled_basis(self, monkeypatch) -> None:
+        """W5.28(f): one ``(N, m)`` block, not two, when ``at`` is the data.
+
+        Before this fix, ``condition(at=None)`` called ``_scaled_basis`` a
+        second time on the identical ``(points, kernel, basis, values)``,
+        recomputing the same spectral density and basis matrix it had just
+        built for ``scaled``. Count the calls rather than only checking the
+        answer: a correctness test cannot tell "computed once, reused" from
+        "computed twice, identically", and the second computation is exactly
+        the redundant work this item removes.
+        """
+        kernel = Matern32(AMPLITUDE, LENGTH_SCALE)
+        values = kernel.resolve({})
+        solver = HilbertSpaceGP(basis_size=16, boundary_factor=2.0)
+        calls = 0
+        original = HilbertSpaceGP._scaled_basis
+
+        def counting(self, kernel, basis, points, values):
+            nonlocal calls
+            calls += 1
+            return original(self, kernel, basis, points, values)
+
+        monkeypatch.setattr(HilbertSpaceGP, "_scaled_basis", counting)
+        default = solver.condition(kernel, GRID, residuals(), variances(), values)
+        assert calls == 1
+
+        # And the answer is unchanged: conditioning at the data explicitly
+        # (the pre-fix code path, in effect) still agrees exactly.
+        explicit = solver.condition(kernel, GRID, residuals(), variances(), values, at=GRID)
+        np.testing.assert_allclose(default.mean, explicit.mean, atol=1e-12)
+        np.testing.assert_allclose(default.variance, explicit.variance, atol=1e-12)
+
     def test_the_error_falls_as_the_basis_is_refined(self) -> None:
         """The convergence claim, in its simplest form. The conformance battery
         states it as a tolerance class over every fixture; this is the reference

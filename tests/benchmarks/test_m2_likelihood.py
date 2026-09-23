@@ -54,8 +54,6 @@ benchmark that fails on a slow runner is a benchmark that gets deleted.
 from __future__ import annotations
 
 import math
-import pathlib
-import sys
 from collections.abc import Callable
 from typing import Any
 
@@ -64,12 +62,9 @@ import pytest
 
 pytest.importorskip("pytest_benchmark")
 
-_ROOT = pathlib.Path(__file__).resolve().parents[2]
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
-
-from examples.m2_misspecification import study  # noqa: E402
-from examples.m2_misspecification.generators import generate  # noqa: E402
+# examples/ is on sys.path via tests/conftest.py (W5.28(k)).
+from examples.m2_misspecification import study
+from examples.m2_misspecification.generators import generate
 
 #: The scenario every row is timed on. The cost does not depend on which one —
 #: the arithmetic is the same — so one is chosen and named rather than looped.

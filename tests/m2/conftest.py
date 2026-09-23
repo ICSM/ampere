@@ -5,11 +5,10 @@ reader is meant to run it, change a scenario and see what happens. That leaves
 this suite two jobs, and both are done here rather than repeated per module.
 
 **Importing it.** ``examples/`` is not an installed package — the wheel
-declares ``include = ["ampere*"]`` — so the repository root goes on
-``sys.path`` explicitly. Explicitly, rather than by relying on pytest's
-``prepend`` import mode reaching that far: it does not, and a suite that
-happened to work because of an editable install's path hook would break the
-first time somebody ran it against a wheel.
+declares ``include = ["ampere*"]`` — so the repository root must reach
+``sys.path`` some way that does not depend on how ``ampere`` itself was
+installed. ``tests/conftest.py`` (**W5.28(k)**) now does this once for the
+whole suite, rather than a copy of the insertion living here as well.
 
 **Paying for the chains once.** The eight runs the science assertions and the
 figures both read (four scenarios x two likelihoods, at
@@ -23,18 +22,12 @@ so a test must not assume it received a freshly emitted run.
 
 from __future__ import annotations
 
-import pathlib
-import sys
 from collections.abc import Iterator
 from typing import Any
 
 import pytest
 
-_ROOT = pathlib.Path(__file__).resolve().parents[2]
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
-
-from examples.m2_misspecification import study  # noqa: E402
+from examples.m2_misspecification import study
 
 #: The size every CI assertion is made at: the paper study's own, and the one
 #: rung of the ladder whose chains fit in a per-PR budget. The other two rungs

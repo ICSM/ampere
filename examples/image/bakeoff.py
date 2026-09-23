@@ -72,7 +72,7 @@ from ampere.core import (
 
 from . import generators as gen
 from . import study
-from .grid_gp import GridDenseGP, GridHilbertSpaceGP, GridLikelihood, _GriddedSolver
+from .grid_gp import GriddedSolver, GridDenseGP, GridHilbertSpaceGP, GridLikelihood
 
 __all__ = [
     "ACCURACY_SIZES",
@@ -98,7 +98,7 @@ __all__ = [
 ]
 
 
-class GridEquispacedFourierGP(_GriddedSolver, EquispacedFourierGP):
+class GridEquispacedFourierGP(GriddedSolver, EquispacedFourierGP):
     """:class:`~ampere.core.EquispacedFourierGP`, allowed to see an ``Image``.
 
     :mod:`examples.image.grid_gp`'s mixin, applied to W5.6's prototype for
@@ -109,7 +109,7 @@ class GridEquispacedFourierGP(_GriddedSolver, EquispacedFourierGP):
     """
 
 
-class GridVecchiaResponseGP(_GriddedSolver, VecchiaResponseGP):
+class GridVecchiaResponseGP(GriddedSolver, VecchiaResponseGP):
     """:class:`~ampere.core.VecchiaResponseGP`, allowed to see an ``Image``."""
 
 

@@ -3282,8 +3282,22 @@ def with_shrinkage(kernel: Kernel, declaration: Sequence[Parameter]) -> Kernel:
     rebuilt = [parameter for parameter in given if parameter.name not in existing]
     rebuilt += [replacements.get(parameter.name, parameter) for parameter in kernel.parameters]
     shrunk = copy.copy(kernel)
-    shrunk.__dict__["_parameters"] = ParameterSet(rebuilt)
     shrunk.__dict__["_bound_cache"] = {}
+    # W5.28(i): the ordinary construction route -- the same register_parameter
+    # loop _Composite.__init__ and WarpedKernel.__init__ already use to build a
+    # parameter set only known once children or renamings are resolved --
+    # rather than a fully-built ParameterSet smuggled straight into __dict__.
+    # Starting from an empty set and registering rebuilt in order means every
+    # name is checked by register_parameter's own _check_free_name (against
+    # the kernel's buffers and the reserved names, not merely against the rest
+    # of rebuilt), and the hierarchical-reference ordering
+    # shrinkage_horseshoe's declaration depends on -- scale levels ahead of
+    # the amplitudes that reference them -- is enforced incrementally, at
+    # each registration, exactly as it would be for a kernel built this way
+    # from the start rather than only checked once at the end.
+    shrunk._parameters = ParameterSet()
+    for parameter in rebuilt:
+        shrunk.register_parameter(parameter)
     shrunk.__dict__["HYPERPARAMETERS"] = tuple(shrunk.parameters.names)
     return shrunk
 

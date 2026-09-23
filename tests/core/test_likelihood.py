@@ -1844,6 +1844,36 @@ class TestQuasisepGP:
             np.testing.assert_allclose(got.mean, expected.mean, atol=1e-10)
             np.testing.assert_allclose(got.variance, expected.variance, atol=1e-10)
 
+    def test_condition_at_accepts_a_multi_axis_container(self) -> None:
+        """W5.28(d): ``at=`` must match the container's own axis count, not 1.
+
+        An ``axes=(...)`` kernel already trains fine on a multi-axis
+        container -- ``_axis`` reduces it to the one ordered column through
+        ``kernel.select``. Before this fix ``condition(at=...)`` hardcoded
+        ``dimensions=1`` for the *target*, so an ``at`` shaped like the
+        training container itself (the only shape ``DenseGP.condition``
+        accepts, and the one a caller matching its own coordinates would
+        naturally pass) was refused as a shape mismatch instead of accepted.
+        """
+        kernel = Matern32(0.4, 2.0, axes=("t",)).for_axes(["t", "other"])
+        coordinates = np.column_stack([np.linspace(0.0, 5.0, 9), np.zeros(9)])
+        rng = np.random.default_rng(20260922)
+        residual = rng.normal(0.0, 0.3, 9)
+        variance = np.full(9, 0.05**2)
+        values = kernel.resolve(None)
+        at = np.column_stack([np.linspace(0.5, 4.5, 6), np.full(6, 3.0)])
+
+        dense = DenseGP().condition(kernel, coordinates, residual, variance, values, at=at)
+        quasisep = QuasisepGP().condition(kernel, coordinates, residual, variance, values, at=at)
+        np.testing.assert_allclose(quasisep.mean, dense.mean, atol=1e-9)
+        np.testing.assert_allclose(quasisep.variance, dense.variance, atol=1e-9)
+
+        # A target that does not match the training container's own axis
+        # count is still refused, by name -- W5.28(d) widens the accepted
+        # shape to match DenseGP, it does not drop the check.
+        with pytest.raises(LikelihoodError, match=r"coordinate\(s\) per point"):
+            QuasisepGP().condition(kernel, coordinates, residual, variance, values, at=at[:, :1])
+
     def test_the_whitening_transform_factorises_the_kernel(self, coordinates: np.ndarray) -> None:
         kernel = Matern32(0.4, 2.0)
         values = kernel.resolve(None)

@@ -2227,33 +2227,44 @@ class SBIEngine(Engine):
         # estimator -- so the batch and the reference draws both come from the
         # box. The attrs say which of the two happened.
         truncated = self.method == TMNRE and self._proposal is not None
-        given = self._truncated_theta(simulations) if truncated else None
-        calibration_context = self.context if context is _INHERIT_CONTEXT else context
-        thetas, summaries, simulated = self._calibration_batch(
-            simulations, rng, values=given, context=calibration_context
-        )
-        theta_tensor = torch.as_tensor(thetas, dtype=dtype, device=self.device)
-        summary_tensor = torch.as_tensor(summaries, dtype=dtype, device=self.device)
-        count_kept = int(thetas.shape[0])
-        prior = (
-            self._truncated_theta(count_kept, unconstrained=True)
-            if truncated
-            else np.stack(
-                [problem.unconstrain(problem.sample_prior(rng)) for _ in range(count_kept)]
+        # W5.28(j): calibrate() reseeds torch as run() does, for the same
+        # reason (W3.15) -- the truncated-prior draws below and sbi's own
+        # SBC/C2ST machinery both sample through torch's (and, for a
+        # slice-MCMC posterior, numpy's legacy global) generator, which this
+        # engine's own problem.seed cannot otherwise reach. Without this, two
+        # calls to calibrate() on the same trained run, at the same seed,
+        # were not guaranteed to repeat -- exactly the gap run()'s own final
+        # draw closed for sampling. One reseed covers the whole SBC batch
+        # (the truncated draws, if any, and sbi's ranking and C2ST check)
+        # the same way one reseed already covers a whole training round.
+        with self._seeded(torch, "sbi.torch.calibrate"):
+            given = self._truncated_theta(simulations) if truncated else None
+            calibration_context = self.context if context is _INHERIT_CONTEXT else context
+            thetas, summaries, simulated = self._calibration_batch(
+                simulations, rng, values=given, context=calibration_context
             )
-        )
-        prior_tensor = torch.as_tensor(prior, dtype=dtype, device=self.device)
+            theta_tensor = torch.as_tensor(thetas, dtype=dtype, device=self.device)
+            summary_tensor = torch.as_tensor(summaries, dtype=dtype, device=self.device)
+            count_kept = int(thetas.shape[0])
+            prior = (
+                self._truncated_theta(count_kept, unconstrained=True)
+                if truncated
+                else np.stack(
+                    [problem.unconstrain(problem.sample_prior(rng)) for _ in range(count_kept)]
+                )
+            )
+            prior_tensor = torch.as_tensor(prior, dtype=dtype, device=self.device)
 
-        diagnostics = importlib.import_module("sbi.diagnostics")
-        ranks, dap = diagnostics.run_sbc(
-            theta_tensor,
-            summary_tensor,
-            target,
-            num_posterior_samples=draws,
-            num_workers=num_workers,
-            show_progress_bar=progress,
-        )
-        checks = diagnostics.check_sbc(ranks, prior_tensor, dap, num_posterior_samples=draws)
+            diagnostics = importlib.import_module("sbi.diagnostics")
+            ranks, dap = diagnostics.run_sbc(
+                theta_tensor,
+                summary_tensor,
+                target,
+                num_posterior_samples=draws,
+                num_workers=num_workers,
+                show_progress_bar=progress,
+            )
+            checks = diagnostics.check_sbc(ranks, prior_tensor, dap, num_posterior_samples=draws)
         extras: dict[str, tuple[tuple[str, ...], Any]] = {
             "ks_pvalue": ((PARAMETER_DIM,), _numpy(checks["ks_pvals"])),
             "c2st_ranks": ((PARAMETER_DIM,), _numpy(checks["c2st_ranks"])),
@@ -2283,14 +2294,20 @@ class SBIEngine(Engine):
         if problem.seed is not None:
             attrs[f"{ATTR_PREFIX}calibration_seed"] = int(problem.seed)
         if tarp:
-            ecp, alpha = diagnostics.run_tarp(
-                theta_tensor,
-                summary_tensor,
-                target,
-                num_posterior_samples=draws,
-                num_workers=num_workers,
-                show_progress_bar=progress,
-            )
+            # A second, distinct draw from the same reseeding rule above: tarp
+            # samples the posterior again, on its own credibility grid, so it
+            # gets its own reseed rather than reusing the SBC batch's -- the
+            # same "distinct concern, distinct sub-stream" reasoning run()'s
+            # own final-draw reseed follows relative to training's.
+            with self._seeded(torch, "sbi.torch.calibrate"):
+                ecp, alpha = diagnostics.run_tarp(
+                    theta_tensor,
+                    summary_tensor,
+                    target,
+                    num_posterior_samples=draws,
+                    num_workers=num_workers,
+                    show_progress_bar=progress,
+                )
             area, ks_pvalue = diagnostics.check_tarp(ecp, alpha)
             extras["tarp_coverage"] = ((TARP_LEVEL_DIM,), _numpy(ecp))
             coords[TARP_LEVEL_DIM] = _numpy(alpha)

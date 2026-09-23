@@ -342,6 +342,68 @@ class TestAppend:
         assert len(read_training_set(path)) == 3
 
 
+class TestConcatenateGroupMismatch:
+    """W5.28(g): ``_concatenate`` refuses a group mismatch by name, for any group.
+
+    Today's two optional groups (``observations/*``, keyed off the batch's
+    own channels, and ``context``) each have their own guard
+    (``_check_against_file``, ``_check_context``) raised before
+    ``_concatenate`` is ever reached, so neither can trigger the bug this
+    closes through the public API. These two tests call the private
+    function directly, with hand-built trees, to pin the behaviour a *future*
+    optional group would otherwise be silently exposed to: a bare
+    ``KeyError`` out of ``addition[name]`` when the file has a group the
+    batch does not, and a silent drop of any group the batch has that the
+    file does not (the loop only ever walks the file's own group paths).
+    """
+
+    def test_a_group_the_file_has_and_the_batch_does_not_is_refused_by_name(self) -> None:
+        xarray = pytest.importorskip("xarray")
+        from ampere.results.training import _concatenate
+
+        existing = xarray.DataTree.from_dict(
+            {
+                "theta": xarray.Dataset({"index": ("sample", [1.0, 2.0])}),
+                "sample_stats": xarray.Dataset({"status": ("sample", ["ok", "ok"])}),
+                "extras": xarray.Dataset({"value": ("sample", [3.0, 4.0])}),
+            }
+        )
+        addition = xarray.DataTree.from_dict(
+            {
+                "theta": xarray.Dataset({"index": ("sample", [5.0])}),
+                "sample_stats": xarray.Dataset({"status": ("sample", ["ok"])}),
+                # "extras" is missing: a future optional group the batch was not
+                # drawn with. Without this item's fix, addition["extras"] raises
+                # a bare KeyError instead of this.
+            }
+        )
+        with pytest.raises(ResultsError, match="extras"):
+            _concatenate(xarray, existing, addition)
+
+    def test_a_group_the_batch_has_and_the_file_does_not_is_refused_not_dropped(self) -> None:
+        xarray = pytest.importorskip("xarray")
+        from ampere.results.training import _concatenate
+
+        existing = xarray.DataTree.from_dict(
+            {
+                "theta": xarray.Dataset({"index": ("sample", [1.0, 2.0])}),
+                "sample_stats": xarray.Dataset({"status": ("sample", ["ok", "ok"])}),
+            }
+        )
+        addition = xarray.DataTree.from_dict(
+            {
+                "theta": xarray.Dataset({"index": ("sample", [5.0])}),
+                "sample_stats": xarray.Dataset({"status": ("sample", ["ok"])}),
+                # "bonus" the file was never written with. Without this item's
+                # fix, the loop over the file's own group paths never looks at
+                # it, and it is silently absent from the merged tree.
+                "bonus": xarray.Dataset({"value": ("sample", [9.0])}),
+            }
+        )
+        with pytest.raises(ResultsError, match="bonus"):
+            _concatenate(xarray, existing, addition)
+
+
 class TestTheObservationContext:
     """**W5.10**: the ``context`` group, and what it deliberately does not store."""
 

@@ -59,6 +59,7 @@ from ampere.core import (
     ModelResult,
     Parameter,
     PoissonFamily,
+    RotationCoupling,
     Spectrum,
 )
 from ampere.core.exceptions import ResultsError
@@ -70,6 +71,7 @@ from ampere.results import (
     ResultsWarning,
     add_residuals,
     chi_square_pvalue,
+    coupling_matrix_summary,
     figure_metadata,
     gp_localisation,
     gp_localisation_score,
@@ -771,6 +773,62 @@ class TestSummary:
         with warnings.catch_warnings():
             warnings.simplefilter("error", ResultsWarning)
             summary(tree)
+
+
+class TestCouplingMatrixSummary:
+    """W5.28(c): summarise ``B`` itself, not its label-switched angle."""
+
+    def test_it_recovers_b_exactly_across_the_relabelling_jump(self) -> None:
+        """Half the draws at one mode, half at the pi/2-rotated relabelling.
+
+        Both halves describe exactly the same ``B``. A plain ``summary()`` of
+        ``astrom.angle`` would report a mean straddling two clusters roughly
+        ``pi/2`` apart -- not a number anyone would read as "the angle". The
+        matrix summary is untouched by which mode a given draw landed in.
+        """
+        import arviz
+
+        angle0 = 0.3
+        log_v0, log_v1 = float(np.log(4.0)), float(np.log(1.0))
+        half = 200
+        angle = np.concatenate([np.full(half, angle0), np.full(half, angle0 + np.pi / 2)])
+        lv0 = np.concatenate([np.full(half, log_v0), np.full(half, log_v1)])
+        lv1 = np.concatenate([np.full(half, log_v1), np.full(half, log_v0)])
+        tree = arviz.from_dict(
+            {
+                "posterior": {
+                    "astrom.angle": angle.reshape(1, -1),
+                    "astrom.log_variance_0": lv0.reshape(1, -1),
+                    "astrom.log_variance_1": lv1.reshape(1, -1),
+                }
+            }
+        )
+        coupling = RotationCoupling(st.uniform(0.0, np.pi), st.norm(-7.0, 2.0), st.norm(-7.0, 2.0))
+        table = coupling_matrix_summary(tree, coupling, prefix="astrom")
+
+        expected = np.asarray(
+            coupling.matrix({"angle": angle0, "log_variance_0": log_v0, "log_variance_1": log_v1})
+        )
+        means = np.asarray(table["mean"]).reshape(2, 2)
+        np.testing.assert_allclose(means, expected, atol=1e-8)
+        # Every draw gives exactly the same B, whichever mode it landed in, so
+        # the posterior spread on the matrix is zero -- unlike the angle's own.
+        assert np.all(np.asarray(table["sd"]) < 1e-8)
+
+    def test_it_refuses_a_run_missing_one_of_the_couplings_parameters(self) -> None:
+        import arviz
+
+        tree = arviz.from_dict(
+            {"posterior": {"astrom.angle": np.zeros((1, 4))}},
+        )
+        coupling = RotationCoupling(st.uniform(0.0, np.pi), st.norm(-7.0, 2.0), st.norm(-7.0, 2.0))
+        with pytest.raises(ResultsError, match=r"astrom\.log_variance_0"):
+            coupling_matrix_summary(tree, coupling, prefix="astrom")
+
+    def test_it_refuses_something_that_is_not_a_coupling(self) -> None:
+        tree = near_truth(white_problem())
+        with pytest.raises(ResultsError, match="ChannelCoupling"):
+            coupling_matrix_summary(tree, object())  # type: ignore[arg-type]
 
 
 class TestImportPolicy:

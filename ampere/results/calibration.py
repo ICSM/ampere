@@ -448,7 +448,16 @@ def replace_observations(
         # simulated -- so the study would report the calibration of a model
         # nobody asked about, and would report it as undercoverage, which is
         # exactly the signal a joint noise model exists to remove.
-        DatasetCollection(rebuilt, joint=dict(problem.datasets.joint) or None),
+        # W5.28(a): the shared/hyperprior parameter set is carried over the same
+        # way -- dropping it would silently turn a population-level replica into
+        # an independent one, reporting the calibration of a model nobody asked
+        # about (the same failure mode as the joint noise groups, above).
+        DatasetCollection(
+            rebuilt,
+            joint=dict(problem.datasets.joint) or None,
+            shared=problem.datasets.shared,
+            shared_label=problem.datasets.shared_label,
+        ),
         ties=problem.ties,
         seed=seed,
         strict=problem.strict,
@@ -526,6 +535,25 @@ def sbc(
     label
         A short name for what was calibrated, recorded in
         ``ampere_calibration_label``. Free text for the figure's title.
+
+    Notes
+    -----
+    **W5.28(b): only the ``posterior`` group is ranked, by design, not by
+    oversight.** :mod:`ampere.results.derived`'s on-demand groups
+    (``posterior_predictive``, ``residuals``, ``gp_localisation``,
+    ``pointwise_log_likelihood``) are per-observation or per-draw quantities,
+    not one value per parameter with a single "truth" ``simulation.parameters``
+    can supply: a residual's truth is the noise realisation actually drawn for
+    *this* replica (not recorded anywhere), and a posterior-predictive
+    replicate's truth is the observed data itself — which is what a
+    posterior-predictive check already tests, by a different and
+    non-equivalent construction than Talts et al.'s rank statistic. Extending
+    SBC to them would mean inventing a "truth" Talts et al.'s construction does
+    not define, which is a design decision, not a parameter-column lookup;
+    it stays open rather than guessed at here. A caller can still rank any
+    *transformed* quantity that lands as its own named column inside the
+    ``posterior`` group itself (whatever the fitting engine's ``emit`` step
+    puts there) through ``parameters=``.
 
     Returns
     -------

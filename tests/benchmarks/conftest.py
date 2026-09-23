@@ -1,11 +1,12 @@
 """Shared setup for ``tests/benchmarks``.
 
 ``test_solver_bakeoff.py`` imports :mod:`examples.image`, which is a
-repository-root package rather than an installed one, so the root goes on
-``sys.path`` explicitly — ``tests/m2/conftest.py``'s pattern and its reasoning:
-explicitly, rather than by relying on pytest's rootdir insertion, because
-``pixi run bench`` invokes the bare ``pytest`` entry point and that inserts the
-*test file's* directory and not the project's.
+repository-root package rather than an installed one, so the root must reach
+``sys.path`` some way that does not depend on how ``ampere`` itself was
+installed -- ``tests/conftest.py`` (**W5.28(k)**) does this once for the
+whole suite now, including for ``pixi run bench``'s bare ``pytest`` entry
+point, which inserts only the *test file's* own directory and never the
+project's on its own.
 
 The ``image_full`` hook is ``tests/examples/conftest.py``'s, under this
 directory's roof for the same reason it is under that one: ``pixi run bench``
@@ -15,14 +16,7 @@ per-PR work.
 
 from __future__ import annotations
 
-import pathlib
-import sys
-
 import pytest
-
-_ROOT = pathlib.Path(__file__).resolve().parents[2]
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
