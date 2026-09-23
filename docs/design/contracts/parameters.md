@@ -675,6 +675,12 @@ The family is a neutral name, exactly as for any other prior, so it goes
 through the same W1.9 lowering table. The hyperparameters are recorded as
 **references by name** — which is what a numpyro model does anyway
 (`dist.Normal(mu, sigma)`, where `mu` and `sigma` are earlier sample sites).
+*Amended W5.30*: §6's default-bijection inference, which used to refuse every
+hierarchical family with shape arguments unconditionally, now infers for a
+family whose support does not move with its shape (`gamma`, `beta`,
+`lognorm`) provided at least one shape argument is a constant, and still
+refuses a family whose support does (`truncnorm`) or one where every shape
+argument is itself a hyperparameter reference.
 
 ```pycon
 >>> hp = HierarchicalPrior("norm", {"loc": "mu", "scale": "sigma"})
