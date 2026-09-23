@@ -888,7 +888,10 @@ plate layout as the remedy. This is the cost recorded below made into a
 guardrail: `lnprior` is O(number of `Parameter` objects), and past a hundred or
 so members the flat declaration is a mistake rather than a trade-off. The
 plate layout has no such limit — it is one object however many members it
-holds.
+holds. *Amended W5.30*: the limit itself is unchanged, but a power user who
+has read the cost and accepts it can turn the refusal into a loud warning via
+`ampere.core.settings.override(flat_population_cap="warn")` — a one-field
+setting, not a `Population` argument and not a change to the limit.
 
 #### What it refuses
 

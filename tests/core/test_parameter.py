@@ -30,6 +30,7 @@ from ampere.core import (
     ParameterSet,
     Plate,
     PlateBinding,
+    Population,
     PriorSpec,
     Tie,
     default_bijection_for,
@@ -42,12 +43,13 @@ from ampere.core import (
     shrinkage_horseshoe,
     regularised_horseshoe,
 )
-from ampere.core.parameter import TORCH_MODULE_NAMES
+from ampere.core.parameter import MAX_FLAT_MEMBERS, TORCH_MODULE_NAMES
 from ampere.core.exceptions import (
     OptionalDependencyError,
     ParameterError,
     TyingError,
 )
+from ampere.core.settings import AmpereFlatPopulationWarning, override
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -1633,3 +1635,61 @@ class TestTheRegularisedHorseshoeAlias:
             aliased = regularised_horseshoe(self.NAMES, global_scale=0.05, tail="cauchy", unit=u.Jy)
         direct = shrinkage_horseshoe(self.NAMES, global_scale=0.05, tail="cauchy", unit=u.Jy)
         assert aliased == direct
+
+
+class TestTheFlatPopulationCapSetting:
+    """W5.30 (a): ``MAX_FLAT_MEMBERS`` stays 128 (Peter's ruling on W5.12's
+    "For Peter (2)"), and ``ampere.core.settings`` gains the one field that
+    turns the refusal into a loud warning for a user who has read the cost
+    (``hierarchical_population.md`` §5) and accepts it. The limit itself does
+    not move either way.
+    """
+
+    @staticmethod
+    def _oversized(count: int) -> tuple[dict[str, ParameterSet], list[Parameter], list[Parameter]]:
+        components = {f"obj{index}": ParameterSet([]) for index in range(count)}
+        members = [Parameter("theta", HierarchicalPrior("norm", {"loc": "mu"}))]
+        hyperpriors = [Parameter("mu", st.norm(0.0, 1.0))]
+        return components, members, hyperpriors
+
+    def test_the_flat_cap_refuses_by_default(self) -> None:
+        components, members, hyperpriors = self._oversized(MAX_FLAT_MEMBERS + 1)
+        with pytest.raises(ParameterError, match="layout='plate'"):
+            Population(
+                "objects",
+                members=members,
+                hyperpriors=hyperpriors,
+                over=list(components),
+                layout="flat",
+            )
+
+    def test_the_setting_turns_the_refusal_into_a_warning_and_the_population_still_works(
+        self,
+    ) -> None:
+        count = MAX_FLAT_MEMBERS + 1
+        components, members, hyperpriors = self._oversized(count)
+        with override(flat_population_cap="warn"):
+            with pytest.warns(AmpereFlatPopulationWarning, match=str(count)) as caught:
+                population = Population(
+                    "objects",
+                    members=members,
+                    hyperpriors=hyperpriors,
+                    over=list(components),
+                    layout="flat",
+                )
+            assert len(caught) == 1
+            # The population merges, and its lnprior evaluates, exactly as a
+            # within-cap population's would.
+            mapping = ParameterSet.merge(components, populations=[population])
+            merged = mapping.merged
+            values = merged.prior_transform(np.full(merged.free_size, 0.5))
+            assert math.isfinite(merged.lnprior(values))
+        # The override restored the default on exit.
+        with pytest.raises(ParameterError, match="layout='plate'"):
+            Population(
+                "objects",
+                members=members,
+                hyperpriors=hyperpriors,
+                over=list(components),
+                layout="flat",
+            )

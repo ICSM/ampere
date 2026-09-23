@@ -79,6 +79,7 @@ from .exceptions import (
     ParameterError,
     TyingError,
 )
+from .settings import AmpereFlatPopulationWarning, settings
 
 __all__ = [
     "HORSESHOE_SPIKE_SHAPE",
@@ -1672,12 +1673,19 @@ class PlateBinding:
 #:
 #: The flat layout is the tie-based pattern ``parameters.md`` §9 documents —
 #: one :class:`Parameter` object per member — and ``lnprior`` is O(number of
-#: ``Parameter`` objects). ``hierarchical_population.md`` §7 measured about
-#: 800 ms per ``lnprior`` at N = 1000 against 0.6 ms for the same structure
-#: declared as one plate. The limit is deliberately generous (a population of
-#: a hundred objects still fits in well under a millisecond) and deliberately
-#: finite: past it the declaration is a mistake, not a trade-off, and
-#: ``layout="plate"`` expresses the same model as one site.
+#: ``Parameter`` objects). ``hierarchical_population.md`` §5 measured 46 ms
+#: per ``lnprior`` at N = 100 flat members and 373 ms at N = 1000, against
+#: 1.3 ms for the same structure declared as one plate. At the cap (128
+#: members) a flat prior costs about 60 ms per evaluation, so a
+#: hundred-thousand-evaluation ensemble run spends well over an hour in the
+#: prior alone. The limit is deliberately finite: past it the declaration is
+#: a mistake, not a trade-off, and ``layout="plate"`` expresses the same
+#: model as one site. *Amended W5.30*: the figures above replace an earlier,
+#: incorrect citation ("800 ms / 0.6 ms", "well under a millisecond"); a
+#: power user who has read this and still wants the flat layout past the cap
+#: can turn the refusal into a loud warning via
+#: ``ampere.core.settings.override(flat_population_cap="warn")`` — the limit
+#: itself does not move.
 MAX_FLAT_MEMBERS: int = 128
 
 
@@ -1874,16 +1882,27 @@ class Population:
                     f"layout='plate'."
                 )
             if declared > MAX_FLAT_MEMBERS:
-                raise ParameterError(
+                message = (
                     f"population {self.name!r} has {declared} members with layout='flat', above "
                     f"the limit of {MAX_FLAT_MEMBERS}. The flat layout is the tie-based pattern "
                     f"of parameters.md §9 — one Parameter object per member — and lnprior is "
-                    f"O(number of Parameter objects): hierarchical_population.md §7 measured "
-                    f"about 800 ms per lnprior at N = 1000 against 0.6 ms for the same "
-                    f"structure as one plate. Use layout='plate', which is one array-valued "
+                    f"O(number of Parameter objects): hierarchical_population.md §5 measured "
+                    f"46 ms per lnprior at N = 100 flat members and 373 ms at N = 1000, against "
+                    f"1.3 ms for the same structure as one plate — about 60 ms per evaluation at "
+                    f"the cap, so a hundred-thousand-evaluation ensemble run spends well over an "
+                    f"hour in the prior alone. Use layout='plate', which is one array-valued "
                     f"site, routes element i to component i through Binding.index, and is what "
                     f"the torch and jax realisations lower to a real plate."
                 )
+                if settings.flat_population_cap == "warn":
+                    warnings.warn(
+                        f"{message} Proceeding anyway because "
+                        f"ampere.core.settings.settings.flat_population_cap == 'warn'.",
+                        AmpereFlatPopulationWarning,
+                        stacklevel=2,
+                    )
+                else:
+                    raise ParameterError(message)
         object.__setattr__(
             self,
             "label",
