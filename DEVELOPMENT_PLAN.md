@@ -816,6 +816,39 @@ the interferometry sketch's Q2 (per-visibility frequency as an
   `lowering.md` §3.2.1) and the non-centred `θ_i = μ + σ z_i` expressible
   for a population. Both are design items, not tasks: each needs a
   contract page before an implementation.
+- **Where the merged gate runs** (Peter's question, 2026-09-23; Fable's
+  assessment recorded for a Phase 6 ruling). The five-suite gate is the
+  merge-throughput limiter, not the agents: the legs serialise on one
+  13 GB machine through `/tmp/ampere-gate.lock` at about four hours end
+  to end, every agent's accept run queues behind them (W5.30's waited two
+  and a half hours for the lock after finishing its code in under an
+  hour), and one merge cycle per gate is the ceiling however fast the
+  agents are. Three levers, in the order to pull them. **(1) CI as the
+  gate of record.** The GitHub Actions run on `origin/v2` already covers
+  every environment — dev, sbi, torch, jax, nested, the typecheck legs —
+  in parallel, in about the length of the slowest leg (seventy minutes),
+  and is already paid for. Two things keep it from being the record:
+  W5.26 (7)'s rows are red on CI, and the mirror is pushed only on
+  Peter's command rather than at every merge. When W5.26 lands, rule
+  whether the orchestrator may push `origin/v2` at each merge (never
+  `origin/master`); the local five-suite gate then retires to targeted
+  pre-merge runs and the lock stops being contended. **(2) An HPC
+  allocation for what CI cannot do.** `tests/gpu` is skipped on every
+  runner and has never been part of a gate; a cluster with accelerators
+  is the only place those rows run, and belongs in the Phase 6 release
+  gate. Pixi installs on a Linux x86_64 login node unchanged (the torch
+  CPU index becomes a choice rather than a constraint), so the
+  environments are not the hard part; the code has to reach the cluster
+  without breaking ground rule 3 (an rsync of the worktree, or a private
+  git remote on the cluster that agents are ruled allowed to push
+  branches to), scheduler queue wait can exceed the run, and the logs
+  must come back so each status row stays reproducible from the
+  repository plus a named log. **(3) Per-leg parallelism.** Whether the
+  suites are `pytest-xdist`-safe (seeded streams, the shared lock in
+  `tests/conftest.py`, the m2 margins) has not been checked; if they
+  are, a many-core node cuts a leg by the core count and is cheaper than
+  either of the above. Not scheduled: (1) rides on W5.26, (2) and (3)
+  are Phase 6 infrastructure items once (1) is in place.
 
 ### Cross-cutting workstream — CI/CD (grows with each phase)
 
@@ -849,7 +882,10 @@ exists before the work it protects:
 - **Phase 6**: release automation — tag-driven builds via setuptools_scm
   (already configured in pyproject.toml), PyPI trusted publishing,
   changelog generation, versioned docs deployment (Read the Docs or
-  gh-pages).
+  gh-pages). **Added 2026-09-23**: the GPU suite in a release gate on an
+  accelerator (an HPC allocation, since hosted runners are CPU-only), and
+  CI as the merged gate of record — see the Phase 6 bullet "Where the
+  merged gate runs".
 
 ### Design horizon — capabilities to keep unblocked (hooks reserved now)
 
