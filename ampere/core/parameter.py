@@ -79,6 +79,7 @@ from .exceptions import (
     ParameterError,
     TyingError,
 )
+from .settings import AmpereFlatPopulationWarning, settings
 
 __all__ = [
     "HORSESHOE_SPIKE_SHAPE",
@@ -775,8 +776,11 @@ def default_bijection_for(prior: AnyPrior, what: str = "this prior") -> Bijectio
 
     For a :class:`HierarchicalPrior` the support may depend on values that are
     not known until sampling time. Inference is therefore attempted only when
-    it is provably safe (a location-scale family with no shape arguments, whose
-    bound-determining hyperparameters are constants); otherwise this raises and
+    it is provably safe: the bound-determining ``loc``/``scale`` hyperparameters
+    must be constants (W5.30 (b) extends this to families with shape arguments,
+    such as ``gamma``, ``beta`` and ``lognorm``, provided at least one shape
+    argument is a constant and the support does not move with it — see
+    :func:`_hierarchical_shape_support_is_fixed`); otherwise this raises and
     asks for an explicit declaration, rather than guessing.
 
     Examples
@@ -823,12 +827,60 @@ def _discrete_refusal(family: str, what: str) -> CapabilityError:
     )
 
 
+def _hierarchical_shape_support_is_fixed(
+    dist: Any,
+    shape_names: Sequence[str],
+    referenced: set[str],
+    constants: Mapping[str, float],
+) -> bool:
+    """Whether *dist*'s support is unaffected by its shape arguments here.
+
+    Two checks, both required. First, at least one shape argument must be a
+    plain constant rather than a hyperparameter reference: a family every one
+    of whose shape arguments is drawn from a hyperprior has no concrete
+    instance of the family to check the support of, so it is refused outright
+    rather than reasoned about symbolically. Second, whichever shape
+    arguments *are* constants must not move the support: this holds
+    automatically for a family that does not override
+    ``scipy.stats.rv_continuous._get_support`` — the base implementation
+    ignores its arguments entirely and always returns ``(self.a, self.b)``,
+    which is why ``gamma``, ``beta`` and ``lognorm`` (none of which override
+    it) are safe regardless of their shape values — and otherwise only if
+    evaluating the override at the declared constant shape values reproduces
+    those same generic bounds; ``truncnorm`` overrides ``_get_support``
+    precisely because its bounds *are* its shape arguments, so this never
+    holds for it.
+    """
+    constant_shapes = [name for name in shape_names if name not in referenced]
+    if shape_names and not constant_shapes:
+        return False
+    if type(dist)._get_support is _stats.rv_continuous._get_support:
+        return True
+    try:
+        shape_values = tuple(constants[name] for name in shape_names)
+    except KeyError:
+        return False
+    try:
+        support = dist._get_support(*shape_values)
+    except Exception:
+        return False
+    return support == (dist.a, dist.b)
+
+
 def _default_bijection_for_hierarchical(prior: HierarchicalPrior, what: str) -> Bijection:
     dist = _distribution_factory(prior.family)
     if isinstance(dist, _stats.rv_discrete):
         raise _discrete_refusal(prior.family, what)
     referenced = set(prior.hyperparameters)
-    if getattr(dist, "numargs", 0):
+    shape_names = [name.strip() for name in (dist.shapes or "").split(",") if name.strip()]
+    constants = dict(prior.kwds)
+    slots = (*shape_names, "loc", "scale")
+    for index, keyword in enumerate(slots):
+        if index < len(prior.args):
+            constants[keyword] = prior.args[index]
+    if getattr(dist, "numargs", 0) and not _hierarchical_shape_support_is_fixed(
+        dist, shape_names, referenced, constants
+    ):
         raise ParameterError(
             f"cannot infer an unconstraining bijection for {what}: the hierarchical family "
             f"{prior.family!r} takes shape arguments, so its support is not determined by "
@@ -838,11 +890,6 @@ def _default_bijection_for_hierarchical(prior: HierarchicalPrior, what: str) -> 
     if not math.isfinite(standard_lower) and not math.isfinite(standard_upper):
         # loc/scale cannot make an unbounded support bounded; safe regardless of values.
         return Identity()
-    constants = dict(prior.kwds)
-    positional = ("loc", "scale")
-    for index, keyword in enumerate(positional):
-        if index < len(prior.args):
-            constants[keyword] = prior.args[index]
     loc = constants.get("loc", 0.0)
     scale = constants.get("scale", 1.0)
     if "loc" in referenced or ("scale" in referenced and standard_upper != standard_lower):
@@ -1626,12 +1673,19 @@ class PlateBinding:
 #:
 #: The flat layout is the tie-based pattern ``parameters.md`` §9 documents —
 #: one :class:`Parameter` object per member — and ``lnprior`` is O(number of
-#: ``Parameter`` objects). ``hierarchical_population.md`` §7 measured about
-#: 800 ms per ``lnprior`` at N = 1000 against 0.6 ms for the same structure
-#: declared as one plate. The limit is deliberately generous (a population of
-#: a hundred objects still fits in well under a millisecond) and deliberately
-#: finite: past it the declaration is a mistake, not a trade-off, and
-#: ``layout="plate"`` expresses the same model as one site.
+#: ``Parameter`` objects). ``hierarchical_population.md`` §5 measured 46 ms
+#: per ``lnprior`` at N = 100 flat members and 373 ms at N = 1000, against
+#: 1.3 ms for the same structure declared as one plate. At the cap (128
+#: members) a flat prior costs about 60 ms per evaluation, so a
+#: hundred-thousand-evaluation ensemble run spends well over an hour in the
+#: prior alone. The limit is deliberately finite: past it the declaration is
+#: a mistake, not a trade-off, and ``layout="plate"`` expresses the same
+#: model as one site. *Amended W5.30*: the figures above replace an earlier,
+#: incorrect citation ("800 ms / 0.6 ms", "well under a millisecond"); a
+#: power user who has read this and still wants the flat layout past the cap
+#: can turn the refusal into a loud warning via
+#: ``ampere.core.settings.override(flat_population_cap="warn")`` — the limit
+#: itself does not move.
 MAX_FLAT_MEMBERS: int = 128
 
 
@@ -1828,16 +1882,27 @@ class Population:
                     f"layout='plate'."
                 )
             if declared > MAX_FLAT_MEMBERS:
-                raise ParameterError(
+                message = (
                     f"population {self.name!r} has {declared} members with layout='flat', above "
                     f"the limit of {MAX_FLAT_MEMBERS}. The flat layout is the tie-based pattern "
                     f"of parameters.md §9 — one Parameter object per member — and lnprior is "
-                    f"O(number of Parameter objects): hierarchical_population.md §7 measured "
-                    f"about 800 ms per lnprior at N = 1000 against 0.6 ms for the same "
-                    f"structure as one plate. Use layout='plate', which is one array-valued "
+                    f"O(number of Parameter objects): hierarchical_population.md §5 measured "
+                    f"46 ms per lnprior at N = 100 flat members and 373 ms at N = 1000, against "
+                    f"1.3 ms for the same structure as one plate — about 60 ms per evaluation at "
+                    f"the cap, so a hundred-thousand-evaluation ensemble run spends well over an "
+                    f"hour in the prior alone. Use layout='plate', which is one array-valued "
                     f"site, routes element i to component i through Binding.index, and is what "
                     f"the torch and jax realisations lower to a real plate."
                 )
+                if settings.flat_population_cap == "warn":
+                    warnings.warn(
+                        f"{message} Proceeding anyway because "
+                        f"ampere.core.settings.settings.flat_population_cap == 'warn'.",
+                        AmpereFlatPopulationWarning,
+                        stacklevel=2,
+                    )
+                else:
+                    raise ParameterError(message)
         object.__setattr__(
             self,
             "label",

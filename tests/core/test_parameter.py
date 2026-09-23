@@ -30,6 +30,7 @@ from ampere.core import (
     ParameterSet,
     Plate,
     PlateBinding,
+    Population,
     PriorSpec,
     Tie,
     default_bijection_for,
@@ -42,12 +43,13 @@ from ampere.core import (
     shrinkage_horseshoe,
     regularised_horseshoe,
 )
-from ampere.core.parameter import TORCH_MODULE_NAMES
+from ampere.core.parameter import MAX_FLAT_MEMBERS, TORCH_MODULE_NAMES
 from ampere.core.exceptions import (
     OptionalDependencyError,
     ParameterError,
     TyingError,
 )
+from ampere.core.settings import AmpereFlatPopulationWarning, override
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -970,6 +972,26 @@ class TestBijections:
                 HierarchicalPrior("halfnorm", {"scale": "sigma"}, kwds={"loc": 3.0}),
                 Log(lower=3.0),
             ),
+            # W5.30 (b): a shape family whose support does not move with the
+            # shape is safe once the shape itself is a constant, whatever is
+            # referenced instead. gamma and lognorm are half-lines (Log);
+            # beta's support is bounded on both sides (Logit).
+            (
+                HierarchicalPrior("gamma", {"scale": "s"}, args=(2.0,)),
+                Log(lower=0.0),
+            ),
+            (
+                HierarchicalPrior("lognorm", {"scale": "tau"}, kwds={"s": 0.5}),
+                Log(lower=0.0),
+            ),
+            (
+                HierarchicalPrior("beta", {"a": "alpha"}, kwds={"b": 2.0}),
+                Logit(lower=0.0, upper=1.0),
+            ),
+            (
+                HierarchicalPrior("beta", {"b": "beta_hp"}, kwds={"a": 2.0}),
+                Logit(lower=0.0, upper=1.0),
+            ),
         ],
     )
     def test_hierarchical_defaults_are_inferred_only_when_provably_safe(
@@ -986,8 +1008,16 @@ class TestBijections:
                 HierarchicalPrior("uniform", {"loc": "a", "scale": "b"}),
                 "bounded support whose position",
             ),
-            # Shape arguments mean loc/scale do not determine the support.
-            (HierarchicalPrior("gamma", {"scale": "s"}, args=(2.0,)), "takes shape arguments"),
+            # truncnorm overrides _get_support with its own shape arguments as
+            # bounds, so it still refuses even though both shapes are constants.
+            (
+                HierarchicalPrior("truncnorm", {"loc": "mu"}, kwds={"a": -2.0, "b": 2.0}),
+                "takes shape arguments",
+            ),
+            # A gamma whose sole shape argument ("a") is itself a hyperparameter
+            # reference still refuses: with no constant shape value left to
+            # reason about, the family is refused outright (W5.30 (b)).
+            (HierarchicalPrior("gamma", {"a": "alpha"}), "takes shape arguments"),
         ],
     )
     def test_hierarchical_defaults_refuse_to_guess(
@@ -1010,6 +1040,32 @@ class TestBijections:
             ]
         )
         assert pset["tau"].unconstraining_bijection() == Log(lower=0.0)
+
+    def test_an_explicit_bijection_wins_over_a_refused_shape_family(self) -> None:
+        """A family the inference rule would refuse still accepts an explicit
+        bijection (W5.30 (b)): truncnorm's support moves with its own shape
+        arguments, so it is never inferred, but a user who knows the fixed
+        bounds can still declare it directly."""
+        pset = ParameterSet(
+            [
+                Parameter(
+                    "tau",
+                    HierarchicalPrior("truncnorm", {"loc": "mu"}, kwds={"a": -2.0, "b": 2.0}),
+                    bijection=Logit(lower=-2.0, upper=2.0),
+                ),
+                Parameter("mu", st.norm(0.0, 1.0)),
+            ]
+        )
+        assert pset["tau"].unconstraining_bijection() == Logit(lower=-2.0, upper=2.0)
+
+    def test_the_horseshoe_helpers_local_scale_infers_without_its_explicit_keyword(self) -> None:
+        """``shrinkage_horseshoe`` declares its local scales with an explicit
+        ``bijection=Log()`` (harmless, kept for W5.27's helper framework), but
+        the same ``HierarchicalPrior`` it builds already infers ``Log`` on its
+        own — this is a regression guard, not a new capability, since the
+        local scale is a plain ``halfnorm`` with no shape arguments."""
+        declaration = HierarchicalPrior("halfnorm", {"scale": "shrinkage.global_scale"})
+        assert default_bijection_for(declaration) == Log(lower=0.0)
 
 
 class _UpperBounded:
@@ -1579,3 +1635,61 @@ class TestTheRegularisedHorseshoeAlias:
             aliased = regularised_horseshoe(self.NAMES, global_scale=0.05, tail="cauchy", unit=u.Jy)
         direct = shrinkage_horseshoe(self.NAMES, global_scale=0.05, tail="cauchy", unit=u.Jy)
         assert aliased == direct
+
+
+class TestTheFlatPopulationCapSetting:
+    """W5.30 (a): ``MAX_FLAT_MEMBERS`` stays 128 (Peter's ruling on W5.12's
+    "For Peter (2)"), and ``ampere.core.settings`` gains the one field that
+    turns the refusal into a loud warning for a user who has read the cost
+    (``hierarchical_population.md`` §5) and accepts it. The limit itself does
+    not move either way.
+    """
+
+    @staticmethod
+    def _oversized(count: int) -> tuple[dict[str, ParameterSet], list[Parameter], list[Parameter]]:
+        components = {f"obj{index}": ParameterSet([]) for index in range(count)}
+        members = [Parameter("theta", HierarchicalPrior("norm", {"loc": "mu"}))]
+        hyperpriors = [Parameter("mu", st.norm(0.0, 1.0))]
+        return components, members, hyperpriors
+
+    def test_the_flat_cap_refuses_by_default(self) -> None:
+        components, members, hyperpriors = self._oversized(MAX_FLAT_MEMBERS + 1)
+        with pytest.raises(ParameterError, match="layout='plate'"):
+            Population(
+                "objects",
+                members=members,
+                hyperpriors=hyperpriors,
+                over=list(components),
+                layout="flat",
+            )
+
+    def test_the_setting_turns_the_refusal_into_a_warning_and_the_population_still_works(
+        self,
+    ) -> None:
+        count = MAX_FLAT_MEMBERS + 1
+        components, members, hyperpriors = self._oversized(count)
+        with override(flat_population_cap="warn"):
+            with pytest.warns(AmpereFlatPopulationWarning, match=str(count)) as caught:
+                population = Population(
+                    "objects",
+                    members=members,
+                    hyperpriors=hyperpriors,
+                    over=list(components),
+                    layout="flat",
+                )
+            assert len(caught) == 1
+            # The population merges, and its lnprior evaluates, exactly as a
+            # within-cap population's would.
+            mapping = ParameterSet.merge(components, populations=[population])
+            merged = mapping.merged
+            values = merged.prior_transform(np.full(merged.free_size, 0.5))
+            assert math.isfinite(merged.lnprior(values))
+        # The override restored the default on exit.
+        with pytest.raises(ParameterError, match="layout='plate'"):
+            Population(
+                "objects",
+                members=members,
+                hyperpriors=hyperpriors,
+                over=list(components),
+                layout="flat",
+            )

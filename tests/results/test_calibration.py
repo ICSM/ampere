@@ -50,9 +50,11 @@ from ampere.core import (
     Dataset,
     DatasetCollection,
     FittingProblem,
+    HierarchicalPrior,
     Model,
     Parameter,
     ParameterSet,
+    Population,
     Spectrum,
 )
 from ampere.core.exceptions import ResultsError
@@ -235,6 +237,44 @@ class TestReplaceObservations:
 
         assert replica.datasets.shared is hyper
         assert replica.datasets.shared_label == "hyper"
+
+    def test_the_populations_survive_the_replica(self) -> None:
+        """W5.30(c): a W5.12 ``Population`` declaration must not vanish on replay.
+
+        Before this fix, ``replace_observations`` rebuilt the collection with
+        ``joint`` and ``shared`` carried over but not ``populations``, so a
+        population-level SBC replay would silently be fitted as independent
+        per-member objects -- the same failure mode W5.28(a) closed for the
+        shared parameter set. The population here is declared the documented,
+        canonical way -- passed directly to ``FittingProblem(...,
+        populations=...)`` (``docs/source/advanced.rst``), not to the
+        ``DatasetCollection`` -- which is the case ``problem.datasets.populations``
+        alone would miss: it is ``problem.populations`` (``FittingProblem``'s
+        own concatenation of both routes) that has to survive the replica.
+        """
+        observed = Spectrum(
+            GRID * u.um,
+            (2.0 * GRID + 0.5) * u.Jy,
+            uncertainty=np.full(GRID.size, 0.5) * u.Jy,
+        )
+        population = Population(
+            "objects",
+            members=[Parameter("slope", HierarchicalPrior("norm", {"loc": "mu_slope"}))],
+            hyperpriors=[Parameter("mu_slope", st.norm(2.0, 0.6))],
+            over=["model"],
+        )
+        datasets = DatasetCollection({"line": Dataset(observed, label="line")})
+        problem = FittingProblem(Line(), datasets, populations=[population], seed=SEED)
+        # The canonical route leaves the DatasetCollection itself unaware of
+        # the population -- confirming this is the gap the fix has to close.
+        assert problem.datasets.populations == ()
+        assert problem.populations == (population,)
+        simulation = problem.simulate(observe=True, rng=np.random.default_rng(2))
+        assert not simulation.failed and simulation.observations is not None
+
+        replica = replace_observations(problem, simulation.observations, seed=17)
+
+        assert replica.populations == (population,)
 
 
 # ---------------------------------------------------------------------------

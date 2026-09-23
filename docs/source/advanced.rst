@@ -104,8 +104,19 @@ plate; NUTS then fits the whole population jointly. The hand-written form —
 fifty scalar parameters sharing a prior — is still available as
 ``Population(..., layout="flat")``, declares exactly the same density, and is
 refused above 128 members, because the prior evaluation is linear in the
-number of parameter *objects* and at a thousand members that is the difference
-between 0.6 ms and 800 ms per evaluation.
+number of parameter *objects*: measured at 46 ms per evaluation at a hundred
+members and 373 ms at a thousand, against about 1.3 ms for the same structure
+as one plate. A user who has read that cost and wants the flat layout anyway
+can turn the refusal into a loud warning with
+``ampere.core.settings.override(flat_population_cap="warn")`` — a one-field
+setting, not a ``Population`` argument, and it does not change the limit.
+
+A hierarchical prior's default unconstraining bijection is inferred, not just
+for location-scale families: a shape family whose support does not move with
+its shape — ``gamma``, ``beta``, ``lognorm`` — infers correctly provided at
+least one shape argument is given as a constant, while a family whose support
+does move with its shape (``truncnorm``) still asks for an explicit
+``Parameter(bijection=...)``.
 
 Two companions are worth knowing about:
 

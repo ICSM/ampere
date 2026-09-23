@@ -452,11 +452,21 @@ def replace_observations(
         # way -- dropping it would silently turn a population-level replica into
         # an independent one, reporting the calibration of a model nobody asked
         # about (the same failure mode as the joint noise groups, above).
+        # W5.30(c): the Population declarations themselves are carried over the
+        # same way again -- without them a W5.12 population-level SBC replay
+        # would be rebuilt and fitted as independent per-member objects, which
+        # is the same silent drop W5.28(a) closed for the shared parameter set.
+        # `problem.populations` (FittingProblem's own concatenation), not
+        # `problem.datasets.populations`: a population passed directly to
+        # FittingProblem(..., populations=...) -- the documented, canonical
+        # form (docs/source/advanced.rst) -- never reaches the DatasetCollection
+        # itself, so reading only the latter would silently miss it.
         DatasetCollection(
             rebuilt,
             joint=dict(problem.datasets.joint) or None,
             shared=problem.datasets.shared,
             shared_label=problem.datasets.shared_label,
+            populations=problem.populations,
         ),
         ties=problem.ties,
         seed=seed,
