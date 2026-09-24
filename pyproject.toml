@@ -458,7 +458,46 @@ test-m2 = "pytest tests/m2"
 # imports `examples/m2_misspecification`, which composes problems from
 # whichever backend the environment has, so running it in the same process as
 # `tests/conformance` is what proves the study registers nothing global.
-test-all = "pytest tests/core tests/results tests/conformance tests/backends tests/inference tests/examples tests/m2"
+# W5.26 added tests/interferometry (W4.4, 22 rows) and tests/astrometry
+# (W4.9, 40 rows): both were landed with their own `*_full` opt-in markers
+# but never joined this task or any `ci.yml` step, so neither ran anywhere
+# from the day it landed. Neither registers anything global (grep finds no
+# `register_family`/`register_lowering` call in either directory or the
+# `examples/{interferometry,astrometry}` modules they exercise), so their
+# addition adds no new registry-leak concern -- they join this one process
+# for the same reason `tests/backends` and `tests/inference` did: this is the
+# one invocation that is the actual per-environment gate.
+test-all = "pytest tests/core tests/results tests/conformance tests/backends tests/inference tests/examples tests/m2 tests/interferometry tests/astrometry"
+# W5.26 (3): `ci.yml`'s `suites` (dev) and `backend-suites`
+# (torch/jax/sbi/nested) jobs run these three groups as separate matrix
+# cells instead of `test-all` as one forty-minute step, so a red row in one
+# group no longer hides every other group's result in the same leg. Two of
+# the three carry a registry-leak proof and must keep their paired suite in
+# one process (test-all's own comment above, restated per group):
+#   * test-group-core:      tests/core tests/results tests/conformance
+#     -- the original test-phase1 pairing: a family/lowering row registered
+#     in tests/core (or the contracts doctest `test_spec_doctests.py` runs)
+#     must not leak into tests/conformance's registered-family check.
+#   * test-group-backends:  tests/backends tests/inference tests/examples
+#     -- tests/examples/conftest.py's own module-scoped fixture already
+#     snapshots and restores `_FAMILIES` around the one import regardless of
+#     which process runs it (see that file's docstring), so this group is
+#     the one of the three that does NOT need tests/conformance alongside it
+#     to stay honest -- unlike the other two, its self-cleaning is structural
+#     rather than proved by co-location.
+#   * test-group-studies:   tests/conformance tests/m2 tests/interferometry
+#                            tests/astrometry
+#     -- the m2 pairing above, extended to the two suites this item adds:
+#     neither registers anything today, but grouping every backend-composing
+#     study suite with tests/conformance keeps that proof extensible rather
+#     than something a future study has to remember to ask for.
+# Local: `test-all` (this task) is unchanged in meaning and stays the one
+# single-process gate a developer runs; the three tasks below exist for CI's
+# matrix and are equally valid to run locally when only one group's result
+# is wanted.
+test-group-core = "pytest tests/core tests/results tests/conformance"
+test-group-backends = "pytest tests/backends tests/inference tests/examples"
+test-group-studies = "pytest tests/conformance tests/m2 tests/interferometry tests/astrometry"
 # W2.5/W2.4 slice 3: the GPU smoke tests. Skipped wherever `jax.devices()`
 # (or torch's CUDA/MPS query) reports no accelerator, which is every ordinary
 # machine and all of CI -- CI is CPU-only by ruling and W2.11 pins CPU wheels

@@ -38,7 +38,9 @@ name: CI
 #   ampere/core/**, ampere/results/**,                     torch, jax, sbi,
 #   ampere/inference/**, and the shared test suites        nested, docs
 #   (tests/{core,results,inference,conformance,m2,
-#   benchmarks,scaling,gpu,characterisation}/**)
+#   interferometry,astrometry,benchmarks,scaling,gpu,
+#   characterisation}/**; interferometry and astrometry
+#   joined W5.26)
 #   ampere/backends/torch/**,                           -> torch, sbi (sbi's
 #   tests/backends/*torch*                                 env installs
 #                                                           torch too)
@@ -160,9 +162,34 @@ jobs:
           # sees the plain `torch` requirement that pyro-ppl and sbi carry and does
           # not apply the per-package CPU index the manifest pins (W2.11), while
           # the solver does (a re-solve reproduces pixi.lock byte for byte). The
-          # lock is current; the check is not. A genuinely stale lock still fails
-          # loudly here (a missing dependency does not import). W5.26 owns the
-          # proper fix if a pixi release provides one.
+          # lock is current; the check is not.
+          #
+          # W5.26 (6), 2026-09-24: this is upstream prefix-dev/pixi#6834 ("Per-
+          # package `index =` on a pypi-dependency makes the lock permanently
+          # 'not up-to-date' when the name is also in `[project].dependencies`")
+          # -- exactly this shape: the per-package `index` pin on `torch`
+          # ([tool.pixi.feature.torch.pypi-dependencies] and the `sbi` feature's
+          # own copy) plus `torch` also reaching the solve unindexed via
+          # `pyro-ppl`/`sbi`'s plain `torch` requirement. Fixed upstream by
+          # prefix-dev/pixi#7024 ("accept custom per-package index in
+          # satisfiability for unindexed requirements"), merged to `main`
+          # 2026-09-17 -- two days *after* pixi's latest tagged release,
+          # v0.81.0 (2026-09-15); no release contains the fix as of this
+          # comment. Reproduced locally with the fix absent: `pixi install -e
+          # sbi --locked` still fails with the same message on 0.68.1. A
+          # re-solve was NOT taken (it would only reproduce the current lock
+          # byte for byte, per the paragraph above, and is not worth the
+          # `pixi.lock` diff noise for no behaviour change) -- spelling the
+          # extras out and a feature-level `extra-index-urls` were tried
+          # before this item and do not help either (the latter breaks the
+          # editable build). Nothing to do here but wait for a pixi release
+          # that contains #7024 (or a later fix) and then flip `locked: true`,
+          # `frozen: false` in one PR across every `setup-pixi` step below and
+          # drop this comment; a genuinely stale lock still fails loudly under
+          # `frozen: true` today (a missing dependency does not import), so
+          # this is not a coverage gap in the meantime, only a missed early
+          # warning for the one specific failure mode `--locked` alone would
+          # add.
           locked: false
           frozen: true
       - run: pixi run -e dev lint
@@ -321,7 +348,7 @@ jobs:
           if-no-files-found: ignore
 
   suites:
-    name: new-namespace suites (dev)
+    name: new-namespace suites (dev, ${{ matrix.group }})
     runs-on: ubuntu-latest
     needs: changes
     # Path-gated on `run_dev` -- see the `changes` job and
@@ -337,22 +364,27 @@ jobs:
     # `arviz` and `netCDF4` are present and tests/results actually runs rather
     # than skipping everywhere -- a results suite that silently skipped on
     # every CI leg would satisfy the letter of this item and be worthless.
-    # Deliberately a single pytest invocation (`test-all`, not six separate
-    # `pixi run` calls): that is what exposed W0.10 finding (c) in the first
-    # place -- a likelihood-family registration in tests/core (or in the
-    # docs/design/contracts/likelihoods.md worked example, run via
-    # tests/core/test_spec_doctests.py) leaking into tests/conformance's check
-    # that the marginalisation table covers exactly the registered family set,
-    # which each suite passing in its own process never caught. The fix is
-    # tests/core/conftest.py's autouse registry-snapshot fixture; this job is
-    # what keeps it honest.
     #
-    # W2.1 added tests/backends (the shipped ampere.backends.reference) to the
-    # same single process, for the same reason. W2.2 added tests/inference
-    # (the engine drivers) on the same grounds. W2.11 added tests/examples,
-    # which is the sharpest case of all: it *loads a user-style module* that
-    # registers a likelihood family at import, which is the exact shape of the
-    # leak this job exists to catch.
+    # W5.26: three matrix cells (`pyproject.toml`'s `test-group-core`,
+    # `test-group-backends`, `test-group-studies`) instead of one `test-all`
+    # step, so a red row in one group no longer hides every other group's
+    # result behind it -- the problem this item was dispatched to fix (a red
+    # `tests/m2` row on torch used to hide the whole forty-minute leg).
+    # `test-all` itself (still a single pytest invocation across every
+    # suite) is unchanged and remains the local gate; each group below is a
+    # subset of it, not a separate command line, so a local run and a CI
+    # cell always agree. Each group that carries a registry-leak proof keeps
+    # its paired suite in one process -- see `test-group-core`'s and
+    # `test-group-studies`'s comments in `pyproject.toml` for which two, and
+    # `test-group-backends`'s for why the third (`tests/examples`) does not
+    # need `tests/conformance` alongside it: its own conftest fixture
+    # snapshots and restores the family registry around the one import
+    # regardless of process, W0.10 finding (c) and W2.10/W2.11's additions
+    # were what first proved the *other* two suites needed the pairing.
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [core, backends, studies]
     steps:
       - name: "skip note (path-gated: no `run_dev` paths changed)"
         if: needs.changes.outputs.run_dev != 'true'
@@ -367,25 +399,29 @@ jobs:
           # frozen, not locked: see the lint job's note (2026-09-22).
           locked: false
           frozen: true
-      - run: pixi run -e dev test-all
+      - run: pixi run -e dev test-group-${{ matrix.group }}
         if: needs.changes.outputs.run_dev == 'true'
       # W2.11, DEVELOPMENT_PLAN.md §5 Phase 2: "benchmark suite ... with
       # results tracked as CI artefacts". The reference backend's row. Runs
-      # after the suites, in the same job, so the environment is set up once
-      # and the two never contend for the runner's memory (see
+      # once per environment, not once per group -- gated to the `core` cell
+      # -- after the suites step, in the same job, so the environment is set
+      # up once and the two never contend for the runner's memory (see
       # backend-suites' note on that).
       - run: pixi run -e dev bench
-        if: needs.changes.outputs.run_dev == 'true'
+        if: needs.changes.outputs.run_dev == 'true' && matrix.group == 'core'
       - name: upload benchmark results
         # `always()` so a red suite still publishes whatever the benchmark
-        # step managed -- but note the step above is skipped when `test-all`
-        # fails, so in practice this uploads nothing then. It is here for the
-        # opposite case: a benchmark row that fails still leaves its partial
-        # JSON attached to the PR, which is when a reviewer most wants it.
-        # Still gated on `run_dev` (`&&`, not `always()` alone) so a skipped
-        # leg does not spend a step trying to upload a file that was never
-        # produced.
-        if: needs.changes.outputs.run_dev == 'true' && always()
+        # step managed -- but note the step above is skipped when the
+        # `core` group's suites fail, so in practice this uploads nothing
+        # then. It is here for the opposite case: a benchmark row that
+        # fails still leaves its partial JSON attached to the PR, which is
+        # when a reviewer most wants it. Still gated on `run_dev` and the
+        # `core` cell (`&&`, not `always()` alone) so a skipped leg, or a
+        # non-`core` cell that never runs `bench`, does not spend a step
+        # trying to upload a file that was never produced. The artifact
+        # name carries no group suffix because only the `core` cell
+        # produces it -- one artifact per environment, as before.
+        if: needs.changes.outputs.run_dev == 'true' && matrix.group == 'core' && always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: benchmarks-dev
@@ -398,9 +434,10 @@ jobs:
     needs: changes
     # W4.10 (1), ruled by Peter on W3.7's report: `typecheck` split out of
     # each five-suite leg into its own matrix job, so the slow `sbi` leg's
-    # critical path in `backend-suites` below is `test-all` alone -- this
-    # job and `backend-suites` are independent jobs (no `needs:` between
-    # them), so they run concurrently rather than one serialising in front
+    # critical path in `backend-suites` below is its `test-group-*` cells
+    # alone -- this job and `backend-suites` are independent jobs (no
+    # `needs:` between them), so they run concurrently rather than one
+    # serialising in front
     # of the other inside a shared job. The trade-off is one extra
     # environment install per leg; `cache: true` (setup-pixi) is what keeps
     # that cheap.
@@ -443,7 +480,7 @@ jobs:
         if: steps.gate.outputs.run == 'true'
 
   backend-suites:
-    name: new-namespace suites (${{ matrix.environment }})
+    name: new-namespace suites (${{ matrix.environment }}, ${{ matrix.group }})
     runs-on: ubuntu-latest
     needs: changes
     # Path-gated per leg (`run_torch`/`run_jax`/`run_sbi`/`run_nested`) --
@@ -453,30 +490,36 @@ jobs:
     # above, a separate job on the same matrix (W4.10 (1)): the two run
     # concurrently rather than one serialising in front of the other, so
     # this job's own critical path -- the slow `sbi` leg in particular -- is
-    # `test-all` alone.
+    # `test-group-*` alone.
     #
     # W2.11, and DEVELOPMENT_PLAN.md §5's Phase 2 line ("separate torch, jax
     # and no-extras jobs"). W3.7 added `sbi` as this matrix's third leg,
     # promoting it from the non-blocking weekly `sbi-characterisation` job
     # below to a blocking PR gate -- the resulting check is named
-    # "new-namespace suites (sbi)", exactly like its siblings, which is what
-    # a branch-protection required-check entry must name. One job per
-    # environment, and one environment per job:
+    # "new-namespace suites (sbi, <group>)", exactly like its siblings,
+    # which is what a branch-protection required-check entry must name. One
+    # job per environment-and-group cell:
     #
     #  * `fail-fast: false` is load-bearing, not decoration. A broken torch
-    #    row must fail the torch leg and leave the jax/sbi legs to report
-    #    their own result; with fail-fast on (the default) GitHub cancels the
-    #    sibling legs the moment one fails, and the answer to "did jax/sbi
-    #    survive this change?" would be "cancelled". Together with `suites`
-    #    above being a separate job on `dev`, this is what makes a failure in
-    #    one environment a single-job failure: the environments never share a
-    #    runner, a step or a process.
-    #  * Never two environments in one job. `pixi run -e <env> test-all` is a
-    #    five-suite, one-process gate; two of them running concurrently
-    #    exhausted a 13 GB development machine during this item, and GitHub's
-    #    hosted runners have 7 GB. Sequential steps in one job would be safe
-    #    on memory and wrong on isolation, which is the criterion that
-    #    decides it.
+    #    row must fail the torch leg and leave the jax/sbi legs (and the
+    #    other groups within torch) to report their own result; with
+    #    fail-fast on (the default) GitHub cancels every sibling cell the
+    #    moment one fails, and the answer to "did jax/sbi survive this
+    #    change?" would be "cancelled". Together with `suites` above being a
+    #    separate job on `dev`, this is what makes a failure in one
+    #    environment-and-group cell a single-job failure: cells never share
+    #    a runner, a step or a process.
+    #  * Never two environments in one job -- and, since W5.26, never two
+    #    groups in one job either, for the same isolation reason: a red
+    #    `tests/m2` row on torch must not hide every other group's result in
+    #    the same leg, which is the problem this split was dispatched to
+    #    fix. `pixi run -e <env> test-all` is a five-suite, one-process
+    #    gate; two of them running concurrently exhausted a 13 GB
+    #    development machine during W4.10, and GitHub's hosted runners have
+    #    7 GB -- a `test-group-*` cell is smaller again, so the matrix now
+    #    runs more, smaller, more isolated jobs rather than fewer, larger
+    #    ones. Sequential steps in one job would be safe on memory and wrong
+    #    on isolation, which is the criterion that decides it.
     #  * `cache: true` matters most here: these are the largest environments
     #    (torch ~1.9 GB installed, jax ~0.5 GB, sbi -- torch's install plus
     #    the `sbi` extra (sbi, pyro-ppl) -- larger again). The torch and sbi
@@ -486,21 +529,21 @@ jobs:
     #    [tool.pixi.feature.sbi.pypi-dependencies]. Hosted runners are
     #    CPU-only; GPU tests are a later, nightly/manual item and add no rows
     #    here.
-    #  * `sbi`'s `test-all` step is the slower of the three locally (see
+    #  * `sbi`'s suites are the slowest of the four locally (see
     #    docs/development.md's "Environment" section for the recorded
-    #    reference numbers: torch's five-suite gate 12-17 min, sbi's
-    #    14-20 min, jax's 8-13 min on this project's 13 GB development
-    #    machine) -- the neural density/likelihood/ratio estimator training
-    #    in `tests/inference/test_sbi.py` costs more wall time than another
-    #    environment's conformance rows do, even at the tiny CI budgets W3.2
-    #    and W3.6 chose. `bench` is deliberately NOT run for `sbi` (see the
-    #    step below): it would only re-exercise the same torch-backed
-    #    benchmarks the `torch` leg already runs, at a cost this already-
-    #    slower leg cannot spare for numbers that duplicate an existing row.
+    #    reference leg times) -- the neural density/likelihood/ratio
+    #    estimator training in `tests/inference/test_sbi.py` (the `backends`
+    #    group) costs more wall time than another environment's conformance
+    #    rows do, even at the tiny CI budgets W3.2 and W3.6 chose. `bench` is
+    #    deliberately NOT run for `sbi` (see the step below): it would only
+    #    re-exercise the same torch-backed benchmarks the `torch` leg
+    #    already runs, at a cost this already-slower leg cannot spare for
+    #    numbers that duplicate an existing row.
     strategy:
       fail-fast: false
       matrix:
         environment: [torch, jax, sbi, nested]
+        group: [core, backends, studies]
     steps:
       - name: decide whether this leg's real work runs
         id: gate
@@ -524,7 +567,7 @@ jobs:
           # frozen, not locked: see the lint job's note (2026-09-22).
           locked: false
           frozen: true
-      - run: pixi run -e ${{ matrix.environment }} test-all
+      - run: pixi run -e ${{ matrix.environment }} test-group-${{ matrix.group }}
         if: steps.gate.outputs.run == 'true'
       # W3.7: `sbi`'s environment already contains `torch`, so running
       # `tests/benchmarks/` there would benchmark the same backend code the
@@ -533,16 +576,20 @@ jobs:
       # W5.14 adds `nested` to the exclusion for the same reason at one
       # remove: that environment is `dev`'s package set plus nautilus and
       # ultranest, so its benchmark rows would be the `dev` leg's own,
-      # re-run.
+      # re-run. W5.26 adds the `core`-group gate: `bench` runs once per
+      # environment, not once per group (the artifact name below carries no
+      # group suffix, for the same reason), so it is conditioned on the one
+      # cell that always runs regardless of which groups a diff touched.
       - name: benchmarks (torch, jax only; sbi and nested would duplicate)
         if: >-
-          steps.gate.outputs.run == 'true' && matrix.environment != 'sbi'
-          && matrix.environment != 'nested'
+          steps.gate.outputs.run == 'true' && matrix.group == 'core'
+          && matrix.environment != 'sbi' && matrix.environment != 'nested'
         run: pixi run -e ${{ matrix.environment }} bench
       - name: upload benchmark results
         if: >-
-          steps.gate.outputs.run == 'true' && matrix.environment != 'sbi'
-          && matrix.environment != 'nested' && always()
+          steps.gate.outputs.run == 'true' && matrix.group == 'core'
+          && matrix.environment != 'sbi' && matrix.environment != 'nested'
+          && always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: benchmarks-${{ matrix.environment }}
@@ -650,13 +697,14 @@ jobs:
     # hosted runner.)
     #
     # W3.7 note: this job is unchanged by, and independent of, the `sbi` leg
-    # `backend-suites` now runs on every PR ("new-namespace suites (sbi)"
-    # below) -- that leg runs `pixi run -e sbi test-all` (the new-namespace
-    # suites, including the sbi engine's own tests in `tests/inference`),
-    # not `test-characterisation` (the legacy `ampere.infer.sbi` flow), so
-    # the two jobs cover disjoint code and neither makes the other
-    # redundant. This one stays weekly/on-demand because it is still a large
-    # download relative to what it alone would justify on every PR.
+    # `backend-suites` now runs on every PR ("new-namespace suites
+    # (sbi, <group>)" below) -- that leg runs `pixi run -e sbi
+    # test-group-*` (the new-namespace suites, including the sbi engine's
+    # own tests in `tests/inference`), not `test-characterisation` (the
+    # legacy `ampere.infer.sbi` flow), so the two jobs cover disjoint code
+    # and neither makes the other redundant. This one stays weekly/on-demand
+    # because it is still a large download relative to what it alone would
+    # justify on every PR.
     # Not path-gated (deliberately): scheduled/manual runs are outside the
     # PR path-filter entirely -- see the `changes` job's comment and
     # .github/scripts/path_filters.py's "non-pull_request events... fall
