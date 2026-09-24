@@ -2501,6 +2501,30 @@ line in each affected page. **Depends:** W5.27 merged (for (i)).
 as refused with the reason; lint, format, typecheck clean in dev, torch,
 jax; gates: dev + torch (jax if (f) or (i) touches its path).
 
+### W5.31 — The arviz lazy-`numpyro` import-order fix-up [XS; orchestrator] (ruled by Peter 2026-09-24 on W5.26's carried finding)
+`tests/results/test_population.py::TestTheApproximateEngineRow::test_vi_fitted_object_agrees_with_emcee`
+fails on jax whenever `tests/results` runs without a suite that imports the
+jax backend ahead of it, on master as on every branch since arviz 1.3.0
+entered the lock: arviz registers `numpyro` in `sys.modules` as an
+`importlib.util._LazyModule`; a plain `import numpyro` returns the stub
+unexecuted, and the backend's first `import numpyro.distributions` runs
+numpyro's `__init__` mid-chain, after which `numpyro.distributions` never
+binds `distribution` and `numpyro.factor` raises `AttributeError` inside
+every native model. Reproduced in a fresh interpreter as `import
+ampere.core; import arviz; import ampere.backends.jax`. Fix: touch
+`numpyro` (read any attribute) in `ampere/backends/jax/_config.py`, the
+first module the package imports; a regression row in
+`tests/backends/test_jax_import_order.py` runs the failing order in a
+fresh interpreter with the checkout first on the path, and a second row
+proves the stub really is lazy after arviz alone. **Not in scope:**
+anything in arviz's own import; the torch backend (pyro is not
+lazy-loaded by arviz). **Owns:** `ampere/backends/jax/_config.py` and
+`__init__.py` (comments), the new test file. **Depends:** W5.26 merged.
+**Accept:** the reproduction green in a fresh interpreter; the VI
+population row green on jax run *alone*; `tests/backends/test_jax.py`
+green on jax; lint, format, jax typecheck clean; gates: jax (the merged
+gate's).
+
 ### W5.29 — The native batched path drawing a context [M; Opus] (W5.10's carried item, ruled by Peter 2026-09-22)
 `simulate_many(context=prior)` draws a context per draw, but on the batched
 native path a per-draw σ does not reach the realisation, so the path
