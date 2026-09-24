@@ -787,6 +787,51 @@ the interferometry sketch's Q2 (per-visibility frequency as an
   Peter's ruling of 2026-09-24: the item text in WORK_ITEMS.md stands as
   written; its outcome is a report, and `ampere.diagnostics` lands only if
   the maturity gate is met.
+- **The optimisers module: point estimates and warm starts** (Peter,
+  2026-09-24, prompted by Fan et al. 2026, arXiv:2609.19476; the harvested
+  `optim_only` branch, `docs/design/harvest/optim_only/`, is the prior
+  art). A fast initial guess at the parameters, and at a GP likelihood's
+  hyperparameters, is a real need: every engine today starts from prior
+  draws that merely score finite (`Engine.initial_positions`), and a user
+  with an expensive or badly conditioned problem has no cheap way to ask
+  "where should I be looking?". The item lands `ampere.inference`'s
+  optimisers as engines on the frozen §4.5 surface, three routes behind
+  one call: (1) **numpy path** — multi-start local minimisation of the
+  negative log-posterior over the packed unconstrained vector
+  (`scipy.optimize`, starts from `initial_positions`, the bijections
+  keeping every iterate in support), the harvested `ScipyMinOpt` shape
+  re-expressed over `FittingProblem`; (2) **native path** — a gradient MAP
+  through `ampere.core.realise` on torch and jax (L-BFGS, Adam as the
+  fallback), and `VIEngine`'s fitted mean as the alternative start, both
+  reaching NUTS through the existing `init_to_value` hook and the
+  ensembles through `initial_positions`; (3) **GP hyperparameter warm
+  start** — given a length-scale, the reduced-rank solvers
+  (`HilbertSpaceGP`, `EquispacedFourierGP`) are linear in their features,
+  so the amplitude and the noise scale have a closed-form empirical-Bayes
+  fit from one eigendecomposition of the feature Gram matrix and a
+  one-dimensional root find (the trick Fan et al. use for their linear
+  surrogate), and a small length-scale grid on top gives the three
+  hyperparameters in milliseconds; the dense solvers take the same start.
+  The result is a point estimate with provenance (the route, the starts,
+  the converged value, the number of evaluations), stored on the run it
+  seeds so a posterior's start is reproducible from its archive. **Not
+  in scope**, and ruled out by the dimension argument recorded on
+  2026-09-24: Bayesian optimisation as a search strategy — the paper's
+  spherical linear surrogate assumes standard-normal latents of high
+  enough dimension for the thin shell to be thin, a locally linear
+  objective and a maximisation goal, none of which an astrophysical
+  posterior of ten to fifty curved, often multimodal parameters supplies;
+  the harvest's Ax/SAASBO/Ray classes stay archived, and an expensive
+  simulator is the SBI layer's case first. **Depends:** Phase 5 closed.
+  **Accept:** on the conformance fixtures, each route's point estimate
+  inside the sampled posterior's central 50 % on every free parameter,
+  once per fixture; the hyperparameter warm start within a factor of two
+  of the sampled posterior median on a pinned reduced-rank row; a pinned
+  row where a NUTS run started from the MAP reaches its adaptation target
+  in fewer warmup steps than the prior-draw start, and the ensemble
+  equivalent for emcee's burn-in; the start recorded in provenance
+  (schema bump if a new attr is needed); `inference.md` amended with the
+  optimiser surface; a `docs/source` page; gates: all four.
 - Sphinx docs rebuilt around the new core; example gallery migrated;
   migration guide from legacy; deprecation policy for `ampere.{data,models,
   infer}`; beta release (addresses issues #57–60, #62).
