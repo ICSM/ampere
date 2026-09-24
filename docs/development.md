@@ -84,9 +84,18 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
     environment). Since W2.11 both `torch` and `sbi` resolve torch from
     PyTorch's **CPU** index, so neither pulls ~2 GB of CUDA runtime onto a
     CPU-only runner; this changes nothing about what `pip install
-    "ampere[torch]"` gives a user. **Run five-suite gates one at a time** —
-    two concurrently exhaust a 13 GB machine. Torch's five-suite gate takes
-    12–17 min here, sbi's 14–20 min, jax's 8–13 min, dev's 5–8 min.
+    "ampere[torch]"` gives a user. **Run `test-all` gates one at a time** —
+    two concurrently exhaust a 13 GB machine. Measured on this machine at
+    W5.26 (2026-09-24, nine suites including `tests/interferometry` and
+    `tests/astrometry`, the studies' numpy-path sampling rows skipped
+    outside `dev`): dev 33 min, torch 55 min, jax 33 min, sbi 62 min — the
+    orchestrator's merged-gate baselines. Before W5.26 (seven suites, the
+    study rows everywhere): dev 27 min, torch 62, jax 45, sbi 69. The two
+    new suites cost about 3 min in dev, 7 on torch, 4 on jax and 6 on sbi
+    of those figures; the study rows they replace cost about 10 min of
+    each modern-backend leg (`tests/m2` + `tests/results/test_population.py`:
+    18.5 min in dev where they run, 8.7 min on torch where only the
+    backend-agreement rows remain).
   - **CI's `suites` matrix** (`.github/workflows/ci.yml`): since W5.26, a
     blocking job per environment-and-group cell, each producing a check
     named "new-namespace suites (`<environment>`, `<group>`)" — `dev` (the
