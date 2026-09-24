@@ -85,6 +85,9 @@ consulted with, and the conformance fixture's id.
 
 from __future__ import annotations
 
+# W5.31: ``._config`` is imported first on purpose -- it touches ``numpyro``
+# before any submodule below imports ``numpyro.distributions`` (see its
+# comment for the arviz lazy-module fault this guards against).
 from ._config import BACKEND, configure_x64, require_x64, x64_enabled
 from ._device import DEVICE
 from .astropy import TRANSLATIONS, NativeAstropyModel, from_astropy
