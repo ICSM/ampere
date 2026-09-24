@@ -726,7 +726,9 @@ torch = { features = ["py313", "dev", "zeus", "extinction", "netcdf", "torch"] }
 # this one, and a separate `blackjax` environment would be the jax
 # environment plus one small pure-python wheel -- a second half-gigabyte jax
 # install and a second CI leg for nothing. Its tests therefore run on the
-# existing `new-namespace suites (jax)` leg, whose path gate already covers
+# existing jax leg (W5.26: "new-namespace suites (jax, backends)", the
+# `test-group-backends` cell -- `tests/inference/test_blackjax.py` lives
+# under `tests/inference`), whose path gate already covers
 # `ampere/inference/**` and `ampere/backends/jax/**`.
 jax = { features = ["py313", "dev", "zeus", "extinction", "netcdf", "jax", "blackjax"] }
 # W5.14: the nested-sampling pair, in their own small environment. Not folded

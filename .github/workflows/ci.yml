@@ -77,7 +77,8 @@ on:
   # `if:` guard below) -- push/pull_request never run it. Before W3.7 the
   # reason was purely the size of the torch+sbi download; since W3.7 the
   # `backend-suites` matrix already pays that cost on every PR (its `sbi`
-  # leg -- "new-namespace suites (sbi)" -- is now blocking), so the download
+  # leg -- the "new-namespace suites (sbi, <group>)" checks, W5.26 -- is now
+  # blocking), so the download
   # itself is no longer avoided here. What stays true, and is now the sole
   # reason, is that `sbi-characterisation` exercises the *legacy*
   # `ampere.infer.sbi` flow specifically (see that job's own comment) --
