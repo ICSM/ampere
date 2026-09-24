@@ -478,25 +478,30 @@ test-all = "pytest tests/core tests/results tests/conformance tests/backends tes
 #     -- the original test-phase1 pairing: a family/lowering row registered
 #     in tests/core (or the contracts doctest `test_spec_doctests.py` runs)
 #     must not leak into tests/conformance's registered-family check.
-#   * test-group-backends:  tests/backends tests/inference tests/examples
-#     -- tests/examples/conftest.py's own module-scoped fixture already
-#     snapshots and restores `_FAMILIES` around the one import regardless of
-#     which process runs it (see that file's docstring), so this group is
-#     the one of the three that does NOT need tests/conformance alongside it
-#     to stay honest -- unlike the other two, its self-cleaning is structural
-#     rather than proved by co-location.
+#   * test-group-backends:  tests/conformance tests/backends tests/inference
+#                            tests/examples
+#     -- the W2.11 pairing: tests/examples loads a user-style module that
+#     registers a likelihood family at import; tests/examples/conftest.py
+#     snapshots and restores the registry around it, and running
+#     tests/conformance's registered-family check in the same process is
+#     what proves that fixture still works (the review of this item restored
+#     the pairing: a fixture whose correctness is only asserted by
+#     co-location is not proved by a group that omits the co-location).
 #   * test-group-studies:   tests/conformance tests/m2 tests/interferometry
 #                            tests/astrometry
-#     -- the m2 pairing above, extended to the two suites this item adds:
+#     -- the W2.10 pairing above, extended to the two suites this item adds:
 #     neither registers anything today, but grouping every backend-composing
 #     study suite with tests/conformance keeps that proof extensible rather
 #     than something a future study has to remember to ask for.
+#   tests/conformance therefore runs in every group (about one to three
+#   minutes per environment): it is the registry oracle, and each group is
+#   a subset of test-all, so a local run and a CI cell still agree.
 # Local: `test-all` (this task) is unchanged in meaning and stays the one
 # single-process gate a developer runs; the three tasks below exist for CI's
 # matrix and are equally valid to run locally when only one group's result
 # is wanted.
 test-group-core = "pytest tests/core tests/results tests/conformance"
-test-group-backends = "pytest tests/backends tests/inference tests/examples"
+test-group-backends = "pytest tests/conformance tests/backends tests/inference tests/examples"
 test-group-studies = "pytest tests/conformance tests/m2 tests/interferometry tests/astrometry"
 # W2.5/W2.4 slice 3: the GPU smoke tests. Skipped wherever `jax.devices()`
 # (or torch's CUDA/MPS query) reports no accelerator, which is every ordinary

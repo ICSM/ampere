@@ -375,13 +375,11 @@ jobs:
     # suite) is unchanged and remains the local gate; each group below is a
     # subset of it, not a separate command line, so a local run and a CI
     # cell always agree. Each group that carries a registry-leak proof keeps
-    # its paired suite in one process -- see `test-group-core`'s and
-    # `test-group-studies`'s comments in `pyproject.toml` for which two, and
-    # `test-group-backends`'s for why the third (`tests/examples`) does not
-    # need `tests/conformance` alongside it: its own conftest fixture
-    # snapshots and restores the family registry around the one import
-    # regardless of process, W0.10 finding (c) and W2.10/W2.11's additions
-    # were what first proved the *other* two suites needed the pairing.
+    # its paired suite in one process: `tests/conformance` (the
+    # registered-family check, W0.10 finding (c)) runs in every group, beside
+    # `tests/core`'s doctest registrations, `tests/examples`' user-style
+    # module (W2.11) and `tests/m2`'s backend-composing study (W2.10) -- see
+    # the `test-group-*` comments in `pyproject.toml`.
     strategy:
       fail-fast: false
       matrix:
