@@ -45,6 +45,11 @@ import pytest
 from examples.m2_misspecification import study
 from examples.m2_misspecification.generators import scenario_named, wavelength_grid
 
+#: W5.26: every row here samples on the reference backend and asserts a claim
+#: about the likelihood, not about the array library; ``tests/m2/conftest.py``
+#: skips ``study``-marked rows outside ``dev`` for that reason.
+pytestmark = pytest.mark.study
+
 MISSPECIFIED = ("mild", "strong_smooth", "strong_sharp")
 AMPLITUDE = f"{study.DATASET_LABEL}.likelihood.amplitude"
 LENGTH_SCALE = f"{study.DATASET_LABEL}.likelihood.length_scale"

@@ -83,6 +83,11 @@ from ampere.backends.reference.interferometry import BinaryVisibilities
 from ampere.inference import EmceeEngine
 from ampere.results.calibration import sbc
 
+#: W5.26: every row here refits on the reference backend and asserts a claim
+#: about the likelihood's calibration, not about the array library;
+#: ``tests/m2/conftest.py`` skips ``study``-marked rows outside ``dev``.
+pytestmark = pytest.mark.study
+
 #: The observing wavelength, micron. Monochromatic: the chromatic case is
 #: W4.4's, and the claim here is about (u, v) correlation.
 WAVELENGTH = 2.2

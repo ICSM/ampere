@@ -302,6 +302,7 @@ class TestTheTwoHundredObjectsFit:
         )
 
 
+@pytest.mark.study
 class TestTheReducedObjectsFit:
     """The default-gate sibling of :class:`TestTheTwoHundredObjectsFit` (W5.22).
 
@@ -330,6 +331,7 @@ class TestTheReducedObjectsFit:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.study
 class TestReweightedPopulationPosterior:
     @pytest.fixture(scope="class")
     def result(self, object_runs: list[Any]) -> Any:
@@ -387,6 +389,7 @@ class TestReweightedPopulationPosterior:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.study
 class TestTheStoredInterimPrior:
     """``fit_population`` reads ``model.theta``'s prior back off the archive's
     own provenance (schema 8, ``ampere_free_priors``) when ``interim_prior``
@@ -485,6 +488,7 @@ class TestTheStoredInterimPrior:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.study
 class TestTheFileBackedReaderAgreesWithTheInMemoryOne:
     def test_bitwise_equal_result(self, object_runs: list[Any], tmp_path: Any) -> None:
         model = _population_model()
@@ -596,6 +600,7 @@ def test_the_protocol_accepts_a_non_datatree_implementation() -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.study
 class TestTheEffectiveSampleSizeRefusal:
     def test_a_collapsed_object_is_refused_by_name(self, object_runs: list[Any]) -> None:
         good = [DataTreeRunColumns(run) for run in object_runs[:5]]
@@ -635,6 +640,7 @@ class TestTheEffectiveSampleSizeRefusal:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.study
 def test_runs_that_do_not_share_a_spec_hash_are_refused() -> None:
     run_a = _fit_object(1.0, seed=1, prior=st.norm(0.0, 10.0))
     run_b = _fit_object(1.0, seed=2, prior=st.norm(0.0, 20.0))  # a different declared prior
@@ -760,6 +766,7 @@ class TestTheApproximateEngineRow:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.study
 class TestTheMarginalInterimPriorFix:
     """A run's stored ``log_prior`` is the *joint* interim prior over every
     free parameter; the reweighting ratio needs the named parameter's own

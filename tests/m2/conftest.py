@@ -22,6 +22,7 @@ so a test must not assume it received a freshly emitted run.
 
 from __future__ import annotations
 
+import importlib.util
 from collections.abc import Iterator
 from typing import Any
 
@@ -87,8 +88,40 @@ def agg_backend() -> Iterator[None]:
         matplotlib.use(previous, force=True)
 
 
+def _skip_study_rows_outside_dev(items: list[pytest.Item]) -> None:
+    """Skip ``study``-marked rows wherever a modern backend is installed (W5.26).
+
+    ``study`` marks the rows that sample on the reference backend only and
+    assert *likelihood* behaviour — ``test_science.py``, ``test_figures.py``
+    (which reads the same session runs), ``test_many_lines.py`` and the two
+    SBC calibration modules. ``tests/m2/test_backend_agreement.py`` (and the
+    per-backend rows in ``test_model.py``) already prove the backends agree
+    with the reference implementation, so re-running the study's own numpy-path
+    sampling in ``torch``, ``jax`` or ``sbi`` buys no additional evidence, only
+    their wall clock (about eleven minutes of it).
+
+    Detected by whether ``torch``/``jax`` import here, the same test every
+    other conditional skip in this suite already uses, rather than by
+    environment name — a ``sbi``-environment run has torch installed and
+    should skip these rows for the same reason a ``torch`` run does.
+    """
+    reasons = [name for name in ("torch", "jax") if importlib.util.find_spec(name) is not None]
+    if not reasons:
+        return
+    skip = pytest.mark.skip(
+        reason=(
+            "study row: numpy-path-only, redundant with the backend-agreement rows "
+            f"(run on `dev` instead); this environment has {' and '.join(reasons)} installed"
+        )
+    )
+    for item in items:
+        if "study" in item.keywords:
+            item.add_marker(skip)
+
+
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Skip the ``m2_full`` rows unless ``-m m2_full`` asked for them.
+    """Skip the ``m2_full`` rows unless ``-m m2_full`` asked for them, and the
+    ``study`` rows outside ``dev`` (W5.26).
 
     The full ladder samples 2 000- and 20 000-point spectra at the milestone
     budget: tens of minutes, on three backends. That is evidence worth having
@@ -103,9 +136,9 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     other suite's invocation exactly as it was.
     """
     selected = config.getoption("-m", default="") or ""
-    if "m2_full" in selected:
-        return
-    skip = pytest.mark.skip(reason="milestone M2's full ladder: run with `pytest -m m2_full`")
-    for item in items:
-        if "m2_full" in item.keywords:
-            item.add_marker(skip)
+    if "m2_full" not in selected:
+        skip = pytest.mark.skip(reason="milestone M2's full ladder: run with `pytest -m m2_full`")
+        for item in items:
+            if "m2_full" in item.keywords:
+                item.add_marker(skip)
+    _skip_study_rows_outside_dev(items)

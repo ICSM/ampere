@@ -366,6 +366,18 @@ markers = [
     # `-m engines_full` asks for them, in `tests/m2/conftest.py`'s own shape
     # and for its own reason.
     "engines_full: the engine battery's full SBC budget; run with `pytest -m engines_full`",
+    # W5.26. A study row that samples on the reference backend only and
+    # asserts a claim about the *likelihood* (or about `ampere.results`
+    # machinery exercised through a reference-backend run) -- never about the
+    # array library. `tests/m2/test_backend_agreement.py` and the per-backend
+    # rows elsewhere already prove the backends agree with the reference
+    # implementation, so re-running these rows' own sampling in `torch`,
+    # `jax` or `sbi` buys no additional evidence, only their wall clock.
+    # `tests/m2/conftest.py` and `tests/results/conftest.py` skip `study`
+    # rows wherever a modern backend is importable, so they run in `dev`
+    # only -- unlike the `*_full` markers above, this is not opt-in by `-m`;
+    # it is opt-out by environment.
+    "study: a study's numpy-path-only sampling row; skipped outside `dev` (see tests/m2/conftest.py)",
 ]
 
 # ---------------------------------------------------------------------------
