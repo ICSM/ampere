@@ -84,21 +84,37 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
     environment). Since W2.11 both `torch` and `sbi` resolve torch from
     PyTorch's **CPU** index, so neither pulls ~2 GB of CUDA runtime onto a
     CPU-only runner; this changes nothing about what `pip install
-    "ampere[torch]"` gives a user. **Run five-suite gates one at a time** —
-    two concurrently exhaust a 13 GB machine. Torch's five-suite gate takes
-    12–17 min here, sbi's 14–20 min, jax's 8–13 min, dev's 5–8 min.
-  - **CI's `suites` matrix** (`.github/workflows/ci.yml`): one blocking
-    job per new-namespace environment, each producing a check named
-    "new-namespace suites (`<environment>`)" — `dev` (its own `suites` job:
-    `test-all` + `bench`) and, in the `backend-suites` job's matrix,
-    `torch`, `jax` and, since W3.7, `sbi` (each: `test-all`; `torch`/`jax`
-    also run `bench`, deliberately not repeated for `sbi` since it would
-    only re-exercise torch's own benchmarks under another name — see the
-    job's comment). `sbi`'s install is cached the same way as `torch`'s
-    (`setup-pixi`'s `cache: true`). The weekly/on-demand
-    `sbi-characterisation` job is unrelated: it exercises the *legacy*
-    `ampere.infer.sbi` flow, not the new-namespace `sbi` gate, and stays
-    non-blocking.
+    "ampere[torch]"` gives a user. **Run `test-all` gates one at a time** —
+    two concurrently exhaust a 13 GB machine. Measured on this machine at
+    W5.26 (2026-09-24, nine suites including `tests/interferometry` and
+    `tests/astrometry`, the studies' numpy-path sampling rows skipped
+    outside `dev`): dev 33 min, torch 55 min, jax 33 min, sbi 62 min — the
+    orchestrator's merged-gate baselines. Before W5.26 (seven suites, the
+    study rows everywhere): dev 27 min, torch 62, jax 45, sbi 69. The two
+    new suites cost about 3 min in dev, 7 on torch, 4 on jax and 6 on sbi
+    of those figures; the study rows they replace cost about 10 min of
+    each modern-backend leg (`tests/m2` + `tests/results/test_population.py`:
+    18.5 min in dev where they run, 8.7 min on torch where only the
+    backend-agreement rows remain).
+  - **CI's `suites` matrix** (`.github/workflows/ci.yml`): since W5.26, a
+    blocking job per environment-and-group cell, each producing a check
+    named "new-namespace suites (`<environment>`, `<group>`)" — `dev` (the
+    `suites` job) and, in the `backend-suites` job's matrix, `torch`, `jax`
+    and, since W3.7, `sbi` and, since W5.14, `nested`. `group` is
+    `core`/`backends`/`studies` (`pyproject.toml`'s `test-group-core` /
+    `test-group-backends` / `test-group-studies` tasks, each a named subset
+    of `test-all`'s suites — see that task's comment for exactly which
+    suites and why), so what used to be one forty-minute `test-all` step per
+    environment is now three smaller, independently-reported steps: a red
+    row in one group no longer hides the other two groups' results in the
+    same leg. `bench` runs once per environment, gated to the `core` cell,
+    not once per group (`torch`/`jax` only; deliberately not repeated for
+    `sbi`/`nested` since either would only re-exercise another leg's own
+    benchmarks under another name — see the job's comment). `sbi`'s install
+    is cached the same way as `torch`'s (`setup-pixi`'s `cache: true`). The
+    weekly/on-demand `sbi-characterisation` job is unrelated: it exercises
+    the *legacy* `ampere.infer.sbi` flow, not the new-namespace `sbi` gate,
+    and stays non-blocking.
   - **W4.10 — `typecheck` split out of the backend legs.** Since W4.10,
     `pixi run -e <env> typecheck` for `torch`/`jax`/`sbi` runs in its own
     matrix job, `backend-typecheck` (check name
@@ -137,7 +153,7 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
     | --- | --- |
     | `ampere/inference/_blackjax.py`, `tests/inference/test_blackjax.py` (W5.14; matched *before* the CORE row below) | dev, jax (blackjax installs into the existing jax environment, so it rides that leg) |
     | `ampere/inference/_nested.py`, `tests/inference/test_nested.py` (W5.14; matched *before* the row below) | dev, nested |
-    | `pyproject.toml`, `pixi.lock`, `.github/**`, `ampere/core/**`, `ampere/results/**`, `ampere/inference/**`, and the shared test suites (`tests/{core,results,inference,conformance,m2,benchmarks,scaling,gpu,characterisation}/**` | everything: dev, torch, jax, sbi, nested, docs |
+    | `pyproject.toml`, `pixi.lock`, `.github/**`, `ampere/core/**`, `ampere/results/**`, `ampere/inference/**`, and the shared test suites (`tests/{core,results,inference,conformance,m2,interferometry,astrometry,benchmarks,scaling,gpu,characterisation}/**` — `interferometry`/`astrometry` joined W5.26) | everything: dev, torch, jax, sbi, nested, docs |
     | `ampere/backends/torch/**`, `tests/backends/*torch*` | torch, sbi (sbi's environment installs torch too) |
     | `ampere/backends/jax/**`, `tests/backends/*jax*` | jax |
     | `ampere/backends/reference/**`, remaining `tests/backends/**` | dev only |
@@ -165,12 +181,16 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
     their existing branch-protection entries; new ones need adding):
     `lint + format-check`, `actionlint`,
     `typecheck (pyrefly, new namespaces)`, `test (py312)`, `test (py313)`,
-    `test (py314)`, `new-namespace suites (dev)`,
+    `test (py314)`,
     `typecheck (pyrefly, torch)`, `typecheck (pyrefly, jax)`,
-    `typecheck (pyrefly, sbi)`, `new-namespace suites (torch)`,
-    `new-namespace suites (jax)`, `new-namespace suites (sbi)`,
-    `typecheck (pyrefly, nested)`, `new-namespace suites (nested)`
-    (both new at W5.14 — they need adding to branch protection),
+    `typecheck (pyrefly, sbi)`, `typecheck (pyrefly, nested)`
+    (nested new at W5.14 — needs adding to branch protection), and, since
+    W5.26 replaced the five single "new-namespace suites (`<environment>`)"
+    checks with one per environment-and-group cell, fifteen
+    "new-namespace suites (`<environment>`, `<group>`)" checks —
+    `<environment>` one of `dev`/`torch`/`jax`/`sbi`/`nested`, `<group>` one
+    of `core`/`backends`/`studies` (all fifteen need adding to branch
+    protection in place of the five they replace), plus
     `docs build`, `minimal install (no extras)`. (`path filters` — the
     `changes` job itself — and the weekly/on-demand
     `characterisation suite (with sbi extra)` are not required checks: the

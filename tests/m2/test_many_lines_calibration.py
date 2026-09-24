@@ -83,6 +83,13 @@ from examples.m2_misspecification import study
 from examples.m2_misspecification.generators import MANY_LINES, generate
 from examples.m2_misspecification.model import FLUX_UNIT, WAVELENGTH_UNIT
 
+#: W5.26: every row here refits on the reference backend and asserts a claim
+#: about the likelihood's calibration, not about the array library;
+#: ``tests/m2/conftest.py`` skips ``study``-marked rows outside ``dev``. (The
+#: already-opt-in ``m2_full`` row below carries both markers; either one
+#: alone already keeps it out of the default gate.)
+pytestmark = pytest.mark.study
+
 #: Points per simulated spectrum. Small, and it can be: the claim is about
 #: coverage over many refits, not about one posterior's width.
 SIZE = 150

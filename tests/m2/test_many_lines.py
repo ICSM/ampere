@@ -65,6 +65,12 @@ from examples.m2_misspecification.generators import (
     wavelength_grid,
 )
 
+#: W5.26: every row here samples on the reference backend and asserts a claim
+#: about the likelihood, not about the array library; ``tests/m2/conftest.py``
+#: skips ``study``-marked rows outside ``dev``. (The warped arm's cross-backend
+#: agreement is ``tests/m2/test_backend_agreement.py``'s own row.)
+pytestmark = pytest.mark.study
+
 CI_SIZE = 200
 
 #: The three flexible arms, i.e. :data:`many_lines.ARMS` without the standard

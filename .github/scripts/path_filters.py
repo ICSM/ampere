@@ -60,7 +60,8 @@ matches it):
               ``ampere/core/**``, ``ampere/results/**``,
               ``ampere/inference/**``, and the shared/backend-neutral test
               suites (``tests/core``, ``tests/results``, ``tests/inference``,
-              ``tests/conformance``, ``tests/m2``, ``tests/benchmarks``,
+              ``tests/conformance``, ``tests/m2``, ``tests/interferometry``,
+              ``tests/astrometry`` (both W5.26), ``tests/benchmarks``,
               ``tests/scaling``, ``tests/gpu``, ``tests/characterisation``).
               Runs EVERYTHING: dev, torch, jax, sbi, nested and the docs
               build.
@@ -130,21 +131,32 @@ ALWAYS_JOBS = [
     "lint + format-check",
     "actionlint",
 ]
+# W5.26: `suites`/`backend-suites` each gained a `group` matrix dimension
+# (`core`, `backends`, `studies` -- pyproject.toml's `test-group-*` tasks),
+# so the one "new-namespace suites (<environment>)" check per environment
+# below is now three, one per group.
+_SUITE_GROUPS = ("core", "backends", "studies")
+
+
+def _suite_jobs(environment: str) -> list[str]:
+    return [f"new-namespace suites ({environment}, {group})" for group in _SUITE_GROUPS]
+
+
 DEV_JOBS = [
     "typecheck (pyrefly, new namespaces)",
     "test (py311)",
     "test (py312)",
     "test (py313)",
-    "new-namespace suites (dev)",
+    *_suite_jobs("dev"),
     "minimal install (no extras)",
 ]
-TORCH_JOBS = ["typecheck (pyrefly, torch)", "new-namespace suites (torch)"]
-JAX_JOBS = ["typecheck (pyrefly, jax)", "new-namespace suites (jax)"]
-SBI_JOBS = ["typecheck (pyrefly, sbi)", "new-namespace suites (sbi)"]
+TORCH_JOBS = ["typecheck (pyrefly, torch)", *_suite_jobs("torch")]
+JAX_JOBS = ["typecheck (pyrefly, jax)", *_suite_jobs("jax")]
+SBI_JOBS = ["typecheck (pyrefly, sbi)", *_suite_jobs("sbi")]
 # W5.14: the nautilus/ultranest environment. A small, numpy-only
 # environment (no torch, no jax), which is what makes a leg of its own
 # affordable rather than folding two nested samplers into `dev`.
-NESTED_JOBS = ["typecheck (pyrefly, nested)", "new-namespace suites (nested)"]
+NESTED_JOBS = ["typecheck (pyrefly, nested)", *_suite_jobs("nested")]
 DOCS_JOBS = ["docs build"]
 # Note: `characterisation suite (with sbi extra)` (sbi-characterisation) is
 # not listed here -- it is never path-gated (see ci.yml's job comment); it
@@ -176,6 +188,13 @@ _CORE_PREFIXES = (
     "tests/inference/",
     "tests/conformance/",
     "tests/m2/",
+    # W5.26: joined `test-all` (and the `test-group-studies` cell of the new
+    # CI matrix); both are backend-neutral shared suites in the same sense
+    # as `tests/m2` above (their per-backend rows skip themselves via
+    # `pytest.importorskip`/`needs_torch`/`needs_jax`, exactly like the rest
+    # of this bucket), so they run in every environment's gate.
+    "tests/interferometry/",
+    "tests/astrometry/",
     "tests/benchmarks/",
     "tests/scaling/",
     "tests/gpu/",

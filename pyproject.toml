@@ -366,6 +366,18 @@ markers = [
     # `-m engines_full` asks for them, in `tests/m2/conftest.py`'s own shape
     # and for its own reason.
     "engines_full: the engine battery's full SBC budget; run with `pytest -m engines_full`",
+    # W5.26. A study row that samples on the reference backend only and
+    # asserts a claim about the *likelihood* (or about `ampere.results`
+    # machinery exercised through a reference-backend run) -- never about the
+    # array library. `tests/m2/test_backend_agreement.py` and the per-backend
+    # rows elsewhere already prove the backends agree with the reference
+    # implementation, so re-running these rows' own sampling in `torch`,
+    # `jax` or `sbi` buys no additional evidence, only their wall clock.
+    # `tests/m2/conftest.py` and `tests/results/conftest.py` skip `study`
+    # rows wherever a modern backend is importable, so they run in `dev`
+    # only -- unlike the `*_full` markers above, this is not opt-in by `-m`;
+    # it is opt-out by environment.
+    "study: a study's numpy-path-only sampling row; skipped outside `dev` (see tests/m2/conftest.py)",
 ]
 
 # ---------------------------------------------------------------------------
@@ -446,7 +458,51 @@ test-m2 = "pytest tests/m2"
 # imports `examples/m2_misspecification`, which composes problems from
 # whichever backend the environment has, so running it in the same process as
 # `tests/conformance` is what proves the study registers nothing global.
-test-all = "pytest tests/core tests/results tests/conformance tests/backends tests/inference tests/examples tests/m2"
+# W5.26 added tests/interferometry (W4.4, 22 rows) and tests/astrometry
+# (W4.9, 40 rows): both were landed with their own `*_full` opt-in markers
+# but never joined this task or any `ci.yml` step, so neither ran anywhere
+# from the day it landed. Neither registers anything global (grep finds no
+# `register_family`/`register_lowering` call in either directory or the
+# `examples/{interferometry,astrometry}` modules they exercise), so their
+# addition adds no new registry-leak concern -- they join this one process
+# for the same reason `tests/backends` and `tests/inference` did: this is the
+# one invocation that is the actual per-environment gate.
+test-all = "pytest tests/core tests/results tests/conformance tests/backends tests/inference tests/examples tests/m2 tests/interferometry tests/astrometry"
+# W5.26 (3): `ci.yml`'s `suites` (dev) and `backend-suites`
+# (torch/jax/sbi/nested) jobs run these three groups as separate matrix
+# cells instead of `test-all` as one forty-minute step, so a red row in one
+# group no longer hides every other group's result in the same leg. Two of
+# the three carry a registry-leak proof and must keep their paired suite in
+# one process (test-all's own comment above, restated per group):
+#   * test-group-core:      tests/core tests/results tests/conformance
+#     -- the original test-phase1 pairing: a family/lowering row registered
+#     in tests/core (or the contracts doctest `test_spec_doctests.py` runs)
+#     must not leak into tests/conformance's registered-family check.
+#   * test-group-backends:  tests/conformance tests/backends tests/inference
+#                            tests/examples
+#     -- the W2.11 pairing: tests/examples loads a user-style module that
+#     registers a likelihood family at import; tests/examples/conftest.py
+#     snapshots and restores the registry around it, and running
+#     tests/conformance's registered-family check in the same process is
+#     what proves that fixture still works (the review of this item restored
+#     the pairing: a fixture whose correctness is only asserted by
+#     co-location is not proved by a group that omits the co-location).
+#   * test-group-studies:   tests/conformance tests/m2 tests/interferometry
+#                            tests/astrometry
+#     -- the W2.10 pairing above, extended to the two suites this item adds:
+#     neither registers anything today, but grouping every backend-composing
+#     study suite with tests/conformance keeps that proof extensible rather
+#     than something a future study has to remember to ask for.
+#   tests/conformance therefore runs in every group (about one to three
+#   minutes per environment): it is the registry oracle, and each group is
+#   a subset of test-all, so a local run and a CI cell still agree.
+# Local: `test-all` (this task) is unchanged in meaning and stays the one
+# single-process gate a developer runs; the three tasks below exist for CI's
+# matrix and are equally valid to run locally when only one group's result
+# is wanted.
+test-group-core = "pytest tests/core tests/results tests/conformance"
+test-group-backends = "pytest tests/conformance tests/backends tests/inference tests/examples"
+test-group-studies = "pytest tests/conformance tests/m2 tests/interferometry tests/astrometry"
 # W2.5/W2.4 slice 3: the GPU smoke tests. Skipped wherever `jax.devices()`
 # (or torch's CUDA/MPS query) reports no accelerator, which is every ordinary
 # machine and all of CI -- CI is CPU-only by ruling and W2.11 pins CPU wheels
@@ -675,7 +731,9 @@ torch = { features = ["py313", "dev", "zeus", "extinction", "netcdf", "torch"] }
 # this one, and a separate `blackjax` environment would be the jax
 # environment plus one small pure-python wheel -- a second half-gigabyte jax
 # install and a second CI leg for nothing. Its tests therefore run on the
-# existing `new-namespace suites (jax)` leg, whose path gate already covers
+# existing jax leg (W5.26: "new-namespace suites (jax, backends)", the
+# `test-group-backends` cell -- `tests/inference/test_blackjax.py` lives
+# under `tests/inference`), whose path gate already covers
 # `ampere/inference/**` and `ampere/backends/jax/**`.
 jax = { features = ["py313", "dev", "zeus", "extinction", "netcdf", "jax", "blackjax"] }
 # W5.14: the nested-sampling pair, in their own small environment. Not folded

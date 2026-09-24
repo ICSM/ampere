@@ -19,7 +19,10 @@ import pytest
 
 from examples.m2_misspecification import figures, study
 
-pytestmark = pytest.mark.usefixtures("agg_backend")
+#: W5.26: renders from the same reference-backend session runs
+#: ``test_science.py`` asserts on; ``tests/m2/conftest.py`` skips ``study``
+#: rows outside ``dev``.
+pytestmark = [pytest.mark.usefixtures("agg_backend"), pytest.mark.study]
 
 #: The two scenarios the per-run renderers are exercised on. All four would
 #: cost a corner plot each per likelihood for no extra coverage: the control and
