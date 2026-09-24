@@ -2611,7 +2611,16 @@ Ordering (two agents at a time): **wave 1** W5.0 ∥ W5.2, then W5.20; **wave 2*
 W5.16, W5.17, W5.18 as they free; W5.19 last. **Fillers, added
 2026-09-22 on Peter's rulings** (any free slot, in this order): W5.25
 first, then W5.26, W5.27 (before W5.19), W5.28 (after W5.27), W5.30 (after W5.28), W5.29,
-with W5.21 and W5.24 as before. File ownership per wave in
+with W5.21 and W5.24 as before. **Ruled by Peter 2026-09-24 (the
+remaining order, after the 2026-09-22 handoffs had stopped naming wave 6,
+the two older fillers and W5.1)**: after W5.26 merges, **W5.1 ∥ W5.29**
+(both Opus; W5.1 dispatched first, the larger blast radius); then
+**W5.21, W5.24, W5.15** as slots free; **W5.17** once W5.1 and W5.24 are
+merged, so the profile sees the final code; **W5.18 trimmed to its
+residue** (W5.14 landed the nested leg and W5.26 re-measured every leg
+and split the matrix — what remains is the `test-fast` task and the
+GPU-job check); **W5.16 deferred to Phase 6** by explicit ruling; **W5.19
+last**. File ownership per wave in
 the dispatch prompts; the sole shared file across waves is
 `core/likelihood.py` (W5.4, W5.7, W5.9 each own a section — the solver,
 the kernel, the noise-model — and merge in that order).
