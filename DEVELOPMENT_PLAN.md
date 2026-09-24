@@ -768,11 +768,13 @@ the interferometry sketch's Q2 (per-visibility frequency as an
 - Hierarchical/population inference: implement the container + hyperprior
   design from Phase 1 (plates in pyro/numpyro).
 - **RHMF exploratory trial** (Peter's ratification note, 2026-09-08, on the
-  W2.7 deferral row): early testing of the pre-fit robust-factorisation
-  family (`diagnostics.md` §2) against a pinned RHMF commit or a ≥0.1
-  release, behind a non-default extra, before the deferred
-  `ampere.diagnostics` namespace lands — the §2.2 adoptability re-check is
-  the gate, and the trial informs it rather than waiting for it.
+  W2.7 deferral row): **moved to Phase 6 by Peter's ruling of 2026-09-24**
+  (W5.16 stays written; it is dispatched after Phase 5 closes) — early
+  testing of the pre-fit robust-factorisation family (`diagnostics.md` §2)
+  against a pinned RHMF commit or a ≥0.1 release, behind a non-default
+  extra, before the deferred `ampere.diagnostics` namespace lands; the §2.2
+  adoptability re-check is the gate, and the trial informs it rather than
+  waiting for it.
 - **A dedicated benchmark-driven optimisation pass**: profile against the
   CI benchmark baselines established in Phase 2, then attack the levers in
   evidence order — requirements-negotiation compilation and caching (§4.3),
@@ -781,6 +783,10 @@ the interferometry sketch's Q2 (per-visibility frequency as an
   before profiles exist.
 
 ### Phase 6 — Docs, migration, release
+- **The RHMF exploratory trial (W5.16)**, deferred here from Phase 5 by
+  Peter's ruling of 2026-09-24: the item text in WORK_ITEMS.md stands as
+  written; its outcome is a report, and `ampere.diagnostics` lands only if
+  the maturity gate is met.
 - Sphinx docs rebuilt around the new core; example gallery migrated;
   migration guide from legacy; deprecation policy for `ampere.{data,models,
   infer}`; beta release (addresses issues #57–60, #62).
