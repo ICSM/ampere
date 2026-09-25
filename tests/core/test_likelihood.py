@@ -1191,6 +1191,20 @@ def photometry() -> PhotometricPoints:
     )
 
 
+#: The numpy path's refusal of the von Mises latent composition (*W5.1*),
+#: pinned word for word: its job is to say where the composition runs.
+NATIVE_ONLY = (
+    "the von_mises family with a GaussianProcessNoise model is a latent-variable model: the "
+    "observed phase is von Mises around predicted + f, with f = L(theta) z a latent GP, and a "
+    "GP added to a wrapped observable does not marginalise in closed form, so there is nothing "
+    "to {verb} until f is supplied, and none was. The composition is fitted on the native path "
+    "only, under NUTS or VI on the torch and jax backends through ampere.core.realise, which "
+    "sample z; every gradient-free engine refuses it. Build the problem from "
+    "ampere.backends.torch or ampere.backends.jax (DenseGP, a kernel selecting the triangle "
+    "axes) and run NUTSEngine or VIEngine, or use IndependentNoise here."
+)
+
+
 class TestVonMisesFamily:
     """The wrapped family W4.1 implemented, and why it is not a Gaussian.
 
@@ -1277,23 +1291,90 @@ class TestVonMisesFamily:
         bare = ClosurePhases([1.0e7], [2.0e7], [-0.5e7], [1.0e7], [2.2] * u.um, [0.2])
         VonMisesFamily().check_observed(bare)
 
-    def test_a_correlated_noise_model_is_refused_at_composition(self) -> None:
-        """A GP on a wrapped observable is latent, and this family does not consume one.
+    def test_a_correlated_noise_model_composes_as_a_latent_model(
+        self, phases: ClosurePhases
+    ) -> None:
+        """A GP on a wrapped observable is latent, and since W5.1 this family consumes one.
 
-        ``Likelihood`` refuses the pair before anything is evaluated, which is
-        the general rule for a ``LATENT`` combination whose family has not
-        opted in. The family's own guard below is the second line of the same
-        defence, for a caller assembling ``NoiseParams`` by hand.
+        ``PoissonFamily``'s pattern: the pair composes, declares
+        ``Marginalisation.LATENT``, and a gradient-free engine is refused by
+        :meth:`Likelihood.check_engine` — so the composition's only route to a
+        number is the native realisation, which is what "native path only"
+        means.
         """
-        with pytest.raises(LikelihoodError, match="CONSUMES_LATENT_GP is False"):
-            Likelihood(VonMisesFamily(), GaussianProcessNoise(Matern32(0.3, 1.0e7), DenseGP()))
+        kernel = Matern32(0.3, 1.0e7, axes=("u1", "v1", "u2", "v2"))
+        like = Likelihood(VonMisesFamily(), GaussianProcessNoise(kernel, DenseGP()))
+        assert VonMisesFamily.CONSUMES_LATENT_GP
+        assert like.marginalisation is Marginalisation.LATENT
+        like.check_alignment(phases, phases)
+        with pytest.raises(LikelihoodError, match="emcee cannot run this likelihood"):
+            like.check_engine(differentiable=False, engine="emcee")
 
-    def test_the_family_itself_refuses_a_correlated_evaluation(self) -> None:
+    def test_the_numpy_path_refuses_to_score_without_the_latent(self) -> None:
+        """Word for word: the refusal says *where* the composition is available."""
         noise = NoiseParams(
             sigma=np.ones(3), values={}, kernel=Matern32(0.3, 1.0), solver=DenseGP()
         )
-        with pytest.raises(LikelihoodError, match="latent-variable model"):
+        with pytest.raises(LikelihoodError) as caught:
             VonMisesFamily().log_prob(np.zeros(3), np.zeros(3), noise)
+        assert str(caught.value) == NATIVE_ONLY.format(verb="score")
+
+    def test_given_the_latent_it_is_von_mises_around_the_shifted_prediction(
+        self, phases: ClosurePhases
+    ) -> None:
+        """The latent-conditional density: the IndependentNoise one, centred on ``mu + f``.
+
+        Including across the branch cut: a latent that carries the centre past
+        ``pi`` is scored on the circle, not on the line.
+        """
+        sigma = np.asarray(phases.uncertainty)
+        observed = np.asarray(phases.values)
+        predicted = np.array([0.2, -0.3, 3.0])
+        latent = np.array([0.05, 0.1, 0.3])
+        noise = NoiseParams(
+            sigma=sigma, values={}, kernel=Matern32(0.3, 1.0), solver=DenseGP(), latent=latent
+        )
+        got = VonMisesFamily().log_prob(predicted, observed, noise)
+        kappa = 1.0 / sigma**2
+        expected = float(np.sum(st.vonmises.logpdf(observed - predicted - latent, kappa)))
+        assert got == pytest.approx(expected, rel=1e-12)
+        with pytest.raises(LikelihoodError, match="One latent value per retained sample"):
+            VonMisesFamily().log_prob(
+                predicted,
+                observed,
+                NoiseParams(
+                    sigma=sigma,
+                    values={},
+                    kernel=Matern32(0.3, 1.0),
+                    solver=DenseGP(),
+                    latent=np.zeros(2),
+                ),
+            )
+
+    def test_given_the_latent_it_draws_around_the_shifted_prediction(self) -> None:
+        """Latent first, wrapped draw second: the circular mean sits at ``mu + f``."""
+        size = 4000
+        latent = np.full(size, 0.5)
+        noise = NoiseParams(
+            sigma=np.full(size, 0.3),
+            values={},
+            kernel=Matern32(0.3, 1.0),
+            solver=DenseGP(),
+            latent=latent,
+        )
+        drawn = VonMisesFamily().sample(np.full(size, 2.9), noise, np.random.default_rng(5))
+        assert np.all(np.abs(drawn) <= np.pi + 1e-12)
+        centre = np.angle(np.mean(np.exp(1j * drawn)))
+        assert np.angle(np.exp(1j * (centre - 3.4))) == pytest.approx(0.0, abs=0.02)
+
+    def test_a_quasiseparable_solver_is_refused_on_closure_phases(
+        self, phases: ClosurePhases
+    ) -> None:
+        """W4.2's structural refusal, on the five-axis kind: no ordered 1-D coordinate."""
+        kernel = Matern32(0.3, 1.0e7, axes=("u1",))
+        like = Likelihood(VonMisesFamily(), GaussianProcessNoise(kernel, QuasisepGP()))
+        with pytest.raises(LikelihoodError, match=r"no\s+ordering reduces to one coordinate"):
+            like.check_alignment(phases, phases)
 
     def test_it_draws_from_the_distribution_it_scores(self, phases: ClosurePhases) -> None:
         """The sampling form, added with the likelihood (``likelihoods.md`` §3).
@@ -1329,13 +1410,15 @@ class TestVonMisesFamily:
         like.check_alignment(phases, observed)
         assert np.isfinite(like.log_prob(phases, observed))
 
-    def test_it_refuses_to_draw_under_a_correlated_noise_model(self) -> None:
+    def test_it_refuses_to_draw_under_a_correlated_noise_model_without_the_latent(self) -> None:
+        """The draw refuses by the same text when no latent is supplied."""
         family = VonMisesFamily()
         noise = NoiseParams(
             sigma=np.ones(3), values={}, kernel=Matern32(0.3, 1.0), solver=DenseGP()
         )
-        with pytest.raises(LikelihoodError, match="cannot draw"):
+        with pytest.raises(LikelihoodError) as caught:
             family.sample(np.zeros(3), noise, np.random.default_rng(0))
+        assert str(caught.value) == NATIVE_ONLY.format(verb="draw")
 
 
 class TestCensoring:
