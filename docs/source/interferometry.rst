@@ -248,15 +248,17 @@ circular complex Gaussian process:
 **mixed units** — dimensionless ``(u, v)`` and a spectral wavelength — and an
 isotropic kernel over all three is refused by ``GPSolver.check_compatible``'s
 single-unit rule; the selector is what lets a kernel act on a named subset.
-The GP is **always on the visibilities, never on the closure phases**, in
-every arm of this study: a GP composed with :class:`~ampere.core.ComplexGaussianFamily`
+The GP is **on the visibilities, not on the closure phases**, in the three
+arms of this study: a GP composed with :class:`~ampere.core.ComplexGaussianFamily`
 marginalises analytically (one Cholesky of the covariance, no latent block),
 while a GP composed with a *wrapped* family like
-:class:`~ampere.core.VonMisesFamily` is a **latent** composition — reachable
+:class:`~ampere.core.VonMisesFamily` is a **latent** composition — fitted
 only on a modern backend under NUTS or VI, never on the reference path with
 emcee (``phase4_placement_memo.md`` §7.2 calls this "the blind alley" its own
-walk-through found; the item this page documents runs on emcee, so the
-choice is structural rather than a preference). Note also the O(N) refusal
+walk-through found; the three arms run on emcee, so the choice there is
+structural rather than a preference). That latent composition landed at
+W5.1 and has its own arm — see "A latent GP on the closure phases" below.
+Note also the O(N) refusal
 this modality forces: a ``(u, v)`` point has no ordered one-dimensional
 coordinate whatever a kernel selects, so :class:`~ampere.core.QuasisepGP`
 refuses a visibility kernel by name — ``DenseGP`` only, here.
@@ -420,8 +422,9 @@ incomplete    binary alone (disc omitted)      independent
 flexible      binary alone (disc omitted)      Matern-3/2 GP over (u, v)
 ============  ==============================  ================
 
-The closure phases stay under independent von Mises noise throughout — the
-flagship GP is always on the visibilities (§5).
+The closure phases stay under independent von Mises noise in these three
+arms — the flagship GP is on the visibilities (§5). The latent GP on the
+closure phases has its own arm, below.
 
 **The claim is about coverage, not about one draw's luck**, so
 ``examples/interferometry/study.run_calibration`` asks it through simulation-based
@@ -463,6 +466,58 @@ each parameter's own margin and wrong about their correlation passes a
 marginal test and fails TARP, which is the failure mode that matters for a
 two-parameter fit whose parameters are exactly as correlated as a binary's
 separation and flux ratio are.
+
+A latent GP on the closure phases (W5.1)
+-------------------------------------------
+
+A GP *added* to a wrapped observable does not marginalise in closed form, so
+:class:`~ampere.core.GaussianProcessNoise` on
+:class:`~ampere.core.ClosurePhases` is a **latent** composition: a phase
+error ``f ~ GP(0, K)`` over the triangle geometry, and each observed closure
+phase von Mises around ``model + f``. It landed at W5.1:
+
+.. code-block:: python
+
+    from ampere.backends import jax as backend
+
+    kernel = backend.Matern32(
+        st.halfnorm(scale=0.6), st.loguniform(1e7, 2e8), axes=("u1", "v1", "u2", "v2")
+    )
+    noise = backend.GaussianProcessNoise(kernel, backend.DenseGP())
+    likelihood = Likelihood(VonMisesFamily(), noise)   # LATENT: N whitened values join theta
+
+It is fitted **on the native path only** — NUTS or VI on the torch or jax
+backend, through ``ampere.core.realise``. Every gradient-free engine refuses
+it by name, because the engine would have to sample one latent value per
+triangle. ``DenseGP`` is the solver: a closure phase sits at a point of the
+four-dimensional ``(u1, v1, u2, v2)`` space, which has no ordering that makes
+it one coordinate, so :class:`~ampere.core.QuasisepGP` is refused by name, as
+it is on visibilities. A ``Product`` with a spectral block,
+``Matern32(axes=("spectral_axis",))``, is the dispersed form.
+
+``examples/interferometry/study.run_phase_calibration`` puts it on trial in
+W4.4's shape: the two-dataset binary is simulated from the prior without a
+disc, a fixed, smooth phase error of 0.6 rad (twelve times the per-triangle
+uncertainty) is added to every replica's closure phases, and each replica is
+refitted twice under NUTS on jax. The visibilities stay under independent
+noise in both arms. Central-90 % coverage on ``(separation, flux_ratio)``,
+twelve simulations, at the pinned seed:
+
+.. code-block:: text
+
+    rigid    [0.42, 0.08]   -- the error is invisible to it, so it drags the binary
+    latent   [1.00, 1.00]   -- the latent absorbs the error, and the binary stays calibrated
+
+At a second seed the figures are ``[0.25, 0.33]`` and ``[0.92, 0.92]``.
+``tests/interferometry/test_phase_calibration.py`` pins the direction with
+W4.4's own floor, ceiling and gap. Both arms take about three and a half
+minutes on jax together, so the rows run under ``-m interferometry_full``.
+Two measured choices are worth knowing about. First, with the visibilities
+in the fit, a 0.25 rad error barely moves a rigid fit, because the
+visibilities pin the binary and the phases lose the tug of war. Second, on
+the closure phases alone the separation is determined poorly enough that
+even the latent arm covered it only 0.58 and 0.67 of the time, so the pinned
+arm keeps the visibilities.
 
 The plots: a found limitation, lifted at W5.3
 -----------------------------------------------
