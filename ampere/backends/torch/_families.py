@@ -338,10 +338,15 @@ def _von_mises(inputs: FamilyInputs) -> torch.Tensor:
       real dataset, so an unnormalised wrapped Gaussian would have
       sigma-dependent mass over the circle (``interferometry.md`` §5).
 
-    Censoring never reaches here (a limit on an angle is not defined) and a
-    correlated noise model is refused at composition: a GP added to a wrapped
-    observable is a latent-variable model whose latent-conditional form
-    ``ampere.core`` does not implement, which is Phase 5's (W5.1).
+    Censoring never reaches here (a limit on an angle is not defined).
+
+    **The latent GP (W5.1).** Under a :class:`~ampere.core.GaussianProcessNoise`
+    the family consumes the latent phase error ``f = L(θ) z`` exactly as
+    :func:`_poisson` consumes its log-rate: the observed phase is von Mises
+    around ``predicted + f``, so the residual is ``observed - predicted - f``,
+    wrapped as above. This body is the composition's only scorer — the numpy
+    path refuses it by name — and the conformance battery holds it to a
+    from-scratch von-Mises-around-a-GP-draw formula.
     """
     sigma = inputs.sigma
     if sigma is None:  # pragma: no cover - composition refuses this first
@@ -352,6 +357,8 @@ def _von_mises(inputs: FamilyInputs) -> torch.Tensor:
         )
     kappa = 1.0 / (sigma * sigma)
     residual = inputs.observed - inputs.predicted
+    if inputs.latent is not None:
+        residual = residual - inputs.latent
     delta = torch.angle(torch.exp(1j * residual.to(complex_dtype(inputs.dtype))))
     return torch.sum(
         kappa * (torch.cos(delta) - 1.0) - _LOG_2PI - torch.log(torch.special.i0e(kappa))
