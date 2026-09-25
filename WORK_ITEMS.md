@@ -2528,8 +2528,11 @@ gate's).
 ### W5.32 — Phase 5 housekeeping IV: the CI warnings [S; Sonnet] (ruled by Peter 2026-09-25 on the orchestrator's warning analysis of CI runs 35962510128 and 36196425548)
 The two green `v2` runs emit about 3400 pytest warnings across the
 fifteen suite cells and a handful of Sphinx warnings; the orchestrator
-sorted them (handoff, 2026-09-25) and Peter ruled which are ours. Five
-small changes, each a commit. **(a) pytest 10.** `PytestRemovedIn10Warning`:
+sorted them (handoff, 2026-09-25) and Peter ruled which are ours. **Held
+for the last filler slot before W5.19 (ruled 2026-09-26): any further
+housekeeping found by later items is appended here as a new lettered
+part rather than given an item of its own.** Five small changes so far,
+each a commit. **(a) pytest 10.** `PytestRemovedIn10Warning`:
 eight class-scoped fixtures are defined as instance methods —
 `tests/results/test_population.py` (six: lines ~336, 403, 407, 796, 804,
 812), `tests/inference/test_engines.py` (~794),
@@ -2711,8 +2714,9 @@ merged, so the profile sees the final code; **W5.18 trimmed to its
 residue** (W5.14 landed the nested leg and W5.26 re-measured every leg
 and split the matrix — what remains is the `test-fast` task and the
 GPU-job check); **W5.16 deferred to Phase 6** by explicit ruling; **W5.32** (housekeeping IV,
-the CI warnings, Sonnet S, added 2026-09-25) as a filler in any free slot
-before W5.19; **W5.19 last**. File ownership per wave in
+the CI warnings, Sonnet S, added 2026-09-25) **held for the last slot before
+W5.19** so that further housekeeping found on the way folds into it (ruled
+2026-09-26); **W5.19 last**. File ownership per wave in
 the dispatch prompts; the sole shared file across waves is
 `core/likelihood.py` (W5.4, W5.7, W5.9 each own a section — the solver,
 the kernel, the noise-model — and merge in that order).
