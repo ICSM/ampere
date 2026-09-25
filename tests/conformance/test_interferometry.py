@@ -27,6 +27,7 @@ What these rows are for, in the order the work item puts them:
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from typing import Any
 
@@ -46,20 +47,34 @@ from ampere.core import (
     Instrument,
     Likelihood,
     LikelihoodError,
+    Marginalisation,
+    NoiseParams,
     RiceFamily,
     TransformationError,
     VisibilitySet,
     VonMisesFamily,
     negotiate,
+    realise,
+    registered_realisations,
 )
 
 from .oracles import (
     binary_closure_phase,
     binary_visibility,
     gaussian_visibility,
+    matern32_matrix,
+    summed_log_abs_det,
     uniform_disc_visibility,
+    von_mises_latent_log_likelihood,
 )
-from .protocol import ConformanceBackend, InterferometryPieces, Tolerances
+from .protocol import (
+    ConformanceBackend,
+    CovarianceSpec,
+    InterferometryPieces,
+    KernelFamily,
+    SolverKind,
+    Tolerances,
+)
 
 #: The observing wavelength every row here works at, micron. Monochromatic,
 #: because the spectral axis is a *coordinate* question (W4.1's amendment) and
@@ -872,3 +887,300 @@ class TestAmplitudeRoute:
         pieces_or_skip(backend)
         with pytest.raises(LikelihoodError, match="declared but not implemented"):
             Likelihood(RiceFamily(), backend.independent_noise())
+
+
+# ---------------------------------------------------------------------------
+# The latent GP on closure phases (W5.1)
+# ---------------------------------------------------------------------------
+
+#: The axes a closure-phase kernel binds: the triangle's two stored baselines.
+#: The spectral axis is left out because every row here is monochromatic.
+LATENT_AXES = ("u1", "v1", "u2", "v2")
+
+#: The latent phase error the log-density rows declare, hyperparameters fixed
+#: so the oracle is a number rather than a prior. A length scale of the order
+#: of a baseline, in wavelengths, so the four triangles are correlated with one
+#: another but not identical.
+LATENT_KERNEL = CovarianceSpec(
+    family=KernelFamily.MATERN32, amplitude=0.3, length_scale=3.0e7, axes=LATENT_AXES
+)
+
+#: The refusal the numpy family gives a latent composition with no latent
+#: supplied, word for word (``tests/core/test_likelihood.py`` pins the same
+#: text). Its job is to say where the composition runs.
+NATIVE_ONLY = (
+    "the von_mises family with a GaussianProcessNoise model is a latent-variable model: the "
+    "observed phase is von Mises around predicted + f, with f = L(theta) z a latent GP, and a "
+    "GP added to a wrapped observable does not marginalise in closed form, so there is nothing "
+    "to {verb} until f is supplied, and none was. The composition is fitted on the native path "
+    "only, under NUTS or VI on the torch and jax backends through ampere.core.realise, which "
+    "sample z; every gradient-free engine refuses it. Build the problem from "
+    "ampere.backends.torch or ampere.backends.jax (DenseGP, a kernel selecting the triangle "
+    "axes) and run NUTSEngine or VIEngine, or use IndependentNoise here."
+)
+
+#: The simulate rows' track: one triangle (stations 0, 1, 2) followed through
+#: this many hour angles across this range, so that the residuals form a
+#: sequence along which a periodogram means something. Its 4-D length is about
+#: 1.0e8 wavelengths, five of :data:`TRACK_KERNEL`'s length scales.
+TRACK_SAMPLES = 64
+TRACK_HOURS = (-1.2, 1.2)
+TRACK_KERNEL = CovarianceSpec(
+    family=KernelFamily.MATERN32, amplitude=0.5, length_scale=2.0e7, axes=LATENT_AXES
+)
+#: How many of the periodogram's lowest non-zero frequencies count as "low".
+#: Four of 32: under white residuals they would hold 4/32 = 0.125 of the power.
+LOW_FREQUENCIES = 4
+#: The low-frequency power fraction a correlated draw must exceed and an
+#: independent one must stay under. Measured over seeds 0-2: through
+#: ``problem.simulate(observe=True, rng=default_rng(seed))`` (the numpy draw,
+#: identical on every fixture) the latent GP gave 0.805-0.984 and independent
+#: von Mises noise 0.053-0.111; through ``simulate_many(3, native=True)`` the
+#: torch draws gave 0.702-0.965 and the jax draws 0.682-0.962. The threshold
+#: leaves at least 0.18 on the correlated side and 0.39 on the independent one.
+CORRELATED_FRACTION = 0.5
+
+
+def triangle_track() -> tuple[np.ndarray, ...]:
+    """``(u1, v1, u2, v2, lambda)`` of triangle 0-1-2 along :data:`TRACK_HOURS`."""
+    table = baselines()
+    hours = np.linspace(*TRACK_HOURS, TRACK_SAMPLES)
+
+    def turned(baseline: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        return (
+            baseline[0] * np.cos(hours) - baseline[1] * np.sin(hours),
+            baseline[0] * np.sin(hours) + baseline[1] * np.cos(hours),
+        )
+
+    u1, v1 = turned(table[(0, 1)])
+    u2, v2 = turned(table[(1, 2)])
+    return u1, v1, u2, v2, np.full(TRACK_SAMPLES, WAVELENGTH)
+
+
+def low_frequency_fraction(residual: np.ndarray) -> float:
+    """The share of the residual periodogram's power in its lowest frequencies.
+
+    The mean is removed and the zero frequency dropped, so a constant offset
+    does not count as correlation; what is left is how much of the variance
+    sits in the slow wiggles along the track.
+    """
+    power = np.abs(np.fft.rfft(residual - np.mean(residual))) ** 2
+    power = power[1:]
+    return float(np.sum(power[:LOW_FREQUENCIES]) / np.sum(power))
+
+
+class TestClosurePhaseLatentGP:
+    """A latent GP on closure phases: von Mises around ``mu + L z`` (**W5.1**).
+
+    The composition is fitted on the native path only — the combination is
+    ``LATENT``, so every gradient-free engine is refused — and the rows hold
+    each native realisation to a from-scratch formula
+    (:func:`~tests.conformance.oracles.von_mises_latent_log_likelihood`) as
+    well as to the numpy contract path, because that path is ampere's own
+    transcription of the same model.
+    """
+
+    def _problem(
+        self,
+        pieces: InterferometryPieces,
+        observed: ClosurePhases,
+        noise: Any,
+    ) -> FittingProblem:
+        instrument = Instrument(
+            [
+                pieces.fourier_sample.from_observed(
+                    observed, field_of_view=FIELD_OF_VIEW * u.mas, oversampling=OVERSAMPLING
+                ),
+                pieces.closure_phase(),
+            ],
+            channel="sky",
+            label="array_t3",
+        )
+        compiled = image_model(pieces, "binary").compile_for(negotiate([instrument]))
+        fitted = {
+            **BINARY,
+            "separation": st.uniform(4.0, 20.0),
+            "flux_ratio": st.uniform(0.05, 0.9),
+        }
+        model = pieces.binary(
+            compiled.buffers["x"].value * u.mas,
+            compiled.buffers["y"].value * u.mas,
+            channels="sky",
+            **fitted,
+        )
+        dataset = Dataset(
+            observed, instrument, likelihood=Likelihood(VonMisesFamily(), noise), label="t3"
+        )
+        return FittingProblem(model, DatasetCollection({"t3": dataset}), seed=20260925)
+
+    @staticmethod
+    def _latent_noise(backend: ConformanceBackend, spec: CovarianceSpec) -> Any:
+        return backend.gp_noise(backend.kernel(spec), backend.gp_solver(SolverKind.DENSE))
+
+    def _four_triangles(
+        self, backend: ConformanceBackend, pieces: InterferometryPieces
+    ) -> FittingProblem:
+        u1, v1, u2, v2, _, _ = triangle_coverage()
+        observed = observed_closure_phases(binary_closure_phase(u1, v1, u2, v2, **BINARY))
+        return self._problem(pieces, observed, self._latent_noise(backend, LATENT_KERNEL))
+
+    def test_the_composition_declares_a_latent_block(self, backend: ConformanceBackend) -> None:
+        pieces = pieces_or_skip(backend)
+        problem = self._four_triangles(backend, pieces)
+        dataset = problem.datasets["t3"]
+        assert dataset.likelihood.marginalisation is Marginalisation.LATENT
+        assert dataset.latent is not None
+        assert dataset.latent.size == dataset.observed.n_samples
+        assert problem.parameters.free_names == (
+            "model.separation",
+            "model.flux_ratio",
+            "t3.latent.z",
+        )
+
+    def test_the_realised_density_is_von_mises_around_a_gp_draw(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """The latent composition's log-likelihood against the formula, at many points.
+
+        ``mu`` is the closed-form closure phase of the binary at each point's
+        separation and flux ratio, ``K`` the Matérn-3/2 of the defining
+        formula over the four triangle axes, and ``f = L z`` comes from the
+        point's own whitened block: nothing on the right-hand side is ampere's.
+        The realisation is also held to the numpy contract path at
+        ``cross_backend``, the guard :func:`ampere.core.realise` applies at one
+        point, applied at all of them.
+        """
+        pieces = pieces_or_skip(backend)
+        problem = self._four_triangles(backend, pieces)
+        if problem.backend not in registered_realisations():
+            pytest.skip(
+                f"the {problem.backend!r} backend registers no realisation: the composition is "
+                f"LATENT and is fitted on the native path only (inference.md §10a)"
+            )
+        realised = realise(problem)
+        u1, v1, u2, v2, _, _ = triangle_coverage()
+        observed = problem.datasets["t3"].observed
+        covariance = matern32_matrix(
+            np.stack([u1, v1, u2, v2], axis=1), LATENT_KERNEL.amplitude, LATENT_KERNEL.length_scale
+        )
+
+        def oracle(separation: float, flux_ratio: float, whitened: np.ndarray) -> float:
+            source = {**BINARY, "separation": separation, "flux_ratio": flux_ratio}
+            return von_mises_latent_log_likelihood(
+                np.asarray(observed.values),
+                binary_closure_phase(u1, v1, u2, v2, **source),
+                np.asarray(observed.uncertainty),
+                covariance,
+                whitened,
+            )
+
+        rng = np.random.default_rng(20260925)
+        moved = 0.0
+        for row in rng.uniform(0.02, 0.98, size=(10, problem.free_size)):
+            theta = problem.prior_transform(row)
+            y = problem.unconstrain(theta)
+            expected = oracle(theta[0], theta[1], theta[2:])
+            total = float(np.asarray(backend.to_numpy(realised.log_prob_unconstrained(y))))
+            got = total - problem.log_prior(theta) - summed_log_abs_det(problem.parameters, y)
+            assert got == pytest.approx(expected, abs=tolerances.cross_solver)
+            assert total == pytest.approx(
+                problem.log_prob_unconstrained(y), abs=tolerances.cross_backend
+            )
+            moved = max(moved, abs(expected - oracle(theta[0], theta[1], 0.0 * theta[2:])))
+        # The latent must actually move the density, or the row would pass on
+        # a body that ignored it.
+        assert moved > 1.0
+
+    def test_the_numpy_family_refuses_without_the_latent_word_for_word(
+        self, backend: ConformanceBackend
+    ) -> None:
+        """No ``f``, no density and no draw — and the message says where the composition runs."""
+        pieces_or_skip(backend)
+        like = Likelihood(VonMisesFamily(), self._latent_noise(backend, LATENT_KERNEL))
+        assert like.marginalisation is Marginalisation.LATENT
+        params = NoiseParams(
+            sigma=np.full(3, 0.05),
+            values={},
+            kernel=backend.kernel(LATENT_KERNEL),
+            solver=backend.gp_solver(SolverKind.DENSE),
+        )
+        with pytest.raises(LikelihoodError) as scored:
+            VonMisesFamily().log_prob(np.zeros(3), np.zeros(3), params)
+        assert str(scored.value) == NATIVE_ONLY.format(verb="score")
+        with pytest.raises(LikelihoodError) as drawn:
+            VonMisesFamily().sample(np.zeros(3), params, np.random.default_rng(0))
+        assert str(drawn.value) == NATIVE_ONLY.format(verb="draw")
+        with pytest.raises(LikelihoodError, match="emcee cannot run this likelihood"):
+            like.check_engine(differentiable=False, engine="emcee")
+
+    def test_a_quasiseparable_solver_is_refused_by_name(self, backend: ConformanceBackend) -> None:
+        """No ordering of the triangle space is one coordinate, even under a one-axis kernel."""
+        pieces_or_skip(backend)
+        if SolverKind.QUASISEP not in backend.capabilities.solvers:
+            pytest.skip(f"backend {backend.name!r} declares no quasiseparable solver")
+        one_axis = dataclasses.replace(LATENT_KERNEL, axes=("u1",))
+        noise = backend.gp_noise(backend.kernel(one_axis), backend.gp_solver(SolverKind.QUASISEP))
+        observed = observed_closure_phases()
+        with pytest.raises(LikelihoodError, match=r"no ordering reduces to one coordinate"):
+            Likelihood(VonMisesFamily(), noise).check_alignment(observed, observed)
+
+    def _track_problem(self, pieces: InterferometryPieces, noise: Any) -> FittingProblem:
+        u1, v1, u2, v2, waves = triangle_track()
+        observed = ClosurePhases(
+            u1,
+            v1,
+            u2,
+            v2,
+            waves * u.micron,
+            np.zeros(TRACK_SAMPLES) * u.rad,
+            uncertainty=np.full(TRACK_SAMPLES, 0.05) * u.rad,
+        )
+        return self._problem(pieces, observed, noise)
+
+    @staticmethod
+    def _residuals(simulation: Any) -> tuple[np.ndarray, np.ndarray]:
+        assert not simulation.failed
+        drawn = np.asarray(simulation.observations["t3"].values, dtype=float)
+        predicted = np.asarray(simulation.predicted["t3"].values, dtype=float)
+        return drawn, np.angle(np.exp(1j * (drawn - predicted)))
+
+    def test_simulate_draws_wrapped_phases_with_the_injected_correlation(
+        self, backend: ConformanceBackend
+    ) -> None:
+        """``simulate(observe=True)``: the latent first, then the wrapped draw.
+
+        Along one triangle's track the residuals of a latent-GP draw put most
+        of their power in the slowest frequencies and those of an independent
+        draw do not: the correlation the latent injects, seen in a
+        periodogram. :data:`CORRELATED_FRACTION` records the measured margin.
+        """
+        pieces = pieces_or_skip(backend)
+        flexible = self._track_problem(pieces, self._latent_noise(backend, TRACK_KERNEL))
+        rigid = self._track_problem(pieces, backend.independent_noise())
+        for seed in (0, 1, 2):
+            drawn, residual = self._residuals(
+                flexible.simulate(observe=True, rng=np.random.default_rng(seed))
+            )
+            assert np.all(drawn > -math.pi) and np.all(drawn <= math.pi)
+            assert low_frequency_fraction(residual) > CORRELATED_FRACTION
+            _, independent = self._residuals(
+                rigid.simulate(observe=True, rng=np.random.default_rng(seed))
+            )
+            assert low_frequency_fraction(independent) < CORRELATED_FRACTION
+
+    def test_the_native_draw_carries_the_same_correlation(
+        self, backend: ConformanceBackend
+    ) -> None:
+        """The backend's own draw (``simulate_many(native=True)``), held to the same margin."""
+        pieces = pieces_or_skip(backend)
+        flexible = self._track_problem(pieces, self._latent_noise(backend, TRACK_KERNEL))
+        if flexible.backend not in registered_realisations() or not flexible.batchable:
+            pytest.skip(f"the {flexible.backend!r} backend has no native batched draw")
+        batch = flexible.simulate_many(
+            3, observe=True, native=True, rng=np.random.default_rng(20260925)
+        )
+        assert batch.provenance["sample_backend"] == flexible.backend
+        for simulation in batch.simulations:
+            drawn, residual = self._residuals(simulation)
+            assert np.all(drawn > -math.pi) and np.all(drawn <= math.pi)
+            assert low_frequency_fraction(residual) > CORRELATED_FRACTION
