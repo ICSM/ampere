@@ -137,6 +137,27 @@ def _refuse(what: str, detail: str) -> LoweringError:
     return LoweringError(what, backend=BACKEND, detail=detail)
 
 
+def _context_rows(sigma: Any, dataset: Any, count: int) -> np.ndarray:
+    """A chunk's per-draw context sigmas on *dataset*'s retained samples (**W5.29**).
+
+    ``(count,) + observed.shape`` in, ``(count, n_retained)`` out, flattened
+    as the lowering flattens the container and restricted to the retained
+    samples; a shape that does not match is refused by name, as
+    ``Dataset.contextual_observed`` refuses it on the contract path. The twin
+    of ``ampere.backends.torch.problem._context_rows``.
+    """
+    array = np.asarray(sigma, dtype=float)
+    shape = np.shape(dataset.dataset.observed.values)
+    if array.shape != (count, *shape):
+        raise _refuse(
+            "context",
+            f"dataset {dataset.label!r}: the per-draw context sigma has shape {array.shape}, "
+            f"and a chunk of {count} draw(s) on an observed container of shape {shape} needs "
+            f"{(count, *shape)} -- one sigma array of the observation's own shape per draw.",
+        )
+    return array.reshape(count, -1)[:, dataset.retain]
+
+
 #: The two spellings of a native model's value-and-coordinates surface, in the
 #: order they are looked for (*W4.3*, reordered by *W5.20*).
 #: ``native_flux``/``native_grid`` is the **canonical** pair; ``flux``/``grid``
@@ -544,20 +565,41 @@ class _LoweredDataset:
 
     # -- the log-likelihood -------------------------------------------------
 
-    def _sigma(self, predicted: jax.Array, values: Mapping[str, Any]) -> jax.Array | None:
+    def _sigma(
+        self,
+        predicted: jax.Array,
+        values: Mapping[str, Any],
+        uncertainty: jax.Array | None = None,
+    ) -> jax.Array | None:
         """``sigma`` for the retained samples, in jax.
 
         A prediction-aware noise model supplies its own traced surface
         (``sigma_jax``); the plain ones are ``scale``/``jitter`` applied to the
         observed uncertainties, transcribed here rather than called, because
         ``NoiseModel.sigma`` coerces with ``float()``.
+
+        *uncertainty* (**W5.29**) is one draw's observation-context sigma on
+        the retained samples, standing in for the observed uncertainties as
+        ``Dataset.contextual_observed`` stands it in on the contract path. It
+        is traced (mapped in beside θ), so it cannot become a container for a
+        ``sigma_jax`` to read; the base quadrature is computed here instead and
+        *handed* to the hook as ``base=``, torch's ``sigma_tensor`` shape.
         """
         native = getattr(self.noise, "sigma_jax", None)
-        if native is not None:
+        if native is not None and uncertainty is None:
             return native(self.dataset.observed, self.retain, values, predicted=predicted)
+        base = self._base_sigma(values, uncertainty)
+        if native is None:
+            return base
+        return native(self.dataset.observed, self.retain, values, predicted=predicted, base=base)
+
+    def _base_sigma(
+        self, values: Mapping[str, Any], uncertainty: jax.Array | None = None
+    ) -> jax.Array | None:
+        """``sqrt((scale * sigma_data)**2 + jitter**2)``, with a context's sigma if given."""
         own = {key: value for key, value in values.items() if key in self.noise.parameters}
         resolved = self.noise.context(own)
-        sigma = self.uncertainty
+        sigma = self.uncertainty if uncertainty is None else uncertainty
         if sigma is None:
             if "jitter" not in resolved:
                 return None
@@ -682,8 +724,14 @@ class _LoweredDataset:
         routed: Mapping[str, Mapping[str, Any]],
         predicted: jax.Array,
         key: jax.Array,
+        uncertainty: jax.Array | None = None,
     ) -> jax.Array:
         """One draw of the retained observed values, natively.
+
+        *uncertainty* (**W5.29**) is this draw's observation-context sigma on
+        the retained samples, or ``None`` for the observation's own; every
+        family that reads a sigma reads it through :meth:`_sigma`, so the
+        context reaches each of them the same way (``poisson`` reads none).
 
         The core family's own ``sample`` transcribed into jax, dispatched on
         the neutral family name exactly as :meth:`log_likelihood` dispatches
@@ -723,17 +771,21 @@ class _LoweredDataset:
         if name == "poisson":
             return self._sample_poisson(routed, predicted, values, key)
         if name == "student_t":
-            return self._sample_student_t(predicted, values, key)
+            return self._sample_student_t(predicted, values, key, uncertainty)
         if name == "complex_gaussian":
-            return self._sample_complex_gaussian(predicted, values, key)
+            return self._sample_complex_gaussian(predicted, values, key, uncertainty)
         if name == "von_mises":
-            return self._sample_von_mises(routed, predicted, values, key)
-        return self._sample_gaussian(predicted, values, key)
+            return self._sample_von_mises(routed, predicted, values, key, uncertainty)
+        return self._sample_gaussian(predicted, values, key, uncertainty)
 
     def _sample_gaussian(
-        self, predicted: jax.Array, values: Mapping[str, Any], key: jax.Array
+        self,
+        predicted: jax.Array,
+        values: Mapping[str, Any],
+        key: jax.Array,
+        uncertainty: Any = None,
     ) -> jax.Array:
-        sigma = self._sigma(predicted, values)
+        sigma = self._sigma(predicted, values, uncertainty)
         realisation = predicted
         size = int(self.retain.sum())
         if self.correlated:
@@ -770,9 +822,13 @@ class _LoweredDataset:
         return jax.random.poisson(key, rate, (size,)).astype(jnp.float64)
 
     def _sample_student_t(
-        self, predicted: jax.Array, values: Mapping[str, Any], key: jax.Array
+        self,
+        predicted: jax.Array,
+        values: Mapping[str, Any],
+        key: jax.Array,
+        uncertainty: Any = None,
     ) -> jax.Array:
-        sigma = self._sigma(predicted, values)
+        sigma = self._sigma(predicted, values, uncertainty)
         assert sigma is not None  # REQUIRES_UNCERTAINTY, checked at composition
         family = self.likelihood.family
         own = {key_: value for key_, value in values.items() if key_ in family.parameters}
@@ -781,9 +837,13 @@ class _LoweredDataset:
         return predicted + sigma * jax.random.t(key, nu, (size,), dtype=jnp.float64)
 
     def _sample_complex_gaussian(
-        self, predicted: jax.Array, values: Mapping[str, Any], key: jax.Array
+        self,
+        predicted: jax.Array,
+        values: Mapping[str, Any],
+        key: jax.Array,
+        uncertainty: Any = None,
     ) -> jax.Array:
-        sigma = self._sigma(predicted, values)
+        sigma = self._sigma(predicted, values, uncertainty)
         assert sigma is not None  # REQUIRES_UNCERTAINTY, checked at composition
         size = int(self.retain.sum())
         if not self.correlated:
@@ -810,6 +870,7 @@ class _LoweredDataset:
         predicted: jax.Array,
         values: Mapping[str, Any],
         key: jax.Array,
+        uncertainty: Any = None,
     ) -> jax.Array:
         """``VonMises(predicted, kappa)``, matching the family's own ``sample``.
 
@@ -829,7 +890,7 @@ class _LoweredDataset:
         scores at, so θ and the drawn phases describe one model. ``sigma`` is
         the independent one either way: the GP is in ``f``, not in ``kappa``.
         """
-        sigma = self._sigma(predicted, values)
+        sigma = self._sigma(predicted, values, uncertainty)
         assert sigma is not None  # REQUIRES_UNCERTAINTY, checked at composition
         kappa = 1.0 / sigma**2
         latent = self._latent(routed, values)
@@ -1353,6 +1414,8 @@ class LoweredProblem:
         theta: Any,
         predicted: Mapping[str, Any],
         seeds: Sequence[int],
+        *,
+        sigma: Mapping[str, Any] | None = None,
     ) -> dict[str, np.ndarray]:
         """Draw the retained observed values for a chunk, natively.
 
@@ -1361,6 +1424,12 @@ class LoweredProblem:
         :meth:`_LoweredDataset.sample_retained`; the **stream** is
         ``jax.random``'s, which is why the numpy path stays the oracle and the
         two are compared *distributionally* rather than draw for draw.
+
+        *sigma* (**W5.29**) carries a per-draw observation context, exactly as
+        torch's ``sample_observations`` takes it: dataset label to a
+        ``(batch,) + observed.shape`` stack of sigma arrays, mapped in beside
+        θ and the key so each draw is made at its own context's noise level;
+        an omitted label, or ``None``, draws at the observation's own.
 
         *seeds* is one integer per draw, taken from the per-draw child
         generator ``simulate_many`` spawns **by index** — so partition
@@ -1433,7 +1502,25 @@ class LoweredProblem:
             def one(vector: jax.Array, row: jax.Array, key: jax.Array, of: Any = dataset) -> Any:
                 return of.sample_retained(self._route(vector.reshape(-1)), row, key)
 
-            drawn[dataset.label] = np.asarray(jax.vmap(one)(stack, retained, keys))
+            def one_in_context(
+                vector: jax.Array,
+                row: jax.Array,
+                key: jax.Array,
+                scale: jax.Array,
+                of: Any = dataset,
+            ) -> Any:
+                return of.sample_retained(self._route(vector.reshape(-1)), row, key, scale)
+
+            context = None if sigma is None else sigma.get(dataset.label)
+            if context is None:
+                drawn[dataset.label] = np.asarray(jax.vmap(one)(stack, retained, keys))
+            else:
+                uncertainty = jnp.asarray(
+                    _context_rows(context, dataset, len(seeds)), dtype=jnp.float64
+                )
+                drawn[dataset.label] = np.asarray(
+                    jax.vmap(one_in_context)(stack, retained, keys, uncertainty)
+                )
         return drawn
 
     def potential(self) -> Callable[[jax.Array], jax.Array]:
