@@ -2525,6 +2525,64 @@ population row green on jax run *alone*; `tests/backends/test_jax.py`
 green on jax; lint, format, jax typecheck clean; gates: jax (the merged
 gate's).
 
+### W5.32 — Phase 5 housekeeping IV: the CI warnings [S; Sonnet] (ruled by Peter 2026-09-25 on the orchestrator's warning analysis of CI runs 35962510128 and 36196425548)
+The two green `v2` runs emit about 3400 pytest warnings across the
+fifteen suite cells and a handful of Sphinx warnings; the orchestrator
+sorted them (handoff, 2026-09-25) and Peter ruled which are ours. Five
+small changes, each a commit. **(a) pytest 10.** `PytestRemovedIn10Warning`:
+eight class-scoped fixtures are defined as instance methods —
+`tests/results/test_population.py` (six: lines ~336, 403, 407, 796, 804,
+812), `tests/inference/test_engines.py` (~794),
+`tests/core/test_astropy_engines.py` (~114). Make each a `@staticmethod`
+(or module-level where the class state is not used); the rows they feed
+stay green, the warning is gone. **(b) sbi's `mcmc_parameters=`.**
+Deprecated since sbi 0.25 (`FutureWarning` from 0.27.0, the locked
+version) in favour of `posterior_parameters=` taking the
+`MCMCPosteriorParameters` dataclass; two call sites in
+`ampere/inference/_sbi.py` (`build_posterior` at ~2203 for the TMNRE
+calibration sampler, ~2654 for `sample_with="mcmc"`). Translate
+`_CALIBRATION_MCMC` and `_TMNRE_MCMC` to the dataclass with the same
+values, keep the two dicts' names if the tests read them, and keep
+`ampere_calibration_sampler` recording the same string; the TMNRE rows in
+`tests/inference/test_sbi.py` are the check. **(c) `WarpedKernel`
+documented three times.** The torch and jax backend packages re-export
+it and their automodule pages describe it again ("duplicate object
+description ... use :no-index:"): give the backend pages' entries
+`:no-index:` as `docs/source/ampere.infer.rst` already does for its
+re-exports, or exclude the re-export from the backend automodule — the
+core page stays the one indexed description. **(d) `ampere.infer.sbi` in
+the docs build.** autodoc fails to import the legacy `ampere.infer.sbi`
+because the docs environment has no `sbi` package. **Ruled 2026-09-25:
+mock it** — add `sbi` to `autodoc_mock_imports` in `docs/source/conf.py`
+(the list's comment explains why an *installed* package must never be
+mocked; `sbi` is import-only in the docs build, as torch and jax are), do
+not add the extra to the docs environment; check the build log for any
+other import-only optional the same rule applies to and mock it the same
+way. **(e) One test leaves figures open.** `tests/results/test_plots.py::TestCornerPaging`
+trips corner's "more than 20 figures" warning; close the pages after the
+assertions. **Ruled out (record, do not do):** the `ubuntu-latest` → Ubuntu
+26 migration notice (no runner pin for now, ruled 2026-09-25); the
+~2700 `DeprecationWarning`s from netCDF4-python setting an array's shape
+under NumPy 2.5 — fixed upstream in netcdf4 1.7.4.1, not yet on
+conda-forge; re-lock when it lands (say in the report whether it has);
+the legacy `SyntaxWarning`s (`data/spectrum.py`, `infer/mixins.py`),
+emcee's deprecated `chain`/`a` in `ampere/infer`, and the docutils
+"inline strong start-string" warnings in legacy docstrings (frozen);
+sbi's, dynesty's and arviz's budget warnings and the kernel overflow in
+the failure-signalling rows (deliberate tiny budgets and bad inputs); the
+arviz chain-longer-than-draw warning (carried in W5.8's row). **Owns:** the
+three test files in (a), `ampere/inference/_sbi.py` for (b)'s two calls
+and two constants only, `docs/source/conf.py` and the two backend rst
+pages, `tests/results/test_plots.py` for (e). **Depends:** nothing.
+**Accept:** the docs build with zero autodoc/duplicate-object warnings
+for the new namespaces and no `ampere.infer.sbi` import failure (the
+legacy docutils warnings may remain — count them before and after);
+`tests/results/test_population.py`, `tests/inference/test_engines.py`,
+`tests/core/test_astropy_engines.py` green in dev with no
+`PytestRemovedIn10Warning`; the TMNRE rows green in sbi with no
+`FutureWarning` from sbi about `mcmc_parameters`; `TestCornerPaging` green
+with no figure warning; lint, format, typecheck clean; gates: dev + sbi.
+
 ### W5.29 — The native batched path drawing a context [M; Opus] (W5.10's carried item, ruled by Peter 2026-09-22)
 `simulate_many(context=prior)` draws a context per draw, but on the batched
 native path a per-draw σ does not reach the realisation, so the path
@@ -2652,8 +2710,9 @@ the two older fillers and W5.1)**: after W5.26 merges, **W5.1 ∥ W5.29**
 merged, so the profile sees the final code; **W5.18 trimmed to its
 residue** (W5.14 landed the nested leg and W5.26 re-measured every leg
 and split the matrix — what remains is the `test-fast` task and the
-GPU-job check); **W5.16 deferred to Phase 6** by explicit ruling; **W5.19
-last**. File ownership per wave in
+GPU-job check); **W5.16 deferred to Phase 6** by explicit ruling; **W5.32** (housekeeping IV,
+the CI warnings, Sonnet S, added 2026-09-25) as a filler in any free slot
+before W5.19; **W5.19 last**. File ownership per wave in
 the dispatch prompts; the sole shared file across waves is
 `core/likelihood.py` (W5.4, W5.7, W5.9 each own a section — the solver,
 the kernel, the noise-model — and merge in that order).
