@@ -314,8 +314,9 @@ class TestTheCircularComplexGPOnVisibilities:
             "vis.likelihood.length_scale",
         )
         assert gp_problem.datasets["vis"].likelihood.noise.CORRELATED is True
-        # And the closure phases are *not* under a GP: a GP on a wrapped
-        # observable is a latent-variable model, which is Phase 5's (W5.1).
+        # And the closure phases are *not* under a GP in this fixture: a GP on a
+        # wrapped observable is a latent-variable model (W5.1, native path only)
+        # and this row is about the visibilities' GP.
         assert bool(getattr(gp_problem.datasets["t3"].likelihood.noise, "CORRELATED", False)) is (
             False
         )

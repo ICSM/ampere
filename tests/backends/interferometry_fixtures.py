@@ -251,8 +251,9 @@ def two_dataset_problem(
         Whether the visibilities carry the flexible likelihood: a circular
         complex Gaussian process over ``(u, v)`` (W4.2). The closure phases
         keep independent von Mises noise either way — a GP on a *wrapped*
-        observable is a latent-variable model, which is Phase 5's (W5.1), and
-        ``ampere.core`` refuses it by name.
+        observable is a latent-variable model, fitted on the native path only
+        since W5.1 (``phase_problem`` in ``examples.interferometry.study`` is
+        the latent arm); this fixture's arms stay the W4.4 ones.
     seed
         The noise realisation.
     """
