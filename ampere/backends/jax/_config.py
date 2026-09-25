@@ -37,6 +37,26 @@ from __future__ import annotations
 import logging
 
 import jax
+import numpyro  # pyrefly: ignore[missing-import]
+
+# W5.31 (2026-09-24): ``numpyro`` is touched here, in the first module the
+# package imports, before any sibling imports ``numpyro.distributions``.
+# arviz (1.3.0 on this project's lock) registers ``numpyro`` in
+# ``sys.modules`` as an ``importlib.util._LazyModule`` when it is imported
+# first; a plain ``import numpyro`` then returns that stub unexecuted, and
+# the first ``import numpyro.distributions`` (``.bijections``,
+# ``.distributions``, ``.parameters``, ``.problem``) executes numpyro's
+# ``__init__`` in the middle of its own submodule chain, after which
+# ``numpyro.distributions`` never gets its ``distribution`` attribute and
+# ``numpyro.factor`` -- every native model's density site -- raises
+# ``AttributeError: module 'numpyro.distributions' has no attribute
+# 'distribution'``. Reading any attribute forces the stub to load in full.
+# The fault only shows when ``ampere.core`` and then arviz are imported
+# before this backend (``tests/results`` run alone; a user script importing
+# results first), which is why every ``test-all`` leg passed while the VI
+# population row failed on its own -- the finding at W5.26's review;
+# ``tests/backends/test_jax_import_order.py`` pins it in a fresh interpreter.
+_NUMPYRO_LOADED: str = numpyro.__version__
 
 __all__ = ["BACKEND", "configure_x64", "require_x64", "x64_enabled"]
 
