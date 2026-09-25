@@ -641,7 +641,9 @@ class _LoweredDataset:
           backend, because applying the censoring operator to a draw is not
           implemented anywhere;
         * a latent declaration means the family reads ``noise.latent``, which
-          only ``poisson`` does. The other three would silently ignore it.
+          ``poisson`` does and, since **W5.1**, ``von_mises`` does (its latent
+          draw is native only: the core's own ``sample`` refuses it by name).
+          The other twins would silently ignore it.
 
         The complex condition is gone: complex data are exactly what the
         ``complex_gaussian`` twin draws, and a complex container under any
@@ -667,7 +669,7 @@ class _LoweredDataset:
                 f"dataset {self.label!r} declares limits on retained samples, which blocks "
                 f"observation drawing on every backend.",
             )
-        if self.latent_name is not None and family.NAME != "poisson":
+        if self.latent_name is not None and family.NAME not in ("poisson", "von_mises"):
             return _refuse(
                 "latent",
                 f"dataset {self.label!r} declares a latent GP, whose family reads "
@@ -725,7 +727,7 @@ class _LoweredDataset:
         if name == "complex_gaussian":
             return self._sample_complex_gaussian(predicted, values, key)
         if name == "von_mises":
-            return self._sample_von_mises(predicted, values, key)
+            return self._sample_von_mises(routed, predicted, values, key)
         return self._sample_gaussian(predicted, values, key)
 
     def _sample_gaussian(
@@ -803,7 +805,11 @@ class _LoweredDataset:
         return predicted + components[:, 0] + 1j * components[:, 1]
 
     def _sample_von_mises(
-        self, predicted: jax.Array, values: Mapping[str, Any], key: jax.Array
+        self,
+        routed: Mapping[str, Mapping[str, Any]],
+        predicted: jax.Array,
+        values: Mapping[str, Any],
+        key: jax.Array,
     ) -> jax.Array:
         """``VonMises(predicted, kappa)``, matching the family's own ``sample``.
 
@@ -817,14 +823,18 @@ class _LoweredDataset:
         ``(-pi, pi]``, exactly ``ampere.core.VonMisesFamily.sample``'s own
         convention for ``rng.vonmises(mean, kappa)``.
 
-        A correlated noise model is refused at composition (**W5.1**'s gap,
-        unchanged here), so ``sigma`` is always the independent one and this
-        needs no GP branch, unlike :meth:`_sample_gaussian`.
+        Under a latent GP (**W5.1**) the latent comes first and the wrapped
+        draw second: the mean is ``predicted + f``, ``f`` being this draw's own
+        latent block through :meth:`_latent` -- the same ``f`` the density
+        scores at, so θ and the drawn phases describe one model. ``sigma`` is
+        the independent one either way: the GP is in ``f``, not in ``kappa``.
         """
         sigma = self._sigma(predicted, values)
         assert sigma is not None  # REQUIRES_UNCERTAINTY, checked at composition
         kappa = 1.0 / sigma**2
-        return npd.VonMises(predicted, kappa).sample(key)
+        latent = self._latent(routed, values)
+        mean = predicted if latent is None else predicted + latent
+        return npd.VonMises(mean, kappa).sample(key)
 
     def _gp_realisation(
         self, values: Mapping[str, Any], key: jax.Array, size: int, components: int = 1
