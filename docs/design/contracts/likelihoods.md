@@ -1737,20 +1737,61 @@ back bimodal — the label switching a mixture model has, dealt with the same
 way: summarise `B`, or fix the angle where the instrument's own is known. The
 density is unaffected.
 
-**The one restriction, and it is a restriction rather than an oversight.** The
-rotation leaves the diagonal noise term diagonal only when the channels share
-one per-sample variance: the rotated `(s, s')` block of `diag(σ_t²)` is
-`Σ_t Q_{ts} Q_{ts'} diag(σ_t²)`, which is `δ_{ss'} diag(σ²)` when every `σ_t`
-is the same vector and a full coupling otherwise. So the channels must carry
-**equal uncertainties** — heteroscedastic *along* the grid as much as you like;
-it is the channels that must agree — which is exactly what a shared-grid
-astrometric solution or a Stokes `Q`/`U` pair from one polarimeter produces.
-This is checked at composition, by name, together with the shared grid (exact
+**Heteroscedastic channels: three routes behind one declaration (*amended
+W5.24*).** The rotation leaves the diagonal noise term diagonal only when the
+channels share one per-sample variance: the rotated `(s, s')` block of
+`diag(σ_t²)` is `Σ_t Q_{ts} Q_{ts'} diag(σ_t²)`, which is `δ_{ss'} diag(σ²)`
+when every `σ_t` is the same vector and a full coupling otherwise. W5.9 refused
+unequal per-channel uncertainties for that reason; W5.24 lifts the refusal,
+because heteroscedasticity *across* channels is the norm for real data. The
+route is chosen by the channels' variances and the bound solver — **never by a
+new argument** — and `JointGaussianProcessNoise.route(variance)` names it:
+
+* **rotated** — every channel carries the same variance vector (heteroscedastic
+  *along* the grid as much as you like). The `T` rescaled scalar solves above:
+  exact, `T·O(N)` under `QuasisepGP`, and **bit-identical** to W5.9's path, a
+  conformance row on every fixture.
+* **dense** — unequal channels with `DenseGP` bound. `B ⊗ (K_x + j² I) +
+  blockdiag(diag(σ_t²))` materialised and factorised directly: exact for any
+  `σ`, `O((TN)³)`, the reference and the small-`N` path. The solver's `jitter`
+  `j` enters as `B ⊗ j² I`, which is what the rotated path's per-output
+  `λ_s j²` sums to, so the two exact routes describe one covariance.
+* **reduced-rank** — unequal channels with a feature solver bound
+  (`HilbertSpaceGP`; `EquispacedFourierGP` on the reference path, which has no
+  native twin). With `K_x ≈ Φ̃ Φ̃ᵀ`, `B ⊗ K_x ≈ (I_T ⊗ Φ̃)(B ⊗ I_m)(I_T ⊗ Φ̃)ᵀ`
+  is a `Tm`-feature model against a noise that is *diagonal in the original
+  basis*, so Woodbury against `blockdiag(diag(σ_t² + j²))` is exact in the
+  approximation at `O(TN·(Tm)²)`: the capacitance's `(s, u)` block is
+  `Σ_t F_{ts} F_{tu} Φ̃ᵀ D_t⁻¹ Φ̃` with `B = F Fᵀ`, so only `T` Gram matrices
+  are formed and `B ⊗ K_x` never is. The whitened block is `T·m`
+  (`JointGaussianProcessNoise.latent_size`) — the NUTS-friendly route, and the
+  first joint use of Phase 5's approximate solvers. `Φ̃` is read through the
+  solver's own `latent_transform` applied to the identity, so it is the factor
+  the solver scores and draws with on whichever backend declared it. Held to
+  W5.4's convergence class against the dense route, tightening with `m`.
+
+Unequal channels under any other solver — `QuasisepGP` above all, which has no
+Kronecker-free `O(N)` form once the diagonal couples the rotated outputs — are
+**refused at composition, by name, with the fix named** (bind `DenseGP` or
+`HilbertSpaceGP`); so is a group some of whose channels carry uncertainties and
+some do not. Equality is compared exactly on the valid samples, and the group's
+`scale` and `jitter` are group-wide, so they can never move a group between
+routes: the composition-time answer is the evaluation-time one, and the native
+backends choose the route once, at lowering.
+
+The callers hand the group every channel's own variances as one `(N, T)` block
+(`JointGaussianProcessNoise.variances`); `simulate(observe=True)` draws the
+correlated part through the solver's whitening exactly as on the rotated path
+and adds each channel's own white noise in the original basis, where it is
+diagonal. `pointwise_log_prob` — `results.md` §6's `"joint"` decomposition,
+indexed by the independent rotated outputs — is **refused** off the rotated
+path, where those outputs are no longer independent; a per-`(sample, channel)`
+decomposition of the dense or reduced-rank density is a recorded follow-on.
+Unchanged by W5.24 and checked at composition as before: the shared grid (exact
 axis equality, `transformations.md` §10's rule) and the shared mask (a rotation
 mixes the channels sample by sample, so a sample the channels disagree about
-has no rotated value at all). Unequal per-channel errors, mismatched grids and
-the general LMC (`Σ_q B_q ⊗ k_q`) stay together on the dense/reduced-rank
-follow-on §15 records.
+has no rotated value at all). Mismatched grids and the general LMC
+(`Σ_q B_q ⊗ k_q`) stay on the follow-on §15 records.
 
 **The kernel's amplitude must not be free.** `B ⊗ (a² K̃) = (a² B) ⊗ K̃`
 exactly, so a free amplitude beside a free `B` is one degree of freedom written
@@ -2669,14 +2710,22 @@ Each is a decision, not an oversight. Each has an extension point.
    limitation was recorded from — and Stokes `Q`/`U` mixed by an instrumental
    leakage are both expressible now, in `B`'s own physical parameterisation.
 
-   **What remains a limitation**, and is the dense/reduced-rank follow-on:
-   the **general LMC** (`Σ_q B_q ⊗ k_q`, several coupling matrices with
-   different kernels), **mismatched grids** between the channels, and
-   **unequal per-channel uncertainties**. All three break the Kronecker
-   structure the exact O(N) rotation rests on — the first two by having no
-   single `K_x`, the third because `Qᵀ ⊗ I` leaves `diag(σ_t²)` diagonal only
-   where every channel's `σ_t` is the same vector. Each is refused by name at
-   composition rather than approximated.
+   **Unequal per-channel uncertainties lifted at W5.24.** `Qᵀ ⊗ I` leaves
+   `diag(σ_t²)` diagonal only where every channel's `σ_t` is the same vector,
+   so heteroscedastic channels now take the dense route (`DenseGP` bound,
+   exact, `O((TN)³)`) or the reduced-rank one (`HilbertSpaceGP` bound, Woodbury
+   against the per-channel diagonal, `O(TN·(Tm)²)`, a `T·m` whitened block),
+   chosen by the bound solver; equal channels keep the rotated path
+   bit-identically, and unequal channels under `QuasisepGP` are refused by name
+   with the fix named (§7).
+
+   **What remains a limitation**: the **general LMC** (`Σ_q B_q ⊗ k_q`,
+   several coupling matrices with different kernels) and **mismatched grids**
+   between the channels. Both break the Kronecker structure by having no single
+   `K_x`, and each is refused by name at composition rather than approximated.
+   The `"joint"` pointwise decomposition is refused off the rotated path (its
+   rotated outputs are not independent there); a per-`(sample, channel)`
+   decomposition of the dense and reduced-rank densities is recorded with them.
 
 ## 16. What this contract hands to the specs downstream
 

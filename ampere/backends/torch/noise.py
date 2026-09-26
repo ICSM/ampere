@@ -522,6 +522,15 @@ class JointGaussianProcessNoise(_CoreJointGaussianProcessNoise):
     NUTS can sample the channel coupling alongside the kernel's
     hyperparameters.
 
+    **W5.24**: channels with unequal per-sample uncertainties take the dense
+    route under :class:`~ampere.backends.torch.DenseGP` (one Cholesky of the
+    ``TN x TN`` matrix) or the reduced-rank route under
+    :class:`~ampere.backends.torch.HilbertSpaceGP` (Woodbury against the
+    per-channel diagonal, a ``T*m`` whitened block), both composed natively by
+    :mod:`ampere.backends.torch.problem`; equal channels keep the rotated
+    path unchanged. The route is the core's rule — see
+    :meth:`ampere.core.JointGaussianProcessNoise.route`.
+
     Parameters
     ----------
     kernel, solver, datasets, coupling, scale, jitter

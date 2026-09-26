@@ -54,6 +54,28 @@ class TestEmceeRecoversTheOrbit:
         assert _covered(run)[name], f"{name} missed its central 95% interval"
 
 
+class TestEmceeRecoversTheOrbitUnderHeteroscedasticJointNoise:
+    """W5.24: the joint arm on channels with their own per-epoch sigmas, same floor.
+
+    ``build_problem(joint=True, heteroscedastic=True)`` injects the correlated
+    centroiding systematic *and* gives each channel its own error bar per
+    epoch, so the joint group is scored on the dense route; the coupling's
+    three parameters are fitted beside the orbit (nine dimensions, hence the
+    walker count). Every orbital parameter must land inside its central 95 %
+    interval, the same claim the rows above make.
+    """
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def run(cls) -> Any:
+        problem = build_problem("reference", joint=True, heteroscedastic=True)
+        return fit(problem, backend="reference", walkers=24, steps=600, burn_in=200)
+
+    @pytest.mark.parametrize("name", list(QUALIFIED_TRUTH))
+    def test_every_parameter_is_inside_the_central_95_percent(self, run: Any, name: str) -> None:
+        assert _covered(run)[name], f"{name} missed its central 95% interval"
+
+
 @needs_torch
 class TestNutsOnTorchRecoversTheOrbit:
     """The torch backend, at a per-PR budget far short of a global period search."""

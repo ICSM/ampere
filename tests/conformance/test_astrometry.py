@@ -45,7 +45,16 @@ from ampere.core import (
     negotiate,
 )
 
-from .oracles import reflex_orbit_dec, reflex_orbit_ra
+from ampere.core.exceptions import LikelihoodError
+
+from .oracles import (
+    coregionalised_covariance,
+    coregionalised_log_density,
+    kernel_matrix,
+    reflex_orbit_dec,
+    reflex_orbit_ra,
+    rotation_coupling_matrix,
+)
 from .protocol import (
     AstrometryPieces,
     ConformanceBackend,
@@ -53,6 +62,7 @@ from .protocol import (
     KernelFamily,
     SolverKind,
     Tolerances,
+    approximation_envelope,
 )
 
 #: The observation epochs, days. Irregular, on purpose (real astrometric
@@ -91,12 +101,13 @@ def pieces_or_skip(backend: ConformanceBackend) -> AstrometryPieces:
     return backend.astrometry()
 
 
-def observed_channel(channel: str, values: np.ndarray | None = None) -> TimeSeries:
-    """A ``TimeSeries`` on :data:`EPOCHS`, with a uniform sigma."""
+def observed_channel(
+    channel: str, values: np.ndarray | None = None, sigma: np.ndarray | None = None
+) -> TimeSeries:
+    """A ``TimeSeries`` on :data:`EPOCHS`, with a uniform sigma unless *sigma* is given."""
     filled = np.zeros(EPOCHS.size) if values is None else values
-    return TimeSeries(
-        EPOCHS * u.day, filled * u.mas, uncertainty=np.full(EPOCHS.size, SIGMA) * u.mas
-    )
+    uncertainty = np.full(EPOCHS.size, SIGMA) if sigma is None else np.asarray(sigma)
+    return TimeSeries(EPOCHS * u.day, filled * u.mas, uncertainty=uncertainty * u.mas)
 
 
 def orbit_model(pieces: AstrometryPieces, **overrides: Any) -> Any:
@@ -434,8 +445,18 @@ class TestJointChannelNoise:
         solver: SolverKind = SolverKind.DENSE,
         coupling: Any = None,
         kernel: CovarianceSpec | None = None,
+        sigmas: np.ndarray | None = None,
+        basis_size: int = 32,
+        boundary_factor: float = 2.0,
     ) -> tuple[FittingProblem, Any, np.ndarray, np.ndarray]:
-        """A joint problem, its noise model, the residual block and the variance."""
+        """A joint problem, its noise model, the residual block and the variance.
+
+        *sigmas* (**W5.24**), a ``(2, N)`` array, gives each channel its own
+        per-epoch uncertainty: the white noise is drawn at it, the containers
+        carry it, and the variance returned is the ``(N, 2)`` block rather than
+        W5.9's shared vector. Left ``None``, every draw and every value is
+        exactly W5.9's, so the rows written before W5.24 see the same data.
+        """
         ra_instrument = chain(pieces, observed_channel("ra"), "ra", "astrom_ra")
         dec_instrument = chain(pieces, observed_channel("dec"), "dec", "astrom_dec")
         truth = orbit_model(pieces)
@@ -446,13 +467,23 @@ class TestJointChannelNoise:
             "dec": backend.to_numpy(dec_instrument(result).values).ravel(),
         }
         rng = np.random.default_rng(20260916)
-        observed = {
-            name: observed_channel(name, values + rng.normal(0.0, SIGMA, values.shape))
-            for name, values in noiseless.items()
-        }
+        if sigmas is None:
+            observed = {
+                name: observed_channel(name, values + rng.normal(0.0, SIGMA, values.shape))
+                for name, values in noiseless.items()
+            }
+        else:
+            observed = {
+                name: observed_channel(
+                    name,
+                    values + rng.normal(0.0, sigmas[index], values.shape),
+                    sigmas[index],
+                )
+                for index, (name, values) in enumerate(noiseless.items())
+            }
         joint = backend.joint_gp_noise(
             backend.kernel(JOINT_KERNEL if kernel is None else kernel),
-            backend.gp_solver(solver),
+            backend.gp_solver(solver, basis_size=basis_size, boundary_factor=boundary_factor),
             datasets=("ra", "dec"),
             coupling=RotationCoupling(*COUPLING.values()) if coupling is None else coupling,
         )
@@ -489,7 +520,7 @@ class TestJointChannelNoise:
                 for name in ("ra", "dec")
             ]
         )
-        variance = np.full(EPOCHS.size, SIGMA**2)
+        variance = np.full(EPOCHS.size, SIGMA**2) if sigmas is None else np.asarray(sigmas).T ** 2
         return problem, joint, residual, variance
 
     def test_the_joint_density_matches_a_dense_kronecker_solve(
@@ -667,3 +698,209 @@ class TestJointChannelNoise:
         # ... and the cross-channel block is genuinely there.
         cross = empirical[: EPOCHS.size, EPOCHS.size :]
         assert float(np.max(np.abs(cross))) > 0.2 * scale
+
+
+# ---------------------------------------------------------------------------
+# Heteroscedastic channels: the dense and reduced-rank routes (W5.24)
+# ---------------------------------------------------------------------------
+
+#: Each channel's own per-epoch sigma: a log-uniform factor of up to two
+#: either side of :data:`SIGMA`, drawn once, seeded. ``(2, N)``: row ``t`` is
+#: channel ``t``'s. Unequal everywhere, so no epoch lets the rotation through.
+CHANNEL_SIGMAS = SIGMA * np.exp(
+    np.random.default_rng(20260926).uniform(-np.log(2.0), np.log(2.0), size=(2, EPOCHS.size))
+)
+
+#: The same heteroscedasticity *along* the grid, shared by both channels: the
+#: case W5.9's rotated path already scores exactly, and the one the
+#: bit-identity rows hold it to.
+SHARED_SIGMAS = np.vstack([CHANNEL_SIGMAS[0], CHANNEL_SIGMAS[0]])
+
+#: The reduced-rank sweep. The box is three data half-extents wide: a
+#: 180-day Matern-3/2 against a 780-day grid is poorly approximated within a
+#: length scale of the boundary, and at the default factor of two the box's
+#: own truncation error sits above ``approximation_final`` whatever ``m`` is
+#: (measured: 3.5e-2 at m = 256). At three it falls with ``m`` down to the
+#: floor.
+REDUCED_RANK_SIZES = (8, 16, 32, 64)
+REDUCED_RANK_BOX = 3.0
+
+THETA_JOINT: dict[str, float] = {
+    "model.pmra": ORBIT["pmra"],
+    "model.pmdec": ORBIT["pmdec"],
+    "astrom.angle": COUPLING["angle"],
+    "astrom.log_variance_0": COUPLING["log_variance_0"],
+    "astrom.log_variance_1": COUPLING["log_variance_1"],
+}
+
+
+def oracle_log_density(variances: np.ndarray, residual: np.ndarray) -> float:
+    """The joint density at :data:`COUPLING` from :mod:`tests.conformance.oracles` alone."""
+    coupling = rotation_coupling_matrix(
+        COUPLING["angle"], COUPLING["log_variance_0"], COUPLING["log_variance_1"]
+    )
+    kernel = kernel_matrix(
+        JOINT_KERNEL.family, EPOCHS, JOINT_KERNEL.amplitude, JOINT_KERNEL.length_scale
+    )
+    block = np.column_stack([residual[: EPOCHS.size], residual[EPOCHS.size :]])
+    return coregionalised_log_density(coupling, kernel, variances, block)
+
+
+class TestHeteroscedasticJointNoise:
+    """Unequal per-channel sigmas: two routes behind one declaration (*W5.24*)."""
+
+    def test_the_dense_route_matches_the_materialised_matrix(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """``DenseGP`` bound: one Cholesky of ``B (x) K_x + blockdiag(diag sigma_t^2)``."""
+        pieces = pieces_or_skip(backend)
+        joint_or_skip(backend)
+        problem, noise, residual, variance = self._pieces(backend, pieces, CHANNEL_SIGMAS)
+        assert noise.route(variance) == "dense"
+        reference = oracle_log_density(variance, residual)
+        columns = [residual[: EPOCHS.size], residual[EPOCHS.size :]]
+        got = noise.log_prob(columns, variance, EPOCHS.reshape(-1, 1), COUPLING)
+        assert abs(got - reference) < tolerances.cross_solver * max(1.0, abs(reference))
+        # The composed problem hands the group every channel's own sigma.
+        through = problem.log_likelihood(THETA_JOINT)
+        assert abs(through - reference) < tolerances.cross_solver * max(1.0, abs(reference))
+
+    def test_the_reduced_rank_route_converges_to_the_dense_answer(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """``HilbertSpaceGP`` bound: W5.4's convergence class, tightening with ``m``."""
+        pieces = pieces_or_skip(backend)
+        joint_or_skip(backend)
+        if SolverKind.HILBERT not in backend.capabilities.solvers:
+            pytest.skip(f"{backend.name} declares no reduced-rank spectral solver.")
+        _, _, residual, variance = self._pieces(backend, pieces, CHANNEL_SIGMAS)
+        reference = oracle_log_density(variance, residual)
+        columns = [residual[: EPOCHS.size], residual[EPOCHS.size :]]
+        errors = []
+        for size in REDUCED_RANK_SIZES:
+            _, noise, _, _ = self._pieces(
+                backend,
+                pieces,
+                CHANNEL_SIGMAS,
+                solver=SolverKind.HILBERT,
+                basis_size=size,
+                boundary_factor=REDUCED_RANK_BOX,
+            )
+            assert noise.route(variance) == "reduced_rank"
+            assert noise.latent_size(EPOCHS.size, "reduced_rank") == 2 * size
+            got = noise.log_prob(columns, variance, EPOCHS.reshape(-1, 1), COUPLING)
+            errors.append(abs(got - reference))
+        coarsest = errors[0]
+        for size, error in zip(REDUCED_RANK_SIZES[1:], errors[1:], strict=True):
+            allowed = approximation_envelope(coarsest, REDUCED_RANK_SIZES[0], size, tolerances)
+            assert error <= allowed, f"error {error:.3e} at m={size} outside {allowed:.3e}"
+        assert errors[-1] <= tolerances.approximation_final, errors
+
+    @pytest.mark.parametrize("solver", [SolverKind.DENSE, SolverKind.QUASISEP])
+    def test_equal_sigmas_are_bit_identical_to_the_rotated_path(
+        self, backend: ConformanceBackend, solver: SolverKind
+    ) -> None:
+        """Equal channels keep W5.9's path: the ``(N, T)`` block and the vector agree exactly.
+
+        Heteroscedastic *along* the grid, identical across the channels —
+        the case the rotation is exact for. The block every W5.24 caller now
+        passes must reach the very arithmetic W5.9's shared vector reached, so
+        the comparison is ``==``, not a tolerance.
+        """
+        pieces = pieces_or_skip(backend)
+        joint_or_skip(backend)
+        if solver not in backend.capabilities.solvers:
+            pytest.skip(f"{backend.name} declares no {solver} solver.")
+        problem, noise, residual, variance = self._pieces(
+            backend, pieces, SHARED_SIGMAS, solver=solver
+        )
+        assert noise.route(variance) == "rotated"
+        columns = [residual[: EPOCHS.size], residual[EPOCHS.size :]]
+        shared = SHARED_SIGMAS[0] ** 2
+        block = noise.log_prob(columns, variance, EPOCHS.reshape(-1, 1), COUPLING)
+        vector = noise.log_prob(columns, shared, EPOCHS.reshape(-1, 1), COUPLING)
+        assert block == vector
+        # And through the composed problem, which now builds the block itself.
+        assert problem.log_likelihood(THETA_JOINT) == vector
+
+    def test_unequal_sigmas_under_quasisep_are_refused_by_name(
+        self, backend: ConformanceBackend
+    ) -> None:
+        """No Kronecker-free O(N) form: refused at composition, with the fix named."""
+        pieces = pieces_or_skip(backend)
+        joint_or_skip(backend)
+        if SolverKind.QUASISEP not in backend.capabilities.solvers:
+            pytest.skip(f"{backend.name} declares no QuasisepGP solver.")
+        with pytest.raises(LikelihoodError, match="HilbertSpaceGP"):
+            self._pieces(backend, pieces, CHANNEL_SIGMAS, solver=SolverKind.QUASISEP)
+
+    def test_simulate_draws_correlated_heteroscedastic_channels(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """``simulate(observe=True)`` under unequal sigmas, against the oracle's covariance.
+
+        The whole ``2N x 2N`` sample covariance, cross-channel block included,
+        is compared entry by entry against the oracle's, each entry within
+        ``monte_carlo_sigmas`` of its own standard error — ``sqrt((S_ii S_jj +
+        S_ij^2)/(n - 1))`` for a Gaussian sample covariance — so the margin is
+        measured from the estimator rather than chosen. Two further claims
+        keep the row from passing on a draw that had got one thing right by
+        luck: the cross-channel block is genuinely there, and the two
+        channels' white variances are the *different* ones each container
+        carries rather than one shared value.
+        """
+        pieces = pieces_or_skip(backend)
+        joint_or_skip(backend)
+        problem, _, _, variance = self._pieces(backend, pieces, CHANNEL_SIGMAS)
+        draws = 2000
+        rows = np.empty((draws, 2 * EPOCHS.size))
+        simulations = problem.simulate_many(draws, values=[THETA_JOINT] * draws, observe=True)
+        for index, simulation in enumerate(simulations):
+            assert not simulation.failed
+            assert simulation.observations is not None
+            rows[index] = np.concatenate(
+                [
+                    np.asarray(simulation.observations[name].values, dtype=float).ravel()
+                    - np.asarray(simulation.predicted[name].values, dtype=float).ravel()
+                    for name in ("ra", "dec")
+                ]
+            )
+        coupling = rotation_coupling_matrix(
+            COUPLING["angle"], COUPLING["log_variance_0"], COUPLING["log_variance_1"]
+        )
+        kernel = kernel_matrix(
+            JOINT_KERNEL.family, EPOCHS, JOINT_KERNEL.amplitude, JOINT_KERNEL.length_scale
+        )
+        expected = coregionalised_covariance(coupling, kernel, variance)
+        empirical = np.cov(rows, rowvar=False)
+        diagonal = np.diag(expected)
+        standard_error = np.sqrt((np.outer(diagonal, diagonal) + expected**2) / (draws - 1))
+        z = np.abs(empirical - expected) / standard_error
+        assert float(np.max(z)) < tolerances.monte_carlo_sigmas, (
+            f"a sample-covariance entry sits {float(np.max(z)):.2f} standard errors from "
+            f"B (x) K_x + blockdiag(diag sigma_t^2)"
+        )
+        cross = empirical[: EPOCHS.size, EPOCHS.size :]
+        expected_cross = expected[: EPOCHS.size, EPOCHS.size :]
+        assert float(np.max(np.abs(cross))) > 0.5 * float(np.max(np.abs(expected_cross)))
+        # The white part differs between the channels, as the containers say.
+        gp_part = np.diag(coupling[0, 0] * kernel), np.diag(coupling[1, 1] * kernel)
+        white_ra = np.diag(empirical)[: EPOCHS.size] - gp_part[0]
+        white_dec = np.diag(empirical)[EPOCHS.size :] - gp_part[1]
+        assert (
+            np.corrcoef(white_ra, variance[:, 0])[0, 1]
+            > np.corrcoef(white_ra, variance[:, 1])[0, 1]
+        )
+        assert (
+            np.corrcoef(white_dec, variance[:, 1])[0, 1]
+            > np.corrcoef(white_dec, variance[:, 0])[0, 1]
+        )
+
+    def _pieces(
+        self,
+        backend: ConformanceBackend,
+        pieces: AstrometryPieces,
+        sigmas: np.ndarray,
+        **kwargs: Any,
+    ) -> tuple[FittingProblem, Any, np.ndarray, np.ndarray]:
+        return TestJointChannelNoise()._pieces(backend, pieces, sigmas=sigmas, **kwargs)

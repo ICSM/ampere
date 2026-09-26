@@ -34,6 +34,18 @@ systematic and two independent GPs' do not, because two independent GPs can
 reproduce each axis's marginal scatter exactly and can say nothing at all
 about the correlation between them.
 
+``--joint --heteroscedastic`` (**W5.24**) is the same arm on data whose two
+channels carry *different* per-epoch error bars, as real astrometric
+solutions do. The rotation that makes W5.9's arm ``T·O(N)`` is exact only
+when the channels share one sigma vector, so this arm binds ``DenseGP`` and
+the group takes the dense route --- ``B (x) K_x + blockdiag(diag sigma_t^2)``
+factorised directly. At this study's 28 epochs that is the cheapest route as
+well as the exact one (measured per likelihood call on one core: dense
+0.38 ms, W5.9's rotated ``QuasisepGP`` path 0.46 ms, the reduced-rank
+``HilbertSpaceGP`` route 0.64 ms at ``m = 32`` with its error still 6e-3);
+the reduced-rank route earns its keep at larger ``N`` and under NUTS, where
+its ``T·m`` whitened block is what ``tests/inference`` exercises.
+
 The other two arms: independent Gaussian noise (the rigid
 comparison), or :class:`~ampere.core.GaussianProcessNoise` with
 :class:`~ampere.core.Matern32` on the ``QuasisepGP`` solver — the O(N) path a
@@ -57,6 +69,7 @@ Run it::
     python -m examples.astrometry --backend torch       # NUTS
     python -m examples.astrometry --gp                  # the flexible likelihood
     python -m examples.astrometry --joint               # the joint channel noise (W5.9)
+    python -m examples.astrometry --joint --heteroscedastic   # unequal channel sigmas (W5.24)
     python -m examples.astrometry --sbc joint           # the calibration study
 
 :mod:`tests.examples.test_astrometry_example` is this module's own coverage:
@@ -101,6 +114,7 @@ __all__ = [
     "DEFAULT_STEPS",
     "DEFAULT_WALKERS",
     "DEFAULT_WARMUP",
+    "HETEROSCEDASTIC_SOLVER",
     "JOINT_LOG_VARIANCE_PRIOR",
     "QUALIFIED_TRUTH",
     "SBC_DIRECTION",
@@ -162,6 +176,12 @@ GP_LENGTH_SCALE = 120.0
 #: log-variances at all: a variance spans orders of magnitude and NUTS wants the
 #: parameterisation that makes it a location.
 JOINT_LOG_VARIANCE_PRIOR = st.norm(-8.0, 1.0)
+
+#: The route the heteroscedastic arm takes (**W5.24**): ``"dense"``, chosen by
+#: measured cost at this study's 28 epochs (see the module docstring). The
+#: other value :func:`joint_noise` accepts is ``"hilbert"``, the reduced-rank
+#: route; ``"quasisep"`` is W5.9's rotated path and refuses unequal channels.
+HETEROSCEDASTIC_SOLVER = "dense"
 
 #: The comparison arm's GP amplitudes are **not** fitted: they are held at
 #: :func:`~examples.astrometry.generators.marginal_amplitudes`, the standard
@@ -294,7 +314,7 @@ def build_instruments(backend: str) -> tuple[Instrument, Instrument]:
     return ra_instrument, dec_instrument
 
 
-def joint_noise(backend: str, *, fit: str = "full") -> Any:
+def joint_noise(backend: str, *, fit: str = "full", solver: str = "quasisep") -> Any:
     """The joint noise model over the two channels (**W5.9**).
 
     ``K = B (x) K_x``: one correlated process over ``ra`` and ``dec``, with
@@ -315,6 +335,13 @@ def joint_noise(backend: str, *, fit: str = "full") -> Any:
     cross-channel structure rather than about the correlation length --- the
     flexible likelihood's own calibration claim is M2's question, asked of a
     misspecified physical model, not of this modality's known systematic.
+
+    ``solver`` (**W5.24**) picks the bound strategy, and with it the route
+    unequal channel sigmas take: ``"quasisep"`` (W5.9's rotated O(N) path,
+    equal sigmas only), ``"dense"`` (exact, any sigmas) or ``"hilbert"`` (the
+    reduced-rank route, a ``HilbertSpaceGP`` whose box is three data
+    half-extents wide --- a 150-day length scale against a 1100-day baseline
+    needs the room).
     """
     noise = noise_module(backend)
     kernel = noise.Matern32(1.0, generators.JOINT_LENGTH_SCALE, axes=("time",))
@@ -325,8 +352,16 @@ def joint_noise(backend: str, *, fit: str = "full") -> Any:
         else [generators.JOINT_TRUTH["log_variance_0"], generators.JOINT_TRUTH["log_variance_1"]]
     )
     coupling = RotationCoupling(angle, *variances)
+    if solver == "quasisep":
+        strategy = noise.QuasisepGP()
+    elif solver == "dense":
+        strategy = noise.DenseGP()
+    elif solver == "hilbert":
+        strategy = noise.HilbertSpaceGP(basis_size=32, boundary_factor=3.0)
+    else:
+        raise ValueError(f"unknown solver {solver!r}; the three are quasisep, dense, hilbert.")
     return noise.JointGaussianProcessNoise(
-        kernel, noise.QuasisepGP(), datasets=("ra", "dec"), coupling=coupling
+        kernel, strategy, datasets=("ra", "dec"), coupling=coupling
     )
 
 
@@ -336,6 +371,7 @@ def build_problem(
     gp: bool = False,
     joint: bool = False,
     injected: bool | None = None,
+    heteroscedastic: bool = False,
     seed: int = generators.SEED,
 ) -> FittingProblem:
     """The composed problem: one model, two channels, distinct labels.
@@ -354,15 +390,21 @@ def build_problem(
     comparison arm is built: ``build_problem(gp=True, injected=True)`` fits the
     *same* systematic-bearing data with two independent GPs, and is the fit
     whose coverage the study shows is not nominal.
+
+    ``heteroscedastic=True`` (**W5.24**) draws the injected data with a sigma
+    per channel per epoch and binds the joint arm's
+    :data:`HETEROSCEDASTIC_SOLVER`, so the group takes the dense route.
     """
     model = build_model(backend)
     ra_instrument, dec_instrument = build_instruments(backend)
-    generate = (
-        generators.synthetic_joint_data
-        if (joint if injected is None else injected)
-        else generators.synthetic_data
-    )
-    observed_ra, observed_dec = generate(model, ra_instrument, dec_instrument, seed=seed)
+    if joint if injected is None else injected:
+        observed_ra, observed_dec = generators.synthetic_joint_data(
+            model, ra_instrument, dec_instrument, seed=seed, heteroscedastic=heteroscedastic
+        )
+    else:
+        observed_ra, observed_dec = generators.synthetic_data(
+            model, ra_instrument, dec_instrument, seed=seed
+        )
     noise = noise_module(backend)
 
     def likelihood() -> Likelihood:
@@ -380,7 +422,15 @@ def build_problem(
             "ra": Dataset(observed_ra, ra_instrument, likelihood=likelihood(), label="ra"),
             "dec": Dataset(observed_dec, dec_instrument, likelihood=likelihood(), label="dec"),
         },
-        joint={"astrom": joint_noise(backend)} if joint else None,
+        joint=(
+            {
+                "astrom": joint_noise(
+                    backend, solver=HETEROSCEDASTIC_SOLVER if heteroscedastic else "quasisep"
+                )
+            }
+            if joint
+            else None
+        ),
     )
     return FittingProblem(model, datasets, seed=seed)
 
@@ -465,6 +515,7 @@ def sbc_problem(
     *,
     arm: str = "joint",
     observed: tuple[Any, Any] | None = None,
+    heteroscedastic: bool = False,
     seed: int = generators.SEED,
 ) -> FittingProblem:
     """The **two-parameter** problem the calibration study simulates and fits.
@@ -506,6 +557,11 @@ def sbc_problem(
 
     *observed* replaces the two containers, which is how the comparison arm
     refits the simulating arm's own data.
+
+    ``heteroscedastic=True`` (**W5.24**) draws the data with a sigma per channel
+    per epoch and binds :data:`HETEROSCEDASTIC_SOLVER` on the joint arm; the
+    comparison arms need nothing new, because each of their likelihoods reads
+    its own container's sigmas already.
     """
     module = backend_module(backend)
     noise = noise_module(backend)
@@ -525,6 +581,7 @@ def sbc_problem(
             ra_instrument,
             dec_instrument,
             seed=seed,
+            heteroscedastic=heteroscedastic,
         )
     observed_ra, observed_dec = observed
 
@@ -545,7 +602,17 @@ def sbc_problem(
             "ra": Dataset(observed_ra, ra_instrument, likelihood=likelihood("ra"), label="ra"),
             "dec": Dataset(observed_dec, dec_instrument, likelihood=likelihood("dec"), label="dec"),
         },
-        joint={"astrom": joint_noise(backend, fit=COUPLING_FIT)} if arm == "joint" else None,
+        joint=(
+            {
+                "astrom": joint_noise(
+                    backend,
+                    fit=COUPLING_FIT,
+                    solver=HETEROSCEDASTIC_SOLVER if heteroscedastic else "quasisep",
+                )
+            }
+            if arm == "joint"
+            else None
+        ),
     )
     return FittingProblem(model, datasets, seed=seed)
 
@@ -585,6 +652,7 @@ def calibrate(
     steps: int = DEFAULT_SBC_STEPS,
     burn_in: int = DEFAULT_SBC_BURN_IN,
     seed: int = generators.SEED,
+    heteroscedastic: bool = False,
 ) -> Any:
     """Simulation-based calibration of one arm, against the **joint** generator.
 
@@ -602,11 +670,16 @@ def calibrate(
     ones. What changes between arms is only what is *fitted*: the same data,
     scored by a model that knows about the cross-channel structure or by one
     that does not.
+
+    ``heteroscedastic=True`` (**W5.24**) runs the same study on channels with
+    their own per-epoch sigmas: the simulating problem's containers carry them,
+    so ``draw_group`` draws each replicate's white noise at them and the joint
+    arm scores it on the dense route.
     """
     from ampere.inference import EmceeEngine
     from ampere.results import REFIT_ROUTE, calibration_dataset, replace_observations
 
-    simulating = sbc_problem(backend, arm="joint", seed=seed)
+    simulating = sbc_problem(backend, arm="joint", seed=seed, heteroscedastic=heteroscedastic)
     rng = np.random.default_rng(seed)
     rows: list[list[int]] = []
     for index in range(int(count)):
@@ -645,7 +718,11 @@ def calibrate(
         [*SBC_PARAMETERS, SBC_DIRECTION],
         posterior_draws=int(draws),
         route=REFIT_ROUTE,
-        attrs={"ampere_calibration_label": f"astrometry {arm} arm"},
+        attrs={
+            "ampere_calibration_label": (
+                f"astrometry {arm} arm" + (", heteroscedastic" if heteroscedastic else "")
+            )
+        },
     )
 
 
@@ -677,6 +754,11 @@ def _parser() -> argparse.ArgumentParser:
         help="one correlated process over both channels, on injected correlated data (W5.9)",
     )
     parser.add_argument(
+        "--heteroscedastic",
+        action="store_true",
+        help="a sigma per channel per epoch; the joint arm takes the dense route (W5.24)",
+    )
+    parser.add_argument(
         "--sbc",
         choices=("joint", "independent", "rigid"),
         default=None,
@@ -700,7 +782,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.sbc is not None:
         started = time.perf_counter()
         calibration = calibrate(
-            args.backend, arm=args.sbc, count=args.sbc_count, draws=args.sbc_draws, seed=args.seed
+            args.backend,
+            arm=args.sbc,
+            count=args.sbc_count,
+            draws=args.sbc_draws,
+            seed=args.seed,
+            heteroscedastic=args.heteroscedastic,
         )
         elapsed = time.perf_counter() - started
         print(f"SBC, {args.sbc} arm: {args.sbc_count} simulation(s), {args.sbc_draws} draw(s)")
@@ -717,7 +804,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  {elapsed:.1f} s wall clock")
         return 0
 
-    problem = build_problem(args.backend, gp=args.gp, joint=args.joint, seed=args.seed)
+    problem = build_problem(
+        args.backend,
+        gp=args.gp,
+        joint=args.joint,
+        heteroscedastic=args.heteroscedastic,
+        seed=args.seed,
+    )
     print(f"negotiated channels: {list(problem.requirements['model'])}")
     for channel_name in problem.requirements["model"]:
         req = problem.requirements["model"][channel_name]

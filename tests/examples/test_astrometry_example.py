@@ -310,3 +310,103 @@ class TestTheCalibrationStudy:
             f"{joint_coverage:.3f}: a gap of {joint_coverage - independent_coverage:.3f}, below "
             f"the pinned {COVERAGE_GAP}."
         )
+
+
+# ---------------------------------------------------------------------------
+# The heteroscedastic joint arm (W5.24)
+# ---------------------------------------------------------------------------
+
+
+#: The heteroscedastic study (W5.24), measured on the reference backend at
+#: ``examples.astrometry.generators.SEED`` and ``FULL_SBC``, at the 0.90 level on
+#: ``model.direction``:
+#:
+#: ===================  ========  ====================
+#: arm                  coverage  KS p(pmra, pmdec, dir)
+#: ===================  ========  ====================
+#: joint (dense route)  0.938     0.833, 0.656, 0.781
+#: independent GPs      0.917     0.850, 0.676, 0.360
+#: ===================  ========  ====================
+#:
+#: Only the joint arm's floor is pinned, the same :data:`JOINT_COVERAGE_FLOOR`
+#: W5.9 pins. The **gap is not**: with each channel's per-epoch sigma drawn up to
+#: twice :data:`~examples.astrometry.generators.SIGMA`, the white noise carries
+#: more of each epoch's error than the shared systematic does, the correlation
+#: it induces between the two proper-motion errors is diluted, and the
+#: independent arm's undercoverage (W5.9's 0.729) all but disappears. That is a
+#: property of this data set, not of the model, and pinning a gap here would
+#: pin the wrong claim.
+
+
+class TestTheHeteroscedasticJointArm:
+    """A sigma per channel per epoch: the joint arm off W5.9's rotated path."""
+
+    def test_the_channels_carry_their_own_sigmas(self) -> None:
+        model = build_model("reference")
+        ra_instrument, dec_instrument = build_instruments("reference")
+        ra, dec = generators.synthetic_joint_data(
+            model, ra_instrument, dec_instrument, heteroscedastic=True
+        )
+        sigmas = generators.channel_sigmas()
+        assert np.allclose(np.asarray(ra.uncertainty), sigmas[0])
+        assert np.allclose(np.asarray(dec.uncertainty), sigmas[1])
+        assert not np.array_equal(np.asarray(ra.uncertainty), np.asarray(dec.uncertainty))
+        # A log-uniform factor of at most two either side of SIGMA.
+        assert np.all(sigmas <= 2.0 * generators.SIGMA + 1e-12)
+        assert np.all(sigmas >= 0.5 * generators.SIGMA - 1e-12)
+
+    def test_the_equal_sigma_generator_is_unchanged(self) -> None:
+        """W5.9's data, bit for bit: the heteroscedastic switch defaults off."""
+        model = build_model("reference")
+        ra_instrument, dec_instrument = build_instruments("reference")
+        ra, dec = generators.synthetic_joint_data(model, ra_instrument, dec_instrument)
+        for channel in (ra, dec):
+            assert np.array_equal(
+                np.asarray(channel.uncertainty), np.full(generators.EPOCHS.size, generators.SIGMA)
+            )
+
+    def test_the_arm_composes_on_the_dense_route_and_scores(self) -> None:
+        problem = build_problem("reference", joint=True, heteroscedastic=True)
+        noise = problem.datasets.joint["astrom"]
+        assert noise.solver.NAME == "DenseGP"
+        variance = noise.variances(
+            [problem.datasets["ra"].observed, problem.datasets["dec"].observed],
+            np.ones(generators.EPOCHS.size, dtype=bool),
+            dict(generators.JOINT_TRUTH),
+        )
+        assert noise.route(variance) == "dense"
+        theta = {
+            **QUALIFIED_TRUTH,
+            "astrom.angle": generators.JOINT_TRUTH["angle"],
+            "astrom.log_variance_0": generators.JOINT_TRUTH["log_variance_0"],
+            "astrom.log_variance_1": generators.JOINT_TRUTH["log_variance_1"],
+        }
+        assert np.isfinite(problem.log_likelihood(theta))
+        simulation = problem.simulate(theta, observe=True)
+        assert not simulation.failed
+        assert simulation.observations is not None
+        assert set(simulation.observations) == {"ra", "dec"}
+
+    def test_the_study_runs_at_a_smoke_budget(self) -> None:
+        calibration = calibrate(
+            "reference", arm="joint", seed=generators.SEED, heteroscedastic=True, **TINY_SBC
+        )
+        assert calibration["ranks"].shape == (TINY_SBC["count"], len(SBC_PARAMETERS) + 1)
+
+    @pytest.mark.astrometry_full
+    def test_the_heteroscedastic_joint_arm_is_calibrated(self) -> None:
+        """W5.9's pinned claim, on channels with their own per-epoch sigmas.
+
+        The same study at the same budget and seed, with every channel's error
+        bar drawn per epoch (``generators.channel_sigmas``), so the joint arm is
+        scored on the dense route rather than the rotated one; held to the same
+        floor. The measured values are tabulated above this class.
+        """
+        joint = calibrate(
+            "reference", arm="joint", seed=generators.SEED, heteroscedastic=True, **FULL_SBC
+        )
+        coverage = coverage_at(joint, 0.9, SBC_DIRECTION)
+        assert coverage >= JOINT_COVERAGE_FLOOR, (
+            f"the heteroscedastic joint arm covered {coverage:.3f} at the 0.90 level, below "
+            f"the pinned floor of {JOINT_COVERAGE_FLOOR}."
+        )

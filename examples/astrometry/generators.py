@@ -21,7 +21,9 @@ __all__ = [
     "JOINT_TRUTH",
     "SEED",
     "SIGMA",
+    "SIGMA_SPREAD",
     "TRUTH",
+    "channel_sigmas",
     "coupling_matrix",
     "marginal_amplitudes",
     "synthetic_data",
@@ -156,6 +158,26 @@ JOINT_TRUTH: dict[str, float] = {
 }
 
 
+#: How far each channel's per-epoch sigma may wander from :data:`SIGMA` in the
+#: heteroscedastic arm (**W5.24**): a log-uniform factor of up to two either
+#: way. Real astrometric solutions do this --- seeing, airmass and the number of
+#: reference stars change epoch by epoch, and the two sky axes of one centroid
+#: rarely share an error bar --- so the heteroscedastic arm is the realistic
+#: one, and the equal-sigma arm W5.9 pinned is the special case.
+SIGMA_SPREAD = float(np.log(2.0))
+
+
+def channel_sigmas(seed: int = SEED) -> np.ndarray:
+    """Each channel's own per-epoch sigma, ``(2, N)``: row 0 ``ra``, row 1 ``dec``.
+
+    Drawn from its own stream (``seed + 2``), so switching the heteroscedastic
+    arm on changes the error bars and the white noise scaled by them and
+    nothing else: the injected systematic is the same draw either way.
+    """
+    rng = np.random.default_rng(seed + 2)
+    return SIGMA * np.exp(rng.uniform(-SIGMA_SPREAD, SIGMA_SPREAD, size=(2, EPOCHS.size)))
+
+
 def coupling_matrix(truth: dict[str, float] | None = None) -> np.ndarray:
     """``B`` at *truth* (:data:`JOINT_TRUTH` by default), as a 2x2 array."""
     return np.asarray(
@@ -184,6 +206,7 @@ def synthetic_joint_data(
     dec_instrument: Instrument,
     *,
     seed: int = SEED,
+    heteroscedastic: bool = False,
 ) -> tuple[TimeSeries, TimeSeries]:
     """:func:`synthetic_data` with a **correlated** centroiding systematic injected.
 
@@ -194,6 +217,13 @@ def synthetic_joint_data(
     here, in numpy, from the materialised Kronecker covariance rather than
     through the noise model, so that the data this study fits are generated
     independently of the code that scores them.
+
+    ``heteroscedastic=True`` is **W5.24**'s arm: each channel carries its own
+    sigma per epoch (:func:`channel_sigmas`), the white noise is drawn at it,
+    and the containers say so --- which is what sends a
+    :class:`~ampere.core.JointGaussianProcessNoise` fit of these data off
+    W5.9's rotated path and onto the dense or reduced-rank route. Left
+    ``False``, every draw is W5.9's.
     """
     # Two streams, and the split is deliberate: the **white** noise comes from
     # the same generator, in the same order, as :func:`synthetic_data`'s, so
@@ -221,16 +251,22 @@ def synthetic_joint_data(
         2, -1
     )
 
-    ra_noisy = ra_truth + systematic[0] + rng.normal(0.0, SIGMA, ra_truth.shape)
-    dec_noisy = dec_truth + systematic[1] + rng.normal(0.0, SIGMA, dec_truth.shape)
+    if heteroscedastic:
+        sigmas = channel_sigmas(seed)
+        ra_noisy = ra_truth + systematic[0] + rng.normal(0.0, sigmas[0], ra_truth.shape)
+        dec_noisy = dec_truth + systematic[1] + rng.normal(0.0, sigmas[1], dec_truth.shape)
+    else:
+        sigmas = np.full((2, EPOCHS.size), SIGMA)
+        ra_noisy = ra_truth + systematic[0] + rng.normal(0.0, SIGMA, ra_truth.shape)
+        dec_noisy = dec_truth + systematic[1] + rng.normal(0.0, SIGMA, dec_truth.shape)
     observed_ra = TimeSeries(
         EPOCHS * u.day,
         ra_noisy * u.mas,
-        uncertainty=np.full(ra_noisy.shape, SIGMA) * u.mas,
+        uncertainty=sigmas[0] * u.mas,
     )
     observed_dec = TimeSeries(
         EPOCHS * u.day,
         dec_noisy * u.mas,
-        uncertainty=np.full(dec_noisy.shape, SIGMA) * u.mas,
+        uncertainty=sigmas[1] * u.mas,
     )
     return observed_ra, observed_dec

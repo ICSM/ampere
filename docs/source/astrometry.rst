@@ -347,13 +347,35 @@ matrix. Exact, not approximate: ``tests/conformance/test_astrometry.py``
 scores the same residual both ways on every backend and holds them to the
 solver tolerance.
 
-One restriction follows from the rotation itself and is checked at
-composition: the two channels must carry the **same per-epoch
-uncertainties**. ``Qᵀ ⊗ I`` leaves ``diag(σ²)`` diagonal only where every
-channel's ``σ`` is the same vector; heteroscedasticity *along* the epoch
-grid is unaffected. Unequal per-channel errors, mismatched grids and the
-general LMC belong to the dense/reduced-rank follow-on
-(``likelihoods.md`` §15).
+Heteroscedastic channels (W5.24)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The rotation is exact only when the two channels carry the **same per-epoch
+uncertainties**: ``Qᵀ ⊗ I`` leaves ``diag(σ²)`` diagonal only where every
+channel's ``σ`` is the same vector. Real astrometric solutions rarely
+oblige — seeing, airmass and the reference-star count change epoch by epoch,
+and the two sky axes of one centroid seldom share an error bar — so unequal
+channels take one of two further routes, chosen by the solver you bind and
+never by an argument:
+
+* ``DenseGP`` — the **dense** route: ``B ⊗ K_x + blockdiag(diag(σ_t²))``
+  factorised directly. Exact for any ``σ``, ``O((TN)³)``.
+* ``HilbertSpaceGP`` — the **reduced-rank** route: with ``K_x ≈ Φ̃ Φ̃ᵀ`` the
+  process is a ``T·m``-feature model against a noise that is diagonal in the
+  original basis, so Woodbury is exact in the approximation at
+  ``O(TN·(Tm)²)`` and NUTS sees a ``T·m`` whitened block.
+
+Equal channels keep the rotated path, bit for bit; unequal channels under
+``QuasisepGP`` are refused at composition with the fix named.
+``python -m examples.astrometry --joint --heteroscedastic`` fits data whose
+channels each draw a ``σ`` per epoch (a log-uniform factor of up to two
+around 0.03 mas) and binds ``DenseGP``: at 28 epochs the dense route is the
+cheapest as well as the exact one (0.38 ms per likelihood call, against
+0.46 ms for the rotated ``QuasisepGP`` path and 0.64 ms for the reduced-rank
+route at ``m = 32``). The calibration study runs on it too
+(``--sbc joint --heteroscedastic``), and holds W5.9's floor: the joint arm covers 0.938 on the direction of the proper motion at the 0.90 level (floor 0.80). The independent-GP arm covers 0.917 on the same data, so the gap W5.9 measured is not reproduced here: with each channel's error bar up to twice 0.03 mas, the white noise carries more of each epoch's error than the shared systematic does, and the correlation it induces between the two proper-motion errors is diluted. Only the floor is pinned.
+Mismatched grids and the general LMC remain ``likelihoods.md`` §15's
+follow-on.
 
 What it buys: the calibration study
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
