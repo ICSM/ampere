@@ -22,11 +22,6 @@ What is here
     shipped image models and adds them, rather than a new class in ``ampere``.
 :mod:`.model_torch`, :mod:`.model_jax`
     Two-line bindings of that class to each modern backend's own models.
-:mod:`.grid_gp`
-    **Read this one first.** The two ``Layout.POINTS`` gates that refuse a
-    correlated noise model on an ``Image`` today, lifted out of tree so that
-    the flexible arm can run, with the library change they stand in for written
-    out in full.
 :mod:`.study`
     The three arms, the SBC calibration route, and the ``DenseGP``-against-HSGP
     benchmark that is Phase 5's own "chosen by measurement" rule made concrete.
@@ -41,4 +36,4 @@ to a directory you name.
 
 from __future__ import annotations
 
-__all__ = ["figures", "generators", "grid_gp", "model", "study"]
+__all__ = ["figures", "generators", "model", "study"]
