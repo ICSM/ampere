@@ -1281,6 +1281,93 @@ class TestABudgetDrawnUnderAContext:
             assert np.allclose(draw.observations["default"].uncertainty, factor * 0.1)
 
 
+class TestTheNativePathDrawsTheContext:
+    """**W5.29**: the refusal W5.10 carried, inverted -- a context runs natively.
+
+    The fake backend's sampler predates ``sample_observations(..., sigma=)``,
+    which makes it the case to test first: the trial draw finds it cannot
+    take a context, so the prediction stays vectorised and the observations
+    are drawn on the numpy path at each draw's context -- from the same
+    per-draw generators the loop uses, so the batch equals the loop exactly.
+    The second half gives the sampler the keyword and checks that what it is
+    handed is each draw's own context, row for row.
+    """
+
+    PRIOR = ScaledSigma(0.25, 4.0)
+
+    def test_native_true_with_a_context_runs_and_says_so(self) -> None:
+        batch = fake_problem().simulate_many(5, observe=True, native=True, context=self.PRIOR)
+        assert batch.provenance["simulate_batched"] is True
+        # The fake sampler has no sigma= keyword, so the draws were numpy's.
+        assert batch.provenance["sample_backend"] == "reference"
+        assert json.loads(batch.provenance["simulation_context"]) == self.PRIOR.describe()
+        for draw in batch:
+            assert draw.context is not None
+            factor = float(draw.context.record["factor"])
+            assert np.allclose(draw.observations["default"].uncertainty, factor * 0.1)
+
+    def test_the_default_now_takes_the_native_path_with_a_context(self) -> None:
+        batch = fake_problem().simulate_many(3, observe=True, context=self.PRIOR)
+        assert batch.provenance["simulate_batched"] is True
+        assert all(draw.context is not None for draw in batch)
+
+    def test_it_equals_the_loop_at_the_same_seed(self) -> None:
+        """The loop is the oracle; with numpy drawing the noise, bitwise."""
+        native = fake_problem().simulate_many(6, observe=True, native=True, context=self.PRIOR)
+        loop = fake_problem().simulate_many(6, observe=True, native=False, context=self.PRIOR)
+        assert loop.provenance["simulate_batched"] is False
+        assert np.array_equal(native.theta, loop.theta)
+        for one, other in zip(native, loop, strict=True):
+            assert one.context is not None and other.context is not None
+            assert dict(one.context.record) == dict(other.context.record)
+            assert np.array_equal(
+                one.observations["default"].values, other.observations["default"].values
+            )
+            assert np.array_equal(
+                one.observations["default"].uncertainty,
+                other.observations["default"].uncertainty,
+            )
+
+    def test_a_sampler_that_takes_sigma_is_handed_each_draws_context(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        handed: list[np.ndarray] = []
+
+        def sample_observations(
+            self: Any, theta: Any, predicted: Any, seeds: Sequence[int], *, sigma: Any = None
+        ) -> dict[str, np.ndarray]:
+            rows = np.asarray(predicted["default"], dtype=float)
+            scale = np.full(rows.shape, 0.1) if not sigma else np.asarray(sigma["default"])
+            handed.append(scale)
+            return {"default": rows + scale * np.random.default_rng(0).standard_normal(rows.shape)}
+
+        monkeypatch.setattr(_FakeRealisation, "sample_observations", sample_observations)
+        batch = fake_problem().simulate_many(4, observe=True, native=True, context=self.PRIOR)
+        assert batch.provenance["sample_backend"] == "w52-native-fake"
+        chunk = handed[-1]  # the first call is the trial draw
+        assert chunk.shape == (4, WAVELENGTH.size)
+        for row, draw in zip(chunk, batch, strict=True):
+            assert draw.context is not None
+            assert np.array_equal(row, draw.context.sigma["default"])
+            # The placed container carries the sigma it was drawn at.
+            assert np.array_equal(draw.observations["default"].uncertainty, row)
+
+    def test_a_budget_without_a_context_calls_the_sampler_as_before(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``sigma=`` is passed only for a context budget, never as ``None``."""
+        calls: list[dict[str, Any]] = []
+        original = _FakeRealisation.sample_observations
+
+        def recording(self: Any, *args: Any, **kwargs: Any) -> dict[str, np.ndarray]:
+            calls.append(kwargs)
+            return original(self, *args, **kwargs)
+
+        monkeypatch.setattr(_FakeRealisation, "sample_observations", recording)
+        fake_problem().simulate_many(3, observe=True, native=True)
+        assert calls and all(call == {} for call in calls)
+
+
 class TestTheContextRefusals:
     """Each one a claim the code could not honestly make, refused by name."""
 
@@ -1291,15 +1378,6 @@ class TestTheContextRefusals:
     def test_a_context_without_observations(self) -> None:
         with pytest.raises(DatasetError, match="observe=False"):
             build().simulate_many(2, observe=False, context=ScaledSigma())
-
-    def test_a_context_with_the_native_path_demanded(self) -> None:
-        with pytest.raises(DatasetError, match="native=True"):
-            fake_problem().simulate_many(2, observe=True, native=True, context=ScaledSigma())
-
-    def test_the_default_falls_back_to_the_loop_rather_than_refusing(self) -> None:
-        batch = fake_problem().simulate_many(2, observe=True, context=ScaledSigma(0.5, 2.0))
-        assert batch.provenance["simulate_batched"] is False
-        assert all(draw.context is not None for draw in batch)
 
     def test_a_sigma_of_the_wrong_shape_is_refused_by_the_dataset(self) -> None:
         dataset = Dataset(observed())
