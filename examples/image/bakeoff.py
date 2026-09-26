@@ -98,7 +98,6 @@ __all__ = [
 ]
 
 
-
 #: The kernel length scale every arm is measured at, mas. The omitted
 #: background is 17 mas across, so this is the scale of the thing the GP is
 #: being asked to absorb; ``study.benchmark_solvers`` uses the same number.
@@ -529,9 +528,7 @@ def measure_resolution(
         arms: list[tuple[str, Any]] = [
             (
                 f"HSGP m={per_axis**2}",
-                HilbertSpaceGP(
-                    basis_size=(per_axis, per_axis), boundary_factor=BOUNDARY_FACTOR
-                ),
+                HilbertSpaceGP(basis_size=(per_axis, per_axis), boundary_factor=BOUNDARY_FACTOR),
             ),
             (
                 f"EFGP m={(per_axis + 1) ** 2}",

@@ -110,7 +110,9 @@ def matern32_matrix(x: np.ndarray, amplitude: float, length_scale: float) -> np.
     return amplitude**2 * (1.0 + scaled) * np.exp(-scaled)
 
 
-def matern32_matrix_nd(coordinates: np.ndarray, amplitude: float, length_scale: float) -> np.ndarray:
+def matern32_matrix_nd(
+    coordinates: np.ndarray, amplitude: float, length_scale: float
+) -> np.ndarray:
     """The reference Matern-3/2 covariance over an ``(N, d)`` coordinate matrix.
 
     Euclidean separation, unlike :func:`matern32_matrix`'s scalar one -- for
@@ -1739,9 +1741,7 @@ class TestSolverStrategies:
         gp = Likelihood(GaussianFamily(), GaussianProcessNoise(Matern32(0.3, 1.0)))
         coordinates = sample_coordinates(image)
         covariance = matern32_matrix_nd(coordinates, 0.3, 1.0) + np.diag(np.full(9, 0.1) ** 2)
-        expected = multivariate_normal.logpdf(
-            np.ones(9), mean=np.zeros(9), cov=covariance
-        )
+        expected = multivariate_normal.logpdf(np.ones(9), mean=np.zeros(9), cov=covariance)
         assert gp.log_prob(predicted, image) == pytest.approx(float(expected), abs=1e-9)
 
     def test_quasisep_on_a_2d_grid_is_still_refused_by_its_own_rule(self) -> None:

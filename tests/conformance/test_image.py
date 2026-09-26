@@ -497,7 +497,8 @@ class TestAnImageAsAnObservation:
         solver that needs exactly one ordered coordinate."""
         if SolverKind.QUASISEP not in backend.capabilities.solvers:
             pytest.skip(f"backend {backend.name!r} declares no quasiseparable solver")
-        noise = backend.gp_noise(backend.kernel(GRID_KERNEL), backend.gp_solver(SolverKind.QUASISEP))
+        kernel = backend.kernel(GRID_KERNEL)
+        noise = backend.gp_noise(kernel, backend.gp_solver(SolverKind.QUASISEP))
         observed = observed_image()
         with pytest.raises(LikelihoodError, match="needs one ordered coordinate axis"):
             Likelihood(GaussianFamily(), noise).check_alignment(observed, observed)
