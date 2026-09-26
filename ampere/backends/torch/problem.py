@@ -728,8 +728,11 @@ class _LoweredDataset:
         is the *core's own* method for that family, so a user override still
         falls back to the numpy function its author wrote. The complex
         condition is gone (complex data are what the ``complex_gaussian`` twin
-        exists for) and the latent condition now applies only to the three
-        families that do not read ``noise.latent``.
+        exists for) and the latent condition now applies only to the families
+        that do not read ``noise.latent`` — every twin but ``poisson`` and,
+        since **W5.1**, ``von_mises``, whose latent draw is native only (the
+        core's own ``sample`` refuses it by name, so there is no numpy draw to
+        fall back to).
         """
         family = self.likelihood.family
         core = _TWINNED_FAMILIES.get(family.NAME)
@@ -750,7 +753,7 @@ class _LoweredDataset:
                 f"dataset {self.label!r} declares limits on retained samples, which blocks "
                 f"observation drawing on every backend.",
             )
-        if self.latent_name is not None and family.NAME != "poisson":
+        if self.latent_name is not None and family.NAME not in ("poisson", "von_mises"):
             return _refuse(
                 "latent",
                 f"dataset {self.label!r} declares a latent GP, whose family reads "
@@ -900,8 +903,9 @@ class _LoweredDataset:
         and the drawn counts describe one model); ``student_t`` returns the
         ``location``, the ``scale`` — the noise model's sigma, used as the
         scale exactly as the density standardises by it — and ``nu``;
-        ``von_mises`` (**W5.2**) returns the ``mean`` angle (the prediction)
-        and the concentration ``kappa = 1/sigma**2``, read from the same
+        ``von_mises`` (**W5.2**) returns the ``mean`` angle (the prediction,
+        plus the latent phase error ``f`` under a GP since **W5.1**) and the
+        concentration ``kappa = 1/sigma**2``, read from the same
         ``sigma`` its density standardises by — exactly
         ``ampere.core.VonMisesFamily.sample``'s own ``rng.vonmises(mean,
         1.0 / sigma**2)``, one family earlier.
@@ -917,7 +921,12 @@ class _LoweredDataset:
         sigma = self._sigma(predicted, values)
         assert sigma is not None  # REQUIRES_UNCERTAINTY, checked at composition
         if family.NAME == "von_mises":
-            return {"mean": predicted, "kappa": 1.0 / sigma**2}
+            # W5.1: under a latent GP the draw is around predicted + f, f being
+            # this draw's own latent block -- the latent first, then the
+            # wrapped variate, and the same f the density scores at.
+            latent = self._latent(routed, values)
+            mean = predicted if latent is None else predicted + latent
+            return {"mean": mean, "kappa": 1.0 / sigma**2}
         own = {key: value for key, value in values.items() if key in family.parameters}
         return {
             "location": predicted,

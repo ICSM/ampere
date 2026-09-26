@@ -426,6 +426,68 @@ closed form inherits the discipline rather than reinventing it; its refusal no
 longer names Phase 4, because the instance the wording was written for has
 landed.
 
+### The latent GP on closure phases: **implemented at W5.1**, fitted on the native path only
+
+**Ruled Phase 5 by Peter, 2026-09-11** (`phase4_placement_memo.md` §7.2).
+A GP *added* to a wrapped observable does not marginalise in closed form, so
+`von_mises` + `GaussianProcessNoise` declares `LATENT`, like Poisson's. From
+the freeze to W5.1 the family did not consume a latent and the composition was
+refused by §4's general rule; **W5.1 implements it** —
+`VonMisesFamily.CONSUMES_LATENT_GP` is `True` — as the phase error
+`f ~ GP(0, K)` over the container's axes, with the observed closure phase von
+Mises **around** `μ + f` and wrapped exactly as §3 wraps it:
+
+```
+log p(φ | μ, f) = Σᵢ [ κᵢ cos(φᵢ − μᵢ − fᵢ) − log 2π − log I₀(κᵢ) ],   κᵢ = 1/σᵢ²,   f = L(θ) z
+```
+
+The engine samples the whitened `z` the dataset declares and the solver's
+`latent_transform` makes `f = L(θ) z` from it (§7). The kernel binds through
+W4.5's `axes` selector: `Matern32(axes=("u1", "v1", "u2", "v2"))` for an
+error smooth in the triangle geometry, or its `Product` with a spectral block.
+
+```pycon
+>>> from ampere.core import VonMisesFamily
+>>> VonMisesFamily.CONSUMES_LATENT_GP
+True
+>>> triangles = GaussianProcessNoise(Matern32(0.3, 3.0e7, axes=("u1", "v1", "u2", "v2")))
+>>> Likelihood(VonMisesFamily(), triangles).marginalisation
+<Marginalisation.LATENT: 'latent'>
+
+```
+
+**Native path only**, and what that means precisely. The combination is
+`LATENT`, so §4's engine check refuses every gradient-free engine by name: the
+composition is fitted under NUTS or VI on the torch and jax backends, through
+`ampere.core.realise`, and nowhere else. The family's numpy `log_prob` and
+`sample` nevertheless compute the latent-conditional density and draw *given*
+`f`, exactly as Poisson's do, because that is the oracle `realise` checks a
+realisation against at the reference point (`inference.md` §10a) and the path
+`Dataset.draw_observation` draws through: a numpy family that refused
+outright made `realise` refuse every such problem, which is the opposite of
+"available natively". With no `f` supplied both refuse, by one text that says
+where the composition runs (pinned word for word in
+`tests/core/test_likelihood.py` and the conformance battery). The draw is
+latent first, wrapped draw second: `rng.vonmises(μ + f, κ)`, and each native
+twin draws `VonMises(μ + f, κ)` with `f` from the draw's own latent block.
+
+The conformance battery holds each native realisation to a **from-scratch**
+formula — the closed-form closure phase of the binary for `μ`, the defining
+Matérn-3/2 for `K`, `f = L z` by Cholesky, and the normalised von Mises
+density above — at `tolerances.cross_solver`, as well as to the numpy path at
+`cross_backend`, because the numpy path is ampere's own transcription of the
+same model.
+
+**The solver is `DenseGP`, and `QuasisepGP` is refused by name**, for W4.2's
+structural reason one kind further (§7): a closure phase lives at a point of
+the `(u1, v1, u2, v2)` space of its triangle's two baselines, at a wavelength,
+and no ordering of that space reduces to one coordinate, so
+`REQUIRES_ORDERED_1D` cannot hold whatever the kernel selects.
+`GaussianProcessNoise.check_compatible` raises before the solver's own generic
+message, which would advise selecting one axis. The dense factorisation is
+`O(N³)` in the number of triangles; the reduced-rank latent is W5.4's question
+and does not gate this at interferometric N.
+
 ### Enforcing it against the engine
 
 §4.4: "gradient-free samplers cannot realistically handle hundreds of latent
@@ -2476,7 +2538,8 @@ of the warped fit with the deviation injected — is
 | Masking beats censoring on the same sample | Masking a region for a test run should not require editing the censoring array too |
 | Complex data are the circular complex Gaussian only | `results_schema.md` §16: the container's real σ encodes exactly that. Non-circular noise supplies its own 2×2 structure and is not a container concern |
 | `complex_gaussian` + GP is `ANALYTIC` — circular meaning fixed, implementation staged | Ruled 2026-09-03 (§17 Q6). The circular complex GP marginalises in closed form exactly as the real Gaussian does, and fixing the declaration now unblocks the flexible likelihood on the Phase-4 proof modality. `GP_ANALYTIC_IMPLEMENTED = False` keeps the pair a composition-time refusal until Phase 4 lands the closed form — declared-but-staged, never silently different. *(Amended W4.8: implemented at W4.2 — `GP_ANALYTIC_IMPLEMENTED` is now `True`; see §4's "declared analytic, implemented at W4.2" subsection for the closed form.)* |
-| Rice takes amplitudes from an `Amplitude` chain step; von Mises takes `κ = 1/σ²` per sample | Ruled 2026-09-03 (§17 Q3/Q4). The model predicts what it physically produces — the complex value — and projection is the instrument chain's job; the concentration comes from the container's own uncertainties, exact in the small-σ limit where closure-phase practice lives. Families themselves are Phase 4's. *(Amended W4.8: `VonMisesFamily` implemented at W4.1, exactly to this interface. `RiceFamily` remains declared, not implemented — `Amplitude` landed at W4.1, but nothing consumes it as a Rician mean yet, and Phase 4 did not schedule it.)* |
+| Rice takes amplitudes from an `Amplitude` chain step; von Mises takes `κ = 1/σ²` per sample | Ruled 2026-09-03 (§17 Q3/Q4). The model predicts what it physically produces — the complex value — and projection is the instrument chain's job; the concentration comes from the container's own uncertainties, exact in the small-σ limit where closure-phase practice lives. Families themselves are Phase 4's. *(Amended W4.8: `VonMisesFamily` implemented at W4.1, exactly to this interface; amended W5.1: it consumes a latent GP, see the row on `von_mises` + GP and §4. `RiceFamily` remains declared, not implemented — `Amplitude` landed at W4.1, but nothing consumes it as a Rician mean yet, and Phase 4 did not schedule it.)* |
+| `von_mises` + GP is `LATENT`, consumed since W5.1, fitted on the native path only; the numpy family computes the latent-conditional form given `f` and refuses without it | Ruled Phase 5 by Peter 2026-09-11 (`phase4_placement_memo.md` §7.2). The observed closure phase is von Mises around `μ + f`, `f = L(θ) z` — Poisson's latent pattern (W2.14) on a wrapped observable. "Native path only" is enforced where an engine is chosen: the pair is `LATENT`, so `check_engine` refuses every gradient-free engine and the fit runs under NUTS/VI on torch and jax through `realise`. The numpy family is the oracle and not a route: `realise`'s reference-point guard and `Dataset.draw_observation` both go through it, so a family that refused even given `f` would make `realise` refuse the problem (measured at W5.1: realised −150.95 against a contract-path −inf). The conformance battery adds a from-scratch von-Mises-around-a-GP-draw oracle. `DenseGP` only: `QuasisepGP` is refused by name, W4.2's structural reason (no ordering of the triangle space is one coordinate) |
 | `check_alignment` is composition-time; `log_prob` re-checks only shapes | O(N) coordinate comparison is right once and wrong per evaluation — `results_schema.md` §10's split |
 | A noise model receives the prediction as well as the observation | Ruled 2026-09-03 (X-1). A noise whose magnitude depends on the model — a fractional model uncertainty, an analytically marginalised multiplicative calibration systematic, a model-variance weighting of counts — is a `NoiseModel`, not a family. Without the `predicted` argument the only way to express one is to re-implement the sampling distribution, which welds noise to family, cannot be reused, and cannot reach the GP path: exactly the monolithic collapse `prior_art.md` Tension 3 warns against |
 

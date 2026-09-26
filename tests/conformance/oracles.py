@@ -448,3 +448,38 @@ def reflex_orbit_dec(
     t = np.asarray(time, dtype=float)
     cycle = 2.0 * math.pi * t / period + phase
     return pmdec * t / DAYS_PER_YEAR + amp_dec * np.cos(cycle)
+
+
+# ---------------------------------------------------------------------------
+# The latent GP on closure phases (W5.1)
+# ---------------------------------------------------------------------------
+
+
+def von_mises_latent_log_likelihood(
+    observed: np.ndarray,
+    predicted: np.ndarray,
+    sigma: np.ndarray,
+    covariance: np.ndarray,
+    whitened: np.ndarray,
+    *,
+    jitter: float = 1e-10,
+) -> float:
+    """``sum log VonMises(observed | predicted + L z, 1/sigma**2)``, written out.
+
+    The oracle for the von Mises latent composition, which has no closed-form
+    marginal to compare against: a GP added to a wrapped observable is only
+    defined given the latent draw, so the oracle is the draw itself —
+    ``f = L z`` with ``L L^T = K`` (plus the relative stabiliser every
+    ``DenseGP.latent_transform`` adds, ``jitter * mean(diag K)``) — and the
+    normalised von Mises density around ``predicted + f``. The wrap needs no
+    code here: ``cos`` is periodic, and ``log I0(kappa)`` is taken as
+    ``log(i0e(kappa)) + kappa`` so that a well-measured triangle's large
+    ``kappa`` does not overflow.
+    """
+    scale = float(np.mean(np.diag(covariance))) or 1.0
+    lower = np.linalg.cholesky(covariance + np.eye(covariance.shape[0]) * (jitter * scale))
+    latent = lower @ np.asarray(whitened, dtype=float)
+    kappa = 1.0 / np.asarray(sigma, dtype=float) ** 2
+    delta = np.asarray(observed, dtype=float) - np.asarray(predicted, dtype=float) - latent
+    log_i0 = np.log(scipy.special.i0e(kappa)) + kappa
+    return float(np.sum(kappa * np.cos(delta) - math.log(2.0 * math.pi) - log_i0))

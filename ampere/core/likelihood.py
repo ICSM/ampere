@@ -118,7 +118,7 @@ from .parameter import (
     Parameterised,
     ParameterSet,
 )
-from .results_schema import FunctionSamples, Layout
+from .results_schema import ClosurePhases, FunctionSamples, Layout
 
 __all__ = [
     "DTYPE",
@@ -2188,6 +2188,7 @@ class GaussianProcessNoise(NoiseModel):
     def check_compatible(self, family: LikelihoodFamily, observed: FunctionSamples) -> None:
         super().check_compatible(family, observed)
         self._check_circular_solver(family, observed)
+        self._check_closure_phase_solver(observed)
         self._solver.check_compatible(self._kernel, observed)
         self._check_hyperparameter_units(observed)
 
@@ -2228,6 +2229,31 @@ class GaussianProcessNoise(NoiseModel):
             f'isotropic (u, v) kernel, or Product(Matern32(axes=("u", "v")), '
             f'Matern32(axes=("spectral_axis",))) for an error that is smooth in (u, v) and '
             f"sharp in wavelength."
+        )
+
+    def _check_closure_phase_solver(self, observed: FunctionSamples) -> None:
+        """Refuse, by name, an ordered-1-D solver on closure phases (*W5.1*).
+
+        W4.2's structural argument, one kind further: a closure phase is
+        indexed by two baselines of its triangle — a point of the
+        ``(u1, v1, u2, v2)`` space at a wavelength — and no ordering of that
+        space makes a stationary kernel a function of one coordinate. The
+        latent GP on closure phases therefore needs ``DenseGP``; the generic
+        :attr:`GPSolver.REQUIRES_ORDERED_1D` message ("select exactly one
+        axis") would be advice that cannot be taken, so this one precedes it,
+        exactly as :meth:`_check_circular_solver` does for visibilities.
+        """
+        if not isinstance(observed, ClosurePhases) or not self._solver.REQUIRES_ORDERED_1D:
+            return
+        raise LikelihoodError(
+            f"a GaussianProcessNoise on ClosurePhases is a latent phase error over the "
+            f"triangles, and {self._solver.NAME} needs one ordered one-dimensional coordinate. "
+            f"It could not have one even in principle: a closure phase lives at a point of the "
+            f"(u1, v1, u2, v2) space of its triangle's two baselines, at a wavelength, which no "
+            f"ordering reduces to one coordinate. Use DenseGP, with the kernel selecting the "
+            f'axes it acts on -- Matern32(axes=("u1", "v1", "u2", "v2")) for an error smooth in '
+            f'the triangle geometry, or Product(Matern32(axes=("u1", "v1", "u2", "v2")), '
+            f'Matern32(axes=("spectral_axis",))) for one that is also sharp in wavelength.'
         )
 
     def _check_hyperparameter_units(self, observed: FunctionSamples) -> None:
@@ -4357,10 +4383,36 @@ class VonMisesFamily(LikelihoodFamily):
     ``observed - predicted`` unwrapped, so a 2° error straddling the branch
     cut is charged as a 358° one — a 5 000-nat penalty on a triangle that fits
     perfectly, silently, and no sampler recovers from it.
+
+    **A latent GP on closure phases (W5.1), fitted on the native path only.**
+    A :class:`GaussianProcessNoise` composes with this family as a latent
+    model, :class:`PoissonFamily`'s pattern: a phase error ``f ~ GP(0, K)``
+    over the container's axes (a ``Matern32(axes=("u1", "v1", "u2", "v2"))``
+    on :class:`ClosurePhases`, or its product with a spectral block), and the
+    observed phase von Mises **around** ``predicted + f``, wrapped exactly as
+    above. :attr:`CONSUMES_LATENT_GP` is ``True``, so the dataset declares the
+    whitened block ``z`` and :meth:`GaussianProcessNoise.noise_params` hands
+    this family ``f = L(θ) z`` as ``noise.latent``.
+
+    *Where* it runs is the point. The combination declares
+    :attr:`Marginalisation.LATENT`, so :meth:`Likelihood.check_engine`
+    refuses every gradient-free engine by name: it is fitted under NUTS or VI
+    on the torch and jax backends, through ``ampere.core.realise``, and
+    nowhere else. The numpy methods below compute the latent-conditional
+    density and draw **given** ``f`` — exactly as Poisson's do — because that
+    is the oracle ``realise`` checks a realisation against at the reference
+    point and :meth:`Dataset.draw_observation` draws through; with no ``f``
+    supplied they refuse by name, saying where the composition is available.
+    The solver must be ``DenseGP``: a triangle is a point of a
+    four-dimensional space with no ordered one-dimensional coordinate, so
+    ``QuasisepGP`` is refused by name
+    (:meth:`GaussianProcessNoise.check_compatible`).
     """
 
     NAME: ClassVar[str] = "von_mises"
     IMPLEMENTED: ClassVar[bool] = True
+    ANALYTIC_WITH_GP: ClassVar[bool] = False
+    CONSUMES_LATENT_GP: ClassVar[bool] = True
 
     def check_observed(self, observed: FunctionSamples) -> None:
         """The container must hold angles in radians.
@@ -4391,18 +4443,10 @@ class VonMisesFamily(LikelihoodFamily):
         observed: np.ndarray,
         noise: NoiseParams,
     ) -> float:
-        if noise.correlated:
-            raise LikelihoodError(
-                f"the {self.NAME} family with a GaussianProcessNoise model is a latent-variable "
-                f"model — a GP added to a *wrapped* observable does not marginalise in closed "
-                f"form — and this family does not implement the latent-conditional log_prob "
-                f"(CONSUMES_LATENT_GP is False). A latent GP on closure phases is a real and "
-                f"useful thing, reachable on the native backends under NUTS or VI the way "
-                f"PoissonFamily's is, and it is Phase 5's (W5.1). Use IndependentNoise here."
-            )
+        centre = self._latent_centre(predicted, noise, "score")
         sigma = _independent_sigma(noise, self.NAME)
         kappa = 1.0 / sigma**2
-        delta = _wrap_to_pi(np.asarray(observed, dtype=DTYPE) - np.asarray(predicted, dtype=DTYPE))
+        delta = _wrap_to_pi(np.asarray(observed, dtype=DTYPE) - centre)
         return float(
             np.sum(kappa * (np.cos(delta) - 1.0) - _LOG_2PI - np.log(scipy.special.i0e(kappa)))
         )
@@ -4427,19 +4471,53 @@ class VonMisesFamily(LikelihoodFamily):
         ruled by Peter 2026-09-10) brings in with its likelihood rather than
         after it: a data type that can be fitted but not simulated breaks SBC
         and SBI for exactly the users who brought the data type, and closure
-        phases are that data type here. A correlated noise model is refused by
-        the same message the density refuses it with — there is no marginal to
-        draw from either.
+        phases are that data type here.
+
+        Under a :class:`GaussianProcessNoise` (**W5.1**) the latent comes
+        first and the wrapped draw second: ``f`` is the latent the caller
+        supplied — the one :meth:`Dataset.draw_observation` resolves from θ's
+        whitened block, so θ and the drawn phases describe one model — and the
+        draw is ``rng.vonmises(predicted + f, kappa)``. With no ``f`` supplied
+        this refuses by the density's own message rather than inventing a
+        fresh realisation, since there is then no θ the draw belongs to.
         """
-        if noise.correlated:
-            raise LikelihoodError(
-                f"the {self.NAME} family cannot draw under a correlated noise model: a GP added "
-                f"to a wrapped observable is a latent-variable model whose latent-conditional "
-                f"form this family does not implement (Phase 5, W5.1). Use IndependentNoise."
-            )
+        mean = self._latent_centre(predicted, noise, "draw")
         sigma = _independent_sigma(noise, self.NAME)
-        mean = np.asarray(predicted, dtype=DTYPE)
         return np.asarray(rng.vonmises(mean, 1.0 / sigma**2), dtype=DTYPE)
+
+    def _latent_centre(self, predicted: np.ndarray, noise: NoiseParams, verb: str) -> np.ndarray:
+        """``predicted``, plus the latent phase error ``f`` under a GP (*W5.1*)."""
+        centre = np.asarray(predicted, dtype=DTYPE)
+        if not noise.correlated:
+            return centre
+        if noise.latent is None:
+            raise LikelihoodError(self._native_only(verb))
+        latent = _as_float64(noise.latent, "latent GP values")
+        if latent.shape != centre.shape:
+            raise LikelihoodError(
+                f"the latent GP values have shape {latent.shape} but there are {centre.shape} "
+                f"retained samples. One latent value per retained sample."
+            )
+        return centre + latent
+
+    def _native_only(self, verb: str) -> str:
+        """The refusal of a latent composition with no latent supplied (*W5.1*).
+
+        One text for :meth:`log_prob` and :meth:`sample`, pinned word for word
+        by ``tests/core/test_likelihood.py`` and the conformance battery. Its
+        job is to say *where* the composition runs, not that it does not exist.
+        """
+        return (
+            f"the {self.NAME} family with a GaussianProcessNoise model is a latent-variable "
+            f"model: the observed phase is von Mises around predicted + f, with f = L(theta) z a "
+            f"latent GP, and a GP added to a wrapped observable does not marginalise in closed "
+            f"form, so there is nothing to {verb} until f is supplied, and none was. The "
+            f"composition is fitted on the native path only, under NUTS or VI on the torch and "
+            f"jax backends through ampere.core.realise, which sample z; every gradient-free "
+            f"engine refuses it. Build the problem from ampere.backends.torch or "
+            f"ampere.backends.jax (DenseGP, a kernel selecting the triangle axes) and run "
+            f"NUTSEngine or VIEngine, or use IndependentNoise here."
+        )
 
 
 # ---------------------------------------------------------------------------

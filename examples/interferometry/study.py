@@ -33,6 +33,11 @@ visibilities and closure phases, fitted three ways:
     not what either W4.2 or this study needs: the flagship GP is on the
     visibilities.
 
+A fourth question, W5.1's, has its own arms (``PHASE_ARMS``): a smooth
+phase error injected into the closure phases, fitted under NUTS on jax by
+a rigid von Mises likelihood and by the latent GP on the closure phases,
+calibrated by :func:`run_phase_calibration`.
+
 Two ways of asking the same question
 --------------------------------------
 :func:`build_problem` + :func:`run` fit **one** noisy dataset per arm — cheap,
@@ -98,6 +103,8 @@ __all__ = [
     "FLUX_RATIO_PRIOR",
     "GP_AMPLITUDE_SCALE",
     "GP_LENGTH_SCALE_RANGE",
+    "PHASE_ARMS",
+    "PHASE_BACKEND",
     "RANK_DRAWS",
     "SEPARATION_PRIOR",
     "SIMULATIONS",
@@ -109,11 +116,15 @@ __all__ = [
     "chromatic_problem",
     "coverage_at",
     "model_for",
+    "phase_error",
+    "phase_problem",
     "run",
     "run_calibration",
     "run_chromatic_arm",
+    "run_phase_calibration",
     "run_study",
     "summarise",
+    "with_phase_error",
 ]
 
 #: The three arms, in the order the item's text puts them.
@@ -573,3 +584,189 @@ def run_chromatic_arm(
         problem = chromatic_problem(backend, kind, seed=seed)
         results[kind] = {"run": run(problem, budget), "problem": problem}
     return results
+
+
+# ---------------------------------------------------------------------------
+# Arm (e): a latent GP on closure phases (W5.1)
+# ---------------------------------------------------------------------------
+
+#: The closure-phase arms, in the order the item names them. ``"rigid"`` is
+#: independent von Mises noise on the closure phases; ``"latent"`` is W5.1's
+#: latent GP over the triangle axes. Both fit W4.4's two-dataset binary — the
+#: visibilities under independent circular complex noise in both arms — so
+#: the two differ in the closure phases' likelihood alone.
+PHASE_ARMS: tuple[str, ...] = ("rigid", "latent")
+
+#: Which backend the closure-phase arms run NUTS on. jax, because the
+#: composition is fitted on the native path only and numpyro compiles the
+#: whole NUTS trajectory into one XLA program: at this problem's size (twenty
+#: free dimensions in the latent arm, sixteen triangles) a fit of 150 warm-up
+#: and 150 kept draws takes about nine seconds, where pyro drives each
+#: leapfrog step from Python. The claim is about the likelihood, not the array
+#: library — the conformance battery holds torch and jax to the same formula.
+PHASE_BACKEND = "jax"
+
+#: The injected phase error: one plane wave in the triangle coordinates, the
+#: same for every replica (the misspecification a rigid fit cannot see), of
+#: twelve times the per-triangle uncertainty
+#: (:data:`~.generators.SIGMA_CLOSURE` = 0.05 rad). Its size was measured
+#: rather than guessed: the visibilities pin the binary well, so at 0.25 rad
+#: the rigid fit still covered the separation (0.83 at the pinned seed) — the
+#: phases lost the tug of war rather than dragging the binary — while at 0.6
+#: rad the rigid coverage fell to 0.42 and 0.25 on two seeds. Its period is of
+#: the order of the array's own baselines.
+PHASE_ERROR_AMPLITUDE = 0.6
+PHASE_ERROR_PERIOD = 8.0e7
+PHASE_ERROR_DIRECTION = np.array([0.6, -0.3, 0.5, 0.55]) / np.linalg.norm(
+    np.array([0.6, -0.3, 0.5, 0.55])
+)
+
+#: The latent arm's kernel priors. The amplitude's scale is the injected
+#: error's own size; the length scale spans a decade either side of
+#: :data:`PHASE_ERROR_PERIOD`'s quarter-period, which is where a Matérn-3/2
+#: realisation looks like one sinusoidal lobe.
+PHASE_GP_AMPLITUDE_SCALE = 0.6
+PHASE_GP_LENGTH_SCALE_RANGE = (1.0e7, 2.0e8)
+
+#: The closure-phase SBC's NUTS budget: kept draws and warm-up per chain.
+#: On the closure-phase-only variant, 400 warm-up and 300 kept draws moved no
+#: coverage figure by more than one simulation, so this is the budget, not a
+#: truncation of it.
+PHASE_DRAWS = 150
+PHASE_WARMUP = 150
+PHASE_CHAINS = 1
+
+#: Whether the phase arms fit W4.4's visibilities alongside the closure
+#: phases. ``False`` fits the closure phases alone, which is the harder
+#: problem and not the pinned one: sixteen triangles determine a binary's
+#: separation poorly enough that even the latent arm covered it only 0.58 and
+#: 0.67 of the time on two seeds (the rigid arm 0.25 and 0.33).
+PHASE_WITH_VISIBILITIES = True
+
+#: The four triangle axes a closure-phase kernel binds (W4.5's selector).
+TRIANGLE_AXES: tuple[str, ...] = ("u1", "v1", "u2", "v2")
+
+
+def phase_error(observed: Any) -> np.ndarray:
+    """The injected per-triangle phase error, radians: one plane wave in (u1, v1, u2, v2)."""
+    points = np.stack([np.asarray(getattr(observed, name).values) for name in TRIANGLE_AXES], 1)
+    return PHASE_ERROR_AMPLITUDE * np.sin(
+        2.0 * np.pi * (points @ PHASE_ERROR_DIRECTION) / PHASE_ERROR_PERIOD + 0.4
+    )
+
+
+def with_phase_error(observed: Any) -> Any:
+    """*observed* with :func:`phase_error` added, wrapped back into ``(-pi, pi]``.
+
+    Adding a fixed offset after a von Mises draw is the same distribution as
+    drawing around the offset prediction — von Mises is a location family on
+    the circle — so this is exactly "simulated closure phases with a smooth
+    per-triangle error injected".
+    """
+    shifted = np.asarray(observed.values, dtype=float) + phase_error(observed)
+    return observed.with_values(np.angle(np.exp(1j * shifted)))
+
+
+def _phase_noise(backend: str, arm: str) -> Any:
+    """The closure-phase noise model for *arm*, on *backend*."""
+    module = _backend_module(backend)
+    if arm == "rigid":
+        return module.IndependentNoise()
+    if arm == "latent":
+        kernel = module.Matern32(
+            st.halfnorm(scale=PHASE_GP_AMPLITUDE_SCALE),
+            st.loguniform(*PHASE_GP_LENGTH_SCALE_RANGE),
+            axes=TRIANGLE_AXES,
+        )
+        return module.GaussianProcessNoise(kernel, module.DenseGP())
+    raise ValueError(f"unknown closure-phase arm {arm!r}; the two are {PHASE_ARMS!r}.")
+
+
+def phase_problem(
+    backend: str, arm: str, observed: Any, *, visibilities: Any = None, seed: int = gen.SEED
+) -> Any:
+    """The binary fitted to closure phases under *arm*, on *backend*.
+
+    With *visibilities* the problem is W4.4's two-dataset binary, the
+    visibilities under independent circular complex noise in both arms; the
+    arm decides the closure phases' noise model alone.
+    """
+    itf = _itf_module(backend)
+    grid = gen.seed_grid()
+    fitted = model_for(backend, "incomplete", grid, grid)
+
+    import interferometry_fixtures as fixtures
+
+    datasets: dict[str, Dataset] = {}
+    if visibilities is not None:
+        datasets["vis"] = Dataset(
+            visibilities,
+            fixtures.chain(itf, visibilities, "vis"),
+            likelihood=_likelihood(_backend_module(backend).IndependentNoise(), complex_=True),
+            label="vis",
+        )
+    datasets["t3"] = Dataset(
+        observed,
+        fixtures.chain(itf, observed, "t3"),
+        likelihood=_likelihood(_phase_noise(backend, arm), complex_=False),
+        label="t3",
+    )
+    return FittingProblem(fitted, DatasetCollection(datasets), seed=seed)
+
+
+def _phase_simulating_problem(*, seed: int = gen.SEED) -> FittingProblem:
+    """The binary alone, independent noise on both observables, reference backend.
+
+    The truth has no disc: the misspecification this arm puts on trial is the
+    phase error :func:`with_phase_error` adds to each replica's closure
+    phases, not the sky.
+    """
+    import interferometry_fixtures as fixtures
+
+    visibilities = fixtures.visibilities() if PHASE_WITH_VISIBILITIES else None
+    return phase_problem(
+        "reference", "rigid", fixtures.closure_phases(), visibilities=visibilities, seed=seed
+    )
+
+
+def _phase_calibration_factory(arm: str, backend: str) -> Any:
+    """A ``sbc`` ``engine_factory``: inject the phase error, refit under *arm* with NUTS."""
+    from ampere.inference import NUTSEngine
+
+    def factory(replica: FittingProblem) -> Any:
+        observed = with_phase_error(replica.datasets["t3"].observed)
+        visibilities = replica.datasets["vis"].observed if "vis" in replica.datasets else None
+        problem = phase_problem(
+            backend, arm, observed, visibilities=visibilities, seed=replica.seed
+        )
+        return NUTSEngine(problem)
+
+    return factory
+
+
+def run_phase_calibration(
+    arm: str,
+    *,
+    backend: str = PHASE_BACKEND,
+    count: int = SIMULATIONS,
+    draws: int = RANK_DRAWS,
+    seed: int = 20260925,
+) -> Any:
+    """``sbc`` over *count* replicas of the phase-error experiment, refitted under *arm*.
+
+    W4.4's pattern (:func:`run_calibration`), with NUTS in place of emcee
+    because the latent arm is a ``LATENT`` composition that no gradient-free
+    engine runs; the rigid arm uses the same engine so that the two differ in
+    the likelihood alone. ``tests/interferometry/test_phase_calibration.py``
+    pins the coverage this returns.
+    """
+    return sbc(
+        _phase_simulating_problem(seed=seed),
+        _phase_calibration_factory(arm, backend),
+        count=count,
+        draws=draws,
+        run_options={"draws": PHASE_DRAWS, "warmup": PHASE_WARMUP, "chains": PHASE_CHAINS},
+        parameters=list(gen.TRUTH),
+        seed=seed,
+        label=f"{arm} closure-phase fit",
+    )

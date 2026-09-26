@@ -370,14 +370,22 @@ def _von_mises(
       so an unnormalised wrapped Gaussian would put sigma-dependent mass on the
       circle (``interferometry.md`` §5).
 
-    Censoring never reaches here -- a limit on an angle is not defined -- and a
-    correlated noise model is refused at composition, because a GP added to a
-    wrapped observable is a latent-variable model whose latent-conditional form
-    ``ampere.core`` does not implement (Phase 5, W5.1).
+    Censoring never reaches here -- a limit on an angle is not defined.
+
+    **The latent GP (W5.1).** Under a ``GaussianProcessNoise`` the family
+    consumes the latent phase error ``f = L(θ) z`` as :func:`_poisson`
+    consumes its log-rate: the observed phase is von Mises around
+    ``predicted + f``, so the residual is ``observed - predicted - f``, wrapped
+    as above. This body is the composition's only scorer -- the numpy path
+    refuses it by name -- and the conformance battery holds it to a
+    from-scratch von-Mises-around-a-GP-draw formula.
     """
     assert sigma is not None  # lower_family has checked the declaration
     kappa = 1.0 / sigma**2
-    delta = jnp.angle(jnp.exp(1j * (observed - predicted).astype(jnp.complex128)))
+    residual = observed - predicted
+    if latent is not None:
+        residual = residual - latent
+    delta = jnp.angle(jnp.exp(1j * residual.astype(jnp.complex128)))
     return jnp.sum(kappa * (jnp.cos(delta) - 1.0) - _LOG_2PI - jnp.log(i0e(kappa)))
 
 
