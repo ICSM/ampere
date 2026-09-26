@@ -174,8 +174,20 @@ def sample_observations_of(realised: Realisation) -> Callable[..., Any] | None:
     Peter's ruling of 2026-09-08 ("every backend supports observation sampling
     natively"), landed at W3.1 slice 2::
 
-        sample_observations(theta, predicted, seeds)
+        sample_observations(theta, predicted, seeds, *, sigma=None)
             -> {dataset label: (batch, n_retained) array}
+
+    **W5.29** adds ``sigma``: a per-draw observation context, dataset label to
+    a ``(batch,) + observed.shape`` stack of sigma arrays in the observed
+    container's value unit. Each draw is made at its own row's sigma, standing
+    in for the observed uncertainties *before* the noise model's ``scale``,
+    ``jitter`` and any prediction-dependent inflation, which is what
+    ``Dataset.contextual_observed`` does on the contract path; an omitted
+    label, or ``None``, draws at the observation's own. ``simulate_many``
+    passes it only for a context budget, and only after a trial draw with it
+    succeeded, so a sampler that predates the keyword still serves every
+    budget without a context and hands a context budget's observations to the
+    numpy path.
 
     drawing from the same distribution ``LikelihoodFamily.sample`` scores over
     the retained samples, in the backend's own arithmetic and from the

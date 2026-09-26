@@ -1630,7 +1630,11 @@ class Dataset:
         return weights > 0.0
 
     def place_observation(
-        self, predicted: FunctionSamples, realisation: np.ndarray
+        self,
+        predicted: FunctionSamples,
+        realisation: np.ndarray,
+        *,
+        sigma: ArrayLike | None = None,
     ) -> FunctionSamples:
         """:meth:`draw_observation`'s second half, given a draw made elsewhere.
 
@@ -1644,8 +1648,12 @@ class Dataset:
         the mask refuses exactly as it does on the numpy path, because a limit
         is part of the observation process and applying the censoring operator
         to a draw is not implemented on any backend.
+
+        *sigma* is :meth:`draw_observation`'s argument of the same name
+        (**W5.29**): the draw's observation context, so the placed container
+        carries the sigma the backend drew it at, exactly as the loop's does.
         """
-        observed = self.observed
+        observed = self.observed if sigma is None else self.contextual_observed(sigma)
         retain = self.retained_mask(predicted)
         if self._censored_after_masking(retain):
             raise DatasetError(
@@ -3357,8 +3365,11 @@ class FittingProblem:
 
             ``ampere.core.simulate`` ships three: :class:`ScaledSigma`,
             :class:`SigmaArchive` and :class:`SignalToNoise`. A context with
-            ``observe=False``, with ``native=True``, or on a problem declaring
-            a joint noise group is **refused by name**.
+            ``observe=False``, or on a problem declaring a joint noise group,
+            is **refused by name**. Since **W5.29** it runs on the native
+            batched path too: the chunk's per-draw sigmas are handed to the
+            realisation's sampler as one batch, so a context budget is
+            vectorised like any other and its provenance says so.
 
         Returns
         -------
@@ -3693,28 +3704,17 @@ class FittingProblem:
         loop runs and the batch's provenance says ``simulate_batched`` was
         false. Nothing is lost by that: the loop is the semantics.
 
-        **W5.10 adds a fourth**, and it is a refusal rather than a plan: an
-        **observation context**. The native path draws its noise in the
-        backend's own arithmetic, from the realised problem's sigma, and a
-        per-draw sigma pattern would have to reach that realisation rather
-        than the container — a different item. With ``native=True`` the caller
-        asked for the vectorised path by name and gets the refusal; with the
-        default the loop runs, which draws the context correctly, and the
-        batch's provenance records both facts (``simulate_batched`` false,
-        ``simulation_context`` naming the prior).
+        An **observation context** (W5.10) is not a fourth condition. W5.10
+        refused it here, because the per-draw sigma reached the container and
+        not the realisation; since **W5.29** the realisation's native sampler
+        takes a per-draw sigma batch (``sample_observations(..., sigma=)``,
+        ``inference.md`` §13), so a context budget runs on the native path like
+        any other and its provenance says ``simulate_batched`` true. A
+        realisation whose sampler does not accept ``sigma=`` is found by the
+        trial draw (:meth:`_NativeBatch._check_sampler`) and its observations
+        are drawn on the numpy path at each draw's context — the prediction
+        stays vectorised either way.
         """
-        if context is not None:
-            if required:
-                raise DatasetError(
-                    "simulate_many(native=True) was asked for the backend's vectorised forward "
-                    "path and given a context= as well. The native path draws its noise from "
-                    "the realised problem's own sigma, in the backend's arithmetic, and a "
-                    "per-draw context sigma reaches the container rather than the realisation "
-                    "(W5.10), so the two cannot both be honoured. Drop native=True -- the loop "
-                    "draws the context correctly and the batch records that it ran -- or drop "
-                    "context=."
-                )
-            return None
         if not serial:
             if required:
                 raise DatasetError(
@@ -3738,7 +3738,9 @@ class FittingProblem:
                 )
             return None
         try:
-            return _NativeBatch(self, observe=observe, sharder=sharder)
+            return _NativeBatch(
+                self, observe=observe, sharder=sharder, contextual=context is not None
+            )
         except Exception:
             if required:
                 raise
@@ -4247,6 +4249,7 @@ class _NativeBatch:
     __slots__ = (
         "backend",
         "channels",
+        "contextual",
         "predict",
         "problem",
         "realised",
@@ -4261,10 +4264,14 @@ class _NativeBatch:
         *,
         observe: bool,
         sharder: ChunkSharder | None,
+        contextual: bool = False,
     ) -> None:
         self.problem = problem
         self.backend = problem.backend
         self.sharder = sharder
+        #: **W5.29**: whether the budget draws an observation context, so the
+        #: sampler's trial draw also checks it accepts a per-draw sigma batch.
+        self.contextual = contextual
         self.realised = realise(problem)
         batched = simulate_batched_of(self.realised)
         if batched is None:
@@ -4320,6 +4327,11 @@ class _NativeBatch:
         placed in a container and never reaches a result, and drawing it from
         the batch's own stream would make a budget's randomness depend on
         whether this check happened to run.
+
+        **W5.29**: for a context budget the trial passes ``sigma=`` — each
+        dataset's own observed sigma as a batch of one — so a realisation whose
+        sampler predates the keyword falls back here, to the numpy draw at each
+        draw's context, rather than failing the budget's first chunk.
         """
         sampler = self.sampler
         if sampler is None:  # pragma: no cover - guarded by the caller
@@ -4330,7 +4342,15 @@ class _NativeBatch:
         ).reshape(1, -1)
         try:
             native = self.predict(reference, sharder=self.sharder)
-            drawn = sampler(reference, native.predicted, [0])
+            if self.contextual:
+                trial = {
+                    label: np.asarray(dataset.observed.uncertainty, dtype=float)[np.newaxis]
+                    for label, dataset in problem.datasets.items()
+                    if dataset.observed.uncertainty is not None
+                }
+                drawn = sampler(reference, native.predicted, [0], sigma=trial)
+            else:
+                drawn = sampler(reference, native.predicted, [0])
             for label, dataset in problem.datasets.items():
                 dataset.place_observation(self.templates[label], np.asarray(drawn[label][0]))
         except Exception:
@@ -4401,8 +4421,9 @@ class _NativeBatch:
         drawn: Mapping[str, Any] | None = None
         sampler_failures: dict[int, BaseException] = {}
         if observe and self.sampler is not None:
+            sigma = self._context_sigma(requests)
             seeds = [int(request.generator.integers(0, 2**63 - 1)) for request in requests]
-            drawn, sampler_failures = self._sample_chunk(theta, native, seeds)
+            drawn, sampler_failures = self._sample_chunk(theta, native, seeds, sigma)
         simulations: list[Simulation] = []
         for position, request in enumerate(requests):
             simulations.append(
@@ -4418,11 +4439,60 @@ class _NativeBatch:
             )
         return simulations
 
+    def _context_sigma(self, requests: Sequence[_DrawRequest]) -> dict[str, np.ndarray] | None:
+        """The chunk's per-draw context sigmas, one batch per dataset (**W5.29**).
+
+        ``None`` when no request carries a context — the budget without one,
+        whose sampler call is then exactly what it was before this item. For a
+        context budget, each dataset the contexts vary gets a
+        ``(chunk,) + observed.shape`` stack, row *i* being draw *i*'s context
+        sigma (:meth:`~ampere.core.simulate.ObservationContext.for_label`), or
+        the observation's own where that draw's context leaves the dataset
+        alone — what :meth:`Dataset.draw_observation` does with
+        ``sigma=None``. A dataset no draw's context mentions is left out, and
+        the sampler draws it at its own sigma.
+
+        The one combination with no batch form is refused by name: a context
+        that varies a dataset in some draws but not in others, on a dataset
+        whose observation has no sigma of its own to fill the gaps with. With
+        the default ``native=None`` the chunk then runs on the loop, which
+        draws each context exactly.
+        """
+        contexts = [request.context for request in requests]
+        if all(context is None for context in contexts):
+            return None
+        stacks: dict[str, np.ndarray] = {}
+        for label, dataset in self.problem.datasets.items():
+            rows = [None if context is None else context.for_label(label) for context in contexts]
+            if all(row is None for row in rows):
+                continue
+            own = dataset.observed.uncertainty
+            if any(row is None for row in rows) and own is None:
+                raise DatasetError(
+                    f"dataset {label!r}: the observation context varies this dataset's sigma "
+                    f"in some draws of the chunk and not in others, and its observed "
+                    f"container has no sigma of its own for the others. The native sampler "
+                    f"takes one sigma batch per dataset, so there is nothing to put in those "
+                    f"rows; the loop draws each context as it is (native=False, or the "
+                    f"default)."
+                )
+            shape = np.shape(dataset.observed.values)
+            filled = []
+            for row in rows:
+                array = np.asarray(own if row is None else row, dtype=float)
+                if array.shape != shape:
+                    # The contract path's own refusal, by name, before any draw.
+                    dataset.contextual_observed(array)
+                filled.append(array)
+            stacks[label] = np.stack(filled)
+        return stacks
+
     def _sample_chunk(
         self,
         theta: np.ndarray,
         native: BatchedPrediction,
         seeds: Sequence[int],
+        sigma: Mapping[str, np.ndarray] | None = None,
     ) -> tuple[Mapping[str, Any], dict[int, BaseException]]:
         """The chunk's native draws, with a failing θ isolated rather than aborting all of it.
 
@@ -4444,12 +4514,32 @@ class _NativeBatch:
         the offending draw with its own traceback rather than a retried one.
         """
         problem = self.problem
-        assert self.sampler is not None  # guarded by the caller
+        sampler = self.sampler
+        assert sampler is not None  # guarded by the caller
+
+        def sample(
+            rows: np.ndarray,
+            predicted: Mapping[str, Any],
+            chosen: Sequence[int],
+            where: slice,
+        ) -> Mapping[str, Any]:
+            # ``sigma=`` only when there is a context (W5.29), so a budget
+            # without one calls the sampler exactly as it always has.
+            if sigma is None:
+                return sampler(rows, predicted, chosen)
+            return sampler(
+                rows,
+                predicted,
+                chosen,
+                sigma={label: values[where] for label, values in sigma.items()},
+            )
+
+        whole = slice(None)
         if problem.strict:
-            return self.sampler(theta, native.predicted, seeds), {}
+            return sample(theta, native.predicted, seeds, whole), {}
         failure_types: tuple[type[BaseException], ...] = (*problem._failure_types, LoweringError)
         try:
-            return self.sampler(theta, native.predicted, seeds), {}
+            return sample(theta, native.predicted, seeds, whole), {}
         except failure_types:
             pass
         drawn: dict[str, list[Any]] = {label: [] for label in native.predicted}
@@ -4460,8 +4550,11 @@ class _NativeBatch:
                 for label, values in native.predicted.items()
             }
             try:
-                row = self.sampler(
-                    theta[position : position + 1], row_predicted, seeds[position : position + 1]
+                row = sample(
+                    theta[position : position + 1],
+                    row_predicted,
+                    seeds[position : position + 1],
+                    slice(position, position + 1),
                 )
             except failure_types as error:
                 failures[position] = error
@@ -4484,6 +4577,9 @@ class _NativeBatch:
     ) -> Simulation:
         problem = self.problem
         resolved = dict(request.values)
+        # W5.29: recorded on every Simulation this draw produces, failures
+        # included, exactly as ``_run_simulation`` records it on the loop.
+        context = request.context
         results = {
             model: ModelResult(
                 {
@@ -4523,11 +4619,17 @@ class _NativeBatch:
                     theta=theta[position],
                     results=results,
                     predicted=predicted,
+                    context=context,
                     failure=failure,
                 )
             routed = problem._mapping.distribute(resolved)
             observations = {}
             for label, dataset in problem.datasets.items():
+                # W5.29: this draw's context sigma for this dataset, or None
+                # for the observation's own -- the argument the loop passes
+                # draw_observation, so the container a draw is placed in (or
+                # drawn into) carries the same error bars on both paths.
+                sigma = None if context is None else context.for_label(label)
                 # Trapped exactly as ``_run_simulation`` traps it, and for the
                 # same reason: a likelihood that cannot produce a draw at *this*
                 # theta is §11's flagged failure, not an exception the budget
@@ -4538,11 +4640,11 @@ class _NativeBatch:
                 try:
                     if drawn is not None:
                         observations[label] = dataset.place_observation(
-                            predicted[label], np.asarray(drawn[label][position])
+                            predicted[label], np.asarray(drawn[label][position]), sigma=sigma
                         )
                     else:
                         observations[label] = dataset.draw_observation(
-                            predicted[label], routed.get(label), request.generator
+                            predicted[label], routed.get(label), request.generator, sigma=sigma
                         )
                 except problem._failure_types as error:
                     failure = _failure_from(FailureReason.LIKELIHOOD_FAILED, error, label)
@@ -4551,6 +4653,7 @@ class _NativeBatch:
                         theta=theta[position],
                         results=results,
                         predicted=predicted,
+                        context=context,
                         failure=failure,
                     )
         return Simulation(
@@ -4559,6 +4662,7 @@ class _NativeBatch:
             results=results,
             predicted=predicted,
             observations=observations,
+            context=context,
         )
 
 

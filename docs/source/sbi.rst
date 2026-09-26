@@ -399,7 +399,10 @@ Everything is recorded. The run's attrs carry the prior and its digest
 (``ampere_sbi_context``, ``ampere_sbi_context_hash``); a training set carries
 the prior in ``ampere_simulation_context`` and *which* context produced each
 row in its ``context`` group; and every
-:class:`~ampere.core.Simulation` carries its own.
+:class:`~ampere.core.Simulation` carries its own. On a torch or jax problem the
+budget takes the native batched path with a context too (since W5.29 the
+backend's sampler draws each simulation at its own context's σ), so amortising
+costs no vectorisation.
 
 **SBC per observation is the check that the prior covered the observation at
 hand.** This is the important sentence of the section. An amortised posterior

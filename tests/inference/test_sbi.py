@@ -2792,3 +2792,71 @@ class TestTheContextIsInTheCacheKey:
         )
         run = wider.run(draws=5, training={"max_num_epochs": 2})
         assert run.attrs["ampere_sbi_cache_hit"] == 0
+
+
+@needs_sbi
+class TestTheBatchedPathDrawsTheContext:
+    """**W5.29**: a context-amortised run on a native problem takes the batched path.
+
+    W5.10 refused ``native=True`` with a context by name and ran the default
+    through the loop, so an amortised budget on a torch or jax problem was
+    simulated one Python call at a time. The realisation's sampler now takes a
+    per-draw sigma batch, so the run's budget is vectorised like any other,
+    its provenance says so, and the artefact cache key -- into which the
+    context prior already enters (W5.10) -- does not depend on which path ran.
+
+    ``examples/sbi/npe_native.py``'s torch problem, because a reference-backend
+    problem has no batched branch to take.
+    """
+
+    PRIOR = ScaledSigma(CONTEXT_LOW, CONTEXT_HIGH)
+
+    @staticmethod
+    def settings(**overrides: Any) -> dict[str, Any]:
+        base: dict[str, Any] = {"method": "npe", "budget": 60, "layout": "set", "embedding": "set"}
+        base.update(overrides)
+        return base
+
+    def test_the_budget_is_batched_and_drawn_under_the_prior(self) -> None:
+        module = _sibling("npe_native")
+        engine = SBIEngine(module.build_problem(), context=self.PRIOR, **self.settings())
+        engine.run(draws=5, training={"max_num_epochs": 2})
+        batch = engine.batch
+        assert batch is not None
+        assert batch.provenance["simulate_batched"] is True
+        assert batch.provenance["sample_backend"] == "torch"
+        assert json.loads(batch.provenance["simulation_context"]) == self.PRIOR.describe()
+        for draw in batch.usable:
+            assert draw.context is not None
+            factor = float(draw.context.record["factor"])
+            assert CONTEXT_LOW <= factor <= CONTEXT_HIGH
+            assert np.allclose(
+                draw.observations["default"].uncertainty, factor * module.UNCERTAINTY
+            )
+
+    def test_the_cache_key_does_not_depend_on_the_path(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The batched run files its network; the looped run of the same settings hits it."""
+        from ampere.results.artefacts import ArtefactStore
+
+        store = ArtefactStore(tmp_path / "artefacts")
+        settings = self.settings(cache=store, context=self.PRIOR)
+        module = _sibling("npe_native")
+        batched = SBIEngine(module.build_problem(), **settings)
+        first = batched.run(draws=5, training={"max_num_epochs": 2})
+        assert batched.batch is not None
+        assert batched.batch.provenance["simulate_batched"] is True
+
+        original = FittingProblem.simulate_many
+
+        def looped(self: FittingProblem, *args: Any, **kwargs: Any) -> Any:
+            kwargs["native"] = False
+            return original(self, *args, **kwargs)
+
+        monkeypatch.setattr(FittingProblem, "simulate_many", looped)
+        second = SBIEngine(module.build_problem(), **settings).run(
+            draws=5, training={"max_num_epochs": 2}
+        )
+        assert second.attrs["ampere_sbi_cache_key"] == first.attrs["ampere_sbi_cache_key"]
+        assert second.attrs["ampere_sbi_cache_hit"] == 1

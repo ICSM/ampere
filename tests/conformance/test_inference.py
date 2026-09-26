@@ -1602,6 +1602,64 @@ class TestBatchedSimulation:
         expected = problem.backend if self.can_run_natively(problem) else "reference"
         assert batch.provenance["sample_backend"] == expected
 
+    #: Draws in the context row: enough standardised residuals (x 12 samples)
+    #: that a sigma which failed to reach the realisation -- off by up to a
+    #: factor of ten either way under the prior below -- is dozens of Monte
+    #: Carlo sigmas out, and a correct one is inside five.
+    CONTEXT_COUNT = 200
+
+    def test_a_context_budget_runs_natively_and_matches_the_loop(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """**W5.29**: a batched draw under a context prior is the loop's draw.
+
+        The reference loop is the oracle (the reference backend has no batched
+        branch, so the row is skipped there). What is equal **exactly**: θ,
+        every draw's context record, and the sigma every observation carries
+        -- the contexts are drawn in ``ampere.core`` on the
+        ``"<stream>.context"`` sub-stream by index, whichever path then uses
+        them. What is equal to ``cross_backend``: the prediction, as in every
+        native row. What cannot be equal draw for draw is the noise, for the
+        reason :class:`TestBatchedSimulation`'s docstring gives -- a backend's
+        random stream is not numpy's -- so the noise is held to its
+        distribution instead: each observation standardised by *its own*
+        context sigma is ``N(0, 1)``, which is the claim that the per-draw
+        sigma reached the realisation rather than the container alone.
+        """
+        from ampere.core.simulate import ScaledSigma
+
+        problem = build_problem(backend, SINGLE)
+        if not self.can_run_natively(problem):
+            pytest.skip(f"the {problem.backend!r} backend has no native batched path")
+        prior = ScaledSigma(0.1, 10.0)
+        count = self.CONTEXT_COUNT
+        batch = problem.simulate_many(count, observe=True, native=True, context=prior)
+        loop = build_problem(backend, SINGLE).simulate_many(
+            count, observe=True, native=False, context=prior
+        )
+        assert batch.provenance["simulate_batched"] is True
+        assert batch.provenance["sample_backend"] == problem.backend
+        assert batch.provenance["simulation_context"] == loop.provenance["simulation_context"]
+        assert self.matches_the_loop(batch, loop, tolerances)
+        residuals = []
+        for one, other in zip(batch, loop, strict=True):
+            assert one.context is not None and other.context is not None
+            assert dict(one.context.record) == dict(other.context.record)
+            assert one.observations is not None and other.observations is not None
+            for label, drawn in one.observations.items():
+                sigma = np.asarray(drawn.uncertainty)
+                assert np.array_equal(sigma, np.asarray(other.observations[label].uncertainty))
+                assert np.array_equal(sigma, one.context.sigma[label])
+                mean = np.asarray(one.predicted[label].values)
+                residuals.append((np.asarray(drawn.values) - mean) / sigma)
+        standard = np.concatenate(residuals)
+        size = standard.size
+        assert abs(float(standard.mean())) <= tolerances.monte_carlo_sigmas / np.sqrt(size)
+        # The variance of a unit normal's sample variance is 2/n.
+        assert abs(float(standard.var()) - 1.0) <= tolerances.monte_carlo_sigmas * np.sqrt(
+            2.0 / size
+        )
+
     def test_a_problem_that_cannot_be_run_natively_is_refused_by_name(
         self, backend: ConformanceBackend
     ) -> None:

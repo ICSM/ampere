@@ -208,11 +208,20 @@ class FractionalModelNoise(_ReferenceFractionalModelNoise):
         values: Mapping[str, Any],
         *,
         predicted: Any = None,
+        base: Any = None,
     ) -> jax.Array:
-        """The native surface: ``sigma_eff`` as a jax array, gradient intact."""
-        base = super(_ReferenceFractionalModelNoise, self).sigma(
-            observed, retain, values, predicted=None
-        )
+        """The native surface: ``sigma_eff`` as a jax array, gradient intact.
+
+        *base* (**W5.29**) is the quadrature of ``scale`` and ``jitter``
+        against one draw's observation-context sigma, computed by the lowering
+        because a traced context cannot be placed in a container for the
+        contract surface to read; ``None`` reads the observed container's own,
+        as before.
+        """
+        if base is None:
+            base = super(_ReferenceFractionalModelNoise, self).sigma(
+                observed, retain, values, predicted=None
+            )
         return _inflate(base, _fraction(self, values), predicted, type(self).__name__)
 
     def sigma(
@@ -304,11 +313,16 @@ class FractionalModelGPNoise(_ReferenceFractionalModelGPNoise):
         values: Mapping[str, Any],
         *,
         predicted: Any = None,
+        base: Any = None,
     ) -> jax.Array:
-        """The native surface: ``sigma_eff`` as a jax array, gradient intact."""
-        base = super(_ReferenceFractionalModelGPNoise, self).sigma(
-            observed, retain, values, predicted=None
-        )
+        """The native surface: ``sigma_eff`` as a jax array, gradient intact.
+
+        *base* as :meth:`FractionalModelNoise.sigma_jax` takes it (**W5.29**).
+        """
+        if base is None:
+            base = super(_ReferenceFractionalModelGPNoise, self).sigma(
+                observed, retain, values, predicted=None
+            )
         return _inflate(base, _fraction(self, values), predicted, type(self).__name__)
 
     def sigma(

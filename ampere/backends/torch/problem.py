@@ -180,6 +180,27 @@ def _seed(seed: int) -> int:
     return int(seed) & 0x7FFFFFFFFFFFFFFF
 
 
+def _context_rows(sigma: Any, dataset: Any, count: int) -> np.ndarray:
+    """A chunk's per-draw context sigmas on *dataset*'s retained samples (**W5.29**).
+
+    ``(count,) + observed.shape`` in, ``(count, n_retained)`` out: each draw's
+    sigma flattened as the lowering flattens the container (``.ravel()``
+    before the mask, *W5.5*) and restricted to the retained samples. A shape
+    that does not match is refused by name, as
+    ``Dataset.contextual_observed`` refuses it on the contract path.
+    """
+    array = np.asarray(sigma, dtype=float)
+    shape = np.shape(dataset.dataset.observed.values)
+    if array.shape != (count, *shape):
+        raise _refuse(
+            "context",
+            f"dataset {dataset.label!r}: the per-draw context sigma has shape {array.shape}, "
+            f"and a chunk of {count} draw(s) on an observed container of shape {shape} needs "
+            f"{(count, *shape)} -- one sigma array of the observation's own shape per draw.",
+        )
+    return array.reshape(count, -1)[:, dataset.retain]
+
+
 #: The two spellings of a native model's value-and-coordinates surface, in the
 #: order they are looked for (*W4.3*, reordered by *W5.20*).
 #: ``native_flux``/``native_grid`` is the **canonical** pair; ``flux``/``grid``
@@ -632,7 +653,9 @@ class _LoweredDataset:
 
     # -- the log-likelihood -------------------------------------------------
 
-    def _base_sigma(self, values: Mapping[str, Any]) -> torch.Tensor | None:
+    def _base_sigma(
+        self, values: Mapping[str, Any], uncertainty: torch.Tensor | None = None
+    ) -> torch.Tensor | None:
         """``sqrt((scale * sigma_data)**2 + jitter**2)`` for the retained samples.
 
         Transcribed rather than called, because ``NoiseModel.sigma`` coerces
@@ -642,10 +665,17 @@ class _LoweredDataset:
         finding). ``None`` when there are no uncertainties and no jitter — a
         family that cannot live without them has already refused at
         composition through ``NoiseModel.check_compatible``.
+
+        *uncertainty* (**W5.29**) is one draw's observation-context sigma on
+        the retained samples, standing in for the cached ``sigma_data``
+        exactly as ``Dataset.contextual_observed`` stands a context's sigma in
+        for the container's on the contract path — so ``scale``, ``jitter``
+        and a fractional inflation apply to it as they apply to the
+        observation's own. ``None`` is the observation's own, unchanged.
         """
         own = {key: value for key, value in values.items() if key in self.noise.parameters}
         resolved = self.noise.context(own)
-        sigma = self.uncertainty
+        sigma = self.uncertainty if uncertainty is None else uncertainty
         if sigma is None:
             if "jitter" not in resolved:
                 return None
@@ -661,18 +691,24 @@ class _LoweredDataset:
             sigma = torch.sqrt(sigma**2 + floor**2)
         return sigma
 
-    def _sigma(self, predicted: torch.Tensor, values: Mapping[str, Any]) -> torch.Tensor | None:
+    def _sigma(
+        self,
+        predicted: torch.Tensor,
+        values: Mapping[str, Any],
+        uncertainty: torch.Tensor | None = None,
+    ) -> torch.Tensor | None:
         """The effective ``sigma``, prediction-aware noise models included.
 
         The base quadrature is computed here (once, from the cached
-        uncertainties) and *handed* to a noise model that declares
-        ``sigma_tensor`` — this backend's ``FractionalModelNoise`` and
-        ``FractionalModelGPNoise``, which inflate it by ``f * |predicted|``.
+        uncertainties, or from one draw's context sigma when *uncertainty* is
+        given — :meth:`_base_sigma`) and *handed* to a noise model that
+        declares ``sigma_tensor`` — this backend's ``FractionalModelNoise``
+        and ``FractionalModelGPNoise``, which inflate it by ``f * |predicted|``.
         The hook takes the base rather than the container and the mask so that
         the quadrature is written once and every parameter in it keeps its
         graph; see :mod:`ampere.backends.torch.noise`.
         """
-        base = self._base_sigma(values)
+        base = self._base_sigma(values, uncertainty)
         native = getattr(self.noise, "sigma_tensor", None)
         if native is None:
             return base
@@ -768,8 +804,15 @@ class _LoweredDataset:
         predicted: torch.Tensor,
         seeds: Sequence[int],
         device: torch.device,
+        uncertainty: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """A whole chunk's retained observed values, natively (*W3.14*).
+
+        *uncertainty* (**W5.29**) is ``None`` — every draw at the observation's
+        own sigma — or a ``(chunk, n_retained)`` stack of per-draw
+        observation-context sigmas, mapped in beside θ and the prediction so
+        that draw *i*'s noise level is its own context's
+        (:meth:`_base_sigma`).
 
         Two shapes of draw, and which one a family takes is decided by whether
         its variate can be written as arithmetic on standard normals.
@@ -805,7 +848,16 @@ class _LoweredDataset:
             def parameters(vector: torch.Tensor, row: torch.Tensor, of: Any = self) -> Any:
                 return of.sample_parameters(route(vector), row)
 
-            resolved = torch.func.vmap(parameters)(stack, predicted)
+            def contextual(
+                vector: torch.Tensor, row: torch.Tensor, sigma: torch.Tensor, of: Any = self
+            ) -> Any:
+                return of.sample_parameters(route(vector), row, sigma)
+
+            resolved = (
+                torch.func.vmap(parameters)(stack, predicted)
+                if uncertainty is None
+                else torch.func.vmap(contextual)(stack, predicted, uncertainty)
+            )
             if name == "poisson":
                 return self._poisson_variates(resolved, seeds, device)
             if name == "von_mises":
@@ -836,13 +888,25 @@ class _LoweredDataset:
         ) -> torch.Tensor:
             return of.sample_retained(route(vector), row, noise)
 
-        return torch.func.vmap(one)(stack, predicted, normals)
+        def one_in_context(
+            vector: torch.Tensor,
+            row: torch.Tensor,
+            noise: torch.Tensor,
+            sigma: torch.Tensor,
+            of: Any = self,
+        ) -> torch.Tensor:
+            return of.sample_retained(route(vector), row, noise, sigma)
+
+        if uncertainty is None:
+            return torch.func.vmap(one)(stack, predicted, normals)
+        return torch.func.vmap(one_in_context)(stack, predicted, normals, uncertainty)
 
     def sample_retained(
         self,
         routed: Mapping[str, Mapping[str, Any]],
         predicted: torch.Tensor,
         normals: torch.Tensor,
+        uncertainty: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """One draw of the retained observed values, from two standard normals.
 
@@ -861,9 +925,11 @@ class _LoweredDataset:
           variance, which is the circular symmetry the family's density
           assumes. ``sigma`` is the **per-component** standard deviation, as
           ``-|r|**2 / (2 sigma**2) - log 2pi - log sigma**2`` implies.
+
+        *uncertainty* is this draw's context sigma, or ``None`` (**W5.29**).
         """
         values = dict(self._dataset_values(routed).get(LIKELIHOOD_COMPONENT, {}))
-        sigma = self._sigma(predicted, values)
+        sigma = self._sigma(predicted, values, uncertainty)
         if self.likelihood.family.NAME == "complex_gaussian":
             assert sigma is not None  # REQUIRES_UNCERTAINTY, checked at composition
             if not self.correlated:
@@ -892,7 +958,10 @@ class _LoweredDataset:
         return realisation + sigma * normals[1]
 
     def sample_parameters(
-        self, routed: Mapping[str, Mapping[str, Any]], predicted: torch.Tensor
+        self,
+        routed: Mapping[str, Mapping[str, Any]],
+        predicted: torch.Tensor,
+        uncertainty: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """One draw's distribution parameters, for the two-stage families (*W3.14*).
 
@@ -918,7 +987,10 @@ class _LoweredDataset:
             if latent is not None:
                 rate = rate * torch.exp(latent)
             return {"rate": rate}
-        sigma = self._sigma(predicted, values)
+        # W5.29: this draw's context sigma, or None for the observation's own.
+        # Poisson above reads no sigma, so a context changes nothing there --
+        # the same answer ``PoissonFamily.sample`` gives on the contract path.
+        sigma = self._sigma(predicted, values, uncertainty)
         assert sigma is not None  # REQUIRES_UNCERTAINTY, checked at composition
         if family.NAME == "von_mises":
             # W5.1: under a latent GP the draw is around predicted + f, f being
@@ -1569,6 +1641,8 @@ class LoweredProblem:
         theta: Any,
         predicted: Mapping[str, Any],
         seeds: Sequence[int],
+        *,
+        sigma: Mapping[str, Any] | None = None,
     ) -> dict[str, np.ndarray]:
         """Draw the retained observed values for a chunk, natively.
 
@@ -1577,6 +1651,16 @@ class LoweredProblem:
         :meth:`_LoweredDataset.draw_chunk`; the **stream** is
         ``torch.Generator``'s, which is why the numpy path stays the oracle and
         the two are compared *distributionally* rather than draw for draw.
+
+        *sigma* (**W5.29**) carries a per-draw observation context: dataset
+        label to a ``(batch,) + observed.shape`` stack of sigma arrays in the
+        observed container's value unit, one per draw — what
+        ``Dataset.contextual_observed`` substitutes on the contract path. A
+        label it omits draws at the observation's own sigma, as does
+        ``sigma=None``. The context's sigma replaces ``sigma_data`` *before*
+        the noise model's ``scale``, ``jitter`` and fractional inflation are
+        applied, exactly as the contract path's ``NoiseParams`` are built from
+        the substituted container.
 
         *seeds* is one integer per draw, taken from the per-draw child generator
         ``simulate_many`` spawns **by index** — so partition independence
@@ -1631,8 +1715,21 @@ class LoweredProblem:
                 dtype=complex_dtype(DEFAULT_DTYPE) if raw.dtype.kind == "c" else DEFAULT_DTYPE,
                 device=self.device,
             )
+            context = None if sigma is None else sigma.get(dataset.label)
+            uncertainty = (
+                None
+                if context is None
+                else _tensor(_context_rows(context, dataset, len(seeds)), device=self.device)
+            )
             drawn[dataset.label] = to_numpy(
-                dataset.draw_chunk(self._route, stack, rows[:, dataset.retain], seeds, self.device)
+                dataset.draw_chunk(
+                    self._route,
+                    stack,
+                    rows[:, dataset.retain],
+                    seeds,
+                    self.device,
+                    uncertainty=uncertainty,
+                )
             )
         return drawn
 
