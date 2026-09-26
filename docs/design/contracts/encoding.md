@@ -457,6 +457,13 @@ problem did not change. A network trained on that budget reads the context
 through columns it was already reading. The reserved `context` group stays
 width 0, for a context that is genuinely not already a column.
 
+***W5.29 moves none either.*** The native batched path now draws the context
+too (`inference.md` §13), and what it produces is the same thing the loop
+produces: observed containers carrying each draw's context σ, placed by
+`Dataset.place_observation` from the same template. The packing reads the
+containers, not the path, so a budget encodes to the same layout and the same
+`log_sigma` columns whichever path simulated it.
+
 ## 9. Deliberate limitations of this draft
 
 1. **One tensor for the whole collection, and one pooling rule.** A long

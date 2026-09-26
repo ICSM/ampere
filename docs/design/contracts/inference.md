@@ -2019,6 +2019,18 @@ container's values by the same rule, applied in one place
 (`Dataset.place_observation`) rather than reimplemented per backend, and a
 censoring declaration that survives the mask blocks a draw on every backend.
 
+***Amended W5.29*:** the member is
+`sample_observations(theta, predicted, seeds, *, sigma=None)`. `sigma` carries
+a per-draw observation context (§13): dataset label to a `(batch,) +
+observed.shape` stack of σ arrays, row *i* standing in for the observed
+uncertainties of draw *i* **before** the noise model's `scale`, `jitter` and
+any prediction-dependent inflation — exactly what `Dataset.contextual_observed`
+does on the contract path — and an omitted label, or `None`, draws at the
+observation's own σ. `simulate_many` passes it only for a context budget, and
+only after a trial draw *with* it succeeded, so a sampler that predates the
+keyword still serves every other budget and hands a context budget's
+observations to the numpy path.
+
 **The numpy path stays the oracle, and the comparison is distributional.**
 `jax.random` and `torch.Generator` do not reproduce numpy's stream and could not
 be made to without reimplementing one library inside another, so a natively
@@ -2150,15 +2162,34 @@ training set stores the per-draw records in its optional `context` group and
 the prior in `ampere_simulation_context`; the σ arrays are not stored twice,
 because a drawn observation carries its own uncertainties.
 
-Three refusals, each a claim the code could not honestly make:
+**The native path draws the context (*Amended W5.29*).** W5.10 refused
+`native=True` with a context, because the native sampler drew from the realised
+problem's own σ and a per-draw container σ did not reach it; the default ran
+the loop. The refusal is lifted: each chunk's contexts are still drawn in
+`ampere.core`, on the `"<stream>.context"` sub-stream by index, and their σ
+arrays are handed to the realisation's sampler as one batch
+(`sample_observations(..., sigma=)`, above), so torch and jax draw
+`x = μ + σ_d z` per draw *d*. A context budget on a batchable modern problem
+therefore runs vectorised, with `provenance['simulate_batched']` true, and
+what it guarantees against the loop at the same seed is the native path's
+two-graded equality with one addition: θ, every draw's context record and the
+σ every observation carries are **exact** (they never touch the backend), the
+prediction agrees to `cross_backend`, and the noise — the backend's stream, not
+numpy's — is held to its distribution, each observation standardised by its own
+context σ being `N(0, 1)` (the conformance row
+`test_a_context_budget_runs_natively_and_matches_the_loop`). All three shipped
+priors take this route, since each produces σ arrays. The artefact cache key is
+unchanged: the prior already enters it (W5.10), and which path ran does not.
+The one case with no batch form — a context that varies a dataset in some
+draws of a chunk and not others, on a dataset with no observed σ of its own to
+fill the rest — is refused by name inside the chunk, so `native=None` runs it
+on the loop.
+
+Two refusals, each a claim the code could not honestly make:
 
 - `observe=False` with a context — the context *is* the level the observations
   are drawn at, so a budget drawing none would record a context that did
   nothing;
-- `native=True` with a context — the native path draws its noise from the
-  realised problem's own σ, in the backend's arithmetic, which a per-draw
-  container σ does not reach. With the default `native=None` the loop runs
-  (which draws the context correctly) and the provenance records both facts;
 - a problem declaring a **joint noise group** (W5.9) — a group's σ is read
   from the first of its datasets and its channels are drawn in one correlated
   call, so what a per-dataset context means for the cross-covariance is a
@@ -2224,8 +2255,9 @@ exactly, which is the way that claim stays checkable; `native=True` requires the
 fast path and **refuses by name** when a part is not `BATCHABLE`, when an
 executor was given (a pool partitions the draws and a `vmap` evaluates them
 together — they are alternative ways of spending one chunk), when the backend
-registers no realisation, or — ***W5.10*** — when a `context=` was given as
-well. The default, `native=None`, uses it where it is
+registers no realisation (W5.10 added a context to that list and ***W5.29***
+took it off again: the native path draws one). The default, `native=None`, uses
+it where it is
 available and falls back to the loop where it is not, recording which happened
 in `SimulationBatch.provenance['simulate_batched']` — written to a training set
 as `ampere_simulate_batched`, and merged conservatively across chunks so a mixed
