@@ -68,6 +68,7 @@ from ampere.core import (
     latent_parameter,
     list_families,
     register_family,
+    sample_coordinates,
 )
 from ampere.core.exceptions import ContractError, LikelihoodError
 
@@ -105,6 +106,17 @@ def predicted(observed: Spectrum, coordinates: np.ndarray) -> Spectrum:
 def matern32_matrix(x: np.ndarray, amplitude: float, length_scale: float) -> np.ndarray:
     """The reference Matern-3/2 covariance, written out independently."""
     separation = np.abs(x[:, None] - x[None, :])
+    scaled = math.sqrt(3.0) * separation / length_scale
+    return amplitude**2 * (1.0 + scaled) * np.exp(-scaled)
+
+
+def matern32_matrix_nd(coordinates: np.ndarray, amplitude: float, length_scale: float) -> np.ndarray:
+    """The reference Matern-3/2 covariance over an ``(N, d)`` coordinate matrix.
+
+    Euclidean separation, unlike :func:`matern32_matrix`'s scalar one -- for
+    the two-axis (GRID) cases W5.21 exercises.
+    """
+    separation = np.linalg.norm(coordinates[:, None, :] - coordinates[None, :, :], axis=-1)
     scaled = math.sqrt(3.0) * separation / length_scale
     return amplitude**2 * (1.0 + scaled) * np.exp(-scaled)
 
@@ -1699,7 +1711,10 @@ class TestSolverStrategies:
         assert QuasisepGP.EXACT is True
         assert DenseGP.EXACT is True
 
-    def test_a_gridded_container_points_at_the_phase_5_slots(self) -> None:
+    def test_a_gridded_container_is_accepted_since_w5_21(self) -> None:
+        """W5.5's blanket ``Layout.GRID`` refusal is lifted (W5.21): the gate
+        was on the layout, not the mathematics, and a stationary kernel's
+        selected axes are exactly the ``Image``'s own."""
         image = Image(
             np.linspace(-1.0, 1.0, 3) * u.arcsec,
             np.linspace(-1.0, 1.0, 3) * u.arcsec,
@@ -1707,7 +1722,40 @@ class TestSolverStrategies:
             uncertainty=np.full((3, 3), 0.1) * u.Jy,
         )
         noise = GaussianProcessNoise(Matern32(0.3, 1.0))
-        with pytest.raises(LikelihoodError, match="SVGP / SKI / Vecchia"):
+        noise.check_compatible(GaussianFamily(), image)  # no longer raises
+
+    def test_the_gridded_composition_agrees_with_an_independent_nd_matern32(self) -> None:
+        """The full path — ``check_compatible``, ``_coordinates``, ``DenseGP`` —
+        against an independently written Euclidean Matern-3/2, proving
+        :func:`~ampere.core.sample_coordinates` is the coordinate source and
+        its flattening order matches the residual's."""
+        image = Image(
+            np.linspace(-1.0, 1.0, 3) * u.arcsec,
+            np.linspace(-1.0, 1.0, 3) * u.arcsec,
+            np.ones((3, 3)) * u.Jy,
+            uncertainty=np.full((3, 3), 0.1) * u.Jy,
+        )
+        predicted = image.with_values(np.zeros((3, 3)))
+        gp = Likelihood(GaussianFamily(), GaussianProcessNoise(Matern32(0.3, 1.0)))
+        coordinates = sample_coordinates(image)
+        covariance = matern32_matrix_nd(coordinates, 0.3, 1.0) + np.diag(np.full(9, 0.1) ** 2)
+        expected = multivariate_normal.logpdf(
+            np.ones(9), mean=np.zeros(9), cov=covariance
+        )
+        assert gp.log_prob(predicted, image) == pytest.approx(float(expected), abs=1e-9)
+
+    def test_quasisep_on_a_2d_grid_is_still_refused_by_its_own_rule(self) -> None:
+        """Lifting the layout gate does not touch ``REQUIRES_ORDERED_1D``: a
+        solver that needs one ordered coordinate axis still refuses a kernel
+        that selects both of an ``Image``'s."""
+        image = Image(
+            np.linspace(-1.0, 1.0, 3) * u.arcsec,
+            np.linspace(-1.0, 1.0, 3) * u.arcsec,
+            np.ones((3, 3)) * u.Jy,
+            uncertainty=np.full((3, 3), 0.1) * u.Jy,
+        )
+        noise = GaussianProcessNoise(Matern32(0.3, 1.0), QuasisepGP())
+        with pytest.raises(LikelihoodError, match="needs one ordered coordinate axis"):
             noise.check_compatible(GaussianFamily(), image)
 
     def test_independent_noise_is_perfectly_happy_on_a_grid(self) -> None:
