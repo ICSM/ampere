@@ -101,6 +101,7 @@ from typing import Any
 
 import jax
 import jax.numpy as jnp
+import jax.scipy.linalg as jsl
 import numpy as np
 import numpyro.distributions as npd
 
@@ -125,6 +126,12 @@ from ampere.core.dataset import (
     LIKELIHOOD_COMPONENT,
 )
 from ampere.core.exceptions import LoweringError
+from ampere.core.likelihood import (
+    DENSE_ROUTE,
+    REDUCED_RANK_ROUTE,
+    REDUCED_RANK_SOLVERS,
+    ROTATED_ROUTE,
+)
 
 from ._config import BACKEND, require_x64
 from .families import lower_family
@@ -973,6 +980,10 @@ class _LoweredDataset:
 # ---------------------------------------------------------------------------
 
 
+#: ``log(2 pi)``, for the two W5.24 routes composed here rather than in a solver.
+_LOG_2PI = float(np.log(2.0 * np.pi))
+
+
 class _LoweredJointGroup:
     """One :class:`~ampere.core.JointGaussianProcessNoise` group's term, as jax.
 
@@ -993,6 +1004,17 @@ class _LoweredJointGroup:
     first, because a coupling with one parameter fixed and another free hands
     back a Python float beside a tracer and ``stack`` should not have to
     decide what that means.
+
+    **W5.24: three routes, chosen once at lowering.** The channels' retained
+    uncertainties decide, exactly as :meth:`~ampere.core.
+    JointGaussianProcessNoise.route` decides on the contract path: identical
+    → W5.9's rotated scalar solves, unchanged; unequal under ``DenseGP`` → one
+    Cholesky of the ``TN x TN`` matrix built in ``jax.numpy``; unequal under
+    ``HilbertSpaceGP`` → Woodbury with the solver's own ``(N, m)`` feature
+    factor, read through ``latent_transform_jax`` on the identity so it
+    carries the gradient in the kernel, and the ``Tm x Tm`` capacitance.
+    ``B ⊗ K_x`` is never formed on that route. The route is a Python-level
+    decision made before any trace, so nothing here branches on a tracer.
     """
 
     def __init__(
@@ -1012,8 +1034,8 @@ class _LoweredJointGroup:
             raise _refuse(
                 type(self.noise.solver).__name__,
                 f"joint noise group {label!r} uses the {type(self.noise.solver).__name__} "
-                f"solver, which is not this backend's. Pass ampere.backends.jax.DenseGP or "
-                f"ampere.backends.jax.QuasisepGP.",
+                f"solver, which is not this backend's. Pass ampere.backends.jax.DenseGP, "
+                f"ampere.backends.jax.QuasisepGP or ampere.backends.jax.HilbertSpaceGP.",
             )
         self.members = tuple(lowered[member] for member in self.noise.datasets)
         first = self.members[0]
@@ -1022,18 +1044,50 @@ class _LoweredJointGroup:
         self.coordinates = first.observed_coordinates
         self.size = int(np.count_nonzero(first.retain))
         self.uncertainty = first.uncertainty
-        if self.uncertainty is not None:
-            retained = np.asarray(observed.uncertainty, dtype=float).ravel()[first.retain]
+        self.uncertainties = tuple(member.uncertainty for member in self.members)
+        for member in self.members:
+            if member.uncertainty is None:
+                continue
+            retained = np.asarray(member.dataset.observed.uncertainty, dtype=float).ravel()[
+                member.retain
+            ]
             if np.any(retained <= 0.0):
                 raise _refuse(
                     "uncertainty",
                     f"joint noise group {label!r} was given zero or negative uncertainties on "
-                    f"{int(np.sum(retained <= 0.0))} retained sample(s). An infinitely precise "
-                    f"measurement is one no likelihood can normalise.",
+                    f"{int(np.sum(retained <= 0.0))} retained sample(s) of channel "
+                    f"{member.label!r}. An infinitely precise measurement is one no likelihood "
+                    f"can normalise.",
                 )
+        self.route = self._route()
 
-    def _sigma(self, values: Mapping[str, Any]) -> jax.Array | None:
-        """The group's shared per-sample sigma, in jax.
+    def _route(self) -> str:
+        """``"rotated"``, ``"dense"`` or ``"reduced_rank"`` — the contract path's rule."""
+        present = [uncertainty is not None for uncertainty in self.uncertainties]
+        if not any(present):
+            return ROTATED_ROUTE
+        reference = np.asarray(self.uncertainties[0])
+        if all(present) and all(
+            np.array_equal(np.asarray(uncertainty), reference) for uncertainty in self.uncertainties
+        ):
+            return ROTATED_ROUTE
+        solver = self.noise.solver
+        if solver.NAME == "DenseGP":
+            return DENSE_ROUTE
+        if solver.NAME in REDUCED_RANK_SOLVERS and callable(
+            getattr(solver, "latent_transform_jax", None)
+        ):
+            return REDUCED_RANK_ROUTE
+        raise _refuse(
+            type(solver).__name__,
+            f"joint noise group {self.label!r}'s channels carry different per-sample "
+            f"uncertainties, and its {type(solver).__name__} solver has no route for that. "
+            f"Pass ampere.backends.jax.DenseGP (the exact dense route) or "
+            f"ampere.backends.jax.HilbertSpaceGP (the reduced-rank one).",
+        )
+
+    def _sigma_of(self, uncertainty: Any, values: Mapping[str, Any]) -> jax.Array | None:
+        """One channel's per-sample sigma, with the group's ``scale`` and ``jitter``.
 
         The group's own ``scale`` and ``jitter`` transcribed, exactly as
         :meth:`_LoweredDataset._sigma` transcribes a dataset's, and for the
@@ -1041,7 +1095,7 @@ class _LoweredJointGroup:
         """
         own = {key: value for key, value in values.items() if key in self.noise.parameters}
         resolved = self.noise.context(own)
-        sigma = self.uncertainty
+        sigma = uncertainty
         if sigma is None:
             if "jitter" not in resolved:
                 return None
@@ -1053,36 +1107,122 @@ class _LoweredJointGroup:
             sigma = jnp.sqrt(sigma**2 + floor**2)
         return sigma
 
+    def _sigma(self, values: Mapping[str, Any]) -> jax.Array | None:
+        """The group's shared per-sample sigma, in jax (the rotated route)."""
+        return self._sigma_of(self.uncertainty, values)
+
+    def _variances(self, values: Mapping[str, Any]) -> jax.Array:
+        """Every channel's variances as an ``(n, T)`` block (the two unequal routes)."""
+        columns = []
+        for uncertainty in self.uncertainties:
+            sigma = self._sigma_of(uncertainty, values)
+            columns.append(jnp.zeros(self.size, dtype=jnp.float64) if sigma is None else sigma**2)
+        return jnp.stack(columns, axis=-1)
+
     def log_likelihood(self, routed: Mapping[str, Mapping[str, Any]]) -> jax.Array:
-        """``log N(vec(R); 0, B (x) K_x + I (x) diag(sigma^2))``, traceable."""
+        """``log N(vec(R); 0, B (x) K_x + blockdiag(diag(sigma_t^2)))``, traceable."""
         values = dict(routed.get(self.label, {}))
         residuals = jnp.stack(
             [member.observed_values - member.predict(routed) for member in self.members],
             axis=-1,
         )
-        sigma = self._sigma(values)
-        variance = jnp.zeros(self.size, dtype=jnp.float64) if sigma is None else sigma**2
         coupling = self.noise.coupling
         resolved = {
             name: jnp.asarray(value, dtype=jnp.float64)
             for name, value in coupling.resolved(values).items()
         }
         eigenvalues, rotation = coupling.eigen(resolved, xp=jnp)
-        rotated = residuals @ rotation
         kernel = self.bound_kernel
         hyperparameters = kernel.resolve(values)
-        total = jnp.asarray(0.0, dtype=jnp.float64)
-        for index in range(len(self.members)):
-            scale = eigenvalues[index]
-            total = total + self.noise.solver.log_marginal_likelihood_jax(
-                kernel,
-                self.coordinates,
-                rotated[:, index] / jnp.sqrt(scale),
-                variance / scale,
-                hyperparameters,
+        if self.route == DENSE_ROUTE:
+            total = self._dense(
+                residuals, self._variances(values), eigenvalues, rotation, hyperparameters
             )
-            total = total - 0.5 * self.size * jnp.log(scale)
+        elif self.route == REDUCED_RANK_ROUTE:
+            total = self._reduced_rank(
+                residuals, self._variances(values), eigenvalues, rotation, hyperparameters
+            )
+        else:
+            sigma = self._sigma(values)
+            variance = jnp.zeros(self.size, dtype=jnp.float64) if sigma is None else sigma**2
+            rotated = residuals @ rotation
+            total = jnp.asarray(0.0, dtype=jnp.float64)
+            for index in range(len(self.members)):
+                scale = eigenvalues[index]
+                total = total + self.noise.solver.log_marginal_likelihood_jax(
+                    kernel,
+                    self.coordinates,
+                    rotated[:, index] / jnp.sqrt(scale),
+                    variance / scale,
+                    hyperparameters,
+                )
+                total = total - 0.5 * self.size * jnp.log(scale)
         return jnp.where(jnp.isfinite(total), total, -jnp.inf)
+
+    def _dense(
+        self,
+        residuals: jax.Array,
+        variances: jax.Array,
+        eigenvalues: jax.Array,
+        rotation: jax.Array,
+        hyperparameters: Mapping[str, Any],
+    ) -> jax.Array:
+        """The dense route: ``B (x) (K_x + jitter^2 I) + blockdiag(diag(sigma_t^2))``."""
+        kernel = self.bound_kernel
+        matrix = jnp.asarray(
+            kernel.matrix(self.coordinates, self.coordinates, hyperparameters), dtype=jnp.float64
+        )
+        jitter = float(getattr(self.noise.solver, "jitter", 0.0) or 0.0)
+        if jitter:
+            matrix = matrix + jnp.eye(self.size, dtype=jnp.float64) * jitter**2
+        coupling = (rotation * eigenvalues[None, :]) @ rotation.T
+        covariance = jnp.kron(coupling, matrix) + jnp.diag(variances.T.reshape(-1))
+        residual = residuals.T.reshape(-1)
+        lower = jnp.linalg.cholesky(covariance)
+        alpha = jsl.cho_solve((lower, True), residual)
+        log_determinant = 2.0 * jnp.sum(jnp.log(jnp.abs(jnp.diag(lower))))
+        return -0.5 * (jnp.sum(residual * alpha) + log_determinant + residual.size * _LOG_2PI)
+
+    def _reduced_rank(
+        self,
+        residuals: jax.Array,
+        variances: jax.Array,
+        eigenvalues: jax.Array,
+        rotation: jax.Array,
+        hyperparameters: Mapping[str, Any],
+    ) -> jax.Array:
+        """The reduced-rank route: Woodbury with ``G = (I_T (x) Phi)(F (x) I_m)``, ``B = F F^T``.
+
+        See :meth:`ampere.core.JointGaussianProcessNoise._reduced_rank_log_prob`
+        for the algebra; this is the same arithmetic in ``jax.numpy``.
+        """
+        solver = self.noise.solver
+        kernel = self.bound_kernel
+        count = int(solver.latent_size(kernel, self.size))
+        identity = jnp.eye(count, dtype=jnp.float64)
+        phi = jnp.asarray(
+            solver.latent_transform_jax(kernel, self.coordinates, identity, hyperparameters),
+            dtype=jnp.float64,
+        )
+        channels = len(self.members)
+        width = channels * count
+        diagonal = variances + float(getattr(solver, "jitter", 0.0) or 0.0) ** 2
+        inverse = 1.0 / diagonal
+        root = rotation * jnp.sqrt(eigenvalues)[None, :]
+        gram = jnp.einsum("nk,nt,nl->tkl", phi, inverse, phi)
+        capacitance = jnp.einsum("ts,tu,tkl->skul", root, root, gram).reshape(
+            width, width
+        ) + jnp.eye(width, dtype=jnp.float64)
+        weighted = residuals * inverse
+        projected = ((phi.T @ weighted) @ root).T.reshape(-1)
+        lower = jnp.linalg.cholesky(capacitance)
+        solved = jsl.cho_solve((lower, True), projected)
+        log_determinant = jnp.sum(jnp.log(diagonal)) + 2.0 * jnp.sum(
+            jnp.log(jnp.abs(jnp.diag(lower)))
+        )
+        quadratic = jnp.sum(residuals * weighted) - jnp.sum(projected * solved)
+        value = -0.5 * (quadratic + log_determinant + residuals.size * _LOG_2PI)
+        return jnp.where(jnp.all(diagonal > 0.0), value, -jnp.inf)
 
 
 class LoweredProblem:
