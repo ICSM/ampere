@@ -626,19 +626,37 @@ class GPSolver(abc.ABC):
         quasiseparable solver by name, before the generic ``QUASISEPARABLE``
         refusal, because "products are not quasiseparable" is a sharper
         diagnosis than "this kernel is not".
+
+        **W5.21 lifts the blanket refusal of `Layout.GRID`.** W5.5 refused a
+        correlated noise model on every gridded container as a gate, not
+        mathematics — the algebra a solver runs never looked at ``LAYOUT``,
+        only at the coordinates and the kernel's axis selection, both of
+        which are equally well-defined for a grid (an ``Image``'s pixel
+        centres are as much a coordinate set as a ``Spectrum``'s wavelengths;
+        :func:`ampere.core.dataset.sample_coordinates` supplies them for
+        either layout). The ordered-1D and quasiseparable-product rules above
+        are unchanged and still bind: a :class:`QuasisepGP` on a 2-D grid is
+        refused by ``REQUIRES_ORDERED_1D``, which counts the kernel's
+        *selected* axes, not the container's declared layout.
         """
         kind = type(observed).__name__
         # Declarative incompatibilities first: they are permanent facts about
         # the choice, whereas "not implemented yet" is temporary, and a user
         # who paired QuasisepGP with a non-quasiseparable kernel needs to hear
         # about the kernel rather than about Phase 2's schedule.
-        if observed.LAYOUT is not Layout.POINTS:
+        if observed.LAYOUT not in (Layout.POINTS, Layout.GRID):
             raise LikelihoodError(
                 f"{self.NAME} was given a {kind}, whose layout is {observed.LAYOUT.value}. The "
-                f"v1 GP solvers work on point-set containers (Spectrum, TimeSeries, "
-                f"PhotometricPoints, VisibilitySet); gridded 2D+ data are the subject of the "
-                f"SVGP / SKI / Vecchia strategy slots (DEVELOPMENT_PLAN.md §4.4, Phase 5)."
+                f"v1 GP solvers work on point-set and grid containers (Spectrum, TimeSeries, "
+                f"PhotometricPoints, VisibilitySet, Image) — {kind}'s layout is neither "
+                f"(DEVELOPMENT_PLAN.md §4.4)."
             )
+        # The kernel's selected axes are guaranteed to be the container's own:
+        # check_axes, below, resolves every leaf's axes=(...) selection to the
+        # container's axis names and raises there (Kernel._resolve_columns) if
+        # a leaf names one the container lacks — for either layout, since axis
+        # names are a property of the container, not of how its samples are
+        # laid out in memory.
         kernel.check_axes(observed, owner=self.NAME)
         if self.REQUIRES_QUASISEPARABLE:
             found = _find_nested_product(kernel)
@@ -5230,14 +5248,19 @@ class Likelihood(Parameterised):
         return np.asarray(self._censoring.kinds)[retain]
 
     def _coordinates(self, observed: FunctionSamples, retain: np.ndarray) -> np.ndarray:
-        if observed.LAYOUT is not Layout.POINTS:
+        # Deferred import: dataset.py imports Likelihood (and friends) from
+        # this module at load time, so a module-level import here would be
+        # circular; by the time this method runs, dataset.py is fully
+        # imported and the cost is a dict lookup in sys.modules.
+        from .dataset import sample_coordinates
+
+        if observed.LAYOUT not in (Layout.POINTS, Layout.GRID):
             raise LikelihoodError(
-                f"a correlated noise model needs point-set coordinates, but a "
-                f"{type(observed).__name__} has a {observed.LAYOUT.value} layout. Gridded 2D+ "
-                f"data are the SVGP / SKI / Vecchia strategy slots (Phase 5)."
+                f"a correlated noise model needs point-set or grid coordinates, but a "
+                f"{type(observed).__name__} has a {observed.LAYOUT.value} layout "
+                f"(DEVELOPMENT_PLAN.md §4.4)."
             )
-        stacked = np.column_stack([np.asarray(axis.values, dtype=DTYPE) for axis in observed.axes])
-        return np.ascontiguousarray(stacked[retain])
+        return np.ascontiguousarray(sample_coordinates(observed)[retain])
 
     def __repr__(self) -> str:
         censored = "" if self._censoring is None else f", {self._censoring!r}"

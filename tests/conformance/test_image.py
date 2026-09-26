@@ -48,12 +48,20 @@ from ampere.core import (
     Image,
     Instrument,
     Likelihood,
+    LikelihoodError,
     TransformationError,
     negotiate,
 )
 
 from .conftest import cross_backend_pairs, pair_ids
-from .protocol import ConformanceBackend, ImagePieces, Tolerances
+from .protocol import (
+    ConformanceBackend,
+    CovarianceSpec,
+    ImagePieces,
+    KernelFamily,
+    SolverKind,
+    Tolerances,
+)
 
 #: Pixels on a side of the observed image. Small on purpose — every row here is
 #: about the transform's *rules*, and a 12x12 image exercises every one of them
@@ -78,6 +86,18 @@ SOURCE = {"flux": 1.5, "fwhm": 3.0}
 #: unit an observed image of one is measured in. ``check_alignment`` compares
 #: units as well as axes, so this is not cosmetic.
 BRIGHTNESS = u.Jy / u.sr
+
+#: A two-axis Matérn-3/2 over the image's own ``(x, y)``, mas — W5.21's
+#: composition rows. The length scale is of the order of the PSF, which is the
+#: scale a flexible arm is meant to absorb; the value is fixed rather than
+#: fitted because these rows ask only whether the composition is *accepted*.
+GRID_KERNEL = CovarianceSpec(
+    family=KernelFamily.MATERN32,
+    amplitude=0.05,
+    length_scale=3.0,
+    axes=("x", "y"),
+    length_scale_unit=u.mas,
+)
 
 
 def observed_grid() -> np.ndarray:
@@ -446,6 +466,42 @@ class TestAnImageAsAnObservation:
         assert drawn.values.dtype.kind == "f"
         # A draw is not the prediction: the noise actually moved the data.
         assert not np.array_equal(drawn.values, simulation.predicted["image"].values)
+
+    @pytest.mark.parametrize(
+        "kind", [SolverKind.DENSE, SolverKind.HILBERT], ids=["dense", "hilbert"]
+    )
+    def test_a_correlated_noise_model_is_accepted_on_a_grid_since_w5_21(
+        self, backend: ConformanceBackend, kind: SolverKind
+    ) -> None:
+        """W5.5's blanket ``Layout.GRID`` refusal is lifted (W5.21): the shipped
+        exact and reduced-rank solvers compose with a two-axis kernel over an
+        ``Image`` exactly as they do over a point-set container."""
+        if kind not in backend.capabilities.solvers:
+            pytest.skip(f"backend {backend.name!r} declares no {kind.value} solver")
+        solver = (
+            backend.gp_solver(kind, basis_size=(6, 6), boundary_factor=2.0)
+            if kind is SolverKind.HILBERT
+            else backend.gp_solver(kind)
+        )
+        noise = backend.gp_noise(backend.kernel(GRID_KERNEL), solver)
+        observed = observed_image()
+        likelihood = Likelihood(GaussianFamily(), noise)
+        likelihood.check_alignment(observed, observed)  # no longer raises
+        assert np.isfinite(likelihood.log_prob(observed, observed))
+
+    def test_a_quasiseparable_solver_is_still_refused_by_name_on_a_grid(
+        self, backend: ConformanceBackend
+    ) -> None:
+        """Lifting the layout gate does not touch ``REQUIRES_ORDERED_1D``: a
+        kernel selecting both of an ``Image``'s axes is still refused by a
+        solver that needs exactly one ordered coordinate."""
+        if SolverKind.QUASISEP not in backend.capabilities.solvers:
+            pytest.skip(f"backend {backend.name!r} declares no quasiseparable solver")
+        kernel = backend.kernel(GRID_KERNEL)
+        noise = backend.gp_noise(kernel, backend.gp_solver(SolverKind.QUASISEP))
+        observed = observed_image()
+        with pytest.raises(LikelihoodError, match="needs one ordered coordinate axis"):
+            Likelihood(GaussianFamily(), noise).check_alignment(observed, observed)
 
 
 # ---------------------------------------------------------------------------

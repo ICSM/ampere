@@ -20,7 +20,6 @@ different shape of hard from either.
 The runnable example is ``examples/image``
 (:download:`generators.py <../../examples/image/generators.py>`,
 :download:`model.py <../../examples/image/model.py>`,
-:download:`grid_gp.py <../../examples/image/grid_gp.py>`,
 :download:`study.py <../../examples/image/study.py>`,
 :download:`figures.py <../../examples/image/figures.py>`,
 :download:`__main__.py <../../examples/image/__main__.py>`): a compact Gaussian
@@ -171,38 +170,40 @@ numbers — two runs that are the same fit and hash differently. **A
 misspecification is a model that does not have the component, not a model that
 has it at zero.**
 
-5. The likelihood: where a grid is currently blocked
---------------------------------------------------------
+5. The likelihood: a grid composes like any other container
+--------------------------------------------------------------
 
-This is the section that does not yet read like the two pages before it, and
-the honest thing is to say so plainly.
-
-``ampere.core`` refuses a correlated noise model on **any** ``Layout.GRID``
-container, in two places:
+Until W5.21, ``ampere.core`` refused a correlated noise model on **any**
+``Layout.GRID`` container, in two places:
 :meth:`~ampere.core.GPSolver.check_compatible` ("the v1 GP solvers work on
 point-set containers […]; gridded 2D+ data are the subject of the SVGP / SKI /
 Vecchia strategy slots") and ``Likelihood._coordinates`` ("a correlated noise
-model needs point-set coordinates"). Both messages name the Phase 5 slot they
-are waiting for, and both predate an image ever being an observation.
+model needs point-set coordinates"). Both messages named the Phase 5 slot they
+were waiting for, and both predated an image ever being an observation.
 
-Neither refusal is about mathematics. A stationary kernel over ``(x, y)`` is a
+Neither refusal was about mathematics. A stationary kernel over ``(x, y)`` is a
 function of coordinates and a grid has coordinates — it just keeps them
 separably, so the ``(N, 2)`` matrix a kernel wants has to be broadcast out of
 the axes rather than stacked from them. That broadcast has existed and been
 correct since W3.3, in ``ampere.core.encoding``'s coordinate matrix for the SBI
 encoder; W5.5 lifted the same rule into :func:`~ampere.core.sample_coordinates`
-so that :meth:`Dataset.draw_observation` could draw an image at all.
+so that :meth:`Dataset.draw_observation` could draw an image at all — leaving
+the two composition-time gates as the one place a grid was still refused.
 
-So ``examples/image/grid_gp.py`` lifts the two gates **out of tree**, from the
-public API, in the way ``transformations.md`` §11 exists to prove is possible:
-three small subclasses that override only the layout check and leave every
-other rule — the kernel's axis selection, the quasiseparable refusals, the
-ordered-1D rule — to the base classes. Read that module before the study; it is
-a demonstration that nothing but the gate is missing, not a design, and it
-carries the two-edit library change it stands in for.
+W5.21 lifted them, in the library rather than out of tree:
+:meth:`~ampere.core.GPSolver.check_compatible` now accepts ``Layout.POINTS`` or
+``Layout.GRID``, and ``Likelihood._coordinates`` builds its coordinate matrix
+through :func:`~ampere.core.sample_coordinates` for either layout. Every other
+rule is unchanged — the kernel's axis selection
+(:meth:`~ampere.core.kernels.Kernel.check_axes`), the quasiseparable-product
+refusals, and the ordered-1D rule, which still refuses a
+:class:`~ampere.core.QuasisepGP` on a two-axis kernel by name, because it
+counts the kernel's *selected* axes rather than the container's layout.
 
-With the gates lifted, a two-axis ``Matern32(axes=("x", "y"))`` composes over
-an image and scores exactly as it does over a spectrum.
+So a two-axis ``Matern32(axes=("x", "y"))`` composes over an ``Image`` with the
+shipped :class:`~ampere.core.DenseGP` and :class:`~ampere.core.HilbertSpaceGP`
+solvers directly, through the plain :class:`~ampere.core.Likelihood`, and
+scores exactly as it does over a spectrum.
 
 6. The study: does the flexible likelihood survive an unmodelled background?
 -------------------------------------------------------------------------------

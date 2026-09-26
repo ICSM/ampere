@@ -41,13 +41,14 @@ Kronecker or SKI solver would, and that is W5.6's bake-off; these two treat an
 image as ``N`` scattered points that happen to lie on a lattice, which is the
 honest baseline the next item's candidates have to beat.
 
-Read :mod:`.grid_gp` first
----------------------------
-Every flexible arm here goes through :mod:`.grid_gp`, which lifts — out of
-tree, from the public API — the two ``Layout.POINTS`` gates that otherwise
-refuse a correlated noise model on an ``Image``. That module explains what is
-blocked, why the block is a Phase 5 slot rather than mathematics, and what the
-library change it stands in for would be.
+The flexible arm's noise model
+-------------------------------
+A correlated noise model over an ``Image`` composes with the shipped
+:class:`~ampere.core.DenseGP` and :class:`~ampere.core.HilbertSpaceGP`
+solvers and the plain :class:`~ampere.core.Likelihood` directly: ``ampere.core``
+accepts a ``Layout.GRID`` container in ``GPSolver.check_compatible`` and builds
+its coordinates through :func:`~ampere.core.sample_coordinates` (W5.21; W5.5's
+decision-log row records the gate that lifted).
 """
 
 from __future__ import annotations
@@ -65,14 +66,15 @@ import scipy.stats as st
 from ampere.core import (
     Dataset,
     DatasetCollection,
+    DenseGP,
     FittingProblem,
     GaussianFamily,
+    HilbertSpaceGP,
     Likelihood,
     negotiate,
 )
 
 from . import generators as gen
-from .grid_gp import GridDenseGP, GridHilbertSpaceGP, GridLikelihood
 
 __all__ = [
     "ARMS",
@@ -275,24 +277,12 @@ def _noise_for(backend: str, arm: str, *, sigma: float, solver: Any = None) -> A
         st.uniform(GP_LENGTH_PRIOR[0], GP_LENGTH_PRIOR[1] - GP_LENGTH_PRIOR[0]),
         axes=("x", "y"),
     )
-    return module.GaussianProcessNoise(kernel, solver or GridDenseGP())
+    return module.GaussianProcessNoise(kernel, solver or DenseGP())
 
 
 def declared_sigma(observed: Any) -> float:
     """The observation's declared per-pixel uncertainty, as one number."""
     return float(np.median(np.asarray(observed.uncertainty, dtype=float)))
-
-
-def _likelihood(arm: str, noise: Any) -> Likelihood:
-    """A ``GridLikelihood`` for the flexible arm, the shipped one otherwise.
-
-    The distinction is :mod:`.grid_gp`'s subject and should not survive the
-    library change that module proposes: an independent noise model never asks
-    for coordinates, so only the correlated arm needs the override at all.
-    """
-    if arm == "flexible":
-        return GridLikelihood(GaussianFamily(), noise)
-    return Likelihood(GaussianFamily(), noise)
 
 
 # ---------------------------------------------------------------------------
@@ -319,7 +309,7 @@ def build_problem(
             "image": Dataset(
                 observed,
                 instrument,
-                likelihood=_likelihood(arm, noise),
+                likelihood=Likelihood(GaussianFamily(), noise),
                 label="image",
             )
         }
@@ -440,7 +430,7 @@ def _calibration_factory(arm: str, backend: str, pixels: int, budget: EmceeBudge
                 "image": Dataset(
                     observed,
                     instrument,
-                    likelihood=_likelihood(arm, noise),
+                    likelihood=Likelihood(GaussianFamily(), noise),
                     label="image",
                 )
             }
@@ -570,18 +560,18 @@ def benchmark_solvers(
         kernel = noise_module.Matern32(0.5 * declared_sigma(observed), 8.0, axes=("x", "y"))
         solvers: list[tuple[str, Any]] = []
         if include_dense:
-            solvers.append(("DenseGP", GridDenseGP()))
+            solvers.append(("DenseGP", DenseGP()))
         solvers.append(
             (
                 f"HSGP({basis_per_axis}x{basis_per_axis})",
-                GridHilbertSpaceGP(
+                HilbertSpaceGP(
                     basis_size=(basis_per_axis, basis_per_axis),
                     boundary_factor=BOUNDARY_FACTOR,
                 ),
             )
         )
         for name, solver in solvers:
-            likelihood = GridLikelihood(
+            likelihood = Likelihood(
                 GaussianFamily(), noise_module.GaussianProcessNoise(kernel, solver)
             )
             seconds, peak, value = _measure(

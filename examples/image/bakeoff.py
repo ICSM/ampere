@@ -63,8 +63,11 @@ from typing import Any
 import numpy as np
 
 from ampere.core import (
+    DenseGP,
     EquispacedFourierGP,
     GaussianFamily,
+    HilbertSpaceGP,
+    Likelihood,
     VecchiaResponseGP,
     negotiate,
     sample_coordinates,
@@ -72,7 +75,6 @@ from ampere.core import (
 
 from . import generators as gen
 from . import study
-from .grid_gp import GriddedSolver, GridDenseGP, GridHilbertSpaceGP, GridLikelihood
 
 __all__ = [
     "ACCURACY_SIZES",
@@ -82,8 +84,6 @@ __all__ = [
     "LENGTH_SCALES",
     "RESOLUTIONS",
     "SMOOTHNESS",
-    "GridEquispacedFourierGP",
-    "GridVecchiaResponseGP",
     "SolverAccuracy",
     "SolverCost",
     "accuracy_table",
@@ -96,21 +96,6 @@ __all__ = [
     "solver_arms",
     "study_case",
 ]
-
-
-class GridEquispacedFourierGP(GriddedSolver, EquispacedFourierGP):
-    """:class:`~ampere.core.EquispacedFourierGP`, allowed to see an ``Image``.
-
-    :mod:`examples.image.grid_gp`'s mixin, applied to W5.6's prototype for
-    exactly the reason that module records: the ``Layout.GRID`` refusal is a
-    closed Phase 5 slot rather than mathematics, and lifting it out of tree
-    keeps ``ampere/core/likelihood.py`` untouched while the library change is
-    with Peter.
-    """
-
-
-class GridVecchiaResponseGP(GriddedSolver, VecchiaResponseGP):
-    """:class:`~ampere.core.VecchiaResponseGP`, allowed to see an ``Image``."""
 
 
 #: The kernel length scale every arm is measured at, mas. The omitted
@@ -225,20 +210,20 @@ def solver_arms(*, coarse: bool = False, include_dense: bool = True) -> list[tup
     hilbert, fourier, width = (8, 9, 10) if coarse else (16, 17, 30)
     arms: list[tuple[str, Any]] = []
     if include_dense:
-        arms.append(("DenseGP", GridDenseGP()))
+        arms.append(("DenseGP", DenseGP()))
     arms.append(
         (
             f"HSGP m={hilbert**2}",
-            GridHilbertSpaceGP(basis_size=(hilbert, hilbert), boundary_factor=BOUNDARY_FACTOR),
+            HilbertSpaceGP(basis_size=(hilbert, hilbert), boundary_factor=BOUNDARY_FACTOR),
         )
     )
     arms.append(
         (
             f"EFGP m={fourier**2}",
-            GridEquispacedFourierGP(basis_size=(fourier, fourier), boundary_factor=BOUNDARY_FACTOR),
+            EquispacedFourierGP(basis_size=(fourier, fourier), boundary_factor=BOUNDARY_FACTOR),
         )
     )
-    arms.append((f"Vecchia k={width}", GridVecchiaResponseGP(neighbours=width, seed=gen.SEED)))
+    arms.append((f"Vecchia k={width}", VecchiaResponseGP(neighbours=width, seed=gen.SEED)))
     return arms
 
 
@@ -308,7 +293,7 @@ def measure_accuracy(
     for pixels in sizes:
         case = study_case(pixels, backend=backend, seed=seed)
         kernel = kernel_for(case, "Matern32", backend=backend)
-        exact = GridDenseGP().log_marginal_likelihood(
+        exact = DenseGP().log_marginal_likelihood(
             kernel, case.coordinates, case.residual, case.variance, {}
         )
         for name, solver in solver_arms(coarse=coarse, include_dense=True):
@@ -374,7 +359,7 @@ def measure_smoothness(
     for length_scale in length_scales:
         for family in SMOOTHNESS:
             kernel = kernel_for(case, family, length_scale=length_scale, backend=backend)
-            exact = GridDenseGP().log_marginal_likelihood(
+            exact = DenseGP().log_marginal_likelihood(
                 kernel, case.coordinates, case.residual, case.variance, {}
             )
             for name, solver in solver_arms(coarse=coarse, include_dense=False):
@@ -457,8 +442,8 @@ def measure_cost(
 ) -> list[SolverCost]:
     """Wall clock and peak memory for one ``log_prob``, per ``(N, solver)``.
 
-    Measured through :class:`examples.image.grid_gp.GridLikelihood`, not
-    through the solver method, so the numbers are directly comparable with
+    Measured through :class:`~ampere.core.Likelihood`, not through the solver
+    method, so the numbers are directly comparable with
     :func:`examples.image.study.benchmark_solvers`' table — the library path a
     sampler actually takes, alignment checks included.
 
@@ -474,7 +459,7 @@ def measure_cost(
         kernel = kernel_for(case, "Matern32", backend=backend)
         noise_module = study._noise_module(backend)
         for name, solver in solver_arms(coarse=coarse, include_dense=pixels < dense_below):
-            likelihood = GridLikelihood(
+            likelihood = Likelihood(
                 GaussianFamily(), noise_module.GaussianProcessNoise(kernel, solver)
             )
 
@@ -543,19 +528,17 @@ def measure_resolution(
         arms: list[tuple[str, Any]] = [
             (
                 f"HSGP m={per_axis**2}",
-                GridHilbertSpaceGP(
-                    basis_size=(per_axis, per_axis), boundary_factor=BOUNDARY_FACTOR
-                ),
+                HilbertSpaceGP(basis_size=(per_axis, per_axis), boundary_factor=BOUNDARY_FACTOR),
             ),
             (
                 f"EFGP m={(per_axis + 1) ** 2}",
-                GridEquispacedFourierGP(
+                EquispacedFourierGP(
                     basis_size=(per_axis + 1, per_axis + 1), boundary_factor=BOUNDARY_FACTOR
                 ),
             ),
         ]
         for name, solver in arms:
-            likelihood = GridLikelihood(
+            likelihood = Likelihood(
                 GaussianFamily(), noise_module.GaussianProcessNoise(kernel, solver)
             )
 

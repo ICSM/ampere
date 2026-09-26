@@ -2563,7 +2563,14 @@ not add the extra to the docs environment; check the build log for any
 other import-only optional the same rule applies to and mock it the same
 way. **(e) One test leaves figures open.** `tests/results/test_plots.py::TestCornerPaging`
 trips corner's "more than 20 figures" warning; close the pages after the
-assertions. **Ruled out (record, do not do):** the `ubuntu-latest` → Ubuntu
+assertions. **(f) `sample_coordinates` below both modules** (W5.21's carried
+note, 2026-09-26): `Likelihood._coordinates` imports
+`ampere.core.dataset.sample_coordinates` inside the method because
+`dataset.py` imports `Likelihood` at load; move the helper (it depends on
+containers only) to a module both can import at the top — `encoding.py`
+or a new `coordinates.py` — re-export it from `ampere.core` unchanged, and
+make both imports module-level. Owns that helper's home, the two import
+lines and `__init__.py`'s re-export. **Ruled out (record, do not do):** the `ubuntu-latest` → Ubuntu
 26 migration notice (no runner pin for now, ruled 2026-09-25); the
 ~2700 `DeprecationWarning`s from netCDF4-python setting an array's shape
 under NumPy 2.5 — fixed upstream in netcdf4 1.7.4.1, not yet on
