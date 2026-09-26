@@ -149,6 +149,12 @@ from ampere.core.dataset import (
     LIKELIHOOD_COMPONENT,
 )
 from ampere.core.exceptions import LoweringError
+from ampere.core.likelihood import (
+    DENSE_ROUTE,
+    REDUCED_RANK_ROUTE,
+    REDUCED_RANK_SOLVERS,
+    ROTATED_ROUTE,
+)
 
 from ._config import (
     BACKEND,
@@ -1186,6 +1192,18 @@ class _LoweredJointGroup:
     The resolved values are coerced to tensors first, because a coupling with
     one parameter fixed and another free hands back a Python float beside a
     tensor and ``torch.stack`` refuses the mixture outright.
+
+    **W5.24: three routes, chosen once at lowering.** The channels' retained
+    uncertainties decide, exactly as :meth:`~ampere.core.
+    JointGaussianProcessNoise.route` decides on the contract path: identical
+    → W5.9's rotated scalar solves, unchanged; unequal under ``DenseGP`` → one
+    ``torch.linalg.cholesky_ex`` of the ``TN x TN`` matrix built in torch;
+    unequal under ``HilbertSpaceGP`` → Woodbury with the solver's own
+    ``(N, m)`` feature factor, read through ``latent_transform_native`` on the
+    identity so it carries the gradient in the kernel, and the ``Tm x Tm``
+    capacitance. ``B ⊗ K_x`` is never formed on that route. The group's
+    ``scale`` and ``jitter`` are group-wide, so they cannot move a group from
+    one route to another between lowering and a draw.
     """
 
     def __init__(
@@ -1212,7 +1230,8 @@ class _LoweredJointGroup:
                 type(self.noise.solver).__name__,
                 f"joint noise group {label!r} uses the {type(self.noise.solver).__name__} "
                 f"solver, which has no `log_marginal_likelihood_native`. Pass "
-                f"ampere.backends.torch.DenseGP or ampere.backends.torch.QuasisepGP.",
+                f"ampere.backends.torch.DenseGP, ampere.backends.torch.QuasisepGP or "
+                f"ampere.backends.torch.HilbertSpaceGP.",
             )
         self.members = tuple(lowered[member] for member in self.noise.datasets)
         first = self.members[0]
@@ -1221,21 +1240,53 @@ class _LoweredJointGroup:
         self.coordinates = first.observed_coordinates
         self.size = int(np.count_nonzero(first.retain))
         self.uncertainty = first.uncertainty
-        if self.uncertainty is not None:
-            retained = np.asarray(observed.uncertainty, dtype=float).ravel()[first.retain]
+        self.uncertainties = tuple(member.uncertainty for member in self.members)
+        for member in self.members:
+            if member.uncertainty is None:
+                continue
+            retained = np.asarray(member.dataset.observed.uncertainty, dtype=float).ravel()[
+                member.retain
+            ]
             if np.any(retained <= 0.0):
                 raise _refuse(
                     "uncertainty",
                     f"joint noise group {label!r} was given zero or negative uncertainties on "
-                    f"{int(np.sum(retained <= 0.0))} retained sample(s). An infinitely precise "
-                    f"measurement is one no likelihood can normalise.",
+                    f"{int(np.sum(retained <= 0.0))} retained sample(s) of channel "
+                    f"{member.label!r}. An infinitely precise measurement is one no likelihood "
+                    f"can normalise.",
                 )
+        self.route = self._route()
 
-    def _sigma(self, values: Mapping[str, Any]) -> torch.Tensor | None:
-        """The group's shared per-sample sigma, in torch."""
+    def _route(self) -> str:
+        """``"rotated"``, ``"dense"`` or ``"reduced_rank"`` — the contract path's rule."""
+        present = [uncertainty is not None for uncertainty in self.uncertainties]
+        if not any(present):
+            return ROTATED_ROUTE
+        reference = self.uncertainties[0]
+        if all(present) and all(
+            bool(torch.equal(uncertainty, reference)) for uncertainty in self.uncertainties
+        ):
+            return ROTATED_ROUTE
+        solver = self.noise.solver
+        if solver.NAME == "DenseGP":
+            return DENSE_ROUTE
+        if solver.NAME in REDUCED_RANK_SOLVERS and hasattr(solver, "latent_transform_native"):
+            return REDUCED_RANK_ROUTE
+        raise _refuse(
+            type(solver).__name__,
+            f"joint noise group {self.label!r}'s channels carry different per-sample "
+            f"uncertainties, and its {type(solver).__name__} solver has no route for that. "
+            f"Pass ampere.backends.torch.DenseGP (the exact dense route) or "
+            f"ampere.backends.torch.HilbertSpaceGP (the reduced-rank one).",
+        )
+
+    def _sigma_of(
+        self, uncertainty: torch.Tensor | None, values: Mapping[str, Any]
+    ) -> torch.Tensor | None:
+        """One channel's per-sample sigma, with the group's ``scale`` and ``jitter``."""
         own = {key: value for key, value in values.items() if key in self.noise.parameters}
         resolved = self.noise.context(own)
-        sigma = self.uncertainty
+        sigma = uncertainty
         if sigma is None:
             if "jitter" not in resolved:
                 return None
@@ -1247,18 +1298,28 @@ class _LoweredJointGroup:
             sigma = torch.sqrt(sigma**2 + _tensor(resolved["jitter"], device=self.device) ** 2)
         return sigma
 
+    def _sigma(self, values: Mapping[str, Any]) -> torch.Tensor | None:
+        """The group's shared per-sample sigma, in torch (the rotated route)."""
+        return self._sigma_of(self.uncertainty, values)
+
+    def _variances(self, values: Mapping[str, Any]) -> torch.Tensor:
+        """Every channel's variances as an ``(n, T)`` block (the two unequal routes)."""
+        columns = []
+        for uncertainty in self.uncertainties:
+            sigma = self._sigma_of(uncertainty, values)
+            columns.append(
+                torch.zeros(self.size, dtype=DEFAULT_DTYPE, device=self.device)
+                if sigma is None
+                else sigma**2
+            )
+        return torch.stack(columns, dim=-1)
+
     def log_likelihood(self, routed: Mapping[str, Mapping[str, Any]]) -> torch.Tensor:
-        """``log N(vec(R); 0, B (x) K_x + I (x) diag(sigma^2))``, differentiable."""
+        """``log N(vec(R); 0, B (x) K_x + blockdiag(diag(sigma_t^2)))``, differentiable."""
         values = dict(routed.get(self.label, {}))
         residuals = torch.stack(
             [member.observed_values - member.predict(routed) for member in self.members],
             dim=-1,
-        )
-        sigma = self._sigma(values)
-        variance = (
-            torch.zeros(self.size, dtype=DEFAULT_DTYPE, device=self.device)
-            if sigma is None
-            else sigma**2
         )
         coupling = self.noise.coupling
         resolved = {
@@ -1266,21 +1327,101 @@ class _LoweredJointGroup:
             for name, value in coupling.resolved(values).items()
         }
         eigenvalues, rotation = coupling.eigen(resolved, xp=torch)
-        rotated = residuals @ rotation
         kernel = self.bound_kernel
         hyperparameters = kernel.resolve(values)
-        total = _tensor(0.0, device=self.device)
-        for index in range(len(self.members)):
-            scale = eigenvalues[index]
-            total = total + self.noise.solver.log_marginal_likelihood_native(
-                kernel,
-                self.coordinates,
-                rotated[:, index] / torch.sqrt(scale),
-                variance / scale,
-                hyperparameters,
+        if self.route == DENSE_ROUTE:
+            total = self._dense(residuals, self._variances(values), eigenvalues, rotation, values)
+        elif self.route == REDUCED_RANK_ROUTE:
+            total = self._reduced_rank(
+                residuals, self._variances(values), eigenvalues, rotation, hyperparameters
             )
-            total = total - 0.5 * self.size * torch.log(scale)
+        else:
+            sigma = self._sigma(values)
+            variance = (
+                torch.zeros(self.size, dtype=DEFAULT_DTYPE, device=self.device)
+                if sigma is None
+                else sigma**2
+            )
+            rotated = residuals @ rotation
+            total = _tensor(0.0, device=self.device)
+            for index in range(len(self.members)):
+                scale = eigenvalues[index]
+                total = total + self.noise.solver.log_marginal_likelihood_native(
+                    kernel,
+                    self.coordinates,
+                    rotated[:, index] / torch.sqrt(scale),
+                    variance / scale,
+                    hyperparameters,
+                )
+                total = total - 0.5 * self.size * torch.log(scale)
         return torch.where(torch.isfinite(total), total, torch.full_like(total, -math.inf))
+
+    def _dense(
+        self,
+        residuals: torch.Tensor,
+        variances: torch.Tensor,
+        eigenvalues: torch.Tensor,
+        rotation: torch.Tensor,
+        values: Mapping[str, Any],
+    ) -> torch.Tensor:
+        """The dense route: ``B (x) (K_x + jitter^2 I) + blockdiag(diag(sigma_t^2))``."""
+        kernel = self.bound_kernel
+        matrix = _tensor(
+            kernel.matrix(self.coordinates, self.coordinates, kernel.resolve(values)),
+            device=self.device,
+        )
+        jitter = float(getattr(self.noise.solver, "jitter", 0.0) or 0.0)
+        if jitter:
+            matrix = matrix + torch.eye(self.size, dtype=DEFAULT_DTYPE, device=self.device) * (
+                jitter**2
+            )
+        coupling = (rotation * eigenvalues[None, :]) @ rotation.transpose(0, 1)
+        covariance = torch.kron(coupling, matrix) + torch.diag(
+            variances.transpose(0, 1).reshape(-1)
+        )
+        residual = residuals.transpose(0, 1).reshape(-1)
+        factor, info = torch.linalg.cholesky_ex(covariance)
+        alpha = torch.cholesky_solve(residual.reshape(-1, 1), factor, upper=False).reshape(-1)
+        log_determinant = 2.0 * torch.log(torch.diagonal(factor)).sum()
+        value = -0.5 * ((residual * alpha).sum() + log_determinant + residual.numel() * _LOG_2PI)
+        return torch.where(info != 0, torch.full_like(value, -math.inf), value)
+
+    def _reduced_rank(
+        self,
+        residuals: torch.Tensor,
+        variances: torch.Tensor,
+        eigenvalues: torch.Tensor,
+        rotation: torch.Tensor,
+        hyperparameters: Mapping[str, Any],
+    ) -> torch.Tensor:
+        """The reduced-rank route: Woodbury with ``G = (I_T (x) Phi)(F (x) I_m)``, ``B = F F^T``.
+
+        See :meth:`ampere.core.JointGaussianProcessNoise._reduced_rank_log_prob`
+        for the algebra; this is the same arithmetic in torch.
+        """
+        solver = self.noise.solver
+        kernel = self.bound_kernel
+        count = int(solver.latent_size(kernel, self.size))
+        identity = torch.eye(count, dtype=DEFAULT_DTYPE, device=self.device)
+        phi = solver.latent_transform_native(kernel, self.coordinates, identity, hyperparameters)
+        channels = len(self.members)
+        width = channels * count
+        diagonal = variances + float(getattr(solver, "jitter", 0.0) or 0.0) ** 2
+        inverse = 1.0 / diagonal
+        root = rotation * torch.sqrt(eigenvalues)[None, :]
+        gram = torch.einsum("nk,nt,nl->tkl", phi, inverse, phi)
+        capacitance = torch.einsum("ts,tu,tkl->skul", root, root, gram).reshape(
+            width, width
+        ) + torch.eye(width, dtype=DEFAULT_DTYPE, device=self.device)
+        weighted = residuals * inverse
+        projected = ((phi.transpose(0, 1) @ weighted) @ root).transpose(0, 1).reshape(-1, 1)
+        factor, info = torch.linalg.cholesky_ex(capacitance)
+        solved = torch.cholesky_solve(projected, factor, upper=False)
+        log_determinant = torch.log(diagonal).sum() + 2.0 * torch.log(torch.diagonal(factor)).sum()
+        quadratic = (residuals * weighted).sum() - (projected * solved).sum()
+        value = -0.5 * (quadratic + log_determinant + residuals.numel() * _LOG_2PI)
+        failed = torch.logical_or(info != 0, torch.logical_not(torch.all(diagonal > 0.0)))
+        return torch.where(failed, torch.full_like(value, -math.inf), value)
 
 
 class LoweredProblem:
