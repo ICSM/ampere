@@ -483,3 +483,58 @@ def von_mises_latent_log_likelihood(
     delta = np.asarray(observed, dtype=float) - np.asarray(predicted, dtype=float) - latent
     log_i0 = np.log(scipy.special.i0e(kappa)) + kappa
     return float(np.sum(kappa * np.cos(delta) - math.log(2.0 * math.pi) - log_i0))
+
+
+def rotation_coupling_matrix(
+    angle: float, log_variance_0: float, log_variance_1: float
+) -> np.ndarray:
+    """``B = R(θ) diag(exp(v₀), exp(v₁)) R(θ)ᵀ`` — ``RotationCoupling``'s definition (W5.24).
+
+    Written from the parameterisation's statement (an error ellipse at
+    position angle ``θ`` with semi-axis variances ``exp(v)``), not by asking
+    the coupling for its matrix.
+    """
+    cosine, sine = math.cos(angle), math.sin(angle)
+    rotation = np.array([[cosine, -sine], [sine, cosine]])
+    return rotation @ np.diag([math.exp(log_variance_0), math.exp(log_variance_1)]) @ rotation.T
+
+
+def coregionalised_covariance(
+    coupling: np.ndarray, kernel: np.ndarray, variances: np.ndarray
+) -> np.ndarray:
+    """``B ⊗ K_x + blockdiag(diag(sigma_t^2))``, channel-major, block by block (W5.24).
+
+    The definition of the joint noise model's covariance under heteroscedastic
+    channels, assembled by writing every ``(s, t)`` block out rather than by
+    ``np.kron``: block ``(s, t)`` is ``B[s, t] K_x``, and diagonal block ``t``
+    adds channel ``t``'s own variances, ``variances[:, t]``.
+    """
+    channels = coupling.shape[0]
+    size = kernel.shape[0]
+    covariance = np.zeros((channels * size, channels * size))
+    for row in range(channels):
+        for column in range(channels):
+            block = coupling[row, column] * kernel
+            if row == column:
+                block = block + np.diag(variances[:, row])
+            covariance[row * size : (row + 1) * size, column * size : (column + 1) * size] = block
+    return covariance
+
+
+def coregionalised_log_density(
+    coupling: np.ndarray, kernel: np.ndarray, variances: np.ndarray, residuals: np.ndarray
+) -> float:
+    """``log N(vec(R); 0, B ⊗ K_x + blockdiag(diag(sigma_t^2)))`` by ``scipy`` (W5.24).
+
+    *residuals* is the ``(n, T)`` block; ``vec`` stacks it channel-major, the
+    same order :func:`coregionalised_covariance` builds the matrix in. The
+    density is ``scipy.stats.multivariate_normal``'s, so neither the
+    factorisation nor the assembly is ampere's.
+    """
+    import scipy.stats
+
+    covariance = coregionalised_covariance(coupling, kernel, variances)
+    stacked = np.asarray(residuals, dtype=float).T.reshape(-1)
+    return float(
+        scipy.stats.multivariate_normal(np.zeros(stacked.size), covariance).logpdf(stacked)
+    )
