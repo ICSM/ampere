@@ -2724,6 +2724,41 @@ def _channel_block(residuals: Any, channels: int) -> np.ndarray:
     return _stack_channels(list(residuals), "residuals")
 
 
+#: The three routes a :class:`JointGaussianProcessNoise` group can take
+#: (**W5.24**), as :meth:`JointGaussianProcessNoise.route` names them.
+ROTATED_ROUTE = "rotated"
+DENSE_ROUTE = "dense"
+REDUCED_RANK_ROUTE = "reduced_rank"
+
+#: The solvers whose ``latent_transform`` is a fixed ``(n, m)`` feature factor
+#: ``Φ̃`` with ``Φ̃ Φ̃ᵀ ≈ K_x`` and ``m`` read off the declaration — the ones the
+#: reduced-rank joint route runs on. By ``NAME``, because each backend's twin
+#: carries its reference class's name (the spec-hash rule).
+#: ``EquispacedFourierGP`` is a reference-path prototype with no native twin
+#: (W5.6), so it reaches this route on the numpy path only.
+REDUCED_RANK_SOLVERS: frozenset[str] = frozenset({"HilbertSpaceGP", "EquispacedFourierGP"})
+
+
+def _columns_agree(block: np.ndarray) -> bool:
+    """Whether every column of an ``(n, T)`` block is identical, compared exactly."""
+    if block.ndim != 2:
+        return False
+    return bool(np.array_equal(np.broadcast_to(block[:, :1], block.shape), block))
+
+
+def _shared_column(variance: Any) -> Any:
+    """The rotated path's ``(n,)`` variance: column ``0`` of an agreeing block.
+
+    A ``(n,)`` vector is handed back untouched, so W5.9's callers see exactly
+    the object they passed; a block's column ``0`` holds the same float64
+    values W5.9's callers computed, so the rotated path is bit-identical.
+    """
+    array = np.asarray(variance)
+    if array.ndim == 2:
+        return array[:, 0]
+    return variance
+
+
 class JointGaussianProcessNoise(NoiseModel):
     """One correlated process over ``T`` channels of one model on a shared grid.
 
@@ -2762,19 +2797,41 @@ class JointGaussianProcessNoise(NoiseModel):
     reach into a kernel tree and rescale it, which is neither general nor
     something a kernel's declaration promises.
 
-    **The one restriction, and it is a restriction rather than an oversight.**
-    The rotation only leaves the *diagonal* noise term diagonal when the
-    channels share one per-sample variance: the rotated ``(s, s')`` block of
-    ``diag(sigma_t²)`` is ``Σ_t Q_{ts} Q_{ts'} diag(sigma_t²)``, which is
-    ``δ_{ss'} diag(sigma^2)`` when every ``sigma_t`` is the same vector and is a full
-    coupling otherwise. So the channels must carry **equal uncertainties**
-    (heteroscedastic along the grid as much as you like — it is the *channels*
-    that must agree, not the samples), which is exactly what a shared-grid
-    astrometric solution or a Stokes ``Q``/``U`` pair from one polarimeter
-    produces. Unequal per-channel errors lose the Kronecker structure
-    altogether and belong with the general LMC and mismatched grids on the
-    dense/reduced-rank follow-on (``likelihoods.md`` §15). This is checked at
-    composition, by name.
+    **Three routes behind one declaration (W5.24).** The rotation only leaves
+    the *diagonal* noise term diagonal when the channels share one per-sample
+    variance: the rotated ``(s, s')`` block of ``diag(sigma_t²)`` is
+    ``Σ_t Q_{ts} Q_{ts'} diag(sigma_t²)``, which is ``δ_{ss'} diag(sigma^2)``
+    when every ``sigma_t`` is the same vector and is a full coupling otherwise.
+    So the route is chosen by the channels' variances and the bound solver —
+    never by an argument — and :meth:`route` says which:
+
+    ``"rotated"``
+        Every channel carries the same variance vector (heteroscedastic along
+        the grid as much as you like — it is the *channels* that must agree).
+        The ``T`` rescaled scalar solves above, exact, ``T·O(N)`` under
+        ``QuasisepGP``: the fast path, and bit-identical to W5.9's.
+    ``"dense"``
+        Unequal per-channel variances with :class:`DenseGP` bound.
+        ``B ⊗ K_x + blockdiag(diag(sigma_t²))`` materialised and factorised
+        directly: exact for any sigma, ``O((TN)³)`` — the reference and the
+        small-``N`` path. The solver's ``jitter`` enters as ``B ⊗ jitter² I``,
+        which is what the rotated path's per-output jitter amounts to, so the
+        two exact routes describe one covariance.
+    ``"reduced_rank"``
+        Unequal per-channel variances with a feature solver bound —
+        :class:`HilbertSpaceGP`, or ``EquispacedFourierGP`` on this reference
+        path. With ``K_x ≈ Φ̃ Φ̃ᵀ``, ``B ⊗ K_x ≈ (I_T ⊗ Φ̃)(B ⊗ I_m)(I_T ⊗
+        Φ̃)ᵀ`` is a ``Tm``-feature model against a noise that is *diagonal in
+        the original basis*, so Woodbury is exact in the approximation at
+        ``O(TN·(Tm)²)`` and the whitened block is ``Tm`` long. The solver's
+        ``jitter`` is added to every channel's noise diagonal, exactly as the
+        solver adds it on one dataset. ``B ⊗ K_x`` is never formed.
+
+    Unequal variances with any other solver — :class:`QuasisepGP` above all,
+    which has no Kronecker-free ``O(N)`` form once the diagonal couples the
+    rotated outputs — are refused at composition, by name, with the fix named.
+    The general (non-Kronecker) LMC and mismatched grids remain
+    ``likelihoods.md`` §15's follow-on.
 
     **Where it lives.** Not in a :class:`Likelihood` — a likelihood scores one
     dataset and this scores ``T`` of them. It is declared on the
@@ -2811,7 +2868,9 @@ class JointGaussianProcessNoise(NoiseModel):
         ``TimeSeries``'s ``time`` axis — to get the O(N) path. The bound solver
         decides, once, for every rotated output: they all live on the same
         grid and see the same kernel, so a per-output choice could only differ
-        by accident.
+        by accident. Under unequal per-channel variances it also chooses the
+        route (see above): ``DenseGP`` the dense one, ``HilbertSpaceGP`` the
+        reduced-rank one.
     datasets
         The labels of the datasets this process spans, **in channel order**:
         ``B``'s row ``t`` is ``datasets[t]``. Two or more, distinct, and the
@@ -2820,11 +2879,11 @@ class JointGaussianProcessNoise(NoiseModel):
         ``B``. :class:`RotationCoupling` for ``T = 2``,
         :class:`CholeskyCoupling` in general.
     scale, jitter
-        As :class:`IndependentNoise`, applied to the channels' shared diagonal
+        As :class:`IndependentNoise`, applied to every channel's diagonal
         before ``B ⊗ K_x`` is added. One pair for the whole group, not one per
-        channel: the exactness condition above is that the group has **one**
-        diagonal, so a per-channel scale would be a per-channel diagonal and
-        would take the group off the exact path.
+        channel: a group-wide scale and floor leave equal channels equal, so
+        they never move a group off the rotated path, which a per-channel pair
+        could do silently.
 
     Examples
     --------
@@ -2979,12 +3038,12 @@ class JointGaussianProcessNoise(NoiseModel):
         *,
         predicted: np.ndarray | None = None,
     ) -> np.ndarray | None:
-        """The group's shared per-sample standard deviation, on one channel's container.
+        """One channel's per-sample standard deviation, on that channel's container.
 
-        Every channel returns the same vector by declaration — that is what
-        :meth:`check_group` enforces — so which container it is asked of does
-        not matter, and the group's own ``scale`` and ``jitter`` are applied
-        here exactly as :class:`IndependentNoise` applies its own.
+        The group's own ``scale`` and ``jitter`` are applied here exactly as
+        :class:`IndependentNoise` applies its own. Since W5.24 the channels
+        need not agree; :meth:`variances` asks every channel and is what the
+        group's callers use.
         """
         resolved = self.context({k: v for k, v in values.items() if k in self.parameters})
         if observed.uncertainty is None:
@@ -3001,6 +3060,94 @@ class JointGaussianProcessNoise(NoiseModel):
             )
             sigma = np.sqrt(sigma**2 + floor**2)
         return sigma
+
+    def variances(
+        self,
+        observed: Sequence[FunctionSamples],
+        retain: np.ndarray,
+        values: Mapping[str, Any],
+    ) -> np.ndarray | None:
+        """Every channel's per-sample variance, as one ``(n, T)`` block (**W5.24**).
+
+        *observed* is the group's containers in channel order. Column ``t`` is
+        :meth:`sigma` of channel ``t``, squared, so a group whose channels
+        carry the same uncertainties hands back ``T`` identical columns and
+        :meth:`route` sends it down the rotated path with column ``0`` —
+        bit for bit the vector W5.9's callers passed. ``None`` when no channel
+        has a sigma at all (no uncertainties and no jitter), which the caller
+        decides the meaning of.
+        """
+        if len(observed) != self.channels:
+            raise LikelihoodError(
+                f"a joint noise model over {self.channels} channels was handed "
+                f"{len(observed)} container(s)."
+            )
+        columns = [self.sigma(container, retain, values) for container in observed]
+        present = [column is not None for column in columns]
+        if not any(present):
+            return None
+        if not all(present):
+            raise LikelihoodError(
+                f"the channels of a joint noise model over {list(self._datasets)} disagree about "
+                f"whether they carry uncertainties at all: attach an uncertainty to every "
+                f"channel's container, or to none and give the group a jitter."
+            )
+        return np.ascontiguousarray(
+            np.column_stack([np.asarray(column, dtype=DTYPE) ** 2 for column in columns])
+        )
+
+    def route(self, variance: Any) -> str:
+        """Which of the three routes *variance* takes under the bound solver (**W5.24**).
+
+        ``"rotated"`` for a ``(n,)`` vector or an ``(n, T)`` block whose
+        columns are **identical** (compared exactly: the rotated path is exact
+        only when they are, and a tolerance would make it silently
+        approximate); otherwise ``"dense"`` under :class:`DenseGP` and
+        ``"reduced_rank"`` under a feature solver (:data:`REDUCED_RANK_SOLVERS`).
+        Any other solver with unequal channels is refused, by name, with the
+        fix — the same refusal :meth:`check_group` raises at composition.
+        """
+        block = np.asarray(variance)
+        if block.ndim == 1 or _columns_agree(block):
+            return ROTATED_ROUTE
+        name = self._solver.NAME
+        if name == "DenseGP":
+            return DENSE_ROUTE
+        if name in REDUCED_RANK_SOLVERS:
+            return REDUCED_RANK_ROUTE
+        raise LikelihoodError(self._unequal_refusal(None))
+
+    def _unequal_refusal(self, group: str | None) -> str:
+        where = "a joint noise group" if group is None else f"joint noise group {group!r}"
+        return (
+            f"{where} over {list(self._datasets)} carries different per-sample uncertainties "
+            f"on different channels, and its bound solver is {self._solver.NAME}. Unequal "
+            f"channels couple the rotated outputs through the noise diagonal, so the T rotated "
+            f"scalar solves are no longer the joint density, and {self._solver.NAME} has no "
+            f"route that is: QuasisepGP in particular has no Kronecker-free O(N) form of "
+            f"B (x) K_x + blockdiag(diag(sigma_t^2)). Bind DenseGP() for the exact O((TN)^3) "
+            f"route, or HilbertSpaceGP(basis_size=...) for the reduced-rank O(TN (Tm)^2) one "
+            f"(likelihoods.md §7)."
+        )
+
+    def latent_size(self, n_samples: int, route: str = ROTATED_ROUTE) -> int:
+        """The whitened block one correlated draw of the group takes, under *route*.
+
+        ``T`` times the bound solver's own on the rotated path (one draw per
+        rotated output), ``T·N`` on the dense one, and ``T·m`` on the
+        reduced-rank one — the size W5.24's item names, and the reason that
+        route is the NUTS-friendly one. Read off the declaration and the
+        sample count alone, as :meth:`GPSolver.latent_size` is.
+        """
+        per_output = int(self._solver.latent_size(self._kernel, int(n_samples)))
+        if route == DENSE_ROUTE:
+            return self.channels * int(n_samples)
+        if route in (ROTATED_ROUTE, REDUCED_RANK_ROUTE):
+            return self.channels * per_output
+        raise LikelihoodError(
+            f"unknown joint noise route {route!r}; the three are "
+            f"{[ROTATED_ROUTE, DENSE_ROUTE, REDUCED_RANK_ROUTE]}."
+        )
 
     def noise_params(
         self,
@@ -3162,33 +3309,55 @@ class JointGaussianProcessNoise(NoiseModel):
                 f"joint noise group {group!r}: dataset {label!r}'s own noise model "
                 f"({type(noise).__name__}) declares parameters "
                 f"{list(noise.parameters.names)}. The group owns the whole covariance, "
-                f"diagonal included, so a per-channel scale or jitter would give the channels "
-                f"different diagonals — and the rotation is exact only where they share one "
-                f"(see this class's docstring). Declare scale=/jitter= on the joint noise "
-                f"model instead, where they apply to the group."
+                f"diagonal included, so a per-channel scale or jitter would be a second noise "
+                f"model on the same residual — and could silently take the group off its "
+                f"rotated path (see this class's docstring). Declare scale=/jitter= on the "
+                f"joint noise model instead, where they apply to the group."
             )
 
     def _check_shared_diagonal(self, containers: Sequence[FunctionSamples], *, group: str) -> None:
-        """The channels' uncertainties must agree, because the rotation says so."""
+        """Which route the channels' uncertainties take — refused only where there is none.
+
+        W5.9 refused unequal per-channel uncertainties here outright; W5.24
+        lifts that. The rotation leaves ``I ⊗ diag(sigma²)`` diagonal only
+        when every channel carries the same vector, so equal channels keep the
+        rotated ``T·O(N)`` path and unequal ones go dense (``DenseGP``) or
+        reduced-rank (``HilbertSpaceGP``, or ``EquispacedFourierGP`` on the
+        reference path) — chosen by the bound solver, never by an argument.
+        What is still refused is the combination with no route at all: unequal
+        channels under any other solver, ``QuasisepGP`` above all. A group
+        whose channels disagree about carrying uncertainties at all is refused
+        too — there is no diagonal to build for the channel without one.
+
+        Compared on the **valid** samples only (the masks agree, which
+        :meth:`_check_shared_grid` has checked): a masked sample never reaches
+        a solve, so its uncertainty cannot choose a route. The group's own
+        ``scale`` and ``jitter`` are group-wide, so they cannot turn equal
+        channels unequal; the composition-time answer is therefore the
+        evaluation-time one.
+        """
         reference = containers[0]
-        if reference.uncertainty is None:
+        present = [container.uncertainty is not None for container in containers]
+        if not any(present):
             return
-        first = np.asarray(reference.uncertainty, dtype=DTYPE).ravel()
-        for label, container in zip(self._datasets[1:], containers[1:], strict=True):
-            if container.uncertainty is None or not np.array_equal(
-                np.asarray(container.uncertainty, dtype=DTYPE).ravel(), first
-            ):
-                raise LikelihoodError(
-                    f"joint noise group {group!r}: dataset {label!r} and dataset "
-                    f"{self._datasets[0]!r} carry different per-sample uncertainties. The "
-                    f"rotation Q^T (x) I leaves diag(sigma^2) diagonal only when every channel "
-                    f"has the same sigma vector; otherwise the rotated noise couples the outputs "
-                    f"again and "
-                    f"the T scalar solves are not the joint density. Heteroscedasticity *along* "
-                    f"the grid is fine; it is the channels that must agree. Unequal per-channel "
-                    f"errors need the dense or reduced-rank solver, recorded with the general "
-                    f"LMC as a follow-on in likelihoods.md §15."
-                )
+        if not all(present):
+            raise LikelihoodError(
+                f"joint noise group {group!r}: some of its channels "
+                f"{list(self._datasets)} carry per-sample uncertainties and some do not. Every "
+                f"channel's diagonal is built from its own container, so attach an uncertainty "
+                f"to every channel, or to none and give the group a jitter."
+            )
+        valid = np.asarray(reference.valid, dtype=bool).ravel()
+        first = np.asarray(reference.uncertainty, dtype=DTYPE).ravel()[valid]
+        for container in containers[1:]:
+            other = np.asarray(container.uncertainty, dtype=DTYPE).ravel()[valid]
+            if not np.array_equal(other, first):
+                break
+        else:
+            return
+        if self._solver.NAME == "DenseGP" or self._solver.NAME in REDUCED_RANK_SOLVERS:
+            return
+        raise LikelihoodError(self._unequal_refusal(group))
 
     # -- evaluation ----------------------------------------------------------
 
@@ -3243,6 +3412,183 @@ class JointGaussianProcessNoise(NoiseModel):
             eigenvalues,
         )
 
+    def _checked_eigen(self, values: Mapping[str, Any]) -> tuple[np.ndarray, np.ndarray]:
+        """``B``'s eigenpairs as float64 numpy, refused unless ``B`` is a covariance."""
+        eigenvalues, rotation = self.eigen(values)
+        eigenvalues = np.asarray(eigenvalues, dtype=DTYPE).ravel()
+        if eigenvalues.size != self.channels:
+            raise LikelihoodError(
+                f"the coupling returned {eigenvalues.size} eigenvalue(s) for "
+                f"{self.channels} channels."
+            )
+        if not np.all(np.isfinite(eigenvalues)) or np.any(eigenvalues <= 0.0):
+            raise LikelihoodError(
+                f"the coupling B has eigenvalues {eigenvalues.tolist()}, which are not all "
+                f"finite and positive — so B is not a covariance at this parameter vector and "
+                f"B ⊗ K_x is not a covariance either."
+            )
+        return eigenvalues, np.asarray(rotation, dtype=DTYPE)
+
+    def _variance_block(self, variance: Any, size: int) -> np.ndarray:
+        """*variance* as an ``(n, T)`` float64 block (a ``(n,)`` vector is broadcast)."""
+        block = _as_float64(np.asarray(variance), "per-channel variances")
+        if block.ndim == 1:
+            block = np.repeat(block[:, None], self.channels, axis=1)
+        if block.shape != (size, self.channels):
+            raise LikelihoodError(
+                f"a joint noise model over {self.channels} channels and {size} retained "
+                f"sample(s) needs an ({size}, {self.channels}) block of variances, got "
+                f"{block.shape}."
+            )
+        return block
+
+    def _stabiliser(self) -> float:
+        """The bound solver's ``jitter`` (a standard deviation), or zero."""
+        return float(getattr(self._solver, "jitter", 0.0) or 0.0)
+
+    def dense_covariance(
+        self,
+        variance: Any,
+        coordinates: np.ndarray,
+        values: Mapping[str, Any],
+        *,
+        kernel: Kernel | None = None,
+    ) -> np.ndarray:
+        """``B ⊗ (K_x + jitter² I) + blockdiag(diag(sigma_t²))``, materialised, channel-major.
+
+        The dense route's covariance (**W5.24**). Block ``(s, t)`` is
+        ``B[s, t] (K_x + jitter² I)``, and diagonal block ``t`` adds channel
+        ``t``'s own variances. ``jitter`` is the bound solver's; entering as
+        ``B ⊗ jitter² I`` it is what the rotated path's per-output
+        ``λ_s jitter²`` sums to, so at equal variances this is exactly the
+        matrix the rotated path factorises implicitly.
+        """
+        bound = self._kernel if kernel is None else kernel
+        points = _as_points(coordinates, "data coordinates")
+        size = int(points.shape[0])
+        block = self._variance_block(variance, size)
+        eigenvalues, rotation = self._checked_eigen(values)
+        coupling = (rotation * eigenvalues[None, :]) @ rotation.T
+        matrix = _as_float64(
+            np.asarray(bound.matrix(points, points, bound.resolve(values))), "kernel matrix"
+        )
+        stabiliser = self._stabiliser()
+        if stabiliser:
+            matrix = matrix + np.eye(size, dtype=DTYPE) * stabiliser**2
+        return np.kron(coupling, matrix) + np.diag(block.T.ravel())
+
+    def _dense_log_prob(
+        self,
+        block: np.ndarray,
+        variance: Any,
+        points: np.ndarray,
+        values: Mapping[str, Any],
+        bound: Kernel,
+    ) -> float:
+        """The dense route: one Cholesky of the ``TN x TN`` matrix."""
+        covariance = self.dense_covariance(variance, points, values, kernel=bound)
+        residual = block.T.ravel()
+        try:
+            factor = scipy.linalg.cho_factor(covariance, lower=True)
+        except (scipy.linalg.LinAlgError, ValueError) as error:
+            raise LikelihoodError(
+                f"the joint covariance B ⊗ K_x + blockdiag(diag(sigma_t^2)) is not positive "
+                f"definite, so its dense Cholesky factorisation failed ({error}). The usual "
+                f"causes are DenseGP's own: a zero uncertainty on some channel, coordinates "
+                f"closer than float64 can separate at this length scale, or B far above the "
+                f"data scale. Pass DenseGP(jitter=...) if the matrix is merely ill-conditioned."
+            ) from error
+        alpha = scipy.linalg.cho_solve(factor, residual)
+        log_determinant = 2.0 * float(np.sum(np.log(np.abs(np.diag(factor[0])))))
+        return -0.5 * (float(residual @ alpha) + log_determinant + residual.size * _LOG_2PI)
+
+    def features(
+        self, coordinates: np.ndarray, values: Mapping[str, Any], *, kernel: Kernel | None = None
+    ) -> np.ndarray:
+        """``Φ̃`` with ``Φ̃ Φ̃ᵀ ≈ K_x``: the bound feature solver's ``(n, m)`` factor.
+
+        Read through :meth:`GPSolver.latent_transform` applied to the identity
+        — ``f = Φ̃ z`` for every unit ``z`` at once — so it is the *same*
+        factor the solver scores and draws with, on whichever backend declared
+        it, rather than a second construction of the basis that could drift
+        from the first. Only meaningful under a feature solver
+        (:data:`REDUCED_RANK_SOLVERS`); refused otherwise.
+        """
+        if self._solver.NAME not in REDUCED_RANK_SOLVERS:
+            raise LikelihoodError(
+                f"{self._solver.NAME} is not a reduced-rank feature solver, so K_x has no "
+                f"(n, m) feature factor to give. The reduced-rank route needs one of "
+                f"{sorted(REDUCED_RANK_SOLVERS)}."
+            )
+        bound = self._kernel if kernel is None else kernel
+        points = _as_points(coordinates, "data coordinates")
+        size = int(self._solver.latent_size(bound, int(points.shape[0])))
+        identity = np.eye(size, dtype=DTYPE)
+        return _as_float64(
+            np.asarray(
+                self._solver.latent_transform(bound, points, identity, bound.resolve(values))
+            ),
+            "reduced-rank features",
+        )
+
+    def _reduced_rank_log_prob(
+        self,
+        block: np.ndarray,
+        variance: Any,
+        points: np.ndarray,
+        values: Mapping[str, Any],
+        bound: Kernel,
+    ) -> float:
+        r"""The reduced-rank route: Woodbury against the per-channel diagonal.
+
+        With ``B = F Fᵀ`` (``F = Q √Λ``) and ``G = (I_T ⊗ Φ̃)(F ⊗ I_m)``, the
+        covariance is ``G Gᵀ + D`` with ``D = blockdiag(diag(sigma_t² +
+        jitter²))``, and
+
+        * ``M = I_{Tm} + Gᵀ D⁻¹ G``, whose ``(s, u)`` block is
+          ``Σ_t F_{ts} F_{tu} Φ̃ᵀ D_t⁻¹ Φ̃`` — ``T`` Gram matrices, never
+          ``B ⊗ K_x``;
+        * ``log|Σ| = log|D| + log|M|``;
+        * ``rᵀ Σ⁻¹ r = rᵀ D⁻¹ r - vᵀ M⁻¹ v`` with ``v_s = Σ_t F_{ts} Φ̃ᵀ D_t⁻¹ r_t``.
+        """
+        size = int(points.shape[0])
+        variances = self._variance_block(variance, size) + self._stabiliser() ** 2
+        if not np.all(np.isfinite(variances)) or np.any(variances <= 0.0):
+            raise LikelihoodError(
+                f"the reduced-rank joint route needs a strictly positive noise diagonal on every "
+                f"channel: Woodbury inverts blockdiag(diag(sigma_t^2 + jitter^2)) directly, so a "
+                f"zero uncertainty is a division by zero. Pass {self._solver.NAME}(jitter=...), "
+                f"or bind DenseGP."
+            )
+        eigenvalues, rotation = self._checked_eigen(values)
+        root = rotation * np.sqrt(eigenvalues)[None, :]
+        phi = self.features(points, values, kernel=bound)
+        count = int(phi.shape[1])
+        width = self.channels * count
+        inverse = 1.0 / variances
+        gram = np.einsum("nk,nt,nl->tkl", phi, inverse, phi)
+        capacitance = np.einsum("ts,tu,tkl->skul", root, root, gram).reshape(width, width) + np.eye(
+            width, dtype=DTYPE
+        )
+        weighted = block * inverse
+        projected = ((phi.T @ weighted) @ root).T.ravel()
+        try:
+            factor = scipy.linalg.cho_factor(capacitance, lower=True)
+        except (scipy.linalg.LinAlgError, ValueError) as error:
+            raise LikelihoodError(
+                f"the reduced-rank joint capacitance I + G^T D^-1 G is not positive definite, so "
+                f"the Woodbury solve failed ({error}). It is positive definite for every "
+                f"admissible parameter, so this is numerical: reduce basis_size, or raise the "
+                f"solver's jitter."
+            ) from error
+        log_determinant = float(np.sum(np.log(variances))) + 2.0 * float(
+            np.sum(np.log(np.abs(np.diag(factor[0]))))
+        )
+        quadratic = float(np.sum(block * weighted)) - float(
+            projected @ scipy.linalg.cho_solve(factor, projected)
+        )
+        return -0.5 * (quadratic + log_determinant + block.size * _LOG_2PI)
+
     def log_prob(
         self,
         residuals: Any,
@@ -3252,7 +3598,7 @@ class JointGaussianProcessNoise(NoiseModel):
         *,
         kernel: Kernel | None = None,
     ) -> float:
-        """``log N(vec(R); 0, B ⊗ K_x + I_T ⊗ diag(variance))``.
+        """``log N(vec(R); 0, B ⊗ K_x + blockdiag(diag(variance_t)))``.
 
         Parameters
         ----------
@@ -3260,7 +3606,9 @@ class JointGaussianProcessNoise(NoiseModel):
             ``observed - predicted`` per channel, in this model's own channel
             order: a sequence of ``T`` vectors or one ``(n, T)`` block.
         variance
-            The shared per-sample variance, ``(n,)``.
+            The per-sample variances: an ``(n, T)`` block from
+            :meth:`variances`, or a shared ``(n,)`` vector (W5.9's form). The
+            route follows from it and the bound solver — see :meth:`route`.
         coordinates
             The shared grid, ``(n, d)``.
         values
@@ -3271,6 +3619,13 @@ class JointGaussianProcessNoise(NoiseModel):
         """
         bound = self._kernel if kernel is None else kernel
         points = _as_points(coordinates, "data coordinates")
+        route = self.route(variance)
+        if route != ROTATED_ROUTE:
+            block = _channel_block(residuals, self.channels)
+            if route == DENSE_ROUTE:
+                return float(self._dense_log_prob(block, variance, points, values, bound))
+            return float(self._reduced_rank_log_prob(block, variance, points, values, bound))
+        variance = _shared_column(variance)
         problems, eigenvalues = self._rotated_problems(residuals, variance, values)
         resolved = bound.resolve(values)
         total = 0.0
@@ -3299,9 +3654,27 @@ class JointGaussianProcessNoise(NoiseModel):
         because the rotated outputs are the things that are independent: a
         leave-one-out conditional of channel ``ra`` alone would condition on
         ``dec``'s value at the same epoch without saying so.
+
+        **Rotated route only** (W5.24). Under unequal per-channel variances
+        the rotated outputs are *not* independent — the noise diagonal couples
+        them — so there is no ``T``-column decomposition of the kind this
+        method promises, and it is refused rather than computed on the wrong
+        premise. A per-``(sample, channel)`` decomposition of the dense or
+        reduced-rank density is a recorded follow-on.
         """
         bound = self._kernel if kernel is None else kernel
         points = _as_points(coordinates, "data coordinates")
+        route = self.route(variance)
+        if route != ROTATED_ROUTE:
+            raise LikelihoodError(
+                f"this joint noise group's channels carry different per-sample uncertainties, so "
+                f"it is scored on the {route!r} route, and its rotated outputs are not "
+                f"independent there: the noise diagonal couples them. The 'joint' pointwise "
+                f"decomposition is indexed by independent rotated outputs and has no honest "
+                f"value on this route; use the per-dataset log_likelihood group every run "
+                f"already carries."
+            )
+        variance = _shared_column(variance)
         problems, eigenvalues = self._rotated_problems(residuals, variance, values)
         resolved = bound.resolve(values)
         columns = [
@@ -3332,9 +3705,22 @@ class JointGaussianProcessNoise(NoiseModel):
         puts the correlation back. The solver's own jitter is folded in
         exactly as :meth:`GaussianFamily.sample` folds it in, and for the same
         reason: it is part of the covariance the density scores.
+
+        Under unequal per-channel variances (**W5.24**) only the white part
+        moves: the correlated GP part is drawn exactly as above — through the
+        bound solver's whitening, which is ``Φ̃ z`` with ``m`` coefficients per
+        output under a feature solver, so ``T·m`` in all — and each channel's
+        own white noise is then added in the *original* basis, where it is
+        diagonal. The solver's jitter goes where the route's density puts it:
+        inside ``B ⊗ (K_x + jitter² I)`` on the dense route, on each channel's
+        diagonal on the reduced-rank one.
         """
         bound = self._kernel if kernel is None else kernel
         points = _as_points(coordinates, "data coordinates")
+        route = self.route(variance)
+        if route != ROTATED_ROUTE:
+            return self._sample_unequal(route, predicted, variance, points, values, rng, bound)
+        variance = _shared_column(variance)
         eigenvalues, rotation = self.eigen(values)
         eigenvalues = np.asarray(eigenvalues, dtype=DTYPE).ravel()
         resolved = bound.resolve(values)
@@ -3353,6 +3739,37 @@ class JointGaussianProcessNoise(NoiseModel):
         block = rotated @ np.asarray(rotation, dtype=DTYPE).T
         means = _stack_channels(predicted, "predicted values")
         return np.ascontiguousarray(means + block)
+
+    def _sample_unequal(
+        self,
+        route: str,
+        predicted: Sequence[Any],
+        variance: Any,
+        points: np.ndarray,
+        values: Mapping[str, Any],
+        rng: np.random.Generator,
+        bound: Kernel,
+    ) -> np.ndarray:
+        """The dense and reduced-rank routes' draw. See :meth:`sample`."""
+        size = int(points.shape[0])
+        block = self._variance_block(variance, size)
+        eigenvalues, rotation = self._checked_eigen(values)
+        resolved = bound.resolve(values)
+        stabiliser = self._stabiliser()
+        columns = []
+        for index in range(self.channels):
+            whitened = rng.standard_normal(self._solver.latent_size(bound, size))
+            draw = np.asarray(
+                self._solver.latent_transform(bound, points, whitened, resolved), dtype=DTYPE
+            )
+            if route == DENSE_ROUTE and stabiliser:
+                draw = draw + stabiliser * rng.standard_normal(size)
+            columns.append(np.sqrt(eigenvalues[index]) * draw)
+        correlated = np.column_stack(columns) @ rotation.T
+        white = block if route == DENSE_ROUTE else block + stabiliser**2
+        noise = np.sqrt(white) * rng.standard_normal((size, self.channels))
+        means = _stack_channels(predicted, "predicted values")
+        return np.ascontiguousarray(means + correlated + noise)
 
     # -- provenance ----------------------------------------------------------
 

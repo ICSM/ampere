@@ -2142,8 +2142,13 @@ class DatasetCollection(Mapping[str, Dataset]):
         residuals = [
             self._group_residual(label, predicted[label], retain) for label in noise.datasets
         ]
-        sigma = noise.sigma(first.observed, retain, values)
-        if sigma is None:
+        # W5.24: every channel's own variances, as an (n, T) block. Equal
+        # channels give T identical columns and the rotated path; unequal ones
+        # the dense or reduced-rank route the bound solver names.
+        variance = noise.variances(
+            [self._datasets[label].observed for label in noise.datasets], retain, values
+        )
+        if variance is None:
             raise DatasetError(
                 f"joint noise group {group!r} has no per-sample sigma: its channels' containers "
                 f"carry no uncertainties and the group declares no jitter. Attach uncertainties, "
@@ -2153,7 +2158,7 @@ class DatasetCollection(Mapping[str, Dataset]):
         return float(
             noise.log_prob(
                 residuals,
-                np.asarray(sigma, dtype=DTYPE) ** 2,
+                variance,
                 coordinates,
                 values,
                 kernel=noise.kernel_for(first.observed),
@@ -2231,12 +2236,12 @@ class DatasetCollection(Mapping[str, Dataset]):
             np.asarray(predicted[label].values, dtype=DTYPE).ravel()[retain]
             for label in noise.datasets
         ]
-        sigma = noise.sigma(first.observed, retain, values)
-        variance = (
-            np.zeros(int(np.count_nonzero(retain)), dtype=DTYPE)
-            if sigma is None
-            else np.asarray(sigma, dtype=DTYPE) ** 2
+        # W5.24: every channel's own variances (see group_log_likelihood).
+        variance = noise.variances(
+            [self._datasets[label].observed for label in noise.datasets], retain, values
         )
+        if variance is None:
+            variance = np.zeros(int(np.count_nonzero(retain)), dtype=DTYPE)
         coordinates = sample_coordinates(first.observed)[retain]
         block = noise.sample(
             means,

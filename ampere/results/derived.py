@@ -968,12 +968,13 @@ def _joint_pointwise_of(
         ]
         if not np.any(retain):
             return rows
-        sigma = noise.sigma(first.observed, retain, values)
-        variance = (
-            np.zeros(int(np.count_nonzero(retain)))
-            if sigma is None
-            else np.asarray(sigma, dtype=float) ** 2
+        # W5.24: every channel's own variances; unequal channels are refused
+        # by pointwise_log_prob, whose rotated outputs are then not independent.
+        variance = noise.variances(
+            [problem.datasets[label].observed for label in members], retain, values
         )
+        if variance is None:
+            variance = np.zeros(int(np.count_nonzero(retain)))
         terms = noise.pointwise_log_prob(
             residuals,
             variance,

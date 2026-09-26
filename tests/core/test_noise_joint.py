@@ -23,6 +23,7 @@ from ampere.core import (
     FittingProblem,
     GaussianFamily,
     GaussianProcessNoise,
+    HilbertSpaceGP,
     IndependentNoise,
     JointGaussianProcessNoise,
     Likelihood,
@@ -209,6 +210,59 @@ class TestTheJointDensity:
         assert np.all(np.isfinite(terms))
 
 
+class TestHeteroscedasticChannels:
+    """W5.24: unequal per-channel variances, on the dense and reduced-rank routes."""
+
+    @staticmethod
+    def _variance() -> np.ndarray:
+        rng = np.random.default_rng(20260926)
+        return (SIGMA * np.exp(rng.uniform(-0.7, 0.7, size=(GRID.size, 2)))) ** 2
+
+    @staticmethod
+    def _reference(noise: JointGaussianProcessNoise, variance: np.ndarray, block) -> float:
+        matrix = np.asarray(noise.coupling_matrix(COUPLING))
+        covariance = noise.kernel.matrix(GRID[:, None], GRID[:, None], noise.kernel.resolve({}))
+        stacked = np.kron(matrix, covariance) + np.diag(variance.T.ravel())
+        return dense_log_density(stacked, block.T.ravel())
+
+    def test_the_dense_route_matches_the_materialised_matrix(
+        self, residual_block: np.ndarray
+    ) -> None:
+        noise = noise_model()
+        variance = self._variance()
+        got = noise.log_prob(residual_block, variance, GRID[:, None], COUPLING)
+        expected = self._reference(noise, variance, residual_block)
+        assert got == pytest.approx(expected, rel=1e-10, abs=1e-10)
+
+    def test_the_reduced_rank_route_converges_to_it(self, residual_block: np.ndarray) -> None:
+        variance = self._variance()
+        expected = self._reference(noise_model(), variance, residual_block)
+        errors = [
+            abs(
+                noise_model(solver=HilbertSpaceGP(basis_size=size, boundary_factor=3.0)).log_prob(
+                    residual_block, variance, GRID[:, None], COUPLING
+                )
+                - expected
+            )
+            for size in (16, 32, 128)
+        ]
+        assert errors[2] < errors[0]
+        assert errors[2] < 1e-2
+
+    def test_pointwise_terms_are_refused_off_the_rotated_path(
+        self, residual_block: np.ndarray
+    ) -> None:
+        with pytest.raises(LikelihoodError, match="not independent"):
+            noise_model().pointwise_log_prob(
+                residual_block, self._variance(), GRID[:, None], COUPLING
+            )
+
+    def test_the_latent_size_is_t_times_m_on_the_reduced_rank_route(self) -> None:
+        noise = noise_model(solver=HilbertSpaceGP(basis_size=24))
+        assert noise.latent_size(GRID.size, "reduced_rank") == 48
+        assert noise_model().latent_size(GRID.size, "dense") == 2 * GRID.size
+
+
 class TestTheDrawIsCorrelated:
     """The generative half, against the same covariance the density scores."""
 
@@ -314,9 +368,50 @@ class TestTheCollectionBinding:
         with pytest.raises(DatasetError, match="not in this collection"):
             self._collection(joint={"astrom": stray})
 
-    def test_channels_with_different_uncertainties_are_refused(self) -> None:
+    def test_different_uncertainties_under_quasisep_are_refused_with_the_fix(self) -> None:
+        """W5.24: no Kronecker-free O(N) form, so refused by name, the fix named."""
         other = Dataset(channel(sigma=0.05), likelihood=Likelihood(GaussianFamily()), label="dec")
-        with pytest.raises(LikelihoodError, match="different per-sample uncertainties"):
+        with pytest.raises(LikelihoodError, match="different per-sample uncertainties") as caught:
+            self._collection(
+                datasets={"dec": other}, joint={"astrom": noise_model(solver=QuasisepGP())}
+            )
+        assert "DenseGP" in str(caught.value)
+        assert "HilbertSpaceGP" in str(caught.value)
+
+    @pytest.mark.parametrize(
+        ("solver", "route"),
+        [(DenseGP(), "dense"), (HilbertSpaceGP(basis_size=32), "reduced_rank")],
+    )
+    def test_different_uncertainties_compose_on_the_solvers_route(
+        self, solver: object, route: str
+    ) -> None:
+        """W5.24 lifts W5.9's refusal: the bound solver chooses the route."""
+        other = Dataset(channel(sigma=0.05), likelihood=Likelihood(GaussianFamily()), label="dec")
+        noise = noise_model(solver=solver)
+        collection = self._collection(datasets={"dec": other}, joint={"astrom": noise})
+        variance = noise.variances(
+            [collection["ra"].observed, collection["dec"].observed],
+            np.ones(GRID.size, dtype=bool),
+            {},
+        )
+        assert variance is not None
+        assert variance.shape == (GRID.size, 2)
+        assert noise.route(variance) == route
+
+    def test_equal_uncertainties_keep_the_rotated_path(self) -> None:
+        noise = noise_model(solver=QuasisepGP())
+        collection = self._collection(joint={"astrom": noise})
+        variance = noise.variances(
+            [collection["ra"].observed, collection["dec"].observed],
+            np.ones(GRID.size, dtype=bool),
+            {},
+        )
+        assert noise.route(variance) == "rotated"
+
+    def test_a_channel_without_uncertainties_beside_one_with_is_refused(self) -> None:
+        bare = TimeSeries(GRID * u.day, np.zeros(GRID.size) * u.mas)
+        other = Dataset(bare, likelihood=Likelihood(GaussianFamily()), label="dec")
+        with pytest.raises(LikelihoodError, match="some of its channels"):
             self._collection(datasets={"dec": other}, joint={"astrom": noise_model()})
 
     def test_channels_on_different_grids_are_refused(self) -> None:
