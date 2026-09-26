@@ -48,7 +48,7 @@ import numpy as np
 import pytest
 import scipy.linalg
 
-from ampere.core import GaussianFamily
+from ampere.core import GaussianFamily, Likelihood
 from ampere.core.efgp import (
     fourier_grid,
     solve_iterative,
@@ -57,7 +57,6 @@ from ampere.core.efgp import (
     toeplitz_matrix,
 )
 from examples.image import bakeoff
-from examples.image.grid_gp import GridLikelihood
 
 pytest.importorskip("pytest_benchmark")
 
@@ -110,7 +109,7 @@ def _log_prob(pixels: int, solver: Any) -> Callable[[], float]:
 
     built = case(pixels)
     kernel = bakeoff.kernel_for(built)
-    likelihood = GridLikelihood(GaussianFamily(), noise_module.GaussianProcessNoise(kernel, solver))
+    likelihood = Likelihood(GaussianFamily(), noise_module.GaussianProcessNoise(kernel, solver))
 
     def call() -> float:
         return likelihood.log_prob(built.predicted, built.observed, values={})
@@ -191,12 +190,12 @@ def test_resolution_crossover(benchmark: Any, per_axis: int, family: str) -> Non
     where it falls near ``m = 576``, and reported in ``likelihoods.md`` §7.
     """
     if family == "hsgp":
-        solver = bakeoff.GridHilbertSpaceGP(
+        solver = bakeoff.HilbertSpaceGP(
             basis_size=(per_axis, per_axis), boundary_factor=bakeoff.BOUNDARY_FACTOR
         )
         label = f"HSGP m={per_axis**2}"
     else:
-        solver = bakeoff.GridEquispacedFourierGP(
+        solver = bakeoff.EquispacedFourierGP(
             basis_size=(per_axis + 1, per_axis + 1), boundary_factor=bakeoff.BOUNDARY_FACTOR
         )
         label = f"EFGP m={(per_axis + 1) ** 2}"
