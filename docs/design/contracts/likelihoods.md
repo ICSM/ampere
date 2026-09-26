@@ -2580,9 +2580,24 @@ Each is a decision, not an oversight. Each has an extension point.
    form, in which a degree-2 polynomial in `tₙ − tₘ` is a rank-3 bilinear form
    in `(1, t, t²)`. §6 carries the algebra. Nothing shipped on the strength of
    the wrong claim: no Matérn-5/2 existed to be flagged.
-4. **`GaussianProcessNoise` only supports `Layout.POINTS`.** A gridded 2D GP is
-   the SVGP/SKI/Vecchia slots' business (Phase 5); `IndependentNoise` works on
-   any layout.
+4. ~~**`GaussianProcessNoise` only supports `Layout.POINTS`.**~~ **Lifted at
+   W5.21.** The refusal was a gate, not mathematics: a stationary kernel over a
+   grid's axes is a function of coordinates exactly as it is over a point set,
+   and `sample_coordinates` (W5.5) already broadcasts a `Layout.GRID`
+   container's separable axes into the `(N, d)` matrix a kernel wants.
+   `GPSolver.check_compatible` now accepts `Layout.POINTS` or `Layout.GRID`,
+   and `Likelihood._coordinates` builds its coordinate matrix through
+   `sample_coordinates` for either layout, so `DenseGP` and `HilbertSpaceGP`
+   compose over an `Image` exactly as they do over a `Spectrum`.
+   `Kernel.check_axes` already refused a leaf selecting axes the container
+   lacks, for either layout, so no new check was needed for "the kernel's
+   selected axes are the container's own". The ordered-1D and
+   quasiseparable-product rules are unchanged: `QuasisepGP` still refuses a
+   kernel selecting both of a grid's axes by name, because it counts the
+   kernel's *selected* axes rather than the container's layout. The
+   SVGP/SKI/Vecchia slots remain about *exploiting* a grid's structure, not
+   about being allowed to see one; `IndependentNoise` worked on any layout
+   already.
 5. **Rice and von Mises are declared, not implemented.** Both raise on
    composition; the implementations are Phase 4's. Their parameterisations
    were fixed by the 2026-09-03 rulings (§17 Q3/Q4): the model predicts the
