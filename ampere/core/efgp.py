@@ -119,7 +119,7 @@ from .exceptions import LikelihoodError
 from .hsgp import basis_size, check_spectral_support, normalise_counts
 from .kernels import Kernel, _as_float64, _as_points
 from .results_schema import FunctionSamples
-from .likelihood import GPConditional, GPSolver, _components
+from .likelihood import GPConditional, GPSolver, _cho_solve, _components
 
 __all__ = [
     "DEFAULT_GRID_SIZE",
@@ -739,7 +739,7 @@ class EquispacedFourierGP(GPSolver):
         direct = float(
             np.sum(residuals * residuals / (diagonal if residuals.ndim == 1 else diagonal[:, None]))
         )
-        corrected = float(np.real(np.vdot(projected, scipy.linalg.cho_solve(factor, projected))))
+        corrected = float(np.real(np.vdot(projected, _cho_solve(factor, projected))))
         columns = _components(residuals)
         return -0.5 * (direct - corrected + columns * log_determinant + residuals.size * _LOG_2PI)
 
@@ -768,7 +768,7 @@ class EquispacedFourierGP(GPSolver):
         diagonal = self._diagonal(variance)
         root, factor = self._normal_factor(grid, selected, weights, diagonal)
         projected = self._right_hand_side(grid, selected, root, residuals, diagonal)
-        correction = scipy.linalg.cho_solve(factor, projected)
+        correction = _cho_solve(factor, projected)
 
         rows = int(residuals.shape[0])
         columns = _components(residuals)
@@ -856,7 +856,7 @@ class EquispacedFourierGP(GPSolver):
         applies by FFT.
         """
         generator = toeplitz_generator(grid, points, 1.0 / diagonal)
-        solved = scipy.linalg.cho_solve(factor, projected)
+        solved = _cho_solve(factor, projected)
         if solved.ndim == 1:
             return root * toeplitz_matvec(grid, generator, root * solved)
         return np.stack(

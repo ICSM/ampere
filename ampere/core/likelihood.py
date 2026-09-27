@@ -213,6 +213,51 @@ def _components(residual: np.ndarray) -> int:
     return 1 if array.ndim == 1 else int(array.shape[1])
 
 
+def _cho_solve(factor: tuple[np.ndarray, Any], rhs: Any) -> np.ndarray:
+    """:func:`scipy.linalg.cho_solve`, without the transposing copy of the factor (**W5.17**).
+
+    scipy's batched ``cho_factor`` (1.18) returns a **C-ordered** factor, and
+    ``cho_solve`` hands it to LAPACK ``potrs``, which needs Fortran order — so
+    f2py first makes a transposing copy of the whole ``N x N`` factor, on every
+    solve. ``docs/design/performance_memo.md`` §3.4 measured that copy at ~0.9 s
+    for N = 4 096, larger than the solve and three quarters of the
+    factorisation itself. The transpose of a C-ordered lower factor *is* a
+    Fortran-ordered upper factor of the same matrix, in the same memory, so
+    ``potrs`` is handed that view with the triangle flag flipped: no copy, and
+    the solution agrees with ``cho_solve``'s **bit for bit** (checked at
+    N = 3 … 4 096 with 1, 2 and 7 right-hand sides, and by the conformance
+    suite).
+
+    The right-hand side is checked for finiteness exactly as ``cho_solve``
+    checks it; the factor is not re-checked, since every caller's comes from
+    ``cho_factor``, which refused a non-finite matrix before factorising it.
+    Anything else — a complex factor, whose transpose is not its adjoint, or
+    a layout this does not recognise — goes through ``cho_solve`` unchanged.
+    """
+    matrix, lower = factor
+    if (
+        not isinstance(matrix, np.ndarray)
+        or matrix.ndim != 2
+        or np.iscomplexobj(matrix)
+        or not matrix.flags.c_contiguous
+        or matrix.flags.f_contiguous
+    ):
+        return scipy.linalg.cho_solve(factor, rhs)
+    right = np.asarray_chkfinite(rhs)
+    if (
+        right.size == 0
+        or right.ndim > 2
+        or np.iscomplexobj(right)
+        or right.shape[0] != matrix.shape[0]
+    ):
+        return scipy.linalg.cho_solve(factor, rhs)
+    (potrs,) = scipy.linalg.get_lapack_funcs(("potrs",), (matrix, right))
+    solution, info = potrs(matrix.T, right, lower=not bool(lower))
+    if info != 0:  # pragma: no cover - potrs reports only an illegal argument
+        raise ValueError(f"illegal value in {-info}th argument of internal potrs")
+    return solution
+
+
 # ---------------------------------------------------------------------------
 # Declarations: marginalisation and censoring
 # ---------------------------------------------------------------------------
@@ -864,7 +909,7 @@ class DenseGP(GPSolver):
         log-determinant computed once and counted ``k`` times.
         """
         factor = self._factor(kernel, coordinates, variance, values)
-        alpha = scipy.linalg.cho_solve(factor, residual)
+        alpha = _cho_solve(factor, residual)
         log_determinant = 2.0 * float(np.sum(np.log(np.abs(np.diag(factor[0])))))
         # ``np.sum(r * alpha)`` rather than ``r @ alpha``: the same number for a
         # vector, and the sum of the k quadratic forms for a block, whereas the
@@ -895,10 +940,10 @@ class DenseGP(GPSolver):
         the normalisation and the log-precision are counted ``k`` times.
         """
         factor = self._factor(kernel, coordinates, variance, values)
-        alpha = scipy.linalg.cho_solve(factor, residual)
+        alpha = _cho_solve(factor, residual)
         rows = np.shape(residual)[0]
         columns = _components(residual)
-        precision_diagonal = np.diag(scipy.linalg.cho_solve(factor, np.eye(rows)))
+        precision_diagonal = np.diag(_cho_solve(factor, np.eye(rows)))
         quadratic = np.sum(np.reshape(alpha, (rows, columns)) ** 2, axis=1)
         return np.asarray(
             columns * (0.5 * np.log(precision_diagonal) - 0.5 * _LOG_2PI)
@@ -925,8 +970,8 @@ class DenseGP(GPSolver):
         # An (n, k) residual gives an (m, k) conditioned mean -- one column per
         # realisation -- beside the single (m,) variance the k realisations
         # share, since a posterior variance does not depend on the data at all.
-        mean = cross @ scipy.linalg.cho_solve(factor, residual)
-        solved = scipy.linalg.cho_solve(factor, cross.T)
+        mean = cross @ _cho_solve(factor, residual)
+        solved = _cho_solve(factor, cross.T)
         prior_variance = kernel.diagonal(target, values)
         posterior = prior_variance - np.einsum("ij,ji->i", cross, solved)
         return GPConditional(mean=mean, variance=posterior)
@@ -1657,7 +1702,7 @@ class HilbertSpaceGP(GPSolver):
         r"""``(K + D)⁻¹ right`` by Woodbury, for an ``(n,)`` or ``(n, k)`` block."""
         divisor = diagonal if right.ndim == 1 else diagonal[:, None]
         direct = right / divisor
-        return direct - weighted @ scipy.linalg.cho_solve(factor, scaled.T @ direct)
+        return direct - weighted @ _cho_solve(factor, scaled.T @ direct)
 
     # -- the interface -------------------------------------------------------
 
@@ -3498,7 +3543,7 @@ class JointGaussianProcessNoise(NoiseModel):
                 f"closer than float64 can separate at this length scale, or B far above the "
                 f"data scale. Pass DenseGP(jitter=...) if the matrix is merely ill-conditioned."
             ) from error
-        alpha = scipy.linalg.cho_solve(factor, residual)
+        alpha = _cho_solve(factor, residual)
         log_determinant = 2.0 * float(np.sum(np.log(np.abs(np.diag(factor[0])))))
         return -0.5 * (float(residual @ alpha) + log_determinant + residual.size * _LOG_2PI)
 
@@ -3585,7 +3630,7 @@ class JointGaussianProcessNoise(NoiseModel):
             np.sum(np.log(np.abs(np.diag(factor[0]))))
         )
         quadratic = float(np.sum(block * weighted)) - float(
-            projected @ scipy.linalg.cho_solve(factor, projected)
+            projected @ _cho_solve(factor, projected)
         )
         return -0.5 * (quadratic + log_determinant + block.size * _LOG_2PI)
 
