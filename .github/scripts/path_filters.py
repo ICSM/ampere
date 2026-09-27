@@ -144,9 +144,14 @@ def _suite_jobs(environment: str) -> list[str]:
 
 DEV_JOBS = [
     "typecheck (pyrefly, new namespaces)",
-    "test (py311)",
+    # W5.18: py3.11 was dropped from the `test:` job's matrix on 2026-09-22
+    # (ci.yml ~258-264: arviz 1.x needs 3.12; the freed leg became 3.14) --
+    # this list still named the retired job and never gained the new one,
+    # so a py3.11-only PR reported "run everything" here while `test:`
+    # itself had nothing to run under that name.
     "test (py312)",
     "test (py313)",
+    "test (py314)",
     *_suite_jobs("dev"),
     "minimal install (no extras)",
 ]
