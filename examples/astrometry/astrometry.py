@@ -78,12 +78,14 @@ The period-aliasing arm (W5.15)
 --------------------------------
 ``--wide-prior`` swaps the informed period prior (``norm(400, 30)``) for
 ``loguniform(50, 2000)`` — W4.9's exact measured prior, on the same
-twenty-eight epochs — which reproduces, rather than merely describes, the
+twenty-eight epochs W4.9 shipped (its first, twelve-epoch trial is where the
+finding was made) — which reproduces, rather than merely describes, the
 hazard :doc:`the tutorial page </astrometry>` §6 used to only narrate: an
-emcee ensemble or a multi-chain NUTS run both alias onto one spurious period
-and stay there. The remedy this arm exists to demonstrate is nested
+emcee ensemble splits across the true period and an alias and never
+reweighs the two. The remedy this arm exists to demonstrate is nested
 sampling, which does not need to choose a mode at all: ``--engine dynesty``
-(the default once ``--wide-prior`` is given), ``--engine nautilus`` or
+(the default once ``--wide-prior`` is given, with :data:`DYNESTY_SAMPLE`
+as its proposal method), ``--engine nautilus`` or
 ``--engine ultranest`` return every alias as a separately-weighed mode,
 which :func:`period_modes` extracts from the equal-weight draws and
 ``main`` prints as a table, mass fraction and local evidence
@@ -133,6 +135,7 @@ __all__ = [
     "DEFAULT_STEPS",
     "DEFAULT_WALKERS",
     "DEFAULT_WARMUP",
+    "DYNESTY_SAMPLE",
     "ENGINES",
     "HETEROSCEDASTIC_SOLVER",
     "JOINT_LOG_VARIANCE_PRIOR",
@@ -164,6 +167,18 @@ BACKENDS = ("reference", "torch", "jax")
 #: NUTS on torch/jax. The three nested samplers are the standard remedy for
 #: the multi-modal posterior :data:`WIDE_PERIOD_PRIOR` produces (W5.15).
 ENGINES = ("emcee", "nuts", "dynesty", "nautilus", "ultranest")
+
+#: dynesty's proposal method for this study (**W5.15**, set at review). dynesty's
+#: ``sample="auto"`` chooses uniform draws inside the bounding ellipsoids below
+#: ten dimensions; on this likelihood -- 0.03 mas over twenty-eight epochs, a
+#: period peak about a day wide inside a 50--2000 day prior -- the ellipsoids'
+#: acceptance fell to a few per cent and neither the wide- nor the informed-prior
+#: run had converged after 38 and 12 minutes. Slice sampling along random
+#: directions converges the same wide-prior run in about four minutes at the
+#: default live points (ln Z +92.25 +- 0.55, agreeing with nautilus's +92.20 and
+#: ultranest's +91.48); see ``docs/source/astrometry.rst`` section 6. The engine's
+#: own default is untouched -- this is the study's choice for its problem.
+DYNESTY_SAMPLE = "rslice"
 
 #: The truth, qualified by the names a built ``FittingProblem`` actually
 #: samples.
@@ -546,7 +561,7 @@ def fit(
     if engine == "dynesty":
         from ampere.inference import DynestyEngine
 
-        sampler = DynestyEngine(problem, live_points=live_points)
+        sampler = DynestyEngine(problem, live_points=live_points, sample=DYNESTY_SAMPLE)
         run_options = {} if dlogz is None else {"dlogz": dlogz}
         return sampler.run(progress=progress, **run_options)
     if engine == "nautilus":

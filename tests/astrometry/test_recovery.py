@@ -34,6 +34,14 @@ needs_nautilus = pytest.mark.skipif(
 needs_ultranest = pytest.mark.skipif(
     importlib.util.find_spec("ultranest") is None, reason="needs ampere[ultranest]"
 )
+#: The `study` marker's convention (W5.26), applied locally because this
+#: directory has no conftest hook for it: a dev-only budget row runs where
+#: neither modern backend is installed, so the dev gate leg pays its two and
+#: a half minutes once and the torch, jax and sbi legs do not repeat it.
+dev_only = pytest.mark.skipif(
+    importlib.util.find_spec("torch") is not None or importlib.util.find_spec("jax") is not None,
+    reason="a dev-only budget row: the torch, jax and sbi legs skip it (the `study` convention)",
+)
 
 
 def _covered(run: Any, *, level: float = 0.95) -> dict[str, bool]:
@@ -138,24 +146,37 @@ def _assert_resolves_the_true_mode(run: Any) -> None:
 class TestNestedSamplingResolvesThePeriodModes:
     """W5.15: the wide-prior posterior's mode structure, pinned rather than narrated.
 
-    Measured on this branch (see the branch report): dynesty's ``bound="multi"``
-    ellipsoidal decomposition needs on the order of half an hour on this
-    problem's likelihood surface at dynesty's default live points, and it is
-    the bound's own machinery that is slow, not the wide prior's
-    multi-modality specifically -- the *informed* prior (``norm(400, 30)``,
-    unimodal) is measured no faster. No live-point/``dlogz`` combination
-    tried resolved the true mode reliably in under four minutes, so this
-    row is ``astrometry_full`` rather than a per-PR dev row (the item's own
-    escape valve for exactly this finding). Nautilus and ultranest (W5.14)
-    resolve the same claim in one to two minutes each at their own library
-    defaults and carry no such marker; they skip by ``find_spec`` exactly as
-    ``tests/inference/test_nested.py`` skips them where the package is absent.
+    Measured on this branch: dynesty at its default live points (175) with
+    the study's ``DYNESTY_SAMPLE`` ("rslice"; ``examples.astrometry.astrometry``
+    says why the engine's own ``sample="auto"`` did not converge here in 38
+    minutes) resolves the true mode in about four minutes -- over the
+    per-PR bar, so that row is ``astrometry_full``; nautilus and ultranest
+    (W5.14) resolve the same claim in one to two and a half minutes each at
+    their library defaults and carry no marker, skipping by ``find_spec``
+    exactly as ``tests/inference/test_nested.py`` does where the package is
+    absent. Every row is the same call ``python -m examples.astrometry
+    --wide-prior --engine <name>`` makes.
     """
 
     @pytest.mark.astrometry_full
     def test_dynesty_resolves_the_true_mode(self) -> None:
+        """The CLI's own call, at dynesty's default live points: 241 s measured."""
         problem = build_problem("reference", wide_prior=True)
-        run = fit(problem, backend="reference", engine="dynesty", dlogz=200.0)
+        run = fit(problem, backend="reference", engine="dynesty")
+        _assert_resolves_the_true_mode(run)
+
+    @dev_only
+    def test_dynesty_resolves_the_true_mode_at_a_per_pr_budget(self) -> None:
+        """The per-PR pin: 100 live points, 142 s measured, the same mode structure.
+
+        Below ``default_live_points``'s ``25 (n_dim + 1)`` floor the evidence
+        is less trustworthy (``+91.63 +- 0.67`` here against ``+92.25 +-
+        0.55`` at 175), which is why the CLI does not run at this budget; the
+        mode structure -- one dominant mode, the truth inside it -- is what
+        this row pins, and it is unchanged.
+        """
+        problem = build_problem("reference", wide_prior=True)
+        run = fit(problem, backend="reference", engine="dynesty", live_points=100)
         _assert_resolves_the_true_mode(run)
 
     @needs_nautilus
