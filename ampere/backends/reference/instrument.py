@@ -239,8 +239,31 @@ class Resample(_Step):
             total = overlap.sum(axis=1, keepdims=True)
         return overlap / total
 
+    def _planned_influence(self, source: Any) -> np.ndarray:
+        """:meth:`influence`, planned once per input grid (**W5.17**, issue #12).
+
+        The weight matrix is a pure function of the two grids, and after
+        negotiation the input grid is the compiled model's, fixed for a run —
+        yet building it is the expensive half of resampling
+        (``docs/design/performance_memo.md`` §3.5: 47 % of the step at
+        2 000 -> 200 points, 92 % at 20 000 -> 2 000). The key is the exact
+        bytes of both grids, as the jax twin's is: a changed grid rebuilds, a
+        repeated one does not, and there is no tolerance, so a lookup can never
+        return the matrix of a nearby grid. The matrix is the one
+        :meth:`influence` returns, so the result is bit-for-bit unchanged.
+        :meth:`influence` itself still builds a fresh matrix on every call.
+        """
+        incoming = np.asarray(source, dtype=DTYPE)
+        key = (incoming.shape, incoming.tobytes(), self._data("target").tobytes())
+        cached = getattr(self, "_influence_plan", None)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        weights = self.influence(incoming)
+        self._influence_plan = (key, weights)
+        return weights
+
     def apply(self, samples: Any, values: Any) -> Spectrum:
-        weights = self.influence(samples.spectral_axis.values)
+        weights = self._planned_influence(samples.spectral_axis.values)
         return Spectrum(
             self._data("target") * COORDINATE_UNIT,
             weights @ np.asarray(samples.values, dtype=DTYPE),

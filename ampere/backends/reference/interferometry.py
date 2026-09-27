@@ -164,6 +164,9 @@ _FWHM_PER_SIGMA = float(2.0 * np.sqrt(2.0 * np.log(2.0)))
 #: smooth visibility across a channel to far better than the measurement.
 _DEFAULT_SMEARING_NODES = 5
 
+#: A sentinel no brightness unit can be (``None`` is a legitimate one).
+_UNSET = object()
+
 
 def _to_unit(values: Any, unit: u.UnitBase) -> np.ndarray:
     """*values* as a bare float64 array in *unit*, whether or not they arrive as a Quantity."""
@@ -817,18 +820,51 @@ class FourierSample(_Step):
 
     # -- evaluation ----------------------------------------------------------
 
-    def apply(self, samples: Any, values: Any) -> VisibilitySet:
-        x_mas = samples.x.values
-        y_mas = samples.y.values
-        brightness = np.asarray(samples.values, dtype=DTYPE) * cell_solid_angle(x_mas, y_mas)
-        u_pts, v_pts, waves = self._expanded
+    def _planned_transform(
+        self, x_mas: np.ndarray, y_mas: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """The grid's solid angles and the two DFT factors, planned once per grid (**W5.17**).
+
+        ``(cell_solid_angle(x, y), exp(-2 pi i v y), exp(-2 pi i u x))`` are
+        functions of the model's grid and of the expanded ``(u, v)`` coverage
+        alone — both fixed once :meth:`configure_from` has run and the model is
+        compiled — yet were recomputed on every evaluation, about a third of
+        the interferometry study's reference ``log_prob``
+        (``docs/design/performance_memo.md`` §3.3). The key is the exact bytes
+        of both grid axes plus the expanded-coverage tuple itself (which
+        :meth:`configure_from` replaces), so a changed grid or coverage
+        replans and there is no tolerance. The arrays are the ones the
+        per-call expressions produced, so the visibilities are bit-for-bit
+        unchanged; the price is keeping the two ``(n_uv, n_axis)`` factors
+        resident between calls instead of reallocating them.
+        """
+        x = np.asarray(x_mas)
+        y = np.asarray(y_mas)
+        key = (x.shape, y.shape, x.tobytes(), y.tobytes())
+        plan = getattr(self, "_transform_plan", None)
+        if plan is not None and plan[0] == key and plan[1] is self._expanded:
+            return plan[2]
+        u_pts, v_pts, _ = self._expanded
         # Separable, because the DFT kernel is: one (n_uv, ny) contraction and
         # one (n_uv, nx) row product, rather than an (n_uv, nx, ny) array that
         # would be the same arithmetic with the memory of a bad idea.
-        x_rad = x_mas / MAS_PER_RAD
-        y_rad = y_mas / MAS_PER_RAD
-        along_y = np.exp(-2j * np.pi * np.outer(v_pts, y_rad)) @ brightness.T
-        along_x = np.exp(-2j * np.pi * np.outer(u_pts, x_rad))
+        x_rad = x / MAS_PER_RAD
+        y_rad = y / MAS_PER_RAD
+        planned = (
+            cell_solid_angle(x, y),
+            np.exp(-2j * np.pi * np.outer(v_pts, y_rad)),
+            np.exp(-2j * np.pi * np.outer(u_pts, x_rad)),
+        )
+        self._transform_plan = (key, self._expanded, planned)
+        return planned
+
+    def apply(self, samples: Any, values: Any) -> VisibilitySet:
+        solid_angle, along_y_kernel, along_x = self._planned_transform(
+            samples.x.values, samples.y.values
+        )
+        brightness = np.asarray(samples.values, dtype=DTYPE) * solid_angle
+        u_pts, v_pts, waves = self._expanded
+        along_y = along_y_kernel @ brightness.T
         visibility = np.einsum("nj,nj->n", along_x, along_y)
         template = self._resolve_template(samples.unit, u_pts, v_pts, waves)
         mask = propagate_mask(samples, _image_influence(samples, u_pts.size))
@@ -851,6 +887,14 @@ class FourierSample(_Step):
         from an image in some other unit would be the units trap in its most
         damaging form.
         """
+        # W5.17: the unit arithmetic below (a composite astropy unit, then an
+        # equality test) cost more than the template saved once the DFT was
+        # planned; the same unit *object* as the one the template was built
+        # from cannot give a different answer, so it returns at once.
+        if self._template is not None and brightness_unit is getattr(
+            self, "_template_source_unit", _UNSET
+        ):
+            return self._template
         unit = None if brightness_unit is None else brightness_unit * u.sr
         if self._template is not None:
             if self._template.unit == unit:
@@ -870,6 +914,7 @@ class FourierSample(_Step):
             np.zeros(u_pts.size, dtype=np.complex128),
             unit=unit,
         )
+        self._template_source_unit = brightness_unit
         return self._template
 
 

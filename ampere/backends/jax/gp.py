@@ -833,6 +833,63 @@ def _celerite2_jax() -> Any:
     return celerite2.jax
 
 
+def _degenerate_norm(log_det: Any) -> tuple[Any, Any]:
+    """celerite2's failed-factorisation branch, at module level (see below)."""
+    return -jnp.inf, jnp.inf
+
+
+@functools.cache
+def _valid_norm(size: int) -> Any:
+    """celerite2's successful-factorisation branch for *size* samples, one per size.
+
+    Cached so that the *same* function object is handed to ``lax.cond`` on
+    every call with this many samples; see :func:`_gaussian_process_type`.
+    *size* stays a Python constant inside the branch, exactly as in
+    celerite2's own closure, so XLA folds ``size * log(2 pi)`` the same way.
+    """
+
+    def _valid(log_det: Any) -> tuple[Any, Any]:
+        return log_det, -0.5 * (log_det + size * jnp.log(2 * jnp.pi))
+
+    return _valid
+
+
+@functools.cache
+def _gaussian_process_type() -> Any:
+    """``celerite2.jax.GaussianProcess`` without the per-call recompilation (**W5.17**).
+
+    celerite2.jax's ``_do_compute`` ends with ``lax.cond(bad, _bad, _good)``
+    whose two branches are closures defined afresh on every call. Called
+    eagerly — which is what this module's numpy-facing contract path does —
+    every call therefore hands jax new branch functions, jax traces new
+    branch jaxprs, and the cond's dispatch cache misses: one XLA compilation
+    per ``log_prob``, about 20 ms, which ``docs/design/performance_memo.md``
+    §3.2 measured as ~98 % of the contract path's time. Under ``jit`` (the
+    realised path) the cost is paid once at trace time and nothing changes.
+
+    This subclass performs the identical operations in the identical order
+    and hands ``lax.cond`` branch functions that are the same objects from
+    call to call — the log-determinant enters as the cond's operand, which is
+    how jax already lowered the closure's captured value — so the compiled
+    cond is reused. The values are bit-for-bit those of the stock class
+    (checked on the M2 load's three kernels over 100 draws each, and by the
+    conformance suite).
+    """
+    celerite2_jax = _celerite2_jax()
+    ops = celerite2_jax.ops
+
+    class _GaussianProcess(celerite2_jax.GaussianProcess):  # type: ignore[misc, name-defined]
+        def _do_compute(self, quiet: Any) -> None:
+            self._d, self._W = ops.factor(self._t, self._c, self._a, self._U, self._V)
+            self._log_det = jnp.sum(jnp.log(self._d))
+            bad = jnp.any(self._d <= 0) | (~jnp.isfinite(self._log_det))
+            self._log_det, self._norm = jax.lax.cond(
+                bad, _degenerate_norm, _valid_norm(self._size), self._log_det
+            )
+
+    return _GaussianProcess
+
+
 @functools.cache
 def _ampere_term_type() -> Any:
     r"""The ``celerite2.jax`` ``Term`` subclass that wraps an ampere kernel.
@@ -1139,7 +1196,7 @@ class QuasisepGP(GPSolver):
         reason both callers guard.
         """
         term = _celerite_term(kernel, values, ordered_axis)
-        gp = _celerite2_jax().GaussianProcess(term, mean=0.0)
+        gp = _gaussian_process_type()(term, mean=0.0)
         # **W5.7.** The recursion's propagators come from the coordinate handed
         # to ``compute``, and a warped kernel is stationary in w(x) rather than
         # in x. ``warped_coordinate`` is the identity for every other kernel;

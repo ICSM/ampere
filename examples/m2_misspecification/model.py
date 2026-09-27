@@ -255,12 +255,9 @@ class AbsorptionLines(Model):
                 d1=float(context["d1"]),
                 d2=float(context["d2"]),
             )
-            template = self.templates.get(channel)
-            emitted[channel] = (
-                Spectrum(self.grid(channel) * WAVELENGTH_UNIT, flux, unit=FLUX_UNIT)
-                if template is None
-                else template.with_values(flux)
-            )
+            emitted[channel] = _template_for(
+                self.templates, channel, self.grid(channel)
+            ).with_values(flux)
         return ModelResult(emitted)
 
 
@@ -269,6 +266,26 @@ class AbsorptionLines(Model):
 # three declarations cannot drift in their priors, their channel handling or
 # their unit conversion — only in their arithmetic.
 # ---------------------------------------------------------------------------
+
+
+def _template_for(templates: dict[str, Spectrum], channel: str, grid: np.ndarray) -> Spectrum:
+    """*channel*'s container template, built once and refilled thereafter (**W5.17**).
+
+    :meth:`~ampere.core.Spectrum.with_values` is the hot-loop constructor; a
+    negotiated channel gets its template in ``compile_for``, but the simple
+    path — a fixed grid, no negotiation, which is how the study runs — used to
+    build and fully validate a fresh ``Spectrum`` on every evaluation, ~15 % of
+    the reference ``log_prob`` (``docs/design/performance_memo.md`` §3.2). The
+    template is now built on the first evaluation instead; the values are the
+    same array either way.
+    """
+    template = templates.get(channel)
+    if template is None:
+        template = Spectrum(
+            grid * WAVELENGTH_UNIT, np.zeros(grid.size, dtype=DTYPE), unit=FLUX_UNIT
+        )
+        templates[channel] = template
+    return template
 
 
 def _declared(**given: Any) -> dict[str, Any]:
