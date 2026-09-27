@@ -711,6 +711,17 @@ the interferometry sketch's Q2 (per-visibility frequency as an
   rather than N — the contract permits it, but `simulate(observe=True)` and
   the latent-GP path must agree on the whitening. (GPJax is the natural
   provider on the jax side, GPyTorch on the torch side.)
+  **Landed at W5.4**: `HilbertSpaceGP`, the reduced-rank spectral method of
+  Solin & Särkkä (2020)/Riutort-Mayol et al. (2023), on all three backends —
+  not GPJax or GPyTorch, superseded as candidates once that method was
+  chosen by the same "measured, not assumed" rule celerite2 was
+  (`likelihoods.md` §7). Both contract questions are answered: the
+  tolerance class is `tests/conformance/protocol.py`'s
+  `approximation_envelope` (`docs/source/solvers.rst`), and the latent size
+  is the reduced rank `m`, not `N` (`inference.md` limitation 17.4, amended
+  W5.4). **W5.6**'s bake-off measured `EquispacedFourierGP` and
+  `VecchiaResponseGP` against it; neither is promoted, and SVGP/SKI remain
+  slots.
 - **Matrix-free exact GPs in 2+ dimensions** (noted by Peter 2026-09-11,
   not immediate): the interferometric kernels of Phase 4 live in 3 and 5
   axes where the quasiseparable tools do not apply, so exact GPs are
@@ -721,6 +732,10 @@ the interferometry sketch's Q2 (per-visibility frequency as an
   is a third solver strategy beside `DenseGP` and `QuasisepGP`, to be
   taken up when a Phase 4 or Phase 5 case actually exceeds the dense
   path's memory; nothing in the solver interface may preclude it.
+  **Not landed.** No Phase 5 item took this up — the reduced-rank strategies
+  above (bullet 1) turned out to be the phase's answer to scale, not a
+  matrix-free exact path — and nothing about the interface has changed to
+  preclude it later.
 - **Non-stationary flexible likelihood: input and amplitude warping as
   kernel wrappers preserving quasiseparability** (*added 2026-09-10 from
   `horizon_notes.md` §1 and its follow-up*): a `WarpedKernel(base,
@@ -741,6 +756,19 @@ the interferometry sketch's Q2 (per-visibility frequency as an
   marginalised by the GP as usual, with the lowering rules offering the
   non-centred parameterisation NUTS wants (a `lowering.md` §3 note). Deep
   kernel learning waits for the multi-dimensional GP work above.
+  **Landed at W5.7**: `ampere.core.WarpedKernel(base, input_warp=,
+  amplitude_warp=, non_centred=True)`, exactly this shape, with the
+  degrees-of-freedom guard as specified — few fixed knots, a shared
+  hierarchical shrinkage scale toward the identity warp, non-centred by
+  default (`likelihoods.md` §6, `docs/source/kernels.rst` §3). **W5.8** is
+  the M2 validation this bullet named as the target evidence, the "many
+  lines / one band" scenario, and it is also where the sparsity prior on
+  summed noise components landed, as `ampere.core.regularised_horseshoe`
+  (renamed `shrinkage_horseshoe` at **W5.27**, its full chain lowering on
+  both backends only after **W5.25** added `halfcauchy`). Deep kernel
+  learning is unaffected either way: bullet 1's `HilbertSpaceGP` reaches
+  1–3 axes, but nothing exercises it as a learned feature map, and bullet
+  2's matrix-free exact route did not land.
 - **Joint noise over a tuple of channels — the linear model of
   coregionalisation** (*added 2026-09-10 from `horizon_notes.md` §3 and
   its follow-up; the limitation `likelihoods.md` §15 records*): a
@@ -756,6 +784,16 @@ the interferometry sketch's Q2 (per-visibility frequency as an
   touches `inference.md` §4 and the results decomposition needs a
   `"joint"` entry — the same vocabulary widening `"mixed"` was; the
   diagnostics generalise per rotated output.
+  **Landed at W5.9**: `ampere.core.JointGaussianProcessNoise`, scoped to the
+  shared-grid intrinsic model exactly as planned, with `RotationCoupling`
+  (`T = 2`) and `CholeskyCoupling` (general `T`) as `B`'s two
+  parameterisations (`likelihoods.md` §7, `docs/source/solvers.rst` §3).
+  Astrometry, not polarimetry, is the worked modality — polarimetry has no
+  shipped dataset yet — with the astrometric sketch's own gap the one W5.9
+  closes. **W5.24** lifts the one restriction W5.9 shipped with, unequal
+  per-channel uncertainties, by a dense or reduced-rank route chosen by the
+  bound solver. The general LMC and mismatched grids remain the follow-on
+  `likelihoods.md` §15 records.
 - **Amortisation over observation context** (*added 2026-09-10 from
   `horizon_notes.md` §4–5; the reserved hook is design horizon (i)*): a
   per-draw context — the σ-pattern drawn from a noise-realisation prior
@@ -770,8 +808,29 @@ the interferometry sketch's Q2 (per-visibility frequency as an
   prior covered the observation at hand. This is the amortisation the
   population use case of `docs/design/inference_extensions_memo.md` §8.1
   depends on.
+  **Landed at W5.10**: `ampere.core.simulate.ObservationContext`,
+  `ContextPrior`, and `simulate_many(context=...)`/`SBIEngine(context=...)`,
+  with FiLM (`embedding={"type": "set", "film": True}`) off by default
+  (`inference.md` §12–§13, `docs/source/sbi.rst`). What shipped is the
+  per-dataset σ-pattern only — the grid and instrument-settings half of
+  `horizon_notes.md` §5's question is still open. **W5.29** adds the native
+  batched path this bullet's own "grouped by `chunk_size`" language
+  anticipated: a context budget now draws natively rather than falling back
+  to the loop.
 - Hierarchical/population inference: implement the container + hyperprior
   design from Phase 1 (plates in pyro/numpyro).
+  **Landed at W5.12**: `ampere.core.Population`, lowering to a real
+  `pyro`/`numpyro` plate on both differentiable backends by default
+  (`layout="plate"`), with the joint fit reached through `realise`
+  (`parameters.md` §8–§9, `docs/source/population.rst`); the tie-based flat
+  layout of Phase 1's own design stays available up to `MAX_FLAT_MEMBERS`.
+  **W5.13** adds a second route this bullet did not anticipate — reweighting
+  archived single-object fits by importance sampling, with no joint fit at
+  all — and **W5.22** promotes its 200-object validation to a
+  `population_full` row and stores each free parameter's interim prior in
+  provenance. **W5.30 (c)** closes the one gap found afterwards: an SBC
+  replica now carries a problem's populations through
+  `replace_observations`.
 - **RHMF exploratory trial** (Peter's ratification note, 2026-09-08, on the
   W2.7 deferral row): **moved to Phase 6 by Peter's ruling of 2026-09-24**
   (W5.16 stays written; it is dispatched after Phase 5 closes) — early
@@ -786,6 +845,16 @@ the interferometry sketch's Q2 (per-visibility frequency as an
   vmap/batched evaluation, GPU placement, precision policy, solver
   selection, resampling (issues #12, #29, #67). No speculative optimisation
   before profiles exist.
+  **Landed at W5.17**: `docs/design/performance_memo.md` profiled the M2
+  driver and the interferometry and image studies against Phase 2's
+  benchmark baselines and attacked five levers in measured order, every one
+  bit-for-bit unchanged — the jax contract path's per-call re-jitting
+  (**L1**, ×3–7), a `scipy` 1.18 `cho_solve` copy (**L2**, ×2.6 on the image
+  benchmark), `Resample`'s cached influence weights (**L3**, ×30–65),
+  `FourierSample`'s cached transform (**L4**, ×1.3–2.1) and the M2 models'
+  cached container template (**L5**, ×1.1–1.35). GPU placement, precision
+  policy and solver selection were not separate levers: the profile found
+  nothing waiting on them at this phase's scale.
 
 ### Phase 6 — Docs, migration, release
 - **The RHMF exploratory trial (W5.16)**, deferred here from Phase 5 by
