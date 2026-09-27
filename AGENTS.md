@@ -81,7 +81,10 @@ non-trivial work, read:
   and m2 in ONE pytest process — in **each** environment; a backend
   package is typechecked with its real types only in its own environment
   (`pixi run -e torch typecheck`), and excluded from the `dev` typecheck.
-  Other tasks: `pixi run test` (fast import sweep), `test-core` /
+  Other tasks: `pixi run test` (fast import sweep), `test-fast` (the
+  local pre-commit run, W5.18: core, results, conformance, backends,
+  inference and the M2 agreement rows minus the study, SBI-training and
+  two slow results classes, about 3 min in dev), `test-core` /
   `test-results` / `conformance` / `test-inference` / `test-examples` /
   `test-m2` individually, `bench` (pytest-benchmark → `benchmark.json`),
   `scaling`, `test-characterisation` (legacy still works), `lint`,
