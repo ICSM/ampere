@@ -42,6 +42,7 @@ User guide
    overview
    concept
    kernels
+   solvers
    astropy
    tutorials
    advanced
