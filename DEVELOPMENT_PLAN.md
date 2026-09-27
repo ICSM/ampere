@@ -857,6 +857,7 @@ the interferometry sketch's Q2 (per-visibility frequency as an
   nothing waiting on them at this phase's scale.
 
 ### Phase 6 — Docs, migration, release
+*(Drafted as agent-sized items 2026-09-28 — `WORK_ITEMS.md`'s Phase 6 section, W6.0–W6.12 with decisions D1–D11 for Peter; the bullets below are the source the items execute.)*
 - **The RHMF exploratory trial (W5.16)**, deferred here from Phase 5 by
   Peter's ruling of 2026-09-24: the item text in WORK_ITEMS.md stands as
   written; its outcome is a report, and `ampere.diagnostics` lands only if
@@ -897,6 +898,15 @@ the interferometry sketch's Q2 (per-visibility frequency as an
   posterior of ten to fifty curved, often multimodal parameters supplies;
   the harvest's Ax/SAASBO/Ray classes stay archived, and an expensive
   simulator is the SBI layer's case first. **Depends:** Phase 5 closed.
+  **Accept:** on the conformance fixtures, each route's point estimate
+  inside the sampled posterior's central 50 % on every free parameter,
+  once per fixture; the hyperparameter warm start within a factor of two
+  of the sampled posterior median on a pinned reduced-rank row; a pinned
+  row where a NUTS run started from the MAP reaches its adaptation target
+  in fewer warmup steps than the prior-draw start, and the ensemble
+  equivalent for emcee's burn-in; the start recorded in provenance
+  (schema bump if a new attr is needed); `inference.md` amended with the
+  optimiser surface; a `docs/source` page; gates: all four.
 - **The scipy distribution exploration** (Peter, 2026-09-27, ruling on
   W5.17's proposal P1). W5.17's profile found the priors the largest single
   item on the M2 reference `log_prob`: six frozen scipy priors evaluated
@@ -923,15 +933,6 @@ the interferometry sketch's Q2 (per-visibility frequency as an
   without a decision-log row (ground rule 9). The memo's §6 P1 paragraph
   (`docs/design/performance_memo.md`) is the starting point. **Depends:**
   Phase 5 closed; nothing else.
-  **Accept:** on the conformance fixtures, each route's point estimate
-  inside the sampled posterior's central 50 % on every free parameter,
-  once per fixture; the hyperparameter warm start within a factor of two
-  of the sampled posterior median on a pinned reduced-rank row; a pinned
-  row where a NUTS run started from the MAP reaches its adaptation target
-  in fewer warmup steps than the prior-draw start, and the ensemble
-  equivalent for emcee's burn-in; the start recorded in provenance
-  (schema bump if a new attr is needed); `inference.md` amended with the
-  optimiser surface; a `docs/source` page; gates: all four.
 - Sphinx docs rebuilt around the new core; example gallery migrated;
   migration guide from legacy; deprecation policy for `ampere.{data,models,
   infer}`; beta release (addresses issues #57–60, #62).

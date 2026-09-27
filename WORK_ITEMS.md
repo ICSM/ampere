@@ -2806,6 +2806,377 @@ the dispatch prompts; the sole shared file across waves is
 the kernel, the noise-model — and merge in that order).
 
 
+## Phase 6 — Docs, migration, release (drafted 2026-09-28 by Fable; **awaiting Peter's rulings D1–D11**; nothing dispatched)
+
+The plan's §5 Phase 6 bullets (the RHMF trial, the optimisers module, the
+scipy distribution exploration, the docs rebuild and beta release, the
+composition tutorial, the two design items, "where the merged gate runs"),
+the §5 CI/CD workstream's Phase 6 line (release automation, versioned docs,
+the GPU suite on an accelerator), the placement memo's Phase 6 pointers
+(OIFITS as the first reader and the `ampere.interferometry` front door),
+the Phase 5 rows' "Phase 6" carried notes, and the open GitHub issues, as
+agent-sized items. **Read `DEVELOPMENT_PLAN.md` §5 "Phase 6" first**: each
+item names the bullet it executes. The phase has a different shape from
+the five before it — its product is a **release** rather than a
+capability, so most items are documentation, policy and infrastructure,
+and the two capability items (the optimisers, the readers) are the ones
+whose scope Peter rules on. Sized under `docs/orchestration.md`'s rules:
+two agents at a time, targeted tests on the branch, gate legs scoped to
+the code the work touched (ruled 2026-09-28). Every change to a §4
+contract is a decision-log row and the conformance rows in the same PR
+(ground rule 9); the release itself is a decision-log row. The eleven
+decisions **D1–D11** at the end are the ones the drafting could not take;
+the ordering paragraph before them assumes the recommendations.
+
+### W6.0 — The deprecation policy, and the legacy surface's retirement schedule [S; Fable drafts the policy, Sonnet lands it]
+`docs/source/migrating.rst` promises "a deprecation policy — if and when
+legacy pieces are retired, and on what notice — is Phase 6 work" (W3.9).
+This item writes it, under D1's ruling, and makes the code say the same:
+(1) the policy page — what "frozen" becomes at the beta release (the
+recommended shape: `ampere.data`, `ampere.models`, `ampere.infer` and
+`ampere.utils` are **deprecated** at the beta, emitting one
+`DeprecationWarning` per package at first import naming the v2 route and
+the removal version; **removed** at 1.0, no sooner than six months after
+the beta; the characterisation suite is the guard until removal and is
+deleted with the packages); (2) `ampere/__init__.py` no longer imports the
+four legacy packages eagerly — `import ampere` today loads `models`,
+`infer`, `data` and `utils` and their dependencies before anything of v2,
+so the legacy import becomes lazy (a module `__getattr__`) with the warning
+on first access, and `__version__` reads `importlib.metadata` instead of the
+hard-coded `"0.1.2"` (`docs/source/conf.py` already does); (3) the v2
+aliases scheduled for Phase 6 removal (`regularised_horseshoe`, W5.27) follow
+the same policy — deprecated now, removed at 1.0 — so the page has one rule;
+(4) the legacy examples (`examples/NGC6302*`, `example.py`, `modbbtest.py`,
+`modelClio.py`, `star_disc*`, the four `minimal_working_example*.py`, the
+two `cstar_model_test_sbi_v2*.py`) are listed with each one's fate under
+W6.1. **Depends:** D1 ruled. **Accept:** the policy page in the API
+toctree beside `migrating`; `import ampere` in a bare environment imports
+no legacy module and no legacy dependency (a `tests/test_imports.py` row);
+`tests/characterisation` still green with the warning filtered; `__version__`
+equals the installed metadata; gates dev (the characterisation suite run
+once on the branch).
+
+### W6.1 — The full migration guide, and the legacy examples converted [M; Sonnet]
+W3.9 seeded `migrating.rst` with the concept map and one side-by-side; this
+completes it (issue #59): every legacy class and search mapped to its v2
+route with a snippet each — `Photometry`/`Spectrum` → `Dataset` with an
+`Instrument` chain, the legacy GP switches → `GaussianProcessNoise`, the
+`ampere.infer` searches → the engines, `ampere.infer.sbi` → `SBIEngine`,
+the post-processors → `ampere.results`, the extinction and filter helpers
+→ their v2 equivalents or "no equivalent; carried" — and the legacy
+examples rewritten on v2 under `examples/`: the four
+`minimal_working_example*.py` (emcee, dynesty, zeus, sbi) become one v2
+example with an `--engine` switch that `tests/examples` smokes, the NGC6302
+dust-mass example becomes a v2 composition (its data files are in the
+repository) or is retired with a note if its model has no v2 twin, the
+`cstar` SBI examples fold into `examples/sbi/`; the three notebooks under
+`docs/source/notebooks/` (`quickstart`, `Ampere_MBB_Example`,
+`Embedding_nets`) are re-written on v2 and executed at docs-build time
+(`nbsphinx_execute = "auto"` for the ones that can run in the docs
+environment) or moved to the legacy section with a banner; the legacy
+characterisation anchors are untouched (they exercise the frozen code, not
+the examples). **Depends:** W6.0 (the fates list). **Accept:** every legacy
+public name appears on the guide with a route or a "carried" note; the
+converted examples under `tests/examples` (each smoke row under a minute in
+dev); the executed notebooks build in `pixi run docs`; docs warnings no
+longer than the base commit's; gates dev.
+
+### W6.2 — Composition tutorial: photometry plus spectra, with calibration uncertainty [S; Sonnet]
+The plan's bullet (Peter, 2026-09-09): the worked, runnable example of one
+model against a photometric catalogue and one or more spectra —
+`SyntheticPhotometry` beside `Resample`/`LSFConvolution` — with calibration
+uncertainty as a `CalibrationScale` step carrying a prior, per spectrum or
+shared through a `Tie`, and the flexible likelihood as the complement for
+what calibration does not explain; `spectrum_photometry.md` and
+`sed_composition.rst` are the starting points (the latter is the one-model
+two-instrument case; this page is the several-observations case W4.4's
+template cites and no example shows). Lands the owed `tests/examples`
+smoke test of the composition. **Depends:** nothing. **Accept:** the page
+in the tutorials toctree; the example under `examples/` with a smoke row;
+`tests/examples` green; docs warnings no longer than base; gates dev.
+
+### W6.3 — The docs rebuild: warnings-as-errors, docstrings, the reference restructured [M; Sonnet]
+The Phase 1 promise the plan's CI/CD workstream deferred here: `-W` on the
+docs job. Twelve warnings remain, all in frozen legacy docstrings
+(`ampere/data/spectrum.py`, `ampere/infer/{emceesearch,mixins,zeussearch}.py`)
+and one ambiguous cross-reference in `ampere.utils.rst`; under W6.0's
+policy the legacy pages stay in the reference until 1.0, so they are
+autodoc'd with the offending members excluded (`:exclude-members:`, the
+W5.32 (c) pattern) rather than by editing frozen code — ground rule 1 holds.
+Then: (1) the API reference restructured around v2 — `api.rst` leads with
+`ampere.core`, `ampere.backends`, `ampere.inference`, `ampere.results`, and
+the legacy packages become one "Legacy (deprecated)" section with the
+policy banner; (2) v2 docstrings audited against the pages (issue #58: every
+public name in the four namespaces has a docstring that autodoc renders
+without a warning); (3) the two pages `tutorials.rst`'s "Still to be
+written" names — conditional priors, arbitrary priors — written from
+`parameters.md` §4–§6; (4) the shrinkage section `advanced.rst` lacks
+(W5.19's question) if D5 says so; (5) the `pycon` blocks under `docs/source`
+under a doctest runner (W5.7's carried idea, W5.19's question) if D5 says
+so — `tests/core/test_spec_doctests.py`'s harness extended to `docs/source`,
+each page's blocks either run or marked `:skipif:` with the reason. Issue
+#57 closes with this item and W6.1 together. **Depends:** W6.0 (the policy
+banner), W6.1 (the notebooks). **Accept:** `pixi run docs` with `-W` green
+in CI; every v2 public name rendered; the doctest runner (if ruled) green
+over `docs/source`; gates dev.
+
+### W6.4 — Versioned documentation deployment [S; Sonnet]
+The CI/CD workstream's Phase 6 line: the docs deployed per version — Read
+the Docs (a `.readthedocs.yaml` building from the pixi `dev` environment,
+or a pip-installable docs extra, since RTD does not run pixi natively) or
+GitHub Pages from the CI job (a `docs` deploy step on tags and on `master`
+as "latest"), per D2; a version switcher; `latest` and `stable` aliases;
+the legacy site, if any, redirected. **Depends:** W6.3, D2. **Accept:** the
+docs reachable at the ruled host for the branch head and for the tagged
+beta; the CI job publishes on tag; no build step outside pixi or the docs
+extra; gates none (infrastructure; the docs job is the check).
+
+### W6.5 — Release automation and the beta release [M; Opus]
+The plan's bullet and the CI/CD line together, addressing issues #57–60 and
+#62: (1) **versioning** — setuptools_scm is configured; `__version__` moves
+to metadata (W6.0); the beta's version per D3; (2) **PyPI trusted
+publishing** — a `release.yml` on `v*` tags: build sdist and wheel in the
+`dev` environment, `twine check`, publish through OIDC, no token in
+secrets; a TestPyPI dry run first; the wheel's metadata carries
+`License-Expression` (the RHMF adoptability row found a packaging
+without one reports no licence on PyPI — check ampere's own); (3) **the
+changelog** — per D3, generated from the decision log and the status table
+for the beta (the phases' landed summaries are the material) and
+maintained per release afterwards; (4) **citation** (#62) — a
+`CITATION.cff`, a Zenodo DOI minted at the tag, the paper reference once
+it exists, and `ampere.__citation__` or a `cite()` helper printing it;
+(5) **installation** (#60) — `install.rst` and the README's install
+section re-checked against a clean PyPI install of the beta in a fresh
+environment for each extra, and the `all` extra verified to resolve;
+(6) **the remote** — per D4, `origin/master` takes the v2 line at the beta
+tag (the `v2` mirror's purpose ends), branch protection on `master`
+(CI required, no force-push), and the release is the decision-log row
+that says so; (7) the paper's examples (`examples/examples_paper/`) are
+Peter's and stay out unless D11 couples them. **Depends:** W6.0, W6.3,
+W6.4, D3, D4. **Accept:** a TestPyPI release installable with every extra
+in a fresh venv; the tagged beta on PyPI with the DOI; `pip install
+ampere` in a clean environment imports without legacy; the changelog and
+citation on the docs site; `origin/master` at the tag; gates all four
+(the release gate is the full matrix once, on the tag).
+
+### W6.6 — Phase 6 housekeeping: the Phase 5 residue [S; Sonnet]
+The carried notes the rows sent here, each a commit: (a) `pyproject.toml`'s
+`blackjax` extra comment says `_blackjax.py` "does not exist yet" — it does
+(W5.19); (b) `tests/results/test_plots.py`'s other classes close their
+figures, so the 20-figure warning stops firing when the file runs whole
+(W5.32, W5.19); (c) W5.18's 26 `--deselect` flags become one `sbi_training`
+marker on the classes that train a network, now that W5.32 (i) settled the
+markers list, and `tests/inference/test_interferometry.py`'s one training
+class (~662) joins it; (d) a conformance row for `QuasisepGP.condition(at=)`
+on a multi-axis container — the reference accepts, torch and jax refuse
+by name (W5.28, annotated at W5.19) — asserting the disagreement as a
+declared capability rather than leaving it undeclared, or closing it if
+the fix is a few lines in each backend's `_axis` (say which); (e) the
+`regularised_horseshoe` alias's removal is *scheduled*, not done, under
+W6.0's policy — this part only checks the warning names the policy's
+removal version; (f) netCDF4 re-locked when 1.7.4.1 reaches conda-forge
+(W5.32's note; the NumPy-2.5 deprecation is ~80 % of CI's warning volume)
+— if it has not landed, say so; (g) ultranest's `logzerr` is more
+conservative than its console line (W5.14) — one sentence on the
+engine's page. **Depends:** nothing; any slot. **Accept:** each part's
+own check as W5.32's were; gates per part (dev; jax and torch for (d);
+the CI run for (f)).
+
+### W6.7 — The optimisers module: point estimates and warm starts [L; Opus]
+The plan's bullet verbatim is the item text: the three routes behind one
+call on the frozen §4.5 surface — multi-start `scipy.optimize` over the
+packed unconstrained vector on the numpy path; gradient MAP through
+`realise` on torch and jax (L-BFGS, Adam as the fallback) and `VIEngine`'s
+mean as the alternative start, both reaching NUTS through `init_to_value`
+and the ensembles through `initial_positions`; the reduced-rank
+empirical-Bayes hyperparameter warm start with a length-scale grid — and
+a point estimate with provenance stored on the run it seeds. Bayesian
+optimisation stays out (the dimension argument of 2026-09-24). Issues #40
+and #14 close with it; #41 (variational Bayes with snowline) is answered
+by `VIEngine` and closes with a note. The `Optimum` result shape the
+inference-extensions memo §5.4 sketched is this item's to land, with a
+`results.md` amendment and the decision-log row. **Depends:** Phase 5
+closed; nothing else. **Accept:** as the plan's bullet states — each
+route's point estimate inside the sampled posterior's central 50 % on
+every free parameter on the conformance fixtures; the warm start within a
+factor of two of the sampled posterior median on a pinned reduced-rank
+row; a pinned row where a NUTS run started from the MAP reaches its
+adaptation target in fewer warm-up steps than the prior-draw start, and
+the emcee burn-in equivalent; the start in provenance (a schema bump if a
+new attr is needed); `inference.md` amended; a `docs/source` page; gates
+all four.
+
+### W6.8 — The scipy distribution exploration [S; Sonnet]
+The plan's bullet verbatim: measure the six-prior `lnprior` of the M2
+reference load through scipy's new distribution infrastructure (≥ 1.15)
+against W5.17's 262 µs legacy figure and 20.5 µs floor; bit-identity or
+the tolerance §13's conformance row would absorb; which of ampere's common
+priors it covers; how a user's frozen legacy prior sits alongside under
+`parameters.md` §4's protocol. The outcome is a **report** in
+`docs/design/performance_memo.md` §6 (a new subsection) and a drafted
+follow-up item if the gain is real and exact; nothing lands in the core.
+**Depends:** nothing; a filler. **Accept:** the measurement table with the
+three columns, the coverage list, the identity result, the recommendation;
+gates none (no code change).
+
+### W6.9 — RHMF exploratory trial [S; Sonnet] (W5.16's text stands, deferred here by ruling 2026-09-24)
+As written under Phase 5 (W5.16): the pre-fit robust-factorisation family
+tried against a pinned `robusta-hmf` commit behind a non-default `rhmf`
+extra, the adapter producing an `AnomalyScore` with `provenance="rhmf_prefit"`,
+run on the M2 spectra and W5.5's image, with the adoptability re-check
+re-run and recorded. The outcome is a report; `ampere.diagnostics` lands
+only if the maturity gate is met. **Depends:** nothing. **Accept:** W5.16's.
+
+### W6.10 — Where the merged gate runs: CI as the gate of record, and the parallelism audit [S; Sonnet]
+The plan's assessment bullet, executed: (1) under D4, the orchestrator
+pushes `origin/v2` (then `origin/master`) at each merge and the CI run on
+the push is the merged gate of record — the local legs retire to the
+scoped pre-merge runs ruled 2026-09-28, and `~/.cache/ampere-gates`'s
+scripts become the fallback for a machine without GitHub; the handoff's
+"next gate's baselines" become the CI run's counts; (2) the
+`pytest-xdist` safety audit — whether the suites' seeded streams, the
+shared lock in `tests/conftest.py` and the m2 margins survive `-n auto`;
+if they do, `test-all` and `test-fast` gain `-n` and the measured
+speed-up goes in the task comment; if a suite does not, it is named and
+left serial; (3) the GPU rows (`tests/gpu`) on an accelerator, per D7 —
+if Peter has an allocation, a `gpu` pixi environment and a documented
+manual procedure (an rsync of the tagged tree, the run, the log back)
+under `docs/development.md`; if not, the rows stay skipped and the
+release gate says so. **Depends:** D4, D7. **Accept:** the CI run
+recorded as the gate in the next merged row; the audit's table; the GPU
+procedure run once on the beta tag if ruled; gates none (infrastructure).
+
+### W6.11 — Design memo: per-dataset nuisance populations, and the `Derived` parameter node [M; Fable drafts, Opus reviews]
+The plan's two design items (Peter, 2026-09-22): (1) `Population.over`
+addressing a dataset's qualified path — `PlateBinding`/`Binding` carrying a
+qualified name so "each dataset's GP amplitude is a draw from one shared
+prior" and a per-dataset calibration scale under a fitted spread are
+declarable — a §4 change to `parameters.md` §8–§9 and `inference.md` §9,
+with `hierarchical_population.md` §11 Q1's rejection of routing in two
+places respected; (2) the `Derived` node — a parameter that is a pure
+function of others — making Piironen & Vehtari's slab declarable
+(`parameters.md` §9, `lowering.md` §3.2.1) and the non-centred
+`θ_i = μ + σ z_i` expressible for a population, with its lowering on both
+backends and its place in provenance and the results groups. The product
+is a memo under `docs/design/` with the contract amendments drafted as
+decision-log rows and the conformance rows named, **not** an
+implementation; the implementation items are drafted at the end of the
+memo for D8's ruling. **Depends:** nothing. **Accept:** the memo; the
+drafted rows; no code.
+
+### W6.12 — The first reader: OIFITS into `VisibilitySet`/`ClosurePhases`, and the observable's front door [M; Opus]
+The placement memo's D reserved it: when the first reader lands, create
+`ampere.interferometry` as the observable's front door and let astrometry
+and image follow the same shape. The reader takes an OIFITS file
+(`OI_VIS2`, `OI_T3`, `OI_WAVELENGTH`) into the shipped containers with
+the spectral axis (Phase 4 D2), the canonical baseline ordering and the
+closure-phase triangle pairing W5.1 binds to; units and flags handled
+per `results_schema.md`; `astropy.io.fits` only, no new dependency. A
+JWST spectrum reader (issue #63) is the second reader under the same
+front-door pattern (`ampere.spectroscopy`?), scoped by D9. **Depends:**
+D9. **Accept:** a real OIFITS file (a public archive product, small,
+under `tests/data` if its licence allows, else downloaded in the test
+with a skip offline) round-trips into containers `tests/interferometry`'s
+fixtures accept; the front-door module documented on `interferometry.rst`;
+gates dev (torch and jax if the containers' native twins are touched).
+
+**Issue triage (D10).** The open issues, with the recommendation: **closed
+by Phase 5 already** — #12, #29, #67 (W5.17's levers), #11 (censoring,
+`likelihoods.md` §9 landed with the core); **closed by Phase 6** — #57,
+#58 (W6.3), #59 (W6.1, W6.2), #60, #62 (W6.5), #40, #14, #41 (W6.7),
+#63 (W6.12 if D9 says so), #73 (the v2 core *is* the rewrite the issue
+asks for — close with a pointer at `overview.rst`), #3 and #68 (legacy
+data-object questions, closed by the deprecation policy); **re-filed as
+v2 backlog** — #61 and #45 (the six v2 plots have a uniform style; what
+remains is corner paging at many parameters, `results.md` §13), #70 (line
+fluxes as an observable kind by the template — a Phase 7 modality), #64
+(the filter library as a build step — legacy `utils`; carried until the
+v2 photometry route needs it), #44 (opacity wavelength range — a legacy
+model's limit); **out of scope, closed with a note** — #65, #21, #22, #23
+(radiative-transfer codes as v2 models: out-of-tree models by the
+`Model` contract, no in-tree adapters planned), #15 (CANFAR batch scripts:
+deployment is a user's, not the library's).
+
+**Ordering (two agents at a time, gate legs scoped to the code touched).**
+**Wave 1** (fillers while the rulings are taken): W6.6 ∥ W6.8 — both
+Sonnet, disjoint files, no ruling needed beyond D10's alias note; W6.9 in
+either slot as it frees. **Wave 2** (after D1): W6.0 alone, short, since
+everything on the documentation side keys on its policy; then W6.1 ∥ W6.2
+(disjoint: `migrating.rst` and the converted examples against a new
+tutorial page and one new example). **Wave 3**: W6.3 ∥ W6.7 — the docs
+rebuild is Sonnet on docs files and the optimisers are Opus on
+`ampere/inference` and one docs page; ownership disjoint by construction.
+**Wave 4**: W6.4 ∥ W6.10 (both infrastructure, D2/D4/D7 ruled by then);
+W6.11 as Fable's own work between waves. **Last**: W6.5, the release,
+once everything else is merged and the full matrix is green on the tag;
+W6.12 after the release if D9 puts the readers in this phase, or first
+in Phase 7 if not. Phase 6 closes with the beta on PyPI and
+`origin/master` at the tag.
+
+**Decisions for Peter before dispatch.**
+- **D1 — the deprecation policy**: (a) deprecate the four legacy packages
+  at the beta (a warning at first import naming the v2 route), remove at
+  1.0 and no sooner than six months after the beta (recommended — the
+  characterisation suite guards the interval and the migration guide is
+  in place by then); (b) keep legacy frozen indefinitely as it is, no
+  warning, no removal; (c) remove at the beta. Also under D1: whether the
+  `regularised_horseshoe` alias (W5.27) is removed at the beta or at 1.0
+  (recommended: 1.0, one rule for every deprecation).
+- **D2 — where the docs live**: Read the Docs (the astronomy convention;
+  a `.readthedocs.yaml` building from a pip docs extra since RTD does not
+  run pixi) or GitHub Pages from the CI job (pixi-native, one less
+  service, no PR previews). Recommendation: Read the Docs, for the
+  version switcher and PR previews users expect.
+- **D3 — the beta's version and the changelog**: the version — `0.2.0b1`
+  under setuptools_scm from a `v0.2.0b1` tag (recommended; `v0.1` is the
+  last legacy tag and `__version__` says `0.1.2`), or `1.0.0b1` to signal
+  the redesign; the changelog — hand-written per release from the decision
+  log and the status table (recommended for the beta: the phases' landed
+  summaries are the material and a generator would flatten them), or a
+  generator (`towncrier` fragments per PR, or `git-cliff` from commit
+  messages) from the beta onward.
+- **D4 — the remote**: `origin/master` takes the v2 line at the beta tag
+  (recommended) or at the first CI-green merge after Phase 6 opens; branch
+  protection on `master` then (CI required, no force-push, Peter merges);
+  and whether the orchestrator may push the mirror at every merge from
+  now on so the CI run becomes the gate of record (W6.10 (1); recommended:
+  yes, `origin/v2` until the switch-over, never `origin/master` before it).
+- **D5 — two small docs rulings from W5.19**: a shrinkage section in
+  `advanced.rst` (recommended: yes, four paragraphs pointing at
+  `kernels.rst` §1 and `m2_misspecification.rst`, in W6.3), and a doctest
+  runner over `docs/source`'s `pycon` blocks (recommended: yes, in W6.3,
+  the harness of `test_spec_doctests.py` extended; the pages already
+  claim their blocks were run).
+- **D6 — the optimisers' size and tier**: L and Opus as drafted (three
+  routes, a `results.md` amendment, four gates), or split into the numpy
+  and native routes first (M) with the empirical-Bayes warm start as a
+  follow-on (S). Recommendation: as drafted; the warm start is where the
+  measured gain is and it shares the provenance work.
+- **D7 — the GPU rows**: whether an HPC allocation with accelerators is
+  available for the release gate; if yes, W6.10 (3) is in scope and the
+  procedure is written; if no, `tests/gpu` stays skipped and the release
+  says so. No recommendation — the answer is a fact only Peter has.
+- **D8 — the design items' timing**: W6.11's memo in Phase 6 (recommended:
+  yes — a memo costs little and the per-dataset GP amplitude is the
+  flexible likelihood's own use case), and its implementation items in
+  Phase 6 after the beta, or in a Phase 7 (recommended: Phase 7; a §4
+  change belongs after the release, not before it).
+- **D9 — readers in Phase 6**: W6.12 (OIFITS, and JWST spectra as the
+  second reader) in this phase after the beta, or the first Phase 7 item.
+  Recommendation: OIFITS in Phase 6 after the beta — a release with no
+  reader for real interferometric data is a weaker claim than the
+  modality deserves; JWST (issue #63) in Phase 7 with the spectroscopy
+  front door.
+- **D10 — the issue triage** as listed above (closed by Phase 5; closed by
+  Phase 6; re-filed as v2 backlog; out of scope). Recommendation: as
+  listed; the closures with a one-line pointer each, done by the
+  orchestrator at the beta.
+- **D11 — the paper**: whether the beta release is coupled to the paper
+  revision's examples (`examples/examples_paper/`, Peter's) — released
+  together, the paper's scripts pinned to the beta tag — or independent.
+  No recommendation; Peter's timeline decides it.
+
+
 ## Status
 
 | Item | Status |
