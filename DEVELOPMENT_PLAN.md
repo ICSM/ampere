@@ -6,7 +6,7 @@ complete** (Phase 2 closed 2026-09-08, Phase 3 closed 2026-09-10 — the §5
 Phase 3 section carries the landed summary); **Phase 4 complete
 (2026-09-11 to 2026-09-13; the §5 Phase 4 paragraph carries the landed
 summary; decisions D1–D4 are recorded in `docs/design/phase4_placement_memo.md`);
-Phase 5 is next to draft.** All
+Phase 5 complete (2026-09-15 to 2026-09-28; the §5 Phase 5 section carries the landed summary; W5.16 deferred to Phase 6); Phase 6 is next to draft.** All
 architectural proposals are confirmed; remaining open items are
 implementation-level choices deferred to their natural phase (§6). This
 document is the source of truth for the redevelopment of ampere: decisions

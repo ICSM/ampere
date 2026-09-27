@@ -13,12 +13,15 @@ reference backend, milestone M2 (the flagship misspecification validation)
 is reached, `ampere.inference.SBIEngine` fits any problem by simulation-based
 inference with calibration, caching and reproducible runs, visibilities and
 closure phases fit through the same stack, and the documentation reflects
-what landed. **Phase 5 (scale-out and advanced inference) is in flight**:
-approved 2026-09-15, dispatched in waves of two agents, fifteen of its
-items merged by 2026-09-18 (approximate GP solvers, image data, warped
-kernels, joint noise, context amortisation, population reweighting, the
-many-lines M2 extension); wave 5 (W5.12 ∥ W5.14) is next, with the filler
-items W5.25–W5.29 (added 2026-09-22) between waves and W5.19 last.
+what landed. **Phase 5 (scale-out and advanced inference) is complete**
+(approved 2026-09-15, closed 2026-09-28 with W5.19's merge): thirty-two
+items merged in waves of two agents — approximate GP solvers, image data,
+warped kernels and the sparsity prior, joint noise, context amortisation
+and the batched native path, `Population` and population reweighting, the
+tier-1 engines behind extras, the latent GP on closure phases, the
+many-lines M2 extension, the optimisation pass, `test-fast` — with W5.16
+(the RHMF trial) deferred to Phase 6; the plan's §5 Phase 5 section is the
+landed summary. **Phase 6 (docs, migration, release) is next to draft.**
 Development happens on `master` locally; the remote branch `v2` mirrors it
 for CI and backup, and `origin/master` stays at the legacy code until
 Phase 6 says otherwise. The live state, what is in flight and what
