@@ -60,10 +60,11 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
   are reproducible; `.pixi/` (the installed environments themselves) is
   not, and is gitignored.
   - Common tasks: `pixi run test` (fast: `tests/test_imports.py`),
-    `pixi run test-all` (every new-namespace suite — core, results,
-    conformance, backends, inference and, since W2.11, examples — in ONE
-    pytest process; **this is the main gate**, and `test-phase1` remains
-    the older core+results+conformance subset; the individual `test-core`,
+    `pixi run test-all` (nine suites since **W5.26** — core, results,
+    conformance, backends, inference, examples (since W2.11), m2, and
+    (since W5.26) interferometry and astrometry — in ONE pytest process;
+    **this is the main gate**, and `test-phase1` remains the older
+    core+results+conformance subset; the individual `test-core`,
     `test-results`, `test-backends`, `test-inference`, `test-examples` and
     `conformance` tasks exist too), `pixi run test-fast` (W5.18: the local
     pre-commit run — the contract-and-backend tier of `test-all`: core,

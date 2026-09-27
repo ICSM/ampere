@@ -275,6 +275,15 @@ differs from them; nothing here changes a policy, and where a difference is a
   its pool and aggregates failure counts on the parent — the per-engine gap
   limitation 17.7 describes is unaffected and still stands for `EmceeEngine`.
   Optimisers remain Phase 5, unlanded.
+  *(Amended W5.19, checked against the code.* This sentence is now stale on
+  its own terms: the optimiser *engines* it means — point estimates and
+  warm starts for `inference/` — were never scheduled inside Phase 5's own
+  item list and Peter moved them to Phase 6 by name on 2026-09-24
+  (`DEVELOPMENT_PLAN.md`'s Phase 6 section), so "remain Phase 5" should now
+  read "moved to Phase 6, unlanded". This is not the same thing as W5.17's
+  "benchmark-driven optimisation pass", a Phase 5 item that landed
+  (`docs/design/performance_memo.md`) and *profiles and speeds up* the
+  existing code rather than adding an optimiser engine.)*
 * **`diagnostics/` did not land in Phase 2, and that is a ruled deferral
   rather than a slippage.** The decision-log row of 2026-09-08
   (`ampere.diagnostics` and the RHMF pre-fit family, W2.7) records it in

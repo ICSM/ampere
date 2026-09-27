@@ -26,11 +26,13 @@ truth inside its 68 % interval.
 
 Ampere is in its **v2** redesign. The current release is a backend-neutral
 core of frozen contracts with three backends implementing it — pure
-numpy/scipy, torch, and jax — and six inference engines written once against
-the contracts and run on any of them, the sixth being
+numpy/scipy, torch, and jax — and nine inference engines written once against
+the contracts and run on any of them, one of them being
 :class:`~ampere.inference.SBIEngine` for models with no likelihood to write
-down at all (see :doc:`sbi`). :doc:`overview` is the map, and :doc:`image`
-is the newest worked modality — an image fitted as a dataset, PSF and all.
+down at all (see :doc:`sbi`). :doc:`overview` is the map, :doc:`image` is
+the modality whose observed container is gridded rather than a point set,
+and :doc:`solvers` and :doc:`population` are Phase 5's additions to the
+flexible likelihood and to fitting many objects at once, respectively.
 
 User guide
 ----------
@@ -42,6 +44,7 @@ User guide
    overview
    concept
    kernels
+   solvers
    astropy
    tutorials
    advanced

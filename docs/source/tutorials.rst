@@ -14,6 +14,7 @@ Ampere v2
    image
    wstat_comparison
    sbi
+   population
 
 :doc:`sed_composition` is the simplest composition there is — one model, a
 spectrum and a photometric catalogue, two instruments on one channel — and
@@ -42,13 +43,19 @@ when your data are not Gaussian. :doc:`sbi` is for the opposite case — a
 model with no likelihood to write down at all — fitting a black-box
 simulator with :class:`~ampere.inference.SBIEngine`, caching the trained
 posterior, truncated marginal ratio estimation, and checking that the
-result is calibrated.
+result is calibrated. :doc:`population` is Phase 5's addition — one
+population of objects declared with :class:`~ampere.core.Population`,
+fitted jointly on the native path and by reweighting archived single-object
+fits, the two routes ``hierarchical_population.md`` left open.
 
-All seven have runnable counterparts in the repository:
+The first seven have runnable counterparts in the repository:
 ``examples/sed_composition``, ``examples/m2_misspecification``,
 ``examples/interferometry``, ``examples/astrometry``, ``examples/image``,
 ``examples/wstat_comparison.py`` and ``examples/sbi/``, each covered by its
-own test suite so that none can rot unnoticed.
+own test suite so that none can rot unnoticed. :doc:`population` has none —
+its code is small enough to walk through inline, and it is exercised
+instead by ``tests/inference/test_population_nuts.py`` and
+``tests/results/test_population.py``.
 
 Legacy tutorials
 ----------------

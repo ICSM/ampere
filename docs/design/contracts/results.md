@@ -1684,6 +1684,18 @@ Each is a decision, not an oversight. Each has an extension point.
   draw from an impossible one, and `ampere_spec_hash` says whether two archived
   fits used the same declaration and may be reweighted together.
 
+  *(Amended W5.19, checked against the code: built, exactly on this
+  footing.* `ampere.results.population.fit_population` (W5.13) reweights a
+  set of archived per-object runs by self-normalised importance sampling
+  read straight off `sample_stats`' `log_prior`/`log_likelihood` (uniform
+  weights for an exact sampler, the engine's `proposal_log_density`
+  correction for an approximate one, W5.0's column), refuses runs whose
+  `ampere_spec_hash` disagrees, and — since W5.22 — verifies a supplied
+  `interim_prior` against the one the archive's own provenance recorded
+  (`ampere_free_priors`) rather than trusting the caller. §13 item 16
+  carries the limitation notes; `Population`, the joint-fit half of the
+  same design horizon, is W5.12's, below §9's own provenance amendments.)*
+
 ## 15. Open questions for review
 
 **Ruled by Peter, 2026-09-03 — all seven, in the direction each request

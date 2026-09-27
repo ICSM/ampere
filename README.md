@@ -27,8 +27,8 @@ likelihood in **4.7 ms**. The whole study is
 
 Ampere is in **alpha**, undergoing a v2 redesign. What is there today is a
 backend-neutral core of frozen contracts, three backends that implement it
-(pure numpy/scipy, torch and jax), and six inference engines written once
-against the contracts and run on any of them. The sixth is for models with no
+(pure numpy/scipy, torch and jax), and nine inference engines written once
+against the contracts and run on any of them. One of them is for models with no
 likelihood to write down at all: `ampere.inference.SBIEngine` fits a
 black-box simulator by simulation-based inference (NPE/NLE/NRE, and truncated
 marginal ratio estimation for a tighter fit), over the same `FittingProblem`
@@ -52,7 +52,23 @@ goes beyond one Matérn-3/2 term: `Sum`/`Product`/`SpectralMixture`
 compositions, a damped-oscillator term for periodic residuals, an `axes=`
 selector for a container whose coordinates carry more than one physical
 meaning, and a public registry for a user's own quasiseparable term
-(`docs/source/kernels.rst`). If you are interested, please get in touch.
+(`docs/source/kernels.rst`).
+
+Phase 5 (scale-out and advanced inference) widened the same five nouns
+rather than adding a sixth: an approximate reduced-rank GP solver alongside
+the two exact ones, chosen the same way the exact one was — by measurement
+— and gridded (`Image`) data with PSF convolution composing through the
+identical likelihood machinery (`docs/source/solvers.rst`,
+`docs/source/image.rst`); a non-stationary kernel wrapper (input and
+amplitude warping) and a sparsity prior for a sum of noise components
+(`docs/source/kernels.rst`); a correlated noise model over a tuple of
+channels, homoscedastic and heteroscedastic, for the astrometric and
+polarimetric case a single-channel GP cannot express; three more sampling
+engines and two more variational guide families behind extras; simulation-
+based inference amortised over the observation context, including a batched
+native path; and a hierarchical `Population` container, fitted either
+jointly or by reweighting archived single-object fits
+(`docs/source/population.rst`). If you are interested, please get in touch.
 
 ## Installation
 
@@ -93,6 +109,9 @@ h5netcdf are base dependencies, not extras, for exactly that reason.
 | `torch` | torch, pyro-ppl | `ampere.backends.torch`, and NUTS/VI on a torch problem |
 | `jax` | jax, numpyro, equinox | `ampere.backends.jax`, and NUTS/VI on a jax problem |
 | `zeus` | zeus-mcmc | `ampere.inference.ZeusEngine` |
+| `nautilus` | nautilus-sampler | `ampere.inference.NautilusEngine` |
+| `ultranest` | ultranest | `ampere.inference.UltranestEngine` |
+| `blackjax` | blackjax | `ampere.inference.BlackjaxEngine` (with `jax`) |
 | `sbi` | torch, sbi | `ampere.inference.SBIEngine` (simulation-based inference) and legacy `ampere.infer.sbi` |
 | `extinction` | dust_extinction | legacy `ampere.models.extinctionModels.F99Extinction` |
 | `dev` | pytest, ruff, pyrefly, sphinx, … | contributor tooling |

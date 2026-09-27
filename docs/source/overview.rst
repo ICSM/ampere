@@ -6,13 +6,27 @@ implement it. This page is the map: what the pieces are, which environment
 each of them needs, how a problem is put together, and what comes out of a
 run. :doc:`api` is the reference for every name mentioned here.
 
-The state of play, as of milestone **M2** and the close of Phase 3: the
-contracts are frozen and implemented, three backends ship, six engines
-ship — simulation-based inference (:class:`~ampere.inference.SBIEngine`)
-landed alongside the five likelihood-based engines — and the flexible
-likelihood has been measured against a deliberately misspecified problem at
-three data sizes and on all three backends. :doc:`m2_misspecification` is
-that measurement; :doc:`sbi` is the SBI tutorial.
+The state of play, as of milestone **M2**: the contracts are frozen and
+implemented, three backends ship, and the flexible likelihood has been
+measured against a deliberately misspecified problem at three data sizes and
+on all three backends. :doc:`m2_misspecification` is that measurement;
+:doc:`sbi` is the SBI tutorial.
+
+**Phase 5** (scale-out and advanced inference, 2026-09-15 to 2026-09-28,
+closed by this documentation pass) widened most of what is on this page rather than replacing it: an
+approximate reduced-rank solver alongside the two exact ones
+(:doc:`solvers`), gridded (``Image``) data with PSF convolution, a
+non-stationary kernel wrapper and a sparsity prior for summed noise
+components (:doc:`kernels`), correlated noise over a tuple of channels —
+homoscedastic and heteroscedastic — three more sampling engines and two new
+variational guide families behind extras, amortisation over the observation
+context for SBI (including a batched native path), a hierarchical
+``Population`` container with both a joint fit and an importance-reweighting
+route (:doc:`population`), the results contract widened for approximate and
+evidence-producing engines, and a benchmark-driven optimisation pass. Not
+shipped: the RHMF pre-fit screening trial (deferred to Phase 6), and the
+``InducingPointGP``/``StructuredGridGP`` (SVGP/SKI) solver slots, which stay
+declared and unimplemented.
 
 .. note::
 
@@ -262,7 +276,8 @@ Realisation, and the engines
 ----------------------------
 
 :mod:`ampere.inference` is written once against the fitting-problem surface
-and **imports no backend**, in any module, at any depth. Six engines ship:
+and **imports no backend**, in any module, at any depth. Nine engines ship
+(six through Phase 3, three more behind extras since W5.14):
 
 .. list-table::
    :header-rows: 1
@@ -288,9 +303,11 @@ and **imports no backend**, in any module, at any depth. Six engines ship:
        one. Gradient-based, so it scales to many more parameters.
    * - :class:`~ampere.inference.VIEngine`
      - ``torch`` or ``jax``
-     - Stochastic variational inference. **Approximate** — the guide family
-       is recorded in the run — and the honest use is a first look, or the
-       only tractable route when the space is too large for MCMC.
+     - Stochastic variational inference: mean-field or full-rank normal
+       guides, plus (**W5.14**) a Laplace approximation and a normalising
+       flow. **Approximate** — the guide family is recorded in the run — and
+       the honest use is a first look, or the only tractable route when the
+       space is too large for MCMC.
    * - :class:`~ampere.inference.SBIEngine`
      - ``sbi`` extra
      - Simulation-based inference (NPE, NLE, NRE, truncated variants) —
@@ -298,6 +315,19 @@ and **imports no backend**, in any module, at any depth. Six engines ship:
        instead of consuming ``log_prob``, so it is the route for a rung-0
        black box with no tractable likelihood at all. **Approximate**, with
        calibration and caching built in. :doc:`sbi` is the tutorial.
+   * - :class:`~ampere.inference.NautilusEngine`,
+       :class:`~ampere.inference.UltranestEngine`
+     - ``nautilus``/``ultranest`` extras
+     - Two more nested samplers (**W5.14**), behind the same
+       ``ampere_evidence_method = "nested_sampling"`` triple as
+       ``DynestyEngine`` — so comparing archived runs never needs knowing
+       which of the three produced them.
+   * - :class:`~ampere.inference.BlackjaxEngine`
+     - ``jax``
+     - MCLMC or Pathfinder (**W5.14**), jax-only by nature. Pathfinder is
+       **approximate** and writes a ``proposal_log_density``; MCLMC is an
+       unadjusted gradient sampler and writes neither an approximation flag
+       nor an evidence triple.
 
 The first three consume only the neutral surface, which is the architectural
 bet of the whole redesign, cashed: one driver, any backend, and a black-box

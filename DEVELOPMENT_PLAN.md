@@ -145,6 +145,7 @@ backend-neutral core plus modern computational backends, targeting:
 | The native batched path draws the observation context (W5.29) | **The optional realisation member becomes `sample_observations(theta, predicted, seeds, *, sigma=None)`** (W5.10's carried item, ruled by Peter 2026-09-22; merged 2026-09-26): `sigma` maps a dataset label to a `(batch,) + observed.shape` stack of context sigmas that stands in for the observed uncertainties *before* the noise model's `scale`, `jitter` and any prediction-dependent inflation — what `Dataset.contextual_observed` substitutes on the contract path. `simulate_many` passes it only for a context budget and only after a trial draw with it succeeds, so a realisation predating the keyword still serves every budget without a context and hands a context budget's observations to the numpy path (the prediction stays vectorised; `sample_backend` says which). W5.10's refusal of `native=True` with a `context=` is withdrawn; the batch's provenance says `simulate_batched` true, every `Simulation` from the native path now records its `context` (failures included — a pre-existing gap the loop never had), and the cache key is unchanged (the prior already enters it). Both modern backends thread the per-draw sigma through `vmap` beside θ; jax's fractional noise models take the base quadrature as `sigma_jax(base=)` because a traced sigma cannot be placed in a container. One combination has no batch form and is refused by name inside the chunk (a context varying a dataset in some draws but not others where the observation has no sigma of its own); no shipped prior produces it and the default `native=None` falls back to the loop there. The conformance row `test_a_context_budget_runs_natively_and_matches_the_loop` holds θ, the context records and every observation's sigma to exact equality with the loop, the prediction to `cross_backend`, and the noise standardised by its own context sigma to `N(0, 1)` within the Monte Carlo margin, since the two paths draw from different random streams. `inference.md` §13 and `encoding.md` §8 amended. |
 | `Layout.GRID` and correlated noise: the gate lifted (W5.21) | **`GPSolver.check_compatible` accepts `Layout.POINTS` or `Layout.GRID`; `Likelihood._coordinates` builds its coordinate matrix through `ampere.core.dataset.sample_coordinates` for either layout** (ruled by Peter 2026-09-16 on W5.5's proposal; merged 2026-09-26). W5.5's row above proposed exactly this: the refusal was a closed Phase 5 slot, not mathematics — a stationary kernel over a grid's axes is a function of coordinates precisely as it is over a point set, and `sample_coordinates` (W5.5) already builds that matrix for a `Layout.GRID` container. `Kernel.check_axes` (via `Kernel._resolve_columns`) already refused a leaf selecting axes the container lacks, for either layout, so "the kernel's selected axes are the container's own" needed no new check, only a comment recording why. The ordered-1D and quasiseparable-product rules are unchanged: `QuasisepGP` still refuses a kernel selecting both of a grid's axes by name (`REQUIRES_ORDERED_1D` counts the kernel's *selected* axes, not the container's layout), and a `Product` of quasiseparable kernels is still refused before the generic `QUASISEPARABLE` message. `examples/image/grid_gp.py` (the `GriddedSolver` mixin and its subclasses, two more of them in `bakeoff.py`) is deleted; `study.py` and `bakeoff.py` import `DenseGP`/`HilbertSpaceGP`/`EquispacedFourierGP`/`VecchiaResponseGP` and build a plain `Likelihood` directly. `likelihoods.md` §15 item 4 — where the refusal actually lived; the item said §7 — is marked lifted in the style of items 1 and 3. Nothing here exploits a grid's structure; that remains W5.6's bake-off, unaffected. `_coordinates` imports `sample_coordinates` inside the method because `dataset.py` imports `Likelihood` at load — the mixin's own construction, carried to W5.32 as a candidate for moving the helper below both modules. |
 | Joint noise with heteroscedastic channels: the dense and reduced-rank routes (W5.24) | **W5.9's refusal of unequal per-channel uncertainties is lifted by two routes behind the same `JointGaussianProcessNoise` declaration, chosen by the channels' variances and the bound solver, never by an argument; `route(variance)` names it** (ruled by Peter 2026-09-17 at W5.9's review; merged 2026-09-26; Opus-authored, Fable-reviewed). *Rotated*: every channel's variance vector is identical (compared exactly on the valid samples), so the path is W5.9's `T` scalar solves, bit-identical — a conformance row on every fixture. *Dense* (`DenseGP`): `B⊗(K_x+j²I) + blockdiag(diag σ_t²)` factorised directly, exact, `O((TN)³)`; `j` enters as `B⊗j²I`, which is what the rotated path's `λ_s j²` sums to. *Reduced-rank* (`HilbertSpaceGP`; `EquispacedFourierGP` on the reference path only, having no native twin): Woodbury with `G=(I_T⊗Φ̃)(F⊗I_m)`, `B=FFᵀ`, against the per-channel diagonal, exact in the approximation at `O(TN(Tm)²)`, with a `T·m` whitened block (`latent_size`); `B⊗K_x` is never formed, and `Φ̃` is the solver's own `latent_transform` of the identity, so the route scores with the factor the solver draws with. Unequal channels under any other solver (QuasisepGP above all, which has no Kronecker-free O(N) form) are refused at composition by name with the fix named, as is a group whose channels disagree about carrying uncertainties at all. **§4 consequences**: the group's callers (`DatasetCollection.group_log_likelihood`/`draw_group`, `results.derived`'s joint pointwise) pass every channel's variances as an `(n, T)` block through `variances()` — before this they passed the first channel's σ, which would have scored unequal channels silently wrong; `log_prob`/`sample` accept the block; `results.md` §6's `"joint"` pointwise decomposition is refused off the rotated path (the rotated outputs are not independent there; a per-(sample, channel) decomposition is a recorded follow-on). The torch and jax lowerings choose the route once at lowering and compose both natively; NUTS through the reduced-rank route recovers `B`'s trace and the length scale on both. Conformance: the dense route against a from-scratch oracle (scipy's MVN over a block-assembled matrix) at `cross_solver` (1.4e-14 measured), reduced-rank in W5.4's convergence class (m 8→64: 3.0e-1→8.1e-4), equal-σ `==` W5.9, and `simulate` covariance within `monte_carlo_sigmas` per entry over 2000 draws. Astrometry `--joint --heteroscedastic` binds DenseGP (cheapest at 28 epochs: 0.38 ms against 0.46 rotated and 0.64 reduced-rank at m=32); SBC direction coverage 0.938 ≥ W5.9's 0.80 floor, but the independent arm covers 0.917 on these data (white noise up to 2× dilutes the induced correlation), so the gap is recorded, not pinned. Jitter conventions differ between the two unequal routes (`B⊗j²I` dense, per-channel diagonal reduced-rank; both default 0) — carried. The general LMC and mismatched grids remain the follow-on. |
+| Phase 5 documentation pass: stale claims annotated in place (W5.19) | **Five additive *Amended W5.19* annotations across five frozen design documents; no contract semantics change; the conformance suite untouched.** Every "Phase 5", "landed", "declared, not implemented" and "will" claim across the frozen contracts and modality sketches was checked against the merged code. Unlike Phase 4, most of Phase 5's items annotated their own contract pages contemporaneously as they landed — the *Amended W5.x* markers already in `likelihoods.md`, `parameters.md`, `inference.md`, `results.md`, `encoding.md`, `lowering.md` and the modality sketches for W5.0, W5.1, W5.3–W5.14 and W5.20–W5.30 predate this item — so this pass found five gaps rather than Phase 4's nineteen. `likelihoods.md` §7: a capability disagreement W5.28 carried but never wrote into the contract — the reference `QuasisepGP.condition(at=)` takes a multi-axis container that torch's and jax's own refuse by name (their `_axis` helper has no route for the rest of the axes) — annotated as a disagreement to close with a conformance row when a problem needs it, Phase 6. `architecture.md` §3: a stale sentence, "optimisers remain Phase 5, unlanded", corrected — the optimiser-*engines* bullet moved to Phase 6 by Peter's ruling of 2026-09-24, distinct from W5.17's own "benchmark-driven optimisation pass" (a Phase 5 item, and landed). `docs/design/modalities/astrometric_timeseries.md`: the "no cross-channel correlated noise model" interface gap marked closed, by W5.9's `JointGaussianProcessNoise` and W5.24's lift of the equal-uncertainty restriction. `docs/design/horizon_notes.md` §2: the HSGP/EFGP/Vecchia recommendation and its two contract questions (the approximation-aware tolerance class, the latent size at the reduced rank) confirmed landed exactly as proposed, at W5.4 and W5.6. `results.md` §14: the pre-freeze "Phase 5 (population inference)" design-horizon bullet confirmed built, by `fit_population` (W5.13) and the provenance route (W5.22). The kernel page (`kernels.rst`) gains a `WarpedKernel` section, a new `docs/source/solvers.rst` (exact/approximate/joint) and a new `docs/source/population.rst` tutorial join the docs site; `overview.rst`, `README.md` and `index.rst` each gain a paragraph on what Phase 5 shipped; `DEVELOPMENT_PLAN.md` §5's Phase 5 section is rewritten as the landed summary, keeping every existing ruling and *corrected at* note verbatim. |
 
 
 ## 3. Architecture: a core and a capability ladder, not four peer backends
@@ -710,6 +711,17 @@ the interferometry sketch's Q2 (per-visibility frequency as an
   rather than N — the contract permits it, but `simulate(observe=True)` and
   the latent-GP path must agree on the whitening. (GPJax is the natural
   provider on the jax side, GPyTorch on the torch side.)
+  **Landed at W5.4**: `HilbertSpaceGP`, the reduced-rank spectral method of
+  Solin & Särkkä (2020)/Riutort-Mayol et al. (2023), on all three backends —
+  not GPJax or GPyTorch, superseded as candidates once that method was
+  chosen by the same "measured, not assumed" rule celerite2 was
+  (`likelihoods.md` §7). Both contract questions are answered: the
+  tolerance class is `tests/conformance/protocol.py`'s
+  `approximation_envelope` (`docs/source/solvers.rst`), and the latent size
+  is the reduced rank `m`, not `N` (`inference.md` limitation 17.4, amended
+  W5.4). **W5.6**'s bake-off measured `EquispacedFourierGP` and
+  `VecchiaResponseGP` against it; neither is promoted, and SVGP/SKI remain
+  slots.
 - **Matrix-free exact GPs in 2+ dimensions** (noted by Peter 2026-09-11,
   not immediate): the interferometric kernels of Phase 4 live in 3 and 5
   axes where the quasiseparable tools do not apply, so exact GPs are
@@ -720,6 +732,10 @@ the interferometry sketch's Q2 (per-visibility frequency as an
   is a third solver strategy beside `DenseGP` and `QuasisepGP`, to be
   taken up when a Phase 4 or Phase 5 case actually exceeds the dense
   path's memory; nothing in the solver interface may preclude it.
+  **Not landed.** No Phase 5 item took this up — the reduced-rank strategies
+  above (bullet 1) turned out to be the phase's answer to scale, not a
+  matrix-free exact path — and nothing about the interface has changed to
+  preclude it later.
 - **Non-stationary flexible likelihood: input and amplitude warping as
   kernel wrappers preserving quasiseparability** (*added 2026-09-10 from
   `horizon_notes.md` §1 and its follow-up*): a `WarpedKernel(base,
@@ -740,6 +756,19 @@ the interferometry sketch's Q2 (per-visibility frequency as an
   marginalised by the GP as usual, with the lowering rules offering the
   non-centred parameterisation NUTS wants (a `lowering.md` §3 note). Deep
   kernel learning waits for the multi-dimensional GP work above.
+  **Landed at W5.7**: `ampere.core.WarpedKernel(base, input_warp=,
+  amplitude_warp=, non_centred=True)`, exactly this shape, with the
+  degrees-of-freedom guard as specified — few fixed knots, a shared
+  hierarchical shrinkage scale toward the identity warp, non-centred by
+  default (`likelihoods.md` §6, `docs/source/kernels.rst` §3). **W5.8** is
+  the M2 validation this bullet named as the target evidence, the "many
+  lines / one band" scenario, and it is also where the sparsity prior on
+  summed noise components landed, as `ampere.core.regularised_horseshoe`
+  (renamed `shrinkage_horseshoe` at **W5.27**, its full chain lowering on
+  both backends only after **W5.25** added `halfcauchy`). Deep kernel
+  learning is unaffected either way: bullet 1's `HilbertSpaceGP` reaches
+  1–3 axes, but nothing exercises it as a learned feature map, and bullet
+  2's matrix-free exact route did not land.
 - **Joint noise over a tuple of channels — the linear model of
   coregionalisation** (*added 2026-09-10 from `horizon_notes.md` §3 and
   its follow-up; the limitation `likelihoods.md` §15 records*): a
@@ -755,6 +784,16 @@ the interferometry sketch's Q2 (per-visibility frequency as an
   touches `inference.md` §4 and the results decomposition needs a
   `"joint"` entry — the same vocabulary widening `"mixed"` was; the
   diagnostics generalise per rotated output.
+  **Landed at W5.9**: `ampere.core.JointGaussianProcessNoise`, scoped to the
+  shared-grid intrinsic model exactly as planned, with `RotationCoupling`
+  (`T = 2`) and `CholeskyCoupling` (general `T`) as `B`'s two
+  parameterisations (`likelihoods.md` §7, `docs/source/solvers.rst` §3).
+  Astrometry, not polarimetry, is the worked modality — polarimetry has no
+  shipped dataset yet — with the astrometric sketch's own gap the one W5.9
+  closes. **W5.24** lifts the one restriction W5.9 shipped with, unequal
+  per-channel uncertainties, by a dense or reduced-rank route chosen by the
+  bound solver. The general LMC and mismatched grids remain the follow-on
+  `likelihoods.md` §15 records.
 - **Amortisation over observation context** (*added 2026-09-10 from
   `horizon_notes.md` §4–5; the reserved hook is design horizon (i)*): a
   per-draw context — the σ-pattern drawn from a noise-realisation prior
@@ -769,8 +808,29 @@ the interferometry sketch's Q2 (per-visibility frequency as an
   prior covered the observation at hand. This is the amortisation the
   population use case of `docs/design/inference_extensions_memo.md` §8.1
   depends on.
+  **Landed at W5.10**: `ampere.core.simulate.ObservationContext`,
+  `ContextPrior`, and `simulate_many(context=...)`/`SBIEngine(context=...)`,
+  with FiLM (`embedding={"type": "set", "film": True}`) off by default
+  (`inference.md` §12–§13, `docs/source/sbi.rst`). What shipped is the
+  per-dataset σ-pattern only — the grid and instrument-settings half of
+  `horizon_notes.md` §5's question is still open. **W5.29** adds the native
+  batched path this bullet's own "grouped by `chunk_size`" language
+  anticipated: a context budget now draws natively rather than falling back
+  to the loop.
 - Hierarchical/population inference: implement the container + hyperprior
   design from Phase 1 (plates in pyro/numpyro).
+  **Landed at W5.12**: `ampere.core.Population`, lowering to a real
+  `pyro`/`numpyro` plate on both differentiable backends by default
+  (`layout="plate"`), with the joint fit reached through `realise`
+  (`parameters.md` §8–§9, `docs/source/population.rst`); the tie-based flat
+  layout of Phase 1's own design stays available up to `MAX_FLAT_MEMBERS`.
+  **W5.13** adds a second route this bullet did not anticipate — reweighting
+  archived single-object fits by importance sampling, with no joint fit at
+  all — and **W5.22** promotes its 200-object validation to a
+  `population_full` row and stores each free parameter's interim prior in
+  provenance. **W5.30 (c)** closes the one gap found afterwards: an SBC
+  replica now carries a problem's populations through
+  `replace_observations`.
 - **RHMF exploratory trial** (Peter's ratification note, 2026-09-08, on the
   W2.7 deferral row): **moved to Phase 6 by Peter's ruling of 2026-09-24**
   (W5.16 stays written; it is dispatched after Phase 5 closes) — early
@@ -785,6 +845,16 @@ the interferometry sketch's Q2 (per-visibility frequency as an
   vmap/batched evaluation, GPU placement, precision policy, solver
   selection, resampling (issues #12, #29, #67). No speculative optimisation
   before profiles exist.
+  **Landed at W5.17**: `docs/design/performance_memo.md` profiled the M2
+  driver and the interferometry and image studies against Phase 2's
+  benchmark baselines and attacked five levers in measured order, every one
+  bit-for-bit unchanged — the jax contract path's per-call re-jitting
+  (**L1**, ×3–7), a `scipy` 1.18 `cho_solve` copy (**L2**, ×2.6 on the image
+  benchmark), `Resample`'s cached influence weights (**L3**, ×30–65),
+  `FourierSample`'s cached transform (**L4**, ×1.3–2.1) and the M2 models'
+  cached container template (**L5**, ×1.1–1.35). GPU placement, precision
+  policy and solver selection were not separate levers: the profile found
+  nothing waiting on them at this phase's scale.
 
 ### Phase 6 — Docs, migration, release
 - **The RHMF exploratory trial (W5.16)**, deferred here from Phase 5 by
