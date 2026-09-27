@@ -16,17 +16,24 @@ multi-modal problem an MCMC chain can alias onto and never leave.
 from __future__ import annotations
 
 import importlib.util
+import math
 from typing import Any
 
 import numpy as np
 import pytest
 
-from examples.astrometry.astrometry import QUALIFIED_TRUTH, build_problem, fit
+from examples.astrometry.astrometry import QUALIFIED_TRUTH, build_problem, fit, period_modes
 
 needs_torch = pytest.mark.skipif(
     importlib.util.find_spec("torch") is None, reason="needs ampere[torch]"
 )
 needs_jax = pytest.mark.skipif(importlib.util.find_spec("jax") is None, reason="needs ampere[jax]")
+needs_nautilus = pytest.mark.skipif(
+    importlib.util.find_spec("nautilus") is None, reason="needs ampere[nautilus]"
+)
+needs_ultranest = pytest.mark.skipif(
+    importlib.util.find_spec("ultranest") is None, reason="needs ampere[ultranest]"
+)
 
 
 def _covered(run: Any, *, level: float = 0.95) -> dict[str, bool]:
@@ -107,3 +114,58 @@ class TestNutsOnJaxRecoversTheOrbit:
     @pytest.mark.parametrize("name", list(QUALIFIED_TRUTH))
     def test_every_parameter_is_inside_the_central_95_percent(self, run: Any, name: str) -> None:
         assert _covered(run)[name], f"{name} missed its central 95% interval"
+
+
+# ---------------------------------------------------------------------------
+# The wide-prior arm: nested sampling resolves the aliasing (W5.15)
+# ---------------------------------------------------------------------------
+
+
+def _assert_resolves_the_true_mode(run: Any) -> None:
+    """The pinned claim: the true period is inside the largest-mass mode."""
+    modes = period_modes(run)
+    assert modes, "period_modes returned no mode at all"
+    largest = max(modes, key=lambda mode: mode["mass_fraction"])
+    assert largest["lower"] <= 400.0 <= largest["upper"], (
+        f"the true period (400) is not inside the largest mode's interval "
+        f"[{largest['lower']}, {largest['upper']}]"
+    )
+    assert all(largest["mass_fraction"] >= mode["mass_fraction"] for mode in modes)
+    assert math.isfinite(run.attrs["ampere_log_evidence"])
+    assert run.attrs["ampere_log_evidence_err"] > 0.0
+
+
+class TestNestedSamplingResolvesThePeriodModes:
+    """W5.15: the wide-prior posterior's mode structure, pinned rather than narrated.
+
+    Measured on this branch (see the branch report): dynesty's ``bound="multi"``
+    ellipsoidal decomposition needs on the order of half an hour on this
+    problem's likelihood surface at dynesty's default live points, and it is
+    the bound's own machinery that is slow, not the wide prior's
+    multi-modality specifically -- the *informed* prior (``norm(400, 30)``,
+    unimodal) is measured no faster. No live-point/``dlogz`` combination
+    tried resolved the true mode reliably in under four minutes, so this
+    row is ``astrometry_full`` rather than a per-PR dev row (the item's own
+    escape valve for exactly this finding). Nautilus and ultranest (W5.14)
+    resolve the same claim in one to two minutes each at their own library
+    defaults and carry no such marker; they skip by ``find_spec`` exactly as
+    ``tests/inference/test_nested.py`` skips them where the package is absent.
+    """
+
+    @pytest.mark.astrometry_full
+    def test_dynesty_resolves_the_true_mode(self) -> None:
+        problem = build_problem("reference", wide_prior=True)
+        run = fit(problem, backend="reference", engine="dynesty", dlogz=200.0)
+        _assert_resolves_the_true_mode(run)
+
+    @needs_nautilus
+    def test_nautilus_resolves_the_true_mode(self) -> None:
+        problem = build_problem("reference", wide_prior=True)
+        run = fit(problem, backend="reference", engine="nautilus")
+        _assert_resolves_the_true_mode(run)
+
+    @needs_ultranest
+    def test_ultranest_resolves_the_true_mode(self) -> None:
+        problem = build_problem("reference", wide_prior=True)
+        run = fit(problem, backend="reference", engine="ultranest")
+        _assert_resolves_the_true_mode(run)
