@@ -66,6 +66,7 @@ import scipy.linalg
 import scipy.special
 import scipy.stats as st
 
+from .encoding import sample_coordinates
 from .exceptions import LikelihoodError
 from .kernels import (
     DTYPE,
@@ -5710,12 +5711,6 @@ class Likelihood(Parameterised):
         return np.asarray(self._censoring.kinds)[retain]
 
     def _coordinates(self, observed: FunctionSamples, retain: np.ndarray) -> np.ndarray:
-        # Deferred import: dataset.py imports Likelihood (and friends) from
-        # this module at load time, so a module-level import here would be
-        # circular; by the time this method runs, dataset.py is fully
-        # imported and the cost is a dict lookup in sys.modules.
-        from .dataset import sample_coordinates
-
         if observed.LAYOUT not in (Layout.POINTS, Layout.GRID):
             raise LikelihoodError(
                 f"a correlated noise model needs point-set or grid coordinates, but a "

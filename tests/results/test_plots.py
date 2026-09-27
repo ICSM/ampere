@@ -442,11 +442,18 @@ class TestCornerPaging:
         tree = _with_extra_scalars(run(toy()), 23)  # 2 (toy's own) + 23 = 25
         with pytest.warns(ResultsWarning, match="25 variables"):
             figures = plot_corner(tree)
-        assert isinstance(figures, list)
-        assert [
-            len(figure_metadata(figure)["corner.variables"].split(", ")) for figure in figures
-        ] == [20, 5]
-        assert [figure_metadata(figure)["page"] for figure in figures] == ["1 of 2", "2 of 2"]
+        try:
+            assert isinstance(figures, list)
+            assert [
+                len(figure_metadata(figure)["corner.variables"].split(", ")) for figure in figures
+            ] == [20, 5]
+            assert [figure_metadata(figure)["page"] for figure in figures] == [
+                "1 of 2",
+                "2 of 2",
+            ]
+        finally:
+            for figure in figures:
+                pyplot.close(figure)
 
     def test_a_200_element_plate_gives_ten_pages(self) -> None:
         # results.md §8's other accept criterion, literally.
@@ -457,20 +464,28 @@ class TestCornerPaging:
         )
         with pytest.warns(ResultsWarning, match="10 pages"):
             figures = plot_corner(tree, var_names=["latent.z"])
-        assert len(figures) == 10
-        assert all(
-            len(figure_metadata(figure)["corner.variables"].split(", ")) == 20 for figure in figures
-        )
-        assert [figure_metadata(figure)["page"] for figure in figures] == [
-            f"{index} of 10" for index in range(1, 11)
-        ]
+        try:
+            assert len(figures) == 10
+            assert all(
+                len(figure_metadata(figure)["corner.variables"].split(", ")) == 20
+                for figure in figures
+            )
+            assert [figure_metadata(figure)["page"] for figure in figures] == [
+                f"{index} of 10" for index in range(1, 11)
+            ]
+        finally:
+            for figure in figures:
+                pyplot.close(figure)
 
     def test_a_call_within_the_cap_still_returns_one_figure(self) -> None:
         # The return-type contract: paginate defaults to True, and that must
         # not change the return of a call that never pages.
         figure = plot_corner(run(toy()))
-        assert not isinstance(figure, list)
-        assert "page" not in figure_metadata(figure)
+        try:
+            assert not isinstance(figure, list)
+            assert "page" not in figure_metadata(figure)
+        finally:
+            pyplot.close(figure)
 
     def test_an_array_block_moves_whole_to_a_fresh_page_rather_than_splitting(self) -> None:
         # results.md §8: "array blocks kept whole where they fit". Fifteen
@@ -484,11 +499,15 @@ class TestCornerPaging:
         )
         with pytest.warns(ResultsWarning):
             figures = plot_corner(tree)
-        assert len(figures) == 2
-        assert len(figure_metadata(figures[0])["corner.variables"].split(", ")) == 15
-        assert figure_metadata(figures[1])["corner.variables"] == (
-            "block[0], block[1], block[2], block[3], block[4], block[5]"
-        )
+        try:
+            assert len(figures) == 2
+            assert len(figure_metadata(figures[0])["corner.variables"].split(", ")) == 15
+            assert figure_metadata(figures[1])["corner.variables"] == (
+                "block[0], block[1], block[2], block[3], block[4], block[5]"
+            )
+        finally:
+            for figure in figures:
+                pyplot.close(figure)
 
     def test_paginate_false_refuses_many_scalars_with_the_pre_w3_10_text(self) -> None:
         tree = _with_extra_scalars(run(toy()), 23)
@@ -498,8 +517,12 @@ class TestCornerPaging:
     def test_the_warning_names_the_cap_and_the_var_names_route(self) -> None:
         tree = _with_extra_scalars(run(toy()), 23)
         with pytest.warns(ResultsWarning, match="max_variables=20") as caught:
-            plot_corner(tree)
-        assert any("var_names=" in str(warning.message) for warning in caught)
+            figures = plot_corner(tree)
+        try:
+            assert any("var_names=" in str(warning.message) for warning in caught)
+        finally:
+            for figure in figures:
+                pyplot.close(figure)
 
     def test_labels_and_truths_are_resolved_across_every_page(self) -> None:
         tree = _with_extra_scalars(run(toy()), 23)
@@ -508,11 +531,15 @@ class TestCornerPaging:
         truths = dict(zip(names, range(len(names)), strict=True))
         with pytest.warns(ResultsWarning):
             figures = plot_corner(tree, labels=labels, truths=truths)
-        assert len(figures) == 2
-        assert (
-            figure_metadata(figures[0])["corner.draws"]
-            == figure_metadata(figures[1])["corner.draws"]
-        )
+        try:
+            assert len(figures) == 2
+            assert (
+                figure_metadata(figures[0])["corner.draws"]
+                == figure_metadata(figures[1])["corner.draws"]
+            )
+        finally:
+            for figure in figures:
+                pyplot.close(figure)
 
     def test_a_mismatched_label_count_is_refused_before_any_page_is_drawn(self) -> None:
         tree = _with_extra_scalars(run(toy()), 23)

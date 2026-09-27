@@ -388,6 +388,11 @@ _TRUNCATION_ACCEPTANCE_FLOOR = 1e-3
 #: defaults (twenty chains, two hundred warm-up steps, automatic thinning)
 #: multiply that by two orders of magnitude against a prior whose ``log_prob``
 #: is a Python loop. A caller who disagrees passes ``posterior=`` their own.
+#: Kept as a plain dict rather than ``sbi.inference.posteriors.
+#: posterior_parameters.MCMCPosteriorParameters`` (**W5.32 (b)**): that class
+#: is only ever imported lazily, at the one call site that builds a posterior
+#: from it, so this module-level constant stays importable without ``sbi``
+#: installed -- unpacked into the dataclass there with ``**_CALIBRATION_MCMC``.
 _CALIBRATION_MCMC: Mapping[str, Any] = {
     "num_chains": 8,
     "warmup_steps": 25,
@@ -405,6 +410,8 @@ _CALIBRATION_MCMC: Mapping[str, Any] = {
 #: distribution, which is already exactly where a truncated posterior's chain
 #: should start. Everything a caller usually wants to set — chains, warm-up,
 #: thinning — stays theirs, through ``posterior_options=`` at sample time.
+#: A plain dict for the same reason as :data:`_CALIBRATION_MCMC` above
+#: (**W5.32 (b)**).
 _TMNRE_MCMC: Mapping[str, Any] = {"init_strategy": "proposal"}
 
 #: The dtype ``sbi`` 0.27 trains in. Stated once rather than spelled at each
@@ -2196,11 +2203,19 @@ class SBIEngine(Engine):
         # wants something else passes ``posterior=`` as they always could.
         rebuilt = False
         if posterior is None and self.method == TMNRE and self.sample_with == "rejection":
+            # posterior_parameters= rather than the deprecated mcmc_parameters=
+            # dict (sbi 0.27.0, W5.32 (b)): the same values, translated into
+            # the dataclass build_posterior now wants; sbi 0.25 deprecated the
+            # dict and 0.27.0 (the locked version) raises a FutureWarning for it.
+            from sbi.inference.posteriors.posterior_parameters import (  # pyrefly: ignore[missing-import]
+                MCMCPosteriorParameters,
+            )
+
             target = self.sampler.build_posterior(
                 self.estimator,
                 prior=self._proposal,
                 sample_with="mcmc",
-                mcmc_parameters=_CALIBRATION_MCMC,
+                posterior_parameters=MCMCPosteriorParameters(**_CALIBRATION_MCMC),
             )
             rebuilt = True
         if target is None or self.encoding is None:
@@ -2647,11 +2662,24 @@ class SBIEngine(Engine):
         # A caller who wants it can still pass it through ``training=``.
         with self._seeded(torch, "sbi.torch"):
             self.estimator = trainer.train(show_train_summary=False, **options)
+        posterior_parameters: Any = None
+        if self.sample_with == "mcmc":
+            # posterior_parameters= rather than the deprecated mcmc_parameters=
+            # dict (sbi 0.27.0, W5.32 (b)) -- see calibrate()'s own note above.
+            from sbi.inference.posteriors.posterior_parameters import (  # pyrefly: ignore[missing-import]
+                MCMCPosteriorParameters,
+            )
+
+            posterior_parameters = MCMCPosteriorParameters(**_TMNRE_MCMC)
         self.posterior = trainer.build_posterior(
             self.estimator,
             prior=proposal,
             sample_with=self.sample_with,
-            **({"mcmc_parameters": dict(_TMNRE_MCMC)} if self.sample_with == "mcmc" else {}),
+            **(
+                {"posterior_parameters": posterior_parameters}
+                if posterior_parameters is not None
+                else {}
+            ),
         )
         self.posterior.set_default_x(observation)
         self.marginal_summary = self._marginal_summary(

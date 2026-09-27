@@ -68,6 +68,8 @@ import astropy.units as u
 import numpy as np
 
 from .exceptions import ContractError
+from .kernels import DTYPE
+from .results_schema import FunctionSamples
 from .results_schema import Layout as ContainerLayout
 
 __all__ = [
@@ -91,6 +93,7 @@ __all__ = [
     "decode",
     "encode",
     "encode_observations",
+    "sample_coordinates",
     "unpack",
 ]
 
@@ -1195,6 +1198,51 @@ def _flat_tensor(
             "there is nothing for the density estimator to condition on."
         )
     return summary.reshape(count, 1, summary.shape[1])
+
+
+def sample_coordinates(container: FunctionSamples) -> np.ndarray:
+    """The ``(n_samples, n_axes)`` coordinate matrix of *container*, C-ordered.
+
+    One row per *sample*, in the same flattening order
+    :attr:`~ampere.core.FunctionSamples.values` ravels in, which is what every
+    consumer of coordinates here wants: a noise model's covariance, a draw's
+    correlated realisation, a diagnostic's residual position.
+
+    Layout-aware, and that is the whole reason it exists (**W5.5**). For a
+    :attr:`~ampere.core.Layout.POINTS` container the axes *are* the samples,
+    one coordinate each, and stacking them column-wise is the answer — which is
+    what this code was, inline, before an ``Image`` was ever a dataset. A
+    :attr:`~ampere.core.Layout.GRID` container's axes are the separable grids
+    the samples are the product of, so a 16x16 image has two axes of sixteen
+    coordinates and two hundred and fifty-six samples, and the inline form
+    raised an ``IndexError`` about a boolean mask rather than saying anything
+    about layouts. The grid branch broadcasts each axis over the others,
+    exactly as :func:`_coordinate_matrix` below does for the SBI encoder —
+    which had this right since W3.3 and is the reason the shape of the answer
+    was never in doubt.
+
+    **W5.32 (f)**: lives here rather than in ``dataset.py`` (where it was
+    defined until now) because ``ampere.core.likelihood.Likelihood`` needs it
+    too, and ``dataset.py`` imports ``Likelihood`` at module load -- a
+    module-level import the other way round would be circular. ``encoding.py``
+    imports nothing from either, so both can import this at the top.
+    """
+    axes = container.axes
+    if not axes:
+        return np.zeros((int(np.asarray(container.values).size), 0), dtype=DTYPE)
+    if container.LAYOUT is ContainerLayout.GRID:
+        indices = np.indices(tuple(axis.values.size for axis in axes))
+        return np.ascontiguousarray(
+            np.column_stack(
+                [
+                    np.asarray(axis.values, dtype=DTYPE)[indices[position]].reshape(-1)
+                    for position, axis in enumerate(axes)
+                ]
+            )
+        )
+    return np.ascontiguousarray(
+        np.column_stack([np.asarray(axis.values, dtype=DTYPE).reshape(-1) for axis in axes])
+    )
 
 
 def _standardised_coordinates(record: DatasetLayout, axes: Any) -> np.ndarray:

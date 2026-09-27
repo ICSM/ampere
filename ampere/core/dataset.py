@@ -121,6 +121,7 @@ import collections
 import contextlib
 import dataclasses
 import enum
+import inspect
 import math
 import pickle
 import types
@@ -130,6 +131,7 @@ from typing import Any, Literal, Protocol, overload, runtime_checkable
 
 import numpy as np
 
+from .encoding import sample_coordinates
 from .exceptions import (
     CompositionError,
     DatasetError,
@@ -155,10 +157,11 @@ from .parameter import (
     Tie,
     Value,
 )
-from .results_schema import FunctionSamples, Layout, ModelResult
+from .results_schema import FunctionSamples, ModelResult
 from .rng import SEED_BYTES
 from .rng import generator as _generator
 from .realisation import realise, sample_observations_of, simulate_batched_of
+from .settings import AmpereContextFallbackWarning
 from .simulate import (
     BatchedPrediction,
     ChunkHook,
@@ -911,45 +914,6 @@ class Simulation:
 # ---------------------------------------------------------------------------
 # Dataset
 # ---------------------------------------------------------------------------
-
-
-def sample_coordinates(container: FunctionSamples) -> np.ndarray:
-    """The ``(n_samples, n_axes)`` coordinate matrix of *container*, C-ordered.
-
-    One row per *sample*, in the same flattening order
-    :attr:`~ampere.core.FunctionSamples.values` ravels in, which is what every
-    consumer of coordinates here wants: a noise model's covariance, a draw's
-    correlated realisation, a diagnostic's residual position.
-
-    Layout-aware, and that is the whole reason it exists (**W5.5**). For a
-    :attr:`~ampere.core.Layout.POINTS` container the axes *are* the samples,
-    one coordinate each, and stacking them column-wise is the answer — which is
-    what this code was, inline, before an ``Image`` was ever a dataset. A
-    :attr:`~ampere.core.Layout.GRID` container's axes are the separable grids
-    the samples are the product of, so a 16x16 image has two axes of sixteen
-    coordinates and two hundred and fifty-six samples, and the inline form
-    raised an ``IndexError`` about a boolean mask rather than saying anything
-    about layouts. The grid branch broadcasts each axis over the others,
-    exactly as ``encoding.py``'s ``_coordinate_matrix`` does for the SBI
-    encoder — which had this right since W3.3 and is the reason the shape of
-    the answer was never in doubt.
-    """
-    axes = container.axes
-    if not axes:
-        return np.zeros((int(np.asarray(container.values).size), 0), dtype=DTYPE)
-    if container.LAYOUT is Layout.GRID:
-        indices = np.indices(tuple(axis.values.size for axis in axes))
-        return np.ascontiguousarray(
-            np.column_stack(
-                [
-                    np.asarray(axis.values, dtype=DTYPE)[indices[position]].reshape(-1)
-                    for position, axis in enumerate(axes)
-                ]
-            )
-        )
-    return np.ascontiguousarray(
-        np.column_stack([np.asarray(axis.values, dtype=DTYPE).reshape(-1) for axis in axes])
-    )
 
 
 class Dataset:
@@ -4337,11 +4301,24 @@ class _NativeBatch:
         dataset's own observed sigma as a batch of one — so a realisation whose
         sampler predates the keyword falls back here, to the numpy draw at each
         draw's context, rather than failing the budget's first chunk.
+
+        **W5.32 (j)**: that fallback is silent -- the trial's own broad
+        ``except`` below does not say *why* it gave up, and a user noise model
+        whose ``sigma_jax``/``sigma_torch`` lacks the ``base=`` keyword that
+        carries the per-draw context sigma (``inference.md`` §13) is exactly
+        this case, deterministically. Checked by signature, not by waiting for
+        the trial to raise from it: :func:`_warn_of_context_base_gaps` inspects
+        every dataset's noise model once, before the trial, and a gap warns
+        loudly (:class:`~ampere.core.settings.AmpereContextFallbackWarning`)
+        so the only trace is not left to ``provenance['sample_backend']``
+        alone.
         """
         sampler = self.sampler
         if sampler is None:  # pragma: no cover - guarded by the caller
             return
         problem = self.problem
+        if self.contextual:
+            _warn_of_context_base_gaps(problem, self.backend)
         reference = np.asarray(
             problem._mapping.merged.pack(dict(problem.reference_values)), dtype=float
         ).reshape(1, -1)
@@ -4669,6 +4646,94 @@ class _NativeBatch:
             observations=observations,
             context=context,
         )
+
+
+#: Each modern backend's native sigma hook, and the shape of the *contextual*
+#: call its own ``problem.py``'s ``_sigma`` makes to it -- read off
+#: ``ampere.backends.jax.problem._LoweredDataset._sigma`` and its torch twin
+#: (**W5.32 (j)**). jax's hook is keyword-optional (``sigma_jax(observed,
+#: retain, values, *, predicted=None, base=None)``): an old noise model
+#: without ``base=`` still works for a budget with no context, because that
+#: call omits the keyword entirely, and only fails once a context adds it --
+#: which is the whole reason the fallback this warns about is *silent*.
+#: torch's hook (``sigma_tensor(base, values, *, predicted)``) takes ``base``
+#: positionally and unconditionally, so a torch noise model missing it fails
+#: the same way whether or not a context is in play; the check below still
+#: covers it (a `TypeError` from the real call either way), but it is the
+#: jax shape this warning exists for.
+_NATIVE_SIGMA_HOOK: Mapping[str, tuple[str, int, tuple[str, ...]]] = {
+    "jax": ("sigma_jax", 3, ("predicted", "base")),
+    "torch": ("sigma_tensor", 2, ("predicted",)),
+}
+
+#: The signature to quote in the warning, one per backend -- the real
+#: contextual call's shape, spelled as a definition a user noise model could
+#: paste in.
+_NATIVE_SIGMA_HINT: Mapping[str, str] = {
+    "jax": "sigma_jax(self, observed, retain, values, *, predicted=None, base=None)",
+    "torch": "sigma_tensor(self, base, values, *, predicted)",
+}
+
+
+def _context_base_gap(noise: Any, backend: str) -> tuple[str, str] | None:
+    """*noise*'s class name and native sigma hook's signature, if the backend's
+    own **contextual** call to it (see :data:`_NATIVE_SIGMA_HOOK`) would not
+    bind (**W5.32 (j)**).
+
+    ``None`` when there is nothing to warn about: no such hook at all
+    (nothing native to check -- the reference backend, or a family
+    ``ampere.core`` computes the plain scale/jitter arithmetic for itself),
+    or one whose signature already accepts that call. A pure signature
+    check rather than a trial call: whether the call would bind is a fact
+    about the hook's definition, not about the data it is called with, so
+    there is nothing to gain from waiting for the ``TypeError`` it would
+    otherwise raise.
+    """
+    hook = _NATIVE_SIGMA_HOOK.get(backend)
+    if hook is None:  # pragma: no cover - reference has no native sigma hook
+        return None
+    name, positional, keywords = hook
+    native = getattr(noise, name, None)
+    if native is None:
+        return None
+    signature = inspect.signature(native)
+    try:
+        signature.bind(*([None] * positional), **dict.fromkeys(keywords))
+    except TypeError:
+        return type(noise).__name__, f"{name}{signature}"
+    return None
+
+
+def _warn_of_context_base_gaps(problem: FittingProblem, backend: str) -> None:
+    """Loud, once per ``simulate_many`` call, for every offending noise model (**W5.32 (j)**).
+
+    Called from :meth:`_NativeBatch._check_sampler` only for a contextual
+    budget, before the trial draw that would otherwise fail silently into
+    it. Every shipped noise model's native sigma hook already takes this
+    call (W5.29), so this never fires for one.
+    """
+    gaps = {
+        gap
+        for dataset in problem.datasets.values()
+        if (gap := _context_base_gap(dataset.likelihood.noise, backend)) is not None
+    }
+    if not gaps:
+        return
+    named = ", ".join(f"{cls}.{signature}" for cls, signature in sorted(gaps))
+    hint = _NATIVE_SIGMA_HINT[backend]
+    warnings.warn(
+        f"simulate_many(context=...): {named} cannot take the per-draw context sigma the "
+        f"batched {backend!r} path would otherwise hand its native sigma hook "
+        f'(inference.md §13, "The native path draws the context") -- this batch is being '
+        f"drawn by numpy, not {backend!r}. Give it a base= parameter, for example:\n\n"
+        f"    def {hint}\n\n"
+        f"to sample it natively. provenance['sample_backend'] records which arithmetic "
+        f"drew this batch either way.",
+        AmpereContextFallbackWarning,
+        # _check_sampler -> _NativeBatch.__init__ -> FittingProblem._native_batch ->
+        # the simulate_many generator's own frame -> whoever is iterating it.
+        stacklevel=5,
+    )
 
 
 def _context_description(prior: ContextPrior | None) -> str:

@@ -29,14 +29,15 @@ package raises at construction if the flag is off. Call
    :imported-members:
    :undoc-members:
    :show-inheritance:
-   :exclude-members: LoweringFallbackWarning, Product, Sum
+   :exclude-members: LoweringFallbackWarning, Product, Sum, WarpedKernel
 
 ``LoweringFallbackWarning`` is re-exported here for the import path a jax user
 reaches for, but it is one shared class across the backends and is documented
-once, as :class:`ampere.core.LoweringFallbackWarning`. ``Product`` and ``Sum``
-are the same story, one level down: they are ``ampere.core.kernels``' own
-composite kernels, re-exported here for the import path, and documented once
-as :class:`ampere.core.kernels.Product` and :class:`ampere.core.kernels.Sum`.
+once, as :class:`ampere.core.LoweringFallbackWarning`. ``Product``, ``Sum``
+and ``WarpedKernel`` are the same story, one level down: they are
+``ampere.core.kernels``' own composite/wrapping kernels, re-exported here for
+the import path, and documented once as :class:`ampere.core.kernels.Product`,
+:class:`ampere.core.kernels.Sum` and :class:`ampere.core.kernels.WarpedKernel`.
 
 Constants
 ---------

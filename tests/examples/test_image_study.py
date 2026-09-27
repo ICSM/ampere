@@ -15,12 +15,19 @@ gross effect. Anything finer needs the marked run.
 
 from __future__ import annotations
 
+import importlib.util
+
 import numpy as np
 import pytest
 
 from ampere.core import Image, Layout
 
 from examples.image import generators, model, study
+
+needs_torch = pytest.mark.skipif(
+    importlib.util.find_spec("torch") is None, reason="needs ampere[torch]"
+)
+needs_jax = pytest.mark.skipif(importlib.util.find_spec("jax") is None, reason="needs ampere[jax]")
 
 #: Small enough to run in a few seconds; large enough that every rule the study
 #: depends on is exercised (a padded grid, a crop, a 2-D GP).
@@ -122,6 +129,28 @@ class TestBuildProblem:
         for arm in study.ARMS:
             problem = study.build_problem("reference", arm, pixels=TINY_PIXELS)
             assert np.isfinite(problem.log_prob(_prior_median(problem)))
+
+
+class TestTheFlexibleArmComposesOnTheModernBackends:
+    """W5.32 (h): ``_noise_for``'s solver fallback must be the chosen backend's
+
+    own ``DenseGP``, not ``ampere.core``'s. Before the fix, ``build_problem``
+    with no explicit ``solver=`` refused the flexible arm on "torch"/"jax" as
+    a foreign part (``DatasetError``), because the fallback was always the
+    reference-backend ``DenseGP`` composed into a native problem.
+    """
+
+    @needs_torch
+    def test_the_flexible_arm_composes_on_torch(self) -> None:
+        problem = study.build_problem("torch", "flexible", pixels=TINY_PIXELS)
+        assert problem.backend == "torch"
+        assert np.isfinite(problem.log_prob(_prior_median(problem)))
+
+    @needs_jax
+    def test_the_flexible_arm_composes_on_jax(self) -> None:
+        problem = study.build_problem("jax", "flexible", pixels=TINY_PIXELS)
+        assert problem.backend == "jax"
+        assert np.isfinite(problem.log_prob(_prior_median(problem)))
 
 
 class TestATinyFitRunsEndToEnd:

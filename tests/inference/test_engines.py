@@ -791,8 +791,9 @@ def flaky_problem(*, declare: bool = True) -> FittingProblem:
 class TestFailureSignalling:
     """``inference.md`` §11, consumed rather than reimplemented."""
 
+    @staticmethod
     @pytest.fixture(scope="class")
-    def flaky_run(self) -> tuple[Any, list[warnings.WarningMessage]]:
+    def flaky_run() -> tuple[Any, list[warnings.WarningMessage]]:
         engine = EmceeEngine(flaky_problem(), walkers=8)
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")

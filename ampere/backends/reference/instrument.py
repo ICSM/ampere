@@ -122,6 +122,26 @@ class _Step(Transformation):
     def _data(self, name: str) -> np.ndarray:
         return np.asarray(self.buffers[name].value, dtype=DTYPE)
 
+    def __getstate__(self) -> dict[str, Any]:
+        """Drop planning caches: a round-tripped step replans on first use (**W5.32 (l)**).
+
+        ``_influence_plan`` (:class:`Resample`) and its siblings elsewhere in
+        this backend (``_transform_plan``, ``_template_source_unit`` on
+        ``interferometry.py``'s own ``_Step``) are pure performance caches --
+        rebuilt from the buffers and parameters pickling already carries, at
+        the cost of one call, never a correctness difference. Carrying them
+        in the pickle only bloats it, and the cache key (grid bytes, expanded
+        coverage) is derived data that is cheaper to recompute than to trust
+        across a process boundary. Any attribute matching ``_*_plan`` is
+        dropped by name pattern rather than an enumerated list, so a future
+        cache of the same shape needs no second edit here.
+        """
+        return {
+            key: value
+            for key, value in self.__dict__.items()
+            if not (key.startswith("_") and key.endswith("_plan"))
+        }
+
 
 class CalibrationScale(_Step):
     """A multiplicative calibration factor: ``flux -> scale * flux``.

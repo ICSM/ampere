@@ -333,8 +333,9 @@ class TestTheReducedObjectsFit:
 
 @pytest.mark.study
 class TestReweightedPopulationPosterior:
+    @staticmethod
     @pytest.fixture(scope="class")
-    def result(self, object_runs: list[Any]) -> Any:
+    def result(object_runs: list[Any]) -> Any:
         columns = [DataTreeRunColumns(run) for run in object_runs]
         return fit_population(
             columns,
@@ -400,18 +401,22 @@ class TestTheStoredInterimPrior:
 
     SETTINGS: ClassVar[dict[str, int]] = dict(walkers=8, steps=2000, burn_in=500, seed=SEED)
 
+    @staticmethod
     @pytest.fixture(scope="class")
-    def columns(self, object_runs: list[Any]) -> list[Any]:
+    def columns(object_runs: list[Any]) -> list[Any]:
         return [DataTreeRunColumns(run) for run in object_runs]
 
+    @staticmethod
     @pytest.fixture(scope="class")
-    def without_prior(self, columns: list[Any]) -> Any:
+    def without_prior(columns: list[Any]) -> Any:
         """One ``fit_population`` call with no ``interim_prior``, shared by
         both tests below -- the same settings and archive
         :class:`TestReweightedPopulationPosterior`'s own ``result`` fixture
         uses, so a second, independent population fit is not paid for
         twice."""
-        return fit_population(columns, "model.theta", _population_model(), **self.SETTINGS)
+        return fit_population(
+            columns, "model.theta", _population_model(), **TestTheStoredInterimPrior.SETTINGS
+        )
 
     def test_omitting_interim_prior_reproduces_the_supplied_result(
         self, columns: list[Any], without_prior: Any
@@ -793,30 +798,34 @@ class TestTheMarginalInterimPriorFix:
         walkers=8, steps=1500, burn_in=400, seed=SEED
     )
 
+    @staticmethod
     @pytest.fixture(scope="class")
-    def two_parameter_runs(self) -> list[Any]:
+    def two_parameter_runs() -> list[Any]:
         _, data = _truths_and_data(SEED, N_OBJECTS)
         return [
             DataTreeRunColumns(_fit_two_parameter_object(float(datum), seed=SEED + index))
-            for index, datum in enumerate(data[: self.N])
+            for index, datum in enumerate(data[: TestTheMarginalInterimPriorFix.N])
         ]
 
+    @staticmethod
     @pytest.fixture(scope="class")
-    def one_parameter_result(self, object_runs: list[Any]) -> Any:
+    def one_parameter_result(object_runs: list[Any]) -> Any:
         """The one-parameter control, over the *same* N_OBJECTS_REDUCED objects."""
-        columns = [DataTreeRunColumns(run) for run in object_runs[: self.N]]
+        cls = TestTheMarginalInterimPriorFix
+        columns = [DataTreeRunColumns(run) for run in object_runs[: cls.N]]
         return fit_population(
-            columns, "model.theta", _population_model(), INTERIM_PRIOR, **self.POPULATION_SETTINGS
+            columns, "model.theta", _population_model(), INTERIM_PRIOR, **cls.POPULATION_SETTINGS
         )
 
+    @staticmethod
     @pytest.fixture(scope="class")
-    def two_parameter_result(self, two_parameter_runs: list[Any]) -> Any:
+    def two_parameter_result(two_parameter_runs: list[Any]) -> Any:
         return fit_population(
             two_parameter_runs,
             "model.theta",
             _population_model(),
             INTERIM_PRIOR,
-            **self.POPULATION_SETTINGS,
+            **TestTheMarginalInterimPriorFix.POPULATION_SETTINGS,
         )
 
     def test_truth_inside_the_central_95_percent(self, two_parameter_result: Any) -> None:
