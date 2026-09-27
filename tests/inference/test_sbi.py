@@ -1611,10 +1611,17 @@ def calibration_engine() -> Any:
     """One trained NPE engine on the one-parameter bounded problem.
 
     ``bounded_problem`` rather than the joint one: a single lognormal parameter
-    over four points is a problem NPE learns *well* at a budget a per-PR gate
-    can afford, and family D's null needs a posterior that really is calibrated
-    — an under-trained network would fail the check for a reason that has
-    nothing to do with the code under test.
+    over four points is a problem NPE learns well enough at a budget a per-PR
+    gate can afford for the calibration *plumbing* to be exercised on it. It is
+    a **smoke fixture, not a calibrated null**: probed at larger calibration
+    counts (2026-09-26, the W5.21 CI investigation) the same posterior gives
+    ``c2st_ranks`` of 0.575 at count 100, 0.63 at 200, 0.79 at 300 and 0.875
+    at 500 with KS p-values falling to 0.015 to 0.03, so a budget-1000 network
+    on this problem is mildly miscalibrated and a hundred SBC samples merely
+    lack the power to see it. The rows below pin the fast path's mechanics
+    and the honest-against-narrowed contrast at that power; calibration
+    correctness itself is carried by ``tests/results/test_calibration.py``'s
+    exact linear-Gaussian null (``TestAgainstAnExactPosterior``).
     """
     engine = SBIEngine(bounded_problem(), method="npe", budget=1000)
     engine.run(200, training={"max_num_epochs": 200})
@@ -1664,6 +1671,11 @@ class TestTheCalibrationFastPath:
     def test_a_trained_npe_posterior_passes_check_sbc(self, calibration: Any) -> None:
         """Accept criterion: uniform within ``check_sbc``'s own thresholds.
 
+        A power-limited smoke row (see ``calibration_engine``): the pins below
+        are set from the fixture's measured scatter, not from what a
+        calibrated posterior would give, and are tight only relative to the
+        narrowed arm a few rows down.
+
         W5.26 (7): the threshold was ``> 0.05`` until a GitHub-hosted runner
         (CI run 35684651060, reproduced byte-for-byte on 35688582595 at
         0.01983926) failed it on a genuinely calibrated posterior — a p-value
@@ -1678,7 +1690,12 @@ class TestTheCalibrationFastPath:
         """
         assert float(np.min(calibration["ks_pvalue"].values)) > 0.001
         # C2ST between the ranks and a uniform baseline: 0.5 is "indistinguishable".
-        assert float(np.max(calibration["c2st_ranks"].values)) < 0.65
+        # Ruled 2026-09-27 (option (b) of the handoff's finding): ``< 0.65`` was
+        # red at 0.66 on one runner and green on the next for the same code,
+        # because the fixture is mildly miscalibrated (its docstring); the pin
+        # is set from the measured scatter (0.575 here, 0.66 there) with a
+        # margin, and stays far below the narrowed arm's c2st.
+        assert float(np.max(calibration["c2st_ranks"].values)) < 0.75
 
     def test_tarps_expected_coverage_passes_check_tarp(self, calibration: Any) -> None:
         """The joint diagnostic, which the marginal ranks cannot stand in for."""
