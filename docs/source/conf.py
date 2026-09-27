@@ -103,6 +103,14 @@ html_static_path = []
 # rendered `ampere.core`'s astropy.units-typed signatures as mock objects the
 # moment those pages existed; bs4 and requests are imported nowhere in the
 # package.
+#
+# `sbi` (W5.32 (d)): the legacy `ampere.infer.sbi` module imports `sbi` at
+# module level (on top of `torch`, already mocked above), and the `dev` docs
+# environment does not carry the `sbi` extra -- adding it here would pull in
+# torch too, for one page, which the two backend pages above already reject
+# for the same reason. `sbi` is import-only in the docs build, exactly like
+# `torch`/`jax` here: it is never installed in the environment this page is
+# built in, so mocking it costs nothing and unblocks the autodoc import.
 autodoc_mock_imports = [
     "torch",
     "pyro",
@@ -110,6 +118,7 @@ autodoc_mock_imports = [
     "jaxlib",
     "numpyro",
     "equinox",
+    "sbi",
 ]
 
 
