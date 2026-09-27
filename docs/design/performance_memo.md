@@ -296,7 +296,7 @@ common priors (`uniform`, `norm`, `halfnorm`, `lognorm`, `loguniform`,
 covers, and how a user's frozen legacy prior would be accepted alongside
 (`parameters.md` §4's `Prior` protocol is evaluated through
 `logpdf`/`logpmf`; the new objects spell it `logpdf` too, so the protocol
-may already be satisfied). A follow-up item, not this pass.*
+may already be satisfied). A Phase 6 item, not this pass — placed there by Peter the same day (`DEVELOPMENT_PLAN.md`, Phase 6, "The scipy distribution exploration").*
 
 **P2 — batched evaluation (issue #67's shape).** The contract path is
 scalar by design (`log_prob(values) -> float`), every problem on it

@@ -827,6 +827,32 @@ the interferometry sketch's Q2 (per-visibility frequency as an
   posterior of ten to fifty curved, often multimodal parameters supplies;
   the harvest's Ax/SAASBO/Ray classes stay archived, and an expensive
   simulator is the SBI layer's case first. **Depends:** Phase 5 closed.
+- **The scipy distribution exploration** (Peter, 2026-09-27, ruling on
+  W5.17's proposal P1). W5.17's profile found the priors the largest single
+  item on the M2 reference `log_prob`: six frozen scipy priors evaluated
+  through `rv_continuous.logpdf` cost 262 µs of 701 µs, almost all of it
+  the legacy wrapper's array bookkeeping on zero-dimensional inputs, while
+  the arithmetic underneath costs 20.5 µs. The private-API route (`_argcheck`,
+  `_support_mask`, `_logpdf`) was declined as a coupling ampere should not
+  carry. The public route to evaluate is **scipy's new distribution
+  infrastructure** (scipy ≥ 1.15: `scipy.stats.Normal`, `Uniform`,
+  `make_distribution`, the `ContinuousDistribution` base), designed with far
+  less per-call overhead: measure the same six-prior `lnprior` through the
+  new objects against the 262 µs legacy figure and the 20.5 µs floor; test
+  whether its values are bit-identical to the frozen `logpdf` and, if not,
+  what tolerance the §13 conformance row (`lnprior` against summed scipy
+  `logpdf`) would have to absorb; list which of ampere's common priors
+  (`uniform`, `norm`, `halfnorm`, `lognorm`, `loguniform`, `truncnorm`,
+  `halfcauchy`, `beta`, `gamma`) it covers; and say how a user's frozen
+  legacy prior sits alongside — `parameters.md` §4's `Prior` protocol is
+  evaluated through `logpdf`/`logpmf`, which the new objects spell the same
+  way, so the protocol may already be satisfied and the change may be one
+  of guidance and the default bijection table (`parameters.md` §6/§9) rather
+  than contract. The outcome is a report with the measurement and, if the
+  gain is real and exact, a follow-up item; nothing lands in the core
+  without a decision-log row (ground rule 9). The memo's §6 P1 paragraph
+  (`docs/design/performance_memo.md`) is the starting point. **Depends:**
+  Phase 5 closed; nothing else.
   **Accept:** on the conformance fixtures, each route's point estimate
   inside the sampled posterior's central 50 % on every free parameter,
   once per fixture; the hyperparameter warm start within a factor of two
