@@ -66,12 +66,14 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
     the older core+results+conformance subset; the individual `test-core`,
     `test-results`, `test-backends`, `test-inference`, `test-examples` and
     `conformance` tasks exist too), `pixi run test-fast` (W5.18: the local
-    pre-commit run — the same suites as `test-all`, minus the `*_full`
-    markers (already opt-in), the `study` rows (`-m "not study"`, W5.26's
-    ~18 minutes in `dev`) and the SBI-training classes in
-    `tests/inference/test_sbi.py` (excluded by `--deselect`, not a new
-    marker); measured at PLACEHOLDER for PLACEHOLDER collected rows in
-    `dev` — see the task's own comment in `pyproject.toml`),
+    pre-commit run — the contract-and-backend tier of `test-all`: core,
+    results, conformance, backends, inference and the M2 agreement rows,
+    minus the `study` rows, the SBI-training classes and two slow results
+    classes, with the three example suites left to `test-all` and CI's
+    `studies` group; **ruled by Peter 2026-09-27** on the measurement;
+    2 min 55 s for 2879 passed / 425 skipped / 244 deselected in `dev` — the
+    task's own comment in `pyproject.toml` has the durations and the
+    reasons),
     `pixi run test-characterisation` (legacy still works),
     `pixi run lint`, `pixi run format-check`, `pixi run typecheck`,
     `pixi run docs` (repaired at W2.11 — it builds), `pixi run bench` (the
