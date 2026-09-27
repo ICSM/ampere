@@ -261,6 +261,26 @@ class _Step(Transformation):
     def _data(self, name: str) -> np.ndarray:
         return np.asarray(self.buffers[name].value, dtype=DTYPE)
 
+    def __getstate__(self) -> dict[str, Any]:
+        """Drop planning caches: a round-tripped step replans on first use (**W5.32 (l)**).
+
+        The same rule as ``instrument.py``'s own ``_Step`` (a separate class,
+        kept in step deliberately): ``_transform_plan``
+        (:class:`FourierSample`'s DFT factors) matches the ``_*_plan``
+        pattern, dropped by name rather than an enumerated list.
+        ``_template_source_unit`` is the one cache here that does not fit
+        that pattern -- a fast identity check beside the real, still-valid
+        ``_template`` it guards, dropped by name explicitly so the next call
+        takes the slower (but equally correct) unit-equality path once rather
+        than trusting an identity check across a process boundary.
+        """
+        return {
+            key: value
+            for key, value in self.__dict__.items()
+            if key != "_template_source_unit"
+            and not (key.startswith("_") and key.endswith("_plan"))
+        }
+
 
 @dataclasses.dataclass(frozen=True)
 class _Expansion:

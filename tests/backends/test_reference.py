@@ -20,6 +20,7 @@ under test.
 
 from __future__ import annotations
 
+import pickle
 import time
 
 import astropy.units as u
@@ -296,6 +297,26 @@ class TestResample:
     def test_an_unsorted_target_is_refused(self) -> None:
         with pytest.raises(TransformationError, match="strictly increasing"):
             Resample(np.array([3.0, 1.0, 2.0]))
+
+    def test_a_pickled_step_drops_its_plan_and_replans_identically(self) -> None:
+        """W5.32 (l): ``_influence_plan`` is a performance cache, not state a
+        round trip should carry -- it is cheap to rebuild and, at 12x400
+        floats, not cheap to ship."""
+        target = np.linspace(2.0, 20.0, 12)
+        step = Resample(target)
+        spectrum = flat(GRID)
+        before = step(spectrum, None)
+        assert "_influence_plan" in step.__dict__
+
+        trimmed = pickle.dumps(step)
+        untrimmed = pickle.dumps(step.__dict__)  # the same state, plan included
+        assert len(trimmed) < len(untrimmed)
+
+        restored = pickle.loads(trimmed)
+        assert "_influence_plan" not in restored.__dict__
+        after = restored(spectrum, None)
+        assert "_influence_plan" in restored.__dict__  # replanned on first use
+        np.testing.assert_array_equal(after.values, before.values)
 
 
 class TestLSFConvolution:

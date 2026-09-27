@@ -18,6 +18,7 @@ twenty minutes of gate time to learn nothing the rows have not already said.
 from __future__ import annotations
 
 import math
+import pickle
 from typing import Any
 
 import astropy.units as u
@@ -198,6 +199,28 @@ class TestFourierSampleConstruction:
         step(Image(grid, grid, np.ones((9, 9)) * u.Jy / u.sr))
         with pytest.raises(TransformationError, match="compiled for an image in"):
             step(Image(grid, grid, np.ones((9, 9)) * u.mJy / u.sr))
+
+    def test_a_pickled_step_drops_its_plan_and_replans_identically(self) -> None:
+        """W5.32 (l): ``_transform_plan`` and ``_template_source_unit`` are
+        performance caches, not state a round trip should carry -- the DFT
+        factors are cheap to rebuild and not cheap to ship."""
+        step = FourierSample.from_observed(visibilities(), field_of_view=FIELD_OF_VIEW * u.mas)
+        grid = np.linspace(-5.0, 5.0, 9) * u.mas
+        image = Image(grid, grid, np.ones((9, 9)) * u.Jy / u.sr)
+        before = step(image)
+        assert "_transform_plan" in step.__dict__
+        assert "_template_source_unit" in step.__dict__
+
+        trimmed = pickle.dumps(step)
+        untrimmed = pickle.dumps(step.__dict__)  # the same state, plans included
+        assert len(trimmed) < len(untrimmed)
+
+        restored = pickle.loads(trimmed)
+        assert "_transform_plan" not in restored.__dict__
+        assert "_template_source_unit" not in restored.__dict__
+        after = restored(image)
+        assert "_transform_plan" in restored.__dict__  # replanned on first use
+        np.testing.assert_array_equal(after.values, before.values)
 
 
 class TestImageModels:
