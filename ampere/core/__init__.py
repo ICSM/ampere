@@ -49,7 +49,6 @@ from .dataset import (
     declared_capabilities,
     foreign_parts,
     part_name,
-    sample_coordinates,
 )
 from .efgp import (
     EquispacedFourierGP,
@@ -80,6 +79,7 @@ from .encoding import (
     decode,
     encode,
     encode_observations,
+    sample_coordinates,
     unpack,
 )
 from .exceptions import (
