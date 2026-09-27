@@ -199,7 +199,89 @@ quality per component, the component count the only real decision:
     >>> mixture.QUASISEPARABLE
     True
 
-3. The ``axes=`` selector, and the per-leaf unit rule
+3. Non-stationarity: ``WarpedKernel``
+-----------------------------------------------------------
+
+Every family above is **stationary**: the covariance depends only on the
+separation between two points, not on where they sit. :class:`~ampere.core.WarpedKernel`
+(**W5.7**) is the flexible likelihood's answer to a residual that is not —
+one or two wrappers around any base kernel, each preserving the exact O(N)
+solve rather than trading it away:
+
+* **Input warping** maps the coordinate through a monotone piecewise-linear
+  spline over a small number of fixed knots, ``k(x, x') -> k(w(x), w(x'))``.
+  A length scale that should be short in one band and long in another is
+  this, not a new family: :math:`w` compresses the coordinate where the
+  process varies quickly and stretches it where it does not. The knot
+  *locations* are fixed and explicit in the declaration — :func:`~ampere.core.quantile_knots`
+  is the convenience for choosing them from the data — and only the segment
+  slopes between them are fitted parameters.
+* **Amplitude warping** scales the marginal standard deviation by a second,
+  independent piecewise-linear spline in :math:`\log a(x)`, giving
+  :math:`D K D` with :math:`D = \mathrm{diag}(a(x))` for a residual whose
+  *size*, not its correlation structure, varies across the band.
+
+Both act on the same one coordinate a kernel already runs its recursion on,
+and both preserve quasiseparability **exactly**, for reasons that are
+structural rather than numerical (``likelihoods.md`` §6 has the full
+account): a monotone warp of the coordinate does not change the sorting
+permutation ``QuasisepGP``'s ordering precondition needs, so the base
+kernel's generators evaluated at :math:`w(x)` are still a valid
+factorisation; and a diagonal congruence :math:`D K D` of a rank-:math:`J`
+semiseparable matrix is rank-:math:`J` semiseparable, with the diagonal
+absorbed straight into the generators (:math:`U \to \mathrm{diag}(a)\,U`,
+:math:`V \to \mathrm{diag}(a)\,V`). Nothing about the solver, the
+approximation or the representation changes — a warped Matérn-3/2 is still
+exactly quasiseparable and still runs on :class:`~ampere.core.QuasisepGP`:
+
+.. code-block:: pycon
+
+    >>> import scipy.stats as st
+    >>> from ampere.core import Matern32, WarpedKernel, quantile_knots
+    >>> base = Matern32(st.loguniform(1e-3, 1e1), st.loguniform(0.1, 10.0))
+    >>> warped = WarpedKernel(base, input_warp=(0.0, 5.0, 10.0))
+    >>> warped.QUASISEPARABLE
+    True
+    >>> sorted(name for name in warped.parameters.names if "warp" in name)
+    ['input_warp.increment0', 'input_warp.increment1', 'input_warp.scale']
+
+The knot variables (``input_warp.incrementN``, ``amplitude_warp.levelN``)
+and each warp's shared shrinkage scale (``input_warp.scale``,
+``amplitude_warp.scale``) are **ordinary** :class:`~ampere.core.Parameter`
+objects — nothing about fitting, lowering or provenance treats them
+differently from a kernel's own hyperparameters, so NUTS reaches all of
+them on the torch and jax backends for free. Their default priors are not
+arbitrary: every knot variable is hierarchical under a single half-normal
+scale per warp (non-centred by default, the better posterior geometry for
+NUTS), which puts the *identity* warp — the base kernel, exactly, bit for
+bit — at the prior's centre of mass, so the data must pay to move away from
+it. This is the same shape :func:`~ampere.core.shrinkage_horseshoe` gives a
+``Sum``'s component amplitudes (§1 above): few knots, and a hierarchical
+prior that shrinks toward "no effect" rather than a hard limit on how many
+knots are allowed.
+
+**The worked case.** ``examples/m2_misspecification/many_lines.py``
+(W5.8) is the M2 scenario a single length scale cannot cover — a forest of
+narrow lines beside a smooth, much broader continuum error — and it is
+where a warped Matérn-3/2 is compared against the plain kernel and against
+a ``Sum`` of two Matérn-3/2 terms. :doc:`m2_misspecification` has the full
+account and the numbers; in short, the plain stationary kernel is the one
+place in the whole M2 study that *fails* the page's own 1.5-posterior-width
+threshold (2.84), while the warped kernel (0.92) and the two-length-scale
+sum (0.78) both recover it, all three localising the deviation inside the
+line band.
+
+**Caution.** Both warps are piecewise-linear **within** their knot range
+and extended **linearly** beyond the end knots — cheap and monotone, but
+not flat, so a warp whose knots do not cover the data's own range keeps
+extrapolating past the last one instead of levelling off. The reviewer's
+note carried from W5.7's review is the rule of thumb: choose knots (by eye,
+or with :func:`~ampere.core.quantile_knots`) that **cover the data range**,
+rather than relying on the extrapolation to do the right thing outside it —
+a linearly extrapolated :math:`\log a` is the amplitude-warp case this
+bites hardest, since it is exponentiated.
+
+4. The ``axes=`` selector, and the per-leaf unit rule
 -----------------------------------------------------------
 
 Ruled 2026-09-11 (``phase4_placement_memo.md`` §3.6 item 3): a kernel acts
@@ -241,7 +323,7 @@ nothing is mutated in place — and the selection is part of the kernel's
 own hash (``KernelSpec.to_dict()`` includes ``axes`` only when a selection
 was made), so a pre-W4.5 spec hash is unaffected.
 
-4. The chromatic case: a ``Product`` on disjoint axes
+5. The chromatic case: a ``Product`` on disjoint axes
 -----------------------------------------------------------
 
 The axis selector's own reason for existing (memo §3.6, measured rather
@@ -277,7 +359,7 @@ reports the honest result — the product does not straightforwardly
 dominate a spatial-only kernel at the per-PR budget, though the
 spectral-only kernel is clearly the worst of the three throughout.
 
-5. Registering your own term: ``register_quasiseparable_term``
+6. Registering your own term: ``register_quasiseparable_term``
 ---------------------------------------------------------------------
 
 A user-defined :class:`~ampere.core.Kernel` subclass works on

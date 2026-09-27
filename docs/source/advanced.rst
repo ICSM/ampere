@@ -56,7 +56,7 @@ measures this case end to end.
 write its covariance function — :class:`~ampere.core.Kernel` is a public
 ABC — and reaches the O(N) path once you register its celerite
 representation with :func:`~ampere.core.register_quasiseparable_term`, out
-of tree, with no change to ``ampere.core``. :doc:`kernels` §5 walks through
+of tree, with no change to ``ampere.core``. :doc:`kernels` §6 walks through
 the registration with the same trivial worked example
 ``tests/core/test_kernels.py`` uses to prove the route.
 
