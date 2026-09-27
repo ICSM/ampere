@@ -111,8 +111,9 @@ class TestAnEmceeFitOfAWrappedModel:
 class TestTheSBIEngineRunsOnAWrappedModel:
     """The black-box route, under the process pool a black box wants."""
 
+    @staticmethod
     @pytest.fixture(scope="class")
-    def sbi_run(self) -> object:
+    def sbi_run() -> object:
         engine = SBIEngine(
             problem(),
             method="npe",
