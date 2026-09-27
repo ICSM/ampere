@@ -281,6 +281,23 @@ needs a ruling; `parameters.md` §4 (a prior is any object satisfying the
 conformance row (`lnprior` against summed scipy `logpdf`) are the texts a
 closed-form route would touch.
 
+*Ruled by Peter 2026-09-27 (on the orchestrator's recommendation to decline
+the private-API route): before anything is decided, **evaluate the
+performance of scipy's new public distribution infrastructure** (scipy ≥
+1.15: `scipy.stats.Normal`, `Uniform`, `make_distribution`, the
+`ContinuousDistribution` base), which is designed with far less per-call
+overhead than `rv_continuous`'s legacy wrapper and is public. To measure:
+the same six-prior M2 reference `lnprior` through the new objects against
+the 262 µs legacy figure and the 20.5 µs private-route floor; whether the
+values are bit-identical to the frozen `logpdf` (if not, what the
+conformance row's tolerance would have to absorb); which of ampere's
+common priors (`uniform`, `norm`, `halfnorm`, `lognorm`, `loguniform`,
+`truncnorm`, `halfcauchy`, `beta`, `gamma`) the new infrastructure
+covers, and how a user's frozen legacy prior would be accepted alongside
+(`parameters.md` §4's `Prior` protocol is evaluated through
+`logpdf`/`logpmf`; the new objects spell it `logpdf` too, so the protocol
+may already be satisfied). A follow-up item, not this pass.*
+
 **P2 — batched evaluation (issue #67's shape).** The contract path is
 scalar by design (`log_prob(values) -> float`), every problem on it
 declares `batchable=False`, and the engines call it once per proposal
