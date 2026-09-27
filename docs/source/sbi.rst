@@ -331,6 +331,25 @@ Second, an SBI run emits **one chain of i.i.d. draws**, not the
 multi-chain structure a NUTS or VI run's ``sample_stats`` carries — the
 usual multi-chain diagnostics (:math:`\hat R`, ESS) do not apply, and
 calibration is the tool that stands in their place for this engine.
+
+**Third, a fast per-PR calibration row is a plumbing check, not a
+calibrated null — do not copy its budget.** The finding of 2026-09-26,
+from the same investigation that fixed W5.21's flaky CI row: a budget-1000
+NPE on a one-parameter lognormal problem, probed at larger calibration
+counts than a per-PR gate can afford, turns out to be **mildly
+miscalibrated** — ``c2st_ranks`` rising from 0.575 at count 100 to 0.63 at
+200, 0.79 at 300 and 0.875 at 500, with the KS *p*-value falling from
+around 0.1 to 0.015–0.03 over the same sweep. A hundred SBC samples — the
+floor ``sbi``'s own ``check_sbc``/``run_tarp`` warn below, and what a smoke
+row can afford — simply lack the power to see it:
+``tests/inference/test_sbi.py``'s fast-path fixture pins the mechanics and
+an honest-against-narrowed contrast at that power, and says so in its own
+docstring rather than being read as a clean bill of health. Set a real
+calibration budget from ``tests/results/test_calibration.py``'s exact
+linear-Gaussian null (``TestAgainstAnExactPosterior``) instead, which is
+where calibration *correctness* — as opposed to the fast path's plumbing —
+is actually asserted.
+
 ``examples/wstat_comparison.py --coverage`` is the general (non-SBI) route's
 worked example, over :func:`~ampere.results.sbc`, at real scale — it is
 where the profiled Cash-with-background statistic's spectral index is shown
@@ -394,6 +413,20 @@ wants the context as one vector per dataset rather than per row, FiLM
 conditioning is the opt-in second route —
 ``embedding={"type": "set", "film": True}`` — off by default, and the identity
 before it has learnt anything.
+
+``sbi`` standardises its own inputs by default (``z_score_x``), which on a
+set layout would z-score the mask, the dataset index and the coordinate
+columns and let padded rows into every column's statistics — a set layout
+therefore passes ``z_score_x="none"`` and lets the encoding's own
+standardisation stand instead (``encoding.md`` §4). Under a **wide** context
+prior you may still see ``sbi`` 0.27's own outlier warning during training:
+it comes from ``sbi``'s generic input-range check on the simulated batch,
+not from ampere's encoding, and a wide context prior widening the range of
+simulated values is exactly the case that check is tuned to flag. It is
+cosmetic here — the network trains on the encoding's own standardised
+columns regardless — but if it is unwelcome noise in a log, narrowing the
+context prior (or training more simulations per round) is the remedy, not
+chasing ``z_score_x``.
 
 Everything is recorded. The run's attrs carry the prior and its digest
 (``ampere_sbi_context``, ``ampere_sbi_context_hash``); a training set carries
