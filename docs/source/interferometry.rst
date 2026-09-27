@@ -595,12 +595,20 @@ not because of slow mixing but because a chain that started near a real
 second mode has no reason to leave it. **A modality whose model is periodic
 (or otherwise genuinely multi-modal in its own right, independent of the
 likelihood or noise machinery) needs its own discussion of prior width,
-separate from the composition questions the rest of this page is about**: an
-informed prior centred on a value a periodogram or a previous epoch has
-already suggested, not a search over decades hoping the sampler finds the
-right one. Check whether your new modality's model has this shape before
-trusting a wide "uninformative" prior to behave the way it does for every
-model on this page.
+separate from the composition questions the rest of this page is about**:
+two remedies, both now measured (**W5.15**, :doc:`astrometry` §6). The
+cheap one is an informed prior centred on a value a periodogram or a
+previous epoch has already suggested, not a search over decades hoping the
+sampler finds the right one. The other is for when no such value is
+available: nested sampling does not need to choose a mode at all, and
+returns every alias as a separately-weighed one, evidence included — at
+the cost of a real compute budget an ensemble or a gradient sampler never
+pays (and never needs to, since they never see the other modes to weigh).
+:doc:`astrometry` §6 has the measured table, the corner-plot description,
+and the caveat the evidence comparison needs (two different priors on the
+same data, not a check of which one is "right"). Check whether your new
+modality's model has this shape before trusting a wide "uninformative"
+prior to behave the way it does for every model on this page.
 
 See also
 ------------

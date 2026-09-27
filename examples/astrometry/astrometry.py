@@ -632,6 +632,13 @@ def period_modes(
     *minimum_mass* of the total draws --- sampling noise in the sampler's own
     boundary rather than a real mode --- is dropped.
 
+    ``gap=0.1`` is measured, not guessed (**W5.15**): the true period and its
+    nearest aliases, as an emcee ensemble at this study's default budget
+    actually splits across (``docs/source/astrometry.rst`` §6), sit about
+    ``ln(762.9 / 399.8) ~= 0.65`` apart in log space, while a single
+    well-resolved mode's own 16/84 % spread is under ``0.01`` -- ``0.1`` sits
+    comfortably in the two-order-of-magnitude gap between them.
+
     Each surviving mode is returned as a dict with:
 
     ``median``, ``lower``, ``upper``
