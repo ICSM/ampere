@@ -42,6 +42,8 @@ Then run anything through ``pixi run``:
 
     $ pixi run test-phase1          # the core, results and conformance suites
     $ pixi run test-all             # everything the v2 namespaces own
+    $ pixi run test-fast            # the local pre-commit run: test-all minus
+                                     # the study rows and the SBI-training rows
     $ pixi run lint                 # ruff
     $ pixi run typecheck            # pyrefly, scoped to the v2 namespaces
     $ pixi run docs                 # build this documentation

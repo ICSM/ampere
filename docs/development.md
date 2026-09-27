@@ -65,7 +65,13 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
     pytest process; **this is the main gate**, and `test-phase1` remains
     the older core+results+conformance subset; the individual `test-core`,
     `test-results`, `test-backends`, `test-inference`, `test-examples` and
-    `conformance` tasks exist too),
+    `conformance` tasks exist too), `pixi run test-fast` (W5.18: the local
+    pre-commit run — the same suites as `test-all`, minus the `*_full`
+    markers (already opt-in), the `study` rows (`-m "not study"`, W5.26's
+    ~18 minutes in `dev`) and the SBI-training classes in
+    `tests/inference/test_sbi.py` (excluded by `--deselect`, not a new
+    marker); measured at PLACEHOLDER for PLACEHOLDER collected rows in
+    `dev` — see the task's own comment in `pyproject.toml`),
     `pixi run test-characterisation` (legacy still works),
     `pixi run lint`, `pixi run format-check`, `pixi run typecheck`,
     `pixi run docs` (repaired at W2.11 — it builds), `pixi run bench` (the
