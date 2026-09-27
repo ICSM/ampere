@@ -26,9 +26,15 @@ where it goes depends on the load:
 | Image, 64², flexible, reference | `cho_factor` ~40 %, **`cho_solve` ~31 % — a layout copy, not arithmetic**, the kernel matrix ~25 % |
 | Any spectrum through `Resample` (issue #12) | the weight matrix, **re-planned every call**: 47 % of the step at 2 000 → 200 points, 92 % at 20 000 → 2 000 |
 
-Four levers are on the plan's candidate list and are exactly-zero changes
-(§5, L1–L4); two further ones are measured but need either a private-API
-coupling or a contract change and are written up as proposals (§6).
+Five levers are on the plan's candidate list, are exactly-zero changes,
+and landed (§5, §7): the jax contract path compiles once (up to 6.8×), the
+dense solve drops a layout copy (2.6× at 64²), `Resample` and
+`FourierSample` plan once per grid (30–65× on the step; up to 2.1× on the
+interferometry `log_prob`), and the M2 models reuse their container
+(1.2–1.35×). The biggest remaining item on the M2 reference load — the
+scalar prior densities, 37 % — is measured with an 11× floor under it but
+needs either a scipy private-API coupling or a non-bit-identical closed
+form, so it is a proposal (§6, P1), with four others.
 
 ## 1. The machine and the loads
 
@@ -78,9 +84,9 @@ tables are in the JSON.
 |---|---|---|---|
 | `test_reference_dense[200]` | 1.32 (0.35) | 1.40 (0.37) | 1.46 (0.52) |
 | `test_reference_dense[2000]` | 308 (269) | 497 (66) | 248 (202) |
-| `test_reference_dense` (image, n2304) | 47.1 (22.9) | 67.7 (37.2) | 48.7 (10.5) |
-| `test_dense_anchor` (bake-off, m1024) | 208 (30) | 199 (19) | 63.7 (86.3) |
-| `test_route_cholesky` | 326 (574) | 564 (75) | 79.9 (67.2) |
+| `test_reference_dense` (GP marginal, n1000) | 47.1 (22.9) | 67.7 (37.2) | 48.7 (10.5) |
+| `test_dense_anchor` (image `DenseGP`, n1024) | 208 (30) | 199 (19) | 63.7 (86.3) |
+| `test_route_cholesky` (EFGP normal equations, m1089) | 326 (574) | 564 (75) | 79.9 (67.2) |
 | `test_reference_quasisep[200]` | 0.722 (0.101) | 0.735 (0.108) | 0.717 (0.107) |
 | `test_reference_quasisep[20000]` | 2.99 (0.74) | 2.49 (0.34) | 2.68 (0.53) |
 | `test_reference_emcee[flexible]` | 1716 (14) | 1773 (26) | 1977 (421) |
@@ -198,9 +204,11 @@ edges although, after negotiation, the input grid is the compiled model's
 and does not change between draws. The v2 core has **not** inherited
 legacy's SpectRes loop, but it has inherited the issue's shape: the
 expensive half of resampling is planning, and it is re-planned per call.
-The jax `Resample` builds its weights through the same inherited
-`influence` on every call; the torch one builds its own, in torch, also on
-every call.
+The jax `Resample` already avoids this — its `_influence_jax` caches the
+matrix keyed on the input grid's exact bytes, citing W2.3's measurement of
+exactly this waste in the reference backend — so the reference class is
+the one that inherited the problem. The torch `Resample` builds its matrix
+in torch (`influence_tensor`) on every call too (§6, P4).
 
 ### 3.6 The three issues, against the v2 core
 
@@ -243,17 +251,175 @@ bit for bit. That is checked per lever, not assumed.
 | # | Lever (plan category) | Where | Measured share | Rows it should move |
 |---|---|---|---|---|
 | L1 | jax contract path: compile once, not per call (compilation caching) | `ampere/backends/jax/gp.py`, `QuasisepGP.log_marginal_likelihood` / `_factorise` | ~98 % of the jax contract loop | `test_backend_quasisep_contract[*-jax]`, `test_one_proposal[contract-QuasisepGP-jax]` |
-| L2 | Dense solve without the layout copy (#29) | `ampere/core/likelihood.py`, `DenseGP` and every other `cho_solve` on a real factor | 31 % of image 64², 5 % of image 24² | `test_reference_dense[2000]`, `test_reference_dense` (image), `test_route_cholesky`, `test_dense_anchor` |
+| L2 | Dense solve without the layout copy (#29) | `ampere/core/likelihood.py`, `DenseGP` and every other `cho_solve` on a real factor | 31 % of image 64², 5 % of image 24² | `test_reference_dense[2000]`, `test_reference_dense`, `test_dense_anchor`, not `test_route_cholesky` (EFGP's normal matrix is complex Hermitian, which falls through) |
 | L3 | `Resample`: plan the weights once per input grid (#12) | `ampere/backends/reference/instrument.py`, `Resample.apply` | 47–92 % of the step | a timed loop (§3.5); no benchmark row resamples |
 | L4 | `FourierSample`: derive the DFT factors and solid angles once per grid (compilation caching; the units trap) | `ampere/backends/reference/interferometry.py`, `FourierSample.apply` | ~33 % of the interferometry loop | a timed loop (§3.3) |
+| L5 | The M2 models: build the container template once on the un-negotiated path (re-allocated per call) | `examples/m2_misspecification/model*.py`, `evaluate` | ~15 % of the M2 reference loop | `test_reference_standard[*]`, `test_reference_quasisep[*]`, `test_reference_emcee[*]` |
 
 ## 6. Proposals — measured, not landed
 
-*(Filled in with the results in §7.)*
+Measured, on the candidate list, and not landed — each for the reason
+given. The decision-log row each would need is drafted in the W5.17 report.
+
+**P1 — scalar prior evaluation (issue #67's "evaluating probability
+distributions").** The largest single item on the M2 reference load:
+`ParameterSet.lnprior` is **262 µs of a 701 µs `log_prob`** (37 %; six
+scalar priors, four uniform and two half-normal, through scipy frozen
+`logpdf`). The arithmetic underneath — the distribution's private
+`_logpdf` on the standardised value, minus `log(scale)` — costs **20.5 µs**
+for all six, and agrees with `logpdf` bit for bit on all 300 × 6 draws
+measured. So an 11× faster prior, and ~1.5× on this `log_prob`, is there.
+Not landed because the only exactly-zero route calls scipy's private
+`_parse_args`, `_argcheck`, `_support_mask` and `_logpdf`, reproducing
+`rv_continuous.logpdf`'s wrapper; a private-API coupling across the CI
+matrix's three Pythons (and whatever scipy each resolves) is a maintenance
+decision, not an optimisation. The public alternative — ampere's own
+closed forms for its common priors — is not bit-identical, so it would move
+conformance values within tolerance, which this pass may not do. Either
+needs a ruling; `parameters.md` §4 (a prior is any object satisfying the
+`Prior` protocol, evaluated through `logpdf`/`logpmf`) and §13's
+conformance row (`lnprior` against summed scipy `logpdf`) are the texts a
+closed-form route would touch.
+
+**P2 — batched evaluation (issue #67's shape).** The contract path is
+scalar by design (`log_prob(values) -> float`), every problem on it
+declares `batchable=False`, and the engines call it once per proposal
+without pretending otherwise. Batching exists where the plan put it: the
+realised path, where jax `vmap`s. Two facts bound it: the reference
+backend has no batched evaluation to call, and `ampere.backends.jax.
+QuasisepGP` declares `BATCHABLE = False` because celerite2's primitives
+register no `vmap` rule (`DEVELOPMENT_PLAN.md` §2, the jax quasiseparable
+row). A batched contract path would be a §4.5 addition (a stacked
+`log_prob`); nothing here measured what it would buy on a numpy model, so
+it is recorded, not ranked.
+
+**P3 — solver selection on the image.** The image study's flexible arm
+defaults to `DenseGP`, and at 64² that is the whole cost (§3.4). The
+baseline's own rows say what the alternatives cost at N = 2 304:
+`HilbertSpaceGP` (m = 256) 80 ms, Vecchia (k = 30) 207 ms, EFGP
+(m = 289) 249 ms. Choosing an approximate solver by default changes
+answers, so it is a science decision (W5.6's bake-off is where it is
+made), not an optimisation.
+
+**P4 — the torch `Resample`.** `influence_tensor` rebuilds the weights in
+torch on every call, as the reference class did before L3. The same
+exact-bytes cache would apply, but the matrix there can sit inside an
+autograd graph, and whether a cached tensor may be reused across graphs
+without `detach` is a torch-backend question this pass did not measure.
+
+**P5 — the jax contract path's remaining overhead.** After L1 the M2 jax
+contract `log_prob` is ~4–6 ms against 0.28 ms realised: eager dispatch of
+~30 small jax operations per call, plus `float()` synchronisations.
+Jitting the whole contract-path solve takes it to ~2 ms but is **not**
+bit-identical (XLA fuses, measured max difference 8e-11 on the same
+draws), so it cannot land under this pass's rule. The realised path is
+already the fast route for anyone using jax.
 
 ## 7. Results
 
-*(Filled in as the levers land.)*
+Five levers landed, one commit each, every one **bit-for-bit**: each
+before/after pair below was measured in one process on the same draws,
+and the values compared with `np.array_equal`, not a tolerance. After
+each, `tests/conformance` in dev (and the lever's own test files) stayed
+green; torch and jax conformance ran once at the end (§7.3).
+
+### 7.1 The timed loops (one process, same machine, values bitwise equal)
+
+| Lever | Load | before | after | × |
+|---|---|---|---|---|
+| L1 jax cond compiled once | M2 jax contract, Matérn-3/2 (200 draws) | 30.89 ms | 4.51 ms | 6.8 |
+| | M2 jax contract, `Sum` | 31.80 ms | 6.32 ms | 5.0 |
+| | M2 jax contract, warped | 36.30 ms | 11.61 ms | 3.1 |
+| L2 dense solve, no layout copy (#29) | image 24², flexible (100 draws) | 18.90 ms | 17.46 ms | 1.08 |
+| | image 48², flexible (10 draws) | 261.8 ms | 232.7 ms | 1.12 |
+| | image 64², flexible (6 draws) | 1 970 ms | 760 ms | 2.59 |
+| | interferometry, flexible (200 draws) | 1.59 ms | 1.12 ms | 1.42 |
+| L3 `Resample` planned once (#12) | 2 000 → 200 | 8.856 ms | 0.137 ms | 65 |
+| | 20 000 → 2 000 | 450.0 ms | 15.0 ms | 30 |
+| L4 `FourierSample` planned once | interferometry correct (300 draws) | 1.328 ms | 0.641 ms | 2.07 |
+| | interferometry incomplete | 0.808 ms | 0.536 ms | 1.51 |
+| | interferometry flexible | 1.201 ms | 0.878 ms | 1.37 |
+| | interferometry chromatic, product kernel (100 draws) | 7.855 ms | 5.924 ms | 1.33 |
+| L5 M2 template on the simple path (min of 7 interleaved rounds) | M2 reference standard | 0.436 ms | 0.322 ms | 1.35 |
+| | M2 reference flexible | 0.691 ms | 0.557 ms | 1.24 |
+| | M2 torch standard / flexible | 0.504 / 1.054 ms | 0.390 / 0.924 ms | 1.29 / 1.14 |
+| | M2 jax standard / flexible | 0.887 / 3.774 ms | 0.767 / 3.858 ms | 1.16 / — |
+
+L5's jax flexible row is the one "tried, no gain" in the table: after L1
+the jax contract path's remaining eager overhead (P5) dwarfs the
+container, and the difference is inside the scatter. It is kept because
+the same one-line change is a measured gain on the other five rows and the
+three M2 models share it by construction (`model._template_for`).
+
+The M2 reference `log_prob` at 200 points, the study's own first rung,
+went from ~0.70 ms to ~0.56 ms with L5; the rest of it is now the priors
+(P1) and the quasiseparable solve.
+
+### 7.2 The benchmark rows
+
+`pixi run -e <env> bench` at the branch head, same machine, same lock
+discipline as the baselines (§2); JSON at
+`~/.cache/ampere-gates/w5.17/after-<env>.json`. Medians in ms, baseline →
+head. The rows each lever targets:
+
+| Row | Lever | dev | torch | jax |
+|---|---|---|---|---|
+| `test_backend_quasisep_contract[200-jax]` | L1 | — | — | 30.2 → **3.65** |
+| `test_backend_quasisep_contract[2000-jax]` | L1 | — | — | 33.0 → **6.38** |
+| `test_backend_quasisep_contract[20000-jax]` | L1 | — | — | 31.7 → **7.45** |
+| `test_one_proposal[contract-QuasisepGP-jax]` | L1 | — | — | 28.5 → **4.61** |
+| `test_backend_quasisep_realised[*-jax]` | (untouched) | — | — | 0.29 / 0.68 / 5.08 → 0.29 / 0.63 / 4.82 |
+| `test_dense_anchor` (image `DenseGP`, n1024) | L2 | 208 → **83.8** | 199 → **39.1** | 63.7 → 256 |
+| `test_reference_dense[2000]` | L2 | 308 → 209 | 497 → 315 | 248 → 171 |
+| `test_reference_standard[200]` | L5 | 0.476 → 0.339 | 0.437 → 0.317 | 0.450 → 0.323 |
+| `test_reference_quasisep[200]` | L5 | 0.722 → 0.590 | 0.735 → 0.605 | 0.717 → 0.578 |
+| `test_reference_emcee[flexible]` | L5 | 1716 → **1435** | 1773 → **1391** | 1977 → 1517 |
+
+**How far to believe them.** The jax contract rows move by 4–8× against an
+IQR of 1–3 ms: L1 is unambiguous. The M2 reference rows move by 1.2–1.4×
+in all three environments, consistently, against IQRs of 0.07–0.2 ms, and
+`test_reference_emcee[flexible]` — the one sampling row with a tight IQR
+(14–26 ms) — moves by 1.2–1.3×: L5 is real on the benchmark too. The
+dense rows are where the shared machine shows: `test_dense_anchor` runs
+the *same numpy code* in all three environments, and its baseline alone
+spans 64–208 ms between them; its head moved 2.5× and 5.1× down in dev and
+torch and 4× *up* in jax. Rows no lever touches moved just as far in the
+same runs (the legacy dense RBF row by anything from 0.06× to 9×; EFGP,
+whose normal matrix is complex and so falls through L2, by up to 3×).
+L2's evidence is therefore the in-process timed loop (§7.1), not these
+rows.
+
+**A regression that was not one.** The torch `test_one_proposal` rows
+came back 1.4–4× slower at the head. None of the five levers is on the
+torch realised path, so this was re-measured as an A/B in one session:
+`tests/benchmarks/test_engine_fast_path.py` run alternately against an
+export of the base commit's tree (shadowing the editable install through
+`PYTHONPATH`) and the head, twice each, in torch and jax. torch
+`contract-DenseGP`: base 8.00 / 6.47 ms, head 4.88 / 7.89 ms;
+`realised-DenseGP`: base 8.18 / 5.69, head 6.19 / 8.56 — the base itself
+had slowed by the same factor, so it was the machine, not the code. The
+same A/B confirms L1 in isolation: jax `contract-QuasisepGP` base
+35.6 / 33.4 ms, head 5.39 / 5.81 ms.
+`test_the_fast_path_beats_the_contract_path` (a ratio, realised against
+contract, floor 3×) still passes on jax: the contract path is now ~7× the
+realised one rather than ~40×, comfortably above the floor.
+
+### 7.3 Conformance and the gates
+
+At the head, every conformance row passes in all three environments —
+dev 669 passed / 75 skipped, torch 1 073 / 75, jax 1 073 / 75 — and no
+row's value moved: every lever was checked bit-for-bit against its
+unchanged twin on the loads above before it was committed. Collected
+tests: 3 869 before and after (plus the one pre-existing legacy collection
+error, `ampere/models/test_Dusty.py`, which needs the absent `Dusty`
+module and is not this item's). Lint, format-check, the import sweep and
+pyrefly (dev, torch and jax: 0 errors) are clean. No §4 contract and no
+frozen `docs/design/contracts/` page changed; float64 remains the default
+everywhere; no GPU placement was attempted.
+
+**Effect on W5.15's measurements.** L4 speeds up the reference
+interferometry forward model that any fit sharing it would use; values
+are bit-identical, so only timings move.
 
 ## Appendix A. The harness
 
