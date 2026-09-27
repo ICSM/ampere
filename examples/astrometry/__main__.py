@@ -6,6 +6,19 @@
     python -m examples.astrometry --joint               # the joint channel noise (W5.9)
     python -m examples.astrometry --sbc joint           # the calibration study
     python -m examples.astrometry --walkers 32 --steps 2000
+    python -m examples.astrometry --wide-prior          # the aliasing hazard, its remedy (W5.15)
+    python -m examples.astrometry --wide-prior --engine nautilus  # or ultranest, in `-e nested`
+    python -m examples.astrometry --wide-prior --engine dynesty --live-points 1000 --dlogz 0.05
+
+``--wide-prior``, ``--engine``, ``--live-points`` and ``--dlogz`` are the
+period-aliasing arm's own flags -- :func:`astrometry.build_problem`'s and
+:func:`astrometry.fit`'s docstrings carry the full account (W5.15).
+``--engine`` chooses among the three nested samplers (``dynesty``,
+``nautilus``, ``ultranest``) and defaults to dynesty once ``--wide-prior`` is
+given; ``--live-points`` sets every nested sampler's own live-set size
+(``None`` defaults to :func:`~ampere.inference.engine.default_live_points`);
+``--dlogz`` is dynesty's and ultranest's stopping criterion (nautilus takes
+its own ``f_live``/``n_eff`` instead).
 
 Restricts every BLAS thread pool to one thread **before numpy is imported
 anywhere in this process**, exactly as :mod:`examples.sed_composition`'s own
