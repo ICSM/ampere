@@ -338,8 +338,8 @@ from the same investigation that fixed W5.21's flaky CI row: a budget-1000
 NPE on a one-parameter lognormal problem, probed at larger calibration
 counts than a per-PR gate can afford, turns out to be **mildly
 miscalibrated** — ``c2st_ranks`` rising from 0.575 at count 100 to 0.63 at
-200, 0.79 at 300 and 0.875 at 500, with the KS *p*-value falling from
-around 0.1 to 0.015–0.03 over the same sweep. A hundred SBC samples — the
+200, 0.79 at 300 and 0.875 at 500, with the KS *p*-value falling to
+0.015–0.03 over the same sweep. A hundred SBC samples — the
 floor ``sbi``'s own ``check_sbc``/``run_tarp`` warn below, and what a smoke
 row can afford — simply lack the power to see it:
 ``tests/inference/test_sbi.py``'s fast-path fixture pins the mechanics and

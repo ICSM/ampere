@@ -12,8 +12,8 @@ measured against a deliberately misspecified problem at three data sizes and
 on all three backends. :doc:`m2_misspecification` is that measurement;
 :doc:`sbi` is the SBI tutorial.
 
-**Phase 5** (scale-out and advanced inference, in flight since 2026-09-15)
-widened most of what is on this page rather than replacing it: an
+**Phase 5** (scale-out and advanced inference, 2026-09-15 to 2026-09-28,
+closed by this documentation pass) widened most of what is on this page rather than replacing it: an
 approximate reduced-rank solver alongside the two exact ones
 (:doc:`solvers`), gridded (``Image``) data with PSF convolution, a
 non-stationary kernel wrapper and a sparsity prior for summed noise
