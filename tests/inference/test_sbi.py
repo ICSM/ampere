@@ -60,6 +60,7 @@ import subprocess
 import sys
 import warnings
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, ClassVar
 
 import astropy.units as u
@@ -73,8 +74,11 @@ from ampere.core import (
     EncodingError,
     EncodingLayout,
     FittingProblem,
+    GaussianFamily,
     Instrument,
+    Likelihood,
     Model,
+    ObservationContext,
     Parameter,
     ProcessExecutor,
     ScaledSigma,
@@ -82,7 +86,9 @@ from ampere.core import (
     VisibilitySet,
     encode_observations,
 )
-from ampere.core.exceptions import OptionalDependencyError
+from ampere.core.dataset import _DrawRequest, _NativeBatch
+from ampere.core.exceptions import DatasetError, OptionalDependencyError
+from ampere.core.settings import AmpereContextFallbackWarning
 from ampere.inference import DEFAULT_TRUNCATION_EPSILON, EmceeEngine, EngineError, SBIEngine
 from ampere.inference._sbi import METHODS, SUMMARY_LAYOUT, _summary_of, _thinned
 from ampere.inference._tmnre import (
@@ -120,6 +126,16 @@ HAS_SBI = importlib.util.find_spec("sbi") is not None
 needs_sbi = pytest.mark.skipif(
     not HAS_SBI,
     reason="needs the 'sbi' extra (pixi run -e sbi ...)",
+)
+
+#: W5.32 (j): the sbi extra is torch, not jax (CLAUDE.md's three real
+#: environments), so a jax-only fixture needs its own guard -- HAS_SBI is
+#: false in `-e jax` (no sbi/torch there) and true in `-e sbi` (no jax
+#: there), and this row is meant to run in `-e jax`.
+HAS_JAX = importlib.util.find_spec("jax") is not None
+needs_jax = pytest.mark.skipif(
+    not HAS_JAX,
+    reason="needs the 'jax' extra (pixi run -e jax ...)",
 )
 
 SEED = 20260909
@@ -2877,3 +2893,176 @@ class TestTheBatchedPathDrawsTheContext:
         )
         assert second.attrs["ampere_sbi_cache_key"] == first.attrs["ampere_sbi_cache_key"]
         assert second.attrs["ampere_sbi_cache_hit"] == 1
+
+
+# ---------------------------------------------------------------------------
+# W5.32 (j): the silent numpy fallback under a context, made loud
+# ---------------------------------------------------------------------------
+
+
+def _jax_context_problem(*, noise: Any = None) -> FittingProblem:
+    """One jax-native PowerLaw dataset labelled ``"x"`` (W5.32 (j) fixtures).
+
+    jax, not torch: ``ampere.backends.jax.problem``'s ``_sigma`` calls a
+    noise model's ``sigma_jax`` *without* ``base=`` at all when there is no
+    context (``uncertainty is None``), and only adds it once a context is in
+    play -- which is exactly what makes an old ``sigma_jax`` (one that
+    predates W5.29) work at composition and fail only later, silently,
+    under ``simulate_many(context=...)``. torch's twin, ``sigma_tensor``,
+    takes ``base`` positionally and unconditionally, so an old one fails at
+    composition already, loudly, with or without a context -- a real bug,
+    but not this one.
+    """
+    from ampere.backends.jax import IndependentNoise, PowerLaw, configure_x64
+
+    configure_x64()
+    grid = np.geomspace(1.0, 10.0, 12)
+    rng = np.random.default_rng(2026093201)
+    truth = 2.0 * grid**-1.0
+    observed = Spectrum(
+        grid * u.um,
+        (truth + rng.normal(0.0, 0.05, grid.size)) * u.Jy,
+        uncertainty=np.full(grid.size, 0.05) * u.Jy,
+    )
+    model = PowerLaw(grid, norm=st.lognorm(0.3, scale=2.0), index=st.norm(-1.0, 0.3))
+    chosen = IndependentNoise() if noise is None else noise
+    likelihood = Likelihood(GaussianFamily(), chosen)
+    problem = FittingProblem(
+        model, [Dataset(observed, likelihood=likelihood, label="x")], seed=2026093201
+    )
+    assert problem.backend == "jax" and problem.batchable  # the point of the fixture
+    return problem
+
+
+def _no_base_sigma_jax_noise() -> Any:
+    """A user noise model whose native surface predates W5.29's ``base=``
+    (W5.32 (j) fixture).
+
+    A genuine :class:`~ampere.backends.jax.IndependentNoise` subclass --
+    ``Likelihood`` needs ``isinstance(noise, NoiseModel)`` to pass, so a
+    structural stand-in will not do -- with the class statement itself
+    inside this function, so importing ``ampere.backends.jax`` (and
+    defining a class that inherits from one of its pieces) never happens at
+    module collection time, exactly as this file's own lazy imports do
+    everywhere else. ``sigma_jax`` delegates to the plain scale/jitter
+    arithmetic when it is actually called (composition's one no-context
+    check calls it that way, and it must succeed there); it simply has
+    nowhere to put ``base=`` if a caller ever passed one, which is the gap
+    this fixture stands in for.
+    """
+    from ampere.backends.jax import IndependentNoise, configure_x64
+
+    # Needed here too: this factory is called as an argument expression
+    # (_jax_context_problem(noise=_no_base_sigma_jax_noise())), evaluated
+    # before that function's own configure_x64() call runs.
+    configure_x64()
+
+    class _NoBaseSigmaJaxNoise(IndependentNoise):
+        def sigma_jax(self, observed: Any, retain: Any, values: Any, *, predicted: Any = None):
+            # The plain (pre-native) numpy surface, inherited unchanged: this
+            # user noise model never overrode sigma_jax's shape, it only
+            # added the method at all, without base=.
+            return self.sigma(observed, retain, values, predicted=predicted)
+
+    return _NoBaseSigmaJaxNoise()
+
+
+@needs_jax
+class TestTheContextBaseGapWarning:
+    """W5.32 (j): a user noise model without ``base=`` warns loudly rather than
+    falling back to numpy silently, and the shipped models never do.
+
+    ``needs_jax`` rather than ``needs_sbi``: every fixture composes a
+    jax-native problem specifically, because jax's ``sigma_jax`` hook is
+    keyword-optional (see :func:`_jax_context_problem`'s docstring) and
+    torch's ``sigma_tensor`` twin is not -- the ``sbi`` extra brings in
+    torch, not jax, so this row runs in ``-e jax`` rather than ``-e sbi``.
+    """
+
+    PRIOR = ScaledSigma(CONTEXT_LOW, CONTEXT_HIGH)
+
+    def test_a_user_noise_model_without_base_warns_and_falls_back(self) -> None:
+        problem = _jax_context_problem(noise=_no_base_sigma_jax_noise())
+        with pytest.warns(AmpereContextFallbackWarning, match=r"_NoBaseSigmaJaxNoise.*sigma_jax"):
+            batch = problem.simulate_many(4, observe=True, native=True, context=self.PRIOR)
+        # The fallback stays correct: numpy drew it, and the provenance says so.
+        assert batch.provenance["sample_backend"] == "reference"
+        assert batch.provenance["simulate_batched"] is True
+
+    def test_the_warning_names_the_signature_to_add(self) -> None:
+        problem = _jax_context_problem(noise=_no_base_sigma_jax_noise())
+        with pytest.warns(AmpereContextFallbackWarning) as caught:
+            problem.simulate_many(2, observe=True, native=True, context=self.PRIOR)
+        message = str(caught[0].message)
+        assert "base=" in message
+        assert "sample_backend" in message
+        assert "jax" in message
+
+    def test_it_fires_once_per_simulate_many_call_not_once_per_chunk(self) -> None:
+        problem = _jax_context_problem(noise=_no_base_sigma_jax_noise())
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            problem.simulate_many(6, observe=True, native=True, context=self.PRIOR, chunk_size=2)
+        fired = [w for w in caught if issubclass(w.category, AmpereContextFallbackWarning)]
+        assert len(fired) == 1
+
+    def test_independent_noise_never_warns(self) -> None:
+        """No native sigma hook at all: nothing for the signature check to find."""
+        problem = _jax_context_problem()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", AmpereContextFallbackWarning)
+            batch = problem.simulate_many(4, observe=True, native=True, context=self.PRIOR)
+        assert batch.provenance["sample_backend"] == "jax"
+
+    def test_fractional_model_noise_never_warns(self) -> None:
+        """A shipped hook that *does* take base= (W5.29): still never warns."""
+        from ampere.backends.jax import FractionalModelNoise
+
+        problem = _jax_context_problem(noise=FractionalModelNoise(0.05))
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", AmpereContextFallbackWarning)
+            batch = problem.simulate_many(4, observe=True, native=True, context=self.PRIOR)
+        assert batch.provenance["sample_backend"] == "jax"
+
+
+class TestTheInChunkContextRefusal:
+    """W5.29's carried note: the in-chunk refusal was untested until now.
+
+    A direct check of :meth:`~ampere.core.dataset._NativeBatch._context_sigma`
+    rather than a full native fit: the method reads only
+    ``self.problem.datasets`` (each dataset's ``observed.uncertainty``) and
+    each request's ``context``, so a minimal stand-in for both is enough --
+    no realised backend, no torch or jax, needed to reach the refusal this
+    row pins.
+    """
+
+    def _dataset_with_no_uncertainty(self) -> Dataset:
+        grid = np.linspace(1.0, 5.0, 4)
+        return Dataset(
+            Spectrum(grid * u.um, np.ones(grid.size) * u.Jy, uncertainty=None), label="x"
+        )
+
+    def test_it_is_asserted_by_name(self) -> None:
+        dataset = self._dataset_with_no_uncertainty()
+        stub = SimpleNamespace(problem=SimpleNamespace(datasets={"x": dataset}))
+        covering = ObservationContext(
+            sigma={"x": np.full(dataset.observed.values.shape, 0.2)}, record={"n": 0}
+        )
+        requests = [
+            _DrawRequest(0, {}, np.random.default_rng(0), True, context=covering),
+            _DrawRequest(1, {}, np.random.default_rng(1), True, context=None),
+        ]
+        with pytest.raises(DatasetError, match="varies this dataset's sigma"):
+            _NativeBatch._context_sigma(stub, requests)
+
+    def test_a_dataset_the_context_never_mentions_is_untouched(self) -> None:
+        """The other branch: every row is None for this dataset, so it is
+        skipped rather than refused -- own sigma stays unused, not missing."""
+        dataset = self._dataset_with_no_uncertainty()
+        stub = SimpleNamespace(problem=SimpleNamespace(datasets={"x": dataset}))
+        elsewhere = ObservationContext(sigma={"y": np.array([0.1])}, record={"n": 0})
+        requests = [
+            _DrawRequest(0, {}, np.random.default_rng(0), True, context=elsewhere),
+            _DrawRequest(1, {}, np.random.default_rng(1), True, context=elsewhere),
+        ]
+        assert _NativeBatch._context_sigma(stub, requests) == {}

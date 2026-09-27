@@ -23,7 +23,13 @@ import dataclasses
 from collections.abc import Iterator
 from typing import Literal
 
-__all__ = ["AmpereFlatPopulationWarning", "Settings", "override", "settings"]
+__all__ = [
+    "AmpereContextFallbackWarning",
+    "AmpereFlatPopulationWarning",
+    "Settings",
+    "override",
+    "settings",
+]
 
 
 class AmpereFlatPopulationWarning(UserWarning):
@@ -37,6 +43,27 @@ class AmpereFlatPopulationWarning(UserWarning):
     is the exception equivalent), because this is not something a caller
     tunes into their own warning hierarchy — it fires only when a knob
     documented as costly has deliberately been turned.
+    """
+
+
+class AmpereContextFallbackWarning(UserWarning):
+    """A ``simulate_many(context=...)`` batch is drawn by numpy rather than by
+    the backend, because a noise model's native surface cannot take the
+    per-draw context sigma (**W5.32 (j)**).
+
+    Raised by :mod:`ampere.core.dataset`'s batched native path
+    (``inference.md`` §13, "The native path draws the context"): a user noise
+    model whose ``sigma_jax``/``sigma_torch`` does not accept a ``base=``
+    keyword cannot be handed the per-draw context sigma that keyword exists
+    to carry, so the batch falls back to the loop's numpy draws. The fallback
+    is correct — the same draws a context budget always produced — only no
+    longer silent; before this, the only trace of it was
+    ``provenance['sample_backend']`` reading ``"reference"`` on a torch or
+    jax problem. Every shipped noise model already takes ``base=``, so this
+    never fires for one. Named for the package, as
+    :class:`AmpereFlatPopulationWarning` is, for the same reason: not
+    something a caller tunes into their own warning hierarchy, only ever
+    seen when a user noise model's native surface has a gap to close.
     """
 
 

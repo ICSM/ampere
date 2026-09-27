@@ -2183,7 +2183,13 @@ unchanged: the prior already enters it (W5.10), and which path ran does not.
 The one case with no batch form — a context that varies a dataset in some
 draws of a chunk and not others, on a dataset with no observed σ of its own to
 fill the rest — is refused by name inside the chunk, so `native=None` runs it
-on the loop.
+on the loop. *W5.32* makes one more silent case loud: a user noise model
+whose native sigma hook cannot take this call (jax's `sigma_jax` lacking
+`base=`, which otherwise still works with no context and so fails only once
+one is added) still falls back to the loop correctly, but now with a loud
+`AmpereContextFallbackWarning` naming the class and the signature to add,
+once per `simulate_many` call, rather than leaving `provenance
+['sample_backend']` as the only trace.
 
 Two refusals, each a claim the code could not honestly make:
 
