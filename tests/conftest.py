@@ -57,13 +57,67 @@ which is a different problem (loading one standalone script as a module)
 solved a different way (temporarily, per import, because two such scripts
 could collide by basename) and has nothing to gain from a permanent,
 process-wide insertion.
+
+**The ``study`` marker (W5.32 (i)).** ``_skip_study_rows_outside_dev`` used
+to be defined twice -- identically, down to the docstring's reasoning --
+in ``tests/m2/conftest.py`` and ``tests/results/conftest.py``, which meant
+the marker only did anything for items collected under those two
+directories; ``tests/astrometry/test_recovery.py`` carried its own local
+``dev_only`` skipif for exactly the same purpose because there was no
+project-wide hook it could lean on. ``pytest_collection_modifyitems`` is
+not a "first result wins" hook -- pytest calls every conftest that defines
+it, each with the *whole* session's item list, not just the items under
+its own directory -- so one copy here, rather than one per suite, is
+enough to cover every ``study``-marked row anywhere in the tree. Each
+directory that still has its own opt-in ``*_full`` marker to skip
+(``tests/m2/conftest.py``'s ``m2_full``, ``tests/results/conftest.py``'s
+``population_full``) keeps that local hook for its own marker and no
+longer needs to call this one itself.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import pathlib
 import sys
+
+import pytest
 
 _ROOT = pathlib.Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
+
+
+def _skip_study_rows_outside_dev(items: list[pytest.Item]) -> None:
+    """Skip ``study``-marked rows wherever a modern backend is installed (W5.26).
+
+    ``study`` marks a row that samples on the reference backend only and
+    asserts a claim about a *likelihood*, about ``ampere.results`` machinery,
+    or about a study's own recovery -- never about the array library. Once a
+    per-backend agreement test (or the modern-backend NUTS/nested-sampling
+    rows a suite already runs) has proven the backends agree with the
+    reference implementation, re-running a ``study`` row's own numpy-path
+    sampling in ``torch``, ``jax`` or ``sbi`` buys no additional evidence,
+    only their wall clock -- so it runs in ``dev`` only.
+
+    Detected by whether ``torch``/``jax`` import here, rather than by
+    environment name -- a ``sbi``-environment run has torch installed and
+    should skip these rows for the same reason a ``torch`` run does.
+    """
+    reasons = [name for name in ("torch", "jax") if importlib.util.find_spec(name) is not None]
+    if not reasons:
+        return
+    skip = pytest.mark.skip(
+        reason=(
+            "study row: numpy-path-only, run on `dev` only (see pyproject.toml's `study` "
+            f"marker); this environment has {' and '.join(reasons)} installed"
+        )
+    )
+    for item in items:
+        if "study" in item.keywords:
+            item.add_marker(skip)
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Skip the ``study`` rows outside ``dev``, project-wide (W5.32 (i))."""
+    _skip_study_rows_outside_dev(items)

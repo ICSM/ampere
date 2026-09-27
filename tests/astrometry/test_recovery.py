@@ -34,14 +34,6 @@ needs_nautilus = pytest.mark.skipif(
 needs_ultranest = pytest.mark.skipif(
     importlib.util.find_spec("ultranest") is None, reason="needs ampere[ultranest]"
 )
-#: The `study` marker's convention (W5.26), applied locally because this
-#: directory has no conftest hook for it: a dev-only budget row runs where
-#: neither modern backend is installed, so the dev gate leg pays its two and
-#: a half minutes once and the torch, jax and sbi legs do not repeat it.
-dev_only = pytest.mark.skipif(
-    importlib.util.find_spec("torch") is not None or importlib.util.find_spec("jax") is not None,
-    reason="a dev-only budget row: the torch, jax and sbi legs skip it (the `study` convention)",
-)
 
 
 def _covered(run: Any, *, level: float = 0.95) -> dict[str, bool]:
@@ -165,7 +157,7 @@ class TestNestedSamplingResolvesThePeriodModes:
         run = fit(problem, backend="reference", engine="dynesty")
         _assert_resolves_the_true_mode(run)
 
-    @dev_only
+    @pytest.mark.study
     def test_dynesty_resolves_the_true_mode_at_a_per_pr_budget(self) -> None:
         """The per-PR pin: 100 live points, 142 s measured, the same mode structure.
 
