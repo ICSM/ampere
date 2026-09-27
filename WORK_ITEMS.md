@@ -2600,8 +2600,10 @@ through `provenance["sample_backend"]`; and the in-chunk refusal W5.29
 described has no test. Locate the fallback and the refusal with `grep -n
 "sample_backend\|contextual\|_context_sigma" ampere/core/dataset.py`.
 Add a **loud, obvious warning** at the fallback — a `UserWarning` subclass
-named for the package in `ampere/core/exceptions.py` beside the existing
-`AmpereFlatPopulationWarning`, whose message names the noise-model class,
+named for the package beside the existing `AmpereFlatPopulationWarning`
+(`ampere/core/settings.py` line ~29; put the new one where a
+`dataset.py` import of it creates no cycle — `exceptions.py` if
+`settings.py` imports `dataset`), whose message names the noise-model class,
 says the batch is being drawn by numpy because its `sigma_jax`/`sigma_torch`
 takes no `base=`, quotes the signature to add, and says where the
 provenance records it; emit it once per `simulate_many` call, not per
@@ -2610,9 +2612,12 @@ chunk. Tests: a user noise model without `base=` triggers the warning
 warn; the in-chunk refusal row W5.29 left untested, asserted by name.
 `encoding.md` §13's context paragraph gains one sentence. **(k) A
 conformance row for `proposal_log_density`** (W5.14's carried note): the
-key has four producers — `VIEngine` (`_vi.py`), `BlackjaxEngine`'s
-pathfinder (`_blackjax.py`), `SBIEngine`'s NPE draws (`_sbi.py` ~2017) and
-`TMNRE` — and no row asserts they agree on shape and convention. One row
+key has three producers in the tree — `VIEngine` (`_vi.py` ~570, every
+guide family), `BlackjaxEngine`'s pathfinder (`_blackjax.py` ~442) and
+`SBIEngine`'s NPE draws (`_sbi.py` ~2048); W5.14's row counted four, so
+confirm with `grep -rn '"proposal_log_density"' ampere/` and say what the
+fourth was if one exists — and no row asserts they agree on shape and
+convention. One row
 in `tests/conformance` (or `tests/inference` if it cannot be fixture-
 parametrised): for each producer available in the environment, the array
 lives at `sample_stats.proposal_log_density`, has one value per draw
@@ -2648,7 +2653,7 @@ pages, `tests/results/test_plots.py` for (e); for (f) the helper's home
 and the import lines; (g) `examples/astrometry/__main__.py`; (h)
 `examples/image/study.py` and its test file; (i) the three conftests and
 `tests/astrometry/test_recovery.py`'s marker; (j) the fallback site in
-`ampere/core/dataset.py`, the new warning class in `exceptions.py`, the
+`ampere/core/dataset.py`, the new warning class (`settings.py` or `exceptions.py`), the
 tests in `tests/inference/test_sbi.py`, one sentence in `encoding.md`
 §13; (k) one new conformance/inference test module; (l) `_Step` in
 `ampere/backends/reference/instrument.py` and one test. **Depends:**
