@@ -2806,7 +2806,7 @@ the dispatch prompts; the sole shared file across waves is
 the kernel, the noise-model — and merge in that order).
 
 
-## Phase 6 — Docs, migration, release (drafted 2026-09-28 by Fable; **awaiting Peter's rulings D1–D11**; nothing dispatched)
+## Phase 6 — Docs, migration, release (drafted 2026-09-28 by Fable; **ruled by Peter 2026-09-28: D1 as (b) with `ampere.legacy`, D2–D7, D9, D10 as recommended (D3 as `1.0.0b1`); D8 and D11 open pending the briefings in the handoff**; nothing dispatched)
 
 The plan's §5 Phase 6 bullets (the RHMF trial, the optimisers module, the
 scipy distribution exploration, the docs rebuild and beta release, the
@@ -2828,33 +2828,46 @@ contract is a decision-log row and the conformance rows in the same PR
 decisions **D1–D11** at the end are the ones the drafting could not take;
 the ordering paragraph before them assumes the recommendations.
 
-### W6.0 — The deprecation policy, and the legacy surface's retirement schedule [S; Fable drafts the policy, Sonnet lands it]
+### W6.0 — `ampere.legacy`: the legacy surface relocated, kept, and never removed [S; Fable drafts the policy page, Sonnet lands it] (ruled D1 (b), 2026-09-28)
 `docs/source/migrating.rst` promises "a deprecation policy — if and when
 legacy pieces are retired, and on what notice — is Phase 6 work" (W3.9).
-This item writes it, under D1's ruling, and makes the code say the same:
-(1) the policy page — what "frozen" becomes at the beta release (the
-recommended shape: `ampere.data`, `ampere.models`, `ampere.infer` and
-`ampere.utils` are **deprecated** at the beta, emitting one
-`DeprecationWarning` per package at first import naming the v2 route and
-the removal version; **removed** at 1.0, no sooner than six months after
-the beta; the characterisation suite is the guard until removal and is
-deleted with the packages); (2) `ampere/__init__.py` no longer imports the
-four legacy packages eagerly — `import ampere` today loads `models`,
-`infer`, `data` and `utils` and their dependencies before anything of v2,
-so the legacy import becomes lazy (a module `__getattr__`) with the warning
-on first access, and `__version__` reads `importlib.metadata` instead of the
-hard-coded `"0.1.2"` (`docs/source/conf.py` already does); (3) the v2
-aliases scheduled for Phase 6 removal (`regularised_horseshoe`, W5.27) follow
-the same policy — deprecated now, removed at 1.0 — so the page has one rule;
-(4) the legacy examples (`examples/NGC6302*`, `example.py`, `modbbtest.py`,
-`modelClio.py`, `star_disc*`, the four `minimal_working_example*.py`, the
-two `cstar_model_test_sbi_v2*.py`) are listed with each one's fate under
-W6.1. **Depends:** D1 ruled. **Accept:** the policy page in the API
-toctree beside `migrating`; `import ampere` in a bare environment imports
-no legacy module and no legacy dependency (a `tests/test_imports.py` row);
-`tests/characterisation` still green with the warning filtered; `__version__`
-equals the installed metadata; gates dev (the characterisation suite run
-once on the branch).
+**Ruled (b)**: the legacy code is **kept indefinitely, frozen as it is,
+with no removal scheduled** — and it moves to one subpackage,
+`ampere.legacy`, so that `from ampere import legacy as ampere` gives a
+legacy script its whole old surface under one name. The item: (1) the
+move — `ampere/data`, `ampere/models`, `ampere/infer`, `ampere/utils`
+become `ampere/legacy/{data,models,infer,utils}` by `git mv`, their
+internal absolute imports rewritten to the new path and nothing else
+changed (ground rule 1's "do not modify" is lifted for exactly this
+mechanical relocation, by this item's text; the characterisation suite
+and `tests/test_imports.py` are the proof nothing else moved);
+`ampere/legacy/__init__.py` imports the four as the old top level did;
+(2) the old top-level names — `ampere.data`, `ampere.models`,
+`ampere.infer`, `ampere.utils` — stay importable **as lazy aliases**
+(a module `__getattr__` in `ampere/__init__.py` resolving to the
+`ampere.legacy` module on first access), so no existing import breaks
+and `import ampere` no longer loads any legacy module or legacy
+dependency eagerly (today it imports all four before anything of v2);
+the aliases are documented on the migration page as "kept; prefer
+`ampere.legacy`", with no warning and no removal date — the orchestrator's
+assumption under (b), to confirm at review; (3) `__version__` reads
+`importlib.metadata` instead of the hard-coded `"0.1.2"`; (4) the policy
+page — what "frozen" means now (kept, unchanged, documented as legacy,
+bugs fixed only where a fix is a line and never a behaviour change,
+tested by the characterisation suite), that v2's **own** deprecations
+(the `regularised_horseshoe` alias, W5.27) are a separate rule —
+deprecated with a warning, removed at 1.0.0 final (the orchestrator's
+assumption: (b) is about legacy, not about v2's aliases; to confirm) —
+and where each legacy example goes under W6.1; (5) the legacy
+characterisation anchors (`examples/minimal_working_example*.py`) and
+`examples/examples_paper/` keep working through the aliases or through
+`ampere.legacy`, unmodified. **Depends:** nothing. **Accept:** the
+characterisation suite green unchanged; `import ampere` in a bare
+environment imports no legacy module (a `tests/test_imports.py` row);
+`from ampere import legacy as ampere` runs `minimal_working_example.py`
+with one substitution; the old names still resolve; the policy page in
+the API toctree beside `migrating`; docs warnings no longer than base;
+gates dev (the characterisation suite once on the branch).
 
 ### W6.1 — The full migration guide, and the legacy examples converted [M; Sonnet]
 W3.9 seeded `migrating.rst` with the concept map and one side-by-side; this
@@ -2900,7 +2913,7 @@ The Phase 1 promise the plan's CI/CD workstream deferred here: `-W` on the
 docs job. Twelve warnings remain, all in frozen legacy docstrings
 (`ampere/data/spectrum.py`, `ampere/infer/{emceesearch,mixins,zeussearch}.py`)
 and one ambiguous cross-reference in `ampere.utils.rst`; under W6.0's
-policy the legacy pages stay in the reference until 1.0, so they are
+policy the legacy pages stay in the reference indefinitely (D1 (b)), so they are
 autodoc'd with the offending members excluded (`:exclude-members:`, the
 W5.32 (c) pattern) rather than by editing frozen code — ground rule 1 holds.
 Then: (1) the API reference restructured around v2 — `api.rst` leads with
@@ -2911,9 +2924,9 @@ public name in the four namespaces has a docstring that autodoc renders
 without a warning); (3) the two pages `tutorials.rst`'s "Still to be
 written" names — conditional priors, arbitrary priors — written from
 `parameters.md` §4–§6; (4) the shrinkage section `advanced.rst` lacks
-(W5.19's question) if D5 says so; (5) the `pycon` blocks under `docs/source`
-under a doctest runner (W5.7's carried idea, W5.19's question) if D5 says
-so — `tests/core/test_spec_doctests.py`'s harness extended to `docs/source`,
+(W5.19's question; **D5 ruled yes**); (5) the `pycon` blocks under `docs/source`
+under a doctest runner (W5.7's carried idea, W5.19's question; **D5 ruled
+yes**) — `tests/core/test_spec_doctests.py`'s harness extended to `docs/source`,
 each page's blocks either run or marked `:skipif:` with the reason. Issue
 #57 closes with this item and W6.1 together. **Depends:** W6.0 (the policy
 banner), W6.1 (the notebooks). **Accept:** `pixi run docs` with `-W` green
@@ -2934,13 +2947,14 @@ extra; gates none (infrastructure; the docs job is the check).
 ### W6.5 — Release automation and the beta release [M; Opus]
 The plan's bullet and the CI/CD line together, addressing issues #57–60 and
 #62: (1) **versioning** — setuptools_scm is configured; `__version__` moves
-to metadata (W6.0); the beta's version per D3; (2) **PyPI trusted
+to metadata (W6.0); the beta is **`1.0.0b1`** from a `v1.0.0b1` tag (D3 ruled:
+the major bump signals the redesign; the final is `1.0.0`); (2) **PyPI trusted
 publishing** — a `release.yml` on `v*` tags: build sdist and wheel in the
 `dev` environment, `twine check`, publish through OIDC, no token in
 secrets; a TestPyPI dry run first; the wheel's metadata carries
 `License-Expression` (the RHMF adoptability row found a packaging
 without one reports no licence on PyPI — check ampere's own); (3) **the
-changelog** — per D3, generated from the decision log and the status table
+changelog** — hand-written for the beta from the decision log and the status table
 for the beta (the phases' landed summaries are the material) and
 maintained per release afterwards; (4) **citation** (#62) — a
 `CITATION.cff`, a Zenodo DOI minted at the tag, the paper reference once
@@ -3038,11 +3052,14 @@ scripts become the fallback for a machine without GitHub; the handoff's
 shared lock in `tests/conftest.py` and the m2 margins survive `-n auto`;
 if they do, `test-all` and `test-fast` gain `-n` and the measured
 speed-up goes in the task comment; if a suite does not, it is named and
-left serial; (3) the GPU rows (`tests/gpu`) on an accelerator, per D7 —
-if Peter has an allocation, a `gpu` pixi environment and a documented
-manual procedure (an rsync of the tagged tree, the run, the log back)
-under `docs/development.md`; if not, the rows stay skipped and the
-release gate says so. **Depends:** D4, D7. **Accept:** the CI run
+left serial; (3) the GPU rows (`tests/gpu`) on an accelerator — **D7 ruled: an HPC
+allocation with A100s is available** — a `gpu` pixi environment (torch
+and jax from their CUDA indices, the CPU-index constraint lifted there
+only) and a documented manual procedure under `docs/development.md` (an
+rsync of the tagged tree to the login node, the scheduler script, the
+run, the log back beside the status row), run once on the beta tag as
+part of the release gate; the cluster's name, scheduler and access route
+are gathered from Peter at dispatch. **Depends:** D4, D7. **Accept:** the CI run
 recorded as the gate in the next merged row; the audit's table; the GPU
 procedure run once on the beta tag if ruled; gates none (infrastructure).
 
@@ -3121,12 +3138,18 @@ in Phase 7 if not. Phase 6 closes with the beta on PyPI and
   in place by then); (b) keep legacy frozen indefinitely as it is, no
   warning, no removal; (c) remove at the beta. Also under D1: whether the
   `regularised_horseshoe` alias (W5.27) is removed at the beta or at 1.0
-  (recommended: 1.0, one rule for every deprecation).
+  (recommended: 1.0, one rule for every deprecation). **Ruled 2026-09-28:
+  (b), with the legacy routines moved into an `ampere.legacy` subpackage
+  so `from ampere import legacy as ampere` keeps a legacy script working
+  — W6.0 rewritten accordingly; the old top-level names as lazy aliases
+  and the v2 alias's own removal at 1.0.0 are the orchestrator's
+  assumptions under (b), to confirm at W6.0's review.**
 - **D2 — where the docs live**: Read the Docs (the astronomy convention;
   a `.readthedocs.yaml` building from a pip docs extra since RTD does not
   run pixi) or GitHub Pages from the CI job (pixi-native, one less
   service, no PR previews). Recommendation: Read the Docs, for the
-  version switcher and PR previews users expect.
+  version switcher and PR previews users expect. **Ruled 2026-09-28: Read
+  the Docs.**
 - **D3 — the beta's version and the changelog**: the version — `0.2.0b1`
   under setuptools_scm from a `v0.2.0b1` tag (recommended; `v0.1` is the
   last legacy tag and `__version__` says `0.1.2`), or `1.0.0b1` to signal
@@ -3134,47 +3157,63 @@ in Phase 7 if not. Phase 6 closes with the beta on PyPI and
   log and the status table (recommended for the beta: the phases' landed
   summaries are the material and a generator would flatten them), or a
   generator (`towncrier` fragments per PR, or `git-cliff` from commit
-  messages) from the beta onward.
+  messages) from the beta onward. **Ruled 2026-09-28: `1.0.0b1`, to
+  signal the redesign (the final is `1.0.0`); the changelog as
+  recommended.**
 - **D4 — the remote**: `origin/master` takes the v2 line at the beta tag
   (recommended) or at the first CI-green merge after Phase 6 opens; branch
   protection on `master` then (CI required, no force-push, Peter merges);
   and whether the orchestrator may push the mirror at every merge from
   now on so the CI run becomes the gate of record (W6.10 (1); recommended:
   yes, `origin/v2` until the switch-over, never `origin/master` before it).
+  **Ruled 2026-09-28: accepted — the orchestrator pushes `origin/v2` at
+  every merge from now on; `origin/master` switches at the beta tag with
+  branch protection.**
 - **D5 — two small docs rulings from W5.19**: a shrinkage section in
   `advanced.rst` (recommended: yes, four paragraphs pointing at
   `kernels.rst` §1 and `m2_misspecification.rst`, in W6.3), and a doctest
   runner over `docs/source`'s `pycon` blocks (recommended: yes, in W6.3,
   the harness of `test_spec_doctests.py` extended; the pages already
-  claim their blocks were run).
+  claim their blocks were run). **Ruled 2026-09-28: yes to both.**
 - **D6 — the optimisers' size and tier**: L and Opus as drafted (three
   routes, a `results.md` amendment, four gates), or split into the numpy
   and native routes first (M) with the empirical-Bayes warm start as a
   follow-on (S). Recommendation: as drafted; the warm start is where the
-  measured gain is and it shares the provenance work.
+  measured gain is and it shares the provenance work. **Ruled 2026-09-28:
+  as drafted.**
 - **D7 — the GPU rows**: whether an HPC allocation with accelerators is
   available for the release gate; if yes, W6.10 (3) is in scope and the
   procedure is written; if no, `tests/gpu` stays skipped and the release
   says so. No recommendation — the answer is a fact only Peter has.
+  **Ruled 2026-09-28: yes — HPC with A100 GPUs is available; W6.10 (3) in
+  scope.**
 - **D8 — the design items' timing**: W6.11's memo in Phase 6 (recommended:
   yes — a memo costs little and the per-dataset GP amplitude is the
   flexible likelihood's own use case), and its implementation items in
   Phase 6 after the beta, or in a Phase 7 (recommended: Phase 7; a §4
-  change belongs after the release, not before it).
+  change belongs after the release, not before it). **Open 2026-09-28:
+  Peter asked for more information — the briefing is in the handoff's
+  session state and the reply of 2026-09-28; ruling pending.**
 - **D9 — readers in Phase 6**: W6.12 (OIFITS, and JWST spectra as the
   second reader) in this phase after the beta, or the first Phase 7 item.
   Recommendation: OIFITS in Phase 6 after the beta — a release with no
   reader for real interferometric data is a weaker claim than the
   modality deserves; JWST (issue #63) in Phase 7 with the spectroscopy
-  front door.
+  front door. **Ruled 2026-09-28: accepted — readers matter less than the
+  containers (a user can always read a file by hand and feed ampere), so
+  OIFITS is the worked example of how a reader is written and where it
+  lives, after the beta; JWST Phase 7.**
 - **D10 — the issue triage** as listed above (closed by Phase 5; closed by
   Phase 6; re-filed as v2 backlog; out of scope). Recommendation: as
   listed; the closures with a one-line pointer each, done by the
-  orchestrator at the beta.
+  orchestrator at the beta. **Ruled 2026-09-28: accepted, with tweaks as
+  they come up at the beta.**
 - **D11 — the paper**: whether the beta release is coupled to the paper
   revision's examples (`examples/examples_paper/`, Peter's) — released
   together, the paper's scripts pinned to the beta tag — or independent.
-  No recommendation; Peter's timeline decides it.
+  No recommendation; Peter's timeline decides it. **Open 2026-09-28: to be
+  discussed with more information — the facts gathered are in the reply
+  of 2026-09-28 and the handoff; ruling pending.**
 
 
 ## Status
