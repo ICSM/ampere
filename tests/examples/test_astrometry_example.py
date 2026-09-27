@@ -30,6 +30,7 @@ from examples.astrometry.astrometry import (
     coverage_at,
     fit,
     main,
+    period_modes,
     recovers_truth,
     report,
     sbc_problem,
@@ -139,6 +140,110 @@ class TestMain:
         assert "free parameters:" in out
         assert "emcee on reference" in out
         assert "wall clock" in out
+
+
+# ---------------------------------------------------------------------------
+# The period-aliasing arm and its remedy (W5.15)
+# ---------------------------------------------------------------------------
+
+
+class _FakeDataset:
+    """The one piece of a posterior ``Dataset`` :func:`period_modes` reads."""
+
+    def __init__(self, values: dict[str, np.ndarray]) -> None:
+        self._values = values
+
+    def __getitem__(self, key: str) -> np.ndarray:
+        return self._values[key]
+
+
+class _FakeNode:
+    def __init__(self, values: dict[str, np.ndarray]) -> None:
+        self.dataset = _FakeDataset(values)
+
+
+class _FakeRun:
+    """A stand-in for a real ``xarray.DataTree`` run, hand-built rather than sampled.
+
+    :func:`period_modes` reads exactly ``run["posterior"].dataset[parameter]``
+    and ``run.attrs``, so a fake exposing only those two is enough to test the
+    splitting rule itself without paying for a nested-sampling run.
+    """
+
+    def __init__(self, values: dict[str, np.ndarray], attrs: dict[str, object]) -> None:
+        self._posterior = _FakeNode(values)
+        self.attrs = attrs
+
+    def __getitem__(self, key: str) -> _FakeNode:
+        if key == "posterior":
+            return self._posterior
+        raise KeyError(key)
+
+
+class TestTheWidePriorArm:
+    """``wide_prior=True``, :func:`period_modes`, and the CLI's ``--wide-prior`` (W5.15)."""
+
+    def test_the_period_prior_is_w49s_wide_loguniform(self) -> None:
+        problem = build_problem("reference", wide_prior=True)
+        support = problem.parameters["model.period"].prior.support()
+        assert support == (50.0, 2000.0)
+
+    def test_period_modes_splits_a_bimodal_set_and_drops_a_tiny_cluster(self) -> None:
+        """No sampling: three hand-built clusters, one of them below the mass floor."""
+        low = np.linspace(268.0, 272.0, 300)  # 30 % of the draws
+        high = np.linspace(398.0, 402.0, 690)  # 69 % of the draws
+        tiny = np.linspace(749.0, 751.0, 10)  # 1 %, below the 2 % default floor
+        draws = np.concatenate([low, high, tiny])
+        run = _FakeRun({"model.period": draws}, {"ampere_log_evidence": -10.0})
+
+        modes = period_modes(run, parameter="model.period")
+
+        assert len(modes) == 2
+        assert modes[0]["median"] == pytest.approx(270.0, abs=0.5)
+        assert modes[0]["mass_fraction"] == pytest.approx(0.30)
+        assert modes[1]["median"] == pytest.approx(400.0, abs=0.5)
+        assert modes[1]["mass_fraction"] == pytest.approx(0.69)
+        # ln Z_k = ln Z + ln f_k, per mode, independently of the other mode.
+        assert modes[0]["log_evidence"] == pytest.approx(-10.0 + np.log(0.30))
+        assert modes[1]["log_evidence"] == pytest.approx(-10.0 + np.log(0.69))
+
+    def test_period_modes_omits_the_evidence_key_when_the_run_has_none(self) -> None:
+        draws = np.concatenate([np.linspace(268.0, 272.0, 50), np.linspace(398.0, 402.0, 50)])
+        run = _FakeRun({"model.period": draws}, {})
+        modes = period_modes(run, parameter="model.period")
+        assert len(modes) == 2
+        assert all("log_evidence" not in mode for mode in modes)
+
+    def test_main_runs_the_wide_prior_dynesty_arm_end_to_end(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The arm's own smoke test: a real (tiny-budget) dynesty run, not a fake one."""
+        assert (
+            main(
+                [
+                    "--wide-prior",
+                    "--engine",
+                    "dynesty",
+                    "--live-points",
+                    "20",
+                    "--dlogz",
+                    "5000",
+                ]
+            )
+            == 0
+        )
+        out = capsys.readouterr().out
+        assert "dynesty on reference" in out
+        assert "ln Z = " in out
+        assert "period modes" in out
+        assert "f_k=" in out
+
+    def test_wide_prior_alone_reaches_for_dynesty(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """``--wide-prior`` with no ``--engine`` picks dynesty and says so."""
+        assert main(["--wide-prior", "--live-points", "20", "--dlogz", "5000"]) == 0
+        out = capsys.readouterr().out
+        assert "reaching for dynesty" in out
+        assert "dynesty on reference" in out
 
 
 # ---------------------------------------------------------------------------
