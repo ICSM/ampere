@@ -2806,7 +2806,7 @@ the dispatch prompts; the sole shared file across waves is
 the kernel, the noise-model — and merge in that order).
 
 
-## Phase 6 — Docs, migration, release (drafted 2026-09-28 by Fable; **ruled by Peter 2026-09-28: D1 as (b) with `ampere.legacy`, D2–D7, D9, D10 as recommended (D3 as `1.0.0b1`); D8 and D11 open pending the briefings in the handoff**; nothing dispatched)
+## Phase 6 — Docs, migration, release (drafted 2026-09-28 by Fable; **ruled by Peter 2026-09-28: D1 as (b) with `ampere.legacy`, D2–D7, D9, D10 as recommended (D3 as `1.0.0b1`); D8 as recommended (2026-09-28, after the briefing); D11 ruled 2026-09-28: the legacy examples stay on legacy and gain v2 twins — W6.13; D12 (the remaining scripts, and the two external-code dependencies) open**; nothing dispatched)
 
 The plan's §5 Phase 6 bullets (the RHMF trial, the optimisers module, the
 scipy distribution exploration, the docs rebuild and beta release, the
@@ -2876,22 +2876,18 @@ route with a snippet each — `Photometry`/`Spectrum` → `Dataset` with an
 `Instrument` chain, the legacy GP switches → `GaussianProcessNoise`, the
 `ampere.infer` searches → the engines, `ampere.infer.sbi` → `SBIEngine`,
 the post-processors → `ampere.results`, the extinction and filter helpers
-→ their v2 equivalents or "no equivalent; carried" — and the legacy
-examples rewritten on v2 under `examples/`: the four
-`minimal_working_example*.py` (emcee, dynesty, zeus, sbi) become one v2
-example with an `--engine` switch that `tests/examples` smokes, the NGC6302
-dust-mass example becomes a v2 composition (its data files are in the
-repository) or is retired with a note if its model has no v2 twin, the
-`cstar` SBI examples fold into `examples/sbi/`; the three notebooks under
+→ their v2 equivalents or "no equivalent; carried" — with the legacy
+examples' v2 twins (W6.13, under D11: the legacy scripts stay as they
+are and keep working on `ampere.legacy`; each gains a v2 twin beside it)
+linked from the guide as the side-by-side material; the three notebooks under
 `docs/source/notebooks/` (`quickstart`, `Ampere_MBB_Example`,
 `Embedding_nets`) are re-written on v2 and executed at docs-build time
 (`nbsphinx_execute = "auto"` for the ones that can run in the docs
 environment) or moved to the legacy section with a banner; the legacy
 characterisation anchors are untouched (they exercise the frozen code, not
-the examples). **Depends:** W6.0 (the fates list). **Accept:** every legacy
+the examples). **Depends:** W6.0, W6.13 (the twins it links). **Accept:** every legacy
 public name appears on the guide with a route or a "carried" note; the
-converted examples under `tests/examples` (each smoke row under a minute in
-dev); the executed notebooks build in `pixi run docs`; docs warnings no
+executed notebooks build in `pixi run docs`; docs warnings no
 longer than the base commit's; gates dev.
 
 ### W6.2 — Composition tutorial: photometry plus spectra, with calibration uncertainty [S; Sonnet]
@@ -3097,6 +3093,59 @@ with a skip offline) round-trips into containers `tests/interferometry`'s
 fixtures accept; the front-door module documented on `interferometry.rst`;
 gates dev (torch and jax if the containers' native twins are touched).
 
+### W6.13 — The legacy examples' models on v2: twins beside the originals [M; Sonnet for the self-contained models, Opus for the two external-code models] (ruled D11, 2026-09-28)
+**Ruled**: the legacy examples are kept exactly as they are, running on
+legacy (D1 (b)), and each named model gains a **v2 twin** — the same
+model, the same data, the same question, written against `ampere.core`
+and the reference backend, beside the original under `examples/`. Peter
+named five (his list; the rest are D12): (1) **the minimal working
+examples** — `minimal_working_example.py` and its `_dynesty`, `_zeus`,
+`_sbi` and `_sbi_embedding` variants — become one v2 example,
+`examples/linear_sed/`, with `--engine emcee|dynesty|zeus|sbi` and
+`--embedding` switches: the linear model, two-band synthetic photometry
+through `SyntheticPhotometry.from_library` (the pattern
+`examples/sed_composition` already uses), the Spitzer IRS sampling read
+from the tracked `examples/test_data/cassis_yaaar_spcfw_14191360t.fits`
+with `astropy.io.fits` (a v2 `Spectrum` container, no legacy reader), the
+calibration scale and the flexible likelihood as the v2 counterparts of
+`calUnc`/`scaleLengthPrior`; the legacy files are the characterisation
+anchors and are **not touched**; (2) **NGC6302** — `NGC6302.py` and
+`NGC6302_zeus.py` become `examples/ngc6302/`: the Kemper et al. (2002)
+two-shell model as a v2 `Model` with the opacity tables as buffers (the
+tracked `examples/NGC6302/` files), the observed `NGC6302_100.tab` as a
+`Spectrum` with the 25–120 µm selection, `Resample`, a `CalibrationScale`
+and `GaussianProcessNoise` in place of the legacy noise triple, `--engine
+emcee|zeus`; `NGC6302-calculate-dust-mass.py`'s post-processing becomes a
+function over the run's `DataTree` in the same package (D12 confirms);
+(3) **the modified blackbody** (`examples_paper/modifiedblackbody.py`) —
+`examples/modified_blackbody/`: the astropy `BlackBody` model with the
+four parameters, ten AKARI/Herschel bands through `from_library`, all
+four engines (emcee, zeus, dynesty, SBI) and the posterior-predictive
+overlay across them through `ampere.results`' plots; (4) **the PHOENIX
+star** (`examples_paper/phoenixstar.py`) — `examples/phoenix_star/`: the
+Starfish spectral emulator wrapped as a v2 `Model` (design horizon (c)'s
+own case: an emulator is a model), the CCM89 extinction through the
+`extinction` extra's `dust_extinction`, Gaia/2MASS/WISE photometry plus a
+Gaia-RVS-like spectrum, `SBIEngine`; the PHOENIX download and emulator
+training stay a documented one-off step outside the test path (D12b);
+(5) **the carbon star** (`cstar_model_test_sbi_v2.py` and its
+`_embedding` variant) — `examples/cstar/`: the Hyperion radiative-transfer
+model as a v2 `Model` (the legacy `ampere.models.Hyperion` class is the
+reference for its parameters and outputs), the tracked `cstar_data`
+votable photometry and IRS spectrum as v2 containers, `SBIEngine` with two
+rounds and the `--embedding` switch; Hyperion is required to run it and
+absent from CI (D12b). Every twin has a `__main__`, a docstring stating
+which legacy script it twins and what changed in the translation, and a
+`tests/examples` smoke row where its dependencies are installed (skipping
+by `find_spec` otherwise — (4) and (5) skip in every CI environment; (1)–(3)
+run under a minute each in dev); the `examples/` README lists the pairs.
+**Depends:** W6.0 (the `ampere.legacy` path the originals now sit behind
+— the twins import nothing from it), D12. **Accept:** the five twins with
+smoke rows; the legacy originals byte-identical; each twin's posterior on
+its synthetic truth covers the truth at 95 % on every parameter once (the
+run recorded in the docstring); docs warnings no longer than base; gates
+dev, plus sbi for (1)'s and (3)'s SBI arms.
+
 **Issue triage (D10).** The open issues, with the recommendation: **closed
 by Phase 5 already** — #12, #29, #67 (W5.17's levers), #11 (censoring,
 `likelihoods.md` §9 landed with the core); **closed by Phase 6** — #57,
@@ -3119,8 +3168,11 @@ deployment is a user's, not the library's).
 Sonnet, disjoint files, no ruling needed beyond D10's alias note; W6.9 in
 either slot as it frees. **Wave 2** (after D1): W6.0 alone, short, since
 everything on the documentation side keys on its policy; then W6.1 ∥ W6.2
-(disjoint: `migrating.rst` and the converted examples against a new
-tutorial page and one new example). **Wave 3**: W6.3 ∥ W6.7 — the docs
+(disjoint: `migrating.rst` and the notebooks against a new tutorial page
+and one new example); then W6.13 ∥ W6.7's first half — the twins are
+Sonnet on `examples/` and the optimisers Opus on `ampere/inference`, with
+the two external-code twins ((4), (5)) as a second Opus slot when the
+first frees. **Wave 3**: W6.3 ∥ W6.7 — the docs
 rebuild is Sonnet on docs files and the optimisers are Opus on
 `ampere/inference` and one docs page; ownership disjoint by construction.
 **Wave 4**: W6.4 ∥ W6.10 (both infrastructure, D2/D4/D7 ruled by then);
@@ -3191,9 +3243,9 @@ in Phase 7 if not. Phase 6 closes with the beta on PyPI and
   yes — a memo costs little and the per-dataset GP amplitude is the
   flexible likelihood's own use case), and its implementation items in
   Phase 6 after the beta, or in a Phase 7 (recommended: Phase 7; a §4
-  change belongs after the release, not before it). **Open 2026-09-28:
-  Peter asked for more information — the briefing is in the handoff's
-  session state and the reply of 2026-09-28; ruling pending.**
+  change belongs after the release, not before it). **Ruled 2026-09-28,
+  after the briefing: as recommended — the memo (W6.11) in Phase 6, the
+  implementations open Phase 7.**
 - **D9 — readers in Phase 6**: W6.12 (OIFITS, and JWST spectra as the
   second reader) in this phase after the beta, or the first Phase 7 item.
   Recommendation: OIFITS in Phase 6 after the beta — a release with no
@@ -3211,9 +3263,36 @@ in Phase 7 if not. Phase 6 closes with the beta on PyPI and
 - **D11 — the paper**: whether the beta release is coupled to the paper
   revision's examples (`examples/examples_paper/`, Peter's) — released
   together, the paper's scripts pinned to the beta tag — or independent.
-  No recommendation; Peter's timeline decides it. **Open 2026-09-28: to be
-  discussed with more information — the facts gathered are in the reply
-  of 2026-09-28 and the handoff; ruling pending.**
+  No recommendation; Peter's timeline decides it. **Ruled 2026-09-28: keep
+  the old versions working on legacy, and produce v2 twins of the same
+  models — `examples_paper/modifiedblackbody.py`, `examples_paper/phoenixstar.py`,
+  `examples/NGC6302.py`, `examples/minimal_working_example.py` and its
+  variants, `examples/cstar_model_test_sbi_v2.py` — as W6.13; the release
+  is not coupled to the paper beyond that.**
+- **D12 — the remaining legacy scripts, and the external-code dependencies**
+  (opened 2026-09-28 on D11's "ask about any others"). (a) The scripts
+  Peter did not name: `examples/example.py` and `examples/modbbtest.py`
+  (both import `ampere.emceesearch`, a path that has not existed for
+  years — already broken; recommend: no twin, left as they are);
+  `examples/modelClio.py` (Gielen et al. 2008's post-AGB disc model, with
+  the same dead `ampere.emceesearch` import; recommend: a twin only if
+  the paper uses it, since the model is a real published one);
+  `examples/star_disc.py` with `examples/star_disc/HD105_SED.*` (a star
+  plus disc on the legacy `QuickSED` model with emcee, committed
+  2026-07-31 as "Star disc model attempt"; recommend: a twin, since it is
+  the most recent work and `QuickSED` is the one legacy model class with
+  no v2 counterpart yet); `NGC6302_zeus.py` and `NGC6302-calculate-dust-mass.py` (folded
+  into (2) as drafted); `cstar_model_test_sbi_v2_embedding.py` (folded into
+  (5)); the three notebooks (W6.1's); `examples_paper/flexible_likelihood_comparison.py`
+  (untracked; its v2 counterpart is the M2 study — recommend: cite the
+  study, no twin). (b) Starfish and Hyperion: documented "to run this
+  example you need" requirements with the twins skipping by `find_spec`
+  (recommended — neither belongs in an extra the package resolves), or an
+  `examples` extra that pins them. Also whether the PHOENIX grid download
+  and the emulator training may be replaced in the twin by a small
+  pre-trained emulator file committed under `examples/phoenix_star/` if it
+  is under a megabyte (recommended if so; otherwise the one-off step stays
+  documented).
 
 
 ## Status
