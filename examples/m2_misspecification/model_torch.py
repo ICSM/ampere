@@ -40,6 +40,7 @@ from .model import (
     REFERENCE_WAVELENGTH,
     WAVELENGTH_UNIT,
     _as_parameter,
+    _template_for,
     _channels,
     _declared,
     _to_micron,
@@ -167,10 +168,6 @@ class AbsorptionLines(Model):
         emitted = {}
         for channel in self.channels:
             flux = to_numpy(self.flux(channel, values)).astype(DTYPE, copy=False)
-            template = self.templates.get(channel)
-            emitted[channel] = (
-                Spectrum(to_numpy(self.grid(channel)) * WAVELENGTH_UNIT, flux, unit=FLUX_UNIT)
-                if template is None
-                else template.with_values(flux)
-            )
+            template = _template_for(self.templates, channel, to_numpy(self.grid(channel)))
+            emitted[channel] = template.with_values(flux)
         return ModelResult(emitted)

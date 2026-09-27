@@ -39,6 +39,7 @@ from .model import (
     REFERENCE_WAVELENGTH,
     WAVELENGTH_UNIT,
     _as_parameter,
+    _template_for,
     _channels,
     _declared,
     _to_micron,
@@ -136,10 +137,6 @@ class AbsorptionLines(Model):
         emitted = {}
         for channel in self.channels:
             flux = np.asarray(self.flux(channel, values), dtype=DTYPE)
-            template = self.templates.get(channel)
-            emitted[channel] = (
-                Spectrum(np.asarray(self.grid(channel)) * WAVELENGTH_UNIT, flux, unit=FLUX_UNIT)
-                if template is None
-                else template.with_values(flux)
-            )
+            template = _template_for(self.templates, channel, np.asarray(self.grid(channel)))
+            emitted[channel] = template.with_values(flux)
         return ModelResult(emitted)
