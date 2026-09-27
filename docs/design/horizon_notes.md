@@ -151,6 +151,21 @@ the first 2–3D solver landed is the one that wins a benchmark on the IFU
 sketch's cube at realistic N. HSGP is the cheapest to land and the most
 useful for NUTS; EFGP is the one to reach for at image scale.
 
+*(Amended W5.19, checked against the code: the recommendation landed as
+stated.* `HilbertSpaceGP` shipped at W5.4 on all three backends, with
+`basis_size`/`boundary_factor` as spec-hashed dataclass fields
+(`likelihoods.md` §7) and the latent block sized at `m`, answering
+question (b) above as anticipated. `EquispacedFourierGP` and
+`VecchiaResponseGP` were measured at W5.6's bake-off against `HilbertSpaceGP`
+on W5.5's image; neither is promoted — both stay reference-only
+prototypes in the tree, `HilbertSpaceGP` remains the phase's one shipped
+reduced-rank solver, and SVGP/SKI/`VecchiaGP` stay slots
+(`likelihoods.md` §7, `docs/source/solvers.rst`). Question (a), the
+approximation-aware conformance tolerance, is answered by the `EXACT =
+False` tolerance class `tests/conformance/test_likelihoods.py` asserts —
+compared to `DenseGP` with a tolerance that tightens with the basis size
+rather than a fixed number, exactly as proposed.)*
+
 ## 3. Multi-task GPs for polarimetry and other vector observables
 
 **Question.** Stokes components have physical cross-talk (instrumental

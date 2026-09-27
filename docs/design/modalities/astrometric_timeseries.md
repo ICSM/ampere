@@ -206,6 +206,21 @@ implicit:
    future reader sees it was considered rather than rediscovers the gap:
    e.g. `JointGP` — not exact, applies to 2+ channels, Phase 5.
 
+*(Amended W5.19, checked against the code: this gap is closed.*
+`JointGaussianProcessNoise` (`ampere.core`, W5.9) is exactly the
+`NoiseModel` bound to a tuple of channels this section asked for — `K = B
+⊗ K_x` on a shared grid, diagonalised through a `ChannelCoupling`
+(`RotationCoupling` for the two-degree-of-freedom case this sketch's
+RA/Dec example needs, `CholeskyCoupling` for the general one), exact and
+`O(N)` under the bound `QuasisepGP` once for all rotated outputs. W5.24
+lifted the one restriction W5.9 shipped with — equal per-channel
+uncertainties — so heteroscedastic RA/Dec residuals take the dense or
+reduced-rank route instead of being refused. It landed as a `NoiseModel`
+addition rather than a new `GPSolver` row, since the existing solvers
+still do the O(N) work per rotated output, so `likelihoods.md` §7's table
+does not carry a `JointGP` row as proposed here; `examples/astrometry
+--joint` is the worked case this sketch's own RA/Dec example anticipated.)*
+
 ### Requirements on W1.7
 
 *Dispositioned at the freeze (W1.13): **discharged by W1.7** (merged

@@ -1542,6 +1542,18 @@ implementation:
   the whole contract as "refuses by name **or** agrees with `DenseGP` at
   `tolerances.cross_solver`".
 
+  *(Amended W5.19, checked against the code.* `condition(at=)` is a further
+  capability disagreement, found at W5.28's housekeeping pass (d) and
+  carried here. The reference `QuasisepGP.condition` now accepts a
+  multi-axis `at=` exactly as `DenseGP` does (fixed at W5.28); torch's and
+  jax's own `QuasisepGP.condition` still refuse a multi-axis `at=` by name,
+  because their `_axis` helper is built to reduce `at=` to the one axis the
+  O(N) recursion runs on and has no route for the rest. No shipped problem
+  asks a differentiable backend's `QuasisepGP` to condition on more than one
+  axis, so nothing depends on the gap today — it is a capability
+  disagreement to close with a conformance row when a problem needs it,
+  Phase 6.)*
+
 **The coordinate the recursion runs on (*Added W5.7*).** The generators are
 only half of a semiseparable representation; the other half is the propagator
 `e^{−cⱼ(tₙ−tₘ)}`, which celerite2 builds from the coordinate handed to
