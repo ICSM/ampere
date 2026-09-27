@@ -277,7 +277,12 @@ def _noise_for(backend: str, arm: str, *, sigma: float, solver: Any = None) -> A
         st.uniform(GP_LENGTH_PRIOR[0], GP_LENGTH_PRIOR[1] - GP_LENGTH_PRIOR[0]),
         axes=("x", "y"),
     )
-    return module.GaussianProcessNoise(kernel, solver or DenseGP())
+    # The fallback must be *this backend's own* DenseGP (module.DenseGP), not
+    # the top-level ampere.core.DenseGP imported above for the reference-only
+    # benchmark below: on "torch"/"jax" a FittingProblem refuses a foreign
+    # part from another backend's namespace, and the core DenseGP is exactly
+    # that composed into a torch/jax problem (W5.32 (h)).
+    return module.GaussianProcessNoise(kernel, solver or module.DenseGP())
 
 
 def declared_sigma(observed: Any) -> float:
