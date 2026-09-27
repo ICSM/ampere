@@ -168,7 +168,7 @@ every backend and every engine, emcee included. There is no "blind alley"
 of a latent composition to avoid, because nothing about this modality's
 values needs one.
 
-6. A measured finding: period aliasing, not a template gap
+6. A measured finding: period aliasing, and the two remedies
 -----------------------------------------------------------------
 
 ``examples/astrometry``'s own study found something the template's models
@@ -184,13 +184,151 @@ This is not a defect in the composition (every conformance row above holds
 regardless), and it is not new astrophysics either — period aliasing under
 sparse sampling is a known problem in the literature this modality
 represents. It is a fact about *this kind of model* that a template built
-from non-periodic sources had no occasion to teach: **a modality whose
-model is periodic needs an informed period prior** (a `norm(400, 30)`
-around a period a periodogram or a previous epoch has already suggested,
-which is what ``examples/astrometry`` fits), not a search over decades, or
-its own recovery test becomes a report on prior-driven aliasing rather than
-on the composition. See §10 below (What the template did not say) for this
-as the item's own carried finding.
+from non-periodic sources had no occasion to teach. See §10 below (What
+the template did not say) for this as the item's own carried finding, and
+below for the two remedies, both now measured (**W5.15**).
+
+Remedy 1: an informed prior
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**A modality whose model is periodic needs an informed period prior** (a
+``norm(400, 30)`` around a period a periodogram or a previous epoch has
+already suggested, which is what ``examples/astrometry`` fits by default),
+not a search over decades, or its own recovery test becomes a report on
+prior-driven aliasing rather than on the composition. This is the cheap
+remedy: it needs no new engine, and §9's recovery numbers are measured
+under it.
+
+Remedy 2: nested sampling
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+An informed prior is not always available — a first epoch with no
+periodogram yet, say — and for that case there is a second remedy: nested
+sampling does not have to choose a mode at all. ``examples/astrometry
+--wide-prior`` reproduces W4.9's exact measured prior
+(``loguniform(50, 2000)``, :data:`~examples.astrometry.astrometry.WIDE_PERIOD_PRIOR`)
+and ``--engine dynesty`` (dynesty's default once ``--wide-prior`` is given,
+and also available under ``--engine nautilus``/``--engine ultranest``)
+returns every alias the sampler found as a separately-weighed mode, which
+:func:`~examples.astrometry.astrometry.period_modes` extracts from the
+equal-weight draws: sort them in log space (aliases sit roughly a constant
+distance apart in ``ln P``, not in ``P``) and split wherever a consecutive
+gap exceeds a threshold measured, not guessed, from this study's own draws
+(``examples/astrometry/astrometry.py``'s ``period_modes``, ``gap=0.1``,
+comfortably below the aliases' several-tenths separation and comfortably
+above a single mode's own internal spread).
+
+**Measured, reference backend, pinned seed** — and a finding that sharpened
+along the way: this study's twenty-eight epochs over 1100 days (the set
+W4.9 shipped; the aliasing itself was found on its first, twelve-epoch trial
+over 860 days, above) constrain the period tightly enough that a *properly
+converged* sampler — nautilus, ultranest, and dynesty with a proposal method
+suited to the likelihood — finds **one** dominant mode, not several
+comparably-weighed ones. The hazard is not that several
+real aliases compete on equal terms; it is that an ensemble sampler, once
+split across the true mode and a much smaller one, has no mechanism to
+correct the split, and so *misreports* the aliasing as a bigger effect than
+it is:
+
+.. code-block:: text
+
+    nautilus, wide prior, live_points=175 (default), f_live=0.01, n_eff=10000, 84.3 s:
+        ln Z = +92.198 +/- 0.010
+        period modes (1 found):
+          period  399.680  16/84%[ 398.742,  400.632]  f_k=1.000  ln Z_k +92.198
+
+    ultranest, wide prior, live_points=175 (default), dlogz=0.5, min_ess=400, 142.9 s:
+        ln Z = +91.475 +/- 0.480
+        period modes (1 found):
+          period  399.626  16/84%[ 398.695,  400.523]  f_k=1.000  ln Z_k +91.475
+
+    dynesty, wide prior, live_points=175 (default), sample="auto" (uniform draws inside
+    the bounding ellipsoids below ten dimensions), dlogz<=200:
+        did not converge in 38 minutes (killed, not stalled -- ncall was still
+        climbing, at a few per cent acceptance); the run that located the cost
+
+    dynesty, informed prior (norm(400, 30)), live_points=175 (default), sample="auto",
+    dlogz<=50:
+        did not converge in 12 minutes either -- the *unimodal*, tightly-informed
+        prior is no faster, so the cost is the proposal method, not the prior's width
+
+    dynesty, wide prior, live_points=175 (default), sample="rslice" (the study's
+    DYNESTY_SAMPLE), 241 s:
+        ln Z = +92.253 +/- 0.553
+        period modes (1 found):
+          period  399.660  16/84%[ 398.720,  400.620]  f_k=1.000  ln Z_k +92.253
+
+    dynesty, wide prior, live_points=100, sample="rslice", 142 s (the per-PR test row):
+        ln Z = +91.633 +/- 0.672; the same single mode at 399.66
+
+    nautilus, informed prior (norm(400, 30)), live_points=175 (default), 66.9 s:
+        ln Z = +95.166 +/- 0.010
+
+    emcee, wide prior, 24 walkers x 1000 draws, 21.4 s (aliasing reproduced, not resolved):
+        period  534.2 +/- 174  95%[398.0, 779.2]  (truth 400)  "ok" -- covered only because
+        the interval spans both clusters below
+        period modes (2 found):
+          period  399.754  16/84%[ 398.742,  400.642]  f_k=0.625
+          period  762.870  16/84%[ 737.797,  774.358]  f_k=0.375
+
+Which engine to reach for, and why: a multimodal posterior over a *bounded*
+prior is nested sampling's home ground — the live set is drawn from the
+whole prior, and every mode with non-negligible mass is weighed rather than
+merely visited. All three nested samplers agree on the answer here
+(``+92.25``, ``+92.20`` and ``+91.48``, within their combined
+uncertainties), but not at the same price, and the measurement that
+mattered was the one that first looked like a failure: dynesty's own
+default proposal — ``sample="auto"``, which below ten dimensions draws
+uniformly inside the bounding ellipsoids — had not converged after 38
+minutes on the wide prior *or* after 12 on the informed one. The informed
+run is the diagnostic: the prior's width is not the cost. The likelihood is
+sharply peaked (0.03 mas over twenty-eight epochs; a period peak about a
+day wide), the ellipsoids' acceptance fell to a few per cent, and every
+dead point cost tens of likelihood calls. Slice sampling along random
+directions (``sample="rslice"``, the study's
+:data:`~examples.astrometry.astrometry.DYNESTY_SAMPLE`) converges the same
+run in four minutes at the same live points; nautilus's neural bounds and
+ultranest's MLFriends region take one to two and a half minutes. **The
+lesson is not "dynesty is slow", nor "nested sampling is slow"; it is that
+a nested sampler's proposal method is a real engineering choice on a
+sharply peaked likelihood** — the same kind of choice §9's emcee-versus-NUTS
+comparison makes for the informed-prior fit. dynesty stays the arm's
+default engine because it needs no extra dependency, with the proposal
+method the study measured.
+
+An ensemble sampler's walkers, by contrast, do not reweigh at all once
+split: the emcee row above shows 37.5 % of the ensemble still reporting a
+period near 763 days at the run's end — where the nested runs put *no*
+posterior mass at all (nautilus's 20 300 equal-weight draws all lie between
+396 and 404 days) — and the naive 95 % coverage check still marks
+``period`` "ok", because the interval is wide enough to straddle both
+clusters. That is the hazard in its sharpest form: not a missed truth, but
+a summary statistic that *looks* fine while hiding a badly mis-weighed
+bimodal posterior underneath it. In the corner plot
+(:func:`ampere.results.plot_corner`) the contrast is the picture to keep:
+the nested run's ``model.period`` marginal is a single sharp peak at the
+truth and nothing else, while the emcee run's carries a second island near
+763 days that the sampler cannot weigh against the first.
+
+**The evidence comparison, stated correctly.** The informed-prior and
+wide-prior runs are two different priors on the *same* data, so their
+evidence ratio is a Bayes factor between "the period was known to within
+about ±30 days beforehand" and "the period is anywhere from 50 to 2000
+days" — not a check of which one is *right*. Measured with one engine held
+fixed (nautilus, so the comparison is not also carrying any cross-engine
+systematic): ``ln Z`` is +95.166 informed against +92.198 wide, a Bayes
+factor of ``exp(2.97) ~= 19`` in the informed prior's favour — roughly the
+wide prior's own Occam penalty (its much larger prior volume, most of which
+the likelihood rejects), not evidence that the wide prior's *model* is
+wrong. That is the lesson: an informed prior is a modelling statement, and
+its evidence premium over the wide prior (a factor of about twenty here) is
+what that statement is worth, in the units nested sampling is the one
+engine here that can quote. Inside the wide-prior run alone, the per-mode
+``ln Z_k`` values are the fair comparison — between the aliases
+themselves, at one fixed prior — and the true period's mode carries the
+largest mass, measured above (dynesty's wide-prior evidence under slice
+sampling, ``+92.25 +/- 0.55``, agrees with nautilus's; the comparison is
+held to one engine so that it carries no cross-engine systematic).
 
 7. What the conformance suite owes a new modality
 -----------------------------------------------------
@@ -248,9 +386,11 @@ either way, which is this page's second concrete finding for W4.8 (see §10).
 ``examples/astrometry`` injects a proper motion, a 400-day period, a phase
 and a reflex semi-amplitude in each coordinate, observes it at a dozen or
 so irregular epochs (0.03 mas uncertainty per epoch), and fits all six
-parameters with an informed period prior (§6). Measured at the pinned seed
-(``examples.astrometry.generators.SEED``), every parameter lands inside its
-central 95 % credible interval on every backend:
+parameters with an informed period prior (§6, remedy 1). Measured at the
+pinned seed (``examples.astrometry.generators.SEED``), every parameter
+lands inside its central 95 % credible interval on every backend. (§6's
+``--wide-prior`` arm is the other case — no informed prior available — and
+its own measured table, under nested sampling, is there rather than here.)
 
 .. code-block:: text
 
@@ -454,7 +594,11 @@ record of what changed and why.
   directly: a modality whose model is periodic (or otherwise genuinely
   multi-modal in its own right, independent of the likelihood/noise
   machinery) needs its own discussion of prior width, separate from the
-  composition questions the rest of the template is about.
+  composition questions the rest of the template is about. **The remedy
+  pair is now measured, not just named** (**W5.15**): an informed prior
+  (cheap, needs no new engine) and nested sampling (works with no informed
+  prior at all, at the cost of a real compute budget), both in §6, with the
+  second remedy's evidence-comparison caveat stated there too.
 - **The "two instruments, one channel" vs. "one model, two channels"
   distinction is now named.** :doc:`interferometry` §4 is retitled "The
   two-dataset composition: two instruments on one channel" and opens by

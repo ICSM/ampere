@@ -71,6 +71,27 @@ Run it::
     python -m examples.astrometry --joint               # the joint channel noise (W5.9)
     python -m examples.astrometry --joint --heteroscedastic   # unequal channel sigmas (W5.24)
     python -m examples.astrometry --sbc joint           # the calibration study
+    python -m examples.astrometry --wide-prior          # the aliasing hazard, its remedy (W5.15)
+    python -m examples.astrometry --wide-prior --engine nautilus  # or ultranest, in `-e nested`
+
+The period-aliasing arm (W5.15)
+--------------------------------
+``--wide-prior`` swaps the informed period prior (``norm(400, 30)``) for
+``loguniform(50, 2000)`` — W4.9's exact measured prior, on the same
+twenty-eight epochs W4.9 shipped (its first, twelve-epoch trial is where the
+finding was made) — which reproduces, rather than merely describes, the
+hazard :doc:`the tutorial page </astrometry>` §6 used to only narrate: an
+emcee ensemble splits across the true period and an alias and never
+reweighs the two. The remedy this arm exists to demonstrate is nested
+sampling, which does not need to choose a mode at all: ``--engine dynesty``
+(the default once ``--wide-prior`` is given, with :data:`DYNESTY_SAMPLE`
+as its proposal method), ``--engine nautilus`` or
+``--engine ultranest`` return every alias as a separately-weighed mode,
+which :func:`period_modes` extracts from the equal-weight draws and
+``main`` prints as a table, mass fraction and local evidence
+(``ln Z_k = ln Z + ln f_k``) included. §6 and §9 of the tutorial page carry
+the measured table; this module's docstring and code are the thing it
+measures.
 
 :mod:`tests.examples.test_astrometry_example` is this module's own coverage:
 a fast, always-on suite at a tiny budget. The full-budget recovery this item
@@ -114,11 +135,14 @@ __all__ = [
     "DEFAULT_STEPS",
     "DEFAULT_WALKERS",
     "DEFAULT_WARMUP",
+    "DYNESTY_SAMPLE",
+    "ENGINES",
     "HETEROSCEDASTIC_SOLVER",
     "JOINT_LOG_VARIANCE_PRIOR",
     "QUALIFIED_TRUTH",
     "SBC_DIRECTION",
     "SBC_PARAMETERS",
+    "WIDE_PERIOD_PRIOR",
     "backend_module",
     "build_instruments",
     "build_model",
@@ -130,12 +154,31 @@ __all__ = [
     "joint_noise",
     "main",
     "noise_module",
+    "period_modes",
     "recovers_truth",
     "report",
     "sbc_problem",
 ]
 
 BACKENDS = ("reference", "torch", "jax")
+
+#: The engines :func:`fit` can be asked for by name. ``None`` (the CLI's own
+#: default) keeps the pre-W5.15 behaviour: emcee on the reference backend,
+#: NUTS on torch/jax. The three nested samplers are the standard remedy for
+#: the multi-modal posterior :data:`WIDE_PERIOD_PRIOR` produces (W5.15).
+ENGINES = ("emcee", "nuts", "dynesty", "nautilus", "ultranest")
+
+#: dynesty's proposal method for this study (**W5.15**, set at review). dynesty's
+#: ``sample="auto"`` chooses uniform draws inside the bounding ellipsoids below
+#: ten dimensions; on this likelihood -- 0.03 mas over twenty-eight epochs, a
+#: period peak about a day wide inside a 50--2000 day prior -- the ellipsoids'
+#: acceptance fell to a few per cent and neither the wide- nor the informed-prior
+#: run had converged after 38 and 12 minutes. Slice sampling along random
+#: directions converges the same wide-prior run in about four minutes at the
+#: default live points (ln Z +92.25 +- 0.55, agreeing with nautilus's +92.20 and
+#: ultranest's +91.48); see ``docs/source/astrometry.rst`` section 6. The engine's
+#: own default is untouched -- this is the study's choice for its problem.
+DYNESTY_SAMPLE = "rslice"
 
 #: The truth, qualified by the names a built ``FittingProblem`` actually
 #: samples.
@@ -162,6 +205,13 @@ DEFAULT_CHAINS = 2
 #: of this study is recovering the orbit, not fitting the noise process).
 GP_AMPLITUDE = 0.03
 GP_LENGTH_SCALE = 120.0
+
+#: W4.9's exact measured period prior (**W5.15**): wide enough to reach past
+#: the epochs' own baseline and genuinely multi-modal as a result. Reproduced
+#: verbatim by ``build_model(wide_prior=True)`` rather than re-measured, so
+#: the aliasing this module now demonstrates is the same finding
+#: ``docs/source/astrometry.rst`` §6 always described, not a new one.
+WIDE_PERIOD_PRIOR = st.loguniform(50.0, 2000.0)
 
 # -- the joint arm (W5.9) ---------------------------------------------------
 
@@ -277,8 +327,12 @@ def noise_module(backend: str) -> Any:
     return backend_module(backend)
 
 
-def build_model(backend: str) -> Any:
-    """The one :class:`~ampere.backends.reference.ReflexOrbit`, on *backend*."""
+def build_model(backend: str, *, wide_prior: bool = False) -> Any:
+    """The one :class:`~ampere.backends.reference.ReflexOrbit`, on *backend*.
+
+    ``wide_prior=True`` swaps the informed period prior for
+    :data:`WIDE_PERIOD_PRIOR` (**W5.15**), everything else unchanged.
+    """
     module = backend_module(backend)
     return module.ReflexOrbit(
         generators.EPOCHS,
@@ -289,13 +343,17 @@ def build_model(backend: str) -> Any:
         # every model the interferometry template fits, a reflex orbit is
         # periodic, and a period prior wide enough to reach past the epochs'
         # own baseline lets a sampler alias onto a spurious cycle indefinitely
-        # (see docs/source/astrometry.rst's closing section). A period search
-        # informed to within a few tens of days -- the realistic case once a
-        # periodogram or a previous epoch has suggested roughly where to look
-        # -- is what this study fits, rather than a global period search,
-        # which is a different (and harder) problem this item does not claim
-        # to solve.
-        period=st.norm(400.0, 30.0),
+        # (see docs/source/astrometry.rst §6). A period informed to within a
+        # few tens of days -- the realistic case once a periodogram or a
+        # previous epoch has suggested roughly where to look -- is what this
+        # study fits by default, rather than a global period search over
+        # decades. **W5.15** runs that global search anyway, deliberately,
+        # under ``wide_prior=True``: not because it is now easy, but because
+        # nested sampling turns "genuinely multi-modal" from a hazard an
+        # ensemble or a gradient sampler cannot escape into a posterior whose
+        # modes are separately weighed and reported, evidence included (see
+        # the module docstring and :func:`period_modes`).
+        period=WIDE_PERIOD_PRIOR if wide_prior else st.norm(400.0, 30.0),
         phase=st.uniform(0.0, 2.0 * np.pi),
         amp_ra=st.uniform(0.0, 2.0),
         amp_dec=st.uniform(0.0, 2.0),
@@ -372,6 +430,7 @@ def build_problem(
     joint: bool = False,
     injected: bool | None = None,
     heteroscedastic: bool = False,
+    wide_prior: bool = False,
     seed: int = generators.SEED,
 ) -> FittingProblem:
     """The composed problem: one model, two channels, distinct labels.
@@ -394,8 +453,14 @@ def build_problem(
     ``heteroscedastic=True`` (**W5.24**) draws the injected data with a sigma
     per channel per epoch and binds the joint arm's
     :data:`HETEROSCEDASTIC_SOLVER`, so the group takes the dense route.
+
+    ``wide_prior=True`` (**W5.15**) is :func:`build_model`'s own flag,
+    threaded through: the period prior becomes :data:`WIDE_PERIOD_PRIOR`,
+    everything else --- data, instruments, noise, the other five priors ---
+    unchanged. It is the arm :func:`fit` and the CLI's ``--wide-prior`` exist
+    to demonstrate the second remedy on.
     """
-    model = build_model(backend)
+    model = build_model(backend, wide_prior=wide_prior)
     ra_instrument, dec_instrument = build_instruments(backend)
     if joint if injected is None else injected:
         observed_ra, observed_dec = generators.synthetic_joint_data(
@@ -439,6 +504,9 @@ def fit(
     problem: FittingProblem,
     *,
     backend: str,
+    engine: str | None = None,
+    live_points: int | None = None,
+    dlogz: float | None = None,
     walkers: int | None = None,
     steps: int | None = None,
     burn_in: int | None = None,
@@ -447,25 +515,65 @@ def fit(
     chains: int | None = None,
     progress: bool = False,
 ) -> Any:
-    """Sample *problem* with the engine its backend can feed."""
-    if backend == "reference":
+    """Sample *problem* with the engine its backend can feed, or the one asked for.
+
+    ``engine=None`` (the default) is unchanged from before **W5.15**: emcee
+    on the reference backend, NUTS on torch/jax. Set ``engine`` to
+    ``"dynesty"``, ``"nautilus"`` or ``"ultranest"`` to run one of the three
+    nested samplers instead --- the standard second remedy for a genuinely
+    multi-modal posterior, such as :func:`build_problem`'s ``wide_prior=True``
+    arm produces (``docs/source/astrometry.rst`` §6).
+
+    ``live_points`` is every nested sampler's own live-set size (``None``
+    defaults to :func:`~ampere.inference.engine.default_live_points`, shared
+    by all three). ``dlogz`` is dynesty's and ultranest's stopping criterion
+    on the remaining evidence, passed through when given; nautilus stops on
+    its own ``f_live``/``n_eff`` instead and does not take a ``dlogz``, so
+    this argument is silently unused when ``engine="nautilus"`` rather than
+    raising --- the same "extra keywords the chosen engine does not use are
+    ignored" contract :func:`fit` already has for ``walkers``/``draws`` and
+    the rest.
+    """
+    if engine is None:
+        engine = "emcee" if backend == "reference" else "nuts"
+    if engine not in ENGINES:
+        raise ValueError(f"unknown engine {engine!r}; choices are {ENGINES}.")
+
+    if engine == "emcee":
         from ampere.inference import EmceeEngine
 
-        engine = EmceeEngine(problem, walkers=DEFAULT_WALKERS if walkers is None else walkers)
-        return engine.run(
+        sampler = EmceeEngine(problem, walkers=DEFAULT_WALKERS if walkers is None else walkers)
+        return sampler.run(
             DEFAULT_STEPS if steps is None else steps,
             burn_in=DEFAULT_BURN_IN if burn_in is None else burn_in,
             progress=progress,
         )
-    from ampere.inference import NUTSEngine
+    if engine == "nuts":
+        from ampere.inference import NUTSEngine
 
-    engine = NUTSEngine(problem)
-    return engine.run(
-        DEFAULT_DRAWS if draws is None else draws,
-        warmup=DEFAULT_WARMUP if warmup is None else warmup,
-        chains=DEFAULT_CHAINS if chains is None else chains,
-        progress=progress,
-    )
+        sampler = NUTSEngine(problem)
+        return sampler.run(
+            DEFAULT_DRAWS if draws is None else draws,
+            warmup=DEFAULT_WARMUP if warmup is None else warmup,
+            chains=DEFAULT_CHAINS if chains is None else chains,
+            progress=progress,
+        )
+    if engine == "dynesty":
+        from ampere.inference import DynestyEngine
+
+        sampler = DynestyEngine(problem, live_points=live_points, sample=DYNESTY_SAMPLE)
+        run_options = {} if dlogz is None else {"dlogz": dlogz}
+        return sampler.run(progress=progress, **run_options)
+    if engine == "nautilus":
+        from ampere.inference import NautilusEngine
+
+        sampler = NautilusEngine(problem, live_points=live_points)
+        return sampler.run(progress=progress)
+    from ampere.inference import UltranestEngine
+
+    sampler = UltranestEngine(problem, live_points=live_points)
+    run_options = {} if dlogz is None else {"dlogz": dlogz}
+    return sampler.run(progress=progress, **run_options)
 
 
 def recovers_truth(run: Any, *, level: float = 0.95) -> dict[str, bool]:
@@ -481,7 +589,12 @@ def recovers_truth(run: Any, *, level: float = 0.95) -> dict[str, bool]:
 
 
 def report(run: Any) -> str:
-    """A human-readable posterior summary, truth in brackets, 95 % coverage flagged."""
+    """A human-readable posterior summary, truth in brackets, 95 % coverage flagged.
+
+    Appends the engine-neutral evidence triple (**W5.15**) when *run* carries
+    one --- every nested-sampling run does, no ensemble or gradient run does
+    (``results.md`` §9).
+    """
     attrs = run.attrs
     posterior = run["posterior"].dataset
     covered = recovers_truth(run)
@@ -502,7 +615,92 @@ def report(run: Any) -> str:
             f"    {name:20s} {values.mean():+.6g} +- {values.std():.3g}   "
             f"95%[{lower:+.6g}, {upper:+.6g}]{bracket}{flag}"
         )
+    if "ampere_log_evidence" in attrs:
+        evidence = float(attrs["ampere_log_evidence"])
+        err = attrs.get("ampere_log_evidence_err")
+        method = attrs.get("ampere_evidence_method", "?")
+        err_bit = "" if err is None else f" +- {float(err):.3f}"
+        lines.append(f"  ln Z = {evidence:+.3f}{err_bit}  ({method})")
     return "\n".join(lines)
+
+
+def period_modes(
+    run: Any,
+    *,
+    parameter: str = "model.period",
+    gap: float = 0.1,
+    minimum_mass: float = 0.02,
+) -> list[dict[str, float]]:
+    """Split *run*'s equal-weight *parameter* draws into aliasing modes (**W5.15**).
+
+    A period search under :data:`WIDE_PERIOD_PRIOR` is genuinely multi-modal
+    (see the module docstring); a nested-sampling run's equal-weight draws
+    already carry every mode the sampler found, unlike an ensemble or a
+    gradient chain's single-mode draws, so recovering them is a matter of
+    *finding the modes in the draws already there*, not of re-sampling.
+
+    The rule is deliberately simple, because the aliases at this study's
+    baseline are not subtle: sort the draws in log space (a period search's
+    natural scale --- aliases sit at roughly one cycle apart in ``1/P``, which
+    is a large, roughly constant separation in ``ln P``, not in ``P`` itself)
+    and split wherever a consecutive gap exceeds *gap*. A cluster below
+    *minimum_mass* of the total draws --- sampling noise in the sampler's own
+    boundary rather than a real mode --- is dropped.
+
+    ``gap=0.1`` is measured, not guessed (**W5.15**): the true period and its
+    nearest aliases, as an emcee ensemble at this study's default budget
+    actually splits across (``docs/source/astrometry.rst`` §6), sit about
+    ``ln(762.9 / 399.8) ~= 0.65`` apart in log space, while a single
+    well-resolved mode's own 16/84 % spread is under ``0.01`` -- ``0.1`` sits
+    comfortably in the two-order-of-magnitude gap between them.
+
+    Each surviving mode is returned as a dict with:
+
+    ``median``, ``lower``, ``upper``
+        The draws' median and central 16/84 % interval, on *parameter*'s own
+        scale (not logged back out of convenience; the split, not the
+        report, is what needs the log scale).
+    ``mass_fraction``
+        ``f_k``, the fraction of *all* the run's draws in this mode.
+    ``count``
+        The number of draws in this mode, for a sanity check against
+        ``mass_fraction`` and the run's total.
+    ``log_evidence``
+        ``ln Z_k = ln Z + ln f_k`` --- present only when *run* carries
+        ``ampere_log_evidence`` (nested-sampling runs; an ensemble or
+        gradient run has no evidence to apportion and this key is omitted
+        rather than written as ``None``, so a caller's ``"log_evidence" in
+        mode`` is the one check it needs).
+
+    Modes are returned ordered by increasing *parameter*, not by mass ---
+    call sorted on ``mass_fraction`` for "which mode is biggest".
+    """
+    posterior = run["posterior"].dataset
+    draws = np.sort(np.asarray(posterior[parameter], dtype=float).ravel())
+    total = draws.size
+    log_draws = np.log(draws)
+    split_at = np.flatnonzero(np.diff(log_draws) > gap) + 1
+    clusters = np.split(draws, split_at)
+
+    log_evidence = run.attrs.get("ampere_log_evidence")
+
+    modes: list[dict[str, float]] = []
+    for cluster in clusters:
+        fraction = cluster.size / total
+        if fraction < minimum_mass:
+            continue
+        lower, upper = np.percentile(cluster, [16.0, 84.0])
+        mode: dict[str, float] = {
+            "median": float(np.median(cluster)),
+            "lower": float(lower),
+            "upper": float(upper),
+            "mass_fraction": float(fraction),
+            "count": float(cluster.size),
+        }
+        if log_evidence is not None:
+            mode["log_evidence"] = float(log_evidence) + float(np.log(fraction))
+        modes.append(mode)
+    return modes
 
 
 # ---------------------------------------------------------------------------
@@ -759,6 +957,24 @@ def _parser() -> argparse.ArgumentParser:
         help="a sigma per channel per epoch; the joint arm takes the dense route (W5.24)",
     )
     parser.add_argument(
+        "--wide-prior",
+        action="store_true",
+        help=(
+            "the period prior W4.9 measured as multi-modal, loguniform(50, 2000); "
+            "reaches for dynesty when --engine is not also given (W5.15)"
+        ),
+    )
+    parser.add_argument(
+        "--engine",
+        choices=list(ENGINES),
+        default=None,
+        help="default: emcee on reference, NUTS on torch/jax; the three nested samplers (W5.15)",
+    )
+    parser.add_argument("--live-points", type=int, default=None, help="nested samplers only")
+    parser.add_argument(
+        "--dlogz", type=float, default=None, help="dynesty/ultranest's stopping criterion"
+    )
+    parser.add_argument(
         "--sbc",
         choices=("joint", "independent", "rigid"),
         default=None,
@@ -809,6 +1025,7 @@ def main(argv: list[str] | None = None) -> int:
         gp=args.gp,
         joint=args.joint,
         heteroscedastic=args.heteroscedastic,
+        wide_prior=args.wide_prior,
         seed=args.seed,
     )
     print(f"negotiated channels: {list(problem.requirements['model'])}")
@@ -817,10 +1034,21 @@ def main(argv: list[str] | None = None) -> int:
         print(f"sources asking of channel {channel_name!r}: {req.sources}")
     print(f"free parameters: {problem.parameters.free_names}")
 
+    engine = args.engine
+    if args.wide_prior and engine is None:
+        engine = "dynesty"
+        print(
+            "--wide-prior with no --engine: reaching for dynesty -- nested sampling is the "
+            "second remedy for a period prior wide enough to alias (W5.15)"
+        )
+
     started = time.perf_counter()
     run = fit(
         problem,
         backend=args.backend,
+        engine=engine,
+        live_points=args.live_points,
+        dlogz=args.dlogz,
         walkers=args.walkers,
         steps=args.steps,
         burn_in=args.burn_in,
@@ -832,4 +1060,14 @@ def main(argv: list[str] | None = None) -> int:
 
     print(report(run))
     print(f"  {elapsed:.1f} s wall clock")
+
+    if args.wide_prior:
+        modes = period_modes(run)
+        print(f"  period modes ({len(modes)} found):")
+        for mode in sorted(modes, key=lambda mode: mode["mass_fraction"], reverse=True):
+            evidence_bit = f"  ln Z_k {mode['log_evidence']:+.3f}" if "log_evidence" in mode else ""
+            print(
+                f"    period {mode['median']:8.3f}  16/84%[{mode['lower']:8.3f}, "
+                f"{mode['upper']:8.3f}]  f_k={mode['mass_fraction']:.3f}{evidence_bit}"
+            )
     return 0
