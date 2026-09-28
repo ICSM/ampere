@@ -298,6 +298,10 @@ covers, and how a user's frozen legacy prior would be accepted alongside
 `logpdf`/`logpmf`; the new objects spell it `logpdf` too, so the protocol
 may already be satisfied). A Phase 6 item, not this pass — placed there by Peter the same day (`DEVELOPMENT_PLAN.md`, Phase 6, "The scipy distribution exploration").*
 
+*Measured at W6.8, §8: the gain is real and exact but the protocol is only
+half-satisfied (`sample`/`prior_transform`/`describe_prior` all fail by
+name), so the recommendation is not to adopt.*
+
 **P2 — batched evaluation (issue #67's shape).** The contract path is
 scalar by design (`log_prob(values) -> float`), every problem on it
 declares `batchable=False`, and the engines call it once per proposal
@@ -437,6 +441,266 @@ everywhere; no GPU placement was attempted.
 **Effect on W5.15's measurements.** L4 speeds up the reference
 interferometry forward model that any fit sharing it would use; values
 are bit-identical, so only timings move.
+
+## 8. The scipy distribution infrastructure, measured (W6.8)
+
+*W6.8, drafted 2026-09-28. Answers the ruling on §6 P1 (Peter, 2026-09-27):
+whether scipy's new public distribution infrastructure (scipy ≥ 1.15:
+`scipy.stats.Normal`, `Uniform`, `make_distribution`, the
+`ContinuousDistribution` base) closes P1's gap without the declined
+private-API route. Same machine as §1 (unchanged: Ryzen 9 6900HS, WSL2,
+Python 3.13.15, numpy 2.5.2, scipy 1.18.1); no other job was sharing it
+this run. Report only — nothing under `ampere/` changes, and the memo's
+own rule holds: no lever lands without its own before/after row.*
+
+### 8.1 The three-column table
+
+The six M2 reference priors — `Uniform` (or `make_distribution(halfnorm)`
+scaled by `*`) standing in for the study's `st.uniform`/`st.halfnorm` — timed
+the same way as §7.1 (one process, this machine, min of 7 interleaved
+rounds), at one θ and batched at 200 θ:
+
+| Route | single θ, six priors | 200 θ, six priors (per θ) | vs legacy |
+|---|---|---|---|
+| (i) legacy, frozen `rv_continuous.logpdf` (reproduced here) | 250.04 µs | 282.27 µs (1.411 µs) | 1.0× |
+| (ii) scipy's new distribution infrastructure | 34.73 µs | 105.41 µs (0.527 µs) | 7.20× |
+| (iii) the arithmetic floor (P1's declined private-API route, reproduced here for comparison, not proposed) | 13.49 µs | — | 18.54× |
+
+Column (i) reproduces W5.17's 262 µs on this machine as 250 µs — the same
+order, the residual difference is ordinary run-to-run scatter (§1's
+inter-quartile-range caveat), not a different measurement. The new
+infrastructure (ii) **does vectorise**: called on a length-200 array per
+prior it drops to 0.527 µs/θ, a further 2.7× over its own single-θ figure,
+the same shape of gain the legacy frozen route already shows (1.411 µs/θ
+batched against 41.7 µs/θ single — batching amortises the wrapper, old or
+new). Column (iii) is **not** a proposal — Peter declined the private-API
+route at the freeze that produced this item — it is reproduced only so (ii)
+has a floor to be measured against: the new infrastructure recovers 7.2× of
+the 18.5× available through the public API alone, leaving a ~2.6× gap to
+the private route that nothing in this item closes.
+
+Run against the live M2 reference problem
+(`examples.m2_misspecification.study.build_problem("strong_smooth",
+size=200, likelihood="flexible")`, `backend="reference"`,
+`likelihood="flexible"`) rather than the six priors standing alone, with
+the substitution made in a second `ParameterSet` built from the same six
+`Parameter` declarations but the new-infrastructure priors:
+
+| Quantity | value |
+|---|---|
+| `log_prob`, total (min of 7 × 300 draws) | 545.39 µs |
+| `lnprior`, legacy, live (`problem.log_prior`) | 318.06 µs (58.3 % of `log_prob`) |
+| `lnprior`, legacy, standalone `ParameterSet.lnprior` | 279.53 µs |
+| `lnprior`, new infrastructure, standalone `ParameterSet.lnprior` | 55.74 µs |
+| gain | 223.79 µs/call = **41.0 % of `log_prob`** |
+| `log_prob` projected with the substitution | 321.60 µs (**1.70×**) |
+
+The live share (58.3 %) sits above §3.2's 47 % and §6 P1's 37 %, both
+measured on earlier commits/loads; the point is not the exact share but
+that it is again the largest single item, and that removing it is a real
+1.7× on the whole M2 reference `log_prob` at this study's own rung — bigger
+than any single lever landed in §7.1 except L1 and L3, and available
+without touching celerite2 or `Resample`.
+
+### 8.2 Identity
+
+**Bit-identical.** All six priors, 10 000 draws each drawn across the
+prior's own support (`np.random.default_rng(42)`), plus six support-edge
+points (one below and one above each bounded prior's limits, and one
+negative point for each half-normal): `np.array_equal(legacy.logpdf(xs),
+new.logpdf(xs))` is `True` for every prior, maximum absolute difference
+`0.0`. Edge points return `-inf` on both routes. The same check, repeated
+for `lognorm`, `truncnorm`, `beta`, `gamma` and `halfcauchy` via
+`make_distribution` (§8.3), also returns exact equality — the six M2
+priors are not a special case.
+
+**The conformance row.** `tests/conformance/test_parameters.py`
+(140–154) `test_lnprior_is_the_summed_scipy_logpdf` compares
+`space.lnprior(theta)` against `tests/conformance/oracles.py`'s
+`analytic_lnprior`, which sums `parameter.prior.logpdf(...)` over the free
+parameters — **the same call ampere's own `lnprior` makes** (`log_density`,
+`ampere/core/parameter.py:325`, dispatches to whichever of `logpdf`/`logpmf`
+the prior object exposes). Both sides read off whatever prior object the
+fixture declares, so the row is insensitive to which prior *family* of
+object is used — legacy or new-infrastructure — by construction; it would
+only move if `ParameterSet.lnprior`'s own summation diverged from a plain
+sum of `logpdf` calls, which this item does not touch. `tolerances.analytic
+= 1e-9` (`tests/conformance/protocol.py:121`) needs **no change**: not
+because the tolerance happens to be wide enough, but because bit-identity
+(above) means the two sides would agree to the last bit even before any
+tolerance is applied.
+
+### 8.3 Coverage
+
+Which of ampere's common priors the new infrastructure covers, in 1.18.1:
+
+| Family | First-class class | Via `make_distribution` | Loc/scale/shape convention |
+|---|---|---|---|
+| `uniform` | `Uniform(a=, b=)` | — | bounds directly, not `loc`/`scale` |
+| `norm` | `Normal(mu=, sigma=)` | — | own names, not `loc`/`scale` |
+| `halfnorm` | — | yes (0 shape params) | scale via `* value` (arithmetic), not a kwarg |
+| `lognorm` | — | yes (`s=`) | bit-identical, checked |
+| `loguniform` | — | yes (`a=, b=`) | bit-identical, checked |
+| `truncnorm` | — | yes (`a=, b=`) | bit-identical, checked |
+| `halfcauchy` | — | yes (0 shape params) | scale via `* value`, as `halfnorm` |
+| `beta` | — | yes (`a=, b=`) | bit-identical, checked |
+| `gamma` | — | yes (`a=`) | bit-identical, checked |
+
+Only `Uniform`, `Normal` and `Logistic` are first-class in 1.18.1
+(`[c for c in dir(scipy.stats) if isinstance(getattr(scipy.stats, c), type)
+and issubclass(..., ContinuousDistribution)]`); every other family ampere
+uses is reachable only through `make_distribution`, which — confirmed
+against scipy's own "Random Variable Transition Guide"
+(`docs.scipy.org/doc/scipy/tutorial/stats/rv_infrastructure.html`) —
+**does not accept `loc`/`scale` as keywords at all**: "these are no longer
+accepted"; a location-scale family with no other shape parameters
+(`halfnorm`, `halfcauchy`) is built with zero keyword arguments and then
+shifted/scaled with `+`/`*` operators, a different declaration shape from
+today's `st.halfnorm(scale=0.3)`. Families with real shape parameters
+(`lognorm`, `loguniform`, `truncnorm`, `beta`, `gamma`) take them as
+keywords under the same names scipy already uses.
+
+**No usable name survives `make_distribution`.** Every `make_distribution`
+product — `loguniform`, `beta`, `gamma`, `truncnorm`, `halfcauchy`,
+`lognorm`, all of them — is an instance of a class literally named
+`CustomDistribution` (`type(obj).__name__`), with no `.dist` and no `.name`
+attribute of any kind. This is the fact that answers `parameters.md` §4/§6's
+question directly: `describe_prior` (`ampere/core/parameter.py:442`) reads
+`prior.dist.name`, which is specific to a frozen `rv_continuous`/
+`rv_discrete` object; a `make_distribution` object cannot be described
+neutrally by any means available on the object itself, because the
+family identity that made it is not retained anywhere ampere can read —
+not a bug to work around, a design choice of the new infrastructure (a
+`CustomDistribution` is deliberately anonymous; only the first-class
+classes carry their own name, e.g. `type(Normal(...)).__name__ ==
+"Normal"`, and even that is a class name, not scipy's family string
+`"norm"` that `PriorSpec.family` and the torch/jax lowering registries
+(`ampere/backends/torch/lowering.py`'s `_BUILTIN_PRIORS`, keyed on
+`spec.family`) both expect).
+
+### 8.4 The protocol
+
+Tried directly: `Parameter("x", scipy.stats.Normal(mu=0.0, sigma=1.0))`
+through `ParameterSet`.
+
+| Operation | Needs | Result |
+|---|---|---|
+| `Parameter` declaration | nothing prior-specific | OK |
+| `ParameterSet.lnprior` | `logpdf`/`logpmf` | **OK** — bit-identical to legacy (§8.2) |
+| `default_bijection_for` / `unconstraining_bijection` | `support()` (called as a method) | **OK** — support-based, not name-based, so it does not need `describe_prior` at all |
+| `ParameterSet.constrain`/`unconstrain` | the bijection above | **OK** |
+| `ParameterSet.sample` | `.rvs(size=, random_state=)` | **FAILS**: `AttributeError: 'Normal' object has no attribute 'rvs'` (the new infrastructure calls it `.sample(shape, rng=)`) |
+| `ParameterSet.prior_transform` | `.ppf(q)` | **FAILS**: `AttributeError: 'Normal' object has no attribute 'ppf'` (the new infrastructure calls it `.icdf(p)`) |
+| `describe_prior` (hence `to_spec`, provenance, torch/jax lowering) | `prior.dist.name` | **FAILS**: `ParameterError: ... is not a frozen scipy.stats distribution ...` |
+
+`isinstance(Normal(...), Prior)` is `False`: the `runtime_checkable` `Prior`
+protocol (`ampere/core/parameter.py:293`) requires `ppf` and `support`, and
+a new-infrastructure object has the second but not the first. So the
+protocol as written is **not** satisfied without an adapter — it is
+satisfied exactly halfway: everything that only needs `logpdf`/`logpmf`
+and `support()` works (constrained-space `lnprior`, hence `log_prob`, hence
+gradient-based engines that never call `prior_transform` and are given an
+explicit start rather than one drawn from `ParameterSet.sample`); anything
+that draws from the prior (`sample`, used by `SBIEngine`'s simulation
+budget and by `sample_prior`-based initialisation) or needs nested
+sampling's `prior_transform`, or needs the prior described for provenance
+or lowered to another backend, fails outright, by name, with no ampere
+code path currently catching it.
+
+**A user's frozen legacy prior is unaffected either way.** Nothing in
+`ampere/core/parameter.py` changed for this item; `describe_prior`,
+`default_bijection_for`, `Prior`, `log_density` and the torch/jax lowering
+registries all read exactly as they did before this measurement. A
+`scipy.stats.norm(...)`-declared prior keeps working exactly as documented
+in `parameters.md` §4/§6.
+
+### 8.5 The recommendation
+
+**(C) — not worth adopting, as default or as a documented option, in
+1.18.1.** The gain is real and exact (§8.1–8.2: 7.2× on the six-prior
+`lnprior` alone, 1.70× on the whole M2 reference `log_prob`, bit-identical
+to the last bit), but the new infrastructure satisfies only half of what a
+prior needs to do in ampere: constrained-space evaluation works, but
+`ParameterSet.sample` (§4's own worked example, `SBIEngine`'s simulation
+budget) and `prior_transform` (every nested-sampling engine) fail outright
+with an `AttributeError` naming a method the new objects simply do not
+have (`rvs`, `ppf`), and `describe_prior` — hence serialisation,
+provenance, and both backends' lowering registries — fails because a
+`make_distribution` product carries no recoverable family identity at all
+(§8.3), not even for the shipped M2 study's own `default_priors()`, whose
+`sample_prior` calls exercise exactly the method (`.rvs`) that breaks.
+Recommending it even as an opt-in ("use the new objects if you only ever
+call `log_prob`") would be recommending a prior declaration that silently
+`AttributeError`s the moment a user's workflow touches nested sampling,
+SBI, or a run's provenance record — none of them edge cases in ampere's own
+engine surface — which is a worse default than saying so plainly.
+
+**What would have to change before this is reconsidered:** either (a)
+scipy adds `ppf`/`rvs` aliases to the new infrastructure (the transition
+guide frames `icdf`/`sample` as the intended names, not a gap it plans to
+close), or (b) ampere writes and maintains a small adapter — wrapping
+`icdf` as `ppf` and `sample` as `rvs` is mechanical, but recovering a
+`describe_prior`-usable family name for a `make_distribution` product is
+not: it would have to be supplied at the call site (`make_distribution`
+returns an anonymous `CustomDistribution`), which turns "declare a prior"
+into "declare a prior and separately tell ampere what it is." Either is a
+§4-adjacent contract change (ground rule 9: a decision-log entry plus the
+conformance suite kept green) and neither is this item's to make. No
+follow-up item is drafted: recommendation (C) asks for nothing to land.
+
+**Appendix — the probe script**, run as `pixi run -e dev python w68.py`
+from the repository root (not committed; ground rule 7 — the numbers above
+are reproducible from this text alone):
+
+```python
+import sys, time
+import numpy as np
+import scipy, scipy.stats as st
+sys.path[:0] = [".", "tests/backends"]
+
+PRIOR_LIMITS = {"A": (0.5, 1.5), "B": (-5.0, 12.0), "d1": (0.0, 0.5), "d2": (0.0, 0.5)}
+GP_AMPLITUDE_SCALE, GP_LENGTH_SCALE = 0.3, 0.003
+ORDER = ["A", "B", "d1", "d2", "gp_amp", "gp_len"]
+
+legacy = {n: st.uniform(lo, hi - lo) for n, (lo, hi) in PRIOR_LIMITS.items()}
+legacy["gp_amp"] = st.halfnorm(scale=GP_AMPLITUDE_SCALE)
+legacy["gp_len"] = st.halfnorm(scale=GP_LENGTH_SCALE)
+
+HalfNormalMD = st.make_distribution(st.halfnorm)  # no rv_continuous shape params
+new = {n: st.Uniform(a=lo, b=hi) for n, (lo, hi) in PRIOR_LIMITS.items()}
+new["gp_amp"] = HalfNormalMD() * GP_AMPLITUDE_SCALE  # loc/scale: arithmetic, not kwargs
+new["gp_len"] = HalfNormalMD() * GP_LENGTH_SCALE
+
+def time_rounds(fn, *args, rounds=7, repeats=1000):
+    best = float("inf")
+    for _ in range(rounds):
+        t0 = time.perf_counter()
+        for _ in range(repeats):
+            fn(*args)
+        best = min(best, (time.perf_counter() - t0) / repeats)
+    return best
+
+theta = np.array([1.0, 3.0, 0.15, 0.10, 0.1, 0.001])
+legacy_lnprior = lambda t: sum(legacy[n].logpdf(v) for n, v in zip(ORDER, t))
+new_lnprior = lambda t: sum(new[n].logpdf(v) for n, v in zip(ORDER, t))
+print(time_rounds(legacy_lnprior, theta), time_rounds(new_lnprior, theta))
+
+# Identity, 10,000 draws per prior:
+rng = np.random.default_rng(42)
+for n in ORDER:
+    xs = (rng.uniform(*PRIOR_LIMITS[n], 10_000) if n in PRIOR_LIMITS
+          else np.abs(rng.normal(0, 3 * (GP_AMPLITUDE_SCALE if n == "gp_amp" else GP_LENGTH_SCALE), 10_000)))
+    assert np.array_equal(legacy[n].logpdf(xs), new[n].logpdf(xs))
+
+# Live M2 comparison and the protocol probe follow the same shape: build
+# examples.m2_misspecification.study.build_problem("strong_smooth", size=200,
+# backend="reference", likelihood="flexible"), read problem.parameters for
+# the free labels, build a parallel ParameterSet from the new-infrastructure
+# priors, and compare ParameterSet.lnprior on both (§8.1's table); then try
+# Parameter("x", scipy.stats.Normal(mu=0.0, sigma=1.0)) through
+# ParameterSet.sample/prior_transform/describe_prior to reproduce §8.4's
+# three failures by name.
+```
 
 ## Appendix A. The harness
 
