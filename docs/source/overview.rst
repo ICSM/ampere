@@ -33,7 +33,7 @@ declared and unimplemented.
    Everything on this page is the **v2** API — ``ampere.core``,
    ``ampere.backends``, ``ampere.inference``, ``ampere.results``. Legacy
    ampere (``ampere.data``, ``ampere.models``, ``ampere.infer``) still works
-   and is frozen; the two do not interoperate. See :doc:`ampere`.
+   and is frozen; the two do not interoperate. See :doc:`legacy`.
 
 The capability ladder
 ---------------------

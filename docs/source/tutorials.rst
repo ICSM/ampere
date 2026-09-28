@@ -63,7 +63,7 @@ Legacy tutorials
 .. warning::
 
    These notebooks teach the **legacy** v1 API (``ampere.data``,
-   ``ampere.models``, ``ampere.infer``), which is frozen — see :doc:`ampere`.
+   ``ampere.models``, ``ampere.infer``), which is frozen — see :doc:`legacy`.
    They are kept because they are still the fullest worked examples of an SED
    fit and of neural posterior estimation in this repository, and because
    Phase 3 will replace them rather than delete them. They are rendered from

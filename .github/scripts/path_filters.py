@@ -56,15 +56,20 @@ matches it):
               ``ampere/backends`` can be affected by them. Runs dev -- whose
               ``test-all`` still imports the namespace and parses its import
               graph -- and the nested leg.
-  CORE     -- ``pyproject.toml``, ``pixi.lock``, ``.github/**``,
-              ``ampere/core/**``, ``ampere/results/**``,
-              ``ampere/inference/**``, and the shared/backend-neutral test
-              suites (``tests/core``, ``tests/results``, ``tests/inference``,
-              ``tests/conformance``, ``tests/m2``, ``tests/interferometry``,
-              ``tests/astrometry`` (both W5.26), ``tests/benchmarks``,
-              ``tests/scaling``, ``tests/gpu``, ``tests/characterisation``).
-              Runs EVERYTHING: dev, torch, jax, sbi, nested and the docs
-              build.
+  CORE     -- ``pyproject.toml``, ``pixi.lock``, ``ampere/__init__.py``,
+              ``ampere/_legacy_aliases.py`` (W6.0: the top-level package and
+              the finder that aliases the old legacy names touch the whole
+              import surface, v2 and legacy alike -- the same reasoning as
+              the shared/backend-neutral code below, so they are named here
+              explicitly rather than left to fall through to OTHER, which
+              runs the same jobs anyway), ``.github/**``, ``ampere/core/**``,
+              ``ampere/results/**``, ``ampere/inference/**``, and the
+              shared/backend-neutral test suites (``tests/core``,
+              ``tests/results``, ``tests/inference``, ``tests/conformance``,
+              ``tests/m2``, ``tests/interferometry``, ``tests/astrometry``
+              (both W5.26), ``tests/benchmarks``, ``tests/scaling``,
+              ``tests/gpu``, ``tests/characterisation``). Runs EVERYTHING:
+              dev, torch, jax, sbi, nested and the docs build.
               (A registry-leak regression in shared code is exactly what
               ``test-all``'s single-process suites exist to catch across
               every backend -- see ``pyproject.toml``'s ``test-all`` task
@@ -97,11 +102,14 @@ matches it):
               ``tests/examples/**``. Runs dev only.
   DOCS     -- ``docs/**``, any ``*.md`` file anywhere. Runs dev and the
               docs build.
-  OTHER    -- anything not matched above (legacy ``ampere/{data,models,
-              infer,utils}``, root files with no extension, etc.) -- an
-              unrecognised path is exactly the case this table cannot
-              afford to get wrong, so it is treated like CORE and runs
-              everything.
+  OTHER    -- anything not matched above (root files with no extension,
+              etc.) -- an unrecognised path is exactly the case this table
+              cannot afford to get wrong, so it is treated like CORE and
+              runs everything. Since W6.0 the legacy code (``ampere/legacy/**``)
+              falls through to here too, by the same fallthrough rather than
+              a named rule -- it is exercised by ``tests/characterisation``,
+              itself a CORE path, so a change under it already runs
+              everything regardless.
 
 ``run_dev``    = CORE | DEV_ONLY | EXAMPLES | EX_SBI | EX_IFM | DOCS | NESTED
                  | BLACKJAX | OTHER
@@ -180,7 +188,15 @@ EXAMPLES = "EXAMPLES"
 DOCS = "DOCS"
 OTHER = "OTHER"
 
-_CORE_EXACT = {"pyproject.toml", "pixi.lock"}
+_CORE_EXACT = {
+    "pyproject.toml",
+    "pixi.lock",
+    # W6.0: the top-level package and the legacy-alias finder touch the
+    # whole import surface, v2 and legacy alike -- see the module
+    # docstring's CORE entry.
+    "ampere/__init__.py",
+    "ampere/_legacy_aliases.py",
+}
 _NESTED_EXACT = {"ampere/inference/_nested.py", "tests/inference/test_nested.py"}
 _BLACKJAX_EXACT = {"ampere/inference/_blackjax.py", "tests/inference/test_blackjax.py"}
 _CORE_PREFIXES = (

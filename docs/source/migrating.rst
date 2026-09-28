@@ -6,13 +6,14 @@ to what, what "frozen" means for the old one, and the same small fit shown
 both ways. It is a seed, not the guide: the legacy API stays **linked**, not
 removed, and a full migration guide and a deprecation timetable are planned
 for a later phase. See
-:doc:`overview` for how the v2 pieces fit together and :doc:`ampere` for the
-legacy reference.
+:doc:`overview` for how the v2 pieces fit together and :doc:`ampere.legacy`
+for the legacy reference.
 
 What "frozen" means
 --------------------
 
-**Legacy ampere** — ``ampere.data``, ``ampere.models``, ``ampere.infer`` — is
+**Legacy ampere** — ``ampere.legacy`` — ``ampere.legacy.data``, ``.models``,
+``.infer``, ``.utils``, still importable under the old top-level names — is
 frozen: it still runs, the characterisation suite exists to keep it running,
 and it is not being extended or refactored. It stays because the published
 science was produced with it, and because rewriting every existing script
@@ -32,8 +33,8 @@ Three things follow from "frozen":
   :class:`~ampere.inference.EmceeEngine` at a legacy model. A fit is built
   entirely on one side or entirely on the other.
 
-A deprecation policy — if and when legacy pieces are retired, and on what
-notice — is Phase 6 work and is not written yet.
+The policy — kept indefinitely, never removed, and where it lives — is
+:doc:`legacy`.
 
 Concept map
 -----------
@@ -171,8 +172,5 @@ model together in one ``EmceeSearch`` object.
 What comes next
 ----------------
 
-This page grows into the full migration guide, and gains the Phase 6
-deprecation policy for the legacy API, once that phase is scoped. Until
-then, :doc:`overview` is the complete reference for composing a v2 problem,
-and :doc:`ampere` is where the legacy API stays documented and supported as
-frozen code.
+This page grows into the full migration guide (W6.1); :doc:`legacy` is the
+policy and :doc:`ampere.legacy` the legacy reference.

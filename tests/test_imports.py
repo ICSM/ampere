@@ -32,8 +32,11 @@ buckets and checks each one appropriately:
 from __future__ import annotations
 
 import importlib
+import importlib.metadata
 import importlib.util
 import pkgutil
+import subprocess
+import sys
 
 import numpy as np
 import pytest
@@ -97,8 +100,8 @@ def _backend_extra_modules() -> dict[str, tuple[str, ...]]:
 
 
 OPTIONAL_EXTRA_MODULES = {
-    "ampere.infer.sbi": ("torch", "sbi"),  # ampere[sbi]
-    "ampere.infer.zeussearch": ("zeus",),  # ampere[zeus]
+    "ampere.legacy.infer.sbi": ("torch", "sbi"),  # ampere[sbi]
+    "ampere.legacy.infer.zeussearch": ("zeus",),  # ampere[zeus]
     **_backend_extra_modules(),
 }
 
@@ -108,9 +111,9 @@ OPTIONAL_EXTRA_MODULES = {
 # comments in each module for the detailed rationale.
 # ---------------------------------------------------------------------------
 QUARANTINED_MODULES = {
-    "ampere.models.Hyperion",  # HyperionCStarRTModel needs hyperion+dill
-    "ampere.models.QuickSED",  # QuickSEDModel needs Starfish
-    "ampere.models.extinctionModels",  # F99Extinction needs dust_extinction (#75);
+    "ampere.legacy.models.Hyperion",  # HyperionCStarRTModel needs hyperion+dill
+    "ampere.legacy.models.QuickSED",  # QuickSEDModel needs Starfish
+    "ampere.legacy.models.extinctionModels",  # F99Extinction needs dust_extinction (#75);
     # CCMExtinctionLaw is an unfinished stub (#76)
 }
 
@@ -123,14 +126,15 @@ EXCLUDED_MODULES = {
     # constructs a DustySpectrum and writes a Dusty input file as a *side
     # effect of being imported*, and uses a bare `from Dusty import
     # DustySpectrum` that only ever worked when run directly as `python
-    # test_Dusty.py` from within ampere/models/ (Dusty.py on sys.path[0]).
-    # Not reachable from any package import chain.
-    "ampere.models.test_Dusty",
+    # test_Dusty.py` from within ampere/legacy/models/ (Dusty.py on
+    # sys.path[0]). Not reachable from any package import chain.
+    "ampere.legacy.models.test_Dusty",
     # Standalone filter-generation CLI scripts requiring 'h5py', which is
     # not an ampere dependency or extra. Not reachable from any package
-    # import chain (ampere/utils/__init__.py imports nothing).
-    "ampere.utils.makeFilterSet",
-    "ampere.utils.makeFilterSet_mod",
+    # import chain (ampere/legacy/utils/__init__.py imports nothing of
+    # theirs).
+    "ampere.legacy.utils.makeFilterSet",
+    "ampere.legacy.utils.makeFilterSet_mod",
 }
 
 PLAIN_MODULES = sorted(
@@ -161,10 +165,20 @@ def test_every_ampere_module_is_classified():
 
 
 def test_top_level_packages_import_cleanly():
+    """The pre-W6.0 top-level names still import -- this is the alias proof.
+
+    ``ampere.models``, ``ampere.infer`` and ``ampere.data`` moved under
+    ``ampere.legacy`` at W6.0; these three imports exercise the
+    :mod:`ampere._legacy_aliases` finder rather than a real subpackage at
+    this path, and ``import ampere.legacy`` is the new spelling alongside
+    them. See ``TestTheLegacyAliases`` below for the identity guarantees
+    the aliases make.
+    """
     import ampere  # noqa: F401
     import ampere.models  # noqa: F401
     import ampere.infer  # noqa: F401
     import ampere.data  # noqa: F401
+    import ampere.legacy  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
@@ -249,3 +263,83 @@ def test_ccmextinctionlaw_always_raises_informative_error():
 
     with pytest.raises(NotImplementedError, match="#76"):
         CCMExtinctionLaw()
+
+
+# ---------------------------------------------------------------------------
+# W6.0: the old top-level names as lazy aliases of ampere.legacy.
+# ---------------------------------------------------------------------------
+
+
+class TestTheLegacyAliases:
+    """The identity guarantees ``ampere/_legacy_aliases.py`` is built on.
+
+    ``ampere.data`` and the rest are not real subpackages any more; they
+    are a :mod:`importlib` meta-path finder that resolves to the module
+    under :mod:`ampere.legacy` on first use. What matters is that the
+    resolved object *is* the real one (no shadow copy, no re-execution),
+    that a plain ``import ampere`` still pulls in none of it, and that a
+    missing extra still fails the way it always did.
+    """
+
+    def test_import_ampere_alone_imports_no_legacy_module(self) -> None:
+        probe = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import sys\n"
+                    "import ampere\n"
+                    "print(sorted(m for m in sys.modules if m.startswith('ampere')))\n"
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert probe.stdout.strip() == str(["ampere", "ampere._legacy_aliases"])
+
+    def test_the_alias_and_the_target_are_the_same_module_object(self) -> None:
+        import ampere.data
+
+        assert ampere.data is ampere.legacy.data
+        assert sys.modules["ampere.data"] is sys.modules["ampere.legacy.data"]
+
+        from ampere.data import Spectrum
+
+        assert Spectrum is ampere.legacy.data.Spectrum
+
+    def test_the_whole_surface_resolves_under_the_new_name(self) -> None:
+        from ampere import legacy as ampere
+
+        assert ampere.data.Spectrum
+        assert ampere.models.Model
+        assert ampere.utils.pyphot_compat.get_unit
+        assert ampere.logger.Logger
+
+    def test_attribute_access_works_without_a_prior_submodule_import(self) -> None:
+        probe = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import ampere\n"
+                    "ampere.models\n"
+                    "print('models ok')\n"
+                    "try:\n"
+                    "    ampere.nonsense\n"
+                    "except AttributeError:\n"
+                    "    print('nonsense raised')\n"
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert probe.stdout.split("\n")[:2] == ["models ok", "nonsense raised"]
+
+    def test_version_is_read_from_package_metadata(self) -> None:
+        assert isinstance(ampere.__version__, str)
+        assert ampere.__version__
+        assert ampere.__version__ != "0.1.2"
+        installed = importlib.metadata.version("ampere")
+        assert ampere.__version__ == installed

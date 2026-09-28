@@ -104,7 +104,7 @@ html_static_path = []
 # moment those pages existed; bs4 and requests are imported nowhere in the
 # package.
 #
-# `sbi` (W5.32 (d)): the legacy `ampere.infer.sbi` module imports `sbi` at
+# `sbi` (W5.32 (d)): the legacy `ampere.legacy.infer.sbi` module imports `sbi` at
 # module level (on top of `torch`, already mocked above), and the `dev` docs
 # environment does not carry the `sbi` extra -- adding it here would pull in
 # torch too, for one page, which the two backend pages above already reject

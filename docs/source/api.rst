@@ -42,4 +42,5 @@ Legacy (frozen)
 .. toctree::
    :maxdepth: 2
 
-   ampere
+   legacy
+   ampere.legacy

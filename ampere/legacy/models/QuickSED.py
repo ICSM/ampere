@@ -2,7 +2,7 @@
 # Ampere Stuff
 #
 import ampere
-from ampere.models import Model
+from ampere.legacy.models import Model
 import numpy as np
 from astropy import constants as const
 from astropy import units as u

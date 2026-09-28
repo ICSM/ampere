@@ -238,14 +238,14 @@ target-version = "py312"
 # findings in `tests/characterisation/conftest.py` and the three in
 # `tests/test_imports.py` are pre-existing and cannot be fixed here without
 # editing frozen test logic; see `[tool.ruff.lint.per-file-ignores]` below.
+# W6.0 moved `ampere/data`, `ampere/models`, `ampere/infer`, `ampere/utils`
+# and `ampere/logger.py` under one subpackage, `ampere/legacy` -- the five
+# entries collapse to the one below -- and rewrote `ampere/__init__.py`
+# from scratch, so it drops out of this list and is linted/formatted like
+# any other new-namespace file.
 extend-exclude = [
-    "ampere/data",
-    "ampere/models",
-    "ampere/infer",
-    "ampere/utils",
+    "ampere/legacy",
     "ampere/examples",
-    "ampere/__init__.py",
-    "ampere/logger.py",
     "examples/examples_paper",
     "docs",
     "demo_pyphot.ipynb",
