@@ -106,7 +106,13 @@ from ampere.core.realisation import (
     registered_realisations,
 )
 
-from .engine import DEFAULT_CACHE_SIZE, Engine, _kept, _refuse_foreign_parts
+from .engine import (
+    _JITTER_SPREAD,
+    DEFAULT_CACHE_SIZE,
+    Engine,
+    _kept,
+    _refuse_foreign_parts,
+)
 from .exceptions import EngineError
 
 __all__ = ["SAMPLER_LIBRARIES", "NUTSEngine", "supported_backends"]
@@ -406,7 +412,10 @@ class NUTSEngine(Engine):
             a strongly correlated posterior of modest dimension.
         initial
             ``(chains, n_dim)`` start positions **in the constrained space**,
-            as for the other drivers. The default draws them from the joint
+            as for the other drivers, or an :class:`~ampere.results.Optimum`
+            (W6.7): every chain then starts at its mode plus a small jitter (a
+            tenth of the optimum's own covariance), reaching the sampler
+            through the same ``init_to_value`` route. The default draws them from the joint
             prior on this engine's own initialisation stream, so a run repeats
             exactly from the problem's seed.
         progress
@@ -429,10 +438,11 @@ class NUTSEngine(Engine):
         _kept(int(draws), 0, 1, self.NAME)
         self.start()
 
-        positions = (
-            self.initial_positions(int(chains))
-            if initial is None
-            else self._checked_initial(initial, int(chains))
+        positions = self._start_positions(
+            initial,
+            int(chains),
+            lambda given: self._checked_initial(given, int(chains)),
+            spread=_JITTER_SPREAD,
         )
         unconstrained = np.stack([self.problem.unconstrain(theta) for theta in positions])
 

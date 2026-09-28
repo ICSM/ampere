@@ -478,7 +478,9 @@ class VIEngine(Engine):
             Adam's step size.
         initial
             A ``(1, n_dim)`` or ``(n_dim,)`` start point **in the constrained
-            space**, as for the other drivers. The default draws one from the
+            space**, as for the other drivers, or an
+            :class:`~ampere.results.Optimum` (W6.7), whose mode the guide is
+            then initialised at exactly. The default draws one from the
             joint prior on this engine's own initialisation stream, so a run
             repeats exactly from the problem's seed.
         progress
@@ -520,7 +522,9 @@ class VIEngine(Engine):
             )
         self.start()
 
-        start = self.initial_positions(1)[0] if initial is None else self._checked_initial(initial)
+        start = self._start_positions(
+            initial, 1, lambda given: self._checked_initial(given)[np.newaxis], spread=0.0
+        )[0]
         unconstrained = self.problem.unconstrain(start)
 
         settings = _Settings(

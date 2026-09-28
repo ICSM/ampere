@@ -242,3 +242,71 @@ class TestRefusals:
         assert optimum.covariance_refusal is not None
         assert "not positive definite" in optimum.covariance_refusal
         assert optimum.constrained["model.slope"] == pytest.approx(2.0, abs=1e-2)
+
+
+# ---------------------------------------------------------------------------
+# The bridge: around= and run(initial=optimum)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def conjugate_optimum() -> Optimum:
+    return optimise(agreement_problem(), method="scipy", starts=2)
+
+
+class TestTheBridge:
+    def test_the_ball_is_tighter_than_the_posterior(self, conjugate_optimum: Optimum) -> None:
+        mean, sd = analytic()
+        engine = EmceeEngine(agreement_problem(), walkers=8)
+        positions = engine.initial_positions(400, around=conjugate_optimum)
+        assert positions.shape == (400, 1)
+        assert np.mean(positions) == pytest.approx(mean, abs=0.1 * sd)
+        assert np.std(positions) == pytest.approx(0.5 * sd, rel=0.15)
+
+    def test_without_around_nothing_changed(self) -> None:
+        first = EmceeEngine(agreement_problem(), walkers=8).initial_positions(8)
+        second = EmceeEngine(agreement_problem(), walkers=8).initial_positions(8)
+        np.testing.assert_array_equal(first, second)
+        assert np.std(first) > analytic()[1]  # prior draws: far wider than the posterior
+
+    def test_a_refused_covariance_gives_the_diagonal_ball(self) -> None:
+        problem = flat_problem()
+        optimum = optimise(problem, method="scipy", starts=1)
+        assert optimum.covariance is None
+        positions = EmceeEngine(problem, walkers=8).initial_positions(200, around=optimum)
+        spread = np.std(np.stack([problem.unconstrain(t) for t in positions]), axis=0)
+        expected = 0.01 * np.abs(optimum.unconstrained) + 1e-3
+        np.testing.assert_allclose(spread, expected, rtol=0.2)
+
+    def test_mismatched_names_are_refused_by_name(self, conjugate_optimum: Optimum) -> None:
+        engine = EmceeEngine(flat_problem(), walkers=8)
+        with pytest.raises(EngineError, match=r"missing \['model.ignored', 'model.slope'\]"):
+            engine.initial_positions(8, around=conjugate_optimum)
+
+    @pytest.mark.parametrize("engine", ["emcee", "zeus"])
+    def test_ensembles_run_from_an_optimum(self, conjugate_optimum: Optimum, engine: str) -> None:
+        from ampere.inference import ZeusEngine
+
+        mean, sd = analytic()
+        factory = {"emcee": EmceeEngine, "zeus": ZeusEngine}[engine]
+        run = factory(agreement_problem(), walkers=8).run(20, initial=conjugate_optimum)
+        first = np.asarray(run["posterior"].dataset["model.norm"])[:, 0]
+        assert np.all(np.abs(first - mean) < 3 * sd)
+
+    def test_dynesty_refuses_an_optimum_by_name(self, conjugate_optimum: Optimum) -> None:
+        from ampere.inference import DynestyEngine
+
+        with pytest.raises(EngineError, match=r"nested sampler .* no start point"):
+            DynestyEngine(agreement_problem(), live_points=30).run(initial=conjugate_optimum)
+
+    @pytest.mark.parametrize("library", ["nautilus", "ultranest"])
+    def test_the_other_nested_samplers_refuse_it(
+        self, conjugate_optimum: Optimum, library: str
+    ) -> None:
+        if find_spec(library) is None:
+            pytest.skip(f"{library} is not installed here")
+        from ampere.inference import NautilusEngine, UltranestEngine
+
+        factory = {"nautilus": NautilusEngine, "ultranest": UltranestEngine}[library]
+        with pytest.raises(EngineError, match=r"nested sampler .* no start point"):
+            factory(agreement_problem()).run(initial=conjugate_optimum)

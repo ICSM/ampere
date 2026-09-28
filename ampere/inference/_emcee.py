@@ -121,8 +121,11 @@ class EmceeEngine(Engine):
         thin
             Keep every *thin*-th retained step.
         initial
-            ``(walkers, n_dim)`` start positions. The default draws them from
-            the joint prior on this engine's own initialisation stream.
+            ``(walkers, n_dim)`` start positions, or an
+            :class:`~ampere.results.Optimum` (W6.7): the walkers then start in
+            ``initial_positions(walkers, around=optimum)``'s ball at its mode.
+            The default draws them from the joint prior on this engine's own
+            initialisation stream.
         progress
             emcee's progress bar. Off by default: a driver that prints by
             default is unusable inside a loop or a test suite.
@@ -136,11 +139,7 @@ class EmceeEngine(Engine):
 
         _kept(int(steps), int(burn_in), int(thin), self.NAME)
         self.start()
-        positions = (
-            self.initial_positions(self.walkers)
-            if initial is None
-            else self._checked_initial(initial)
-        )
+        positions = self._start_positions(initial, self.walkers, self._checked_initial)
 
         sampler = emcee.EnsembleSampler(
             self.walkers,

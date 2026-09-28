@@ -153,11 +153,7 @@ class ZeusEngine(Engine):
         zeus = self._zeus
         _kept(int(steps), int(burn_in), int(thin), self.NAME)
         self.start()
-        positions = (
-            self.initial_positions(self.walkers)
-            if initial is None
-            else self._checked_initial(initial)
-        )
+        positions = self._start_positions(initial, self.walkers, self._checked_initial)
 
         sampler = zeus.EnsembleSampler(
             self.walkers,

@@ -130,7 +130,9 @@ from ampere.core.realisation import (
     realise,
     registered_realisations,
 )
-from ampere.results import emit
+from ampere.results import Optimum, emit
+from ampere.results.exceptions import ResultsError
+from ampere.results.optimum import aligned
 
 from .exceptions import EngineError, SamplingFailureWarning
 
@@ -191,6 +193,15 @@ def unconstrained_jacobian_correction(problem: FittingProblem, unconstrained: An
         constrained_prior = float(parameters.lnprior(constrained))
         out[row] = unconstrained_prior - constrained_prior
     return out
+
+
+#: ``initial_positions(around=)``'s ball, in units of the optimum's own
+#: covariance: tighter than the posterior, so no walker starts in a tail.
+_BALL_SPREAD = 0.5
+
+#: A gradient sampler's chains start at the mode plus this much jitter (same
+#: units): NUTS and blackjax need distinct chains for R-hat, not a spread.
+_JITTER_SPREAD = 0.1
 
 
 class _EvaluationCache:
@@ -498,6 +509,9 @@ class Engine(abc.ABC):
         self.sampler: Any = None
         self.last_failure_summary: str = ""
         self._cache = _EvaluationCache(problem, cache_size, use_realisation=use_realisation)
+        #: What this run started from: "prior", "user", "pathfinder" or the
+        #: Optimum itself (W6.7) -- set by `_start_positions`, read by `finish`.
+        self._start: Any = "prior"
 
     # -- the §4.5 surface, and nothing else -----------------------------------
 
@@ -557,16 +571,33 @@ class Engine(abc.ABC):
         """
         return int(self.stream(concern).integers(0, 2**32))
 
-    def initial_positions(self, count: int, *, attempts: int = 200) -> np.ndarray:
-        """*count* start points drawn from the joint prior, each inside the support.
+    def initial_positions(
+        self, count: int, *, around: Optimum | None = None, attempts: int = 200
+    ) -> np.ndarray:
+        """*count* start points, each inside the support, in the constrained space.
 
-        A draw from the prior is the right start for an ensemble: it is where
-        the user says the mass is, it needs no tuning, and it is reproducible
-        from the problem's seed. Draws that cannot be scored are re-drawn
-        rather than kept — an ensemble move from a ``-inf`` walker cannot go
-        anywhere — and a prior that cannot produce a scoreable point at all is
-        a composition problem the run should stop for, not sample through.
+        Without *around*, drawn from the joint prior. A draw from the prior is
+        the right default start for an ensemble: it is where the user says the
+        mass is, it needs no tuning, and it is reproducible from the problem's
+        seed. Draws that cannot be scored are re-drawn rather than kept — an
+        ensemble move from a ``-inf`` walker cannot go anywhere — and a prior
+        that cannot produce a scoreable point at all is a composition problem
+        the run should stop for, not sample through.
+
+        With *around* (an :class:`~ampere.results.Optimum`, W6.7), a ball at
+        the mode in the unconstrained coordinates: ``u* + 0.5 L z`` with ``L``
+        the Cholesky factor of the optimum's covariance and ``z`` standard
+        normal, or ``u* + (0.01 |u*| + 1e-3) z`` when the covariance was
+        refused. The factor ``0.5`` makes the ball **tighter than the
+        posterior's own width**, so no walker starts in a tail it would then
+        have to climb out of, while leaving the ensemble a non-degenerate
+        spread for its moves to span — a point start would collapse a stretch
+        move to a line. The finite-log-probability rejection is kept, and the
+        optimum's free labels must be exactly this problem's (in any order;
+        ``Optimum.combine`` joins partial optima) or it is refused by name.
         """
+        if around is not None:
+            return self._ball(around, count, spread=_BALL_SPREAD, attempts=attempts)
         return draw_prior_positions(
             self.problem,
             count,
@@ -575,6 +606,79 @@ class Engine(abc.ABC):
             who=self.NAME,
             attempts=attempts,
         )
+
+    def _ball(
+        self, optimum: Optimum, count: int, *, spread: float, attempts: int = 200
+    ) -> np.ndarray:
+        """*count* constrained start points in a ball of relative size *spread* at *optimum*."""
+        if count < 1:
+            raise EngineError(f"{self.NAME} needs at least one start point, got {count}.")
+        if not isinstance(optimum, Optimum):
+            raise EngineError(
+                f"{self.NAME}: around= takes an ampere.results.Optimum (from "
+                f"ampere.inference.optimise or warm_start_gp), got {type(optimum).__name__}."
+            )
+        try:
+            centre, covariance = aligned(optimum, self.problem.parameters.free_labels())
+        except ResultsError as error:
+            raise EngineError(f"{self.NAME} cannot start around this optimum: {error}") from None
+        if covariance is not None:
+            factor = np.linalg.cholesky(covariance) * spread
+        else:
+            factor = np.diag((0.01 * np.abs(centre) + 1e-3) * (spread / _BALL_SPREAD))
+        rng = self.stream("initialisation")
+        positions = np.empty((count, self.problem.free_size), dtype=float)
+        for index in range(count):
+            for _ in range(attempts):
+                u = centre + factor @ rng.standard_normal(centre.size)
+                theta = self.problem.constrain(u)
+                if math.isfinite(self.log_prob(theta)):
+                    positions[index] = theta
+                    break
+            else:
+                raise EngineError(
+                    f"{self.NAME} could not find a start point with a finite log-probability in "
+                    f"{attempts} draws around the {optimum.route!r} optimum: the ball at the mode "
+                    f"lies where the model cannot score. problem.failure_summary() says why:\n"
+                    f"{self.problem.failure_summary()}"
+                )
+        return positions
+
+    def _start_positions(
+        self,
+        initial: Any,
+        count: int,
+        checked: Callable[[Any], np.ndarray],
+        *,
+        spread: float = _BALL_SPREAD,
+    ) -> np.ndarray:
+        """``run(initial=)`` resolved to *count* constrained start points, and recorded.
+
+        ``None`` draws from the prior; an :class:`~ampere.results.Optimum` is a
+        ball of relative size *spread* at its mode (the ensembles take
+        :data:`_BALL_SPREAD`, a gradient sampler's chains
+        :data:`_JITTER_SPREAD` — the mode plus a small jitter); anything else
+        is the caller's own array, checked by *checked*. Which one it was is
+        kept for :meth:`finish`, which writes it as ``ampere_start_route``
+        (and, for an optimum, ``ampere_start``).
+        """
+        if initial is None:
+            self._start = "prior"
+            return self.initial_positions(count)
+        if isinstance(initial, Optimum):
+            self._start = initial
+            return self._ball(initial, count, spread=spread)
+        self._start = "user"
+        return checked(initial)
+
+    def _refuse_optimum(self, options: Mapping[str, Any]) -> None:
+        """Refuse ``initial=`` on a sampler that has no start (the nested samplers)."""
+        if "initial" in options:
+            raise EngineError(
+                f"{self.NAME} does not take initial=: a nested sampler draws its live points "
+                f"from the prior transform and has no start point for an Optimum (or anything "
+                f"else) to seed. Use an Optimum to start emcee, zeus, NUTS, blackjax or VI."
+            )
 
     def start(self) -> None:
         """Begin a run: forget the previous one's failures.
