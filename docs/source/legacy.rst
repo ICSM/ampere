@@ -30,6 +30,19 @@ its repr and any pickle of it say ``ampere.legacy.data``. Prefer the
 ``ampere.legacy`` spelling in new writing; the old names are kept for the
 scripts that already exist.
 
+**One thing the substitution does not carry is the package path.**
+``ampere.legacy.__file__`` is the subpackage's own ``__init__.py``, so a
+script that locates the filter library as
+``ampere.__file__.strip("__init__.py") + "ampere_allfilters.hd5"`` — the
+minimal working examples do — looks one directory too deep once ``ampere``
+is bound to ``ampere.legacy``, and pyphot reports the first filter name as
+missing. Keep a plain ``import ampere`` for that line, or locate the file
+by package name, which works under either binding::
+
+    from importlib.resources import files
+
+    libname = str(files("ampere") / "ampere_allfilters.hd5")
+
 ``import ampere`` itself no longer loads any of this. It binds the version
 and licence attributes and installs the aliases; the legacy modules and
 their dependencies are imported the first time one of them is named. v2's
