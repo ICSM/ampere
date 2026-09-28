@@ -1497,18 +1497,27 @@ class QuasisepGP(GPSolver):
         linear per column. :class:`DenseGP` pays O(N³) for the same answer.
         """
         axis, order = self._axis(coordinates, kernel)
-        points = axis.reshape(-1, 1)
+        # W6.6 (d): the *unreduced* multi-axis container, not the selected
+        # column reshaped to (n, 1) -- so `at` may carry every axis the
+        # caller's own coordinates do, matching what DenseGP.condition and
+        # ampere.core.QuasisepGP.condition (W5.28 (d)) already accept.
+        # kernel.matrix selects the ordered axis from both sides itself.
+        points = _points(coordinates, dtype=self.TENSOR_DTYPE, device=self.TENSOR_DEVICE)
         residuals = self._tensor(residual).reshape(-1)
         diagonal = self._tensor(variance).reshape(-1) + self.jitter**2
         sorted_axis = axis[order]
         solve_axis = kernel.warped_coordinate(sorted_axis, values)
         c, U, d, W = self._guarded_factor(kernel, sorted_axis, diagonal[order], values)
         alpha = self._apply_inverse(solve_axis, c, U, d, W, residuals[order].reshape(-1, 1))[:, 0]
-        target = points if at is None else _points(at).to(dtype=self.TENSOR_DTYPE)
-        if target.shape[1] != 1:
+        target = (
+            points
+            if at is None
+            else _points(at, dtype=self.TENSOR_DTYPE, device=self.TENSOR_DEVICE)
+        )
+        if target.shape[1] != points.shape[1]:
             raise LikelihoodError(
                 f"the conditioning grid has {target.shape[1]} coordinate dimension(s) but the "
-                f"data have 1."
+                f"data have {points.shape[1]}."
             )
         cross = self._tensor(kernel.matrix(target, points, values))[:, order]
         solved = self._apply_inverse(solve_axis, c, U, d, W, cross.transpose(0, 1))

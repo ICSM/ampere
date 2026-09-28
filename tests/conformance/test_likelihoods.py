@@ -1109,6 +1109,64 @@ class TestAxisSelector:
             dense.log_prob(predicted, observed), abs=tolerances.cross_solver
         )
 
+    def test_condition_at_a_multi_axis_container_reaches_the_quasiseparable_path(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """W6.6 (d): ``at=`` may carry every axis the container does, not only
+        the kernel's selected one.
+
+        ``ampere.core.QuasisepGP.condition`` accepted this since W5.28 (d)
+        (``tests/core/test_likelihood.py``'s
+        ``test_condition_at_accepts_a_multi_axis_container``); this is the
+        same claim asserted across backends, on the three-axis container
+        :class:`TestAxisSelector` already uses for the selected-axis row
+        above. Measured at W6.6: torch's solver reshaped its selected column
+        to ``(n, 1)`` and hardcoded the conditioning grid's expected width at
+        1, refusing a same-shaped ``at`` by name; the fix (under 15 lines) is
+        landed alongside this row rather than a disagreement being declared,
+        so every backend supplying a quasiseparable solver is asserted here.
+        jax already carried the *unreduced* multi-axis container through to
+        ``kernel.matrix`` and needed no change.
+        """
+        if SolverKind.QUASISEP not in backend.capabilities.solvers:
+            pytest.skip(f"{backend.name} supplies no quasiseparable solver")
+        predicted, observed = dispersed_pair()
+        spec = CovarianceSpec(
+            KernelFamily.MATERN32,
+            0.3,
+            0.05,
+            axes=("spectral_axis",),
+            length_scale_unit=u.um,
+        )
+        dense = Likelihood(
+            GaussianFamily(),
+            GaussianProcessNoise(backend.kernel(spec), backend.gp_solver(SolverKind.DENSE)),
+        )
+        quasisep = Likelihood(
+            GaussianFamily(),
+            GaussianProcessNoise(backend.kernel(spec), backend.gp_solver(SolverKind.QUASISEP)),
+        )
+        # A conditioning grid shaped like the container's own three axes
+        # (u, v, spectral_axis) -- the shape DenseGP.condition already
+        # accepts, and the one a caller matching its own coordinates would
+        # naturally pass -- rather than the kernel's single selected column.
+        rng = np.random.default_rng(20260928)
+        at = np.column_stack(
+            [
+                rng.uniform(-3.0, 3.0, 5),
+                rng.uniform(-3.0, 3.0, 5),
+                np.sort(rng.uniform(2.0, 2.4, 5)),
+            ]
+        )
+        expected = dense.conditional(predicted, observed, at=at)
+        got = quasisep.conditional(predicted, observed, at=at)
+        assert backend.to_numpy(got.mean) == pytest.approx(
+            backend.to_numpy(expected.mean), abs=tolerances.cross_solver
+        )
+        assert backend.to_numpy(got.variance) == pytest.approx(
+            backend.to_numpy(expected.variance), abs=tolerances.cross_solver
+        )
+
 
 @pytest.fixture
 def registered_user_term() -> Iterator[None]:

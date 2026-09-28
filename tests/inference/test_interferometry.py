@@ -659,6 +659,7 @@ def calibration(npe_engine: Any) -> Any:
     return npe_engine.calibrate(count=CALIBRATION_COUNT, posterior_draws=CALIBRATION_DRAWS)
 
 
+@pytest.mark.sbi_training
 @needs_sbi
 class TestSBIOnVisibilitiesAndClosurePhases:
     """The encoding's first complex customer and its first five-axis one, fitted."""
