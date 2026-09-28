@@ -3122,19 +3122,39 @@ function over the run's `DataTree` in the same package (D12 confirms);
 four parameters, ten AKARI/Herschel bands through `from_library`, all
 four engines (emcee, zeus, dynesty, SBI) and the posterior-predictive
 overlay across them through `ampere.results`' plots; (4) **the PHOENIX
-star** (`examples_paper/phoenixstar.py`) — `examples/phoenix_star/`: the
-Starfish spectral emulator wrapped as a v2 `Model` (design horizon (c)'s
-own case: an emulator is a model), the CCM89 extinction through the
-`extinction` extra's `dust_extinction`, Gaia/2MASS/WISE photometry plus a
-Gaia-RVS-like spectrum, `SBIEngine`; the PHOENIX download and emulator
-training stay a documented one-off step outside the test path (D12b);
+star** (`examples_paper/phoenixstar.py`) — `examples/phoenix_star/`:
+**ruled 2026-09-28 on `docs/design/example_dependencies_memo.md` §2: no
+Starfish in the twin — ampere's own lightweight emulator instead** (design
+horizon (c)'s own case: an emulator is a model): a training script, run
+once and not in CI, downloads the PHOENIX-ACES subset (Teff 5000–8000 K,
+log g 4–5, [Fe/H] 0–0.5; `astropy.utils.data.download_file` or `expecto`),
+bins it to a coarse 0.3–5 µm SED grid plus the Gaia-RVS window at
+R ≈ 11 000, fits a PCA with one regressor per component weight over
+(Teff, log g, [Fe/H]) — a small MLP preferred over a GP so the emulator
+is differentiable on every backend; the item chooses and says why — and
+writes the result as a sub-megabyte `.npz` committed beside the script;
+the example loads it into an emulator `Model` written against the core
+contracts (reference, torch and jax twins), applies the luminosity
+scaling and CCM89 extinction through the `extinction` extra's
+`dust_extinction`, and fits Gaia/2MASS/WISE photometry plus the RVS
+spectrum with `SBIEngine` and NUTS for comparison; a comment points at
+the legacy script for the Starfish route (Starfish on PyPI still requires
+Python < 3.10; master carries Peter's July 2026 fix unreleased);
 (5) **the carbon star** (`cstar_model_test_sbi_v2.py` and its
-`_embedding` variant) — `examples/cstar/`: the Hyperion radiative-transfer
-model as a v2 `Model` (the legacy `ampere.models.Hyperion` class is the
-reference for its parameters and outputs), the tracked `cstar_data`
-votable photometry and IRS spectrum as v2 containers, `SBIEngine` with two
-rounds and the `--embedding` switch; Hyperion is required to run it and
-absent from CI (D12b); (6) **the star plus disc** (`examples/star_disc.py`,
+`_embedding` variant) — `examples/cstar/`: **ruled 2026-09-28 on the memo's
+§3: Hyperion stays** (actively maintained again; conda-forge ships
+`hyperion` and `hyperion-fortran` 0.9.11 for Python ≤ 3.13, pinned there
+until upstream releases this year's fixes) as a v2 `Model` with the same
+shell parameters as the legacy `ampere.models.Hyperion` class, **the
+unpackaged `bhmie` Fortran step replaced by `miepython`** (the `.optc`
+n, k tables and the power-law size distributions mixed by the two
+abundance parameters into arrays for Hyperion's `IsotropicDust`), the
+tracked `cstar_data` votable photometry and IRS spectrum as v2 containers,
+`SBIEngine` with two rounds and the `--embedding` switch, its simulation
+bank cached so reruns and calibration reuse it; Hyperion lives in an
+optional pixi feature (`hyperion`: conda-forge `hyperion` +
+`hyperion-fortran` + `miepython`, not a `pyproject` extra) and is absent
+from CI (D12b); (6) **the star plus disc** (`examples/star_disc.py`,
 the HD105 SED in `examples/star_disc/`) — `examples/star_disc/`: the
 legacy `QuickSED` star-plus-disc model as a v2 `Model` (the one legacy
 model class with no v2 counterpart yet), the votable photometry as a v2
@@ -3314,7 +3334,12 @@ in Phase 7 if not. Phase 6 closes with the beta on PyPI and
   and an assessment of better-maintained alternatives to Starfish and
   Hyperion for the twins (`docs/design/example_dependencies_memo.md`,
   the orchestrator's) — the twins may switch, the legacy scripts keep
-  their packages.**
+  their packages. Ruled on the memo 2026-09-28: the PHOENIX twin ships
+  ampere's own lightweight emulator in place of Starfish; the carbon-star
+  twin keeps Hyperion (maintained again) with `bhmie` replaced by
+  `miepython`; the GRAMS grid, a Starfish release and the Zenodo download
+  are moot under those two; the emulator's regressor is the item's
+  choice (MLP preferred).**
 
 
 ## Status
