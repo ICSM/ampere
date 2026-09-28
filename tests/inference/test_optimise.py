@@ -27,7 +27,7 @@ import scipy.stats as st
 
 from ampere.backends.reference import PowerLaw
 from ampere.core import Dataset, FittingProblem, Model, Parameter, Spectrum
-from ampere.inference import EmceeEngine, EngineError, optimise
+from ampere.inference import EmceeEngine, EngineError, optimise, warm_start_gp
 from ampere.inference._optimise import (
     constrained_objective,
     covariance_from_hessian,
@@ -410,3 +410,176 @@ class TestTheVIRoute:
 
         with pytest.raises(EngineError, match=r"does not take the option\(s\) \['minimiser'\]"):
             optimise(build_problem(backend), method="vi", minimiser="Powell")
+
+
+# ---------------------------------------------------------------------------
+# (b) The warm start, on test_hsgp.py's solver fixture
+# ---------------------------------------------------------------------------
+
+#: ``tests/core/test_hsgp.py``'s ``TestTheSolver`` fixture — a Matérn-3/2 of
+#: amplitude 0.4 and length scale 2.0 over [1, 11.5], white noise of 0.1, a
+#: 24-member basis at boundary factor 2 — made into a fitting problem: the same
+#: kernel and noise drawn onto 80 points (the fixture's 12 are too few to pin
+#: three hyperparameters to a factor of two) on top of a fixed power law.
+HSGP_AMPLITUDE, HSGP_LENGTH_SCALE, HSGP_SIGMA = 0.4, 2.0, 0.1
+HSGP_GRID = np.linspace(1.0, 11.5, 80)
+HSGP_BASIS = 24
+
+
+def _gp_data() -> np.ndarray:
+    from ampere.core import Matern32
+
+    kernel = Matern32(HSGP_AMPLITUDE, HSGP_LENGTH_SCALE)
+    values = kernel.resolve({})
+    separation = np.abs(HSGP_GRID[:, None] - HSGP_GRID[None, :])
+    covariance = np.asarray(kernel.value(separation, values), dtype=float)
+    rng = np.random.default_rng(11)
+    factor = np.linalg.cholesky(covariance + 1e-10 * np.eye(HSGP_GRID.size))
+    truth = 2.0 * HSGP_GRID**-1.0
+    return (
+        truth
+        + factor @ rng.standard_normal(HSGP_GRID.size)
+        + rng.normal(0, HSGP_SIGMA, HSGP_GRID.size)
+    )
+
+
+GP_DATA = _gp_data()
+
+
+def gp_problem(solver: Any = None) -> FittingProblem:
+    from ampere.core import (
+        GaussianFamily,
+        GaussianProcessNoise,
+        HilbertSpaceGP,
+        Likelihood,
+        Matern32,
+    )
+
+    chosen = (
+        HilbertSpaceGP(basis_size=HSGP_BASIS, boundary_factor=2.0) if solver is None else solver
+    )
+    likelihood = Likelihood(
+        GaussianFamily(),
+        GaussianProcessNoise(
+            Matern32(st.loguniform(0.05, 5.0), st.loguniform(0.3, 20.0)),
+            chosen,
+            scale=st.loguniform(0.3, 3.0),
+        ),
+    )
+    observed = Spectrum(
+        HSGP_GRID * u.micron,
+        GP_DATA * u.Jy,
+        uncertainty=np.full(HSGP_GRID.size, HSGP_SIGMA) * u.Jy,
+    )
+    return FittingProblem(
+        PowerLaw(HSGP_GRID, norm=2.0, index=-1.0, reference_wavelength=1.0),
+        [Dataset(observed, likelihood=likelihood)],
+        seed=SEED,
+    )
+
+
+HYPERPARAMETERS = (
+    "default.likelihood.amplitude",
+    "default.likelihood.length_scale",
+    "default.likelihood.scale",
+)
+
+#: The emcee run the warm start is held to: 12 walkers, 400 steps, 150
+#: burned — about 6 s on dev over three hyperparameters.
+GP_WALKERS, GP_STEPS, GP_BURN_IN = 12, 400, 150
+
+
+@pytest.fixture(scope="module")
+def gp_posterior_medians() -> dict[str, float]:
+    run = EmceeEngine(gp_problem(), walkers=GP_WALKERS).run(GP_STEPS, burn_in=GP_BURN_IN)
+    posterior = run["posterior"].dataset
+    return {name: float(np.median(np.asarray(posterior[name]))) for name in HYPERPARAMETERS}
+
+
+class TestTheWarmStart:
+    def test_within_a_factor_of_two_of_the_posterior_median(
+        self, gp_posterior_medians: dict[str, float]
+    ) -> None:
+        optimum = warm_start_gp(gp_problem())["default"]
+        assert optimum.route == "empirical_bayes"
+        assert optimum.free_names == HYPERPARAMETERS
+        ratios = {n: optimum.constrained[n] / gp_posterior_medians[n] for n in HYPERPARAMETERS}
+        print("warm-start / posterior-median ratios:", ratios)
+        assert all(0.5 <= ratio <= 2.0 for ratio in ratios.values()), ratios
+
+    def test_the_dense_marginal_likelihood_agrees_at_the_answer(self) -> None:
+        """At the returned hyperparameters, ``DenseGP`` and the reduced-rank
+        solver score the same residual alike, to the approximation's tolerance."""
+        from ampere.core import DenseGP, HilbertSpaceGP, Matern32
+
+        optimum = warm_start_gp(gp_problem())["default"]
+        a, ell, s = (optimum.constrained[n] for n in HYPERPARAMETERS)
+        kernel = Matern32(a, ell)
+        values = kernel.resolve({})
+        coordinates = HSGP_GRID.reshape(-1, 1)
+        residual = GP_DATA - 2.0 * HSGP_GRID**-1.0
+        variance = np.full(HSGP_GRID.size, (s * HSGP_SIGMA) ** 2)
+        dense = DenseGP().log_marginal_likelihood(kernel, coordinates, residual, variance, values)
+
+        def reduced(m: int) -> float:
+            return HilbertSpaceGP(basis_size=m, boundary_factor=2.0).log_marginal_likelihood(
+                kernel, coordinates, residual, variance, values
+            )
+
+        coarse, fine = reduced(HSGP_BASIS), reduced(4 * HSGP_BASIS)
+        print(f"dense {dense:.6f}, reduced-rank m=24 {coarse:.6f}, m=96 {fine:.6f}")
+        # The approximation's tolerance at m=24: a Matérn-3/2 spectrum decays
+        # only as omega**-4, so the truncated basis is a few per cent short of
+        # the dense marginal likelihood; the claim is agreement to that
+        # tolerance and convergence towards it as the basis grows.
+        assert coarse == pytest.approx(dense, rel=0.05)
+        assert abs(fine - dense) < abs(coarse - dense)
+
+    def test_a_brute_force_grid_does_not_beat_the_root_find(self) -> None:
+        from ampere.core import HilbertSpaceGP, Matern32
+
+        optimum = warm_start_gp(gp_problem())["default"]
+        a, ell, s = (optimum.constrained[n] for n in HYPERPARAMETERS)
+        coordinates = HSGP_GRID.reshape(-1, 1)
+        residual = GP_DATA - 2.0 * HSGP_GRID**-1.0
+        solver = HilbertSpaceGP(basis_size=HSGP_BASIS, boundary_factor=2.0)
+
+        def score(amplitude: float, scale: float) -> float:
+            kernel = Matern32(amplitude, ell)
+            variance = np.full(HSGP_GRID.size, (scale * HSGP_SIGMA) ** 2)
+            return solver.log_marginal_likelihood(
+                kernel, coordinates, residual, variance, kernel.resolve({})
+            )
+
+        found = score(a, s)
+        best = max(
+            score(x, y)
+            for x in np.geomspace(a / 3.0, a * 3.0, 61)
+            for y in np.geomspace(s / 3.0, s * 3.0, 61)
+        )
+        print(f"root find {found:.9f}, best of the 61x61 grid {best:.9f}")
+        assert best <= found + 1e-6
+
+    def test_the_dense_solver_takes_the_same_start(self) -> None:
+        from ampere.core import DenseGP
+
+        dense = warm_start_gp(gp_problem(DenseGP()))["default"]
+        reduced = warm_start_gp(gp_problem())["default"]
+        assert "temporary HilbertSpaceGP(basis_size=32)" in dense.message
+        for name in HYPERPARAMETERS:
+            assert dense.constrained[name] == pytest.approx(reduced.constrained[name], rel=0.1)
+
+    def test_it_combines_with_a_model_optimum_and_seeds_a_run(self) -> None:
+        import json
+
+        problem = gp_problem()
+        warm = warm_start_gp(problem)["default"]
+        run = EmceeEngine(problem, walkers=8).run(10, initial=warm)
+        assert run.attrs["ampere_start_route"] == "empirical_bayes"
+        assert json.loads(run.attrs["ampere_start"])["identity"] == warm.identity
+
+    def test_no_gp_dataset_is_refused_by_name(self) -> None:
+        with pytest.raises(
+            EngineError, match="no dataset in this problem has a GaussianProcessNoise"
+        ):
+            warm_start_gp(agreement_problem())

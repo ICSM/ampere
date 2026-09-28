@@ -260,7 +260,7 @@ from ._dynesty import DynestyEngine
 from ._emcee import EmceeEngine
 from ._nested import NESTED_ENGINES, NautilusEngine, UltranestEngine
 from ._nuts import NUTSEngine
-from ._optimise import OPTIMISE_METHODS, optimise
+from ._optimise import OPTIMISE_METHODS, WARM_START_GRID, optimise, warm_start_gp
 from ._sbi import (
     DEFAULT_TRUNCATION_EPSILON,
     EMBEDDINGS,
@@ -290,6 +290,7 @@ __all__ = [
     "SET_EMBEDDINGS",
     "SUMMARY_LAYOUT",
     "TMNRE_SAMPLERS",
+    "WARM_START_GRID",
     "BlackjaxEngine",
     "DynestyEngine",
     "EmceeEngine",
@@ -303,4 +304,5 @@ __all__ = [
     "VIEngine",
     "ZeusEngine",
     "optimise",
+    "warm_start_gp",
 ]
