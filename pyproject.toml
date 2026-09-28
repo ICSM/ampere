@@ -153,13 +153,14 @@ ultranest = ["ultranest"]
 # sampler here keeps one extra to one sampler, as the ruling asks; the
 # driver's refusal names the `jax` extra when the backend is missing.
 #
-# **Declared and locked ahead of its driver.** W5.14 landed the nested pair
-# (`_nested.py`) and handed the blackjax route on to a follow-on session;
-# `ampere/inference/_blackjax.py` does not exist yet, so nothing imports this
-# extra today. It is here, with its pixi feature and its place in the `jax`
-# environment, because that is the part of the work that costs a lock
-# re-solve: the follow-on adds a module and its tests, and needs no
-# packaging change at all.
+# **Declared and locked ahead of its driver, then landed.** W5.14 landed the
+# nested pair (`_nested.py`) and handed the blackjax route on to a follow-on
+# session; W5.19 landed `ampere/inference/_blackjax.py` -- `BlackjaxEngine`,
+# routing MCLMC as a sampler and Pathfinder as both an initialiser and an
+# approximation. It is here, with its pixi feature and its place in the
+# `jax` environment, because declaring it ahead of the driver was the part
+# of the work that cost a lock re-solve; the driver's own module and tests
+# needed no further packaging change.
 blackjax = ["blackjax"]
 # NOTE: there is deliberately no `arviz` extra any more -- arviz and a netCDF
 # engine are base dependencies as of W2.2 (see [project.dependencies] above).
