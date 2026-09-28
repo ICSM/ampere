@@ -391,3 +391,22 @@ class TestTheMapRoute:
         from examples.sed_composition.sed_composition import build_problem
 
         assert optimise(build_problem(backend), starts=1).route == "map"
+
+
+@pytest.mark.parametrize("backend", NATIVE)
+class TestTheVIRoute:
+    def test_inside_the_sampled_central_50_percent(
+        self, backend: str, sed_posterior: dict[str, np.ndarray]
+    ) -> None:
+        from examples.sed_composition.sed_composition import build_problem
+
+        optimum = optimise(build_problem(backend), method="vi", starts=8)
+        assert optimum.route == "vi" and optimum.backend == backend
+        assert optimum.covariance is not None
+        assert central_50(optimum, sed_posterior) == dict.fromkeys(optimum.free_names, True)
+
+    def test_an_unknown_option_is_refused(self, backend: str) -> None:
+        from examples.sed_composition.sed_composition import build_problem
+
+        with pytest.raises(EngineError, match=r"does not take the option\(s\) \['minimiser'\]"):
+            optimise(build_problem(backend), method="vi", minimiser="Powell")

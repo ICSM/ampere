@@ -68,6 +68,7 @@ parameters does not supply; an expensive simulator is the SBI layer's case.
 
 from __future__ import annotations
 
+import json
 import math
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -783,8 +784,85 @@ def _jax_hessian(realised: Any, mode: np.ndarray) -> np.ndarray:
     return np.asarray(jax.hessian(realised.log_prob_unconstrained)(point), dtype=float)
 
 
+#: The ``"vi"`` route's options and their defaults (``VIEngine.run``'s own).
+_VI_DEFAULTS: dict[str, Any] = {"steps": 2000, "learning_rate": 0.01, "draws": 200}
+
+
 def _vi_route(problem: FittingProblem, positions: np.ndarray, options: dict[str, Any]) -> Optimum:
-    raise EngineError("optimise(method='vi') lands in W6.7 unit 6.")
+    """:class:`~ampere.inference.VIEngine`'s fitted ``laplace`` guide as the point.
+
+    The guide is fitted once, from the best of the starts by objective. Its mean is the point and
+    its covariance (``guide_scale_tril @ guide_scale_tril.T``) the covariance —
+    both in the unconstrained coordinates, as every ``Optimum``'s are. Note
+    what that mean is: the Laplace guide centres on the mode of the density
+    NUTS samples, the one *with* the change of variables, so on a problem with
+    non-identity bijections it sits slightly apart from the ``"scipy"`` and
+    ``"map"`` routes' constrained-space mode. It is offered as the alternative
+    start the item names, not as a third estimate of the same number, and
+    ``converged`` means the fitted guide is finite — whether its ELBO had
+    flattened is the fitted run's ``vi_elbo_trace`` attr to judge.
+    """
+    from ._vi import VIEngine
+
+    _check_options("vi", options, frozenset(_VI_DEFAULTS))
+    settings = {**_VI_DEFAULTS, **options}
+    # The guide starts at the best of the prior draws by objective: VI's Adam
+    # walks a bounded distance per step, and a laplace guide whose MAP stage
+    # ends short of the mode has no positive-definite curvature to build on.
+    objective = constrained_objective(problem)
+    scores = [objective(problem.unconstrain(theta)) for theta in positions]
+    chosen = positions[int(np.argmax(scores))]
+    engine = VIEngine(problem)
+    try:
+        run = engine.run(
+            int(settings["draws"]),
+            steps=int(settings["steps"]),
+            guide="laplace",
+            learning_rate=float(settings["learning_rate"]),
+            initial=chosen,
+        )
+    except Exception as error:  # the library's own linear-algebra refusal, by type name
+        if "positive" not in str(error).lower():
+            raise
+        raise EngineError(
+            f"optimise('vi'): the laplace guide's curvature at the end of its "
+            f"{settings['steps']}-step MAP stage is not positive definite "
+            f"({type(error).__name__}), so the guide has not reached a mode. Use more steps or a "
+            f"larger learning_rate, more starts to begin nearer one, or method='map'."
+        ) from error
+    loc = engine.guide_loc
+    tril = engine.guide_scale_tril
+    u0 = problem.unconstrain(chosen)
+    if loc is None or not np.all(np.isfinite(loc)):
+        raise EngineError(
+            "optimise('vi'): the fitted laplace guide has no finite mean, so there is no point to "
+            "report. Try more steps, a smaller learning_rate, or method='map'."
+        )
+    mode = np.asarray(loc, dtype=float).reshape(-1)
+    covariance: np.ndarray | None = None
+    refusal: str | None = None
+    if tril is None:
+        refusal = "the fitted laplace guide kept no scale_tril"
+    else:
+        matrix = np.asarray(tril, dtype=float)
+        covariance, refusal = covariance_from_hessian(np.linalg.inv(matrix @ matrix.T))
+    value = float(constrained_objective(problem)(mode))
+    trace = json.loads(str(run.attrs.get("ampere_vi_elbo_trace", "[]")))
+    elbo = f"{float(trace[-1]):.6g}" if trace else "not recorded"
+    return build_optimum(
+        problem,
+        route="vi",
+        unconstrained=mode,
+        covariance=covariance,
+        refusal=refusal,
+        converged=True,
+        message=(
+            f"VIEngine(guide='laplace'), {settings['steps']} steps at learning_rate "
+            f"{settings['learning_rate']}: the guide's mean (final ELBO: {elbo})"
+        ),
+        evaluations=int(settings["steps"]),
+        starts=(StartSummary(start_hash(u0), value, "converged"),),
+    )
 
 
 def _hessian_calls(n: int) -> int:
