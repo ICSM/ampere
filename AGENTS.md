@@ -41,8 +41,10 @@ non-trivial work, read:
 
 ## Ground rules
 
-1. **Legacy is frozen.** Do not modify `ampere/data/`, `ampere/models/`, or
-   `ampere/infer/` unless your work item explicitly says so.
+1. **Legacy is frozen.** Do not modify anything under `ampere/legacy/`
+   (`data/`, `models/`, `infer/`, `utils/`, `logger.py` — relocated there at
+   W6.0; the old top-level names are aliases) unless your work item
+   explicitly says so.
 2. **One work item = one branch = one PR.** Branch naming: `w0.2-repo-hygiene`
    style (item id + slug). Peter Scicluna reviews and merges everything.
 3. **Never** push to `master`, push tags, delete branches, or publish
@@ -151,8 +153,10 @@ pushes.
   spec, per-contract specs (`contracts/`), lowering rules, the
   serialisation review, modality sketches, prior-art memo, harvest of old
   branches.
-- `ampere/` — the package. Legacy (frozen): `data/`, `models/`, `infer/`,
-  `utils/`. v2: `core/` (the frozen contracts, implemented — parameters,
+- `ampere/` — the package. Legacy (frozen, kept indefinitely — D1 (b)):
+  `legacy/{data,models,infer,utils}` and `legacy/logger.py`, the old
+  top-level names served as aliases by `_legacy_aliases.py`; the policy is
+  `docs/source/legacy.rst`. v2: `core/` (the frozen contracts, implemented — parameters,
   containers, transformations, likelihoods with `DenseGP`/`QuasisepGP`,
   datasets and `FittingProblem`, the lowering and realisation registries),
   `backends/{reference,torch,jax}/` (one name per backend everywhere; a
