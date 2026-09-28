@@ -227,6 +227,18 @@ the ``--gp`` arms) ``gp_localisation.png`` into *DIR* — the last one is the
 GP's own conditioned mean on the ``"ll"`` dataset, showing the bump it
 localised. No figure is committed (AGENTS.md ground rule 7).
 
+**Where the walkers start.** The example does not draw its initial
+positions from the prior, which is :class:`~ampere.inference.EmceeEngine`'s
+default; it starts every walker in a tight ball around the known synthetic
+truth (``_initial_positions`` in ``photometry_spectra.py``). Writing this
+page found out why that matters: with ``model.scale``'s prior spanning two
+decades, about one walker in ten drawn from the joint prior lands on a
+finitely-scored but astronomically improbable point and then never accepts
+a proposal in thousands of steps, silently corrupting every flattened
+statistic. Starting near a good point is ordinary MCMC practice; on a
+synthetic problem the truth is that point, and on real data it is a
+preliminary optimum — the warm start Phase 6's optimisers module is for.
+
 See also
 ---------
 
