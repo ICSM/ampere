@@ -339,7 +339,9 @@ def build_problem(
             "sl": Dataset(observed_sl, sl, likelihood=_spectrum_likelihood(gp=gp)),
             "ll": Dataset(observed_ll, ll, likelihood=_spectrum_likelihood(gp=gp)),
             "catalogue": Dataset(
-                observed_photometry, camera, likelihood=Likelihood(GaussianFamily(), IndependentNoise())
+                observed_photometry,
+                camera,
+                likelihood=Likelihood(GaussianFamily(), IndependentNoise()),
             ),
         }
     )
@@ -570,7 +572,9 @@ def write_figures(
     _save(plot_corner(run), "corner")
 
     run = add_posterior_predictive(run, problem, thin=thin)
-    _save(plot_posterior_predictive(run, datasets=["sl", "ll", "catalogue"]), "posterior_predictive")
+    _save(
+        plot_posterior_predictive(run, datasets=["sl", "ll", "catalogue"]), "posterior_predictive"
+    )
 
     if gp:
         from ampere.results import gp_localisation, plot_gp_localisation
