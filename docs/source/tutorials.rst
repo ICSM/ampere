@@ -52,7 +52,9 @@ The first seven have runnable counterparts in the repository:
 ``examples/sed_composition``, ``examples/m2_misspecification``,
 ``examples/interferometry``, ``examples/astrometry``, ``examples/image``,
 ``examples/wstat_comparison.py`` and ``examples/sbi/``, each covered by its
-own test suite so that none can rot unnoticed. :doc:`population` has none —
+own test suite so that none can rot unnoticed. The v2 twins of six classic
+legacy examples, landed and pending, are listed in ``examples/README.md``.
+:doc:`population` has none —
 its code is small enough to walk through inline, and it is exercised
 instead by ``tests/inference/test_population_nuts.py`` and
 ``tests/results/test_population.py``.
