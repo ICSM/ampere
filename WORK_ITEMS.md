@@ -2806,7 +2806,7 @@ the dispatch prompts; the sole shared file across waves is
 the kernel, the noise-model — and merge in that order).
 
 
-## Phase 6 — Docs, migration, release (drafted 2026-09-28 by Fable; **ruled by Peter 2026-09-28: D1 as (b) with `ampere.legacy`, D2–D7, D9, D10 as recommended (D3 as `1.0.0b1`); D8 as recommended (2026-09-28, after the briefing); D11 ruled 2026-09-28: the legacy examples stay on legacy and gain v2 twins — W6.13; D12 (the remaining scripts, and the two external-code dependencies) open**; nothing dispatched)
+## Phase 6 — Docs, migration, release (drafted 2026-09-28 by Fable; **ruled by Peter 2026-09-28: D1 as (b) with `ampere.legacy`, D2–D7, D9, D10 as recommended (D3 as `1.0.0b1`); D8 as recommended (2026-09-28, after the briefing); D11 ruled 2026-09-28: the legacy examples stay on legacy and gain v2 twins — W6.13; D12 ruled 2026-09-28 as recommended, plus a `star_disc` twin and the committed pre-trained emulator**; **wave 1 (W6.6 ∥ W6.8) cleared to dispatch on Peter's word of 2026-09-28**)
 
 The plan's §5 Phase 6 bullets (the RHMF trial, the optimisers module, the
 scipy distribution exploration, the docs rebuild and beta release, the
@@ -3098,7 +3098,7 @@ gates dev (torch and jax if the containers' native twins are touched).
 legacy (D1 (b)), and each named model gains a **v2 twin** — the same
 model, the same data, the same question, written against `ampere.core`
 and the reference backend, beside the original under `examples/`. Peter
-named five (his list; the rest are D12): (1) **the minimal working
+named five and D12 added a sixth: (1) **the minimal working
 examples** — `minimal_working_example.py` and its `_dynesty`, `_zeus`,
 `_sbi` and `_sbi_embedding` variants — become one v2 example,
 `examples/linear_sed/`, with `--engine emcee|dynesty|zeus|sbi` and
@@ -3134,17 +3134,34 @@ model as a v2 `Model` (the legacy `ampere.models.Hyperion` class is the
 reference for its parameters and outputs), the tracked `cstar_data`
 votable photometry and IRS spectrum as v2 containers, `SBIEngine` with two
 rounds and the `--embedding` switch; Hyperion is required to run it and
-absent from CI (D12b). Every twin has a `__main__`, a docstring stating
+absent from CI (D12b); (6) **the star plus disc** (`examples/star_disc.py`,
+the HD105 SED in `examples/star_disc/`) — `examples/star_disc/`: the
+legacy `QuickSED` star-plus-disc model as a v2 `Model` (the one legacy
+model class with no v2 counterpart yet), the votable photometry as a v2
+container, emcee. **D12 ruled**: Starfish and Hyperion are documented
+example-only requirements, not extras, and (4) and (5) skip by `find_spec`
+where they are absent; (4) ships a small pre-trained emulator file under
+a megabyte beside the script so the PHOENIX download and the training
+are an optional, documented one-off; **and the orchestrator's assessment
+of better-maintained alternatives to Starfish and Hyperion for the v2
+twins (Peter's ask of 2026-09-28: the legacy scripts keep their packages,
+the twins may switch) is `docs/design/example_dependencies_memo.md` —
+the twin follows its recommendation where Peter accepts it.** Every twin
+has a `__main__`, a docstring stating
 which legacy script it twins and what changed in the translation, and a
 `tests/examples` smoke row where its dependencies are installed (skipping
 by `find_spec` otherwise — (4) and (5) skip in every CI environment; (1)–(3)
 run under a minute each in dev); the `examples/` README lists the pairs.
 **Depends:** W6.0 (the `ampere.legacy` path the originals now sit behind
-— the twins import nothing from it), D12. **Accept:** the five twins with
+— the twins import nothing from it), D12. **Accept:** the six twins with
 smoke rows; the legacy originals byte-identical; each twin's posterior on
 its synthetic truth covers the truth at 95 % on every parameter once (the
 run recorded in the docstring); docs warnings no longer than base; gates
-dev, plus sbi for (1)'s and (3)'s SBI arms.
+dev, plus sbi for (1)'s and (3)'s SBI arms. The three scripts with the
+dead `ampere.emceesearch` import (`example.py`, `modbbtest.py`,
+`modelClio.py`) get no twin and are left as they are (D12 (a)); the
+untracked `flexible_likelihood_comparison.py` is answered by the M2
+study.
 
 **Issue triage (D10).** The open issues, with the recommendation: **closed
 by Phase 5 already** — #12, #29, #67 (W5.17's levers), #11 (censoring,
@@ -3292,7 +3309,12 @@ in Phase 7 if not. Phase 6 closes with the beta on PyPI and
   and the emulator training may be replaced in the twin by a small
   pre-trained emulator file committed under `examples/phoenix_star/` if it
   is under a megabyte (recommended if so; otherwise the one-off step stays
-  documented).
+  documented). **Ruled 2026-09-28: all as recommended, plus the
+  `star_disc` twin (W6.13 (6)) and the committed pre-trained emulator;
+  and an assessment of better-maintained alternatives to Starfish and
+  Hyperion for the twins (`docs/design/example_dependencies_memo.md`,
+  the orchestrator's) — the twins may switch, the legacy scripts keep
+  their packages.**
 
 
 ## Status

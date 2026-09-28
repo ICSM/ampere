@@ -21,7 +21,12 @@ and the batched native path, `Population` and population reweighting, the
 tier-1 engines behind extras, the latent GP on closure phases, the
 many-lines M2 extension, the optimisation pass, `test-fast` — with W5.16
 (the RHMF trial) deferred to Phase 6; the plan's §5 Phase 5 section is the
-landed summary. **Phase 6 (docs, migration, release) is next to draft.**
+landed summary. **Phase 6 (docs, migration, release) is open**: drafted
+and ruled 2026-09-28 (`WORK_ITEMS.md`'s Phase 6 section, W6.0–W6.13,
+decisions D1–D12 all taken — legacy is kept indefinitely and moves to
+`ampere.legacy`; the beta is `1.0.0b1` on PyPI with the docs on Read the
+Docs; `origin/master` takes the v2 line at that tag); wave 1 (W6.6 ∥
+W6.8) is cleared to dispatch.
 Development happens on `master` locally; the remote branch `v2` mirrors it
 for CI and backup, and `origin/master` stays at the legacy code until
 Phase 6 says otherwise. The live state, what is in flight and what
