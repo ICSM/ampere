@@ -83,7 +83,16 @@ on, and its recovered intervals, are recorded at the foot of this docstring.
 
 Coverage run (Accept criterion)
 --------------------------------
-TODO: filled in by the coverage-run commit.
+``python -m examples.linear_sed`` (default settings: ``--engine emcee``,
+``--seed 20260928``, GP on), the legacy budget (100 walkers, 150 steps, 100
+burn-in), run 2026-09-28, wall clock 181.4 s. The central 95 % interval
+covers the truth on all four qualified parameters, on the first run (no
+reseeding needed)::
+
+    model.slope                             +1.00432 +/- 0.012   95%[+0.982627, +1.02977]   (truth +1)          ok
+    model.intercept                         +0.898044 +/- 0.13   95%[+0.638074, +1.14113]    (truth +1)          ok
+    sl.instrument.calibration_scale.scale   +1.00027 +/- 0.00222  95%[+0.995802, +1.00475]   (truth +1)          ok
+    ll.instrument.calibration_scale.scale   +0.999678 +/- 0.00262 95%[+0.994599, +1.0045]    (truth +1)          ok
 """
 
 from __future__ import annotations
