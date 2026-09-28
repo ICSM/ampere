@@ -211,15 +211,22 @@ CALIBRATION_PRIOR = st.lognorm(0.05, scale=1.0)
 #: The GP kernel's amplitude prior, Jy -- log-uniform ("shrinkage-free": flat
 #: in log-amplitude, so it has no pull towards zero the way a half-normal or
 #: half-Cauchy would), following :class:`~ampere.core.GaussianProcessNoise`'s
-#: own docstring example. Sized against the injected bump's peak (a few
-#: tenths of a Jy at this source's flux level -- 10 % of :data:`generators.BUMP_FRACTION`
-#: applied to a few-Jy continuum).
-GP_AMPLITUDE_PRIOR = st.loguniform(1.0e-3, 1.0e1)
+#: own docstring example. Bracketing the injected bump's peak (about 0.43 Jy
+#: -- :data:`generators.BUMP_FRACTION` applied to the "ll" continuum, 2-5.5
+#: Jy) without reaching so high that the GP could absorb the continuum's own
+#: scale.
+GP_AMPLITUDE_PRIOR = st.loguniform(1.0e-2, 3.0)
 
 #: The GP kernel's length-scale prior, micron -- log-uniform for the same
-#: reason, spanning well below and above the injected bump's 4 micron width
-#: (:data:`generators.BUMP_WIDTH`).
-GP_LENGTH_SCALE_PRIOR = st.loguniform(1.0e-1, 1.0e2)
+#: reason, bracketing the injected bump's 4 micron width
+#: (:data:`generators.BUMP_WIDTH`) while capped well below either
+#: spectrograph's own span (9 micron for "sl", 24 for "ll"): an unbounded
+#: upper end would let a long-length-scale, moderate-amplitude draw mimic a
+#: broadband multiplicative recalibration over the whole spectrum -- exactly
+#: the degeneracy with the calibration factor this page's GP arm is meant to
+#: avoid, not reproduce (found empirically: an upper bound of 100 micron let
+#: the "ll" calibration factor's 95 % interval miss its truth).
+GP_LENGTH_SCALE_PRIOR = st.loguniform(5.0e-1, 1.2e1)
 
 # Budgets. Four free-parameter counts are possible (4, 5, 8 or 9, depending
 # on tie/gp), so walkers are left to EmceeEngine's own default rather than a
@@ -354,6 +361,79 @@ def build_problem(
     return FittingProblem(model, datasets, ties=ties, seed=seed)
 
 
+#: Rough starting guesses for the GP hyperparameters -- not a "truth" (the
+#: injected bump is not itself a draw from a Matérn-3/2), just a plausible
+#: point inside :data:`GP_AMPLITUDE_PRIOR`/:data:`GP_LENGTH_SCALE_PRIOR`'s
+#: support to start the ball from.
+_GP_AMPLITUDE_GUESS = 0.3
+_GP_LENGTH_SCALE_GUESS = 3.0
+
+#: The initial ball's per-walker relative jitter (log-normal sigma).
+_INITIAL_BALL_JITTER = 0.05
+
+
+def _initial_positions(problem: FittingProblem, walkers: int) -> np.ndarray:
+    """A tight ball around a good starting guess, not the raw prior span.
+
+    :meth:`~ampere.inference.engine.Engine.initial_positions` -- what
+    ``fit`` would otherwise fall back on -- draws each walker from the joint
+    prior and keeps the first draw that scores *finitely*, which accepts a
+    technically-scoreable but astronomically improbable point exactly when a
+    prior spans much more range than the posterior's own footprint (here,
+    ``model.scale`` alone spans two decades). Found empirically on this
+    composition: about one walker in ten started that way never accepts a
+    single proposal in thousands of subsequent steps -- the affine-invariant
+    stretch move cannot climb back from so far off -- which then corrupts
+    every flattened statistic :func:`report`/:func:`recovers_truth` compute.
+
+    Starting near a known-good point instead is ordinary MCMC practice, and
+    this tutorial is exactly the case where it costs nothing to be honest
+    about: the synthetic truth is *known* (:mod:`.generators`), so each
+    walker starts within a few percent of it (or, for the two GP
+    hyperparameters, of a plausible point in their prior) rather than
+    wherever an unconstrained prior draw happened to land.
+    """
+    names = problem.parameters.free_names
+    centre: dict[str, float] = {
+        "model.temperature": generators.TRUTH["temperature"],
+        "model.beta": generators.TRUTH["beta"],
+        "model.scale": generators.TRUTH["scale"],
+    }
+    if "calibration" in names:
+        centre["calibration"] = (
+            generators.CALIBRATION_TRUTH["sl"] + generators.CALIBRATION_TRUTH["ll"]
+        ) / 2.0
+    else:
+        centre["sl.instrument.calibration_scale.scale"] = generators.CALIBRATION_TRUTH["sl"]
+        centre["ll.instrument.calibration_scale.scale"] = generators.CALIBRATION_TRUTH["ll"]
+    for label in ("sl", "ll"):
+        amplitude_name = f"{label}.likelihood.amplitude"
+        length_scale_name = f"{label}.likelihood.length_scale"
+        if amplitude_name in names:
+            centre[amplitude_name] = _GP_AMPLITUDE_GUESS
+        if length_scale_name in names:
+            centre[length_scale_name] = _GP_LENGTH_SCALE_GUESS
+
+    if set(centre) != set(names):
+        raise AssertionError(
+            f"_initial_positions does not know every free parameter: has {sorted(centre)}, "
+            f"problem declares {sorted(names)}."
+        )
+
+    # Every centred quantity here is positive (temperatures, scales,
+    # calibration factors, GP hyperparameters), so a log-normal jitter keeps
+    # every draw inside its parameter's positive support without a rejection
+    # loop.
+    rng = problem.rng("photometry_spectra.initial_ball")
+    positions = np.empty((walkers, len(names)), dtype=float)
+    for row in range(walkers):
+        jittered = {
+            name: centre[name] * float(rng.lognormal(0.0, _INITIAL_BALL_JITTER)) for name in names
+        }
+        positions[row] = problem.parameters.pack(jittered)
+    return positions
+
+
 def fit(
     problem: FittingProblem,
     *,
@@ -367,12 +447,15 @@ def fit(
     ``walkers=None`` (the default) leaves the ensemble size to the engine's
     own ``_default_walkers`` -- see the module docstring's "Engines" section
     for why this module does not hardcode one, unlike
-    :func:`examples.sed_composition.sed_composition.fit`.
+    :func:`examples.sed_composition.sed_composition.fit`. Walkers start in
+    :func:`_initial_positions`'s tight ball rather than the engine's own
+    prior-draw default -- see that function's docstring for why.
     """
     engine = EmceeEngine(problem, walkers=walkers)
     return engine.run(
         DEFAULT_STEPS if steps is None else steps,
         burn_in=DEFAULT_BURN_IN if burn_in is None else burn_in,
+        initial=_initial_positions(problem, engine.walkers),
         progress=progress,
     )
 
