@@ -630,8 +630,8 @@ provenance, and both backends' lowering registries — fails because a
 (§8.3), not even for the shipped M2 study's own `default_priors()`, whose
 `sample_prior` calls exercise exactly the method (`.rvs`) that breaks.
 Recommending it even as an opt-in ("use the new objects if you only ever
-call `log_prob`") would be recommending a prior declaration that silently
-`AttributeError`s the moment a user's workflow touches nested sampling,
+call `log_prob`") would be recommending a prior declaration that raises an
+`AttributeError` the moment a user's workflow touches nested sampling,
 SBI, or a run's provenance record — none of them edge cases in ampere's own
 engine surface — which is a worse default than saying so plainly.
 
