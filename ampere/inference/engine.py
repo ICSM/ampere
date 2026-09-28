@@ -852,6 +852,7 @@ class Engine(abc.ABC):
             registered_lowerings=registered_lowerings,
             extra_attrs=attrs,
             sample_stats=sample_stats,
+            start=self._start,
         )
         if summary:
             warnings.warn(

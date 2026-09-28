@@ -310,3 +310,37 @@ class TestTheBridge:
         factory = {"nautilus": NautilusEngine, "ultranest": UltranestEngine}[library]
         with pytest.raises(EngineError, match=r"nested sampler .* no start point"):
             factory(agreement_problem()).run(initial=conjugate_optimum)
+
+
+# ---------------------------------------------------------------------------
+# (e) The start in provenance (schema 9)
+# ---------------------------------------------------------------------------
+
+
+class TestTheStartInProvenance:
+    def test_a_run_from_an_optimum_records_it(self, conjugate_optimum: Optimum) -> None:
+        import json
+
+        run = EmceeEngine(agreement_problem(), walkers=8).run(10, initial=conjugate_optimum)
+        assert run.attrs["ampere_start_route"] == "scipy"
+        assert json.loads(run.attrs["ampere_start"]) == conjugate_optimum.start_record()
+        assert run.attrs["ampere_schema_version"] == 9
+
+    def test_a_prior_started_run_says_prior(self) -> None:
+        run = EmceeEngine(agreement_problem(), walkers=8).run(10)
+        assert run.attrs["ampere_start_route"] == "prior"
+        assert "ampere_start" not in run.attrs
+
+    def test_a_callers_array_says_user(self) -> None:
+        engine = EmceeEngine(agreement_problem(), walkers=8)
+        run = engine.run(10, initial=np.full((8, 1), 2.0) + 0.01 * np.arange(8)[:, None])
+        assert run.attrs["ampere_start_route"] == "user"
+
+    def test_the_optimum_carries_the_schema_too(self, conjugate_optimum: Optimum) -> None:
+        from ampere.results import PROVENANCE_SCHEMA_VERSION
+
+        assert PROVENANCE_SCHEMA_VERSION == 9
+        assert conjugate_optimum.provenance["ampere_schema_version"] == 9
+        tree = conjugate_optimum.to_datatree()
+        assert tree.attrs["ampere_schema_version"] == 9
+        assert "posterior" not in tree.children

@@ -215,7 +215,15 @@ __all__ = [
 #: this attribute exists so the declaration can be read back, not so it can
 #: be compared) -- but the schema constant is, so ``ampere_problem_hash``
 #: moves again at this bump as at every previous one.
-PROVENANCE_SCHEMA_VERSION = 8
+#: **9 (W6.7)**: ``ampere_start_route`` joined every run -- ``"prior"`` for
+#: the default prior-draw start, ``"user"`` for a caller's own array,
+#: ``"pathfinder"`` for blackjax's Pathfinder start, or an
+#: :class:`~ampere.results.Optimum`'s route -- and ``ampere_start``, canonical
+#: JSON of the optimum's :meth:`~ampere.results.Optimum.start_record` (route,
+#: identity hash, ``log_prob_constrained``, evaluations, converged), on a run
+#: seeded from one. A new attribute on *every* run, not a conditional one, so
+#: it rides a bump (``ampere_problem_hash`` moves with it, as at every bump).
+PROVENANCE_SCHEMA_VERSION = 9
 
 #: Every attribute this module writes starts with this, so ampere's provenance
 #: never collides with ArviZ's own (``created_at``, ``creation_library``, ...)
@@ -789,6 +797,7 @@ def provenance_attrs(
     realised: bool = False,
     registered_lowerings: Sequence[Mapping[str, Any]] | None = None,
     extra: Mapping[str, object] | None = None,
+    start: Any = "prior",
 ) -> dict[str, Any]:
     """The ``ampere_*`` attributes every emitted run carries.
 
@@ -834,6 +843,15 @@ def provenance_attrs(
     extra
         Further entries, JSON-normalised and prefixed like the rest. Use it for
         engine-specific settings (step size, number of live points).
+    start
+        What the run started from (W6.7, schema 9): a route name —
+        ``"prior"`` (the default, every engine's prior-draw start),
+        ``"user"``, ``"pathfinder"`` — written as ``ampere_start_route``; or
+        an :class:`~ampere.results.Optimum` (anything with a
+        ``start_record()`` and a ``route``), which writes its route there and
+        its :meth:`~ampere.results.Optimum.start_record` as canonical JSON in
+        ``ampere_start``, so a posterior's start is reproducible from its
+        archive.
 
     Notes
     -----
@@ -985,6 +1003,13 @@ def provenance_attrs(
     # PROVENANCE_SCHEMA_VERSION bump; the *names* are recorded rather than a
     # bare flag because "this run had no gradients through some piece" is only
     # actionable if it says which piece.
+    # W6.7, schema 9: what the run started from.
+    record = getattr(start, "start_record", None)
+    if callable(record):
+        attrs["start_route"] = str(getattr(start, "route"))
+        attrs["start"] = canonical_json(record())
+    else:
+        attrs["start_route"] = str(start)
     foreign = problem.foreign_part_names
     if foreign:
         attrs["foreign_parts"] = canonical_json(list(foreign))

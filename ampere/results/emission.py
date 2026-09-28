@@ -470,6 +470,7 @@ def emit(
     observed: bool = True,
     extra_attrs: Mapping[str, object] | None = None,
     sample_stats: Mapping[str, Any] | None = None,
+    start: Any = "prior",
 ) -> Any:
     """Build the run's :class:`xarray.DataTree` from its draws and evaluations.
 
@@ -529,6 +530,10 @@ def emit(
         collides with a built-in ``sample_stats`` variable raises, the same
         rule :func:`~ampere.results.provenance.provenance_attrs`'s ``extra=``
         applies to the root attrs.
+    start
+        What the run started from, passed to
+        :func:`~ampere.results.provenance.provenance_attrs` (W6.7, schema 9):
+        ``"prior"`` by default, or an :class:`~ampere.results.Optimum`.
 
     Raises
     ------
@@ -586,6 +591,7 @@ def emit(
             realised=realised,
             registered_lowerings=registered_lowerings,
             extra=extra_attrs,
+            start=start,
         )
     )
     tree.attrs[f"{ATTR_PREFIX}chains"] = chains

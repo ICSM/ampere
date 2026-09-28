@@ -1928,8 +1928,8 @@ class TestSchemaEightAttributes:
     accordingly.
     """
 
-    def test_the_schema_version_is_eight(self) -> None:
-        assert PROVENANCE_SCHEMA_VERSION == 8
+    def test_the_schema_version_is_at_least_eight(self) -> None:
+        assert PROVENANCE_SCHEMA_VERSION >= 8
 
     def test_a_run_records_every_free_parameters_prior(self) -> None:
         problem = joint_problem()
@@ -1988,6 +1988,46 @@ class TestSchemaEightAttributes:
             assert PriorSpec.from_dict(stored[name]) == describe_prior(
                 problem.parameters[name].prior
             )
+
+
+class TestSchemaNineAttributes:
+    """W6.7: ``ampere_start_route`` on every run, ``ampere_start`` from an Optimum."""
+
+    def test_the_schema_version_is_nine(self) -> None:
+        assert PROVENANCE_SCHEMA_VERSION == 9
+
+    def test_the_default_start_is_the_prior(self) -> None:
+        attrs = provenance_attrs(joint_problem())
+        assert attrs["ampere_start_route"] == "prior"
+        assert "ampere_start" not in attrs
+
+    def test_an_optimum_start_is_recorded(self) -> None:
+        from ampere.results import Optimum
+
+        optimum = Optimum(
+            route="scipy",
+            backend="reference",
+            free_names=("a",),
+            free_labels=("a",),
+            unconstrained=np.array([0.25]),
+            constrained={"a": 0.25},
+            log_prob_constrained=-1.5,
+            log_prob_unconstrained=-1.5,
+            covariance=np.array([[0.1]]),
+            covariance_refusal=None,
+            converged=True,
+            message="",
+            evaluations=40,
+        )
+        attrs = provenance_attrs(joint_problem(), start=optimum)
+        assert attrs["ampere_start_route"] == "scipy"
+        assert json.loads(attrs["ampere_start"]) == {
+            "route": "scipy",
+            "identity": optimum.identity,
+            "log_prob_constrained": -1.5,
+            "evaluations": 40,
+            "converged": True,
+        }
 
 
 class TestEmitSampleStats:
