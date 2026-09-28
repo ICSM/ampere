@@ -454,6 +454,14 @@ class UltranestEngine(_NestedEngine):
     independently of ``show_status``. With ``progress=False`` that logger is
     quietened for the duration of the run and restored afterwards, so a driver
     asked not to print does not print.
+
+    **The stored evidence error is more conservative than the run's own
+    console line.** ``log_evidence_err`` (and ``ampere_ultranest_logzerr``)
+    come from ``result["logzerr"]`` after the run has finished, which folds
+    in the tail correction (``logzerr_tail``) on top of the bootstrap term
+    (``logzerr_bs``); the ``logZ = ... +- ...`` line ultranest prints while
+    ``show_status=True`` is running updates live from the bootstrap term
+    alone, so it reads smaller than the final, recorded value.
     """
 
     NAME: ClassVar[str] = "ultranest"
