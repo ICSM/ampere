@@ -66,7 +66,41 @@ Coverage
 
 Coverage run (Accept criterion)
 --------------------------------
-TODO: filled in by the coverage-run commit.
+Each engine once at the legacy script's own budget, ``--seed 20260928``, run
+2026-09-28 (the dev engines in one process through the machine's gate lock,
+the sbi arm in ``-e sbi``). The central 95 % interval covers the truth on
+all four parameters under every engine, on the first run (no reseeding
+needed)::
+
+    emcee   100 walkers / 1000 steps / 900 burn-in       wall clock 356.8 s
+    model.temperature   +28.6731  +/- 1.5     95%[+26.0632,  +31.6419]  (truth +30)    ok
+    model.logmass       +0.898954 +/- 0.292   95%[+0.378884, +1.35598]  (truth +1)     ok
+    model.beta          -2.10879  +/- 0.163   95%[-2.4326,   -1.8001]   (truth -2)     ok
+    model.distance      +0.0969118 +/- 0.0297 95%[+0.0517114, +0.147434] (truth +0.11) ok
+
+    zeus    100 walkers / 150 steps / 100 burn-in        wall clock 424.6 s
+    model.temperature   +29.1521  +/- 2.78    95%[+25.6915,  +38.6073]  (truth +30)    ok
+    model.logmass       +0.875356 +/- 0.32    95%[+0.255603, +1.33331]  (truth +1)     ok
+    model.beta          -2.06893  +/- 0.291   95%[-2.48119,  -1.22664]  (truth -2)     ok
+    model.distance      +0.0982483 +/- 0.0298 95%[+0.0523269, +0.148705] (truth +0.11) ok
+
+    dynesty dlogz=1.0 (1476 equal-weight draws)         wall clock 42.7 s
+    model.temperature   +28.8348  +/- 1.57    95%[+26.0089,  +32.1987]  (truth +30)    ok
+    model.logmass       +0.9435   +/- 0.27    95%[+0.412237, +1.34536]  (truth +1)     ok
+    model.beta          -2.09291  +/- 0.171   95%[-2.42789,  -1.75449]  (truth -2)     ok
+    model.distance      +0.101998 +/- 0.0284  95%[+0.0540334, +0.147008] (truth +0.11) ok
+
+    sbi     50 000 simulations / 10 000 draws (197 epochs) wall clock 891.4 s
+    model.temperature   +38.061   +/- 11.2    95%[+15.6214,  +49.9983]  (truth +30)    ok
+    model.logmass       +0.457771 +/- 0.956   95%[-1.73619,  +2.3576]   (truth +1)     ok
+    model.beta          -1.56658  +/- 0.821   95%[-2.91674,  -0.15714]  (truth -2)     ok
+    model.distance      +0.0925207 +/- 0.0296 95%[+0.0507863, +0.1454]  (truth +0.11)  ok
+
+The sbi posterior is several times wider than the three samplers' on
+temperature, log-mass and beta: the model's flux spans many decades across
+the ten bands, and the network's z-scoring warns of extreme outliers at
+training time (see the smoke test's finding) -- a calibrated but loose
+amortised posterior, not a miss.
 """
 
 from __future__ import annotations
