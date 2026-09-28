@@ -216,11 +216,13 @@ Running it
     python -m examples.photometry_spectra --tie --gp
 
 Each finishes in one to three minutes on the reference backend with
-:class:`~ampere.inference.EmceeEngine` (98-173 s across the four arms in one
-specific run — the GP arms are slower, both for the extra dimensions and for
-the Cholesky solve :class:`~ampere.core.GaussianProcessNoise`'s default
-:class:`~ampere.core.DenseGP` does every evaluation). Add ``--figures DIR``
-to any of them to write ``corner.png``, ``posterior_predictive.png`` and (for
+:class:`~ampere.inference.EmceeEngine` (71-173 s across the four arms in one
+specific run — untied/independent 98 s, untied/GP 173 s, tied/independent
+71 s, tied/GP 155 s; the GP arms are slower, both for the extra dimensions
+and for the Cholesky solve :class:`~ampere.core.GaussianProcessNoise`'s
+default :class:`~ampere.core.DenseGP` does every evaluation). Add
+``--figures DIR`` to any of them to write ``corner.png``,
+``posterior_predictive.png`` and (for
 the ``--gp`` arms) ``gp_localisation.png`` into *DIR* — the last one is the
 GP's own conditioned mean on the ``"ll"`` dataset, showing the bump it
 localised. No figure is committed (AGENTS.md ground rule 7).
