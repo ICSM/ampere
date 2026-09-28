@@ -127,11 +127,11 @@ __all__ = [
     "EMBEDDING",
     "FILTERS",
     "GRID",
-    "LinearModel",
     "PHOTOMETRY_TABULATION",
     "QUALIFIED_TRUTH",
     "SBI_DEFAULT_BUDGET",
     "SBI_DEFAULT_DRAWS",
+    "LinearModel",
     "build_instruments",
     "build_model",
     "build_problem",
@@ -225,7 +225,7 @@ class LinearModel(Model):
         self.register_parameter(_as_parameter("intercept", intercept))
         self._template: Spectrum | None = None
 
-    def compile_for(self, requirements: Any) -> "LinearModel":
+    def compile_for(self, requirements: Any) -> LinearModel:
         """Adopt the negotiated grid for :attr:`channel`, once (W2.12's contract)."""
         asked = requirements.get(self.channel)
         if asked is not None and "spectral_axis" in asked:
@@ -297,7 +297,9 @@ def build_problem(*, gp: bool = True, seed: int = generators.SEED) -> FittingPro
     datasets = DatasetCollection(
         {
             "catalogue": Dataset(
-                observed_photometry, catalogue, likelihood=Likelihood(GaussianFamily(), IndependentNoise())
+                observed_photometry,
+                catalogue,
+                likelihood=Likelihood(GaussianFamily(), IndependentNoise()),
             ),
             "sl": Dataset(observed_sl, sl_instrument, likelihood=_likelihood(gp=gp)),
             "ll": Dataset(observed_ll, ll_instrument, likelihood=_likelihood(gp=gp)),
