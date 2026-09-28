@@ -1618,14 +1618,16 @@ class TestTheRegularisedHorseshoeAlias:
     """``regularised_horseshoe`` is W5.27's deprecated alias for the above.
 
     It exists so that a caller who has not migrated yet still gets the same
-    declaration, with one warning naming the replacement and the phase the
-    alias goes in.
+    declaration, with one warning naming the replacement and the version it
+    is removed in (W6.6 (e): v2's own deprecations name a removal version,
+    1.0.0 final, under W6.0's policy -- not the Phase 6 label the alias
+    warned with before that policy was ruled).
     """
 
     NAMES = ("broad.amplitude", "narrow.amplitude")
 
-    def test_it_warns_once_naming_the_replacement_and_the_phase(self) -> None:
-        with pytest.warns(DeprecationWarning, match="Phase 6") as caught:
+    def test_it_warns_once_naming_the_replacement_and_the_removal_version(self) -> None:
+        with pytest.warns(DeprecationWarning, match="1.0.0") as caught:
             regularised_horseshoe(self.NAMES)
         assert len(caught) == 1
         assert "shrinkage_horseshoe" in str(caught[0].message)

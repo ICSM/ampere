@@ -3744,12 +3744,14 @@ def regularised_horseshoe(
     the function to :func:`shrinkage_horseshoe`, which also names the family
     of ``shrinkage_*`` helpers it is the first of. This alias is kept, with a
     :class:`DeprecationWarning`, for callers not yet migrated, and is
-    scheduled for removal in **Phase 6**. It takes the same arguments and
-    returns exactly what :func:`shrinkage_horseshoe` returns for them.
+    removed in **1.0.0 final** under Phase 6's deprecation policy (W6.0: v2's
+    own deprecations carry a warning and a removal version, unlike the
+    legacy surface, which is kept indefinitely). It takes the same arguments
+    and returns exactly what :func:`shrinkage_horseshoe` returns for them.
     """
     warnings.warn(
         "ampere.core.regularised_horseshoe is deprecated since W5.27 and will be removed in "
-        "Phase 6; use ampere.core.shrinkage_horseshoe instead (same signature, same return "
+        "1.0.0 final; use ampere.core.shrinkage_horseshoe instead (same signature, same return "
         "value).",
         DeprecationWarning,
         stacklevel=2,
