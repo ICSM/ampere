@@ -351,6 +351,44 @@ class _EvaluationCache:
         return self._score(vector)
 
 
+def draw_prior_positions(
+    problem: FittingProblem,
+    count: int,
+    rng: np.random.Generator,
+    score: Callable[[np.ndarray], float],
+    *,
+    who: str,
+    attempts: int = 200,
+) -> np.ndarray:
+    """*count* constrained free vectors drawn from the joint prior, each scoreable.
+
+    The prior-draw start every engine uses (:meth:`Engine.initial_positions`)
+    and the multi-start draws of :func:`ampere.inference.optimise` (W6.7) —
+    one function, so the two cannot drift. A draw *score* returns non-finite
+    for is re-drawn rather than kept, and a prior that cannot produce a
+    scoreable point in *attempts* draws is refused by name, with the problem's
+    failure summary, because that is a composition problem to stop for.
+    """
+    if count < 1:
+        raise EngineError(f"{who} needs at least one start point, got {count}.")
+    positions = np.empty((count, problem.free_size), dtype=float)
+    for index in range(count):
+        for _ in range(attempts):
+            theta = problem.parameters.pack(problem.sample_prior(rng))
+            if math.isfinite(score(theta)):
+                positions[index] = theta
+                break
+        else:
+            raise EngineError(
+                f"{who} could not find a start point with a finite log-probability in "
+                f"{attempts} draws from the joint prior. Either the prior puts (almost) all "
+                f"its mass where the model or likelihood cannot be evaluated, or the data and "
+                f"the model disagree so completely that every prior draw underflows. "
+                f"problem.failure_summary() says which:\n{problem.failure_summary()}"
+            )
+    return positions
+
+
 class Engine(abc.ABC):
     """Base class for the gradient-free engine drivers.
 
@@ -529,25 +567,14 @@ class Engine(abc.ABC):
         anywhere — and a prior that cannot produce a scoreable point at all is
         a composition problem the run should stop for, not sample through.
         """
-        if count < 1:
-            raise EngineError(f"{self.NAME} needs at least one start point, got {count}.")
-        positions = np.empty((count, self.problem.free_size), dtype=float)
-        rng = self.stream("initialisation")
-        for index in range(count):
-            for _ in range(attempts):
-                theta = self.problem.parameters.pack(self.problem.sample_prior(rng))
-                if math.isfinite(self.log_prob(theta)):
-                    positions[index] = theta
-                    break
-            else:
-                raise EngineError(
-                    f"{self.NAME} could not find a start point with a finite log-probability in "
-                    f"{attempts} draws from the joint prior. Either the prior puts (almost) all "
-                    f"its mass where the model or likelihood cannot be evaluated, or the data and "
-                    f"the model disagree so completely that every prior draw underflows. "
-                    f"problem.failure_summary() says which:\n{self.problem.failure_summary()}"
-                )
-        return positions
+        return draw_prior_positions(
+            self.problem,
+            count,
+            self.stream("initialisation"),
+            self.log_prob,
+            who=self.NAME,
+            attempts=attempts,
+        )
 
     def start(self) -> None:
         """Begin a run: forget the previous one's failures.

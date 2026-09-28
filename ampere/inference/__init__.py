@@ -260,6 +260,7 @@ from ._dynesty import DynestyEngine
 from ._emcee import EmceeEngine
 from ._nested import NESTED_ENGINES, NautilusEngine, UltranestEngine
 from ._nuts import NUTSEngine
+from ._optimise import OPTIMISE_METHODS, optimise
 from ._sbi import (
     DEFAULT_TRUNCATION_EPSILON,
     EMBEDDINGS,
@@ -285,6 +286,7 @@ __all__ = [
     "MARGINAL_ORDERS",
     "METHODS",
     "NESTED_ENGINES",
+    "OPTIMISE_METHODS",
     "SET_EMBEDDINGS",
     "SUMMARY_LAYOUT",
     "TMNRE_SAMPLERS",
@@ -300,4 +302,5 @@ __all__ = [
     "UltranestEngine",
     "VIEngine",
     "ZeusEngine",
+    "optimise",
 ]
