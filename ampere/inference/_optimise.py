@@ -77,7 +77,7 @@ import numpy as np
 from ampere.core.dataset import FittingProblem
 from ampere.results import Optimum, StartSummary, hash_of, provenance_attrs
 
-from .engine import draw_prior_positions
+from .engine import draw_prior_positions, unconstrained_jacobian_correction
 from .exceptions import EngineError
 
 __all__ = [
@@ -95,6 +95,14 @@ OPTIMISE_METHODS = ("auto", "scipy", "map", "vi")
 #: ``-inf`` wall at a support boundary the bijections did not remove (a model
 #: that refuses a region), and the harvested ``ScipyMinOpt``'s own choice.
 DEFAULT_MINIMISER = "Powell"
+
+#: The scipy route's default ``tol``. scipy's own Powell default (``xtol`` and
+#: ``ftol`` of ``1e-4``, the latter *relative* to a log-density in the
+#: hundreds) stops a few hundredths of a nat short, which is a visible
+#: fraction of a posterior width in ``u``; this is what holds the scipy and
+#: native modes to the ``1e-3`` the conformance row asks, for a few hundred
+#: more evaluations per start.
+DEFAULT_TOLERANCE = 1e-8
 
 #: The options each route understands; anything else is refused by name.
 _SCIPY_OPTIONS = frozenset({"minimiser", "tol", "minimiser_options"})
@@ -375,7 +383,7 @@ def _scipy_route(
 
     _check_options("scipy", options, _SCIPY_OPTIONS)
     minimiser = str(options.get("minimiser", DEFAULT_MINIMISER))
-    tol = options.get("tol")
+    tol = float(options.get("tol", DEFAULT_TOLERANCE))
     minimiser_options = dict(options.get("minimiser_options") or {})
     objective = constrained_objective(problem)
     calls = 0
@@ -422,8 +430,357 @@ def _scipy_route(
     )
 
 
+# ---------------------------------------------------------------------------
+# The Jacobian term, for the native routes
+# ---------------------------------------------------------------------------
+
+
+def jacobian_term(problem: FittingProblem, u: np.ndarray) -> float:
+    """``Σ log|dθ/du|`` at *u* — what the realised density carries and a MAP must not.
+
+    :func:`~ampere.inference.engine.unconstrained_jacobian_correction`, the one
+    place that knows the formula, for one vector. ``0`` where the prior itself
+    is not finite, so the term cannot turn the realised ``-inf`` into ``nan``.
+    """
+    value = float(unconstrained_jacobian_correction(problem, u)[0])
+    return value if math.isfinite(value) else 0.0
+
+
+def jacobian_gradient(problem: FittingProblem, u: np.ndarray) -> np.ndarray:
+    """The gradient of :func:`jacobian_term` at *u*, by central differences.
+
+    The term is a smooth elementwise function of ``u`` that touches no model
+    and no data, so ``2 n`` evaluations cost microseconds and a step of
+    ``1e-5 max(1, |u_i|)`` leaves an error near ``1e-10``.
+    """
+    x = np.asarray(u, dtype=float).reshape(-1)
+    out = np.empty(x.size)
+    for i in range(x.size):
+        h = 1e-5 * max(1.0, abs(x[i]))
+        up = x.copy()
+        down = x.copy()
+        up[i] += h
+        down[i] -= h
+        out[i] = (jacobian_term(problem, up) - jacobian_term(problem, down)) / (2.0 * h)
+    return out
+
+
+def _gradient_converged(gradient: np.ndarray, value: float) -> bool:
+    """A native optimiser's convergence test: a finite point with a vanishing gradient."""
+    return bool(
+        math.isfinite(value)
+        and np.all(np.isfinite(gradient))
+        and float(np.max(np.abs(gradient))) < _GRADIENT_TOLERANCE
+    )
+
+
+#: A native optimiser has converged when every component of the objective's
+#: gradient in ``u`` is below this — about a thousandth of a posterior
+#: standard deviation's worth of log-density slope for a well-scaled problem.
+_GRADIENT_TOLERANCE = 1e-3
+
+#: The native routes' options and their defaults.
+_MAP_DEFAULTS: dict[str, Any] = {"steps": 500, "learning_rate": 0.05}
+
+
+# ---------------------------------------------------------------------------
+# Route 2: the gradient MAP through realise
+# ---------------------------------------------------------------------------
+
+
 def _map_route(problem: FittingProblem, positions: np.ndarray, options: dict[str, Any]) -> Optimum:
-    raise EngineError("optimise(method='map') lands in W6.7 unit 5.")
+    from ampere.core.realisation import realise
+
+    _check_options("map", options, frozenset(_MAP_DEFAULTS))
+    settings = {**_MAP_DEFAULTS, **options}
+    steps = int(settings["steps"])
+    learning_rate = float(settings["learning_rate"])
+    if steps < 1 or learning_rate <= 0:
+        raise EngineError(
+            f"optimise('map') needs steps >= 1 and a positive learning_rate, got {steps} and "
+            f"{learning_rate}."
+        )
+    realised = realise(problem)
+    if problem.backend == "torch":
+        fit, hessian = _torch_fit, _torch_hessian
+    elif problem.backend == "jax":
+        fit, hessian = _jax_fit, _jax_hessian
+    else:  # a third registered realisation: the scipy route is the honest answer
+        raise EngineError(
+            f"optimise('map') knows how to drive the torch and jax realisations; this problem's "
+            f"backend is {problem.backend!r}. Use method='scipy'."
+        )
+    summaries: list[StartSummary] = []
+    best: tuple[float, np.ndarray, bool, str] | None = None
+    evaluations = 0
+    for theta in positions:
+        u0 = problem.unconstrain(theta)
+        u, value, converged, message, calls = fit(problem, realised, u0, steps, learning_rate)
+        evaluations += calls
+        status = "converged" if converged else f"not converged: {message}"
+        if not math.isfinite(value):
+            status = f"failed: the optimiser ended where the density is {value}"
+        summaries.append(StartSummary(start_hash(u0), value, status))
+        if math.isfinite(value) and (best is None or value > best[0]):
+            best = (value, u, converged, message)
+    if best is None:
+        raise EngineError(
+            f"optimise('map'): none of the {len(positions)} starts ended at a point the "
+            f"problem can score. problem.failure_summary() says why:\n{problem.failure_summary()}"
+        )
+    _, mode, converged, message = best
+    # The negated objective's Hessian: -(H[log_prob_unconstrained] - H[J]),
+    # the first by the backend's autodiff, the second by finite differences
+    # of the numpy-path term (module docstring: the term is cheap and smooth).
+    curvature = -(
+        hessian(realised, mode)
+        - finite_difference_hessian(lambda u: jacobian_term(problem, u), mode)
+    )
+    covariance, refusal = covariance_from_hessian(curvature)
+    return build_optimum(
+        problem,
+        route="map",
+        unconstrained=mode,
+        covariance=covariance,
+        refusal=refusal,
+        converged=converged,
+        message=message,
+        evaluations=evaluations,
+        starts=tuple(summaries),
+    )
+
+
+def _torch_fit(
+    problem: FittingProblem, realised: Any, u0: np.ndarray, steps: int, learning_rate: float
+) -> tuple[np.ndarray, float, bool, str, int]:
+    """``torch.optim.LBFGS`` from *u0*, with Adam as the fallback.
+
+    The Jacobian term enters each closure call **linearised at the current
+    point** — ``J(u₀) + (u - u₀)·∇J(u₀)`` with ``u₀`` the detached iterate —
+    so the closure's value is the objective exactly and its gradient is the
+    objective's exactly, which is all L-BFGS's line search reads.
+
+    The fallback is :func:`_quasi_newton_then_adam`'s: Adam from the best
+    finite point L-BFGS reached (or the start), then L-BFGS again to polish.
+    """
+    import torch  # pyrefly: ignore[missing-import]
+
+    calls = 0
+
+    def negative(u: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        here = u.detach().cpu().numpy().astype(float)
+        term = torch.as_tensor(jacobian_term(problem, here), dtype=u.dtype)
+        slope = torch.as_tensor(jacobian_gradient(problem, here), dtype=u.dtype)
+        density = realised.log_prob_unconstrained(u)
+        return -(density - term - torch.dot(u - u.detach(), slope))
+
+    def state(u: np.ndarray) -> tuple[float, np.ndarray]:
+        v = torch.tensor(u, dtype=torch.float64, requires_grad=True)
+        loss = negative(v)
+        if not bool(torch.isfinite(loss)):
+            return -math.inf, np.full(u.size, math.nan)
+        (grad,) = torch.autograd.grad(loss, v)
+        return -float(loss.detach()), grad.detach().cpu().numpy().astype(float)
+
+    def quasi_newton(u: np.ndarray) -> tuple[np.ndarray, str]:
+        v = torch.tensor(u, dtype=torch.float64, requires_grad=True)
+        lbfgs = torch.optim.LBFGS(
+            [v],
+            lr=1.0,
+            max_iter=steps,
+            tolerance_grad=_GRADIENT_TOLERANCE * 1e-2,
+            tolerance_change=1e-12,
+            history_size=20,
+            line_search_fn="strong_wolfe",
+        )
+
+        def closure() -> Any:
+            lbfgs.zero_grad()
+            loss = negative(v)
+            loss.backward()
+            return loss
+
+        try:
+            lbfgs.step(closure)
+        except RuntimeError as error:  # a non-finite line search, typically
+            return u, f"torch.optim.LBFGS raised {error}"
+        return v.detach().cpu().numpy().astype(float), "torch.optim.LBFGS"
+
+    def adam(u: np.ndarray) -> np.ndarray:
+        v = torch.tensor(u, dtype=torch.float64, requires_grad=True)
+        optimiser = torch.optim.Adam([v], lr=learning_rate)
+        for _ in range(steps):
+            optimiser.zero_grad()
+            loss = negative(v)
+            if not bool(torch.isfinite(loss)):
+                break
+            loss.backward()
+            optimiser.step()
+        return v.detach().cpu().numpy().astype(float)
+
+    u, value, converged, message = _quasi_newton_then_adam(
+        np.asarray(u0, dtype=float),
+        state,
+        quasi_newton,
+        adam,
+        "torch.optim.Adam",
+        learning_rate,
+        steps,
+    )
+    return u, value, converged, message, calls
+
+
+def _quasi_newton_then_adam(
+    u0: np.ndarray,
+    state: Callable[[np.ndarray], tuple[float, np.ndarray]],
+    quasi_newton: Callable[[np.ndarray], tuple[np.ndarray, str]],
+    adam: Callable[[np.ndarray], np.ndarray],
+    adam_name: str,
+    learning_rate: float,
+    steps: int,
+) -> tuple[np.ndarray, float, bool, str]:
+    """The native routes' one strategy: quasi-Newton, Adam if it fails, quasi-Newton again.
+
+    A quasi-Newton method started from a prior draw takes its first step with
+    an identity inverse Hessian, which on a posterior whose curvature is
+    ``1e4`` in some direction is a step of thousands of units — straight into a
+    saturated bijection where the density is ``-inf``, after which the line
+    search gives up. Adam's step is bounded by its learning rate whatever the
+    gradient, so it walks the same start into the bulk reliably; but it never
+    *converges* by a gradient test there, because it oscillates at the scale
+    of its learning rate. So the fallback is Adam to get close and the
+    quasi-Newton method again to finish, and the message records every leg.
+    """
+    u, name = quasi_newton(u0)
+    value, grad = state(u)
+    if _gradient_converged(grad, value):
+        return u, value, True, f"{name}: converged"
+    restart = u if math.isfinite(value) and np.all(np.isfinite(u)) else u0
+    walked = adam(restart)
+    walked_value, _ = state(walked)
+    if not math.isfinite(walked_value):
+        walked = restart
+    polished, polish_name = quasi_newton(walked)
+    polished_value, polished_grad = state(polished)
+    if not math.isfinite(polished_value):
+        polished, (polished_value, polished_grad) = walked, state(walked)
+    converged = _gradient_converged(polished_grad, polished_value)
+    message = (
+        f"{name} did not converge (max |gradient| above {_GRADIENT_TOLERANCE}); fallback: "
+        f"{adam_name}, lr={learning_rate}, {steps} steps, then {polish_name} again: "
+        f"{'converged' if converged else 'not converged'}"
+    )
+    return polished, polished_value, converged, message
+
+
+def _torch_hessian(realised: Any, mode: np.ndarray) -> np.ndarray:
+    import torch  # pyrefly: ignore[missing-import]
+
+    point = torch.tensor(np.asarray(mode, dtype=float), dtype=torch.float64)
+    hessian = torch.autograd.functional.hessian(realised.log_prob_unconstrained, point)
+    return np.asarray(hessian.detach().cpu().numpy(), dtype=float)
+
+
+def _jax_objective(problem: FittingProblem, realised: Any) -> Callable[[Any], Any]:
+    """The negated objective as a jax function, the Jacobian term by callback.
+
+    ``jax.scipy.optimize.minimize`` traces its function, so the numpy-path
+    term goes in through :func:`jax.pure_callback` with a custom JVP whose
+    tangent is ``∇J · t`` — linear in ``t``, so reverse mode can transpose it
+    and ``jax.value_and_grad`` sees the exact gradient.
+    """
+    import jax  # pyrefly: ignore[missing-import]
+    import jax.numpy as jnp  # pyrefly: ignore[missing-import]
+
+    def value(u: Any) -> np.ndarray:
+        return np.asarray(jacobian_term(problem, np.asarray(u, dtype=float)), dtype=np.float64)
+
+    def slope(u: Any) -> np.ndarray:
+        return np.asarray(jacobian_gradient(problem, np.asarray(u, dtype=float)), dtype=np.float64)
+
+    @jax.custom_jvp
+    def term(u: Any) -> Any:
+        return jax.pure_callback(value, jax.ShapeDtypeStruct((), jnp.float64), u)
+
+    @term.defjvp
+    def _term_jvp(primals: Any, tangents: Any) -> Any:
+        (u,) = primals
+        (t,) = tangents
+        gradient = jax.pure_callback(slope, jax.ShapeDtypeStruct(u.shape, jnp.float64), u)
+        return term(u), jnp.dot(gradient, t)
+
+    def negative(u: Any) -> Any:
+        return -(realised.log_prob_unconstrained(u) - term(u))
+
+    return negative
+
+
+def _jax_fit(
+    problem: FittingProblem, realised: Any, u0: np.ndarray, steps: int, learning_rate: float
+) -> tuple[np.ndarray, float, bool, str, int]:
+    """``jax.scipy.optimize.minimize(method="BFGS")`` from *u0*, ``optax.adam`` as the fallback.
+
+    The strategy is :func:`_quasi_newton_then_adam`'s, as on torch.
+    """
+    import jax  # pyrefly: ignore[missing-import]
+    import jax.numpy as jnp  # pyrefly: ignore[missing-import]
+    import optax  # pyrefly: ignore[missing-import]
+    from jax.scipy.optimize import minimize  # pyrefly: ignore[missing-import]
+
+    negative = _jax_objective(problem, realised)
+    value_and_grad = jax.jit(jax.value_and_grad(negative))
+    calls = 0
+
+    def state(u: np.ndarray) -> tuple[float, np.ndarray]:
+        nonlocal calls
+        calls += 1
+        loss, grad = value_and_grad(jnp.asarray(u, dtype=jnp.float64))
+        value = -float(loss)
+        return (value if math.isfinite(value) else -math.inf), np.asarray(grad, dtype=float)
+
+    def quasi_newton(u: np.ndarray) -> tuple[np.ndarray, str]:
+        nonlocal calls
+        result = minimize(
+            negative, jnp.asarray(u, dtype=jnp.float64), method="BFGS", options={"maxiter": steps}
+        )
+        calls += int(result.nfev) + int(result.njev)
+        name = f"jax.scipy.optimize.minimize('BFGS') (status {int(result.status)})"
+        return np.asarray(result.x, dtype=float), name
+
+    optimiser = optax.adam(learning_rate)
+
+    @jax.jit
+    def step(params: Any, opt_state: Any) -> Any:
+        loss, grads = jax.value_and_grad(negative)(params)
+        updates, opt_state = optimiser.update(grads, opt_state, params)
+        return optax.apply_updates(params, updates), opt_state, loss
+
+    def adam(u: np.ndarray) -> np.ndarray:
+        nonlocal calls
+        params = jnp.asarray(u, dtype=jnp.float64)
+        opt_state = optimiser.init(params)
+        for _ in range(steps):
+            candidate, candidate_state, loss = step(params, opt_state)
+            calls += 1
+            if not bool(jnp.isfinite(loss)):
+                break
+            params, opt_state = candidate, candidate_state
+        return np.asarray(params, dtype=float)
+
+    u, value, converged, message = _quasi_newton_then_adam(
+        np.asarray(u0, dtype=float), state, quasi_newton, adam, "optax.adam", learning_rate, steps
+    )
+    return u, value, converged, message, calls
+
+
+def _jax_hessian(realised: Any, mode: np.ndarray) -> np.ndarray:
+    import jax  # pyrefly: ignore[missing-import]
+    import jax.numpy as jnp  # pyrefly: ignore[missing-import]
+
+    point = jnp.asarray(np.asarray(mode, dtype=float), dtype=jnp.float64)
+    return np.asarray(jax.hessian(realised.log_prob_unconstrained)(point), dtype=float)
 
 
 def _vi_route(problem: FittingProblem, positions: np.ndarray, options: dict[str, Any]) -> Optimum:

@@ -1006,7 +1006,7 @@ def provenance_attrs(
     # W6.7, schema 9: what the run started from.
     record = getattr(start, "start_record", None)
     if callable(record):
-        attrs["start_route"] = str(getattr(start, "route"))
+        attrs["start_route"] = str(start.route)
         attrs["start"] = canonical_json(record())
     else:
         attrs["start_route"] = str(start)

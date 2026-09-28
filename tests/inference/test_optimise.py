@@ -344,3 +344,50 @@ class TestTheStartInProvenance:
         tree = conjugate_optimum.to_datatree()
         assert tree.attrs["ampere_schema_version"] == 9
         assert "posterior" not in tree.children
+
+
+# ---------------------------------------------------------------------------
+# (a) The native routes, on sed_composition's torch and jax twins
+# ---------------------------------------------------------------------------
+
+NATIVE = [
+    pytest.param(
+        "torch", marks=pytest.mark.skipif(not HAS_TORCH, reason="torch is not installed here")
+    ),
+    pytest.param("jax", marks=pytest.mark.skipif(not HAS_JAX, reason="jax is not installed here")),
+]
+
+
+@pytest.fixture(scope="module")
+def sed_scipy() -> Optimum:
+    """The scipy route's mode on the reference twin, shared by the native rows."""
+    from examples.sed_composition.sed_composition import build_problem
+
+    return optimise(build_problem("reference"), method="scipy", starts=2)
+
+
+@pytest.mark.parametrize("backend", NATIVE)
+class TestTheMapRoute:
+    def test_inside_the_sampled_central_50_percent(
+        self, backend: str, sed_posterior: dict[str, np.ndarray], sed_scipy: Optimum
+    ) -> None:
+        """The native twin composes the same declaration on the same data (same
+        seed), so the reference emcee posterior is its posterior too."""
+        from examples.sed_composition.sed_composition import build_problem
+
+        problem = build_problem(backend)
+        optimum = optimise(problem, method="map", starts=2)
+        assert optimum.route == "map" and optimum.backend == backend and optimum.converged
+        assert central_50(optimum, sed_posterior) == dict.fromkeys(optimum.free_names, True)
+        # the objective convention is one convention: same mode as scipy's
+        np.testing.assert_allclose(optimum.unconstrained, sed_scipy.unconstrained, atol=1e-3)
+        # and the autodiff curvature is the finite-difference one
+        assert optimum.covariance is not None and sed_scipy.covariance is not None
+        np.testing.assert_allclose(
+            np.sqrt(np.diag(optimum.covariance)), np.sqrt(np.diag(sed_scipy.covariance)), rtol=0.02
+        )
+
+    def test_auto_takes_the_map_route(self, backend: str) -> None:
+        from examples.sed_composition.sed_composition import build_problem
+
+        assert optimise(build_problem(backend), starts=1).route == "map"
