@@ -379,6 +379,18 @@ markers = [
     # they run in `dev` only -- unlike the `*_full` markers above, this is
     # not opt-in by `-m`; it is opt-out by environment.
     "study: a study's numpy-path-only sampling row; skipped outside `dev` (see tests/conftest.py)",
+    # W6.6 (c). Replaces W5.18's 26 `--deselect=tests/inference/test_sbi.py::...`
+    # flags on `test-fast` (below) with one marker on the classes that train
+    # an sbi network -- minutes each, so still deliberately out of `test-fast`,
+    # but a marker rather than a per-node deselect list now that W5.32 (i)
+    # settled this markers list's shape. Applied to the 26 `@needs_sbi`
+    # classes in `tests/inference/test_sbi.py` that call `.run(...)`/train,
+    # plus `tests/inference/test_interferometry.py`'s one training class.
+    # Unlike `study` above, `dev` never needs an opt-out here: these classes
+    # already skip in `dev` for want of the `sbi`/`torch` extra, so the
+    # marker only matters in `-e sbi` and `-e torch`, where `test-all` and
+    # CI's sbi cell run them (`pytest -m sbi_training` selects just these).
+    "sbi_training: trains an sbi network (minutes); excluded from test-fast, run by test-all/CI's sbi cell",
 ]
 
 # ---------------------------------------------------------------------------
@@ -504,31 +516,33 @@ test-all = "pytest tests/core tests/results tests/conformance tests/backends tes
 #     tests/m2/conftest.py's/tests/results/conftest.py's own hook outside
 #     `dev`; that hook does not fire in `dev`, so `dev` needs this
 #     explicit deselection to stay fast.
-#   * the SBI-training classes in tests/inference/test_sbi.py: identified
-#     by their `@needs_sbi` class decorator together with a
-#     `budget=`/`.run(...)` training call (a coarse, class-level cut --
-#     e.g. TestThePriorBridge itself does not train, but shares the same
-#     `@needs_sbi` gate as the classes that do, so it is swept in with
-#     them for one exact mechanism rather than a per-method one).
-#     Excluded by `--deselect` on the precise `file::Class` node id, not a
-#     new marker -- `pyproject.toml`'s `markers` list above is W5.32's,
-#     not this item's. `dev` has neither the `torch` nor the `sbi` extra,
-#     so every one of these rows already skips for free here (this
-#     deselection changes nothing about `dev`'s wall clock); it is what
-#     keeps this task fast if it is ever run under `-e sbi` or `-e torch`,
-#     which is the point of a task meant to be run before every commit,
-#     not only in `dev`. (`tests/inference/test_tmnre.py` does not exist:
-#     the TMNRE classes live inside `test_sbi.py` and are covered by the
-#     same class list -- `TestWhatTMNRERefuses` does not train and is not
-#     deselected.) `TestTheRunItEmits` is also a class name in
-#     `tests/inference/test_vi.py`; the `file::Class` form below is exact
-#     about which one, unlike a bare `-k` name would have been.
-# Measured on this branch (2026-09-27, `pixi run -e dev test-fast`, one
-# run through the machine's gate lock): 2879 passed / 425 skipped / 244
-# deselected in 2 min 55 s (3 min 02 s wall clock with pixi's start-up);
-# 3299 of 3543 collected rows selected, the 244 deselected being the
-# `study` rows, the 26 SBI-training classes and the two classes above.
-test-fast = "pytest tests/core tests/results tests/conformance tests/backends tests/inference tests/m2 -m \"not study\" --deselect=tests/inference/test_sbi.py::TestThePriorBridge --deselect=tests/inference/test_sbi.py::TestNPERecoversTheJointPosterior --deselect=tests/inference/test_sbi.py::TestTheRunItEmits --deselect=tests/inference/test_sbi.py::TestTheOtherTwoFamiliesRunEndToEnd --deselect=tests/inference/test_sbi.py::TestTheEmbeddingVocabulary --deselect=tests/inference/test_sbi.py::TestABlackBoxSimulatorOnTheReferenceBackend --deselect=tests/inference/test_sbi.py::TestTheTrainingSetPath --deselect=tests/inference/test_sbi.py::TestTheShippedExample --deselect=tests/inference/test_sbi.py::TestMultipleRounds --deselect=tests/inference/test_sbi.py::TestTheSetEmbeddingWrapper --deselect=tests/inference/test_sbi.py::TestTheTransformerWrapper --deselect=tests/inference/test_sbi.py::TestTheSetLayoutEndToEnd --deselect=tests/inference/test_sbi.py::TestTheArtefactCache --deselect=tests/inference/test_sbi.py::TestServingANamedArtefact --deselect=tests/inference/test_sbi.py::TestTheCalibrationFastPath --deselect=tests/inference/test_sbi.py::TestTMNRERecoversTheJointPosterior --deselect=tests/inference/test_sbi.py::TestTheTruncationHistory --deselect=tests/inference/test_sbi.py::TestTheMarginalsGroup --deselect=tests/inference/test_sbi.py::TestTMNRECalibrationAndCaching --deselect=tests/inference/test_sbi.py::TestTheShippedTMNREExample --deselect=tests/inference/test_sbi.py::TestTorchIsSeededFromTheProblem --deselect=tests/inference/test_sbi.py::TestCalibrateReseedsTorch --deselect=tests/inference/test_sbi.py::TestAmortisationOverTheObservationContext --deselect=tests/inference/test_sbi.py::TestTheFilmConditioningRoute --deselect=tests/inference/test_sbi.py::TestTheContextIsInTheCacheKey --deselect=tests/inference/test_sbi.py::TestTheBatchedPathDrawsTheContext --deselect=tests/results/test_plots.py::TestCornerPaging --deselect=tests/results/test_calibration.py::TestTheRefitLoop"
+#   * the SBI-training classes: W6.6 (c) replaced the 26 `--deselect`
+#     flags this bullet used to describe (one per `tests/inference/test_sbi.py`
+#     class, identified by `@needs_sbi` together with a `budget=`/`.run(...)`
+#     training call) with the `sbi_training` marker registered in the
+#     `markers` list above, now that W5.32 (i) settled that list's shape.
+#     `-m "not study and not sbi_training"` below excludes them, plus
+#     `tests/inference/test_interferometry.py::TestSBIOnVisibilitiesAndClosurePhases`,
+#     the interferometry study's own training class, which joins the same
+#     marker here for the same reason. `dev` has neither the `torch` nor
+#     the `sbi` extra, so every one of these rows already skips for free
+#     here (the marker changes nothing about `dev`'s wall clock); it is
+#     what keeps this task fast if it is ever run under `-e sbi` or
+#     `-e torch`, which is the point of a task meant to be run before every
+#     commit, not only in `dev`. (`tests/inference/test_tmnre.py` does not
+#     exist: the TMNRE classes live inside `test_sbi.py` and carry the same
+#     marker -- `TestWhatTMNRERefuses` does not train and is not marked.)
+# Measured on this branch (2026-09-27, `pixi run -e dev test-fast`, one run
+# through the machine's gate lock, before W6.6 (c)'s marker swap): 2879
+# passed / 425 skipped / 244 deselected in 2 min 55 s (3 min 02 s wall
+# clock with pixi's start-up); 3299 of 3543 collected rows selected. W6.6
+# (c) (2026-09-28, `--collect-only`, tree since grown): 3311/3555 collected
+# (244 deselected) under the old 26-deselect form, 3306/3555 collected (249
+# deselected) under this marker form -- five fewer, exactly
+# `TestSBIOnVisibilitiesAndClosurePhases`'s five test methods, the one class
+# that newly joins the exclusion; `dev`'s wall clock is unaffected either
+# way, since that class already skipped there for want of the `sbi` extra.
+test-fast = "pytest tests/core tests/results tests/conformance tests/backends tests/inference tests/m2 -m \"not study and not sbi_training\" --deselect=tests/results/test_plots.py::TestCornerPaging --deselect=tests/results/test_calibration.py::TestTheRefitLoop"
 # W5.26 (3): `ci.yml`'s `suites` (dev) and `backend-suites`
 # (torch/jax/sbi/nested) jobs run these three groups as separate matrix
 # cells instead of `test-all` as one forty-minute step, so a red row in one

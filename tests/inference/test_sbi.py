@@ -230,6 +230,7 @@ def two_dataset_problem(seed: int | None = SEED) -> FittingProblem:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.sbi_training
 @needs_sbi
 class TestThePriorBridge:
     """``sample`` and ``log_prob`` must be one distribution, not two."""
@@ -550,6 +551,7 @@ def npe_run() -> Any:
     return engine.run(draws=1000)
 
 
+@pytest.mark.sbi_training
 @needs_sbi
 class TestNPERecoversTheJointPosterior:
     """Accept criterion 1: mean and width against the emcee reference."""
@@ -585,6 +587,7 @@ class TestNPERecoversTheJointPosterior:
         assert 0.6 < float(drawn.std()) / width < 1.5
 
 
+@pytest.mark.sbi_training
 @needs_sbi
 class TestTheRunItEmits:
     """``results.md``'s obligations, discharged by this driver like any other."""
@@ -712,6 +715,7 @@ def mcmc_run(request: Any) -> tuple[str, Any]:
     return method, run
 
 
+@pytest.mark.sbi_training
 @needs_sbi
 class TestTheOtherTwoFamiliesRunEndToEnd:
     """Accept criterion 2. Both sample by MCMC, so the budgets are tiny."""
@@ -747,6 +751,7 @@ class TestTheOtherTwoFamiliesRunEndToEnd:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.sbi_training
 @needs_sbi
 class TestTheEmbeddingVocabulary:
     """``ampere/infer/sbi.py``'s four spellings, carried over and refused precisely."""
@@ -900,6 +905,7 @@ def pooled_external_run() -> Any:
     return engine.run(draws=50, training={"max_num_epochs": 20})
 
 
+@pytest.mark.sbi_training
 @needs_sbi
 class TestABlackBoxSimulatorOnTheReferenceBackend:
     """Accept criterion 3, and the case the whole engine exists for.
@@ -950,6 +956,7 @@ class TestABlackBoxSimulatorOnTheReferenceBackend:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.sbi_training
 @needs_sbi
 class TestTheTrainingSetPath:
     """``training_set=``: the pairs on disk, written a chunk at a time."""
@@ -969,6 +976,7 @@ class TestTheTrainingSetPath:
         assert len(training) == 60
 
 
+@pytest.mark.sbi_training
 @needs_sbi
 class TestTheShippedExample:
     """``examples/sbi/fit_external_simulator.py`` runs, and reports what it fitted.
@@ -989,6 +997,7 @@ class TestTheShippedExample:
         assert run["posterior"].dataset.sizes["draw"] == 20
 
 
+@pytest.mark.sbi_training
 @needs_sbi
 class TestMultipleRounds:
     """``rounds=``: each round after the first proposes from the last posterior."""
@@ -1069,6 +1078,7 @@ class TestTheLayoutArgument:
             _embedding_of(None, torch=None, features=0, free_size=1, layout=layout)
 
 
+@pytest.mark.sbi_training
 @needs_sbi
 class TestTheSetEmbeddingWrapper:
     """The masked-pooling wrapper, checked on its own before any training.
@@ -1175,6 +1185,7 @@ class TestTheSetEmbeddingWrapper:
         assert module.net.aggregation_fn == "mean"
 
 
+@pytest.mark.sbi_training
 @needs_sbi
 class TestTheTransformerWrapper:
     """Non-causal, no positional embedding, explicit dropout, and masked."""
@@ -1318,6 +1329,7 @@ class TestTheTransformerWrapper:
             _transformer_masked_mean(Causal(), tokens, keep)
 
 
+@pytest.mark.sbi_training
 @needs_sbi
 class TestTheSetLayoutEndToEnd:
     """Accept criterion: it trains and samples on a two-dataset toy problem."""
@@ -1429,6 +1441,7 @@ class TestTheSetLayoutEndToEnd:
         assert "z_score_x" not in seen
 
 
+@pytest.mark.sbi_training
 @needs_sbi
 class TestTheArtefactCache:
     """W3.5's wiring: a second identical run trains nothing and says so."""
@@ -1482,6 +1495,7 @@ class TestTheArtefactCache:
         assert run.attrs["ampere_sbi_cache_hit"] == 1
 
 
+@pytest.mark.sbi_training
 @needs_sbi
 class TestServingANamedArtefact:
     """W5.23: ``serve_artefact=`` restores one named digest regardless of match.
@@ -1649,6 +1663,7 @@ def calibration(calibration_engine: Any) -> Any:
     return calibration_engine.calibrate(count=CALIBRATION_COUNT, posterior_draws=CALIBRATION_DRAWS)
 
 
+@pytest.mark.sbi_training
 @needs_sbi
 class TestTheCalibrationFastPath:
     """``diagnostics.md`` §11 on the route where re-conditioning is free."""
@@ -1977,6 +1992,7 @@ def tmnre_run() -> Any:
     return engine.run(draws=TMNRE_DRAWS, training={"max_num_epochs": TMNRE_EPOCHS})
 
 
+@pytest.mark.sbi_training
 @needs_sbi
 class TestTMNRERecoversTheJointPosterior:
     """Accept criterion 1: the run recovers the toy joint posterior.
@@ -2075,6 +2091,7 @@ class TestTMNRERecoversTheJointPosterior:
         assert np.all(np.isfinite(np.asarray(stats["ampere_sbi_log_prob"])))
 
 
+@pytest.mark.sbi_training
 @needs_sbi
 class TestTheTruncationHistory:
     """Accept criterion 2: the boxes nest, they contain the truth, and say so."""
@@ -2154,6 +2171,7 @@ def pair_run() -> Any:
     return engine, run
 
 
+@pytest.mark.sbi_training
 @needs_sbi
 class TestTheMarginalsGroup:
     """Accept criterion 3: the group carries 1-D and 2-D and survives netCDF."""
@@ -2267,6 +2285,7 @@ def bounded_tmnre() -> Any:
     return engine
 
 
+@pytest.mark.sbi_training
 @needs_sbi
 class TestTMNRECalibrationAndCaching:
     """Accept criterion 4, and W3.5's store against a run with more in it."""
@@ -2353,6 +2372,7 @@ class TestTMNRECalibrationAndCaching:
         assert again.attrs["ampere_sbi_cache_hit"] == 0
 
 
+@pytest.mark.sbi_training
 @needs_sbi
 class TestTheShippedTMNREExample:
     """``examples/sbi/tmnre_fit.py`` runs, at the budget it is asked for."""
@@ -2377,6 +2397,7 @@ class TestTheShippedTMNREExample:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.sbi_training
 @needs_sbi
 class TestTorchIsSeededFromTheProblem:
     """Before this, ``problem.seed`` fixed the budget and nothing else.
@@ -2455,6 +2476,7 @@ class TestTorchIsSeededFromTheProblem:
         assert isinstance(run.attrs["ampere_sbi_torch_seed"], int)
 
 
+@pytest.mark.sbi_training
 @needs_sbi
 class TestCalibrateReseedsTorch:
     """W5.28(j): ``calibrate()`` reseeds torch as ``run()`` does, for the same reason.
@@ -2590,6 +2612,7 @@ def uncovered_calibration(amortised: Any) -> Any:
     )
 
 
+@pytest.mark.sbi_training
 @needs_sbi
 class TestAmortisationOverTheObservationContext:
     """W5.10's acceptance row: calibrated where the prior reaches, and not beyond.
@@ -2677,6 +2700,7 @@ class TestAmortisationOverTheObservationContext:
         assert report.attrs["ampere_calibration_context"] == "none"
 
 
+@pytest.mark.sbi_training
 @needs_sbi
 class TestTheFilmConditioningRoute:
     """W5.10's opt-in second route: off by default, and it trains when on."""
@@ -2765,6 +2789,7 @@ class TestTheFilmConditioningRoute:
         assert isinstance(restored.film.net, torch.nn.Sequential)
 
 
+@pytest.mark.sbi_training
 @needs_sbi
 class TestTheContextIsInTheCacheKey:
     """W5.10: the store must not serve a network trained under another context.
@@ -2827,6 +2852,7 @@ class TestTheContextIsInTheCacheKey:
         assert run.attrs["ampere_sbi_cache_hit"] == 0
 
 
+@pytest.mark.sbi_training
 @needs_sbi
 class TestTheBatchedPathDrawsTheContext:
     """**W5.29**: a context-amortised run on a native problem takes the batched path.
