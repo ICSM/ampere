@@ -632,14 +632,12 @@ class TestTheImportCost:
 
     Checked by **parsing the module**, the way ``tests/inference/test_engines.py``
     checks ``ampere.inference``'s import graph, rather than by grepping the
-    prose. A runtime probe — ``'astropy.modeling' in sys.modules`` after
-    ``import ampere.core`` — cannot be written today and the reason is worth
-    recording: ``ampere/__init__.py`` imports the frozen legacy
-    ``ampere.models``, and ``ampere/models/starScreen.py`` imports
-    ``astropy.modeling`` at module scope, so the submodule is already present
-    before ``ampere.core`` is reached. That is a legacy cost this item does not
-    touch; what it must not do is *add* one, and this row is what holds it to
-    that.
+    prose, and — since W6.0 — also by a direct runtime probe: ``import
+    ampere.core`` alone no longer drags in the frozen legacy
+    ``ampere.models`` (``ampere/__init__.py`` imports no legacy module
+    eagerly any more), so ``'astropy.modeling' in sys.modules`` after
+    ``import ampere.core`` now measures this package's own cost rather than
+    ``ampere/models/starScreen.py``'s.
     """
 
     def test_astropy_modeling_is_imported_inside_a_function_not_at_module_scope(self) -> None:
@@ -670,21 +668,23 @@ class TestTheImportCost:
         )
 
     def test_importing_the_module_alone_does_not_import_astropy_modeling(self) -> None:
-        """The same claim at run time, with the legacy import stubbed out of the way.
+        """The same claim at run time, directly.
 
-        The frozen legacy subpackages are replaced by empty stand-ins before
-        ``ampere.core`` is imported, so what is measured is this package's own
-        import cost rather than ``ampere/models/starScreen.py``'s.
+        Before W6.0 this probe had to stub the four legacy subpackages out
+        of the way first, because ``ampere/__init__.py`` imported them
+        eagerly and ``ampere/models/starScreen.py`` imports
+        ``astropy.modeling`` at module scope -- the submodule would already
+        have been present before ``ampere.core`` was ever reached. W6.0
+        removed that eager import (``import ampere`` now installs a
+        lazy-alias finder and nothing else), so the probe now measures
+        ``ampere.core``'s own cost with no stubbing required.
         """
         probe = subprocess.run(
             [
                 sys.executable,
                 "-c",
                 (
-                    "import sys, types\n"
-                    "for name in ('ampere.models', 'ampere.data', 'ampere.infer', "
-                    "'ampere.utils'):\n"
-                    "    sys.modules[name] = types.ModuleType(name)\n"
+                    "import sys\n"
                     "import ampere.core\n"
                     "print('astropy.modeling' in sys.modules)\n"
                     "print(hasattr(ampere.core, 'from_astropy'))\n"
