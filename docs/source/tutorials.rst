@@ -8,6 +8,7 @@ Ampere v2
    :maxdepth: 2
 
    sed_composition
+   photometry_spectra
    m2_misspecification
    interferometry
    astrometry
@@ -19,6 +20,11 @@ Ampere v2
 :doc:`sed_composition` is the simplest composition there is — one model, a
 spectrum and a photometric catalogue, two instruments on one channel — and
 the page to start with if you have not built a multi-dataset fit before.
+:doc:`photometry_spectra` extends that composition to three observations of
+one source — two spectrographs of different resolving power, each with its
+own uncertain calibration factor, and a catalogue — with the factors tied or
+left free and the flexible likelihood as the complement for the residual
+calibration alone cannot explain.
 :doc:`m2_misspecification` is the flagship study: a deliberately misspecified
 spectrum, fitted with and without the flexible likelihood, at three data
 sizes and on all three backends, with the timings. :doc:`interferometry` is
