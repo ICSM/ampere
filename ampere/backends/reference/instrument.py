@@ -696,7 +696,7 @@ class SyntheticPhotometry(_Step):
         """Build a step from a pyphot filter library, interpolated onto *wavelength*.
 
         Targets pyphot >= 2's unit-adapter API through
-        :mod:`ampere.utils.pyphot_compat`, whose ``get_unit`` is the supported
+        :mod:`ampere.legacy.utils.pyphot_compat`, whose ``get_unit`` is the supported
         way to attach units to an array for pyphot — never the ``pyphot.unit``
         registry, which pyphot 2 removed.
 
@@ -730,7 +730,7 @@ class SyntheticPhotometry(_Step):
         # should not pay for.
         import pyphot
 
-        from ampere.utils.pyphot_compat import get_unit
+        from ampere.legacy.utils.pyphot_compat import get_unit
 
         grid = _to_micron(wavelength)
         if library is None:

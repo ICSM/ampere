@@ -119,9 +119,9 @@ def _contract_call(backend: str, size: int, likelihood: str, solver: str) -> Cal
 def _legacy_call(size: int) -> Callable[[], float]:
     import scipy.stats as st
 
-    from ampere.data import Spectrum as LegacySpectrum
-    from ampere.models import Model as LegacyModel
-    from ampere.models.results import ModelResults
+    from ampere.legacy.data import Spectrum as LegacySpectrum
+    from ampere.legacy.models import Model as LegacyModel
+    from ampere.legacy.models.results import ModelResults
     from examples.m2_misspecification.model import (
         LINE1_CENTRE,
         LINE1_WIDTH,
