@@ -83,6 +83,23 @@ pytest.importorskip("arviz", reason="ampere.results needs arviz")
 
 pyplot = pytest.importorskip("matplotlib.pyplot")
 
+
+@pytest.fixture(autouse=True)
+def _close_all_figures_after_each_test():
+    """W6.6 (b): close every figure a test leaves open.
+
+    Several classes here render one or more figures per test without an
+    explicit ``pyplot.close`` (unlike ``TestCornerPaging``, which closes its
+    own pages in a ``try``/``finally``). Left open, the file's full run
+    crosses matplotlib's default 20-open-figure ``RuntimeWarning`` threshold.
+    A single autouse fixture is simpler than adding a close to every test and
+    is safe alongside the classes that already close explicitly -- closing an
+    already-closed figure, or a list of them, is a no-op.
+    """
+    yield
+    pyplot.close("all")
+
+
 GRID = np.linspace(1.0, 9.0, 24)
 SIGMA = 0.05
 TRUTH = {"model.index": -1.0, "model.norm": 1.0}
