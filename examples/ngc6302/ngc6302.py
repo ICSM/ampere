@@ -46,35 +46,54 @@ Legacy's own ``lims`` array (``examples/NGC6302.py`` lines 99-110, confirmed
 by printing it: ``[-6, 0]`` for the eleven log-abundances, ``[10, 80]`` for
 ``Tcold0``/``Tcold1``, ``[80, 180]`` for ``Twarm0``/``Twarm1``) is
 reproduced as eleven ``st.uniform(-6.0, 6.0)`` priors (seven cold --
-species 0-4, 6, 7 -- and four warm -- species 1, 2, 5, 7) plus four
-``st.uniform(10.0, 70.0)``/``st.uniform(80.0, 100.0)`` priors.
+species 0-4, 6, 7 -- and four warm -- species 1, 2, 5, 7) plus the four
+temperature-family parameters below.
 
 **Temperature ordering.** Legacy's own ``lnprior`` (``examples/NGC6302.py``
-lines 257-274) does enforce ``Tcold1 > Tcold0`` and ``Twarm1 > Twarm0`` --
-but as a hard rejection *on top of* the identical box for both parameters,
-giving a flat joint density over the ordered triangle
-``{10 <= Tcold0 < Tcold1 <= 80}`` (and likewise for the warm pair). v2's
-:class:`~ampere.core.Parameter` priors are independent per parameter, with
-one conditioning mechanism (:class:`~ampere.core.parameter.HierarchicalPrior`)
-for a prior whose distribution parameters are themselves other parameters'
-*values*; there is no way to express "loc a, scale (80 - a)" through it (the
-mapping is a name reference, not an arithmetic expression), so a
-hierarchical ``Tcold1 | Tcold0 ~ Uniform(Tcold0, 80)`` is not directly
-constructible, and the nearest one that is (a fixed ``scale``) would break
-the "same box" the ruling asks to keep. Per ruling 1's own escape hatch for
-exactly this situation, this twin gives ``Tcold0``/``Tcold1`` (and
-``Twarm0``/``Twarm1``) the **same, independent** box legacy's ``lims``
-literally declares for both, named the same way (``Tcold0`` the outer/cooler
-radius, ``Tcold1`` the inner/hotter one -- legacy's own convention). The
-prior itself does not structurally forbid ``Tcold0 > Tcold1``; the forward
-model does not silently reorder a disordered draw either -- ``Tcold1`` is
-always passed as ``ckmodbb``'s ``tin`` and ``Tcold0`` as its ``tout``,
-exactly as legacy calls it, so a disordered draw is scored by the same
-physics, not given a free pass -- and the likelihood is what does the
-discriminating (the two shells' data-implied temperatures are far enough
-apart, and the model's ``tin``-referenced power law is not symmetric under
-exchange, that the posterior is not expected to reward disorder). The
-coverage run below is the check that this in fact works.
+lines 257-274) enforces ``Tcold1 > Tcold0`` and ``Twarm1 > Twarm0`` as a
+hard rejection *on top of* the identical box for both parameters, giving a
+flat joint density over the ordered triangle
+``{10 <= Tcold0 < Tcold1 <= 80}`` (and likewise for the warm pair, over
+``{80 <= Twarm0 < Twarm1 <= 180}``). This twin reproduces that triangle
+**exactly**, without a rejection step, via one derived quantity per pair
+(Peter's ruling, 2026-09-29): ``Tcold0 ~ st.triang(c=0, loc=10.0,
+scale=70.0)`` -- density proportional to ``80 - Tcold0`` on ``[10, 80]``,
+confirmed 2026-09-29 -- and ``Tcold_fraction ~ st.uniform(0.0, 1.0)``,
+independent, with ``Tcold1 = Tcold0 + Tcold_fraction * (80 - Tcold0)``
+computed in :meth:`KemperTwoShell.evaluate` (and, identically,
+``Twarm0 ~ st.triang(c=0, loc=80.0, scale=100.0)``,
+``Twarm_fraction ~ st.uniform(0.0, 1.0)``,
+``Twarm1 = Twarm0 + Twarm_fraction * (180 - Twarm0)``).
+
+**Why it is exact.** The map ``(T0, f) -> (T0, T1)`` (fixing ``T0``,
+``T1 = T0 + f * (80 - T0)``) has Jacobian ``dT1/df = 80 - T0``, so the joint
+density of the pair transforms as
+``p(T0, T1) = p(T0) p(f) / |dT1/df| = [k (80 - T0)] * 1 / (80 - T0) = k`` --
+constant on the triangle ``{10 <= T0 < T1 <= 80}``, precisely legacy's own
+flat ordered prior, reproduced through two independent priors and one
+derived quantity rather than a rejection step.
+:class:`~ampere.core.parameter.HierarchicalPrior` still cannot express this
+directly (it binds a raw value to a keyword, not an arithmetic expression
+like "loc a, scale 80 - a"), which is why the derived quantity lives in
+:meth:`~KemperTwoShell.evaluate` instead. A row in
+:mod:`tests.examples.test_ngc6302` checks the exactness numerically: at
+1 000 random points of the triangle, ``log p(T0) + log p(f) - log(80 - T0)``
+is constant to ``1e-10`` (and likewise for the warm pair, against ``180``).
+
+The legacy names ``Tcold1``/``Twarm1`` survive as **derived quantities**
+(:func:`derived_temperatures`), not fitted parameters: :func:`report` prints
+all four physical temperatures from the posterior draws beside the declared
+ones, and :func:`recovers_truth` scores the four declared temperature-family
+parameters plus the two derived ones.
+
+History: the first draft of this twin gave ``Tcold0``/``Tcold1`` (and
+``Twarm0``/``Twarm1``) the same, independent, *unordered* box legacy's
+``lims`` literally declares for both, reasoning that v2's per-parameter
+priors have no direct way to express "loc a, scale (80 - a)"; the 900-step
+coverage run below (see "History" in that section) showed that choice
+lets the ensemble settle into disordered, data-compatible modes that never
+recombine, which the exact reparameterisation above forecloses by
+construction.
 
 The data
 --------
@@ -116,8 +135,9 @@ instead of the real spectrum: the model evaluated at the "2002 solution"
 for its source and the species correspondence), on the observed wavelength
 selection, plus Gaussian noise at the data's own five-per-cent uncertainty
 rule. :func:`recovers_truth` checks the fifteen model parameters plus the
-calibration factor (``iso.instrument.calibration_scale.scale``, truth 1.0)
--- the GP's own hyperparameters have a prior but no injected truth, as in
+calibration factor (``iso.instrument.calibration_scale.scale``, truth 1.0),
+**and** the two derived temperatures ``Tcold1``/``Twarm1`` (ruling 2) -- the
+GP's own hyperparameters have a prior but no injected truth, as in
 :mod:`examples.linear_sed`.
 
 ::
@@ -168,6 +188,7 @@ import argparse
 import math
 import sys
 import time
+from collections.abc import Mapping
 from typing import Any
 
 import astropy.units as u
@@ -203,9 +224,11 @@ __all__ = [
     "DEFAULT_GRID",
     "DEFAULT_STEPS",
     "DEFAULT_WALKERS",
+    "DERIVED_TRUTH",
     "ENGINES",
     "GP_AMPLITUDE_PRIOR",
     "GP_LENGTH_SCALE_PRIOR",
+    "PHYSICAL_TRUTH",
     "QUALIFIED_TRUTH",
     "QUICK_BURN_IN",
     "QUICK_STEPS",
@@ -213,6 +236,7 @@ __all__ = [
     "build_instrument",
     "build_model",
     "build_problem",
+    "derived_temperatures",
     "fit",
     "main",
     "recovers_truth",
@@ -244,12 +268,65 @@ ENGINES = ("emcee", "zeus")
 #: both ways.
 _SOLVER_CLASSES: dict[str, type] = {"quasisep": QuasisepGP, "dense": DenseGP}
 
+#: The upper edge of each temperature pair's shared box (legacy's own
+#: ``lims``, see the module docstring) -- the ``80``/``180`` in
+#: :func:`derived_temperatures`.
+_TCOLD_UPPER = 80.0
+_TWARM_UPPER = 180.0
+
+
+def derived_temperatures(values: Mapping[str, Any]) -> dict[str, Any]:
+    """``Tcold1``/``Twarm1`` from ``Tcold0``/``Tcold_fraction`` (and warm).
+
+    See the module docstring's "Temperature ordering" section for why this
+    recovers legacy's own physical temperatures exactly, as derived
+    quantities rather than fitted parameters.
+
+    Parameters
+    ----------
+    values
+        Maps (at least) ``Tcold0``, ``Tcold_fraction``, ``Twarm0`` and
+        ``Twarm_fraction`` to scalars or equal-shaped arrays (e.g. a fit's
+        posterior draws, already flattened or not).
+
+    Returns
+    -------
+    dict
+        ``{"Tcold1": ..., "Twarm1": ...}``, in *values*' own shape.
+    """
+    tcold0 = np.asarray(values["Tcold0"], dtype=float)
+    tcold_fraction = np.asarray(values["Tcold_fraction"], dtype=float)
+    twarm0 = np.asarray(values["Twarm0"], dtype=float)
+    twarm_fraction = np.asarray(values["Twarm_fraction"], dtype=float)
+    return {
+        "Tcold1": tcold0 + tcold_fraction * (_TCOLD_UPPER - tcold0),
+        "Twarm1": twarm0 + twarm_fraction * (_TWARM_UPPER - twarm0),
+    }
+
+
 #: The fifteen model parameters plus the calibration factor -- the sixteen
-#: parameters :func:`recovers_truth` checks.
+#: *declared* parameters :func:`recovers_truth` checks.
 QUALIFIED_TRUTH: dict[str, float] = {
     f"model.{name}": value for name, value in generators.TRUTH.items()
 }
 QUALIFIED_TRUTH["iso.instrument.calibration_scale.scale"] = generators.CALIBRATION_TRUTH
+
+#: The two *derived* physical temperatures' truth (ruling 2) -- scored by
+#: :func:`recovers_truth` and printed by :func:`report` alongside the sixteen
+#: qualified (declared) parameters, but not part of :data:`QUALIFIED_TRUTH`
+#: (they are not a posterior variable name).
+DERIVED_TRUTH: dict[str, float] = {
+    name: float(value) for name, value in derived_temperatures(generators.TRUTH).items()
+}
+
+#: All four physical temperatures' truth, in the "cool -> hot" reading order
+#: -- :func:`report`'s combined block.
+PHYSICAL_TRUTH: dict[str, float] = {
+    "Tcold0": generators.TRUTH["Tcold0"],
+    "Tcold1": DERIVED_TRUTH["Tcold1"],
+    "Twarm0": generators.TRUTH["Twarm0"],
+    "Twarm1": DERIVED_TRUTH["Twarm1"],
+}
 
 # Budgets. Legacy's own emcee script (50 walkers, 50 000 steps, 40 000
 # burn-in -- ``examples/NGC6302.py`` lines 399, 456) is kept as the shared
@@ -335,9 +412,17 @@ class KemperTwoShell(Model):
     logawarm1, logawarm2, logawarm5, logawarm7
         Warm-component log10 abundance, species 1, 2, 5, 7 (enstatite,
         forsterite, iron, olivine).
-    Tcold0, Tcold1, Twarm0, Twarm1
-        Shell temperatures, kelvin -- see the module docstring's note on the
-        ordering these are *not* structurally constrained to keep.
+    Tcold0, Tcold_fraction, Twarm0, Twarm_fraction
+        The cold shell's outer (cooler) temperature and the fraction of the
+        remaining ``80 - Tcold0`` K the inner (hotter) one sits at (and
+        likewise, over ``180 - Twarm0``, for the warm shell) -- kelvin and
+        dimensionless respectively. :meth:`evaluate` derives the physical
+        ``Tcold1``/``Twarm1`` (``ckmodbb``'s ``tin``) from these; see the
+        module docstring's "Temperature ordering" section for why this
+        parameterisation makes ``Tcold0 < Tcold1`` (and ``Twarm0 < Twarm1``)
+        exact by construction rather than a rejected or unenforced box.
+        :func:`derived_temperatures` recovers the physical pair from a
+        point or a set of posterior draws.
     channel
         Name of the channel the emitted :class:`~ampere.core.Spectrum`
         appears under.
@@ -359,9 +444,9 @@ class KemperTwoShell(Model):
         logawarm5: Any,
         logawarm7: Any,
         Tcold0: Any,
-        Tcold1: Any,
+        Tcold_fraction: Any,
         Twarm0: Any,
-        Twarm1: Any,
+        Twarm_fraction: Any,
         channel: str = "sed",
     ) -> None:
         grid = np.asarray(wavelength, dtype=float)
@@ -404,9 +489,13 @@ class KemperTwoShell(Model):
         self.register_parameter(_as_parameter("logawarm5", logawarm5))
         self.register_parameter(_as_parameter("logawarm7", logawarm7))
         self.register_parameter(_as_parameter("Tcold0", Tcold0, unit=u.K))
-        self.register_parameter(_as_parameter("Tcold1", Tcold1, unit=u.K))
+        self.register_parameter(
+            _as_parameter("Tcold_fraction", Tcold_fraction, unit=u.dimensionless_unscaled)
+        )
         self.register_parameter(_as_parameter("Twarm0", Twarm0, unit=u.K))
-        self.register_parameter(_as_parameter("Twarm1", Twarm1, unit=u.K))
+        self.register_parameter(
+            _as_parameter("Twarm_fraction", Twarm_fraction, unit=u.dimensionless_unscaled)
+        )
 
         self._template: Spectrum | None = None
         self._opacity_on_grid: np.ndarray | None = None
@@ -453,6 +542,15 @@ class KemperTwoShell(Model):
             grid = np.asarray(ctx["wavelength"], dtype=float)
             opacity = self._interpolate_opacity(grid)
 
+        # The exact ordered reparameterisation (module docstring, "Temperature
+        # ordering", ruling 2): Tcold1/Twarm1 are derived here, not read from
+        # ctx, and passed to _ckmodbb exactly as legacy calls it (Tcold1/
+        # Twarm1 as tin, Tcold0/Twarm0 as tout).
+        tcold0 = float(ctx["Tcold0"])
+        tcold1 = tcold0 + float(ctx["Tcold_fraction"]) * (_TCOLD_UPPER - tcold0)
+        twarm0 = float(ctx["Twarm0"])
+        twarm1 = twarm0 + float(ctx["Twarm_fraction"]) * (_TWARM_UPPER - twarm0)
+
         # acold/awarm -- examples/NGC6302.py lines 158-178. Species 5 (iron)
         # is never fitted cold; species 0, 3, 4, 6 (calcite, diopside,
         # dolomite, ice) are never fitted warm. Every one of the eight
@@ -483,8 +581,8 @@ class KemperTwoShell(Model):
         for index, n0 in enumerate(acold):
             cold = cold + _ckmodbb(
                 opacity[:, index],
-                tin=float(ctx["Tcold1"]),
-                tout=float(ctx["Tcold0"]),
+                tin=tcold1,
+                tout=tcold0,
                 n0=n0,
                 grid=grid,
             )
@@ -492,8 +590,8 @@ class KemperTwoShell(Model):
         for index, n0 in enumerate(awarm):
             warm = warm + _ckmodbb(
                 opacity[:, index],
-                tin=float(ctx["Twarm1"]),
-                tout=float(ctx["Twarm0"]),
+                tin=twarm1,
+                tout=twarm0,
                 n0=n0,
                 grid=grid,
             )
@@ -508,8 +606,12 @@ class KemperTwoShell(Model):
 
 
 def build_model() -> KemperTwoShell:
-    """The one :class:`KemperTwoShell`, with legacy's own box priors."""
+    """The one :class:`KemperTwoShell`: legacy's own box priors on the eleven
+    log-abundances, and the exact ordered-triangle prior (ruling 2, see the
+    module docstring's "Temperature ordering") on the two temperature pairs.
+    """
     abundance_prior = st.uniform(-6.0, 6.0)
+    fraction_prior = st.uniform(0.0, 1.0)
     return KemperTwoShell(
         DEFAULT_GRID,
         logacold0=abundance_prior,
@@ -523,10 +625,10 @@ def build_model() -> KemperTwoShell:
         logawarm2=abundance_prior,
         logawarm5=abundance_prior,
         logawarm7=abundance_prior,
-        Tcold0=st.uniform(10.0, 70.0),
-        Tcold1=st.uniform(10.0, 70.0),
-        Twarm0=st.uniform(80.0, 100.0),
-        Twarm1=st.uniform(80.0, 100.0),
+        Tcold0=st.triang(c=0, loc=10.0, scale=70.0),
+        Tcold_fraction=fraction_prior,
+        Twarm0=st.triang(c=0, loc=80.0, scale=100.0),
+        Twarm_fraction=fraction_prior,
     )
 
 
@@ -600,8 +702,35 @@ def fit(
     )
 
 
+#: The four posterior variable names :func:`_derived_draws` needs.
+_TEMPERATURE_FAMILY_NAMES = (
+    "model.Tcold0",
+    "model.Tcold_fraction",
+    "model.Twarm0",
+    "model.Twarm_fraction",
+)
+
+
+def _derived_draws(posterior: Any) -> dict[str, Any] | None:
+    """:func:`derived_temperatures` on *posterior*'s draws, or ``None`` if the
+    four declared temperature-family variables are not all present (e.g. a
+    run built with a fixed, non-fitted temperature)."""
+    if not all(name in posterior.data_vars for name in _TEMPERATURE_FAMILY_NAMES):
+        return None
+    return derived_temperatures(
+        {
+            "Tcold0": np.asarray(posterior["model.Tcold0"], dtype=float).ravel(),
+            "Tcold_fraction": np.asarray(posterior["model.Tcold_fraction"], dtype=float).ravel(),
+            "Twarm0": np.asarray(posterior["model.Twarm0"], dtype=float).ravel(),
+            "Twarm_fraction": np.asarray(posterior["model.Twarm_fraction"], dtype=float).ravel(),
+        }
+    )
+
+
 def recovers_truth(run: Any, *, level: float = 0.95) -> dict[str, bool]:
-    """Whether each qualified parameter's central *level* interval covers its truth."""
+    """Whether each qualified parameter's, and each derived temperature's,
+    central *level* interval covers its truth (ruling 2).
+    """
     posterior = run["posterior"].dataset
     tail = (1.0 - level) / 2.0 * 100.0
     covered: dict[str, bool] = {}
@@ -609,16 +738,24 @@ def recovers_truth(run: Any, *, level: float = 0.95) -> dict[str, bool]:
         draws = np.asarray(posterior[name], dtype=float).ravel()
         lower, upper = np.percentile(draws, [tail, 100.0 - tail])
         covered[name] = bool(lower <= truth <= upper)
+    derived = _derived_draws(posterior)
+    if derived is not None:
+        for name, truth in DERIVED_TRUTH.items():
+            lower, upper = np.percentile(derived[name], [tail, 100.0 - tail])
+            covered[name] = bool(lower <= truth <= upper)
     return covered
 
 
 def report(run: Any) -> str:
-    """A human-readable posterior summary, truth in brackets, 95 % coverage flagged."""
+    """A human-readable posterior summary, truth in brackets, 95 % coverage
+    flagged; the four physical temperatures (``Tcold0``, the derived
+    ``Tcold1``, ``Twarm0``, the derived ``Twarm1``) are printed together in
+    one block after the declared parameters (ruling 2).
+    """
     attrs = run.attrs
     posterior = run["posterior"].dataset
-    covered = (
-        recovers_truth(run) if any(name in posterior.data_vars for name in QUALIFIED_TRUTH) else {}
-    )
+    has_truth = any(name in posterior.data_vars for name in QUALIFIED_TRUTH)
+    covered = recovers_truth(run) if has_truth else {}
     lines = [
         (
             f"{attrs['ampere_engine']} on {attrs['ampere_backend']}: "
@@ -636,6 +773,30 @@ def report(run: Any) -> str:
             f"    {name:45s} {values.mean():+.6g} +- {values.std():.3g}   "
             f"95%[{lower:+.6g}, {upper:+.6g}]{bracket}{flag}"
         )
+
+    derived = _derived_draws(posterior)
+    if derived is not None:
+        tcold0 = np.asarray(posterior["model.Tcold0"], dtype=float).ravel()
+        twarm0 = np.asarray(posterior["model.Twarm0"], dtype=float).ravel()
+        physical = {
+            "Tcold0": (tcold0, "model.Tcold0"),
+            "Tcold1": (derived["Tcold1"], "Tcold1"),
+            "Twarm0": (twarm0, "model.Twarm0"),
+            "Twarm1": (derived["Twarm1"], "Twarm1"),
+        }
+        lines.append(
+            "  the four physical temperatures (Tcold1/Twarm1 derived from "
+            'Tcold_fraction/Twarm_fraction -- see "Temperature ordering"):'
+        )
+        for name, (draws, flag_key) in physical.items():
+            lower, upper = np.percentile(draws, [2.5, 97.5])
+            truth = PHYSICAL_TRUTH.get(name) if has_truth else None
+            flag = "" if truth is None else ("  ok" if covered.get(flag_key) else "  MISS")
+            bracket = "" if truth is None else f"  (truth {truth:+.6g})"
+            lines.append(
+                f"    {name:45s} {draws.mean():+.6g} +- {draws.std():.3g}   "
+                f"95%[{lower:+.6g}, {upper:+.6g}]{bracket}{flag}"
+            )
     return "\n".join(lines)
 
 

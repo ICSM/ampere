@@ -65,8 +65,19 @@ iron                    warm[7]                               ``logawarm5``
 olivine                 warm[0]                               ``logawarm7``
 ======================  =================================  ==================
 
-and ``Tcold0/Tcold1 = Tout/Tin[0]``, ``Twarm0/Twarm1 = Tout/Tin[1]`` directly.
-:mod:`.dust_mass` uses the identical correspondence in the other direction.
+and ``Tcold0/Tcold1 = Tout/Tin[0]``, ``Twarm0/Twarm1 = Tout/Tin[1]`` directly --
+the physical temperatures :data:`TRUTH` is built from. Per the exact ordered
+prior ruling (:mod:`.ngc6302`'s module docstring, "Temperature ordering"),
+:data:`TRUTH` stores ``Tcold0``/``Tcold_fraction`` and
+``Twarm0``/``Twarm_fraction`` -- the model's own declared parameters --
+rather than the physical ``Tcold1``/``Twarm1`` directly;
+:func:`~examples.ngc6302.ngc6302.derived_temperatures` recovers
+``Tcold1 = 57.03042`` and ``Twarm1 = 122.69678`` from them exactly (to
+machine precision -- the map is an affine reparameterisation, not an
+approximation). :mod:`.dust_mass` uses the identical species correspondence
+in the other direction, and still takes the physical temperatures directly
+(``dust_masses_at``) or derives them from a fit's draws
+(``dust_masses``).
 """
 
 from __future__ import annotations
@@ -138,9 +149,14 @@ TRUTH: dict[str, float] = {
     "logawarm5": -3.70948,  # iron
     "logawarm7": -3.72738,  # olivine
     "Tcold0": 36.13010,
-    "Tcold1": 57.03042,
+    # (57.03042 - 36.13010) / (80.0 - 36.13010) -- recovers the physical
+    # Tcold1 = 57.03042 exactly (see the module docstring and
+    # examples.ngc6302.ngc6302.derived_temperatures).
+    "Tcold_fraction": 0.47641594806461834,
     "Twarm0": 105.19534,
-    "Twarm1": 122.69678,
+    # (122.69678 - 105.19534) / (180.0 - 105.19534) -- recovers the physical
+    # Twarm1 = 122.69678 exactly.
+    "Twarm_fraction": 0.23396189488729716,
 }
 
 

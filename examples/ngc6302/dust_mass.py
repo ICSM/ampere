@@ -177,15 +177,22 @@ def dust_masses(tree: Any, *, quantiles: tuple[float, ...] = (0.16, 0.5, 0.84)) 
     returns); *quantiles* are taken over the flattened chain x draw
     posterior. Same equations as :func:`dust_masses_at`, vectorised over
     draws -- legacy's hard-coded ``n0``/``Tin``/``Tout`` become the
-    posterior draws (ruling 4).
+    posterior draws (ruling 4). Since the exact ordered prior (ruling 2),
+    ``Tcold1``/``Twarm1`` are not declared parameters; they are derived from
+    the ``Tcold0``/``Tcold_fraction`` (and warm) draws through
+    :func:`~examples.ngc6302.ngc6302.derived_temperatures`, imported here
+    lazily to avoid the module cycle (:mod:`.ngc6302` imports this module).
     """
+    from .ngc6302 import derived_temperatures
+
     posterior = tree["posterior"].dataset
-    names = {"Tcold0", "Tcold1", "Twarm0", "Twarm1"} | {
+    names = {"Tcold0", "Tcold_fraction", "Twarm0", "Twarm_fraction"} | {
         parameter
         for parameter in (*COLD_PARAMETER.values(), *WARM_PARAMETER.values())
         if parameter is not None
     }
     theta = {name: np.asarray(posterior[f"model.{name}"], dtype=float).ravel() for name in names}
+    theta.update(derived_temperatures(theta))
 
     masses = _component_masses(theta)
     table: dict[str, Any] = {"cold": {}, "warm": {}}

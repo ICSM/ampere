@@ -10,8 +10,10 @@ calibration and GP ones; a tiny-budget emcee fit runs; and
 ``main --synthetic --quick`` (sized down) prints a report. The dust-mass row
 is in :mod:`tests.examples.test_ngc6302`'s later commit
 (``TestDustMass``, added alongside :mod:`examples.ngc6302.dust_mass`).
-``TestSolverAgreement`` is ruling 1: the O(N) solver agrees with the O(N^3)
-one.
+``TestSolverAgreement`` and ``TestExactOrderedPrior`` are W6.13 (2) tranche
+B's two rulings: the O(N) solver agrees with the O(N^3) one, and the
+triangle-plus-fraction reparameterisation is the same flat ordered prior
+legacy's rejection-sampled box is, exactly.
 
 The full-budget coverage run this item is accepted on is **not** part of
 this suite -- as :mod:`tests.examples.test_linear_sed` and
@@ -29,15 +31,18 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import scipy.stats as st
 
 from ampere.core import DenseGP, QuasisepGP
 from examples.ngc6302 import dust_mass, generators
 from examples.ngc6302.ngc6302 import (
     DEFAULT_GRID,
+    DERIVED_TRUTH,
     QUALIFIED_TRUTH,
     build_instrument,
     build_model,
     build_problem,
+    derived_temperatures,
     fit,
     main,
     recovers_truth,
@@ -45,6 +50,35 @@ from examples.ngc6302.ngc6302 import (
 )
 
 TINY = {"walkers": 32, "steps": 10, "burn_in": 3}
+
+# The "old" (pre-reparameterisation) synthetic spectrum's own summary
+# numbers -- computed once from the branch's first commit
+# (``generators.synthetic_data(build_model(), instrument, seed=generators.SEED)``,
+# the four independent, unordered temperature boxes) and quoted here so
+# ``TestExactOrderedPrior.test_synthetic_spectrum_unchanged_by_the_reparameterisation``
+# does not depend on checking out that commit. See ruling 2: the
+# reparameterisation changes what is *declared* (the prior), not the
+# physical temperatures :data:`generators.TRUTH` encodes, so the synthetic
+# spectrum it produces is unchanged.
+_OLD_SYNTHETIC_SPECTRUM = {
+    "mean": 708.7160959988712,
+    "std": 189.98174311949063,
+    "first5": [
+        320.23823679712285,
+        316.58977914448604,
+        353.01993692987776,
+        318.8355657174629,
+        324.29206996207455,
+    ],
+    "last5": [
+        424.19577285548036,
+        467.06141415498763,
+        445.32801798747,
+        430.539285335882,
+        426.3037219331683,
+    ],
+    "sum": 442947.55999929446,
+}
 
 # The legacy dust-mass script's own printed numbers
 # (`cd examples && pixi run -e dev python NGC6302-calculate-dust-mass.py`),
@@ -127,6 +161,10 @@ class TestModelEqualsLegacy:
         monkeypatch.chdir(Path(__file__).resolve().parents[2] / "examples")
         legacy_module.wavelengths = DEFAULT_GRID
         legacy_model = legacy_module.SpectrumNGC6302(DEFAULT_GRID)
+        # generators.TRUTH stores Tcold0/Tcold_fraction and Twarm0/Twarm_fraction
+        # (ruling 2), not the physical Tcold1/Twarm1 legacy's own constructor
+        # takes directly; derived_temperatures recovers them exactly.
+        derived = derived_temperatures(generators.TRUTH)
         legacy_model(
             generators.TRUTH["logacold0"],
             generators.TRUTH["logacold1"],
@@ -140,9 +178,9 @@ class TestModelEqualsLegacy:
             generators.TRUTH["logawarm5"],
             generators.TRUTH["logawarm7"],
             generators.TRUTH["Tcold0"],
-            generators.TRUTH["Tcold1"],
+            float(derived["Tcold1"]),
             generators.TRUTH["Twarm0"],
-            generators.TRUTH["Twarm1"],
+            float(derived["Twarm1"]),
         )
         legacy_flux = legacy_model.modelFlux
 
@@ -222,7 +260,8 @@ class TestTheFitRuns:
 
     def test_recovers_truth_reports_one_bool_per_qualified_parameter(self, tiny_run) -> None:
         covered = recovers_truth(tiny_run)
-        assert set(covered) == set(QUALIFIED_TRUTH)
+        # Plus the two derived temperatures, Tcold1/Twarm1 (ruling 2).
+        assert set(covered) == set(QUALIFIED_TRUTH) | set(DERIVED_TRUTH)
         assert all(isinstance(value, bool) for value in covered.values())
 
     def test_dust_masses_runs_on_the_fit_posterior(self, tiny_run) -> None:
@@ -234,10 +273,21 @@ class TestTheFitRuns:
 
 
 class TestDustMass:
-    """``dust_masses_at`` reproduces the legacy dust-mass script's printout."""
+    """``dust_masses_at`` reproduces the legacy dust-mass script's printout.
+
+    ``dust_masses_at`` keeps taking the physical temperatures directly
+    (ruling 2), so *theta* here merges :data:`generators.TRUTH` (which stores
+    ``Tcold_fraction``/``Twarm_fraction``, not ``Tcold1``/``Twarm1``) with
+    ``derived_temperatures``'s output -- the legacy-printout row itself is
+    untouched.
+    """
+
+    @staticmethod
+    def _theta() -> dict[str, float]:
+        return {**generators.TRUTH, **derived_temperatures(generators.TRUTH)}
 
     def test_matches_the_legacy_printout(self) -> None:
-        table = dust_mass.dust_masses_at(generators.TRUTH)
+        table = dust_mass.dust_masses_at(self._theta())
         for component in ("cold", "warm"):
             for name, expected in _LEGACY_DUST_MASSES[component].items():
                 if expected == 0.0:
@@ -246,7 +296,7 @@ class TestDustMass:
                     np.testing.assert_allclose(table[component][name], expected, rtol=1e-6)
 
     def test_format_table_renders_every_species(self) -> None:
-        table = dust_mass.dust_masses_at(generators.TRUTH)
+        table = dust_mass.dust_masses_at(self._theta())
         text = dust_mass.format_table(table)
         for name in dust_mass.SPECIES_NAMES:
             assert name in text
@@ -315,3 +365,67 @@ class TestSolverAgreement:
             lp_quasisep = float(quasisep.log_prob(theta))
             if np.isfinite(lp_dense) or np.isfinite(lp_quasisep):
                 assert lp_quasisep == pytest.approx(lp_dense, rel=1e-6)
+
+
+class TestExactOrderedPrior:
+    """Ruling 2: the triangle-plus-fraction reparameterisation is legacy's
+    own flat ordered prior, exactly -- not an approximation of it."""
+
+    def test_density_is_constant_on_the_cold_triangle(self) -> None:
+        rng = np.random.default_rng(20260929)
+        t0 = rng.uniform(10.0, 80.0, size=1000)
+        f = rng.uniform(0.0, 1.0, size=1000)
+        const = (
+            st.triang(c=0, loc=10.0, scale=70.0).logpdf(t0)
+            + st.uniform(0.0, 1.0).logpdf(f)
+            - np.log(80.0 - t0)
+        )
+        np.testing.assert_allclose(const, const[0], atol=1e-10)
+
+    def test_density_is_constant_on_the_warm_triangle(self) -> None:
+        rng = np.random.default_rng(20260929)
+        t0 = rng.uniform(80.0, 180.0, size=1000)
+        f = rng.uniform(0.0, 1.0, size=1000)
+        const = (
+            st.triang(c=0, loc=80.0, scale=100.0).logpdf(t0)
+            + st.uniform(0.0, 1.0).logpdf(f)
+            - np.log(180.0 - t0)
+        )
+        np.testing.assert_allclose(const, const[0], atol=1e-10)
+
+    def test_derived_temperatures_recovers_the_2002_solution_exactly(self) -> None:
+        derived = derived_temperatures(generators.TRUTH)
+        np.testing.assert_allclose(derived["Tcold1"], 57.03042, rtol=0, atol=1e-10)
+        np.testing.assert_allclose(derived["Twarm1"], 122.69678, rtol=0, atol=1e-10)
+
+    def test_derived_temperatures_handles_arrays(self) -> None:
+        draws = {
+            "Tcold0": np.full(5, generators.TRUTH["Tcold0"]),
+            "Tcold_fraction": np.full(5, generators.TRUTH["Tcold_fraction"]),
+            "Twarm0": np.full(5, generators.TRUTH["Twarm0"]),
+            "Twarm_fraction": np.full(5, generators.TRUTH["Twarm_fraction"]),
+        }
+        derived = derived_temperatures(draws)
+        assert derived["Tcold1"].shape == (5,)
+        assert derived["Twarm1"].shape == (5,)
+        np.testing.assert_allclose(derived["Tcold1"], DERIVED_TRUTH["Tcold1"])
+        np.testing.assert_allclose(derived["Twarm1"], DERIVED_TRUTH["Twarm1"])
+
+    def test_synthetic_spectrum_unchanged_by_the_reparameterisation(self) -> None:
+        """generators.TRUTH's Tcold_fraction/Twarm_fraction were chosen to
+        round-trip to the exact 2002-solution physical temperatures, so the
+        synthetic spectrum built from the new (declared) parameterisation is
+        the same array the old (independent-box) parameterisation produced,
+        for the same seed (ruling 2)."""
+        model = build_model()
+        observed = generators.load_observed_spectrum()
+        instrument = build_instrument(observed.spectral_axis.values)
+        synthetic = generators.synthetic_data(model, instrument, seed=generators.SEED)
+        values = synthetic.values
+
+        assert values.size == 625
+        np.testing.assert_allclose(values.mean(), _OLD_SYNTHETIC_SPECTRUM["mean"], rtol=1e-12)
+        np.testing.assert_allclose(values.std(), _OLD_SYNTHETIC_SPECTRUM["std"], rtol=1e-12)
+        np.testing.assert_allclose(values.sum(), _OLD_SYNTHETIC_SPECTRUM["sum"], rtol=1e-12)
+        np.testing.assert_allclose(values[:5], _OLD_SYNTHETIC_SPECTRUM["first5"], rtol=1e-12)
+        np.testing.assert_allclose(values[-5:], _OLD_SYNTHETIC_SPECTRUM["last5"], rtol=1e-12)
