@@ -583,3 +583,99 @@ class TestTheWarmStart:
             EngineError, match="no dataset in this problem has a GaussianProcessNoise"
         ):
             warm_start_gp(agreement_problem())
+
+
+# ---------------------------------------------------------------------------
+# (c) NUTS from the MAP against NUTS from the prior; (d) emcee's burn-in
+# ---------------------------------------------------------------------------
+
+#: The pinned NUTS budget: short enough that the prior-started run has not
+#: converged, the same for both runs, at the same seed. The tree depth is
+#: capped at 6 for both, so a prior-started chain far out in a tail costs 64
+#: leapfrog steps an iteration rather than 1024 — the comparison stays fair
+#: and the row stays affordable.
+#: Draws are cut from the ruling's 200 to 100 (orchestrator's note, W6.7):
+#: at 200 the torch row ran past fifty minutes on a shared machine, and the
+#: acceptance is the comparison, not the budget. torch is held to four threads
+#: for the row — four chains on four parameters gain nothing from sixteen.
+NUTS_WARMUP, NUTS_DRAWS, NUTS_CHAINS, NUTS_TREE_DEPTH = 50, 100, 4, 6
+
+
+def _nuts_summary(run: Any) -> dict[str, Any]:
+    import arviz
+
+    posterior = run["posterior"]
+    rhat = arviz.rhat(posterior)
+    ess = arviz.ess(posterior)
+    names = [str(n) for n in posterior.dataset.data_vars]
+    return {
+        "rhat": {n: float(np.asarray(rhat[n])) for n in names},
+        "ess": {n: float(np.asarray(ess[n])) for n in names},
+        "divergences": int(run.attrs["ampere_nuts_divergences"]),
+    }
+
+
+@pytest.mark.parametrize("backend", NATIVE)
+def test_nuts_from_the_map_adapts_faster_than_from_the_prior(backend: str) -> None:
+
+    if backend == "torch":
+        import torch  # pyrefly: ignore[missing-import]
+
+        threads = torch.get_num_threads()
+        torch.set_num_threads(4)
+    try:
+        runs = _nuts_pair(backend)
+    finally:
+        if backend == "torch":
+            torch.set_num_threads(threads)
+    print(f"NUTS on {backend}, warmup={NUTS_WARMUP}:", runs)
+    prior, started = runs["prior"], runs["map"]
+    for name in prior["rhat"]:
+        assert started["rhat"][name] < prior["rhat"][name], (name, runs)
+        assert started["ess"][name] >= prior["ess"][name], (name, runs)
+    assert started["divergences"] <= prior["divergences"], runs
+
+
+def _nuts_pair(backend: str) -> dict[str, Any]:
+    from examples.sed_composition.sed_composition import build_problem
+
+    from ampere.inference import NUTSEngine
+
+    optimum = optimise(build_problem(backend), method="map", starts=2)
+    runs = {}
+    for label, initial in (("prior", None), ("map", optimum)):
+        runs[label] = _nuts_summary(
+            NUTSEngine(build_problem(backend)).run(
+                NUTS_DRAWS,
+                warmup=NUTS_WARMUP,
+                chains=NUTS_CHAINS,
+                max_tree_depth=NUTS_TREE_DEPTH,
+                initial=initial,
+            )
+        )
+    return runs
+
+
+#: emcee's budget for the burn-in comparison: the example's 16 walkers, 600
+#: steps, the plateau the mean over the last quarter.
+BURN_WALKERS, BURN_STEPS = 16, 600
+
+
+def burn_in_step(log_prob: np.ndarray) -> int:
+    """The first step at which the ensemble's mean log-probability is within
+    one unit of its plateau (the mean over the last quarter of the run)."""
+    mean = np.mean(log_prob, axis=1)
+    plateau = float(np.mean(mean[-(mean.size // 4) :]))
+    return int(np.argmax(mean >= plateau - 1.0))
+
+
+def test_emcee_from_the_optimum_burns_in_faster(sed_scipy: Optimum) -> None:
+    from examples.sed_composition.sed_composition import build_problem
+
+    steps = {}
+    for label, initial in (("prior", None), ("optimum", sed_scipy)):
+        engine = EmceeEngine(build_problem("reference"), walkers=BURN_WALKERS)
+        engine.run(BURN_STEPS, initial=initial)
+        steps[label] = burn_in_step(np.asarray(engine.sampler.get_log_prob()))
+    print("emcee burn-in equivalent (steps):", steps)
+    assert steps["optimum"] < steps["prior"], steps
