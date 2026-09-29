@@ -294,6 +294,21 @@ coordinate. `VisibilitySet` declares baseline length (`hypot(u, v)`);
 `ClosurePhases` declares the longest of its three baselines. §8 is where a
 plot resolves it.
 
+*(Amended W6.7, 2026-09-29.)* **A point estimate is not a run, and has its
+own tree.** `ampere.results.Optimum` — what `ampere.inference.optimise` and
+`warm_start_gp` return (`inference.md` §10b) — is a frozen dataclass whose
+`to_datatree()` writes **one group, `optimum`**, and **no `posterior`**:
+`unconstrained` and `constrained` along a `free_parameter` dimension whose
+coordinate is the free labels, and, when the Hessian was positive definite,
+`covariance` over `(free_parameter, free_parameter_2)` in the unconstrained
+coordinates. The root attrs are the problem's provenance at the time plus
+`ampere_optimum_*` (route, backend, identity hash, free names and shapes, the
+density in both conventions, the covariance refusal, convergence, message,
+evaluation count and per-start summaries as canonical JSON), so the tree
+round-trips through `to_netcdf`/`from_netcdf` and `Optimum.from_datatree`.
+Nothing that reads a run's `posterior` can mistake a mode for a draw, which
+is the point: ArviZ would otherwise compute an R-hat over one value.
+
 ### Array-valued parameters are never 10⁵ names
 
 `likelihoods.md` §16(a) is explicit: "the latent block cannot be labelled with
@@ -940,6 +955,23 @@ declaration can be read back, not so it can be compared — but the schema
 constant is, so `ampere_problem_hash` moves again at this bump as at every
 previous one.
 
+**One attribute on every run, one on some, and the constant is now 9**
+*(Amended W6.7, 2026-09-29; decision-log row "The optimisers module")*.
+**`ampere_start_route`** says what the run started from — `"prior"` (every
+engine's default prior-draw start), `"user"` (a caller's own array),
+`"pathfinder"` (blackjax's Pathfinder start) or the route of the
+`ampere.results.Optimum` it was seeded from — and is written on **every**
+run, which is why this rides a bump rather than being conditional like
+`ampere_foreign_parts`. **`ampere_start`** is written only on a run seeded
+from an `Optimum`: canonical JSON of its `start_record()` — the route, the
+optimum's identity hash (`hash_of` over its free labels, its unconstrained
+vector and its route), `log_prob_constrained`, the evaluation count and
+whether it converged — so a posterior's start is reproducible from its
+archive, the optimum's own record (`Optimum.provenance`) holding the rest.
+Neither is an input to `problem_fingerprint` — they describe how the run
+began, not what problem it was over — but the schema constant is, so
+`ampere_problem_hash` moves at this bump as at every previous one.
+
 ### The hashing recipe
 
 Four steps, and each is a decision.
@@ -1349,6 +1381,7 @@ training set and is what the composed problem is for.
 | Container serialisation is functions in `ampere.results`, not methods on the containers | A hot-loop object should not carry the one method no evaluation calls; and `results_schema.py` is a merged contract (§15 R5) |
 | Training sets are netCDF | NaN is native, coordinates are stored once, and the spec hash sits in the attributes where invalidation can see it |
 | `ResultsError` lives in `ampere/core/exceptions.py`, re-exported here | §15 R5 asked for the move and it was made the same day the ruling landed (2026-09-03): one class, two import paths, no call-site changes — pinned by a test at the freeze |
+| A point estimate is an `Optimum` with an `optimum` group, never a one-draw `posterior` *(Added W6.7)* | A mode stored as a posterior would be diagnosed, plotted and reweighted as a sample; its own group keeps it out of every posterior reader while the one results format and the netCDF route still carry it, and `ampere_start` (schema 9) ties a seeded run back to it |
 
 ## 13. Deliberate limitations of v1.8
 

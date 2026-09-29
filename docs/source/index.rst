@@ -45,6 +45,7 @@ User guide
    concept
    kernels
    solvers
+   optimisers
    astropy
    tutorials
    advanced

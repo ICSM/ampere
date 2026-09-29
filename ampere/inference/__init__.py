@@ -86,6 +86,13 @@ What is here
     guide draws have no Markov structure, so R-hat has nothing to say about
     them, and the ELBO trace is what a reader looks at instead. Needs the
     ``torch`` or ``jax`` extra.
+:func:`optimise`, :func:`warm_start_gp`
+    **Point estimates, not engines** (W6.7, ``inference.md`` §10b): the
+    constrained-space posterior mode by a scipy, a native-MAP or a VI route,
+    and the reduced-rank empirical-Bayes start for a GP likelihood's
+    hyperparameters, each returned as an :class:`ampere.results.Optimum`
+    that ``Engine.initial_positions(around=)`` and every sampling engine's
+    ``run(initial=)`` accept.
 :class:`SBIEngine`
     **Simulation-based** inference — neural posterior, likelihood or ratio
     estimation through the ``sbi`` package (``method="npe" | "nle" | "nre" |

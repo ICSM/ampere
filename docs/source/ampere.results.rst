@@ -54,6 +54,7 @@ Provenance and schema versions
 
 .. autodata:: ampere.results.provenance.ATTR_PREFIX
 .. autodata:: ampere.results.provenance.PROVENANCE_SCHEMA_VERSION
+.. autodata:: ampere.results.optimum.OPTIMUM_GROUP
 .. autodata:: ampere.results.serialisation.CONTAINER_SCHEMA_VERSION
 .. autodata:: ampere.results.training.TRAINING_SET_SCHEMA_VERSION
 .. autodata:: ampere.results.artefacts.ARTEFACT_CACHE_SCHEMA_VERSION

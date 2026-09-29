@@ -243,6 +243,16 @@ on another observation, and ``ampere_sbi_amortised`` is ``0`` for every TMNRE
 run whatever its round count. ``examples/sbi/tmnre_fit.py`` is the method end
 to end on the toy joint problem.
 
+Point estimates and warm starts
+-------------------------------
+
+:func:`~ampere.inference.optimise` and :func:`~ampere.inference.warm_start_gp`
+(W6.7, :mod:`ampere.inference._optimise`) are functions, not engines: an
+optimiser produces no posterior, so each returns an
+:class:`ampere.results.Optimum`, which ``Engine.initial_positions(around=)``
+and every sampling engine's ``run(initial=)`` accept. :doc:`optimisers` is
+the user guide; ``inference.md`` §10b the contract.
+
 .. automodule:: ampere.inference
    :members:
    :imported-members:
@@ -255,6 +265,10 @@ Constants
 Re-exported from ``ampere.inference``; shown under the module that defines it.
 
 .. autodata:: ampere.inference.engine.DEFAULT_CACHE_SIZE
+
+.. autodata:: ampere.inference._optimise.OPTIMISE_METHODS
+
+.. autodata:: ampere.inference._optimise.WARM_START_GRID
 
 .. autodata:: ampere.inference._sbi.METHODS
 

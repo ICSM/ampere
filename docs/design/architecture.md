@@ -284,6 +284,12 @@ differs from them; nothing here changes a policy, and where a difference is a
   "benchmark-driven optimisation pass", a Phase 5 item that landed
   (`docs/design/performance_memo.md`) and *profiles and speeds up* the
   existing code rather than adding an optimiser engine.)*
+  *(Amended W6.7, 2026-09-29: **the optimisers have landed**, in Phase 6 and
+  as functions rather than engines — `ampere.inference.optimise` (a scipy,
+  a native-MAP and a VI route) and `warm_start_gp` (the reduced-rank
+  empirical-Bayes hyperparameter start), returning an
+  `ampere.results.Optimum` that every sampling engine's `run(initial=)` and
+  `Engine.initial_positions(around=)` accept; `inference.md` §10b.)*
 * **`diagnostics/` did not land in Phase 2, and that is a ruled deferral
   rather than a slippage.** The decision-log row of 2026-09-08
   (`ampere.diagnostics` and the RHMF pre-fit family, W2.7) records it in
