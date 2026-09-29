@@ -209,9 +209,13 @@ near its truth, +105.2, though its wide 95 % interval still covers it) in
 more than one way that fits the data comparably well, and emcee's default
 stretch move lets an ensemble split across those modes and never recombine.
 That this persists essentially unchanged at 10 000 steps (R-hat/ESS are the
-same order of magnitude as the 900-step run's) says the modes are not merely
-under-sampled but structurally distinct, which more steps at the same move
-will not fix. A different move set (the legacy script's own
+same order of magnitude as the 900-step run's -- and an ESS near the walker
+count, fifty, is what arviz reports when each walker occupies its own
+region) is consistent with two readings the run cannot tell apart:
+structurally distinct modes, or a stretch-move autocorrelation time in
+eighteen dimensions longer than the run itself. Either way, more steps at
+the same move are the wrong lever; a different move or sampler is. A
+different move set (the legacy script's own
 ``DEMove``/``DESnookerMove`` comment, ``examples/NGC6302.py`` lines
 387-394), ``zeus`` (this twin's other engine), or a reduced/marginalised
 abundance parameterisation are the natural next things to try, and are out
