@@ -589,16 +589,30 @@ class TestTheWarmStart:
 # (c) NUTS from the MAP against NUTS from the prior; (d) emcee's burn-in
 # ---------------------------------------------------------------------------
 
-#: The pinned NUTS budget: short enough that the prior-started run has not
-#: converged, the same for both runs, at the same seed. The tree depth is
-#: capped at 6 for both, so a prior-started chain far out in a tail costs 64
-#: leapfrog steps an iteration rather than 1024 — the comparison stays fair
-#: and the row stays affordable.
-#: Draws are cut from the ruling's 200 to 100 (orchestrator's note, W6.7):
-#: at 200 the torch row ran past fifty minutes on a shared machine, and the
-#: acceptance is the comparison, not the budget. torch is held to four threads
-#: for the row — four chains on four parameters gain nothing from sixteen.
-NUTS_WARMUP, NUTS_DRAWS, NUTS_CHAINS, NUTS_TREE_DEPTH = 50, 100, 4, 6
+#: The pinned NUTS budgets, per backend: short enough that the prior-started
+#: run has not converged, the same for both runs, at the same seed, as
+#: ``(warmup, draws, chains, max_tree_depth)``. The tree depth is capped for
+#: both runs, so a prior-started chain far out in a tail costs at most
+#: ``2**depth`` leapfrog steps an iteration rather than 1024 — the comparison
+#: stays fair and the row stays affordable.
+#:
+#: jax keeps 4 chains of 100 draws at depth 6 (the ruling's 200 draws halved,
+#: orchestrator's note): about three minutes, and a wide margin — the
+#: MAP-started R-hat near 1.1 against the prior-started run's 2.3 to 3.2.
+#: torch is cut to 2 chains of 50 draws at depth 4 (W6.7's successor): at the
+#: jax budget the torch row ran past fifty minutes on a shared machine, since
+#: pyro costs about 0.75 s an iteration from the prior and 1.7 s from the MAP
+#: at depth 4, 5.8 s at depth 6 (the MAP-started chains build full trees at
+#: their small adapted step size). Two chains are the fewest R-hat can
+#: compare; the torch row takes about nine minutes and its margin is still
+#: clear. The same cut on jax left too thin a margin (MAP-started R-hat up to
+#: 2.09 against the prior's 2.09 to 3.09), hence the split. At warm-up 50 the
+#: prior-started run is far from converged on both backends, so the warm-up
+#: stays at 50. torch is held to four threads for the row.
+NUTS_BUDGET: dict[str, tuple[int, int, int, int]] = {
+    "jax": (50, 100, 4, 6),
+    "torch": (50, 50, 2, 4),
+}
 
 
 def _nuts_summary(run: Any) -> dict[str, Any]:
@@ -628,7 +642,7 @@ def test_nuts_from_the_map_adapts_faster_than_from_the_prior(backend: str) -> No
     finally:
         if backend == "torch":
             torch.set_num_threads(threads)
-    print(f"NUTS on {backend}, warmup={NUTS_WARMUP}:", runs)
+    print(f"NUTS on {backend}, (warmup, draws, chains, depth)={NUTS_BUDGET[backend]}:", runs)
     prior, started = runs["prior"], runs["map"]
     for name in prior["rhat"]:
         assert started["rhat"][name] < prior["rhat"][name], (name, runs)
@@ -641,15 +655,16 @@ def _nuts_pair(backend: str) -> dict[str, Any]:
 
     from ampere.inference import NUTSEngine
 
+    warmup, draws, chains, depth = NUTS_BUDGET[backend]
     optimum = optimise(build_problem(backend), method="map", starts=2)
     runs = {}
     for label, initial in (("prior", None), ("map", optimum)):
         runs[label] = _nuts_summary(
             NUTSEngine(build_problem(backend)).run(
-                NUTS_DRAWS,
-                warmup=NUTS_WARMUP,
-                chains=NUTS_CHAINS,
-                max_tree_depth=NUTS_TREE_DEPTH,
+                draws,
+                warmup=warmup,
+                chains=chains,
+                max_tree_depth=depth,
                 initial=initial,
             )
         )
