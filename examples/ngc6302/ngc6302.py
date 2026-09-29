@@ -145,41 +145,89 @@ GP's own hyperparameters have a prior but no injected truth, as in
     python -m examples.ngc6302 --synthetic --engine emcee --quick   # a look
     python -m examples.ngc6302 --synthetic --engine emcee           # the coverage run's engine
 
-Coverage run (Accept criterion) -- does not converge, reported as a finding
+Coverage run (Accept criterion) -- every parameter covers truth, but the
+chain still does not converge; reported as a finding (ruling 3, tranche B)
 -----------------------------------------------------------------------------
 ``python -m examples.ngc6302 --synthetic --engine emcee --seed 20260928
---walkers 50 --steps 900 --burn-in 450`` (GP on), run 2026-09-29, wall clock
-2822.1 s (comfortably inside the two-hour cap -- the budget was chosen for
-that margin, not because 900 steps was expected to be enough).
-``ampere.results.summary`` on the result: **R-hat up to 3.12 and ESS (bulk)
-as low as 57** on every one of the eighteen free parameters -- nowhere near
-ruling 5's 1.05/400 thresholds. Twelve of the sixteen qualified parameters'
-central 95 % intervals cover the truth; four do not: ``Tcold0`` (+19.6 vs
-truth +36.1), ``Twarm0`` (+86.1 vs truth +105.2), ``logacold4`` and
-``logacold6``. Per ruling 5, this is reported as a finding rather than
-reseeded:
+--walkers 50 --steps 10000 --burn-in 5000`` (GP on, ``QuasisepGP``), run
+2026-09-29, wall clock 4748.3 s (79.1 min). ``ampere.results.summary`` on
+the result, all eighteen free parameters (R-hat, ESS (bulk))::
 
-The R-hat values are not "a bit high" -- they say the fifty walkers have not
-mixed with each other at all by step 900, which is a much larger failure
-than an under-run chain that just needs a few more thousand steps. The most
-likely cause is a structural one this module's own design already flags:
-**this twin's temperature priors do not enforce ``Tcold0 < Tcold1`` /
-``Twarm0 < Twarm1``** (the module docstring's "Temperature ordering"
-section), and eleven independent log-abundance parameters give the eight
-dust species room to trade off against each other and against the two
-shells' temperatures in more than one way that fits the data comparably
-well. Both are classic sources of a genuinely multimodal posterior, and
-emcee's default stretch move is well known to let an ensemble's walkers
-split across modes and never recombine -- exactly the failure R-hat is
-built to catch. A materially larger step budget was not tried: the two
-misses on ``Tcold0``/``Twarm0`` are on the model's *unordered* pair, which
-is consistent with some walkers having settled near a disordered (but
-data-compatible) solution that more steps at the same move would not
-necessarily escape; a different move set (as the legacy script's own
+    iso.instrument.calibration_scale.scale  r_hat 1.70  ess_bulk 77
+    iso.likelihood.amplitude                r_hat 2.13  ess_bulk 64
+    iso.likelihood.length_scale             r_hat 1.69  ess_bulk 78
+    model.Tcold0                            r_hat 2.41  ess_bulk 60
+    model.Tcold_fraction                    r_hat 2.51  ess_bulk 59
+    model.Twarm0                            r_hat 2.66  ess_bulk 58
+    model.Twarm_fraction                    r_hat 2.79  ess_bulk 57
+    model.logacold0                         r_hat 2.49  ess_bulk 60
+    model.logacold1                         r_hat 2.45  ess_bulk 60
+    model.logacold2                         r_hat 2.73  ess_bulk 58
+    model.logacold3                         r_hat 2.46  ess_bulk 60
+    model.logacold4                         r_hat 2.43  ess_bulk 60
+    model.logacold6                         r_hat 2.50  ess_bulk 60
+    model.logacold7                         r_hat 2.90  ess_bulk 57
+    model.logawarm1                         r_hat 2.73  ess_bulk 58
+    model.logawarm2                         r_hat 2.30  ess_bulk 62
+    model.logawarm5                         r_hat 2.48  ess_bulk 60
+    model.logawarm7                         r_hat 2.34  ess_bulk 61
+
+    max R-hat: 2.90   min ESS (bulk): 57.2
+
+Per-parameter posterior (mean +- std, central 95 %, truth in brackets;
+``Tcold1``/``Twarm1`` are the two derived temperatures)::
+
+    iso.instrument.calibration_scale.scale  +0.978 +- 0.038   95%[+0.904, +1.062]  (truth +1)
+    iso.likelihood.amplitude                +36.7  +- 60.9    95%[+0.19,  +170.5]  (no truth)
+    iso.likelihood.length_scale             +0.167 +- 0.070   95%[+0.016, +0.289]  (no truth)
+    Tcold0                                  +32.0  +- 3.4     95%[+23.0,  +41.1]   (truth +36.13)
+    Tcold_fraction                          +0.546 +- 0.158   95%[+0.130, +0.674]  (truth +0.4764)
+    Tcold1 (derived)                        +58.2  +- 7.9     95%[+39.0,  +64.0]   (truth +57.03)
+    Twarm0                                  +136.8 +- 24.0    95%[+81.5,  +167.3]  (truth +105.20)
+    Twarm_fraction                          +0.057 +- 0.052   95%[+0.0002,+0.252]  (truth +0.2340)
+    Twarm1 (derived)                        +139.7 +- 21.3    95%[+89.9,  +167.9]  (truth +122.70)
+    logacold0..7, logawarm1/2/5/7                                                  (all within 95%)
+
+**All eighteen qualified parameters plus both derived temperatures cover
+truth at 95 %** -- a real improvement on the first draft's four misses,
+confirming the exact ordered prior does what it was meant to (the "unordered
+but data-compatible" failure mode ruling 2 fixed cannot occur any more).
+But **R-hat (1.69-2.90) and ESS (bulk, 57-78) are barely changed from the
+900-step run below** despite an eleven-fold larger budget: the walkers still
+have not mixed. Neither diagnostic is within a factor of two of ruling 3's
+1.05/400 thresholds (2.90 is 2.76x 1.05; 57.2 is 7.0x short of 400), so the
+one permitted extension to 20 000/10 000 was not run -- it would not be
+expected to close a gap this large, and ruling 3 asks for it only when the
+run is close. This is reported as a finding, not reseeded.
+
+**Diagnosis.** With the temperature-ordering degeneracy eliminated by
+construction, the coverage run isolates the *other* cause the original
+diagnosis flagged: the eleven independent log-abundance parameters give the
+eight dust species room to trade off against each other (and against the
+two shells' temperatures -- ``Twarm0``'s posterior mean, +136.8, sits nowhere
+near its truth, +105.2, though its wide 95 % interval still covers it) in
+more than one way that fits the data comparably well, and emcee's default
+stretch move lets an ensemble split across those modes and never recombine.
+That this persists essentially unchanged at 10 000 steps (R-hat/ESS are the
+same order of magnitude as the 900-step run's) says the modes are not merely
+under-sampled but structurally distinct, which more steps at the same move
+will not fix. A different move set (the legacy script's own
 ``DEMove``/``DESnookerMove`` comment, ``examples/NGC6302.py`` lines
-387-394), ``zeus`` (this twin's other engine), or enforcing the ordering
-structurally are the natural next things to try, and are out of this item's
-scope.
+387-394), ``zeus`` (this twin's other engine), or a reduced/marginalised
+abundance parameterisation are the natural next things to try, and are out
+of this item's scope.
+
+History: the first draft's four independent, unordered temperature boxes
+were run at 50 walkers x 900 steps (450 burn-in), 2026-09-29, wall clock
+2822.1 s. R-hat reached 3.12 and ESS (bulk) as low as 57 on every one of
+the eighteen free parameters -- the ensemble under-run about fifty-fold
+(:math:`\\tau \\approx 400` steps against 900 sampled) -- and four of the
+sixteen qualified parameters' 95 % intervals missed the truth, all on the
+disordered ``Tcold0``/``Twarm0`` pair or the abundances that trade off
+against them. That under-run, and the coverage run above showing the same
+non-convergence persisting after the ordering was fixed, is the lesson: this
+model's multimodality has (at least) two independent sources, of which only
+one was in this item's scope to fix.
 """
 
 from __future__ import annotations
