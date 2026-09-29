@@ -28,7 +28,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from examples.ngc6302 import generators
+from examples.ngc6302 import dust_mass, generators
 from examples.ngc6302.ngc6302 import (
     DEFAULT_GRID,
     QUALIFIED_TRUTH,
@@ -42,6 +42,34 @@ from examples.ngc6302.ngc6302 import (
 )
 
 TINY = {"walkers": 32, "steps": 10, "burn_in": 3}
+
+# The legacy dust-mass script's own printed numbers
+# (`cd examples && pixi run -e dev python NGC6302-calculate-dust-mass.py`),
+# quoted here so the reproduction test does not depend on that script
+# continuing to run in CI -- it is the frozen legacy characterisation
+# anchor, not touched by this item, and this suite must stay fast.
+_LEGACY_DUST_MASSES = {
+    "cold": {
+        "am. oliv.": 0.04754212255388583,
+        "forst.": 0.0005689300735648554,
+        "calcite": 1.4866336145406103e-05,
+        "ice": 1.4885199428994224e-05,
+        "diopside": 3.019907040849098e-05,
+        "c-enst.": 3.916360746071945e-06,
+        "dolomite": 5.53800058979032e-06,
+        "iron": 0.0,
+    },
+    "warm": {
+        "am. oliv.": 6.8280769429978754e-06,
+        "forst.": 8.66440471981681e-08,
+        "calcite": 0.0,
+        "ice": 0.0,
+        "diopside": 0.0,
+        "c-enst.": 8.767434461047079e-08,
+        "dolomite": 0.0,
+        "iron": 1.5101493748674502e-05,
+    },
+}
 
 
 class TestOpacityBuffers:
@@ -185,6 +213,34 @@ class TestTheFitRuns:
         covered = recovers_truth(tiny_run)
         assert set(covered) == set(QUALIFIED_TRUTH)
         assert all(isinstance(value, bool) for value in covered.values())
+
+    def test_dust_masses_runs_on_the_fit_posterior(self, tiny_run) -> None:
+        table = dust_mass.dust_masses(tiny_run)
+        assert set(table["cold"]) == set(dust_mass.SPECIES_NAMES)
+        assert set(table["warm"]) == set(dust_mass.SPECIES_NAMES)
+        for value in table["cold"]["am. oliv."].values():
+            assert np.isfinite(value)
+
+
+class TestDustMass:
+    """``dust_masses_at`` reproduces the legacy dust-mass script's printout."""
+
+    def test_matches_the_legacy_printout(self) -> None:
+        table = dust_mass.dust_masses_at(generators.TRUTH)
+        for component in ("cold", "warm"):
+            for name, expected in _LEGACY_DUST_MASSES[component].items():
+                if expected == 0.0:
+                    assert table[component][name] == 0.0
+                else:
+                    np.testing.assert_allclose(table[component][name], expected, rtol=1e-6)
+
+    def test_format_table_renders_every_species(self) -> None:
+        table = dust_mass.dust_masses_at(generators.TRUTH)
+        text = dust_mass.format_table(table)
+        for name in dust_mass.SPECIES_NAMES:
+            assert name in text
+        assert "total cold" in text
+        assert "total warm" in text
 
 
 class TestMain:

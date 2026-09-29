@@ -164,7 +164,7 @@ from ampere.core import (
 from ampere.backends.reference import CalibrationScale, Resample
 from ampere.inference import EmceeEngine, ZeusEngine
 
-from . import generators
+from . import dust_mass, generators
 
 __all__ = [
     "CALIBRATION_PRIOR",
@@ -601,6 +601,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--walkers", type=int, default=None)
     parser.add_argument("--steps", type=int, default=None)
     parser.add_argument("--burn-in", type=int, default=None)
+    parser.add_argument("--dust-mass", action="store_true", help="print the dust-mass table too")
     return parser
 
 
@@ -622,4 +623,8 @@ def main(argv: list[str] | None = None) -> int:
 
     print(report(run))
     print(f"  {elapsed:.1f} s wall clock")
+
+    if args.dust_mass:
+        table = dust_mass.dust_masses(run)
+        print(dust_mass.format_table(table))
     return 0
