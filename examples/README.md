@@ -19,7 +19,7 @@ beside the original (W6.13).
 | Legacy script(s) | Twin package | Status |
 | --- | --- | --- |
 | `minimal_working_example.py` and its `_dynesty`, `_zeus`, `_sbi`, `_sbi_embedding` variants | `examples/linear_sed/` | landed W6.13 (1) |
-| `NGC6302.py`, `NGC6302_zeus.py`, `NGC6302-calculate-dust-mass.py` | `examples/ngc6302/` | twin pending, W6.13 (2) |
+| `NGC6302.py`, `NGC6302_zeus.py`, `NGC6302-calculate-dust-mass.py` | `examples/ngc6302/` | landed W6.13 (2) |
 | `examples_paper/modifiedblackbody.py` | `examples/modified_blackbody/` | landed W6.13 (3) |
 | `examples_paper/phoenixstar.py` | `examples/phoenix_star/` | twin pending, W6.13 (4) |
 | `cstar_model_test_sbi_v2.py` and its `_embedding` variant | `examples/cstar/` | twin pending, W6.13 (5) |
@@ -31,7 +31,11 @@ directly, on legacy, to define "legacy still works" for the v2 redesign, and
 they are not touched by `linear_sed`'s own work.
 `examples_paper/modifiedblackbody.py` has no characterisation test of its
 own; it too is kept byte-identical, untouched by `modified_blackbody`'s
-work.
+work. `NGC6302-calculate-dust-mass.py`'s post-processing (equations 4 and 5
+of Kemper et al. 2002) lives on as `examples/ngc6302/dust_mass.py`, a
+function over a fit's posterior draws rather than a script with hard-coded
+inputs; the original script itself is untouched, kept exactly as it is
+beside its twin.
 
 **Three scripts have no twin and never will**: `example.py`, `modbbtest.py`
 and `modelClio.py` each import a path that no longer exists
