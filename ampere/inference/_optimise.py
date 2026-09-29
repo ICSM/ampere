@@ -240,7 +240,8 @@ def optimise(
     starts
         Independent starts drawn from the joint prior; the best by objective
         is kept and every one summarised in :attr:`Optimum.starts`. The
-        ``"vi"`` route fits one guide from the first start.
+        ``"vi"`` route fits one guide, from the best start after a short scipy
+        polish.
     seed
         Seed for the start draws. ``None`` takes them from the problem's own
         seed, on the ``"optimise.initialisation"`` stream, so a seeded problem
@@ -789,11 +790,30 @@ def _jax_hessian(realised: Any, mode: np.ndarray) -> np.ndarray:
 #: The ``"vi"`` route's options and their defaults (``VIEngine.run``'s own).
 _VI_DEFAULTS: dict[str, Any] = {"steps": 2000, "learning_rate": 0.01, "draws": 200}
 
+#: The ``"vi"`` route's scipy polish of its start: evaluations per free parameter.
+_VI_POLISH_EVALUATIONS = 200
+
+
+def _polish(
+    objective: Callable[[np.ndarray], float], u0: np.ndarray, evaluations: int
+) -> np.ndarray | None:
+    """A budgeted Powell run up *objective* from *u0*; ``None`` if it ends off the support."""
+    from scipy.optimize import minimize
+
+    def negative(u: np.ndarray) -> float:
+        value = objective(u)
+        return -value if math.isfinite(value) else math.inf
+
+    result = minimize(negative, u0, method="Powell", options={"maxfev": int(evaluations)})
+    x = np.asarray(result.x, dtype=float)
+    return x if math.isfinite(float(result.fun)) and np.all(np.isfinite(x)) else None
+
 
 def _vi_route(problem: FittingProblem, positions: np.ndarray, options: dict[str, Any]) -> Optimum:
     """:class:`~ampere.inference.VIEngine`'s fitted ``laplace`` guide as the point.
 
-    The guide is fitted once, from the best of the starts by objective. Its mean is the point and
+    The guide is fitted once, from the best of the starts by objective after a
+    short budgeted scipy polish (the comment below says why). Its mean is the point and
     its covariance (``guide_scale_tril @ guide_scale_tril.T``) the covariance —
     both in the unconstrained coordinates, as every ``Optimum``'s are. Note
     what that mean is: the Laplace guide centres on the mode of the density
@@ -808,12 +828,25 @@ def _vi_route(problem: FittingProblem, positions: np.ndarray, options: dict[str,
 
     _check_options("vi", options, frozenset(_VI_DEFAULTS))
     settings = {**_VI_DEFAULTS, **options}
-    # The guide starts at the best of the prior draws by objective: VI's Adam
-    # walks a bounded distance per step, and a laplace guide whose MAP stage
-    # ends short of the mode has no positive-definite curvature to build on.
+    # The guide starts at the best of the prior draws by objective, polished by
+    # a short gradient-free scipy run. VI's Adam walks a bounded distance per
+    # step, and a laplace guide whose MAP stage ends short of the mode has no
+    # positive-definite curvature to build on: pyro's Cholesky refuses it. A
+    # higher learning rate or more steps only moves that failure to another
+    # prior draw (the gated torch run met one the default 2000 steps at 0.01
+    # did not bring home); starting beside the constrained-space mode leaves
+    # Adam only the small step to the change-of-variables mode, whatever the
+    # draw. The polish is budgeted (``_VI_POLISH_EVALUATIONS`` per free
+    # parameter) so it stays a start, not a second optimisation, and is kept
+    # only when it improved the objective.
     objective = constrained_objective(problem)
     scores = [objective(problem.unconstrain(theta)) for theta in positions]
-    chosen = positions[int(np.argmax(scores))]
+    best = int(np.argmax(scores))
+    chosen = positions[best]
+    u0 = problem.unconstrain(chosen)
+    polished = _polish(objective, u0, _VI_POLISH_EVALUATIONS * problem.free_size)
+    if polished is not None and objective(polished) > scores[best]:
+        chosen = problem.constrain(polished)
     engine = VIEngine(problem)
     try:
         run = engine.run(
@@ -834,7 +867,6 @@ def _vi_route(problem: FittingProblem, positions: np.ndarray, options: dict[str,
         ) from error
     loc = engine.guide_loc
     tril = engine.guide_scale_tril
-    u0 = problem.unconstrain(chosen)
     if loc is None or not np.all(np.isfinite(loc)):
         raise EngineError(
             "optimise('vi'): the fitted laplace guide has no finite mean, so there is no point to "
