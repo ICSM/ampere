@@ -189,6 +189,7 @@ from ampere.core import (
     Model,
     ModelResult,
     Parameter,
+    QuasisepGP,
     Spectrum,
 )
 from ampere.backends.reference import CalibrationScale, Resample
@@ -235,6 +236,13 @@ GP_LENGTH_SCALE_PRIOR = st.halfnorm(scale=0.1)
 GP_AMPLITUDE_PRIOR = st.halfnorm(scale=100.0)
 
 ENGINES = ("emcee", "zeus")
+
+#: The two solvers ``_likelihood``/``build_problem`` accept -- ruling 1 makes
+#: ``quasisep`` (:class:`~ampere.core.QuasisepGP`, O(N)) the default in place
+#: of ``dense`` (:class:`~ampere.core.DenseGP`, O(N^3)); both are kept so the
+#: agreement row in :mod:`tests.examples.test_ngc6302` can build the problem
+#: both ways.
+_SOLVER_CLASSES: dict[str, type] = {"quasisep": QuasisepGP, "dense": DenseGP}
 
 #: The fifteen model parameters plus the calibration factor -- the sixteen
 #: parameters :func:`recovers_truth` checks.
@@ -531,7 +539,7 @@ def build_instrument(observed_wavelength: Any) -> Instrument:
     )
 
 
-def _likelihood(*, gp: bool) -> Likelihood:
+def _likelihood(*, gp: bool, solver: str = "quasisep") -> Likelihood:
     if not gp:
         return Likelihood(GaussianFamily(), IndependentNoise())
     kernel = Matern32(
@@ -541,11 +549,21 @@ def _likelihood(*, gp: bool) -> Likelihood:
         length_scale_unit=u.um,
         axes=("spectral_axis",),
     )
-    return Likelihood(GaussianFamily(), GaussianProcessNoise(kernel, DenseGP()))
+    # Ruling 1: QuasisepGP (O(N)) in place of DenseGP (O(N^3)) -- exact for a
+    # Matern-3/2 kernel on sorted, strictly increasing 1-D coordinates, which
+    # generators.load_observed_spectrum now guarantees. ``solver="dense"`` is
+    # kept for the agreement row (tests/examples/test_ngc6302.py) that checks
+    # the two give the same log_prob.
+    solver_cls = _SOLVER_CLASSES[solver]
+    return Likelihood(GaussianFamily(), GaussianProcessNoise(kernel, solver_cls()))
 
 
 def build_problem(
-    *, synthetic: bool = False, gp: bool = True, seed: int = generators.SEED
+    *,
+    synthetic: bool = False,
+    gp: bool = True,
+    seed: int = generators.SEED,
+    solver: str = "quasisep",
 ) -> FittingProblem:
     """The composed problem: one model, one dataset (real, or ``--synthetic``)."""
     model = build_model()
@@ -554,7 +572,7 @@ def build_problem(
     if synthetic:
         observed = generators.synthetic_data(model, instrument, seed=seed)
     datasets = DatasetCollection(
-        {"iso": Dataset(observed, instrument, likelihood=_likelihood(gp=gp))}
+        {"iso": Dataset(observed, instrument, likelihood=_likelihood(gp=gp, solver=solver))}
     )
     return FittingProblem(model, datasets, seed=seed)
 

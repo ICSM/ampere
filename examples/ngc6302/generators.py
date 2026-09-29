@@ -154,11 +154,30 @@ def load_observed_spectrum(
     """The real ISO SWS/LWS spectrum, legacy's own 25-120 micron selection.
 
     See the module docstring for the uncertainty rule (five per cent of the
-    flux).
+    flux). Sorted and de-duplicated on wavelength (ruling 1): the twin's GP
+    likelihood uses :class:`~ampere.core.QuasisepGP`, which needs sorted,
+    strictly increasing one-dimensional coordinates. The tracked
+    ``NGC6302_100.tab`` is already sorted and has no repeated wavelength in
+    the 25-120 micron window (625 points, checked at W6.13 (2) tranche B) --
+    the sort and the averaging de-duplication below are defensive, not
+    currently exercised by this file.
     """
     wavelength, flux = np.loadtxt(path, skiprows=2, unpack=True)
     selected = (wavelength >= low) & (wavelength <= high)
     wavelength, flux = wavelength[selected], flux[selected]
+    order = np.argsort(wavelength, kind="stable")
+    wavelength, flux = wavelength[order], flux[order]
+    unique_wavelength, inverse, counts = np.unique(
+        wavelength, return_inverse=True, return_counts=True
+    )
+    if unique_wavelength.size != wavelength.size:
+        flux = np.bincount(inverse, weights=flux) / counts
+        wavelength = unique_wavelength
+    assert np.all(np.diff(wavelength) > 0), (
+        "load_observed_spectrum's wavelength grid is not strictly increasing after "
+        "sorting and de-duplication -- QuasisepGP needs sorted, strictly increasing "
+        "one-dimensional coordinates (ruling 1)."
+    )
     uncertainty = fractional_uncertainty * np.abs(flux)
     return Spectrum(wavelength * u.um, flux * u.Jy, uncertainty=uncertainty * u.Jy)
 

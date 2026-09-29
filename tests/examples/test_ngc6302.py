@@ -10,6 +10,8 @@ calibration and GP ones; a tiny-budget emcee fit runs; and
 ``main --synthetic --quick`` (sized down) prints a report. The dust-mass row
 is in :mod:`tests.examples.test_ngc6302`'s later commit
 (``TestDustMass``, added alongside :mod:`examples.ngc6302.dust_mass`).
+``TestSolverAgreement`` is ruling 1: the O(N) solver agrees with the O(N^3)
+one.
 
 The full-budget coverage run this item is accepted on is **not** part of
 this suite -- as :mod:`tests.examples.test_linear_sed` and
@@ -28,6 +30,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from ampere.core import DenseGP, QuasisepGP
 from examples.ngc6302 import dust_mass, generators
 from examples.ngc6302.ngc6302 import (
     DEFAULT_GRID,
@@ -162,6 +165,14 @@ class TestDataLoading:
         spectrum = generators.load_observed_spectrum()
         np.testing.assert_allclose(spectrum.uncertainty, 0.05 * np.abs(spectrum.values))
 
+    def test_wavelength_is_sorted_and_strictly_increasing(self) -> None:
+        """QuasisepGP's own precondition (ruling 1); the tracked file already
+        satisfies it (no duplicate wavelength in the 25-120 micron window)."""
+        spectrum = generators.load_observed_spectrum()
+        wavelength = spectrum.spectral_axis.values
+        assert wavelength.size == 625
+        assert np.all(np.diff(wavelength) > 0)
+
 
 class TestTheProblemBuilds:
     """One model, one dataset; the fifteen model parameters plus calibration and GP."""
@@ -267,3 +278,40 @@ class TestMain:
         assert "free parameters:" in out
         assert "emcee on reference" in out
         assert "wall clock" in out
+
+
+class TestSolverAgreement:
+    """Ruling 1: ``QuasisepGP`` (O(N)) is now the default, and agrees with
+    ``DenseGP`` (O(N^3)) exactly on this problem's Matern-3/2 likelihood."""
+
+    def test_default_solver_is_quasisep(self) -> None:
+        from examples.ngc6302.ngc6302 import _likelihood
+
+        assert isinstance(_likelihood(gp=True).noise.solver, QuasisepGP)
+        assert isinstance(_likelihood(gp=True, solver="dense").noise.solver, DenseGP)
+
+    def test_quasisep_and_dense_score_the_same_log_prob_at_truth(self) -> None:
+        dense = build_problem(synthetic=True, gp=True, solver="dense")
+        quasisep = build_problem(synthetic=True, gp=True, solver="quasisep")
+        assert dense.parameters.free_names == quasisep.parameters.free_names
+
+        # generators.TRUTH plus the GP hyperparameters' prior median (no
+        # injected truth for those -- module docstring).
+        theta = dict(dense.reference_values)
+        theta.update(QUALIFIED_TRUTH)
+
+        lp_dense = float(dense.log_prob(theta))
+        lp_quasisep = float(quasisep.log_prob(theta))
+        assert lp_quasisep == pytest.approx(lp_dense, rel=1e-6)
+
+    def test_quasisep_and_dense_agree_away_from_truth(self) -> None:
+        """One point could agree by accident; a few draws from the priors cannot."""
+        dense = build_problem(synthetic=True, gp=True, solver="dense", seed=7)
+        quasisep = build_problem(synthetic=True, gp=True, solver="quasisep", seed=7)
+        rng = np.random.default_rng(11)
+        for _ in range(3):
+            theta = dense.sample_prior(rng)
+            lp_dense = float(dense.log_prob(theta))
+            lp_quasisep = float(quasisep.log_prob(theta))
+            if np.isfinite(lp_dense) or np.isfinite(lp_quasisep):
+                assert lp_quasisep == pytest.approx(lp_dense, rel=1e-6)
