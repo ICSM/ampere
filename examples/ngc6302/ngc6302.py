@@ -125,11 +125,41 @@ calibration factor (``iso.instrument.calibration_scale.scale``, truth 1.0)
     python -m examples.ngc6302 --synthetic --engine emcee --quick   # a look
     python -m examples.ngc6302 --synthetic --engine emcee           # the coverage run's engine
 
-Coverage run (Accept criterion)
---------------------------------
-Recorded once the full run (below the two-hour wall-clock cap ruling 5 sets)
-has finished -- see this module's later commit and the branch report for the
-seed, engine, budget, wall-clock, date and the per-parameter coverage table.
+Coverage run (Accept criterion) -- does not converge, reported as a finding
+-----------------------------------------------------------------------------
+``python -m examples.ngc6302 --synthetic --engine emcee --seed 20260928
+--walkers 50 --steps 900 --burn-in 450`` (GP on), run 2026-09-29, wall clock
+2822.1 s (comfortably inside the two-hour cap -- the budget was chosen for
+that margin, not because 900 steps was expected to be enough).
+``ampere.results.summary`` on the result: **R-hat up to 3.12 and ESS (bulk)
+as low as 57** on every one of the eighteen free parameters -- nowhere near
+ruling 5's 1.05/400 thresholds. Twelve of the sixteen qualified parameters'
+central 95 % intervals cover the truth; four do not: ``Tcold0`` (+19.6 vs
+truth +36.1), ``Twarm0`` (+86.1 vs truth +105.2), ``logacold4`` and
+``logacold6``. Per ruling 5, this is reported as a finding rather than
+reseeded:
+
+The R-hat values are not "a bit high" -- they say the fifty walkers have not
+mixed with each other at all by step 900, which is a much larger failure
+than an under-run chain that just needs a few more thousand steps. The most
+likely cause is a structural one this module's own design already flags:
+**this twin's temperature priors do not enforce ``Tcold0 < Tcold1`` /
+``Twarm0 < Twarm1``** (the module docstring's "Temperature ordering"
+section), and eleven independent log-abundance parameters give the eight
+dust species room to trade off against each other and against the two
+shells' temperatures in more than one way that fits the data comparably
+well. Both are classic sources of a genuinely multimodal posterior, and
+emcee's default stretch move is well known to let an ensemble's walkers
+split across modes and never recombine -- exactly the failure R-hat is
+built to catch. A materially larger step budget was not tried: the two
+misses on ``Tcold0``/``Twarm0`` are on the model's *unordered* pair, which
+is consistent with some walkers having settled near a disordered (but
+data-compatible) solution that more steps at the same move would not
+necessarily escape; a different move set (as the legacy script's own
+``DEMove``/``DESnookerMove`` comment, ``examples/NGC6302.py`` lines
+387-394), ``zeus`` (this twin's other engine), or enforcing the ordering
+structurally are the natural next things to try, and are out of this item's
+scope.
 """
 
 from __future__ import annotations
@@ -328,9 +358,7 @@ class KemperTwoShell(Model):
     ) -> None:
         grid = np.asarray(wavelength, dtype=float)
         if grid.ndim != 1 or grid.size == 0:
-            raise ValueError(
-                f"KemperTwoShell needs a 1-D, non-empty grid, got shape {grid.shape}."
-            )
+            raise ValueError(f"KemperTwoShell needs a 1-D, non-empty grid, got shape {grid.shape}.")
         self.channel = str(channel)
         self.register_buffer("wavelength", grid, unit=u.um)
 
@@ -348,7 +376,9 @@ class KemperTwoShell(Model):
                 table_opacity = table_opacity * 1e-4
             elif name == "dolomite":
                 table_opacity = table_opacity * 2.87 * (4.0 / 3.0) * 1e-4
-            wavelength_buffer = self.register_buffer(f"{name}_wavelength", table_wavelength, unit=u.um)
+            wavelength_buffer = self.register_buffer(
+                f"{name}_wavelength", table_wavelength, unit=u.um
+            )
             opacity_buffer = self.register_buffer(
                 f"{name}_opacity", table_opacity, unit=u.dimensionless_unscaled
             )
@@ -596,7 +626,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--engine", default="emcee", choices=list(ENGINES))
     parser.add_argument("--synthetic", action="store_true", help="fit the 2002-solution truth")
     parser.add_argument("--no-gp", dest="gp", action="store_false", help="IndependentNoise instead")
-    parser.add_argument("--quick", action="store_true", help=f"{QUICK_STEPS}/{QUICK_BURN_IN} budget")
+    parser.add_argument(
+        "--quick", action="store_true", help=f"{QUICK_STEPS}/{QUICK_BURN_IN} budget"
+    )
     parser.add_argument("--seed", type=int, default=generators.SEED)
     parser.add_argument("--walkers", type=int, default=None)
     parser.add_argument("--steps", type=int, default=None)

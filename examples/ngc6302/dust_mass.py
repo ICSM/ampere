@@ -166,9 +166,7 @@ def dust_masses_at(theta: Mapping[str, float]) -> dict[str, Any]:
     return {
         "cold": {name: float(value) for name, value in masses["cold"].items()},
         "warm": {name: float(value) for name, value in masses["warm"].items()},
-        "totals": {
-            component: float(sum(values.values())) for component, values in masses.items()
-        },
+        "totals": {component: float(sum(values.values())) for component, values in masses.items()},
     }
 
 
