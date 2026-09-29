@@ -1546,6 +1546,90 @@ it did not. Nothing else in `distribute` touches values, so nothing else is
 affected; this is recorded because it is the one line of `ampere.core` that a
 backend's trace runs through by design rather than by accident.
 
+## 10b. Optimisers: point estimates and starts (*Added W6.7*)
+
+*(Added W6.7, 2026-09-29; the decision-log row "The optimisers module"
+records the rulings.)* Every engine starts from prior draws that merely score
+finite (`Engine.initial_positions`), and until W6.7 a user had no cheap way to
+ask "where should I be looking?". The answer is additive surface beside §4.5,
+not a change to it: nothing in §10 or §10a moved.
+
+**The surface is a function, not an engine.** An optimiser produces no
+posterior, so it is not an `Engine` subclass with a `run()` that emits a
+`DataTree`. `ampere.inference` exports
+
+```python
+optimise(problem, *, method="auto", starts=8, seed=None, **options) -> Optimum
+warm_start_gp(problem, *, length_scales=None, residual_from=None) -> dict[str, Optimum]
+```
+
+and `ampere.results` exports the `Optimum` they return (`results.md` §4's
+*Amended W6.7* note). `method` is `"scipy"` (multi-start
+`scipy.optimize.minimize` over the packed unconstrained vector on the numpy
+contract path — any backend, gradient-free, Powell by default), `"map"` (a
+gradient MAP through `realise`: `torch.optim.LBFGS` or
+`jax.scipy.optimize.minimize("BFGS")`, Adam as the fallback), `"vi"`
+(`VIEngine`'s fitted `laplace` guide, its mean and covariance) or `"auto"`
+(`"map"` where the problem is native and differentiable, else `"scipy"`).
+The multi-start draws come from the same helper `Engine.initial_positions`
+uses, so the two cannot drift; `starts` of them are run and the best by
+objective kept, with every start summarised on the `Optimum`.
+
+**The objective convention: the constrained-space MAP.** Every route
+maximises `log p(θ) + log p(D | θ)` at `θ = constrain(u)`, over the packed
+unconstrained `u` so every iterate stays in support — *not*
+`log_prob_unconstrained(u)`, whose extra change-of-variables term moves the
+maximum with the choice of bijection, so that a "MAP" of it would be a
+property of the parametrisation. On the native path the realisation offers
+only `log_prob_unconstrained`, so the term is **subtracted on the realised
+side**, with its gradient by central differences on the numpy path
+(`unconstrained_jacobian_correction`): rebuilding each bijection inside the
+backend's graph would mean `ampere.inference` restating every backend's
+lowering table (§4's inferred default goes through `biject_to` on torch), and
+the term touches no model and no data. `tests/conformance/test_optimise.py`
+holds the `"scipy"` and `"map"` modes to `1e-3` in every unconstrained
+coordinate on each column with a realisation. The `"vi"` route is the
+stated exception: the Laplace guide centres on the mode of the density NUTS
+samples, so it is offered as the alternative start, not as a third estimate
+of the same point. The `Optimum` records the density in both conventions,
+each named for what it is. The covariance is the inverse Hessian of the
+negated objective in the unconstrained coordinates — central differences on
+the scipy route, autodiff on the native ones — or `None` with a
+`covariance_refusal` naming the reason when the Hessian is not positive
+definite; it is never silently regularised.
+
+**The bridge.** `Engine.initial_positions(count, *, around=None)` with an
+`Optimum` draws a ball at the mode, `u* + 0.5 L z` with `L` the covariance's
+Cholesky factor (tighter than the posterior, so no walker starts in a tail),
+or `u* + (0.01 |u*| + 1e-3) z` when the covariance was refused, keeping the
+finite-log-probability rejection; without `around` it is exactly the old
+prior draw. Every sampling engine's `run(initial=)` accepts an `Optimum` as
+well as an array: emcee and zeus through that ball, NUTS and blackjax with
+each chain at the mode plus a jitter of a tenth of the covariance (through
+the existing `init_to_value` route), `VIEngine` at the mode exactly.
+`warm_start_gp` (the reduced-rank empirical-Bayes route, its closed form
+derived in its docstring) returns hyperparameter optima in the likelihood's
+own parameter names, and `Optimum.combine` merges disjoint optima so a model
+optimum and its GP's hyperparameters can seed one run.
+
+**Provenance.** A run records what it started from: `ampere_start_route`
+(`"prior"`, `"user"`, `"pathfinder"` or the optimum's route) on every run and
+`ampere_start` (the optimum's route, identity hash, constrained-space
+density, evaluation count, convergence) on a run seeded from an `Optimum` —
+`results.md` §9's schema 9.
+
+**The refusals, by name.** `method="map"`/`"vi"` on a problem with no
+differentiable realisation (the sentence names `"scipy"`); an unknown method
+or an option the route does not take; an `Optimum` handed to dynesty,
+nautilus or ultranest (they draw from the prior transform and have no start);
+`around=` with an optimum whose free labels are not the problem's;
+`warm_start_gp` on a problem with no GP dataset, a composite kernel, or an
+exact solver other than `DenseGP`.
+
+**Out of scope.** Bayesian optimisation (the dimension argument recorded on
+2026-09-24); profile intervals and the Laplace evidence (the inference
+extensions memo §3.2's items 2–3, a later item).
+
 ## 11. Failure signalling
 
 `DEVELOPMENT_PLAN.md` §4.5: "external simulators crash and return NaNs; the

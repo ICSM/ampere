@@ -155,6 +155,7 @@ class DynestyEngine(Engine):
         xarray.DataTree
             The run, with one chain of equal-weight posterior draws.
         """
+        self._refuse_optimum(run_nested)
         import dynesty
         from dynesty.utils import resample_equal
 

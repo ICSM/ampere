@@ -151,6 +151,7 @@ from .plots import (
     plot_trace,
     warn_if_approximate,
 )
+from .optimum import OPTIMUM_GROUP, Optimum, StartSummary
 from .population import (
     DEFAULT_ESS_FLOOR,
     DataTreeRunColumns,
@@ -241,6 +242,7 @@ __all__ = [
     "MAX_TRACE_VARIABLES",
     "OBSERVATIONS_GROUP",
     "OBSERVED_DATA_GROUP",
+    "OPTIMUM_GROUP",
     "PARAMETER_DIM",
     "POINTWISE_LOG_LIKELIHOOD_GROUP",
     "POSTERIOR_GROUP",
@@ -264,10 +266,12 @@ __all__ = [
     "DrawRecorder",
     "GaussianPopulationModel",
     "NetCDFRunColumns",
+    "Optimum",
     "PopulationModel",
     "ResultsError",
     "ResultsWarning",
     "RunColumns",
+    "StartSummary",
     "TrainingSet",
     "WhitenessTest",
     "add_pointwise_log_likelihood",

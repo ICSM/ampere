@@ -119,6 +119,7 @@ from ampere.core.realisation import (
 )
 
 from .engine import (
+    _JITTER_SPREAD,
     DEFAULT_CACHE_SIZE,
     Engine,
     _refuse_foreign_parts,
@@ -624,11 +625,14 @@ class BlackjaxEngine(Engine):
                     f"would fit the same approximation twice and draw from the second. Omit "
                     f"initial=, or use method='mclmc' to sample from a Pathfinder start."
                 )
+            self._start = "pathfinder"
             return self._pathfinder_starts(settings)
-        if initial is None:
-            positions = self.initial_positions(settings.chains)
-        else:
-            positions = self._checked_initial(initial, settings.chains)
+        positions = self._start_positions(
+            initial,
+            settings.chains,
+            lambda given: self._checked_initial(given, settings.chains),
+            spread=_JITTER_SPREAD,
+        )
         return np.stack([self.problem.unconstrain(theta) for theta in positions])
 
     def _pathfinder_starts(self, settings: _Settings) -> np.ndarray:
