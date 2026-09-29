@@ -3,10 +3,9 @@
 The v2 twin of ``examples/NGC6302.py`` (emcee) and ``examples/NGC6302_zeus.py``
 (zeus); the legacy files stay exactly as they are (this module does **not**
 touch them, nor the tracked data under ``examples/NGC6302/`` and
-``examples/NGC6302-opacities.txt``). This first commit lands the model
-itself, :class:`KemperTwoShell`, and its equality row against the legacy
-``SpectrumNGC6302``; the data, the problem, the engines and the CLI follow
-in the next commit.
+``examples/NGC6302-opacities.txt``). One model, the same data, the same
+question, written once against :mod:`ampere.core` and the reference backend,
+with the sampler chosen by ``--engine`` rather than by which file you ran.
 
 The model
 ---------
@@ -75,12 +74,70 @@ physics, not given a free pass -- and the likelihood is what does the
 discriminating (the two shells' data-implied temperatures are far enough
 apart, and the model's ``tin``-referenced power law is not symmetric under
 exchange, that the posterior is not expected to reward disorder). The
-coverage run (a later commit) is the check that this in fact works.
+coverage run below is the check that this in fact works.
+
+The data
+--------
+One instrument, ``"iso"`` (the real spectrum is ISO SWS/LWS) --
+:class:`~ampere.backends.reference.Resample` onto the observed 25-120 micron
+selection (:func:`~examples.ngc6302.generators.load_observed_spectrum`) then
+:class:`~ampere.backends.reference.CalibrationScale`. Legacy's own
+``calUnc=1e-10`` declared "no calibration freedom"; this twin gives it a
+five per cent log-normal instead, as :mod:`examples.linear_sed` documents
+doing for its own ``calUnc``. :class:`~ampere.core.GaussianProcessNoise`
+with a :class:`~ampere.core.Matern32` kernel in wavelength is on by default
+(``--no-gp`` swaps in :class:`~ampere.core.IndependentNoise`); the
+length-scale prior reproduces legacy's own ``scalelengthPrior=0.1`` (micron,
+half-normal -- ``examples/NGC6302.py`` line ~367) directly, and the
+amplitude prior is weakly informative, scaled to *this* spectrum's own flux
+magnitude (a few hundred Jy across the 25-120 micron window) rather than
+:mod:`examples.linear_sed`'s O(1) Jy synthetic scale, which would be badly
+mismatched here.
+
+Engines
+-------
+``--engine emcee|zeus`` (:class:`~ampere.inference.EmceeEngine`,
+:class:`~ampere.inference.ZeusEngine`), both at legacy's own 50 walkers and
+its emcee script's own 50 000 steps / 40 000 burn-in as the shared full
+budget (zeus's own legacy script uses a smaller 5 000 / 3 500 budget for a
+quicker look; this twin keeps one full budget across both engines, as
+:mod:`examples.linear_sed` and :mod:`examples.modified_blackbody` do, so a
+caller comparing engines compares them at one cost). ``--quick`` uses 2 000
+steps / 1 000 burn-in instead, for a fast look, not a coverage claim.
+``NGC6302_zeus.py`` also drops ``logawarm1`` (a fourteen-parameter model);
+this twin keeps all fifteen parameters on both engines and does not
+reproduce that reduction -- one model, two samplers, as the item text asks.
+
+Synthetic mode and coverage
+----------------------------
+``--synthetic`` builds :func:`~examples.ngc6302.generators.synthetic_data`
+instead of the real spectrum: the model evaluated at the "2002 solution"
+(:data:`examples.ngc6302.generators.TRUTH` -- see that module's docstring
+for its source and the species correspondence), on the observed wavelength
+selection, plus Gaussian noise at the data's own five-per-cent uncertainty
+rule. :func:`recovers_truth` checks the fifteen model parameters plus the
+calibration factor (``iso.instrument.calibration_scale.scale``, truth 1.0)
+-- the GP's own hyperparameters have a prior but no injected truth, as in
+:mod:`examples.linear_sed`.
+
+::
+
+    python -m examples.ngc6302 --synthetic --engine emcee --quick   # a look
+    python -m examples.ngc6302 --synthetic --engine emcee           # the coverage run's engine
+
+Coverage run (Accept criterion)
+--------------------------------
+Recorded once the full run (below the two-hour wall-clock cap ruling 5 sets)
+has finished -- see this module's later commit and the branch report for the
+seed, engine, budget, wall-clock, date and the per-parameter coverage table.
 """
 
 from __future__ import annotations
 
+import argparse
 import math
+import sys
+import time
 from typing import Any
 
 import astropy.units as u
@@ -88,14 +145,47 @@ import numpy as np
 import scipy.stats as st
 from scipy.interpolate import interp1d
 
-from ampere.core import Model, ModelResult, Parameter, Spectrum
+from ampere.core import (
+    Dataset,
+    DatasetCollection,
+    DenseGP,
+    FittingProblem,
+    GaussianFamily,
+    GaussianProcessNoise,
+    IndependentNoise,
+    Instrument,
+    Likelihood,
+    Matern32,
+    Model,
+    ModelResult,
+    Parameter,
+    Spectrum,
+)
+from ampere.backends.reference import CalibrationScale, Resample
+from ampere.inference import EmceeEngine, ZeusEngine
 
 from . import generators
 
 __all__ = [
+    "CALIBRATION_PRIOR",
+    "DEFAULT_BURN_IN",
     "DEFAULT_GRID",
+    "DEFAULT_STEPS",
+    "DEFAULT_WALKERS",
+    "ENGINES",
+    "GP_AMPLITUDE_PRIOR",
+    "GP_LENGTH_SCALE_PRIOR",
+    "QUALIFIED_TRUTH",
+    "QUICK_BURN_IN",
+    "QUICK_STEPS",
     "KemperTwoShell",
+    "build_instrument",
     "build_model",
+    "build_problem",
+    "fit",
+    "main",
+    "recovers_truth",
+    "report",
 ]
 
 # Legacy's own wavelength grid (``examples/NGC6302.py`` lines 295-297): a
@@ -104,6 +194,33 @@ __all__ = [
 _WAVE1 = np.linspace(2.3603, 35.0603, 327)
 _WAVE2 = np.linspace(1.0 / 196.6261, 1.0 / 35.1, 117)
 DEFAULT_GRID = np.concatenate((_WAVE1, 1.0 / _WAVE2[::-1]))
+
+#: ``calUnc``'s v2 counterpart -- see the module docstring.
+CALIBRATION_PRIOR = st.lognorm(0.05, scale=1.0)
+
+#: legacy's own ``scalelengthPrior=0.1`` (micron, half-normal).
+GP_LENGTH_SCALE_PRIOR = st.halfnorm(scale=0.1)
+#: No legacy number to match; weakly informative, scaled to this spectrum's
+#: own flux magnitude (see the module docstring).
+GP_AMPLITUDE_PRIOR = st.halfnorm(scale=100.0)
+
+ENGINES = ("emcee", "zeus")
+
+#: The fifteen model parameters plus the calibration factor -- the sixteen
+#: parameters :func:`recovers_truth` checks.
+QUALIFIED_TRUTH: dict[str, float] = {
+    f"model.{name}": value for name, value in generators.TRUTH.items()
+}
+QUALIFIED_TRUTH["iso.instrument.calibration_scale.scale"] = generators.CALIBRATION_TRUTH
+
+# Budgets. Legacy's own emcee script (50 walkers, 50 000 steps, 40 000
+# burn-in -- ``examples/NGC6302.py`` lines 399, 456) is kept as the shared
+# full-budget default for both engines (see the module docstring).
+DEFAULT_WALKERS = 50
+DEFAULT_STEPS = 50_000
+DEFAULT_BURN_IN = 40_000
+QUICK_STEPS = 2_000
+QUICK_BURN_IN = 1_000
 
 #: Fixed in ``ckmodbb`` (``examples/NGC6302.py`` line 203), never fitted.
 _INDEX = 0.5
@@ -373,3 +490,136 @@ def build_model() -> KemperTwoShell:
         Twarm0=st.uniform(80.0, 100.0),
         Twarm1=st.uniform(80.0, 100.0),
     )
+
+
+def build_instrument(observed_wavelength: Any) -> Instrument:
+    """The ISO spectrum's instrument: resample onto the observed grid, then calibrate."""
+    return Instrument(
+        [Resample(observed_wavelength), CalibrationScale(CALIBRATION_PRIOR)],
+        channel="sed",
+        label="iso",
+    )
+
+
+def _likelihood(*, gp: bool) -> Likelihood:
+    if not gp:
+        return Likelihood(GaussianFamily(), IndependentNoise())
+    kernel = Matern32(
+        GP_AMPLITUDE_PRIOR,
+        GP_LENGTH_SCALE_PRIOR,
+        amplitude_unit=u.Jy,
+        length_scale_unit=u.um,
+        axes=("spectral_axis",),
+    )
+    return Likelihood(GaussianFamily(), GaussianProcessNoise(kernel, DenseGP()))
+
+
+def build_problem(
+    *, synthetic: bool = False, gp: bool = True, seed: int = generators.SEED
+) -> FittingProblem:
+    """The composed problem: one model, one dataset (real, or ``--synthetic``)."""
+    model = build_model()
+    observed = generators.load_observed_spectrum()
+    instrument = build_instrument(observed.spectral_axis.values)
+    if synthetic:
+        observed = generators.synthetic_data(model, instrument, seed=seed)
+    datasets = DatasetCollection(
+        {"iso": Dataset(observed, instrument, likelihood=_likelihood(gp=gp))}
+    )
+    return FittingProblem(model, datasets, seed=seed)
+
+
+def fit(
+    problem: FittingProblem,
+    *,
+    engine: str = "emcee",
+    walkers: int | None = None,
+    steps: int | None = None,
+    burn_in: int | None = None,
+    progress: bool = False,
+) -> Any:
+    """Sample *problem* with the named engine, at its own legacy-matched default."""
+    if engine == "emcee":
+        run_engine = EmceeEngine(problem, walkers=DEFAULT_WALKERS if walkers is None else walkers)
+    elif engine == "zeus":
+        run_engine = ZeusEngine(problem, walkers=DEFAULT_WALKERS if walkers is None else walkers)
+    else:
+        raise SystemExit(f"unknown engine {engine!r}; choose {', '.join(ENGINES)}.")
+    return run_engine.run(
+        DEFAULT_STEPS if steps is None else steps,
+        burn_in=DEFAULT_BURN_IN if burn_in is None else burn_in,
+        progress=progress,
+    )
+
+
+def recovers_truth(run: Any, *, level: float = 0.95) -> dict[str, bool]:
+    """Whether each qualified parameter's central *level* interval covers its truth."""
+    posterior = run["posterior"].dataset
+    tail = (1.0 - level) / 2.0 * 100.0
+    covered: dict[str, bool] = {}
+    for name, truth in QUALIFIED_TRUTH.items():
+        draws = np.asarray(posterior[name], dtype=float).ravel()
+        lower, upper = np.percentile(draws, [tail, 100.0 - tail])
+        covered[name] = bool(lower <= truth <= upper)
+    return covered
+
+
+def report(run: Any) -> str:
+    """A human-readable posterior summary, truth in brackets, 95 % coverage flagged."""
+    attrs = run.attrs
+    posterior = run["posterior"].dataset
+    covered = (
+        recovers_truth(run) if any(name in posterior.data_vars for name in QUALIFIED_TRUTH) else {}
+    )
+    lines = [
+        (
+            f"{attrs['ampere_engine']} on {attrs['ampere_backend']}: "
+            f"{posterior.sizes['chain']} chain(s) x {posterior.sizes['draw']} draw(s)"
+        ),
+        "  posterior (truth in brackets, 95 % coverage flagged, --synthetic only):",
+    ]
+    for name in sorted(posterior.data_vars):
+        values = np.asarray(posterior[name], dtype=float).ravel()
+        lower, upper = np.percentile(values, [2.5, 97.5])
+        truth = QUALIFIED_TRUTH.get(name)
+        flag = "" if truth is None else ("  ok" if covered.get(name) else "  MISS")
+        bracket = "" if truth is None else f"  (truth {truth:+.6g})"
+        lines.append(
+            f"    {name:45s} {values.mean():+.6g} +- {values.std():.3g}   "
+            f"95%[{lower:+.6g}, {upper:+.6g}]{bracket}{flag}"
+        )
+    return "\n".join(lines)
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--engine", default="emcee", choices=list(ENGINES))
+    parser.add_argument("--synthetic", action="store_true", help="fit the 2002-solution truth")
+    parser.add_argument("--no-gp", dest="gp", action="store_false", help="IndependentNoise instead")
+    parser.add_argument("--quick", action="store_true", help=f"{QUICK_STEPS}/{QUICK_BURN_IN} budget")
+    parser.add_argument("--seed", type=int, default=generators.SEED)
+    parser.add_argument("--walkers", type=int, default=None)
+    parser.add_argument("--steps", type=int, default=None)
+    parser.add_argument("--burn-in", type=int, default=None)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(sys.argv[1:] if argv is None else argv)
+
+    problem = build_problem(synthetic=args.synthetic, gp=args.gp, seed=args.seed)
+    print(f"free parameters: {problem.parameters.free_names}")
+
+    steps = args.steps
+    burn_in = args.burn_in
+    if args.quick:
+        steps = QUICK_STEPS if steps is None else steps
+        burn_in = QUICK_BURN_IN if burn_in is None else burn_in
+
+    started = time.perf_counter()
+    run = fit(problem, engine=args.engine, walkers=args.walkers, steps=steps, burn_in=burn_in)
+    elapsed = time.perf_counter() - started
+
+    print(report(run))
+    print(f"  {elapsed:.1f} s wall clock")
+    return 0

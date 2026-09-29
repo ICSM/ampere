@@ -73,7 +73,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import astropy.units as u
+import numpy as np
+
+from ampere.core import Instrument, Model, Spectrum, negotiate
+
 __all__ = [
+    "CALIBRATION_TRUTH",
     "DATA_FILE",
     "FRACTIONAL_UNCERTAINTY",
     "OPACITY_DIRECTORY",
@@ -82,6 +88,8 @@ __all__ = [
     "SPECIES",
     "TRUTH",
     "WAVELENGTH_SELECTION",
+    "load_observed_spectrum",
+    "synthetic_data",
 ]
 
 #: Reproducible everywhere this example is run, in the convention
@@ -110,6 +118,10 @@ WAVELENGTH_SELECTION = (25.0, 120.0)
 #: docstring for the one-per-cent jitter this is *not*).
 FRACTIONAL_UNCERTAINTY = 0.05
 
+#: No deliberate miscalibration injected for the synthetic truth (as
+#: :data:`examples.linear_sed.generators.CALIBRATION_TRUTH`).
+CALIBRATION_TRUTH = 1.0
+
 #: The "2002 solution" -- see the module docstring for the species
 #: correspondence and its source
 #: (``examples/NGC6302-calculate-dust-mass.py`` lines 20-34, 87-88).
@@ -130,3 +142,46 @@ TRUTH: dict[str, float] = {
     "Twarm0": 105.19534,
     "Twarm1": 122.69678,
 }
+
+
+def load_observed_spectrum(
+    *,
+    low: float = WAVELENGTH_SELECTION[0],
+    high: float = WAVELENGTH_SELECTION[1],
+    fractional_uncertainty: float = FRACTIONAL_UNCERTAINTY,
+    path: Path | str = DATA_FILE,
+) -> Spectrum:
+    """The real ISO SWS/LWS spectrum, legacy's own 25-120 micron selection.
+
+    See the module docstring for the uncertainty rule (five per cent of the
+    flux).
+    """
+    wavelength, flux = np.loadtxt(path, skiprows=2, unpack=True)
+    selected = (wavelength >= low) & (wavelength <= high)
+    wavelength, flux = wavelength[selected], flux[selected]
+    uncertainty = fractional_uncertainty * np.abs(flux)
+    return Spectrum(wavelength * u.um, flux * u.Jy, uncertainty=uncertainty * u.Jy)
+
+
+def synthetic_data(model: Model, instrument: Instrument, *, seed: int = SEED) -> Spectrum:
+    """The 2002-solution truth, on the observed grid, noisy at its own uncertainty rule.
+
+    Negotiates *instrument*'s requirement (the observed wavelength selection,
+    via its own :class:`~ampere.backends.reference.Resample` step), compiles
+    *model* onto it, evaluates once at :data:`TRUTH`, and perturbs by
+    :data:`FRACTIONAL_UNCERTAINTY` -- ruling 3's synthetic truth, the one
+    :func:`examples.ngc6302.ngc6302.recovers_truth` scores.
+    """
+    rng = np.random.default_rng(seed)
+    requirements = negotiate([instrument])
+    compiled = model.compile_for(requirements)
+    truth = compiled(**TRUTH)
+
+    calibration = {"calibration_scale.scale": CALIBRATION_TRUTH}
+    spectrum_truth = instrument(truth, calibration)
+
+    sigma = FRACTIONAL_UNCERTAINTY * np.abs(spectrum_truth.values)
+    values = spectrum_truth.values + rng.normal(0.0, sigma)
+    return Spectrum(
+        spectrum_truth.spectral_axis.values * u.um, values * u.Jy, uncertainty=sigma * u.Jy
+    )
