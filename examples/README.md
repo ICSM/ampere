@@ -6,7 +6,7 @@ This directory holds two generations of ampere example code side by side.
 backend, each covered by its own test suite in `tests/examples/` so that none
 can rot unnoticed: `sed_composition`, `m2_misspecification`, `interferometry`,
 `astrometry`, `image`, `wstat_comparison.py`, `sbi/`, `linear_sed`,
-`modified_blackbody`, `phoenix_star` and `star_disc` — see `docs/source/tutorials.rst` for the walk-throughs.
+`modified_blackbody`, `phoenix_star`, `star_disc` and `cstar` — see `docs/source/tutorials.rst` for the walk-throughs.
 `population` has no example package of its own; its code is small enough to
 live in the tutorial page inline.
 
@@ -22,7 +22,7 @@ beside the original (W6.13).
 | `NGC6302.py`, `NGC6302_zeus.py`, `NGC6302-calculate-dust-mass.py` | `examples/ngc6302/` | landed W6.13 (2) |
 | `examples_paper/modifiedblackbody.py` | `examples/modified_blackbody/` | landed W6.13 (3) |
 | `examples_paper/phoenixstar.py` | `examples/phoenix_star/` | landed W6.13 (4), with ampere's own PHOENIX emulator (a PCA plus one GP per weight over 156 PHOENIX-ACES spectra, committed as `phoenix_emulator.npz`) in place of Starfish |
-| `cstar_model_test_sbi_v2.py` and its `_embedding` variant | `examples/cstar/` | twin pending, W6.13 (5) |
+| `cstar_model_test_sbi_v2.py` and its `_embedding` variant | `examples/cstar/` | landed W6.13 (5), Hyperion kept as the physics with `miepython` in place of the unpackaged `bhmie` step; needs the pixi `hyperion` environment (`pixi install -e hyperion`), an example-only requirement absent from CI |
 | `examples/star_disc.py` (the HD105 SED) | `examples/star_disc/` | landed W6.13 (6), `QuickSED` as a v2 `Model` on the same emulator |
 
 `minimal_working_example.py` and its four variants are

@@ -147,6 +147,23 @@ of the engine drivers — a base install that could build a run but not save it
 would be a base install that cannot sample. There is deliberately no
 ``arviz`` extra any more, not even as an empty alias.
 
+**One pixi environment is not an extra at all.** The carbon-star example,
+``examples/cstar``, runs the Hyperion Monte Carlo radiative-transfer code,
+which is a Fortran program packaged on conda-forge only, so no ``pip`` extra
+could deliver it. It lives in the pixi ``hyperion`` feature instead —
+conda-forge's ``hyperion`` and ``hyperion-fortran`` 0.9.11 plus ``miepython``,
+which computes the dust opacities — composed with the ``sbi`` environment's
+set:
+
+.. code-block:: console
+
+    $ pixi install -e hyperion
+    $ pixi run -e hyperion python -m examples.cstar --help
+
+It is an example-only requirement: nothing in the ``ampere`` package imports
+Hyperion, the example's Hyperion tests skip where it is absent, and CI does not
+install it.
+
 Nothing outside ``ampere/backends/torch`` and ``ampere/backends/jax`` imports
 torch or jax, at any depth, even lazily. Importing a backend is your explicit
 opt-in to its dependency, and a missing optional dependency raises
