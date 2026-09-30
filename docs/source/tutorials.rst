@@ -59,7 +59,10 @@ The first seven have runnable counterparts in the repository:
 ``examples/interferometry``, ``examples/astrometry``, ``examples/image``,
 ``examples/wstat_comparison.py`` and ``examples/sbi/``, each covered by its
 own test suite so that none can rot unnoticed. The v2 twins of six classic
-legacy examples, landed and pending, are listed in ``examples/README.md``.
+legacy examples, landed and pending, are listed in ``examples/README.md``;
+among them ``examples/phoenix_star`` and ``examples/star_disc`` fit stars with
+ampere's own PHOENIX emulator, a PCA plus one Gaussian process per weight that
+evaluates identically on the reference, torch and jax backends.
 :doc:`population` has none —
 its code is small enough to walk through inline, and it is exercised
 instead by ``tests/inference/test_population_nuts.py`` and
