@@ -50,25 +50,40 @@ A PCA on the mean-subtracted ``log10`` grid (:func:`numpy.linalg.svd`), keeping
 the smallest K that reconstructs every grid spectrum to 0.5 % RMS in flux on A
 and 1 % on B, capped at 16 (:func:`choose_components`). Each PCA weight is then
 regressed on standardised (Teff, log g, [Fe/H]) by a Gaussian process with an
-ARD squared-exponential kernel (:func:`fit_gp`: three length scales, an
-amplitude, a jitter floored at 1e-8, by maximising the marginal likelihood).
+ARD squared-exponential kernel (:func:`fit_gp`: three length scales in
+0.05-5 standardised units, an amplitude, and a jitter between 1e-8 and 1e-4 of
+the amplitude squared, by maximising the marginal likelihood).
 
 **Why a GP and not the MLP the item prefers** (W6.13 lets the tranche choose):
-with 156 nodes on a three-dimensional box a GP interpolates every node exactly,
-up to the jitter; it trains in seconds with scipy alone in the ``dev``
-environment; and its predictive mean ``k(x, X) alpha`` is a closed form in
-``exp`` and ``matmul`` that reads identically in numpy, torch and jax, so the
-emulator is differentiable on every backend by construction. An MLP needs a
-training loop in a framework the ``dev`` environment does not have, and gives
-no exactness at the nodes.
+it trains in seconds with scipy alone in the ``dev`` environment, and its
+predictive mean ``k(x, X) alpha`` is a closed form in ``exp`` and ``matmul``
+that reads identically in numpy, torch and jax. The emulator is therefore
+differentiable on every backend by construction. An MLP needs a training loop
+in a framework the ``dev`` environment does not have.
+
+The jitter
+----------
+The dispatch expected the GP to interpolate every node exactly, up to a jitter
+floored at 1e-8. On this grid the marginal likelihood does not agree. The PCA
+weights vary with Teff on the scale of the 100 K grid step, and the log g axis
+has only three nodes, so a noise-free GP needs length scales near the grid
+spacing. It then reproduces the nodes (to 3e-6 in flux) but predicts poorly
+between them: leave-one-out RMS 9 % on A and 5 % on B. With the jitter free
+up to 1e-4, the likelihood uses it and the GP smooths rather than
+interpolates. Leave-one-out improves to 0.6 % RMS on A and 0.3 % on B, but a
+node is then reproduced only to the smoothing, several per cent at the worst
+pixel (the ultraviolet end of A for the coolest stars). An emulator exists to
+predict between nodes, so the committed file uses the smoothing GP. Its
+provenance record and the W6.13 (4) report carry the numbers.
 
 Checks
 ------
 (i) leave-one-out on every seventh node (the GPs refitted without it, the PCA
-basis kept); (ii) the emulator at each node reproduces its PCA reconstruction
-to 1e-3 fractional (the interpolation property; also a smoke row on the
-committed file, :mod:`tests.examples.test_phoenix_star`). Both go into the
-file's provenance record and are printed.
+basis kept), against the true PHOENIX spectrum; (ii) the emulator at every node
+against its PCA reconstruction and against the true spectrum (the maximum and
+RMS fractional error in flux). Both go into the file's provenance record and
+are printed. The file also stores four nodes' true spectra, and a smoke row
+(:mod:`tests.examples.test_phoenix_star`) checks the emulator against them.
 """
 
 from __future__ import annotations
@@ -116,11 +131,14 @@ TARGET_A = 0.005
 TARGET_B = 0.01
 MAX_COMPONENTS = 16
 JITTER_FLOOR = 1e-8
-#: The weights are deterministic functions of the inputs -- there is no noise
-#: to learn -- so the jitter is numerical regularisation only, and capped so
-#: the marginal likelihood cannot trade exactness at the nodes for smoothness.
-JITTER_CAP = 1e-6
-#: How many nodes' PCA-reconstructed spectra the file stores for the smoke row.
+#: The jitter's ceiling (relative to amplitude squared). See "The jitter" in
+#: the module docstring for why it is not held at the floor.
+JITTER_CAP = 1e-4
+#: The length scales' range, in standardised input units. The ceiling keeps
+#: the kernel matrix conditioned (a length scale far beyond the box makes
+#: columns nearly identical).
+LENGTH_BOUNDS = (0.05, 5.0)
+#: How many nodes' PHOENIX spectra the file stores for the smoke row.
 STORED_NODES = 4
 
 
@@ -287,7 +305,7 @@ def fit_gp(nodes: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         return float(0.5 * solved @ solved + np.log(np.diag(chol)).sum())
 
     start = np.array([0.0, 0.0, 0.0, np.log(scale), np.log(1e-6)])
-    bounds = [(np.log(0.05), np.log(50.0))] * 3 + [
+    bounds = [(np.log(LENGTH_BOUNDS[0]), np.log(LENGTH_BOUNDS[1]))] * 3 + [
         (np.log(scale) - 5.0, np.log(scale) + 5.0),
         (np.log(JITTER_FLOOR), np.log(JITTER_CAP)),
     ]
@@ -371,11 +389,18 @@ def main(argv: list[str] | None = None) -> int:
     for row in hyper:
         print("  " + "  ".join(f"{v:.4g}" for v in row))
 
-    # (ii) interpolation: the emulator at every node against its PCA reconstruction.
+    # (ii) the emulator at every node, against its PCA reconstruction and the truth.
     rebuilt = mean + weights @ basis
     emulated = mean + gp_mean(x, x, alpha, hyper) @ basis
-    node_error = float(np.abs(10.0 ** (emulated - rebuilt) - 1.0).max())
-    print(f"(ii) node reproduction: max fractional {node_error:.3g}", flush=True)
+    to_pca = 10.0 ** (emulated - rebuilt) - 1.0
+    to_truth = 10.0 ** (emulated - log_flux) - 1.0
+    node_error = {
+        "max_vs_pca": float(np.abs(to_pca).max()),
+        "max_vs_truth": float(np.abs(to_truth).max()),
+        "rms_vs_truth_a": float(np.sqrt(np.mean(to_truth[:, :n_a] ** 2))),
+        "rms_vs_truth_b": float(np.sqrt(np.mean(to_truth[:, n_a:] ** 2))),
+    }
+    print(f"(ii) at the nodes: {node_error}", flush=True)
 
     # (i) leave-one-out on every seventh node, the basis kept, the GPs refitted.
     frac_a, frac_b = [], []
@@ -409,7 +434,7 @@ def main(argv: list[str] | None = None) -> int:
         "date": datetime.date.today().isoformat(),
         "components": k,
         "pca_reconstruction": pca_errors,
-        "node_reproduction_max_fractional": node_error,
+        "node_reproduction": node_error,
         "leave_one_out": loo,
         "vacuum_wavelengths": True,
         "script": "python -m examples.phoenix_star.train_emulator",
@@ -427,7 +452,7 @@ def main(argv: list[str] | None = None) -> int:
         hyper=hyper,
         grid_parameters=nodes,
         stored_index=stored,
-        stored_spectra=rebuilt[stored],
+        stored_spectra=log_flux[stored],
         provenance=np.array(json.dumps(provenance)),
     )
     print(f"wrote {args.output} ({args.output.stat().st_size} bytes)")
