@@ -76,7 +76,52 @@ and refuses ``reference`` by name. ``emcee`` runs on any backend.
 
 Coverage runs (Accept criterion)
 --------------------------------
-Pending: recorded here once run.
+Both runs are on the synthetic observation at ``generators.SEED`` (20260930),
+with the GP noise on the RVS spectrum, from the committed emulator. Truths are
+``theta_true`` (``log_luminosity = log10(4.68)``). "ok" is the central 95 %
+interval covering the truth.
+
+**SBI** (``pixi run -e sbi python -m examples.phoenix_star --engine sbi``):
+reference backend, NPE, 10 000 simulations in one round, 10 000 posterior
+draws, cached under ``~/.cache/ampere-phoenix/``; 191 s wall clock,
+2026-09-30. **All five truths covered.**
+
+==========================  =========  ==============================  =========
+parameter                   mean       95 % interval                   truth
+==========================  =========  ==============================  =========
+``a_v``                     1.098      [0.847, 1.380]                  1.0 ok
+``log_luminosity``          0.7033     [0.6392, 0.7746]                0.6702 ok
+``logg``                    4.563      [4.068, 4.968]                  4.37 ok
+``r_v``                     3.429      [2.929, 3.960]                  3.2 ok
+``teff``                    6878       [6175, 7756]                    6750 ok
+calibration scale           1.0000     [0.9951, 1.0050]
+GP amplitude                9.8e-4     [6.8e-5, 4.3e-3]
+GP length scale             8.7e-3     [5.4e-4, 3.1e-2]
+==========================  =========  ==============================  =========
+
+**NUTS** (``pixi run -e torch python -m examples.phoenix_star --engine nuts
+--backend torch``): torch backend, ``warmup=300, draws=500, chains=4``;
+17 890 s (5.0 h) wall clock, 2026-09-30. All five truths fall inside the 95 %
+intervals, **but the run has not converged**: R-hat is 1.12-1.61, above 1.05
+on every parameter (the CLI prints no ESS). The coverage verdict therefore
+means nothing at this budget. The intervals on ``log_luminosity`` and the
+calibration scale are 9 and 300 times wider than SBI's, consistent with
+chains that have not mixed. Whether a longer warm-up, more draws or a
+reparameterisation converges is an open budget question (W6.13 (4) report);
+it was not re-run.
+
+==========================  =========  ==============================  =========  =====
+parameter                   mean       95 % interval                   truth      R-hat
+==========================  =========  ==============================  =========  =====
+``a_v``                     1.245      [0.942, 1.933]                  1.0 ok     1.597
+``log_luminosity``          0.4946     [-0.5134, 0.7005]               0.6702 ok  1.602
+``logg``                    4.548      [4.345, 4.952]                  4.37 ok    1.606
+``r_v``                     3.374      [2.988, 3.942]                  3.2 ok     1.293
+``teff``                    6890       [6701, 7260]                    6750 ok    1.585
+calibration scale           1.380      [0.996, 4.320]                             1.578
+GP amplitude                7.9e-4     [6.6e-5, 2.0e-3]                           1.548
+GP length scale             6.4e-3     [3.4e-4, 2.0e-2]                           1.118
+==========================  =========  ==============================  =========  =====
 """
 
 from __future__ import annotations
