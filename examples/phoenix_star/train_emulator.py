@@ -74,7 +74,10 @@ interpolates. Leave-one-out improves to 0.6 % RMS on A and 0.3 % on B, but a
 node is then reproduced only to the smoothing, several per cent at the worst
 pixel (the ultraviolet end of A for the coolest stars). An emulator exists to
 predict between nodes, so the committed file uses the smoothing GP. Its
-provenance record and the W6.13 (4) report carry the numbers.
+provenance record and the W6.13 (4) report carry the numbers. Ruled by Peter
+on 2026-09-30, at the W6.13 (4) review: the smoothing GP is accepted, the
+1e-3 node-exactness check replaced by the check against the stored true
+spectra, after the exact GP had measured 9 % / 5 % leave-one-out RMS.
 
 Checks
 ------
