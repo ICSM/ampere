@@ -540,6 +540,11 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(sys.argv[1:] if argv is None else argv)
     backend = args.backend or ("torch" if args.engine == "nuts" else "reference")
+    if backend == "torch" or args.engine == "sbi":
+        import torch
+
+        # Four threads, as the BLAS pools in __main__: a shared machine.
+        torch.set_num_threads(4)
     problem = build_problem(backend, gp=args.gp, seed=args.seed)
     print(f"free parameters: {problem.parameters.free_names}")
     started = time.perf_counter()
