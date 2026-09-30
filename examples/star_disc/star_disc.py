@@ -100,7 +100,33 @@ What changed in the translation
 
 Coverage run (Accept criterion)
 -------------------------------
-Pending: recorded here once run.
+``pixi run -e dev python -m examples.star_disc --synthetic``: the votable's
+nineteen points and the synthetic RVS spectrum, replaced by the model at the
+Marshall star plus the synthetic dust (``generators.SYNTHETIC_TRUTH``) at
+``generators.SEED`` (20260930); emcee on the reference backend at the legacy
+budget, 40 walkers, 4000 steps with 1000 burn-in (3000 kept draws per
+walker); 631 s wall clock, 2026-09-30. All eight truths fall inside the 95 %
+intervals, **but the run has not converged**: R-hat is 1.10-1.42, above 1.05
+on every parameter, and the minimum bulk ESS is 82, against the criterion's
+R-hat < 1.05 and ESS > 400. The coverage verdict therefore does not count at
+this budget. It was not re-run; the budget that converges is an open question
+(W6.13 (6) report).
+
+==========================  =========  ==============================  =========  =====
+parameter                   mean       95 % interval                   truth      R-hat
+==========================  =========  ==============================  =========  =====
+``beta``                    1.0025     [0.9521, 1.1034]                1.0 ok     1.194
+``feh``                     0.0178     [0.0103, 0.0593]                0.02 ok    1.191
+``lambda_0``                150.02     [144.87, 161.79]                150 ok     1.187
+``log_area``                0.49800    [0.49412, 0.50219]              0.5 ok     1.107
+``logg``                    4.4807     [4.4710, 4.4981]                4.478 ok   1.418
+``luminosity``              1.21570    [1.21447, 1.21781]              1.216 ok   1.193
+``t_dust``                  60.12      [59.78, 60.43]                  60 ok      1.115
+``teff``                    6033.9     [5959.1, 6085.7]                6034 ok    1.378
+calibration scale           0.9959     [0.9765, 1.0036]                           1.190
+GP amplitude                0.083      [0.0044, 0.219]                            1.096
+GP length scale             8.4e-3     [3.0e-4, 2.3e-2]                           1.141
+==========================  =========  ==============================  =========  =====
 """
 
 from __future__ import annotations
