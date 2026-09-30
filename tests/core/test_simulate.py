@@ -874,14 +874,25 @@ class TestThePoolIsReusedAcrossMapCalls:
     def test_the_same_worker_processes_run_every_chunk(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The stronger form: not merely one pool object, the same processes."""
+        """The stronger form: not merely one pool object, the same processes.
+
+        Four instant items can all land on one of two workers, so the two
+        chunks' worker sets need not be equal (CI, 2026-09-30: ``{2994}``
+        against ``{2994, 2997}``); what must hold is that both chunks ran on
+        the one pool's own processes, and that the pool was not rebuilt.
+        """
         executor = ProcessExecutor(2)
         try:
             first = set(executor.map(_worker_pid, [0, 1, 2, 3]))
+            source = executor._source
             second = set(executor.map(_worker_pid, [0, 1, 2, 3]))
+            assert executor._source is source, "the pool must not be rebuilt between chunks"
+            pool_pids = set(source.acquire()._processes)  # pyrefly: ignore[missing-attribute]
         finally:
             executor.shutdown()
-        assert first == second
+        assert first and second
+        assert first <= pool_pids and second <= pool_pids, (first, second, pool_pids)
+        assert len(first | second) <= 2
 
     def test_a_dead_worker_does_replace_the_pool(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The exception to the rule, and the only one that is not a timeout."""
