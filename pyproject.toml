@@ -734,6 +734,23 @@ torch = { version = "*", index = "https://download.pytorch.org/whl/cpu" }
 [tool.pixi.feature.jax.pypi-dependencies]
 ampere = { path = ".", editable = true, extras = ["jax"] }
 
+# W6.13 (5), D12 (b): the carbon-star twin's physics, `examples/cstar/`.
+# Deliberately a pixi feature and *not* a [project.optional-dependencies]
+# extra, so the 1:1 extra mirror above does not apply: Hyperion is a
+# Fortran Monte Carlo radiative-transfer code packaged on conda-forge only
+# (`hyperion` is the Python front end, `hyperion-fortran` the
+# `hyperion_sph` binaries), so no pip extra could deliver it. It is an
+# example-only requirement -- nothing under `ampere/` imports it -- and the
+# twin's tests skip by `find_spec` where it is absent. `miepython` replaces
+# the legacy's unpackaged `bhmie` Fortran step (ruled 2026-09-28 on
+# `docs/design/example_dependencies_memo.md` §3). Pinned at 0.9.11, the
+# last release, which conda-forge builds for Python <= 3.13, until upstream
+# releases this year's fixes.
+[tool.pixi.feature.hyperion.dependencies]
+hyperion = "0.9.11.*"
+hyperion-fortran = "0.9.11.*"
+miepython = ">=3.3"
+
 [tool.pixi.environments]
 # W0.10 finding (b): without an explicit `default` entry here, pixi
 # synthesises one from only the base [tool.pixi.pypi-dependencies] table
@@ -822,3 +839,9 @@ jax = { features = ["py313", "dev", "zeus", "extinction", "netcdf", "jax", "blac
 # small: nautilus adds scikit-learn, ultranest adds corner, and matplotlib is
 # already here.
 nested = { features = ["py313", "dev", "zeus", "extinction", "netcdf", "nautilus", "ultranest"] }
+# W6.13 (5): the carbon-star twin's environment -- the `sbi` environment's
+# feature set, because the twin fits with `SBIEngine`, plus the conda-forge
+# `hyperion` feature above. An example-only requirement (D12 (b)), not an
+# extra, and absent from CI by ruling: the twin's Hyperion rows skip in
+# every CI environment and are run by hand here.
+hyperion = { features = ["py313", "dev", "zeus", "extinction", "netcdf", "torch", "sbi", "hyperion"] }
