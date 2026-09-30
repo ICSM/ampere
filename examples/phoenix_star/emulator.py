@@ -40,6 +40,32 @@ The inverse-square law
 already carries the ``4 pi``. The legacy scripts (``phoenixstar.py`` line 53,
 ``QuickSED.py`` line 148) divide by ``4 pi d**2`` a *second* time, making their
 fluxes ``4 pi`` too faint; the twins do not reproduce that.
+
+Where the emulator errs
+-----------------------
+The GP smooths rather than interpolates (see :mod:`.train_emulator`, "The
+jitter"), so it misses the grid by a few per cent at its worst pixels. The
+three maxima the training reports all sit at the cool edge of the grid and the
+blue end of segment A, outside every fitted passband:
+
+* at the nodes (check (ii)), 7.9 % against the PCA reconstruction (7.8 %
+  against the true spectrum) at 0.3015 micron, node Teff 5400 K, log g 4.5,
+  [Fe/H] +0.5;
+* leave-one-out on segment A (check (i)), 14 % at 0.300 micron, node 5000 K,
+  4.0, 0.0 -- a corner of the grid, so an extrapolation when held out;
+* leave-one-out on segment B, 2.0 % at 0.8668 micron, the same node -- inside
+  the RVS window and the Gaia G and RP passbands.
+
+The eight filters of :mod:`.phoenix_star` start at 0.328 micron (Gaia BP, at
+1 % of peak), so the two segment-A maxima lie blueward of every passband and
+outside the RVS window (0.842-0.872 micron). Both nodes lie below the twins'
+Teff priors (6000 K for :mod:`.phoenix_star`, 5500 K for
+:mod:`examples.star_disc`). Errors above 1 % are not confined there, though:
+over all nodes, 297 of the 371 segment-A pixels that exceed 1 % somewhere
+against the true spectrum lie inside a passband, and in segment B every such
+pixel is inside the RVS window (41 pixels at the nodes, 24 leave-one-out, at
+most 2.5 % at a node). The RMS errors are 0.38 % (A) and 0.21 % (B) at the
+nodes, and 0.61 % and 0.29 % leave-one-out.
 """
 
 from __future__ import annotations
