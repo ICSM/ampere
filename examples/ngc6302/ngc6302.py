@@ -232,6 +232,83 @@ against them. That under-run, and the coverage run above showing the same
 non-convergence persisting after the ordering was fixed, is the lesson: this
 model's multimodality has (at least) two independent sources, of which only
 one was in this item's scope to fix.
+
+Follow-up: zeus and nested sampling on the same synthetic truth (2026-09-30)
+---------------------------------------------------------------------------
+Peter's word after the review above: try zeus, then, if it did not converge,
+nested sampling. Four more runs on the same synthetic observation (seed
+20260928, GP on, ``QuasisepGP``), each detached and saved, settle what the
+emcee run could not. Log posteriors below are ``lp`` as the run records it,
+the prior included.
+
+1. **zeus from the prior**, 50 walkers x 2 000 steps / 1 000 burn-in (twice,
+   92 and 93 min; the second with arviz diagnostics and the run saved): every
+   truth covered, but R-hat 2.3-6.2 and bulk ESS 52-63 -- worse than emcee --
+   and the saved run shows why: the walkers' mean log posteriors span -3 164
+   to -673 351, only four of fifty within 100 of the best, forty-nine of
+   fifty still climbing between their first and last draw. The ensemble had
+   not finished burning in from its prior draws (zeus's documented start
+   sensitivity: slice expansion from fifty scattered draws in eighteen
+   dimensions is slow). Its wide intervals were walkers in transit, not the
+   posterior.
+2. **zeus from the MAP**, abandoned: :func:`ampere.inference.optimise` with
+   ``method="scipy"`` and eight Powell starts (97 964 evaluations, 20 min)
+   converged to a corner of the prior box -- seven log-abundances at their
+   edges, ``Twarm0`` at its floor -- at log posterior -3 228.5, a hundred
+   below a point the prior-started zeus walkers had already reached; Powell's
+   line searches run to where the sigmoid-bounded coordinates saturate. The
+   ball around it was the wrong start. (A W6.7 finding, carried in its row.)
+3. **zeus from the best prior-started walker**: all fifty walkers started in
+   that walker's own last fifty draws (a compact cloud at log posterior about
+   -3 130), the same budget, 86 min. The ensemble climbed to -3 103..-3 109
+   (every walker within ten of the best; the best draw -3 099) and stayed
+   there -- R-hat 1.5-2.2, ESS 64-97, the walkers a continuum along one
+   high-posterior region (``Tcold0`` 37.7-42.1 K by walker, within-walker sd
+   0.7 K). The posterior it reports is narrow and **misses eight of eighteen
+   truths** (``Tcold0`` 40.3 +- 1.2 K against 36.1; ``logacold7`` -0.45 +-
+   0.16 against -1.08; ``logawarm5`` -2.79 +- 0.24 against -3.71).
+4. **nautilus** (importance nested sampling, 475 live points, ``n_networks``
+   4), 158 min, 460 800 likelihood calls, 10 001 effective draws, ``log Z =
+   -3 119.94`` with a Kish-estimate error of 0.01: fourteen of twenty truths
+   covered (``Tcold0`` 33.6 +- 1.0 K against 36.1, ``Tcold1``,
+   ``Tcold_fraction``, ``logacold2``, ``logacold3`` and ``logacold7`` -1.27
+   +- 0.09 against -1.08 missed), the best draw at -3 098 -- and **not one of
+   its 460 582 equal-weight draws lies where run 3's walkers sit**
+   (``Tcold0`` > 38 or ``logacold7`` > -0.8: zero draws), although that
+   region's log posterior equals nautilus's own median (-3 104).
+
+**What the four runs say together.** The synthetic posterior has at least
+two high-density regions of the same height (peaks at -3 098 and -3 099):
+one at ``Tcold0`` about 33.6 K with the olivine abundance ``logacold7`` about
+-1.27, which contains the truth (the log posterior along the straight line
+from nautilus's median to the truth stays within -3 130..-3 110, and the
+truth's own log posterior with the nuisance parameters profiled is -3 109.6,
+the GP amplitude driven to zero as synthetic data without misspecification
+should give); and one at ``Tcold0`` about 40.5 K with ``logacold7`` about
+-0.45, where run 3's walkers sit. The two are 3.7 posterior widths apart at
+their closest high-posterior draws, and the straight line between those
+draws drops 230 log-units -- distinct modes, not one curved ridge: two dust
+compositions fit the 5 %-uncertainty spectrum equally well. Each sampler
+found one of them. nautilus's bound never captured the second mode, so its
+evidence is that of one mode and its quoted error says nothing about the
+whole posterior; run 3 climbed into the second from a start near the first;
+and **the emcee coverage run above never reached either**: at its GP
+amplitude of 37 Jy the truth's log posterior is -3 191, some ninety below
+the modes, so its walkers were in a low-posterior region where the GP
+absorbed the residuals, and the wide intervals that cover every truth are
+that absorption, not a sampled posterior. Its coverage should not be read as
+evidence that the run sampled the posterior.
+
+**What would settle it.** A nested sampler whose bound is built to hold
+several modes -- dynesty's multi-ellipsoid decomposition with slice
+sampling, or nautilus with more live points and a larger
+``enlarge_per_dim`` -- run once, and its per-mode masses reported (the
+``period_modes`` precedent of :mod:`examples.astrometry`); on the science
+side, a prior on the species set or the far-infrared photometry the legacy
+script leaves out, since the data alone do not choose between the two
+compositions. Neither is this example's scope; both are recorded for W6.13's
+successor. The runs' drivers, logs and saved DataTrees are in the
+orchestrator's gate cache (``~/.cache/ampere-gates/ngc6302-*``), outside git.
 """
 
 from __future__ import annotations
