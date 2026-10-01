@@ -837,6 +837,73 @@ class TestExecutorsInTheirOwnRight:
             assert pool.map(math.sqrt, [4.0]) == [2.0]
 
 
+class TestABrokenPoolRefusesTheNextSubmit:
+    """CI 2026-10-01 (run 36935963691): a worker died *between* two ``result``
+    calls, so the pool was already broken when the loop handed it the next
+    draw and ``submit`` itself raised ``BrokenProcessPool`` — outside the
+    handler that catches the same error from ``result``. The loop must treat
+    that exactly as it treats a crash surfacing from a future: the draw that
+    was being submitted heads the survivors, which are re-run alone."""
+
+    def test_the_draw_being_submitted_is_rerun_with_the_others(self) -> None:
+        from concurrent.futures import ThreadPoolExecutor
+        from concurrent.futures.process import BrokenProcessPool
+
+        from ampere.core.simulate import _PoolSource, _windowed_map
+
+        class BreaksOnTheSecondSubmit(ThreadPoolExecutor):
+            submissions = 0
+
+            def submit(self, fn, /, *args, **kwargs):  # type: ignore[override]
+                type(self).submissions += 1
+                if type(self).submissions == 2:
+                    raise BrokenProcessPool("a worker died between two result calls")
+                return super().submit(fn, *args, **kwargs)
+
+        pools: list[ThreadPoolExecutor] = []
+
+        def factory() -> ThreadPoolExecutor:
+            # The shared pool breaks; every fresh pool the re-run asks for works.
+            pool = BreaksOnTheSecondSubmit(1) if not pools else ThreadPoolExecutor(1)
+            pools.append(pool)
+            return pool
+
+        # One worker, so draw 1 has *completed* before draw 2 is submitted: the
+        # raise comes from ``submit``, not from a future already in flight.
+        source = _PoolSource(factory, persistent=False, workers=1)
+        try:
+            results = _windowed_map(
+                source, math.sqrt, [1.0, 4.0, 9.0, 16.0], timeout=None, recover=True
+            )
+        finally:
+            for pool in pools:
+                pool.shutdown(wait=True)
+        assert results == [1.0, 2.0, 3.0, 4.0]
+        assert BreaksOnTheSecondSubmit.submissions == 2
+        assert len(pools) == 1 + 3, "draws 2 to 4 are re-run one per fresh pool"
+
+    def test_without_recovery_the_survivors_say_so(self) -> None:
+        from concurrent.futures import ThreadPoolExecutor
+        from concurrent.futures.process import BrokenProcessPool
+
+        from ampere.core.simulate import ExecutionFailure, _PoolSource, _windowed_map
+
+        class BreaksOnTheSecondSubmit(ThreadPoolExecutor):
+            submissions = 0
+
+            def submit(self, fn, /, *args, **kwargs):  # type: ignore[override]
+                type(self).submissions += 1
+                if type(self).submissions == 2:
+                    raise BrokenProcessPool("a worker died between two result calls")
+                return super().submit(fn, *args, **kwargs)
+
+        source = _PoolSource(lambda: BreaksOnTheSecondSubmit(1), persistent=False, workers=1)
+        results = _windowed_map(source, math.sqrt, [1.0, 4.0, 9.0], timeout=None, recover=False)
+        assert results[0] == 1.0
+        assert all(isinstance(result, ExecutionFailure) for result in results[1:])
+        assert {result.exception_type for result in results[1:]} == {"BrokenExecutor"}
+
+
 class TestThePoolIsReusedAcrossMapCalls:
     """W3.1 slice 2's carried finding: a chunked budget must not rebuild the pool.
 

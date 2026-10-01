@@ -436,12 +436,50 @@ def _windowed_loop[Item, Result](
         cursor = 0
         rebuild = False
         broken = False
+
+        def settle_broken(survivors: list[int]) -> None:
+            # A worker died outright (a segfaulting Fortran routine is the
+            # case this exists for), and killing one worker breaks the pool
+            # for *every* draw in flight — including the one being awaited,
+            # which may well be innocent. The OS does not say which draw did
+            # it, so nothing is flagged on suspicion: every affected draw,
+            # the awaited one first, is re-run one per fresh single-worker
+            # pool, where whichever draw is guilty convicts itself and the
+            # innocent ones simply produce their results.
+            if recover:
+                _rerun_alone(source, fn, items, results, survivors, timeout)
+                return
+            # A thread pool breaks only when it cannot start a worker at
+            # all — interpreter shutdown, or a hard resource limit — and
+            # there is nothing to replace it with, so the survivors are
+            # lost with it and say so.
+            for survivor in survivors:
+                results[survivor] = ExecutionFailure(
+                    message=(
+                        "the executor broke while this draw was queued; the draw produced no result"
+                    ),
+                    exception_type="BrokenExecutor",
+                )
+
         try:
             while cursor < len(queue) or inflight:
-                while cursor < len(queue) and len(inflight) < workers:
-                    index = queue[cursor]
-                    cursor += 1
-                    inflight.append((index, pool.submit(fn, items[index]), time.monotonic()))
+                try:
+                    while cursor < len(queue) and len(inflight) < workers:
+                        index = queue[cursor]
+                        cursor += 1
+                        inflight.append((index, pool.submit(fn, items[index]), time.monotonic()))
+                except concurrent.futures.BrokenExecutor:
+                    # The pool was already broken when the next draw was
+                    # handed to it: a worker died between two ``result``
+                    # calls, so ``submit`` raised instead of a future (CI,
+                    # 2026-10-01, run 36935963691). The draw never left this
+                    # process, so it heads the survivors exactly as an
+                    # awaited draw would.
+                    survivors = [index, *(entry[0] for entry in inflight), *queue[cursor:]]
+                    broken = True
+                    settle_broken(survivors)
+                    inflight.clear()
+                    break
                 index, future, started = inflight.pop(0)
                 remaining = (
                     None if timeout is None else max(0.0, timeout - (time.monotonic() - started))
@@ -469,32 +507,9 @@ def _windowed_loop[Item, Result](
                         rebuild = True
                         break
                 except concurrent.futures.BrokenExecutor:
-                    # A worker died outright (a segfaulting Fortran routine is
-                    # the case this exists for), and killing one worker breaks
-                    # the pool for *every* draw in flight — including the one
-                    # being awaited, which may well be innocent. The OS does not
-                    # say which draw did it, so nothing is flagged on suspicion:
-                    # every affected draw, the awaited one first, is re-run one
-                    # per fresh single-worker pool, where whichever draw is
-                    # guilty convicts itself and the innocent ones simply
-                    # produce their results.
                     survivors = [index, *(entry[0] for entry in inflight), *queue[cursor:]]
                     broken = True
-                    if recover:
-                        _rerun_alone(source, fn, items, results, survivors, timeout)
-                    else:
-                        # A thread pool breaks only when it cannot start a
-                        # worker at all — interpreter shutdown, or a hard
-                        # resource limit — and there is nothing to replace it
-                        # with, so the survivors are lost with it and say so.
-                        for survivor in survivors:
-                            results[survivor] = ExecutionFailure(
-                                message=(
-                                    "the executor broke while this draw was queued; the draw "
-                                    "produced no result"
-                                ),
-                                exception_type="BrokenExecutor",
-                            )
+                    settle_broken(survivors)
                     inflight.clear()
                     break
         finally:
