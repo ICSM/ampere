@@ -172,35 +172,48 @@ eight workers at the *pooled* cost, ``8 x 7200 / 4.5 = 12 800`` simulations
     pixi run -e hyperion python -m examples.cstar --synthetic --photons quick \
         --rounds 1 --simulations 12800 --workers 8
 
-Run 2026-09-30/10-01 at ``generators.SEED`` (20260930), GP on (thirteen
-free parameters), NPE, one round. The 12 800 simulations and the training took
-1 h 23 min of wall clock (23:38-01:01 BST); the trained posterior went into
-the ``--cache`` store. The first invocation then began scoring the default
-10 000 draws (see "What changed") and was stopped; the same command with
-``--draws 500`` was served the trained posterior from the cache
-(``ampere_sbi_cache_hit = 1``, no simulation, no training) and spent its
-27 min 50 s scoring the 500 draws, one serial Hyperion run each. Wall clock in
-all about 1 h 51 min.
+The network was trained once, 2026-09-30, at ``generators.SEED`` (20260930),
+GP on (thirteen free parameters), NPE, one round: the 12 800 simulations and
+the training took 1 h 23 min of wall clock (23:38-01:01 BST), and the trained
+posterior went into the ``--cache`` store under the digest
+``377b1193b84b1d0bf67923760cd6c392``. The bank is drawn from the prior, so it
+does not depend on the observation, and the recorded run conditions that same
+network on the synthetic observation at the in-box truth::
 
-**Six of the seven truths are covered; ``envelope_mass`` is not, and cannot
-be**: its truth, the legacy default ``log10(6.985718e-6) = -5.156``, lies
-*outside* the legacy prior box U(-10, -6), so no posterior on that box can
-cover it -- the posterior is pressed against the box's upper edge instead,
-which is the right answer to the question asked. ``width/prior`` is the 95 %
-interval's width over the prior's own central 95 % width; near 1 means the
-data left the parameter at its prior, and those rows "cover" trivially:
-``envelope_r0``, ``stellar_mass``, ``sic_fraction``, ``envelope_rout`` and
-``envelope_rin``. Only ``stellar_luminosity`` and ``envelope_mass`` are
-constrained at this budget::
+    pixi run -e hyperion python -m examples.cstar --synthetic --photons quick \
+        --rounds 1 --simulations 12800 --workers 8 --draws 500 \
+        --serve-artefact 377b1193b84b1d0bf67923760cd6c392
 
-    model.envelope_mass       -6.4575  [-7.7438, -6.0397]   0.45  truth -5.1558 MISS (out of box)
-    model.envelope_r0         +0.113   [-1.8849, +1.9436]   1.01  truth +0.65185 ok (prior)
-    model.envelope_rin        -0.43355 [-1.8143, +1.4539]   0.86  truth +0.65185 ok (prior)
-    model.envelope_rout       +2.5644  [+2.0297, +3.7057]   0.88  truth +3.65    ok (prior)
-    model.sic_fraction        +0.42427 [+0.026347, +0.95614] 0.98 truth +0.1     ok (prior)
-    model.stellar_luminosity  +7471    [+4974.5, +9120.6]   0.48  truth +6165.9  ok
-    model.stellar_mass        +1.9972  [+1.0447, +2.9634]   1.01  truth +2       ok (prior)
-    irs_1 / irs_2 calibration +1.010   [+0.912, +1.124] / [+0.912, +1.121]
+2026-10-01, 10 min 36 s of wall clock, all of it scoring the 500 draws (one
+serial Hyperion run each; no simulation, no training, no failures).
+**Six of the seven truths are covered; ``envelope_mass`` misses**: its 95 %
+interval, [-9.58, -6.64], stops 0.14 dex short of the truth -6.5. It was not
+reseeded. ``width/prior`` is the 95 % interval's width over the prior's own
+central 95 % width; near 1 means the data left the parameter at its prior, and
+those rows "cover" trivially: ``stellar_mass``, ``envelope_r0``,
+``sic_fraction``, ``envelope_rout`` and ``envelope_rin``. Only
+``stellar_luminosity`` (0.17) and, loosely, ``envelope_mass`` (0.77) are
+constrained at this budget -- one round of 12 800 simulations over thirteen
+dimensions, against the legacy's two rounds of 10 000::
+
+    model.envelope_mass       -8.1761  [-9.5819, -6.6433]   0.77  truth -6.5     MISS
+    model.envelope_r0         +0.0269  [-1.7934, +1.851]    0.96  truth +0.65185 ok (prior)
+    model.envelope_rin        -0.0738  [-1.7502, +1.7022]   0.91  truth +0.65185 ok (prior)
+    model.envelope_rout       +2.9859  [+2.1167, +3.9046]   0.94  truth +3.65    ok (prior)
+    model.sic_fraction        +0.4610  [+0.04245, +0.94878] 0.95  truth +0.1     ok (prior)
+    model.stellar_luminosity  +6517.7  [+5738.8, +7177.8]   0.17  truth +6165.9  ok
+    model.stellar_mass        +2.0422  [+1.0846, +2.9437]   0.98  truth +2       ok (prior)
+    irs_1 / irs_2 calibration +1.003   [+0.927, +1.087] / [+0.923, +1.101]
+
+History: the first coverage run (2026-09-30/10-01, the same network, ``--draws
+500``, 27 min 50 s of scoring) used the legacy default ``envelope_mass =
+log10(6.985718e-6) = -5.156`` as its truth, which lies *outside* the legacy
+prior box U(-10, -6) -- a defect in the brief, not a finding about the model,
+since no posterior on that box can cover it. It covered the other six (95 %
+intervals: ``stellar_luminosity`` [4974.5, 9120.6], width/prior 0.48; the
+five others at their prior, 0.86-1.01) and put ``envelope_mass`` at [-7.74,
+-6.04] (0.45), against the box's upper edge. The truth was moved to -6.5,
+inside the box, on the orchestrator's ruling of 2026-10-01.
 """
 
 from __future__ import annotations
@@ -612,6 +625,7 @@ def fit(
     workers: int = 4,
     cache: Path | str | None = DEFAULT_CACHE,
     training: dict[str, Any] | None = None,
+    serve_artefact: str | None = None,
     progress: bool = False,
 ) -> Any:
     """Fit *problem* by NPE, ``rounds`` rounds of ``simulations`` each, pooled over *workers*."""
@@ -633,6 +647,7 @@ def fit(
         embedding=EMBEDDING if embedding else None,
         executor=ProcessExecutor(int(workers)) if int(workers) > 1 else None,
         cache=store,
+        serve_artefact=serve_artefact,
     )
     return run_engine.run(int(draws), training=training, progress=progress)
 
@@ -696,6 +711,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--workers", type=int, default=4, help="Hyperion runs at once")
     parser.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
     parser.add_argument("--seed", type=int, default=generators.SEED)
+    parser.add_argument(
+        "--serve-artefact",
+        default=None,
+        help="restore this digest from --cache whatever the key (a trained network, reused)",
+    )
     return parser
 
 
@@ -719,6 +739,7 @@ def main(argv: list[str] | None = None) -> int:
         rounds=args.rounds,
         draws=args.draws,
         workers=args.workers,
+        serve_artefact=args.serve_artefact,
         cache=args.cache,
     )
     elapsed = time.perf_counter() - started

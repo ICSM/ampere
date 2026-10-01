@@ -66,13 +66,16 @@ IRS_FILE = DATA_DIR / "SPEC_OGLE_CAGB_IRS.csv"
 PHOTOSPHERE_FILE = DATA_DIR / "photosphere_interpolated.csv"
 
 #: ``--synthetic``'s truth: the legacy ``__init__`` defaults, by the twin's
-#: names. ``envelope_mass = log10(6.985718e-6)``; ``envelope_rin`` and
+#: names, with one exception. ``envelope_mass = -6.5``: the legacy default,
+#: ``log10(6.985718e-6) = -5.156``, lies *outside* the legacy prior box
+#: U(-10, -6), so no posterior on that box could cover it (ruled 2026-10-01;
+#: see the "History" note in :mod:`.cstar`). ``envelope_rin`` and
 #: ``envelope_r0 = log10(4.4859)`` stellar radii; ``envelope_rout = 3.65``,
 #: placed inside the prior box (the legacy default, 1000 *inner* radii, is
 #: log10(4486) = 3.65 stellar radii, so this is that default); the star's
 #: legacy mass and luminosity; ``sic_fraction = 0.1``.
 SYNTHETIC_TRUTH: dict[str, float] = {
-    "envelope_mass": float(np.log10(6.985718e-6)),
+    "envelope_mass": -6.5,
     "envelope_rin": float(np.log10(4.4859)),
     "envelope_rout": 3.65,
     "envelope_r0": float(np.log10(4.4859)),
