@@ -212,6 +212,7 @@ class TestTheSimulator:
 
     @needs_sbi
     def test_a_forty_simulation_fit_runs_and_its_cache_serves_a_rerun(self, tmp_path: Path) -> None:
+        bank = tmp_path / "bank.nc"
         problem = build_problem(photons="quick", gp=False)
         run = fit(
             problem,
@@ -220,11 +221,28 @@ class TestTheSimulator:
             draws=8,  # each stored draw is scored by one serial Hyperion run
             workers=4,
             cache=tmp_path,
+            training_set=bank,
             training={"max_num_epochs": 5},
         )
         posterior = run["posterior"].dataset
         assert {f"model.{name}" for name in PRIORS} <= set(posterior.data_vars)
         assert int(run.attrs["ampere_sbi_cache_hit"]) == 0
+        # W6.14: the pairs were written, filter names and spectral axis by value.
+        from ampere.results import read_training_set
+
+        stored = read_training_set(bank)
+        assert len(stored) == 40
+        observed = stored.observations(0)
+        kinds = {type(container).__name__ for container in observed.values()}
+        assert {"PhotometricPoints", "Spectrum"} <= kinds
+        for dataset in problem.datasets:
+            container = dataset.observed
+            back = observed[dataset.label]
+            assert type(back) is type(container)
+            assert np.array_equal(back.spectral_axis.values, container.spectral_axis.values)
+            if hasattr(container, "filters"):
+                assert back.filters.tolist() == container.filters.tolist()
+                assert "MCPS_B" in back.filters.tolist()
         # A rerun at the same settings restores the stored posterior: no simulation.
         again = fit(
             build_problem(photons="quick", gp=False),

@@ -135,14 +135,11 @@ eight workers. ``--cache DIR`` (default ``~/.cache/ampere-cstar``) is an
 rerun at the same settings restores the trained posterior instead of
 simulating or training again (``ampere_sbi_cache_hit`` in the run's attrs),
 and :meth:`~ampere.inference.SBIEngine.calibrate` on the same engine reuses the
-trained posterior without retraining. The simulated pairs themselves are
-**not** written as a netCDF training set (``training_set=``), which the item
-asked for: ``ampere.results.training``'s writer stores every
-``extra_coords`` entry as float64, and a ``PhotometricPoints`` observation's
-filter names are strings, so the first write fails (``could not convert
-string to float: 'MCPS_B'``). That is a bug under ``ampere/``, outside this
-example's scope, recorded in the W6.13 (5) report; ``training_set=`` joins the
-call once it is fixed.
+trained posterior without retraining. The simulated pairs are written when
+asked: ``--training-set PATH`` is ``SBIEngine(training_set=)``, and the file is
+an :mod:`ampere.results.training` training set, readable by
+:func:`~ampere.results.read_training_set` (the photometric observation's filter
+names are stored as strings since W6.14). A 500-simulation bank is MEASURED.
 
 ``--synthetic`` replaces the observed fluxes by **one simulation** at
 :data:`.generators.SYNTHETIC_TRUTH` (the legacy defaults), pushed through the
@@ -624,6 +621,7 @@ def fit(
     draws: int = DEFAULT_DRAWS,
     workers: int = 4,
     cache: Path | str | None = DEFAULT_CACHE,
+    training_set: Path | str | None = None,
     training: dict[str, Any] | None = None,
     serve_artefact: str | None = None,
     progress: bool = False,
@@ -647,6 +645,7 @@ def fit(
         embedding=EMBEDDING if embedding else None,
         executor=ProcessExecutor(int(workers)) if int(workers) > 1 else None,
         cache=store,
+        training_set=training_set,
         serve_artefact=serve_artefact,
     )
     return run_engine.run(int(draws), training=training, progress=progress)
@@ -710,6 +709,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--draws", type=int, default=DEFAULT_DRAWS, help="each costs a run")
     parser.add_argument("--workers", type=int, default=4, help="Hyperion runs at once")
     parser.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
+    parser.add_argument(
+        "--training-set",
+        type=Path,
+        default=None,
+        help="also write the simulated (theta, x) pairs here as a netCDF training set",
+    )
     parser.add_argument("--seed", type=int, default=generators.SEED)
     parser.add_argument(
         "--serve-artefact",
@@ -741,6 +746,7 @@ def main(argv: list[str] | None = None) -> int:
         workers=args.workers,
         serve_artefact=args.serve_artefact,
         cache=args.cache,
+        training_set=args.training_set,
     )
     elapsed = time.perf_counter() - started
     print(report(run, synthetic=args.synthetic))
