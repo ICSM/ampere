@@ -91,7 +91,7 @@ for the other.
      - Landed (W3.2–W3.15, Phase 3). Simulation-based inference over ``sbi``
        0.27, fitting the same :class:`~ampere.core.FittingProblem` every
        other v2 engine fits by training on simulated pairs from
-       :meth:`~ampere.core.dataset.FittingProblem.simulate_many` rather than
+       :attr:`~ampere.core.FittingProblem.simulate_many` rather than
        consuming ``log_prob``. Beyond a name change: NLE and NRE join NPE,
        plus truncated marginal ratio estimation (``method="tmnre"``); a
        trained posterior can be cached (``cache=``) and checked for
@@ -383,7 +383,7 @@ Inference (``ampere.legacy.infer``)
      - See :ref:`migrating-post-processing`. ``ArvizPostProcessor`` is an
        empty subclass of the shared base: ArviZ is the one format of v2.
    * - ``SimulatorMixin``
-     - :meth:`FittingProblem.simulate_many <ampere.core.dataset.FittingProblem.simulate_many>`
+     - :attr:`FittingProblem.simulate_many <ampere.core.FittingProblem.simulate_many>`
      - The legacy mixin's ``simulate`` is a stub; the v2 method is the
        real thing, and the training-set writer builds on it.
    * - ``AnotherMixin``
