@@ -1,10 +1,10 @@
 """``examples/wstat_comparison.py`` runs end to end (W2.9's accept criterion).
 
-The docs build cannot be trusted as the sole proof that this example runs:
-``docs/source/conf.py`` sets ``nbsphinx_allow_errors = True`` (so a failed
-notebook does not fail the Sphinx build), and this example is a literal
-script included via ``:download:`` rather than an executed notebook in any
-case (see ``docs/source/wstat_comparison.rst`` for why: this repository
+The docs build cannot be trusted as the proof that this example runs:
+``docs/source/conf.py`` has set ``nbsphinx_allow_errors = False`` since W6.1
+(a failing cell in the two executed v2 notebooks fails the Sphinx build), but
+this example is a literal script included via ``:download:`` rather than an
+executed notebook in any case (see ``docs/source/wstat_comparison.rst`` for why: this repository
 commits no run outputs or other binary artefacts, and an executed notebook
 with embedded figures would be exactly that). This module is the reliable,
 environment-independent gate instead — it imports the example as a module
