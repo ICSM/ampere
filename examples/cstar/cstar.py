@@ -139,7 +139,9 @@ trained posterior without retraining. The simulated pairs are written when
 asked: ``--training-set PATH`` is ``SBIEngine(training_set=)``, and the file is
 an :mod:`ampere.results.training` training set, readable by
 :func:`~ampere.results.read_training_set` (the photometric observation's filter
-names are stored as strings since W6.14). A 500-simulation bank is about 8 MB (measured: 54 kB of shared coordinates and attributes plus 15.5 kB per simulation, at the quick preset).
+names are stored as strings since W6.14).
+A 500-simulation bank is about 8 MB (measured: 54 kB of shared coordinates and
+attributes plus 15.5 kB per simulation, at the quick preset).
 
 ``--synthetic`` replaces the observed fluxes by **one simulation** at
 :data:`.generators.SYNTHETIC_TRUTH` (the legacy defaults), pushed through the
