@@ -3183,6 +3183,45 @@ dead `ampere.emceesearch` import (`example.py`, `modbbtest.py`,
 untracked `flexible_likelihood_comparison.py` is answered by the M2
 study.
 
+### W6.14 — The training-set writer's non-numeric coordinates [S; Sonnet] (added 2026-10-01 on Peter's word, from W6.13 (5)'s finding)
+`ampere/results/training.py`'s `_slot_dataset` (line 755) stores every
+`extra_coords` entry of a slot's containers as float64, so a
+`PhotometricPoints` observation — whose filter names are strings — fails the
+first `training_set=` write with `could not convert string to float:
+'MCPS_B'`. Any SBI problem with photometry among its observations therefore
+cannot write its simulated pairs as a netCDF training set, which is what
+W3.4's contract promises and what `examples/cstar` had to omit. The fix:
+a coordinate keeps its own dtype (strings as a fixed-width or object array
+the way `results_schema.md`'s `filters` coordinate already round-trips
+through netCDF), the `extra_coords` attr recording the dtype alongside the
+name; a conformance row writes and reads back a training set from a
+problem with a `PhotometricPoints` observation and a `Spectrum` one, and
+`examples/cstar`'s `fit` gains the `training_set=` argument the brief asked
+for. **Depends:** W6.13 (C2) merged. **Accept:** the row round-trips both
+container kinds; `examples/cstar`'s 40-simulation smoke row writes a
+training set under `tmp_path`; `results.md` §9 amended with a sentence;
+gates dev and sbi.
+
+### W6.15 — `SBIEngine`'s scoring of the stored draws: optional, and pooled [S; Sonnet] (added 2026-10-01 on Peter's word, from W6.13 (5)'s finding)
+`SBIEngine.run` scores every stored posterior draw on the numpy contract
+path through `problem.evaluate` (`_sbi.py` line 70's rule), one evaluation
+per draw, serially in the driving process and never through the engine's
+`executor`. For an external simulator that is one Hyperion run per draw:
+`examples/cstar` measured 28 min for 500 draws and would need ten hours for
+the legacy's 10 000, so the twin cut its default to 1 000. Two levers,
+both additive to §4.5's surface: (a) `run(..., score=False)` stores the
+draws with `lp`, `log_prior` and `log_likelihood` absent and a provenance
+attr `ampere_sbi_scored = 0` saying so, refused by name when `calibrate`
+or a diagnostic later needs the scores; (b) when an `executor` was given,
+the scoring is pooled through it in chunks, the same `simulate_many` path
+the bank uses, so the stored draws of a pooled fit cost what the bank's
+simulations did. The default stays scored and serial for a cheap model
+(say at what per-evaluation cost the pool pays for itself, measured on the
+`sed_composition` and `cstar` problems). **Depends:** nothing. **Accept:** a
+row for each lever on an inference-suite problem; the `cstar` 40-simulation
+smoke row scores through its two-worker pool; `inference.md` §10 and
+`sbi.rst` amended; gates dev and sbi.
+
 **Issue triage (D10).** The open issues, with the recommendation: **closed
 by Phase 5 already** — #12, #29, #67 (W5.17's levers), #11 (censoring,
 `likelihoods.md` §9 landed with the core); **closed by Phase 6** — #57,
