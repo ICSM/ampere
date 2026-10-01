@@ -1307,6 +1307,18 @@ W3.12, the model hash — sit in the attributes, so `DEVELOPMENT_PLAN.md` §7's
 "spec-hash invalidation of trained artefacts" is a comparison of strings rather
 than a convention somebody has to remember.
 
+*Amended W6.14*: an `extra_coords` entry keeps its own dtype. Each slot's
+group gains the attribute `ampere_extra_coord_dtypes`, a JSON mapping from
+coordinate name to dtype (`"float64"`, ..., or `"str"` for a label coordinate
+such as `PhotometricPoints`' `filters`, stored as variable-length unicode and
+filled with the empty string for a failed sample); `ampere_extra_coords` stays
+the list of names. A file without the new attribute reads every coordinate as
+`float64`, which is what every earlier file holds, so no earlier file stops
+reading and `TRAINING_SET_SCHEMA_VERSION` does not change; the one regression
+is an old reader meeting a new file with a string coordinate, which fails with
+the error it already gave. This is an amendment rather than a §4 contract
+change.
+
 *Amended W3.12*: `append_training_set` now checks `ampere_model_hash` as well
 as `ampere_spec_hash` before growing a file, because the spec hash alone is
 only the parameter declaration — a likelihood family, noise model, solver or
