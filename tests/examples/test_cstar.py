@@ -235,9 +235,9 @@ class TestTheSimulator:
         observed = stored.observations(0)
         kinds = {type(container).__name__ for container in observed.values()}
         assert {"PhotometricPoints", "Spectrum"} <= kinds
-        for dataset in problem.datasets:
+        for label, dataset in problem.datasets.items():
             container = dataset.observed
-            back = observed[dataset.label]
+            back = observed[label]
             assert type(back) is type(container)
             assert np.array_equal(back.spectral_axis.values, container.spectral_axis.values)
             if hasattr(container, "filters"):
