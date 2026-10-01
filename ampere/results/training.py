@@ -204,7 +204,26 @@ class _Slot:
     uncertainty: bool
     mask: bool
     extra: tuple[str, ...]
+    # Per extra coordinate, the dtype it is stored as (W6.14): a numpy dtype
+    # string for a numeric coordinate, ``"str"`` for a label coordinate such as
+    # ``PhotometricPoints``' ``filters``. Parallel to ``extra``; a file written
+    # before W6.14 has none, and every one of its coordinates is ``float64``.
+    extra_dtypes: tuple[str, ...]
     meta: str | None
+
+
+def _extra_dtype(array: np.ndarray) -> str:
+    """The dtype string an extra coordinate is recorded under.
+
+    Strings (``U``, ``S`` and ``object`` arrays) are all ``"str"``: netCDF
+    stores them as variable-length unicode, so the fixed width numpy happened to
+    pick for one batch is not a property of the set, and a longer name in a
+    later append still fits.
+    """
+    array = np.asarray(array)
+    if array.dtype.kind in "USO":
+        return "str"
+    return str(array.dtype.newbyteorder("<"))
 
 
 def _slot_of(path: str, container: FunctionSamples) -> _Slot:
@@ -252,6 +271,9 @@ def _slot_of(path: str, container: FunctionSamples) -> _Slot:
         uncertainty=container.uncertainty is not None,
         mask=container.mask is not None,
         extra=tuple(sorted(container.extra_coords)),
+        extra_dtypes=tuple(
+            _extra_dtype(container.extra_coords[name]) for name in sorted(container.extra_coords)
+        ),
         meta=json.dumps(dict(container.meta), sort_keys=True) if container.meta else None,
     )
 
@@ -294,6 +316,15 @@ def _check_slot(slot: _Slot, container: FunctionSamples, index: int) -> None:
             f"sample {index} of channel {slot.path!r} carries extra coordinates {other.extra}, "
             f"where the set carries {slot.extra}."
         )
+    for name, ours, theirs in zip(slot.extra, slot.extra_dtypes, other.extra_dtypes, strict=True):
+        if (ours == "str") != (theirs == "str") or (
+            ours != "str" and np.dtype(ours).kind != np.dtype(theirs).kind
+        ):
+            raise ResultsError(
+                f"sample {index} of channel {slot.path!r} carries extra coordinate {name!r} "
+                f"as {theirs!r}, where the set holds it as {ours!r}. A label coordinate and a "
+                f"numeric one cannot share a variable."
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -758,7 +789,11 @@ def _slot_dataset(xarray: Any, slot: _Slot, batch: Sequence[Simulation], count: 
     values = _filled(slot.dtype, (count, *slot.shape))
     uncertainty = _filled("float64", (count, *slot.shape)) if slot.uncertainty else None
     mask = np.zeros((count, *slot.shape), dtype=np.int8) if slot.mask else None
-    extra = {name: _filled("float64", (count, *slot.shape)) for name in slot.extra}
+    extra = {
+        name: _filled(dtype, (count, *slot.shape))
+        for name, dtype in zip(slot.extra, slot.extra_dtypes, strict=True)
+    }
+    string_extra: set[str] = set()
     for index, simulation in enumerate(batch):
         container = _container_at(simulation, slot.path)
         if container is None:
@@ -770,6 +805,13 @@ def _slot_dataset(xarray: Any, slot: _Slot, batch: Sequence[Simulation], count: 
             mask[index] = np.asarray(container.mask, dtype=np.int8)
         for name in slot.extra:
             extra[name][index] = np.asarray(container.extra_coords[name])
+    for name, dtype in zip(slot.extra, slot.extra_dtypes, strict=True):
+        if dtype == "str":
+            # Variable-length unicode: the object array is the data and the
+            # encoding (below) says so, because a fixed-width ``<U`` array is
+            # written at the first batch's width and would truncate a longer
+            # name in a later append.
+            string_extra.add(name)
     variables: dict[str, Any] = {}
     if slot.complex:
         # netCDF has no complex type; the parts are named so nothing mistakes
@@ -783,7 +825,10 @@ def _slot_dataset(xarray: Any, slot: _Slot, batch: Sequence[Simulation], count: 
     if mask is not None:
         variables["mask"] = (dims, mask)
     for name, array in extra.items():
-        variables[f"extra_{name}"] = (dims, array)
+        if name in string_extra:
+            variables[f"extra_{name}"] = xarray.Variable(dims, array, encoding={"dtype": str})
+        else:
+            variables[f"extra_{name}"] = (dims, array)
     for name, axis_values, _ in slot.axis_variables:
         variables[f"axis_{name}"] = (slot.dims, axis_values)
     dataset = xarray.Dataset(variables)
@@ -796,6 +841,9 @@ def _slot_dataset(xarray: Any, slot: _Slot, batch: Sequence[Simulation], count: 
             f"{ATTR_PREFIX}value_dtype": slot.dtype,
             f"{ATTR_PREFIX}complex": int(slot.complex),
             f"{ATTR_PREFIX}extra_coords": json.dumps(list(slot.extra)),
+            f"{ATTR_PREFIX}extra_coord_dtypes": json.dumps(
+                dict(zip(slot.extra, slot.extra_dtypes, strict=True))
+            ),
             f"{ATTR_PREFIX}axis_units": json.dumps(
                 {name: unit for name, _, unit in slot.axis_variables if unit is not None}
             ),
@@ -816,8 +864,11 @@ def _filled(dtype: str, shape: tuple[int, ...]) -> np.ndarray:
     netCDF: "NaN is native, so a masked or crashed sample needs no sentinel".
     An integer channel has no NaN, so it is zero-filled and ``sample_stats``'
     ``failed`` flag is the authority for that sample — recorded here rather
-    than left as a surprise.
+    than left as a surprise. A string coordinate (``"str"``) is filled with the
+    empty string, on the same terms.
     """
+    if dtype == "str":
+        return np.full(shape, "", dtype=object)
     kind = np.dtype(dtype).kind
     if kind in "fc":
         return np.full(shape, np.nan, dtype=dtype)
@@ -1096,6 +1147,8 @@ def _record_at(dataset: Any, coordinates: Any, index: int) -> dict[str, Any]:
         }
     unit = str(attrs.get(f"{ATTR_PREFIX}unit", ""))
     fidelity = str(attrs.get(f"{ATTR_PREFIX}fidelity", ""))
+    # Absent from a file written before W6.14, whose coordinates are all float64.
+    extra_dtypes = json.loads(attrs.get(f"{ATTR_PREFIX}extra_coord_dtypes", "{}"))
     record: dict[str, Any] = {
         "version": CONTAINER_SCHEMA_VERSION,
         "kind": str(attrs[f"{ATTR_PREFIX}kind"]),
@@ -1117,7 +1170,7 @@ def _record_at(dataset: Any, coordinates: Any, index: int) -> dict[str, Any]:
         ),
         "extra_coords": {
             name: {
-                "dtype": "float64",
+                "dtype": extra_dtypes.get(name, "float64"),
                 "data": np.asarray(dataset[f"extra_{name}"].values[index]).tolist(),
             }
             for name in json.loads(attrs.get(f"{ATTR_PREFIX}extra_coords", "[]"))
@@ -1244,6 +1297,10 @@ def _slots_from_file(tree: Any) -> dict[str, _Slot]:
             uncertainty="uncertainty" in dataset.variables,
             mask="mask" in dataset.variables,
             extra=tuple(json.loads(attrs.get(f"{ATTR_PREFIX}extra_coords", "[]"))),
+            extra_dtypes=tuple(
+                json.loads(attrs.get(f"{ATTR_PREFIX}extra_coord_dtypes", "{}")).get(name, "float64")
+                for name in json.loads(attrs.get(f"{ATTR_PREFIX}extra_coords", "[]"))
+            ),
             meta=attrs.get(f"{ATTR_PREFIX}meta"),
         )
     return dict(sorted(slots.items()))
@@ -1295,7 +1352,13 @@ def _concatenate(xarray: Any, existing: Any, addition: Any) -> Any:
             groups[name] = old
             continue
         new = addition[name].dataset
-        groups[name] = xarray.concat([old, new], dim=SAMPLE_DIM, data_vars="minimal")
+        joined = xarray.concat([old, new], dim=SAMPLE_DIM, data_vars="minimal")
+        for variable in joined.variables:
+            # A string coordinate read back carries the first batch's width in
+            # its encoding, and writing would truncate a longer name to it.
+            if str(variable).startswith("extra_") and joined[variable].dtype.kind in "USO":
+                joined[variable].encoding["dtype"] = str
+        groups[name] = joined
     merged = xarray.DataTree.from_dict(groups)
     merged.attrs.update(dict(existing.attrs))
     return merged
