@@ -46,6 +46,7 @@ from ampere.core import (
 )
 
 from .composition import (
+    COARSE_GRID,
     GP_GRID,
     DatasetSpec,
     ProblemSpec,
@@ -72,8 +73,11 @@ from ampere.results import (  # noqa: E402  (must follow the arviz gate)
     from_netcdf,
     model_result_from_dict,
     model_result_to_dict,
+    append_training_set,
     provenance_attrs,
+    read_training_set,
     to_netcdf,
+    write_training_set,
 )
 
 CALIBRATION = TransformationSpec(TransformationKind.SCALE, label="calibration")
@@ -96,6 +100,26 @@ PLATED = ProblemSpec(
     model=ModelSpec(channels=("blue", "red"), coordinates=GP_GRID, plated=True),
     datasets=(
         DatasetSpec(label="blue", channel="blue"),
+        DatasetSpec(label="red", channel="red", data_seed=771),
+    ),
+)
+
+
+MIXED = ProblemSpec(
+    model=ModelSpec(kind=ModelKind.POWER_LAW, channels=("blue", "red"), coordinates=GP_GRID),
+    datasets=(
+        DatasetSpec(
+            label="blue",
+            channel="blue",
+            instrument=(
+                TransformationSpec(
+                    TransformationKind.PHOTOMETRY,
+                    label="synphot",
+                    target=COARSE_GRID,
+                    filters=("W1", "W2", "W3", "W4"),
+                ),
+            ),
+        ),
         DatasetSpec(label="red", channel="red", data_seed=771),
     ),
 )
@@ -222,6 +246,39 @@ class TestNetCDFRoundTrip:
         rejected = np.isneginf(tree[SAMPLE_STATS_GROUP]["log_prior"].values)
         assert np.isneginf(back[SAMPLE_STATS_GROUP]["log_prior"].values[rejected]).all()
         assert np.isnan(back[SAMPLE_STATS_GROUP]["log_likelihood"].values[rejected]).all()
+
+
+class TestTrainingSetCoordinates:
+    """W6.14: a label coordinate (filter names) is written like a numeric one."""
+
+    def test_photometry_and_a_spectrum_round_trip_by_value(
+        self, backend: ConformanceBackend, tmp_path: Path
+    ) -> None:
+        pytest.importorskip("h5netcdf", reason="netCDF serialisation needs an engine")
+        problem = build_problem(backend, MIXED)
+        path = tmp_path / "bank.nc"
+        drawn = problem.simulate_many(8, observe=True)
+        write_training_set(path, drawn, problem)
+        stored = read_training_set(path)
+        assert len(stored) == 8
+        for index in (0, 7):
+            observed = stored.observations(index)
+            original = drawn[index].observations
+            assert original is not None
+            assert isinstance(observed["blue"], PhotometricPoints)
+            assert isinstance(observed["red"], Spectrum)
+            assert observed["blue"].filters.tolist() == ["W1", "W2", "W3", "W4"]
+            assert observed["blue"].filters.dtype.kind == "U"
+            assert observed["blue"] == original["blue"]
+            assert observed["red"] == original["red"]
+            assert np.array_equal(
+                observed["red"].spectral_axis.values, original["red"].spectral_axis.values
+            )
+
+        append_training_set(path, problem.simulate_many(8, observe=True), problem)
+        again = read_training_set(path)
+        assert len(again) == 16
+        assert again.observations(15)["blue"].filters.tolist() == ["W1", "W2", "W3", "W4"]
 
 
 class TestHashSensitivity:
