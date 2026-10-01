@@ -137,43 +137,45 @@ autodoc_member_order = "bysource"
 # accounts for several dozen warnings on its own.
 napoleon_use_ivar = True
 
-# W2.11: notebooks are rendered from what they contain; the docs build never
-# executes them. nbsphinx's default ('auto') executes any notebook with no
-# stored outputs, and this repository stores none by policy (AGENTS.md ground
-# rule 7 — no run outputs or figures in git), so 'auto' means "execute every
-# notebook here except Ampere_MBB_Example.ipynb". Neither of the two it would
-# reach can run, and both were part of why `pixi run docs` was red before this
-# item:
+# W6.1: the two v2 notebooks are executed at docs-build time; the legacy one
+# never is. nbsphinx's default ('auto') executes any notebook that stores no
+# outputs, and this repository stores none by policy (AGENTS.md ground rule
+# 7 -- no run outputs or figures in git), so 'auto' means "execute every
+# notebook here except one that opts out in its own metadata":
 #
-#   * notebooks/quickstart.ipynb reads
-#     'PGQuasars/PG1011-040/cassis_yaaar_spcfw_14191360t.fits' relative to the
-#     *working directory*. No such file is in the repository (it is a Spitzer
-#     CASSIS spectrum, i.e. exactly the kind of binary artefact that is not
-#     committed), so the notebook cannot run from a clean clone anywhere. It
-#     then fits it with a 100-walker emcee run and calls postProcess(), which
-#     writes figures.
-#   * notebooks/Embedding_nets.ipynb imports torch and sbi — neither is in the
-#     `dev` environment the docs are built in, deliberately (pyproject.toml's
-#     [tool.pixi.environments]) — and trains an SNPE posterior on 10 000
-#     simulations.
+#   * notebooks/quickstart.ipynb and notebooks/Ampere_MBB_Example.ipynb are
+#     written on v2, import nothing but ampere and the `dev` environment's own
+#     packages, read the one data file they need (a tracked Spitzer spectrum
+#     under examples/test_data) by a path found from the notebook's own
+#     directory, and run in about a minute each. Their last cells state their
+#     sampling budgets and wall times.
+#   * notebooks/Embedding_nets.ipynb teaches the legacy `SBI_SNPE` embedding
+#     vocabulary, imports torch and sbi -- neither is in the `dev`
+#     environment the docs are built in, deliberately (pyproject.toml's
+#     [tool.pixi.environments]) -- and trains an SNPE posterior on 10 000
+#     simulations. It carries "nbsphinx": {"execute": "never"} in its own
+#     metadata, so it is rendered from what it contains and never run.
 #
-# So this is the "explicitly excluded, with a note" half of that repair rather
-# than a claim that they work. The gate that actually proves ampere's shipped
-# example code runs is tests/examples (W2.9), which is in `pixi run test-all`
-# as of W2.11 — a real pytest run, not a docs build that
-# `nbsphinx_allow_errors` would let pass regardless.
-#
-# `ipykernel` is nonetheless declared in the `dev` pixi feature alongside
-# `pandoc`: without a registered `python3` kernelspec the failure mode for any
-# notebook that *is* executed is a build-aborting NoSuchKernel rather than a
-# cell error, and this line is one word away from being turned back on for a
-# notebook that earns it.
-nbsphinx_execute = "never"
+# `ipykernel` is declared in the `dev` pixi feature alongside `pandoc`:
+# without a registered `python3` kernelspec a notebook that is executed
+# aborts the build with NoSuchKernel rather than a cell error.
+nbsphinx_execute = "auto"
 
-# Belt and braces with the line above: a cell that raises is reported, not
-# fatal. tests/examples/test_wstat_comparison.py's docstring cites this
-# setting as the reason the docs build is not a trustworthy gate for example
-# code — that reasoning stands.
-nbsphinx_allow_errors = True
+# A cell that raises fails the build. That is the point of executing the
+# notebooks: a tutorial that no longer runs is a bug the docs build must see.
+# (tests/examples/test_wstat_comparison.py's docstring used to cite the
+# opposite setting as the reason the docs build was no gate for example code;
+# for the two executed notebooks it now is one.)
+nbsphinx_allow_errors = False
+
+# nbsphinx's default is 30 s per cell; the slowest cell here is a zeus run of
+# about half a minute, and a loaded machine is slower still.
+nbsphinx_timeout = 300
+
+# The kernel logs "Kernel is running over TCP without encryption" at WARNING
+# on every start; it is about the local loopback connection the build opens,
+# not about the notebooks, and it would otherwise add one WARNING line to the
+# build log per executed notebook.
+nbsphinx_execute_arguments = ["--IPKernelApp.log_level=ERROR"]
 
 # imgmath_latex = "latex"
