@@ -217,7 +217,7 @@ class TestTheSimulator:
             problem,
             simulations=40,
             rounds=1,
-            draws=100,
+            draws=8,  # each stored draw is scored by one serial Hyperion run
             workers=4,
             cache=tmp_path,
             training={"max_num_epochs": 5},
@@ -230,7 +230,7 @@ class TestTheSimulator:
             build_problem(photons="quick", gp=False),
             simulations=40,
             rounds=1,
-            draws=100,
+            draws=8,  # each stored draw is scored by one serial Hyperion run
             workers=4,
             cache=tmp_path,
             training={"max_num_epochs": 5},

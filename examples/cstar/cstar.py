@@ -172,7 +172,35 @@ eight workers at the *pooled* cost, ``8 x 7200 / 4.5 = 12 800`` simulations
     pixi run -e hyperion python -m examples.cstar --synthetic --photons quick \
         --rounds 1 --simulations 12800 --workers 8
 
-RESULT-PENDING
+Run 2026-09-30/10-01 at ``generators.SEED`` (20260930), GP on (thirteen
+free parameters), NPE, one round. The 12 800 simulations and the training took
+1 h 23 min of wall clock (23:38-01:01 BST); the trained posterior went into
+the ``--cache`` store. The first invocation then began scoring the default
+10 000 draws (see "What changed") and was stopped; the same command with
+``--draws 500`` was served the trained posterior from the cache
+(``ampere_sbi_cache_hit = 1``, no simulation, no training) and spent its
+27 min 50 s scoring the 500 draws, one serial Hyperion run each. Wall clock in
+all about 1 h 51 min.
+
+**Six of the seven truths are covered; ``envelope_mass`` is not, and cannot
+be**: its truth, the legacy default ``log10(6.985718e-6) = -5.156``, lies
+*outside* the legacy prior box U(-10, -6), so no posterior on that box can
+cover it -- the posterior is pressed against the box's upper edge instead,
+which is the right answer to the question asked. ``width/prior`` is the 95 %
+interval's width over the prior's own central 95 % width; near 1 means the
+data left the parameter at its prior, and those rows "cover" trivially:
+``envelope_r0``, ``stellar_mass``, ``sic_fraction``, ``envelope_rout`` and
+``envelope_rin``. Only ``stellar_luminosity`` and ``envelope_mass`` are
+constrained at this budget::
+
+    model.envelope_mass       -6.4575  [-7.7438, -6.0397]   0.45  truth -5.1558 MISS (out of box)
+    model.envelope_r0         +0.113   [-1.8849, +1.9436]   1.01  truth +0.65185 ok (prior)
+    model.envelope_rin        -0.43355 [-1.8143, +1.4539]   0.86  truth +0.65185 ok (prior)
+    model.envelope_rout       +2.5644  [+2.0297, +3.7057]   0.88  truth +3.65    ok (prior)
+    model.sic_fraction        +0.42427 [+0.026347, +0.95614] 0.98 truth +0.1     ok (prior)
+    model.stellar_luminosity  +7471    [+4974.5, +9120.6]   0.48  truth +6165.9  ok
+    model.stellar_mass        +1.9972  [+1.0447, +2.9634]   1.01  truth +2       ok (prior)
+    irs_1 / irs_2 calibration +1.010   [+0.912, +1.124] / [+0.912, +1.121]
 """
 
 from __future__ import annotations
