@@ -87,6 +87,14 @@ What changed in the translation
   photons run out), and an mpich inside a pixi environment under WSL2 is the
   brittle route. There is no ``--mpi`` switch.
 * **Seven parameters, not eight** (the Dirichlet above).
+* **1 000 posterior draws by default, not 10 000.** The legacy's
+  ``nsamples_post=10000`` cost nothing beyond the network. ``SBIEngine``
+  scores every *stored* draw with the true ``log_prior`` and
+  ``log_likelihood`` through ``problem.evaluate`` (what makes importance
+  reweighting and calibration possible later), and here each such evaluation
+  is a Hyperion run, serial, in the driving process: 10 000 draws would be
+  some ten hours at ``photons="quick"`` and two days at ``"legacy"``.
+  ``--draws`` sets it; the training budget is unaffected.
 * **The data** as v2 containers, the IRS chunks sorted (see
   :mod:`.generators`): the legacy stored them in file order, which is not
   monotonic.
@@ -117,11 +125,12 @@ from CI. The tests skip where ``find_spec`` finds neither.
     pixi run -e hyperion python -m examples.cstar                       # the data, legacy budget
     pixi run -e hyperion python -m examples.cstar --embedding           # the _embedding variant
     pixi run -e hyperion python -m examples.cstar --synthetic --photons quick \\
-        --rounds 1 --simulations 800 --workers 8                        # the coverage run
+        --rounds 1 --simulations 12800 --workers 8                      # the coverage run
 
 The default ``--simulations 10000 --rounds 2 --photons legacy`` is the legacy
-budget, documented here and not run: at the measured cost below it is days of
-CPU. ``--cache DIR`` (default ``~/.cache/ampere-cstar``) is an
+budget, documented here and not run: at the measured cost below it is about
+90 CPU-hours of Hyperion (20 000 simulations at ~16 s), some eleven hours on
+eight workers. ``--cache DIR`` (default ``~/.cache/ampere-cstar``) is an
 :class:`~ampere.results.ArtefactStore` handed to ``SBIEngine(cache=)``: a
 rerun at the same settings restores the trained posterior instead of
 simulating or training again (``ampere_sbi_cache_hit`` in the run's attrs),
@@ -146,7 +155,24 @@ signal.
 
 Measured cost and the coverage run (Accept criterion)
 -----------------------------------------------------
-Recorded at the foot of this docstring once run.
+One simulation at :data:`.generators.SYNTHETIC_TRUTH`, serially, in the
+``hyperion`` environment on the 16-core development machine (2026-09-30; the
+once-per-process Mie tables, 2.0 s, excluded): **16.1 s at
+``photons="legacy"``, 3.7 s at ``photons="quick"``** -- of which about 2.2 s
+is Hyperion's own mean-opacity and LTE-emissivity tabulation for the mixed
+dust, the same at either preset. Pooled, 32 quick simulations on eight
+workers took 17.9 s of wall clock, **4.5 s per simulation per worker**
+(process start-up and the per-process Mie tables included), with no
+failures.
+
+The coverage budget is the largest that fits two hours of wall clock on
+eight workers at the *pooled* cost, ``8 x 7200 / 4.5 = 12 800`` simulations
+(the serial 3.7 s would give 15 500, which the pool does not achieve)::
+
+    pixi run -e hyperion python -m examples.cstar --synthetic --photons quick \
+        --rounds 1 --simulations 12800 --workers 8
+
+RESULT-PENDING
 """
 
 from __future__ import annotations
@@ -242,6 +268,9 @@ EMBEDDING: dict[str, Any] = {"type": "FC", "num_hiddens": 100, "n_layers": 3, "o
 LEGACY_SIMULATIONS = 10_000
 LEGACY_ROUNDS = 2
 LEGACY_DRAWS = 10_000
+#: The twin's default posterior draws -- a tenth of the legacy's, because every
+#: stored draw costs one Hyperion run here (see "What changed").
+DEFAULT_DRAWS = 1_000
 
 DEFAULT_CACHE = Path.home() / ".cache" / "ampere-cstar"
 
@@ -551,7 +580,7 @@ def fit(
     embedding: bool = False,
     simulations: int = LEGACY_SIMULATIONS,
     rounds: int = LEGACY_ROUNDS,
-    draws: int = LEGACY_DRAWS,
+    draws: int = DEFAULT_DRAWS,
     workers: int = 4,
     cache: Path | str | None = DEFAULT_CACHE,
     training: dict[str, Any] | None = None,
@@ -635,7 +664,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--carbon", default="rouleau91", choices=sorted(dust.CARBON))
     parser.add_argument("--simulations", type=int, default=LEGACY_SIMULATIONS)
     parser.add_argument("--rounds", type=int, default=LEGACY_ROUNDS)
-    parser.add_argument("--draws", type=int, default=LEGACY_DRAWS)
+    parser.add_argument("--draws", type=int, default=DEFAULT_DRAWS, help="each costs a run")
     parser.add_argument("--workers", type=int, default=4, help="Hyperion runs at once")
     parser.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
     parser.add_argument("--seed", type=int, default=generators.SEED)
