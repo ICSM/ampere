@@ -20,6 +20,7 @@ repository (``AGENTS.md`` ground rule 7).
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,7 @@ from ampere.core import (
     Model,
     ModelResult,
     Parameter,
+    PhotometricPoints,
     Spectrum,
 )
 from ampere.core.dataset import Failure, FailureReason, Simulation
@@ -192,6 +194,170 @@ class TestRoundTrip:
         assert stored.attrs[f"{ATTR_PREFIX}schema_version"] == PROVENANCE_SCHEMA_VERSION == 9
         assert stored.attrs[f"{ATTR_PREFIX}seed"] == 20260908
         assert stored.attrs[f"{ATTR_PREFIX}training_set_version"] == TRAINING_SET_SCHEMA_VERSION
+
+
+# ---------------------------------------------------------------------------
+# Extra coordinates keep their dtype (W6.14)
+# ---------------------------------------------------------------------------
+
+FILTERS = ("MCPS_B", "MCPS_V", "IRAC_1")
+
+
+class Photometer(Model):
+    """A model whose output is photometry, so its filter names are strings."""
+
+    fail = False
+
+    def __init__(self, filters: tuple[str, ...] = FILTERS) -> None:
+        self.filters = filters
+        self.register_parameter(Parameter("norm", st.loguniform(0.5, 2.0)))
+
+    def evaluate(self, **values: Any) -> ModelResult:
+        if type(self).fail:
+            raise RuntimeError("the photometer broke")
+        ctx = self.context(values)
+        pivots = np.linspace(1.0, 4.0, len(self.filters))
+        return ModelResult(
+            PhotometricPoints(
+                self.filters,
+                pivots * u.micron,
+                ctx["norm"] * pivots**-1.0 * u.Jy,
+                extra_coords={"quality": np.arange(len(self.filters), dtype=float)},
+            )
+        )
+
+
+def photometric(filters: tuple[str, ...] = FILTERS) -> FittingProblem:
+    pivots = np.linspace(1.0, 4.0, len(filters))
+    observed = PhotometricPoints(
+        filters,
+        pivots * u.micron,
+        pivots**-1.0 * u.Jy,
+        uncertainty=np.full(len(filters), 0.02) * u.Jy,
+        extra_coords={"quality": np.arange(len(filters), dtype=float)},
+    )
+    return FittingProblem(
+        Photometer(filters),
+        DatasetCollection({"phot": Dataset(observed, label="phot")}),
+        seed=20261001,
+        simulator_failures=(RuntimeError,),
+    )
+
+
+class TestStringCoordinates:
+    def test_filter_names_round_trip_and_the_numeric_label_keeps_its_dtype(
+        self, tmp_path: Path
+    ) -> None:
+        problem = photometric()
+        drawn = budget(problem, 3)
+        write_training_set(tmp_path / "bank.nc", drawn, problem)
+        stored = read_training_set(tmp_path / "bank.nc")
+        result = stored.result(1)["default"]
+        assert result.filters.tolist() == list(FILTERS)
+        assert result == drawn[1].results["model"]["default"]
+        observed = stored.observations(2)["phot"]
+        assert observed.filters.tolist() == list(FILTERS)
+        assert observed.extra_coords["quality"].dtype == np.float64
+        assert observed == drawn[2].observations["phot"]
+
+    def test_the_attr_records_the_dtype_beside_the_unchanged_name_list(
+        self, tmp_path: Path
+    ) -> None:
+        import xarray
+
+        problem = photometric()
+        write_training_set(tmp_path / "bank.nc", budget(problem, 2), problem)
+        tree = xarray.open_datatree(tmp_path / "bank.nc").load()
+        attrs = tree["observations/phot"].dataset.attrs
+        assert json.loads(attrs[f"{ATTR_PREFIX}extra_coords"]) == ["filters", "quality"]
+        assert json.loads(attrs[f"{ATTR_PREFIX}extra_coord_dtypes"]) == {
+            "filters": "str",
+            "quality": "float64",
+        }
+
+    def test_a_longer_name_in_a_later_append_still_fits(self, tmp_path: Path) -> None:
+        problem = photometric()
+        write_training_set(tmp_path / "bank.nc", budget(problem, 2), problem)
+        longer = photometric(("MCPS_B", "MCPS_V", "A_much_longer_filter_name"))
+        # The grid check compares the numeric axes, which are the same; the
+        # point is that the stored width is not fixed at the first batch's.
+        append_training_set(tmp_path / "bank.nc", budget(longer, 2), longer)
+        stored = read_training_set(tmp_path / "bank.nc")
+        assert len(stored) == 4
+        assert stored.observations(3)["phot"].filters.tolist()[-1] == "A_much_longer_filter_name"
+
+    def test_a_failed_sample_is_filled_with_the_empty_string(self, tmp_path: Path) -> None:
+        import xarray
+
+        problem = photometric()
+        good = budget(problem, 1)
+        Photometer.fail = True
+        try:
+            bad = budget(problem, 1)
+        finally:
+            Photometer.fail = False
+        assert bad[0].failed
+        write_training_set(tmp_path / "bank.nc", [*good, *bad], problem)
+        tree = xarray.open_datatree(tmp_path / "bank.nc").load()
+        filters = np.asarray(tree["model.default"]["extra_filters"].values)
+        assert filters[0].tolist() == list(FILTERS)
+        assert filters[1].tolist() == ["", "", ""]
+
+    def test_a_string_coordinate_against_a_numeric_one_is_refused_by_name(
+        self, tmp_path: Path
+    ) -> None:
+        problem = photometric()
+        drawn = budget(problem, 2)
+        original = drawn[1].results["model"]["default"]
+        relabelled = PhotometricPoints(
+            FILTERS,
+            original.spectral_axis.values * u.micron,
+            original.values * u.Jy,
+            extra_coords={"quality": np.array(["x", "y", "z"])},
+        )
+        drawn[1] = dataclasses.replace(drawn[1], results={"model": ModelResult(relabelled)})
+        with pytest.raises(ResultsError, match=r"extra coordinate 'quality'.*'float64'"):
+            write_training_set(tmp_path / "bank.nc", drawn, problem)
+
+
+class TestFilesWrittenBeforeTheDtypeAttr:
+    def test_a_file_without_the_attr_reads_back_unchanged(self, tmp_path: Path) -> None:
+        import xarray
+
+        # A numeric-coordinate set: the only kind a pre-W6.14 writer could emit.
+        problem = photometric()
+        drawn = budget(problem, 3)
+        numeric = [
+            dataclasses.replace(
+                simulation,
+                results={
+                    "model": ModelResult(
+                        Spectrum(
+                            np.linspace(1.0, 4.0, 3) * u.micron,
+                            np.asarray(simulation.results["model"]["default"].values) * u.Jy,
+                            extra_coords={"quality": np.arange(3, dtype=float)},
+                        )
+                    )
+                },
+                observations=None,
+            )
+            for simulation in drawn
+        ]
+        write_training_set(tmp_path / "new.nc", numeric, problem)
+        tree = xarray.open_datatree(tmp_path / "new.nc").load()
+        removed = 0
+        for node in tree.subtree:
+            if f"{ATTR_PREFIX}extra_coord_dtypes" in node.dataset.attrs:
+                del node.dataset.attrs[f"{ATTR_PREFIX}extra_coord_dtypes"]
+                removed += 1
+        assert removed == 1
+        tree.to_netcdf(tmp_path / "old.nc", engine="h5netcdf")
+        new = read_training_set(tmp_path / "new.nc")
+        old = read_training_set(tmp_path / "old.nc")
+        assert len(old) == 3
+        for index in range(3):
+            assert old.result(index)["default"] == new.result(index)["default"]
+            assert old.result(index)["default"].extra_coords["quality"].dtype == np.float64
 
 
 # ---------------------------------------------------------------------------
