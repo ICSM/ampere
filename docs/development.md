@@ -572,6 +572,26 @@ Claude-Session: https://claude.ai/code/session_01Y4vLKdyyMpn1e2MTqixBwM
 **Operations notes for the orchestrator**: one five-suite gate at a time, always through the `flock`; run long gates detached (`nohup … &`) and wait with a background `until` loop rather than polling in the foreground; **never edit, format or check out source files in the main checkout while a gate runs there** (a half-written module crashed a subprocess test on 2026-09-09; markdown is safe); an agent that `cd`s to the main checkout can edit its files even though the isolation guard blocks git there — tell agents to stay in their worktree; after a lockfile change, `pixi install -e <env>` in the main checkout; the merged-master gate is the one that counts; parallel agents appending decision-log rows conflict at the table's last line — keep both rows, keep the table contiguous; agent worktrees under `.claude/worktrees/` may hold their own `.pixi` (2 GB) — remove a merged agent's worktree with `git worktree remove --force --force`; finished agents linger in the task list until dismissed with `TaskStop`; an agent that "stops to wait" for a gate is resumed with `SendMessage` and told to poll; a session rate limit kills agents mid-flight but their committed work survives — resume them from their branches.
 
 
+## The merged gate: CI is the gate of record
+
+*(W6.10, ruled 2026-10-02 under D4. The status-table convention below applies from the next merged row on; earlier rows keep the local five-suite summary lines they were written with.)*
+
+**Before the merge, the scoped runs.** The orchestrator's pre-merge legs are the scoped runs ruled on 2026-09-28: the targeted files the item touches, the one-environment `test-all` or `test-fast` leg the item's Accept line names, and the lint, format and typecheck tasks. They run on the branch, detached, through the gate lock (below). They are a confidence measure, not the gate: nothing in them is repeated on all environments at once.
+
+**At the merge, CI.** After Peter's merge the orchestrator pushes `master` to `origin/v2` (and, once the `1.0.0b1` tag has moved the v2 line there, to `origin/master`). The CI run on that push (`.github/workflows/ci.yml`, with the path-gated jobs of the CI section above) is **the merged gate of record**. The status row records the run id and the per-job counts (`passed` / `skipped` per matrix cell, one line) where the five-suite summary lines used to go, and the handoff's "next gate's baselines" are that run's per-job counts, not a local machine's. A job that path filters skipped is recorded as skipped, not as a pass.
+
+**A red run.** If the run on a merge is red, nothing else merges until it is green again, or until the failure is ruled flaky and the row says so. The worked example is the 2026-10-01 race: CI run 36935963691 on the W6.14 merge push failed one row on Python 3.12 only (`tests/core/test_simulate.py::TestThePoolIsReusedAcrossMapCalls::test_a_dead_worker_does_replace_the_pool`; a worker died between two `result()` calls and the next `submit` raised `BrokenProcessPool` outside the handler); it was diagnosed, fixed at `30d43e3` on its own branch, and the confirming run (36943679622 on `e09d530`) was green before the next merge. A rerun that turns green without a code change is recorded as "flaky, rerun green" with both run ids; one that does it twice for the same row is a defect to be filed, not a rerun to be repeated.
+
+**The fallback for a machine without GitHub.** The scripts in `~/.cache/ampere-gates/` (`gate-leg.sh <env> [tag]` and the per-item `*-gate.sh` files beside it) remain the fallback when CI cannot be reached. Each is a detached shell chain that takes `/tmp/ampere-gate.lock` with `flock`, runs `pixi run -e <env> test-all` in the main checkout, and writes a summary log under the cache directory (not `/tmp`, so it survives a reboot). "The lock" is only that file: it is not a pytest fixture, `tests/conftest.py` has none, and it exists so that two five-suite runs, or a five-suite run and a docs build, never share a 13 GB machine. Launch one with `nohup setsid ~/.cache/ampere-gates/gate-leg.sh dev <tag> &` and read `<tag>.log` for the verdict; the row then quotes the local counts and says that they are the fallback.
+
+**What CI never sees.** Two sets of rows are outside every CI run and are quoted in the row instead. The `hyperion` rows (the `hyperion` environment's radiative-transfer examples, run on the development machine with `pixi run -e hyperion ...`) are run by the orchestrator when a merge touches that code and the counts go in the row. The GPU rows (`tests/gpu/`, skipped without an accelerator) are W6.16's: the cluster procedure, run once on the beta tag, not per merge.
+
+**Where this agrees with the rest.** `docs/orchestration.md`'s rules still hold: agents never run a five-suite gate, every long command is detached through the lock, and the orchestrator does the polling. What changes is only *where the merged gate runs*.
+
+### Parallel test runs (`pytest-xdist`): the audit
+
+AUDIT_PLACEHOLDER
+
 ---
 
 Earlier session records (Phase 0–1 review outcomes, the 2026-09-01 to 2026-09-09 handoffs, including the incremental mid-Phase-3 record) are archived verbatim in `docs/handoff-archive.md`.
