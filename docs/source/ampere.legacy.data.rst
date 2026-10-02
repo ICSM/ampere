@@ -12,6 +12,11 @@ ampere.legacy.data package (legacy, frozen)
     :undoc-members:
     :show-inheritance:
     :no-index:
+    :exclude-members: setPlotParams
+
+``Spectrum.setPlotParams`` is left out of this page, as it is under the
+``spectrum`` submodule below: its frozen docstring is not valid reStructuredText
+and the source is the reference for it.
 
 Submodules
 ----------
