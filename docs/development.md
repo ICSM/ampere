@@ -215,6 +215,8 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
 
 ## ⚡ Pick up here — **PHASE 6 OPEN** (drafted and ruled 2026-09-28; Phase 5 complete at `50f6ff4`, thirty-two items, W5.16 deferred)
 
+**UPDATE: the doctest fix MERGED by Peter at `32da5fe`; pushed to `origin/v2`; the CI run on this push is the gate — its result fills `CI_FIX_RESULT` in the W6.3 row.**
+
 **STATE 2026-10-02 04:0x BST (session ampere-59, Fable, orchestrator). CI RUN 36954600768 ON THE W6.3 MERGE: RED on one doctest — `optimisers.rst`'s `Optimum.summary()` block pinned the Powell evaluation count (695 here, 678 on CI's runners; py312/py313 agreed by chance, py314 and the dev/jax core groups did not); the `-W` docs job and the other 24 jobs green. **Fix ready for Peter's merge**: branch `ci-optimisers-doctest-ellipsis` at `45a2209` (worktree `.claude/worktrees/ci-optimisers-doctest`), one line — the count becomes `...` under the runner's ELLIPSIS; verified 4 passed under dev, test-py314 and jax from the main checkout's environments. Command from the main checkout: `git merge --no-ff ci-optimisers-doctest-ellipsis`. Under the gate-of-record rule nothing else merges until CI is green on that push. Lesson for the W6.3 row and W6.10's policy text: a doctest must never pin an optimiser's evaluation count or any other platform-dependent figure — ELLIPSIS is already on. W6.10 still running.**
 
 **UPDATE 2026-10-02 03:49 BST: the W6.3 dev gate GREEN — 3302 passed / 647 skipped in 34 min, in the row; the CI run on the merge push still in progress (this commit is held unpushed until it completes, so the push does not cancel it; `CI_RESULT` in the row is filled from it).**
