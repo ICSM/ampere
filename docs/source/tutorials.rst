@@ -16,7 +16,18 @@ Ampere v2
    wstat_comparison
    sbi
    population
+   notebooks/quickstart
+   notebooks/Ampere_MBB_Example
 
+:doc:`notebooks/quickstart` is the shortest route from nothing to a v2 fit —
+a straight line fitted to two photometric bands and a *Spitzer*/IRS spectrum,
+first with independent noise and then with the flexible likelihood, ending in
+the :mod:`ampere.results` plots — and :doc:`notebooks/Ampere_MBB_Example` fits
+a modified blackbody to ten bands of photometry with emcee and then zeus
+behind one interface. Both are executed when the documentation is built (a
+cell that raises fails the build), state their sampling budgets and wall
+times in their last cell, and are the notebook forms of ``examples/linear_sed``
+and ``examples/modified_blackbody``.
 :doc:`sed_composition` is the simplest composition there is — one model, a
 spectrum and a photometric catalogue, two instruments on one channel — and
 the page to start with if you have not built a multi-dataset fit before.
@@ -59,7 +70,9 @@ The first seven have runnable counterparts in the repository:
 ``examples/interferometry``, ``examples/astrometry``, ``examples/image``,
 ``examples/wstat_comparison.py`` and ``examples/sbi/``, each covered by its
 own test suite so that none can rot unnoticed. The v2 twins of six classic
-legacy examples, landed and pending, are listed in ``examples/README.md``;
+legacy examples are listed in ``examples/README.md`` and set beside their
+legacy originals, with snippets, in :ref:`the migration guide
+<migrating-side-by-side>`;
 among them ``examples/phoenix_star`` and ``examples/star_disc`` fit stars with
 ampere's own PHOENIX emulator, a PCA plus one Gaussian process per weight that
 evaluates identically on the reference, torch and jax backends, and
@@ -76,18 +89,20 @@ Legacy tutorials
 
 .. warning::
 
-   These notebooks teach the **legacy** v1 API (``ampere.data``,
-   ``ampere.models``, ``ampere.infer``), which is frozen — see :doc:`legacy`.
-   They are kept because they are still the fullest worked examples of an SED
-   fit and of neural posterior estimation in this repository, and because
-   Phase 3 will replace them rather than delete them. They are rendered from
-   their stored output; the documentation build does not execute them.
+   This notebook teaches the **legacy** v1 API (``ampere.infer.sbi``), which is
+   frozen — see :doc:`legacy`. It is kept as the reference for the legacy
+   embedding-network dictionary (:doc:`advanced` cites it), and because
+   Phase 3 replaced it rather than deleted it: :doc:`sbi` is its v2
+   counterpart. It is rendered from what it contains and is **never executed**
+   by the documentation build, because it needs ``torch`` and ``sbi``, which
+   the docs environment deliberately lacks. The other two notebooks that used
+   to sit here, ``quickstart`` and ``Ampere_MBB_Example``, are now written on v2
+   and are listed above with the v2 tutorials; the legacy code they used to
+   show is covered name by name in :doc:`migrating`.
 
 .. toctree::
    :maxdepth: 2
 
-   notebooks/quickstart
-   notebooks/Ampere_MBB_Example
    notebooks/Embedding_nets
 
 Still to be written
