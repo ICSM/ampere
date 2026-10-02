@@ -16,6 +16,8 @@ Ampere v2
    wstat_comparison
    sbi
    population
+   conditional_priors
+   arbitrary_priors
    notebooks/quickstart
    notebooks/Ampere_MBB_Example
 
@@ -64,6 +66,14 @@ result is calibrated. :doc:`population` is Phase 5's addition — one
 population of objects declared with :class:`~ampere.core.Population`,
 fitted jointly on the native path and by reweighting archived single-object
 fits, the two routes ``hierarchical_population.md`` left open.
+:doc:`conditional_priors` and :doc:`arbitrary_priors` are about priors rather
+than a workflow: the first is what v2 offers for a prior that depends on another
+parameter (a hierarchical prior, a plate of population members, and an ordering
+done by reparameterisation), and says what cannot be declared; the second is
+the ``Prior`` protocol itself and three priors that are not frozen scipy
+distributions — your own class, scipy's newer distribution objects, and an
+empirical prior built from a previous run's draws. Every example on both pages is
+run by the documentation's doctest runner.
 
 The first seven have runnable counterparts in the repository:
 ``examples/sed_composition``, ``examples/m2_misspecification``,
@@ -108,7 +118,10 @@ Legacy tutorials
 Still to be written
 -------------------
 
-Conditional priors and arbitrary priors each deserve a page of their own;
-:doc:`overview` and the API reference carry what there is for now.
-Combining different data types is no longer on this list —
-:doc:`sed_composition` is that page.
+Nothing is promised here at present. Conditional priors and arbitrary priors,
+which this section used to name, now have their pages
+(:doc:`conditional_priors` and :doc:`arbitrary_priors`), and combining different
+data types has had one since :doc:`sed_composition`. What the two prior pages
+say cannot be declared today — a joint density on two parameters, and the
+``Derived`` node that would declare a prior over a function of others — is the
+subject of a design memo (W6.11), not of a missing tutorial.

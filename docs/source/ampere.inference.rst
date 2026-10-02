@@ -285,3 +285,5 @@ Re-exported from ``ampere.inference``; shown under the module that defines it.
 .. autodata:: ampere.inference._tmnre.MARGINAL_ORDERS
 
 .. autodata:: ampere.inference._tmnre.DEFAULT_TRUNCATION_EPSILON
+
+.. autodata:: ampere.inference._nested.NESTED_ENGINES

@@ -52,6 +52,10 @@ ampere.legacy.utils.makeFilterSet module
     :undoc-members:
     :show-inheritance:
     :no-index:
+    :exclude-members: makeFilterSet
+
+The ``makeFilterSet`` function is left out of this page: its frozen docstring carries an ambiguous
+cross-reference (``name``) and the source is the reference for it.
 
 ampere.legacy.utils.makeFilterSet\_mod module
 -------------------------------------------------

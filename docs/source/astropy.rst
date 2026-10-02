@@ -198,6 +198,7 @@ black-box route uses, so a native and a black-box fit of the same astropy
 model cannot disagree about what a bound or a fixed value means:
 
 .. code-block:: pycon
+    :class: needs-torch
 
     >>> from ampere.backends.torch import from_astropy as native_from_astropy
     >>> compound = Gaussian1D(3.0, 6.0, 1.5) + Const1D(0.3)

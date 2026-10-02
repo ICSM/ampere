@@ -43,6 +43,10 @@ ampere.legacy.infer.emceesearch module
     :undoc-members:
     :show-inheritance:
     :no-index:
+    :exclude-members: EmceeSearch
+
+The ``EmceeSearch`` class is left out of this page: its frozen docstring is not valid reStructuredText
+and the source is the reference for it.
 
 ampere.legacy.infer.mcmcsearch module
 ----------------------------------------
@@ -61,6 +65,10 @@ ampere.legacy.infer.mixins module
     :undoc-members:
     :show-inheritance:
     :no-index:
+    :exclude-members: get_map, plot_posteriorpredictive
+
+The ``get_map`` and ``plot_posteriorpredictive`` methods of the post-processor mixins are left out of
+this page: their frozen docstrings are not valid reStructuredText and the source is the reference for them.
 
 ampere.legacy.infer.nestedsearch module
 -------------------------------------------
@@ -88,3 +96,7 @@ ampere.legacy.infer.zeussearch module
     :undoc-members:
     :show-inheritance:
     :no-index:
+    :exclude-members: get_map
+
+``ZeusSearch.get_map`` is left out of this page for the same reason as the mixins' methods: its frozen
+docstring is not valid reStructuredText and the source is the reference for it.

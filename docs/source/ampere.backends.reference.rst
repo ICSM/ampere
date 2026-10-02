@@ -21,3 +21,6 @@ define them.
 .. autodata:: ampere.backends.reference.models.COORDINATE_UNIT
 .. autodata:: ampere.backends.reference.models.FLUX_UNIT
 .. autodata:: ampere.backends.reference.instrument.DETECTORS
+.. autodata:: ampere.backends.reference.interferometry.SPECTRAL_UNIT
+.. autodata:: ampere.backends.reference.interferometry.BRIGHTNESS_UNIT
+.. autodata:: ampere.backends.reference.interferometry.MAS_PER_RAD

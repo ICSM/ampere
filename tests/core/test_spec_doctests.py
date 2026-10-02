@@ -11,12 +11,15 @@ file is fed straight to :mod:`doctest`; its examples share one namespace and
 build on each other, exactly as a reader would run them.
 
 The module docstrings of ``ampere.core`` are covered here too, for the same
-reason.
+reason, and (W6.3) so is the user documentation: every ``.. code-block::
+pycon`` under ``docs/source`` is extracted and run, one namespace per page.
 """
 
 from __future__ import annotations
 
 import doctest
+import importlib.util
+import warnings
 from pathlib import Path
 
 import pytest
@@ -149,3 +152,102 @@ def test_module_docstring_examples_run(module: object) -> None:
     results = doctest.testmod(module, optionflags=OPTIONS, verbose=False)  # type: ignore[arg-type]
     assert results.failed == 0
     assert results.attempted > 0
+
+
+# ---------------------------------------------------------------------------
+# The user documentation (W6.3): every ``.. code-block:: pycon`` under
+# ``docs/source`` is run.
+# ---------------------------------------------------------------------------
+
+DOCS_SOURCE = REPO_ROOT / "docs" / "source"
+
+# A page whose blocks need something this environment lacks is skipped here,
+# with the reason, rather than dropped from the page: the blocks stay where a
+# reader finds them and the skip shows in ``pytest -rs``. Empty today -- every
+# page's blocks run in the ``dev`` environment.
+SKIP: dict[str, str] = {}
+
+
+def _pycon_blocks(text: str) -> list[tuple[str, str | None]]:
+    """A page's ``.. code-block:: pycon`` directives, in order.
+
+    Each is ``(body, requires)``: ``requires`` is the library named by a
+    ``:class: needs-<library>`` option on the directive (Sphinx renders the
+    class harmlessly), or ``None``.
+    """
+    lines = text.splitlines()
+    blocks: list[tuple[str, str | None]] = []
+    i = 0
+    while i < len(lines):
+        if lines[i].strip() == ".. code-block:: pycon":
+            indent = len(lines[i]) - len(lines[i].lstrip())
+            i += 1
+            requires = None
+            body: list[str] = []
+            while i < len(lines) and (
+                not lines[i].strip() or lines[i].startswith(" " * (indent + 1))
+            ):
+                stripped = lines[i].strip()
+                if stripped.startswith(":class: needs-") and not body:
+                    requires = stripped.removeprefix(":class: needs-")
+                else:
+                    body.append(lines[i][indent + 4 :] if stripped else "")
+                i += 1
+            blocks.append(("\n".join(body).strip("\n"), requires))
+        else:
+            i += 1
+    return blocks
+
+
+def _pycon_pages() -> list[Path]:
+    return sorted(
+        page for page in DOCS_SOURCE.glob("*.rst") if ".. code-block:: pycon" in page.read_text()
+    )
+
+
+@pytest.mark.parametrize("page", _pycon_pages(), ids=lambda page: page.name)
+def test_docs_page_pycon_blocks_run(
+    page: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ``pycon`` blocks of a documentation page run as written, in order.
+
+    One namespace per page, so a later block builds on an earlier one exactly
+    as the page reads.
+    """
+    if page.name in SKIP:
+        pytest.skip(SKIP[page.name])
+    # A page may write a file (an optimum to NetCDF, say) and may import the
+    # repository's ``examples`` package: run from a scratch directory, with the
+    # repository root importable, so nothing lands in the working tree.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.syspath_prepend(str(REPO_ROOT))
+    found = _pycon_blocks(page.read_text())
+    assert found, f"{page.name} has a pycon directive the extractor could not read"
+    blocks = []
+    for body, requires in found:
+        # A block marked ``:class: needs-torch`` (or -jax) runs only where that
+        # library is installed; elsewhere it is dropped and the drop is reported.
+        if requires is not None and importlib.util.find_spec(requires) is None:
+            warnings.warn(f"{page.name}: a block needing {requires} was not run here", stacklevel=1)
+            continue
+        blocks.append(body)
+    test = doctest.DocTestParser().get_doctest("\n\n".join(blocks), {}, page.name, str(page), 0)
+    runner = doctest.DocTestRunner(optionflags=OPTIONS, verbose=False)
+    runner.run(test)
+    results = runner.summarize(verbose=False)
+    assert results.failed == 0, (
+        f"{results.failed} of {results.attempted} examples failed in {page.name}"
+    )
+    assert results.attempted > 0, f"no examples found in {page.name}"
+
+
+def test_docs_pycon_pages_are_collected() -> None:
+    """The glob finds at least the pages known to carry ``pycon`` blocks."""
+    names = {page.name for page in _pycon_pages()}
+    assert {
+        "kernels.rst",
+        "solvers.rst",
+        "astropy.rst",
+        "optimisers.rst",
+        "sed_composition.rst",
+    } <= names

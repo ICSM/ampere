@@ -261,7 +261,7 @@ True
 
 from __future__ import annotations
 
-from ._blackjax import METHODS as BLACKJAX_METHODS
+from . import _blackjax
 from ._blackjax import BlackjaxEngine
 from ._dynesty import DynestyEngine
 from ._emcee import EmceeEngine
@@ -283,6 +283,11 @@ from ._vi import VIEngine
 from ._zeus import ZeusEngine
 from .engine import DEFAULT_CACHE_SIZE, Engine
 from .exceptions import EngineError, SamplingFailureWarning
+
+#: What :class:`BlackjaxEngine`'s ``method=`` accepts, mapped to a one-line
+#: description of each. Re-exported from the engine module under this name so
+#: it cannot be confused with the SBI methods' ``METHODS``.
+BLACKJAX_METHODS = _blackjax.METHODS
 
 __all__ = [
     "BLACKJAX_METHODS",
