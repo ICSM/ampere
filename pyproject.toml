@@ -188,10 +188,22 @@ dev = [
     # lint/format + types
     "ruff",
     "pyrefly",
-    # docs
+    # docs (W6.4): the pip half of the documentation build, shared with
+    # Read the Docs through the `docs` extra rather than duplicated.
+    "ampere[docs]",
+]
+# W6.4: exactly the pip packages the documentation build needs, so Read the
+# Docs (which runs pip, not pixi -- see .readthedocs.yaml) and the pixi `dev`
+# environment build the same site. `ipykernel` executes the two v2 notebooks
+# at build time; `zeus-mcmc` is what the modified-blackbody notebook's
+# ZeusEngine imports; alabaster, the theme, ships with Sphinx. `pandoc` is
+# not a pip package: apt on Read the Docs, conda in the pixi `dev` feature.
+docs = [
     "sphinx",
     "nbsphinx",
     "nbconvert",
+    "ipykernel",
+    "ampere[zeus]",
 ]
 # Every feature extra (not dev) composed; self-referential extras are
 # supported by pip and setuptools.

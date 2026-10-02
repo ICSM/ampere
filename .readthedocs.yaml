@@ -2,13 +2,17 @@
 #
 # This mirrors `pixi run docs` (pyproject.toml: `sphinx-build -W --keep-going`),
 # which is also what CI's docs job runs, so the three builds agree. Read the
-# Docs does not run pixi, so the two non-pip tools the build needs are
-# declared here directly: `pandoc` (nbsphinx shells out to it) from apt, and
-# `ipykernel` (the two v2 notebooks under docs/source/notebooks are executed
-# at build time since W6.1, so a registered kernel is needed) from pip. Until
-# W6.4 lands a dedicated `docs` extra, the `dev` extra carries the Sphinx
-# packages (sphinx, nbsphinx, nbconvert) and is installed here, with the `zeus` extra the
-# modified-blackbody notebook needs.
+# Docs does not run pixi, so the build is declared here from pip and apt:
+# the pip packages are the `docs` extra in pyproject.toml (sphinx, nbsphinx,
+# nbconvert, ipykernel, zeus-mcmc -- the pixi `dev` environment installs the
+# same extra), and the one non-pip tool, `pandoc` (nbsphinx shells out to it),
+# comes from apt here and from conda in the pixi `dev` feature. `ipykernel` is
+# in the extra because the two v2 notebooks under docs/source/notebooks are
+# executed at build time (W6.1).
+#
+# Versions (W6.4): `latest` is built from the project's default branch (`v2`
+# until the 1.0.0b1 tag, then `master`; set in the Read the Docs dashboard),
+# and every tag is built automatically. `stable` is Read the Docs's own rule.
 
 version: 2
 
@@ -24,11 +28,7 @@ python:
     - method: pip
       path: .
       extra_requirements:
-        - dev
-        # The modified-blackbody notebook runs ZeusEngine: `zeus` is a pixi
-        # feature of the dev environment, not part of the `dev` extra.
-        - zeus
-    - requirements: docs/requirements-readthedocs.txt
+        - docs
 
 sphinx:
   configuration: docs/source/conf.py

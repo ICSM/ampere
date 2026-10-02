@@ -33,6 +33,8 @@ down at all (see :doc:`sbi`). :doc:`overview` is the map, :doc:`image` is
 the modality whose observed container is gridded rather than a point set,
 and :doc:`solvers` and :doc:`population` are Phase 5's additions to the
 flexible likelihood and to fitting many objects at once, respectively.
+The documentation for every released version is hosted at
+https://ampere.readthedocs.io/.
 
 User guide
 ----------

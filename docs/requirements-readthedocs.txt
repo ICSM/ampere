@@ -1,4 +1,0 @@
-# Read the Docs only (see .readthedocs.yaml): the Jupyter kernel that executes
-# the two v2 notebooks at build time. Locally this comes from the pixi `dev`
-# feature's conda `ipykernel`; pip installs it here.
-ipykernel
