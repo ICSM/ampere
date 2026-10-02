@@ -72,6 +72,11 @@ on:
     # `v2` mirrors the local v2 master on the remote (2026-09-22) so the
     # workflow runs on it before the v2 line is merged to master.
     branches: [master, v2]
+    # W6.4: a release tag runs the same jobs, the `-W` docs build among them,
+    # so the build Read the Docs makes of the tag (its GitHub integration
+    # builds every tag; there is deliberately no publish step here) has been
+    # checked by CI too. A push event is never path-gated.
+    tags: ["v*"]
   pull_request:
   # Non-blocking triggers for the sbi-characterisation job only (see its
   # `if:` guard below) -- push/pull_request never run it. Before W3.7 the
