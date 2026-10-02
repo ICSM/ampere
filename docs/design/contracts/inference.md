@@ -1360,6 +1360,52 @@ buys little where the fast path is cheap and almost nothing where it is
 valuable, at the price of a second silently non-differentiable path. It is
 **not implemented**: the fall-back stands.
 
+### Scoring the stored draws: optional, and pooled (*Amended W6.15*)
+
+An engine whose draws do not come from its own evaluations of the target (SBI:
+the draws are the trained estimator's) stores, per draw, the true
+`log_prior`, `log_likelihood` and per-dataset split by scoring each draw on the
+numpy contract path after the fit, one `problem.evaluate` each. That is §4.5's
+surface unchanged and stays the default and the reference semantics. Two
+**additive** levers, neither of which changes what `run` returns by default:
+
+- **`run(..., score=False)`** (SBI): the draws are stored unscored. `lp`,
+  `log_prior`, `log_likelihood`, the `log_likelihood` group (the per-dataset
+  decomposition) and the per-draw `failed`/`failure_*` columns are **absent**
+  from the run, not NaN (absence says "not computed"; NaN already says "the
+  prior rejected this point", §11), `engine_draws_recomputed` is 0, and the
+  provenance attribute `ampere_sbi_scored` is 0 (1 on every scored SBI run).
+  `proposal_log_density` and `ampere_sbi_log_prob` remain, so the run is still
+  importance-reweightable *given* scores computed later. A reader that needs
+  the scores refuses by name, naming `ampere_sbi_scored = 0` and
+  `run(score=True)`: `ampere.results.chi_square_pvalue` and the population
+  reweighting (`DataTreeRunColumns`). Readers that pass `lp` through if present
+  (the trace plot) are unchanged; `SBIEngine.calibrate` reads none of a run's
+  scores (it simulates fresh) and is unaffected.
+- **Pooled scoring.** `FittingProblem.evaluate_many(vectors, *, executor=None,
+  chunk_size=None)` is `[evaluate(v) for v in vectors]` on an executor: the
+  same `Executor` protocol and broadcast-once pool as `simulate_many` (§13),
+  returning the loop's results in order, identical at `rtol=0`. A worker's copy
+  of the problem records failures where nobody reads them, so the parent
+  suspends recording while a chunk runs and records each returned
+  `Evaluation.failure` once, in draw order; a draw the executor could not
+  deliver is an `Evaluation` with `log_prob = -inf` and a failure of reason
+  `EXECUTION_FAILED`, `where="executor"`, as a lost simulation is. Every
+  engine's `finish` takes `executor=`/`chunk_size=` and scores the draws not in
+  its evaluation cache through it; `SBIEngine` passes its own, so an engine
+  built with an `executor` pools its scoring as it pools its bank. No executor,
+  or a cache scoring through a realisation (§10a: arrays that do not cross to a
+  worker), keeps the serial path. No other engine passes an executor, so their
+  runs are unchanged.
+
+*Rule of thumb* (measured, `docs/source/sbi.rst`, four workers): pool the
+scoring when one evaluation costs more than about 10 ms. `examples/sed_composition`
+(2.7 ms per evaluation) scored 400 draws in 1.09 s serially and 1.47 s pooled;
+`examples/cstar` at the quick preset (1.43 s per evaluation) scored 40 draws in
+57.2 s serially and 21.9 s pooled. Dispatch costs about 0.4 ms an item on a
+trivial task; a small `chunk_size` adds a barrier per chunk. No §4 contract
+changes: no decision-log row.
+
 ### `check_engine`
 
 `likelihoods.md` §16's second obligation, discharged for every dataset — and it

@@ -112,6 +112,7 @@ run, like every other engine's, and that is the point worth dwelling on:
   good demonstration and a bad advertisement); ``ampere_sbi_log_prob`` beside
   them is the estimator's own, and ``ampere_sbi_log_prob_kind`` says whether
   it is normalised (NPE) or known only up to the evidence (NLE, NRE);
+  ``ampere_sbi_scored`` says whether they were computed at all (below);
 * a rejected simulation never reaches the network: failed draws are dropped
   and counted (``ampere_sbi_failures``, ``ampere_sbi_usable_simulations``),
   which is ``inference.md`` §13's reject-and-record signal arriving where a
@@ -126,6 +127,48 @@ run, like every other engine's, and that is the point worth dwelling on:
   executor and chunk size (``ampere_sbi_executor``,
   ``ampere_sbi_chunk_size``), and the ``sbi``/torch versions
   (``ampere_sbi_version``).
+
+Scoring the stored draws: optional, and pooled
+----------------------------------------------
+
+The true ``lp``, ``log_prior`` and ``log_likelihood`` cost one
+``problem.evaluate`` per stored draw. For a model that runs in microseconds
+that is nothing; for an external simulator it is one simulator run per draw,
+and ``examples/cstar`` measured 28 minutes for 500 draws serially. Two
+keywords of the engine and of :meth:`~ampere.inference.SBIEngine.run`, both
+additive, deal with it:
+
+* ``run(draws, score=False)`` stores the draws **unscored**: ``lp``,
+  ``log_prior``, ``log_likelihood`` (the group, and the per-dataset
+  decomposition) and the per-draw failure columns are *absent*, not NaN, and
+  ``ampere_sbi_scored = 0``, ``ampere_engine_draws_recomputed = 0`` say so
+  (a scored run records ``ampere_sbi_scored = 1``).
+  ``ampere_sbi_log_prob`` and ``proposal_log_density`` remain.
+  :func:`~ampere.results.chi_square_pvalue` and the population reweighting
+  refuse such a run by name and tell you to run again with ``score=True``;
+  :meth:`~ampere.inference.SBIEngine.calibrate` reads none of a run's scores
+  (it simulates fresh) and the trace plot simply has no ``lp`` row.
+* ``SBIEngine(..., executor=...)`` already pooled the simulation bank; since
+  W6.15 it pools the scoring too, through
+  :meth:`~ampere.core.dataset.FittingProblem.evaluate_many` (the same
+  broadcast-once pool, chunked by the same ``chunk_size``). The numbers are
+  identical to the serial path's (``rtol=0``; a test asserts it). Without an
+  ``executor`` the scoring stays serial and in this process, the default for
+  a cheap model.
+
+When does the pool pay? Measured on four workers over a fixed set of prior
+draws (``ProcessExecutor(4)``, a warm pool): the ``sed_composition`` problem,
+2.7 ms per evaluation, took 1.09 s serially for 400 draws and 1.47 s pooled,
+so the pool **loses**; the ``cstar`` problem at the quick preset, 1.43 s per
+evaluation, took 57.2 s serially for 40 draws and 21.9 s pooled (2.6 times
+faster, with the pool's 5.4 s start-up, paid once and shared with the bank,
+not counted). Dispatching an item costs about 0.4 ms on a trivial task and
+more on a real problem, so the break-even is a few milliseconds per
+evaluation on four workers (per-item cost divided by the fraction of work the
+pool removes, :math:`1 - 1/W`); pool the scoring when one evaluation costs
+more than about 10 ms. A small ``chunk_size`` hurts a short scoring run: each
+chunk waits for its slowest evaluation, and on ``cstar`` 40 draws in chunks of
+four took 29.2 s against 21.9 s in one chunk.
 
 Pass ``--training-set pairs.nc`` to write every simulated pair to a netCDF
 training set (``results.md`` §11), failures included, a chunk at a time, so a
