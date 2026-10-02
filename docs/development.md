@@ -71,7 +71,8 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
     results, conformance, backends, inference and the M2 agreement rows,
     minus the `study` rows, the SBI-training classes and two slow results
     classes, with the three example suites left to `test-all` and CI's
-    `studies` group; **ruled by Peter 2026-09-27** on the measurement;
+    `studies` group; **since W6.10 `test-all` and `test-fast` run `-n 4`**
+    (`-n 0` for a serial run; the audit table is in "The merged gate" below); **ruled by Peter 2026-09-27** on the measurement;
     2 min 55 s for 2879 passed / 425 skipped / 244 deselected in `dev` — the
     task's own comment in `pyproject.toml` has the durations and the
     reasons),
@@ -590,7 +591,27 @@ Claude-Session: https://claude.ai/code/session_01Y4vLKdyyMpn1e2MTqixBwM
 
 ### Parallel test runs (`pytest-xdist`): the audit
 
-AUDIT_PLACEHOLDER
+Measured 2026-10-02 on the 16-core, 13 GB development machine (shared with a docs build and another agent, so load averages of 4 to 13 and every figure is good to perhaps 10 to 15 %), `dev` environment, each suite alone through the gate lock, `pytest tests/<suite> -q -p no:cacheprovider [-n 4]`. The figures are pytest's own wall time (pixi's start-up and any wait for the lock excluded). **`-n 4` is the most this machine can say anything about; the speed-up at `-n auto` on CI's runners is a separate measurement**, and `-n auto` is not used: runner and development machine differ, and `auto` on 16 cores with 13 GB is a memory hazard for the torch and jax legs.
+
+| Suite | Serial | `-n 4`, default BLAS threads | Counts (passed / skipped), serial and `-n 4` | Verdict |
+|---|---|---|---|---|
+| `core` | 57 s | 31 s | 1417 / 30, equal | parallel |
+| `results` | 684 s | 534 s | 481 / 5, equal | parallel (a few long rows bound it) |
+| `conformance` | 29 s | 14 s | 677 / 79, equal | parallel |
+| `backends` | 20 s | 16 s | 149 / 65, equal | parallel |
+| `inference` | 169 s | 169 s | 214 / 380, equal | parallel, no gain (one long row bounds it) |
+| `examples` | 286 s | 217 s | 203 / 30, equal | parallel (the `ProcessExecutor` rows of `test_cstar` and `test_external_simulator` pass inside workers; their processes were not counted) |
+| `m2` | 558 s | 304 s | 115 / 32, equal | parallel (the agreement margins held) |
+| `interferometry` | 127 s, 145 s | 300 s, 339 s | 21 / 9, equal | **slower: left serial** (pinned to one worker) |
+| `astrometry` | 406 s | 452 s | 14 / 14, equal | **slower: left serial** (pinned to one worker) |
+| torch `conformance` | 65 s | 43 s | 1087 / 79, equal | parallel |
+| jax `conformance` | 339 s | 177 s | 1087 / 79, equal | parallel (each worker re-pays the jit compilation) |
+
+**Correctness.** Every suite passes with counts identical to the serial run, in all three environments for `conformance` (the cross-check that the backends' seeded streams survive: the streams are per problem, `FittingProblem(seed=)`, never a process-global generator). No row failed or flaked under `-n 4`. A read of every test and example for writes outside `tmp_path` (`grep -rn "\.cache\|expanduser\|/tmp/" tests/ --include=*.py`, and the cache users `SBIEngine(cache=)` and `tests/examples/test_cached_fit.py`) found none: the cached-fit example is given `cache_dir=tmp_path`, `functools.cache` in the kernels module is per process and harmless, and `git status` after the runs is clean. The "shared lock" the item names is the gate lock above, which exists outside pytest.
+
+**Speed.** Two suites are correct but slower in parallel, and `-n 4` with the default thread counts also oversubscribed the cores (each numpy process opens its own BLAS thread pool). `interferometry` rebuilds three class-scoped calibration fits (about 100 s of setup each) in every worker that draws one of their rows; with one BLAS thread per process it ran in 103 s at `-n 4`, but it still gains nothing over a single worker. `astrometry`'s wall clock is bounded by two nested-sampling rows (about 270 s and 160 s) whatever the worker count (444 s at `-n 4` with one BLAS thread). Both are therefore **left serial inside the parallel run**: `tests/conftest.py` marks every row of each with `xdist_group` and the tasks pass `--dist loadgroup`, so each suite runs in one worker while the others proceed on the rest. The tasks also set `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS` and `MKL_NUM_THREADS` to 1: `test-fast` took 294 s serial, 260 s at `-n 4` with default threads and 152 s with them pinned.
+
+**Adopted.** `test-all` and `test-fast` run `-n 4 --dist loadgroup` with single-thread BLAS. `test-all` (dev): 36 min 19 s serial (W6.1's merged gate, 3290 passed / 645 skipped) against **19 min 40 s** (3290 / 645, identical); `test-fast` (dev): 4 min 54 s serial (`-n 0`, today's tree) against **2 min 32 s** (2951 / 444). `-n 0` on the command line restores a serial run; CI's jobs do not use these two tasks (they use the `test-group-*` tasks and explicit `pytest` lines), so CI is unchanged. **Proposal for W6.3 or the orchestrator, not made here**: add `-n auto --dist loadgroup` to CI's suites steps only after a measurement on a runner, since the `ci.yml` jobs are not this item's to edit.
 
 ---
 

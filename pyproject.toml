@@ -182,6 +182,9 @@ dev = [
     # fixtures and skip logic as every other suite, and `--benchmark-json`
     # writes the machine-readable artefact CI uploads.
     "pytest-benchmark",
+    # W6.10: the parallelism audit (docs/development.md, "The merged gate");
+    # `test-all` and `test-fast` run under `-n 4`.
+    "pytest-xdist",
     # lint/format + types
     "ruff",
     "pyrefly",
@@ -480,7 +483,16 @@ test-m2 = "pytest tests/m2"
 # addition adds no new registry-leak concern -- they join this one process
 # for the same reason `tests/backends` and `tests/inference` did: this is the
 # one invocation that is the actual per-environment gate.
-test-all = "pytest tests/core tests/results tests/conformance tests/backends tests/inference tests/examples tests/m2 tests/interferometry tests/astrometry"
+# W6.10 (the xdist audit; the table is in docs/development.md, "The merged
+# gate"): `-n 4`, not `-n auto` -- CI runners and the 16-core, 13 GB
+# development machine differ, and `auto` there is a memory hazard for the
+# torch and jax legs. `--dist loadgroup` keeps `tests/interferometry` and
+# `tests/astrometry` (correct under xdist but slower for it; their rows carry
+# an `xdist_group` marker from `tests/conftest.py`) on one worker each, and
+# one BLAS thread per process stops four workers oversubscribing the cores.
+# Measured (dev, 2026-10-02): 36 min 19 s serial -> 19 min 40 s, counts
+# identical (3290 passed / 645 skipped). `-n 0` restores a serial run.
+test-all = { cmd = "pytest -n 4 --dist loadgroup tests/core tests/results tests/conformance tests/backends tests/inference tests/examples tests/m2 tests/interferometry tests/astrometry", env = { OMP_NUM_THREADS = "1", OPENBLAS_NUM_THREADS = "1", MKL_NUM_THREADS = "1" } }
 # W5.18: the local pre-commit run -- docs/orchestration.md's "Make a fast
 # gate" rule. The contract-and-backend tier of `test-all` above: `tests/core`,
 # `tests/results`, `tests/conformance`, `tests/backends`, `tests/inference`
@@ -542,7 +554,9 @@ test-all = "pytest tests/core tests/results tests/conformance tests/backends tes
 # `TestSBIOnVisibilitiesAndClosurePhases`'s five test methods, the one class
 # that newly joins the exclusion; `dev`'s wall clock is unaffected either
 # way, since that class already skipped there for want of the `sbi` extra.
-test-fast = "pytest tests/core tests/results tests/conformance tests/backends tests/inference tests/m2 -m \"not study and not sbi_training\" --deselect=tests/results/test_plots.py::TestCornerPaging --deselect=tests/results/test_calibration.py::TestTheRefitLoop"
+# W6.10: `-n 4` as for `test-all` above. Measured (dev, 2026-10-02): 4 min
+# 54 s serial (`-n 0`) -> 2 min 32 s, 2951 passed / 444 skipped both ways.
+test-fast = { cmd = "pytest -n 4 --dist loadgroup tests/core tests/results tests/conformance tests/backends tests/inference tests/m2 -m \"not study and not sbi_training\" --deselect=tests/results/test_plots.py::TestCornerPaging --deselect=tests/results/test_calibration.py::TestTheRefitLoop", env = { OMP_NUM_THREADS = "1", OPENBLAS_NUM_THREADS = "1", MKL_NUM_THREADS = "1" } }
 # W5.26 (3): `ci.yml`'s `suites` (dev) and `backend-suites`
 # (torch/jax/sbi/nested) jobs run these three groups as separate matrix
 # cells instead of `test-all` as one forty-minute step, so a red row in one
