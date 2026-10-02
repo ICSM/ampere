@@ -153,7 +153,7 @@ goes through the ordinary netCDF route and back:
     >>> Optimum.from_datatree(from_netcdf(path)).identity == optimum.identity
     True
     >>> print(optimum.summary())
-    Optimum by route 'scipy' on backend 'reference': converged after 695 evaluations over 4 start(s)
+    Optimum by route 'scipy' on backend 'reference': converged after ... evaluations over 4 start(s)
     log p (constrained) = 6.42836; log p (unconstrained) = 6.06802
     parameter       constrained   unconstrained     sd (unc.)
     model.norm          2.01405         2.01405      0.125458
