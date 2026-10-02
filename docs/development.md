@@ -215,6 +215,8 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
 
 ## ⚡ Pick up here — **PHASE 6 OPEN** (drafted and ruled 2026-09-28; Phase 5 complete at `50f6ff4`, thirty-two items, W5.16 deferred)
 
+**STATE 2026-10-02 (session ampere-59, Fable, orchestrator). D13 RULED by Peter: the distribution name is **`ampere-astro`** (the PyPI name `ampere` is an unrelated battery package — the README and `install.rst` already warn so), the import name stays `ampere`, the Read the Docs slug is `ampere` (free at the ruling). Recorded in the plan's decision table and as D13 in the Phase 6 section; W6.5's text carries the name change (`pyproject.toml`'s `name`, the extras' short form, the install page and README) and W6.4's the slug and the prerequisite that **Peter imports the RTD project from GitHub before W6.4 dispatches** (and registers `ampere-astro` on PyPI and TestPyPI with trusted publishing, links Zenodo, and enables branch protection on `master` before W6.5 — the list given to him 2026-10-02). Next: the W6.4 and W6.15 prompts drafted while W6.10 runs.**
+
 **UPDATE 2026-10-02 (Peter's word, confirmed by `gh`): CI run 36960051619 on the fix push GREEN — 28 jobs, 1 skipped, none red; in the W6.3 row as its gate of record. W6.3 CLOSED. Nothing blocks the next merge. W6.10 still running; its report is the next event.**
 
 **UPDATE: the doctest fix MERGED by Peter at `32da5fe`; pushed to `origin/v2`; the CI run on this push is the gate — its result fills `CI_FIX_RESULT` in the W6.3 row.**

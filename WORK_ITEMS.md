@@ -2935,7 +2935,11 @@ the Docs (a `.readthedocs.yaml` building from the pixi `dev` environment,
 or a pip-installable docs extra, since RTD does not run pixi natively) or
 GitHub Pages from the CI job (a `docs` deploy step on tags and on `master`
 as "latest"), per D2; a version switcher; `latest` and `stable` aliases;
-the legacy site, if any, redirected. **Depends:** W6.3, D2. **Accept:** the
+the legacy site, if any, redirected. **D13 (2026-10-02): the Read the Docs
+slug is `ampere` (`ampere.readthedocs.io`; free at the ruling), the
+project imported from the GitHub repository by Peter before dispatch —
+the agent cannot create it; until the beta tag the `v2` mirror is the
+branch RTD builds as `latest`, switching to `master` at the tag (D4).** **Depends:** W6.3, D2. **Accept:** the
 docs reachable at the ruled host for the branch head and for the tagged
 beta; the CI job publishes on tag; no build step outside pixi or the docs
 extra; gates none (infrastructure; the docs job is the check).
@@ -2957,7 +2961,14 @@ maintained per release afterwards; (4) **citation** (#62) — a
 it exists, and `ampere.__citation__` or a `cite()` helper printing it;
 (5) **installation** (#60) — `install.rst` and the README's install
 section re-checked against a clean PyPI install of the beta in a fresh
-environment for each extra, and the `all` extra verified to resolve;
+environment for each extra, and the `all` extra verified to resolve —
+**under the distribution name `ampere-astro` (D13, ruled 2026-10-02: the
+PyPI name `ampere` is an unrelated package)**: `name = "ampere-astro"` in
+`pyproject.toml`, the import name unchanged, the extras' short form in
+docstrings and `OptionalDependencyError` messages becoming
+`pip install "ampere-astro[jax]"`, and the README's and `install.rst`'s
+clash warnings rewritten as the plain statement of the three names
+(distribution, import, docs slug);
 (6) **the remote** — per D4, `origin/master` takes the v2 line at the beta
 tag (the `v2` mirror's purpose ends), branch protection on `master`
 (CI required, no force-push), and the release is the decision-log row
@@ -2965,7 +2976,7 @@ that says so; (7) the paper's examples (`examples/examples_paper/`) are
 Peter's and stay out unless D11 couples them. **Depends:** W6.0, W6.3,
 W6.4, D3, D4. **Accept:** a TestPyPI release installable with every extra
 in a fresh venv; the tagged beta on PyPI with the DOI; `pip install
-ampere` in a clean environment imports without legacy; the changelog and
+ampere-astro` in a clean environment imports `ampere` without legacy; the changelog and
 citation on the docs site; `origin/master` at the tag; gates all four
 (the release gate is the full matrix once, on the tag).
 
@@ -3251,6 +3262,15 @@ model's limit); **out of scope, closed with a note** — #65, #21, #22, #23
 (radiative-transfer codes as v2 models: out-of-tree models by the
 `Model` contract, no in-tree adapters planned), #15 (CANFAR batch scripts:
 deployment is a user's, not the library's).
+
+- **D13 — the distribution name** (opened 2026-10-02 when W6.5's prerequisites
+  were listed): the PyPI name `ampere` belongs to an unrelated battery-modelling
+  package, so the beta needs its own. Candidates, all free on PyPI at the
+  ruling: `ampere-astro`, `ampere-fit`, `ampere-sed`, `ampere-bayes`,
+  `ampere-infer`, `astro-ampere`. **Ruled by Peter 2026-10-02: `ampere-astro`
+  on PyPI (and TestPyPI); the import name stays `ampere`; the Read the Docs
+  slug is `ampere`.** Recorded in the plan's decision table; carried by W6.5
+  and W6.4.
 
 **Ordering (two agents at a time, gate legs scoped to the code touched).**
 **Wave 1** (fillers while the rulings are taken): W6.6 ∥ W6.8 — both
