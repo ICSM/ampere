@@ -127,7 +127,8 @@ and jax; nothing in ampere needs them together.
 
 ## Where to look next
 
-- **Documentation**: `pixi run docs`, then `docs/_build/html/index.html`.
+- **Documentation**: hosted per version at <https://ampere.readthedocs.io/>, or
+  build it yourself with `pixi run docs`, then `docs/_build/html/index.html`.
   Start at the architecture overview (`docs/source/overview.rst`), then the
   misspecification study (`docs/source/m2_misspecification.rst`).
 - **Runnable examples**: `examples/m2_misspecification` (the study above),
