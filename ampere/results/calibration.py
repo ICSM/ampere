@@ -151,8 +151,11 @@ CALIBRATION_SCHEMA_VERSION = 1
 #: own credibility grid — a separate dimension because ``run_tarp`` chooses its
 #: bin count from the sample size and it is not this module's to align.
 SIMULATION_DIM = "simulation"
+#: The calibration group's dimension over the scalar parameter columns ranked.
 PARAMETER_DIM = "parameter"
+#: The calibration group's dimension over the nominal credible levels.
 LEVEL_DIM = "level"
+#: The calibration group's dimension over TARP's own credibility grid.
 TARP_LEVEL_DIM = "tarp_level"
 
 #: The nominal credible levels the coverage curve is reported at. Twenty-one
@@ -167,6 +170,7 @@ CALIBRATION_STREAM = "calibration"
 
 #: The two routes, as recorded in ``ampere_calibration_route``.
 SBI_ROUTE = "sbi"
+#: The refit route: the problem is refitted on each simulated dataset.
 REFIT_ROUTE = "refit"
 
 _SBC_WARNING_FLOOR = 100
