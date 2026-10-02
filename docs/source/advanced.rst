@@ -60,6 +60,26 @@ of tree, with no change to ``ampere.core``. :doc:`kernels` §6 walks through
 the registration with the same trivial worked example
 ``tests/core/test_kernels.py`` uses to prove the route.
 
+Shrinkage priors on kernel amplitudes
+-------------------------------------
+
+A ``Sum`` of noise kernels is as easy to write as one kernel, and that freedom needs a guard: a component the data do not need will otherwise be fitted to whatever the others leave over. :func:`~ampere.core.shrinkage_horseshoe` declares the guard — one global scale shared by every component, one local scale per component under it, and each component's amplitude under its own local scale — and :func:`~ampere.core.with_shrinkage` puts it on a kernel without changing anything else about it. :doc:`kernels` §1 is the reference for both, with the declaration written out; here is the short form, which names the amplitudes of the two components by their labels:
+
+.. code-block:: python
+
+    kernel = with_shrinkage(
+        Sum(Matern32(...), Matern32(...), labels=("broad", "narrow")),
+        shrinkage_horseshoe(("broad.amplitude", "narrow.amplitude")),
+    )
+
+The shared global scale is what makes this a *sparsity* prior rather than several independent shrinkage priors: a component the data insist on pulls the global scale up, and every other component is then shrunk against that same scale. Reach for it whenever you add a second or third term to a ``Sum`` — a broad term for the smooth residual plus a narrow one for the structure the model has not got, say — and you do not know in advance that the data support all of them. It is the recommended prior for any ``Sum`` of noise components, and the same hierarchical shape is what the warped kernels' default priors give their knots (:doc:`kernels` §3).
+
+It is not the right tool when the question is *which structure*, rather than *how many components*. The prior shrinks amplitudes towards zero; it does not tell two components which of them should survive, so if the data cannot distinguish the terms (two nearly degenerate Matérn terms are the extreme case), the prior decides the split, and an answer that depends on the prior is a statement about the prior. Nor does it help when a single component has the wrong *shape*: shrinking its amplitude only hides the misfit, and the remedy is a different kernel (:doc:`kernels` §3's warps, for a deviation whose length scale changes across the band). For a lone component with a sensible amplitude prior of its own there is nothing to share a scale across, and the three levels only add a funnel to the posterior, which an ensemble sampler explores unevenly (:doc:`m2_misspecification` makes the same point about its own assertions).
+
+What the M2 study measured is on :doc:`m2_misspecification`, under "A sum of noise components needs a sparsity guard". Two nearly degenerate Matérn terms were fitted to a spectrum whose deviation has exactly one smooth component, so the likelihood pins their total and says almost nothing about how it is divided. Under a flat prior the larger amplitude had a posterior median of 0.0118 Jy and the median ratio of the smaller amplitude to the larger was 0.254, with 0.257 of the posterior mass below a ratio of 0.1; under the horseshoe the figures were 0.0077 Jy, 0.087 and 0.537. The redundant component's share fell by a factor of 2.9 and the posterior mass at "the fit chose one component" rose by 2.1, while the component the truth does have survived — which is the check that matters, since a prior that shrank everything would move both numbers together and be useless. ``python -m examples.m2_misspecification.many_lines --shrinkage`` prints that table.
+
+**What is and is not the regularised horseshoe.** The default ``tail="regularised"`` is Piironen and Vehtari's idea in the form this version of ampere can declare, not their exact construction. Their slab bounds the local scale through :math:`\tilde\lambda_j^2 = c^2\lambda_j^2/(c^2 + \tau^2\lambda_j^2)`, which is a deterministic function of two sampled parameters, and the parameter contract declares parameters and priors rather than deterministic nodes. What it declares instead is a gamma-tailed local scale, ``gamma(a=1/2, scale=tau)``: the same spike at zero, where all the shrinkage comes from, with an exponential tail in place of the Cauchy one, which bounds the tails and calms the geometry as the slab is meant to. The exact slab waits on a ``Derived`` node (see :doc:`kernels` §1 and ``likelihoods.md`` §6 for the account); ``tail="cauchy"`` gives the plain horseshoe if you want the heavier tail.
+
 Populations: fitting many objects together
 ------------------------------------------
 
