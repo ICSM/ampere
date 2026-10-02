@@ -346,7 +346,10 @@ Inference (``ampere.legacy.infer``)
    * - ``EmceeSearch``
      - :class:`~ampere.inference.EmceeEngine`
      - ``optimise(nsamples=, burnin=, guess=)`` becomes ``run(steps,
-       burn_in=)``; there is no ``guess``, the walkers start from the prior.
+       burn_in=, initial=)``: ``initial`` is a ``(walkers, n_dim)`` array of
+       start positions or an :class:`~ampere.results.Optimum` from
+       :func:`ampere.inference.optimise` (the walkers then start in a ball
+       at its mode); left out, the walkers start from the prior.
    * - ``ZeusSearch``
      - :class:`~ampere.inference.ZeusEngine`
      -
