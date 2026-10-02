@@ -10,6 +10,11 @@ can rot unnoticed: `sed_composition`, `m2_misspecification`, `interferometry`,
 `population` has no example package of its own; its code is small enough to
 live in the tutorial page inline.
 
+`rhmf_trial` is W6.9's exploratory trial of pre-fit robust matrix factorisation
+(`pixi run -e rhmf python -m examples.rhmf_trial --quick --out DIR`): a trial
+behind the non-default `rhmf` extra, not a feature; its findings are in
+`docs/design/contracts/diagnostics.md` §7.
+
 **Legacy examples**, kept exactly as they are and run on legacy
 (`ampere.legacy`) rather than touched — ampere v2's decision D1 (b). Six of
 them have gained a v2 **twin**: the same model, the same data, the same

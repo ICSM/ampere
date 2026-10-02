@@ -86,7 +86,8 @@ artefact is 0.0.2 from 2025-11-24, and two sequencing obligations of §2.5 and
 cancelled** — the decision-log row of 2026-09-08 in `DEVELOPMENT_PLAN.md` §2
 carries the full assessment and a named revisit trigger. Every §2.4 reason
 for a peer namespace is unaffected; what moved is the landing, not the
-placement.)*
+placement. The W6.9 trial's re-check and findings are in §7's "Amended W6.9"
+paragraph.)*
 
 ### 2.3 Inputs / outputs, in §4.2 vocabulary
 
@@ -547,6 +548,89 @@ deferred with the namespace itself; see the amendment to §2.2.)*:
   adds the namespace in code — not asserted unilaterally here). *(Done at
   the freeze: the §3 diagram now lists `diagnostics/` as the Phase 2 peer
   namespace; the code-landing PR still carries the decision-log entry.)*
+
+*(**Amended W6.9**, 2026-10-03: the exploratory trial the 2026-09-08
+ratification note asked for, run as `examples/rhmf_trial/` against
+`robusta-hmf` at commit `cf2fcffa10bc` (the upstream `paper` tag; installed as
+0.0.3.dev240) in the new non-default `rhmf` pixi environment. **The outcome is
+this paragraph, not a namespace**: the maturity gate is still unmet, and
+`ampere.diagnostics` stays deferred. **The re-check** (PyPI JSON and the GitHub
+API, 2026-10-03): latest release still 0.0.2 (2025-11-24), the metadata still
+carrying neither `License` nor `License-Expression` (the repository's `LICENSE`
+is MIT); `requires_dist` is `equinox>=0.13.0`, `jax>=0.6.0`, `optax>=0.2.0`
+(the repository's `pyproject.toml` at the pinned commit adds `pandas`); on
+`main` the only workflow is still `release.yml`. One thing has moved: a `test`
+workflow is now *registered* on the repository, but it exists only on two
+unmerged branches (`test-suite`, the draft "[WIP] Test suite" PR #7 last touched
+2026-07-31, whose runs failed; `sharded-frame`, PR #11, one success on
+2026-09-24), so no test job runs on `main`, on pull requests to it, or at a
+release; and there is no release at 0.1. The JAX-pin axis of §2.7 is discharged
+by the lock: the `rhmf` environment is the `jax` environment's features plus
+the pin and it solves (jax 0.11.2, equinox 0.13.8, optax 0.2.8, against the
+`jax` environment's 0.11.1, 0.13.8 and 0.2.8). The adapter calls (`Robusta(...)`,
+`fit`, `robust_weights`) are unchanged between the 0.0.2 tag and the pinned
+commit (the `src/` diff is 52 lines of ALS, convergence and state fixes); only
+the commit was run.
+
+**What the family does on the M2 spectra.** The collection is 12 controls (no
+deviation) plus 1, 3 or 6 copies of each of `mild`, `strong_smooth`,
+`strong_sharp` and `many_lines` (200 points, a shared grid, so §2.3's alignment
+step is trivial and `to_matrix` only checks it), factorised over rank 1-4 and
+`robust_scale` 1, 2, 3, 5 (in units of the declared sigma). "Inside" is where
+`|delta|` reaches half its peak; *excess* is the deviated rows' inside/outside
+score ratio divided by the controls' ratio over the same band, and the best
+grid point per scenario is chosen knowing where the deviation is, so it is an
+upper bound and not a setting anyone could pick unaided. With three copies:
+`strong_sharp` 16.8 (rank 3, scale 5), `many_lines` 4.7 (rank 2, scale 5),
+`strong_smooth` 2.8 (rank 1, scale 5), `mild` 1.8 (rank 1, scale 2); with one
+copy 21.9, 6.7, 3.4 and 2.0; with six 10.3, 3.9, 2.4 and 1.5. At those points
+the per-object low-quantile score separates every deviated row from every
+control (AUC 1.00 at every best point; away from them it is as low as 0.61 for
+`mild` at six copies and scale 5). So the
+robust weights **do localise the sharp deviations**, and flag the fringes
+across the band (which has no location to find, `Scenario.localised_at`) at
+a modest contrast. **What it did not do, and the sensitivity:** (1) the
+deviation is flagged only while the rank leaves no room for its own shape:
+fringes at rank 1 only (excess 0.7-1.15 from rank 2 up, with the per-object
+separation inverting, AUC down to 0.00), `many_lines` at ranks 1-2 (0.8-1.6 from
+rank 3), `strong_sharp` at ranks 1-3 (0.6-1.4 from rank 4), so the best rank
+differs between scenarios *in one collection* and no single rank serves it;
+(2) the more rows share a deviation, the less is flagged (the excess falls
+monotonically from one copy to six at every scenario's best point), because a
+deviation common to a subset of the collection is, to the factorisation, a
+population feature; (3) the contrast rises with `robust_scale` over the range
+scanned (up to 5) for the sharp line at every copy count and for `many_lines`
+at one and three copies, and turns over at six; and the controls' ratio at the
+best points runs 0.8-1.9, so the bare inside/outside ratio is not the statistic
+and the controls are part of it, not a nicety. **The image**
+(W5.5's synthetic image, 24x24, 24 images at varied source flux and FWHM, half
+carrying the smooth background the study's misspecified arms omit; the core of
+the source excluded from "outside"): the injected background peaks at 0.84
+sigma per pixel at the study's strength, and at 4.0 sigma in a 5x sensitivity
+row. Two flattenings were tried, each image as one row (a collection) and the
+rows of one image as the objects. **Neither flags it**: excess 0.91-1.01
+(collection) and 0.93-1.28 (single image) at the study's strength, 0.81-1.01
+and 1.04-1.42 at 5x, with the collection's per-object separation anywhere from
+0.00 to 0.69 (inverted at rank 1). Fits cost 0.3-1.0 s each at 24x24 with JIT
+and 10-180 ms without, so cost is not the obstacle. The
+result is consistent with, but was not tested as, the background being smooth
+and nearly separable, hence absorbed by one more component than the source
+needs; it says only that these two flattenings do not serve 2D, and designs
+nothing (§2.6 stands). **What would change if the namespace landed.** §2.3: the
+input must carry uncertainties (RHMF is heteroskedastic, and a unit weight
+would fabricate a noise model); an `AnomalyScore` holds one object's
+per-feature score or one per-object score, so a collection needs a documented
+per-object view (Lesson R2's quantile) beside the per-feature one; and the fit
+needs float64, which JAX gives only by a process-wide switch that
+`lowering.md` §10.2(a) forbids ampere to make on a user's behalf, so the
+adapter would require it, as `require_x64` does for the jax backend, or
+rescale. `fit()` prints unconditionally and has to be captured. §2.5: nothing
+here validates a default and the scenario-dependence of the best rank argues
+that no single heuristic would be right for all of them, so expert opt-in
+stands, with `rank` and `robust_scale` required. §2.6: the 1D scoping
+stands. §2.7: the extra cannot carry the commit pin, because PyPI refuses
+uploads whose metadata holds a direct reference, so the pin is in the pixi
+feature and `ampere[rhmf]` would resolve the 0.0.2 release.)*
 
 ---
 

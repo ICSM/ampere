@@ -162,6 +162,17 @@ ultranest = ["ultranest"]
 # of the work that cost a lock re-solve; the driver's own module and tests
 # needed no further packaging change.
 blackjax = ["blackjax"]
+# W6.9: the RHMF exploratory trial (`examples/rhmf_trial/`), **a trial's extra,
+# not a user feature**: `ampere.diagnostics` has not landed (the maturity gate
+# of DEVELOPMENT_PLAN.md §2, row W2.7, is unmet), so nothing under `ampere/`
+# imports `robusta_hmf`. The trial was run against the *commit*
+# `cf2fcffa10bc` (the upstream `paper` tag), pinned in the pixi feature below.
+# The pin is not spelt here because PyPI refuses uploads whose metadata carries
+# a direct reference (`robusta-hmf @ git+...`), and this extra must not stop
+# the 1.0.0b1 upload; `pip install "ampere[rhmf]"` therefore resolves the
+# 0.0.2 release, which the trial was not run against (see `diagnostics.md` §7,
+# "Amended W6.9").
+rhmf = ["robusta-hmf"]
 # NOTE: there is deliberately no `arviz` extra any more -- arviz and a netCDF
 # engine are base dependencies as of W2.2 (see [project.dependencies] above).
 # The extra is not retained as an empty alias: `pip install "ampere[arviz]"`
@@ -760,6 +771,14 @@ torch = { version = "*", index = "https://download.pytorch.org/whl/cpu" }
 [tool.pixi.feature.jax.pypi-dependencies]
 ampere = { path = ".", editable = true, extras = ["jax"] }
 
+# W6.9: the RHMF trial's feature -- the extra's name, but the *commit* the trial
+# was run against rather than the PyPI release (0.0.2, 2025-11-24, which is
+# behind the repository by the referee-response work and carries no licence
+# metadata). `ampere`'s own `rhmf` extra is not repeated here: it would
+# resolve the release and fight this pin.
+[tool.pixi.feature.rhmf.pypi-dependencies]
+robusta-hmf = { git = "https://github.com/TomHilder/robusta-hmf", rev = "cf2fcffa10bc6b150b6cdee76cb18980bbe908ef" }
+
 # W6.13 (5), D12 (b): the carbon-star twin's physics, `examples/cstar/`.
 # Deliberately a pixi feature and *not* a [project.optional-dependencies]
 # extra, so the 1:1 extra mirror above does not apply: Hyperion is a
@@ -854,6 +873,12 @@ torch = { features = ["py313", "dev", "zeus", "extinction", "netcdf", "torch"] }
 # under `tests/inference`), whose path gate already covers
 # `ampere/inference/**` and `ampere/backends/jax/**`.
 jax = { features = ["py313", "dev", "zeus", "extinction", "netcdf", "jax", "blackjax"] }
+# W6.9: the RHMF trial's environment -- the `jax` environment's feature set plus
+# the `rhmf` feature, so that whether `ampere[jax]`'s JAX pin and
+# `robusta-hmf`'s are mutually satisfiable (`diagnostics.md` §2.7) is answered
+# by this environment's lock solving or not. A trial's environment, absent
+# from CI (a new leg is W6.5's or W6.16's call).
+rhmf = { features = ["py313", "dev", "zeus", "extinction", "netcdf", "jax", "blackjax", "rhmf"] }
 # W5.14: the nested-sampling pair, in their own small environment. Not folded
 # into `dev`, which is the environment every work item's gate runs and which
 # is deliberately the *base* toolchain: two more nested samplers there would
