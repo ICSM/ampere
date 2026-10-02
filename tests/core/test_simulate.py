@@ -1468,3 +1468,73 @@ class TestTheContextRefusals:
         assert np.allclose(swapped.values, [1.0, 2.0, 4.0])
         assert np.allclose(swapped.uncertainty, 0.5)
         assert swapped.unit == dataset.observed.unit
+
+
+# ---------------------------------------------------------------------------
+# W6.15: scoring stored draws on an executor
+# ---------------------------------------------------------------------------
+
+
+def _same_evaluation(a: Any, b: Any) -> bool:
+    """Bit-for-bit, NaN equal to NaN, ``failure`` compared by reason and place."""
+    left = (a.log_prior, a.log_likelihood, a.log_prob)
+    right = (b.log_prior, b.log_likelihood, b.log_prob)
+    same = all(
+        x == y or (math.isnan(x) and math.isnan(y)) for x, y in zip(left, right, strict=True)
+    )
+    if (a.failure is None) != (b.failure is None):
+        return False
+    if a.failure is not None and b.failure is not None:
+        same = same and (a.failure.reason, a.failure.where) == (b.failure.reason, b.failure.where)
+    return same and dict(a.contributions) == dict(b.contributions)
+
+
+class TestEvaluateMany:
+    """``evaluate_many`` is ``[evaluate(v) for v in vectors]``, on whichever executor."""
+
+    TABLE = levels(12, _3=9.99, _8=-1.0)
+
+    @pytest.mark.parametrize(
+        "executor",
+        [None, SerialExecutor(), ThreadExecutor(2), ProcessExecutor(2)],
+        ids=["none", "serial", "thread-2", "process-2"],
+    )
+    @pytest.mark.parametrize("chunk_size", [None, 5])
+    def test_it_returns_what_the_loop_returns_at_rtol_zero(
+        self, executor: Any, chunk_size: int | None
+    ) -> None:
+        reference = [build_unreliable().evaluate(row) for row in self.TABLE]
+        problem = build_unreliable()
+        scored = problem.evaluate_many(self.TABLE, executor=executor, chunk_size=chunk_size)
+        assert len(scored) == len(reference)
+        assert all(_same_evaluation(a, b) for a, b in zip(scored, reference, strict=True))
+
+    def test_the_parent_records_a_pooled_failure_once_in_draw_order(self) -> None:
+        problem = build_unreliable()
+        problem.evaluate_many(self.TABLE, executor=ProcessExecutor(2), chunk_size=4)
+        assert problem.failure_counts[FailureReason.MODEL_FAILED] == 1
+        assert sum(problem.failure_counts.values()) == 1
+
+    def test_a_thread_pool_does_not_count_a_failure_twice(self) -> None:
+        """The threads share the problem, so its own recording is suspended while they run."""
+        problem = build_unreliable()
+        problem.evaluate_many(self.TABLE, executor=ThreadExecutor(2))
+        assert sum(problem.failure_counts.values()) == 1
+
+    def test_a_lost_worker_is_an_execution_failure_with_log_prob_minus_inf(self) -> None:
+        problem = build_unreliable()
+        table = levels(4, _1=HANGS_AT)
+        scored = problem.evaluate_many(table, executor=ProcessExecutor(2, timeout=2.0))
+        assert scored[1].failure is not None
+        assert scored[1].failure.reason is FailureReason.EXECUTION_FAILED
+        assert scored[1].failure.where == "executor"
+        assert scored[1].log_prob == -math.inf
+        assert [e.failure is None for e in scored] == [True, False, True, True]
+        assert problem.failure_counts[FailureReason.EXECUTION_FAILED] == 1
+
+    def test_the_wrong_shape_and_a_bad_chunk_size_are_refused(self) -> None:
+        problem = build()
+        with pytest.raises(DatasetError, match="free-parameter"):
+            problem.evaluate_many(np.zeros((3, 2)))
+        with pytest.raises(DatasetError, match="chunk_size"):
+            problem.evaluate_many(levels(3), executor=ThreadExecutor(2), chunk_size=0)
