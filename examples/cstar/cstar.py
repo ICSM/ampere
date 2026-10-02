@@ -92,9 +92,21 @@ What changed in the translation
   scores every *stored* draw with the true ``log_prior`` and
   ``log_likelihood`` through ``problem.evaluate`` (what makes importance
   reweighting and calibration possible later), and here each such evaluation
-  is a Hyperion run, serial, in the driving process: 10 000 draws would be
-  some ten hours at ``photons="quick"`` and two days at ``"legacy"``.
-  ``--draws`` sets it; the training budget is unaffected.
+  is a Hyperion run. Since W6.15 the scoring goes through the **same worker
+  pool as the bank** (``SBIEngine`` pools it whenever it was given an
+  executor), so ``--draws`` costs a run per draw *divided by* ``--workers``:
+  measured at the quick preset on four workers, 40 draws took 21.9 s pooled
+  against 57.2 s serially (1.43 s per evaluation serially, 0.55 s pooled;
+  2026-10-02, ``problem.evaluate_many``, the pool's 5.4 s start-up excluded),
+  so 1 000 draws are about nine minutes pooled where they were twenty-four
+  serial, and the legacy's 10 000 about an hour and a half (at ``"legacy"``
+  photons, about 4.4 times the per-simulation cost, some seven hours). The
+  coverage run's 28-minute serial scoring of 500 draws (below) was measured
+  before the pool; extrapolating the 2.6-fold speed-up, not re-measured, it
+  is about ten minutes on four workers. ``--no-score`` skips the scoring
+  altogether (``SBIEngine.run(score=False)``: the draws are stored without
+  ``lp``/``log_likelihood`` and ``ampere_sbi_scored = 0``), for a fit wanted
+  only for its posterior; the training budget is unaffected by either.
 * **The data** as v2 containers, the IRS chunks sorted (see
   :mod:`.generators`): the legacy stored them in file order, which is not
   monotonic.
@@ -184,7 +196,8 @@ network on the synthetic observation at the in-box truth::
         --serve-artefact 377b1193b84b1d0bf67923760cd6c392
 
 2026-10-01, 10 min 36 s of wall clock, all of it scoring the 500 draws (one
-serial Hyperion run each; no simulation, no training, no failures).
+serial Hyperion run each, before W6.15 pooled the scoring; no simulation, no
+training, no failures).
 **Six of the seven truths are covered; ``envelope_mass`` misses**: its 95 %
 interval, [-9.58, -6.64], stops 0.14 dex short of the truth -6.5. It was not
 reseeded. ``width/prior`` is the 95 % interval's width over the prior's own
@@ -627,8 +640,15 @@ def fit(
     training: dict[str, Any] | None = None,
     serve_artefact: str | None = None,
     progress: bool = False,
+    score: bool = True,
 ) -> Any:
-    """Fit *problem* by NPE, ``rounds`` rounds of ``simulations`` each, pooled over *workers*."""
+    """Fit *problem* by NPE, ``rounds`` rounds of ``simulations`` each, pooled over *workers*.
+
+    The stored draws are scored through the same pool as the bank (W6.15: the
+    engine's ``executor=`` pools both), so ``draws`` costs one Hyperion run
+    per draw **divided by** *workers*. ``score=False`` stores them unscored
+    (``SBIEngine.run(score=)``), for a fit wanted only for its posterior.
+    """
     if engine != "sbi":
         raise SystemExit(f"examples.cstar fits with --engine sbi only, got {engine!r}.")
     _needs_sbi()
@@ -650,7 +670,7 @@ def fit(
         training_set=training_set,
         serve_artefact=serve_artefact,
     )
-    return run_engine.run(int(draws), training=training, progress=progress)
+    return run_engine.run(int(draws), training=training, progress=progress, score=score)
 
 
 def recovers_truth(run: Any, *, level: float = 0.95) -> dict[str, bool]:
@@ -708,7 +728,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--carbon", default="rouleau91", choices=sorted(dust.CARBON))
     parser.add_argument("--simulations", type=int, default=LEGACY_SIMULATIONS)
     parser.add_argument("--rounds", type=int, default=LEGACY_ROUNDS)
-    parser.add_argument("--draws", type=int, default=DEFAULT_DRAWS, help="each costs a run")
+    parser.add_argument(
+        "--draws", type=int, default=DEFAULT_DRAWS, help="each costs a run, on the worker pool"
+    )
+    parser.add_argument(
+        "--no-score",
+        dest="score",
+        action="store_false",
+        help="store the draws unscored: no Hyperion run per draw (SBIEngine.run(score=False))",
+    )
     parser.add_argument("--workers", type=int, default=4, help="Hyperion runs at once")
     parser.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
     parser.add_argument(
@@ -749,6 +777,7 @@ def main(argv: list[str] | None = None) -> int:
         serve_artefact=args.serve_artefact,
         cache=args.cache,
         training_set=args.training_set,
+        score=args.score,
     )
     elapsed = time.perf_counter() - started
     print(report(run, synthetic=args.synthetic))

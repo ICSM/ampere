@@ -1033,3 +1033,32 @@ class TestASuppliedDecomposition:
         _, engine, draws = self.prepared()
         run = engine.finish(draws[np.newaxis, ...])
         assert run.attrs["ampere_engine_draws_recomputed"] == 0  # the start points are cached
+
+
+# ---------------------------------------------------------------------------
+# W6.15: the scoring levers are SBI's; every other engine's finish is unchanged
+# ---------------------------------------------------------------------------
+
+
+class TestScoringLeversLeaveTheOtherEnginesAlone:
+    """``finish(score=, executor=)`` default to today's behaviour, bit for bit."""
+
+    def test_an_emcee_run_is_scored_serially_and_exactly_as_evaluate_scores_it(self) -> None:
+        problem = joint_problem()
+        run = EmceeEngine(problem, walkers=8).run(steps=10, burn_in=2)
+        stats = run["sample_stats"].dataset
+        assert {"lp", "log_prior", "log_likelihood", "failed"} <= set(stats.data_vars)
+        assert "log_likelihood" in run.children
+        assert "ampere_sbi_scored" not in run.attrs
+        posterior = run["posterior"].dataset
+        fresh = joint_problem()
+        for c, d in ((0, 0), (3, 4), (7, 7)):
+            theta = np.array([float(posterior[n][c, d]) for n in fresh.parameters.free_names])
+            evaluation = fresh.evaluate(theta)
+            assert float(stats["lp"][c, d]) == evaluation.log_prob
+            assert float(stats["log_prior"][c, d]) == evaluation.log_prior
+            assert float(stats["log_likelihood"][c, d]) == evaluation.log_likelihood
+
+    def test_an_engine_does_not_accept_the_sbi_keywords_on_run(self) -> None:
+        with pytest.raises(TypeError):
+            EmceeEngine(joint_problem(), walkers=8).run(steps=2, burn_in=1, score=False)  # type: ignore[call-arg]

@@ -83,6 +83,7 @@ from ampere.core import (
     ProcessExecutor,
     ScaledSigma,
     Spectrum,
+    ThreadExecutor,
     VisibilitySet,
     encode_observations,
 )
@@ -928,6 +929,22 @@ class TestABlackBoxSimulatorOnTheReferenceBackend:
         assert attrs["ampere_sbi_executor"] == "ProcessExecutor"
         assert attrs["ampere_sbi_chunk_size"] == 60
         assert attrs["ampere_sbi_simulations"] == 120
+
+    def test_the_stored_draws_were_scored_through_the_pool(self, pooled_external_run: Any) -> None:
+        """W6.15: ``executor=`` also pools the scoring, to the serial path's numbers."""
+        attrs = pooled_external_run.attrs
+        assert attrs["ampere_sbi_scored"] == 1
+        assert attrs["ampere_engine_draws_recomputed"] == 50
+        posterior = pooled_external_run["posterior"].dataset
+        stats = pooled_external_run["sample_stats"].dataset
+        problem = external_problem()
+        for draw in (0, 17, 49):
+            theta = problem.parameters.pack(
+                {name: float(posterior[name][0, draw]) for name in problem.parameters.free_names}
+            )
+            serial = problem.evaluate(theta)
+            assert float(stats["lp"][0, draw]) == serial.log_prob
+            assert float(stats["log_prior"][0, draw]) == serial.log_prior
 
     def test_the_crashing_draws_are_dropped_and_counted(self, pooled_external_run: Any) -> None:
         """Reject-and-record: the network never sees them, and the run says how many.
@@ -3092,3 +3109,157 @@ class TestTheInChunkContextRefusal:
             _DrawRequest(1, {}, np.random.default_rng(1), True, context=elsewhere),
         ]
         assert _NativeBatch._context_sigma(stub, requests) == {}
+
+
+# ---------------------------------------------------------------------------
+# W6.15: scoring the stored draws is optional, and pooled
+# ---------------------------------------------------------------------------
+
+_QUICK = {"max_num_epochs": 5}
+
+
+def _quick_run(**engine: Any) -> Any:
+    """A seeded, small NPE fit of ``bounded_problem`` -- the same fit however it is scored."""
+    run_options = {"draws": 12, "training": _QUICK}
+    return SBIEngine(bounded_problem(), method="npe", budget=80, **engine).run(**run_options)
+
+
+@pytest.mark.sbi_training
+@needs_sbi
+class TestScoringIsOptional:
+    """``run(score=False)``: the draws stored unscored, and the run says so."""
+
+    @pytest.fixture(scope="class")
+    def unscored(self) -> Any:
+        engine = SBIEngine(bounded_problem(), method="npe", budget=80)
+        return engine.run(draws=12, training=_QUICK, score=False)
+
+    def test_a_default_run_says_it_was_scored(self, npe_run: Any) -> None:
+        assert npe_run.attrs["ampere_sbi_scored"] == 1
+
+    def test_the_scores_are_absent_not_nan(self, unscored: Any) -> None:
+        stats = unscored["sample_stats"].dataset
+        for name in ("lp", "log_prior", "log_likelihood", "failed", "failure_reason"):
+            assert name not in stats.variables
+        assert "log_likelihood" not in unscored.children
+        # what is not about the scores is still there, in the run's own shape
+        assert stats["ampere_sbi_log_prob"].shape == (1, 12)
+        assert stats["proposal_log_density"].shape == (1, 12)
+        assert np.all(np.isfinite(np.asarray(stats["proposal_log_density"])))
+        assert unscored["posterior"].dataset.sizes["draw"] == 12
+
+    def test_the_attrs_say_nothing_was_evaluated(self, unscored: Any) -> None:
+        assert unscored.attrs["ampere_sbi_scored"] == 0
+        assert unscored.attrs["ampere_engine_draws_recomputed"] == 0
+        assert unscored.attrs["ampere_engine_evaluations"] == 0
+
+    def test_the_draws_are_the_scored_runs_draws(self, unscored: Any) -> None:
+        """Skipping the scoring changes nothing about what was drawn, same seed."""
+        scored = _quick_run()
+        assert np.array_equal(
+            np.asarray(unscored["posterior"].dataset["model.slope"]),
+            np.asarray(scored["posterior"].dataset["model.slope"]),
+        )
+
+    def test_what_needs_the_scores_refuses_by_name(self, unscored: Any) -> None:
+        from ampere.core.exceptions import ResultsError
+        from ampere.results import chi_square_pvalue
+
+        with pytest.raises(ResultsError, match=r"ampere_sbi_scored = 0.*score=True"):
+            chi_square_pvalue(unscored)
+
+    def test_the_population_columns_refuse_by_name(self, unscored: Any) -> None:
+        from ampere.core.exceptions import ResultsError
+        from ampere.results.population import DataTreeRunColumns
+
+        with pytest.raises(ResultsError, match=r"ampere_sbi_scored = 0.*score=True"):
+            _ = DataTreeRunColumns(unscored).log_prior
+
+    def test_the_plots_that_read_lp_still_draw_without_it(self, unscored: Any) -> None:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        from ampere.results import plot_trace
+
+        figure = plot_trace(unscored)
+        assert figure is not None
+
+    def test_the_unscored_run_round_trips_through_netcdf(
+        self, unscored: Any, tmp_path: Any
+    ) -> None:
+        pytest.importorskip("h5netcdf")
+        from ampere.results import from_netcdf, to_netcdf
+
+        path = tmp_path / "unscored.nc"
+        to_netcdf(unscored, path)
+        back = from_netcdf(path)
+        assert back.attrs["ampere_sbi_scored"] == 0
+        assert "lp" not in back["sample_stats"].dataset.variables
+
+    def test_an_unscored_run_still_calibrates(self) -> None:
+        """``calibrate`` simulates fresh and reads none of the run's scores."""
+        engine = SBIEngine(bounded_problem(), method="npe", budget=80)
+        engine.run(draws=12, training=_QUICK, score=False)
+        group = engine.calibrate(count=20, posterior_draws=20, tarp=False)
+        assert "ranks" in group.data_vars
+
+
+@pytest.mark.sbi_training
+@needs_sbi
+class TestScoringIsPooled:
+    """With an ``executor`` the stored draws are scored through it, to the same numbers."""
+
+    def test_a_pooled_run_equals_the_serial_run_at_rtol_zero(self) -> None:
+        serial = _quick_run()
+        pooled = _quick_run(executor=ThreadExecutor(2), chunk_size=5)
+        assert pooled.attrs["ampere_sbi_executor"] == "ThreadExecutor"
+        # the same trained estimator: the draws are identical, so are their scores
+        assert np.array_equal(
+            np.asarray(serial["posterior"].dataset["model.slope"]),
+            np.asarray(pooled["posterior"].dataset["model.slope"]),
+        )
+        for name in ("lp", "log_prior", "log_likelihood"):
+            np.testing.assert_allclose(
+                np.asarray(pooled["sample_stats"].dataset[name]),
+                np.asarray(serial["sample_stats"].dataset[name]),
+                rtol=0,
+                atol=0,
+            )
+        assert np.array_equal(
+            np.asarray(pooled["log_likelihood"].dataset["default"]),
+            np.asarray(serial["log_likelihood"].dataset["default"]),
+        )
+        assert pooled.attrs["ampere_engine_draws_recomputed"] == 12
+        assert (
+            pooled.attrs["ampere_engine_draws_recomputed"]
+            == (serial.attrs["ampere_engine_draws_recomputed"])
+        )
+
+    def test_the_pooled_draws_are_the_pools_own_work(self, monkeypatch: Any) -> None:
+        """The scoring goes through ``evaluate_many`` with the engine's executor and chunk size."""
+        seen: list[tuple[Any, Any, int]] = []
+        original = FittingProblem.evaluate_many
+
+        def spy(self: Any, vectors: Any, *, executor: Any = None, chunk_size: Any = None) -> Any:
+            seen.append((executor, chunk_size, len(vectors)))
+            return original(self, vectors, executor=executor, chunk_size=chunk_size)
+
+        monkeypatch.setattr(FittingProblem, "evaluate_many", spy)
+        executor = ThreadExecutor(2)
+        _quick_run(executor=executor, chunk_size=5)
+        # one call for the scoring; the bank goes through simulate_many, not here
+        assert seen == [(executor, 5, 12)]
+
+    def test_a_serial_engine_never_touches_the_pooled_path(self, monkeypatch: Any) -> None:
+        def refuse(*args: Any, **kwargs: Any) -> Any:
+            raise AssertionError("evaluate_many was called by a serial engine")
+
+        monkeypatch.setattr(FittingProblem, "evaluate_many", refuse)
+        run = _quick_run()
+        assert run.attrs["ampere_engine_draws_recomputed"] == 12
+
+    def test_a_pooled_unscored_run_evaluates_nothing(self) -> None:
+        engine = SBIEngine(bounded_problem(), method="npe", budget=80, executor=ThreadExecutor(2))
+        run = engine.run(draws=12, training=_QUICK, score=False)
+        assert run.attrs["ampere_engine_draws_recomputed"] == 0
+        assert run.attrs["ampere_sbi_scored"] == 0

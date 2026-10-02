@@ -406,6 +406,9 @@ class DataTreeRunColumns:
         return np.asarray(stats["proposal_log_density"].values, dtype=float).reshape(-1)
 
     def _stat(self, name: str) -> np.ndarray:
+        from .diagnostics import require_scored
+
+        require_scored(self.tree, f"population reweighting (the run's {name!r} column)")
         stats = _group(self.tree, "sample_stats")
         if name not in stats:
             raise ResultsError(f"this run's sample_stats has no {name!r} column.")

@@ -2793,6 +2793,118 @@ class FittingProblem:
             failure=failure,
         )
 
+    def evaluate_many(
+        self,
+        vectors: ArrayLike,
+        *,
+        executor: Executor | None = None,
+        chunk_size: int | None = None,
+    ) -> list[Evaluation]:
+        """:meth:`evaluate` at each row of *vectors*, optionally on an executor (W6.15).
+
+        The scoring counterpart of :meth:`simulate_many`, for the same reason
+        and by the same route: when one forward-model evaluation is expensive
+        (an external radiative-transfer code, seconds to minutes), scoring a
+        run's stored draws one after another in the driving process is the
+        dominant cost, and a pool that already holds the problem can do it in
+        parallel. ``executor=None`` is the plain loop and is the reference
+        semantics: the pooled path returns, in order, exactly what
+        ``[problem.evaluate(v) for v in vectors]`` returns, because it runs
+        that very method on a worker holding an identical copy of the problem.
+
+        The pooling machinery is :meth:`simulate_many`'s own, reused rather
+        than repeated: a :class:`~ampere.core.simulate.ProcessExecutor` is told
+        to :meth:`~ampere.core.simulate.ProcessExecutor.broadcast` this problem
+        (so a pool the bank already started is reused, and the problem crosses
+        to each worker once), and any other executor is handed a task carrying
+        the problem. It is a method here rather than a free function because
+        both the picklability check and the failure ledger are this class's.
+
+        Failures keep the way a failed simulation records them. A worker's
+        copy of the problem records what it sees in the worker, where nobody
+        reads it, so recording is suspended while a chunk runs and the parent
+        records each returned :attr:`Evaluation.failure` once, in draw order;
+        a draw the *executor* could not deliver (a killed or timed-out worker)
+        becomes an evaluation whose failure has reason
+        :attr:`~FailureReason.EXECUTION_FAILED` and ``where="executor"``, with
+        ``log_prob = -inf``.
+
+        Parameters
+        ----------
+        vectors
+            ``(count, free_size)`` free-parameter vectors, in this problem's
+            order.
+        executor
+            Anything satisfying :class:`~ampere.core.simulate.Executor`.
+        chunk_size
+            How many evaluations are handed to the executor at once; ``None``
+            is one chunk. Same meaning as :meth:`simulate_many`'s.
+        """
+        array = np.asarray(vectors, dtype=float)
+        if array.ndim != 2 or array.shape[1] != self.free_size:
+            raise DatasetError(
+                f"evaluate_many wants a (count, {self.free_size}) array of free-parameter "
+                f"vectors, got shape {array.shape}."
+            )
+        if executor is None:
+            bounds = chunk_bounds(len(array), chunk_size)  # validates chunk_size
+            del bounds
+            return [self.evaluate(row) for row in array]
+        if not callable(getattr(executor, "map", None)):
+            raise DatasetError(
+                f"executor= needs a map(fn, items) returning results in item order, and "
+                f"{type(executor).__name__} has none (ampere.core.simulate.Executor)."
+            )
+        if isinstance(executor, ProcessExecutor):
+            self._assert_picklable()
+            executor.broadcast(self)
+            task: Callable[[np.ndarray], Any] = _evaluate_shared
+        else:
+            task = _EvaluateTask(self)
+        results: list[Evaluation] = []
+        for start, stop in chunk_bounds(len(array), chunk_size):
+            rows = [array[index] for index in range(start, stop)]
+            with self._suspend_recording():
+                outcomes = list(executor.map(task, rows))
+            if len(outcomes) != len(rows):
+                raise DatasetError(
+                    f"the executor returned {len(outcomes)} result(s) for {len(rows)} "
+                    f"evaluation(s). An Executor's map must return one result per item, in "
+                    f"item order."
+                )
+            for row, outcome in zip(rows, outcomes, strict=True):
+                if isinstance(outcome, ExecutionFailure):
+                    outcome = self._executor_failed_evaluation(row, outcome)
+                elif not isinstance(outcome, Evaluation):
+                    raise DatasetError(
+                        f"the executor returned {type(outcome).__name__} for an evaluation; "
+                        f"an Executor's map returns whatever the mapped callable returned, and "
+                        f"ampere's returns an Evaluation."
+                    )
+                self._record(outcome.failure)
+                results.append(outcome)
+        return results
+
+    def _executor_failed_evaluation(self, row: np.ndarray, outcome: ExecutionFailure) -> Evaluation:
+        """The evaluation standing for a point whose worker delivered nothing."""
+        resolved = self._resolve(row)
+        try:
+            log_prior = float(self._mapping.merged.lnprior(resolved))
+        except Exception:
+            log_prior = math.nan
+        return Evaluation(
+            log_prior=log_prior,
+            log_likelihood=-math.inf,
+            log_prob=-math.inf,
+            failure=Failure(
+                reason=FailureReason.EXECUTION_FAILED,
+                message=outcome.message,
+                where="executor",
+                exception_type=outcome.exception_type,
+                values=_scalars(resolved),
+            ),
+        )
+
     def prior_transform(self, unit_cube: ArrayLike) -> np.ndarray:
         """Map a unit-hypercube point to a free-parameter vector — nested sampling.
 
@@ -4167,6 +4279,32 @@ def _simulate_shared(request: _DrawRequest) -> Simulation | ExecutionFailure:
     return problem._run_simulation(
         request.values, request.generator, observe=request.observe, context=request.context
     )
+
+
+class _EvaluateTask:
+    """A picklable callable evaluating one θ of *problem*, as ``_SimulateTask`` simulates one."""
+
+    __slots__ = ("_problem",)
+
+    def __init__(self, problem: FittingProblem) -> None:
+        self._problem = problem
+
+    def __call__(self, vector: np.ndarray) -> Evaluation:
+        return self._problem.evaluate(vector)
+
+
+def _evaluate_shared(vector: np.ndarray) -> Evaluation | ExecutionFailure:
+    """Evaluate one θ against the problem this worker was given at start-up."""
+    problem = worker_shared()
+    if problem is None:  # pragma: no cover - only if a pool is reused unbroadcast
+        return ExecutionFailure(
+            message=(
+                "this worker process was never given a fitting problem; "
+                "ProcessExecutor.broadcast was not called before map"
+            ),
+            exception_type="RuntimeError",
+        )
+    return problem.evaluate(vector)
 
 
 #: How closely a native chunk must agree with the contract path at the one

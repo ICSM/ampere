@@ -704,6 +704,26 @@ class ChiSquareCheck:
         )
 
 
+def require_scored(tree: Any, who: str) -> None:
+    """Refuse, by name, a run whose stored draws were never scored (W6.15).
+
+    ``SBIEngine.run(score=False)`` stores the draws without ``lp``,
+    ``log_prior`` or ``log_likelihood`` and records ``ampere_sbi_scored = 0``.
+    A reader that needs those columns would otherwise report "no such group"
+    or "no such column", which sends a user looking for an emission bug; the
+    answer is that the run chose not to compute them, and the fix is to run
+    again with ``score=True``.
+    """
+    attrs = getattr(tree, "attrs", None) or {}
+    if int(attrs.get("ampere_sbi_scored", 1)) == 0:
+        raise ResultsError(
+            f"{who} needs each stored draw's log-prior and log-likelihood, and this run was made "
+            f"with SBIEngine.run(score=False) (ampere_sbi_scored = 0), which stores the draws "
+            f"unscored. Run again with score=True, or pool the scoring through the engine's "
+            f"executor if one evaluation is expensive."
+        )
+
+
 def chi_square_pvalue(tree: Any, *, dataset: str | None = None) -> ChiSquareCheck:
     """The cheap half of family B: a Bayesian p-value with no replicate draws.
 
@@ -734,6 +754,7 @@ def chi_square_pvalue(tree: Any, *, dataset: str | None = None) -> ChiSquareChec
         If the run stores no per-dataset log-likelihood, if the dataset is
         ambiguous, or if its likelihood is outside the case above.
     """
+    require_scored(tree, "chi_square_pvalue")
     group = require_group(
         tree,
         LOG_LIKELIHOOD_GROUP,

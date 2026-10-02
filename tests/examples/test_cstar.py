@@ -218,7 +218,7 @@ class TestTheSimulator:
             problem,
             simulations=40,
             rounds=1,
-            draws=8,  # each stored draw is scored by one serial Hyperion run
+            draws=8,  # each stored draw is scored by one Hyperion run, through the same pool
             workers=4,
             cache=tmp_path,
             training_set=bank,
@@ -227,6 +227,13 @@ class TestTheSimulator:
         posterior = run["posterior"].dataset
         assert {f"model.{name}" for name in PRIORS} <= set(posterior.data_vars)
         assert int(run.attrs["ampere_sbi_cache_hit"]) == 0
+        # W6.15: the eight stored draws were scored through the two-or-more-worker pool the
+        # bank used (SBIEngine pools the scoring whenever it was given an executor).
+        assert int(run.attrs["ampere_sbi_scored"]) == 1
+        assert int(run.attrs["ampere_engine_draws_recomputed"]) == 8
+        assert run.attrs["ampere_sbi_executor"] == "ProcessExecutor"
+        stats = run["sample_stats"].dataset
+        assert np.all(np.isfinite(np.asarray(stats["lp"])))
         # W6.14: the pairs were written, filter names and spectral axis by value.
         from ampere.results import read_training_set
 
@@ -248,9 +255,28 @@ class TestTheSimulator:
             build_problem(photons="quick", gp=False),
             simulations=40,
             rounds=1,
-            draws=8,  # each stored draw is scored by one serial Hyperion run
+            draws=8,  # each stored draw is scored by one Hyperion run, through the same pool
             workers=4,
             cache=tmp_path,
             training={"max_num_epochs": 5},
         )
         assert int(again.attrs["ampere_sbi_cache_hit"]) == 1
+
+    @needs_sbi
+    def test_an_unscored_fit_runs_no_hyperion_per_draw(self, tmp_path: Path) -> None:
+        """W6.15: ``score=False`` stores the draws with the scores absent, and says so."""
+        run = fit(
+            build_problem(photons="quick", gp=False),
+            simulations=4,
+            rounds=1,
+            draws=4,
+            workers=2,
+            cache=None,
+            training={"max_num_epochs": 2},
+            score=False,
+        )
+        stats = run["sample_stats"].dataset
+        assert "lp" not in stats.variables
+        assert "log_likelihood" not in run.children
+        assert int(run.attrs["ampere_sbi_scored"]) == 0
+        assert int(run.attrs["ampere_engine_draws_recomputed"]) == 0
