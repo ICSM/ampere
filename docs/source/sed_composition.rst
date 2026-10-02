@@ -85,6 +85,9 @@ does something less obvious:
 
 .. code-block:: pycon
 
+    >>> from examples.sed_composition import generators, sed_composition as example
+    >>> model = example.build_model("reference")
+    >>> _, camera = example.build_instruments("reference")
     >>> raw_result = model(**generators.TRUTH)           # the model's own grid
     >>> camera(raw_result)
     Traceback (most recent call last):
@@ -172,10 +175,16 @@ the two instruments the way a first attempt might, without ``label=``:
 
 .. code-block:: pycon
 
+    >>> import numpy as np
+    >>> from ampere.backends.reference import LSFConvolution, Resample, SyntheticPhotometry
+    >>> from ampere.core import Dataset, DatasetCollection, Instrument
+    >>> grid, tabulation = np.linspace(5.0, 35.0, 120), np.geomspace(1.0, 100.0, 500)
     >>> spectrograph = Instrument([LSFConvolution(resolving_power=100.0), Resample(grid)], channel="sed")
     >>> camera = Instrument([SyntheticPhotometry.from_library(["WISE_RSR_W3"], tabulation)], channel="sed")
     >>> spectrograph.label, camera.label
     ('sed', 'sed')
+    >>> observed_spectrum, observed_photometry = generators.synthetic_data(
+    ...     model, *example.build_instruments("reference"))
     >>> DatasetCollection([Dataset(observed_spectrum, spectrograph), Dataset(observed_photometry, camera)])
     Traceback (most recent call last):
         ...

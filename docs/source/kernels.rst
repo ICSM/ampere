@@ -19,6 +19,7 @@ that have one:
 
 .. code-block:: pycon
 
+    >>> from ampere.core import quasiseparable_families
     >>> quasiseparable_families()
     ('matern12', 'matern32', 'matern52', 'rotation', 'sho', 'spectral_mixture',
      'sum', 'warped')
@@ -145,9 +146,11 @@ Two composite kernels, and one composite that is really a sum in disguise:
 
 .. code-block:: pycon
 
-    >>> from ampere.core import Matern32, SquaredExponential, Sum, Product
-    >>> Sum(Matern32(0.3, 2.0), SquaredExponential(0.1, 0.2)).QUASISEPARABLE
+    >>> from ampere.core import Matern12, Matern32, SquaredExponential, Sum, Product
+    >>> Sum(Matern32(0.3, 2.0), Matern12(0.1, 0.2)).QUASISEPARABLE
     True
+    >>> Sum(Matern32(0.3, 2.0), SquaredExponential(0.1, 0.2)).QUASISEPARABLE
+    False
     >>> Product(Matern32(0.3, 2.0), SquaredExponential(0.1, 0.2)).QUASISEPARABLE
     False
 
@@ -169,13 +172,16 @@ path names the reason rather than merely "not registered":
 
 .. code-block:: pycon
 
-    >>> from ampere.core import GaussianProcessNoise, QuasisepGP
+    >>> import numpy as np, astropy.units as u
+    >>> from ampere.core import GaussianFamily, GaussianProcessNoise, QuasisepGP, Spectrum
+    >>> data = Spectrum(np.linspace(1.0, 10.0, 8) * u.um, np.zeros(8) * u.Jy,
+    ...                 uncertainty=np.full(8, 0.1) * u.Jy)
     >>> noise = GaussianProcessNoise(Product(Matern32(0.3, 2.0), SquaredExponential(0.1, 0.2)), QuasisepGP())
-    >>> noise.check_compatible(GaussianFamily(), some_container)
+    >>> noise.check_compatible(GaussianFamily(), data)
     Traceback (most recent call last):
         ...
     ampere.core.exceptions.LikelihoodError: QuasisepGP cannot lower a Product: a product
-    of quasiseparable kernels is not quasiseparable. Use DenseGP, or replace the
+    of quasiseparable kernels is not quasiseparable. ... Use DenseGP, or replace the
     Product with a Sum, which is quasiseparable exactly when every term is.
 
 Where the two factors act on **disjoint axes** — the chromatic case §4
@@ -304,6 +310,12 @@ which ``ampere`` refuses rather than silently computes:
 
 .. code-block:: pycon
 
+    >>> from ampere.core import DenseGP, VisibilitySet
+    >>> a_visibility_set = VisibilitySet(
+    ...     [120.0, -35.0, 88.0, -210.0], [45.0, 190.0, -66.0, 12.0],
+    ...     [1.3, 1.3, 0.87, 0.87] * u.mm, [1.0 + 0.2j, 0.6 - 0.3j, 0.4 + 0.0j, 0.1 - 0.05j],
+    ...     uncertainty=[0.02, 0.02, 0.03, 0.05],
+    ... )
     >>> GaussianProcessNoise(Matern32(0.3, 2.0), DenseGP()).check_compatible(
     ...     GaussianFamily(), a_visibility_set)
     Traceback (most recent call last):
@@ -311,7 +323,7 @@ which ``ampere`` refuses rather than silently computes:
     ampere.core.exceptions.LikelihoodError: DenseGP measures separation as a Euclidean
     distance across a VisibilitySet's coordinate axes, but they carry different units
     [...]. A single isotropic length-scale is meaningless across mixed units; name the
-    axes this kernel acts on with axes=(...) ... and compose kernels on different axes
+    axes this kernel acts on with axes=(...), as in Matern32(axes=('u',)), and compose kernels on different axes
     with Product.
 
 The remedy is the selector: ``Matern32(axes=("u", "v"))`` is the isotropic
