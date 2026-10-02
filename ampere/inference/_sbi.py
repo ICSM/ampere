@@ -1792,6 +1792,7 @@ class SBIEngine(Engine):
         training: Mapping[str, Any] | None = None,
         posterior_options: Mapping[str, Any] | None = None,
         progress: bool = False,
+        score: bool = True,
     ) -> Any:
         """Simulate, train, sample the trained posterior, and emit the run.
 
@@ -1805,12 +1806,17 @@ class SBIEngine(Engine):
             an MCMC step, so a large number is not free.
 
             One cost is easy to overlook and is the same for all three: every
-            stored draw is **scored on the numpy contract path** afterwards, so
-            ``draws`` is also a count of full ``problem.evaluate`` calls — one
-            forward-model evaluation each. That is what buys the true per-draw
-            split beside the estimator's own density, and it is why a draw
-            count here is not the free number it is for a variational fit.
-            ``engine_draws_recomputed`` in the attrs is that count.
+            stored draw is **scored on the numpy contract path** afterwards
+            (unless ``score=False``), so ``draws`` is also a count of full
+            ``problem.evaluate`` calls -- one forward-model evaluation each.
+            That is what buys the true per-draw split beside the estimator's
+            own density, and it is why a draw count here is not the free number
+            it is for a variational fit. ``engine_draws_recomputed`` in the
+            attrs is that count. **W6.15**: when the engine was built with an
+            ``executor`` the scoring is pooled through it, in ``chunk_size``
+            chunks, exactly as the bank's simulations were, and the numbers
+            are identical to the serial path's; without one it is serial, in
+            this process.
         training
             Forwarded verbatim to the ``sbi`` trainer's ``train`` --
             ``max_num_epochs``, ``training_batch_size``, ``learning_rate``,
@@ -1838,6 +1844,19 @@ class SBIEngine(Engine):
             Show ``sbi``'s own progress bars, for training and for sampling.
             Off by default: a driver that prints by default is unusable inside
             a loop or a test suite.
+        score
+            **W6.15.** ``True`` (the default) scores every stored draw as
+            described under *draws*. ``False`` skips it: the draws are stored
+            with ``lp``, ``log_prior``, ``log_likelihood`` and the per-draw
+            failure columns **absent** (not NaN), ``engine_draws_recomputed``
+            is 0 and ``ampere_sbi_scored`` is 0, so an archived run says it
+            was not scored. ``ampere_sbi_log_prob`` and ``proposal_log_density``
+            remain. Whatever later needs the scores -- the chi-square check,
+            population reweighting -- refuses by name and says to run with
+            ``score=True``; :meth:`calibrate` does not read a run's scores
+            (it simulates fresh) and is unaffected. The right choice when one
+            evaluation is expensive and the run is only wanted for its
+            posterior draws.
 
         Returns
         -------
@@ -2049,10 +2068,14 @@ class SBIEngine(Engine):
         if self.serve_artefact is not None:
             attrs["sbi_artefact_served"] = self.serve_artefact
             attrs["sbi_artefact_mismatch"] = dict(artefact_mismatch)
+        attrs["sbi_scored"] = int(bool(score))
         tree = self.finish(
             chain,
             extra_attrs=attrs,
             sample_stats={"proposal_log_density": proposal_log_density},
+            score=bool(score),
+            executor=self.executor,
+            chunk_size=self.chunk_size,
         )
         tree = _with_estimator_log_prob(tree, estimator_log_prob)
         if self.marginal_summary is not None:
@@ -3274,11 +3297,14 @@ def _with_estimator_log_prob(tree: Any, values: np.ndarray) -> Any:
     try:
         node = tree["sample_stats"]
         dataset = node.dataset
-        shape = tuple(dataset["lp"].shape)
+        # ``proposal_log_density`` rather than ``lp``: it is always written, and
+        # ``lp`` is absent from a run made with ``score=False`` (W6.15).
+        reference = dataset["proposal_log_density"]
+        shape = tuple(reference.shape)
         if int(np.prod(shape)) != int(values.size):
             return tree
         node.dataset = dataset.assign(
-            {"ampere_sbi_log_prob": (dataset["lp"].dims, values.reshape(shape))}
+            {"ampere_sbi_log_prob": (reference.dims, values.reshape(shape))}
         )
     except Exception:
         return tree

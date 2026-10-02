@@ -125,6 +125,7 @@ import numpy as np
 
 from ampere.core.dataset import Evaluation, FittingProblem
 from ampere.core.exceptions import LoweringError
+from ampere.core.simulate import Executor
 from ampere.core.realisation import (
     log_likelihood_terms_of,
     realise,
@@ -360,6 +361,49 @@ class _EvaluationCache:
             return found
         self.recomputed += 1
         return self._score(vector)
+
+    def lookup_many(
+        self,
+        thetas: Sequence[Any],
+        *,
+        executor: Executor | None = None,
+        chunk_size: int | None = None,
+    ) -> list[Evaluation]:
+        """:meth:`lookup` for a batch of stored draws, scoring the misses on *executor*.
+
+        **W6.15.** With no executor this is exactly ``[self.lookup(t) for t in
+        thetas]``. With one, the draws still in the cache are returned from it
+        and the rest -- every draw, for an engine that never evaluated its
+        own proposals, as SBI does not -- are scored together through
+        :meth:`ampere.core.dataset.FittingProblem.evaluate_many`, which is the
+        numpy contract path on a pool that already holds the problem.
+        ``calls`` and ``recomputed`` count what they always counted, one per
+        evaluation. A cache that scores through a realisation is never pooled:
+        the realisation's arrays do not cross to a worker, so its draws take
+        the serial route and the numbers are the realisation's own.
+        """
+        if executor is None or self._terms is not None:
+            return [self.lookup(theta) for theta in thetas]
+        found: dict[int, Evaluation] = {}
+        missing: list[int] = []
+        vectors: list[np.ndarray] = []
+        for index, theta in enumerate(thetas):
+            vector, key = self._key(theta)
+            hit = self._entries.get(key)
+            if hit is not None:
+                found[index] = hit
+            else:
+                missing.append(index)
+                vectors.append(vector)
+        if vectors:
+            scored = self._problem.evaluate_many(
+                np.stack(vectors), executor=executor, chunk_size=chunk_size
+            )
+            self.calls += len(vectors)
+            self.recomputed += len(vectors)
+            for index, evaluation in zip(missing, scored, strict=True):
+                found[index] = evaluation
+        return [found[index] for index in range(len(thetas))]
 
 
 def draw_prior_positions(
@@ -767,6 +811,9 @@ class Engine(abc.ABC):
         registered_lowerings: Sequence[Mapping[str, Any]] | None = None,
         log_likelihood_terms: Sequence[Sequence[Mapping[str, float]]] | None = None,
         sample_stats: Mapping[str, Any] | None = None,
+        score: bool = True,
+        executor: Executor | None = None,
+        chunk_size: int | None = None,
     ) -> Any:
         """Assemble the stored draws into the run's ``DataTree``.
 
@@ -819,12 +866,31 @@ class Engine(abc.ABC):
         than on each driver is the point: the key ``results.md`` §9 asks every
         run to carry is carried by construction, not by five drivers
         remembering to say "none".
+
+        *score*, *executor* and *chunk_size* are **W6.15**'s two levers, both
+        for a driver whose stored draws are expensive to score (SBI over an
+        external simulator). ``score=False`` evaluates nothing: ``lp``,
+        ``log_prior``, ``log_likelihood`` (the group), and the per-draw failure
+        columns are **absent** from the run rather than NaN, because absence is
+        the honest signal that nothing was computed, and
+        ``engine_draws_recomputed`` is zero. *executor* scores the stored draws
+        through :meth:`_EvaluationCache.lookup_many`, in chunks of
+        *chunk_size*; the numbers are identical to the serial path's. The
+        defaults are today's behaviour.
         """
         array = np.asarray(draws, dtype=float)
         if array.ndim == 2:
             array = array[np.newaxis, ...]
-        if log_likelihood_terms is None:
-            evaluations = [[self._cache.lookup(theta) for theta in chain] for chain in array]
+        if not score:
+            if log_likelihood_terms is not None:
+                raise EngineError("score=False and log_likelihood_terms cannot both be given.")
+            placeholder = Evaluation(log_prior=math.nan, log_likelihood=math.nan, log_prob=math.nan)
+            evaluations = [[placeholder for _ in chain] for chain in array]
+        elif log_likelihood_terms is None:
+            evaluations = [
+                self._cache.lookup_many(list(chain), executor=executor, chunk_size=chunk_size)
+                for chain in array
+            ]
         else:
             evaluations = self._evaluations_from_terms(array, log_likelihood_terms)
 
@@ -854,6 +920,8 @@ class Engine(abc.ABC):
             sample_stats=sample_stats,
             start=self._start,
         )
+        if not score:
+            _strip_scores(tree)
         if summary:
             warnings.warn(
                 f"{self.NAME}: {summary}",
@@ -864,6 +932,20 @@ class Engine(abc.ABC):
 
     def __repr__(self) -> str:
         return f"<{type(self).__name__} on {self.problem!r}>"
+
+
+#: What an unscored run (``finish(score=False)``) does not carry: the
+#: per-draw score columns ``emit`` always writes, and the failure columns that
+#: describe those scores.
+_SCORE_STATS = ("lp", "log_prior", "log_likelihood", "failed", "failure_reason", "failure_where")
+
+
+def _strip_scores(tree: Any) -> None:
+    """Remove what ``emit`` wrote about scores nobody computed (W6.15)."""
+    node = tree["sample_stats"]
+    node.dataset = node.dataset.drop_vars([name for name in _SCORE_STATS if name in node.dataset])
+    if "log_likelihood" in tree.children:
+        del tree["log_likelihood"]
 
 
 def _refuse_foreign_parts(engine: str, problem: FittingProblem) -> None:
