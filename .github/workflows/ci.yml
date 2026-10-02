@@ -602,26 +602,15 @@ jobs:
     # Path-gated on `run_docs` -- see the `changes` job and
     # .github/scripts/path_filters.py's rule table.
     #
-    # W2.11. DEVELOPMENT_PLAN.md §5 asked for this at Phase 1 ("Sphinx docs
-    # build check with warnings-as-errors") and it never landed, because
-    # `pixi run docs` was red on master for four environment reasons that had
-    # nothing to do with any change under review: no `pandoc` for nbsphinx, no
-    # registered Jupyter kernel for the two legacy notebooks that carry no
-    # stored outputs, an autodoc entry for a module (ampere.infer.ptemcee
-    # search) that does not exist, and a pile of legacy-docstring warnings.
-    # The first three are fixed at their source (pyproject.toml's dev feature
-    # declares pandoc and ipykernel; docs/source/conf.py sets
-    # nbsphinx_execute = 'never' and says why for each notebook; the dead
-    # automodule entry is gone).
-    #
-    # The fourth is why this job runs **without** `-W`. The remaining
-    # warnings are legacy docstrings in ampere/{data,models,infer} -- frozen
-    # by AGENTS.md ground rule 1, and editing them to silence a warning would
-    # be touching frozen code for a cosmetic reason. Warnings-as-errors is
-    # therefore deferred until the Phase 6 docs rebuild retires those pages;
-    # what this job asserts today is the stronger half of the original intent
-    # anyway: the documentation *builds*, from a clean clone, in a declared
-    # environment, on every PR.
+    # W2.11 asked for this at Phase 1 (DEVELOPMENT_PLAN.md §5: "Sphinx docs
+    # build check with warnings-as-errors"); it landed at W6.3. The task
+    # `pixi run docs` is `sphinx-build -W --keep-going`, so a warning from
+    # any page -- an undocumented v2 name, a broken cross-reference, a
+    # notebook cell that raises -- fails this job, and the command here is
+    # the command a contributor runs locally. The legacy pages stay in the
+    # reference (D1 (b)), and the frozen docstrings that used to warn are
+    # excluded on the docs side with `:exclude-members:` (ground rule 1: no
+    # edit to ampere/legacy/); each page says what is left out and why.
     steps:
       - name: "skip note (path-gated: no `run_docs` paths changed)"
         if: needs.changes.outputs.run_docs != 'true'
