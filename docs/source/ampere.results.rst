@@ -66,6 +66,7 @@ Training sets
 .. autodata:: ampere.results.training.SAMPLE_DIM
 .. autodata:: ampere.results.training.COORDINATES_GROUP
 .. autodata:: ampere.results.training.OBSERVATIONS_GROUP
+.. autodata:: ampere.results.training.CONTEXT_GROUP
 
 Trained-artefact caching
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -173,3 +174,5 @@ same rule.
 .. autodata:: ampere.results.plots.MAX_RANK_PANELS
 .. autodata:: ampere.results.plots.MAX_TRACE_VARIABLES
 .. autodata:: ampere.results.derived.COMPONENTS
+.. autodata:: ampere.results.derived.JOINT_DECOMPOSITION
+.. autodata:: ampere.results.population.DEFAULT_ESS_FLOOR

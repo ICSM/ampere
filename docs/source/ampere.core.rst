@@ -47,4 +47,7 @@ which is where its documentation lives.
 .. autodata:: ampere.core.encoding.COLUMN_GROUPS
 .. autodata:: ampere.core.encoding.SET_KIND
 .. autodata:: ampere.core.encoding.FLAT_KIND
+.. autodata:: ampere.core.encoding.AXIS_TYPE_CODES
+.. autodata:: ampere.core.encoding.AXIS_TYPE_NAMES
+.. autodata:: ampere.core.astropy_compat.ADAPTABLE_KINDS
 
