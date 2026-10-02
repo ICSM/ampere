@@ -413,7 +413,7 @@ parameter's unit and so is a derived expression; recorded as a limitation.
 | `free_size`, `free_names`, `free_labels`, `free_slice`, `bijections`, `constrain`, `unconstrain` (the free-vector half) | **excluded** — not a sampler dimension, like a fixed parameter |
 | `pack(values)` | ignores a derived entry, as it ignores a fixed one |
 | `names`, `__iter__`, `__getitem__`, `evaluation_order` | **included** — it is a parameter of the set, ordered after its inputs (its `references` are the mapping's values, so `_evaluation_order` needs no new logic; cycles are refused by the same walk) |
-| `complete(values)`, `unpack(theta)` | **computed** in evaluation order from the resolved inputs. `complete` is **idempotent**: a derived name present in the mapping is recomputed and overwritten, never trusted and never refused — `FittingProblem.evaluate` completes once in `_resolve` and again inside `lnprior`, `unconstrain` is `pack(complete(values))`, `Dataset.route` completes values the problem has already completed, and `reference_values` is stored complete, so a refusal here would break the main evaluation path |
+| `complete(values)`, `unpack(theta)` | **computed** in evaluation order from the resolved inputs. `complete` is **idempotent**: a derived name present in the mapping is recomputed from its inputs; on the numpy reference path a supplied value that disagrees with the recomputation beyond round-off is **refused by name** (a silent overwrite would score the caller's θ at a different point with no signal — the fallback pattern Peter ruled against at W5.32 (j)), while the traced torch and jax paths, which cannot branch on a value, overwrite; a second `complete` on an already-complete mapping therefore passes everywhere, and it must, because `FittingProblem.evaluate` completes once in `_resolve` and again inside `lnprior`, `unconstrain` is `pack(complete(values))`, `Dataset.route` completes values the problem has already completed, and `reference_values` is stored complete, so a refusal here would break the main evaluation path |
 | `lnprior`, `lnprior_unconstrained` | **skipped** as a term — no density; its inputs carry theirs — but computed into the resolved mapping before any hierarchical prior that references it binds |
 | `prior_transform(unit_cube)`, `sample(rng)` | no unit-cube dimension; **computed mid-walk** in evaluation order, after its inputs and before any prior that references it — which is how a hierarchical prior over a derived scale (the slab) can bind during the walk |
 | `HierarchicalPrior.bind(resolved)` | finds it in `resolved` like any other name |
@@ -519,9 +519,13 @@ evaluation strategy: `_posterior_variables` evaluates each derived
 expression **once, vectorised**, over arrays shaped `(chain, draw,
 *shape)` — the free blocks are already sliced from the `(chain, draw,
 free)` array, and the expression's arithmetic and the five functions all
-broadcast; when any input carries a plate axis, scalar inputs are given a
-trailing axis of length one first so `(chain, draw, N)` and `(chain, draw,
-1)` broadcast as the declaration intends. No per-draw Python loop. A root
+broadcast once every input is padded to one rank: an input of shape
+`(chain, draw, *s)` becomes `(chain, draw, *(1,) * (k - len(s)), *s)` with
+`k` the largest input rank, which reproduces numpy's own broadcasting for a
+scalar beside a plate member `(N,)`, for a non-plate array `(3,)` beside a
+scalar, and for a plate member with its own shape `(N, 3)`. Derived
+parameters are evaluated in `evaluation_order` at emission too, so a derived
+input to another derived parameter is formed first. No per-draw Python loop. A root
 attr `ampere_derived` lists the names, so a diagnostic that must not treat
 a deterministic function of draws as a sampled dimension can tell (R-hat
 and ESS on it are meaningful; `plot_trace` may show it; the SBC and TARP
@@ -552,7 +556,13 @@ free dimensions only.
 ### 3.8 Contract text this amends
 
 - `parameters.md` §3: three states become four, with the slot's meaning
-  stated; a new §9 subsection "`Derived` — a parameter that is a function of
+  stated; §8 "Plate bindings": the sentence that the receiving component's
+  own set "does **not** declare the local name … consuming it is the
+  composing caller's contract" is **retracted** — §3.5 rule 2 requires the
+  declaration, and the `_apply_populations` docstring's flat-layout clause
+  "a component that does not declare it is given one" is retracted with it
+  (no existing fixture relies on either; `test_population.py` routes to the
+  model's own `slope`); a new §9 subsection "`Derived` — a parameter that is a function of
   others" with the grammar, the `symbols` mapping, the table of §3.3 and
   both customers; the `shrinkage_horseshoe` subsection's "a `Derived` node is
   what would close the gap" discharged by `tail="slab"` (§3.9); §12 gains
@@ -688,7 +698,7 @@ amplitudes, pinned as a margin (W4.5's `_period_margin` precedent).
 | Topic | Decision |
 |---|---|
 | Per-dataset nuisance populations: a `Population` over a qualified component path (W7.1) | **`Population.over` entries may be qualified component paths (`"d0.likelihood"`, `"d0.instrument.calibrate"`); `PlateBinding.local_name` and `Binding.local_name` may be qualified paths relative to the component; the plate layout strips the addressed leaf from the composite's outer declaration; `DatasetCollection.plate(within=)` writes the entries from the dataset labels; routing is unchanged; the problem's provenance record gains `populations`, `PROVENANCE_SCHEMA_VERSION` → 11.** The population sketch's §11 Q1 ruling (2026-09-02) that routing lives in `ParameterMapping` alone is kept: the one new binding has a longer local name and the dataset's retained mapping takes the second hop it already takes for every other value, so neither `distribute` nor either backend changes; the path walk through the retained inner mappings is validation, not routing. The W5.12 refusal of a composite in `over` becomes a refusal of a composite *without a path*. A routed member's leaf must exist in every `over` component (a composite's inner routing has no row for a leaf it never declared; a model that lacks it fails late today), an internal member (an input of a derived member) is exempt and routed nowhere, and a leaf an inner `shared_as` collapsed is named by its tie label in the refusal. The provenance record is new because the merged spec already moved with a population but the declaration was recorded nowhere, the population's own component is in neither dataset nor model per-component hash, and after this change a dataset's own spec no longer declares the leaf the population replaced. Motivated by the per-dataset GP amplitude under a shared prior — the flexible likelihood's natural hierarchical prior across many spectra — and the per-dataset calibration scale under a fitted spread, neither declarable before. `parameters.md` §8/§9, `inference.md` §9, `hierarchical_population.md` §11, `results.md` §9 amended; the conformance rows of the memo's §9.1. |
-| The `Derived` parameter node (W7.0) | **A fourth `Parameter` state, `derived`: `Parameter(name, Derived("<expression>", symbols={...}))`, the expression a closed grammar over symbols (numeric literals, `+ - * / **`, unary minus, `sqrt exp log log1p abs`, the five names reserved) parsed once and stored as its normalised source, each symbol bound to a parameter name by a mapping of `HierarchicalPrior.hyperparameters`' shape that merges rename; no sampler dimension, no prior term; computed from its inputs wherever named values are formed — `complete`/`unpack` (idempotently: a supplied derived value is recomputed, never trusted or refused), mid-walk in `prior_transform` and `sample`, and in both backends' resolve and walk functions — and evaluated over `ArrayOps` on every backend; referenceable by a `HierarchicalPrior`; a legal plate and plate-layout population member, refused in the flat layout; `numpyro.deterministic` in the jax structural view only; one `posterior` variable per derived parameter on every engine, computed vectorised at emission and named in `ampere_derived`; `PROVENANCE_SCHEMA_VERSION` → 10.** A callable is refused for the reason `to_spec()` refuses an opaque prior: provenance, hashing, serialisation and lowering must read it. `ArrayOps` gains `sqrt` and `log`. `Population` gains two member rules: a member no `over` component declares is internal — routed nowhere, permitted only as an input of a derived member of the same population (the non-centred `θ_i = μ + σ z_i`), refused otherwise — and a routed member must be declared by every `over` component, which moves the undeclared-member failure from the first model evaluation to the merge. Discharges the two recorded gaps: `shrinkage_horseshoe(tail="slab", slab_scale=c)` declares Piironen & Vehtari's slab in the helper's own `s_j = τλ_j` parameterisation (`s̃_j = sqrt(c²s_j²/(c²+s_j²))`, the fixed-`c` variant, with a prior on `c` admitted), and `lowering.md` §3.2.1's "where the multiplication lives" has an answer that is a declaration. Deliberate limitations: no callable, no conditional, no unit arithmetic, not in the flat layout. `parameters.md` §3/§9/§12, `lowering.md` §3.2.1/§5/§8, `results.md` §4/§9, `inference.md` §9/§10a amended; the conformance rows of the memo's §9.2. |
+| The `Derived` parameter node (W7.0) | **A fourth `Parameter` state, `derived`: `Parameter(name, Derived("<expression>", symbols={...}))`, the expression a closed grammar over symbols (numeric literals, `+ - * / **`, unary minus, `sqrt exp log log1p abs`, the five names reserved) parsed once and stored as its normalised source, each symbol bound to a parameter name by a mapping of `HierarchicalPrior.hyperparameters`' shape that merges rename; no sampler dimension, no prior term; computed from its inputs wherever named values are formed — `complete`/`unpack` (idempotently: a supplied derived value is recomputed, never trusted or refused), mid-walk in `prior_transform` and `sample`, and in both backends' resolve and walk functions — and evaluated over `ArrayOps` on every backend; referenceable by a `HierarchicalPrior`; a legal plate and plate-layout population member, refused in the flat layout; `numpyro.deterministic` in the jax structural view only; one `posterior` variable per derived parameter on every engine, computed vectorised at emission and named in `ampere_derived`; `PROVENANCE_SCHEMA_VERSION` → 10.** A callable is refused for the reason `to_spec()` refuses an opaque prior: provenance, hashing, serialisation and lowering must read it. `ArrayOps` gains `sqrt` and `log`. `Population` gains two member rules: a member no `over` component declares is internal — routed nowhere, permitted only as an input of a derived member of the same population (the non-centred `θ_i = μ + σ z_i`), refused otherwise — and a routed member must be declared by every `over` component, which moves the undeclared-member failure from the first model evaluation to the merge. Discharges the two recorded gaps: `shrinkage_horseshoe(tail="slab", slab_scale=c)` declares Piironen & Vehtari's slab in the helper's own `s_j = τλ_j` parameterisation (`s̃_j = sqrt(c²s_j²/(c²+s_j²))`, the fixed-`c` variant, with a prior on `c` admitted), and `lowering.md` §3.2.1's "where the multiplication lives" has an answer that is a declaration. Two frozen allowances are retracted by rule 2: `parameters.md` §8's "the receiving component's own set does not declare the local name" and `_apply_populations`'s flat-layout "a component that does not declare it is given one" — both now a merge-time refusal. Deliberate limitations: no callable, no conditional, no unit arithmetic, not in the flat layout. `parameters.md` §3/§9/§12, `lowering.md` §3.2.1/§5/§8, `results.md` §4/§9, `inference.md` §9/§10a amended; the conformance rows of the memo's §9.2. |
 
 ## 9. The conformance rows (named; `tests/conformance`, once per registered fixture unless stated)
 
@@ -737,7 +747,9 @@ amplitudes, pinned as a margin (W4.5's `_period_margin` precedent).
    `evaluation_order` include it after its inputs; `unpack`'s mapping has
    it.
 2. `test_complete_is_idempotent_and_computes_it` — `complete(complete(v))
-   == complete(v)`; a stale supplied value is overwritten; `pack` ignores it.
+   == complete(v)`; a stale supplied value is refused by name on the numpy
+   path and overwritten on the torch and jax paths (both pinned); `pack`
+   ignores it.
 3. `test_the_grammar_is_closed` — each refused node kind refused by name
    (attribute, subscript, comparison, an unlisted call, a lambda); a symbol
    spelt `exp` refused.
@@ -769,7 +781,8 @@ amplitudes, pinned as a margin (W4.5's `_period_margin` precedent).
    only).
 9. `test_the_posterior_carries_the_derived_variable` — an emcee run's
    `posterior` has the derived variable, equal to `complete()` of each draw,
-   including a plate-shaped one against scalar hyperpriors; `ampere_derived`
+   including a plate-shaped one against scalar hyperpriors, a non-plate
+   array `(3,)` beside a scalar, and a derived parameter of a derived one; `ampere_derived`
    lists it; schema version 10 (dev only, through `ampere.results`).
 10. `test_the_evaluation_order_is_honoured_under_tracing` — a derived
     parameter referencing a hierarchical one referencing a derived one:
@@ -858,9 +871,16 @@ absence from the per-component hashes noted (§1.3, §8); (12) the probe
 source is Appendix A. Nits: (13) the path walk is validation only and the
 inner-`shared_as` leaf is named by its tie label (§2.2); (14) emission's
 evaluation is vectorised with the broadcasting rule stated and row 9 is
-dev-only (§3.6). The reviewer's verdict after the fixes: ready for ruling,
-and an Opus implementer could land W7.0 and W7.1 without a second design
-round. The confirmation pass on this revision is recorded in the status row.
+dev-only (§3.6). The reviewer's first verdict was conditional: ready for ruling
+*after* the blocking fixes. Its **confirmation pass on `d106067`** found all
+fourteen resolved and nothing blocking introduced, with three should-fixes,
+folded in here: `complete` must not silently overwrite a supplied derived
+value on the reference path (§3.3, row 2 — W5.32 (j)'s rule); the emission
+broadcasting rule generalised to every declared shape and evaluated in
+`evaluation_order` (§3.6, row 9); and §3.5 rule 2's retraction of two frozen
+allowances listed in §3.8 and the W7.0 row. Verdict: ready for Peter's
+ruling, and an Opus implementer could land W7.0 and W7.1 without a second
+design round.
 
 ## Appendix A — the probe (`probe_w611.py`, run with `pixi run -e dev python` at `f7c05ba`)
 
