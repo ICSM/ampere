@@ -3037,7 +3037,7 @@ run on the M2 spectra and W5.5's image, with the adoptability re-check
 re-run and recorded. The outcome is a report; `ampere.diagnostics` lands
 only if the maturity gate is met. **Depends:** nothing. **Accept:** W5.16's.
 
-### W6.10 — Where the merged gate runs: CI as the gate of record, and the parallelism audit [S; Sonnet]
+### W6.10 — Where the merged gate runs: CI as the gate of record, and the parallelism audit [S; Sonnet] (the GPU rows split out to W6.16 on Peter's word, 2026-10-02)
 The plan's assessment bullet, executed: (1) under D4, the orchestrator
 pushes `origin/v2` (then `origin/master`) at each merge and the CI run on
 the push is the merged gate of record — the local legs retire to the
@@ -3048,16 +3048,10 @@ scripts become the fallback for a machine without GitHub; the handoff's
 shared lock in `tests/conftest.py` and the m2 margins survive `-n auto`;
 if they do, `test-all` and `test-fast` gain `-n` and the measured
 speed-up goes in the task comment; if a suite does not, it is named and
-left serial; (3) the GPU rows (`tests/gpu`) on an accelerator — **D7 ruled: an HPC
-allocation with A100s is available** — a `gpu` pixi environment (torch
-and jax from their CUDA indices, the CPU-index constraint lifted there
-only) and a documented manual procedure under `docs/development.md` (an
-rsync of the tagged tree to the login node, the scheduler script, the
-run, the log back beside the status row), run once on the beta tag as
-part of the release gate; the cluster's name, scheduler and access route
-are gathered from Peter at dispatch. **Depends:** D4, D7. **Accept:** the CI run
-recorded as the gate in the next merged row; the audit's table; the GPU
-procedure run once on the beta tag if ruled; gates none (infrastructure).
+left serial. The GPU rows on an accelerator, formerly (3) here, are
+**W6.16** (split out 2026-10-02: Peter is checking the cluster's details
+first). **Depends:** D4. **Accept:** the CI run recorded as the gate in the
+next merged row; the audit's table; gates none (infrastructure).
 
 ### W6.11 — Design memo: per-dataset nuisance populations, and the `Derived` parameter node [M; Fable drafts, Opus reviews]
 The plan's two design items (Peter, 2026-09-22): (1) `Population.over`
@@ -3222,6 +3216,25 @@ row for each lever on an inference-suite problem; the `cstar` 40-simulation
 smoke row scores through its two-worker pool; `inference.md` §10 and
 `sbi.rst` amended; gates dev and sbi.
 
+### W6.16 — The GPU rows on the cluster: the `gpu` environment and the procedure [S; Sonnet] (split from W6.10 (3) on Peter's word, 2026-10-02; **not dispatchable until Peter confirms the cluster's details**)
+W6.10's former part (3), unchanged in substance: the GPU rows (`tests/gpu`,
+API-level smoke rows that skip without an accelerator) run on an
+accelerator — **D7 ruled: an HPC allocation with A100s is available** — a
+`gpu` pixi environment (torch and jax from their CUDA indices, the
+CPU-index constraint of the `torch` feature lifted there only; locked, not
+installed on the development machine) and a documented manual procedure
+under `docs/development.md` (an rsync of the tagged tree to the login node,
+the scheduler script committed under `scripts/`, the run, the log back
+beside the status row), run once on the beta tag as part of the release
+gate. The cluster's name, scheduler, driver/CUDA version and access route
+are gathered from Peter at dispatch — he is double-checking them, which is
+why this is its own item. **Depends:** D7, Peter's details, W6.10 (the gate
+policy the procedure's log joins). **Accept:** the environment solves
+(`pixi lock` / `--no-install`) and the other environments' lock sections are
+unchanged; the procedure runs end to end once on the cluster against the
+beta tag (W6.5's release gate records it); gates none (infrastructure;
+the rows run where CI cannot).
+
 **Issue triage (D10).** The open issues, with the recommendation: **closed
 by Phase 5 already** — #12, #29, #67 (W5.17's levers), #11 (censoring,
 `likelihoods.md` §9 landed with the core); **closed by Phase 6** — #57,
@@ -3314,7 +3327,8 @@ in Phase 7 if not. Phase 6 closes with the beta on PyPI and
   procedure is written; if no, `tests/gpu` stays skipped and the release
   says so. No recommendation — the answer is a fact only Peter has.
   **Ruled 2026-09-28: yes — HPC with A100 GPUs is available; W6.10 (3) in
-  scope.**
+  scope.** (2026-10-02: (3) split out as W6.16 so W6.10 can run while Peter
+  checks the cluster's details.)
 - **D8 — the design items' timing**: W6.11's memo in Phase 6 (recommended:
   yes — a memo costs little and the per-dataset GP amplitude is the
   flexible likelihood's own use case), and its implementation items in
