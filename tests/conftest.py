@@ -118,6 +118,32 @@ def _skip_study_rows_outside_dev(items: list[pytest.Item]) -> None:
             item.add_marker(skip)
 
 
-def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    """Skip the ``study`` rows outside ``dev``, project-wide (W5.32 (i))."""
+# W6.10 (the xdist audit, docs/development.md "The merged gate"): suites that
+# are correct under ``-n`` but slower for it, kept to ONE worker each by
+# ``--dist loadgroup`` (the task lines pass it; without it, or without
+# pytest-xdist, the marker is inert and nothing here applies).
+# ``interferometry``: three class-scoped calibration fits (~100 s of setup
+# each) are rebuilt in every worker that draws one of their rows; ``astrometry``:
+# two nested-sampling rows (~270 s and ~160 s) bound its wall clock whatever
+# the worker count.
+_SERIAL_UNDER_XDIST = ("interferometry", "astrometry")
+
+
+def _group_serial_suites_for_xdist(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Pin each of :data:`_SERIAL_UNDER_XDIST` to one xdist worker (W6.10)."""
+    if not config.pluginmanager.hasplugin("xdist"):
+        return
+    here = pathlib.Path(__file__).resolve().parent
+    for item in items:
+        try:
+            suite = item.path.resolve().relative_to(here).parts[0]
+        except (ValueError, IndexError):
+            continue
+        if suite in _SERIAL_UNDER_XDIST:
+            item.add_marker(pytest.mark.xdist_group(f"serial-{suite}"))
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Skip the ``study`` rows outside ``dev`` (W5.32 (i)); group the serial suites (W6.10)."""
     _skip_study_rows_outside_dev(items)
+    _group_serial_suites_for_xdist(config, items)

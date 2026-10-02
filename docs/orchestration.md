@@ -118,7 +118,10 @@ surveys 123–152 k each on Opus.
   the orchestrator as a detached shell chain (`nohup … flock … &`) that
   needs no model; failures come back to a cheap fix-up agent with the log
   excerpt. Branch gates were a confidence measure; the merged-master gate
-  is the one that counts and always was.
+  is the one that counts and always was. **Since W6.10 (2026-10-02) that
+  gate is the CI run on the push to `origin/v2`**, and the local scripts
+  are the fallback for a machine without GitHub: see
+  `docs/development.md`, "The merged gate: CI is the gate of record".
 - **Nothing sleeps longer than the cache.** If anything must poll (the
   orchestrator on a gate it launched, say), it sleeps under the cache TTL
   — under five minutes for a subagent, under an hour for the orchestrating
