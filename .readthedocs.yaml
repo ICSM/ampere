@@ -7,7 +7,8 @@
 # `ipykernel` (the two v2 notebooks under docs/source/notebooks are executed
 # at build time since W6.1, so a registered kernel is needed) from pip. Until
 # W6.4 lands a dedicated `docs` extra, the `dev` extra carries the Sphinx
-# packages (sphinx, nbsphinx, nbconvert) and is installed here.
+# packages (sphinx, nbsphinx, nbconvert) and is installed here, with the `zeus` extra the
+# modified-blackbody notebook needs.
 
 version: 2
 
@@ -24,6 +25,9 @@ python:
       path: .
       extra_requirements:
         - dev
+        # The modified-blackbody notebook runs ZeusEngine: `zeus` is a pixi
+        # feature of the dev environment, not part of the `dev` extra.
+        - zeus
     - requirements: docs/requirements-readthedocs.txt
 
 sphinx:
