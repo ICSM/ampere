@@ -3246,6 +3246,66 @@ unchanged; the procedure runs end to end once on the cluster against the
 beta tag (W6.5's release gate records it); gates none (infrastructure;
 the rows run where CI cannot).
 
+### W6.17 — Community health before the beta: licence detection, contributing, conduct, security, templates [S; Sonnet] (added 2026-10-03 on Peter's ask; D14)
+Peter's review of the repository's community profile before `v1.0.0b1`:
+GitHub reports a health score of 25 % — `readme` present, **`license`
+missing** (the GPLv3 text lives at `licenses/gpl.txt`; GitHub, Zenodo and
+PyPI's "licence" badge all detect a licence only from a root `LICENSE`/
+`COPYING` file, so the beta's GitHub release and its Zenodo record would
+show *no licence* today), `code_of_conduct`, `contributing`,
+`issue_template` and `pull_request_template` missing; `isSecurityPolicyEnabled`
+false, private vulnerability reporting and secret scanning off, Discussions
+on. In priority order, each a commit: (1) **`LICENSE` at the root** —
+`git mv licenses/gpl.txt LICENSE`, `license-files = ["LICENSE"]` in
+`pyproject.toml` (the SPDX `license` field unchanged), the `licenses/`
+directory gone; the single change that must precede the tag. (2)
+**`CONTRIBUTING.md`** for a human contributor: the pixi route and the
+tasks (`test-fast` before a PR, `lint`/`format-check`/`typecheck`, `docs`),
+the branch-and-PR convention and that Peter reviews and merges, the
+frozen legacy and the frozen contracts with pointers at `DEVELOPMENT_PLAN.md`
+§4 and ground rule 9, British English, the Co-Authored-By line when an
+agent assisted, where discussion happens (Issues for bugs, Discussions for
+questions), and a plain sentence that much of v2 was built by orchestrated
+agents under `AGENTS.md`'s working agreement — honesty a contributor can
+act on; `docs/source/index.rst`'s "Contributing" paragraph and the README's
+pointer link to it. (3) **`CODE_OF_CONDUCT.md`** — the Contributor Covenant
+2.1 verbatim with the enforcement contact D14 names. (4) **`SECURITY.md`** —
+supported versions (the beta line onward), how to report (GitHub's private
+vulnerability reporting, which Peter enables; email as the fallback), what
+ampere's risk surface actually is (it executes user-supplied models and
+simulators in worker processes, reads netCDF runs and training sets, and
+pickles problems for `ProcessExecutor` — loading a file or a cache from an
+untrusted source is the hazard to name), and the response Peter is willing
+to promise (D14). (5) **Issue forms** under `.github/ISSUE_TEMPLATE/`: a bug
+report (version from `python -c "import ampere; print(ampere.__version__)"`,
+backend and extras, the smallest `FittingProblem` that shows it, the
+traceback, the engine), a feature request, and `config.yml` sending
+questions to Discussions and documentation gaps to a `docs` form. (6) **A
+pull-request template**: the item or issue, what and why, the acceptance
+evidence (which tasks ran, counts), a checklist (tests, lint/format/
+typecheck, docs built, British English, no run outputs or binaries,
+Co-Authored-By when agent-assisted). **Not files, for Peter in the
+repository settings**: enable private vulnerability reporting, secret
+scanning with push protection, and "reported content" moderation for the
+public Discussions. **Deferred, recorded**: an accessibility statement for
+the docs site is not a GitHub profile item and belongs with a docs-theme
+review (alabaster's contrast and keyboard navigation; alt text on every
+figure as a docs convention) — a Phase 7 docs item, not a release blocker;
+`SUPPORT.md` is subsumed by the issue forms' `config.yml`. **Ownership**:
+the six files above, `pyproject.toml`'s one line, `.github/ISSUE_TEMPLATE/`,
+`.github/PULL_REQUEST_TEMPLATE.md`, one paragraph each in `index.rst` and
+the README; runs **before W6.5** (the licence move is W6.5's wheel's
+`License-File`, and W6.5 rewrites the same README and `index.rst` passages
+afterwards) and after W6.16 (no shared files, but one agent at a time on
+the release path). **Depends:** nothing. **Accept:** `gh api
+repos/ICSM/ampere/community/profile` reports every file present once merged
+(the orchestrator checks after the push — the `license` entry detects
+`GPL-3.0`); a wheel built from the branch carries `License-File: LICENSE`
+and `License-Expression: GPL-3.0-or-later` (the agent builds one with
+`python -m build` if `build` is present, else says so and W6.5 verifies);
+`actionlint`/YAML validity of the forms; `pixi run test` and the docs build
+green; gates dev (the docs job is the check).
+
 **Issue triage (D10).** The open issues, with the recommendation: **closed
 by Phase 5 already** — #12, #29, #67 (W5.17's levers), #11 (censoring,
 `likelihoods.md` §9 landed with the core); **closed by Phase 6** — #57,
@@ -3271,6 +3331,21 @@ deployment is a user's, not the library's).
   on PyPI (and TestPyPI); the import name stays `ampere`; the Read the Docs
   slug is `ampere`.** Recorded in the plan's decision table; carried by W6.5
   and W6.4.
+- **D14 — community health before the beta** (opened 2026-10-03 on Peter's
+  review of the community profile; W6.17): (a) the code of conduct's
+  enforcement contact — Peter's address, a project address, or the
+  maintainers listed in `CITATION.cff`; recommendation: Peter's address,
+  as the one person who merges; (b) the security policy's promise — an
+  acknowledgement within a stated number of days, or no stated time (a
+  scientific library with no network surface of its own); recommendation:
+  acknowledge within fourteen days, fix on a best-effort basis, no embargo
+  machinery; (c) whether `SECURITY.md` names the pickle/netCDF/worker
+  hazards plainly (recommendation: yes — a user who loads an archived
+  training set from a stranger should read it there); (d) the three
+  repository settings (private vulnerability reporting, secret scanning
+  with push protection, reported-content moderation) are Peter's clicks,
+  before the tag; (e) the accessibility statement deferred to a Phase 7
+  docs item (recommendation: yes — not a profile item and not a blocker).
 
 **Ordering (two agents at a time, gate legs scoped to the code touched).**
 **Wave 1** (fillers while the rulings are taken): W6.6 ∥ W6.8 — both
