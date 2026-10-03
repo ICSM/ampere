@@ -103,8 +103,11 @@ Three environments
        consequences. The fastest path in the repository: a value **and** a
        gradient of a 20 000-point GP likelihood in 4.7 ms.
 
-No environment has both torch and jax; the two are separately installable by
-design, and nothing in ampere requires them together. ``ampere.core``,
+No environment used for development or CI has both torch and jax; the two
+are separately installable by design, and nothing in ampere requires them
+together (the one exception is the ``gpu`` environment, which exists only to
+run ``tests/gpu`` on an accelerator and is never installed on a development
+machine — see :doc:`install`). ``ampere.core``,
 ``ampere.inference`` and ``ampere.results`` import neither, ever — importing
 a backend is your explicit opt-in to its dependency, and
 ``ampere/backends/__init__.py`` imports nothing at all.
