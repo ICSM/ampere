@@ -164,6 +164,12 @@ It is an example-only requirement: nothing in the ``ampere`` package imports
 Hyperion, the example's Hyperion tests skip where it is absent, and CI does not
 install it.
 
+**One pixi environment carries both backends.** Every other environment has
+torch or jax, never both, but the ``gpu`` environment, which exists only to run
+``tests/gpu`` on an accelerator, installs both from their CUDA 12 wheels. It is
+locked and never installed on a development machine; the procedure is in
+``docs/development.md``.
+
 Nothing outside ``ampere/backends/torch`` and ``ampere/backends/jax`` imports
 torch or jax, at any depth, even lazily. Importing a backend is your explicit
 opt-in to its dependency, and a missing optional dependency raises

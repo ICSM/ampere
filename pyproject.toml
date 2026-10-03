@@ -771,6 +771,23 @@ torch = { version = "*", index = "https://download.pytorch.org/whl/cpu" }
 [tool.pixi.feature.jax.pypi-dependencies]
 ampere = { path = ".", editable = true, extras = ["jax"] }
 
+# W6.16: the GPU environment, for the `tests/gpu` rows on the cluster (run by
+# hand at the release gate; see docs/development.md, "The GPU rows on the
+# cluster"). The one environment that carries torch *and* jax -- deliberately:
+# the rows exercise both backends on one accelerator node. Locked, never
+# installed on the development machine (a CUDA torch plus a CUDA jax is several
+# gigabytes). The cluster's driver version was not known at dispatch, so both
+# are the CUDA 12 wheel family -- bundled CUDA libraries, a driver of 525 or
+# newer: torch from PyTorch's `cu126` index (the newest cu12x index that
+# publishes the torch version the other environments lock, 2.14.1; `cu128` and
+# `cu129` stop at 2.11 and 2.13) and `jax[cuda12]`. This feature omits the
+# `torch` feature's CPU-index pin, as that pin's comment instructs; it does not
+# edit it.
+[tool.pixi.feature.gpu.pypi-dependencies]
+ampere = { path = ".", editable = true, extras = ["torch", "jax"] }
+torch = { version = "*", index = "https://download.pytorch.org/whl/cu126" }
+jax = { version = "*", extras = ["cuda12"] }
+
 # W6.9: the RHMF trial's feature -- the extra's name, but the *commit* the trial
 # was run against rather than the PyPI release (0.0.2, 2025-11-24, which is
 # behind the repository by the referee-response work and carries no licence
@@ -896,3 +913,6 @@ nested = { features = ["py313", "dev", "zeus", "extinction", "netcdf", "nautilus
 # extra, and absent from CI by ruling: the twin's Hyperion rows skip in
 # every CI environment and are run by hand here.
 hyperion = { features = ["py313", "dev", "zeus", "extinction", "netcdf", "torch", "sbi", "hyperion"] }
+# W6.16: the GPU rows' environment (the `gpu` feature above). Its own solve
+# group, so no other environment's lock section can move when it is re-solved.
+gpu = { features = ["py313", "dev", "zeus", "extinction", "netcdf", "gpu"], solve-group = "gpu" }

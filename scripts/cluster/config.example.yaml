@@ -1,0 +1,32 @@
+# Local configuration for scripts/cluster/. Copy to scripts/cluster/config.yaml
+# (gitignored) and fill in every value. Nothing that identifies an account, a
+# project or a key belongs in the committed tree: this file is the template,
+# config.yaml is where the real values live. Flat "key: value" lines only (the
+# scripts parse them with sed, not a YAML library); quote nothing.
+#
+# The scripts refuse to run while any value still reads CHANGE_ME.
+
+# A label for the cluster, written into the run log's header.
+cluster_name: CHANGE_ME
+# The ~/.ssh/config host alias of a LOGIN node (not a data mover). The site
+# routes jobs to the cluster of the login host they are submitted from, so the
+# alias decides where the job runs; no partition, account or QoS is ever named.
+ssh_alias: CHANGE_ME
+# The ~/.ssh/config host alias of a data-mover node, used only for fetching logs.
+data_mover_alias: CHANGE_ME
+# The cluster username (informational; the ssh aliases carry the login).
+user: CHANGE_ME
+# The project ID that owns the project space.
+project_id: CHANGE_ME
+# The project space root on the cluster (/home is a hard quota, so nothing
+# lives there). Everything of ampere's goes under <fred_dir>/ampere.
+fred_dir: CHANGE_ME
+# The clone on the cluster, normally <fred_dir>/ampere/repo.
+repo_dir: CHANGE_ME
+# Where pixi and its cache live on the cluster, normally <fred_dir>/ampere/pixi.
+pixi_home: CHANGE_ME
+# Environment modules to load in the job before anything else, as a YAML flow
+# list of version-qualified names (Lmod is hierarchical; find them with
+# `module spider`), e.g. [cuda/12.4.0]. Usually empty: the CUDA 12 wheels
+# bundle their own libraries.
+modules: []

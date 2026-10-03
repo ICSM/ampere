@@ -120,3 +120,6 @@ ampere/utils/ALMA/ALMA.B9.csv
 # directory is ignored for the same reason.
 benchmark.json
 .benchmarks/
+# W6.16: the cluster scripts' local configuration -- the account, project and
+# key paths, never committed (copy scripts/cluster/config.example.yaml).
+scripts/cluster/config.yaml
