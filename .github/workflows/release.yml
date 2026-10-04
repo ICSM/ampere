@@ -166,22 +166,29 @@ jobs:
         env:
           VERSION: ${{ needs.build.outputs.version }}
           EXTRA: ${{ matrix.extra }}
-        # The package comes from TestPyPI and its dependencies from PyPI
-        # (`--extra-index-url`). TestPyPI can take a few minutes to serve a
-        # new upload, so the install is retried before it is called a failure.
+        # Only the wheel comes from TestPyPI (`pip download --no-deps`); its
+        # dependencies then resolve from PyPI alone, which is what a user's
+        # `pip install ampere-astro` does and what the wheel's metadata must
+        # support. Mixing the two indexes with `--extra-index-url` would let a
+        # name squatted on TestPyPI shadow a real dependency. TestPyPI can take
+        # a few minutes to serve a new upload, so the download is retried
+        # before it is called a failure.
         run: |
-          if [ "$EXTRA" = base ]; then spec="ampere-astro==${VERSION}"; else spec="ampere-astro[${EXTRA}]==${VERSION}"; fi
           python -m venv "$RUNNER_TEMP/venv"
+          pip="$RUNNER_TEMP/venv/bin/pip"
           for attempt in 1 2 3 4 5 6 7 8 9 10; do
-            if "$RUNNER_TEMP/venv/bin/pip" install --no-cache-dir \
+            if "$pip" download --no-deps --no-cache-dir --only-binary=:all: \
                 --index-url https://test.pypi.org/simple/ \
-                --extra-index-url https://pypi.org/simple/ "$spec"; then
-              exit 0
+                --dest "$RUNNER_TEMP/dist" "ampere-astro==${VERSION}"; then
+              break
             fi
+            if [ "$attempt" = 10 ]; then echo "::error::TestPyPI never served ampere-astro==${VERSION}"; exit 1; fi
             echo "attempt ${attempt} failed; waiting for TestPyPI"
             sleep 60
           done
-          exit 1
+          wheel=$(ls "$RUNNER_TEMP"/dist/ampere_astro-*.whl)
+          if [ "$EXTRA" = base ]; then spec="$wheel"; else spec="${wheel}[${EXTRA}]"; fi
+          "$pip" install --no-cache-dir "$spec"
       - name: import it
         env:
           PROBE: ${{ matrix.probe }}

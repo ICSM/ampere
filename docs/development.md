@@ -788,15 +788,21 @@ run is fixed by an ordinary PR before (a).
   `git merge-base --is-ancestor`). If the push is refused as a
   non-fast-forward, something has moved `origin/master` since: stop and look,
   never force. Then branch protection
-  on `master` (repository settings → Branches, or a ruleset): require a pull
-  request, require the CI checks by name — `lint + format-check`,
-  `actionlint`, `typecheck (pyrefly, new namespaces)`, the `test (py…)`
-  matrix, the `new-namespace suites (…)` matrices, the
-  `typecheck (pyrefly, …)` backend legs, `docs build` and
-  `minimal install (no extras)` (the path-gated ones report success when
-  skipped, so requiring them is safe) — block force-pushes and block
-  deletion. From then on `origin/master` is what the orchestrator pushes at
-  each merge; the `v2` mirror's purpose ends.
+  on `master` (repository settings → Branches, or a ruleset), as D4 rules
+  it — **CI required, no force-push** — and no more: require the CI checks
+  by name — `lint + format-check`, `actionlint`,
+  `typecheck (pyrefly, new namespaces)`, the `test (py…)` matrix, the
+  `new-namespace suites (…)` matrices, the `typecheck (pyrefly, …)` backend
+  legs, `docs build` and `minimal install (no extras)` (the path-gated ones
+  report success when skipped, so requiring them is safe) — block
+  force-pushes and block deletion. **Do not require a pull request**: merges
+  are made locally and pushed (the working agreement), so that setting would
+  block every push. Leave the administrator bypass as GitHub sets it
+  (the classic rule's "Do not allow bypassing" unchecked): the pushes come
+  from Peter's account, and the required checks are then the gate of record
+  on each push, as "The merged gate" above already has them, rather than a
+  hard block on the push itself. From then on `origin/master` is what the
+  orchestrator pushes at each merge; the `v2` mirror's purpose ends.
 - **(g) Peter points Read the Docs at the new line.** In the project's admin:
   default branch `master` (so `latest` follows it), and the `v1.0.0b1`
   version activated (the integration builds every tag, but a version must be
