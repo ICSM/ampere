@@ -3332,20 +3332,34 @@ deployment is a user's, not the library's).
   slug is `ampere`.** Recorded in the plan's decision table; carried by W6.5
   and W6.4.
 - **D14 — community health before the beta** (opened 2026-10-03 on Peter's
-  review of the community profile; W6.17): (a) the code of conduct's
-  enforcement contact — Peter's address, a project address, or the
-  maintainers listed in `CITATION.cff`; recommendation: Peter's address,
-  as the one person who merges; (b) the security policy's promise — an
-  acknowledgement within a stated number of days, or no stated time (a
-  scientific library with no network surface of its own); recommendation:
-  acknowledge within fourteen days, fix on a best-effort basis, no embargo
-  machinery; (c) whether `SECURITY.md` names the pickle/netCDF/worker
-  hazards plainly (recommendation: yes — a user who loads an archived
-  training set from a stranger should read it there); (d) the three
-  repository settings (private vulnerability reporting, secret scanning
-  with push protection, reported-content moderation) are Peter's clicks,
-  before the tag; (e) the accessibility statement deferred to a Phase 7
-  docs item (recommendation: yes — not a profile item and not a blocker).
+  review of the community profile; W6.17). **Ruled by Peter 2026-10-04 — every
+  recommendation accepted**: (a) the code of conduct's enforcement contact is
+  **Peter's address** (the one in `pyproject.toml`'s author list,
+  `peter.scicluna@eso.org`; the same address serves `SECURITY.md`'s email
+  fallback; "we can adjust email addresses when necessary" — a later change
+  is a one-line edit, not a ruling) — the alternatives were a project address
+  (no mailbox exists) and "the maintainers listed in `CITATION.cff`", which
+  does not exist as written: the repository has no `CITATION.cff` (W6.5 adds
+  one for Zenodo) and `pyproject.toml` names nine authors with one email;
+  (b) the security policy promises **an acknowledgement within fourteen
+  days, a fix on a best-effort basis, no embargo or coordinated-disclosure
+  machinery** — a scientific library with no network surface of its own, whose
+  realistic report class is unsafe deserialisation of a file the user chose to
+  load; (c) **`SECURITY.md` names the hazards plainly** — the artefact store
+  unpickles cached posteriors (`ampere/results/artefacts.py`), `ProcessExecutor`
+  pickles whole problems with their user models into workers, runs and training
+  sets are netCDF parsed by the xarray/HDF5 stack, and models and simulators
+  are user Python run with the user's privileges — so that a user who loads a
+  stranger's training set reads the warning there and a report of the
+  documented hazard is recognised as not a vulnerability; (d) the three
+  repository settings (private vulnerability reporting, secret scanning with
+  push protection, reported-content moderation for Discussions) are **Peter's
+  clicks before the tag** — the API on 2026-10-04 shows secret scanning and
+  push protection disabled, Dependabot security updates enabled, Discussions
+  on; the non-provider-pattern and validity-check extras are not asked for;
+  (e) the accessibility statement is **deferred to a Phase 7 docs item** (not
+  a profile item, not a blocker; the one thing taken now is alt text on any
+  figure W6.17 or W6.5 adds). Recorded in the plan's decision table.
 
 **Ordering (two agents at a time, gate legs scoped to the code touched).**
 **Wave 1** (fillers while the rulings are taken): W6.6 ∥ W6.8 — both
