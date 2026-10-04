@@ -162,7 +162,7 @@ It runs under a process pool with per-simulation timeouts and crash capture, so 
 .. note::
 
    This is the **current** route. ``ampere.infer.sbi`` is legacy and frozen
-   (``pip install "ampere[sbi]"`` unlocks either): it still runs and is the
+   (``pip install "ampere-astro[sbi]"`` unlocks either): it still runs and is the
    fullest worked example of an SED fit in this repository's legacy
    notebooks, but it gains nothing new and the two APIs do not interoperate
    — see :doc:`migrating`'s ``SBI_SNPE`` row. :class:`~ampere.inference.SBIEngine`

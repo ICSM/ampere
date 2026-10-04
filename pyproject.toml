@@ -3,7 +3,7 @@ requires = ["setuptools>=77.0.3", "setuptools_scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ampere"
+name = "ampere-astro"
 # version = "0.1.2"
 dynamic = ["version"]
 # SPDX expression (PEP 639); the shipped licence text is GPLv3, and
@@ -31,7 +31,7 @@ dependencies = [
     "tqdm",
     "pyphot",  # W0.9: forward-migrated onto pyphot >= 2's unit-adapter API via ampere/utils/pyphot_compat.py (pyphot < 2 still works through the same compat layer)
     # pyphot 2.1.1 imports `requests` at module level without declaring it, so
-    # a bare `pip install ampere` could not `import pyphot` (the minimal-install
+    # a bare `pip install ampere-astro` could not `import pyphot` (the minimal-install
     # CI job caught it; W2.1's out-of-scope finding). Declared here on pyphot's
     # behalf (ruled by Peter 2026-09-07) until pyphot fixes its own metadata --
     # ampere itself makes no HTTP requests. If ampere ever needs an HTTP client
@@ -149,7 +149,7 @@ ultranest = ["ultranest"]
 # and as an approximation). blackjax itself depends on jax, but ampere's *jax
 # backend* -- which is what supplies the differentiable realisation this
 # driver consumes -- needs numpyro and equinox too, so the working
-# combination is `pip install "ampere[jax,blackjax]"`. Listing only the new
+# combination is `pip install "ampere-astro[jax,blackjax]"`. Listing only the new
 # sampler here keeps one extra to one sampler, as the ruling asks; the
 # driver's refusal names the `jax` extra when the backend is missing.
 #
@@ -169,13 +169,13 @@ blackjax = ["blackjax"]
 # `cf2fcffa10bc` (the upstream `paper` tag), pinned in the pixi feature below.
 # The pin is not spelt here because PyPI refuses uploads whose metadata carries
 # a direct reference (`robusta-hmf @ git+...`), and this extra must not stop
-# the 1.0.0b1 upload; `pip install "ampere[rhmf]"` therefore resolves the
+# the 1.0.0b1 upload; `pip install "ampere-astro[rhmf]"` therefore resolves the
 # 0.0.2 release, which the trial was not run against (see `diagnostics.md` §7,
 # "Amended W6.9").
 rhmf = ["robusta-hmf"]
 # NOTE: there is deliberately no `arviz` extra any more -- arviz and a netCDF
 # engine are base dependencies as of W2.2 (see [project.dependencies] above).
-# The extra is not retained as an empty alias: `pip install "ampere[arviz]"`
+# The extra is not retained as an empty alias: `pip install "ampere-astro[arviz]"`
 # failing loudly with "does not provide the extra 'arviz'" is a better answer
 # than one that silently succeeds and teaches the wrong mental model.
 # W0.5: replaces the abandoned 'extinction' package (issue #75) for
@@ -201,7 +201,7 @@ dev = [
     "pyrefly",
     # docs (W6.4): the pip half of the documentation build, shared with
     # Read the Docs through the `docs` extra rather than duplicated.
-    "ampere[docs]",
+    "ampere-astro[docs]",
 ]
 # W6.4: exactly the pip packages the documentation build needs, so Read the
 # Docs (which runs pip, not pixi -- see .readthedocs.yaml) and the pixi `dev`
@@ -214,11 +214,11 @@ docs = [
     "nbsphinx",
     "nbconvert",
     "ipykernel",
-    "ampere[zeus]",
+    "ampere-astro[zeus]",
 ]
 # Every feature extra (not dev) composed; self-referential extras are
 # supported by pip and setuptools.
-all = ["ampere[torch,jax,sbi,zeus,extinction,nautilus,ultranest,blackjax]"]
+all = ["ampere-astro[torch,jax,sbi,zeus,extinction,nautilus,ultranest,blackjax]"]
 
 [tool.setuptools]
 include-package-data = false
@@ -437,7 +437,7 @@ channels = ["conda-forge"]
 platforms = ["linux-64"]
 
 [tool.pixi.pypi-dependencies]
-ampere = { path = ".", editable = true }
+ampere-astro = { path = ".", editable = true }
 
 [tool.pixi.tasks]
 # Fast tests: the import-quarantine suite (tests/test_imports.py) --
@@ -677,7 +677,7 @@ python = "3.14.*"
 # --- One feature per [project.optional-dependencies] extra, mirrored 1:1
 # via the editable install's `extras`, never duplicated here. ---
 [tool.pixi.feature.dev.pypi-dependencies]
-ampere = { path = ".", editable = true, extras = ["dev"] }
+ampere-astro = { path = ".", editable = true, extras = ["dev"] }
 
 # W2.11: the docs build's two environment-level requirements, declared here
 # rather than assumed to be on the machine. `pixi run docs` was red on master
@@ -702,10 +702,10 @@ ipykernel = "*"
 actionlint = "*"
 
 [tool.pixi.feature.zeus.pypi-dependencies]
-ampere = { path = ".", editable = true, extras = ["zeus"] }
+ampere-astro = { path = ".", editable = true, extras = ["zeus"] }
 
 [tool.pixi.feature.sbi.pypi-dependencies]
-ampere = { path = ".", editable = true, extras = ["sbi"] }
+ampere-astro = { path = ".", editable = true, extras = ["sbi"] }
 # Same CPU-wheel pin, same reason, as the `torch` feature below: the `sbi`
 # extra depends on torch, so without this line the weekly
 # `sbi-characterisation` job downloads the ~2 GB CUDA build too, to run on a
@@ -713,7 +713,7 @@ ampere = { path = ".", editable = true, extras = ["sbi"] }
 torch = { version = "*", index = "https://download.pytorch.org/whl/cpu" }
 
 [tool.pixi.feature.extinction.pypi-dependencies]
-ampere = { path = ".", editable = true, extras = ["extinction"] }
+ampere-astro = { path = ".", editable = true, extras = ["extinction"] }
 
 # W5.14: one feature per new sampler extra, mirrored the same 1:1 way. They
 # are separate features rather than one `nested` feature over both extras so
@@ -721,13 +721,13 @@ ampere = { path = ".", editable = true, extras = ["extinction"] }
 # [project.optional-dependencies] -- and the *environment* below is where the
 # two are composed.
 [tool.pixi.feature.nautilus.pypi-dependencies]
-ampere = { path = ".", editable = true, extras = ["nautilus"] }
+ampere-astro = { path = ".", editable = true, extras = ["nautilus"] }
 
 [tool.pixi.feature.ultranest.pypi-dependencies]
-ampere = { path = ".", editable = true, extras = ["ultranest"] }
+ampere-astro = { path = ".", editable = true, extras = ["ultranest"] }
 
 [tool.pixi.feature.blackjax.pypi-dependencies]
-ampere = { path = ".", editable = true, extras = ["blackjax"] }
+ampere-astro = { path = ".", editable = true, extras = ["blackjax"] }
 
 # W2.2: arviz and h5netcdf are base dependencies now (see
 # [project.dependencies]), so this feature no longer carries the results
@@ -746,7 +746,7 @@ netcdf4 = "*"
 # stubs these (torch = ["torch"], jax = ["jax"]); wiring the pixi features
 # up now means the eventual backend split doesn't also need a pixi change.
 [tool.pixi.feature.torch.pypi-dependencies]
-ampere = { path = ".", editable = true, extras = ["torch"] }
+ampere-astro = { path = ".", editable = true, extras = ["torch"] }
 # W2.11 (ruled 2026-09-07): `torch` from PyPI's default index resolves, on
 # linux-64, to the CUDA build -- 2.13.0+cu130 here, which drags in fifteen
 # `nvidia-*` wheels and roughly 2 GB of CUDA runtime that nothing in this
@@ -763,13 +763,13 @@ ampere = { path = ".", editable = true, extras = ["torch"] }
 #
 # This changes only what *this project's* torch environment installs. It does
 # not touch [project.optional-dependencies]'s `torch = ["torch", "pyro-ppl"]`,
-# so `pip install "ampere[torch]"` still gives a user whatever their platform's
+# so `pip install "ampere-astro[torch]"` still gives a user whatever their platform's
 # default wheel is, GPU included. A GPU environment, when the GPU smoke-test
 # item arrives, is a new pixi feature that omits this line -- not an edit to it.
 torch = { version = "*", index = "https://download.pytorch.org/whl/cpu" }
 
 [tool.pixi.feature.jax.pypi-dependencies]
-ampere = { path = ".", editable = true, extras = ["jax"] }
+ampere-astro = { path = ".", editable = true, extras = ["jax"] }
 
 # W6.16: the GPU environment, for the `tests/gpu` rows on the cluster (run by
 # hand at the release gate; see docs/development.md, "The GPU rows on the
@@ -784,7 +784,7 @@ ampere = { path = ".", editable = true, extras = ["jax"] }
 # `torch` feature's CPU-index pin, as that pin's comment instructs; it does not
 # edit it.
 [tool.pixi.feature.gpu.pypi-dependencies]
-ampere = { path = ".", editable = true, extras = ["torch", "jax"] }
+ampere-astro = { path = ".", editable = true, extras = ["torch", "jax"] }
 torch = { version = "*", index = "https://download.pytorch.org/whl/cu126" }
 jax = { version = "*", extras = ["cuda12"] }
 
@@ -891,7 +891,7 @@ torch = { features = ["py313", "dev", "zeus", "extinction", "netcdf", "torch"] }
 # `ampere/inference/**` and `ampere/backends/jax/**`.
 jax = { features = ["py313", "dev", "zeus", "extinction", "netcdf", "jax", "blackjax"] }
 # W6.9: the RHMF trial's environment -- the `jax` environment's feature set plus
-# the `rhmf` feature, so that whether `ampere[jax]`'s JAX pin and
+# the `rhmf` feature, so that whether `ampere-astro[jax]`'s JAX pin and
 # `robusta-hmf`'s are mutually satisfiable (`diagnostics.md` §2.7) is answered
 # by this environment's lock solving or not. A trial's environment, absent
 # from CI (a new leg is W6.5's or W6.16's call).

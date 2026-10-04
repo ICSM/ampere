@@ -5561,7 +5561,7 @@ packages:
   size: 901988
   timestamp: 1787044664327
 - pypi: .
-  name: ampere
+  name: ampere-astro
   requires_dist:
   - numpy
   - astropy>=4.0.0
@@ -5597,13 +5597,13 @@ packages:
   - pytest-xdist ; extra == 'dev'
   - ruff ; extra == 'dev'
   - pyrefly ; extra == 'dev'
-  - ampere[docs] ; extra == 'dev'
+  - ampere-astro[docs] ; extra == 'dev'
   - sphinx ; extra == 'docs'
   - nbsphinx ; extra == 'docs'
   - nbconvert ; extra == 'docs'
   - ipykernel ; extra == 'docs'
-  - ampere[zeus] ; extra == 'docs'
-  - ampere[blackjax,extinction,jax,nautilus,sbi,torch,ultranest,zeus] ; extra == 'all'
+  - ampere-astro[zeus] ; extra == 'docs'
+  - ampere-astro[blackjax,extinction,jax,nautilus,sbi,torch,ultranest,zeus] ; extra == 'all'
   requires_python: '>=3.12'
 - pypi: git+https://github.com/TomHilder/robusta-hmf?rev=cf2fcffa10bc6b150b6cdee76cb18980bbe908ef#cf2fcffa10bc6b150b6cdee76cb18980bbe908ef
   name: robusta-hmf

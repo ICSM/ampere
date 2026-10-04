@@ -35,8 +35,9 @@ from importlib.metadata import version
 # configuration was templated from it; it has never been installable here, so
 # `pixi run docs` failed at configuration time regardless of content
 # (W2.9's docs-build gate found this). The distribution actually installed
-# for this documentation build is 'ampere' (pyproject.toml's [project].name).
-release = version("ampere")
+# for this documentation build is 'ampere-astro' (pyproject.toml's
+# [project].name since W6.5, D13); the import name is still 'ampere'.
+release = version("ampere-astro")
 # for example take major/minor
 version = ".".join(release.split(".")[:2])
 

@@ -341,5 +341,5 @@ class TestTheLegacyAliases:
         assert isinstance(ampere.__version__, str)
         assert ampere.__version__
         assert ampere.__version__ != "0.1.2"
-        installed = importlib.metadata.version("ampere")
+        installed = importlib.metadata.version("ampere-astro")
         assert ampere.__version__ == installed

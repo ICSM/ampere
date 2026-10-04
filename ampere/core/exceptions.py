@@ -374,9 +374,9 @@ class OptionalDependencyError(AmpereError, ImportError):
         Import name of the missing package, e.g. ``"torch"``.
     extra
         The ampere extra that provides it, e.g. ``"torch"`` -- installed with
-        ``pip install ".[torch]"`` from a checkout (PyPI's ``ampere`` package
-        is unrelated). ``None`` if the package is not available through any
-        extra.
+        ``pip install "ampere-astro[torch]"`` (the distribution is
+        ``ampere-astro``; the import name is ``ampere``). ``None`` if the
+        package is not available through any extra.
     context
         What was being attempted, phrased as a noun phrase, e.g.
         ``"lowering a ParameterSet to a paramax pytree"``. Used verbatim at
@@ -395,7 +395,7 @@ class OptionalDependencyError(AmpereError, ImportError):
     ... )
     >>> print(err)
     lowering a ParameterSet requires the optional dependency 'paramax', which is not installed.
-    Install ampere's "jax" extra: pip install ".[jax]" (checkout only; PyPI's ampere is unrelated).
+    Install ampere's "jax" extra: pip install "ampere-astro[jax]"
     >>> err.package, err.extra
     ('paramax', 'jax')
     """
@@ -407,10 +407,7 @@ class OptionalDependencyError(AmpereError, ImportError):
         subject = context if context else f"this operation ({package})"
         message = f"{subject} requires the optional dependency {package!r}, which is not installed."
         if extra is not None:
-            message += (
-                f'\nInstall ampere\'s "{extra}" extra: pip install ".[{extra}]" '
-                "(checkout only; PyPI's ampere is unrelated)."
-            )
+            message += f'\nInstall ampere\'s "{extra}" extra: pip install "ampere-astro[{extra}]"'
         else:
             message += f"\nInstall it with: pip install {package}"
         super().__init__(message)

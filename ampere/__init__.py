@@ -29,7 +29,9 @@ us!
 from importlib.metadata import PackageNotFoundError, version as _version
 
 try:
-    __version__ = _version("ampere")
+    # The distribution is `ampere-astro` (D13: PyPI's `ampere` is an unrelated
+    # package); the import name stays `ampere`.
+    __version__ = _version("ampere-astro")
 except PackageNotFoundError:  # a checkout on sys.path without an install
     __version__ = "0+unknown"
 
