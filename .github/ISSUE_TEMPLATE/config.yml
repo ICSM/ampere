@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or idea
+    url: https://github.com/ICSM/ampere/discussions
+    about: Ask how to fit something, or float an idea, in Discussions.
+  - name: Security vulnerability
+    url: https://github.com/ICSM/ampere/security/advisories/new
+    about: Report privately; see SECURITY.md. Please do not open a public issue.

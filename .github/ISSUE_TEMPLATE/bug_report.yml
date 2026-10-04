@@ -1,0 +1,54 @@
+name: Bug report
+description: Something does not work, or gives a wrong answer.
+labels: ["bug"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Ampere version
+      description: >-
+        Output of `python -c "import ampere; print(ampere.__version__)"`.
+        `0+unknown` means a source checkout without a tag; say which commit.
+    validations:
+      required: true
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Backend
+      options:
+        - numpy reference
+        - torch
+        - jax
+        - not sure
+    validations:
+      required: true
+  - type: input
+    id: extras
+    attributes:
+      label: Extras and environment
+      description: Extras installed (for example sbi, zeus, extinction), Python version, operating system.
+  - type: input
+    id: engine
+    attributes:
+      label: Engine
+      description: The inference engine in use (for example emcee, dynesty, NUTS, SBIEngine).
+  - type: textarea
+    id: problem
+    attributes:
+      label: Smallest FittingProblem that shows it
+      description: A short, runnable script, with synthetic data if you can.
+      render: python
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: traceback
+    attributes:
+      label: Traceback
+      description: The full traceback or warning text, if there is one.
+      render: text
