@@ -188,6 +188,7 @@ jobs:
         run: |
           "$RUNNER_TEMP/venv/bin/python" -c "import ampere, ampere.core; print(ampere.__version__)"
           "$RUNNER_TEMP/venv/bin/python" -c "import ${PROBE}"
+          "$RUNNER_TEMP/venv/bin/python" -c "import ampere; ampere.cite()"
 
   publish-pypi:
     name: publish to PyPI

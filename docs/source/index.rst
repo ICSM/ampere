@@ -51,6 +51,7 @@ User guide
    astropy
    tutorials
    advanced
+   citing
    faqs
 
 
