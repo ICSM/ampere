@@ -253,6 +253,14 @@ _SENTINEL_KEYS = frozenset({"__ndarray__", "__unit__", "__quantity__", "__bytes_
 #: not compare equal — so such a string is wrapped rather than passed through.
 _FLOAT_SENTINELS = frozenset({_POSITIVE_INFINITY, _NEGATIVE_INFINITY, _NOT_A_NUMBER})
 
+#: The distribution name a recorded package is installed under, where it is
+#: not the recorded name itself. ampere's distribution is ``ampere-astro``
+#: (W6.5, D13: PyPI's ``ampere`` is an unrelated package), and its version is
+#: still recorded under ``"ampere"``, the name every earlier run used; without
+#: this the lookup by import name would find nothing and drop ampere's own
+#: version from the record without a word.
+_DISTRIBUTIONS: dict[str, str] = {"ampere": "ampere-astro"}
+
 #: Packages whose versions every run records. Anything else the caller adds.
 _RECORDED_PACKAGES = (
     "ampere",
@@ -721,7 +729,7 @@ def package_versions(extra: Sequence[str] = ()) -> dict[str, str]:
     versions: dict[str, str] = {"python": ".".join(str(n) for n in sys.version_info[:3])}
     for name in (*_RECORDED_PACKAGES, *extra):
         try:
-            versions[name] = _metadata.version(name)
+            versions[name] = _metadata.version(_DISTRIBUTIONS.get(name, name))
         except _metadata.PackageNotFoundError:
             continue
     return versions

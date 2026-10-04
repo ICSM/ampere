@@ -1382,8 +1382,7 @@ class SBIEngine(Engine):
     evaluated at the **observed** data. The likelihood is never written down,
     which is why this is the engine for a wrapped external simulator.
 
-    Requires the ``sbi`` extra -- ``pip install ".[sbi]"`` from a checkout
-    (PyPI's ``ampere`` package is unrelated). Both ``sbi`` and torch are
+    Requires the ``sbi`` extra -- ``pip install "ampere-astro[sbi]"``. Both ``sbi`` and torch are
     imported inside :meth:`run`, so constructing this class in the base install
     is fine and the refusal arrives when the run does.
 

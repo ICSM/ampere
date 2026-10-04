@@ -29,7 +29,9 @@ us!
 from importlib.metadata import PackageNotFoundError, version as _version
 
 try:
-    __version__ = _version("ampere")
+    # The distribution is `ampere-astro` (D13: PyPI's `ampere` is an unrelated
+    # package); the import name stays `ampere`.
+    __version__ = _version("ampere-astro")
 except PackageNotFoundError:  # a checkout on sys.path without an install
     __version__ = "0+unknown"
 
@@ -61,6 +63,12 @@ _install_legacy_aliases()
 
 
 def __getattr__(name: str):
+    # `ampere.cite()`, how to cite ampere (W6.5), resolved on first use so that
+    # `import ampere` alone still imports nothing but the alias finder.
+    if name == "cite":
+        from ._citation import cite
+
+        return cite
     if name in _LEGACY_NAMES or name == "legacy":
         import importlib
 

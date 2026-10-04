@@ -191,7 +191,7 @@ class _NestedEngine(Engine):
 
     #: The importable name of the library this driver drives.
     MODULE: ClassVar[str]
-    #: The ``pip install "ampere[...]"`` extra that supplies it.
+    #: The ``pip install "ampere-astro[...]"`` extra that supplies it.
     EXTRA: ClassVar[str]
 
     def __init__(

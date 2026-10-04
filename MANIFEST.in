@@ -1,0 +1,8 @@
+# W6.5: what the sdist leaves out. setuptools_scm's file finder puts every
+# git-tracked file in the sdist; these are tracked for the repository's sake
+# and have no business in a source distribution on PyPI. The wheel is
+# unaffected (it carries the `ampere` package and its filter library only, as
+# `check-wheel-contents` verifies).
+prune .claude
+global-exclude .DS_Store
+exclude examples/ampere_2022-12-19_10-33-51_SpectrumNGC6302__corner.png

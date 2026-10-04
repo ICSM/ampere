@@ -25,6 +25,7 @@ import numpy as np
 import pytest
 import scipy.stats as st
 
+import ampere
 from ampere.core import (
     ComplexGaussianFamily,
     Cube,
@@ -670,6 +671,10 @@ class TestProvenanceAttrs:
     def test_versions_include_the_stack_that_moves_numbers(self) -> None:
         versions = package_versions()
         assert {"python", "numpy", "scipy", "astropy"} <= set(versions)
+
+    def test_versions_record_ampere_under_its_import_name(self) -> None:
+        # The distribution is ``ampere-astro`` (W6.5, D13); the record keeps ``ampere``.
+        assert package_versions()["ampere"] == ampere.__version__
 
     def test_extra_attrs_cannot_shadow_ampere_s_own(self) -> None:
         with pytest.raises(ResultsError, match="would overwrite"):

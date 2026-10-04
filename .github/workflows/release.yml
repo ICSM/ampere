@@ -1,0 +1,226 @@
+name: release
+
+# W6.5: build ampere's sdist and wheel, publish them to TestPyPI, install them
+# from there in fresh environments, and -- after Peter's approval -- publish
+# them to PyPI. The distribution is `ampere-astro` (D13); the import name is
+# `ampere`.
+#
+# Publishing is PyPI's *trusted publishing*: each publish job asks GitHub for a
+# short-lived OIDC token (`id-token: write`) that PyPI exchanges for an upload
+# credential, matched against the trusted publisher registered for
+# `ampere-astro` (owner ICSM, repository ampere, this file's name `release.yml`,
+# and the job's environment). There is no API token, no repository secret and
+# no `password:` anywhere -- none may be added. **The file name and the two
+# environment names below are load-bearing**: renaming this file, or either
+# environment, breaks publishing until the publishers on PyPI and TestPyPI are
+# edited to match.
+#
+#   environment `testpypi` -> https://test.pypi.org (no reviewer)
+#   environment `pypi`     -> https://pypi.org (Peter is the required reviewer;
+#                             his approval in the Actions UI is the release gate)
+#
+# Two ways in:
+#
+#   * a `v*` tag pushed (Peter's act, after the release gate): build -> TestPyPI
+#     -> smoke-install every extra from TestPyPI -> wait for approval at `pypi`
+#     -> PyPI. The tag is the version (setuptools_scm, pyproject.toml).
+#   * `workflow_dispatch` with `target`: `testpypi` (the default) is the dry
+#     run -- build and publish whatever commit the dispatch names to TestPyPI,
+#     then smoke-install it; it never reaches the `pypi` job. Before the first
+#     `v*` tag such a build is a development version `0.2.devN` (the legacy
+#     `v0.1` tag is the last `v*` tag below it), which sorts below `1.0.0b1`
+#     and is harmless on TestPyPI, a scratch index. `pypi` publishes to PyPI
+#     only when dispatched *from a `v*` tag* (a re-run of a tag whose PyPI step
+#     failed); dispatched from a branch it fails in the build job, by design.
+#
+# Action references are pinned to full commit SHAs with a `# vX.Y` comment,
+# as in ci.yml (W4.10); dependabot's `github-actions` ecosystem updates them.
+# CI's `actionlint` job lints this file along with every other workflow.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Where to publish: testpypi (the dry run) or pypi (from a v* tag only)"
+        type: choice
+        options: [testpypi, pypi]
+        default: testpypi
+
+permissions:
+  contents: read
+
+# One release run per ref at a time, and never cancel one half-way through a
+# publish.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build sdist and wheel
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: refuse a PyPI dispatch that is not from a v* tag
+        if: github.event_name == 'workflow_dispatch' && inputs.target == 'pypi' && !startsWith(github.ref, 'refs/tags/v')
+        run: |
+          echo "::error::target=pypi publishes only from a v* tag; this dispatch is on ${GITHUB_REF}"
+          exit 1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # The whole history and its tags: setuptools_scm versions the build
+          # from `git describe`, which a shallow clone cannot answer.
+          fetch-depth: 0
+      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+        with:
+          environments: dev
+          cache: true
+          # frozen, not locked: see ci.yml's lint job (2026-09-22).
+          locked: false
+          frozen: true
+      - name: build
+        # PyPI and TestPyPI refuse a local version label (`+g<sha>`), which
+        # setuptools_scm adds to every untagged build; this drops it for the
+        # upload only. A tagged build has no local label to drop, and local
+        # `pixi run build-dist` builds keep theirs.
+        env:
+          SETUPTOOLS_SCM_OVERRIDES_FOR_AMPERE_ASTRO: '{local_scheme = "no-local-version"}'
+        run: pixi run -e dev build-dist
+      - name: check (twine check --strict, check-wheel-contents)
+        run: pixi run -e dev check-dist
+      - name: read the built version
+        id: version
+        run: |
+          wheel=$(ls dist/*.whl)
+          version=$(basename "$wheel" | cut -d- -f2)
+          echo "built ${version} from ${GITHUB_REF}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+      - name: a tag builds exactly its own version
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$VERSION" != "$tag" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} built version ${VERSION}, not ${tag}"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish-testpypi:
+    name: publish to TestPyPI
+    needs: build
+    if: github.event_name == 'push' || inputs.target == 'testpypi'
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/project/ampere-astro/${{ needs.build.outputs.version }}/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          # TestPyPI is a scratch index: a second dry run of the same commit
+          # rebuilds the same version, which is not an error worth failing on.
+          skip-existing: true
+
+  smoke:
+    name: install from TestPyPI (${{ matrix.extra }})
+    needs: [build, publish-testpypi]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The base install, each extra of the `all` extra on its own, and
+        # `all` itself -- each in a fresh environment, so an extra that only
+        # resolves beside another one is caught. `probe` is the import that
+        # extra exists to unlock, beyond `ampere` and `ampere.core`.
+        include:
+          - {extra: base, probe: "ampere.results"}
+          - {extra: torch, probe: "ampere.backends.torch"}
+          - {extra: jax, probe: "ampere.backends.jax"}
+          - {extra: sbi, probe: "sbi"}
+          - {extra: zeus, probe: "zeus"}
+          - {extra: extinction, probe: "dust_extinction"}
+          - {extra: nautilus, probe: "nautilus"}
+          - {extra: ultranest, probe: "ultranest"}
+          - {extra: blackjax, probe: "blackjax"}
+          - {extra: all, probe: "ampere.backends.torch, ampere.backends.jax"}
+    steps:
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.13"
+      - name: install ampere-astro==${{ needs.build.outputs.version }} from TestPyPI
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          EXTRA: ${{ matrix.extra }}
+        # Only the wheel comes from TestPyPI (`pip download --no-deps`); its
+        # dependencies then resolve from PyPI alone, which is what a user's
+        # `pip install ampere-astro` does and what the wheel's metadata must
+        # support. Mixing the two indexes with `--extra-index-url` would let a
+        # name squatted on TestPyPI shadow a real dependency. TestPyPI can take
+        # a few minutes to serve a new upload, so the download is retried
+        # before it is called a failure.
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          pip="$RUNNER_TEMP/venv/bin/pip"
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            if "$pip" download --no-deps --no-cache-dir --only-binary=:all: \
+                --index-url https://test.pypi.org/simple/ \
+                --dest "$RUNNER_TEMP/dist" "ampere-astro==${VERSION}"; then
+              break
+            fi
+            if [ "$attempt" = 10 ]; then echo "::error::TestPyPI never served ampere-astro==${VERSION}"; exit 1; fi
+            echo "attempt ${attempt} failed; waiting for TestPyPI"
+            sleep 60
+          done
+          wheel=$(ls "$RUNNER_TEMP"/dist/ampere_astro-*.whl)
+          if [ "$EXTRA" = base ]; then spec="$wheel"; else spec="${wheel}[${EXTRA}]"; fi
+          "$pip" install --no-cache-dir "$spec"
+      - name: import it
+        env:
+          PROBE: ${{ matrix.probe }}
+        run: |
+          "$RUNNER_TEMP/venv/bin/python" -c "import ampere, ampere.core; print(ampere.__version__)"
+          "$RUNNER_TEMP/venv/bin/python" -c "import ${PROBE}"
+          "$RUNNER_TEMP/venv/bin/python" -c "import ampere; ampere.cite()"
+
+  publish-pypi:
+    name: publish to PyPI
+    needs: [build, publish-testpypi, smoke]
+    # On a tag: only after TestPyPI and every smoke install succeeded. On a
+    # dispatch: only with target=pypi, which the build job has already refused
+    # unless the dispatch is from a v* tag. Never on a testpypi dispatch.
+    if: >-
+      !cancelled() && needs.build.result == 'success' && (
+        (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+          && needs.smoke.result == 'success')
+        || (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi'
+          && startsWith(github.ref, 'refs/tags/v'))
+      )
+    runs-on: ubuntu-latest
+    environment:
+      # Peter is this environment's required reviewer: the job waits here
+      # until he approves the deployment in the Actions UI.
+      name: pypi
+      url: https://pypi.org/project/ampere-astro/${{ needs.build.outputs.version }}/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2

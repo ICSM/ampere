@@ -711,6 +711,115 @@ Measured 2026-10-02 on the 16-core, 13 GB development machine (shared with a doc
 
 **Adopted.** `test-all` and `test-fast` run `-n 4 --dist loadgroup` with single-thread BLAS. `test-all` (dev): 36 min 19 s serial (W6.1's merged gate, 3290 passed / 645 skipped) against **19 min 40 s** (3290 / 645, identical); `test-fast` (dev): 4 min 54 s serial (`-n 0`, today's tree) against **2 min 32 s** (2951 / 444). `-n 0` on the command line restores a serial run; CI's jobs do not use these two tasks (they use the `test-group-*` tasks and explicit `pytest` lines), so CI is unchanged. **Proposal for W6.3 or the orchestrator, not made here**: add `-n auto --dist loadgroup` to CI's suites steps only after a measurement on a runner, since the `ci.yml` jobs are not this item's to edit.
 
+## The release procedure
+
+*(W6.5. Written for `1.0.0b1`; every later release follows the same steps
+with its own tag. **The tag, the PyPI approval, the GitHub release, the push
+of `master` to `origin/master`, branch protection and the Read the Docs
+settings are Peter's, and agents never do them** — ground rule 3. The
+orchestrator's steps are (a) and (h), plus the TestPyPI dry run before them.)*
+
+**What is already in place.** The distribution is `ampere-astro` (D13), the
+import name `ampere`. The version comes from git: setuptools_scm counts only
+`v*` tags (`pyproject.toml`'s `[tool.setuptools_scm.scm.git]`), so a build
+before the beta is a development version `0.2.devN` (the legacy `v0.1` tag is
+the last `v*` tag below it) and the `v1.0.0b1` tag builds as exactly
+`1.0.0b1`. `pixi run build-dist && pixi run check-dist` builds and checks the
+sdist and wheel locally. `.github/workflows/release.yml` publishes through
+**trusted publishing** (OIDC): the pending publishers for `ampere-astro` on
+TestPyPI and PyPI name owner `ICSM`, repository `ampere`, workflow
+`release.yml` and environments `testpypi` and `pypi` — those four strings are
+load-bearing, and no token or secret exists or may be added. Zenodo's switch
+for the repository is on, so the first GitHub *release* (not a bare tag)
+mints the DOI. If either GitHub environment restricts which refs may deploy
+to it, `testpypi` must admit the `v*` tags and the branch a dry run is
+dispatched from (`v2`, later `master`), and `pypi` the `v*` tags. The changelog (`docs/source/changelog.rst`) and the citation
+(`ampere/_citation.py`, `CITATION.cff`, `docs/source/citing.rst`) are written
+for `1.0.0b1`.
+
+**The dry run, after W6.5 merges** (the orchestrator, once, on Peter's word):
+push `master` to `origin/v2` as usual, then
+`gh workflow run release.yml --ref v2 -f target=testpypi`. It builds the
+merged commit as `0.2.devN` (the upload drops setuptools_scm's `+g<sha>`
+local label, which PyPI and TestPyPI refuse), publishes it to TestPyPI and
+installs it there in ten fresh environments — the base install, each extra of
+`all` on its own, and `all` itself. TestPyPI is a scratch index, so the
+development version is harmless; the run never reaches the `pypi` job. A red
+run is fixed by an ordinary PR before (a).
+
+**The release, in order:**
+
+- **(a) The release gate — the orchestrator.** On the candidate commit (the
+  head of `master`, pushed to `origin/v2`): all four legs, through CI's run on
+  that push (the gate of record, "The merged gate" above) or the lock's
+  fallback scripts, plus the GPU rows on the cluster ("The GPU rows on the
+  cluster" above), with the log's last line quoted in the release row.
+  `scripts/cluster/run.sh submit` checks out whatever ref it is given, so
+  before the tag exists it takes the gated commit's hash (on `origin/v2`, and
+  so fetched by the cluster's clone); if Peter would rather the rows ran on
+  the tag itself, they run between (b) and (d) instead, and the PyPI approval
+  waits for their log.
+  If the cluster cannot run them, the release row says the GPU rows were not
+  run and why; the release does not wait on them unless Peter says so. Then
+  the orchestrator tells Peter the gate is green and hands him the commands
+  for (b).
+- **(b) Peter tags and pushes the tag.** On `master` at the gated commit:
+  `git tag -a v1.0.0b1 -m "ampere 1.0.0b1"` and `git push origin v1.0.0b1`.
+  The tag is pushed alone — not `--tags`, which would also push the local
+  `spec-v1.0` and nothing else should go with it.
+- **(c) CI and the release workflow run on the tag.** `ci.yml` runs every job
+  on the tag (a tag push is never path-gated), including the `-W` docs build
+  Read the Docs repeats. `release.yml` builds, checks that the tag built
+  exactly `1.0.0b1`, publishes to TestPyPI, smoke-installs every extra from
+  there, and then **waits at the `pypi` environment** for approval.
+- **(d) Peter approves; PyPI publishes.** In the run's page on GitHub
+  (*Review deployments* → `pypi` → *Approve*). Check the smoke jobs are green
+  first. Once published, a version cannot be re-uploaded to PyPI, even after
+  deletion: a broken release is fixed by `1.0.0b2`, never by replacing
+  `1.0.0b1`.
+- **(e) Peter creates the GitHub release from the tag**
+  (`gh release create v1.0.0b1 --prerelease --title "ampere 1.0.0b1" --notes
+  "…"` with the notes pointing at the changelog page, or the web UI). Zenodo
+  archives it and mints the version DOI and the concept DOI.
+- **(f) Peter moves `origin/master` to the v2 line and protects it** (D4).
+  `git push origin master` — the v2 line replaces the legacy code there. It
+  is a plain fast-forward: the legacy head `origin/master` still points at,
+  `b8e585b`, is an ancestor of the v2 line (checked at W6.5 with
+  `git merge-base --is-ancestor`). If the push is refused as a
+  non-fast-forward, something has moved `origin/master` since: stop and look,
+  never force. Then branch protection
+  on `master` (repository settings → Branches, or a ruleset), as D4 rules
+  it — **CI required, no force-push** — and no more: require the CI checks
+  by name — `lint + format-check`, `actionlint`,
+  `typecheck (pyrefly, new namespaces)`, the `test (py…)` matrix, the
+  `new-namespace suites (…)` matrices, the `typecheck (pyrefly, …)` backend
+  legs, `docs build` and `minimal install (no extras)` (the path-gated ones
+  report success when skipped, so requiring them is safe) — block
+  force-pushes and block deletion. **Do not require a pull request**: merges
+  are made locally and pushed (the working agreement), so that setting would
+  block every push. Leave the administrator bypass as GitHub sets it
+  (the classic rule's "Do not allow bypassing" unchecked): the pushes come
+  from Peter's account, and the required checks are then the gate of record
+  on each push, as "The merged gate" above already has them, rather than a
+  hard block on the push itself. From then on `origin/master` is what the
+  orchestrator pushes at each merge; the `v2` mirror's purpose ends.
+- **(g) Peter points Read the Docs at the new line.** In the project's admin:
+  default branch `master` (so `latest` follows it), and the `v1.0.0b1`
+  version activated (the integration builds every tag, but a version must be
+  active to be served). `stable` stays empty until a final release: Read the
+  Docs never promotes a pre-release to it.
+- **(h) The record — the orchestrator.** Dates the decision-log row "The
+  beta release `1.0.0b1` (W6.5)" (`DATE`, `TAG_COMMIT`) and fills W6.5's
+  status row's gate fields (the CI run on the tag, the release run, the GPU
+  log). Then the first post-beta change lands as one commit: the concept DOI
+  into `ampere/_citation.py` (`"doi"`, and `"date_released"`), `CITATION.cff`
+  regenerated with `scripts/write_citation_cff.py`, and a DOI badge on the
+  README. The orchestrator also closes issues #57–#60 and #62 with their
+  one-line pointers (D10).
+
+**Every later release** repeats (a)–(e) and (h): a changelog section for the
+new version written before the gate, then the tag. (f) and (g) happen once.
+
 ---
 
 Earlier session records (Phase 0–1 review outcomes, the 2026-09-01 to 2026-09-09 handoffs, including the incremental mid-Phase-3 record) are archived verbatim in `docs/handoff-archive.md`.

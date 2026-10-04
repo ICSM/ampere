@@ -3,19 +3,46 @@ Installing AMPERE
 
 Ampere runs on **Python 3.12, 3.13 and 3.14**; those are the versions CI
 tests (the 3.11 floor was raised on 2026-09-22: the results layer needs
-arviz 1.x, which needs 3.12). It is not yet published on PyPI, so every route below starts from a
-clone.
+arviz 1.x, which needs 3.12).
 
-.. warning::
+Ampere has three names. The **distribution** you install is
+``ampere-astro``; the **import** name is ``ampere``; the **documentation** is
+at `ampere.readthedocs.io <https://ampere.readthedocs.io/>`_. (The PyPI name
+``ampere`` belongs to an unrelated package.)
 
-   There is an unrelated project called ``ampere`` on PyPI (a battery
-   modelling package). ``pip install ampere`` will install **that**, not this.
-   Install from the repository.
+From PyPI
+---------
 
-   Ampere's own docstrings and its ``OptionalDependencyError`` messages name
-   extras in the short form — ``pip install "ampere[jax]"`` — because that is
-   what they will be once ampere is published. Until then, read them as
-   ``pip install -e ".[jax]"`` from your clone.
+In a clean virtual environment (conda, venv, uv — whichever you prefer):
+
+.. code-block:: console
+
+    $ python -m venv .venv && source .venv/bin/activate
+    $ pip install ampere-astro
+
+That gives you the **base install**, which is a complete fitting environment
+rather than a stub: the reference backend, the whole of :mod:`ampere.core`
+including the flexible GP likelihood and its exact O(N) solver, the
+gradient-free engines, and :mod:`ampere.results`.
+
+Add extras in the usual way — the quotes stop your shell reading the
+brackets:
+
+.. code-block:: console
+
+    $ pip install "ampere-astro[torch]"
+    $ pip install "ampere-astro[jax]"
+    $ pip install "ampere-astro[all]"
+
+The ``1.0.0b1`` beta is a pre-release: ``pip install ampere-astro`` installs
+it while there is no final release, and ``pip install --pre ampere-astro``
+picks up later betas once a final release exists.
+
+From a clone (contributors)
+---------------------------
+
+To work on ampere itself, or to run its test suites, examples and
+documentation build, install from a clone of the repository:
 
 .. code-block:: console
 
@@ -23,10 +50,10 @@ clone.
     $ cd ampere
 
 With pixi (recommended)
------------------------
+~~~~~~~~~~~~~~~~~~~~~~~
 
-`pixi <https://pixi.sh>`_ is the supported route: it builds the whole
-environment — the interpreter included — from ``pyproject.toml`` and the
+`pixi <https://pixi.sh>`_ is the supported route for a clone: it builds the
+whole environment — the interpreter included — from ``pyproject.toml`` and the
 committed lock file, so everyone gets the same package set. With only pixi
 installed:
 
@@ -57,31 +84,21 @@ environments are selected with ``-e``:
     $ pixi run -e jax test-all      # the jax backend and its suites
     $ pixi run -e sbi  test-characterisation
 
-``pixi.lock`` is committed; ``.pixi/`` is not.
+``pixi.lock`` is committed; ``.pixi/`` is not. The contributing guide,
+``CONTRIBUTING.md`` at the repository's root, says what to run before a pull
+request.
 
 With pip
---------
+~~~~~~~~
 
-If you would rather manage the environment yourself, use a clean virtual
-environment (conda, venv, uv — whichever you prefer) and install the clone:
+If you would rather manage the environment yourself, install the clone
+editable, with whichever extras you need:
 
 .. code-block:: console
 
-    $ python -m venv .venv && source .venv/bin/activate
     $ pip install -e .
-
-That gives you the **base install**, which is a complete fitting environment
-rather than a stub: the reference backend, the whole of :mod:`ampere.core`
-including the flexible GP likelihood and its exact O(N) solver, the
-gradient-free engines, and :mod:`ampere.results`.
-
-Add extras in the usual way:
-
-.. code-block:: console
-
+    $ pip install -e ".[dev]"
     $ pip install -e ".[torch]"
-    $ pip install -e ".[jax]"
-    $ pip install -e ".[all]"
 
 Extras
 ------
@@ -115,6 +132,19 @@ Extras
      - zeus-mcmc
      - :class:`~ampere.inference.ZeusEngine`
 
+   * - ``nautilus``
+     - nautilus-sampler
+     - :class:`~ampere.inference.NautilusEngine`
+
+   * - ``ultranest``
+     - ultranest
+     - :class:`~ampere.inference.UltranestEngine`
+
+   * - ``blackjax``
+     - blackjax
+     - :class:`~ampere.inference.BlackjaxEngine` (MCLMC and Pathfinder);
+       needs the ``jax`` extra beside it for the jax backend it drives
+
    * - ``sbi``
      - torch, sbi
      - Simulation-based inference:
@@ -129,8 +159,9 @@ Extras
      - Legacy ``ampere.models.extinctionModels.F99Extinction``
 
    * - ``dev``
-     - pytest, pytest-cov, pytest-benchmark, coverage, ruff, pyrefly, sphinx,
-       nbsphinx, nbconvert
+     - pytest, pytest-cov, pytest-benchmark, pytest-xdist, coverage, ruff,
+       pyrefly, build, twine, check-wheel-contents, and the ``docs`` extra
+       (sphinx, nbsphinx, nbconvert, ipykernel)
      - Contributor tooling. Building this documentation also needs ``pandoc``
        and ``ipykernel``, which are not Python packages — the pixi ``dev``
        environment installs them for you.
@@ -182,8 +213,9 @@ Checking it worked
 .. code-block:: console
 
     $ python -c "import ampere; from ampere.core import FittingProblem; print(ampere.__version__)"
+    $ python -c "import ampere; ampere.cite()"
 
-and, with the ``dev`` tooling present:
+and, from a clone with the ``dev`` tooling present:
 
 .. code-block:: console
 

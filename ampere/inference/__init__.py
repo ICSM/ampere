@@ -31,8 +31,7 @@ What is here
     likelihood. Also a base dependency.
 :class:`ZeusEngine`
     Ensemble slice sampling. Needs the ``zeus`` extra -- ``pip install
-    ".[zeus]"`` from a checkout (PyPI's ``ampere`` package is unrelated); the
-    import is lazy and the refusal names the extra.
+    "ampere-astro[zeus]"``; the import is lazy and the refusal names the extra.
 :class:`NautilusEngine`, :class:`UltranestEngine`
     Two more **nested** samplers, added at W5.14 from the inference-extensions
     memo's tier 1, sharing one driver
