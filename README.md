@@ -142,8 +142,10 @@ and jax; nothing in ampere needs them together.
   `sbi` extra). All are covered by tests, so none can rot unnoticed.
 - **Design**: `docs/design/` holds the frozen contract specifications
   (`spec-v1.0`) the v2 API implements — start with `architecture.md`.
-- **Contributing**: `DEVELOPMENT_PLAN.md` is the source of truth for where the
-  redesign is going; `WORK_ITEMS.md` is the current work, item by item; and
+- **Contributing**: see `CONTRIBUTING.md` for how to set up, what to run
+  before a pull request, and what is frozen. For the agent-facing reader,
+  `DEVELOPMENT_PLAN.md` is the source of truth for where the redesign is
+  going; `WORK_ITEMS.md` is the current work, item by item; and
   `docs/development.md` is the onboarding note.
 
 Legacy ampere — `ampere.data`, `ampere.models`, `ampere.infer` — is the v1
