@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77.0.3", "setuptools_scm>=8"]
+requires = ["setuptools>=77.0.3", "setuptools_scm>=9.2"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -199,6 +199,14 @@ dev = [
     # lint/format + types
     "ruff",
     "pyrefly",
+    # W6.5: the release build, run by `pixi run build-dist` / `check-dist`
+    # locally and by .github/workflows/release.yml on a tag. `build` makes the
+    # sdist and wheel, `twine check` validates the metadata PyPI will render,
+    # and `check-wheel-contents` catches a wheel that ships what it should not
+    # (tests, docs, stray top-level modules) or misses what it should.
+    "build",
+    "twine",
+    "check-wheel-contents",
     # docs (W6.4): the pip half of the documentation build, shared with
     # Read the Docs through the `docs` extra rather than duplicated.
     "ampere-astro[docs]",
@@ -232,6 +240,22 @@ include = ["ampere*"]
 ampere = ["ampere_allfilters.hd5"]
 
 [tool.setuptools_scm]
+
+# W6.5: only `v*` tags are versions. Without the match, `git describe` reaches
+# `spec-v1.0` (the contract-freeze tag of 2026-09-03), which setuptools_scm
+# reads as 1.0, so every pre-release build was `1.1.devN+g<sha>` -- a version
+# that sorts *above* the beta `1.0.0b1`. With it, `git describe` reaches the
+# legacy `v0.1` tag instead (the one older `v*` tag, on origin since v1), so a
+# build before the beta is `0.2.devN+g<sha>`, below `1.0.0b1`, and the
+# `v1.0.0b1` tag itself builds as exactly `1.0.0b1`. The `archive/*` tags never
+# matched and still do not. The version scheme is otherwise setuptools_scm's
+# default; there is deliberately no `fallback_version`: the first real version
+# is the tag's. (The table form, not the top-level `git_describe_command`,
+# which setuptools_scm 10 deprecates with a warning; the table needs
+# setuptools_scm 9 or later -- 9.0.0 was yanked, hence the 9.2 floor in
+# [build-system].)
+[tool.setuptools_scm.scm.git]
+describe_command = "git describe --dirty --tags --long --match 'v*'"
 
 [tool.ruff]
 # 100, not ruff's 88 default: wide enough that the pre-existing W0.4/W0.5
@@ -654,6 +678,14 @@ format-check = "ruff format --check . --exclude tests/characterisation"
 # needs no per-library list and was kept at the merge.)
 typecheck = "bash -c 'dirs=\"\"; excludes=\"\"; for d in ampere/core ampere/backends ampere/inference ampere/results; do [ -d \"$d\" ] && dirs=\"$dirs $d\"; done; for b in torch jax; do if [ -d \"ampere/backends/$b\" ] && ! python -c \"import $b\" >/dev/null 2>&1; then echo \"typecheck: skipping ampere/backends/$b -- $b is not installed here; run pixi run -e $b typecheck\"; excludes=\"$excludes --project-excludes=ampere/backends/$b/**\"; fi; done; if [ -z \"$dirs\" ]; then echo \"typecheck: none of ampere/{core,backends,inference,results} exist yet -- nothing to check\"; else pyrefly check $excludes $dirs; fi'"
 docs = "sphinx-build -W --keep-going -b html docs/source docs/_build/html"
+# W6.5: the release build. `build-dist` writes the sdist and the wheel to
+# `dist/` (cleared first, so `check-dist` never sees a stale file);
+# `check-dist` is what .github/workflows/release.yml runs before anything is
+# uploaded. The version comes from git through setuptools_scm, so a build
+# outside a `v*` tag is a `0.2.devN+g<sha>` development version by design
+# (see [tool.setuptools_scm] above).
+build-dist = "rm -rf dist && python -m build"
+check-dist = "twine check --strict dist/* && check-wheel-contents dist/*.whl"
 # W4.10 (3): `actionlint` validates `.github/workflows/*.yml` -- action
 # inputs, expression syntax, embedded `run:` shell via shellcheck, the lot.
 # It ships as a binary on conda-forge (`pixi search actionlint`), so this is
