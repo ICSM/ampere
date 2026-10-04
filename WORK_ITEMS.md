@@ -3385,7 +3385,11 @@ deployment is a user's, not the library's).
   (legacy is frozen; nothing is pushed to `origin/master` before the switch).
   **Recommendation: (a)**, with the release procedure's step (f) moved to
   before the dry run and `ci.yml`'s `v2` trigger left until a later
-  housekeeping. Awaits Peter's ruling.
+  housekeeping. **Ruled by Peter 2026-10-05: (a) — "go ahead with the
+  switch"; done the same day: `origin/master` fast-forwarded `b8e585b` →
+  `fef26ca` by the orchestrator, `release.yml` registered, D4's switch
+  thereby taken before the tag rather than at it; branch protection and the
+  Read the Docs default branch remain Peter's at the tag.**
 
 **Ordering (two agents at a time, gate legs scoped to the code touched).**
 **Wave 1** (fillers while the rulings are taken): W6.6 ∥ W6.8 — both
