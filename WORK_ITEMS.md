@@ -3361,6 +3361,32 @@ deployment is a user's, not the library's).
   a profile item, not a blocker; the one thing taken now is alt text on any
   figure W6.17 or W6.5 adds). Recorded in the plan's decision table.
 
+- **D15 — the `origin/master` switch before the dry run** (opened 2026-10-05
+  when the dry run was attempted; W6.5 merged at `f4ea081`): GitHub registers
+  a `workflow_dispatch` workflow only from the repository's **default
+  branch**, and `release.yml` lives on `v2` — `gh api
+  repos/ICSM/ampere/actions/workflows/release.yml` returns 404 and the
+  workflow list shows `ci.yml` alone — so the TestPyPI dry run
+  (`gh workflow run release.yml --ref v2 -f target=testpypi`) cannot be
+  dispatched while `origin/master` is the legacy line. A tag push would
+  still trigger the workflow (push-triggered workflows run from the pushed
+  ref), but then the first ever run of `release.yml` is the beta itself, with
+  no dry run before it. Options: (a) **move D4's switch forward** — Peter
+  fast-forwards `origin/master` to the gated v2 head *before* the dry run
+  (`git push origin master`; `b8e585b` is an ancestor, so no force), and the
+  dry run, the tag and the rest of the procedure follow with `master` as the
+  default branch from the start; legacy users pulling `master` get v2 a few
+  days before the tag, with the legacy code still importable under its old
+  names (W6.0's aliases), which is the state the tag would give them anyway;
+  branch protection can go on at the same time or at the tag as D4 says;
+  (b) skip the dry run and let the tag's run be the first — a red smoke leg
+  then means a tag already pushed, a fix, and `v1.0.0b2` as the first beta;
+  (c) put `release.yml` on the legacy `master` by a commit there — ruled out
+  (legacy is frozen; nothing is pushed to `origin/master` before the switch).
+  **Recommendation: (a)**, with the release procedure's step (f) moved to
+  before the dry run and `ci.yml`'s `v2` trigger left until a later
+  housekeeping. Awaits Peter's ruling.
+
 **Ordering (two agents at a time, gate legs scoped to the code touched).**
 **Wave 1** (fillers while the rulings are taken): W6.6 ∥ W6.8 — both
 Sonnet, disjoint files, no ruling needed beyond D10's alias note; W6.9 in
