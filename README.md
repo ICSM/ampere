@@ -25,7 +25,7 @@ on the jax backend takes a value *and* a gradient of a 20 000-point GP
 likelihood in **4.7 ms**. The whole study is
 `docs/source/m2_misspecification.rst`, and it is re-run by `pixi run test-m2`.
 
-Ampere is in **alpha**, undergoing a v2 redesign. What is there today is a
+Ampere is in **beta** (`1.0.0b1`), the first release of its v2 redesign. It is a
 backend-neutral core of frozen contracts, three backends that implement it
 (pure numpy/scipy, torch and jax), and nine inference engines written once
 against the contracts and run on any of them. One of them is for models with no
@@ -72,30 +72,13 @@ jointly or by reweighting archived single-object fits
 
 ## Installation
 
-Ampere needs Python 3.11–3.13 and is not on PyPI yet, so start from a clone.
-
-> **Note:** there is an unrelated project called `ampere` on PyPI (a battery
-> modelling package). `pip install ampere` installs *that*, not this.
-
-```bash
-git clone https://github.com/ICSM/ampere.git
-cd ampere
-```
-
-**With [pixi](https://pixi.sh) — the supported route.** It builds the whole
-environment, interpreter included, from `pyproject.toml` and the committed
-lock file:
+Ampere needs Python 3.12–3.14. It has three names: the distribution on PyPI
+is **`ampere-astro`**, the import name is **`ampere`**, and the documentation
+is at **<https://ampere.readthedocs.io/>**. (The PyPI name `ampere` belongs to
+an unrelated package.)
 
 ```bash
-pixi install -e dev
-pixi run test-all        # everything the v2 namespaces own
-pixi run docs            # build the documentation
-```
-
-**With pip**, in a clean virtual environment:
-
-```bash
-pip install -e .
+pip install ampere-astro
 ```
 
 That is the base install, and it is a complete fitting environment rather than
@@ -114,23 +97,43 @@ h5netcdf are base dependencies, not extras, for exactly that reason.
 | `blackjax` | blackjax | `ampere.inference.BlackjaxEngine` (with `jax`) |
 | `sbi` | torch, sbi | `ampere.inference.SBIEngine` (simulation-based inference) and legacy `ampere.infer.sbi` |
 | `extinction` | dust_extinction | legacy `ampere.models.extinctionModels.F99Extinction` |
-| `dev` | pytest, ruff, pyrefly, sphinx, … | contributor tooling |
+| `dev` | pytest, ruff, pyrefly, sphinx, build, twine, … | contributor tooling |
 | `all` | every feature extra above | — |
 
 ```bash
-pip install -e ".[torch]"     # or [jax], [zeus], [all], …
+pip install "ampere-astro[torch]"     # or [jax], [zeus], [all], …
 ```
 
-The corresponding pixi environments are `pixi run -e torch …`,
-`pixi run -e jax …`, `pixi run -e sbi …`. No environment carries both torch
-and jax; nothing in ampere needs them together.
+**From a clone — the contributor route.** To work on ampere itself, clone the
+repository and use [pixi](https://pixi.sh), which builds the whole
+environment, interpreter included, from `pyproject.toml` and the committed
+lock file:
+
+```bash
+git clone https://github.com/ICSM/ampere.git
+cd ampere
+pixi install -e dev
+pixi run test-all        # everything the v2 namespaces own
+pixi run docs            # build the documentation
+```
+
+(or `pip install -e ".[dev]"` in an environment of your own). The
+corresponding pixi environments are `pixi run -e torch …`,
+`pixi run -e jax …`, `pixi run -e sbi …`. Only the `gpu` environment, which
+exists to run `tests/gpu` on an accelerator, carries both torch and jax;
+nothing in ampere needs them together.
 
 ## Where to look next
 
 - **Documentation**: hosted per version at <https://ampere.readthedocs.io/>, or
   build it yourself with `pixi run docs`, then `docs/_build/html/index.html`.
+  What each release added is the
+  [changelog](https://ampere.readthedocs.io/en/latest/changelog.html).
   Start at the architecture overview (`docs/source/overview.rst`), then the
   misspecification study (`docs/source/m2_misspecification.rst`).
+- **Citing**: `ampere.cite()` prints the citation (or
+  `ampere.cite(format="bibtex")`); `CITATION.cff` carries the same facts for
+  GitHub's "Cite this repository" button.
 - **Runnable examples**: `examples/m2_misspecification` (the study above),
   `examples/sed_composition` (a spectrum and a photometric catalogue, one
   model, the simplest multi-instrument composition), `examples/interferometry`
