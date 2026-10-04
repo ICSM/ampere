@@ -1,0 +1,21 @@
+name: Documentation gap
+description: Something in the documentation is missing, unclear or wrong.
+labels: ["documentation"]
+body:
+  - type: input
+    id: page
+    attributes:
+      label: Page or section
+      description: A link, or the file and heading.
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What is missing, unclear or wrong?
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: What would have helped?

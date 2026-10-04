@@ -66,7 +66,7 @@ API reference
 Contributing
 ------------
 
-We very much welcome contributions to AMPERE! Please take a look at our `github repository <https://github.com/ICSM/ampere/>`_ for more information on how to contribute!
+We very much welcome contributions to AMPERE! The `contributing guide <https://github.com/ICSM/ampere/blob/master/CONTRIBUTING.md>`_ covers setting up, the checks to run before a pull request, and what is frozen; questions are welcome in the repository's `Discussions <https://github.com/ICSM/ampere/discussions>`_.
 
 Indices and tables
 ==================
