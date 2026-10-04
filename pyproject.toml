@@ -10,7 +10,7 @@ dynamic = ["version"]
 # ampere/__init__.py declares "version 3 ... or (at your option) any later
 # version".
 license = "GPL-3.0-or-later"
-license-files = ["licenses/gpl.txt"]
+license-files = ["LICENSE"]
 description = ""
 classifiers = [
     "Development Status :: 3 - Alpha",
