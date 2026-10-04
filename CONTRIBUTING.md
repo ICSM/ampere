@@ -43,7 +43,9 @@ which tasks you ran and what they reported.
 - One topic per branch and per pull request. Name the branch for what it
   does, for example `fix-closure-phase-wrap` or `w6.17-community-health`
   for a numbered work item.
-- Open the pull request against the repository's default branch. Do not push to it directly.
+- Open the pull request against `master`, the development branch from the
+  `v1.0.0b1` release onward (before that release the v2 line lives on `v2`).
+  Do not push to it directly.
 - The maintainer, Peter Scicluna, reviews and merges every change. Expect
   questions; a review is a conversation, not a verdict.
 - Stay in scope. If you notice another problem while working, record it in
