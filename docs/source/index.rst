@@ -24,7 +24,9 @@ chi-square fit reports a parameter **113 posterior standard deviations** away
 from the truth, while the flexible likelihood stays within 0.6 and keeps the
 truth inside its 68 % interval.
 
-Ampere is in its **v2** redesign. The current release is a backend-neutral
+This is the **v2** redesign, released as the ``1.0.0b1`` beta —
+``pip install ampere-astro``, then ``import ampere`` (see :doc:`install`;
+what is new is the :doc:`changelog`, and how to cite it is :doc:`citing`). It is a backend-neutral
 core of frozen contracts with three backends implementing it — pure
 numpy/scipy, torch, and jax — and nine inference engines written once against
 the contracts and run on any of them, one of them being
@@ -51,6 +53,7 @@ User guide
    astropy
    tutorials
    advanced
+   changelog
    citing
    faqs
 
