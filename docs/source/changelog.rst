@@ -7,142 +7,173 @@ can do with each release, not which pull requests made it.
 1.0.0b1 — the first beta of ampere v2
 -------------------------------------
 
-*Released from the* ``v1.0.0b1`` *tag.* This is the first release of the
-redesigned ampere ("v2") and the first ampere published on PyPI. The major
-version marks the redesign: v2 is a new package grown beside the old one, not
-an upgrade of it. The final release will be ``1.0.0``.
+*Released from the* ``v1.0.0b1`` *tag on 2026-10-05.*
 
-**Three names.** The distribution on PyPI is ``ampere-astro``
-(``pip install ampere-astro``; the name ``ampere`` on PyPI belongs to an
-unrelated package); the import name is ``ampere``; the documentation is at
-https://ampere.readthedocs.io/. Extras are spelt the same way:
-``pip install "ampere-astro[jax]"``. See :doc:`install`.
+What this release is
+~~~~~~~~~~~~~~~~~~~~
 
-**The legacy code is kept.** The v1 code that produced ampere's published
-science — ``ampere.data``, ``ampere.models``, ``ampere.infer`` — now lives in
-``ampere.legacy``, still answers to its old import names, and is kept
-indefinitely: it is frozen, receives only critical fixes, and will not be
-removed. It implements none of the v2 contracts, and the two halves do not
-interoperate. :doc:`legacy` is the policy; :doc:`migrating` maps every legacy
-class and call onto its v2 counterpart.
+ampere v2 is a ground-up redesign of the package, and this beta is its first
+release and the first ampere on PyPI. The idea is the same as before — fit a
+physical model to heterogeneous astronomical data under a likelihood that is
+robust to the model being imperfect — but the package around that idea is
+new: you *declare* a fit from named parts (parameters with priors, a model,
+an instrument, a dataset with its likelihood, an engine) instead of
+subclassing a framework, and the same declaration runs unchanged on numpy,
+torch or jax. The old code is not gone: it lives in ``ampere.legacy``, still
+answers to its old import names, and is kept indefinitely (see
+:doc:`legacy`). The two halves do not interoperate; :doc:`migrating` is the
+bridge, with every legacy name mapped and the same fit shown side by side.
+The final release of this line will be ``1.0.0``.
 
-What follows is what the beta lets you do, phase by phase of the redesign.
+Installing it: ``pip install ampere-astro`` (the name ``ampere`` on PyPI
+belongs to an unrelated package); the import name is still ``ampere``. The
+base install is a complete fitting environment — the reference backend, the
+flexible likelihood with its exact O(N) solver, the gradient-free engines and
+the results tools. Extras add a backend or an engine:
+``pip install "ampere-astro[torch]"``, ``"[jax]"``, ``"[sbi]"``,
+``"[nautilus]"``, ``"[ultranest]"``, ``"[blackjax]"``, ``"[zeus]"``,
+``"[extinction]"`` or ``"[all]"``. Python 3.12 to 3.14. See :doc:`install`.
 
-Phase 0 — a safety net under the old code
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+What you can fit
+~~~~~~~~~~~~~~~~
 
-The legacy examples are pinned by characterisation tests with fixed seeds, so
-the v1 code keeps producing the numbers it always did. ``import ampere`` no
-longer fails because of a broken corner of the legacy code: the modules that
-did not import (issues #74–#77) are fixed or import lazily, the abandoned
-``extinction`` package is replaced by ``dust_extinction`` (the ``extinction``
-extra), and pyphot 2 is supported. Python 3.12, 3.13 and 3.14 are supported
-and tested.
+* **Spectra and SEDs**, singly or combined, including photometry and spectra
+  in one fit with the calibration uncertainty of each instrument as a
+  parameter (:doc:`sed_composition`, :doc:`photometry_spectra`). Synthetic
+  photometry comes from a bundled filter library or one of your own.
+* **Images**, with PSF convolution and noise correlated across the grid
+  (:doc:`image`).
+* **Interferometric visibilities and closure phases**, with Fourier sampling
+  of an image model, bandwidth and time smearing, a von Mises likelihood for
+  the phases and a complex Gaussian process for correlated visibility
+  residuals (:doc:`interferometry`).
+* **Astrometric time series** (:doc:`astrometry`), and other time series
+  through the same container.
+* **Several objects at once**: a population fitted hierarchically in one
+  joint run, or built afterwards by reweighting archived single-object fits
+  (:doc:`population`).
+* **Anything with a simulator and no likelihood** — a radiative-transfer code
+  behind a Python call, say — by simulation-based inference (below).
 
-Phase 1 — the contracts
+Data arrive as plain arrays in containers (:class:`~ampere.core.Spectrum`,
+:class:`~ampere.core.Image`, :class:`~ampere.core.VisibilitySet`,
+:class:`~ampere.core.TimeSeries`) indexed by their coordinates, with masks
+for missing values and no assumption of a regular grid. There are no file
+readers yet (see the limitations below).
+
+The flexible likelihood
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-ampere v2 is built on a small set of frozen, backend-neutral contracts in
-:mod:`ampere.core`: parameters and priors (with ties, fixed values and
-buffers), result containers indexed by their coordinates with first-class
-masks and no assumption of a regular grid, instruments as chains of
-transformations, likelihood families and noise models, datasets, and the
-:class:`~ampere.core.FittingProblem` that composes them. Every model,
-instrument and likelihood you write against them runs on every backend.
-:doc:`overview` is the map and :doc:`concept` the idea behind the flexible
-likelihood.
+The reason to use ampere. A Gaussian process over the residuals absorbs the
+structure a wrong or incomplete model leaves behind and is marginalised
+while the physical parameters are fitted, so the posterior on those
+parameters stays honest. On a deliberately misspecified 20 000-point
+spectrum, a chi-square fit lands 113 posterior standard deviations from the
+truth; the flexible likelihood lands within 0.6 (:doc:`m2_misspecification`;
+:doc:`concept` explains why). Attaching it to a dataset is one line —
+:class:`~ampere.core.GaussianProcessNoise` in place of
+:class:`~ampere.core.IndependentNoise` — and from there:
 
-Phase 2 — three backends, and the flexible likelihood at scale
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+* **Kernels** (:doc:`kernels`): seven families, sums and products, spectral
+  mixtures, a damped oscillator for periodic residuals, a selector for which
+  axis of multi-dimensional data a kernel acts on, and a registry for a
+  kernel of your own. Non-stationary noise through a warped kernel, and a
+  shrinkage prior that switches off noise components a fit does not need.
+* **Solvers** (:doc:`solvers`): the default Matérn-3/2 kernel is solved
+  exactly in O(N) by the quasiseparable solver, with the dense solver beside
+  it; for data too large or too high-dimensional for either there are
+  reduced-rank, Vecchia, inducing-point and structured-grid solvers, each
+  documented with its error envelope.
+* **Joint noise** across several channels, for astrometric and similar data.
+* **Other likelihood families** where a Gaussian is wrong: Student-t,
+  Cauchy, Poisson, Rice, von Mises and complex Gaussian, all with the same
+  noise models.
 
-Three backends implement the contracts and are held to one another by a
-shared conformance suite: a pure numpy/scipy **reference** backend, which is
-the base install and needs no extra; **torch** (``pip install
-"ampere-astro[torch]"``); and **jax** (``"ampere-astro[jax]"``). The flexible
-likelihood — a Gaussian process over the residuals, marginalised while the
-physical parameters are fitted — defaults to a Matérn-3/2 kernel solved
-exactly in **O(N)** by a quasiseparable solver (``QuasisepGP``), with the
-dense solver beside it. Fits run under emcee and dynesty on any backend, and
-under NUTS and variational inference on torch and jax. Every run is an ArviZ
-``DataTree`` with provenance — the problem's hash, the library versions, the
-seed — that can be saved, reloaded and plotted with :mod:`ampere.results`'s
-plots (corner, trace, posterior predictive, residuals, GP localisation).
-:doc:`m2_misspecification` is the flagship measurement: on a deliberately
-misspecified 20 000-point spectrum, a chi-square fit lands 113 posterior
-standard deviations from the truth and the flexible likelihood within 0.6.
-:doc:`sed_composition` and :doc:`photometry_spectra` are the first fits to
-read.
+Models and instruments
+~~~~~~~~~~~~~~~~~~~~~~
 
-Phase 3 — simulation-based inference
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+A model is a class with named parameters and an ``evaluate`` method that
+returns a container; written once, it runs on every backend. Priors are any
+scipy distribution, with ties, fixed values and conditional priors
+(:doc:`arbitrary_priors`, :doc:`conditional_priors`). Any
+**astropy.modeling** model, compound models included, becomes an ampere model
+with :func:`~ampere.core.from_astropy` (:doc:`astropy`). An **instrument** is
+a chain of transformations — resampling, convolution, synthetic photometry,
+a calibration scale — applied to the model's prediction before it meets the
+data, so one physical model serves several instruments.
 
-:class:`~ampere.inference.SBIEngine` fits a model with no likelihood to write
-down — a compiled radiative-transfer code behind a Python call, say — by
-neural posterior, likelihood or ratio estimation, and by truncated marginal
-ratio estimation for a tighter fit (the ``sbi`` extra). Simulations run in
-batches under a process pool with timeouts and crash capture; trained
-posteriors are cached and reused; runs are reproducible from the problem's
-seed; and calibration checks (SBC, TARP, coverage) tell you whether to trust
-the result. Embedding networks read any container through one
-coordinate–value–mask encoding, so irregular sampling and missing data need
-no special handling. :doc:`sbi` is the tutorial and :doc:`wstat_comparison`
-a worked calibration study.
+Inference and results
+~~~~~~~~~~~~~~~~~~~~~
 
-Phase 4 — new observables, kernels and astropy models
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Nine engines share one interface, so changing sampler is changing one name:
+:class:`~ampere.inference.EmceeEngine`, :class:`~ampere.inference.ZeusEngine`
+and :class:`~ampere.inference.DynestyEngine` on any backend;
+:class:`~ampere.inference.NautilusEngine` and
+:class:`~ampere.inference.UltranestEngine` for nested sampling with an
+evidence; :class:`~ampere.inference.NUTSEngine` and
+:class:`~ampere.inference.VIEngine` (mean-field, full-rank, Laplace and
+normalising-flow guides) with gradients on torch and jax;
+:class:`~ampere.inference.BlackjaxEngine` (MCLMC, Pathfinder) on jax.
+:func:`~ampere.inference.optimise` gives a fast point estimate or Laplace
+approximation and :func:`~ampere.inference.warm_start_gp` the GP's
+hyperparameters in milliseconds; any engine can start from either
+(:doc:`optimisers`).
 
-Interferometric **visibilities and closure phases** fit end to end, with
-Fourier sampling of an image model, bandwidth and time smearing, a von Mises
-likelihood for phases and a circular complex GP for correlated visibility
-residuals (:doc:`interferometry`, which is also the template for adding an
-observable of your own). **Astrometric time series** were then added by
-following that template (:doc:`astrometry`). The flexible likelihood's
-**kernel algebra** grew to seven families, sums, products, spectral mixtures,
-a damped oscillator for periodic residuals, an ``axes=`` selector for
-multi-axis data and a public registry for your own quasiseparable term
-(:doc:`kernels`). Any **astropy.modeling** model, compound models included,
-wraps as an ampere model with :func:`~ampere.core.from_astropy`, with an
-opt-in differentiable translation for six common models (:doc:`astropy`).
+:class:`~ampere.inference.SBIEngine` fits a model with no likelihood by
+neural posterior, likelihood or ratio estimation, or truncated marginal
+ratio estimation; simulations run in a process pool with timeouts and crash
+capture, trained networks are cached and reused, one network can be
+amortised over differently-sampled observations, and calibration checks
+(simulation-based calibration, TARP, coverage) say whether to trust the
+result (:doc:`sbi`, :doc:`wstat_comparison`).
 
-Phase 5 — scale and advanced inference
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Every run returns an ArviZ ``DataTree``: the posterior, the sample
+statistics, the posterior predictive and residuals, and provenance — the
+problem's hash, the seed, the library versions — so a result can be saved
+(:func:`~ampere.results.to_netcdf`), reloaded, compared and reproduced.
+:mod:`ampere.results` plots it: corner, trace, posterior predictive,
+residuals, and a view of where the GP absorbed structure the model missed.
 
-**Approximate GP solvers** for data too large or too high-dimensional for the
-exact ones — reduced-rank (``HilbertSpaceGP``, ``EquispacedFourierGP``),
-Vecchia, inducing-point and structured-grid solvers — each chosen by
-measurement and documented with its error envelope (:doc:`solvers`).
-**Images**, with PSF convolution and correlated noise over the grid
-(:doc:`image`). **Non-stationary noise** through a warped kernel, and a
-shrinkage prior that switches off noise components a fit does not need
-(:doc:`kernels`). **Joint noise** over several channels, for astrometric and
-similar data. **More engines** behind their own extras: nautilus and
-UltraNest nested sampling (``nautilus``, ``ultranest``) and blackjax's MCLMC
-and Pathfinder (``blackjax``, with ``jax``), plus more variational guide
-families — nine engines in all, written once against the contracts.
-**Amortised SBI** over the observation context, so one trained network
-serves differently-sampled observations. **Populations**: many objects fitted
-hierarchically in one joint fit, or by reweighting archived single-object
-fits (:doc:`population`). And a measured optimisation pass that made the
-common paths several times faster without changing a number.
+What changed in the interface
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Phase 6 — documentation, migration and this release
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+If you have code against the old ampere, this is what to expect.
 
-**Optimisers** for a fast point estimate and a warm start:
-:func:`~ampere.inference.optimise` (multi-start scipy minimisation on any
-backend, gradient MAP on torch and jax, or a Laplace approximation) and
-:func:`~ampere.inference.warm_start_gp` for a GP's hyperparameters in
-milliseconds; any sampling engine can start from the result
-(:doc:`optimisers`). The **documentation** was rebuilt around v2 and is
-published per version on Read the Docs, with every public name documented;
-the **migration guide** (:doc:`migrating`) and v2 twins of the legacy
-examples' models sit beside the originals, and :doc:`photometry_spectra`
-shows calibration uncertainty in a combined fit. SBI training sets accept
-non-numeric coordinates, and scoring the stored draws in
-:class:`~ampere.inference.SBIEngine` is optional. The package is on PyPI as
-``ampere-astro``, built and published by a release workflow; it can be cited
-with :func:`ampere.cite` (:doc:`citing`); and the repository has a
-contributing guide, a code of conduct and a security policy.
+* **The name on PyPI** is ``ampere-astro``; ``import ampere`` is unchanged.
+* **The old modules moved**: ``ampere.data``, ``ampere.models``,
+  ``ampere.infer``, ``ampere.utils`` and ``ampere.logger`` are now
+  ``ampere.legacy.data`` and so on. The old names still import, as aliases
+  of the same modules, with no warning and no removal date, so old scripts
+  keep running (:doc:`legacy`).
+* **A fit is declared, not subclassed.** Where the old code asked for a
+  ``Model`` subclass with ``__call__``, ``lnprior`` and ``prior_transform``,
+  a ``Spectrum`` data object carrying its own noise parameters, and an
+  ``EmceeSearch`` holding both, v2 separates them:
+
+  .. code-block:: python
+
+      model = ASimpleModel(wavelength)                  # parameters and priors declared inside
+      observed = Spectrum(wave, flux, uncertainty=uncertainty)
+      dataset = Dataset(observed, likelihood=Likelihood(GaussianFamily(), GaussianProcessNoise(...)))
+      problem = FittingProblem(model, [dataset], seed=1)
+      run = EmceeEngine(problem, walkers=32).run(steps=2000, burn_in=1000)
+
+  Priors attach to named :class:`~ampere.core.Parameter` declarations; the
+  noise model is a named choice on the dataset; the engine is bound to the
+  problem rather than mixed into the model. The same fit is shown in full,
+  old and new, in :doc:`migrating`.
+* **Results are a** ``DataTree``, not the sampler's raw chain and a
+  ``postProcess`` call; plots are functions in :mod:`ampere.results` that
+  take the tree.
+* **Filters and photometry** are the reference backend's
+  :class:`~ampere.backends.reference.SyntheticPhotometry` over a bundled
+  pyphot library; the legacy filter-building helpers are carried unchanged
+  under ``ampere.legacy.utils``.
+* **Backends are explicit.** The base install is the numpy reference
+  backend; torch and jax are extras, chosen when a model or problem is
+  built, and a device (a GPU) is asked for by name and never detected.
+
+The complete name-by-name table is :ref:`migrating-every-name`.
 
 Known limitations at the beta
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
