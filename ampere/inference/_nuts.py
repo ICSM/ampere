@@ -518,7 +518,9 @@ class NUTSEngine(Engine):
         if terms is None:
             return None
         return [
-            [{label: float(np.asarray(value)) for label, value in terms(y).items()} for y in chain]
+            # ``float(value)``, not ``float(np.asarray(value))``: each term is a
+            # backend scalar, and a CUDA tensor has no ``__array__`` (W6.18).
+            [{label: float(value) for label, value in terms(y).items()} for y in chain]
             for chain in unconstrained
         ]
 
