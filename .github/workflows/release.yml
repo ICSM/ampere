@@ -86,11 +86,26 @@ jobs:
         # setuptools_scm adds to every untagged build; this drops it for the
         # upload only. A tagged build has no local label to drop, and local
         # `pixi run build-dist` builds keep theirs.
+        #
+        # `--frozen`: a plain `pixi run` re-checks the lock against the
+        # manifest and, on the runner's pixi (0.81 on 2026-10-05; 0.68 at home
+        # never did), rewrites `pixi.lock` before the task runs. The tree is
+        # then dirty when setuptools_scm runs `git describe --dirty`, and the
+        # tag `v1.0.0b1` built as `1.0.0b2.dev0` -- caught by the step below,
+        # run 37259563688. The same flag the cluster job needed (pixi #7024).
         env:
           SETUPTOOLS_SCM_OVERRIDES_FOR_AMPERE_ASTRO: '{local_scheme = "no-local-version"}'
-        run: pixi run -e dev build-dist
+        run: pixi run --frozen -e dev build-dist
       - name: check (twine check --strict, check-wheel-contents)
-        run: pixi run -e dev check-dist
+        run: pixi run --frozen -e dev check-dist
+      - name: the tree is still clean (setuptools_scm versions a dirty tree as the next .dev0)
+        run: |
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+            git status --porcelain --untracked-files=no
+            git diff --stat HEAD --
+            echo "::error::the build modified tracked files; the version above is not the tag's"
+            exit 1
+          fi
       - name: read the built version
         id: version
         run: |
