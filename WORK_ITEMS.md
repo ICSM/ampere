@@ -3613,6 +3613,434 @@ in Phase 7 if not. Phase 6 closes with the beta on PyPI and
   choice (MLP preferred).**
 
 
+## Phase 7 — Hierarchy, derived parameters, the second reader (drafted 2026-10-05 by Fable; **for Peter's ruling** — the W6.11 memo's §7 questions and D8's order as D1–D4 below, with the memo's recommendations assumed throughout; the rest D5–D11)
+
+The first phase after the beta. Its sources: the W6.11 design memo
+(`docs/design/nuisance_populations_and_derived_memo.md`) whose §10 drafted
+W7.0–W7.2 and whose §7 questions Peter has not yet ruled — D8 of Phase 6
+put the implementations here; Phase 6's D9 (the JWST reader as the second
+reader, with the spectroscopy front door); the Phase 6 rows' carried
+findings and Peter's backlog as the handoff records them; the beta's
+"Known limitations" (`changelog.rst`), each of which is either an item
+here or a decision not to lift it yet; and the two deferred trials (RHMF,
+the jax-native quasiseparable recursion). **Read the memo first** — W7.0
+and W7.1 execute it section by section and the item texts below point at
+its sections rather than restating them. The plan's §5 has no Phase 7
+section yet: it is written at approval from this section, as Phase 6's
+was, and the beta's changelog gains an "Unreleased" entry per merged item
+(W6.5's convention). Sized under `docs/orchestration.md`'s rules: two
+agents at a time, gate legs scoped to the code touched, CI on the push
+after merge as the gate of record (W6.10). Every change to a §4 contract
+is a decision-log row and the conformance rows in the same PR (ground
+rule 9) — the two rows for W7.0 and W7.1 are already drafted in the
+memo's §8. The decisions **D1–D11** at the end are the ones the drafting
+could not take; the ordering paragraph before them assumes the
+recommendations.
+
+**What the phase delivers.** (1) The two design items: a `Derived`
+parameter node and populations over a dataset's own parameters — which
+lift two of the beta's five known limitations and give the flexible
+likelihood its natural hierarchical prior across many spectra (the
+per-dataset GP amplitude), validated on the M2 pattern. (2) The second
+reader and the spectroscopy front door, so a JWST spectrum fits in a
+dozen lines. (3) The release train: `1.0.0b2` with the above, and the
+housekeeping the beta carried. Not in this phase, recorded as decisions:
+nested populations (the third limitation), a jax-native quasiseparable
+recursion (the fourth), `ampere.diagnostics` (the fifth, gated on
+upstream).
+
+### W7.0 — The `Derived` parameter node [M; Opus] (memo §3; D1, D2 assumed as recommended)
+§3 of the memo, whole: `Parameter(name, Derived("<expression>",
+symbols={...}))` as a fourth parameter state — the closed grammar over
+symbols (numeric literals, `+ - * / **`, unary minus, `sqrt exp log log1p
+abs`; attribute, subscript, comparison, lambda and any unlisted call
+refused by name; a symbol spelt like a reserved name refused), parsed once
+and stored as its normalised source, each symbol bound to a parameter name
+by a mapping of `HierarchicalPrior.hyperparameters`' shape so a merge
+renames the binding and never the expression; no sampler dimension and no
+prior term; computed idempotently wherever named values are formed
+(`complete`/`unpack` — a supplied value recomputed, never trusted; on the
+reference path a stale supplied value is refused by name, W5.32 (j)),
+mid-walk in `prior_transform` and `sample`, and in both backends' resolve
+and walk functions (torch `unpack_tensor`, `_resolved`, `prior_transform`,
+`log_prior_tensor`; jax `_resolved`, `unpack`, `prior_transform`,
+`log_prior`, `numpyro_model` with `numpyro.deterministic` as the
+structural view only); evaluated over `ArrayOps`, which gains `sqrt` and
+`log` on the three namespaces; referenceable by a `HierarchicalPrior`; the
+evaluation order honoured under tracing (the §3.4 hazard: derived →
+hierarchical → derived). Results: one `posterior` variable per derived
+parameter on every engine, computed vectorised at emission
+(`_posterior_variables`), named in a new `ampere_derived` attr,
+`training.py`'s column writer carrying it, `PROVENANCE_SCHEMA_VERSION` →
+10. `Population` gains the two member rules of §3.5: a member no `over`
+component declares is **internal** — routed nowhere, permitted only as an
+input of a derived member of the same population (the non-centred `θ_i =
+μ + σ z_i`), refused otherwise — and a routed member must be declared by
+every `over` component, which moves W6.11's recorded late failure (an
+undeclared member failing at the first model evaluation) to the merge;
+both rules refused in the flat layout; the two frozen allowances §3.8
+retracts (`parameters.md` §8's "the receiving component's own set does
+not declare the local name"; `_apply_populations`'s flat-layout "a
+component that does not declare it is given one") become merge-time
+refusals. The slab: `shrinkage_horseshoe(tail="slab", slab_scale=c)` in
+the helper's own `s_j = τλ_j` parameterisation (§3.9: `s̃_j =
+sqrt(c²s_j²/(c²+s_j²))`, a prior on `c` admitted), the plain and
+regularised tails byte-identical. The contract amendments of §3.8
+(`parameters.md` §3/§9/§12, `lowering.md` §3.2.1/§5/§8, `results.md`
+§4/§9, `inference.md` §9/§10a) and the decision-log row of §8, verbatim
+but for what review changes. Deliberate limitations stand (§3.7): no
+callable, no conditional, no unit arithmetic, not in the flat layout.
+**Depends:** D1, D2. **Accept:** the memo's §9.2 ten rows
+(`tests/conformance/test_derived.py`) green on every registered fixture;
+the existing `test_population.py`, shrinkage and horseshoe rows unchanged
+and green; a NUTS run on torch and jax of the non-centred fifty-member
+population (`tests/inference/test_population_nuts.py`'s problem
+re-declared with `z` internal and a derived `theta`) recovering `mu` and
+`sigma` inside the central 95 % with fewer divergences than the centred
+declaration at the same budget, pinned as an inequality; every
+`ampere_problem_hash` the conformance suite pins unchanged for a problem
+without a derived parameter; `population.rst` gains the non-centred
+declaration as a worked block (run as a doctest, D5 of Phase 6);
+lint/format/pyrefly clean; gates dev + torch + jax.
+
+### W7.1 — Populations over a qualified component path [M; Opus] (memo §2; D3 assumed as recommended)
+§2 of the memo, whole: `Population.over` entries of the form
+`component[.path]` (`"d0.likelihood"`, `"d0.instrument.calibrate"`;
+`"d*.likelihood"` through the existing glob), validated by walking the
+retained inner mappings — a path that does not resolve refused naming the
+components at that level, a path on a plain-set component refused, a leaf
+the composite does not declare refused, a leaf an inner `shared_as`
+collapsed refused by its tie label, a tied leaf refused, and W5.12's
+refusal of a composite in `over` re-worded to a refusal of a composite
+*without a path* naming the remedy; `PlateBinding.local_name` and
+`Binding.local_name` as qualified paths relative to the component; the
+plate layout stripping the addressed leaf from the composite's *outer*
+declaration (the flat layout re-prioring the leaf in place); routing
+untouched — the dataset's retained mapping takes the second hop it
+already takes, so neither `distribute` nor either backend changes and the
+population sketch's §11 Q1 ruling stands; the leaf-must-exist rule with
+W7.0's internal-member exemption; `DatasetCollection.plate(within=)`
+writing the entries from the dataset labels (the convenience on the
+factory only, D3); the population declaration in the problem's provenance
+record as `populations` (W6.11's recorded gap: the merged spec moved but
+the declaration was recorded nowhere, and after this change a dataset's
+own spec no longer declares the leaf the population replaced),
+`PROVENANCE_SCHEMA_VERSION` → 11. The contract amendments of §2.6
+(`parameters.md` §8/§9, `inference.md` §9, `hierarchical_population.md`
+§11, `results.md` §9) and the decision-log row of §8. **Depends:** W7.0
+(the member rules, the merge-time refusals; §9.1's row 10 needs
+`Derived`). **Accept:** the memo's §9.1 ten rows
+(`tests/conformance/test_population.py::TestAPopulationOverADatasetPath`)
+green on every fixture, the two-level instrument-step path among them;
+`test_population.py`'s existing rows unchanged; `inference.md` §9's
+doctest of the plate-of-datasets rewritten to the path form and
+executing; the emitted run's plate dimension labelled by the dataset
+labels; `population.rst` teaching the path form in one section; gates
+dev + torch + jax.
+
+### W7.2 — The per-dataset GP amplitude as a population: the M2 validation [M; Opus] (memo §4)
+§4's customer, measured — the composition W7.0 and W7.1 exist for. A
+scenario with N spectra of one object class (the M2 generators' pattern,
+the deviation injected in some) sharing a population of GP amplitudes,
+non-centred (`z` internal, `amplitude` derived, over `d*.likelihood`),
+against (a) independent amplitudes and (b) one tied amplitude: bias,
+calibration and localisation on the M2 pattern; the shrinkage of a poorly
+constrained member's amplitude towards the population, pinned as a margin
+against (a); SBC over refits with the deviation injected; NUTS on torch
+and jax through the realisation, emcee on the reference path. Placement:
+a sibling `examples/m2_populations/` rather than a new `SCENARIOS` entry,
+since the study's scenarios are the milestone's fixed set (W5.8's
+precedent) — the driver, generators and models imported from the study
+where they fit. A `docs/source/population.rst` section teaching the three
+declarations — tie, flat, non-centred population — and when each is
+right, with the measured table. **Depends:** W7.0, W7.1. **Accept:** the
+scenario's driver with `tests/m2` rows and pinned margins (the shrinkage
+margin; the population recovering the amplitude spread inside the
+central 95 %); the SBC contrast pinned (the population's rank
+distribution uniform at the study's thresholds); the docs section with
+every figure traced to the driver; `test-fast` not lengthened — the long rows
+behind the `m2_full` marker as the study's are; gates dev + torch (jax if the native
+declaration touches the jax population code; it should not).
+
+### W7.3 — The second reader: JWST spectra into `Spectrum`, and `ampere.spectroscopy` [M; Opus] (Phase 6 D9's ruling; issue #63)
+The front-door pattern of W6.12 applied to spectroscopy. A reader for
+the JWST pipeline's one-dimensional spectral products — the `x1d`/`c1d`
+FITS files with their `EXTRACT1D`/`COMBINE1D` binary tables (`WAVELENGTH`
+in µm, `FLUX` and `FLUX_ERROR` in Jy, `DQ`, `SURF_BRIGHT`/`SB_ERROR` for
+extended sources, `NPIXELS`; several extensions for several sources or
+slits) — `read_jwst(path, *, source=, extension=, surface_brightness=False)
+-> Spectrum` with `astropy.io.fits` only; `DQ` → mask by the pipeline's
+"do not use" bit, non-finite values and non-positive uncertainties masked
+and counted in `meta`; the instrument, grating/filter, exposure and
+pipeline version in `meta`; a file with several sources or extensions
+refused by name with the choices listed unless the keyword says which;
+the spectral axis emitted in µm (the OIFITS precedent) and the flux in
+the file's unit; the LSF: the pipeline's `R` per instrument mode is
+*not* tabulated by the file — the reader carries nothing it cannot read,
+and the docs section shows `LSFConvolution` taking the user's resolution
+curve beside it. `ampere.spectroscopy` as the front door: re-exports of
+`Spectrum`, `PhotometricPoints`, the reference steps (`Resample`,
+`LSFConvolution`, `CalibrationScale`, `SyntheticPhotometry`), the shipped
+families, and `read_jwst`/`JWSTError`; `import ampere` untouched (the
+import-cost rows). A real file under `tests/data/` with its provenance
+(a small public MAST product — JWST data are public domain once their
+exclusive-access period lapses; the ERS programmes' are; under a
+megabyte, else downloaded in the test with a skip offline, the W6.12
+pattern), read into a `Spectrum` that `tests/examples/test_photometry_spectra.py`'s
+fixtures accept and fit end to end in the test with a `GaussianProcessNoise`
+likelihood (a dozen lines, run in the docs section too). The `.gitignore`'s
+legacy `*.fits` line qualified so a vendored test file is not silently
+ignored (W6.12's carried finding). **Depends:** D6 (the product set).
+**Accept:** the file round-trips into a `Spectrum`, the mask equals the
+DQ "do not use" bit, the fit runs; the multi-source refusal and the
+selection by keyword exercised on a rewritten copy; `read_jwst` on an
+OIFITS file and `read_oifits` on an `x1d` file refuse by name;
+`photometry_spectra.rst` gains "Reading a JWST spectrum: the front door";
+`ampere.spectroscopy.rst` in the API toctree; `tests/data/README.md`
+extended; the changelog's "No file readers yet" rewritten; `ampere/spectroscopy`
+in the typecheck scope; gates dev.
+
+### W7.4 — `normalisation="model"` on `SquaredAmplitude`, and the interferometry housekeeping [S; Sonnet] (W6.12's For Peter and carried findings)
+(1) `SquaredAmplitude(normalisation="model")` on the three backends:
+`|V/V(0)|²` with the model's own zero-spacing flux, for a model whose
+total flux is free — the kind-preserving step evaluating the prediction
+at `(u, v) = (0, 0)` through the same `FourierSample` it already holds,
+the buffer form unchanged and the default; a conformance row per fixture
+against the analytic uniform disc, and a row that a fixed buffer and the
+model form agree when the buffer equals the model's total flux. (2)
+`FourierSample.from_observed` on every backend emits the observed
+container's own spectral unit rather than converting to µm, so a container
+not in µm no longer fails alignment at composition; a conformance row in
+nm. (3) `tests/conformance/protocol.py`'s `InterferometryPieces` gains
+`squared_amplitude` and the mirror backend a `SquaredAmplitude`;
+`test_native_interferometry.py::test_every_piece_declares_this_backend`
+reads the piece names from the protocol instead of a hand list.
+**Depends:** nothing. **Accept:** the rows above green on every fixture;
+`interferometry.rst` §10's reader example gains the model form in one
+sentence; gates dev + torch + jax.
+
+### W7.5 — Phase 7 housekeeping: the beta's carried list [S; Sonnet]
+The owed list from the Phase 6 rows and the handoff, each a line and none
+a behaviour change: `ci.yml`'s `v2` trigger removed (D15); `overview.rst`,
+`sbi.rst` and the two backend API pages' clone-form installs replaced by
+`pip install ampere-astro[...]`, `ampere/__init__.py`'s "alpha testing
+phase" docstring and `conf.py`'s copyright and author lists brought to
+`pyproject.toml`'s (W6.5); `examples/README.md`'s stale notebook paragraph
+(W6.1); the `failure_*` variables' fixed-width truncation on
+`append_training_set` and integer/boolean extra coordinates exercised by a
+row (W6.14); `SyntheticPhotometry.from_library`'s call into
+`ampere.legacy.utils.pyphot_compat.get_unit` lifted into v2 (W6.1 (b),
+W6.0's carried `pyphot_compat` home — the one legacy dependency v2 has)
+and the stray ruff entry (W6.0); a `heavy` marker in `pyproject.toml`
+keeping W6.7's emcee burn-in row and the `sed_composition` fixture out of
+`test-fast` (W6.7); the sbi calibration row
+`TestAmortisationOverTheObservationContext::test_it_stays_calibrated_at_a_rescale_the_prior_covers`
+that fails locally at `ks_pvalue` 0.0054 against 0.01 while CI passes —
+the seed pinned or the budget raised so the row is not at the threshold
+(W6.15, W5.26's territory); netCDF4 re-locked when 1.7.4.1 ships (W6.6);
+the Hyperion `np.string_` shim dropped if upstream has released on NumPy
+2 (W6.13 (C2)); the changelog's "Unreleased" section carrying each.
+**Depends:** nothing. **Accept:** each line's own check (a row, a grep,
+a build); `import ampere` imports no legacy module (the W6.0 row still
+green); docs warnings no longer than base; gates dev (+ sbi for the
+calibration row).
+
+### W7.6 — The optimisers' bound-aware scipy route [S; Opus] (W6.7's carried finding)
+W6.7's scipy route, on an eighteen-parameter problem whose free
+coordinates are all sigmoid-bounded boxes, converged from eight Powell
+starts to a box corner (seven coordinates saturated) with a log posterior
+a hundred below a point the ensemble had already visited: Powell's line
+searches run to where the sigmoid saturates and the objective goes flat.
+The fix: the scipy route minimises in the *constrained* coordinates with
+the bounds passed (`L-BFGS-B` or `Powell` with `bounds=`, the Jacobian of
+the bijection dropped from the objective accordingly), the unconstrained
+form kept for unbounded coordinates; a loud warning (a `UserWarning`
+subclass in `ampere.inference.exceptions`, the `SamplingFailureWarning`
+pattern) when a converged coordinate sits within a tolerance of its
+bound, naming the coordinate; `warm_start_gp`'s assumption of `<label>.likelihood.<name>`
+names replaced by a lookup through the merged mapping so a renaming tie
+is accepted. The NGC6302 twin's eighteen-parameter problem is the
+regression row (its MAP within the ensemble's best point's log posterior
+by a pinned margin). **Depends:** nothing. **Accept:** the regression
+row; the existing `test_optimise.py` rows unchanged; `optimisers.rst`'s
+route table amended; the `Optimum` record's provenance naming the
+coordinates (constrained/unconstrained) — a `results.md` §4 sentence if
+the record's fields change, with the decision-log row; gates dev + torch
++ jax.
+
+### W7.7 — The docs accessibility pass [S; Sonnet] (Phase 6 D14 (e))
+Deferred from W6.17: an accessibility statement for the docs site, and
+the review it rests on — alabaster's contrast (the link and code colours
+against WCAG AA, overridden in `_static` where they fail), keyboard
+navigation through the sidebar and the search, a `lang` attribute, alt
+text on every figure as a docs convention (a Sphinx `figure` directive
+without `:alt:` made a warning by a small extension in `conf.py`, so the
+convention enforces itself), the six plots' default palettes checked
+for colour-vision deficiency, recorded on the results API page. The statement on its own
+page beside `citing.rst`, dated, naming what was checked, what fails
+and how to report a problem (the issue forms). **Depends:** nothing.
+**Accept:** every existing figure carries alt text; a build with a
+figure lacking it warns; the contrast figures recorded on the page;
+`pixi run docs` warnings no longer than base; gates none (docs).
+
+### W7.8 — `1.0.0b2`: the second beta [S; Opus] (Phase 6 D3's train)
+The release procedure as W6.5 wrote it and the first release corrected
+it (`pixi run --frozen`, the clean-tree check, the `pypi` environment's
+tag policy), run a second time from the changelog's "Unreleased"
+section: the known-limitations list rewritten (two lifted by W7.0/W7.1;
+the readers sentence rewritten by W7.3; the jax solver's and the
+hierarchy's standing), the GPU rows on the cluster at the candidate
+(`scripts/cluster/run.sh`, 33 rows plus any W7.0–W7.2 add), CI green on
+the candidate, Peter's tag, TestPyPI then PyPI behind his approval, the
+GitHub release and the Zenodo version DOI, the Read the Docs version.
+**Depends:** every Phase 7 item Peter wants in the beta merged.
+**Accept:** `ampere-astro 1.0.0b2` on PyPI built from the tag with its
+own version; the GPU rows green; the decision-log row dated; the
+changelog's section closed.
+
+### W7.9 — Line fluxes as an observable kind [M; Opus] (issue #70, re-filed at D10; D7 below)
+The modality template applied to the measurement a spectroscopist most
+often has: a set of integrated line fluxes with uncertainties, each
+identified by a transition (a rest wavelength and a label), the model
+producing a `Spectrum` and the instrument chain integrating it over each
+line's window — a `LineFluxes` point kind (the template of
+`PhotometricPoints`: a coordinate per line, the value its integrated
+flux, the units `W m⁻²` or `erg s⁻¹ cm⁻²` under the usual equivalences)
+and a `LineIntegration` reference step (the window per line in velocity
+or wavelength, a local continuum subtracted or not, by declaration) with
+its native twins; the flexible likelihood on it (the kernel over the
+line's rest wavelength, so a misspecified excitation ladder shows as a
+correlated residual across neighbouring transitions); the conformance
+rows per fixture; an example on a JWST-like line list (synthetic until
+W7.3 lands a real file, then the real one). **Depends:** D7; W7.3 for the
+real-file example. **Accept:** the template's checklist (the kind, the
+step on three backends, the family default, the diagnostics' four plots,
+the conformance rows); a worked example page; gates dev + torch + jax.
+
+### W7.10 — The jax-native quasiseparable recursion [L; Opus] (W6.18's carried limitation; D9 below)
+The beta's fourth known limitation: the jax `QuasisepGP` refuses an
+accelerator because celerite2's jax primitives lower on the CPU alone.
+The item: the O(N) recursion written in jax itself — a `lax.scan` over
+ampere's exact rank-2 Matérn-3/2 representation (the tinygp route W2.5
+slice 2 declined on CPU speed), behind the strategy interface as a
+second provider the solver chooses by device (celerite2 on the CPU, the
+scan on an accelerator), bit-comparable to the reference solver at
+`tolerances.cross_solver`, `conditional_loo` by the same recursion,
+`BATCHABLE` true for the scan provider (the one thing the celerite2
+provider cannot be); the GPU row W6.18 turned into a refusal row turned
+back into the cross-device agreement row; the CPU speed of the scan
+measured against celerite2 at 10³–10⁶ points and recorded in
+`performance_memo.md`, with the device rule chosen from that table.
+**Depends:** D9; a cluster run per `scripts/cluster/run.sh`. **Accept:**
+the conformance columns for the jax fixture green on both providers; the
+GPU rows green with the agreement row restored; the table in the memo;
+the changelog's limitation struck; gates jax (+ dev for the memo's rows).
+
+**Ordering (two agents at a time, gate legs scoped to the code touched).**
+**Wave 1** (after D1–D3): W7.0 alone first — W7.1 depends on its member
+rules and both touch `parameter.py`, the populations and both backends'
+resolve functions, so they cannot run beside each other; W7.5 beside it
+as the filler (housekeeping, disjoint files), then W7.7 as the second
+filler (docs only). **Wave 2**: W7.1 ∥ W7.4 (the interferometry pieces
+are disjoint from the parameter layer). **Wave 3**: W7.2 ∥ W7.3 (the M2
+sibling under `examples/` and `tests/m2` against a new package
+`ampere/spectroscopy` and `tests/spectroscopy`; disjoint). **Wave 4**:
+W7.6 ∥ W7.9 if D7 admits it (the optimisers against a new kind and step;
+disjoint). **Then W7.8**, the second beta, once Peter names its cut —
+recommended after wave 3, so `1.0.0b2` carries the two design items and
+the reader. **W7.10** is the long one and runs in whichever slot frees
+after wave 2, since it touches only the jax backend's solver and its
+conformance column; it may miss the beta without holding it. Every item
+except W7.7 and W7.8 touches tested code, so each has CI on its push as
+the gate of record; W7.0, W7.1, W7.4 and W7.6 are core-touching and
+their rows record the three legs.
+
+**Decisions for Peter before dispatch.**
+- **D1 — the `Derived` grammar versus a callable** (memo §3.2, §7 Q1):
+  a closed expression grammar with a `symbols` mapping (recommended —
+  provenance, hashing, serialisation and lowering must read it, for the
+  reason `to_spec()` refuses an opaque prior; `where` added when a
+  customer appears), or a Python callable traced on each backend.
+  **Recommended: the grammar.**
+- **D2 — where derived values live in the emitted run** (memo §3.6,
+  §7 Q2): in `posterior` with the `ampere_derived` attr naming them
+  (recommended — ArviZ's summaries, the corner plot and the training-set
+  writer see them without a second group, and a derived value *is* a
+  posterior quantity), or a separate `ampere_derived` group.
+  **Recommended: `posterior` with the attr.**
+- **D3 — paths on `over`, or `within=` on `Population`** (memo §2.1, §7
+  Q3): qualified paths as the one low-level grammar on `over`
+  (heterogeneous depths allowed) with `within=` as a convenience on
+  `DatasetCollection.plate` only (recommended), or `within=` on
+  `Population` itself as a second declaration form. **Recommended: paths
+  on `over`, the convenience on the factory.**
+- **D4 — the landing order** (memo §10, §7 Q4): W7.0 → W7.1 → W7.2
+  (recommended — (2) the `Derived` node is self-contained and (1) the
+  paths need its member rules), or W7.1 first with the member rules
+  split out. **Recommended: as listed**, Phase 6 D8's order.
+- **D5 — the second beta's cut**: `1.0.0b2` after wave 3 (W7.0–W7.5,
+  W7.7 — recommended: the two design items lift two known limitations
+  and the reader rewrites a third sentence, which is the changelog a
+  second beta deserves), after wave 4, or at the phase's close. Also
+  whether `1.0.0b2` is the last beta before `1.0.0` final, which fixes
+  when v2's own deprecations (the `regularised_horseshoe` alias) go.
+  **Recommended: after wave 3; the final's timing left to the phase after
+  this one.**
+- **D6 — the JWST product set**: `x1d`/`c1d` one-dimensional products
+  only (recommended — one container, one reader, the W6.12 size), or
+  also `s3d` cubes into the `Image` kind per spectral channel (the IFU
+  sketch's territory, `ifu_cube.md`; a second item if wanted) and the
+  MIRI MRS/NIRSpec multi-extension layouts beyond source selection. And
+  which public file: a NIRSpec or MIRI LRS `x1d` from an ERS programme
+  under a megabyte (the orchestrator finds one and records its provenance
+  at dispatch, as W6.12 did). **Recommended: `x1d`/`c1d` only; the cube
+  reader deferred to the phase that lands the IFU modality.**
+- **D7 — line fluxes in this phase**: W7.9 as drafted (a new kind and
+  step by the template, Opus, M), deferred to the phase after, or
+  declined — issue #70 is the one re-filed modality request and the
+  second reader makes it timely, but it is the one item here that is
+  neither a memo's nor a carried finding's. **Recommended: in this
+  phase, in wave 4, if the budget allows; else the first item of the
+  next phase.**
+- **D8 — nested populations** (the beta's "one level of hierarchy"): a
+  design memo in this phase (Fable's own work between waves, the W6.11
+  pattern — a parameter carrying two plates, objects within surveys, the
+  plate layout generalised to a tree, the native resolve functions'
+  nesting; a §4 change whose memo precedes its item), or left as a known
+  limitation until a customer appears. **Recommended: left; no customer
+  has asked, and W7.1 is the hierarchy work this phase can absorb.**
+- **D9 — the jax-native recursion**: W7.10 in this phase (L, Opus, a
+  cluster run per candidate), or deferred with the limitation standing
+  — the torch solver has no such limit and the jax `DenseGP` and
+  `HilbertSpaceGP` serve an accelerator today. **Recommended: in this
+  phase, in the free slot after wave 2, allowed to miss the beta** — a
+  CPU-only distinguishing feature on one backend is a claim the docs
+  must keep qualifying.
+- **D10 — `ampere.diagnostics` and RHMF**: the revisit trigger (a
+  robusta-hmf release at ≥ 0.1 with a test job on `main`) is checked
+  once at the phase's close by the orchestrator (recommended — four
+  lookups, no item) and the trial item re-opened only if it is met; or
+  the trial's finding (robust weights localise sharp deviations only at
+  ranks that leave no residual structure to screen) taken as closing
+  the question. **Recommended: the check at close; the finding stands.**
+- **D11 — Peter's backlog from Phase 6, which of it this phase takes**:
+  the two unconverged C1 coverage runs (a longer NUTS budget or the
+  calibration-scale reparameterisation — the latter is a W7.0 customer:
+  `scale = luminosity_ratio * k`); the star-disc CSV's two upper limits
+  as a `Censoring` declaration in the twin (an example change, S,
+  Sonnet — recommended: yes, as a filler); the missing IRS file
+  `cassis_yaaar_spcfw_5295616t.fits` (Peter's to commit or not);
+  NGC6302's second mode; C2's envelope mass at the quick budget; the
+  legacy 4π-twice finding (the legacy scripts are frozen — a note on the
+  migration page, recommended); the three issue comments (#40, #14,
+  #41) and the D10 closures not yet posted; the one merged
+  worktree left under `.claude/worktrees/` (W6.12's
+  `agent-a4bda625296ffe8c5`, locked; the eighteen the handoff listed are
+  gone) to `git worktree remove` on Peter's word, never the branch;
+  W6.16's cu126/525 confirmation.
+  **Recommended: the `Censoring` filler and the migration-page note in
+  this phase; the rest stays recorded.**
+
 ## Status
 
 | Item | Status |

@@ -30,9 +30,11 @@ optimisers, the CI-as-gate policy, the GPU rows on the cluster, the
 community-health files, the first reader (`ampere.interferometry`,
 OIFITS) — and **the beta `ampere-astro 1.0.0b1` is released on PyPI**
 (tag `v1.0.0b1`, GitHub release, Zenodo concept DOI
-10.5281/zenodo.23151412). Phase 7 is next: the W6.11 design memo's §7
-rulings and D8's order (W7.0 → W7.1 → W7.2), the JWST reader (D9), the
-RHMF trial's successor.
+10.5281/zenodo.23151412). **Phase 7 is drafted** (2026-10-05, the
+`WORK_ITEMS.md` section: W7.0–W7.10 with decisions D1–D11) and awaits
+Peter's rulings — the W6.11 design memo's §7 questions and D8's order
+(W7.0 → W7.1 → W7.2) open it, the JWST reader (D9) and the beta's carried
+list follow.
 Development happens on `master` locally and `origin/master` carries the
 v2 line (since D15, 2026-10-05; the `v2` mirror is retired); the
 orchestrator pushes at every state change and CI on the push is the gate
