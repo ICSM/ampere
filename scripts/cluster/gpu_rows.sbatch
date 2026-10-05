@@ -61,7 +61,12 @@ echo "== checkout: $(git describe --tags --always) ($(git rev-parse HEAD))"
 out="$(mktemp)"
 trap 'rm -f "$out"' EXIT
 set +e
-"$AMPERE_PIXI_HOME/bin/pixi" run -e gpu gpu -q --tb=short -p no:cacheprovider 2>&1 | tee "$out"
+# --frozen: run exactly the installed, locked environment. Without it `pixi run`
+# re-checks every environment against the manifest first, trips on pixi #7024
+# (the editable project's `torch` extra against the lock's PyTorch index) and
+# tries to re-solve `sbi` on a compute node with no network -- job 18040399
+# (2026-10-05) died that way before a single row ran.
+"$AMPERE_PIXI_HOME/bin/pixi" run --frozen -e gpu gpu -q --tb=short -p no:cacheprovider 2>&1 | tee "$out"
 status="${PIPESTATUS[0]}"
 set -e
 echo "== pytest exit status ${status} (tag ${AMPERE_TAG}, job ${SLURM_JOB_ID:-none})"
