@@ -40,11 +40,12 @@ Instrument steps (``transformations.md`` §10's table):
 
 Interferometry (Phase 4, ``interferometry.py``): the steps
 :class:`FourierSample`, :class:`ClosurePhase`, :class:`BandwidthSmearing`,
-:class:`TimeSmearing` and :class:`Amplitude`, the image-emitting source models
-:class:`UniformDisc`, :class:`GaussianSource` and :class:`Binary`, and the same
-three emitting visibilities analytically — :class:`UniformDiscVisibilities`,
-:class:`GaussianSourceVisibilities`, :class:`BinaryVisibilities` — which are
-the closed forms the direct transform is held to. The two container kinds they
+:class:`TimeSmearing`, :class:`Amplitude` and :class:`SquaredAmplitude`, the
+image-emitting source models :class:`UniformDisc`, :class:`GaussianSource` and
+:class:`Binary`, and the same three emitting visibilities analytically —
+:class:`UniformDiscVisibilities`, :class:`GaussianSourceVisibilities`,
+:class:`BinaryVisibilities` — which are the closed forms the direct transform is
+held to. The two container kinds they
 speak in, ``VisibilitySet`` and ``ClosurePhases``, are ``ampere.core``'s.
 
 Images (Phase 5, ``image.py``, W5.5): the PSF-convolution step
@@ -104,6 +105,7 @@ from .interferometry import (
     FourierSample,
     GaussianSource,
     GaussianSourceVisibilities,
+    SquaredAmplitude,
     TimeSmearing,
     UniformDisc,
     UniformDiscVisibilities,
@@ -145,6 +147,7 @@ __all__ = [
     "PowerLaw",
     "ReflexOrbit",
     "Resample",
+    "SquaredAmplitude",
     "SyntheticPhotometry",
     "TimeSmearing",
     "UniformDisc",

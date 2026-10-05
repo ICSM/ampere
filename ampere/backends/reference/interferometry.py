@@ -135,6 +135,7 @@ __all__ = [
     "FourierSample",
     "GaussianSource",
     "GaussianSourceVisibilities",
+    "SquaredAmplitude",
     "TimeSmearing",
     "UniformDisc",
     "UniformDiscVisibilities",
@@ -1087,6 +1088,112 @@ class Amplitude(_Step):
 
     def apply(self, samples: Any, values: Any) -> VisibilitySet:
         return samples.with_values(np.abs(np.asarray(samples.values)))
+
+
+class SquaredAmplitude(_Step):
+    """Take the squared modulus: a ``VisibilitySet`` to a real one holding ``|V|**2``.
+
+    Kind-preserving, coordinate-preserving, parameter-free, and the step that
+    meets an OIFITS ``OI_VIS2`` table where it stands. A squared visibility is
+    what most optical and infrared beam combiners **measure** — the bias of
+    the amplitude estimator is removed on the square, and its noise is close
+    to Gaussian there and not after a square root — so the data stay as
+    given and the prediction is squared to meet them, with a
+    :class:`~ampere.core.GaussianFamily` on ``V**2`` the standard fit
+    (``results_schema.md``: data arrive as measured). Converting ``VIS2DATA``
+    to amplitudes instead would need an error propagation that is not
+    symmetric near zero, and would put the decision in a reader rather than in
+    the chain where it can be seen.
+
+    **Units.** The square of a quantity is in the square of its unit: a
+    visibility in Jy becomes ``|V|**2`` in ``Jy**2``, and a dimensionless one
+    stays dimensionless. An ``OI_VIS2`` table records the **normalised**
+    squared visibility ``|V(u, v)|**2 / |V(0, 0)|**2`` — a pure number —
+    and a prediction in ``Jy**2`` is refused against it by the alignment check,
+    as it should be. ``normalisation`` is how the two meet: the zero-spacing
+    flux ``V(0, 0)`` of the model, which for the shipped sources is their
+    total ``flux``, held **fixed** (a normalised visibility carries no
+    information about the total flux, so a free one is unconstrained). With
+    it, the output is ``|V|**2 / normalisation**2``, unitless, in the same
+    representation a reader's ``VIS2DATA`` arrives in.
+
+    The mask comes through :meth:`~ampere.core.FunctionSamples.with_values`,
+    which inherits it: the mapping is one-to-one. An uncertainty on the input
+    is dropped rather than relabelled — a ``sigma`` in Jy is not a ``sigma``
+    on ``|V|**2`` — and predictions carry none in any case.
+
+    Parameters
+    ----------
+    normalisation
+        The zero-spacing flux to divide by (Jy, or a flux
+        :class:`~astropy.units.Quantity`), finite and positive; ``None`` (the
+        default) leaves ``|V|**2`` in the input unit squared. A buffer, not a
+        parameter.
+    label
+        Component label for this step within a chain.
+    """
+
+    ACCEPTS: ClassVar[tuple[type, ...]] = (VisibilitySet,)
+
+    def __init__(self, *, normalisation: Any = None, label: str | None = None) -> None:
+        super().__init__(label=label)
+        self._normalisation: float | None = None
+        if normalisation is not None:
+            try:
+                flux = float(_to_unit(normalisation, FLUX_UNIT))
+            except (u.UnitConversionError, TypeError, ValueError) as exc:
+                raise TransformationError(
+                    f"SquaredAmplitude's normalisation is the model's zero-spacing flux, a flux "
+                    f"density (Jy), got {normalisation!r}. ({exc})"
+                ) from exc
+            if not np.isfinite(flux) or flux <= 0.0:
+                raise TransformationError(
+                    f"SquaredAmplitude's normalisation is the model's zero-spacing flux and must "
+                    f"be finite and positive (Jy), got {normalisation!r}."
+                )
+            self.register_buffer("normalisation", flux, unit=FLUX_UNIT)
+            self._normalisation = flux
+
+    def _scale(self, unit: u.UnitBase | None) -> float:
+        """The factor ``|V|**2`` in *unit* squared is multiplied by: one, or ``(c/F)**2``."""
+        if self._normalisation is None:
+            return 1.0
+        if unit is None:
+            raise TransformationError(
+                "SquaredAmplitude(normalisation=...) divides a visibility in flux units by the "
+                "model's zero-spacing flux, but the incoming VisibilitySet has no unit: it is "
+                "already normalised. Drop normalisation=..."
+            )
+        try:
+            to_flux = float(unit.to(FLUX_UNIT))
+        except u.UnitConversionError as exc:
+            raise TransformationError(
+                f"SquaredAmplitude(normalisation=...) needs a visibility in flux units to divide "
+                f"by a flux, got one in {unit}. ({exc})"
+            ) from exc
+        return (to_flux / self._normalisation) ** 2
+
+    def _output_unit(self, unit: u.UnitBase | None) -> u.UnitBase | None:
+        """``None`` when normalised (a pure number, as ``OI_VIS2`` records it), else ``unit**2``."""
+        if self._normalisation is not None or unit is None:
+            return None
+        return unit**2
+
+    def _finish(self, samples: Any, squared: np.ndarray) -> VisibilitySet:
+        """The output container: *samples*' axes and mask, *squared*'s values, the new unit.
+
+        ``with_values`` cannot change a unit, by design; the step does what
+        :meth:`~ampere.core.FunctionSamples.to_unit` does, setting the unit on
+        the clone, so the hot loop pays no re-validation.
+        """
+        result = samples.with_values(np.asarray(squared, dtype=DTYPE))
+        object.__setattr__(result, "unit", self._output_unit(samples.unit))
+        object.__setattr__(result, "uncertainty", None)
+        return result
+
+    def apply(self, samples: Any, values: Any) -> VisibilitySet:
+        modulus = np.abs(np.asarray(samples.values))
+        return self._finish(samples, modulus * modulus * self._scale(samples.unit))
 
 
 # ---------------------------------------------------------------------------
