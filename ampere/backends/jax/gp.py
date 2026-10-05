@@ -1097,6 +1097,20 @@ class QuasisepGP(GPSolver):
                 f"QuasisepGP's jitter must be finite and >= 0, got {self.jitter!r}."
             )
         resolved = resolve_device(device, self.NAME)
+        if str(resolved.platform) != "cpu":
+            # celerite2.jax registers its primitives' MLIR lowerings for the
+            # CPU alone (celerite2 0.3.3, ``celerite2/jax/ops.py``), so on an
+            # accelerator the first factorisation dies inside the trace with
+            # "MLIR translation rule for primitive 'celerite2_factor' not found
+            # for platform cuda" — the first GPU run's finding (W6.18,
+            # 2026-10-05). Refused here, by name, where the user can read it;
+            # ampere never substitutes another solver silently.
+            raise LikelihoodError(
+                f"{self.NAME} runs on the CPU only: its O(N) recursions are celerite2's "
+                f"compiled kernels, whose jax primitives have CPU lowerings alone, and "
+                f"{resolved.platform!r} has none. Use DenseGP (or HilbertSpaceGP) on an "
+                f"accelerator, or keep the quasiseparable solver on device='cpu'."
+            )
         object.__setattr__(self, "_device", resolved)
         object.__setattr__(self, "DEVICE", device_flag(device, resolved))
 

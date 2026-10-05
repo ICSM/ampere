@@ -3306,7 +3306,7 @@ and `License-Expression: GPL-3.0-or-later` (the agent builds one with
 `actionlint`/YAML validity of the forms; `pixi run test` and the docs build
 green; gates dev (the docs job is the check).
 
-### W6.18 — The first GPU run's three faults: a host copy in the realisation self-check, the jax CPU lookup on an accelerator, a sharding test's hard-coded width [S; Fable or Sonnet] (added 2026-10-05 from the release gate's first GPU run; blocks the tag unless Peter rules otherwise)
+### W6.18 — The first GPU run's faults: a host copy in the realisation self-check, the jax CPU lookup on an accelerator, a sharding test's hard-coded width, NUTS's start tensor, and the jax quasiseparable solver's CPU-only refusal [S; Fable] (added 2026-10-05 from the release gate's first GPU run; blocks the tag unless Peter rules otherwise)
 Slurm job 18041011 on `cc7a65e` (node `gina1`, one A100, driver 615.71.09)
 ran `tests/gpu` for the first time ever: **20 passed, 13 failed**, three
 distinct faults, none of which a CPU machine can show. (1) **torch, six
@@ -3338,9 +3338,29 @@ appends a usage epilogue after the job's output, so the log's last line is
 *not* the pytest summary as the procedure says — `run.sh fetch` prints the
 summary line by `grep -E '[0-9]+ (passed|failed)' | tail -n 1`, and the
 procedure text says so; and `tests/gpu` is 33 rows after parametrisation,
-not 30. **Ownership**: `ampere/core/realisation.py` (the one conversion),
-`ampere/backends/jax/_device.py` (the lookup), `tests/gpu/test_jax_gpu.py`
-(the helper), `scripts/cluster/run.sh` (the fetch's summary line),
+not 30. **Extended 2026-10-05 by the second run** (job 18042559 on `7e324f5`,
+31 passed, 2 failed — the two the first three faults had masked): (4)
+**torch NUTS on a GPU**: `ampere/inference/_nuts.py` built pyro's
+`initial_params` start tensor with no device, so pyro's momenta and mass
+matrix lived on the CPU beside a CUDA density and `velocity_verlet` failed
+with "Expected all tensors to be on the same device"; the start now takes
+the realisation's `device` (a caller-supplied density keeps the default),
+and the engine's own reference-value self-check uses `float()` as in (1).
+(5) **jax `QuasisepGP` on an accelerator cannot work**: celerite2 0.3.3
+registers its primitives' MLIR lowerings for the CPU alone
+(`celerite2/jax/ops.py`), so the first factorisation dies inside the trace
+with "MLIR translation rule for primitive 'celerite2_factor' not found for
+platform cuda"; under `architecture.md` §5's rule the solver now **refuses an
+accelerator by name at construction** (`LikelihoodError`, naming `DenseGP`
+and `HilbertSpaceGP` as the way out), the GPU row that compared the
+quasiseparable density across devices becomes the row asserting that
+refusal, and the changelog's "Known limitations" records the jax solver as
+CPU-only. A jax-native quasiseparable recursion (a `lax.scan`, the tinygp
+route slice 2 declined on CPU speed) is the Phase 7 item that would lift it. **Ownership**: `ampere/core/realisation.py` (the one conversion),
+`ampere/backends/jax/_device.py` (the lookup), `ampere/inference/_nuts.py`
+(the start tensor's device, the self-check's conversion),
+`ampere/backends/jax/gp.py` (`QuasisepGP`'s refusal), `tests/gpu/test_jax_gpu.py`
+(the helper, the refusal row), `docs/source/changelog.rst` (one limitation), `scripts/cluster/run.sh` (the fetch's summary line),
 `docs/development.md`'s GPU-rows section (the two corrections). No
 contract changes (the realisation registry's self-check is implementation;
 `resolve_device` is the jax backend's own). **Depends:** the cluster

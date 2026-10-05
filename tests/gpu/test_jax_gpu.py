@@ -159,8 +159,8 @@ class TestPlacement:
 class TestTheDensityAgrees:
     """The same declaration, on two devices, is the same posterior."""
 
-    @pytest.mark.parametrize("factory", [DenseGP, QuasisepGP], ids=["dense", "quasisep"])
-    def test_the_realised_density_matches_the_cpu(self, factory: Any) -> None:
+    def test_the_realised_density_matches_the_cpu(self) -> None:
+        factory = DenseGP  # QuasisepGP refuses an accelerator by name; see below
         on_cpu = lower_problem(_problem(factory, "cpu"))
         on_device = lower_problem(_problem(factory, PLATFORM))
         theta = np.random.default_rng(4).normal(0.0, 0.5, on_cpu.free_size)
@@ -175,6 +175,17 @@ class TestTheDensityAgrees:
         on_device = _problem(DenseGP, PLATFORM)
         theta = on_cpu.parameters.pack(on_cpu.reference_values)
         assert on_device.log_prob(theta) == pytest.approx(on_cpu.log_prob(theta), rel=1e-9)
+
+    def test_the_quasiseparable_solver_refuses_an_accelerator_by_name(self) -> None:
+        """celerite2.jax lowers its primitives for the CPU alone (W6.18): the
+        refusal names the solver and the way out, instead of an MLIR error
+        about a primitive the user never wrote."""
+        from ampere.core.exceptions import LikelihoodError
+
+        with pytest.raises(LikelihoodError, match="CPU only"):
+            QuasisepGP(device=PLATFORM)
+        # The same declaration on the CPU is what it always was.
+        assert lower_problem(_problem(QuasisepGP, "cpu")).free_size == 4
 
 
 class TestTheRefusalsStillHold:

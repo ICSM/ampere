@@ -160,7 +160,12 @@ Known limitations at the beta
   that owns the nuisance, or a tie, is the workaround.
 * **GPU support is exercised by smoke tests only**, run by hand on a cluster
   at release time, never in continuous integration; the hosted CI is
-  CPU-only.
+  CPU-only. The first such run, before this release, found and fixed three
+  device-placement faults; one limitation it found stands: **the jax
+  ``QuasisepGP`` solver is CPU-only**, because celerite2's jax primitives have
+  CPU lowerings alone — on an accelerator it refuses by name, and ``DenseGP``
+  or ``HilbertSpaceGP`` is the solver to use there. The torch quasiseparable
+  solver has no such limit.
 * **No file readers yet.** Observations are built from arrays you read
   yourself; an OIFITS reader for interferometric data is planned after the
   beta.

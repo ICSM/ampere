@@ -358,7 +358,9 @@ class NUTSEngine(Engine):
         reference = self.problem.unconstrain(self.problem.reference_values)
         expected = self.problem.log_prob_unconstrained(reference)
         try:
-            got = float(np.asarray(self.density(reference)))
+            # ``float()``, not ``float(np.asarray(...))``: a CUDA tensor has no
+            # ``__array__`` (W6.18, as in ampere.core.realisation's self-check).
+            got = float(self.density(reference))
         except Exception as error:  # the lowering refusing is not this driver's to interpret
             raise EngineError(
                 f"{self.NAME} could not evaluate the supplied density at the problem's reference "
@@ -632,7 +634,16 @@ class NUTSEngine(Engine):
         with torch.random.fork_rng(devices=[]):
             torch.manual_seed(self.integer_seed("sampler"))
             for index in range(settings.chains):
-                start = torch.as_tensor(unconstrained[index], dtype=torch.float64)
+                # On the realisation's device (W6.18): pyro builds its momenta and
+                # mass matrix where ``initial_params`` live, and a CPU start
+                # beside a CUDA density made ``velocity_verlet`` add a CUDA
+                # gradient to a CPU momentum. A caller-supplied density has no
+                # realisation to ask, and keeps the default device.
+                start = torch.as_tensor(
+                    unconstrained[index],
+                    dtype=torch.float64,
+                    device=getattr(self.realisation, "device", None),
+                )
                 kernel = NUTS(
                     potential_fn=potential,
                     max_tree_depth=settings.max_tree_depth,
