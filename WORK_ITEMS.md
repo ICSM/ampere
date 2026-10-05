@@ -3380,7 +3380,10 @@ their first `lower_problem`; the fixes are three small edits and one more
 cluster job), or the tag goes on `cc7a65e` with the changelog's "Known
 limitations" amended to say the torch realisation path and the jax CPU
 device lookup fail on an accelerator at the beta and W6.18 follows as
-`1.0.0b2`.
+`1.0.0b2`. **Taken (2026-10-05): the beta waits for W6.18; the orchestrator
+did the item on `w6.18-gpu-first-run`; the fourth GPU run, job 18042730 on
+`62e851c`, 33 passed, 0 failed — the acceptance met; the CPU-only regression
+row for (2) was writable after all (`366f576`).**
 
 **Issue triage (D10).** The open issues, with the recommendation: **closed
 by Phase 5 already** — #12, #29, #67 (W5.17's levers), #11 (censoring,
