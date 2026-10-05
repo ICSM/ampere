@@ -11,7 +11,7 @@
 #      read-only deploy key and print its public half. If the clone fails
 #      (the key is not yet registered) it stops there, exit status 0.
 #   2. re-run it once the key is added: clone ICSM/ampere, then
-#      `pixi install -e gpu --locked` (a few gigabytes; the install is the
+#      `pixi install -e gpu --frozen` (a few gigabytes; the install is the
 #      reason everything lives under the project space and not under /home,
 #      which is a hard 20 GB).
 # It does NOT smoke-test the GPU: that is the job's first act (gpu_rows.sbatch).
@@ -75,6 +75,12 @@ git -C "$AMPERE_REPO" config core.sshCommand "$GIT_SSH_COMMAND"
 # --- the environment ---------------------------------------------------------
 cd "$AMPERE_REPO"
 git fetch --tags --quiet
-echo "bootstrap: pixi install -e gpu --locked (at $(git rev-parse --short HEAD))"
-"$pixi_bin" install -e gpu --locked
+# --frozen, not --locked: the lock is the authority and is installed as it
+# stands. `--locked` re-validates every environment against the manifest and
+# trips on pixi #7024 -- the editable project's `torch` extra names `torch`
+# with no index, which pixi reads as disagreeing with the lock's PyTorch index
+# -- so it refused on the first cluster run (2026-10-05) although the lock was
+# current. CI's `setup-pixi` steps use frozen for the same reason.
+echo "bootstrap: pixi install -e gpu --frozen (at $(git rev-parse --short HEAD))"
+"$pixi_bin" install -e gpu --frozen
 echo "bootstrap: done. Next: scripts/cluster/run.sh submit <tag>"
