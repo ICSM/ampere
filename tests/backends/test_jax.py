@@ -2104,6 +2104,33 @@ class TestPerInstanceDevice:
         assert [f.name for f in dataclasses.fields(DenseGP(device="cpu"))] == ["jitter"]
         assert DenseGP(device="cpu") == DenseGP()
 
+    def test_the_cpu_is_found_when_the_default_backend_is_an_accelerator(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The first GPU run's finding (W6.18): ``jax.devices()`` with no argument
+        lists the *default* backend's devices only, which on a node with an
+        accelerator is the accelerator alone — so a lookup that searched that
+        list refused ``"cpu"`` as "no such platform" although every jax process
+        has one. The CPU-only stand-in for that node: the no-argument listing
+        reports an accelerator, the named lookups stay jax's own."""
+        from types import SimpleNamespace
+
+        from ampere.backends.jax._device import resolve_device
+        from ampere.core.exceptions import LikelihoodError
+
+        real_devices = jax.devices
+
+        def as_on_an_accelerator_node(platform: str | None = None) -> list[Any]:
+            if platform is None:
+                return [SimpleNamespace(platform="cuda")]
+            return real_devices(platform)
+
+        monkeypatch.setattr(jax, "devices", as_on_an_accelerator_node)
+        assert resolve_device("cpu", "a kernel").platform == "cpu"
+        # The refusal still names what the default listing reports.
+        with pytest.raises(LikelihoodError, match=r"no such platform.*cuda"):
+            resolve_device("definitely-not-a-platform", "a kernel")
+
 
 # ---------------------------------------------------------------------------
 # The complex Gaussian, end to end on the realised path (W2.5 slice 3)
