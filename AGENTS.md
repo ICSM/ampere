@@ -21,17 +21,24 @@ and the batched native path, `Population` and population reweighting, the
 tier-1 engines behind extras, the latent GP on closure phases, the
 many-lines M2 extension, the optimisation pass, `test-fast` — with W5.16
 (the RHMF trial) deferred to Phase 6; the plan's §5 Phase 5 section is the
-landed summary. **Phase 6 (docs, migration, release) is open**: drafted
-and ruled 2026-09-28 (`WORK_ITEMS.md`'s Phase 6 section, W6.0–W6.13,
-decisions D1–D12 all taken — legacy is kept indefinitely and moves to
-`ampere.legacy`; the beta is `1.0.0b1` on PyPI with the docs on Read the
-Docs; `origin/master` takes the v2 line at that tag); wave 1 (W6.6 ∥
-W6.8) is cleared to dispatch.
-Development happens on `master` locally; the remote branch `v2` mirrors it
-for CI and backup, and `origin/master` stays at the legacy code until
-Phase 6 says otherwise. The live state, what is in flight and what
-comes next are in `docs/development.md`'s "⚡ Pick up here". Before any
-non-trivial work, read:
+landed summary. **Phase 6 (docs, migration, release) is complete**
+(drafted and ruled 2026-09-28, closed 2026-10-05 with W6.12's merge):
+nineteen items merged — legacy kept indefinitely under `ampere.legacy`
+behind its old names, the documentation rebuilt and versioned on Read the
+Docs, the migration guide and the v2 twins of the paper's examples, the
+optimisers, the CI-as-gate policy, the GPU rows on the cluster, the
+community-health files, the first reader (`ampere.interferometry`,
+OIFITS) — and **the beta `ampere-astro 1.0.0b1` is released on PyPI**
+(tag `v1.0.0b1`, GitHub release, Zenodo concept DOI
+10.5281/zenodo.23151412). Phase 7 is next: the W6.11 design memo's §7
+rulings and D8's order (W7.0 → W7.1 → W7.2), the JWST reader (D9), the
+RHMF trial's successor.
+Development happens on `master` locally and `origin/master` carries the
+v2 line (since D15, 2026-10-05; the `v2` mirror is retired); the
+orchestrator pushes at every state change and CI on the push is the gate
+of record. The live state, what is in flight and what comes next are in
+`docs/development.md`'s "⚡ Pick up here". Before any non-trivial work,
+read:
 
 - **`DEVELOPMENT_PLAN.md`** — the source of truth: decisions taken, target
   architecture (backend-neutral core + reference/torch/jax backends), phased
@@ -164,14 +171,19 @@ pushes.
   models and solvers included), `inference/` (emcee/dynesty/zeus on the
   numpy path; NUTS and VI through `ampere.core.realise`; imports no
   backend), `results/` (ArviZ `DataTree` emission with provenance schema
-  5, derived groups, diagnostics, the six plots, training sets).
-  `ampere.diagnostics` (RHMF pre-fit screening) is deferred, not landed.
+  5, derived groups, diagnostics, the six plots, training sets),
+  `interferometry/` (the observable's front door: re-exports plus
+  `read_oifits`; the pattern `astrometry`/`image` follow when their readers
+  land). `ampere.diagnostics` (RHMF pre-fit screening) is deferred, not
+  landed.
 - `tests/` — `core`, `results`, `conformance` (the lockstep battery: one
   column per registered backend fixture, `backends/__init__.py` is the one
   place a backend is named), `backends`, `inference`, `examples`, `m2`
   (the M2 study's assertions), `benchmarks`, `scaling`, `gpu` (API-level
-  smoke tests, skipped without an accelerator), `characterisation`
-  (legacy).
+  smoke tests, skipped without an accelerator; run on the cluster at a
+  release through `scripts/cluster/run.sh`), `interferometry`, `data` (small
+  public files with their provenance in `tests/data/README.md`),
+  `characterisation` (legacy).
 - `examples/` — legacy examples; `minimal_working_example*.py` are the
   characterisation-test anchors. `examples/examples_paper/` is
   paper-revision work in progress — leave it alone.
