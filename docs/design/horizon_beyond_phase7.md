@@ -430,3 +430,103 @@ for Peter at drafting.
 7. **The paper**: which of the above the paper's revision needs — the
    radial profile and the emulator are the two with figures a paper would
    want — so the order can serve it.
+
+## 11. The questions' impact (the exchange of 2026-10-05, recorded for the ruling)
+
+What each §10 question decides and what changes downstream with the
+answer. Recorded so the ruling can be taken from the file alone.
+
+**Q1 — radial profiles, both readings or the model side first.** The
+model side needs the kind, `Deproject`, `HankelTransform`, `Render` and
+the profile models; the observable side adds `AzimuthalAverage` and a
+conformance row on top, two steps once the kind exists. With both, the
+worked example can fit a published visibility profile directly and show
+one disc through the full uv set and through the binned profile; with the
+model side alone the example is a full-visibility fit, fine for VLTI data
+through `read_oifits` but leaving the ALMA case waiting on the uv-table
+reader. The item is L already; if split, the observable side is an S
+follow-on, never the models. `Deproject`'s angles and a ring's width as a
+ratio of radii are the first `Derived` customers outside the W6.11 memo,
+which fixes the item after W7.0 and so in Phase 8, not Phase 7's free slot.
+Recommendation: both in one item.
+
+**Q2 — the foreign function first, or the emulator alone.** The emulator
+is the route to gradients for a radiative-transfer code; the foreign
+function without a Jacobian gains only the gradient-free engines on the
+native path. But `ForeignModel` is S per backend with no design question
+(both frameworks ship the primitive), answers "can I use my routine" with
+yes, and makes hybrid models composable at once (a Fortran opacity routine
+inside a native dust model, the native part carrying the gradient, the
+foreign part a few finite-difference parameters). The emulator is L and
+needs a memo first, because three things are undecided: the training-set-
+to-model contract, the coordinate-conditioned decoder for requirements
+negotiation, and the error model. Emulator first means Phase 8 opens on
+Fable memo work with nothing dispatchable on the theme for a wave; foreign
+function first means an Opus item on day one with the memo beside it. The
+error-model decision is the one that matters: the emulator's predictive
+variance as a noise component makes every emulated fit misspecification-
+aware and lets the M2 methodology measure whether the component absorbed
+the emulation error — a result a paper can state; ignored, the emulator is
+a faster black box. Recommendation: both, the foreign function first.
+
+**Q3 — nested populations, Phase 9 by plan or on a customer.** The
+substrate (lossless nested merge, `Binding.index`) nests; the declaration,
+the plate layout, the native resolve functions and the emitted coordinates
+do not. Writing the memo after W7.1 has been used is the right moment,
+since a path into a dataset is a second level in disguise and W7.1 will
+show where one level strains. Waiting for a customer risks the customer
+arriving mid-phase with no memo. Nested populations gate two Phase 9
+items — hierarchical SBI (batched hierarchical draws are shaped by whether
+the plate is a tree) and the IFU cube (spaxels within cubes within a
+sample) — so the memo at Phase 9's start lets both be drafted against it.
+The item is L on the parameter layer and both backends' resolve functions,
+so it runs alone, as W7.0 does. Recommendation: Phase 9 by plan.
+
+**Q4 — readers' order.** Each is S and a filler, so the order costs no
+wall time; it decides which examples become real. The memo's order puts
+catalogue photometry first for the users it unblocks and because it
+carries the filter library (the larger half, closing #64 and v2's last
+dependence on legacy code). Peter's own data first puts IRS and VLTI
+first, making the star-disc twin fit its real spectrum and the radial-
+profile example a VLTI one. The two orders are compatible: IRS is half a
+session. Gaia has a date — DR4's epoch data around the end of 2026 — and is
+scheduled to the release, not to a phase. Recommendation: IRS as the first
+filler, then the memo's order.
+
+**Q5 — the model zoo's home.** In the examples a model has whatever tests
+its example has, native twins only if the example wrote them, no
+conformance rows; in the package it has all three and its spec hash in
+provenance, so a user knows the three backends agree before trying. The
+cost is M and mostly mechanical, with one decision inside: a package model
+that needs a download (the PHOENIX grid) must say so loudly in the
+shrinkage-warning manner. Promotion lengthens the release gate.
+Recommendation: the package, the gallery page as the examples' index.
+
+**Q6 — `1.0.0`'s criteria and a software paper.** The list (the
+known-limitations list reduced to what is deliberate, conda-forge live,
+the paper's examples pinned to the tag, v2's deprecations removed, the
+Zenodo record) is small items but the first, which is a judgement about
+what the final promises; Peter's amendment sets Phase 10's length. A JOSS
+paper would be short (the statement of need, the install and the tests
+exist); if wanted, the cookbook and gallery move from Phase 10 fillers to
+Phase 9 items, since reviewers read the docs, and the declarative problem
+file becomes worth doing for the reproducibility claim. If not, the docs
+items stay fillers and Phase 10 is mostly inference.
+
+**Q7 — what the paper's revision needs.** The question that can reorder
+everything above. Two items produce figures a paper wants: the radial
+profile (misspecification localisation on a new axis — a parametric disc
+plus a GP correction in radius) and the emulator with its error component
+(a black-box fit, an emulated fit and the same model through SBI compared
+on one problem). If the revision needs either, that item moves to Phase
+8's first wave. The dependency to watch is the second beta: a paper that
+shows a radial-profile fit must cite a release that has the kind, so
+either the paper waits for a Phase 8 beta or the radial profile is pulled
+into Phase 7 after wave 3 — possible, since it touches no parameter-layer
+code once W7.0 has landed, at the cost of a later `1.0.0b2` than D5 ruled.
+
+**A combined ruling, if the paper needs nothing new**: Q1 both; Q2 the
+foreign function first; Q3 Phase 9 by plan; Q4 IRS first, then the memo's
+order; Q5 the package; Q6 the list, the JOSS paper decided later; Q7
+nothing pulled forward. Phase 7 stays as ruled and Phase 8 opens with two
+dispatchable items and one memo.
