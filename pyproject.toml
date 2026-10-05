@@ -681,7 +681,7 @@ format-check = "ruff format --check . --exclude tests/characterisation"
 # `pixi run -e torch typecheck` / `pixi run -e jax typecheck`. (W2.4 had used
 # `--ignore-missing-imports` per library for the same purpose; the exclude form
 # needs no per-library list and was kept at the merge.)
-typecheck = "bash -c 'dirs=\"\"; excludes=\"\"; for d in ampere/core ampere/backends ampere/inference ampere/results; do [ -d \"$d\" ] && dirs=\"$dirs $d\"; done; for b in torch jax; do if [ -d \"ampere/backends/$b\" ] && ! python -c \"import $b\" >/dev/null 2>&1; then echo \"typecheck: skipping ampere/backends/$b -- $b is not installed here; run pixi run -e $b typecheck\"; excludes=\"$excludes --project-excludes=ampere/backends/$b/**\"; fi; done; if [ -z \"$dirs\" ]; then echo \"typecheck: none of ampere/{core,backends,inference,results} exist yet -- nothing to check\"; else pyrefly check $excludes $dirs; fi'"
+typecheck = "bash -c 'dirs=\"\"; excludes=\"\"; for d in ampere/core ampere/backends ampere/inference ampere/results ampere/interferometry; do [ -d \"$d\" ] && dirs=\"$dirs $d\"; done; for b in torch jax; do if [ -d \"ampere/backends/$b\" ] && ! python -c \"import $b\" >/dev/null 2>&1; then echo \"typecheck: skipping ampere/backends/$b -- $b is not installed here; run pixi run -e $b typecheck\"; excludes=\"$excludes --project-excludes=ampere/backends/$b/**\"; fi; done; if [ -z \"$dirs\" ]; then echo \"typecheck: none of ampere/{core,backends,inference,results} exist yet -- nothing to check\"; else pyrefly check $excludes $dirs; fi'"
 docs = "sphinx-build -W --keep-going -b html docs/source docs/_build/html"
 # W6.5: the release build. `build-dist` writes the sdist and the wheel to
 # `dist/` (cleared first, so `check-dist` never sees a stale file);
