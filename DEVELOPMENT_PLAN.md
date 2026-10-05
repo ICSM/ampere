@@ -121,6 +121,7 @@ backend-neutral core plus modern computational backends, targeting:
 | The astropy adapter, a post-freeze §4 addition (W4.6) | **`core/astropy_compat.py` implements §4.7 as `contracts/astropy_compat.md` states it** (merged 2026-09-13, `b6d9298`): the adapter is black-box on the reference backend (`DIFFERENTIABLE = False`, `BATCHABLE = False` — astropy vectorises over inputs, not over parameter vectors), bounds become uniform priors, fixed parameters are frozen, ties are recorded and applied rather than sampled, an unbounded free parameter without a prior is refused; **no solid angle is ever invented** — a per-steradian output converts to a flux density only through an equivalency the caller states; the kind is declared or inferred only where the axis unit and arity make it unambiguous. The opt-in native translation of 2026-09-01 is a per-backend `from_astropy` that refuses anything outside its curated table; the table is empty until W4.7. |
 | The distribution name (Phase 6 D13) | **`ampere-astro` on PyPI; the import name stays `ampere`; the Read the Docs slug is `ampere`** (ruled by Peter 2026-10-02). The PyPI name `ampere` belongs to an unrelated battery-modelling package (0.5.9 at the time of the ruling), which the README and `install.rst` already warned about; PyPI normalises `ampere-astro`, `ampere_astro` and `ampere.astro` to one name. `ampere-astro`, `ampere-fit`, `ampere-sed`, `ampere-bayes`, `ampere-infer` and `astro-ampere` were all free; the field suffix was chosen because it is the one that tells the two packages apart by name alone. Carried by W6.5 (the `name` in `pyproject.toml`, the extras' short form `ampere-astro[jax]`, the install page and README) and W6.4 (the slug). |
 | Community health before the beta (Phase 6 D14) | **All five recommendations accepted** (ruled by Peter 2026-10-04): the Contributor Covenant 2.1's enforcement contact is Peter's address as given in `pyproject.toml` (adjustable later by a one-line edit; the option "the maintainers in `CITATION.cff`" did not exist — no such file until W6.5 writes one for Zenodo); `SECURITY.md` promises an acknowledgement within fourteen days and a best-effort fix with no embargo machinery, and names the deserialisation hazards plainly (the artefact store's pickles, `ProcessExecutor`'s pickled problems, netCDF runs and training sets, user models run as user code); private vulnerability reporting, secret scanning with push protection and reported-content moderation are Peter's repository settings before the tag; the accessibility statement is a Phase 7 docs item. The GPLv3 text moves from `licenses/gpl.txt` to a root `LICENSE` so GitHub, Zenodo and PyPI detect it — the one change that must precede `v1.0.0b1`. Carried by W6.17. |
+| Phase 7 opened (D1–D11) | **Every recommendation accepted** (ruled by Peter 2026-10-05, the day of the drafting): the `Derived` node's declaration is a closed expression grammar with a `symbols` mapping, never a callable; derived values are `posterior` variables named by an `ampere_derived` attr; a population's `over` takes qualified component paths with `within=` on the factory only; the order is W7.0 → W7.1 → W7.2; `1.0.0b2` is cut after wave 3; the JWST reader takes the one-dimensional products only; line fluxes (#70) are in the phase; nested populations stay a known limitation this phase (the horizon memo plans them); the jax-native quasiseparable recursion is in and may miss the beta; the RHMF revisit trigger is checked once at the phase's close; of the backlog, the `Censoring` filler and the migration-page note are taken. The decision-log rows for the two §4 changes are drafted in the memo's §8 and land with W7.0 and W7.1 under ground rule 9. |
 | The `origin/master` switch before the dry run (Phase 6 D15) | **D4's switch taken before the TestPyPI dry run, not at the tag** (ruled by Peter 2026-10-05, done the same day): GitHub registers a `workflow_dispatch` workflow only from the default branch, so `release.yml` on `v2` could not be dispatched for the dry run while `origin/master` was the legacy line. The orchestrator fast-forwarded `origin/master` from the legacy head `b8e585b` to the v2 line at `fef26ca` on Peter's word — no force; the legacy code remains importable under its old names (W6.0) — and `release.yml` registered at once. From then on `origin/master` is pushed at every merge and the `v2` mirror is retired. Branch protection and the Read the Docs default branch stay at the tag as D4 says. The alternatives — the tag's run as the first ever run of the workflow, or a commit on the frozen legacy line — were declined. |
 | The circular complex GP implemented, and a solver's right-hand side widened (W4.2) | **`complex_gaussian` + `GaussianProcessNoise` is `ANALYTIC` *and implemented*: the circular (equal-component, zero-pseudo-covariance) complex GP, computed as one Cholesky of `S = K(θ) + diag(σ²)` with a two-column right-hand side rather than as a `2N` by `2N` factorisation** (merged 2026-09-13, `4d93323`; the 2026-09-03 ruling of `likelihoods.md` §17 Q6 executed, `GP_ANALYTIC_IMPLEMENTED` now `True`). Circularity says the real `2N` covariance of `(Re r, Im r)` is `diag(S, S)` with a zero off-diagonal block, so the density is `−½[rᵉᵀS⁻¹rᵉ + rⁱᵀS⁻¹rⁱ + 2 log|S| + 2N log 2π]`: one factorisation, two solves, `log|S|` once and counted twice. Materialising the `2N` matrix costs eight times the arithmetic to carry a zero block the model has declared; calling the real solver twice computes the log-determinant twice. **The `GPSolver` contract is amended accordingly** (`likelihoods.md` §7, new subsection): a `residual` may be an `(n, k)` block of `k` realisations independent of one another and sharing one covariance — `log_marginal_likelihood` sums the `k` marginals, `conditional_loo` stays one term per sample (the components share `A_ii`), `condition` gives an `(m, k)` mean and one `(m,)` variance, `latent_transform` maps `(n, k)` to `(n, k)`. `GPSolver.STACKED_RESIDUALS` is the opt-in, `False` by default because both failure modes are silent: flattening scores `2n` residuals against an `n` by `n` covariance, and taking the first column drops the imaginary part of every visibility. **`QuasisepGP` is refused by name, and it is structural rather than scheduling**: `REQUIRES_ORDERED_1D` cannot hold for a point of the `(u, v)` plane at a wavelength, whatever the kernel selects, so the refusal precedes the solver's own check — `interferometry.md` §7's prediction that the O(N) path "will inherit it" is withdrawn. σ and the kernel `amplitude` are both per-component (`results_schema.md` §16), so `E|r|² = 2(K_ii + σ²)`; the draw is two real realisations sharing `L` and nothing else. Two native-path bugs closed in the same PR, exposed by the first multi-axis GP customer: both backends' lowerings took `observed.axes[0]` as the GP coordinates rather than the full `(n, d)` stack, and both used the unbound `noise.kernel` where W4.5 put the axis binding on `kernel_for(observed)`. **Confirmed by Peter 2026-09-15.** The calibration row's coverage pin (rather than the rank test, where the flexible GP over-covers) confirmed the same day. |
 | The native model surface has a second spelling (W4.3) | **`ampere.backends.{torch,jax}.problem` resolve a native model's value-and-coordinates pair over two names: `flux`/`grid` (the original) and `native_flux`/`native_grid`** (merged 2026-09-13, `64284d5`). A genuine collision rather than taste: `Parameterised._check_free_name` refuses a parameter whose name shadows a class attribute, and `flux` is exactly what every interferometric source model calls its total flux density, so such a model cannot have a method called `flux` and the convention the placement memo records as a duck-typed `flux`/`grid` surface was unsatisfiable for the first modality that needed it. Either pair composes; a model offering half of either is refused with the missing half named. Not a §4 change (the surface is a backend-internal convention), recorded because it is a documented convention. **Ruled by Peter 2026-09-15: (a) and (b) together, as W5.20 — `native_flux`/`native_grid` canonical with `flux`/`grid` an alias, and the shadow check narrowed to a backend-invariant core reserved set** (provisionally (a) earlier the same day, made final on the consequences analysis he asked for) (recorded in `docs/development.md`'s review block of 2026-09-15). The analysis's finding: `_check_free_name` tests `hasattr(type(self), name)` over the whole MRO, so each backend's base class adds its own reserved parameter names — core `Model` reserves 17, a torch spectral model adds `AXIS`, `evaluate_tensor`, `flux`, `grid`, `grid_tensor`, `to`, a jax one `AXIS`, `flux`, `grid` — and a parameter legal on the reference backend can be illegal on its twin; separately, torch's lowering nests parameters as `nn.Module` attributes, so `nn.Module`'s own namespace (`to`, `type`, `float`, `apply`, …) is a third reserved list enforced only at lowering. Nothing reads a parameter as an attribute (no `__getattr__`; values arrive as `context[name]`), so the rule guards a convention, not a live defect. The lookup order `("flux", "native_flux")` means a class offering both is silently taken at the legacy name. W5.20 (proposed) makes the namespace backend-invariant; the canonical spelling flips the lookup order and refuses a model offering both pairs. Also recorded: both modern backends' interferometric twins use the *inheriting* pattern — the declaration (requirements, `configure_from`, the canonical-closure check) is written once, because a pixel-scale requirement written twice would alias silently. |
@@ -1127,8 +1128,60 @@ Not scheduled, but the contracts must not paint them out:
   itself is the Phase 5 bullet above; nothing before it may fix a call
   signature that leaves no room for a context.
 
-Dependencies: 0 → 1 → 2 → {3, 4} → 5 → 6, with 3 and 4 parallelisable and
-the CI/CD workstream running alongside every phase.
+### Phase 7 — Hierarchy, derived parameters, the second reader
+*(Drafted as agent-sized items 2026-10-05 — `WORK_ITEMS.md`'s Phase 7 section, W7.0–W7.11 with decisions D1–D11; **ruled by Peter the same day, every decision as recommended**. The first phase after the beta; the bullets below are the source the items execute.)*
+- **The two design items of the W6.11 memo**
+  (`docs/design/nuisance_populations_and_derived_memo.md`), whose
+  implementation Phase 6's D8 placed here: the `Derived` parameter node
+  (W7.0 — a fourth parameter state carried by a closed expression grammar
+  with a `symbols` mapping, no sampler dimension, computed idempotently
+  wherever named values are formed and natively on both backends, one
+  `posterior` variable per derived name under `ampere_derived`, schema 10;
+  the slab tail of the shrinkage horseshoe and the two population member
+  rules ride with it) and populations over a dataset's qualified
+  component path (W7.1 — `over` entries of the form `component[.path]`,
+  qualified binding paths, the outer-declaration strip, `within=` on the
+  factory only, `populations` in provenance, schema 11), then the
+  composition they exist for measured on the M2 pattern: the per-dataset
+  GP amplitude as a non-centred population (W7.2). The memo's §7 questions
+  were ruled as it recommended (the grammar over a callable; derived
+  values in `posterior` with an attr; paths on `over`; W7.0 → W7.1 →
+  W7.2). Two of the beta's known limitations are lifted by these.
+- **The second reader and the spectroscopy front door** (W7.3, Phase 6
+  D9's ruling, issue #63): JWST `x1d`/`c1d` products into `Spectrum` with
+  the data-quality flags as mask, `ampere.spectroscopy` as the front door
+  by W6.12's pattern, a vendored public file with its provenance. Cubes
+  wait for the IFU modality.
+- **The beta's carried list**: `normalisation="model"` on
+  `SquaredAmplitude` and the interferometry housekeeping (W7.4); the
+  housekeeping lines the Phase 6 rows carried (W7.5); the optimisers'
+  bound-aware scipy route after the Powell-at-the-corner finding (W7.6);
+  the docs accessibility pass (W7.7, Phase 6 D14 (e)); the star-disc
+  twin's upper limits as a `Censoring` declaration (W7.11).
+- **Line fluxes as an observable kind** (W7.9, issue #70): a point kind
+  and an integration step by the modality template, the flexible
+  likelihood over rest wavelength.
+- **The jax-native quasiseparable recursion** (W7.10): a `lax.scan`
+  provider behind the strategy interface chosen by device, lifting the
+  jax solver's CPU-only limitation from W6.18; allowed to miss the beta.
+- **`1.0.0b2`** (W7.8) after wave 3 — the two design items and the
+  reader — by the procedure as the first release corrected it.
+- **Deferred by ruling, with the reasoning in
+  `docs/design/horizon_beyond_phase7.md`**: nested populations (required
+  at some point — the horizon memo places the design memo and item in
+  Phase 9 with the IFU cube as the customer); `ampere.diagnostics` (the
+  RHMF revisit trigger checked once at the phase's close).
+
+**The horizon beyond Phase 7** is assessed in
+`docs/design/horizon_beyond_phase7.md` (2026-10-05): the foreign function
+and the emulator, radial profiles and azimuthal symmetry, hierarchy at
+depth and at scale, the readers, model comparison and correction, the
+modalities still on paper, the package and the release train, and a shape
+for Phases 8–10 with questions for Peter. It folds into this section when
+he rules on it.
+
+Dependencies: 0 → 1 → 2 → {3, 4} → 5 → 6 → 7, with 3 and 4 parallelisable
+and the CI/CD workstream running alongside every phase.
 
 ## 6. Deferred implementation choices
 

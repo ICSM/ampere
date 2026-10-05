@@ -3613,7 +3613,7 @@ in Phase 7 if not. Phase 6 closes with the beta on PyPI and
   choice (MLP preferred).**
 
 
-## Phase 7 — Hierarchy, derived parameters, the second reader (drafted 2026-10-05 by Fable; **for Peter's ruling** — the W6.11 memo's §7 questions and D8's order as D1–D4 below, with the memo's recommendations assumed throughout; the rest D5–D11)
+## Phase 7 — Hierarchy, derived parameters, the second reader (drafted 2026-10-05 by Fable; **ruled by Peter 2026-10-05: D1–D11 as recommended** — the memo's §7 answers as D1–D4, `1.0.0b2` after wave 3, `x1d`/`c1d` only, line fluxes in wave 4, nested populations left for the horizon memo, the jax recursion in, the RHMF check at close, the `Censoring` filler and the migration note from the backlog; the longer horizon is `docs/design/horizon_beyond_phase7.md`)
 
 The first phase after the beta. Its sources: the W6.11 design memo
 (`docs/design/nuisance_populations_and_derived_memo.md`) whose §10 drafted
@@ -3633,9 +3633,11 @@ agents at a time, gate legs scoped to the code touched, CI on the push
 after merge as the gate of record (W6.10). Every change to a §4 contract
 is a decision-log row and the conformance rows in the same PR (ground
 rule 9) — the two rows for W7.0 and W7.1 are already drafted in the
-memo's §8. The decisions **D1–D11** at the end are the ones the drafting
-could not take; the ordering paragraph before them assumes the
-recommendations.
+memo's §8. The decisions **D1–D11** at the end were the ones the drafting
+could not take; **Peter ruled every one as recommended on 2026-10-05**,
+and the ordering paragraph stands as written. The horizon beyond this
+phase — what is blocked, what unblocks it, a shape for Phases 8–10 — is
+`docs/design/horizon_beyond_phase7.md`, drafted the same day.
 
 **What the phase delivers.** (1) The two design items: a `Derived`
 parameter node and populations over a dataset's own parameters — which
@@ -3649,7 +3651,7 @@ nested populations (the third limitation), a jax-native quasiseparable
 recursion (the fourth), `ampere.diagnostics` (the fifth, gated on
 upstream).
 
-### W7.0 — The `Derived` parameter node [M; Opus] (memo §3; D1, D2 assumed as recommended)
+### W7.0 — The `Derived` parameter node [M; Opus] (memo §3; D1, D2 ruled as recommended 2026-10-05)
 §3 of the memo, whole: `Parameter(name, Derived("<expression>",
 symbols={...}))` as a fourth parameter state — the closed grammar over
 symbols (numeric literals, `+ - * / **`, unary minus, `sqrt exp log log1p
@@ -3690,7 +3692,7 @@ regularised tails byte-identical. The contract amendments of §3.8
 §4/§9, `inference.md` §9/§10a) and the decision-log row of §8, verbatim
 but for what review changes. Deliberate limitations stand (§3.7): no
 callable, no conditional, no unit arithmetic, not in the flat layout.
-**Depends:** D1, D2. **Accept:** the memo's §9.2 ten rows
+**Depends:** nothing (D1, D2 ruled). **Accept:** the memo's §9.2 ten rows
 (`tests/conformance/test_derived.py`) green on every registered fixture;
 the existing `test_population.py`, shrinkage and horseshoe rows unchanged
 and green; a NUTS run on torch and jax of the non-centred fifty-member
@@ -3703,7 +3705,7 @@ without a derived parameter; `population.rst` gains the non-centred
 declaration as a worked block (run as a doctest, D5 of Phase 6);
 lint/format/pyrefly clean; gates dev + torch + jax.
 
-### W7.1 — Populations over a qualified component path [M; Opus] (memo §2; D3 assumed as recommended)
+### W7.1 — Populations over a qualified component path [M; Opus] (memo §2; D3 ruled as recommended 2026-10-05)
 §2 of the memo, whole: `Population.over` entries of the form
 `component[.path]` (`"d0.likelihood"`, `"d0.instrument.calibrate"`;
 `"d*.likelihood"` through the existing glob), validated by walking the
@@ -3790,7 +3792,7 @@ pattern), read into a `Spectrum` that `tests/examples/test_photometry_spectra.py
 fixtures accept and fit end to end in the test with a `GaussianProcessNoise`
 likelihood (a dozen lines, run in the docs section too). The `.gitignore`'s
 legacy `*.fits` line qualified so a vendored test file is not silently
-ignored (W6.12's carried finding). **Depends:** D6 (the product set).
+ignored (W6.12's carried finding). **Depends:** nothing (D6 ruled: `x1d`/`c1d` only).
 **Accept:** the file round-trips into a `Spectrum`, the mask equals the
 DQ "do not use" bit, the fit runs; the multi-source refusal and the
 selection by keyword exercised on a rewritten copy; `read_jwst` on an
@@ -3839,7 +3841,11 @@ that fails locally at `ks_pvalue` 0.0054 against 0.01 while CI passes —
 the seed pinned or the budget raised so the row is not at the threshold
 (W6.15, W5.26's territory); netCDF4 re-locked when 1.7.4.1 ships (W6.6);
 the Hyperion `np.string_` shim dropped if upstream has released on NumPy
-2 (W6.13 (C2)); the changelog's "Unreleased" section carrying each.
+2 (W6.13 (C2)); **a note on `migrating.rst`** that the legacy
+`phoenixstar.py` and `QuickSED.py` divide by 4πd² twice, so their fluxes
+are 4π too faint and the twins use the correct law (D11: the legacy code
+is frozen, so a note is the only fix); the changelog's "Unreleased"
+section carrying each.
 **Depends:** nothing. **Accept:** each line's own check (a row, a grep,
 a build); `import ampere` imports no legacy module (the W6.0 row still
 green); docs warnings no longer than base; gates dev (+ sbi for the
@@ -3912,8 +3918,8 @@ its native twins; the flexible likelihood on it (the kernel over the
 line's rest wavelength, so a misspecified excitation ladder shows as a
 correlated residual across neighbouring transitions); the conformance
 rows per fixture; an example on a JWST-like line list (synthetic until
-W7.3 lands a real file, then the real one). **Depends:** D7; W7.3 for the
-real-file example. **Accept:** the template's checklist (the kind, the
+W7.3 lands a real file, then the real one). **Depends:** W7.3 for the
+real-file example (D7 ruled in). **Accept:** the template's checklist (the kind, the
 step on three backends, the family default, the diagnostics' four plots,
 the conformance rows); a worked example page; gates dev + torch + jax.
 
@@ -3931,23 +3937,37 @@ provider cannot be); the GPU row W6.18 turned into a refusal row turned
 back into the cross-device agreement row; the CPU speed of the scan
 measured against celerite2 at 10³–10⁶ points and recorded in
 `performance_memo.md`, with the device rule chosen from that table.
-**Depends:** D9; a cluster run per `scripts/cluster/run.sh`. **Accept:**
+**Depends:** nothing (D9 ruled in); a cluster run per `scripts/cluster/run.sh`. **Accept:**
 the conformance columns for the jax fixture green on both providers; the
 GPU rows green with the agreement row restored; the table in the memo;
 the changelog's limitation struck; gates jax (+ dev for the memo's rows).
 
+### W7.11 — The star-disc twin's upper limits as a `Censoring` declaration [S; Sonnet] (D11, ruled 2026-10-05)
+W6.13 (C1)'s finding (4): the HD 105 CSV's two upper limits at 500 and
+880 µm are in neither the legacy fit nor the twin's. The twin
+(`examples/star_disc/`) gains the two points as censored observations —
+`Censoring` on the photometric dataset with the limits as upper bounds
+under the Gaussian family, per `likelihoods.md` §9 — so the far-infrared
+constraint on the disc's cold dust enters the fit; the twin's docstring
+and coverage record updated, the smoke row in
+`tests/examples/test_star_disc.py` asserting the censored points are in
+the likelihood's decomposition, and one paragraph on `photometry_spectra.rst`
+or the twin's docs section showing the declaration as the worked censoring
+example the docs lack. **Depends:** nothing. **Accept:** the smoke row;
+the fit's posterior on the disc temperature moves in the direction the
+limits imply (pinned as a sign, not a value); docs warnings no longer
+than base; gates dev.
+
 **Ordering (two agents at a time, gate legs scoped to the code touched).**
-**Wave 1** (after D1–D3): W7.0 alone first — W7.1 depends on its member
+**Wave 1**: W7.0 alone first — W7.1 depends on its member
 rules and both touch `parameter.py`, the populations and both backends'
 resolve functions, so they cannot run beside each other; W7.5 beside it
-as the filler (housekeeping, disjoint files), then W7.7 as the second
-filler (docs only). **Wave 2**: W7.1 ∥ W7.4 (the interferometry pieces
+as the filler (housekeeping, disjoint files), then W7.7 and W7.11 as the
+next fillers (docs only; one example). **Wave 2**: W7.1 ∥ W7.4 (the interferometry pieces
 are disjoint from the parameter layer). **Wave 3**: W7.2 ∥ W7.3 (the M2
 sibling under `examples/` and `tests/m2` against a new package
 `ampere/spectroscopy` and `tests/spectroscopy`; disjoint). **Wave 4**:
-W7.6 ∥ W7.9 if D7 admits it (the optimisers against a new kind and step;
-disjoint). **Then W7.8**, the second beta, once Peter names its cut —
-recommended after wave 3, so `1.0.0b2` carries the two design items and
+W7.6 ∥ W7.9 (the optimisers against a new kind and step; disjoint). **Then W7.8**, the second beta, after wave 3 (D5), so `1.0.0b2` carries the two design items and
 the reader. **W7.10** is the long one and runs in whichever slot frees
 after wave 2, since it touches only the jax backend's solver and its
 conformance column; it may miss the beta without holding it. Every item
@@ -3962,22 +3982,26 @@ their rows record the three legs.
   reason `to_spec()` refuses an opaque prior; `where` added when a
   customer appears), or a Python callable traced on each backend.
   **Recommended: the grammar.**
+  **Ruled 2026-10-05: the grammar.**
 - **D2 — where derived values live in the emitted run** (memo §3.6,
   §7 Q2): in `posterior` with the `ampere_derived` attr naming them
   (recommended — ArviZ's summaries, the corner plot and the training-set
   writer see them without a second group, and a derived value *is* a
   posterior quantity), or a separate `ampere_derived` group.
   **Recommended: `posterior` with the attr.**
+  **Ruled 2026-10-05: `posterior` with the attr.**
 - **D3 — paths on `over`, or `within=` on `Population`** (memo §2.1, §7
   Q3): qualified paths as the one low-level grammar on `over`
   (heterogeneous depths allowed) with `within=` as a convenience on
   `DatasetCollection.plate` only (recommended), or `within=` on
   `Population` itself as a second declaration form. **Recommended: paths
   on `over`, the convenience on the factory.**
+  **Ruled 2026-10-05: paths on `over`, `within=` on the factory.**
 - **D4 — the landing order** (memo §10, §7 Q4): W7.0 → W7.1 → W7.2
   (recommended — (2) the `Derived` node is self-contained and (1) the
   paths need its member rules), or W7.1 first with the member rules
   split out. **Recommended: as listed**, Phase 6 D8's order.
+  **Ruled 2026-10-05: W7.0 → W7.1 → W7.2.**
 - **D5 — the second beta's cut**: `1.0.0b2` after wave 3 (W7.0–W7.5,
   W7.7 — recommended: the two design items lift two known limitations
   and the reader rewrites a third sentence, which is the changelog a
@@ -3986,6 +4010,7 @@ their rows record the three legs.
   when v2's own deprecations (the `regularised_horseshoe` alias) go.
   **Recommended: after wave 3; the final's timing left to the phase after
   this one.**
+  **Ruled 2026-10-05: after wave 3; the final's timing to the next phase.**
 - **D6 — the JWST product set**: `x1d`/`c1d` one-dimensional products
   only (recommended — one container, one reader, the W6.12 size), or
   also `s3d` cubes into the `Image` kind per spectral channel (the IFU
@@ -3995,6 +4020,7 @@ their rows record the three legs.
   under a megabyte (the orchestrator finds one and records its provenance
   at dispatch, as W6.12 did). **Recommended: `x1d`/`c1d` only; the cube
   reader deferred to the phase that lands the IFU modality.**
+  **Ruled 2026-10-05: `x1d`/`c1d` only; the cube reader with the IFU modality.**
 - **D7 — line fluxes in this phase**: W7.9 as drafted (a new kind and
   step by the template, Opus, M), deferred to the phase after, or
   declined — issue #70 is the one re-filed modality request and the
@@ -4002,6 +4028,7 @@ their rows record the three legs.
   neither a memo's nor a carried finding's. **Recommended: in this
   phase, in wave 4, if the budget allows; else the first item of the
   next phase.**
+  **Ruled 2026-10-05: in this phase, wave 4.**
 - **D8 — nested populations** (the beta's "one level of hierarchy"): a
   design memo in this phase (Fable's own work between waves, the W6.11
   pattern — a parameter carrying two plates, objects within surveys, the
@@ -4009,6 +4036,7 @@ their rows record the three legs.
   nesting; a §4 change whose memo precedes its item), or left as a known
   limitation until a customer appears. **Recommended: left; no customer
   has asked, and W7.1 is the hierarchy work this phase can absorb.**
+  **Ruled 2026-10-05: left as a known limitation; Peter notes nested populations will be required at some point — the horizon memo's §4 places the memo and item in Phase 9 with the IFU cube as the customer.**
 - **D9 — the jax-native recursion**: W7.10 in this phase (L, Opus, a
   cluster run per candidate), or deferred with the limitation standing
   — the torch solver has no such limit and the jax `DenseGP` and
@@ -4016,6 +4044,7 @@ their rows record the three legs.
   phase, in the free slot after wave 2, allowed to miss the beta** — a
   CPU-only distinguishing feature on one backend is a claim the docs
   must keep qualifying.
+  **Ruled 2026-10-05: in this phase, allowed to miss the beta.**
 - **D10 — `ampere.diagnostics` and RHMF**: the revisit trigger (a
   robusta-hmf release at ≥ 0.1 with a test job on `main`) is checked
   once at the phase's close by the orchestrator (recommended — four
@@ -4023,6 +4052,7 @@ their rows record the three legs.
   the trial's finding (robust weights localise sharp deviations only at
   ranks that leave no residual structure to screen) taken as closing
   the question. **Recommended: the check at close; the finding stands.**
+  **Ruled 2026-10-05: the check at close; the finding stands.**
 - **D11 — Peter's backlog from Phase 6, which of it this phase takes**:
   the two unconverged C1 coverage runs (a longer NUTS budget or the
   calibration-scale reparameterisation — the latter is a W7.0 customer:
@@ -4040,7 +4070,7 @@ their rows record the three legs.
   W6.16's cu126/525 confirmation.
   **Recommended: the `Censoring` filler and the migration-page note in
   this phase; the rest stays recorded.**
-
+  **Ruled 2026-10-05: the `Censoring` filler (W7.11) and the migration-page note (in W7.5); the rest stays recorded.**
 ## Status
 
 | Item | Status |
