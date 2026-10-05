@@ -89,11 +89,20 @@ def resolve_device(
     """
     if not isinstance(device, str):
         return device  # an explicit jax.Device, used as given
-    available = jax.devices()
-    for found in available:
-        if found.platform == device:
-            return found
-    platforms = ", ".join(sorted({d.platform for d in available}))
+    # ``jax.devices(name)``, not a search of ``jax.devices()``: with no argument
+    # jax lists the devices of its *default* backend only, which on a node with
+    # an accelerator is the accelerator alone — so a request for ``"cpu"`` was
+    # refused there as "no such platform" although every jax process has one
+    # (the first GPU run's finding, W6.18, 2026-10-05). Naming the platform asks
+    # jax for exactly that backend; a platform this process genuinely lacks
+    # raises ``RuntimeError`` inside jax, which becomes the ruled refusal below.
+    try:
+        found = jax.devices(device)
+    except RuntimeError:
+        found = []
+    if found:
+        return found[0]
+    platforms = ", ".join(sorted({d.platform for d in jax.devices()}))
     raise error(
         f"{owner} was asked for device {device!r}, but this jax process has no such platform. "
         f"Available: {platforms}. ampere never falls back to another device — a fit that was "

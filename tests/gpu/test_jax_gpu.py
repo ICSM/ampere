@@ -225,8 +225,14 @@ class TestChunkSharding:
 
     def theta(self, problem: FittingProblem, draws: int = 8) -> np.ndarray:
         rng = np.random.default_rng(20260909)
+        # The problem's own width (norm, index and the two Matérn hyperparameters
+        # — four), not a literal: the first GPU run (W6.18) found this helper
+        # drawing two-wide rows for a four-parameter problem.
         return np.stack(
-            [problem.prior_transform(row) for row in rng.uniform(0.05, 0.95, (draws, 2))]
+            [
+                problem.prior_transform(row)
+                for row in rng.uniform(0.05, 0.95, (draws, problem.free_size))
+            ]
         )
 
     def test_the_sharder_reports_the_devices_it_will_use(self) -> None:

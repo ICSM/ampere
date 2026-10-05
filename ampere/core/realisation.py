@@ -51,7 +51,6 @@ import math
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-import numpy as np
 
 from .exceptions import LoweringError, ParameterError
 
@@ -430,7 +429,13 @@ def _check_agrees_at_reference(problem: FittingProblem, realised: Realisation) -
     reference = problem.unconstrain(problem.reference_values)
     expected = float(problem.log_prob_unconstrained(reference))
     try:
-        got = float(np.asarray(realised.log_prob_unconstrained(reference)))
+        # ``float()`` and not ``float(np.asarray(...))``: a torch tensor on a CUDA
+        # device has no ``__array__`` (the device-to-host copy must be explicit),
+        # so the numpy route refused every torch problem placed on a GPU — the
+        # first GPU run's finding (W6.18, 2026-10-05). A 0-d tensor, a jax array
+        # and a numpy scalar all implement ``__float__``, and torch copies to the
+        # host inside it.
+        got = float(realised.log_prob_unconstrained(reference))
     except Exception as error:
         raise LoweringError(
             "realisation",
