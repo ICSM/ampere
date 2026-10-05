@@ -103,8 +103,12 @@ case "$cmd" in
     newest="$(ls -t "$logdir"/raw/gpu-"$tag"-*.log | head -n 1)"
     cp "$newest" "$logdir/$tag.log"
     echo "run.sh: $logdir/$tag.log  (from $(basename "$newest"))"
-    echo "--- last lines (the summary line is the status row's quote):"
-    tail -n 3 "$logdir/$tag.log"
+    # The cluster appends a resource-usage epilogue after the job's own output,
+    # so the summary is not the log's last line (W6.18): find it by pattern.
+    echo "--- pytest summary (the status row's quote):"
+    grep -E '^[0-9]+ (passed|failed|skipped|error)' "$logdir/$tag.log" | tail -n 1 || echo "(no pytest summary line found)"
+    echo "--- exit status line:"
+    grep -E '^== pytest exit status' "$logdir/$tag.log" | tail -n 1 || echo "(no exit status line found)"
     ;;
 
   *) usage ;;
