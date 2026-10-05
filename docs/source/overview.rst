@@ -129,7 +129,10 @@ wavelength grid), and returns a container — a :class:`~ampere.core.Spectrum`,
 container **kind** is three class attributes (axes, layout, whether values
 may be complex), extensible out of tree with no change to ``ampere.core``;
 :doc:`interferometry` is the worked template for adding one, and
-:doc:`astrometry` the second modality built by following it.
+:doc:`astrometry` the second modality built by following it. Interferometry
+also has a front door, :mod:`ampere.interferometry`: one import for its
+kinds, families, reference steps and models, and the OIFITS reader that fills
+the containers from a file.
 
 **An instrument** is a chain of transformations from what the model produces
 to what a particular dataset observed: a calibration scale, a resampling onto

@@ -27,6 +27,7 @@ Ampere v2
    ampere.backends
    ampere.inference
    ampere.results
+   ampere.interferometry
 
 Migrating
 ---------

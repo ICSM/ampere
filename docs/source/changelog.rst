@@ -4,6 +4,16 @@ Changelog
 This page is maintained by hand, one section per release. It says what you
 can do with each release, not which pull requests made it.
 
+Unreleased
+----------
+
+* **Read OIFITS files.** :func:`ampere.interferometry.read_oifits` turns an
+  OIFITS file's squared visibilities, closure phases and complex visibilities
+  into the interferometric containers, ready for a fit, and the new
+  :mod:`ampere.interferometry` is the one place to import interferometry
+  from; :class:`~ampere.backends.reference.SquaredAmplitude` fits squared
+  visibilities as they were measured. See :doc:`interferometry` §10.
+
 1.0.0b1 — the first beta of ampere v2
 -------------------------------------
 

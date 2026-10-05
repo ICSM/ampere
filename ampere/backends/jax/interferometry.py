@@ -93,6 +93,9 @@ from ampere.backends.reference.interferometry import (
     BandwidthSmearing as _ReferenceBandwidthSmearing,
 )
 from ampere.backends.reference.interferometry import (
+    SquaredAmplitude as _ReferenceSquaredAmplitude,
+)
+from ampere.backends.reference.interferometry import (
     Binary as _ReferenceBinary,
 )
 from ampere.backends.reference.interferometry import (
@@ -141,6 +144,7 @@ __all__ = [
     "FourierSample",
     "GaussianSource",
     "GaussianSourceVisibilities",
+    "SquaredAmplitude",
     "TimeSmearing",
     "UniformDisc",
     "UniformDiscVisibilities",
@@ -437,6 +441,38 @@ class Amplitude(_JaxInterferometryStep, _ReferenceAmplitude):
 
     def apply(self, samples: Any, values: Any) -> VisibilitySet:
         return samples.with_values(np.asarray(jnp.abs(self._observed_array(samples.values))))
+
+
+class SquaredAmplitude(_JaxInterferometryStep, _ReferenceSquaredAmplitude):
+    """Take the squared modulus, in jax: ``|V|**2``, the observable an ``OI_VIS2`` holds.
+
+    Kind-preserving, coordinate-preserving, parameter-free; the reference
+    step's docstring says why the prediction is squared rather than the data
+    rooted. Written as ``real**2 + imag**2`` rather than ``abs(V)**2``, so the
+    gradient is defined at the origin too: a squared visibility near a null is
+    exactly where a fit to ``V**2`` spends its time.
+    """
+
+    def apply_flux(self, flux: jax.Array, grid: Any, values: Any) -> tuple[jax.Array, Any]:
+        """``|V|**2`` (over ``normalisation**2`` when one is set), coordinates untouched.
+
+        On the native path the model's flux is in the backend's flux unit (Jy),
+        which is the unit ``normalisation`` was converted to at construction.
+        """
+        squared = self._square(flux)
+        if self._normalisation is not None:
+            squared = squared / (self._normalisation * self._normalisation)
+        return squared, grid
+
+    @staticmethod
+    def _square(flux: jax.Array) -> jax.Array:
+        if jnp.iscomplexobj(flux):
+            return jnp.real(flux) * jnp.real(flux) + jnp.imag(flux) * jnp.imag(flux)
+        return flux * flux
+
+    def apply(self, samples: Any, values: Any) -> VisibilitySet:
+        squared = np.asarray(self._square(self._observed_array(samples.values)))
+        return self._finish(samples, squared * self._scale(samples.unit))
 
 
 class _JaxAveragingStep(_JaxInterferometryStep):

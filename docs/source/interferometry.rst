@@ -6,7 +6,10 @@ kind-changing, coordinate-changing step in the middle of the chain, complex
 data, a wrapped angular family, and two datasets sharing one sky model. This
 page is written as the template for the *next* modality (W4.9's astrometric
 time series, and whatever comes after it): each section below is a piece a
-new modality supplies, in the order a reader adds one. If you have not built
+new modality supplies, in the order a reader adds one — the kind, the step,
+the composition, the likelihoods, the conformance rows, the native twins, the
+study and, last, **a reader** that fills the kind from the file format its
+data arrive in (§10). If you have not built
 a combined fit before, read :doc:`sed_composition` first — it is the same
 five nouns with no kind change and no complex container, and this page cites
 it throughout as "the case you already know".
@@ -446,6 +449,106 @@ times. Measured at the pinned seed, central-90 % coverage on
 gross effect, not a fine one), not these exact figures. The whole run — three
 arms, twelve simulations each — takes about two and a half minutes on the
 reference backend.
+
+10. Reading an OIFITS file: the front door
+---------------------------------------------
+
+Everything above builds its containers from arrays. Real interferometric data
+arrive as OIFITS files (Pauls et al. 2005; Duvert, Young & Hummel 2017), and
+:mod:`ampere.interferometry` is where a fit to one starts: the observable's
+**front door**, one import for the kinds, the families, the reference steps,
+the source models and the reader. It is a user-facing layer over the
+placement the contracts fix (the placement memo's option D), not a place code
+moves to: the kinds stay in :mod:`ampere.core` and the steps in each
+backend's ``interferometry`` module, and torch and jax users still compose
+from their own backend's pieces — the containers the reader returns are
+backend-neutral and feed any backend's ``FourierSample.from_observed``.
+``import ampere`` does not import it.
+
+:func:`~ampere.interferometry.read_oifits` reads ``OI_VIS2``, ``OI_T3`` and
+``OI_VIS`` into a :class:`~ampere.core.VisibilitySet` of squared
+visibilities, a :class:`~ampere.core.ClosurePhases` and a complex
+``VisibilitySet``, each ``None`` when the file has no such table. The test
+file is the 2008 Imaging Beauty Contest's binary (``tests/data``, with its
+provenance), and §4's composition rebuilt on it is a dozen lines:
+
+.. code-block:: python
+
+    import astropy.units as u
+    import scipy.stats as st
+    from ampere.core import Dataset, DatasetCollection, FittingProblem, Instrument, Likelihood
+    from ampere.interferometry import (read_oifits, Binary, FourierSample, ClosurePhase,
+                                       SquaredAmplitude, GaussianFamily, VonMisesFamily)
+
+    data = read_oifits("tests/data/contest-2008-binary.oifits")   # Gam_Vic, MIRC_H, CHARA
+    v2, t3 = data.squared_visibilities, data.closure_phases       # 600 and 800 samples
+    fov = 16 * u.mas
+
+    vis2 = Instrument([FourierSample.from_observed(v2, field_of_view=fov),
+                       SquaredAmplitude(normalisation=1 * u.Jy)], channel="sky", label="vis2")
+    phases = Instrument([FourierSample.from_observed(t3, field_of_view=fov), ClosurePhase()],
+                        channel="sky", label="t3")
+    model = Binary.on_field(fov, 4, channels="sky", component_fwhm=0.9, flux=1.0,
+                            separation=st.uniform(2, 8), position_angle=0.52,
+                            flux_ratio=st.uniform(0.02, 0.5))
+    problem = FittingProblem(model, DatasetCollection({
+        "vis2": Dataset(v2, vis2, likelihood=Likelihood(GaussianFamily()), label="vis2"),
+        "t3": Dataset(t3, phases, likelihood=Likelihood(VonMisesFamily()), label="t3"),
+    }))
+
+(``tests/interferometry/test_oifits.py`` runs this composition. The
+contest's components are uniform discs and ``Binary``'s are Gaussians, so it
+is a smoke test of the plumbing, not a claim about the fit.)
+
+The reader enforces two conventions, and both are where a silent error would
+otherwise live.
+
+**The canonical triangle.** An ``OI_T3`` row lists its stations ``(a, b, c)``
+in any order, with ``(U1, V1)`` the baseline ``a -> b``, ``(U2, V2)`` the
+baseline ``b -> c`` and ``T3PHI = arg(V_ab V_bc V_ca)``. The container wants
+§1's canonical order: stations ``i < j < k``, ``(u1, v1)`` the baseline
+``ij`` and ``(u2, v2)`` the baseline ``jk`` (each ``r_j - r_i``), and the
+value ``arg(V_ij V_jk V_ki)`` that :class:`~ampere.backends.reference.ClosurePhase`
+computes. The reader takes each stored baseline from the file's three,
+negated where the file traverses it the other way, and negates the phase
+exactly when the permutation ``(a, b, c) -> (i, j, k)`` is **odd**: a cyclic
+shift is the same loop and leaves the bispectrum alone, a transposition
+reverses the loop and conjugates it. Every baseline, on a visibility table
+too, is stored in that ``i < j`` sense. The rows that hold this are against
+the contest's published truth, not against ampere: the closure phases agree
+with two uniform discs at 5.0 mas and 30° east of north to a median of 0.66
+sigma, and the mirrored source (the signature of a sign error) is off by 47.
+
+**Squared visibilities are a step, not a transformation of the data.**
+``OI_VIS2`` holds ``|V|**2``, normalised to the zero spacing, because that is
+what was measured: its noise is close to Gaussian there, and not after a
+square root. So the container holds ``VIS2DATA`` and ``VIS2ERR`` as given,
+with no unit, and the *prediction* is squared to meet it by
+:class:`~ampere.backends.reference.SquaredAmplitude` — with
+``normalisation`` set to the model's total flux, held fixed, since a
+normalised visibility carries no information about it. A
+:class:`~ampere.core.GaussianFamily` on ``V**2`` is then the standard fit.
+Without ``normalisation`` the step returns ``|V|**2`` in the square of the
+visibility's unit (``Jy**2``), and the alignment check refuses it against an
+``OI_VIS2``, rather than letting a factor of the flux squared through.
+
+The smaller rules: ``FLAG`` is the mask (OIFITS ``True`` is bad, as ours is),
+non-finite values and non-positive uncertainties are masked too and counted
+in ``meta``; the spectral axis is ``EFF_WAVE`` in micron (the unit every
+shipped ``FourierSample`` emits, which the alignment check compares exactly);
+station, baseline and triangle names, the channel, the MJD and ``EFF_BAND``
+ride in ``extra_coords``; and a file with several targets, instruments or
+arrays is refused until ``target=``, ``insname=`` or ``arrname=`` says which,
+never read as its first. An ``OI_VIS`` table becomes the complex container
+with ``VISAMPERR`` as its circular sigma — OIFITS reports amplitude and phase
+errors separately, and that is the symmetric approximation; fit amplitudes
+with :class:`~ampere.backends.reference.Amplitude` and
+:class:`~ampere.core.RiceFamily` where it matters.
+
+The next modalities follow the same shape when their first readers land: an
+``ampere.astrometry`` or ``ampere.image`` package that re-exports its kinds
+and reference pieces by name, one module per file format, and a section like
+this one on its page.
 
 Three engines, as the item asked
 -----------------------------------
