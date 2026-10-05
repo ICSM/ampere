@@ -1,5 +1,7 @@
 # ampere
 
+[![PyPI](https://img.shields.io/pypi/v/ampere-astro.svg)](https://pypi.org/project/ampere-astro/) [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23151412.svg)](https://doi.org/10.5281/zenodo.23151412) [![Documentation](https://readthedocs.org/projects/ampere/badge/?version=latest)](https://ampere.readthedocs.io/)
+
 Ampere is a Bayesian fitting environment for astronomers: a tool for modelling
 several kinds of astronomical data at once — SEDs, spectra, and more — **even
 when the model cannot explain everything in the data**.

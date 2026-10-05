@@ -6,8 +6,8 @@ message: "If you use ampere in your research, please cite the software as below 
 type: software
 title: "ampere"
 version: "1.0.0b1"
-# date-released: filled on the day v1.0.0b1 is tagged
-# doi: Zenodo mints it at the first GitHub release; added after it
+date-released: "2026-10-05"
+doi: "10.5281/zenodo.23151412"
 license: "GPL-3.0-or-later"
 repository-code: "https://github.com/ICSM/ampere"
 url: "https://ampere.readthedocs.io/"

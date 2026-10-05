@@ -15,19 +15,19 @@ For the ``1.0.0b1`` beta it prints:
 .. code-block:: text
 
     Scicluna, P., Kemper, F., Srinivasan, S., Marshall, J., Morata, O., Trejo, A.,
-    Zeegers, S., Fanciullo, L., Dharmawardena, T. ampere (version 1.0.0b1)
+    Zeegers, S., Fanciullo, L., Dharmawardena, T. (2026). ampere (version 1.0.0b1)
     [software]. https://github.com/ICSM/ampere
     Documentation: https://ampere.readthedocs.io/
     Install: pip install ampere-astro
-    DOI: minted at the first release — see the badge on the README
+    DOI: https://doi.org/10.5281/zenodo.23151412
 
 **The DOI.** The software is archived on `Zenodo <https://zenodo.org>`_, which
 mints a DOI for each GitHub release of the repository and a *concept* DOI
-that always resolves to the latest one. Until the first release has been made
-the DOI line says so, as above; from then on :func:`ampere.cite` prints the
-concept DOI and the README carries it as a badge. Cite the concept DOI unless
-you need to pin the exact version you used, in which case the version's own
-DOI is on the Zenodo record.
+that always resolves to the latest one. :func:`ampere.cite` prints the
+concept DOI, ``10.5281/zenodo.23151412``, and the README carries it as a
+badge. Cite the concept DOI unless you need to pin the exact version you
+used, in which case the version's own DOI is on the Zenodo record (the
+``1.0.0b1`` release is ``10.5281/zenodo.23151413``).
 
 **The paper.** There is no ampere paper yet. When there is one, :func:`ampere.cite`
 will ask you to cite it too and print its reference.

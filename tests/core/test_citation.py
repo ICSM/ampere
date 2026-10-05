@@ -56,21 +56,25 @@ class TestCitationFile:
         assert CITATION["license"] == pyproject["project"]["license"]
         assert CITATION["distribution"] == pyproject["project"]["name"]
 
-    def test_it_is_cff_1_2_software_with_no_doi_yet(self) -> None:
+    def test_it_is_cff_1_2_software_with_the_concept_doi(self) -> None:
         text = (ROOT / "CITATION.cff").read_text(encoding="utf-8")
         assert "cff-version: 1.2.0\n" in text
         assert "type: software\n" in text
-        assert "\ndoi:" not in text  # minted at the first release, not invented
+        # Zenodo minted it at the first GitHub release (2026-10-05); the concept
+        # DOI, which always resolves to the latest version, is the one cited.
+        assert 'doi: "10.5281/zenodo.23151412"\n' in text
+        assert 'date-released: "2026-10-05"\n' in text
 
 
 class TestCite:
-    def test_text_names_the_version_the_repository_and_the_pending_doi(self) -> None:
+    def test_text_names_the_version_the_repository_and_the_doi(self) -> None:
         text = _printed()
         assert text.startswith("Scicluna, P., Kemper, F., Srinivasan, S.")
-        assert "ampere (version 1.0.0b1) [software]" in text
+        assert "(2026). ampere (version 1.0.0b1) [software]" in text
         assert "https://github.com/ICSM/ampere" in text
         assert "pip install ampere-astro" in text
-        assert f"DOI: {DOI_PENDING}" in text
+        assert "DOI: https://doi.org/10.5281/zenodo.23151412" in text
+        assert DOI_PENDING not in text
 
     def test_bibtex_is_one_software_entry(self) -> None:
         entry = _printed(format="bibtex")
@@ -78,6 +82,8 @@ class TestCite:
         assert entry.rstrip().endswith("}")
         assert "author = {Scicluna, Peter and Kemper, Francisca and" in entry
         assert "version = {1.0.0b1}" in entry
+        assert "date = {2026-10-05}" in entry
+        assert "doi = {10.5281/zenodo.23151412}" in entry
 
     def test_it_prints_to_standard_output_by_default(
         self, capsys: pytest.CaptureFixture[str]
