@@ -3,6 +3,15 @@ name: CI
 # W0.6/W0.8: the whole gate runs through pixi (prefix-dev/setup-pixi), so
 # the environment setup is built once and shared with local development
 # (`pixi run <task>`) rather than duplicated as ad-hoc pip/apt steps here.
+#
+# Every `pixi run` here is `pixi run --frozen`: setup-pixi installs the
+# locked environment, and a plain `pixi run` on the runner's pixi (0.81 on
+# 2026-10-05) re-checks the lock against the manifest and rewrites
+# `pixi.lock` before the task starts -- the tree is then dirty, which is
+# what versioned the first `v1.0.0b1` release build as `1.0.0b2.dev0`
+# (release.yml has the same flag for that reason). The tests never read the
+# version, so nothing here was wrong, but a job should run exactly the
+# environment the lock describes and leave the checkout as it found it.
 # pyproject.toml's [tool.pixi.*] tables are the actual environment
 # definitions; this file only decides which environment/task runs where.
 #
@@ -198,8 +207,8 @@ jobs:
           # add.
           locked: false
           frozen: true
-      - run: pixi run -e dev lint
-      - run: pixi run -e dev format-check
+      - run: pixi run --frozen -e dev lint
+      - run: pixi run --frozen -e dev format-check
 
   actionlint:
     name: actionlint
@@ -223,7 +232,7 @@ jobs:
           # frozen, not locked: see the lint job's note (2026-09-22).
           locked: false
           frozen: true
-      - run: pixi run -e dev actionlint
+      - run: pixi run --frozen -e dev actionlint
 
   typecheck:
     name: typecheck (pyrefly, new namespaces)
@@ -250,7 +259,7 @@ jobs:
       # errors). Each is checked with its *real* types in the
       # backend-typecheck job below, which runs the same task in the
       # environment that has them.
-      - run: pixi run -e dev typecheck
+      - run: pixi run --frozen -e dev typecheck
         if: needs.changes.outputs.run_dev == 'true'
 
   test:
@@ -292,7 +301,7 @@ jobs:
           frozen: true
       - name: fast tests (with coverage)
         if: needs.changes.outputs.run_dev == 'true'
-        run: pixi run -e test-py${{ matrix.python }} pytest tests/test_imports.py --cov=ampere --cov-report=xml --cov-report=term
+        run: pixi run --frozen -e test-py${{ matrix.python }} pytest tests/test_imports.py --cov=ampere --cov-report=xml --cov-report=term
       # Characterisation suite (W0.4/W0.5, "legacy still works"): runs here
       # in [dev,zeus,extinction] -- no `sbi` extra, so torch is never
       # pulled into the main matrix. The sbi flow's tests skip cleanly by
@@ -306,7 +315,7 @@ jobs:
       # deliberately excludes.
       - name: characterisation suite (emcee/dynesty/zeus; sbi skips cleanly)
         if: needs.changes.outputs.run_dev == 'true'
-        run: pixi run -e test-py${{ matrix.python }} test-characterisation
+        run: pixi run --frozen -e test-py${{ matrix.python }} test-characterisation
       # W0.10: tests/core and tests/conformance (which imports core) run on
       # every matrix leg, not just py3.13 -- the py3.11 core-import break
       # that survived until W1.10's review (fixed a8e6f54, see this item's
@@ -332,19 +341,19 @@ jobs:
       # shared pytest process).
       - name: "phase 1 suite: core (py${{ matrix.python }})"
         if: needs.changes.outputs.run_dev == 'true'
-        run: pixi run -e test-py${{ matrix.python }} test-core
+        run: pixi run --frozen -e test-py${{ matrix.python }} test-core
       - name: "phase 1 suite: results (py${{ matrix.python }})"
         if: needs.changes.outputs.run_dev == 'true'
-        run: pixi run -e test-py${{ matrix.python }} test-results
+        run: pixi run --frozen -e test-py${{ matrix.python }} test-results
       - name: "phase 1 suite: conformance (py${{ matrix.python }})"
         if: needs.changes.outputs.run_dev == 'true'
-        run: pixi run -e test-py${{ matrix.python }} conformance
+        run: pixi run --frozen -e test-py${{ matrix.python }} conformance
       - name: "backends suite (py${{ matrix.python }})"
         if: needs.changes.outputs.run_dev == 'true'
-        run: pixi run -e test-py${{ matrix.python }} test-backends
+        run: pixi run --frozen -e test-py${{ matrix.python }} test-backends
       - name: "inference suite (py${{ matrix.python }})"
         if: needs.changes.outputs.run_dev == 'true'
-        run: pixi run -e test-py${{ matrix.python }} test-inference
+        run: pixi run --frozen -e test-py${{ matrix.python }} test-inference
       - name: upload coverage
         if: needs.changes.outputs.run_dev == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -403,7 +412,7 @@ jobs:
           # frozen, not locked: see the lint job's note (2026-09-22).
           locked: false
           frozen: true
-      - run: pixi run -e dev test-group-${{ matrix.group }}
+      - run: pixi run --frozen -e dev test-group-${{ matrix.group }}
         if: needs.changes.outputs.run_dev == 'true'
       # W2.11, DEVELOPMENT_PLAN.md §5 Phase 2: "benchmark suite ... with
       # results tracked as CI artefacts". The reference backend's row. Runs
@@ -411,7 +420,7 @@ jobs:
       # -- after the suites step, in the same job, so the environment is set
       # up once and the two never contend for the runner's memory (see
       # backend-suites' note on that).
-      - run: pixi run -e dev bench
+      - run: pixi run --frozen -e dev bench
         if: needs.changes.outputs.run_dev == 'true' && matrix.group == 'core'
       - name: upload benchmark results
         # `always()` so a red suite still publishes whatever the benchmark
@@ -480,7 +489,7 @@ jobs:
       # since jax is absent there too), and, for `sbi` specifically, the only
       # place `ampere/inference/_sbi.py` is checked with the real `sbi`
       # package installed rather than an untyped lazy import.
-      - run: pixi run -e ${{ matrix.environment }} typecheck
+      - run: pixi run --frozen -e ${{ matrix.environment }} typecheck
         if: steps.gate.outputs.run == 'true'
 
   backend-suites:
@@ -571,7 +580,7 @@ jobs:
           # frozen, not locked: see the lint job's note (2026-09-22).
           locked: false
           frozen: true
-      - run: pixi run -e ${{ matrix.environment }} test-group-${{ matrix.group }}
+      - run: pixi run --frozen -e ${{ matrix.environment }} test-group-${{ matrix.group }}
         if: steps.gate.outputs.run == 'true'
       # W3.7: `sbi`'s environment already contains `torch`, so running
       # `tests/benchmarks/` there would benchmark the same backend code the
@@ -588,7 +597,7 @@ jobs:
         if: >-
           steps.gate.outputs.run == 'true' && matrix.group == 'core'
           && matrix.environment != 'sbi' && matrix.environment != 'nested'
-        run: pixi run -e ${{ matrix.environment }} bench
+        run: pixi run --frozen -e ${{ matrix.environment }} bench
       - name: upload benchmark results
         if: >-
           steps.gate.outputs.run == 'true' && matrix.group == 'core'
@@ -630,7 +639,7 @@ jobs:
           # frozen, not locked: see the lint job's note (2026-09-22).
           locked: false
           frozen: true
-      - run: pixi run -e dev docs
+      - run: pixi run --frozen -e dev docs
         if: needs.changes.outputs.run_docs == 'true'
 
   minimal-install:
@@ -713,4 +722,4 @@ jobs:
           # frozen, not locked: see the lint job's note (2026-09-22).
           locked: false
           frozen: true
-      - run: pixi run -e sbi test-characterisation
+      - run: pixi run --frozen -e sbi test-characterisation
