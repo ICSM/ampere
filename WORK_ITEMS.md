@@ -3817,9 +3817,15 @@ nm. (3) `tests/conformance/protocol.py`'s `InterferometryPieces` gains
 `squared_amplitude` and the mirror backend a `SquaredAmplitude`;
 `test_native_interferometry.py::test_every_piece_declares_this_backend`
 reads the piece names from the protocol instead of a hand list.
+(4) A conformance row fitting the shipped `Binary` to the contest file
+and recovering the published geometry (5.0 mas at 30° east of north,
+ratio 8.9) in the model's own convention — the user-journeys walkthrough
+(Appendix D) found the optimum at 3.9 mas and 126° with the walkthrough's
+construction, which is a convention or a field-of-view question the page
+must answer in one sentence beside the DFT sign it already states.
 **Depends:** nothing. **Accept:** the rows above green on every fixture;
 `interferometry.rst` §10's reader example gains the model form in one
-sentence; gates dev + torch + jax.
+sentence; the convention sentence; gates dev + torch + jax.
 
 ### W7.5 — Phase 7 housekeeping: the beta's carried list [S; Sonnet]
 The owed list from the Phase 6 rows and the handoff, each a line and none
@@ -3987,7 +3993,11 @@ variable alone fails) — and a `ResultsWarning` from `emit` and `summary`
 when a chain-based run fails it, on the same `ampere_approximation` guard
 `summary` already uses so VI and SBI runs are never warned about. (3)
 The FAQ's "Inference" section rewritten around the verdict and the two
-starts; the quickstart's text names the default. **Depends:** nothing
+starts; the quickstart's text names the default. (4) An ensemble engine
+given a problem whose `free_size` exceeds a threshold (a `Population`
+of twenty members took eight minutes to R-hat 1.23 on the numpy path,
+Appendix E, where the docs fit fifty by NUTS) warns once, naming NUTS
+and the native backends. **Depends:** nothing
 (W6.7 merged). **Accept:** the Appendix A problem as a regression row —
 R-hat below 1.1 at the first budget from the default start, the attr
 present, the prior start reproducing today's draws bit for bit under
@@ -4037,6 +4047,20 @@ not ("the GP absorbed structure at 9.7 µm; the model is missing a
 feature there" against "the model is wrong"), the shrinkage section's
 figures reused, and the decision a user takes from each (fix the model,
 widen the prior, accept the GP's correction and report its amplitude).
+**The page opens with the gross case** (ruled by Peter 2026-10-06): the
+IRS spectrum of PG 1011-040 fitted by a single power law
+(`docs/design/walkthroughs/persona_b2.py`, the user-journeys memo's
+Appendix B.2) — the GP's conditioned mean *is* the silicate emission, a
+third of the flux at a length scale of microns, the index loses two orders
+of precision and under a permissive prior the normalisation runs to its
+bound while the GP carries the lot; the page says in so many words that
+this is the concept page's earthquake and what "absorbing a lot of
+power" looks like, then turns to the mild case (W7.16's) where the GP
+absorbs only what the model leaves. One section on choosing the kernel's
+priors against the model's own scales — the amplitude as a fraction of
+the flux, the length scale against the features' widths and the data's
+span — which no page gives today (the quickstart's 0.01 µm length scale
+on an IRS grid sidesteps the question).
 Linked from the concept page's last paragraph and from `plot_residuals`'s
 docstring. **Depends:** nothing. **Accept:** every figure traced to a
 driver and its numbers to the M2 page's table; alt text on each; docs
@@ -4060,9 +4084,13 @@ copy the step's axis from a dummy prediction. `check_alignment` on that
 kind matches names and adopts the step's wavelength, refusing a name the
 step does not tabulate; a `results_schema.md` §8 sentence and the
 decision-log row. (3) `plot_posterior_predictive` thins its replicate draw
-to a default of a few hundred draws (8 s on nine points today); the
-plotting library's "too few points to create valid contours" warnings on
-a corner plot are silenced with the reason; one sentence on
+to a default of a few hundred draws (8 s on nine points, 39 s on 360),
+and `gp_localisation` the same (130 s on 360 points); the localisation
+plot's caveat text no longer overdraws the x-axis label; `Evaluation`
+gains a `predictions` mapping (or `FittingProblem.predict(values)`) so
+the model curve at a point is one call rather than a recomputation by
+hand; the plotting library's "too few points to create valid contours"
+warnings on a corner plot are silenced with the reason; one sentence on
 `photometry_spectra.rst` on when the flexible likelihood has nothing to
 learn from (nine photometric points). **Depends:** nothing. **Accept:** a
 catalogue-wavelength `PhotometricPoints` accepted and fitting (the Appendix
@@ -4070,15 +4098,37 @@ A probe as a row); the scale's unit in the model's `to_spec` and provenance;
 the twin's fit unchanged in its posterior after the amendment; gates dev
 + torch + jax (the native model twins).
 
+### W7.16 — The spectroscopist's walkthrough: NGC 6302 as an executed notebook [M; Sonnet] (ruled by Peter 2026-10-06; user-journeys memo Appendix B)
+Persona B's tutorial, on the mildly misspecified case Peter chose: the
+NGC 6302 twin (`examples/ngc6302`, the Kemper et al. 2002 two-shell dust
+model on the ISO 25–120 µm spectrum, eighteen species abundances, a
+calibration scale, `QuasisepGP`) expanded from an example with a command
+line into a notebook under `docs/source/notebooks/` executed at docs
+build: reading the ISO data by hand (the lines a reader will replace,
+said so), the model's declaration explained species by species, the
+independent fit against the flexible one, the default start (W7.12) and
+the convergence verdict read, every diagnostic of W7.14's page applied to
+this fit with the sentence each supports — the GP's amplitude as a
+fraction of the flux and where it localises, against the gross case the
+page opened with — the dust-mass table as the post-fit product, and the
+second mode of the legacy backlog shown rather than hidden. The notebook
+runs a short budget inside the docs build's limit (the W6.1 pattern: the
+budget and wall time stated in the last cell) and quotes the full-budget
+run's numbers from the twin's recorded coverage. **Depends:** W7.12,
+W7.14. **Accept:** the notebook executes in `pixi run docs` under two
+minutes; the full-budget figures traced to the twin's record; linked from
+`tutorials.rst` and from W7.14's page; docs warnings no longer than base;
+gates none (docs; the twin's rows unchanged).
+
 **Ordering (two agents at a time, gate legs scoped to the code touched).**
 **Wave 1**: W7.0 alone first — W7.1 depends on its member
 rules and both touch `parameter.py`, the populations and both backends'
 resolve functions, so they cannot run beside each other; W7.5 beside it
 as the filler (housekeeping, disjoint files), then the fillers in this
 order as slots free: W7.12 (convergence — every walkthrough hits it
-first), W7.14 (docs), W7.7 (docs), W7.11 (one example), W7.15 (on
-Peter's word for the scale semantics); W7.13 only after W7.0 merges,
-since both touch `ArrayOps`. **Wave 2**: W7.1 ∥ W7.4 (the interferometry pieces
+first), W7.14 (docs), W7.7 (docs), W7.11 (one example), W7.16 (after
+W7.12 and W7.14), W7.15 (on Peter's word for the scale semantics); W7.13
+only after W7.0 merges, since both touch `ArrayOps`. **Wave 2**: W7.1 ∥ W7.4 (the interferometry pieces
 are disjoint from the parameter layer). **Wave 3**: W7.2 ∥ W7.3 (the M2
 sibling under `examples/` and `tests/m2` against a new package
 `ampere/spectroscopy` and `tests/spectroscopy`; disjoint). **Wave 4**:

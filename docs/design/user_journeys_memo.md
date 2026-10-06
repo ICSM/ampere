@@ -370,6 +370,37 @@ under `examples/` or must be downloaded in the example, and whether the
 analytic model is to be written fresh from the paper or ported from the
 authors' code.
 
+### 8.1a Rulings of 2026-10-06, later: the spectroscopy case
+
+Peter: the PG 1011-040 fit is a great example but not of the question at
+hand — the walkthrough should show a model with at most mild
+misspecification, and the NGC 6302 twin is there and needs expanding into
+a full walkthrough. **Folded**: the gross case opens W7.14's page; the
+NGC 6302 notebook is W7.16, after W7.12 and W7.14. The orchestrator
+considered the alternatives — the PHOENIX-star twin (the emulator's own
+error is the misspecification, which is the emulator item's story, not
+this one), the star-plus-disc twin (photometry plus a spectrum, persona
+A's case as much as B's), the M2 generators (synthetic) — and agrees NGC
+6302 is the right one: real data, a published physical model with
+eighteen species, a calibration scale, the quasiseparable solver and a
+post-fit physical product, and a mild misspecification a GP of modest
+amplitude can absorb.
+
+**When each piece folds into the plan.** *Now*: the Phase 7 fillers
+W7.12–W7.16 and the amendments to W7.4, W7.12 and W7.15 from the
+walkthroughs — in the plan's Phase 7 section with this commit. *At Phase
+8's drafting* (when `1.0.0b2`'s cut is in sight, or earlier on Peter's
+word): the horizon memo's §9 Phase 8 shape re-ranked by §6 of this memo —
+the foreign function and `NumpyroEngine`, the emulator memo and item, the
+radial profile (required for planned papers), the photometry reader with
+the filter library, the model comparison module, the model zoo, the
+debris-disc flagship once its two data questions are answered, the
+walkthrough for persona C with the emulator. *At Phase 9's drafting*:
+nested populations, hierarchical SBI, the store and the catalogue loop at
+scale, the IFU cube, SAGE with GRAMS as the amortised-SBI flagship, the
+light-curve and Gaia readers. The two memos stay as the reasoning; the
+plan's §5 carries the bullets.
+
 ### 8.2 The questions as asked
 
 1. **The flagship's data and model**: SAGE (public via VizieR/IRSA, with

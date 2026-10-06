@@ -1175,7 +1175,12 @@ Not scheduled, but the contracts must not paint them out:
   (W7.13); the "Reading the diagnostics" page (W7.14); the persona-A
   findings — `ModifiedBlackBody`'s `scale` is a solid angle in all but
   name, photometric alignment by wavelength refuses a catalogue's own
-  axis (W7.15, proposed; the scale semantics await Peter's word).
+  axis (W7.15, proposed; the scale semantics await Peter's word); the
+  spectroscopist's walkthrough as an executed notebook on the NGC 6302
+  twin, the mildly misspecified case (W7.16), with the gross case — a
+  quasar's IRS spectrum under a single power law, the GP absorbing the
+  silicate features — as the opening of W7.14's page (both ruled by
+  Peter 2026-10-06).
 - **Deferred by ruling, with the reasoning in
   `docs/design/horizon_beyond_phase7.md`**: nested populations (required
   at some point — the horizon memo places the design memo and item in
