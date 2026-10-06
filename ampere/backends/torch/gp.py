@@ -243,6 +243,12 @@ class TorchOps:
     def absolute(self, array: Any) -> torch.Tensor:
         return torch.abs(self.scalar(array))
 
+    def sqrt(self, array: Any) -> torch.Tensor:
+        return torch.sqrt(self.scalar(array))
+
+    def log(self, array: Any) -> torch.Tensor:
+        return torch.log(self.scalar(array))
+
 
 class _TorchKernel(Kernel):
     """Shared plumbing for the torch kernels: torch separations, torch covariances.

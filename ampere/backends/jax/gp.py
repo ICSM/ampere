@@ -303,6 +303,12 @@ class JaxOps:
     def absolute(self, array: Any) -> jax.Array:
         return jnp.abs(jnp.asarray(array, dtype=jnp.float64))
 
+    def sqrt(self, array: Any) -> jax.Array:
+        return jnp.sqrt(jnp.asarray(array, dtype=jnp.float64))
+
+    def log(self, array: Any) -> jax.Array:
+        return jnp.log(jnp.asarray(array, dtype=jnp.float64))
+
 
 class _JaxKernel(Kernel):
     """Shared plumbing for the jax kernels: jax separations, jax covariances.
