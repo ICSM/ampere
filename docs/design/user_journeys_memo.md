@@ -370,6 +370,27 @@ under `examples/` or must be downloaded in the example, and whether the
 analytic model is to be written fresh from the paper or ported from the
 authors' code.
 
+**The flagship's data, answered by Peter (2026-10-06)**: the paper's
+repository, `github.com/jontymarshall/SEDs_Of_Spatially_Resolved_Discs`
+(public, MIT, 890 KB, last push 2026-02-03), holds the manuscript, the
+per-object inputs (`data/processed/emcee_resolved_disc_tablulated_values_for_modelling.csv`,
+32 KB, and `paper/tables/Marshall+2026_Table_A1.csv`), the literature
+compilations under `data/external` (Cao et al. 2023, Marshall et al.
+2021, the REASONS data frame, Pawellek et al. 2014), the emcee chains per
+object, and the model (`models/RT_Code.py`: an `RTModel` class over
+`miepython`, `numba`, astropy's `BlackBody` and the `astrosil.lnk` optical
+constants, with the analysis scripts beside it). Nothing is committed to
+ampere: the example reads from the repository at a pinned commit through
+a download-and-cache helper with an offline skip, which is W6.12's
+pattern and which the MIT licence permits. The model is ported rather
+than imported — ampere already uses `miepython` (W6.13 (C2)) and would
+drop `numba` — and the port is checked against the repository's chains
+for a few objects as the example's own acceptance row. One thing to
+confirm at the example's drafting: `data/raw` is a placeholder, so the
+per-band photometry itself may live in the external tables or need the
+literature references in `paper/references`; the orchestrator did not
+open those files.
+
 ### 8.1a Rulings of 2026-10-06, later: the spectroscopy case
 
 Peter: the PG 1011-040 fit is a great example but not of the question at
