@@ -4066,14 +4066,17 @@ docstring. **Depends:** nothing. **Accept:** every figure traced to a
 driver and its numbers to the M2 page's table; alt text on each; docs
 warnings no longer than base; gates none (docs).
 
-### W7.15 — The persona-A findings: `ModifiedBlackBody`'s `scale`, photometric alignment by filter name, two plotting nits [S; Sonnet] (proposed 2026-10-06 from Appendix A findings 2, 3 and 5; **Peter's word needed on the scale semantics**)
+### W7.15 — The persona-A findings: `ModifiedBlackBody`'s `scale`, photometric alignment by filter name, the plotting nits [S; Sonnet] (from Appendix A findings 2, 3 and 5 and Appendix B.2; **ruled by Peter 2026-10-06: `scale` is the flux at the reference wavelength by default, the solid angle by keyword**)
 (1) `ModifiedBlackBody` and `BlackBody` multiply `B_ν` with its per-
 steradian magnitude, so `scale = 1` gives fluxes of 10¹⁵ Jy and a user
 with catalogue fluxes needs a prior reaching 10⁻¹⁶, while the docstring
 promises "`scale` stays interpretable as the flux the source would have
-… at that wavelength". Proposed: `scale` becomes that flux — a quantity
-in Jy at `reference_wavelength` — and the solid-angle form is reachable
-by a documented `solid_angle=` alternative; the modified-blackbody twin,
+… at that wavelength". **Ruled**: `scale` becomes that flux — a quantity
+in Jy at `reference_wavelength`, the Planck function divided by its own
+value there — on `ModifiedBlackBody` and `BlackBody` alike, and the
+solid-angle form is reachable by a documented keyword (`solid_angle=`, a
+quantity in steradian, exclusive with `scale`), the parameter carrying
+its unit in `to_spec` either way; the modified-blackbody twin,
 the M2 generators and every test pinning a value amended, the change
 named in the changelog as a behaviour change. (2) `PhotometricPoints`
 alignment keys on the filter name, not the wavelength: the step tabulates
