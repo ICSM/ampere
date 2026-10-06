@@ -514,6 +514,69 @@ not uniform (`add_residuals(run, problem)` against
 posterior-predictive plot's cost scales with draws × points; a default
 thinning (W7.15 (3)) matters more here than on photometry.
 
+### B.2 The second pass: the start crossed with the kernel priors, and what the fit is
+
+`walkthroughs/persona_b2.py`, same data and model. **The set-up, stated
+in full** because it decides the reading: the spectrum is a quasar's
+(PG 1011-040) with silicate emission at 10 and 18 µm and PAH bands over a
+rising continuum; the model is a single `PowerLaw` (`norm` the flux at
+1 µm, log-uniform 0.001–10 Jy; `index` uniform −3 to 6), which can
+represent the continuum and nothing else; one `Resample` step; the GP's
+priors are the orchestrator's, half-normal with scales 0.05 Jy and 5 µm
+("wide") or 0.01 Jy and 2 µm ("M2-like"); emcee 24 × 1500 from the
+optimiser's mode or from the prior.
+
+| Fit | Start | `index` | GP amplitude, length scale | R-hat |
+|---|---|---|---|---|
+| independent | optimiser | 1.111 ± 0.003 | — | 1.03 |
+| GP, wide | optimiser | 0.9 ± 1.0; `norm` on its bound | 0.033 Jy, 9.4 µm | undefined (ESS = draws) |
+| GP, wide | prior | 0.5 ± 0.8 | 0.022 Jy, 7.1 µm | 1.40 |
+| GP, M2-like | optimiser | 0.75 ± 0.12 | 0.011 Jy, 4.1 µm | 1.13 |
+| GP, M2-like | prior | 0.3 ± 1.1 | 0.014 Jy, 4.6 µm | 1.56 |
+
+The optimiser's ball at the bound is twenty-four identical positions
+(`initial_positions(24, around=opt)`: one unique value in the `norm`
+column), which is the degeneracy of finding 1 seen directly.
+
+**Peter's reading (2026-10-06), which is the right one**: the model is
+*very* misspecified — the power law can represent the underlying
+continuum and not the dust features on top of it — so the GP has to
+absorb a lot of power, and the behaviour follows. The figures bear it
+out: the independent power law threads the silicate hump at ±10σ (the
+whiteness test says so: Q = 1490, p = 0.005, structure detected); every
+GP fit places the power law *under* the hump with a shallower index and
+the GP's conditioned mean is the 10 and 18 µm silicate emission (+0.02 Jy
+at 18–20 µm) with a trough below 9 µm — a third of the flux at a
+length scale of several microns. A GP that large is degenerate with the
+continuum's curvature, so `index` loses two orders of magnitude of
+precision and, under the permissive prior, `norm` runs to its bound while
+the GP carries the lot. This is the concept page's earthquake, working as
+designed; the independent fit's ±0.003 on the index was the false
+precision the method exists to remove.
+
+**What the second pass changes in the findings.** (1) The GP absorbing
+the continuum is **not** a package finding; it is the expected answer to
+a grossly misspecified model, and the walkthrough that would show the
+method at its best is one whose model carries the features (a power law
+plus a silicate emission template, or the NGC6302 twin's opacity model)
+so the GP absorbs only what is left. That is the case W7.14's page should
+open with, in both forms: the gross one, to show what "absorbing a lot of
+power" looks like, and the mild one. (2) The package findings stand: the
+degenerate ball at a bound (W7.12's fallback), no warning at R-hat 1.5 or
+ESS equal to the draw count (W7.12's verdict), no guidance anywhere on
+choosing the kernel's priors against the model's own scales — the
+quickstart's own GP fit on this grid uses a 0.01 µm length scale, below
+the sample spacing, which makes its GP nearly white and sidesteps the
+question (W7.14, one section). (3) Three nits for W7.15: `gp_localisation`
+costs 130 s per run on 360 points (the conditioning over every stored
+draw; a default thinning as for the predictive plot); the localisation
+plot's caveat text is drawn over the x-axis label; the `Evaluation`
+record carries `log_prob` and its split but no prediction, so a user who
+wants the median model curve on a plot recomputes it by hand or goes
+through `add_posterior_predictive` — a `predictions` field on
+`Evaluation`, or a one-line `predict(problem, values)`, is the obvious
+convenience.
+
 ## Appendix C — persona C, sketched from the rows (not run)
 
 `examples/cstar` is the carbon star on Hyperion fitted with `SBIEngine`

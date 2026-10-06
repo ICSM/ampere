@@ -13,8 +13,10 @@ package says.
 - `persona_a.py`, `persona_a2.py` — the SED fitter: nine-band photometry,
   a modified blackbody, emcee from the prior and from the optimiser,
   dynesty, the plots, three unit and wavelength probes (Appendix A).
-- `persona_b.py` — the spectroscopist: a real IRS spectrum read by hand,
-  a power law, the flexible likelihood, the diagnostics (Appendix B).
+- `persona_b.py`, `persona_b2.py` — the spectroscopist: a real IRS spectrum
+  read by hand, a power law, the flexible likelihood, the diagnostics; the
+  second pass crosses the start (optimiser, prior) with two kernel priors
+  and saves the overlay, residual and localisation figures (Appendix B).
 - `persona_d.py` — the interferometrist: the contest OIFITS file through
   the reader and the binary fit (Appendix D).
 - `persona_e.py` — the population person: twenty objects as a
