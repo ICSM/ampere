@@ -82,7 +82,7 @@ Three environments
      - Environment
      - What you get
 
-   * - ``pip install -e .``
+   * - ``pip install ampere-astro``
      - ``pixi run -e dev …``
      - The reference backend, the whole of :mod:`ampere.core` — including the
        flexible GP likelihood and its **exact O(N)** solver — the
@@ -90,14 +90,14 @@ Three environments
        fitting environment on its own, not a stub: celerite2, arviz and
        h5netcdf are base dependencies, not extras.
 
-   * - ``pip install -e ".[torch]"``
+   * - ``pip install ampere-astro[torch]``
      - ``pixi run -e torch …``
      - Adds :mod:`ampere.backends.torch` and pyro, and therefore
        :class:`~ampere.inference.NUTSEngine`,
        :class:`~ampere.inference.VIEngine`, ``vmap`` batching and per-instance
        device placement.
 
-   * - ``pip install -e ".[jax]"``
+   * - ``pip install ampere-astro[jax]``
      - ``pixi run -e jax …``
      - Adds :mod:`ampere.backends.jax`, numpyro and equinox, with the same
        consequences. The fastest path in the repository: a value **and** a

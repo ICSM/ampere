@@ -78,9 +78,7 @@ name: CI
 
 on:
   push:
-    # `v2` mirrors the local v2 master on the remote (2026-09-22) so the
-    # workflow runs on it before the v2 line is merged to master.
-    branches: [master, v2]
+    branches: [master]
     # W6.4: a release tag runs the same jobs, the `-W` docs build among them,
     # so the build Read the Docs makes of the tag (its GitHub integration
     # builds every tag; there is deliberately no publish step here) has been

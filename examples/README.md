@@ -5,7 +5,7 @@ This directory holds two generations of ampere example code side by side.
 **v2 example packages**, each written against `ampere.core` and a modern
 backend, each covered by its own test suite in `tests/examples/` so that none
 can rot unnoticed: `sed_composition`, `m2_misspecification`, `interferometry`,
-`astrometry`, `image`, `wstat_comparison.py`, `sbi/`, `linear_sed`,
+`astrometry`, `image`, `ngc6302`, `wstat_comparison.py`, `sbi/`, `linear_sed`,
 `modified_blackbody`, `phoenix_star`, `star_disc` and `cstar` — see `docs/source/tutorials.rst` for the walk-throughs.
 `population` has no example package of its own; its code is small enough to
 live in the tutorial page inline.
@@ -48,7 +48,7 @@ and `modelClio.py` each import a path that no longer exists
 emceesearch` or anything else legacy currently ships), so none of the three
 has run in a long time. Ruled D12 (a): dead code, not migrated, not fixed.
 
-**Notebooks** (`docs/source/notebooks/`: `quickstart`, `Ampere_MBB_Example`,
-`Embedding_nets`) teach the legacy v1 API and are rendered from stored
-output rather than executed by the documentation build; converting them is
-W6.1's, not this item's.
+**Notebooks** (`docs/source/notebooks/`): `quickstart` and
+`Ampere_MBB_Example` are v2 and are executed by the documentation build;
+only `Embedding_nets` still teaches the legacy API, and it is rendered from
+stored output, never executed.

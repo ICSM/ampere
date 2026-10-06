@@ -21,12 +21,13 @@ from datetime import date
 project = "AMPERE"
 copyright = (
     f"{date.today().year}, Peter Scicluna, Francisca Kemper, Sundar"
-    " Srinivasan, Jonathan Marshall, Sacha Hony, Sascha Zeegers, "
-    "Lapo Fanciullo"
+    " Srinivasan, Jonathan Marshall, Oscar Morata, Alfonso Trejo, "
+    "Sascha Zeegers, Lapo Fanciullo, Thavisha Dharmawardena"
 )
 author = (
     "Peter Scicluna, Francisca Kemper, Sundar Srinivasan, Jonathan"
-    " Marshall, Sacha Hony, Sascha Zeegers, Lapo Fanciullo"
+    " Marshall, Oscar Morata, Alfonso Trejo, Sascha Zeegers, Lapo"
+    " Fanciullo, Thavisha Dharmawardena"
 )
 
 from importlib.metadata import version

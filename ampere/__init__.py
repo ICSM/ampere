@@ -21,9 +21,8 @@ correlated noise.
 This effectively downweights parts of the data which the model doesn't
 represent well without having to manually identify these regions.
 
-At present, ampere is in the alpha testing phase, but we anticipate a beta
-release in the near future. If you are interested, please get in touch with
-us!
+ampere is in beta, released on PyPI as ``ampere-astro``; the documentation is
+at https://ampere.readthedocs.io.
 """
 
 from importlib.metadata import PackageNotFoundError, version as _version
@@ -35,8 +34,9 @@ try:
 except PackageNotFoundError:  # a checkout on sys.path without an install
     __version__ = "0+unknown"
 
-__copyright__ = """ Copyright (C) 2017  P. Scicluna, F. Kemper, S. Srinivasan
-J.P. Marshall, L. Fanciullo, T. Dharmawardena, A. Trejo, S. Hony
+__copyright__ = """ Copyright (C) 2017-2026  P. Scicluna, F. Kemper, S. Srinivasan,
+J.P. Marshall, O. Morata, A. Trejo, S. Zeegers, L. Fanciullo,
+T. Dharmawardena
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
