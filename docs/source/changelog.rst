@@ -14,6 +14,24 @@ Unreleased
   from; :class:`~ampere.backends.reference.SquaredAmplitude` fits squared
   visibilities as they were measured. See :doc:`interferometry` §10.
 
+* **Install from PyPI throughout the documentation.** The overview, the SBI
+  guide and the torch and jax backend pages say ``pip install
+  ampere-astro[...]`` rather than an install from a clone; the development
+  install stays on :doc:`install`.
+* **Training sets keep long failure messages and extra-coordinate dtypes.**
+  Appending a batch whose failure message (or context record) is longer than
+  any in the file no longer truncates it on write: every string variable of a
+  training set is stored variable-length. Integer and boolean extra
+  coordinates are covered by a test through write, append and read-back.
+* **Migrating note: the legacy star scripts are** :math:`4\pi` **too faint.**
+  :doc:`migrating` now says that the legacy ``phoenixstar.py`` and
+  ``star_disc.py``/``QuickSED`` divide by :math:`4\pi d^2` twice; the twins
+  use the correct law.
+* **For developers.** A ``heavy`` pytest marker keeps the optimiser rows that
+  need a 40-second emcee run out of ``pixi run test-fast``; ``test-all`` and CI
+  still run them. ``SyntheticPhotometry.from_library`` no longer depends on a
+  legacy module.
+
 1.0.0b1 — the first beta of ampere v2
 -------------------------------------
 

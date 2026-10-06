@@ -663,7 +663,8 @@ on PyPI still needs Python below 3.10. The legacy divides by :math:`4\pi d^2`
 a second time after a flux that already carries the :math:`4\pi`, so its
 fluxes are :math:`4\pi` too faint; the twin does not reproduce that, and a
 luminosity fitted with the legacy script is :math:`4\pi` times the twin's for
-the same photometry. And CCM89 is implemented inside the model, so it is
+the same photometry (the note under :ref:`migrating-twin-star-disc` has the
+detail). And CCM89 is implemented inside the model, so it is
 differentiable on every backend, instead of calling the ``extinction``
 package. The trained posterior is cached by an
 :class:`~ampere.results.ArtefactStore`, keyed on the problem's hashes.
@@ -752,6 +753,21 @@ emits two channels, ``"sed"`` and ``"rvs"``, so the Gaia-RVS spectrum is
 modelled on its own grid. Two photometric bands that the bundled filter
 library lacks (ALMA band 6 and ATCA 9 mm) are top-hats with
 ``detector="energy"``.
+
+.. note::
+
+   **The legacy scripts divide by** :math:`4\pi d^2` **twice, so their fluxes
+   are** :math:`4\pi` **too faint.** ``examples/examples_paper/phoenixstar.py``
+   divides the emulator's flux by :math:`4\pi d^2` in the model (line 53) after
+   scaling the bolometric flux by :math:`1/4\pi (1\,\mathrm{pc})^2` (line 25),
+   and again in its post-processing (line 130). ``examples/star_disc.py``
+   forms ``fbol_1l1p / (4π (1 pc)²)`` (line 43) and passes it to
+   ``ampere/legacy/models/QuickSED.py``, which divides by :math:`4\pi d_\star^2`
+   a second time (line 148), so for ``QuickSED`` the second division is the
+   example feeding the model as much as the model itself. A luminosity fitted
+   with either legacy script is :math:`4\pi` times the twin's for the same
+   photometry. The twins use the correct law. The legacy code is frozen (D11),
+   so this note is the only fix.
 
 .. _migrating-post-processing:
 
