@@ -3958,12 +3958,127 @@ the fit's posterior on the disc temperature moves in the direction the
 limits imply (pinned as a sign, not a value); docs warnings no longer
 than base; gates dev.
 
+### W7.12 — Convergence: the optimiser's mode as the ensemble engines' default start, the verdict, the warning [S; Sonnet] (ruled by Peter 2026-10-06 from the user-journeys memo, Appendix A finding 1)
+The first fit a user writes on the beta — nine-band photometry, a
+modified blackbody, emcee from prior draws — reaches R-hat 1.5 at 36 000
+evaluations and 1.22 at ten times that, while the same budget started
+from `optimise`'s mode reaches 1.06 in 22 s; `summary` printed R-hat 1.5
+without comment (`docs/design/user_journeys_memo.md`, Appendix A). Three
+changes: (1) **the default start of `EmceeEngine` and `ZeusEngine` is the
+optimiser's mode** — `run(initial=None)` runs `optimise(problem)` once
+(the scipy route, its default starts) and takes
+`initial_positions(walkers, around=optimum)`'s ball; `initial="prior"`
+restores the prior start; an explicit `initial=` is honoured as today; the
+run records `ampere_start` (`"optimum"`, `"prior"`, `"supplied"`) and the
+optimum's provenance as W6.7 stores it; a problem the optimiser cannot
+start (a non-finite objective at every start) **or whose optimum sits on
+a prior bound** (Appendix B: the ball around a bound-pinned optimum is
+degenerate and every walker stayed on it — ESS equal to the draw count,
+R-hat undefined) falls back to the prior with a loud warning naming
+`initial="prior"` and the bound; the default start is budgeted (one
+start, or a time cap — Appendix E measured 79 s for the eight-start route
+on 22 parameters) with the full route on request; W7.6's bound check is
+the one this uses, so W7.6 lands first or with it. (2) **A convergence
+verdict**: `ampere.results.check_convergence(tree, *, rhat=1.05, ess=100)`
+returning a small typed record — passed or not, the failing variables with
+their values, and the remedy in words (more steps; more walkers; the
+warm start if the run says `"prior"`; a reparameterisation when one
+variable alone fails) — and a `ResultsWarning` from `emit` and `summary`
+when a chain-based run fails it, on the same `ampere_approximation` guard
+`summary` already uses so VI and SBI runs are never warned about. (3)
+The FAQ's "Inference" section rewritten around the verdict and the two
+starts; the quickstart's text names the default. **Depends:** nothing
+(W6.7 merged). **Accept:** the Appendix A problem as a regression row —
+R-hat below 1.1 at the first budget from the default start, the attr
+present, the prior start reproducing today's draws bit for bit under
+`initial="prior"`; the verdict's rows (passed, one failing variable, an
+approximate run never warned); every engine test unchanged but for the
+start; `results.md` §4 gains the attr and the decision-log row records
+the default's change; gates dev (+ torch and jax for the engine rows that
+run there).
+
+### W7.13 — The portable model: one `ArrayOps` for models and the guide "Writing a model once for three backends" [S code, M docs; Opus] (ruled by Peter 2026-10-06; user-journeys memo §4 (1))
+Most users write a `Model` subclass (Peter: 60 % or more), and the
+package's answer to "how do I run it on jax" is documented only for
+modality authors (`interferometry.rst` §8's inheriting pattern) while the
+mechanism exists three times — `ampere.core.ArrayOps` for kernels (W4.5),
+a private ops class in the jax astropy adapter, the PHOENIX emulator's own
+`Ops`. The item: (1) one public protocol for models — `ArrayOps` widened by
+what a model needs beyond a kernel (`where`, `interp`, `trapz`/`cumsum`,
+`exp`, `log`, `sqrt`, `power`, `clip`, the dtype-and-device scalar and
+`asarray`), `NumpyOps` from `ampere.core`, `JaxOps` and `TorchOps` from
+their backends, the astropy adapter's private class and the emulator
+example folded onto it (W7.0 adds `sqrt` and `log` first; this item lands
+after it); (2) a documented base pattern — a reference model whose
+`evaluate` is written against `self.ops`, and the two native twins as
+three-line subclasses setting `OPS`, `BACKEND` and the capability flags,
+the inheriting pattern made the default for a user's own model; (3) the
+guide page, "Writing a model once for three backends": the quickstart's
+`LinearModel` rewritten against the protocol (its `np.asarray` and
+`float(...)` casts are exactly what makes it unportable), run under emcee
+on numpy and NUTS on jax in one executed notebook, the `from_astropy`
+route for the curated classes stated beside it, and the rule for when to
+re-declare instead. **Depends:** W7.0 merged. **Accept:** the guide's
+model as a conformance row agreeing across the three fixtures at
+`tolerances.cross_backend` and lowering under NUTS on both native
+backends; the emulator example and the astropy adapter on the public
+protocol with their tests unchanged; the notebook executed at docs build;
+gates dev + torch + jax.
+
+### W7.14 — "Reading the diagnostics": the docs page that teaches what the misspecification plots show [S; Sonnet] (ruled by Peter 2026-10-06)
+Peter: users probably do not know what the misspecification diagnostics
+mean and would care if they did; half of them read the concept page,
+which explains why the GP is there and not what its plots show. One page
+beside `concept.rst`, walking the M2 study's scenarios through the four
+plots — the residual plot with the whiteness test, the GP localisation
+plot with its caveat, the posterior-predictive check, the anomaly score —
+with, for each figure, the one sentence it supports and the one it does
+not ("the GP absorbed structure at 9.7 µm; the model is missing a
+feature there" against "the model is wrong"), the shrinkage section's
+figures reused, and the decision a user takes from each (fix the model,
+widen the prior, accept the GP's correction and report its amplitude).
+Linked from the concept page's last paragraph and from `plot_residuals`'s
+docstring. **Depends:** nothing. **Accept:** every figure traced to a
+driver and its numbers to the M2 page's table; alt text on each; docs
+warnings no longer than base; gates none (docs).
+
+### W7.15 — The persona-A findings: `ModifiedBlackBody`'s `scale`, photometric alignment by filter name, two plotting nits [S; Sonnet] (proposed 2026-10-06 from Appendix A findings 2, 3 and 5; **Peter's word needed on the scale semantics**)
+(1) `ModifiedBlackBody` and `BlackBody` multiply `B_ν` with its per-
+steradian magnitude, so `scale = 1` gives fluxes of 10¹⁵ Jy and a user
+with catalogue fluxes needs a prior reaching 10⁻¹⁶, while the docstring
+promises "`scale` stays interpretable as the flux the source would have
+… at that wavelength". Proposed: `scale` becomes that flux — a quantity
+in Jy at `reference_wavelength` — and the solid-angle form is reachable
+by a documented `solid_angle=` alternative; the modified-blackbody twin,
+the M2 generators and every test pinning a value amended, the change
+named in the changelog as a behaviour change. (2) `PhotometricPoints`
+alignment keys on the filter name, not the wavelength: the step tabulates
+each filter on the user's grid and emits its own effective wavelength,
+which differs from a catalogue's pivot wavelength in the second decimal,
+so a catalogue's own axis is refused and the only accepted route is to
+copy the step's axis from a dummy prediction. `check_alignment` on that
+kind matches names and adopts the step's wavelength, refusing a name the
+step does not tabulate; a `results_schema.md` §8 sentence and the
+decision-log row. (3) `plot_posterior_predictive` thins its replicate draw
+to a default of a few hundred draws (8 s on nine points today); the
+plotting library's "too few points to create valid contours" warnings on
+a corner plot are silenced with the reason; one sentence on
+`photometry_spectra.rst` on when the flexible likelihood has nothing to
+learn from (nine photometric points). **Depends:** nothing. **Accept:** a
+catalogue-wavelength `PhotometricPoints` accepted and fitting (the Appendix
+A probe as a row); the scale's unit in the model's `to_spec` and provenance;
+the twin's fit unchanged in its posterior after the amendment; gates dev
++ torch + jax (the native model twins).
+
 **Ordering (two agents at a time, gate legs scoped to the code touched).**
 **Wave 1**: W7.0 alone first — W7.1 depends on its member
 rules and both touch `parameter.py`, the populations and both backends'
 resolve functions, so they cannot run beside each other; W7.5 beside it
-as the filler (housekeeping, disjoint files), then W7.7 and W7.11 as the
-next fillers (docs only; one example). **Wave 2**: W7.1 ∥ W7.4 (the interferometry pieces
+as the filler (housekeeping, disjoint files), then the fillers in this
+order as slots free: W7.12 (convergence — every walkthrough hits it
+first), W7.14 (docs), W7.7 (docs), W7.11 (one example), W7.15 (on
+Peter's word for the scale semantics); W7.13 only after W7.0 merges,
+since both touch `ArrayOps`. **Wave 2**: W7.1 ∥ W7.4 (the interferometry pieces
 are disjoint from the parameter layer). **Wave 3**: W7.2 ∥ W7.3 (the M2
 sibling under `examples/` and `tests/m2` against a new package
 `ampere/spectroscopy` and `tests/spectroscopy`; disjoint). **Wave 4**:

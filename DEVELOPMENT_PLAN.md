@@ -1166,6 +1166,16 @@ Not scheduled, but the contracts must not paint them out:
   jax solver's CPU-only limitation from W6.18; allowed to miss the beta.
 - **`1.0.0b2`** (W7.8) after wave 3 — the two design items and the
   reader — by the procedure as the first release corrected it.
+- **The user-journeys fillers** (ruled by Peter 2026-10-06 from
+  `docs/design/user_journeys_memo.md`): the optimiser's mode as the
+  ensemble engines' default start, a convergence verdict and the warning
+  at emission (W7.12 — the first fit a user writes on the beta reached
+  R-hat 1.5 with no warning, and the warm start cured it); one `ArrayOps`
+  for models with the guide "Writing a model once for three backends"
+  (W7.13); the "Reading the diagnostics" page (W7.14); the persona-A
+  findings — `ModifiedBlackBody`'s `scale` is a solid angle in all but
+  name, photometric alignment by wavelength refuses a catalogue's own
+  axis (W7.15, proposed; the scale semantics await Peter's word).
 - **Deferred by ruling, with the reasoning in
   `docs/design/horizon_beyond_phase7.md`**: nested populations (required
   at some point — the horizon memo places the design memo and item in

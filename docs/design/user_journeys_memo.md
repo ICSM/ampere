@@ -316,7 +316,61 @@ only if Peter wants them kept.
 G is reading, not running; F is §4 (1)'s guide, which the portable-model
 item produces.
 
-## 8. Questions for Peter
+## 8. Questions for Peter, and his rulings of 2026-10-06
+
+**Ruled**: (2) the ensemble engines start from the optimiser's mode by
+default — W7.12; (3) the small items are Phase 7 fillers — W7.12, W7.13,
+W7.14 drafted, W7.15 proposed; (4) the other walkthroughs are sketched and
+run where the beta allows (Appendices B–H); (5) the radial profile is not
+needed for the current paper but **is required for papers planned soon**,
+so it keeps its place in Phase 8's first wave (horizon memo §3, §11 Q7).
+On (1), the flagship's data, Peter's steer and the orchestrator's reading
+of the paper are in §8.1; the choice is his.
+
+### 8.1 The flagship's data: the paper read, and a recommendation
+
+Peter's steer: analysing SAGE would be better without computing a new
+grid, and could be a good example of amortised SBI. The paper he linked,
+2026MNRAS.545f2221M (arXiv:2512.07573), is Marshall et al., "Systematic
+determination of dust properties for a sample of 133 spatially resolved
+debris discs" — Peter is a co-author — which fits simple analytical
+radiative-transfer models of debris dust emission to multi-wavelength
+photometry from the near-infrared to the millimetre, with the disc radius
+from resolved imaging as an input, and derives per disc the minimum grain
+size, the dust mass and the size-distribution exponent, finding a
+population value q = 3.49 (+0.38, −0.33) and a trend of q with disc
+radius. (Read from the arXiv abstract page; the data-availability
+statement was not visible there.)
+
+**Assessment.** It is a very good example, and a different one from
+SAGE: it exercises A (one disc's SED with an analytic dust model — grain
+size distribution, optical constants through Mie efficiencies, the
+`miepython` route W6.13 (C2) already uses), E (the population of q, and
+the q–radius trend as a hierarchical regression: a population whose
+hyperprior location is a function of a per-object covariate, which is a
+`Derived` on a buffer — W7.0's grammar over a per-object constant — under
+a `HierarchicalPrior`, a construction the memo did not anticipate and
+should be checked at W7.0), and the misspecification story (a smooth
+analytic model against real SEDs with photospheric residuals and
+silicate features, with the GP localising where). It does not need SBI:
+the model is cheap. SAGE with a GRAMS-style grid is the amortised-SBI
+example — the grid as the simulator, context amortisation over each
+object's noise (W5.10), one trained posterior applied to thousands of
+sources, reweighted as a population — and the catalogue-loop and store
+work of Phase 9.
+
+**Recommendation**: both, in sequence. The debris-disc sample as the
+Phase 8 flagship (A + E + misspecification; the data are the
+co-authors' and the model is public physics), staged as one disc, then the
+133 as a population with the regression hyperprior, then the GP
+localisation on the discs the analytic model fails; SAGE with GRAMS as
+the Phase 9 flagship for amortised SBI at scale. Two questions remain for
+Peter: whether the paper's photometry table and radii can be committed
+under `examples/` or must be downloaded in the example, and whether the
+analytic model is to be written fresh from the paper or ported from the
+authors' code.
+
+### 8.2 The questions as asked
 
 1. **The flagship's data and model**: SAGE (public via VizieR/IRSA, with
    GRAMS grids public) or the 2026MNRAS.545f2221M sample (the orchestrator
@@ -424,3 +478,133 @@ uniform priors.
 
 **What the walkthrough did not test**: a real catalogue (the reader), a
 user-written model, a notebook rather than a script.
+
+## Appendix B — persona B on the beta (2026-10-06)
+
+`walkthroughs/persona_b.py`: the real Spitzer IRS spectrum the quickstart
+ships (`examples/test_data/cassis_yaaar_spcfw_14191360t.fits`, PG
+1011-040, 360 unique samples over 5.2–37.4 µm after dropping the
+overlapping orders' duplicates, median S/N 27), a `PowerLaw` continuum,
+`IndependentNoise` then `GaussianProcessNoise(Matern32, QuasisepGP)`,
+emcee from `optimise`'s mode, the diagnostics a user would reach for.
+
+| Step | Wall time | Result |
+|---|---|---|
+| reading the CASSIS file by hand | 9 lines of astropy | the overlapping orders must be de-duplicated or `QuasisepGP` refuses the unsorted axis — the quickstart's `np.unique` trick, which a user must know |
+| `optimise`, independent | 4 s | norm 0.00288, index 1.11 |
+| emcee 24 × 1500 from it | 44 s | R-hat 1.03; a tight continuum |
+| `optimise`, with the GP | 9 s | **norm pinned at its prior bound 0.001** (W6.7's Powell-at-the-bound finding, reproduced on real data) |
+| emcee 24 × 1500 from that optimum | 73 s | **every walker sits on the bound**: norm sd 0, ESS 24 000, R-hat undefined; index 0.9 ± 1.0, unconstrained; the GP amplitude 0.033 Jy against a median flux 0.059 Jy — the GP is carrying the continuum |
+| `add_residuals` + `plot_residuals` | 17 s | a correct warning that the whiteness family is scoped to standard-likelihood fits |
+| `residual_whiteness` | 0.1 s | Q = 1578, p = 0.04 |
+| `gp_localisation_score(run, problem)` | — | `TypeError`: takes the run alone — a signature the user guessed from `add_residuals(run, problem)` |
+| `plot_posterior_predictive` | 39 s | slow: the replicate draw over every stored draw at 360 points |
+
+**Findings.** (1) **The warm start can be worse than the prior start.**
+When the optimiser lands on a bound, the ball around it is degenerate and
+the ensemble never leaves: the fit is silently wrong with no diagnostic
+except an ESS equal to the draw count. W7.12's default start must detect a
+bound-saturated optimum (W7.6's check) and fall back to the prior with a
+warning, and W7.6 should land before or with W7.12. (2) With the model at
+a bound the GP absorbed the continuum entirely — the concept page's
+"earthquake" paragraph in action, and the case the "Reading the
+diagnostics" page (W7.14) must show. (3) The diagnostics' signatures are
+not uniform (`add_residuals(run, problem)` against
+`gp_localisation_score(run)`); a user guesses wrong once. (4) The
+posterior-predictive plot's cost scales with draws × points; a default
+thinning (W7.15 (3)) matters more here than on photometry.
+
+## Appendix C — persona C, sketched from the rows (not run)
+
+`examples/cstar` is the carbon star on Hyperion fitted with `SBIEngine`
+(W6.13 (C2)); it needs the `hyperion` pixi environment. From its row: the
+one-round quick budget left the envelope mass 0.14 dex short, the legacy
+budget is about eleven hours, and the smoke row's forty simulations run
+in the test. What the persona would meet, from the code rather than a
+run: the wrapper is theirs to write (`Model` subclass, numpy path,
+process pool, timeouts — the external-simulator example is the template);
+`SBIEngine(cache=ArtefactStore)` makes a second run free; NUTS is refused
+by name. The walkthrough to run when a slot allows: cold versus warm cache
+at the quick budget, timed, and the calibration check. The emulator
+(horizon §2 (b)) is what changes this persona's experience, not a
+reader.
+
+## Appendix D — persona D on the beta (2026-10-06)
+
+`walkthroughs/persona_d.py`: the vendored contest OIFITS file through
+`read_oifits`, V² and closure phases on one `sky` channel, the shipped
+`Binary` on a 16 mas field, emcee from the optimiser.
+
+| Step | Wall time | Result |
+|---|---|---|
+| `read_oifits` | 0.02 s | target, 600 V², 800 closure phases, 8 channels — one line |
+| problem, 3 free parameters | 0.02 s | |
+| `optimise` | 7 s | separation 3.886 mas, PA 126.4°, ratio 0.101 |
+| emcee 24 × 800 | 39 s | R-hat 1.09; about 490 evaluations per second |
+
+**Findings.** (1) The reader removes what was the whole cost of this
+persona's entry: two containers in one call, the composition in a dozen
+lines as the docs promise. (2) The log posterior at the *published*
+geometry (5.0 mas at 30° east of north, ratio 1/8.9) is −456 346 while the
+fit sits at 3.9 mas and 126° with sub-milliarcsecond precision. The
+orchestrator did not resolve whether that is the `Binary` model's
+position-angle convention, the four-pixel field it was built on, or the
+walkthrough's own construction; W6.12's review verified the reader
+against the published truth with an analytic model in numpy, not with
+the shipped `Binary`. It is recorded as a question for the interferometry
+page, not as a defect: a user porting a published geometry needs the
+conventions stated where the model is documented, and a conformance row
+fitting the shipped `Binary` to the contest file would settle it.
+
+## Appendix E — persona E on the beta (2026-10-06)
+
+`walkthroughs/persona_e.py`: the population page's example at twenty
+objects on the numpy path (the page's own fit is NUTS on torch; the `dev`
+environment has no torch), then the same twenty one by one as the loop a
+user writes today.
+
+| Step | Wall time | Result |
+|---|---|---|
+| the `Population` problem, 22 free | 0.02 s | |
+| `optimise` on 22 dimensions | **79 s** | the scipy route's eight starts |
+| emcee 48 × 3000 from it | 483 s | R-hat 1.23; μ = −1.49 ± 0.07 against −1.30, σ = 0.30 ± 0.05 against 0.35 |
+| the loop, 20 single-object fits with `to_netcdf` | 43 s | 2.1 s per object; 0.7 MB per run file; provenance attrs present on reload |
+
+**Findings.** (1) A population on the numpy path is the wrong tool and
+nothing says so: eight minutes to R-hat 1.23 with a biased μ, where the
+docs page fits fifty members by NUTS. The population page says it; a
+`Population` problem handed to an ensemble engine could say it too (a
+warning naming NUTS when `free_size` exceeds a threshold). (2) **The
+optimiser's cost grows with dimension**: 79 s before the first draw on 22
+parameters, which bounds what W7.12's default start may spend — one start
+or a time cap for the default, the eight-start route on request. (3) The
+loop a user writes today is fine at twenty objects and extrapolates to
+six hours and seven gigabytes at ten thousand on one core: the
+catalogue-loop example wants the cluster scripts and a per-object file
+smaller than 0.7 MB for a one-parameter fit (the provenance and the
+stored θ are most of it), and the store memo (horizon §4) is the ten
+thousand case.
+
+## Appendix H — persona H on the beta (2026-10-06)
+
+`python -m examples.astrometry --walkers 24 --steps 400 --burn-in 100`:
+6 s wall clock, the six orbit and proper-motion parameters printed with
+their truths and the 95 % coverage flagged (one of six missed at this
+budget, as a budget this small should). No friction; synthetic data by
+construction, which is the persona's gap (the Gaia and light-curve
+readers).
+
+## Appendix F — the roll-up: what the walkthroughs change
+
+Across A, B, D and E, the package's refusals were correct every time and
+named the fix in four of five cases; nothing crashed; the imports cost a
+second. What cost the user was never a missing feature: it was a default
+(the prior start), a convention (the model's `scale`, the alignment
+wavelength, a position angle), or a cost nobody capped (the optimiser's
+starts, the replicate draw). The items that follow are all S, and all in
+Phase 7's filler list: W7.12 with the bound-saturation fallback and a
+budgeted default, W7.15 with the plotting defaults, W7.6 before W7.12. The
+one thing no filler fixes is that a population fit needs the native path
+and a `dev` user has no torch — which is a documentation and packaging
+statement for `install.rst`: who needs which extra.
+
