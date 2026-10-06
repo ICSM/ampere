@@ -31,7 +31,7 @@ dependencies = [
     "matplotlib",
     "spectres",
     "tqdm",
-    "pyphot",  # W0.9: forward-migrated onto pyphot >= 2's unit-adapter API via ampere/utils/pyphot_compat.py (pyphot < 2 still works through the same compat layer)
+    "pyphot",  # W0.9: forward-migrated onto pyphot >= 2's unit-adapter API via ampere/backends/reference/_pyphot_compat.py (pyphot < 2 still works through the same compat layer)
     # pyphot 2.1.1 imports `requests` at module level without declaring it, so
     # a bare `pip install ampere-astro` could not `import pyphot` (the minimal-install
     # CI job caught it; W2.1's out-of-scope finding). Declared here on pyphot's
@@ -300,7 +300,6 @@ target-version = "py312"
 # any other new-namespace file.
 extend-exclude = [
     "ampere/legacy",
-    "ampere/examples",
     "examples/examples_paper",
     "docs",
     "demo_pyphot.ipynb",
