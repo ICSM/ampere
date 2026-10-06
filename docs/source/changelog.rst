@@ -13,6 +13,17 @@ Unreleased
   :mod:`ampere.interferometry` is the one place to import interferometry
   from; :class:`~ampere.backends.reference.SquaredAmplitude` fits squared
   visibilities as they were measured. See :doc:`interferometry` §10.
+* **Derived parameters.** ``Parameter(name, Derived("mu + sigma * z"))``
+  declares a parameter computed from others — no sampler dimension, no prior
+  term, handed to the model like any other value and stored in the
+  ``posterior`` beside the sampled ones on every engine (named in the run's
+  ``ampere_derived`` attribute; provenance schema 10). It makes the
+  non-centred population declarable (a member no model declares is internal
+  to the population, see :doc:`population`) and gives
+  :func:`~ampere.core.shrinkage_horseshoe` Piironen & Vehtari's slab as
+  ``tail="slab"``. A population member must now be declared by every
+  component it is routed to; one that is not is refused when the problem is
+  composed, rather than failing at the first model evaluation.
 
 1.0.0b1 — the first beta of ampere v2
 -------------------------------------

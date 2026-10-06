@@ -996,6 +996,32 @@ jax (§10a). The N-component form remains available as
 `Population(layout="flat")`, refused above `MAX_FLAT_MEMBERS` for the reason
 this section has just given.
 
+#### The non-centred population, for NUTS (*Added W7.0*)
+
+The same population can be declared non-centred — `z` an internal member,
+the routed quantity a `Derived` one (`parameters.md` §9, "`Population`"):
+
+```
+members=[Parameter("z", st.norm(0.0, 1.0)),
+         Parameter("index", Derived("mu + sigma * z"))]
+```
+
+It declares the same density, sampled in `(μ, σ, z)`, and it is the
+**recommended form for NUTS when the data constrain each member weakly** — the
+regime where the centred form's posterior is Neal's funnel (`lowering.md`
+§3.2.1) and the sampler diverges or stalls at small `σ`. It is *not* a free
+improvement: when every member is well determined by its own data, the centred
+form is the better geometry and the non-centred one mixes slowly, because the
+data then fix `μ + σ z_i` and leave `μ`, `σ` and the `z` strongly correlated.
+`tests/inference/test_population_nuts.py` pins both halves of the claim it
+can: on fifty members observed at a per-member noise where the data barely
+constrain each index, the non-centred run recovers `μ` and `σ` inside the
+central 95 % with fewer divergences than the centred run at the same budget,
+on torch and jax; the informative-data rows above stay centred. A derived
+member is in the run's `posterior` beside the sampled ones on every engine
+(`results.md` §4), so the per-member values a centred fit would report are
+still there to read.
+
 ## 10. The engine-facing surface (`DEVELOPMENT_PLAN.md` §4.5)
 
 §4.5 is implemented verbatim.
@@ -1517,10 +1543,15 @@ are always `-inf`. This is the trace-purity ruling (`likelihoods.md` §17 Q1)
 applied to the whole problem.
 
 **Coverage.** W2.13 fixes the floor both backends must meet: Gaussian
-families with independent or dense-GP noise, masks, plates and hierarchical
-priors, with native kernels so GP hyperparameters are trainable; anything
-else refused by name at construction. Widening (censoring, latent GPs,
-non-Gaussian families, the quasiseparable solver) is each track's slice 2.
+families with independent or dense-GP noise, masks, plates, hierarchical
+priors and *(added W7.0)* derived parameters, with native kernels so GP
+hyperparameters are trainable; anything else refused by name at construction.
+A derived parameter is no site: each realisation forms it in its resolve step
+from the current inputs, in evaluation order (`lowering.md` §5, §8), and the
+conformance suite holds that to the numpy path on a problem whose hierarchical
+prior references a derived parameter and whose model consumes a derived
+element. Widening (censoring, latent GPs, non-Gaussian families, the
+quasiseparable solver) is each track's slice 2.
 
 **What the conformance suite owes** (`tests/conformance`): for every
 registered realisation, agreement with the numpy path at many points

@@ -249,5 +249,6 @@ def test_docs_pycon_pages_are_collected() -> None:
         "solvers.rst",
         "astropy.rst",
         "optimisers.rst",
+        "population.rst",
         "sed_composition.rst",
     } <= names
