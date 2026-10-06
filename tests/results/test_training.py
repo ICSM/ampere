@@ -244,6 +244,42 @@ def photometric(filters: tuple[str, ...] = FILTERS) -> FittingProblem:
     )
 
 
+class Flagged(Photometer):
+    """A photometer whose extra coordinates are an integer and a boolean."""
+
+    def evaluate(self, **values: Any) -> ModelResult:
+        ctx = self.context(values)
+        pivots = np.linspace(1.0, 4.0, len(self.filters))
+        return ModelResult(
+            PhotometricPoints(
+                self.filters,
+                pivots * u.micron,
+                ctx["norm"] * pivots**-1.0 * u.Jy,
+                extra_coords=FLAGS,
+            )
+        )
+
+
+FLAGS = {"n": np.arange(3), "ok": np.array([True, False, True])}
+
+
+def flagged() -> FittingProblem:
+    pivots = np.linspace(1.0, 4.0, len(FILTERS))
+    observed = PhotometricPoints(
+        FILTERS,
+        pivots * u.micron,
+        pivots**-1.0 * u.Jy,
+        uncertainty=np.full(len(FILTERS), 0.02) * u.Jy,
+        extra_coords=FLAGS,
+    )
+    return FittingProblem(
+        Flagged(),
+        DatasetCollection({"phot": Dataset(observed, label="phot")}),
+        seed=20261002,
+        simulator_failures=(RuntimeError,),
+    )
+
+
 class TestStringCoordinates:
     def test_filter_names_round_trip_and_the_numeric_label_keeps_its_dtype(
         self, tmp_path: Path
@@ -285,6 +321,23 @@ class TestStringCoordinates:
         stored = read_training_set(tmp_path / "bank.nc")
         assert len(stored) == 4
         assert stored.observations(3)["phot"].filters.tolist()[-1] == "A_much_longer_filter_name"
+
+    def test_integer_and_boolean_extra_coordinates_keep_their_dtypes(self, tmp_path: Path) -> None:
+        problem = flagged()
+        first = budget(problem, 2)
+        write_training_set(tmp_path / "bank.nc", first, problem)
+        append_training_set(tmp_path / "bank.nc", budget(problem, 2), problem)
+        stored = read_training_set(tmp_path / "bank.nc")
+        assert len(stored) == 4
+        for index in (0, 3):
+            result = stored.result(index)["default"]
+            assert result.extra_coords["n"].dtype.kind == "i"
+            assert result.extra_coords["n"].tolist() == [0, 1, 2]
+            assert result.extra_coords["ok"].dtype == np.bool_
+            assert result.extra_coords["ok"].tolist() == [True, False, True]
+        observed = stored.observations(2)["phot"]
+        assert observed.extra_coords["n"].dtype.kind == "i"
+        assert observed.extra_coords["ok"].dtype == np.bool_
 
     def test_a_failed_sample_is_filled_with_the_empty_string(self, tmp_path: Path) -> None:
         import xarray
@@ -661,10 +714,11 @@ class Crashing(Powerlaw):
     """A model that fails on demand — the 2 % crash rate, made deterministic."""
 
     fail = False
+    message = "the RT code exited 1"
 
     def evaluate(self, **values: Any) -> ModelResult:
         if type(self).fail:
-            raise RuntimeError("the RT code exited 1")
+            raise RuntimeError(type(self).message)
         return super().evaluate(**values)
 
 
@@ -719,6 +773,26 @@ class TestFailures:
         values = np.asarray(tree["model.default"]["values"].values)
         assert np.all(np.isfinite(values[0]))
         assert np.all(np.isnan(values[1]))
+
+    def test_a_longer_failure_message_in_a_later_append_is_not_truncated(
+        self, tmp_path: Path
+    ) -> None:
+        problem = toy(Crashing)
+        Crashing.fail = True
+        Crashing.message = "short"
+        try:
+            first = budget(problem, 1)
+            Crashing.message = "a much longer message " + "x" * 200
+            later = budget(problem, 1)
+        finally:
+            Crashing.fail = False
+            Crashing.message = "the RT code exited 1"
+        write_training_set(tmp_path / "budget.nc", [*budget(problem, 1), *first], problem)
+        append_training_set(tmp_path / "budget.nc", later, problem)
+        stored = read_training_set(tmp_path / "budget.nc")
+        record = stored.failures[2]
+        assert record is not None
+        assert record["message"].endswith("x" * 200)
 
     def test_an_all_failed_batch_can_still_be_appended(self, tmp_path: Path) -> None:
         # A budget's failure rate is data, and the file already knows the
