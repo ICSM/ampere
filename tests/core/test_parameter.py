@@ -1610,8 +1610,9 @@ class TestTheShrinkageHorseshoe:
             shrinkage_horseshoe(self.NAMES, global_scale=bad)
 
     def test_an_unknown_tail_is_refused_naming_the_two(self) -> None:
+        # "slab" was the unknown tail here until W7.0 made it a declarable one.
         with pytest.raises(ParameterError, match="is not one of"):
-            shrinkage_horseshoe(self.NAMES, tail="slab")
+            shrinkage_horseshoe(self.NAMES, tail="laplace")
 
 
 class TestTheRegularisedHorseshoeAlias:

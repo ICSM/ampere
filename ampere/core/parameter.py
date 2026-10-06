@@ -92,6 +92,7 @@ __all__ = [
     "MAX_FLAT_MEMBERS",
     "SEPARATOR",
     "SHRINKAGE_HELPER_FRAMEWORK",
+    "SLAB_EXPRESSION",
     "TORCH_MODULE_NAMES",
     "Bijection",
     "Binding",
@@ -3245,14 +3246,18 @@ def _evaluation_order(parameters: Sequence[Parameter], index: Mapping[str, int])
     order in which priors are evaluated.
     """
     dependencies: dict[str, tuple[str, ...]] = {}
+    derived = {parameter.name for parameter in parameters if parameter.is_derived}
     for parameter in parameters:
-        how = "is derived from" if parameter.is_derived else "has a hierarchical prior referencing"
+        if parameter.is_derived:
+            how, kind = "is derived from", "Derived"
+        else:
+            how, kind = "has a hierarchical prior referencing", "Hierarchical"
         for reference in parameter.references:
             if reference not in index:
                 raise ParameterError(
                     f"parameter {parameter.name!r} {how} {reference!r}, which is not in this "
-                    f"set (it declares {sorted(index)}). Hierarchical and derived references "
-                    f"must resolve within the set that will evaluate them."
+                    f"set (it declares {sorted(index)}). {kind} references must resolve within "
+                    f"the set that will evaluate them."
                 )
             if reference == parameter.name:
                 raise ParameterError(f"parameter {parameter.name!r} {how} itself")
@@ -3267,9 +3272,14 @@ def _evaluation_order(parameters: Sequence[Parameter], index: Mapping[str, int])
             return
         if mark == 1:
             cycle = " -> ".join([*trail, name])
+            if derived & {*trail, name}:
+                raise ParameterError(
+                    f"hierarchical priors and derived parameters form a cycle: {cycle}. A "
+                    f"parameter's prior or value cannot depend (even indirectly) on itself."
+                )
             raise ParameterError(
-                f"hierarchical priors or derived parameters form a cycle: {cycle}. A "
-                f"parameter's prior or value cannot depend (even indirectly) on itself."
+                f"hierarchical priors form a cycle: {cycle}. A parameter's prior cannot "
+                f"depend (even indirectly) on itself."
             )
         state[name] = 1
         for reference in dependencies[name]:
@@ -4031,13 +4041,17 @@ class Parameterised:
             unambiguous.
         """
         if values is None:
-            missing = [p.name for p in self.parameters if p.value is None]
+            missing = [p.name for p in self.parameters if p.value is None and not p.is_derived]
             if missing:
                 raise ParameterError(
                     f"context() was given no values and parameter(s) {missing} have no declared "
                     f"value to fall back on."
                 )
-            resolved: dict[str, Value] = {p.name: p.value for p in self.parameters}
+            # A derived parameter has no declared value of its own (W7.0): it
+            # is computed from the declared values of its inputs.
+            resolved: dict[str, Value] = self.parameters.complete(
+                {p.name: p.value for p in self.parameters if not p.is_derived}
+            )
         else:
             resolved = self.parameters.complete(values)
         merged: dict[str, Value] = self.buffers.values()
@@ -4061,9 +4075,10 @@ class Parameterised:
 #: tail with an exponential one at the global scale.
 HORSESHOE_SPIKE_SHAPE = 0.5
 
-#: The two declarable tails, in the order :func:`shrinkage_horseshoe`
-#: documents them. ``"regularised"`` is the default and the recommended one.
-HORSESHOE_TAILS: tuple[str, ...] = ("regularised", "cauchy")
+#: The three declarable tails, in the order :func:`shrinkage_horseshoe`
+#: documents them. ``"regularised"`` is the default and the recommended one;
+#: ``"slab"`` (W7.0) is Piironen & Vehtari's regularised horseshoe exactly.
+HORSESHOE_TAILS: tuple[str, ...] = ("regularised", "cauchy", "slab")
 
 
 # W5.27: the shrinkage-helper framework's shared note. Spliced onto
@@ -4108,6 +4123,7 @@ def shrinkage_horseshoe(
     global_scale: float = 1.0,
     tail: str = "regularised",
     unit: Any = None,
+    slab_scale: float | Parameter | None = None,
 ) -> list[Parameter]:
     r"""The sparsity-inducing prior for a sum of noise components (W5.8).
 
@@ -4140,21 +4156,9 @@ def shrinkage_horseshoe(
     which references a parameter by name and has no product node, with no
     change to any class in this module.
 
-    **The regularisation.** Piironen & Vehtari's slab replaces the local
-    scale's Cauchy tail beyond a slab scale :math:`c` with a Gaussian one,
-    through
-
-    .. math::
-
-        \tilde\lambda_j^2 = \frac{c^2\lambda_j^2}{c^2 + \tau^2\lambda_j^2},
-
-    which is a **deterministic function of two sampled parameters**. §4.1
-    declares parameters and priors, not deterministic nodes, so that exact form
-    is not declarable today; the decision log records the gap and names the
-    node (a ``Derived`` parameter) that would close it.
-
-    What *is* declarable is the same guard in one level, and it is what
-    ``tail="regularised"`` — the default — gives: the local scale's family
+    **The regularisation.** Two tails tame the horseshoe's Cauchy tail. The
+    default, ``tail="regularised"``, does it in one level: the local scale's
+    family
     becomes ``gamma(a=1/2, scale=tau)``. That keeps the horseshoe's
     :math:`s^{-1/2}` spike at zero, which is where all of the shrinkage comes
     from, and replaces the Cauchy tail with an exponential one whose scale is
@@ -4169,6 +4173,30 @@ def shrinkage_horseshoe(
     ``tail="cauchy"`` declares the plain horseshoe instead, half-Cauchy at both
     levels; it lowers on both backends as a consequence, with no row of its
     own beyond the global scale's (``lowering.md`` §3.2.1).
+
+    ``tail="slab"`` (**W7.0**) declares Piironen & Vehtari's slab itself. Their
+    form replaces the local scale's Cauchy tail beyond a slab scale :math:`c`
+    with a Gaussian one through
+    :math:`\tilde\lambda_j^2 = c^2\lambda_j^2 / (c^2 + \tau^2\lambda_j^2)`,
+    a **deterministic function of sampled parameters** — the gap W5.8 recorded
+    and a :class:`Derived` parameter closes. This helper samples the product
+    :math:`s_j = \tau\lambda_j` rather than :math:`\lambda_j`, so in the
+    variables it actually has the slab reads
+
+    .. math::
+
+        \tau^2\tilde\lambda_j^2 = \frac{c^2 s_j^2}{c^2 + s_j^2},
+
+    and ``tail="slab"`` declares, per component, the plain half-Cauchy local
+    scale :math:`s_j`, one derived effective scale
+    ``sqrt(c**2 * s**2 / (c**2 + s**2))`` named ``<prefix>.<leaf>_effective``,
+    and the amplitude :math:`a_j \mid \tilde s_j \sim \mathcal{N}^+(0,
+    \tilde s_j)` — a :class:`HierarchicalPrior` referencing a derived
+    parameter. ``slab_scale`` as a float is their fixed-:math:`c` variant (a
+    fixed ``<prefix>.slab_scale``); as a :class:`Parameter` with a prior it is
+    their recommended hyperprior on the slab (an inverse-gamma on
+    :math:`c^2` is a prior on :math:`c` the declaration admits as written), and
+    is declared under ``<prefix>.slab_scale`` whatever its own name.
 
     Parameters
     ----------
@@ -4186,18 +4214,24 @@ def shrinkage_horseshoe(
         unit: the prior guess at "how big is a component that is really there".
         The data move it.
     tail
-        ``"regularised"`` (the default) or ``"cauchy"``, above.
+        ``"regularised"`` (the default), ``"cauchy"`` or ``"slab"``, above.
     unit
         The unit the amplitudes carry, applied to both scale levels too — a
         scale and the thing it scales are the same kind of quantity, and
         :class:`~ampere.core.GaussianProcessNoise` checks an amplitude's unit
         against its container.
+    slab_scale
+        :math:`c`, for ``tail="slab"`` only (and required by it): a positive
+        float, held fixed, or a :class:`Parameter` carrying a prior. Refused
+        with any other tail.
 
     Returns
     -------
     list of Parameter
-        The global scale, then one local scale per component, then one
-        re-declared amplitude per component, **in that order**. The order is
+        The global scale (and, for ``tail="slab"``, the slab scale), then one
+        local scale per component (and, for the slab, one derived effective
+        scale per component), then one re-declared amplitude per component,
+        **in that order**. The order is
         part of the answer: a :class:`ParameterSet` refuses a hierarchical
         reference that is not already in it, so the levels have to be
         registered outermost first. :func:`ampere.core.with_shrinkage` is what
@@ -4237,6 +4271,16 @@ def shrinkage_horseshoe(
         raise ParameterError(
             f"shrinkage_horseshoe's tail={tail!r} is not one of {list(HORSESHOE_TAILS)}."
         )
+    if tail == "slab" and slab_scale is None:
+        raise ParameterError(
+            "shrinkage_horseshoe's tail='slab' needs slab_scale=c: a positive float (the fixed-c "
+            "variant) or a Parameter carrying a prior on c."
+        )
+    if tail != "slab" and slab_scale is not None:
+        raise ParameterError(
+            f"shrinkage_horseshoe was given slab_scale= with tail={tail!r}; the slab scale is "
+            f"used only by tail='slab'."
+        )
     scale = _numeric(global_scale, "shrinkage_horseshoe's global_scale")
     if not math.isfinite(scale) or scale <= 0.0:
         raise ParameterError(
@@ -4261,6 +4305,8 @@ def shrinkage_horseshoe(
     declaration = [
         Parameter(global_name, _stats.halfcauchy(scale=scale), unit=unit, bijection=Log())
     ]
+    if tail == "slab":
+        return declaration + _slab_tiers(names, local_names, prefix, slab_scale, unit)
     declaration += [
         Parameter(local, local_prior, unit=unit, bijection=Log()) for local in local_names
     ]
@@ -4269,6 +4315,61 @@ def shrinkage_horseshoe(
         for name, local in zip(names, local_names, strict=True)
     ]
     return declaration
+
+
+#: The slab's effective scale over the helper's own ``s_j = tau * lambda_j``
+#: (memo §3.9): ``tau**2 * lambda_tilde_j**2 = c**2 s_j**2 / (c**2 + s_j**2)``.
+SLAB_EXPRESSION = "sqrt(c ** 2 * s ** 2 / (c ** 2 + s ** 2))"
+
+
+def _slab_tiers(
+    names: Sequence[str],
+    local_names: Sequence[str],
+    prefix: str,
+    slab_scale: float | Parameter | None,
+    unit: Any,
+) -> list[Parameter]:
+    """``tail="slab"``'s tiers after the global scale (W7.0, memo §3.9)."""
+    slab_name = f"{prefix}{SEPARATOR}slab_scale"
+    if isinstance(slab_scale, Parameter):
+        if slab_scale.shape:
+            raise ParameterError(
+                f"shrinkage_horseshoe's slab_scale Parameter {slab_scale.name!r} has shape "
+                f"{slab_scale.shape}; the slab scale is one scalar shared by every component."
+            )
+        slab = dataclasses.replace(slab_scale, name=slab_name)
+    else:
+        value = _numeric(slab_scale, "shrinkage_horseshoe's slab_scale")
+        if not math.isfinite(value) or value <= 0.0:
+            raise ParameterError(
+                f"shrinkage_horseshoe's slab_scale must be a positive, finite number, got "
+                f"{slab_scale!r}: it is the scale beyond which a component's prior turns "
+                f"Gaussian."
+            )
+        slab = Parameter(slab_name, value=value, fixed=True, unit=unit)
+    effective_names = [f"{local}_effective" for local in local_names]
+    global_name = f"{prefix}{SEPARATOR}global_scale"
+    tiers = [slab]
+    tiers += [
+        Parameter(
+            local,
+            HierarchicalPrior("halfcauchy", {"scale": global_name}),
+            unit=unit,
+            bijection=Log(),
+        )
+        for local in local_names
+    ]
+    tiers += [
+        Parameter(effective, Derived(SLAB_EXPRESSION, {"c": slab_name, "s": local}), unit=unit)
+        for effective, local in zip(effective_names, local_names, strict=True)
+    ]
+    tiers += [
+        Parameter(
+            name, HierarchicalPrior("halfnorm", {"scale": effective}), unit=unit, bijection=Log()
+        )
+        for name, effective in zip(names, effective_names, strict=True)
+    ]
+    return tiers
 
 
 shrinkage_horseshoe.__doc__ = f"{shrinkage_horseshoe.__doc__}\n{SHRINKAGE_HELPER_FRAMEWORK}"

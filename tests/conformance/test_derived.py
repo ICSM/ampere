@@ -10,6 +10,7 @@ an oracle comparison — the expected value is written out here from
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import math
 
@@ -27,6 +28,7 @@ from ampere.core import (
     Population,
     realise,
     registered_realisations,
+    shrinkage_horseshoe,
 )
 from ampere.core.exceptions import ParameterError, TyingError
 
@@ -614,3 +616,109 @@ class TestTheRealisedDerived:
             expected = problem.log_prob_unconstrained(y)
             got = scalar(backend.to_numpy(realisation.log_prob_unconstrained(y)))  # type: ignore[attr-defined]
             assert got == pytest.approx(expected, abs=tolerances.cross_backend)
+
+
+#: The three amplitudes row 6 shrinks.
+AMPLITUDES = ("broad.amplitude", "narrow.amplitude", "mid.amplitude")
+
+#: sha256 of ``json.dumps(ParameterSet(shrinkage_horseshoe(AMPLITUDES,
+#: tail=...)).to_spec(), sort_keys=True)``, recorded from the base commit
+#: ``5963b2f`` (before W7.0) — the plain and regularised tails are unchanged
+#: byte for byte by the slab's arrival.
+UNCHANGED_TAILS = {
+    "regularised": "5e4921d65b8067850aa9bd291de90fbeee187287318652009b4bff3b9b065ae0",
+    "cauchy": "13cc7e4a2a6cdc0ae5061e08e0367729e6ebf7e4c221b14075cb660e730d82e5",
+}
+
+
+class TestTheSlab:
+    """Row 6: ``tail="slab"`` is Piironen & Vehtari's, over the helper's own ``s_j``."""
+
+    def test_the_slab_is_piironen_and_vehtari_in_the_helpers_parameterisation(self) -> None:
+        c = 1.5
+        declaration = shrinkage_horseshoe(AMPLITUDES, tail="slab", slab_scale=c)
+        assert [parameter.name for parameter in declaration] == [
+            "shrinkage.global_scale",
+            "shrinkage.slab_scale",
+            "shrinkage.broad",
+            "shrinkage.narrow",
+            "shrinkage.mid",
+            "shrinkage.broad_effective",
+            "shrinkage.narrow_effective",
+            "shrinkage.mid_effective",
+            *AMPLITUDES,
+        ]
+        pset = ParameterSet(declaration)
+        assert pset["shrinkage.slab_scale"].is_fixed
+        assert pset.free_names == (
+            "shrinkage.global_scale",
+            "shrinkage.broad",
+            "shrinkage.narrow",
+            "shrinkage.mid",
+            *AMPLITUDES,
+        )
+        assert pset["broad.amplitude"].references == ("shrinkage.broad_effective",)
+        rng = np.random.default_rng(20261009)
+        for _ in range(6):
+            values = pset.sample(rng)
+            tau = float(values["shrinkage.global_scale"])
+            expected = float(st.halfcauchy(0.0, 1.0).logpdf(tau))
+            for leaf in ("broad", "narrow", "mid"):
+                s = float(values[f"shrinkage.{leaf}"])
+                scale = effective_scale(c, s)
+                assert values[f"shrinkage.{leaf}_effective"] == pytest.approx(scale, rel=1e-14)
+                expected += float(st.halfcauchy(0.0, tau).logpdf(s))
+                expected += float(st.halfnorm(0.0, scale).logpdf(values[f"{leaf}.amplitude"]))
+            assert pset.lnprior(values) == pytest.approx(expected, rel=1e-12)
+        # The plain and regularised tails, byte for byte as before W7.0.
+        for tail, digest in UNCHANGED_TAILS.items():
+            spec = ParameterSet(shrinkage_horseshoe(AMPLITUDES, tail=tail)).to_spec()
+            text = json.dumps(spec, sort_keys=True)
+            assert hashlib.sha256(text.encode()).hexdigest() == digest, tail
+
+    def test_the_slab_scale_is_refused_outside_the_slab_tail(self) -> None:
+        with pytest.raises(ParameterError, match="needs slab_scale"):
+            shrinkage_horseshoe(AMPLITUDES, tail="slab")
+        with pytest.raises(ParameterError, match="used only by tail='slab'"):
+            shrinkage_horseshoe(AMPLITUDES, slab_scale=1.0)
+        with pytest.raises(ParameterError, match="positive, finite"):
+            shrinkage_horseshoe(AMPLITUDES, tail="slab", slab_scale=0.0)
+
+    def test_a_slab_scale_with_a_prior_lowers_and_evaluates(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        declaration = shrinkage_horseshoe(
+            AMPLITUDES, tail="slab", slab_scale=Parameter("c", st.halfnorm(0.0, 2.0))
+        )
+        pset = ParameterSet(declaration)
+        assert "shrinkage.slab_scale" in pset.free_names
+        space = backend.parameter_space(pset)
+        for cube in unit_cubes(pset.free_size, count=5):
+            vector = pset.prior_transform(cube)
+            np.testing.assert_allclose(
+                space.prior_transform(cube), vector, rtol=1e-9, atol=tolerances.cross_backend
+            )
+            assert scalar(space.lnprior(vector)) == pytest.approx(
+                pset.lnprior(vector), abs=tolerances.cross_backend
+            )
+            values = pset.unpack(vector)
+            c = float(values["shrinkage.slab_scale"])
+            assert values["shrinkage.mid_effective"] == pytest.approx(
+                effective_scale(c, float(values["shrinkage.mid"])), rel=1e-14
+            )
+
+    def test_the_slab_rides_on_a_kernel_through_with_shrinkage(self) -> None:
+        from ampere.core import Matern32, Sum, with_shrinkage
+
+        kernel = Sum(Matern32(0.3, 0.01), Matern32(0.3, 0.001), labels=("broad", "narrow"))
+        shrunk = with_shrinkage(
+            kernel,
+            shrinkage_horseshoe(
+                ("broad.amplitude", "narrow.amplitude"), tail="slab", slab_scale=1.0
+            ),
+        )
+        values = shrunk.parameters.sample(np.random.default_rng(1))
+        context = shrunk.context(values)
+        assert context["shrinkage.broad_effective"] == pytest.approx(
+            effective_scale(1.0, float(values["shrinkage.broad"]))
+        )
