@@ -2020,7 +2020,15 @@ class Population:
         :class:`HierarchicalPrior` referencing the hyperpriors by their bare
         names is the population draw; a member with an ordinary prior is a
         **per-member nuisance parameter** — an i.i.d. array, which §11 Q4
-        confirms is the intended reading of ``members``.
+        confirms is the intended reading of ``members``. A member whose prior
+        slot holds a :class:`Derived` is computed from the others
+        (**W7.0**), and two member rules apply at the merge
+        (``parameters.md`` §9): a member **no** ``over`` component declares
+        is *internal* — routed to none of them, one plate-tagged array on the
+        population's own component, and permitted only as an input of a
+        derived member (the non-centred ``theta_i = mu + sigma * z_i``); and
+        a routed member must be declared by **every** ``over`` component.
+        Both refusals are by name, at the merge.
     hyperpriors
         The population hyperparameters, as ordinary :class:`Parameter`\\ s.
         They are what the members' :class:`HierarchicalPrior`\\ s reference,
@@ -2044,12 +2052,13 @@ class Population:
 
         **flat** is the tie-based pattern ``parameters.md`` §9 documents and
         the route the numpy path has had all along: each member component
-        keeps (or is given) its *own* scalar parameter, whose prior becomes
-        the member's with its references qualified onto the shared
-        hyperpriors. Identical joint density, N times as many
-        :class:`Parameter` objects, so it is refused beyond
-        :data:`MAX_FLAT_MEMBERS` members, by name, with the plate layout as
-        the remedy.
+        keeps its *own* scalar parameter, whose prior becomes the member's
+        with its references qualified onto the shared hyperpriors. Identical
+        joint density, N times as many :class:`Parameter` objects, so it is
+        refused beyond :data:`MAX_FLAT_MEMBERS` members, by name, with the
+        plate layout as the remedy. Derived and internal members are refused
+        in this layout (an internal ``z`` declared once would be one value
+        shared by every member — a tie wearing a population's clothes).
     label
         Component label for the hyperpriors (and, in the plate layout, for the
         member array). Defaults to *name*.
@@ -2084,6 +2093,26 @@ class Population:
     ((3,), 'objects')
     >>> [(b.component, b.local_name, b.index) for b in plated.bindings if b.index is not None]
     [('obj0', 'theta', 0), ('obj1', 'theta', 1), ('obj2', 'theta', 2)]
+
+    The non-centred form of the same population (W7.0): ``z`` is declared by
+    no member component, so it is internal — sampled on the population's own
+    component and routed nowhere — and ``theta`` is computed from it:
+
+    >>> non_centred = dataclasses.replace(
+    ...     population,
+    ...     members=[
+    ...         Parameter("z", st.norm(0.0, 1.0)),
+    ...         Parameter("theta", Derived("mu + sigma * z")),
+    ...     ],
+    ... )
+    >>> merged = ParameterSet.merge(
+    ...     {label: object_set() for label in ("obj0", "obj1", "obj2")},
+    ...     populations=[non_centred],
+    ... )
+    >>> merged.merged.free_names
+    ('obj0.cal', 'obj1.cal', 'obj2.cal', 'objects.mu', 'objects.sigma', 'objects.z')
+    >>> merged.merged["objects.theta"].references
+    ('objects.mu', 'objects.sigma', 'objects.z')
 
     The flat layout declares the same population, and the same density, with N
     scalar sites instead of one array:
@@ -2171,6 +2200,15 @@ class Population:
             )
         object.__setattr__(self, "size", declared)
         if self.layout == "flat":
+            derived = [member.name for member in self.members if member.is_derived]
+            if derived:
+                raise ParameterError(
+                    f"population {self.name!r} declares derived member(s) {derived} with "
+                    f"layout='flat'. The flat layout is one scalar parameter per member "
+                    f"component, and a derived member's inputs would have to be declared on "
+                    f"every component or tied across them; the non-centred form is the plate "
+                    f"layout's (parameters.md §12). Use layout='plate'."
+                )
             if not self.over:
                 raise ParameterError(
                     f"population {self.name!r} has layout='flat' but names no components in "
@@ -2257,14 +2295,18 @@ class Population:
             )
         return ParameterSet(parameters)
 
-    def plate_bindings(self) -> tuple[PlateBinding, ...]:
+    def plate_bindings(self, *, internal: Iterable[str] = ()) -> tuple[PlateBinding, ...]:
         """The element bindings routing member *i*'s draw to component *i*.
 
         Empty for the flat layout (whose members are each component's own
         parameter) and for a population declaring no ``over`` components.
+        A member named in *internal* is routed nowhere (**W7.0**): which
+        members are internal depends on what the ``over`` components declare,
+        so :meth:`ParameterSet.merge` works it out and passes it here.
         """
         if self.layout != "plate":
             return ()
+        omitted = set(internal)
         return tuple(
             PlateBinding(
                 parameter=self.qualified(member.name),
@@ -2274,6 +2316,7 @@ class Population:
             )
             for index, label in enumerate(self.over)
             for member in self.members
+            if member.name not in omitted
         )
 
 
@@ -3441,12 +3484,21 @@ def _apply_populations(
       :attr:`Binding.index`;
     * ``layout="flat"`` — the component's own declaration is **re-priored**
       with the member's prior, its hierarchical references qualified onto the
-      population's hyperpriors; a component that does not declare it is given
-      one.
+      population's hyperpriors.
 
     Either way each member component ends up receiving the draw under the
     member's own bare local name, so per-object models compose unmodified,
     which is the whole of H-1's argument.
+
+    **The two member rules (W7.0).** A routed member must be declared by
+    **every** ``over`` component — refused here, by name, rather than failing
+    at the first model evaluation with an unknown keyword (and the flat
+    layout no longer gives an undeclaring component one: that W5.12
+    allowance is retracted). A member declared by **none** of them is
+    *internal*: routed nowhere, permitted only as an input of a derived member
+    of the same population, refused otherwise, and refused outright in the
+    flat layout. A population with no ``over`` components routes nothing, so
+    neither rule applies to it.
     """
     ordered = list(components)
     updated = {component: list(entries) for component, entries in declarations.items()}
@@ -3486,12 +3538,15 @@ def _apply_populations(
                     f"models those datasets name, or share one quantity across them with a "
                     f"Tie."
                 )
+        internal = _internal_members(population, updated)
         ordered.append(label)
         updated[label] = list(population.parameter_set())
         rename = {name: population.qualified(name) for name in population.hyperprior_names}
         for member_label in population.over:
             existing = {parameter.name: parameter for parameter in updated[member_label]}
             for member in population.members:
+                if member.name in internal:
+                    continue
                 site = f"{member_label}{SEPARATOR}{member.name}"
                 current = existing.get(member.name)
                 if current is not None:
@@ -3533,19 +3588,69 @@ def _apply_populations(
                 prior = member.prior
                 if isinstance(prior, HierarchicalPrior):
                     prior = prior.rename_references(rename)
-                updated[member_label] = _replace_or_append(
-                    updated[member_label],
-                    dataclasses.replace(member, prior=prior, plate=None),
-                )
-        extra.extend(population.plate_bindings())
+                replacement = dataclasses.replace(member, prior=prior, plate=None)
+                updated[member_label] = [
+                    replacement if entry.name == member.name else entry
+                    for entry in updated[member_label]
+                ]
+        extra.extend(population.plate_bindings(internal=internal))
     return tuple(ordered), updated, (*plate_bindings, *extra)
 
 
-def _replace_or_append(entries: list[Parameter], parameter: Parameter) -> list[Parameter]:
-    """*entries* with *parameter* substituted in place, or appended if absent."""
-    if any(entry.name == parameter.name for entry in entries):
-        return [parameter if entry.name == parameter.name else entry for entry in entries]
-    return [*entries, parameter]
+def _internal_members(
+    population: Population, declarations: Mapping[str, Sequence[Parameter]]
+) -> frozenset[str]:
+    """The population's internal members, after checking both member rules (W7.0).
+
+    Rule 2: a member declared by some ``over`` components and not others is
+    refused by name. Rule 1: a member declared by none is internal, which is
+    permitted only when a derived member of the same population references it
+    (by its bare name), and never in the flat layout.
+    """
+    if not population.over:
+        return frozenset()
+    referenced = {
+        reference
+        for member in population.members
+        if member.is_derived
+        for reference in member.references
+    }
+    internal: set[str] = set()
+    for member in population.members:
+        declaring = [
+            label
+            for label in population.over
+            if any(parameter.name == member.name for parameter in declarations[label])
+        ]
+        if len(declaring) == len(population.over):
+            continue
+        if declaring:
+            missing = [label for label in population.over if label not in declaring]
+            raise ParameterError(
+                f"population {population.name!r} routes member {member.name!r} to every "
+                f"component in `over`, but {missing} do not declare it (while {declaring} do). "
+                f"A routed member replaces each component's own declaration, so every member "
+                f"component must declare it — a component that lacks it would receive a value "
+                f"its model does not take."
+            )
+        if population.layout == "flat":
+            raise ParameterError(
+                f"population {population.name!r}: member {member.name!r} is declared by none "
+                f"of the components in `over`, and layout='flat' has no internal members — "
+                f"one {member.name!r} declared once would be a single value shared by every "
+                f"member, a tie rather than a population. Declare it on every component, or "
+                f"use layout='plate'."
+            )
+        if member.name not in referenced:
+            raise ParameterError(
+                f"population {population.name!r}: member {member.name!r} is declared by none "
+                f"of the components in `over`, so it would be routed nowhere, and no derived "
+                f"member references it. An internal member is permitted only as an input of a "
+                f"derived member of the same population (the non-centred "
+                f"theta = mu + sigma * z); otherwise every member component must declare it."
+            )
+        internal.add(member.name)
+    return frozenset(internal)
 
 
 def _qualified_prior(parameter: Parameter, rename: Mapping[str, str]) -> AnyPrior:

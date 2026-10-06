@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 import scipy.stats as st
 
-from ampere.core import Derived, HierarchicalPrior, Parameter, ParameterSet
+from ampere.core import Derived, HierarchicalPrior, Parameter, ParameterSet, Population
 from ampere.core.exceptions import ParameterError, TyingError
 
 #: The non-centred triple every row composes: ``theta = mu + sigma * z``.
@@ -256,3 +256,121 @@ class TestAHierarchicalPriorOverADerivedValue:
             assert pset.unpack(np.array([a, c, s]))["s_eff"] == pytest.approx(scale, rel=1e-14)
         drawn = pset.sample(np.random.default_rng(3))
         assert drawn["s_eff"] == pytest.approx(effective_scale(drawn["c"], drawn["s"]))
+
+
+#: Members in the population rows 7 and 8 compose.
+MEMBERS = 4
+
+
+def object_labels(count: int = MEMBERS) -> tuple[str, ...]:
+    return tuple(f"obj{index}" for index in range(count))
+
+
+def hyperpriors() -> list[Parameter]:
+    return [Parameter("mu", st.norm(1.0, 0.5)), Parameter("sigma", st.halfnorm(0.0, 0.4))]
+
+
+def centred(*, layout: str = "plate") -> Population:
+    """``theta_i ~ Normal(mu, sigma)``, the declaration W5.12 landed."""
+    return Population(
+        "objects",
+        members=[Parameter("theta", HierarchicalPrior("norm", {"loc": "mu", "scale": "sigma"}))],
+        hyperpriors=hyperpriors(),
+        over=object_labels(),
+        layout=layout,
+    )
+
+
+def non_centred(*, layout: str = "plate") -> Population:
+    """The same density, sampled in ``(mu, sigma, z)``: ``theta = mu + sigma * z``."""
+    return Population(
+        "objects",
+        members=[Parameter("z", st.norm(0.0, 1.0)), Parameter("theta", Derived(EXPRESSION))],
+        hyperpriors=hyperpriors(),
+        over=object_labels(),
+        layout=layout,
+    )
+
+
+def objects() -> dict[str, ParameterSet]:
+    """One component per member, each declaring only the routed ``theta``."""
+    return {
+        label: ParameterSet([Parameter("theta", st.norm(0.0, 1.0))]) for label in object_labels()
+    }
+
+
+class TestTheNonCentredPopulation:
+    """Row 7: internal ``z``, derived ``theta``, and the two member rules."""
+
+    def test_the_non_centred_population_declares_the_centred_density(self) -> None:
+        nc = ParameterSet.merge(objects(), populations=[non_centred()])
+        c = ParameterSet.merge(objects(), populations=[centred()])
+        assert nc.merged.free_names == ("objects.mu", "objects.sigma", "objects.z")
+        assert nc.merged["objects.z"].shape == (MEMBERS,)
+        assert nc.merged["objects.theta"].shape == (MEMBERS,)
+        assert nc.merged["objects.theta"].plate == "objects"
+        rng = np.random.default_rng(20261007)
+        for _ in range(25):
+            mu = float(rng.normal(1.0, 0.5))
+            sigma = float(rng.uniform(0.05, 1.5))
+            z = rng.normal(size=MEMBERS)
+            theta = mu + sigma * z
+            values = nc.merged.complete({"objects.mu": mu, "objects.sigma": sigma, "objects.z": z})
+            np.testing.assert_allclose(values["objects.theta"], theta, rtol=1e-15)
+            lnprior_nc = nc.merged.lnprior(values)
+            lnprior_c = c.merged.lnprior(
+                {"objects.mu": mu, "objects.sigma": sigma, "objects.theta": theta}
+            )
+            # The Jacobian of the N-fold affine map z -> mu + sigma z.
+            assert lnprior_nc == pytest.approx(lnprior_c + MEMBERS * math.log(sigma), abs=1e-10)
+
+    def test_the_internal_member_reaches_no_component(self) -> None:
+        nc = ParameterSet.merge(objects(), populations=[non_centred()])
+        assert all(
+            binding.local_name != "z" for binding in nc.bindings if binding.index is not None
+        )
+        assert non_centred().plate_bindings(internal=("z",)) == tuple(
+            binding for binding in non_centred().plate_bindings() if binding.local_name != "z"
+        )
+        values = nc.merged.complete(
+            {"objects.mu": 0.5, "objects.sigma": 2.0, "objects.z": np.arange(MEMBERS, dtype=float)}
+        )
+        routed = nc.distribute(values)
+        for index, label in enumerate(object_labels()):
+            assert routed[label] == {"theta": pytest.approx(0.5 + 2.0 * index)}
+
+    def test_an_undeclared_member_that_nothing_derives_from_is_refused(self) -> None:
+        population = Population(
+            "objects",
+            members=[
+                Parameter("z", st.norm(0.0, 1.0)),
+                Parameter("w", st.norm(0.0, 1.0)),
+                Parameter("theta", Derived(EXPRESSION)),
+            ],
+            hyperpriors=hyperpriors(),
+            over=object_labels(),
+        )
+        with pytest.raises(ParameterError, match="member 'w' is declared by none"):
+            ParameterSet.merge(objects(), populations=[population])
+
+    def test_a_member_declared_by_only_some_components_is_refused(self) -> None:
+        partial = objects()
+        partial["obj2"] = ParameterSet([Parameter("other", st.norm())])
+        with pytest.raises(ParameterError, match=r"\['obj2'\] do not declare it"):
+            ParameterSet.merge(partial, populations=[centred()])
+        # The flat layout no longer gives an undeclaring component one.
+        with pytest.raises(ParameterError, match=r"\['obj2'\] do not declare it"):
+            ParameterSet.merge(partial, populations=[centred(layout="flat")])
+
+    def test_derived_and_internal_members_are_refused_in_the_flat_layout(self) -> None:
+        with pytest.raises(ParameterError, match=r"derived member\(s\) \['theta'\]"):
+            non_centred(layout="flat")
+        internal_only = Population(
+            "objects",
+            members=[Parameter("w", st.norm(0.0, 1.0))],
+            hyperpriors=hyperpriors(),
+            over=object_labels(),
+            layout="flat",
+        )
+        with pytest.raises(ParameterError, match="layout='flat' has no internal members"):
+            ParameterSet.merge(objects(), populations=[internal_only])
