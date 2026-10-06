@@ -1,0 +1,258 @@
+"""The ``Derived`` parameter node (**W7.0**), the memo's §9.2 rows.
+
+``docs/design/nuisance_populations_and_derived_memo.md`` §3: a fourth
+parameter state, a deterministic function of others, declared as a closed
+grammar over symbols. The rows are named one per claim of §9.2, and each is
+an oracle comparison — the expected value is written out here from
+``scipy.stats`` and ``numpy``, never read back from the object under test.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+
+import numpy as np
+import pytest
+import scipy.stats as st
+
+from ampere.core import Derived, HierarchicalPrior, Parameter, ParameterSet
+from ampere.core.exceptions import ParameterError, TyingError
+
+#: The non-centred triple every row composes: ``theta = mu + sigma * z``.
+EXPRESSION = "mu + sigma * z"
+
+
+def non_centred_set(size: int = 3) -> ParameterSet:
+    """``mu``, ``sigma``, an array ``z`` and the derived ``theta``, declared out of order.
+
+    ``theta`` is declared *first*, so the rows that check it is formed after
+    its inputs are testing the evaluation order and not the declaration order.
+    """
+    return ParameterSet(
+        [
+            Parameter("theta", Derived(EXPRESSION), shape=(size,)),
+            Parameter("mu", st.norm(0.0, 1.0)),
+            Parameter("sigma", st.halfnorm(0.0, 1.0)),
+            Parameter("z", st.norm(0.0, 1.0), shape=(size,)),
+        ]
+    )
+
+
+def slab_set() -> ParameterSet:
+    """A hierarchical prior over a derived scale, declared before what it references."""
+    return ParameterSet(
+        [
+            Parameter("a", HierarchicalPrior("halfnorm", {"scale": "s_eff"})),
+            Parameter("s_eff", Derived("sqrt(c**2 * s**2 / (c**2 + s**2))")),
+            Parameter("c", st.halfnorm(0.0, 2.0)),
+            Parameter("s", st.halfcauchy(0.0, 1.0)),
+        ]
+    )
+
+
+def effective_scale(c: float, s: float) -> float:
+    """§3.9's slab, written out independently of the expression under test."""
+    return math.sqrt(c * c * s * s / (c * c + s * s))
+
+
+class TestTheState:
+    """Rows 1 and 2: not a sampler dimension; computed, idempotently."""
+
+    def test_a_derived_parameter_is_not_a_free_dimension(self) -> None:
+        pset = non_centred_set()
+        assert pset.free_size == 5
+        assert pset.free_names == ("mu", "sigma", "z")
+        assert pset.free_labels() == ("mu", "sigma", "z[0]", "z[1]", "z[2]")
+        assert pset.derived_names == ("theta",)
+        assert "theta" in pset.names
+        order = pset.evaluation_order()
+        assert order.index("theta") > max(order.index(name) for name in ("mu", "sigma", "z"))
+        theta = pset["theta"]
+        assert theta.is_derived
+        assert not (theta.is_free or theta.is_fixed or theta.is_deferred)
+        vector = np.array([0.5, 2.0, -1.0, 0.0, 1.5])
+        values = pset.unpack(vector)
+        np.testing.assert_array_equal(values["theta"], 0.5 + 2.0 * np.array([-1.0, 0.0, 1.5]))
+        np.testing.assert_array_equal(pset.pack(values), vector)
+        with pytest.raises(KeyError, match="derived"):
+            pset.free_slice("theta")
+
+    def test_complete_is_idempotent_and_computes_it(self) -> None:
+        pset = non_centred_set()
+        partial = {"mu": 1.0, "sigma": 0.5, "z": np.array([0.0, 2.0, -2.0])}
+        once = pset.complete(partial)
+        np.testing.assert_array_equal(once["theta"], [1.0, 2.0, 0.0])
+        twice = pset.complete(once)
+        assert set(twice) == set(once)
+        for name in once:
+            np.testing.assert_array_equal(twice[name], once[name])
+        # pack ignores the derived entry, stale or not.
+        stale = dict(once, theta=np.array([9.0, 9.0, 9.0]))
+        np.testing.assert_array_equal(pset.pack(stale), pset.pack(once))
+        # On the numpy reference path a stale value is refused, by name.
+        with pytest.raises(ParameterError, match="derived parameter 'theta'"):
+            pset.complete(stale)
+        with pytest.raises(ParameterError, match="derived parameter 'theta'"):
+            pset.lnprior(stale)
+        # Round-off is not staleness.
+        jittered = dict(once, theta=once["theta"] * (1.0 + 1e-13))
+        np.testing.assert_array_equal(pset.complete(jittered)["theta"], once["theta"])
+
+    @pytest.mark.parametrize(
+        ("keywords", "named"),
+        [
+            ({"fixed": True}, "fixed=True"),
+            ({"value": 1.0}, "value"),
+            ({"shared_as": "tied"}, "shared_as"),
+        ],
+    )
+    def test_the_derived_state_refuses_what_belongs_to_its_inputs(
+        self, keywords: dict[str, object], named: str
+    ) -> None:
+        with pytest.raises(ParameterError, match=named):
+            Parameter("theta", Derived(EXPRESSION), **keywords)  # type: ignore[arg-type]
+        derived = Parameter("theta", Derived(EXPRESSION))
+        with pytest.raises(ParameterError, match="derived"):
+            derived.fix(1.0)
+        with pytest.raises(ParameterError, match="derived"):
+            derived.release(st.norm())
+
+    def test_a_tie_on_a_derived_parameter_is_refused(self) -> None:
+        from ampere.core import Tie
+
+        one = ParameterSet([Parameter("a", st.norm()), Parameter("t", Derived("2 * a"))])
+        two = ParameterSet([Parameter("b", st.norm()), Parameter("t", Derived("3 * b"))])
+        with pytest.raises(TyingError, match="tie the inputs"):
+            ParameterSet.merge({"one": one, "two": two}, ties=[Tie("t", ["one.t", "two.t"])])
+
+    def test_a_result_that_does_not_broadcast_is_refused_by_name(self) -> None:
+        with pytest.raises(ParameterError, match=r"'theta'.*does not broadcast"):
+            ParameterSet(
+                [
+                    Parameter("z", st.norm(), value=np.zeros(3)),
+                    Parameter("theta", Derived("2 * z")),
+                ]
+            )
+        lazy = ParameterSet(
+            [Parameter("z", st.norm(), shape=(3,)), Parameter("theta", Derived("2 * z"))]
+        )
+        with pytest.raises(ParameterError, match=r"'theta'.*does not broadcast"):
+            lazy.complete({"z": np.zeros(3)})
+
+
+class TestTheGrammar:
+    """Row 3: the grammar is closed, and refuses by name."""
+
+    @pytest.mark.parametrize(
+        ("expression", "named"),
+        [
+            ("mu.real", "Attribute"),
+            ("z[0]", "Subscript"),
+            ("mu < sigma", "Compare"),
+            ("lambda: mu", "Lambda"),
+            ("max(mu, sigma)", "'max'"),
+            ("mu if sigma else z", "IfExp"),
+            ("mu % 2", "Mod"),
+            ("+mu", "UAdd"),
+            ("'text'", "constant"),
+            ("exp + 1", "reserved"),
+        ],
+    )
+    def test_the_grammar_is_closed(self, expression: str, named: str) -> None:
+        with pytest.raises(ParameterError, match=named):
+            Derived(expression)
+
+    def test_the_five_functions_and_the_operators_are_admitted(self) -> None:
+        from ampere.core.kernels import NUMPY_OPS
+
+        derived = Derived("-sqrt(abs(a)) + exp(log(b)) * log1p(c) / 2 ** a - 1.5")
+        a, b, c = -4.0, 3.0, 0.25
+        expected = -math.sqrt(abs(a)) + math.exp(math.log(b)) * math.log1p(c) / 2**a - 1.5
+        assert float(derived.evaluate(NUMPY_OPS, {"a": a, "b": b, "c": c})) == pytest.approx(
+            expected, rel=1e-15
+        )
+
+    def test_a_symbol_spelt_like_a_reserved_name_is_refused(self) -> None:
+        with pytest.raises(ParameterError, match="reserved"):
+            Derived("2 * x", {"exp": "x"})
+        with pytest.raises(ParameterError, match="does not bind"):
+            Derived("a + b", {"a": "mu"})
+        with pytest.raises(ParameterError, match="does not use"):
+            Derived("a", {"a": "mu", "b": "sigma"})
+        with pytest.raises(ParameterError, match="non-empty string"):
+            Derived(lambda mu: mu)  # type: ignore[arg-type]
+
+
+class TestTheSpec:
+    """Row 4: the spec round-trips after a merge, and hashes stably."""
+
+    def test_the_spec_round_trips_after_a_merge(self) -> None:
+        component = ParameterSet(
+            [
+                Parameter("mu", st.norm()),
+                Parameter("sigma", st.halfnorm()),
+                Parameter("z", st.norm(), shape=(3,)),
+                Parameter("theta", Derived("mu+sigma*z"), shape=(3,)),
+            ]
+        )
+        other = ParameterSet([Parameter("mu", st.norm())])
+        merged = ParameterSet.merge({"gp": component, "other": other}).merged
+        derived = merged["gp.theta"].prior
+        assert isinstance(derived, Derived)
+        # The merge renamed the bindings to dotted names and left the expression alone.
+        assert derived.expression == EXPRESSION
+        assert dict(derived.symbols or {}) == {"mu": "gp.mu", "sigma": "gp.sigma", "z": "gp.z"}
+        assert merged["gp.theta"].references == ("gp.mu", "gp.sigma", "gp.z")
+        spec = merged.to_spec()
+        assert {"name": "gp.theta", "derived": derived.to_dict(), "shape": [3]} in spec[
+            "parameters"
+        ]
+        rebuilt = ParameterSet.from_spec(json.loads(json.dumps(spec)))
+        assert rebuilt == merged
+        values = merged.unpack(np.arange(merged.free_size, dtype=float))
+        np.testing.assert_array_equal(
+            rebuilt.unpack(np.arange(merged.free_size, dtype=float))["gp.theta"],
+            values["gp.theta"],
+        )
+
+    def test_the_normalised_source_hashes_stably(self) -> None:
+        assert Derived("a+b") == Derived("a + b")
+        assert Derived("(a)+(b)").expression == "a + b"
+
+        def spec_of(expression: str) -> str:
+            pset = ParameterSet(
+                [
+                    Parameter("a", st.norm()),
+                    Parameter("b", st.norm()),
+                    Parameter("c", Derived(expression)),
+                ]
+            )
+            return json.dumps(pset.to_spec(), sort_keys=True)
+
+        assert spec_of("a+b") == spec_of("a + b") == spec_of("(a) + b")
+
+
+class TestAHierarchicalPriorOverADerivedValue:
+    """Row 5: ``bind`` finds a derived value, in ``lnprior`` and mid-walk."""
+
+    def test_a_hierarchical_prior_may_reference_a_derived_parameter(self) -> None:
+        pset = slab_set()
+        assert pset.free_names == ("a", "c", "s")
+        rng = np.random.default_rng(20261007)
+        for _ in range(10):
+            cube = rng.uniform(0.05, 0.95, size=3)
+            c = float(st.halfnorm(0.0, 2.0).ppf(cube[1]))
+            s = float(st.halfcauchy(0.0, 1.0).ppf(cube[2]))
+            scale = effective_scale(c, s)
+            a = float(st.halfnorm(0.0, scale).ppf(cube[0]))
+            np.testing.assert_allclose(pset.prior_transform(cube), [a, c, s], rtol=1e-12)
+            expected = (
+                st.halfnorm(0.0, 2.0).logpdf(c)
+                + st.halfcauchy(0.0, 1.0).logpdf(s)
+                + st.halfnorm(0.0, scale).logpdf(a)
+            )
+            assert pset.lnprior(np.array([a, c, s])) == pytest.approx(expected, rel=1e-12)
+            assert pset.unpack(np.array([a, c, s]))["s_eff"] == pytest.approx(scale, rel=1e-14)
+        drawn = pset.sample(np.random.default_rng(3))
+        assert drawn["s_eff"] == pytest.approx(effective_scale(drawn["c"], drawn["s"]))
