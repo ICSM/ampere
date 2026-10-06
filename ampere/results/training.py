@@ -734,10 +734,12 @@ def _theta_variables(batch: Sequence[Simulation], problem: FittingProblem) -> di
     an input an emulator varies, and it is already in ``ampere_spec_hash``,
     which is what a training set is validated against; writing a column of one
     repeated number per fixed parameter would grow every file for nothing.
+    A **derived** parameter (W7.0) is skipped for the same reason: it is a
+    function of the free columns, and the free vector is the encoding.
     """
     variables: dict[str, Any] = {}
     for parameter in problem.parameters:
-        if parameter.is_fixed:
+        if parameter.is_fixed or parameter.is_derived:
             continue
         name = parameter.name
         column = [np.asarray(simulation.parameters[name]) for simulation in batch]

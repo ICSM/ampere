@@ -1999,7 +1999,7 @@ class TestSchemaNineAttributes:
     """W6.7: ``ampere_start_route`` on every run, ``ampere_start`` from an Optimum."""
 
     def test_the_schema_version_is_nine(self) -> None:
-        assert PROVENANCE_SCHEMA_VERSION == 9
+        assert PROVENANCE_SCHEMA_VERSION >= 9  # nine introduced them; W7.0 bumped to ten
 
     def test_the_default_start_is_the_prior(self) -> None:
         attrs = provenance_attrs(joint_problem())

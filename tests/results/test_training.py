@@ -33,6 +33,7 @@ import scipy.stats as st
 from ampere.core import (
     Dataset,
     DatasetCollection,
+    Derived,
     FittingProblem,
     Model,
     ModelResult,
@@ -191,7 +192,7 @@ class TestRoundTrip:
         # (W5.0), schema 8 (W5.22) and schema 9 (W6.7, ampere_start_route)
         # add no root attribute this function's own recipe touches.
         assert len(stored.attrs[f"{ATTR_PREFIX}model_hash"]) == 32
-        assert stored.attrs[f"{ATTR_PREFIX}schema_version"] == PROVENANCE_SCHEMA_VERSION == 9
+        assert stored.attrs[f"{ATTR_PREFIX}schema_version"] == PROVENANCE_SCHEMA_VERSION == 10
         assert stored.attrs[f"{ATTR_PREFIX}seed"] == 20260908
         assert stored.attrs[f"{ATTR_PREFIX}training_set_version"] == TRAINING_SET_SCHEMA_VERSION
 
@@ -891,3 +892,58 @@ class TestWritingFromChunks:
         problem = toy()
         with pytest.raises(ResultsError, match="at least one simulation"):
             write_training_set(tmp_path / "empty.nc", iter(()), problem)
+
+
+# ---------------------------------------------------------------------------
+# W7.0: the derived node, schema 10
+# ---------------------------------------------------------------------------
+
+
+class DerivedNorm(Powerlaw):
+    """:class:`Powerlaw` sampled in ``log_norm``, with ``norm`` derived from it."""
+
+    def __init__(self, grid: np.ndarray) -> None:
+        self.register_buffer("grid", np.asarray(grid, dtype=float), unit=u.micron)
+        self.register_parameter(Parameter("index", st.norm(-1.0, 0.3)))
+        self.register_parameter(Parameter("log_norm", st.norm(0.0, 0.3)))
+        self.register_parameter(Parameter("norm", Derived("exp(log_norm)")))
+
+
+class TestTheDerivedNode:
+    """W7.0: a derived parameter is no training column, and is named in the attrs."""
+
+    def test_a_derived_parameter_is_not_a_training_column(self, tmp_path: Path) -> None:
+        problem = toy(DerivedNorm)
+        drawn = budget(problem, 3)
+        write_training_set(tmp_path / "derived.nc", drawn, problem)
+        stored = read_training_set(tmp_path / "derived.nc")
+        # The free vector is the encoding: the derived value is a function of it.
+        assert set(stored.theta) == {"model.index", "model.log_norm"}
+        assert json.loads(stored.attrs[f"{ATTR_PREFIX}derived"]) == ["model.norm"]
+
+    def test_the_fingerprint_is_unchanged_for_a_problem_without_one(self) -> None:
+        """Schema 10 moves ``ampere_problem_hash`` through the version alone.
+
+        The digests were recorded by computing ``problem.parameters.to_spec()``
+        and ``problem_fingerprint(problem)`` with ``"version"`` masked, through
+        ``hash_of``, on the base commit ``5963b2f``'s code (before W7.0) for
+        ``tests/conformance/test_population.py``'s population problem on the
+        reference fixture, in both layouts -- so everything the fingerprint
+        hashes except the schema constant is byte-identical across the bump.
+        """
+        from ampere.results.provenance import hash_of, problem_fingerprint
+        from tests.conformance.backends.reference import ReferenceBackend
+        from tests.conformance.test_population import build_population_problem
+
+        recorded = {
+            "plate": ("f943023d9574b67ef48e52d223917193", "85fcb069130f943ec684e35d746bd5fe"),
+            "flat": ("630d727c2f5ece480922c2176fde5a89", "3fcb7b2b3cf54956baee2c6189923eb4"),
+        }
+        for layout, (spec_digest, fingerprint_digest) in recorded.items():
+            problem = build_population_problem(ReferenceBackend(), layout=layout)
+            assert not problem.parameters.derived_names
+            fingerprint = problem_fingerprint(problem)
+            assert fingerprint.pop("version") == PROVENANCE_SCHEMA_VERSION == 10
+            assert hash_of(problem.parameters.to_spec()) == spec_digest, layout
+            assert hash_of(fingerprint) == fingerprint_digest, layout
+            assert provenance_attrs(problem)[f"{ATTR_PREFIX}derived"] == "[]"

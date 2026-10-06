@@ -52,7 +52,7 @@ import numpy as np
 
 from ampere.core.dataset import Evaluation, FittingProblem
 from ampere.core.exceptions import OptionalDependencyError
-from ampere.core.parameter import Binding, Parameter
+from ampere.core.parameter import Binding, Derived, Parameter, ParameterSet
 from ampere.core.results_schema import FunctionSamples, Layout
 
 from .exceptions import ResultsError
@@ -248,7 +248,7 @@ def _posterior_variables(
     dims: dict[str, list[str]] = {}
     resolved: dict[str, Sequence[Any]] = dict(coords or {})
     for parameter in parameters:
-        if parameter.is_fixed:
+        if parameter.is_fixed or parameter.is_derived:
             continue
         block = draws[:, :, parameters.free_slice(parameter.name)]
         if not parameter.shape:
@@ -264,7 +264,77 @@ def _posterior_variables(
             labels = _index_coordinate(bindings, parameter)
             if labels is not None:
                 resolved[names[0]] = labels
+    for name, value in _derived_variables(parameters, variables, chains, count).items():
+        parameter = parameters[name]
+        variables[name] = value
+        if parameter.shape:
+            names = _dimension_names(parameter)
+            dims[name] = list(names)
+            if names[0] not in resolved:
+                labels = _index_coordinate(bindings, parameter)
+                if labels is not None:
+                    resolved[names[0]] = labels
     return variables, dims, resolved
+
+
+def _derived_variables(
+    parameters: ParameterSet, free: Mapping[str, np.ndarray], chains: int, count: int
+) -> dict[str, np.ndarray]:
+    """One ``(chain, draw, *shape)`` array per derived parameter (W7.0, schema 10).
+
+    ``results.md`` §4: each expression is evaluated **once, vectorised** over
+    every stored draw -- no per-draw loop -- in evaluation order, so a derived
+    input to another derived parameter is formed first. The broadcasting rule
+    is the memo's (§3.6): an input of per-draw shape ``s`` is padded to
+    ``(chain, draw, *(1,) * (k - len(s)), *s)``, ``k`` the largest per-draw
+    rank among the expression's inputs, which reproduces numpy's own
+    broadcasting of the per-draw values -- a scalar beside a plate member
+    ``(N,)``, a non-plate ``(3,)`` beside a scalar, a plate member ``(N, 3)``.
+    The result is padded the same way to the declared shape.
+    """
+    from ampere.core.kernels import NUMPY_OPS
+
+    known: dict[str, np.ndarray] = dict(free)
+    for parameter in parameters:
+        if parameter.is_fixed:
+            value = np.asarray(parameter.value, dtype=float)
+            known[parameter.name] = np.broadcast_to(value, (chains, count, *value.shape))
+    out: dict[str, np.ndarray] = {}
+    for name in parameters.derived_names:
+        parameter = parameters[name]
+        prior = parameter.prior
+        assert isinstance(prior, Derived)
+        inputs = {reference: known[reference] for reference in prior.references}
+        rank = max((array.ndim - 2 for array in inputs.values()), default=0)
+        padded = {
+            reference: array.reshape(
+                chains, count, *(1,) * (rank - (array.ndim - 2)), *array.shape[2:]
+            )
+            for reference, array in inputs.items()
+        }
+        with np.errstate(all="ignore"):
+            value = np.asarray(prior.evaluate(NUMPY_OPS, padded), dtype=float)
+        if not inputs:
+            # A constant expression: no input carries the (chain, draw) axes.
+            value = np.broadcast_to(value, (chains, count))
+        trailing = value.shape[2:]
+        try:
+            if len(trailing) > len(parameter.shape):
+                raise ValueError
+            value = np.broadcast_to(
+                value.reshape(
+                    chains, count, *(1,) * (len(parameter.shape) - len(trailing)), *trailing
+                ),
+                (chains, count, *parameter.shape),
+            )
+        except ValueError:
+            raise ResultsError(
+                f"derived parameter {name!r} ({prior.expression!r}) evaluates to per-draw shape "
+                f"{trailing}, which does not broadcast to its declared shape {parameter.shape}."
+            ) from None
+        known[name] = value
+        out[name] = np.array(value, dtype=float)
+    return out
 
 
 # ---------------------------------------------------------------------------

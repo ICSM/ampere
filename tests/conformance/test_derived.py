@@ -722,3 +722,81 @@ class TestTheSlab:
         assert context["shrinkage.broad_effective"] == pytest.approx(
             effective_scale(1.0, float(values["shrinkage.broad"]))
         )
+
+
+def results_population() -> Population:
+    """Row 9's population: every broadcasting case §3.6 names, and a chain.
+
+    ``slope`` (a plate member, ``(N,)``) is derived from scalar ``mu``, the
+    scalar derived ``sigma`` (so a derived parameter of a derived one) and the
+    internal ``z``; ``tilt`` is a non-plate ``(3,)`` derived from ``w`` beside
+    the scalar ``mu``.
+    """
+    return Population(
+        "objects",
+        members=[
+            Parameter("z", st.norm(0.0, 1.0)),
+            Parameter("slope", Derived("mu + sigma * z")),
+            Parameter("offset", HierarchicalPrior("norm", {"scale": "sigma"}, kwds={"loc": 0.0})),
+        ],
+        hyperpriors=[
+            Parameter("mu", st.norm(1.0, 0.5)),
+            Parameter("log_sigma", st.norm(-1.0, 0.5)),
+            Parameter("sigma", Derived("exp(log_sigma)")),
+            Parameter("w", st.norm(0.0, 1.0), shape=(3,)),
+            Parameter("tilt", Derived("w * mu"), shape=(3,)),
+        ],
+        over=object_labels(),
+    )
+
+
+class TestThePosterior:
+    """Row 9: every derived parameter is a posterior variable (dev, ``ampere.results``)."""
+
+    def test_the_posterior_carries_the_derived_variable(self) -> None:
+        pytest.importorskip("emcee")
+        from ampere.inference import EmceeEngine
+        from ampere.results import PROVENANCE_SCHEMA_VERSION
+
+        from .backends.reference import ReferenceBackend
+
+        problem = build_problem(ReferenceBackend(), results_population())
+        assert PROVENANCE_SCHEMA_VERSION == 10
+        run = EmceeEngine(problem, walkers=2 * problem.free_size + 2).run(steps=40, burn_in=2)
+        assert run.attrs["ampere_schema_version"] == 10
+        derived = json.loads(run.attrs["ampere_derived"])
+        assert derived == list(problem.parameters.derived_names)
+        assert set(derived) == {"objects.sigma", "objects.slope", "objects.tilt"}
+        posterior = run["posterior"]
+        chains, draws = np.asarray(posterior["objects.mu"]).shape
+        assert np.asarray(posterior["objects.slope"]).shape == (chains, draws, MEMBERS)
+        assert np.asarray(posterior["objects.tilt"]).shape == (chains, draws, 3)
+        assert np.asarray(posterior["objects.sigma"]).shape == (chains, draws)
+        merged = problem.parameters
+        for chain in range(chains):
+            for draw in range(0, draws, 7):
+                values = {
+                    name: np.asarray(posterior[name])[chain, draw] for name in merged.free_names
+                }
+                expected = merged.complete(values)
+                for name in derived:
+                    np.testing.assert_allclose(
+                        np.asarray(posterior[name])[chain, draw], expected[name], rtol=1e-14
+                    )
+
+    def test_a_problem_without_one_records_an_empty_list(self) -> None:
+        from ampere.results import provenance_attrs
+
+        from .backends.reference import ReferenceBackend
+
+        slopes = Population(
+            "objects",
+            members=[
+                Parameter("slope", HierarchicalPrior("norm", {"loc": "mu", "scale": "sigma"}))
+            ],
+            hyperpriors=hyperpriors(),
+            over=object_labels(),
+        )
+        problem = build_problem(ReferenceBackend(), slopes)
+        attrs = provenance_attrs(problem, engine="test")
+        assert attrs["ampere_derived"] == "[]"
