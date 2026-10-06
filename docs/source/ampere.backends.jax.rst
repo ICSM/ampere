@@ -4,10 +4,9 @@ ampere.backends.jax
 Rung 2 of the capability ladder, beside torch: numpyro distributions,
 equinox pytrees, gradients, ``jit``, and a per-instance device.
 
-Requires the ``jax`` extra — from a clone, since ampere is not on PyPI
-(:doc:`install`)::
+Requires the ``jax`` extra (:doc:`install`)::
 
-    pip install -e ".[jax]"
+    pip install ampere-astro[jax]
 
 **float64 is a policy here, and you must turn it on yourself.** jax's
 ``jax_enable_x64`` is process-global state addressed to the application

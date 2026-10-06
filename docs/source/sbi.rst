@@ -20,8 +20,8 @@ reproducibility questions that cut across all of them. Every one of them is
 also exercised by the test suite, named at the point it is introduced below,
 so none of this page can rot unnoticed.
 
-Requires the ``sbi`` extra (``pixi install -e sbi``; ``pip install -e
-".[sbi]"``), which resolves to **sbi 0.27.0 with a CPU torch 2.13 and no
+Requires the ``sbi`` extra (``pixi install -e sbi``; ``pip install
+ampere-astro[sbi]``), which resolves to **sbi 0.27.0 with a CPU torch 2.13 and no
 pyro-ppl** — so it unlocks :class:`~ampere.inference.SBIEngine` without
 unlocking :class:`~ampere.inference.NUTSEngine`/:class:`~ampere.inference.VIEngine`
 on a torch problem. ``sbi`` and ``torch`` are imported lazily inside

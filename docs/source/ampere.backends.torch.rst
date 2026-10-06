@@ -6,10 +6,9 @@ differentiability — and therefore NUTS, stochastic variational inference and
 gradient-based optimisation — plus batching through ``torch.func.vmap``, and
 a per-instance ``device=`` on every piece.
 
-Requires the ``torch`` extra — from a clone, since ampere is not on PyPI
-(:doc:`install`)::
+Requires the ``torch`` extra (:doc:`install`)::
 
-    pip install -e ".[torch]"
+    pip install ampere-astro[torch]
 
 .. note::
 

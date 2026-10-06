@@ -656,11 +656,11 @@ def _tree_from(
     count = len(batch)
     groups: dict[str, Any] = {
         THETA_GROUP: xarray.Dataset(_theta_variables(batch, problem)),
-        SAMPLE_STATS_GROUP: xarray.Dataset(_sample_stats(batch)),
+        SAMPLE_STATS_GROUP: _variable_width_strings(xarray.Dataset(_sample_stats(batch))),
     }
     contexts = _context_variables(batch)
     if contexts is not None:
-        groups[CONTEXT_GROUP] = xarray.Dataset(contexts)
+        groups[CONTEXT_GROUP] = _variable_width_strings(xarray.Dataset(contexts))
     coordinates: dict[str, Any] = {}
     for path, slot in slots.items():
         groups[path] = _slot_dataset(xarray, slot, batch, count)
@@ -745,6 +745,21 @@ def _theta_variables(batch: Sequence[Simulation], problem: FittingProblem) -> di
         dims = (SAMPLE_DIM, *(f"{name}_dim_{axis}" for axis in range(stacked.ndim - 1)))
         variables[name] = (dims, stacked)
     return variables
+
+
+def _variable_width_strings(dataset: Any) -> Any:
+    """Mark every string variable of *dataset* as variable-length on write.
+
+    ``np.array([...]).astype(str)`` is a fixed-width ``<U`` array at the
+    longest string of the batch, and netCDF would store that width as the
+    variable's; a longer failure message or context record in a later append
+    would then be truncated. ``encoding={"dtype": str}`` stores them as
+    variable-length unicode, as the string ``extra_*`` coordinates already are.
+    """
+    for variable in dataset.variables:
+        if dataset[variable].dtype.kind in "USO":
+            dataset[variable].encoding["dtype"] = str
+    return dataset
 
 
 def _sample_stats(batch: Sequence[Simulation]) -> dict[str, Any]:
@@ -1354,9 +1369,9 @@ def _concatenate(xarray: Any, existing: Any, addition: Any) -> Any:
         new = addition[name].dataset
         joined = xarray.concat([old, new], dim=SAMPLE_DIM, data_vars="minimal")
         for variable in joined.variables:
-            # A string coordinate read back carries the first batch's width in
-            # its encoding, and writing would truncate a longer name to it.
-            if str(variable).startswith("extra_") and joined[variable].dtype.kind in "USO":
+            # A string variable read back carries the first batch's width in
+            # its encoding, and writing would truncate a longer one to it.
+            if joined[variable].dtype.kind in "USO":
                 joined[variable].encoding["dtype"] = str
         groups[name] = joined
     merged = xarray.DataTree.from_dict(groups)

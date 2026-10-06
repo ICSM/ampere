@@ -800,7 +800,7 @@ class SyntheticPhotometry(TorchStep):
         # should not pay for.
         import pyphot
 
-        from ampere.legacy.utils.pyphot_compat import get_unit
+        from ampere.backends.reference._pyphot_compat import get_unit
 
         grid = _to_micron(wavelength)
         if library is None:
