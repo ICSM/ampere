@@ -9,6 +9,7 @@ an oracle comparison — the expected value is written out here from
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import math
 
@@ -16,8 +17,21 @@ import numpy as np
 import pytest
 import scipy.stats as st
 
-from ampere.core import Derived, HierarchicalPrior, Parameter, ParameterSet, Population
+from ampere.core import (
+    Dataset,
+    Derived,
+    FittingProblem,
+    HierarchicalPrior,
+    Parameter,
+    ParameterSet,
+    Population,
+    realise,
+    registered_realisations,
+)
 from ampere.core.exceptions import ParameterError, TyingError
+
+from .composition import ProblemSpec, build_instrument, build_likelihood, observed_container
+from .protocol import ConformanceBackend, ModelKind, ModelSpec, Tolerances
 
 #: The non-centred triple every row composes: ``theta = mu + sigma * z``.
 EXPRESSION = "mu + sigma * z"
@@ -374,3 +388,229 @@ class TestTheNonCentredPopulation:
         )
         with pytest.raises(ParameterError, match="layout='flat' has no internal members"):
             ParameterSet.merge(objects(), populations=[internal_only])
+
+
+# ---------------------------------------------------------------------------
+# On every registered backend
+# ---------------------------------------------------------------------------
+
+
+def scalar(value: object) -> float:
+    return float(np.asarray(value, dtype=float))
+
+
+def build_problem(backend: ConformanceBackend, population: Population) -> FittingProblem:
+    """One ``LINEAR`` model and one dataset per member of *population*, on *backend*."""
+    spec = ProblemSpec(model=ModelSpec(kind=ModelKind.LINEAR))
+    models: dict[str, object] = {}
+    datasets = []
+    for index, label in enumerate(population.over):
+        dataset = dataclasses.replace(spec.datasets[0], label=f"d{index}", data_seed=1000 + index)
+        observed = observed_container(spec, dataset)
+        models[label] = backend.model(spec.model)
+        datasets.append(
+            Dataset(
+                observed,
+                build_instrument(backend, dataset),
+                build_likelihood(backend, dataset, observed),
+                model=label,
+                label=dataset.label,
+            )
+        )
+    return FittingProblem(models, datasets, populations=[population], seed=spec.seed)
+
+
+def derived_scale_population() -> Population:
+    """Row 8's population: a derived hyperprior, a prior over it, a derived element.
+
+    ``sigma`` is derived (``exp(log_sigma)``); ``offset``'s hierarchical prior
+    references it; ``slope``, the ``LINEAR`` model's own parameter, is the
+    derived ``mu + sigma * z`` over the internal ``z``.
+    """
+    return Population(
+        "objects",
+        members=[
+            Parameter("z", st.norm(0.0, 1.0)),
+            Parameter("slope", Derived("mu + sigma * z")),
+            Parameter("offset", HierarchicalPrior("norm", {"scale": "sigma"}, kwds={"loc": 0.0})),
+        ],
+        hyperpriors=[
+            Parameter("mu", st.norm(1.0, 0.5)),
+            Parameter("log_sigma", st.norm(-1.0, 0.5)),
+            Parameter("sigma", Derived("exp(log_sigma)")),
+        ],
+        over=object_labels(),
+    )
+
+
+def chained_population() -> Population:
+    """Row 10's chain: derived ``slope`` -> hierarchical ``h`` -> derived ``spread``.
+
+    Declared in reverse, so the evaluation order is the only thing that can
+    put each value after its inputs (the §3.4 hazard).
+    """
+    return Population(
+        "objects",
+        members=[
+            Parameter("slope", Derived("a + h ** 2")),
+            Parameter("h", HierarchicalPrior("halfnorm", {"scale": "spread"})),
+        ],
+        hyperpriors=[Parameter("spread", Derived("exp(a)")), Parameter("a", st.norm(-0.5, 0.3))],
+        over=object_labels(),
+    )
+
+
+def unit_cubes(size: int, count: int = 8) -> np.ndarray:
+    rng = np.random.default_rng(20261008)
+    return np.concatenate(
+        [np.full((1, size), 0.5), rng.uniform(0.05, 0.95, size=(count - 1, size))]
+    )
+
+
+def realised(problem: FittingProblem) -> object:
+    if problem.backend not in registered_realisations():
+        pytest.skip(
+            f"the {problem.backend!r} backend registers no realisation "
+            f"(inference.md §10a: the reference backend has no differentiable path)"
+        )
+    return realise(problem)
+
+
+class TestOnEveryBackend:
+    """Rows 1, 2 and 5 through each backend's lowered parameter space."""
+
+    def test_a_derived_parameter_is_not_a_free_dimension(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        pset = non_centred_set()
+        space = backend.parameter_space(pset)
+        assert space.free_size == pset.free_size == 5
+        assert space.free_labels() == pset.free_labels()
+        vector = np.array([0.5, 2.0, -1.0, 0.0, 1.5])
+        unpacked = space.unpack(vector)
+        assert set(unpacked) == set(pset.names)
+        np.testing.assert_allclose(
+            np.asarray(unpacked["theta"], dtype=float),
+            pset.unpack(vector)["theta"],
+            atol=tolerances.cross_backend,
+        )
+        np.testing.assert_allclose(space.pack(unpacked), vector, atol=tolerances.cross_backend)
+
+    def test_complete_is_idempotent_and_computes_it(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        """A stale derived value: refused on the numpy path, overwritten on a traced one."""
+        pset = non_centred_set()
+        space = backend.parameter_space(pset)
+        vector = np.array([1.0, 0.5, 0.0, 2.0, -2.0])
+        fresh = pset.unpack(vector)
+        stale = dict(fresh, theta=np.array([9.0, 9.0, 9.0]))
+        # Every path: the free vector has no derived slot, so the derived value
+        # a lowering hands back is always the recomputation.
+        np.testing.assert_allclose(
+            np.asarray(space.unpack(space.pack(stale))["theta"], dtype=float),
+            [1.0, 2.0, 0.0],
+            atol=tolerances.cross_backend,
+        )
+        if not backend.capabilities.differentiable:
+            with pytest.raises(ParameterError, match="derived parameter 'theta'"):
+                space.lnprior(stale)
+        elif hasattr(space, "log_prior_tensor"):
+            # A traced path that takes a mapping cannot branch on a value: it
+            # overwrites the supplied derived entry with the recomputation.
+            assert scalar(space.lnprior(stale)) == pytest.approx(
+                pset.lnprior(fresh), abs=tolerances.cross_backend
+            )
+
+    def test_a_hierarchical_prior_may_reference_a_derived_parameter(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        pset = slab_set()
+        space = backend.parameter_space(pset)
+        for cube in unit_cubes(pset.free_size):
+            expected = pset.prior_transform(cube)
+            np.testing.assert_allclose(
+                space.prior_transform(cube), expected, rtol=1e-9, atol=tolerances.cross_backend
+            )
+            assert scalar(space.lnprior(expected)) == pytest.approx(
+                pset.lnprior(expected), abs=tolerances.cross_backend
+            )
+            assert scalar(space.unpack(expected)["s_eff"]) == pytest.approx(
+                pset.unpack(expected)["s_eff"], abs=tolerances.cross_backend
+            )
+
+
+class TestTheRealisedDerived:
+    """Rows 8 and 10: the lowerings agree with the numpy path."""
+
+    def test_the_realised_derived_agrees_with_the_numpy_path(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        problem = build_problem(backend, derived_scale_population())
+        merged = problem.parameters
+        assert merged.derived_names == ("objects.sigma", "objects.slope")
+        assert merged["objects.offset"].references == ("objects.sigma",)
+        # The model consumes the derived element under its own name.
+        values = merged.complete(problem.sample_prior(np.random.default_rng(5)))
+        routed = problem.mapping.distribute(values)
+        for index, label in enumerate(object_labels()):
+            assert scalar(routed[label]["slope"]) == pytest.approx(
+                float(values["objects.mu"])
+                + float(values["objects.sigma"]) * values["objects.z"][index]
+            )
+        space = backend.parameter_space(merged)
+        if hasattr(space, "numpyro_model"):
+            import numpyro
+
+            with numpyro.handlers.seed(rng_seed=0):
+                trace = numpyro.handlers.trace(space.numpyro_model()).get_trace()
+            for name in merged.derived_names:
+                assert trace[name]["type"] == "deterministic"
+            assert trace["objects.z"]["type"] == "sample"
+        realisation = realised(problem)
+        assert int(realisation.free_size) == problem.free_size  # type: ignore[attr-defined]
+        for cube in unit_cubes(problem.free_size):
+            y = problem.unconstrain(problem.prior_transform(cube))
+            expected = problem.log_prob_unconstrained(y)
+            got = scalar(backend.to_numpy(realisation.log_prob_unconstrained(y)))  # type: ignore[attr-defined]
+            assert got == pytest.approx(expected, abs=tolerances.cross_backend)
+
+    def test_the_evaluation_order_is_honoured_under_tracing(
+        self, backend: ConformanceBackend, tolerances: Tolerances
+    ) -> None:
+        problem = build_problem(backend, chained_population())
+        merged = problem.parameters
+        order = merged.evaluation_order()
+        assert (
+            order.index("objects.a")
+            < order.index("objects.spread")
+            < order.index("objects.h")
+            < order.index("objects.slope")
+        )
+        space = backend.parameter_space(merged)
+        for cube in unit_cubes(merged.free_size):
+            vector = merged.prior_transform(cube)
+            np.testing.assert_allclose(
+                space.prior_transform(cube), vector, rtol=1e-9, atol=tolerances.cross_backend
+            )
+            numpy_values = merged.unpack(vector)
+            lowered_values = space.unpack(vector)
+            for name in merged.names:
+                np.testing.assert_allclose(
+                    np.asarray(lowered_values[name], dtype=float),
+                    numpy_values[name],
+                    atol=tolerances.cross_backend,
+                    rtol=1e-12,
+                )
+            a = float(numpy_values["objects.a"])
+            h = numpy_values["objects.h"]
+            np.testing.assert_allclose(numpy_values["objects.slope"], a + h**2, rtol=1e-14)
+            assert scalar(space.lnprior(vector)) == pytest.approx(
+                merged.lnprior(vector), abs=tolerances.cross_backend
+            )
+        realisation = realised(problem)
+        for cube in unit_cubes(problem.free_size):
+            y = problem.unconstrain(problem.prior_transform(cube))
+            expected = problem.log_prob_unconstrained(y)
+            got = scalar(backend.to_numpy(realisation.log_prob_unconstrained(y)))  # type: ignore[attr-defined]
+            assert got == pytest.approx(expected, abs=tolerances.cross_backend)
