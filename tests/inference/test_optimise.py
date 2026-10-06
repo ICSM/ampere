@@ -200,6 +200,7 @@ class TestTheScipyRoute:
         other = optimise(agreement_problem(), method="scipy", starts=2, seed=1)
         assert [s.start_hash for s in other.starts] != [s.start_hash for s in first.starts]
 
+    @pytest.mark.heavy
     def test_inside_the_sampled_central_50_percent(
         self, sed_posterior: dict[str, np.ndarray]
     ) -> None:
@@ -380,6 +381,7 @@ def sed_scipy() -> Optimum:
 
 @pytest.mark.parametrize("backend", NATIVE)
 class TestTheMapRoute:
+    @pytest.mark.heavy
     def test_inside_the_sampled_central_50_percent(
         self, backend: str, sed_posterior: dict[str, np.ndarray], sed_scipy: Optimum
     ) -> None:
@@ -407,6 +409,7 @@ class TestTheMapRoute:
 
 @pytest.mark.parametrize("backend", NATIVE)
 class TestTheVIRoute:
+    @pytest.mark.heavy
     def test_inside_the_sampled_central_50_percent(
         self, backend: str, sed_posterior: dict[str, np.ndarray]
     ) -> None:
@@ -699,6 +702,7 @@ def burn_in_step(log_prob: np.ndarray) -> int:
     return int(np.argmax(mean >= plateau - 1.0))
 
 
+@pytest.mark.heavy
 def test_emcee_from_the_optimum_burns_in_faster(sed_scipy: Optimum) -> None:
     from examples.sed_composition.sed_composition import build_problem
 

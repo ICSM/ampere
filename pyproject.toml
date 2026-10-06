@@ -445,6 +445,12 @@ markers = [
     # marker only matters in `-e sbi` and `-e torch`, where `test-all` and
     # CI's sbi cell run them (`pytest -m sbi_training` selects just these).
     "sbi_training: trains an sbi network (minutes); excluded from test-fast, run by test-all/CI's sbi cell",
+    # W7.5 (W6.7's carried item). A row costing more than about a minute on its
+    # own -- the optimiser rows that consume the module-scoped emcee run of
+    # `examples.sed_composition` (`sed_posterior`, about 40 s) or `sed_scipy`,
+    # and the 16-walker burn-in comparison -- kept out of `test-fast`. `test-all`
+    # and CI run everything, so nothing is lost; `pytest -m heavy` selects them.
+    "heavy: a row or fixture costing more than about a minute on its own; excluded from test-fast",
 ]
 
 # ---------------------------------------------------------------------------
@@ -595,6 +601,10 @@ test-all = { cmd = "pytest -n 4 --dist loadgroup tests/core tests/results tests/
 #     commit, not only in `dev`. (`tests/inference/test_tmnre.py` does not
 #     exist: the TMNRE classes live inside `test_sbi.py` and carry the same
 #     marker -- `TestWhatTMNRERefuses` does not train and is not marked.)
+#   * the `heavy` marker (W7.5): `and not heavy` in the `-m` expression below
+#     leaves out W6.7's optimiser rows that need the 40 s emcee run of
+#     `examples.sed_composition` (or its scipy optimum) and the emcee burn-in
+#     comparison; `test-all` and CI still run them.
 # Measured on this branch (2026-09-27, `pixi run -e dev test-fast`, one run
 # through the machine's gate lock, before W6.6 (c)'s marker swap): 2879
 # passed / 425 skipped / 244 deselected in 2 min 55 s (3 min 02 s wall
@@ -607,7 +617,7 @@ test-all = { cmd = "pytest -n 4 --dist loadgroup tests/core tests/results tests/
 # way, since that class already skipped there for want of the `sbi` extra.
 # W6.10: `-n 4` as for `test-all` above. Measured (dev, 2026-10-02): 4 min
 # 54 s serial (`-n 0`) -> 2 min 32 s, 2951 passed / 444 skipped both ways.
-test-fast = { cmd = "pytest -n 4 --dist loadgroup tests/core tests/results tests/conformance tests/backends tests/inference tests/m2 -m \"not study and not sbi_training\" --deselect=tests/results/test_plots.py::TestCornerPaging --deselect=tests/results/test_calibration.py::TestTheRefitLoop", env = { OMP_NUM_THREADS = "1", OPENBLAS_NUM_THREADS = "1", MKL_NUM_THREADS = "1" } }
+test-fast = { cmd = "pytest -n 4 --dist loadgroup tests/core tests/results tests/conformance tests/backends tests/inference tests/m2 -m \"not study and not sbi_training and not heavy\" --deselect=tests/results/test_plots.py::TestCornerPaging --deselect=tests/results/test_calibration.py::TestTheRefitLoop", env = { OMP_NUM_THREADS = "1", OPENBLAS_NUM_THREADS = "1", MKL_NUM_THREADS = "1" } }
 # W5.26 (3): `ci.yml`'s `suites` (dev) and `backend-suites`
 # (torch/jax/sbi/nested) jobs run these three groups as separate matrix
 # cells instead of `test-all` as one forty-minute step, so a red row in one
