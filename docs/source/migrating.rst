@@ -760,7 +760,8 @@ library lacks (ALMA band 6 and ATCA 9 mm) are top-hats with
    are** :math:`4\pi` **too faint.** ``examples/examples_paper/phoenixstar.py``
    divides the emulator's flux by :math:`4\pi d^2` in the model (line 53) after
    scaling the bolometric flux by :math:`1/4\pi (1\,\mathrm{pc})^2` (line 25),
-   and again in its post-processing (line 130). ``examples/star_disc.py``
+   and its stand-alone post-processing function repeats the same pair at
+   454 pc (line 130). ``examples/star_disc.py``
    forms ``fbol_1l1p / (4π (1 pc)²)`` (line 43) and passes it to
    ``ampere/legacy/models/QuickSED.py``, which divides by :math:`4\pi d_\star^2`
    a second time (line 148), so for ``QuickSED`` the second division is the
