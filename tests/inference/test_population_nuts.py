@@ -287,7 +287,25 @@ class TestRecovery:
 #: dispatch: zero divergences each on torch and jax, the non-centred chain
 #: mixing far more slowly), so that comparison would test nothing; this is
 #: the one the reparameterisation exists for.
+#:
+#: What the funnel does to the centred chain is **measured by its effective
+#: sample size, not its divergence count**. The count swings with the step
+#: size adaptation lands on — at this budget the centred run gave 127
+#: divergences on jax and 184 on torch here, 3 and 5 at twice the budget,
+#: and 0 on CI's jax runner, where the non-centred run gave 2 — so a strict
+#: inequality on it failed CI (run 37572241312). The bulk ESS of ``sigma``
+#: separates the declarations everywhere: centred 1.4 (jax) and 1.3 (torch)
+#: at this budget, 11 and 25 at twice it; non-centred 155 and 92, 202 and
+#: 149 — never under a factor of three apart, and ``mu`` the same.
 WEAK_NOISE = 1.0
+
+#: The pinned ratio of the non-centred run's bulk ESS to the centred run's,
+#: on ``mu`` and on ``sigma``; the measured ratios above are 6 to 110.
+NON_CENTRED_ESS_GAIN = 3.0
+
+#: The non-centred run's divergences may not exceed this fraction of its
+#: draws (measured 1 and 4 of 300 here, 2 on CI's jax runner).
+NON_CENTRED_DIVERGENCE_FRACTION = 0.1
 
 
 @pytest.fixture(scope="module")
@@ -332,12 +350,24 @@ class TestTheNonCentredPopulation:
             f"of {samples.size} non-centred draws (mean {samples.mean()})"
         )
 
-    def test_it_diverges_less_than_the_centred_declaration(
-        self, declarations: dict[str, Any]
+    @pytest.mark.parametrize("name", ["objects.mu", "objects.sigma"])
+    def test_it_mixes_better_than_the_centred_declaration(
+        self, declarations: dict[str, Any], name: str
     ) -> None:
-        centred = int(declarations["centred"].attrs["ampere_nuts_divergences"])
-        non_centred = int(declarations["non-centred"].attrs["ampere_nuts_divergences"])
-        assert non_centred < centred, (centred, non_centred)
+        """The funnel's signature is the centred chain's ESS, not its divergence count."""
+        import arviz as az
+
+        ess = {
+            label: float(az.ess(run["posterior"].to_dataset()[[name]], method="bulk")[name])
+            for label, run in declarations.items()
+        }
+        assert ess["non-centred"] >= NON_CENTRED_ESS_GAIN * ess["centred"], ess
+
+    def test_it_rarely_diverges(self, declarations: dict[str, Any]) -> None:
+        run = declarations["non-centred"]
+        divergences = int(run.attrs["ampere_nuts_divergences"])
+        draws = int(run.posterior.sizes["draw"]) * int(run.posterior.sizes["chain"])
+        assert divergences <= NON_CENTRED_DIVERGENCE_FRACTION * draws, (divergences, draws)
 
     def test_the_posterior_carries_the_derived_index(self, declarations: dict[str, Any]) -> None:
         run = declarations["non-centred"]

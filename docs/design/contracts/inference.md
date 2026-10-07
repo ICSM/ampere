@@ -1016,8 +1016,11 @@ data then fix `μ + σ z_i` and leave `μ`, `σ` and the `z` strongly correlated
 `tests/inference/test_population_nuts.py` pins both halves of the claim it
 can: on fifty members observed at a per-member noise where the data barely
 constrain each index, the non-centred run recovers `μ` and `σ` inside the
-central 95 % with fewer divergences than the centred run at the same budget,
-on torch and jax; the informative-data rows above stay centred. A derived
+central 95 % with a bulk effective sample size on `μ` and `σ` at least three
+times the centred run's at the same budget (the funnel's signature; the
+divergence count swings with the adaptation and is pinned only as a cap on
+the non-centred run — *corrected 2026-10-07* after CI's jax runner gave the
+centred run no divergences), on torch and jax; the informative-data rows above stay centred. A derived
 member is in the run's `posterior` beside the sampled ones on every engine
 (`results.md` §4), so the per-member values a centred fit would report are
 still there to read.
