@@ -154,7 +154,8 @@ class Optimum:
         One entry per :attr:`free_labels` entry, ``"constrained"`` or
         ``"unconstrained"``: the coordinates the minimiser moved that entry
         in (W7.6). The ``"scipy"`` route moves a bounded coordinate in its
-        constrained value with the bounds passed, every other route moves
+        normalised constrained value, kept inside its support; every other
+        route moves
         ``u``. Omitted, it is all ``"unconstrained"`` — what every optimum
         stored before W7.6 was. It does not enter :attr:`identity`: the
         point is the same whichever coordinates reached it.

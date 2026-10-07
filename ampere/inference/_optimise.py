@@ -24,11 +24,12 @@ modes to ``1e-3`` in every free parameter on each fixture both run on.
 
 *Which coordinates a minimiser moves in* is a separate choice from the
 function's value (W7.6). The ``"scipy"`` route moves a coordinate with a
-``Logit`` box or a ``Log`` floor in its **constrained** value, with the bounds
-passed to :func:`scipy.optimize.minimize`, and every other coordinate in
-``u``: in ``u``, a box's sigmoid saturates and a Powell line search runs out
-to where the objective goes flat, which ended W6.7's eighteen-parameter
-NGC6302 fit at a corner of its box with nine coordinates at a bound. No
+``Logit`` box or a ``Log`` floor in its **constrained** value (normalised, and
+kept inside the support by ``bounds=`` or by reflection, :class:`_Coordinates`),
+and every other coordinate in ``u``: in ``u``, a box's sigmoid saturates and
+a Powell line search runs out to where the objective goes flat, which ended
+W6.7's eighteen-parameter NGC6302 fit at a corner of its box with nine
+coordinates at a bound. No
 Jacobian enters either way, because the objective never carried one.
 :attr:`Optimum.coordinates <ampere.results.Optimum.coordinates>` records the
 choice, and :func:`saturated_bounds` names a converged coordinate still at a
@@ -56,7 +57,7 @@ The routes
     contract path — the harvested ``ScipyMinOpt`` shape
     (``docs/design/harvest/optim_only/``) re-expressed over
     :class:`~ampere.core.dataset.FittingProblem`, bounded coordinates moved
-    in their constrained value with ``bounds=`` (above). The covariance is
+    in their normalised constrained value (above). The covariance is
     the inverse of a central-difference Hessian in ``u``.
 ``"map"``
     torch and jax: a gradient MAP through :func:`ampere.core.realise` —
@@ -127,13 +128,17 @@ DEFAULT_TOLERANCE = 1e-8
 #: The options each route understands; anything else is refused by name.
 _SCIPY_OPTIONS = frozenset({"minimiser", "tol", "minimiser_options"})
 
-#: The :func:`scipy.optimize.minimize` methods that honour ``bounds=`` (by
-#: lower-cased name). With any other method the scipy route moves every
-#: coordinate in ``u``, as it did before W7.6, and records so in
-#: :attr:`~ampere.results.Optimum.coordinates`.
-_BOUNDED_MINIMISERS = frozenset(
-    {"powell", "l-bfgs-b", "nelder-mead", "tnc", "slsqp", "trust-constr", "cobyla", "cobyqa"}
-)
+#: The :func:`scipy.optimize.minimize` methods (by lower-cased name) whose
+#: ``bounds=`` handling is *local* — a projection or an active set — and which
+#: the scipy route therefore hands the box as ``bounds=``. Every other method,
+#: Powell (the default) among them, moves in the same normalised coordinates
+#: *reflected* into the box instead (:class:`_Coordinates`), with no
+#: ``bounds=``: scipy's Powell, given bounds, replaces its local bracketing
+#: line search with ``fminbound`` over the whole segment between the bounds,
+#: which may return a point worse than the current one, and its ``ftol`` test
+#: then reads the worsening iteration as convergence (W7.6 measured both
+#: starts of an NGC6302 fit "converging" thousands of nats below the mode).
+_PROJECTED_MINIMISERS = frozenset({"l-bfgs-b", "tnc", "slsqp", "trust-constr"})
 
 #: How far inside a bound the box handed to the minimiser stops, as a
 #: fraction of the coordinate's scale (:func:`_bounded_entries`). A bounded
@@ -258,56 +263,69 @@ class _Coordinates:
     A coordinate whose bijection is a ``Logit`` box or a ``Log`` floor moves
     in its **constrained** value, normalised by its scale
     (:func:`_bounded_entries`): ``w = (θ - lower) / scale``, so a box is
-    ``[0, 1]`` and a half-line ``[0, ∞)``, with those bounds (pulled in by
-    :data:`_BOUND_MARGIN`) passed to the minimiser. The normalisation is
-    affine, so it adds no curvature; it is there because scipy's bounded
-    line searches and Powell's initial directions work in absolute units, and
-    a flux scale of ``1e-15`` moved in its raw value is never resolved. A
-    positive box spanning :data:`_DECADE` or more moves in its normalised
-    logarithm, ``log(θ / lower) / log(upper / lower)``, still on ``[0, 1]``
-    and still bounded. Every
-    other coordinate moves in ``u`` unbounded; with ``bounded=False`` (a
-    minimiser that ignores ``bounds=``) every coordinate does. The
-    objective's value is the same function of the point whatever ``w`` is:
-    the map only changes the coordinates the line searches move in.
+    ``[0, 1]`` and a half-line ``[0, ∞)``. The normalisation is affine, so
+    it adds no curvature; it is there because scipy's line searches and
+    Powell's initial directions work in absolute units, and a flux scale of
+    ``1e-15`` moved in its raw value is never resolved. A positive box
+    spanning :data:`_DECADE` or more moves in its normalised logarithm,
+    ``log(θ / lower) / log(upper / lower)``, still on ``[0, 1]``. Every
+    other coordinate moves in ``u``.
+
+    The box is enforced one of two ways. With ``reflect=False`` (a minimiser
+    in :data:`_PROJECTED_MINIMISERS`) :attr:`bounds` is handed to scipy as
+    ``bounds=``. With ``reflect=True`` (Powell and every other method) no
+    bounds are passed and :meth:`from_w` folds ``w`` back into the box — a
+    triangle wave for a box, ``|w|`` for a half-line — so every iterate is
+    inside the support and the minimiser keeps its own local line search.
+    The fold is a mirror image, never a flat region, so nothing saturates.
+    Either way the box is pulled in by :data:`_BOUND_MARGIN`, so ``u`` stays
+    finite. The objective's value is the same function of the point whatever
+    ``w`` is: the map only changes the coordinates the minimiser moves in.
     """
 
-    def __init__(self, problem: FittingProblem, *, bounded: bool = True) -> None:
+    def __init__(self, problem: FittingProblem, *, reflect: bool) -> None:
         size = int(problem.free_size)
+        self.reflect = bool(reflect)
         self.kinds: list[str] = [UNCONSTRAINED] * size
         self.bounds: list[tuple[float | None, float | None]] = [(None, None)] * size
-        self._pieces: list[tuple[slice, Any, float, np.ndarray, bool, float, float]] = []
-        if not bounded:
-            return
+        self._pieces: list[tuple[slice, Any, float, np.ndarray, bool, bool, float, float]] = []
         for where, bijection, lower, boxed, scale in _bounded_entries(problem):
             low, high = _BOUND_MARGIN, (1.0 - _BOUND_MARGIN) if boxed else math.inf
             ratio = float(np.min((lower + scale) / lower)) if boxed and lower > 0 else 0.0
             logarithmic = ratio >= _DECADE
             if logarithmic:
                 scale = np.log((lower + scale) / lower)
-            self._pieces.append((where, bijection, lower, scale, logarithmic, low, high))
+            self._pieces.append((where, bijection, lower, scale, logarithmic, boxed, low, high))
             for i in range(where.start, where.stop):
                 self.kinds[i] = CONSTRAINED
                 self.bounds[i] = (low, high if boxed else None)
 
     @property
-    def any_bounded(self) -> bool:
-        return bool(self._pieces)
+    def bounds_argument(self) -> list[tuple[float | None, float | None]] | None:
+        """What to pass as ``scipy.optimize.minimize(bounds=)``."""
+        return None if self.reflect or not self._pieces else self.bounds
 
     def to_w(self, u: np.ndarray) -> np.ndarray:
         """``u`` to ``w``, a bounded coordinate clipped strictly inside its box."""
         w = np.array(u, dtype=float).reshape(-1)
-        for where, bijection, lower, scale, logarithmic, low, high in self._pieces:
+        for where, bijection, lower, scale, logarithmic, _, low, high in self._pieces:
             theta = np.asarray(bijection.constrain(w[where]), dtype=float).reshape(-1)
             position = np.log(theta / lower) if logarithmic else theta - lower
             w[where] = np.clip(position / scale, low, high)
         return w
 
     def from_w(self, w: np.ndarray) -> np.ndarray:
-        """``w`` to ``u``; a bounded coordinate is clipped inside first, so ``u`` is finite."""
+        """``w`` to ``u``; a bounded coordinate is folded and clipped inside first."""
         u = np.array(w, dtype=float).reshape(-1)
-        for where, bijection, lower, scale, logarithmic, low, high in self._pieces:
-            position = np.clip(u[where], low, high) * scale
+        for where, bijection, lower, scale, logarithmic, boxed, low, high in self._pieces:
+            position = u[where]
+            if self.reflect:
+                if boxed:
+                    position = np.mod(position, 2.0)
+                    position = np.where(position > 1.0, 2.0 - position, position)
+                else:
+                    position = np.abs(position)
+            position = np.clip(position, low, high) * scale
             theta = lower * np.exp(position) if logarithmic else lower + position
             u[where] = np.asarray(bijection.unconstrain(theta), dtype=float).reshape(-1)
         return u
@@ -664,12 +682,14 @@ def _scipy_route(
         # a point the model cannot score is; NaN would poison a line search.
         return -value if math.isfinite(value) else math.inf
 
-    # Bounded coordinates move in their constrained value with the box passed
-    # (W7.6): in u, a box's sigmoid saturates and a line search runs out to
-    # where the objective goes flat, ending at a corner. The objective's value
-    # is the same function of the point in either coordinate system.
-    coordinates = _Coordinates(problem, bounded=minimiser.lower() in _BOUNDED_MINIMISERS)
-    bounds = coordinates.bounds if coordinates.any_bounded else None
+    # Bounded coordinates move in their normalised constrained value (W7.6):
+    # in u, a box's sigmoid saturates and a line search runs out to where the
+    # objective goes flat, ending at a corner. The box is passed as bounds= to
+    # a projected minimiser and folded in by reflection for every other one
+    # (_PROJECTED_MINIMISERS says why). The objective's value is the same
+    # function of the point in either coordinate system.
+    coordinates = _Coordinates(problem, reflect=minimiser.lower() not in _PROJECTED_MINIMISERS)
+    bounds = coordinates.bounds_argument
 
     def negative_w(w: np.ndarray) -> float:
         return negative(coordinates.from_w(w))
@@ -1098,7 +1118,7 @@ def _polish(
     """
     from scipy.optimize import minimize
 
-    coordinates = _Coordinates(problem)
+    coordinates = _Coordinates(problem, reflect=True)
 
     def negative(w: np.ndarray) -> float:
         value = objective(coordinates.from_w(w))
@@ -1108,7 +1128,7 @@ def _polish(
         negative,
         coordinates.to_w(u0),
         method="Powell",
-        bounds=coordinates.bounds if coordinates.any_bounded else None,
+        bounds=coordinates.bounds_argument,
         options={"maxfev": int(evaluations)},
     )
     x = coordinates.from_w(np.asarray(result.x, dtype=float))

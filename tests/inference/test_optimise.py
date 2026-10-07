@@ -296,9 +296,12 @@ class TestBoundedCoordinates:
         assert optimum.coordinates == ("unconstrained", "constrained")
         assert optimise(agreement_problem(), starts=1).coordinates == ("unconstrained",)
 
-    def test_a_minimiser_that_ignores_bounds_moves_in_u(self) -> None:
-        optimum = optimise(flat_problem(), method="scipy", starts=1, minimiser="CG")
-        assert optimum.coordinates == ("unconstrained", "unconstrained")
+    def test_a_minimiser_without_bounds_moves_in_reflected_coordinates(self) -> None:
+        optimum = optimise(agreement_problem(), method="scipy", starts=1, minimiser="CG")
+        assert optimum.coordinates == ("unconstrained",)
+        optimum = optimise(edge_problem(), method="scipy", starts=1, minimiser="Nelder-Mead")
+        assert optimum.coordinates == ("constrained", "constrained", "unconstrained")
+        assert 0.0 < optimum.constrained["model.slope"] <= 1.0
 
     def test_the_coordinate_map_is_normalised_and_round_trips(self) -> None:
         """A box on ``[0, 1]`` (a decade-spanning positive one in its logarithm),
@@ -313,15 +316,22 @@ class TestBoundedCoordinates:
             [Dataset(AGREEMENT_DATA)],
             seed=SEED,
         )
-        coordinates = _Coordinates(problem)
         theta = problem.parameters.pack({"model.norm": 1e-15, "model.index": -0.75})
         u0 = problem.unconstrain(theta)
-        w = coordinates.to_w(u0)
-        np.testing.assert_allclose(w, [0.5, 0.75], rtol=1e-12)
-        np.testing.assert_allclose(coordinates.from_w(w), u0, rtol=1e-9)
-        assert coordinates.bounds == [(1e-10, 1.0 - 1e-10)] * 2
-        # a point on the bound maps strictly inside, so u stays finite
-        assert np.all(np.isfinite(coordinates.from_w(np.array([0.0, 1.0]))))
+        projected = _Coordinates(problem, reflect=False)
+        reflected = _Coordinates(problem, reflect=True)
+        for coordinates in (projected, reflected):
+            w = coordinates.to_w(u0)
+            np.testing.assert_allclose(w, [0.5, 0.75], rtol=1e-12)
+            np.testing.assert_allclose(coordinates.from_w(w), u0, rtol=1e-9)
+            # a point on the bound maps strictly inside, so u stays finite
+            assert np.all(np.isfinite(coordinates.from_w(np.array([0.0, 1.0]))))
+        assert projected.bounds_argument == [(1e-10, 1.0 - 1e-10)] * 2
+        assert reflected.bounds_argument is None
+        # past a bound, the reflected map folds back: 1.25 is 0.75, -0.25 is 0.25
+        np.testing.assert_allclose(
+            reflected.from_w(np.array([1.25, -0.25])), reflected.from_w(np.array([0.75, 0.25]))
+        )
 
     @pytest.mark.parametrize("minimiser", ["Powell", "L-BFGS-B"])
     def test_a_mode_at_the_bounds_is_reached_and_named(self, minimiser: str) -> None:
