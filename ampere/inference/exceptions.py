@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from ampere.core.exceptions import ContractError
 
-__all__ = ["EngineError", "SamplingFailureWarning"]
+__all__ = ["BoundSaturationWarning", "EngineError", "SamplingFailureWarning"]
 
 
 class EngineError(ContractError):
@@ -44,5 +44,21 @@ class SamplingFailureWarning(UserWarning):
     A distinct class so that a caller can silence it, promote it to an error
     (``warnings.simplefilter("error", SamplingFailureWarning)``, which is a
     reasonable thing to do in a pipeline), or assert on it in a test, without
+    catching every other :class:`UserWarning` the stack emits.
+    """
+
+
+class BoundSaturationWarning(UserWarning):
+    """An optimiser converged with a coordinate at a bound of its support.
+
+    Raised once per :func:`~ampere.inference.optimise` call by the ``"scipy"``
+    route, naming every coordinate :func:`~ampere.inference.saturated_bounds`
+    finds: the line search ran to the bound, so the point may be a corner of
+    the box rather than a mode. The :class:`~ampere.results.Optimum` is still
+    returned — an absent component's abundance at its floor is a correct
+    answer — but an ensemble started around it collapses onto the bound.
+
+    A distinct class, as :class:`SamplingFailureWarning` is, so that a caller
+    can silence it, promote it to an error, or assert on it in a test without
     catching every other :class:`UserWarning` the stack emits.
     """

@@ -22,6 +22,19 @@ parametrisation rather than of the posterior. Every route here maximises the
 same function, and a conformance row holds the ``"scipy"`` and ``"map"``
 modes to ``1e-3`` in every free parameter on each fixture both run on.
 
+*Which coordinates a minimiser moves in* is a separate choice from the
+function's value (W7.6). The ``"scipy"`` route moves a coordinate with a
+``Logit`` box or a ``Log`` floor in its **constrained** value, with the bounds
+passed to :func:`scipy.optimize.minimize`, and every other coordinate in
+``u``: in ``u``, a box's sigmoid saturates and a Powell line search runs out
+to where the objective goes flat, which ended W6.7's eighteen-parameter
+NGC6302 fit at a corner of its box with nine coordinates at a bound. No
+Jacobian enters either way, because the objective never carried one.
+:attr:`Optimum.coordinates <ampere.results.Optimum.coordinates>` records the
+choice, and :func:`saturated_bounds` names a converged coordinate still at a
+bound — the route warns with
+:class:`~ampere.inference.BoundSaturationWarning` when there is one.
+
 On the native path the realisation only offers ``log_prob_unconstrained``, so
 the Jacobian term is **subtracted on the realised side**, and its own gradient
 supplied by central differences on the numpy contract path
@@ -42,8 +55,9 @@ The routes
     (Powell by default; ``minimiser="L-BFGS-B"`` selectable) on the numpy
     contract path — the harvested ``ScipyMinOpt`` shape
     (``docs/design/harvest/optim_only/``) re-expressed over
-    :class:`~ampere.core.dataset.FittingProblem`. The covariance is the
-    inverse of a central-difference Hessian.
+    :class:`~ampere.core.dataset.FittingProblem`, bounded coordinates moved
+    in their constrained value with ``bounds=`` (above). The covariance is
+    the inverse of a central-difference Hessian in ``u``.
 ``"map"``
     torch and jax: a gradient MAP through :func:`ampere.core.realise` —
     ``torch.optim.LBFGS`` (Adam as the fallback) or
@@ -70,6 +84,7 @@ from __future__ import annotations
 
 import json
 import math
+import warnings
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -79,15 +94,17 @@ from ampere.core.dataset import FittingProblem
 from ampere.results import Optimum, StartSummary, hash_of, provenance_attrs
 
 from .engine import draw_prior_positions, unconstrained_jacobian_correction
-from .exceptions import EngineError
+from .exceptions import BoundSaturationWarning, EngineError
 
 __all__ = [
     "OPTIMISE_METHODS",
+    "SATURATION_TOLERANCE",
     "WARM_START_GRID",
     "constrained_objective",
     "covariance_from_hessian",
     "finite_difference_hessian",
     "optimise",
+    "saturated_bounds",
     "warm_start_gp",
 ]
 
@@ -109,6 +126,39 @@ DEFAULT_TOLERANCE = 1e-8
 
 #: The options each route understands; anything else is refused by name.
 _SCIPY_OPTIONS = frozenset({"minimiser", "tol", "minimiser_options"})
+
+#: The :func:`scipy.optimize.minimize` methods that honour ``bounds=`` (by
+#: lower-cased name). With any other method the scipy route moves every
+#: coordinate in ``u``, as it did before W7.6, and records so in
+#: :attr:`~ampere.results.Optimum.coordinates`.
+_BOUNDED_MINIMISERS = frozenset(
+    {"powell", "l-bfgs-b", "nelder-mead", "tnc", "slsqp", "trust-constr", "cobyla", "cobyqa"}
+)
+
+#: How far inside a bound the box handed to the minimiser stops, as a
+#: fraction of the coordinate's scale (:func:`_bounded_entries`). A bounded
+#: minimiser may end exactly on a bound, where ``u`` is infinite; pulling the
+#: box in by this much keeps the converged point, and a prior draw that landed
+#: on a bound, strictly inside the support (``u`` within about ±23), and is far
+#: below :data:`SATURATION_TOLERANCE`, so a point pinned at the pulled-in
+#: bound is still reported as saturated.
+_BOUND_MARGIN = 1e-10
+
+#: :func:`saturated_bounds`' default: the fraction of a coordinate's scale (a
+#: box's width; a half-line's reference distance from its floor) within which
+#: a converged coordinate counts as sitting at its bound.
+SATURATION_TOLERANCE = 1e-3
+
+#: A positive box whose upper bound is at least this many times its lower one
+#: (a ``loguniform`` flux scale, say) moves in its normalised logarithm rather
+#: than its normalised value: a multiplicative parameter's degeneracy with the
+#: rest of the model is a straight ridge in its logarithm and a curved one in
+#: its value, and Powell's direction set stalls on the curve (W7.6, measured
+#: on ``examples/sed_composition``).
+_DECADE = 10.0
+
+#: The two entries :attr:`~ampere.results.Optimum.coordinates` takes.
+CONSTRAINED, UNCONSTRAINED = "constrained", "unconstrained"
 
 #: Relative floor on the Hessian's eigenvalues: below it the curvature is
 #: indistinguishable from zero at finite-difference precision, and a
@@ -135,6 +185,218 @@ def constrained_objective(problem: FittingProblem) -> Callable[[np.ndarray], flo
         return value if math.isfinite(value) else -math.inf
 
     return objective
+
+
+# ---------------------------------------------------------------------------
+# The coordinates a bounded minimiser moves in, and the bound check (W7.6)
+# ---------------------------------------------------------------------------
+
+
+def _bounds_of(bijection: Any) -> tuple[float | None, float | None] | None:
+    """``(lower, upper)`` of a ``Logit`` box or ``(lower, None)`` of a ``Log`` floor.
+
+    ``None`` for the identity and for any bijection whose bounds are not known
+    (a user's own, which the ``Bijection`` protocol gives no bounds accessor).
+    """
+    from ampere.core.parameter import Log, Logit
+
+    if isinstance(bijection, Logit):
+        lower, upper = float(bijection.lower), float(bijection.upper)
+        if math.isfinite(lower) and math.isfinite(upper):
+            return lower, upper
+    elif isinstance(bijection, Log):
+        lower = float(bijection.lower)
+        if math.isfinite(lower):
+            return lower, None
+    return None
+
+
+def _bounded_entries(
+    problem: FittingProblem,
+) -> list[tuple[slice, Any, float, bool, np.ndarray]]:
+    """``(slice, bijection, lower, boxed, scale)`` for each free parameter with known bounds.
+
+    *scale* (one entry per element of the slice) is what both the scipy
+    route's coordinates and :func:`saturated_bounds` measure distances in: a
+    box's width ``upper - lower``, or, for a half-line, the reference value's
+    distance from the floor (:attr:`FittingProblem.reference_values
+    <ampere.core.dataset.FittingProblem.reference_values>`, the prior median
+    unless the user set one) — a half-line has no width, and a fixed unit
+    would call every small-valued parameter (a GP amplitude of ``1e-4`` Jy, a
+    flux scale of ``1e-15``) saturated and leave a minimiser stepping in
+    units it cannot resolve. ``max(1, |lower|)`` stands in where the reference
+    is not above the floor.
+    """
+    parameters = problem.parameters
+    reference: np.ndarray | None = None
+    out: list[tuple[slice, Any, float, bool, np.ndarray]] = []
+    for name in parameters.free_names:
+        bijection = parameters[name].unconstraining_bijection()
+        known = _bounds_of(bijection)
+        if known is None:
+            continue
+        lower, upper = known
+        where = parameters.free_slice(name)
+        size = where.stop - where.start
+        if upper is not None:
+            out.append((where, bijection, lower, True, np.full(size, upper - lower)))
+            continue
+        if reference is None:
+            reference = np.asarray(
+                parameters.pack(dict(problem.reference_values)), dtype=float
+            ).reshape(-1)
+        distance = reference[where] - lower
+        fallback = max(1.0, abs(lower))
+        scale = np.where(np.isfinite(distance) & (distance > 0), distance, fallback)
+        out.append((where, bijection, lower, False, np.asarray(scale, dtype=float)))
+    return out
+
+
+class _Coordinates:
+    """The scipy route's mixed coordinates ``w`` over a problem's free vector.
+
+    A coordinate whose bijection is a ``Logit`` box or a ``Log`` floor moves
+    in its **constrained** value, normalised by its scale
+    (:func:`_bounded_entries`): ``w = (θ - lower) / scale``, so a box is
+    ``[0, 1]`` and a half-line ``[0, ∞)``, with those bounds (pulled in by
+    :data:`_BOUND_MARGIN`) passed to the minimiser. The normalisation is
+    affine, so it adds no curvature; it is there because scipy's bounded
+    line searches and Powell's initial directions work in absolute units, and
+    a flux scale of ``1e-15`` moved in its raw value is never resolved. A
+    positive box spanning :data:`_DECADE` or more moves in its normalised
+    logarithm, ``log(θ / lower) / log(upper / lower)``, still on ``[0, 1]``
+    and still bounded. Every
+    other coordinate moves in ``u`` unbounded; with ``bounded=False`` (a
+    minimiser that ignores ``bounds=``) every coordinate does. The
+    objective's value is the same function of the point whatever ``w`` is:
+    the map only changes the coordinates the line searches move in.
+    """
+
+    def __init__(self, problem: FittingProblem, *, bounded: bool = True) -> None:
+        size = int(problem.free_size)
+        self.kinds: list[str] = [UNCONSTRAINED] * size
+        self.bounds: list[tuple[float | None, float | None]] = [(None, None)] * size
+        self._pieces: list[tuple[slice, Any, float, np.ndarray, bool, float, float]] = []
+        if not bounded:
+            return
+        for where, bijection, lower, boxed, scale in _bounded_entries(problem):
+            low, high = _BOUND_MARGIN, (1.0 - _BOUND_MARGIN) if boxed else math.inf
+            ratio = float(np.min((lower + scale) / lower)) if boxed and lower > 0 else 0.0
+            logarithmic = ratio >= _DECADE
+            if logarithmic:
+                scale = np.log((lower + scale) / lower)
+            self._pieces.append((where, bijection, lower, scale, logarithmic, low, high))
+            for i in range(where.start, where.stop):
+                self.kinds[i] = CONSTRAINED
+                self.bounds[i] = (low, high if boxed else None)
+
+    @property
+    def any_bounded(self) -> bool:
+        return bool(self._pieces)
+
+    def to_w(self, u: np.ndarray) -> np.ndarray:
+        """``u`` to ``w``, a bounded coordinate clipped strictly inside its box."""
+        w = np.array(u, dtype=float).reshape(-1)
+        for where, bijection, lower, scale, logarithmic, low, high in self._pieces:
+            theta = np.asarray(bijection.constrain(w[where]), dtype=float).reshape(-1)
+            position = np.log(theta / lower) if logarithmic else theta - lower
+            w[where] = np.clip(position / scale, low, high)
+        return w
+
+    def from_w(self, w: np.ndarray) -> np.ndarray:
+        """``w`` to ``u``; a bounded coordinate is clipped inside first, so ``u`` is finite."""
+        u = np.array(w, dtype=float).reshape(-1)
+        for where, bijection, lower, scale, logarithmic, low, high in self._pieces:
+            position = np.clip(u[where], low, high) * scale
+            theta = lower * np.exp(position) if logarithmic else lower + position
+            u[where] = np.asarray(bijection.unconstrain(theta), dtype=float).reshape(-1)
+        return u
+
+
+def saturated_bounds(
+    problem: FittingProblem,
+    unconstrained: Any,
+    *,
+    tolerance: float = SATURATION_TOLERANCE,
+) -> tuple[str, ...]:
+    """The free labels whose value at *unconstrained* sits at a bound of its support.
+
+    A coordinate whose bijection is a ``Logit(lower, upper)`` box counts when
+    its constrained value lies within ``tolerance * (upper - lower)`` of
+    either end; one whose bijection is a ``Log(lower)`` half-line counts when
+    it lies within ``tolerance * (reference - lower)`` above the floor, the
+    reference being :attr:`FittingProblem.reference_values
+    <ampere.core.dataset.FittingProblem.reference_values>`' entry (the prior
+    median unless the user set one; ``max(1, |lower|)`` stands in when it is
+    not above the floor). The identity and any bijection without known
+    bounds never count.
+
+    An optimiser that ends here has run its line search into a bound: the
+    point may be a corner of the box rather than a mode, with the posterior
+    flat (or still rising) towards the edge in that direction. It is the check
+    :func:`optimise`'s ``"scipy"`` route runs on its converged point before it
+    warns with :class:`~ampere.inference.BoundSaturationWarning`, and the one a
+    caller deciding whether to start a sampler from an
+    :class:`~ampere.results.Optimum` should run (an ensemble ball drawn at a
+    bound collapses onto it).
+
+    Parameters
+    ----------
+    problem
+        The composed problem.
+    unconstrained
+        A packed unconstrained vector — typically ``optimum.unconstrained``.
+    tolerance
+        The fraction of the scale above, in ``[0, 0.5)``.
+
+    Returns
+    -------
+    tuple[str, ...]
+        The saturated coordinates' :meth:`free labels
+        <ampere.core.parameter.ParameterSet.free_labels>`, in layout order;
+        empty when none is.
+    """
+    tolerance = float(tolerance)
+    if not 0.0 <= tolerance < 0.5:
+        raise EngineError(
+            f"saturated_bounds: tolerance is a fraction of a bound's scale in [0, 0.5), got "
+            f"{tolerance}."
+        )
+    u = np.asarray(unconstrained, dtype=float).reshape(-1)
+    if u.size != problem.free_size:
+        raise EngineError(
+            f"saturated_bounds: the vector has {u.size} entries but the problem has "
+            f"{problem.free_size} free coordinates."
+        )
+    labels = problem.parameters.free_labels()
+    theta = problem.constrain(u)
+    flagged = np.zeros(u.size, dtype=bool)
+    for where, _, lower, boxed, scale in _bounded_entries(problem):
+        position = (theta[where] - lower) / scale
+        flagged[where] = position <= tolerance
+        if boxed:
+            flagged[where] |= position >= 1.0 - tolerance
+    return tuple(label for label, hit in zip(labels, flagged, strict=True) if hit)
+
+
+def _warn_if_saturated(problem: FittingProblem, unconstrained: np.ndarray, route: str) -> None:
+    """Warn once, naming every coordinate :func:`saturated_bounds` finds."""
+    saturated = saturated_bounds(problem, unconstrained)
+    if not saturated:
+        return
+    warnings.warn(
+        f"optimise({route!r}): the optimum sits at a bound of the support in "
+        f"{len(saturated)} coordinate(s): {', '.join(saturated)}. The line search ran to the "
+        f"bound, so the point may be a corner of the box rather than a mode: the posterior is "
+        f"flat, or still rising, towards the edge in that direction. An absent component's "
+        f"abundance at its floor is the harmless case; otherwise check those priors, and do not "
+        f"start an ensemble around this point (its ball collapses onto the bound). "
+        f"ampere.inference.saturated_bounds(problem, optimum.unconstrained, tolerance=...) "
+        f"re-runs the check at another tolerance (default {SATURATION_TOLERANCE:g} of the "
+        f"bound's scale).",
+        BoundSaturationWarning,
+        stacklevel=4,
+    )
 
 
 def finite_difference_hessian(
@@ -336,6 +598,7 @@ def build_optimum(
     message: str,
     evaluations: int,
     starts: tuple[StartSummary, ...],
+    coordinates: tuple[str, ...] | None = None,
 ) -> Optimum:
     """Assemble an :class:`Optimum` at *unconstrained*, scoring both conventions.
 
@@ -372,6 +635,7 @@ def build_optimum(
         evaluations=int(evaluations),
         starts=starts,
         provenance=provenance_attrs(problem, engine=f"optimise.{route}"),
+        coordinates=() if coordinates is None else coordinates,
     )
 
 
@@ -400,11 +664,29 @@ def _scipy_route(
         # a point the model cannot score is; NaN would poison a line search.
         return -value if math.isfinite(value) else math.inf
 
+    # Bounded coordinates move in their constrained value with the box passed
+    # (W7.6): in u, a box's sigmoid saturates and a line search runs out to
+    # where the objective goes flat, ending at a corner. The objective's value
+    # is the same function of the point in either coordinate system.
+    coordinates = _Coordinates(problem, bounded=minimiser.lower() in _BOUNDED_MINIMISERS)
+    bounds = coordinates.bounds if coordinates.any_bounded else None
+
+    def negative_w(w: np.ndarray) -> float:
+        return negative(coordinates.from_w(w))
+
     summaries: list[StartSummary] = []
     best: Any = None
+    best_u: np.ndarray | None = None
     for theta in positions:
         u0 = problem.unconstrain(theta)
-        result = minimize(negative, u0, method=minimiser, tol=tol, options=minimiser_options)
+        result = minimize(
+            negative_w,
+            coordinates.to_w(u0),
+            method=minimiser,
+            tol=tol,
+            bounds=bounds,
+            options=minimiser_options,
+        )
         value = -float(result.fun)
         status = "converged" if bool(result.success) else f"not converged: {result.message}"
         if not math.isfinite(value):
@@ -412,15 +694,21 @@ def _scipy_route(
         summaries.append(StartSummary(start_hash(u0), value, status))
         if math.isfinite(value) and (best is None or value > -float(best.fun)):
             best = result
+            best_u = coordinates.from_w(np.asarray(result.x, dtype=float))
     if best is None:
         raise EngineError(
             f"optimise('scipy'): none of the {len(positions)} starts ended at a point the "
             f"problem can score. problem.failure_summary() says why:\n{problem.failure_summary()}"
         )
-    mode = np.asarray(best.x, dtype=float)
+    assert best_u is not None
+    mode = best_u
     before = calls
+    # The covariance stays in u (results.md §4): at a bound-adjacent optimum
+    # this Hessian is flat in the saturated direction and may be refused,
+    # which is the degenerate case the warning below names.
     hessian = finite_difference_hessian(lambda u: -objective(u), mode)
     covariance, refusal = covariance_from_hessian(hessian)
+    _warn_if_saturated(problem, mode, "scipy")
     return build_optimum(
         problem,
         route="scipy",
@@ -431,6 +719,7 @@ def _scipy_route(
         message=f"scipy.optimize.minimize({minimiser!r}): {best.message}",
         evaluations=before + _hessian_calls(mode.size),
         starts=tuple(summaries),
+        coordinates=tuple(coordinates.kinds),
     )
 
 
@@ -795,17 +1084,34 @@ _VI_POLISH_EVALUATIONS = 200
 
 
 def _polish(
-    objective: Callable[[np.ndarray], float], u0: np.ndarray, evaluations: int
+    problem: FittingProblem,
+    objective: Callable[[np.ndarray], float],
+    u0: np.ndarray,
+    evaluations: int,
 ) -> np.ndarray | None:
-    """A budgeted Powell run up *objective* from *u0*; ``None`` if it ends off the support."""
+    """A budgeted Powell run up *objective* from *u0*; ``None`` if it ends off the support.
+
+    In the scipy route's mixed coordinates (:class:`_Coordinates`) — bounded
+    coordinates in their constrained value with the box passed — for the same
+    reason: a line search in ``u`` runs out along a saturating sigmoid. The
+    polished point is returned in ``u``.
+    """
     from scipy.optimize import minimize
 
-    def negative(u: np.ndarray) -> float:
-        value = objective(u)
+    coordinates = _Coordinates(problem)
+
+    def negative(w: np.ndarray) -> float:
+        value = objective(coordinates.from_w(w))
         return -value if math.isfinite(value) else math.inf
 
-    result = minimize(negative, u0, method="Powell", options={"maxfev": int(evaluations)})
-    x = np.asarray(result.x, dtype=float)
+    result = minimize(
+        negative,
+        coordinates.to_w(u0),
+        method="Powell",
+        bounds=coordinates.bounds if coordinates.any_bounded else None,
+        options={"maxfev": int(evaluations)},
+    )
+    x = coordinates.from_w(np.asarray(result.x, dtype=float))
     return x if math.isfinite(float(result.fun)) and np.all(np.isfinite(x)) else None
 
 
@@ -844,7 +1150,7 @@ def _vi_route(problem: FittingProblem, positions: np.ndarray, options: dict[str,
     best = int(np.argmax(scores))
     chosen = positions[best]
     u0 = problem.unconstrain(chosen)
-    polished = _polish(objective, u0, _VI_POLISH_EVALUATIONS * problem.free_size)
+    polished = _polish(problem, objective, u0, _VI_POLISH_EVALUATIONS * problem.free_size)
     if polished is not None and objective(polished) > scores[best]:
         chosen = problem.constrain(polished)
     engine = VIEngine(problem)

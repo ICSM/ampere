@@ -27,8 +27,17 @@ import scipy.stats as st
 
 from ampere.backends.reference import PowerLaw
 from ampere.core import Dataset, FittingProblem, Model, Parameter, Spectrum
-from ampere.inference import EmceeEngine, EngineError, optimise, warm_start_gp
+from ampere.inference import (
+    BoundSaturationWarning,
+    EmceeEngine,
+    EngineError,
+    optimise,
+    saturated_bounds,
+    warm_start_gp,
+)
 from ampere.inference._optimise import (
+    _Coordinates,
+    _polish,
     constrained_objective,
     covariance_from_hessian,
     finite_difference_hessian,
@@ -103,6 +112,35 @@ class OnlySlope(Model):
 def flat_problem() -> FittingProblem:
     observed = Spectrum(GRID * u.um, 2.0 * GRID * u.Jy, uncertainty=np.full(4, 0.1) * u.Jy)
     return FittingProblem(OnlySlope(), [Dataset(observed)], seed=SEED)
+
+
+# -- a mode at the bounds: a box the data push past, a half-line the prior pins -
+
+
+class AtTheEdge(Model):
+    """``slope * x`` with ``slope`` in ``[0, 1]`` and data at slope 2; ``width`` unused.
+
+    The posterior rises to ``slope = 1`` (a box's upper bound) and, with a
+    flat likelihood under a half-normal prior, to ``width = 0`` (a ``Log``
+    floor): both coordinates of the true constrained-space mode sit at a
+    bound, which is what :func:`saturated_bounds` must name.
+    """
+
+    def __init__(self) -> None:
+        self.register_buffer("wavelength", GRID, unit=u.um)
+        self.register_parameter(Parameter("slope", st.uniform(0.0, 1.0)))
+        self.register_parameter(Parameter("width", st.halfnorm(scale=1.0)))
+        self.register_parameter(Parameter("offset", st.norm(0.0, 1.0)))
+
+    def evaluate(self, **values: Any) -> Spectrum:
+        ctx = self.context(values)
+        flux = ctx["slope"] * ctx["wavelength"] + 0.0 * ctx["width"] + ctx["offset"]
+        return Spectrum(ctx["wavelength"] * u.um, flux * u.Jy)
+
+
+def edge_problem() -> FittingProblem:
+    observed = Spectrum(GRID * u.um, 2.0 * GRID * u.Jy, uncertainty=np.full(4, 0.1) * u.Jy)
+    return FittingProblem(AtTheEdge(), [Dataset(observed)], seed=SEED)
 
 
 # -- the four-parameter composition, sampled once -----------------------------
@@ -243,6 +281,134 @@ class TestRefusals:
         assert optimum.covariance_refusal is not None
         assert "not positive definite" in optimum.covariance_refusal
         assert optimum.constrained["model.slope"] == pytest.approx(2.0, abs=1e-2)
+
+
+# ---------------------------------------------------------------------------
+# W7.6: bounded coordinates, the bound check and its warning
+# ---------------------------------------------------------------------------
+
+
+class TestBoundedCoordinates:
+    def test_the_coordinates_are_recorded_per_label(self) -> None:
+        optimum = optimise(flat_problem(), method="scipy", starts=1)
+        assert optimum.free_labels == ("model.slope", "model.ignored")
+        # the identity moves in u; the uniform box in its own value
+        assert optimum.coordinates == ("unconstrained", "constrained")
+        assert optimise(agreement_problem(), starts=1).coordinates == ("unconstrained",)
+
+    def test_a_minimiser_that_ignores_bounds_moves_in_u(self) -> None:
+        optimum = optimise(flat_problem(), method="scipy", starts=1, minimiser="CG")
+        assert optimum.coordinates == ("unconstrained", "unconstrained")
+
+    def test_the_coordinate_map_is_normalised_and_round_trips(self) -> None:
+        """A box on ``[0, 1]`` (a decade-spanning positive one in its logarithm),
+        a half-line by its median's distance from the floor, the identity in u."""
+        problem = FittingProblem(
+            PowerLaw(
+                AGREEMENT_GRID,
+                norm=st.loguniform(1e-16, 1e-14),
+                index=st.uniform(-3.0, 3.0),
+                reference_wavelength=REFERENCE_WAVELENGTH,
+            ),
+            [Dataset(AGREEMENT_DATA)],
+            seed=SEED,
+        )
+        coordinates = _Coordinates(problem)
+        theta = problem.parameters.pack({"model.norm": 1e-15, "model.index": -0.75})
+        u0 = problem.unconstrain(theta)
+        w = coordinates.to_w(u0)
+        np.testing.assert_allclose(w, [0.5, 0.75], rtol=1e-12)
+        np.testing.assert_allclose(coordinates.from_w(w), u0, rtol=1e-9)
+        assert coordinates.bounds == [(1e-10, 1.0 - 1e-10)] * 2
+        # a point on the bound maps strictly inside, so u stays finite
+        assert np.all(np.isfinite(coordinates.from_w(np.array([0.0, 1.0]))))
+
+    @pytest.mark.parametrize("minimiser", ["Powell", "L-BFGS-B"])
+    def test_a_mode_at_the_bounds_is_reached_and_named(self, minimiser: str) -> None:
+        problem = edge_problem()
+        with pytest.warns(BoundSaturationWarning, match="model.slope, model.width") as caught:
+            optimum = optimise(problem, method="scipy", starts=2, minimiser=minimiser)
+        assert len(caught) == 1
+        assert optimum.coordinates == ("constrained", "constrained", "unconstrained")
+        assert np.all(np.isfinite(optimum.unconstrained))
+        assert optimum.constrained["model.slope"] == pytest.approx(1.0, abs=1e-6)
+        assert optimum.constrained["model.width"] == pytest.approx(0.0, abs=1e-3)
+        assert saturated_bounds(problem, optimum.unconstrained) == ("model.slope", "model.width")
+        # the message field is the optimiser's own, untouched by the warning
+        assert "bound" not in optimum.message
+
+    def test_an_interior_mode_does_not_warn(self) -> None:
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", BoundSaturationWarning)
+            optimise(agreement_problem(), method="scipy", starts=2)
+
+
+class TestSaturatedBounds:
+    def point(self, problem: FittingProblem, **values: float) -> np.ndarray:
+        return problem.unconstrain(problem.parameters.pack(problem.parameters.complete(values)))
+
+    def test_the_box_rule_is_a_fraction_of_the_width(self) -> None:
+        problem = edge_problem()
+        middle = {"model.width": 2.0, "model.offset": 0.0}
+        assert (
+            saturated_bounds(problem, self.point(problem, **middle, **{"model.slope": 0.5})) == ()
+        )
+        near = self.point(problem, **middle, **{"model.slope": 0.9995})
+        assert saturated_bounds(problem, near) == ("model.slope",)
+        assert saturated_bounds(problem, near, tolerance=1e-4) == ()
+        low = self.point(problem, **middle, **{"model.slope": 5e-4})
+        assert saturated_bounds(problem, low) == ("model.slope",)
+
+    def test_the_floor_rule_is_a_fraction_of_the_reference_distance(self) -> None:
+        """``width ~ halfnorm(1)``: its median, 0.674, is the floor's scale."""
+        problem = edge_problem()
+        others = {"model.slope": 0.5, "model.offset": 0.0}
+        assert saturated_bounds(
+            problem, self.point(problem, **others, **{"model.width": 5e-4})
+        ) == ("model.width",)
+        assert (
+            saturated_bounds(problem, self.point(problem, **others, **{"model.width": 2e-3})) == ()
+        )
+
+    def test_a_small_valued_half_line_is_not_saturated_at_its_median(self) -> None:
+        """A unit floor scale would call every value below ``1e-3`` saturated."""
+        problem = FittingProblem(
+            PowerLaw(
+                AGREEMENT_GRID,
+                norm=st.halfnorm(scale=1e-6),
+                index=AGREEMENT_INDEX,
+                reference_wavelength=REFERENCE_WAVELENGTH,
+            ),
+            [Dataset(AGREEMENT_DATA)],
+            seed=SEED,
+        )
+        assert saturated_bounds(problem, self.point(problem, **{"model.norm": 6.7e-7})) == ()
+        assert saturated_bounds(problem, self.point(problem, **{"model.norm": 1e-10})) == (
+            "model.norm",
+        )
+
+    def test_an_identity_never_saturates(self) -> None:
+        problem = edge_problem()
+        far = self.point(problem, **{"model.slope": 0.5, "model.width": 2.0, "model.offset": 1e9})
+        assert saturated_bounds(problem, far) == ()
+
+    def test_refusals_by_name(self) -> None:
+        problem = edge_problem()
+        with pytest.raises(EngineError, match="tolerance"):
+            saturated_bounds(problem, np.zeros(3), tolerance=0.5)
+        with pytest.raises(EngineError, match="3 free coordinates"):
+            saturated_bounds(problem, np.zeros(2))
+
+    def test_the_vi_polish_stays_inside_the_support(self) -> None:
+        problem = edge_problem()
+        objective = constrained_objective(problem)
+        u0 = np.zeros(3)
+        polished = _polish(problem, objective, u0, 600)
+        assert polished is not None and np.all(np.isfinite(polished))
+        assert objective(polished) > objective(u0)
+        assert problem.constrain(polished)[0] == pytest.approx(1.0, abs=1e-3)
 
 
 # ---------------------------------------------------------------------------
