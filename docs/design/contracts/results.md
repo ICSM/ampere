@@ -308,6 +308,16 @@ evaluation count and per-start summaries as canonical JSON), so the tree
 round-trips through `to_netcdf`/`from_netcdf` and `Optimum.from_datatree`.
 Nothing that reads a run's `posterior` can mistake a mode for a draw, which
 is the point: ArviZ would otherwise compute an R-hat over one value.
+*(Amended W7.6, 2026-10-07.)* The record gains one frozen field,
+`coordinates`: one entry per free label, `"constrained"` or
+`"unconstrained"`, naming the coordinates the minimiser moved that entry in
+(the `"scipy"` route moves a `Logit` box or a `Log` floor in its normalised
+constrained value, kept inside the support by `bounds=` or by reflection;
+every other route moves `u`), written as
+`ampere_optimum_coordinates` in canonical JSON and read back as all
+`"unconstrained"` when absent (an optimum stored by the beta); the
+covariance stays in the unconstrained coordinates and the identity hash does
+not see the field.
 
 ### Array-valued parameters are never 10⁵ names
 
@@ -1394,6 +1404,7 @@ training set and is what the composed problem is for.
 | Training sets are netCDF | NaN is native, coordinates are stored once, and the spec hash sits in the attributes where invalidation can see it |
 | `ResultsError` lives in `ampere/core/exceptions.py`, re-exported here | §15 R5 asked for the move and it was made the same day the ruling landed (2026-09-03): one class, two import paths, no call-site changes — pinned by a test at the freeze |
 | A point estimate is an `Optimum` with an `optimum` group, never a one-draw `posterior` *(Added W6.7)* | A mode stored as a posterior would be diagnosed, plotted and reweighted as a sample; its own group keeps it out of every posterior reader while the one results format and the netCDF route still carry it, and `ampere_start` (schema 9) ties a seeded run back to it |
+| An `Optimum` records the coordinates its minimiser moved in *(Added W7.6)* | The scipy route now moves bounded coordinates in their constrained value (a sigmoid-saturated line search in `u` ended W6.7's NGC6302 fit at a box corner); the same point can be reached either way, so the choice is provenance, not identity — a field beside the vector, absent-means-`"unconstrained"` so every beta-stored optimum reads unchanged, and no schema bump because nothing a run records moves |
 
 ## 13. Deliberate limitations of v1.8
 
