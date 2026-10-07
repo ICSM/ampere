@@ -242,8 +242,10 @@ class TestTheRunRecordsWhichPathItTook:
     def test_the_posterior_is_the_same_run_either_way(self, kit: Kit) -> None:
         """Same seed, same declaration, same draws: the fast path is a change
         of arithmetic route, not of the chain the sampler walks."""
-        fast = EmceeEngine(_problem(kit), walkers=8).run(steps=8, burn_in=2)
-        slow = EmceeEngine(_problem(kit), walkers=8, use_realisation=False).run(steps=8, burn_in=2)
+        fast = EmceeEngine(_problem(kit), walkers=8).run(steps=8, burn_in=2, initial="prior")
+        slow = EmceeEngine(_problem(kit), walkers=8, use_realisation=False).run(
+            steps=8, burn_in=2, initial="prior"
+        )
         for name in ("model.norm", "model.index"):
             assert np.asarray(fast["posterior"][name]) == pytest.approx(
                 np.asarray(slow["posterior"][name]), abs=1e-8
