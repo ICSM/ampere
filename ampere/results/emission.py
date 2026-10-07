@@ -666,6 +666,12 @@ def emit(
     )
     tree.attrs[f"{ATTR_PREFIX}chains"] = chains
     tree.attrs[f"{ATTR_PREFIX}draws"] = count
+    # W7.12: a chain that has not converged is said so where the run is made.
+    # Lazy: `.diagnostics` imports this module. The stack level reaches the
+    # caller of an engine's run() through Engine.finish.
+    from .diagnostics import warn_if_unconverged
+
+    warn_if_unconverged(tree, stacklevel=4)
     return tree
 
 

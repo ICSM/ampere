@@ -106,6 +106,8 @@ never looks at a figure.
 from __future__ import annotations
 
 import dataclasses
+import warnings
+from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
@@ -125,13 +127,22 @@ from ._plotting import (
     select_datasets,
 )
 from .derived import GP_LOCALISATION_GROUP, RESIDUALS_GROUP, base_label, component_variable
-from .emission import CHAIN_DIM, DRAW_DIM, LOG_LIKELIHOOD_GROUP, _require_arviz
+from .emission import (
+    CHAIN_DIM,
+    DRAW_DIM,
+    LOG_LIKELIHOOD_GROUP,
+    POSTERIOR_GROUP,
+    _require_arviz,
+)
+from .provenance import ATTR_PREFIX
 
 __all__ = [
     "GP_LOCALISATION_PROVENANCE",
     "WHITENESS_STREAM",
     "ChiSquareCheck",
+    "ConvergenceVerdict",
     "WhitenessTest",
+    "check_convergence",
     "chi_square_pvalue",
     "coupling_matrix_summary",
     "gp_localisation_datasets",
@@ -139,6 +150,7 @@ __all__ = [
     "residual_whiteness",
     "separation_binned_autocorrelation",
     "summary",
+    "warn_if_unconverged",
 ]
 
 #: ``AnomalyScore.provenance`` for family C, as ``diagnostics.md`` §5 names it.
@@ -989,7 +1001,9 @@ def summary(tree: Any, **kwargs: Any) -> Any:
     the returned table is arviz's own — plus that one warning, on the same
     :class:`~ampere.results.plots.ResultsWarning`
     :func:`~ampere.results.plots.plot_trace` raises for the identical reason,
-    so a caller catching one catches both.
+    so a caller catching one catches both. Since W7.12 a chain-based run that
+    fails :func:`check_convergence` at its default thresholds also warns, on the
+    same class, with the verdict's text (the failing variables and the remedy).
 
     Parameters
     ----------
@@ -1006,8 +1020,174 @@ def summary(tree: Any, **kwargs: Any) -> Any:
     from .plots import warn_if_approximate
 
     warn_if_approximate(tree, what="a summary table")
+    # W7.12: the verdict, after the approximation warning and on its guard --
+    # an approximate run (or a nested sampler's resample) is never warned here.
+    warn_if_unconverged(tree, stacklevel=2)
     arviz = _require_arviz()
     return arviz.summary(tree, **kwargs)
+
+
+#: The engines whose stored draws are a nested sampler's equal-weighted
+#: resample: ``ampere_approximation`` is ``"none"`` for them (the draws are
+#: exact), but they are not a Markov chain, so an R-hat says nothing about
+#: them and :func:`check_convergence` is not applicable (W7.12).
+_NESTED_SAMPLERS = frozenset({"dynesty", "nautilus", "ultranest"})
+
+
+@dataclasses.dataclass(frozen=True)
+class ConvergenceVerdict:
+    """:func:`check_convergence`'s answer: did the chains converge, and if not, what next.
+
+    ``applicable`` is ``False`` for a run that is not a Markov chain (an
+    approximate run — ``ampere_approximation`` not ``"none"`` — or a nested
+    sampler's resample) or that has no posterior to judge; ``passed`` is then
+    ``True``, since there is nothing to fail, and ``remedy`` says why no
+    verdict was given. ``failing`` maps every variable that fails either
+    threshold to its ``(max R-hat, min bulk ESS)`` over its elements.
+    """
+
+    applicable: bool
+    passed: bool
+    rhat_threshold: float
+    ess_threshold: float
+    failing: Mapping[str, tuple[float, float]]
+    remedy: str
+
+    def __str__(self) -> str:
+        if not self.applicable:
+            return f"No convergence verdict: {self.remedy}"
+        criteria = f"R-hat below {self.rhat_threshold:g}, bulk ESS at least {self.ess_threshold:g}"
+        if self.passed:
+            return f"Converged: every variable has {criteria}."
+        listing = "; ".join(
+            f"{name} (R-hat {rhat:.3g}, ESS {ess:.0f})" for name, (rhat, ess) in self.failing.items()
+        )
+        return f"Not converged ({criteria}): {listing}. {self.remedy}"
+
+
+def check_convergence(tree: Any, *, rhat: float = 1.05, ess: float = 100) -> ConvergenceVerdict:
+    """Whether a chain-based run converged, which variables did not, and what to do about it.
+
+    **W7.12.** The rank-normalised split R-hat (:func:`arviz.rhat`) and the bulk
+    effective sample size (:func:`arviz.ess`) of every ``posterior`` variable —
+    for an array parameter, the worst element: the largest R-hat and the
+    smallest ESS — held to *rhat* (strictly below) and *ess* (at least). The
+    remedy, in words, follows the pattern of the failures: only the ESS short
+    asks for more steps; most variables failing R-hat asks for more walkers
+    and more steps; a run that started from the prior (``ampere_start_kind``)
+    is told about the optimiser's start, or the fallback that put it there;
+    and one variable failing alone is a reparameterisation's case.
+
+    :func:`~ampere.results.emit` and :func:`summary` issue a
+    :class:`~ampere.results.plots.ResultsWarning` carrying this verdict's text
+    when a chain-based run fails it; a run that is not a Markov chain (an
+    approximate run, a nested sampler's resample) gets ``applicable=False``
+    and no warning.
+
+    Parameters
+    ----------
+    tree
+        The run.
+    rhat
+        Every variable's R-hat must lie strictly below this.
+    ess
+        Every variable's bulk ESS must be at least this.
+    """
+    rhat_threshold, ess_threshold = float(rhat), float(ess)
+    attrs = getattr(tree, "attrs", {})
+
+    def inapplicable(why: str) -> ConvergenceVerdict:
+        return ConvergenceVerdict(False, True, rhat_threshold, ess_threshold, {}, why)
+
+    approximation = attrs.get(f"{ATTR_PREFIX}approximation", "none")
+    if approximation != "none":
+        return inapplicable(
+            f"the run's ampere_approximation is {approximation!r}; its draws are not a Markov "
+            f"chain, so R-hat and ESS do not apply."
+        )
+    engine = attrs.get(f"{ATTR_PREFIX}engine", "")
+    if engine in _NESTED_SAMPLERS:
+        return inapplicable(
+            f"{engine} is a nested sampler; its draws are an equal-weighted resample, not a "
+            f"Markov chain, so R-hat and ESS do not apply."
+        )
+    try:
+        posterior = tree[POSTERIOR_GROUP].dataset
+    except KeyError:
+        return inapplicable("the run has no posterior group.")
+    if not posterior.data_vars or posterior.sizes.get(DRAW_DIM, 0) < 4:
+        return inapplicable("the run has too few draws for R-hat and ESS (fewer than four).")
+    arviz = _require_arviz()
+    with warnings.catch_warnings():
+        # A constant chain (a walker pinned to a bound) gives a NaN R-hat with
+        # a RuntimeWarning of numpy's; the NaN is the verdict's to report.
+        warnings.simplefilter("ignore", RuntimeWarning)
+        # An ensemble stores one chain per walker, so a short run has more
+        # chains than draws; arviz's naming check says so, which is noise here.
+        warnings.filterwarnings("ignore", message="Found chain dimension", category=UserWarning)
+        rhats = arviz.rhat(posterior)
+        esses = arviz.ess(posterior, method="bulk")
+    failing: dict[str, tuple[float, float]] = {}
+    failing_rhat: list[str] = []
+    for name in posterior.data_vars:
+        r_values = np.asarray(rhats[name], dtype=float).ravel()
+        e_values = np.asarray(esses[name], dtype=float).ravel()
+        worst_rhat = float(np.nan) if np.any(np.isnan(r_values)) else float(np.max(r_values))
+        worst_ess = float(np.nan) if np.any(np.isnan(e_values)) else float(np.min(e_values))
+        bad_rhat = not worst_rhat < rhat_threshold
+        bad_ess = not worst_ess >= ess_threshold
+        if bad_rhat or bad_ess:
+            failing[str(name)] = (worst_rhat, worst_ess)
+        if bad_rhat:
+            failing_rhat.append(str(name))
+    if not failing:
+        return ConvergenceVerdict(True, True, rhat_threshold, ess_threshold, {}, "")
+    total = len(posterior.data_vars)
+    if not failing_rhat:
+        remedy = (
+            "Run more steps: every R-hat passes, but the chains are too short for the "
+            "effective sample size asked for."
+        )
+    elif 2 * len(failing_rhat) > total:
+        remedy = (
+            f"Run more walkers and more steps: {len(failing_rhat)} of {total} "
+            f"variable{'s have' if total > 1 else ' has'} not mixed."
+        )
+    else:
+        remedy = "Run more steps."
+    if attrs.get(f"{ATTR_PREFIX}start_kind") == "prior":
+        fallback = attrs.get(f"{ATTR_PREFIX}start_fallback")
+        if fallback:
+            remedy += (
+                f" The run started from prior draws because the default start fell back: "
+                f"{fallback}"
+            )
+        else:
+            remedy += (
+                " Start from the optimiser's mode (the default; this run passed "
+                "initial='prior')."
+            )
+    if len(failing) == 1 and total > 1:
+        (name,) = failing
+        remedy += (
+            f" Only {name} fails while the rest pass: consider a reparameterisation of {name} "
+            f"(a log or logit on it, or a Derived form)."
+        )
+    return ConvergenceVerdict(True, False, rhat_threshold, ess_threshold, failing, remedy)
+
+
+def warn_if_unconverged(tree: Any, *, stacklevel: int = 2) -> None:
+    """A :class:`~ampere.results.plots.ResultsWarning` with the verdict's text when a chain fails.
+
+    The default thresholds of :func:`check_convergence`; silent for a run the
+    verdict does not apply to (an approximate run, a nested sampler's resample).
+    """
+    verdict = check_convergence(tree)
+    if verdict.applicable and not verdict.passed:
+        # Lazy, as in `summary`: `.plots` imports this module.
+        from .plots import ResultsWarning
+
+        warnings.warn(str(verdict), ResultsWarning, stacklevel=stacklevel + 1)
 
 
 def coupling_matrix_summary(
