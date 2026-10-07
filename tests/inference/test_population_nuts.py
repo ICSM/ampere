@@ -19,7 +19,10 @@ population's own scatter), which is deliberate: a centred hierarchical
 parameterisation funnels when the data say little about each θ_i, and a row
 that failed for *that* reason would be testing Neal's funnel rather than
 ampere's lowering. The non-centred reparameterisation is a user-level
-declaration and a separate question.
+declaration and a separate question — answered since W7.0 by
+:class:`TestTheNonCentredPopulation`, on the same fifty members observed
+with a noise at which the data barely constrain each one (the funnel's own
+regime).
 """
 
 from __future__ import annotations
@@ -36,6 +39,7 @@ import scipy.stats as st
 
 from ampere.core import (
     Dataset,
+    Derived,
     FittingProblem,
     GaussianFamily,
     HierarchicalPrior,
@@ -119,12 +123,35 @@ def synthetic_indices() -> np.ndarray:
     return TRUE_MU + TRUE_SIGMA * (raw - raw.mean()) / raw.std()
 
 
-def population_problem(kit: Kit) -> FittingProblem:
+def centred_members() -> list[Parameter]:
+    """``index_i ~ Normal(mu, sigma)``: the declaration W5.12 landed."""
+    return [Parameter("index", HierarchicalPrior("norm", {"loc": "mu", "scale": "sigma"}))]
+
+
+def non_centred_members() -> list[Parameter]:
+    """The same density sampled in ``(mu, sigma, z)`` (**W7.0**).
+
+    ``z`` is declared by no member model, so it is internal: sampled on the
+    population's own component and routed nowhere. The derived member is
+    spelt ``index`` because a population routes a member under its own bare
+    name, and ``index`` is the name ``PowerLaw`` takes it under — this is the
+    memo's derived ``theta``, in the place the centred ``index`` occupied.
+    """
+    return [
+        Parameter("z", st.norm(0.0, 1.0)),
+        Parameter("index", Derived("mu + sigma * z")),
+    ]
+
+
+def population_problem(
+    kit: Kit, members: list[Parameter] | None = None, *, noise: float = NOISE
+) -> FittingProblem:
     """Fifty power-law members, declared as one population.
 
     ``norm`` is held fixed on every member: the population is about the
     *index*, and fifty nuisance amplitudes would double the sampler's
-    dimension to say nothing extra about it.
+    dimension to say nothing extra about it. *members* defaults to the
+    centred declaration.
     """
     indices = synthetic_indices()
     rng = np.random.default_rng(SEED + 1)
@@ -135,8 +162,8 @@ def population_problem(kit: Kit) -> FittingProblem:
         truth = NORM * GRID**value
         observed = Spectrum(
             GRID * u.micron,
-            (truth + rng.normal(0.0, NOISE, GRID.size)) * u.Jy,
-            uncertainty=np.full(GRID.size, NOISE) * u.Jy,
+            (truth + rng.normal(0.0, noise, GRID.size)) * u.Jy,
+            uncertainty=np.full(GRID.size, noise) * u.Jy,
         )
         models[label] = kit.module.PowerLaw(
             GRID,
@@ -154,7 +181,7 @@ def population_problem(kit: Kit) -> FittingProblem:
         )
     declaration = Population(
         "objects",
-        members=[Parameter("index", HierarchicalPrior("norm", {"loc": "mu", "scale": "sigma"}))],
+        members=centred_members() if members is None else members,
         hyperpriors=[
             Parameter("mu", st.norm(-1.0, 1.0)),
             Parameter("sigma", st.halfnorm(0.0, 1.0)),
@@ -245,3 +272,80 @@ class TestRecovery:
         posterior_means = drawn.reshape(-1, MEMBERS).mean(axis=0)
         assert posterior_means.std() > 0.5 * TRUE_SIGMA
         assert np.corrcoef(posterior_means, synthetic_indices())[0, 1] > 0.9
+
+
+# ---------------------------------------------------------------------------
+# W7.0: the non-centred declaration
+# ---------------------------------------------------------------------------
+
+#: The per-member noise of the non-centred comparison: fifty times the
+#: recovery rows' own, so each member's three points barely constrain its
+#: index (an index posterior several population scatters wide) and the
+#: population prior does most of the work — the regime in which the centred
+#: declaration funnels. With the recovery rows' informative noise the
+#: centred form is the right one and neither form diverges (measured at
+#: dispatch: zero divergences each on torch and jax, the non-centred chain
+#: mixing far more slowly), so that comparison would test nothing; this is
+#: the one the reparameterisation exists for.
+WEAK_NOISE = 1.0
+
+
+@pytest.fixture(scope="module")
+def declarations(kit: Kit) -> dict[str, Any]:
+    """The centred and the non-centred run, at the same budget and seed."""
+    runs: dict[str, Any] = {}
+    for label, members in (("centred", centred_members()), ("non-centred", non_centred_members())):
+        problem = population_problem(kit, members, noise=WEAK_NOISE)
+        with warnings.catch_warnings():
+            # The centred run is *expected* to diverge here; the count is the
+            # assertion, and the driver's warning about it is noise.
+            warnings.simplefilter("ignore")
+            runs[label] = NUTSEngine(problem).run(draws=300, warmup=300, chains=1)
+    return runs
+
+
+class TestTheNonCentredPopulation:
+    """W7.0: ``z`` internal, ``index`` derived — the same density, a better geometry."""
+
+    def test_it_samples_z_and_derives_the_index(self, kit: Kit) -> None:
+        problem = population_problem(kit, non_centred_members(), noise=WEAK_NOISE)
+        assert problem.free_size == MEMBERS + 2
+        assert problem.parameters.free_names == ("objects.mu", "objects.sigma", "objects.z")
+        assert problem.parameters.derived_names == ("objects.index",)
+        elements = {
+            binding.component: binding.index
+            for binding in problem.mapping.bindings
+            if binding.index is not None
+        }
+        assert elements == {f"obj{index}": index for index in range(MEMBERS)}
+
+    @pytest.mark.parametrize(
+        ("name", "truth"), [("objects.mu", TRUE_MU), ("objects.sigma", TRUE_SIGMA)]
+    )
+    def test_the_hyperparameter_is_inside_the_central_95_percent(
+        self, declarations: dict[str, Any], name: str, truth: float
+    ) -> None:
+        samples = TestRecovery.draws(declarations["non-centred"], name)
+        lower, upper = np.quantile(samples, [0.025, 0.975])
+        assert lower <= truth <= upper, (
+            f"{name}: truth {truth} outside the central 95 % [{lower}, {upper}] "
+            f"of {samples.size} non-centred draws (mean {samples.mean()})"
+        )
+
+    def test_it_diverges_less_than_the_centred_declaration(
+        self, declarations: dict[str, Any]
+    ) -> None:
+        centred = int(declarations["centred"].attrs["ampere_nuts_divergences"])
+        non_centred = int(declarations["non-centred"].attrs["ampere_nuts_divergences"])
+        assert non_centred < centred, (centred, non_centred)
+
+    def test_the_posterior_carries_the_derived_index(self, declarations: dict[str, Any]) -> None:
+        run = declarations["non-centred"]
+        assert run.attrs["ampere_derived"] == '["objects.index"]'
+        posterior = run.posterior
+        mu = np.asarray(posterior["objects.mu"].values)[..., None]
+        sigma = np.asarray(posterior["objects.sigma"].values)[..., None]
+        z = np.asarray(posterior["objects.z"].values)
+        np.testing.assert_allclose(
+            np.asarray(posterior["objects.index"].values), mu + sigma * z, rtol=1e-12
+        )
