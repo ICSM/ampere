@@ -355,6 +355,15 @@ class TestTheNonCentredPopulation:
         for index, label in enumerate(object_labels()):
             assert routed[label] == {"theta": pytest.approx(0.5 + 2.0 * index)}
 
+    def test_a_plate_may_derive_a_member_from_a_sibling_member(self) -> None:
+        """``Plate.expand`` qualifies a derived member's bindings onto its siblings too."""
+        plated = non_centred().as_plate().to_parameter_set()
+        assert plated["objects.theta"].references == ("objects.mu", "objects.sigma", "objects.z")
+        values = plated.complete(
+            {"objects.mu": 1.0, "objects.sigma": 2.0, "objects.z": np.arange(MEMBERS, dtype=float)}
+        )
+        np.testing.assert_array_equal(values["objects.theta"], 1.0 + 2.0 * np.arange(MEMBERS))
+
     def test_an_undeclared_member_that_nothing_derives_from_is_refused(self) -> None:
         population = Population(
             "objects",

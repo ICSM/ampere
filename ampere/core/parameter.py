@@ -1829,8 +1829,15 @@ class Plate:
                     f"{member.plate!r}; nested plates are out of scope for v1.3."
                 )
             prior = member.prior
-            if isinstance(prior, (HierarchicalPrior, Derived)):
+            if isinstance(prior, HierarchicalPrior):
                 prior = prior.rename_references(rename)
+            elif isinstance(prior, Derived):
+                # W7.0: a derived member may be computed from a sibling member
+                # (the non-centred theta from z) as well as from the
+                # hyperparameters, so its bindings are qualified onto both.
+                prior = prior.rename_references(
+                    {**rename, **{m.name: self.qualified(m.name) for m in self.members}}
+                )
             expanded.append(
                 dataclasses.replace(
                     member,
