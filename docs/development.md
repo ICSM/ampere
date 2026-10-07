@@ -214,7 +214,9 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
   the "legacy still works" gate; run it before merging anything that
   touches shared files.
 
-## ⚡ Pick up here — **PHASE 7: W7.5 AND W7.6 CLOSED; W7.0'S CI FIX MERGED (its gate run pending); W7.12 (OPUS) AND W7.14 DRAFTED FOR A CLEAN SESSION** (2026-10-07; seventeen items W7.0–W7.16); Phase 6 complete (the beta `ampere-astro 1.0.0b1` on PyPI, tag `v1.0.0b1`, DOI 10.5281/zenodo.23151412)
+## ⚡ Pick up here — **PHASE 7: W7.5, W7.6 AND W7.0 CLOSED; NOTHING IN FLIGHT, NOTHING PENDING ON PETER BUT THREE WORKTREE REMOVALS; W7.12 (OPUS) AND W7.14 DRAFTED — A CLEAN SESSION DISPATCHES THEM** (2026-10-07; seventeen items W7.0–W7.16); Phase 6 complete (the beta `ampere-astro 1.0.0b1` on PyPI, tag `v1.0.0b1`, DOI 10.5281/zenodo.23151412)
+
+**UPDATE 2026-10-07 08:xx BST: CI run 37582940893 on `dbca4fc` GREEN — 29 jobs, 28 success, 1 skipped — W7.0's gate of record, in its row; W7.0 CLOSED. Phase 7 stands at three closed (W7.5, W7.6, W7.0), fourteen open. NOTHING IN FLIGHT: no agents, no gate, the lock free, master = `origin/master` at this commit. The clean session's list in the closing-state block below applies from step (2): dispatch W7.12 (Opus) on Peter's word, W7.14 beside it if he wants two slots. Housekeeping unchanged: the three merged worktrees to remove on Peter's word.**
 
 **UPDATE 2026-10-07: THE W7.0 FIX MERGED BY PETER at `a513d9a`** (a true merge — master had moved on by the handoff commit). Pushed with this commit; **the CI run on this push is W7.0's gate of record** — its id and counts fill `FIX_CI_RESULT` in W7.0's row (step (1) of the clean session's list, if this session does not get to it). Nothing else is pending on Peter but the worktree removals.**
 
