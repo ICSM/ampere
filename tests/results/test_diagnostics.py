@@ -774,7 +774,9 @@ class TestSummary:
             # The approximation warning only: six draws fail the convergence
             # verdict (W7.12), which TestTheVerdict in
             # tests/inference/test_default_start.py covers.
-            warnings.filterwarnings("error", message=".*ampere_approximation", category=ResultsWarning)
+            warnings.filterwarnings(
+                "error", message=".*ampere_approximation", category=ResultsWarning
+            )
             summary(tree)
 
 

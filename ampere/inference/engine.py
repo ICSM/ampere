@@ -650,10 +650,11 @@ class Engine(abc.ABC):
         mass is, it needs no tuning, and it is reproducible from the problem's
         seed. (Since W7.12 an ensemble's *default* start is the ball below, at
         the optimiser's mode: from the prior, a modest budget left the
-        user-journeys memo's first fit at R-hat 1.5.) Draws that cannot be scored are re-drawn rather than kept — an
-        ensemble move from a ``-inf`` walker cannot go anywhere — and a prior
-        that cannot produce a scoreable point at all is a composition problem
-        the run should stop for, not sample through.
+        user-journeys memo's first fit at R-hat 1.5.) Draws that cannot be
+        scored are re-drawn rather than kept — an ensemble move from a
+        ``-inf`` walker cannot go anywhere — and a prior that cannot produce a
+        scoreable point at all is a composition problem the run should stop
+        for, not sample through.
 
         With *around* (an :class:`~ampere.results.Optimum`, W6.7), a ball at
         the mode in the unconstrained coordinates: ``u* + 0.5 L z`` with ``L``
@@ -835,9 +836,7 @@ class Engine(abc.ABC):
             return optimum, ""
         theta = self.problem.constrain(np.asarray(optimum.unconstrained, dtype=float))
         labels = self.problem.parameters.free_labels()
-        at = ", ".join(
-            f"{label} = {float(theta[labels.index(label)]):.4g}" for label in saturated
-        )
+        at = ", ".join(f"{label} = {float(theta[labels.index(label)]):.4g}" for label in saturated)
         return None, (
             f"its mode sits on a bound of the prior's support ({at}), and a ball of walkers "
             f"around a bound-pinned mode is degenerate: every walker stays on the bound. Widen "

@@ -272,7 +272,9 @@ TINY: Mapping[str, Callable[[FittingProblem], Any]] = {
         steps=20, burn_in=5, initial="prior"
     ),
     "dynesty": lambda problem: DynestyEngine(problem, live_points=30).run(maxcall=600),
-    "zeus": lambda problem: ZeusEngine(problem, walkers=8).run(steps=10, burn_in=2, initial="prior"),
+    "zeus": lambda problem: ZeusEngine(problem, walkers=8).run(
+        steps=10, burn_in=2, initial="prior"
+    ),
 }
 
 

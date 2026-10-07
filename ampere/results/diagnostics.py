@@ -1060,7 +1060,8 @@ class ConvergenceVerdict:
         if self.passed:
             return f"Converged: every variable has {criteria}."
         listing = "; ".join(
-            f"{name} (R-hat {rhat:.3g}, ESS {ess:.0f})" for name, (rhat, ess) in self.failing.items()
+            f"{name} (R-hat {rhat:.3g}, ESS {ess:.0f})"
+            for name, (rhat, ess) in self.failing.items()
         )
         return f"Not converged ({criteria}): {listing}. {self.remedy}"
 
@@ -1159,13 +1160,11 @@ def check_convergence(tree: Any, *, rhat: float = 1.05, ess: float = 100) -> Con
         fallback = attrs.get(f"{ATTR_PREFIX}start_fallback")
         if fallback:
             remedy += (
-                f" The run started from prior draws because the default start fell back: "
-                f"{fallback}"
+                f" The run started from prior draws because the default start fell back: {fallback}"
             )
         else:
             remedy += (
-                " Start from the optimiser's mode (the default; this run passed "
-                "initial='prior')."
+                " Start from the optimiser's mode (the default; this run passed initial='prior')."
             )
     if len(failing) == 1 and total > 1:
         (name,) = failing
