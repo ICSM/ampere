@@ -446,8 +446,10 @@ class TestTheBoundAwareScipyRoute:
     The GP-off synthetic problem (sixteen free parameters: eleven abundance
     boxes ``uniform(-6, 0)``, two fractions ``uniform(0, 1)``, two
     ``triang(c=0)`` temperature boxes, and the ``lognorm`` calibration's
-    ``Log`` floor), optimised by ``optimise(method="scipy", starts=2,
-    seed=20261007)``. Measured on the same problem and seed:
+    ``Log`` floor), optimised by ``optimise(method="scipy", starts=1,
+    seed=20261007)``. Measured on the same problem and seed with two starts
+    (the row runs one: the first start alone reaches the same MAP, and two
+    took 610 s — too long for CI's examples job; review, 2026-10-07):
 
     * the **old route** (every coordinate in ``u``, ``429960c``): log
       posterior ``-4146.0``, eleven coordinates at a bound (seven
@@ -476,7 +478,7 @@ class TestTheBoundAwareScipyRoute:
         with warnings.catch_warnings():
             # the count is asserted below; whether Twarm0 lands on its bound is not
             warnings.simplefilter("ignore", BoundSaturationWarning)
-            optimum = optimise(problem, method="scipy", starts=2, seed=BOUND_AWARE_SEED)
+            optimum = optimise(problem, method="scipy", starts=1, seed=BOUND_AWARE_SEED)
         assert set(optimum.coordinates) == {"constrained"}
         assert optimum.log_prob_constrained >= problem.log_prob(truth) - BOUND_AWARE_MARGIN
         saturated = saturated_bounds(problem, optimum.unconstrained)
