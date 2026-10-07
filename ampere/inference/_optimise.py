@@ -90,7 +90,7 @@ from typing import Any
 
 import numpy as np
 
-from ampere.core.dataset import FittingProblem
+from ampere.core.dataset import LIKELIHOOD_COMPONENT, FittingProblem
 from ampere.results import Optimum, StartSummary, hash_of, provenance_attrs
 
 from .engine import draw_prior_positions, unconstrained_jacobian_correction
@@ -1444,9 +1444,17 @@ def _warm_start_one(
     from ampere.core.encoding import sample_coordinates
 
     free = set(problem.parameters.free_names)
-    qualified = {
-        name: f"{label}.likelihood.{name}" for name in ("amplitude", "length_scale", "scale")
-    }
+
+    def merged(name: str) -> str:
+        # The likelihood's own name, looked up through the problem's mapping
+        # rather than assumed (W7.6): a Tie may have renamed it.
+        leaf = f"{LIKELIHOOD_COMPONENT}.{name}"
+        try:
+            return problem.mapping.global_name_for(label, leaf)
+        except KeyError:
+            return f"{label}.{leaf}"
+
+    qualified = {name: merged(name) for name in ("amplitude", "length_scale", "scale")}
     kernel_names = set(noise.kernel.parameters.names)
     if not {"amplitude", "length_scale"} <= kernel_names:
         raise EngineError(
@@ -1466,9 +1474,7 @@ def _warm_start_one(
     residual = (np.asarray(observed.values).ravel() - np.asarray(predicted.values).ravel())[retain]
     coordinates = np.ascontiguousarray(sample_coordinates(observed)[retain])
     local = {
-        name: values[f"{label}.likelihood.{name}"]
-        for name in noise.parameters.names
-        if f"{label}.likelihood.{name}" in values
+        name: values[merged(name)] for name in noise.parameters.names if merged(name) in values
     }
     local["scale"] = 1.0
     sigma = noise.sigma(observed, retain, local)

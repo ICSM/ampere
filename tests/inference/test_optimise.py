@@ -765,6 +765,49 @@ class TestTheWarmStart:
         ):
             warm_start_gp(agreement_problem())
 
+    def test_a_tie_renaming_the_amplitude_is_accepted(self) -> None:
+        """W7.6: the names come from the mapping, not ``<label>.likelihood.<name>``.
+
+        Two GP datasets share one amplitude under a tie's own name; before
+        W7.6 the warm start looked for ``blue.likelihood.amplitude``, did not
+        find it free, and refused.
+        """
+        from ampere.core import DatasetCollection, Instrument, Tie
+
+        single = gp_problem()
+        dataset = single.datasets["default"]
+        problem = FittingProblem(
+            PowerLaw(HSGP_GRID, norm=2.0, index=-1.0, reference_wavelength=1.0),
+            DatasetCollection(
+                {
+                    label: Dataset(
+                        dataset.observed,
+                        Instrument([], channel="default", input_kind=Spectrum, label=label),
+                        likelihood=dataset.likelihood,
+                    )
+                    for label in ("blue", "red")
+                }
+            ),
+            ties=(Tie("gp_amplitude", ("blue.likelihood.amplitude", "red.likelihood.amplitude")),),
+            seed=SEED,
+        )
+        assert "gp_amplitude" in problem.parameters.free_names
+        assert "blue.likelihood.amplitude" not in problem.parameters.free_names
+        optima = warm_start_gp(problem)
+        reference = warm_start_gp(single)["default"]
+        for label in ("blue", "red"):
+            optimum = optima[label]
+            assert optimum.free_names == (
+                "gp_amplitude",
+                f"{label}.likelihood.length_scale",
+                f"{label}.likelihood.scale",
+            )
+            # the same data and likelihood as the untied problem: the same answer
+            for mine, theirs in zip(optimum.free_names, HYPERPARAMETERS, strict=True):
+                assert optimum.constrained[mine] == pytest.approx(
+                    reference.constrained[theirs], rel=1e-6
+                )
+
 
 # ---------------------------------------------------------------------------
 # (c) NUTS from the MAP against NUTS from the prior; (d) emcee's burn-in
