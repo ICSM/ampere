@@ -21,14 +21,38 @@ produces sane output, not to reproduce the doc page's own posterior.
 
 from __future__ import annotations
 
+import contextlib
 import warnings
+from collections.abc import Iterator
 from types import ModuleType
+from typing import Any
 
 import numpy as np
 import pytest
 
 from ampere.core import Likelihood
 from ampere.core.exceptions import LikelihoodError
+
+
+@contextlib.contextmanager
+def prior_start() -> Iterator[None]:
+    """Run the example's ``EmceeEngine`` from prior draws (W7.12's ``initial="prior"``).
+
+    The example passes no ``initial=``, so since W7.12 it starts at the
+    optimiser's mode; the numbers this row holds were made from the prior
+    start, which is what it keeps. The example itself is not this item's to edit.
+    """
+    from ampere.inference import EmceeEngine
+
+    original = EmceeEngine.run
+
+    def run(self: Any, *args: Any, **kwargs: Any) -> Any:
+        kwargs.setdefault("initial", "prior")
+        return original(self, *args, **kwargs)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(EmceeEngine, "run", run)
+        yield
 
 
 @pytest.fixture(scope="module")
@@ -261,7 +285,7 @@ def reduced_study(wstat_example: ModuleType) -> dict[str, object]:
     to say anything about coverage. Module-scoped because it is the only
     expensive thing in this file.
     """
-    with warnings.catch_warnings():
+    with warnings.catch_warnings(), prior_start():
         warnings.simplefilter("ignore", UserWarning)
         return wstat_example.coverage_study(count=6, draws=40, walkers=8, steps=120, burn_in=40)
 
