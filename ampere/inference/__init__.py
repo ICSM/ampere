@@ -288,8 +288,14 @@ from ._sbi import (
 )
 from ._vi import VIEngine
 from ._zeus import ZeusEngine
-from .engine import DEFAULT_CACHE_SIZE, Engine
-from .exceptions import BoundSaturationWarning, EngineError, SamplingFailureWarning
+from .engine import DEFAULT_CACHE_SIZE, ENSEMBLE_SIZE_WARNING, Engine
+from .exceptions import (
+    BoundSaturationWarning,
+    DefaultStartWarning,
+    EngineError,
+    EnsembleSizeWarning,
+    SamplingFailureWarning,
+)
 
 #: What :class:`BlackjaxEngine`'s ``method=`` accepts, mapped to a one-line
 #: description of each. Re-exported from the engine module under this name so
@@ -299,6 +305,7 @@ BLACKJAX_METHODS = _blackjax.METHODS
 __all__ = [
     "BLACKJAX_METHODS",
     "DEFAULT_CACHE_SIZE",
+    "ENSEMBLE_SIZE_WARNING",
     "DEFAULT_TRUNCATION_EPSILON",
     "EMBEDDINGS",
     "LAYOUTS",
@@ -312,10 +319,12 @@ __all__ = [
     "WARM_START_GRID",
     "BlackjaxEngine",
     "BoundSaturationWarning",
+    "DefaultStartWarning",
     "DynestyEngine",
     "EmceeEngine",
     "Engine",
     "EngineError",
+    "EnsembleSizeWarning",
     "NUTSEngine",
     "NautilusEngine",
     "SBIEngine",

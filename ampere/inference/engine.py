@@ -135,10 +135,16 @@ from ampere.results import Optimum, emit
 from ampere.results.exceptions import ResultsError
 from ampere.results.optimum import aligned
 
-from .exceptions import EngineError, SamplingFailureWarning
+from .exceptions import (
+    DefaultStartWarning,
+    EngineError,
+    EnsembleSizeWarning,
+    SamplingFailureWarning,
+)
 
 __all__ = [
     "DEFAULT_CACHE_SIZE",
+    "ENSEMBLE_SIZE_WARNING",
     "Engine",
     "default_live_points",
     "global_seed",
@@ -203,6 +209,20 @@ _BALL_SPREAD = 0.5
 #: A gradient sampler's chains start at the mode plus this much jitter (same
 #: units): NUTS and blackjax need distinct chains for R-hat, not a spread.
 _JITTER_SPREAD = 0.1
+
+#: The free-coordinate count at and above which an ensemble engine warns once
+#: per run that a gradient sampler is the better tool (W7.12). An affine-
+#: invariant ensemble mixes in a time that grows with the dimension: a
+#: twenty-member ``Population`` took eight minutes on the numpy path to reach
+#: R-hat 1.23 (``docs/design/user_journeys_memo.md``, Appendix E), where NUTS
+#: on a native backend fits fifty members.
+ENSEMBLE_SIZE_WARNING = 16
+
+#: What ``ampere_start_kind`` records for each value of ``Engine._start`` that
+#: is a string, on an engine that does not set the kind itself (every engine
+#: but the two ensembles): the prior draws and blackjax's Pathfinder start are
+#: both drawn from the prior; a caller's own array is supplied.
+_START_KINDS = {"prior": "prior", "pathfinder": "prior", "user": "supplied"}
 
 
 class _EvaluationCache:
@@ -556,6 +576,11 @@ class Engine(abc.ABC):
         #: What this run started from: "prior", "user", "pathfinder" or the
         #: Optimum itself (W6.7) -- set by `_start_positions`, read by `finish`.
         self._start: Any = "prior"
+        #: ``ampere_start_kind`` and ``ampere_start_fallback`` (W7.12), set by
+        #: `_ensemble_start` on emcee and zeus; ``None`` on every other engine,
+        #: whose kind `finish` reads off `_start` instead.
+        self._start_kind: str | None = None
+        self._start_fallback: str | None = None
 
     # -- the §4.5 surface, and nothing else -----------------------------------
 
@@ -620,10 +645,12 @@ class Engine(abc.ABC):
     ) -> np.ndarray:
         """*count* start points, each inside the support, in the constrained space.
 
-        Without *around*, drawn from the joint prior. A draw from the prior is
-        the right default start for an ensemble: it is where the user says the
+        Without *around*, drawn from the joint prior — ``run(initial="prior")``'s
+        start, and every non-ensemble engine's: it is where the user says the
         mass is, it needs no tuning, and it is reproducible from the problem's
-        seed. Draws that cannot be scored are re-drawn rather than kept — an
+        seed. (Since W7.12 an ensemble's *default* start is the ball below, at
+        the optimiser's mode: from the prior, a modest budget left the
+        user-journeys memo's first fit at R-hat 1.5.) Draws that cannot be scored are re-drawn rather than kept — an
         ensemble move from a ``-inf`` walker cannot go anywhere — and a prior
         that cannot produce a scoreable point at all is a composition problem
         the run should stop for, not sample through.
@@ -714,6 +741,108 @@ class Engine(abc.ABC):
             return self._ball(initial, count, spread=spread)
         self._start = "user"
         return checked(initial)
+
+    def _ensemble_start(
+        self, initial: Any, count: int, checked: Callable[[Any], np.ndarray]
+    ) -> np.ndarray:
+        """An ensemble engine's ``run(initial=)``, with the optimiser's mode as the default.
+
+        **W7.12.** ``None`` (the default) runs :func:`~ampere.inference.optimise`
+        once — ``method="scipy"``, one start, on the problem's own
+        ``"optimise.initialisation"`` stream, so a seeded problem starts
+        reproducibly — and draws the walkers in
+        ``initial_positions(count, around=optimum)``'s ball. ``"prior"`` is the
+        former default exactly: the same prior draws on the same stream, so a run
+        under ``initial="prior"`` reproduces a run made before W7.12 bit for bit.
+        An array or an :class:`~ampere.results.Optimum` is the caller's, as
+        before; the eight-start route is ``initial=optimise(problem)``.
+
+        Two problems fall back to the prior with a :class:`~ampere.inference.
+        DefaultStartWarning`: one the optimiser cannot start (no start it could
+        score), and one whose optimum :func:`~ampere.inference.saturated_bounds`
+        finds on a bound of the support, because a ball around a bound-pinned
+        mode is degenerate and every walker stays on the bound
+        (``docs/design/user_journeys_memo.md``, Appendix B). A refused
+        covariance is not a fallback: the ball's diagonal stands in for it.
+
+        Records ``ampere_start_kind`` (``"optimum"``, ``"prior"`` or
+        ``"supplied"``) and, after a fallback, ``ampere_start_fallback`` for
+        :meth:`finish`; and warns once, with :class:`~ampere.inference.
+        EnsembleSizeWarning`, when the problem is large enough
+        (:data:`ENSEMBLE_SIZE_WARNING`) that a gradient sampler is the better tool.
+        """
+        self._start_fallback = None
+        size = self.problem.free_size
+        if size >= ENSEMBLE_SIZE_WARNING:
+            warnings.warn(
+                f"{self.NAME}: this problem has {size} free coordinates (the warning starts at "
+                f"{ENSEMBLE_SIZE_WARNING}). An ensemble sampler mixes slowly at this size -- a "
+                f"twenty-member Population took eight minutes to reach R-hat 1.23 on the numpy "
+                f"path. NUTSEngine on a torch or jax problem is the tool for it: compose the "
+                f"problem from ampere.backends.torch or ampere.backends.jax and sample with "
+                f"ampere.inference.NUTSEngine (the docs' Overview, 'Realisation, and the "
+                f"engines', says which engine runs where).",
+                EnsembleSizeWarning,
+                stacklevel=3,
+            )
+        if isinstance(initial, str):
+            if initial != "prior":
+                raise EngineError(
+                    f"{self.NAME}: initial= takes None (the optimiser's mode, the default), "
+                    f"'prior', an ampere.results.Optimum, or a (walkers, n_dim) array; got "
+                    f"{initial!r}."
+                )
+            self._start_kind = "prior"
+            return self._start_positions(None, count, checked)
+        if initial is not None:
+            self._start_kind = "supplied"
+            return self._start_positions(initial, count, checked)
+        optimum, reason = self._default_optimum()
+        # The optimiser's evaluations are not this run's draws: a start it
+        # could not score is no more a sampling failure than a rejected
+        # proposal of its own line search.
+        self.problem.reset_failures()
+        if optimum is None:
+            self._start_kind = "prior"
+            self._start_fallback = reason
+            warnings.warn(
+                f"{self.NAME}: the default start (the optimiser's mode) could not be used: "
+                f"{reason} This run starts from prior draws instead. Pass initial='prior' to ask "
+                f"for that start and silence this warning.",
+                DefaultStartWarning,
+                stacklevel=3,
+            )
+            return self._start_positions(None, count, checked)
+        self._start_kind = "optimum"
+        return self._start_positions(optimum, count, checked)
+
+    def _default_optimum(self) -> tuple[Optimum | None, str]:
+        """The one-start scipy optimum, or ``None`` and the reason it cannot be a start."""
+        # Lazy: `_optimise` imports this module.
+        from ._optimise import optimise, saturated_bounds
+        from .exceptions import BoundSaturationWarning
+
+        with warnings.catch_warnings():
+            # The engine says this itself, below, with the remedy for a run.
+            warnings.simplefilter("ignore", BoundSaturationWarning)
+            try:
+                optimum = optimise(self.problem, method="scipy", starts=1)
+            except EngineError as error:
+                first = str(error).splitlines()[0]
+                return None, f"the optimiser found no start it could score ({first})."
+        saturated = saturated_bounds(self.problem, optimum.unconstrained)
+        if not saturated:
+            return optimum, ""
+        theta = self.problem.constrain(np.asarray(optimum.unconstrained, dtype=float))
+        labels = self.problem.parameters.free_labels()
+        at = ", ".join(
+            f"{label} = {float(theta[labels.index(label)]):.4g}" for label in saturated
+        )
+        return None, (
+            f"its mode sits on a bound of the prior's support ({at}), and a ball of walkers "
+            f"around a bound-pinned mode is degenerate: every walker stays on the bound. Widen "
+            f"or move the prior on {', '.join(saturated)} if the data push against it."
+        )
 
     def _refuse_optimum(self, options: Mapping[str, Any]) -> None:
         """Refuse ``initial=`` on a sampler that has no start (the nested samplers)."""
@@ -901,7 +1030,10 @@ class Engine(abc.ABC):
             "engine_draws_recomputed": self._cache.recomputed,
             "engine_realised_evaluations": self._cache.realised_calls,
             "approximation": "none",
+            "start_kind": self._start_kind or _start_kind_of(self._start),
         }
+        if self._start_fallback:
+            attrs["start_fallback"] = self._start_fallback
         attrs.update(extra_attrs or {})
         if summary:
             attrs["failure_summary"] = summary
@@ -975,6 +1107,13 @@ def _refuse_foreign_parts(engine: str, problem: FittingProblem) -> None:
         f"Python; it cannot make one differentiable. Build those pieces from "
         f"{problem.backend}'s own classes, or sample with emcee, dynesty or zeus."
     )
+
+
+def _start_kind_of(start: Any) -> str:
+    """``ampere_start_kind`` for an engine that does not set it: an Optimum is supplied."""
+    if isinstance(start, Optimum):
+        return "supplied"
+    return _START_KINDS.get(str(start), "supplied")
 
 
 def _check_ensemble(engine: str, walkers: int, free_size: int) -> int:

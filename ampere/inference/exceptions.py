@@ -14,7 +14,13 @@ from __future__ import annotations
 
 from ampere.core.exceptions import ContractError
 
-__all__ = ["BoundSaturationWarning", "EngineError", "SamplingFailureWarning"]
+__all__ = [
+    "BoundSaturationWarning",
+    "DefaultStartWarning",
+    "EngineError",
+    "EnsembleSizeWarning",
+    "SamplingFailureWarning",
+]
 
 
 class EngineError(ContractError):
@@ -61,4 +67,28 @@ class BoundSaturationWarning(UserWarning):
     A distinct class, as :class:`SamplingFailureWarning` is, so that a caller
     can silence it, promote it to an error, or assert on it in a test without
     catching every other :class:`UserWarning` the stack emits.
+    """
+
+
+class DefaultStartWarning(UserWarning):
+    """An ensemble engine's default start fell back to prior draws (W7.12).
+
+    The default start of :class:`~ampere.inference.EmceeEngine` and
+    :class:`~ampere.inference.ZeusEngine` is a ball at the optimiser's mode.
+    Two problems cannot have one, and the run starts from the prior instead,
+    saying so once: the optimiser found no start it could score, or its mode
+    sits on a bound of the prior's support (a ball there is degenerate). The
+    message names the reason, the bound and the remedies; ``initial="prior"``
+    asks for the prior start outright and silences it. The run records the
+    reason in ``ampere_start_fallback``.
+    """
+
+
+class EnsembleSizeWarning(UserWarning):
+    """An ensemble engine was given a problem large enough to mix slowly (W7.12).
+
+    Issued once per run at :data:`~ampere.inference.engine.ENSEMBLE_SIZE_WARNING`
+    free coordinates or more, naming NUTS on a torch or jax problem as the
+    tool for that size. A distinct class so that a caller who has chosen the
+    ensemble deliberately can silence exactly this.
     """
