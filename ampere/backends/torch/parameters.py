@@ -79,6 +79,7 @@ from torch.distributions import transforms
 
 from ampere.core.exceptions import LoweringError, ParameterError
 from ampere.core.parameter import (
+    Derived,
     HierarchicalPrior,
     Parameter,
     ParameterSet,
@@ -342,8 +343,17 @@ class TorchParameterSpace:
         self._transforms: dict[str, transforms.Transform] = {}
         self._fixed: dict[str, torch.Tensor] = {}
         self._free: list[str] = []
+        from .gp import TorchOps  # local: gp imports this module's neighbours
+
+        # W7.0: a derived parameter is no site and no bijection (``lowering.md``
+        # §5) -- a computation in the resolve step, over the same ArrayOps
+        # namespace the kernels use, from the *current* inputs every time.
+        self._ops = TorchOps(dtype, device)
+        self._derived: tuple[str, ...] = declaration.derived_names
 
         for parameter in declaration.parameters:
+            if parameter.is_derived:
+                continue
             owner, leaf = _place(self.module, parameter.name)
             tensor = as_tensor(_initial_value(parameter), dtype=dtype, device=device)
             if parameter.shape:
@@ -567,6 +577,10 @@ class TorchParameterSpace:
             parameter = self._declaration[name]
             if parameter.is_fixed:
                 continue
+            if parameter.is_derived:
+                # Mid-walk, after its inputs and before any prior that binds it.
+                resolved[name] = self._derive(name, resolved)
+                continue
             chunk = cube[self._slices[name]]
             # ``distribution_of`` is the same route the density takes: constant
             # for an ordinary family, rebuilt from the hyperparameters resolved
@@ -661,11 +675,42 @@ class TorchParameterSpace:
             if parameter.is_fixed:
                 resolved[parameter.name] = self._fixed[parameter.name]
                 continue
+            if parameter.is_derived:
+                continue
             chunk = vector[self._slices[parameter.name]]
             resolved[parameter.name] = (
                 chunk.reshape(parameter.shape) if parameter.shape else chunk[0]
             )
+        if self._derived:
+            self._derive_all(resolved)
+            return {name: resolved[name] for name in self._declaration.names}
         return resolved
+
+    def _derive(self, name: str, resolved: Mapping[str, torch.Tensor]) -> torch.Tensor:
+        """One derived parameter's value, from the current *resolved* tensors (W7.0)."""
+        parameter = self._declaration[name]
+        prior = parameter.prior
+        assert isinstance(prior, Derived)
+        value = self._ops.scalar(prior.evaluate(self._ops, resolved))
+        if parameter.shape:
+            return torch.broadcast_to(value, parameter.shape)
+        if value.dim():
+            raise ParameterError(
+                f"derived parameter {name!r} ({prior.expression!r}) evaluates to shape "
+                f"{tuple(value.shape)}, which does not broadcast to its declared shape (); "
+                f"declare shape= to match what the expression produces."
+            )
+        return value
+
+    def _derive_all(self, resolved: dict[str, torch.Tensor]) -> None:
+        """Compute every derived parameter into *resolved*, in evaluation order.
+
+        A traced path cannot branch on a value, so a supplied derived value is
+        **overwritten** here, never compared (``parameters.md`` §9; the numpy
+        reference path is the one that refuses a stale one).
+        """
+        for name in self._derived:
+            resolved[name] = self._derive(name, resolved)
 
     def _resolved(self, values: Any) -> dict[str, torch.Tensor]:
         if isinstance(values, Mapping):
@@ -678,9 +723,15 @@ class TorchParameterSpace:
                 )
             for name, raw in values.items():
                 filled[name] = as_tensor(raw, dtype=self._dtype, device=self._device)
-            missing = [name for name in self._declaration.names if name not in filled]
+            missing = [
+                name
+                for name in self._declaration.names
+                if name not in filled and name not in self._derived
+            ]
             if missing:
                 raise ParameterError(f"no value supplied for parameter(s) {missing}")
+            if self._derived:
+                self._derive_all(filled)
             return filled
         return self.unpack_tensor(values)
 
@@ -733,7 +784,8 @@ class TorchParameterSpace:
         resolved = self._resolved(values)
         total = as_tensor(0.0, dtype=self._dtype, device=self._device)
         for name in self._order:
-            if self._declaration[name].is_fixed:
+            parameter = self._declaration[name]
+            if parameter.is_fixed or parameter.is_derived:
                 continue
             lowered = self.distribution_of(name, resolved)
             total = total + lowered.log_prob(resolved[name]).sum()
@@ -819,6 +871,10 @@ class TorchParameterSpace:
         for name in self._order:
             parameter = self._declaration[name]
             if parameter.is_fixed:
+                continue
+            if parameter.is_derived:
+                tensors[name] = self._derive(name, tensors)
+                resolved[name] = to_numpy(tensors[name])
                 continue
             shape = parameter.shape if parameter.shape else ()
             lowered = self.distribution_of(name, tensors)

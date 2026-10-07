@@ -62,8 +62,10 @@ interchangeable and this module refuses to conflate them.
 
 from __future__ import annotations
 
+import ast
 import dataclasses
 import math
+import operator
 import types
 import warnings
 from collections.abc import Iterable, Iterator, Mapping, Sequence
@@ -82,16 +84,21 @@ from .exceptions import (
 from .settings import AmpereFlatPopulationWarning, settings
 
 __all__ = [
+    "DERIVED_ATOL",
+    "DERIVED_FUNCTIONS",
+    "DERIVED_RTOL",
     "HORSESHOE_SPIKE_SHAPE",
     "HORSESHOE_TAILS",
     "MAX_FLAT_MEMBERS",
     "SEPARATOR",
     "SHRINKAGE_HELPER_FRAMEWORK",
+    "SLAB_EXPRESSION",
     "TORCH_MODULE_NAMES",
     "Bijection",
     "Binding",
     "Buffer",
     "BufferSet",
+    "Derived",
     "HierarchicalPrior",
     "Identity",
     "Log",
@@ -508,7 +515,9 @@ def _priors_equal(left: object, right: object) -> bool:
     """Compare two priors by neutral description, falling back to identity."""
     if left is right:
         return True
-    if isinstance(left, HierarchicalPrior) or isinstance(right, HierarchicalPrior):
+    if isinstance(left, (HierarchicalPrior, Derived)) or isinstance(
+        right, (HierarchicalPrior, Derived)
+    ):
         return left == right
     if left is None or right is None:
         return False
@@ -629,6 +638,239 @@ class HierarchicalPrior:
             args=tuple(data.get("args", ())),
             kwds=dict(data.get("kwds", {})),
         )
+
+
+# ---------------------------------------------------------------------------
+# Derived parameters (W7.0)
+# ---------------------------------------------------------------------------
+
+#: The functions a :class:`Derived` expression may call, and the
+#: :class:`~ampere.core.kernels.ArrayOps` method each evaluates through
+#: (``abs`` is ``ArrayOps.absolute``). The five names are reserved: a symbol
+#: may not be spelt like one.
+DERIVED_FUNCTIONS: Mapping[str, str] = types.MappingProxyType(
+    {"sqrt": "sqrt", "exp": "exp", "log": "log", "log1p": "log1p", "abs": "absolute"}
+)
+
+_DERIVED_BINARY: Mapping[type, Any] = types.MappingProxyType(
+    {
+        ast.Add: operator.add,
+        ast.Sub: operator.sub,
+        ast.Mult: operator.mul,
+        ast.Div: operator.truediv,
+        ast.Pow: operator.pow,
+    }
+)
+
+
+def _derived_refusal(expression: str, what: str) -> ParameterError:
+    return ParameterError(
+        f"Derived({expression!r}): {what} is not part of the derived-expression grammar. "
+        f"An expression may use numeric literals, symbols, + - * / **, unary minus, "
+        f"parentheses and calls to {', '.join(DERIVED_FUNCTIONS)} — nothing else "
+        f"(parameters.md §9, 'Derived'). A quantity the grammar cannot state is formed by "
+        f"the consumer that needs it."
+    )
+
+
+def _check_derived_tree(expression: object) -> tuple[ast.expr, tuple[str, ...]]:
+    """Parse *expression* and check it against the closed grammar.
+
+    Returns the checked tree and its symbols in first-appearance order.
+    """
+    if not isinstance(expression, str) or not expression.strip():
+        raise ParameterError(f"a Derived expression must be a non-empty string, got {expression!r}")
+    try:
+        tree = ast.parse(expression.strip(), mode="eval")
+    except SyntaxError as exc:
+        raise ParameterError(
+            f"Derived({expression!r}) is not a valid expression: {exc.msg}"
+        ) from None
+    symbols: list[str] = []
+
+    def visit(node: ast.AST) -> None:
+        if isinstance(node, ast.Name):
+            if node.id in DERIVED_FUNCTIONS:
+                raise ParameterError(
+                    f"Derived({expression!r}) uses {node.id!r} as a symbol, but {node.id!r} is "
+                    f"one of the reserved function names ({', '.join(DERIVED_FUNCTIONS)}); bind "
+                    f"the parameter under another symbol through the symbols mapping."
+                )
+            if node.id not in symbols:
+                symbols.append(node.id)
+            return
+        if isinstance(node, ast.Constant):
+            value = node.value
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise _derived_refusal(expression, f"the constant {value!r}")
+            return
+        if isinstance(node, ast.BinOp):
+            if type(node.op) not in _DERIVED_BINARY:
+                raise _derived_refusal(expression, f"the operator {type(node.op).__name__}")
+            visit(node.left)
+            visit(node.right)
+            return
+        if isinstance(node, ast.UnaryOp):
+            if not isinstance(node.op, ast.USub):
+                raise _derived_refusal(expression, f"the unary operator {type(node.op).__name__}")
+            visit(node.operand)
+            return
+        if isinstance(node, ast.Call):
+            function = node.func
+            if not isinstance(function, ast.Name) or function.id not in DERIVED_FUNCTIONS:
+                raise _derived_refusal(expression, f"a call to {ast.unparse(function)!r}")
+            if node.keywords or len(node.args) != 1:
+                raise _derived_refusal(
+                    expression, f"a call to {function.id!r} with other than one positional argument"
+                )
+            visit(node.args[0])
+            return
+        raise _derived_refusal(expression, f"{type(node).__name__} ({ast.unparse(node)!r})")
+
+    visit(tree.body)
+    return tree.body, tuple(symbols)
+
+
+def _evaluate_derived(node: ast.expr, ops: Any, bound: Mapping[str, Any]) -> Any:
+    """One walk of a checked tree over the namespace *ops*."""
+    if isinstance(node, ast.Name):
+        return bound[node.id]
+    if isinstance(node, ast.Constant):
+        return float(node.value)
+    if isinstance(node, ast.BinOp):
+        return _DERIVED_BINARY[type(node.op)](
+            _evaluate_derived(node.left, ops, bound), _evaluate_derived(node.right, ops, bound)
+        )
+    if isinstance(node, ast.UnaryOp):
+        return -_evaluate_derived(node.operand, ops, bound)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        method = getattr(ops, DERIVED_FUNCTIONS[node.func.id])
+        return method(_evaluate_derived(node.args[0], ops, bound))
+    raise AssertionError(f"unchecked node {ast.dump(node)}")  # pragma: no cover
+
+
+@dataclasses.dataclass(frozen=True)
+class Derived:
+    """A parameter that is a deterministic function of others (**W7.0**).
+
+    Put in a :class:`Parameter`'s prior slot, it makes the parameter
+    **derived** — the fourth state beside free, fixed and deferred: no sampler
+    dimension, no prior term, its value computed from its inputs wherever
+    named values are formed (``parameters.md`` §9, "``Derived``"). The
+    expression is a closed grammar over **symbols** — numeric literals,
+    ``+ - * / **``, unary minus, parentheses, and calls to ``sqrt``, ``exp``,
+    ``log``, ``log1p`` and ``abs`` — parsed once and stored as its normalised
+    source, so it hashes stably (``"a+b"`` and ``"a + b"`` are one
+    expression) and serialises into provenance. A callable is deliberately
+    not accepted: it could be neither hashed, nor serialised, nor shown, nor
+    trusted to lower on every backend.
+
+    Parameters
+    ----------
+    expression
+        The expression, over symbols.
+    symbols
+        Mapping from each symbol the expression uses to the *name of the
+        parameter* supplying it — the shape of
+        :attr:`HierarchicalPrior.hyperparameters` exactly. Defaults to the
+        identity: each symbol names the parameter of the same bare name. A
+        merge renames the mapping's values, never the expression, which is
+        what lets a symbol be bound to a dotted merged name.
+
+    Examples
+    --------
+    >>> theta = Derived("mu+sigma*z")
+    >>> theta.expression, theta.references
+    ('mu + sigma * z', ('mu', 'sigma', 'z'))
+    >>> from ampere.core.kernels import NUMPY_OPS
+    >>> float(theta.evaluate(NUMPY_OPS, {"mu": 1.0, "sigma": 2.0, "z": 0.5}))
+    2.0
+    >>> Derived("sqrt(c**2 * s**2 / (c**2 + s**2))", {"c": "slab", "s": "gp.scale"}).references
+    ('slab', 'gp.scale')
+    """
+
+    expression: str
+    symbols: Mapping[str, str] | None = None
+
+    def __post_init__(self) -> None:
+        tree, used = _check_derived_tree(self.expression)
+        if self.symbols is None:
+            mapping = {symbol: symbol for symbol in used}
+        else:
+            given = dict(self.symbols)
+            for symbol, reference in given.items():
+                if not isinstance(symbol, str) or not symbol.isidentifier():
+                    raise ParameterError(
+                        f"Derived({self.expression!r}): symbol {symbol!r} must be an "
+                        f"identifier, because it is spelt in the expression."
+                    )
+                if symbol in DERIVED_FUNCTIONS:
+                    raise ParameterError(
+                        f"Derived({self.expression!r}): symbol {symbol!r} is one of the "
+                        f"reserved function names ({', '.join(DERIVED_FUNCTIONS)})."
+                    )
+                _check_name(reference, "derived-expression reference")
+            absent = [symbol for symbol in used if symbol not in given]
+            if absent:
+                raise ParameterError(
+                    f"Derived({self.expression!r}) uses symbol(s) {absent} that its symbols "
+                    f"mapping {given} does not bind; bind every symbol, or omit the mapping to "
+                    f"bind each symbol to the parameter of the same name."
+                )
+            unused = [symbol for symbol in given if symbol not in used]
+            if unused:
+                raise ParameterError(
+                    f"Derived({self.expression!r}): the symbols mapping binds {unused}, which "
+                    f"the expression does not use; an unused binding would record a "
+                    f"dependency the value does not have."
+                )
+            mapping = {symbol: given[symbol] for symbol in used}
+        object.__setattr__(self, "expression", ast.unparse(tree))
+        object.__setattr__(self, "symbols", types.MappingProxyType(mapping))
+        object.__setattr__(self, "_tree", tree)
+
+    @property
+    def bindings(self) -> Mapping[str, str]:
+        """The symbols mapping, always populated after construction."""
+        return self.symbols if self.symbols is not None else _EMPTY_STR_MAP
+
+    @property
+    def references(self) -> tuple[str, ...]:
+        """Names of the parameters this value is computed from, in first-appearance order."""
+        return tuple(dict.fromkeys(self.bindings.values()))
+
+    def evaluate(self, ops: Any, resolved: Mapping[str, Value]) -> Any:
+        """The value, from *resolved* (name to value), in the namespace *ops*.
+
+        *ops* is an :class:`~ampere.core.kernels.ArrayOps`-shaped namespace;
+        the arithmetic is the arrays' own, so the one expression runs in
+        numpy, torch and jax alike.
+        """
+        try:
+            bound = {symbol: resolved[name] for symbol, name in self.bindings.items()}
+        except KeyError as exc:
+            raise ParameterError(
+                f"Derived({self.expression!r}) is computed from parameter {exc.args[0]!r}, "
+                f"which is not available; known names are {sorted(resolved)}."
+            ) from None
+        tree: ast.expr = object.__getattribute__(self, "_tree")
+        return _evaluate_derived(tree, ops, bound)
+
+    def rename_references(self, rename: Mapping[str, str]) -> Derived:
+        """A copy with the symbols' bindings remapped; the expression is untouched."""
+        return Derived(
+            self.expression,
+            {symbol: rename.get(name, name) for symbol, name in self.bindings.items()},
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """A JSON-compatible dictionary (the serialisation form)."""
+        return {"expression": self.expression, "symbols": dict(self.bindings)}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> Derived:
+        """Inverse of :meth:`to_dict`."""
+        return cls(data["expression"], dict(data["symbols"]))
 
 
 AnyPrior = Any
@@ -952,7 +1194,7 @@ def _normalise_shape(shape: object) -> tuple[int, ...]:
 class Parameter:
     """One named quantity a model, instrument, noise model or dataset owns.
 
-    A ``Parameter`` is in exactly one of three states:
+    A ``Parameter`` is in exactly one of four states:
 
     ``free``
         Has a ``prior``, is not ``fixed``. Occupies :attr:`size` dimensions of
@@ -967,6 +1209,17 @@ class Parameter:
         once :meth:`ParameterSet.merge` has resolved the group. A set holding
         one is :attr:`~ParameterSet.is_resolved` ``False`` and refuses to
         evaluate priors.
+    ``derived``
+        Has a :class:`Derived` in the prior slot (**W7.0**): its value is a
+        deterministic function of other parameters of the same set. Occupies
+        no sampler dimension and contributes nothing to ``lnprior`` (its
+        inputs carry the density), and is computed wherever named values are
+        formed — :meth:`ParameterSet.complete`, :meth:`ParameterSet.unpack`,
+        and mid-walk in :meth:`ParameterSet.prior_transform` and
+        :meth:`ParameterSet.sample` — so a model receives it like any other
+        value and a :class:`HierarchicalPrior` may reference it. It takes no
+        ``value``, ``fixed``, ``shared_as`` or ``bijection``: fix, tie,
+        initialise or transform its inputs instead.
 
     Parameters
     ----------
@@ -976,8 +1229,8 @@ class Parameter:
         declaration.
     prior
         A frozen ``scipy.stats`` distribution (canonical; see :class:`Prior`),
-        or a :class:`HierarchicalPrior`, or ``None`` for a fixed or deferred
-        parameter.
+        or a :class:`HierarchicalPrior`, or a :class:`Derived` for a derived
+        parameter, or ``None`` for a fixed or deferred parameter.
     value
         Initial value for a free parameter, or *the* value for a fixed one. May
         be given as a :class:`~astropy.units.Quantity`, which is converted to
@@ -1065,6 +1318,25 @@ class Parameter:
             object.__setattr__(self, "value", float(array))
 
     def _validate_state(self) -> None:
+        if isinstance(self.prior, Derived):
+            refused = [
+                keyword
+                for keyword, given in (
+                    ("fixed=True", self.fixed),
+                    ("value", self.value is not None),
+                    ("shared_as", self.shared_as is not None),
+                    ("bijection", self.bijection is not None),
+                )
+                if given
+            ]
+            if refused:
+                raise ParameterError(
+                    f"parameter {self.name!r} is derived ({self.prior.expression!r}) and is also "
+                    f"given {', '.join(refused)}. A derived parameter has no draw to fix, tie, "
+                    f"initialise or transform: fix, tie, initialise or transform its inputs "
+                    f"instead."
+                )
+            return
         if self.fixed:
             if self.prior is not None:
                 raise ParameterError(
@@ -1095,12 +1367,17 @@ class Parameter:
     @property
     def is_free(self) -> bool:
         """Whether this parameter varies *and* knows its own prior."""
-        return not self.fixed and self.prior is not None
+        return not self.fixed and self.prior is not None and not isinstance(self.prior, Derived)
 
     @property
     def is_deferred(self) -> bool:
         """Whether this parameter is waiting for a tie group to supply its prior."""
         return not self.fixed and self.prior is None
+
+    @property
+    def is_derived(self) -> bool:
+        """Whether this parameter is a deterministic function of others (:class:`Derived`)."""
+        return isinstance(self.prior, Derived)
 
     @property
     def is_hierarchical(self) -> bool:
@@ -1114,8 +1391,10 @@ class Parameter:
 
     @property
     def references(self) -> tuple[str, ...]:
-        """Parameter names this one's prior depends on (empty unless hierarchical)."""
-        return self.prior.references if isinstance(self.prior, HierarchicalPrior) else ()
+        """Parameter names this one depends on: a hierarchical prior's, or a derived value's."""
+        if isinstance(self.prior, (HierarchicalPrior, Derived)):
+            return self.prior.references
+        return ()
 
     # -- units -------------------------------------------------------------
 
@@ -1149,12 +1428,22 @@ class Parameter:
         """The declared bijection, or the one implied by the prior's support."""
         if self.bijection is not None:
             return self.bijection
+        if isinstance(self.prior, Derived):
+            raise ParameterError(
+                f"parameter {self.name!r} is derived and has no unconstraining bijection: it "
+                f"occupies no free dimension."
+            )
         if self.prior is None:
             return Identity()
         return default_bijection_for(self.prior, f"parameter {self.name!r}")
 
     def fix(self, value: Value = None) -> Parameter:
         """Return a fixed copy of this parameter (configuration, not code, changes)."""
+        if self.is_derived:
+            raise ParameterError(
+                f"parameter {self.name!r} is derived and cannot be fixed: it has no draw of its "
+                f"own. Fix its inputs instead."
+            )
         target = self.value if value is None else value
         if target is None:
             raise ParameterError(
@@ -1165,6 +1454,11 @@ class Parameter:
 
     def release(self, prior: AnyPrior, *, bijection: Bijection | None = None) -> Parameter:
         """Return a free copy of this parameter with *prior* (the inverse of :meth:`fix`)."""
+        if self.is_derived:
+            raise ParameterError(
+                f"parameter {self.name!r} is derived and cannot be released: it is not fixed. "
+                f"To sample it instead, declare it as a free parameter with a prior."
+            )
         return dataclasses.replace(
             self,
             prior=prior,
@@ -1207,6 +1501,8 @@ class Parameter:
         bits = [repr(self.name)]
         if self.is_fixed:
             bits.append(f"fixed={self.value!r}")
+        elif isinstance(self.prior, Derived):
+            bits.append(f"derived={self.prior.expression!r}")
         elif self.is_deferred:
             bits.append(f"deferred, shared_as={self.shared_as!r}")
         else:
@@ -1223,6 +1519,8 @@ class Parameter:
 
 
 def _prior_repr(prior: AnyPrior) -> str:
+    if isinstance(prior, Derived):
+        return f"derived({prior.expression})"
     if isinstance(prior, HierarchicalPrior):
         return f"{prior.family}({', '.join(prior.hyperparameters.values())})"
     try:
@@ -1519,7 +1817,7 @@ class Plate:
         expanded: list[Parameter] = []
         for hyper in self.hyperparameters:
             prior = hyper.prior
-            if isinstance(prior, HierarchicalPrior):
+            if isinstance(prior, (HierarchicalPrior, Derived)):
                 prior = prior.rename_references(rename)
             expanded.append(
                 dataclasses.replace(hyper, name=self.qualified(hyper.name), prior=prior)
@@ -1533,6 +1831,13 @@ class Plate:
             prior = member.prior
             if isinstance(prior, HierarchicalPrior):
                 prior = prior.rename_references(rename)
+            elif isinstance(prior, Derived):
+                # W7.0: a derived member may be computed from a sibling member
+                # (the non-centred theta from z) as well as from the
+                # hyperparameters, so its bindings are qualified onto both.
+                prior = prior.rename_references(
+                    {**rename, **{m.name: self.qualified(m.name) for m in self.members}}
+                )
             expanded.append(
                 dataclasses.replace(
                     member,
@@ -1723,7 +2028,15 @@ class Population:
         :class:`HierarchicalPrior` referencing the hyperpriors by their bare
         names is the population draw; a member with an ordinary prior is a
         **per-member nuisance parameter** — an i.i.d. array, which §11 Q4
-        confirms is the intended reading of ``members``.
+        confirms is the intended reading of ``members``. A member whose prior
+        slot holds a :class:`Derived` is computed from the others
+        (**W7.0**), and two member rules apply at the merge
+        (``parameters.md`` §9): a member **no** ``over`` component declares
+        is *internal* — routed to none of them, one plate-tagged array on the
+        population's own component, and permitted only as an input of a
+        derived member (the non-centred ``theta_i = mu + sigma * z_i``); and
+        a routed member must be declared by **every** ``over`` component.
+        Both refusals are by name, at the merge.
     hyperpriors
         The population hyperparameters, as ordinary :class:`Parameter`\\ s.
         They are what the members' :class:`HierarchicalPrior`\\ s reference,
@@ -1747,12 +2060,13 @@ class Population:
 
         **flat** is the tie-based pattern ``parameters.md`` §9 documents and
         the route the numpy path has had all along: each member component
-        keeps (or is given) its *own* scalar parameter, whose prior becomes
-        the member's with its references qualified onto the shared
-        hyperpriors. Identical joint density, N times as many
-        :class:`Parameter` objects, so it is refused beyond
-        :data:`MAX_FLAT_MEMBERS` members, by name, with the plate layout as
-        the remedy.
+        keeps its *own* scalar parameter, whose prior becomes the member's
+        with its references qualified onto the shared hyperpriors. Identical
+        joint density, N times as many :class:`Parameter` objects, so it is
+        refused beyond :data:`MAX_FLAT_MEMBERS` members, by name, with the
+        plate layout as the remedy. Derived and internal members are refused
+        in this layout (an internal ``z`` declared once would be one value
+        shared by every member — a tie wearing a population's clothes).
     label
         Component label for the hyperpriors (and, in the plate layout, for the
         member array). Defaults to *name*.
@@ -1787,6 +2101,26 @@ class Population:
     ((3,), 'objects')
     >>> [(b.component, b.local_name, b.index) for b in plated.bindings if b.index is not None]
     [('obj0', 'theta', 0), ('obj1', 'theta', 1), ('obj2', 'theta', 2)]
+
+    The non-centred form of the same population (W7.0): ``z`` is declared by
+    no member component, so it is internal — sampled on the population's own
+    component and routed nowhere — and ``theta`` is computed from it:
+
+    >>> non_centred = dataclasses.replace(
+    ...     population,
+    ...     members=[
+    ...         Parameter("z", st.norm(0.0, 1.0)),
+    ...         Parameter("theta", Derived("mu + sigma * z")),
+    ...     ],
+    ... )
+    >>> merged = ParameterSet.merge(
+    ...     {label: object_set() for label in ("obj0", "obj1", "obj2")},
+    ...     populations=[non_centred],
+    ... )
+    >>> merged.merged.free_names
+    ('obj0.cal', 'obj1.cal', 'obj2.cal', 'objects.mu', 'objects.sigma', 'objects.z')
+    >>> merged.merged["objects.theta"].references
+    ('objects.mu', 'objects.sigma', 'objects.z')
 
     The flat layout declares the same population, and the same density, with N
     scalar sites instead of one array:
@@ -1874,6 +2208,15 @@ class Population:
             )
         object.__setattr__(self, "size", declared)
         if self.layout == "flat":
+            derived = [member.name for member in self.members if member.is_derived]
+            if derived:
+                raise ParameterError(
+                    f"population {self.name!r} declares derived member(s) {derived} with "
+                    f"layout='flat'. The flat layout is one scalar parameter per member "
+                    f"component, and a derived member's inputs would have to be declared on "
+                    f"every component or tied across them; the non-centred form is the plate "
+                    f"layout's (parameters.md §12). Use layout='plate'."
+                )
             if not self.over:
                 raise ParameterError(
                     f"population {self.name!r} has layout='flat' but names no components in "
@@ -1960,14 +2303,18 @@ class Population:
             )
         return ParameterSet(parameters)
 
-    def plate_bindings(self) -> tuple[PlateBinding, ...]:
+    def plate_bindings(self, *, internal: Iterable[str] = ()) -> tuple[PlateBinding, ...]:
         """The element bindings routing member *i*'s draw to component *i*.
 
         Empty for the flat layout (whose members are each component's own
         parameter) and for a population declaring no ``over`` components.
+        A member named in *internal* is routed nowhere (**W7.0**): which
+        members are internal depends on what the ``over`` components declare,
+        so :meth:`ParameterSet.merge` works it out and passes it here.
         """
         if self.layout != "plate":
             return ()
+        omitted = set(internal)
         return tuple(
             PlateBinding(
                 parameter=self.qualified(member.name),
@@ -1977,6 +2324,7 @@ class Population:
             )
             for index, label in enumerate(self.over)
             for member in self.members
+            if member.name not in omitted
         )
 
 
@@ -2151,7 +2499,7 @@ class ParameterSet:
     {'temperature': 5050.0, 'log_tau': 0.0, 'distance': 1.5}
     """
 
-    __slots__ = ("_free_size", "_index", "_order", "_parameters", "_slices")
+    __slots__ = ("_derived", "_free_size", "_index", "_order", "_parameters", "_slices")
 
     def __init__(
         self, parameters: Iterable[Parameter] = (), *, plates: Iterable[Plate] = ()
@@ -2177,7 +2525,7 @@ class ParameterSet:
         slices: dict[str, slice] = {}
         offset = 0
         for item in items:
-            if item.is_fixed:
+            if item.is_fixed or item.is_derived:
                 continue
             slices[item.name] = slice(offset, offset + item.size)
             offset += item.size
@@ -2187,6 +2535,9 @@ class ParameterSet:
         self._slices = slices
         self._free_size = offset
         self._order = _evaluation_order(self._parameters, index)
+        self._derived = tuple(name for name in self._order if self[name].is_derived)
+        if self._derived:
+            self._check_derived_shapes()
 
     # -- collection surface ------------------------------------------------
 
@@ -2203,12 +2554,22 @@ class ParameterSet:
     @property
     def free_names(self) -> tuple[str, ...]:
         """Names occupying flat-vector dimensions (free *and* deferred)."""
-        return tuple(p.name for p in self._parameters if not p.is_fixed)
+        return tuple(p.name for p in self._parameters if p.name in self._slices)
 
     @property
     def fixed_names(self) -> tuple[str, ...]:
         """Names of parameters held at a value."""
         return tuple(p.name for p in self._parameters if p.is_fixed)
+
+    @property
+    def derived_names(self) -> tuple[str, ...]:
+        """Names of derived parameters (:class:`Derived`), in evaluation order.
+
+        Evaluation order, not declaration order, because that is the order a
+        consumer computing them must follow: a derived input to a derived
+        parameter is formed first.
+        """
+        return self._derived
 
     @property
     def deferred_names(self) -> tuple[str, ...]:
@@ -2276,7 +2637,10 @@ class ParameterSet:
             return self._slices[name]
         except KeyError:
             if name in self._index:
-                raise KeyError(f"parameter {name!r} is fixed and occupies no free slice") from None
+                state = "derived" if self[name].is_derived else "fixed"
+                raise KeyError(
+                    f"parameter {name!r} is {state} and occupies no free slice"
+                ) from None
             raise KeyError(f"no parameter named {name!r}") from None
 
     def evaluation_order(self) -> tuple[str, ...]:
@@ -2323,7 +2687,7 @@ class ParameterSet:
         """
         labels: list[str] = []
         for parameter in self._parameters:
-            if parameter.is_fixed:
+            if parameter.name not in self._slices:
                 continue
             if not parameter.shape:
                 labels.append(parameter.name)
@@ -2339,9 +2703,10 @@ class ParameterSet:
     def pack(self, values: Mapping[str, Value]) -> np.ndarray:
         """Flatten a name-to-value mapping into the free-parameter vector.
 
-        Entries for fixed parameters are accepted and ignored, so that
-        ``pack(unpack(theta))`` round-trips. Unknown names are an error (they
-        are almost always typos), and every free parameter must be present.
+        Entries for fixed and derived parameters are accepted and ignored, so
+        that ``pack(unpack(theta))`` round-trips. Unknown names are an error
+        (they are almost always typos), and every free parameter must be
+        present.
         """
         unknown = set(values) - set(self._index)
         if unknown:
@@ -2351,7 +2716,7 @@ class ParameterSet:
             )
         flat = np.empty(self._free_size, dtype=float)
         for parameter in self._parameters:
-            if parameter.is_fixed:
+            if parameter.name not in self._slices:
                 continue
             try:
                 raw = values[parameter.name]
@@ -2371,9 +2736,10 @@ class ParameterSet:
     def unpack(self, theta: ArrayLike) -> dict[str, Value]:
         """Expand a free-parameter vector into a mapping over **all** parameters.
 
-        Fixed parameters are injected at their declared values, so a model
-        always receives its full vocabulary and never has to know which
-        parameters this particular fit chose to vary.
+        Fixed parameters are injected at their declared values, and derived
+        ones computed from the result, so a model always receives its full
+        vocabulary and never has to know which parameters this particular fit
+        chose to vary.
         """
         flat = np.asarray(theta, dtype=float).reshape(-1)
         if flat.size != self._free_size:
@@ -2385,11 +2751,14 @@ class ParameterSet:
         for parameter in self._parameters:
             if parameter.is_fixed:
                 values[parameter.name] = parameter.value
-            else:
+            elif parameter.name in self._slices:
                 chunk = flat[self._slices[parameter.name]]
                 values[parameter.name] = (
                     chunk.reshape(parameter.shape).copy() if parameter.shape else float(chunk[0])
                 )
+        if self._derived:
+            self._derive_into(values, supplied=())
+            return {p.name: values[p.name] for p in self._parameters}
         return values
 
     def complete(self, values: Mapping[str, Value] | ArrayLike) -> dict[str, Value]:
@@ -2398,6 +2767,16 @@ class ParameterSet:
         Accepts a flat free-parameter vector (delegating to :meth:`unpack`) or
         a partial mapping, in which case fixed parameters are filled in from
         their declared values. Anything still missing is an error.
+
+        Derived parameters are **computed** from the completed inputs, in
+        evaluation order, and ``complete`` is **idempotent** (W7.0): a derived
+        name present in *values* is recomputed, and a supplied value that
+        disagrees with the recomputation beyond round-off is refused by name —
+        a silent overwrite would score the caller's point somewhere else with
+        no signal. A second ``complete`` of an already-complete mapping
+        therefore passes, as it must: ``FittingProblem.evaluate`` completes
+        twice. "Round-off" is :data:`DERIVED_RTOL` relative and
+        :data:`DERIVED_ATOL` absolute (``numpy.allclose``).
         """
         if isinstance(values, Mapping):
             unknown = set(values) - set(self._index)
@@ -2408,11 +2787,55 @@ class ParameterSet:
                 )
             filled = {p.name: p.value for p in self._parameters if p.is_fixed}
             filled.update(values)
-            missing = [p.name for p in self._parameters if p.name not in filled]
+            missing = [
+                p.name for p in self._parameters if p.name not in filled and not p.is_derived
+            ]
             if missing:
                 raise ParameterError(f"no value supplied for parameter(s) {missing}")
+            if self._derived:
+                self._derive_into(filled, supplied=tuple(values))
             return filled
         return self.unpack(values)
+
+    # -- derived parameters ------------------------------------------------
+
+    def _derive_into(self, resolved: dict[str, Value], *, supplied: Iterable[str]) -> None:
+        """Compute every derived parameter into *resolved*, in evaluation order.
+
+        A name in *supplied* is a value the caller gave: it must agree with the
+        recomputation to round-off, and is refused by name otherwise.
+        """
+        given = set(supplied)
+        for name in self._derived:
+            parameter = self[name]
+            inputs = [resolved[reference] for reference in parameter.references]
+            if name in given:
+                inputs.append(resolved[name])
+            if all(_is_plain(value) for value in inputs):
+                value = _derived_value(parameter, resolved)
+                if name in given:
+                    _check_supplied_derived(parameter, resolved[name], value)
+            else:
+                # A traced path: a native component's ``context()`` completes
+                # tensors or tracers, which cannot be compared by value, so the
+                # derived value is recomputed in their own namespace and
+                # overwrites whatever was supplied (parameters.md §9).
+                value = _native_derived_value(parameter, resolved)
+            resolved[name] = value
+
+    def _check_derived_shapes(self) -> None:
+        """Refuse, by name, a derived result that does not broadcast to its shape.
+
+        Checked here only where every input has a declared value (fixed values,
+        free initial values, or a derived value computed from those);
+        otherwise the first :meth:`complete` checks it.
+        """
+        known: dict[str, Value] = {p.name: p.value for p in self._parameters if p.value is not None}
+        for name in self._derived:
+            parameter = self[name]
+            if all(reference in known for reference in parameter.references):
+                with np.errstate(all="ignore"):
+                    known[name] = _derived_value(parameter, known)
 
     # -- priors ------------------------------------------------------------
 
@@ -2439,7 +2862,7 @@ class ParameterSet:
         total = 0.0
         for name in self._order:
             parameter = self[name]
-            if parameter.is_fixed:
+            if parameter.is_fixed or parameter.is_derived:
                 continue
             prior = parameter.prior
             frozen = prior.bind(resolved) if isinstance(prior, HierarchicalPrior) else prior
@@ -2454,7 +2877,9 @@ class ParameterSet:
 
         Hierarchical priors are handled by evaluating parameters in dependency
         order, so a hyperparameter is always transformed before anything whose
-        prior references it.
+        prior references it. A derived parameter has no cube dimension; it is
+        computed mid-walk, after its inputs and before any prior that
+        references it.
         """
         self._require_resolved("evaluate prior_transform")
         cube = np.asarray(unit_cube, dtype=float).reshape(-1)
@@ -2467,6 +2892,9 @@ class ParameterSet:
         for name in self._order:
             parameter = self[name]
             if parameter.is_fixed:
+                continue
+            if parameter.is_derived:
+                resolved[name] = _derived_value(parameter, resolved)
                 continue
             prior = parameter.prior
             frozen = prior.bind(resolved) if isinstance(prior, HierarchicalPrior) else prior
@@ -2493,6 +2921,9 @@ class ParameterSet:
             parameter = self[name]
             if parameter.is_fixed:
                 continue
+            if parameter.is_derived:
+                resolved[name] = _derived_value(parameter, resolved)
+                continue
             prior = parameter.prior
             frozen = prior.bind(resolved) if isinstance(prior, HierarchicalPrior) else prior
             size = parameter.shape if parameter.shape else None
@@ -2504,7 +2935,9 @@ class ParameterSet:
 
     def bijections(self) -> tuple[Bijection, ...]:
         """The unconstraining bijection of each free parameter, in flat order."""
-        return tuple(p.unconstraining_bijection() for p in self._parameters if not p.is_fixed)
+        return tuple(
+            p.unconstraining_bijection() for p in self._parameters if p.name in self._slices
+        )
 
     def unconstrain(self, values: Mapping[str, Value] | ArrayLike) -> np.ndarray:
         """Map a free-parameter vector (or mapping) into unconstrained space."""
@@ -2512,7 +2945,7 @@ class ParameterSet:
         flat = self.pack(self.complete(values))
         out = np.empty_like(flat)
         for parameter in self._parameters:
-            if parameter.is_fixed:
+            if parameter.name not in self._slices:
                 continue
             where = self._slices[parameter.name]
             bijection = parameter.unconstraining_bijection()
@@ -2529,7 +2962,7 @@ class ParameterSet:
             )
         out = np.empty_like(y)
         for parameter in self._parameters:
-            if parameter.is_fixed:
+            if parameter.name not in self._slices:
                 continue
             where = self._slices[parameter.name]
             bijection = parameter.unconstraining_bijection()
@@ -2550,7 +2983,7 @@ class ParameterSet:
         if not math.isfinite(total):
             return -math.inf
         for parameter in self._parameters:
-            if parameter.is_fixed:
+            if parameter.name not in self._slices:
                 continue
             where = self._slices[parameter.name]
             bijection = parameter.unconstraining_bijection()
@@ -2655,6 +3088,8 @@ class ParameterSet:
             entry: dict[str, Any] = {"name": parameter.name}
             if isinstance(parameter.prior, HierarchicalPrior):
                 entry["hierarchical_prior"] = parameter.prior.to_dict()
+            elif isinstance(parameter.prior, Derived):
+                entry["derived"] = parameter.prior.to_dict()
             elif parameter.prior is not None:
                 entry["prior"] = describe_prior(parameter.prior).to_dict()
             if parameter.value is not None:
@@ -2691,6 +3126,8 @@ class ParameterSet:
             prior: AnyPrior = None
             if "hierarchical_prior" in entry:
                 prior = HierarchicalPrior.from_dict(entry["hierarchical_prior"])
+            elif "derived" in entry:
+                prior = Derived.from_dict(entry["derived"])
             elif "prior" in entry:
                 prior = prior_from_spec(PriorSpec.from_dict(entry["prior"]))
             parameters.append(
@@ -2736,6 +3173,129 @@ class ParameterSet:
         )
 
 
+#: The round-off a supplied derived value may differ from its recomputation by
+#: before :meth:`ParameterSet.complete` refuses it (``numpy.allclose``'s
+#: ``rtol`` and ``atol``; W7.0). Relative to the value, with a small absolute
+#: floor for results that cancel to near zero (``mu + sigma * z`` at
+#: ``z = -mu / sigma``), where two correct float64 evaluations in different
+#: operation orders legitimately differ by more than any relative bound.
+DERIVED_RTOL: float = 1e-9
+DERIVED_ATOL: float = 1e-12
+
+
+def _derived_value(parameter: Parameter, resolved: Mapping[str, Value]) -> Value:
+    """A derived parameter's value on the numpy path, shaped to its declaration."""
+    from .kernels import NUMPY_OPS
+
+    prior = parameter.prior
+    assert isinstance(prior, Derived)
+    array = np.asarray(prior.evaluate(NUMPY_OPS, resolved), dtype=float)
+    if parameter.shape:
+        try:
+            return np.broadcast_to(array, parameter.shape).astype(float, copy=True)
+        except ValueError:
+            pass
+    elif array.shape == ():
+        return float(array)
+    raise ParameterError(
+        f"derived parameter {parameter.name!r} ({prior.expression!r}) evaluates to shape "
+        f"{array.shape}, which does not broadcast to its declared shape {parameter.shape}; "
+        f"declare shape= to match what the expression produces."
+    )
+
+
+def _is_plain(value: object) -> bool:
+    """Whether *value* is a Python or numpy number or array (not a tensor or tracer)."""
+    return isinstance(value, (int, float, np.ndarray, np.generic, list, tuple))
+
+
+class _NativeOps:
+    """The derived grammar's five functions, in an array's **own** namespace (W7.0).
+
+    For the traced half of :meth:`ParameterSet.complete`: a native component's
+    ``context()`` completes tensors or tracers, and core must neither import
+    torch or jax (``architecture.md`` §4) nor pull their values into numpy. A
+    numpy value takes numpy's function; an array that publishes an array-API
+    namespace (jax) takes that namespace's; otherwise the array's own method
+    of the same name (torch's ``Tensor.sqrt`` and the rest).
+    """
+
+    @staticmethod
+    def _apply(function: str, array: Any) -> Any:
+        if _is_plain(array):
+            return getattr(np, function)(array)
+        namespace = getattr(array, "__array_namespace__", None)
+        if callable(namespace):
+            return getattr(namespace(), function)(array)
+        method = getattr(array, function, None)
+        if callable(method):
+            return method()
+        raise ParameterError(
+            f"a derived expression called {function}() on a {type(array).__name__}, which "
+            f"offers neither an array-API namespace nor a {function}() method."
+        )
+
+    def sqrt(self, array: Any) -> Any:
+        return self._apply("sqrt", array)
+
+    def exp(self, array: Any) -> Any:
+        return self._apply("exp", array)
+
+    def log(self, array: Any) -> Any:
+        return self._apply("log", array)
+
+    def log1p(self, array: Any) -> Any:
+        return self._apply("log1p", array)
+
+    def absolute(self, array: Any) -> Any:
+        return self._apply("abs", array)
+
+
+_NATIVE_OPS = _NativeOps()
+
+
+def _native_derived_value(parameter: Parameter, resolved: Mapping[str, Value]) -> Value:
+    """A derived parameter's value from native (traced) inputs, in their own arrays."""
+    prior = parameter.prior
+    assert isinstance(prior, Derived)
+    value = prior.evaluate(_NATIVE_OPS, resolved)
+    if not parameter.shape:
+        return value
+    if _is_plain(value):
+        return np.broadcast_to(np.asarray(value, dtype=float), parameter.shape).copy()
+    namespace = getattr(value, "__array_namespace__", None)
+    if callable(namespace):
+        return namespace().broadcast_to(value, parameter.shape)
+    return value.broadcast_to(parameter.shape)
+
+
+def _check_supplied_derived(parameter: Parameter, supplied: Value, computed: Value) -> None:
+    """Refuse a supplied derived value that disagrees with its recomputation."""
+    given = np.asarray(parameter.to_value(supplied), dtype=float)
+    expected = np.asarray(computed, dtype=float)
+    agrees = given.shape == expected.shape or given.size == expected.size == 1
+    if agrees:
+        agrees = bool(
+            np.allclose(
+                given.reshape(expected.shape),
+                expected,
+                rtol=DERIVED_RTOL,
+                atol=DERIVED_ATOL,
+                equal_nan=True,
+            )
+        )
+    if not agrees:
+        prior = parameter.prior
+        assert isinstance(prior, Derived)
+        raise ParameterError(
+            f"a value was supplied for derived parameter {parameter.name!r} "
+            f"({prior.expression!r}) that disagrees with the value its inputs give "
+            f"(supplied {given.tolist()!r}, computed {expected.tolist()!r}). A derived value is "
+            f"computed, never taken from the caller; drop it from the mapping, or supply the "
+            f"inputs that give it."
+        )
+
+
 def _bijection_to_dict(bijection: Bijection) -> dict[str, Any]:
     if isinstance(bijection, Identity):
         return {"kind": "identity"}
@@ -2768,19 +3328,21 @@ def _evaluation_order(parameters: Sequence[Parameter], index: Mapping[str, int])
     order in which priors are evaluated.
     """
     dependencies: dict[str, tuple[str, ...]] = {}
+    derived = {parameter.name for parameter in parameters if parameter.is_derived}
     for parameter in parameters:
+        if parameter.is_derived:
+            how, kind = "is derived from", "Derived"
+        else:
+            how, kind = "has a hierarchical prior referencing", "Hierarchical"
         for reference in parameter.references:
             if reference not in index:
                 raise ParameterError(
-                    f"parameter {parameter.name!r} has a hierarchical prior referencing "
-                    f"{reference!r}, which is not in this set (it declares "
-                    f"{sorted(index)}). Hierarchical references must resolve within the set "
-                    f"that will evaluate them."
+                    f"parameter {parameter.name!r} {how} {reference!r}, which is not in this "
+                    f"set (it declares {sorted(index)}). {kind} references must resolve within "
+                    f"the set that will evaluate them."
                 )
             if reference == parameter.name:
-                raise ParameterError(
-                    f"parameter {parameter.name!r} has a hierarchical prior referencing itself"
-                )
+                raise ParameterError(f"parameter {parameter.name!r} {how} itself")
         dependencies[parameter.name] = parameter.references
 
     ordered: list[str] = []
@@ -2792,6 +3354,11 @@ def _evaluation_order(parameters: Sequence[Parameter], index: Mapping[str, int])
             return
         if mark == 1:
             cycle = " -> ".join([*trail, name])
+            if derived & {*trail, name}:
+                raise ParameterError(
+                    f"hierarchical priors and derived parameters form a cycle: {cycle}. A "
+                    f"parameter's prior or value cannot depend (even indirectly) on itself."
+                )
             raise ParameterError(
                 f"hierarchical priors form a cycle: {cycle}. A parameter's prior cannot "
                 f"depend (even indirectly) on itself."
@@ -3009,12 +3576,21 @@ def _apply_populations(
       :attr:`Binding.index`;
     * ``layout="flat"`` — the component's own declaration is **re-priored**
       with the member's prior, its hierarchical references qualified onto the
-      population's hyperpriors; a component that does not declare it is given
-      one.
+      population's hyperpriors.
 
     Either way each member component ends up receiving the draw under the
     member's own bare local name, so per-object models compose unmodified,
     which is the whole of H-1's argument.
+
+    **The two member rules (W7.0).** A routed member must be declared by
+    **every** ``over`` component — refused here, by name, rather than failing
+    at the first model evaluation with an unknown keyword (and the flat
+    layout no longer gives an undeclaring component one: that W5.12
+    allowance is retracted). A member declared by **none** of them is
+    *internal*: routed nowhere, permitted only as an input of a derived member
+    of the same population, refused otherwise, and refused outright in the
+    flat layout. A population with no ``over`` components routes nothing, so
+    neither rule applies to it.
     """
     ordered = list(components)
     updated = {component: list(entries) for component, entries in declarations.items()}
@@ -3054,12 +3630,15 @@ def _apply_populations(
                     f"models those datasets name, or share one quantity across them with a "
                     f"Tie."
                 )
+        internal = _internal_members(population, updated)
         ordered.append(label)
         updated[label] = list(population.parameter_set())
         rename = {name: population.qualified(name) for name in population.hyperprior_names}
         for member_label in population.over:
             existing = {parameter.name: parameter for parameter in updated[member_label]}
             for member in population.members:
+                if member.name in internal:
+                    continue
                 site = f"{member_label}{SEPARATOR}{member.name}"
                 current = existing.get(member.name)
                 if current is not None:
@@ -3101,25 +3680,75 @@ def _apply_populations(
                 prior = member.prior
                 if isinstance(prior, HierarchicalPrior):
                     prior = prior.rename_references(rename)
-                updated[member_label] = _replace_or_append(
-                    updated[member_label],
-                    dataclasses.replace(member, prior=prior, plate=None),
-                )
-        extra.extend(population.plate_bindings())
+                replacement = dataclasses.replace(member, prior=prior, plate=None)
+                updated[member_label] = [
+                    replacement if entry.name == member.name else entry
+                    for entry in updated[member_label]
+                ]
+        extra.extend(population.plate_bindings(internal=internal))
     return tuple(ordered), updated, (*plate_bindings, *extra)
 
 
-def _replace_or_append(entries: list[Parameter], parameter: Parameter) -> list[Parameter]:
-    """*entries* with *parameter* substituted in place, or appended if absent."""
-    if any(entry.name == parameter.name for entry in entries):
-        return [parameter if entry.name == parameter.name else entry for entry in entries]
-    return [*entries, parameter]
+def _internal_members(
+    population: Population, declarations: Mapping[str, Sequence[Parameter]]
+) -> frozenset[str]:
+    """The population's internal members, after checking both member rules (W7.0).
+
+    Rule 2: a member declared by some ``over`` components and not others is
+    refused by name. Rule 1: a member declared by none is internal, which is
+    permitted only when a derived member of the same population references it
+    (by its bare name), and never in the flat layout.
+    """
+    if not population.over:
+        return frozenset()
+    referenced = {
+        reference
+        for member in population.members
+        if member.is_derived
+        for reference in member.references
+    }
+    internal: set[str] = set()
+    for member in population.members:
+        declaring = [
+            label
+            for label in population.over
+            if any(parameter.name == member.name for parameter in declarations[label])
+        ]
+        if len(declaring) == len(population.over):
+            continue
+        if declaring:
+            missing = [label for label in population.over if label not in declaring]
+            raise ParameterError(
+                f"population {population.name!r} routes member {member.name!r} to every "
+                f"component in `over`, but {missing} do not declare it (while {declaring} do). "
+                f"A routed member replaces each component's own declaration, so every member "
+                f"component must declare it — a component that lacks it would receive a value "
+                f"its model does not take."
+            )
+        if population.layout == "flat":
+            raise ParameterError(
+                f"population {population.name!r}: member {member.name!r} is declared by none "
+                f"of the components in `over`, and layout='flat' has no internal members — "
+                f"one {member.name!r} declared once would be a single value shared by every "
+                f"member, a tie rather than a population. Declare it on every component, or "
+                f"use layout='plate'."
+            )
+        if member.name not in referenced:
+            raise ParameterError(
+                f"population {population.name!r}: member {member.name!r} is declared by none "
+                f"of the components in `over`, so it would be routed nowhere, and no derived "
+                f"member references it. An internal member is permitted only as an input of a "
+                f"derived member of the same population (the non-centred "
+                f"theta = mu + sigma * z); otherwise every member component must declare it."
+            )
+        internal.add(member.name)
+    return frozenset(internal)
 
 
 def _qualified_prior(parameter: Parameter, rename: Mapping[str, str]) -> AnyPrior:
     """A site's prior with hierarchical references mapped to merged names."""
     prior = parameter.prior
-    if isinstance(prior, HierarchicalPrior):
+    if isinstance(prior, (HierarchicalPrior, Derived)):
         return prior.rename_references(rename)
     return prior
 
@@ -3132,6 +3761,16 @@ def _collapse(
 ) -> Parameter:
     """Reduce one tie group to the single :class:`Parameter` the sampler sees."""
     first_component, first = sites[0]
+
+    if tie is not None or len(sites) > 1:
+        derived = [(c, p) for c, p in sites if p.is_derived]
+        if derived:
+            component, parameter = derived[0]
+            raise TyingError(
+                f"tie {group!r} includes {component}.{parameter.name}, which is derived "
+                f"({parameter.prior.expression!r}). A derived parameter is a function of its "
+                f"inputs and has no draw of its own to share: tie the inputs."
+            )
 
     for component, parameter in sites[1:]:
         if parameter.shape != first.shape:
@@ -3484,13 +4123,17 @@ class Parameterised:
             unambiguous.
         """
         if values is None:
-            missing = [p.name for p in self.parameters if p.value is None]
+            missing = [p.name for p in self.parameters if p.value is None and not p.is_derived]
             if missing:
                 raise ParameterError(
                     f"context() was given no values and parameter(s) {missing} have no declared "
                     f"value to fall back on."
                 )
-            resolved: dict[str, Value] = {p.name: p.value for p in self.parameters}
+            # A derived parameter has no declared value of its own (W7.0): it
+            # is computed from the declared values of its inputs.
+            resolved: dict[str, Value] = self.parameters.complete(
+                {p.name: p.value for p in self.parameters if not p.is_derived}
+            )
         else:
             resolved = self.parameters.complete(values)
         merged: dict[str, Value] = self.buffers.values()
@@ -3514,9 +4157,10 @@ class Parameterised:
 #: tail with an exponential one at the global scale.
 HORSESHOE_SPIKE_SHAPE = 0.5
 
-#: The two declarable tails, in the order :func:`shrinkage_horseshoe`
-#: documents them. ``"regularised"`` is the default and the recommended one.
-HORSESHOE_TAILS: tuple[str, ...] = ("regularised", "cauchy")
+#: The three declarable tails, in the order :func:`shrinkage_horseshoe`
+#: documents them. ``"regularised"`` is the default and the recommended one;
+#: ``"slab"`` (W7.0) is Piironen & Vehtari's regularised horseshoe exactly.
+HORSESHOE_TAILS: tuple[str, ...] = ("regularised", "cauchy", "slab")
 
 
 # W5.27: the shrinkage-helper framework's shared note. Spliced onto
@@ -3561,6 +4205,7 @@ def shrinkage_horseshoe(
     global_scale: float = 1.0,
     tail: str = "regularised",
     unit: Any = None,
+    slab_scale: float | Parameter | None = None,
 ) -> list[Parameter]:
     r"""The sparsity-inducing prior for a sum of noise components (W5.8).
 
@@ -3593,21 +4238,9 @@ def shrinkage_horseshoe(
     which references a parameter by name and has no product node, with no
     change to any class in this module.
 
-    **The regularisation.** Piironen & Vehtari's slab replaces the local
-    scale's Cauchy tail beyond a slab scale :math:`c` with a Gaussian one,
-    through
-
-    .. math::
-
-        \tilde\lambda_j^2 = \frac{c^2\lambda_j^2}{c^2 + \tau^2\lambda_j^2},
-
-    which is a **deterministic function of two sampled parameters**. §4.1
-    declares parameters and priors, not deterministic nodes, so that exact form
-    is not declarable today; the decision log records the gap and names the
-    node (a ``Derived`` parameter) that would close it.
-
-    What *is* declarable is the same guard in one level, and it is what
-    ``tail="regularised"`` — the default — gives: the local scale's family
+    **The regularisation.** Two tails tame the horseshoe's Cauchy tail. The
+    default, ``tail="regularised"``, does it in one level: the local scale's
+    family
     becomes ``gamma(a=1/2, scale=tau)``. That keeps the horseshoe's
     :math:`s^{-1/2}` spike at zero, which is where all of the shrinkage comes
     from, and replaces the Cauchy tail with an exponential one whose scale is
@@ -3622,6 +4255,30 @@ def shrinkage_horseshoe(
     ``tail="cauchy"`` declares the plain horseshoe instead, half-Cauchy at both
     levels; it lowers on both backends as a consequence, with no row of its
     own beyond the global scale's (``lowering.md`` §3.2.1).
+
+    ``tail="slab"`` (**W7.0**) declares Piironen & Vehtari's slab itself. Their
+    form replaces the local scale's Cauchy tail beyond a slab scale :math:`c`
+    with a Gaussian one through
+    :math:`\tilde\lambda_j^2 = c^2\lambda_j^2 / (c^2 + \tau^2\lambda_j^2)`,
+    a **deterministic function of sampled parameters** — the gap W5.8 recorded
+    and a :class:`Derived` parameter closes. This helper samples the product
+    :math:`s_j = \tau\lambda_j` rather than :math:`\lambda_j`, so in the
+    variables it actually has the slab reads
+
+    .. math::
+
+        \tau^2\tilde\lambda_j^2 = \frac{c^2 s_j^2}{c^2 + s_j^2},
+
+    and ``tail="slab"`` declares, per component, the plain half-Cauchy local
+    scale :math:`s_j`, one derived effective scale
+    ``sqrt(c**2 * s**2 / (c**2 + s**2))`` named ``<prefix>.<leaf>_effective``,
+    and the amplitude :math:`a_j \mid \tilde s_j \sim \mathcal{N}^+(0,
+    \tilde s_j)` — a :class:`HierarchicalPrior` referencing a derived
+    parameter. ``slab_scale`` as a float is their fixed-:math:`c` variant (a
+    fixed ``<prefix>.slab_scale``); as a :class:`Parameter` with a prior it is
+    their recommended hyperprior on the slab (an inverse-gamma on
+    :math:`c^2` is a prior on :math:`c` the declaration admits as written), and
+    is declared under ``<prefix>.slab_scale`` whatever its own name.
 
     Parameters
     ----------
@@ -3639,18 +4296,24 @@ def shrinkage_horseshoe(
         unit: the prior guess at "how big is a component that is really there".
         The data move it.
     tail
-        ``"regularised"`` (the default) or ``"cauchy"``, above.
+        ``"regularised"`` (the default), ``"cauchy"`` or ``"slab"``, above.
     unit
         The unit the amplitudes carry, applied to both scale levels too — a
         scale and the thing it scales are the same kind of quantity, and
         :class:`~ampere.core.GaussianProcessNoise` checks an amplitude's unit
         against its container.
+    slab_scale
+        :math:`c`, for ``tail="slab"`` only (and required by it): a positive
+        float, held fixed, or a :class:`Parameter` carrying a prior. Refused
+        with any other tail.
 
     Returns
     -------
     list of Parameter
-        The global scale, then one local scale per component, then one
-        re-declared amplitude per component, **in that order**. The order is
+        The global scale (and, for ``tail="slab"``, the slab scale), then one
+        local scale per component (and, for the slab, one derived effective
+        scale per component), then one re-declared amplitude per component,
+        **in that order**. The order is
         part of the answer: a :class:`ParameterSet` refuses a hierarchical
         reference that is not already in it, so the levels have to be
         registered outermost first. :func:`ampere.core.with_shrinkage` is what
@@ -3690,6 +4353,16 @@ def shrinkage_horseshoe(
         raise ParameterError(
             f"shrinkage_horseshoe's tail={tail!r} is not one of {list(HORSESHOE_TAILS)}."
         )
+    if tail == "slab" and slab_scale is None:
+        raise ParameterError(
+            "shrinkage_horseshoe's tail='slab' needs slab_scale=c: a positive float (the fixed-c "
+            "variant) or a Parameter carrying a prior on c."
+        )
+    if tail != "slab" and slab_scale is not None:
+        raise ParameterError(
+            f"shrinkage_horseshoe was given slab_scale= with tail={tail!r}; the slab scale is "
+            f"used only by tail='slab'."
+        )
     scale = _numeric(global_scale, "shrinkage_horseshoe's global_scale")
     if not math.isfinite(scale) or scale <= 0.0:
         raise ParameterError(
@@ -3714,6 +4387,8 @@ def shrinkage_horseshoe(
     declaration = [
         Parameter(global_name, _stats.halfcauchy(scale=scale), unit=unit, bijection=Log())
     ]
+    if tail == "slab":
+        return declaration + _slab_tiers(names, local_names, prefix, slab_scale, unit)
     declaration += [
         Parameter(local, local_prior, unit=unit, bijection=Log()) for local in local_names
     ]
@@ -3722,6 +4397,61 @@ def shrinkage_horseshoe(
         for name, local in zip(names, local_names, strict=True)
     ]
     return declaration
+
+
+#: The slab's effective scale over the helper's own ``s_j = tau * lambda_j``
+#: (memo §3.9): ``tau**2 * lambda_tilde_j**2 = c**2 s_j**2 / (c**2 + s_j**2)``.
+SLAB_EXPRESSION = "sqrt(c ** 2 * s ** 2 / (c ** 2 + s ** 2))"
+
+
+def _slab_tiers(
+    names: Sequence[str],
+    local_names: Sequence[str],
+    prefix: str,
+    slab_scale: float | Parameter | None,
+    unit: Any,
+) -> list[Parameter]:
+    """``tail="slab"``'s tiers after the global scale (W7.0, memo §3.9)."""
+    slab_name = f"{prefix}{SEPARATOR}slab_scale"
+    if isinstance(slab_scale, Parameter):
+        if slab_scale.shape:
+            raise ParameterError(
+                f"shrinkage_horseshoe's slab_scale Parameter {slab_scale.name!r} has shape "
+                f"{slab_scale.shape}; the slab scale is one scalar shared by every component."
+            )
+        slab = dataclasses.replace(slab_scale, name=slab_name)
+    else:
+        value = _numeric(slab_scale, "shrinkage_horseshoe's slab_scale")
+        if not math.isfinite(value) or value <= 0.0:
+            raise ParameterError(
+                f"shrinkage_horseshoe's slab_scale must be a positive, finite number, got "
+                f"{slab_scale!r}: it is the scale beyond which a component's prior turns "
+                f"Gaussian."
+            )
+        slab = Parameter(slab_name, value=value, fixed=True, unit=unit)
+    effective_names = [f"{local}_effective" for local in local_names]
+    global_name = f"{prefix}{SEPARATOR}global_scale"
+    tiers = [slab]
+    tiers += [
+        Parameter(
+            local,
+            HierarchicalPrior("halfcauchy", {"scale": global_name}),
+            unit=unit,
+            bijection=Log(),
+        )
+        for local in local_names
+    ]
+    tiers += [
+        Parameter(effective, Derived(SLAB_EXPRESSION, {"c": slab_name, "s": local}), unit=unit)
+        for effective, local in zip(effective_names, local_names, strict=True)
+    ]
+    tiers += [
+        Parameter(
+            name, HierarchicalPrior("halfnorm", {"scale": effective}), unit=unit, bijection=Log()
+        )
+        for name, effective in zip(names, effective_names, strict=True)
+    ]
+    return tiers
 
 
 shrinkage_horseshoe.__doc__ = f"{shrinkage_horseshoe.__doc__}\n{SHRINKAGE_HELPER_FRAMEWORK}"

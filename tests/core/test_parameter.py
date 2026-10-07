@@ -1610,8 +1610,9 @@ class TestTheShrinkageHorseshoe:
             shrinkage_horseshoe(self.NAMES, global_scale=bad)
 
     def test_an_unknown_tail_is_refused_naming_the_two(self) -> None:
+        # "slab" was the unknown tail here until W7.0 made it a declarable one.
         with pytest.raises(ParameterError, match="is not one of"):
-            shrinkage_horseshoe(self.NAMES, tail="slab")
+            shrinkage_horseshoe(self.NAMES, tail="laplace")
 
 
 class TestTheRegularisedHorseshoeAlias:
@@ -1649,7 +1650,12 @@ class TestTheFlatPopulationCapSetting:
 
     @staticmethod
     def _oversized(count: int) -> tuple[dict[str, ParameterSet], list[Parameter], list[Parameter]]:
-        components = {f"obj{index}": ParameterSet([]) for index in range(count)}
+        # Each component declares the member: W7.0 retracted the flat layout's
+        # allowance that gave an undeclaring component one (parameters.md §8).
+        components = {
+            f"obj{index}": ParameterSet([Parameter("theta", st.norm(0.0, 1.0))])
+            for index in range(count)
+        }
         members = [Parameter("theta", HierarchicalPrior("norm", {"loc": "mu"}))]
         hyperpriors = [Parameter("mu", st.norm(0.0, 1.0))]
         return components, members, hyperpriors

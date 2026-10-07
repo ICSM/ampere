@@ -266,6 +266,14 @@ class ArrayOps(Protocol):
         """Elementwise absolute value."""
         ...
 
+    def sqrt(self, array: Any) -> Any:
+        """Elementwise square root (W7.0, for :class:`~ampere.core.parameter.Derived`)."""
+        ...
+
+    def log(self, array: Any) -> Any:
+        """Elementwise natural logarithm (W7.0, for :class:`~ampere.core.parameter.Derived`)."""
+        ...
+
 
 class NumpyOps:
     """:class:`ArrayOps` in numpy. The reference path's namespace, and the default."""
@@ -309,6 +317,12 @@ class NumpyOps:
 
     def absolute(self, array: Any) -> np.ndarray:
         return np.abs(array)
+
+    def sqrt(self, array: Any) -> np.ndarray:
+        return np.sqrt(array)
+
+    def log(self, array: Any) -> np.ndarray:
+        return np.log(array)
 
 
 #: The reference namespace. One instance, because it holds no state.

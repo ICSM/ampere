@@ -207,6 +207,29 @@ and *(added W3.12)* they gain one more member there: `ampere_model_hash`,
 written on every run (and, §11, every training set) beside the spec, problem
 and data hashes.
 
+**Derived parameters in `posterior`** *(added W7.0, ruled by Peter 2026-10-05,
+D2; schema 10)*. A merged parameter name in the `posterior` group is a free one
+*or a derived one* (`parameters.md` §9, "`Derived`"): each derived parameter is
+one variable under its merged name, beside the free ones and not in a separate
+group, on **every** engine — emcee, dynesty, zeus, NUTS, VI, SBI — because it
+is computed from the stored draws at emission, the single source, and a
+deterministic function of each stored draw does not care where the draw came
+from. Each expression is evaluated **once, vectorised** over `(chain, draw,
+*shape)`, in evaluation order so a derived input to another derived parameter
+is formed first, with no per-draw loop. The broadcasting rule: an input of
+per-draw shape `s` is padded to `(chain, draw, *(1,) * (k - len(s)), *s)`, `k`
+the largest per-draw rank among the expression's inputs — which reproduces
+numpy's own broadcasting of the per-draw values for a scalar beside a plate
+member `(N,)`, a non-plate `(3,)` beside a scalar, and a plate member `(N, 3)` —
+and the result is padded the same way to the declared shape. A shaped derived
+variable takes the named dimension and index coordinate a free one of its shape
+would. The root attribute `ampere_derived` (§9) names them, so a consumer that
+must not treat a deterministic function of draws as a sampled dimension can
+tell: R-hat and ESS on one are meaningful, `plot_trace` may show it, and the
+SBC and TARP routes operate on the free vector and never see it. An `Optimum`
+stays on the free vector (§10b of `inference.md`); a derived value at the
+optimum is `complete()` of its constrained vector, left to the caller.
+
 **The weighted/approximate-draw rule, stated once** *(added W5.0, ruled by
 Peter 2026-09-10 on the inference-extensions memo §5, §7.1–7.2)*. dynesty's
 own convention — nested sampling's dead points are *weighted*, and every
@@ -879,6 +902,23 @@ append onto a file written before this attribute existed at all, since such a
 file has nothing to compare against. Not itself an input to
 `problem_fingerprint`, but the schema constant is, so `ampere_problem_hash`
 moved again at this bump as at every previous one.
+
+**One attribute joined at W7.0, and the constant is now 10** (decision-log row
+"The `Derived` parameter node (W7.0)" in `DEVELOPMENT_PLAN.md` §2).
+**`ampere_derived`** is canonical JSON of the derived parameters' merged names,
+in evaluation order — `"[]"` when there are none, so the attribute exists on
+every run and every training set from schema 10 on and a reader never has to
+ask whether its absence means "none" or "older file". It names the `posterior`
+variables that are deterministic functions of the draws rather than sampled
+dimensions (§4). A derived parameter's declaration enters the merged spec as
+its `"derived"` entry, so it is hashed into `ampere_spec_hash` with everything
+else; for a problem with no derived parameter nothing hashed changes except the
+schema constant itself, which is in `problem_fingerprint`, so
+`ampere_problem_hash` moved at this bump as at every previous one (and the
+conformance suite pins that the rest of the fingerprint is byte-identical
+across it). A training set's free-parameter columns are unchanged: a derived
+parameter is no column, as a fixed one is none — the free vector is the
+encoding.
 
 **`SBIEngine`'s cache attributes, none of them schema-counted.** Written
 through `extra=` exactly as `ampere_dynesty_logz` is (below), so a reader who

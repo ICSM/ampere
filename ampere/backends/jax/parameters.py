@@ -88,6 +88,7 @@ from ampere.core.lowering import (
     provenance_entries,
 )
 from ampere.core.parameter import (
+    Derived,
     HierarchicalPrior,
     Parameter,
     ParameterSet,
@@ -274,6 +275,13 @@ class LoweredParameterSet:
         # (``ParameterSet.evaluation_order()``, fold-in 9) precisely because
         # this line used to reach past the underscore for it.
         self._order: tuple[str, ...] = tuple(declaration.evaluation_order())
+        from .gp import JaxOps  # local: gp imports the core's kernels at module level
+
+        # W7.0: a derived parameter is no site and no bijection (``lowering.md``
+        # §5) -- a computation in the resolve step, over the same ArrayOps
+        # namespace the kernels use, from the *current* inputs every time.
+        self._ops = JaxOps()
+        self._derived: tuple[str, ...] = declaration.derived_names
         self._fallback_families = tuple(
             sorted({site.family for site in self._sites if not site.native_icdf})
         )
@@ -403,12 +411,17 @@ class LoweredParameterSet:
     def unpack(self, theta: Any) -> dict[str, Any]:
         """Expand a free vector into every parameter, fixed ones included."""
         vector = jnp.asarray(theta, dtype=jnp.float64).reshape(-1)
+        derived = self._resolved(vector) if self._derived else {}
         out: dict[str, Any] = {}
         for parameter in self._declaration:
             if parameter.is_fixed:
                 out[parameter.name] = np.asarray(self.constants[parameter.name])
                 if not parameter.shape:
                     out[parameter.name] = float(out[parameter.name])
+                continue
+            if parameter.is_derived:
+                value = np.asarray(derived[parameter.name])
+                out[parameter.name] = value if parameter.shape else float(value)
                 continue
             site = self._by_name[parameter.name]
             chunk = vector[site.where]
@@ -428,7 +441,34 @@ class LoweredParameterSet:
         for site in self._sites:
             chunk = vector[site.where]
             resolved[site.name] = chunk.reshape(site.shape) if site.shape else chunk[0]
+        # The second pass (W7.0): the sites above are in flat order, which is
+        # not the evaluation order a derived parameter needs, so derived values
+        # are formed afterwards, in ``evaluation_order`` -- every free and fixed
+        # input is resolved by then, and a derived input to a derived
+        # parameter is formed first.
+        for name in self._derived:
+            resolved[name] = self._derive(name, resolved)
         return resolved
+
+    def _derive(self, name: str, resolved: Mapping[str, Any]) -> jax.Array:
+        """One derived parameter's value, from the current *resolved* arrays (W7.0)."""
+        parameter = self._declaration[name]
+        prior = parameter.prior
+        assert isinstance(prior, Derived)
+        value = jnp.asarray(prior.evaluate(self._ops, resolved), dtype=jnp.float64)
+        if parameter.shape:
+            return jnp.broadcast_to(value, parameter.shape)
+        if value.ndim:
+            raise LoweringError(
+                "derived",
+                backend=BACKEND,
+                detail=(
+                    f"derived parameter {name!r} ({prior.expression!r}) evaluates to shape "
+                    f"{value.shape}, which does not broadcast to its declared shape (); declare "
+                    f"shape= to match what the expression produces"
+                ),
+            )
+        return value
 
     # -- priors -------------------------------------------------------------
 
@@ -489,6 +529,9 @@ class LoweredParameterSet:
         for name in self._order:
             site = self._by_name.get(name)
             if site is None:
+                if name in self._derived:
+                    # Mid-walk, after its inputs and before any prior binding it.
+                    resolved[name] = self._derive(name, resolved)
                 continue
             drawn = jnp.reshape(site.distribution(resolved).icdf(cube[site.where]), (-1,))
             flat = flat.at[site.where].set(drawn)
@@ -572,6 +615,13 @@ class LoweredParameterSet:
             for name in self._order:
                 site = self._by_name.get(name)
                 if site is None:
+                    if name in self._derived:
+                        # numpyro's own spelling of a deterministic site: the
+                        # structural view carries it under the merged name. Not
+                        # how a derived value reaches a run -- ampere's engines
+                        # use the flat potential, and emission computes the
+                        # posterior's derived variables (results.md §4).
+                        resolved[name] = numpyro.deterministic(name, self._derive(name, resolved))
                     continue
                 distribution = site.distribution(resolved)
                 plate = site.parameter.plate
@@ -630,8 +680,8 @@ def _entry_assertion(declaration: ParameterSet) -> None:
 
 
 def _lower_site(parameter: Parameter, declaration: ParameterSet) -> _Site | None:
-    """Lower one free parameter, or ``None`` for a fixed one (§5's "fixed" row)."""
-    if parameter.is_fixed:
+    """Lower one free parameter, or ``None`` for a fixed or derived one (§5's rows)."""
+    if parameter.is_fixed or parameter.is_derived:
         return None
     prior = parameter.prior
     hierarchical = isinstance(prior, HierarchicalPrior)

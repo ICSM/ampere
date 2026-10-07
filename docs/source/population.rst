@@ -92,6 +92,52 @@ is the more direct route: it builds the same ``Population`` declaration
 from a list of datasets in plate order, routing draws to the model label
 each dataset already names, so the loop above collapses into one call.
 
+The same population, non-centred
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The declaration above is *centred*: each ``index`` is sampled directly from
+``Normal(mu, sigma)``. The same density can be sampled in independent
+coordinates instead — ``z ~ Normal(0, 1)`` per member and
+``index = mu + sigma * z`` — which removes the funnel a gradient sampler
+meets when the data say little about each member. ``z`` is declared by no
+member model, so it is an *internal* member: sampled on the population's own
+component and routed nowhere. ``index`` is a :class:`~ampere.core.Derived`
+member, computed from the others wherever values are formed and routed to each
+model exactly as the centred draw was. A small version, on plain parameter
+sets:
+
+.. code-block:: pycon
+
+    >>> import numpy as np
+    >>> import scipy.stats as st
+    >>> from ampere.core import Derived, Parameter, ParameterSet, Population
+    >>> non_centred = Population(
+    ...     "objects",
+    ...     members=[Parameter("z", st.norm(0.0, 1.0)),
+    ...              Parameter("index", Derived("mu + sigma * z"))],
+    ...     hyperpriors=[Parameter("mu", st.norm(-1.0, 1.0)),
+    ...                  Parameter("sigma", st.halfnorm(0.0, 1.0))],
+    ...     over=["obj0", "obj1", "obj2"],
+    ... )
+    >>> objects = {
+    ...     f"obj{i}": ParameterSet([Parameter("index", st.norm(-1.3, 1.0))]) for i in range(3)
+    ... }
+    >>> merged = ParameterSet.merge(objects, populations=[non_centred]).merged
+    >>> merged.free_names
+    ('objects.mu', 'objects.sigma', 'objects.z')
+    >>> values = merged.complete({"objects.mu": -1.3, "objects.sigma": 0.35,
+    ...                           "objects.z": np.array([-1.0, 0.0, 2.0])})
+    >>> values["objects.index"]
+    array([-1.65, -1.3 , -0.6 ])
+
+The sampler sees ``mu``, ``sigma`` and the three ``z``; ``index`` is no
+sampler dimension, yet every model receives it, and the ``posterior`` of a
+run carries it as a variable of its own beside the sampled ones (named in the
+run's ``ampere_derived`` attribute). For the fifty-object problem above the
+change is the ``members=`` list alone. Which form samples better depends on
+the data: the centred form suits members the data pin down individually, the
+non-centred one members the data barely constrain (``inference.md`` §9).
+
 The joint fit, on the native path
 -------------------------------------
 

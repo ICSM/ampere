@@ -46,7 +46,7 @@ so survives declaration, composition and serialisation.
 >>> import scipy.stats as st
 >>> import astropy.units as u
 >>> from ampere.core import (
-...     Buffer, HierarchicalPrior, Identity, Log, Logit, Parameter,
+...     Buffer, Derived, HierarchicalPrior, Identity, Log, Logit, Parameter,
 ...     Parameterised, ParameterSet, Plate, PlateBinding, Population, PriorSpec, Tie,
 ...     describe_prior, prior_from_spec,
 ... )
@@ -69,9 +69,10 @@ so survives declaration, composition and serialisation.
 | `Bijection`, `Identity`, `Log`, `Logit` | Maps to and from unconstrained space |
 | `Parameterised` | The declaration mixin: `register_parameter` / `register_buffer` / `context`, plus the opt-in `describe()` identity hook (§10) |
 
-## 3. `Parameter`: three states, and why "fixed" is not a delta prior
+## 3. `Parameter`: four states, and why "fixed" is not a delta prior
 
-A `Parameter` is in exactly one of three states.
+A `Parameter` is in exactly one of four states (*Amended W7.0*: the fourth,
+**derived**, was added; the other three are unchanged).
 
 **Free** — has a prior, is not fixed. Occupies `size` dimensions of the flat
 vector and contributes to `lnprior`.
@@ -83,6 +84,17 @@ evaluation.
 **Deferred** — carries a `shared_as` tie label but no prior of its own: another
 site in the tie group supplies it (§7). A set containing one refuses to
 evaluate priors until merged.
+
+**Derived** — holds a `Derived` in the prior slot: its value is a deterministic
+function of other parameters of the same set (§9, "`Derived`"). The slot's
+meaning is therefore "what determines this parameter": a distribution (free), a
+`HierarchicalPrior` (free, its arguments bound by name), a `Derived` (derived),
+or nothing (fixed or deferred). A derived parameter occupies no sampler
+dimension and contributes nothing to `lnprior` — its inputs carry the density —
+and it is computed wherever named values are formed, so a model receives it
+like any other value. It takes no `value`, `fixed=True`, `shared_as` or
+`bijection`; each is refused by name, because there is no draw to fix, tie,
+initialise or transform — those belong to its inputs.
 
 ```pycon
 >>> temperature = Parameter("temperature", st.uniform(100.0, 9900.0), unit=u.K)
@@ -652,16 +664,26 @@ qualification and tie collapse) — fully qualified rather than the sketch's
 bare form, because two components may each hold a plate of the same local
 name. Everything is validated at merge: the parameter must exist and be
 array-valued, the index in range for its shape, the component present, and
-the local name must not shadow anything the component already receives. Note
-the receiving component's own `ParameterSet` does **not** declare the local
-name: the element arrives as an extra key in `distribute`'s output, and
-consuming it is the composing caller's contract — the intended caller being
-the plate-of-datasets construction, which builds these bindings from its own
-dataset ordering. **Since W5.12 that caller exists**: `Population` (§9) is the
-declaration that produces these bindings, and `DatasetCollection.plate`
-(`inference.md` §9) is the convenience that derives them from the datasets'
-order, so writing them out by hand is the low-level route rather than the
-expected one.
+the local name must not shadow anything the component already receives. A
+hand-written `PlateBinding` therefore delivers the element under a name the
+receiving component's own set does not hold, as in the example above, and
+consuming it is the composing caller's affair. **Since W5.12** the expected
+route is not the hand-written one: `Population` (§9) is the declaration that
+produces these bindings, and `DatasetCollection.plate` (`inference.md` §9) is
+the convenience that derives them from the datasets' order.
+
+*Amended W7.0* — the frozen text said, here, that the receiving component
+"does **not** declare the local name … consuming it is the composing caller's
+contract", and `_apply_populations`'s flat layout gave a component that did not
+declare a member one of its own. **Both allowances are retracted for a
+population**: a routed member must be declared by every `over` component (the
+plate layout then removes that declaration and the element replaces it; the
+flat layout re-priors it), and a member some components declare and others do
+not is refused by name at the merge — the failure that used to surface as an
+unknown keyword at the first model evaluation. A member *no* component declares
+is the population's internal member (§9, "`Population`"). No existing fixture
+relied on either allowance in its public rows; one unit test of the flat cap's
+warning merged over empty components and was changed to declare the member.
 
 ## 9. Hierarchical structure: `HierarchicalPrior` and `Plate`
 
@@ -796,6 +818,33 @@ and this contract declares parameters and priors, not deterministic nodes —
 `gamma(a=½, scale=τ)` local level: the same spike at zero, an exponential tail
 rather than a Cauchy one), and a `Derived` node is what would close the gap.
 
+*Amended W7.0* — the gap is closed. The helper samples `s_j = τλ_j`, not
+`λ_j`, so in its own variables the slab reads `τ²λ̃_j² = c²s_j²/(c² + s_j²)`,
+and `tail="slab", slab_scale=c` declares exactly that: after the global scale,
+the slab scale `<prefix>.slab_scale` (a float is Piironen & Vehtari's fixed-`c`
+variant; a `Parameter` with a prior is their hyperprior on `c`, declared under
+that name), the plain half-Cauchy local scales `s_j`, one derived effective
+scale `<prefix>.<leaf>_effective = sqrt(c²s_j²/(c² + s_j²))` per component, and
+the amplitudes `a_j | s̃_j ~ N⁺(0, s̃_j)` — a `HierarchicalPrior` referencing a
+derived parameter. The helper's returned order (global tier, local tier,
+components) is kept, so `with_shrinkage` consumes it unchanged; the default tail
+stays `"regularised"`, and the plain and regularised tails are byte-identical to
+what they were.
+
+```pycon
+>>> from ampere.core import shrinkage_horseshoe
+>>> slab = ParameterSet(shrinkage_horseshoe(("broad.amplitude", "narrow.amplitude"),
+...                                         tail="slab", slab_scale=2.0))
+>>> slab.derived_names
+('shrinkage.broad_effective', 'shrinkage.narrow_effective')
+>>> slab["broad.amplitude"].references
+('shrinkage.broad_effective',)
+>>> slab.free_names  # doctest: +NORMALIZE_WHITESPACE
+('shrinkage.global_scale', 'shrinkage.broad', 'shrinkage.narrow',
+ 'broad.amplitude', 'narrow.amplitude')
+
+```
+
 ### `Population` — hierarchy declared at composition time (*Added W5.12*)
 
 **Ruled by Peter, 2026-09-03** (`hierarchical_population.md` §11 Q2): the
@@ -893,6 +942,52 @@ has read the cost and accepts it can turn the refusal into a loud warning via
 `ampere.core.settings.override(flat_population_cap="warn")` — a one-field
 setting, not a `Population` argument and not a change to the limit.
 
+#### Internal members, and the non-centred form (*Added W7.0*)
+
+Two member rules replace "route every member to every component", both checked
+at the merge. **A routed member must be declared by every `over` component** —
+a member some declare and others do not is refused by name (§8's amendment).
+**A member no `over` component declares is internal**: it is routed to none of
+them, lives on the population's own component as one plate-tagged array, and
+is permitted only as an input of a **derived** member of the same population;
+otherwise it is refused by name. That is what makes the non-centred population
+declarable — the same density as the centred one above, sampled in
+`(μ, σ, z)`:
+
+```pycon
+>>> non_centred = Population(
+...     "objects",
+...     members=[Parameter("z", st.norm(0.0, 1.0)),
+...              Parameter("theta", Derived("mu + sigma * z"))],
+...     hyperpriors=objects.hyperpriors,
+...     over=objects.over,
+... )
+>>> nc = ParameterSet.merge(
+...     {label: object_set() for label in ("obj0", "obj1", "obj2")},
+...     populations=[non_centred],
+... )
+>>> nc.merged.free_names
+('obj0.cal', 'obj1.cal', 'obj2.cal', 'objects.mu', 'objects.sigma', 'objects.z')
+>>> sorted({b.local_name for b in nc.bindings if b.index is not None})
+['theta']
+>>> values = nc.merged.complete({"obj0.cal": 1.0, "obj1.cal": 1.0, "obj2.cal": 1.0,
+...                              "objects.mu": 1.0, "objects.sigma": 0.5,
+...                              "objects.z": np.array([-2.0, 0.0, 2.0])})
+>>> values["objects.theta"]
+array([0., 1., 2.])
+
+```
+
+The two declarations agree exactly: `lnprior_nc(μ, σ, z) = lnprior_c(μ, σ,
+θ = μ + σz) + N log σ`, the Jacobian of the N-fold affine map, which the
+conformance suite pins to round-off. **The flat layout refuses derived and
+internal members by name**: flat means one scalar per member component, and an
+internal `z` declared once would be one value shared by every `θ_i = μ + σz` —
+a tie wearing a population's clothes — while declared per component it would
+be routed and `theta`'s reference to it would dangle. The non-centred form is
+the plate layout's (§12). A population with no `over` components routes
+nothing, so neither rule applies to it.
+
 #### What it refuses
 
 By name, at merge, because each of these is a different model from the one the
@@ -900,12 +995,98 @@ caller meant: a component label the merge already has; a member component that
 does not exist, or the population's own; a member that disagrees with the
 component's own declaration about shape or unit; a **fixed** site (a fixed site
 has no draw); a site already tied or `shared_as` (sharing collapses N sites
-into one value, a population keeps them N — pick one); and a component merged
+into one value, a population keeps them N — pick one); a routed member some
+`over` components declare and others do not, and an undeclared member no
+derived member uses (*Added W7.0*, above); a derived or internal member in the
+flat layout; and a component merged
 as a `ParameterMapping`, because a composite's merged names are qualified
 (`likelihood.scale`) while a population addresses its members by bare local
 name, so the draw would never reach a leaf. For a plate of per-object
 *datasets*, declare the population over the models those datasets name —
 which is what `DatasetCollection.plate` does.
+
+### `Derived` — a parameter that is a function of others (*Added W7.0*)
+
+**Ruled by Peter, 2026-10-05** (D1, D2 of the nuisance-populations memo): a
+fourth `Parameter` state, declared as `Parameter(name, Derived("<expression>",
+symbols={...}))`. Two customers motivated it, and both are now declarations: the
+non-centred population above, and Piironen & Vehtari's slab on
+`shrinkage_horseshoe` (whose effective scale is a deterministic function of two
+sampled parameters).
+
+**The grammar is closed.** The expression is parsed once with
+`ast.parse(mode="eval")` and checked against a whitelist: symbols, numeric
+literals, `+ - * / **`, unary minus, parentheses, and calls to exactly `sqrt`,
+`exp`, `log`, `log1p` and `abs`. Attribute access, subscripts, comparisons,
+conditionals, lambdas and any other call are refused at declaration, naming the
+offending construct; the five function names are reserved, so a symbol may not
+be spelt like one. The checked tree is stored as its normalised source
+(`ast.unparse`), so `a+b` and `a + b` are one expression, hash as one, and
+serialise as one.
+
+**Symbols, not names.** Every name in the expression is a *symbol*, bound to a
+parameter by the `symbols` mapping — the shape of
+`HierarchicalPrior.hyperparameters` exactly, defaulting to the identity. A
+merge renames the mapping's values and never the expression, which is what lets
+a derived parameter reference a dotted merged name the grammar could not spell:
+
+```pycon
+>>> theta = Derived("mu+sigma*z")
+>>> theta.expression, theta.references
+('mu + sigma * z', ('mu', 'sigma', 'z'))
+>>> component = ParameterSet([Parameter("mu", st.norm()), Parameter("sigma", st.halfnorm()),
+...                           Parameter("z", st.norm()), Parameter("theta", theta)])
+>>> merged = ParameterSet.merge({"gp": component}).merged
+>>> dict(merged["gp.theta"].prior.symbols)
+{'mu': 'gp.mu', 'sigma': 'gp.sigma', 'z': 'gp.z'}
+>>> merged.to_spec()["parameters"][3]["derived"]["expression"]
+'mu + sigma * z'
+>>> Derived("mu.real")
+Traceback (most recent call last):
+    ...
+ampere.core.exceptions.ParameterError: Derived('mu.real'): Attribute ('mu.real') is not part of the derived-expression grammar. An expression may use numeric literals, symbols, + - * / **, unary minus, parentheses and calls to sqrt, exp, log, log1p, abs — nothing else (parameters.md §9, 'Derived'). A quantity the grammar cannot state is formed by the consumer that needs it.
+
+```
+
+**What each consumer does with it:**
+
+| Consumer | Behaviour |
+|---|---|
+| `free_size`, `free_names`, `free_labels`, `free_slice`, `bijections`, `constrain`, `unconstrain` | **excluded** — not a sampler dimension, like a fixed parameter |
+| `pack(values)` | ignores a derived entry, as it ignores a fixed one |
+| `names`, `__iter__`, `__getitem__`, `evaluation_order` | **included**, after its inputs (its `references` are the mapping's values, so the topological walk and its cycle refusal apply unchanged); `derived_names` lists them in evaluation order |
+| `complete(values)`, `unpack(theta)` | **computed** in evaluation order. `complete` is **idempotent**: a supplied derived value is recomputed; on the numpy reference path one that disagrees beyond round-off (`numpy.allclose`, `rtol=1e-9`, `atol=1e-12`) is refused by name, while the traced torch and jax paths, which cannot branch on a value, overwrite — so a second `complete` of a complete mapping passes everywhere |
+| `lnprior`, `lnprior_unconstrained` | **skipped** as a term, but resolved before any `HierarchicalPrior` that references it binds |
+| `prior_transform`, `sample` | no unit-cube dimension; computed **mid-walk**, after its inputs and before any prior that references it |
+| `HierarchicalPrior.bind` | finds it in the resolved values like any other name |
+| `Tie`, `shared_as`, `fix`, `release` | refused — tie, fix or release its inputs |
+| `PlateBinding`, `Plate`, `Population` member | allowed in the plate layout (a plate-tagged derived array is the non-centred `theta`); refused in a flat population |
+| `to_spec` / `from_spec` | `{"derived": {"expression": ..., "symbols": {...}}}`; round-trips after a merge |
+
+**Shape** is declared as for any parameter, and the result must broadcast to it
+— checked at `ParameterSet` construction when every input has a value, and
+otherwise at the first `complete`, refused by name either way. **Unit** is
+declared and carried into provenance, not checked through the arithmetic.
+
+```pycon
+>>> pset = ParameterSet([Parameter("theta", Derived("mu + sigma * z"), shape=(3,)),
+...                      Parameter("mu", st.norm()), Parameter("sigma", st.halfnorm()),
+...                      Parameter("z", st.norm(), shape=(3,))])
+>>> pset.free_names, pset.free_size
+(('mu', 'sigma', 'z'), 5)
+>>> pset.evaluation_order()
+('mu', 'sigma', 'z', 'theta')
+>>> pset.unpack(np.array([1.0, 2.0, -1.0, 0.0, 1.0]))["theta"]
+array([-1.,  1.,  3.])
+
+```
+
+A **callable** was the obvious alternative and is refused, for the reason §7
+gives about opaque priors: it could not be hashed into `ampere_problem_hash`,
+serialised into a stored run, shown to a reader, or lowered without trusting it
+to trace on every backend. The posterior carries one variable per derived
+parameter, computed at emission (`results.md` §4); the lowering is a
+computation in each backend's resolve step (`lowering.md` §5).
 
 ### Which construct to use
 
@@ -1221,6 +1402,18 @@ Each of these is a decision, not an oversight. Each has an extension point.
    the freeze, ruled 2026-09-03: the one thing that could never be right —
    a continuous default bijection — is now refused with a typed
    `CapabilityError` in `default_bijection_for`, and only there; see §6.)*
+9. **A derived parameter is a closed-grammar expression, not a callable**
+   (*Added W7.0*, §9). A quantity the grammar cannot state is formed by the
+   consumer that needs it, as `WarpedKernel`'s `non_centred=True` does; the
+   extension point is the whitelist.
+10. **No conditional in a derived expression** (*Added W7.0*). `where` is one
+    whitelist entry away and waits for a customer.
+11. **No unit arithmetic in a derived expression** (*Added W7.0*). The declared
+    unit is recorded, not derived from the inputs' units; the expression is
+    numeric in the declared units, as a prior is.
+12. **No derived or internal member in a flat population** (*Added W7.0*, §9).
+    The non-centred form is the plate layout's; the flat layout is the capped
+    small-N pattern, and an internal member there would be a tie.
 
 ## 13. What this contract hands to the specs downstream
 

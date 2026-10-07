@@ -337,14 +337,20 @@ The right-hand column has no funnel, because `z_k` and `s` are a priori
 independent, and it lowers to two ordinary rows of §3.2 (`halfnorm` and `norm`)
 with a multiplication in between.
 
-**Where the multiplication lives.** This contract has no deterministic node —
-`parameters.md` §9 — so `θ_k = s · z_k` is formed by whatever consumes the
-knot variables, not declared. `WarpedKernel` does exactly that and it is the
+**Where the multiplication lives.** (*Amended W7.0*) In a `Derived` parameter
+(`parameters.md` §9): `Parameter("theta", Derived("s * z"))` declares the
+right-hand column, with `z` sampled and `theta` computed in each backend's
+resolve step (§5) and handed to the model under its own name. A population
+declares it the same way, with `z` an internal member and `theta` a derived one
+(`parameters.md` §9, "`Population`"; §8 below). Before W7.0 the contract had no
+deterministic node, so `θ_k = s · z_k` could only be formed by whatever
+consumed the knot variables; `WarpedKernel` does exactly that, and it is the
 reason `non_centred=True` is its default: the kernel declares `z_k ~ Normal(0,
 1)` and forms `s · z_k` itself, so the sampler sees the right-hand column while
-the model is the left-hand one. `non_centred=False` declares the left-hand
-column directly with `HierarchicalPrior`, which is what a strongly identified
-warp can afford and what the plan names.
+the model is the left-hand one. That kernel is left as it is — it works, and
+re-expressing a landed kernel for symmetry is not a customer. `non_centred=False`
+declares the left-hand column directly with `HierarchicalPrior`, which is what a
+strongly identified warp can afford and what the plan names.
 
 **The horseshoe's chain now lowers, in full.** (*Amended W5.25*)
 `shrinkage_horseshoe` (`parameters.md` §9) is three hierarchical levels, and
@@ -691,6 +697,7 @@ This is the table W1.9's acceptance criterion asks for: every declaration form
 | **free** parameter | an entry in the flat float64 array; `scipy` prior evaluated directly | `torch.nn.Parameter(tensor, requires_grad=True)` registered via `register_parameter`; prior as a `torch.distributions` object per §3 | equinox: an ordinary array field on the `Module`, **in** the trainable partition. numpyro: one `numpyro.sample(name, fn)` site |
 | **fixed** parameter | not in the flat vector; injected by `unpack` at its declared value | a **buffer**, not a `Parameter` — `register_buffer(name, tensor)`, `requires_grad=False`, no prior object constructed | equinox: an array field **excluded** from the trainable partition (§6.2). numpyro: **not a sample site** — a plain constant closed over, or `numpyro.deterministic` if it must appear in the trace |
 | **deferred** parameter | — | — | — (all three: **must not reach lowering**; `merge` resolves it first, §1.3) |
+| **derived** parameter (*Added W7.0*) | **no site, no bijection**: computed by `complete`/`unpack` in evaluation order, mid-walk in `prior_transform` and `sample`; a stale supplied value refused | **no site, no bijection**: no `nn.Parameter` or buffer; computed in the resolve step (`unpack_tensor`, `_resolved`, mid-walk in `prior_transform` and `sample`) through `TorchOps`, a supplied value overwritten | **no site, no bijection**: computed in `_resolved`'s second pass over the evaluation order and mid-walk in `prior_transform`, through `JaxOps`. numpyro: `numpyro.deterministic(name, value)` under the merged name — the structural view only, since ampere's NUTS and VI run on the flat potential |
 | **`PriorSpec`** per family | identity — scipy is the declaration | §3.2, with the `loc`/`scale` rules of §3.3 and the fallback rule of §3.4 | §3.2 via numpyro; same rules |
 | **`HierarchicalPrior`** | evaluated in topological order; `bind()` freezes the family against already-resolved values | distribution object constructed **per evaluation** from the referenced parameter tensors (its arguments are tensors, so it cannot be built once at lowering) | numpyro: the natural form — `dist.Normal(mu, sigma)` where `mu`, `sigma` are earlier sample sites in the same model function. Site order follows the same topological order |
 | **`Plate`** (name, size, array-valued member) | already expanded into ordinary parameters by `Plate.expand()`; the member is one array-valued parameter of shape `(size,) + member.shape` | a single `nn.Parameter` of shape `(size,) + member.shape`; the prior is the member distribution **batched** over the leading axis | numpyro: `with numpyro.plate(plate_name, size, dim=-1): numpyro.sample(member_name, fn)` — one site producing `size` draws, which is exactly why the contract chose the array-valued shape |
@@ -974,6 +981,39 @@ implementation that hoists distribution construction out of the evaluation
 loop as an optimisation will break exactly the hierarchical rows, and break
 them into a plausible-looking wrong answer (the prior frozen at its
 initial-value hyperparameters).
+
+**The non-centred population** (*Added W7.0*). The same four objects, declared
+as a `Population` with `z` internal and `theta` derived (`parameters.md` §9):
+
+```
+Population("objects",
+           members=[Parameter("z", norm(0, 1)),
+                    Parameter("theta", Derived("mu + sigma * z"))],
+           hyperpriors=[Parameter("mu", norm(0, 5)), Parameter("sigma", halfnorm(0, 2))],
+           over=["obj0", "obj1", "obj2", "obj3"])
+```
+
+merges to `objects.mu`, `objects.sigma`, `objects.z` (shape `(4,)`, plate
+`"objects"`, routed nowhere) and `objects.theta` (shape `(4,)`, plate
+`"objects"`, element *i* routed to `obj<i>` under `theta`). The numpyro
+structural view is:
+
+```
+mu    = numpyro.sample("objects.mu",    dist.Normal(0.0, 5.0))
+sigma = numpyro.sample("objects.sigma", dist.HalfNormal(2.0))
+with numpyro.plate("objects", 4):
+    z = numpyro.sample("objects.z", dist.Normal(0.0, 1.0))
+theta = numpyro.deterministic("objects.theta", mu + sigma * z)
+```
+
+and on torch `objects.theta` is formed in the resolve step from the current
+`mu`, `sigma` and `z` tensors. The hazard above applies verbatim to a derived
+value: it must be formed from the *current* inputs on every evaluation, never
+hoisted, and in evaluation order — a derived input to a hierarchical prior
+(the slab's effective scale) is formed before the prior binds, and a derived
+parameter of a hierarchical one after it. The sampled coordinates are
+`(μ, σ, z)`; the density is the centred one, `lnprior_c(μ, σ, θ) + N log σ` in
+those coordinates, which the conformance suite pins to round-off.
 
 ## 9. RNG lowering and seed derivation
 

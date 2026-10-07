@@ -223,7 +223,18 @@ __all__ = [
 #: identity hash, ``log_prob_constrained``, evaluations, converged), on a run
 #: seeded from one. A new attribute on *every* run, not a conditional one, so
 #: it rides a bump (``ampere_problem_hash`` moves with it, as at every bump).
-PROVENANCE_SCHEMA_VERSION = 9
+#: **10 (W7.0)**: the ``Derived`` parameter node. The ``posterior`` group gains
+#: one variable per derived parameter, under its merged name, computed from
+#: the stored draws at emission on every engine, and ``ampere_derived`` --
+#: canonical JSON of the derived names in evaluation order, ``"[]"`` when
+#: there are none, so the attribute exists on every run from this schema on
+#: -- names them, so a consumer that must not treat a deterministic function
+#: of draws as a sampled dimension can tell. The merged spec gains the
+#: ``"derived"`` entry for such a parameter. For a problem with no derived
+#: parameter nothing hashed changes but the schema constant itself, which is
+#: in :func:`problem_fingerprint`, so ``ampere_problem_hash`` moves at this
+#: bump as at every previous one.
+PROVENANCE_SCHEMA_VERSION = 10
 
 #: Every attribute this module writes starts with this, so ampere's provenance
 #: never collides with ArviZ's own (``created_at``, ``creation_library``, ...)
@@ -972,6 +983,9 @@ def provenance_attrs(
         "capabilities": canonical_json(problem.capabilities.to_dict()),
         "free_size": int(problem.free_size),
         "free_names": canonical_json(list(problem.parameters.free_names)),
+        # W7.0, schema 10: the derived parameters, whose posterior variables are
+        # deterministic functions of the draws rather than sampled dimensions.
+        "derived": canonical_json(list(problem.parameters.derived_names)),
         # W5.22, schema 8: each free parameter's own declared prior, neutrally
         # described -- what lets a reader (fit_population among them) read
         # pi_0 back off a run rather than take it as a required argument.
