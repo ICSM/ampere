@@ -181,3 +181,48 @@ class TestTheDataTree:
 
         with pytest.raises(ResultsError, match="not an Optimum"):
             Optimum.from_datatree(xr.DataTree())
+
+
+class TestTheCoordinates:
+    """``Optimum.coordinates`` (W7.6): what the minimiser moved each entry in."""
+
+    def test_omitted_means_every_entry_moved_in_u(self) -> None:
+        assert make().coordinates == ("unconstrained", "unconstrained")
+
+    def test_one_known_kind_per_label(self) -> None:
+        assert make(coordinates=("constrained", "unconstrained")).coordinates == (
+            "constrained",
+            "unconstrained",
+        )
+        with pytest.raises(ResultsError, match="coordinates"):
+            make(coordinates=("constrained",))
+        with pytest.raises(ResultsError, match="coordinates"):
+            make(coordinates=("constrained", "sideways"))
+
+    def test_identity_does_not_see_them(self) -> None:
+        assert make(coordinates=("constrained", "constrained")).identity == make().identity
+
+    def test_combine_carries_them(self) -> None:
+        other = make(
+            route="empirical_bayes",
+            free_names=("irs.gp.scale",),
+            free_labels=("irs.gp.scale",),
+            unconstrained=np.array([2.0]),
+            constrained={"irs.gp.scale": 2.0},
+            covariance=np.array([[0.25]]),
+            starts=(),
+        )
+        both = Optimum.combine(make(coordinates=("constrained", "unconstrained")), other)
+        assert both.coordinates == ("constrained", "unconstrained", "unconstrained")
+
+    def test_netcdf_round_trip(self, tmp_path: object) -> None:
+        original = make(coordinates=("constrained", "unconstrained"))
+        tree = original.to_datatree()
+        assert tree.attrs["ampere_optimum_coordinates"] == '["constrained","unconstrained"]'
+        back = Optimum.from_datatree(from_netcdf(to_netcdf(tree, f"{tmp_path}/optimum.nc")))
+        assert back.coordinates == original.coordinates
+
+    def test_a_beta_tree_without_them_reads_as_unconstrained(self) -> None:
+        tree = make(coordinates=("constrained", "constrained")).to_datatree()
+        del tree.attrs["ampere_optimum_coordinates"]
+        assert Optimum.from_datatree(tree).coordinates == ("unconstrained", "unconstrained")

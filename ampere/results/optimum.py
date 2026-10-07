@@ -61,6 +61,10 @@ OPTIMUM_GROUP = "optimum"
 _DIM = "free_parameter"
 _DIM2 = "free_parameter_2"
 
+#: :attr:`Optimum.coordinates`' two entries (W7.6).
+_UNCONSTRAINED = "unconstrained"
+_COORDINATE_KINDS = frozenset({"constrained", _UNCONSTRAINED})
+
 
 @dataclass(frozen=True)
 class StartSummary:
@@ -146,6 +150,15 @@ class Optimum:
         :func:`~ampere.results.provenance.provenance_attrs` of the problem
         when the optimum was found, so the start is reproducible from this
         record alone.
+    coordinates
+        One entry per :attr:`free_labels` entry, ``"constrained"`` or
+        ``"unconstrained"``: the coordinates the minimiser moved that entry
+        in (W7.6). The ``"scipy"`` route moves a bounded coordinate in its
+        normalised constrained value, kept inside its support; every other
+        route moves
+        ``u``. Omitted, it is all ``"unconstrained"`` — what every optimum
+        stored before W7.6 was. It does not enter :attr:`identity`: the
+        point is the same whichever coordinates reached it.
     """
 
     route: str
@@ -163,6 +176,7 @@ class Optimum:
     evaluations: int
     starts: tuple[StartSummary, ...] = ()
     provenance: Mapping[str, Any] = field(default_factory=dict)
+    coordinates: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         vector = np.array(self.unconstrained, dtype=float).reshape(-1)
@@ -171,6 +185,13 @@ class Optimum:
                 f"an Optimum's unconstrained vector has {vector.size} entries but "
                 f"{len(self.free_labels)} free labels; one label per entry is the layout."
             )
+        kinds = tuple(str(k) for k in self.coordinates) or (_UNCONSTRAINED,) * vector.size
+        if len(kinds) != vector.size or not set(kinds) <= _COORDINATE_KINDS:
+            raise ResultsError(
+                f"an Optimum's coordinates must be one of {sorted(_COORDINATE_KINDS)} per free "
+                f"label ({vector.size}), got {kinds!r}."
+            )
+        object.__setattr__(self, "coordinates", kinds)
         vector.setflags(write=False)
         object.__setattr__(self, "unconstrained", vector)
         object.__setattr__(self, "free_names", tuple(self.free_names))
@@ -343,6 +364,7 @@ class Optimum:
             evaluations=sum(o.evaluations for o in optima),
             starts=tuple(s for o in optima for s in o.starts),
             provenance=optima[0].provenance,
+            coordinates=tuple(kind for o in optima for kind in o.coordinates),
         )
 
     # -- the one results format -----------------------------------------------
@@ -390,6 +412,7 @@ class Optimum:
                 f"{prefix}message": self.message,
                 f"{prefix}evaluations": int(self.evaluations),
                 f"{prefix}starts": canonical_json([s.to_dict() for s in self.starts]),
+                f"{prefix}coordinates": canonical_json(list(self.coordinates)),
             }
         )
         tree.attrs.update(attrs)
@@ -441,6 +464,8 @@ class Optimum:
             evaluations=int(attrs[f"{prefix}evaluations"]),
             starts=tuple(StartSummary.from_dict(s) for s in json.loads(attrs[f"{prefix}starts"])),
             provenance={k: v for k, v in attrs.items() if k not in own},
+            # absent from an optimum stored before W7.6: every one moved in u
+            coordinates=tuple(json.loads(attrs.get(f"{prefix}coordinates", "[]"))),
         )
 
     def __repr__(self) -> str:

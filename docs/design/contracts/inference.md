@@ -1611,8 +1611,8 @@ warm_start_gp(problem, *, length_scales=None, residual_from=None) -> dict[str, O
 
 and `ampere.results` exports the `Optimum` they return (`results.md` §4's
 *Amended W6.7* note). `method` is `"scipy"` (multi-start
-`scipy.optimize.minimize` over the packed unconstrained vector on the numpy
-contract path — any backend, gradient-free, Powell by default), `"map"` (a
+`scipy.optimize.minimize` on the numpy
+contract path — *Amended W7.6, 2026-10-07*: over bounded coordinates in their normalised constrained value and unbounded ones in `u`, the objective's value unchanged — any backend, gradient-free, Powell by default), `"map"` (a
 gradient MAP through `realise`: `torch.optim.LBFGS` or
 `jax.scipy.optimize.minimize("BFGS")`, Adam as the fallback), `"vi"`
 (`VIEngine`'s fitted `laplace` guide, its mean and covariance) or `"auto"`
@@ -1623,7 +1623,7 @@ objective kept, with every start summarised on the `Optimum`.
 
 **The objective convention: the constrained-space MAP.** Every route
 maximises `log p(θ) + log p(D | θ)` at `θ = constrain(u)`, over the packed
-unconstrained `u` so every iterate stays in support — *not*
+unconstrained `u` so every iterate stays in support (*Amended W7.6*: the scipy route moves a bounded coordinate in its constrained value instead, which also stays in support; the value maximised is the same) — *not*
 `log_prob_unconstrained(u)`, whose extra change-of-variables term moves the
 maximum with the choice of bijection, so that a "MAP" of it would be a
 property of the parametrisation. On the native path the realisation offers

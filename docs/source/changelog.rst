@@ -31,6 +31,18 @@ Unreleased
   need a 40-second emcee run out of ``pixi run test-fast``; ``test-all`` and CI
   still run them. ``SyntheticPhotometry.from_library`` no longer depends on a
   legacy module.
+* **The scipy optimiser no longer stops at a corner of the prior box.**
+  ``optimise(method="scipy")`` now moves a parameter with a box or half-line
+  prior in its own normalised value, kept inside the box, rather than
+  through a saturating sigmoid. On the NGC6302 twin's sixteen
+  parameters this takes the MAP from eleven coordinates at a bound to one.
+  :func:`ampere.inference.saturated_bounds` names a converged parameter
+  that still sits at a bound, and the route warns with
+  :class:`~ampere.inference.BoundSaturationWarning`. The
+  :class:`~ampere.results.Optimum` records the coordinates its minimiser
+  moved in (``coordinates``). :func:`~ampere.inference.warm_start_gp`
+  accepts a GP hyperparameter that a tie has renamed. See
+  :doc:`optimisers`.
 
 1.0.0b1 — the first beta of ampere v2
 -------------------------------------

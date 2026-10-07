@@ -91,7 +91,9 @@ What is here
     and the reduced-rank empirical-Bayes start for a GP likelihood's
     hyperparameters, each returned as an :class:`ampere.results.Optimum`
     that ``Engine.initial_positions(around=)`` and every sampling engine's
-    ``run(initial=)`` accept.
+    ``run(initial=)`` accept. :func:`saturated_bounds` names the coordinates
+    of an optimum that sit at a bound of their support (W7.6), and the scipy
+    route warns with :class:`BoundSaturationWarning` when it finds any.
 :class:`SBIEngine`
     **Simulation-based** inference — neural posterior, likelihood or ratio
     estimation through the ``sbi`` package (``method="npe" | "nle" | "nre" |
@@ -266,7 +268,13 @@ from ._dynesty import DynestyEngine
 from ._emcee import EmceeEngine
 from ._nested import NESTED_ENGINES, NautilusEngine, UltranestEngine
 from ._nuts import NUTSEngine
-from ._optimise import OPTIMISE_METHODS, WARM_START_GRID, optimise, warm_start_gp
+from ._optimise import (
+    OPTIMISE_METHODS,
+    WARM_START_GRID,
+    optimise,
+    saturated_bounds,
+    warm_start_gp,
+)
 from ._sbi import (
     DEFAULT_TRUNCATION_EPSILON,
     EMBEDDINGS,
@@ -281,7 +289,7 @@ from ._sbi import (
 from ._vi import VIEngine
 from ._zeus import ZeusEngine
 from .engine import DEFAULT_CACHE_SIZE, Engine
-from .exceptions import EngineError, SamplingFailureWarning
+from .exceptions import BoundSaturationWarning, EngineError, SamplingFailureWarning
 
 #: What :class:`BlackjaxEngine`'s ``method=`` accepts, mapped to a one-line
 #: description of each. Re-exported from the engine module under this name so
@@ -303,6 +311,7 @@ __all__ = [
     "TMNRE_SAMPLERS",
     "WARM_START_GRID",
     "BlackjaxEngine",
+    "BoundSaturationWarning",
     "DynestyEngine",
     "EmceeEngine",
     "Engine",
@@ -315,5 +324,6 @@ __all__ = [
     "VIEngine",
     "ZeusEngine",
     "optimise",
+    "saturated_bounds",
     "warm_start_gp",
 ]

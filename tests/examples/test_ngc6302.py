@@ -429,3 +429,58 @@ class TestExactOrderedPrior:
         np.testing.assert_allclose(values.sum(), _OLD_SYNTHETIC_SPECTRUM["sum"], rtol=1e-12)
         np.testing.assert_allclose(values[:5], _OLD_SYNTHETIC_SPECTRUM["first5"], rtol=1e-12)
         np.testing.assert_allclose(values[-5:], _OLD_SYNTHETIC_SPECTRUM["last5"], rtol=1e-12)
+
+
+#: The regression row's pinned seed and its margin below the truth (W7.6).
+BOUND_AWARE_SEED = 20261007
+BOUND_AWARE_MARGIN = 100.0
+#: Coordinates at a bound after the pre-W7.6 scipy route (every coordinate in
+#: ``u``) on the same problem and seed, measured at ``429960c``.
+OLD_ROUTE_SATURATED = 11
+
+
+@pytest.mark.heavy
+class TestTheBoundAwareScipyRoute:
+    """W7.6's regression row: the scipy route on fifteen boxes and a half-line.
+
+    The GP-off synthetic problem (sixteen free parameters: eleven abundance
+    boxes ``uniform(-6, 0)``, two fractions ``uniform(0, 1)``, two
+    ``triang(c=0)`` temperature boxes, and the ``lognorm`` calibration's
+    ``Log`` floor), optimised by ``optimise(method="scipy", starts=1,
+    seed=20261007)``. Measured on the same problem and seed with two starts
+    (the row runs one: the first start alone reaches the same MAP, and two
+    took 610 s — too long for CI's examples job; review, 2026-10-07):
+
+    * the **old route** (every coordinate in ``u``, ``429960c``): log
+      posterior ``-4146.0``, eleven coordinates at a bound (seven
+      abundances at ``-6``, ``Tcold0 = 10``, ``Tcold_fraction = 1``,
+      ``Twarm0 = 80``, ``Twarm_fraction = 0``), 19 691 evaluations;
+    * the **new route** (Powell in the bounded coordinates' normalised
+      constrained values, reflected into the box): log posterior ``-3151.8``,
+      one coordinate at a bound (``logacold2 = -6``), 32 545 evaluations,
+      both starts ending at Powell's default ``maxfev`` (so ``converged`` is
+      false) — the second start at ``-3203.5``;
+    * the truth the data were drawn from: ``-3106.9``.
+
+    On seed 2 the old route gave ``-4947.7`` with twelve coordinates at a
+    bound and the new one ``-3173.7`` with three, so the margin of 100 nats
+    is pinned over the measured gaps of 45 and 67, against the old route's
+    1039 and 1841.
+    """
+
+    def test_the_map_is_near_the_truth_and_off_the_corner(self) -> None:
+        import warnings
+
+        from ampere.inference import BoundSaturationWarning, optimise, saturated_bounds
+
+        problem = build_problem(synthetic=True, gp=False)
+        truth = problem.parameters.pack(QUALIFIED_TRUTH)
+        with warnings.catch_warnings():
+            # the count is asserted below; whether Twarm0 lands on its bound is not
+            warnings.simplefilter("ignore", BoundSaturationWarning)
+            optimum = optimise(problem, method="scipy", starts=1, seed=BOUND_AWARE_SEED)
+        assert set(optimum.coordinates) == {"constrained"}
+        assert optimum.log_prob_constrained >= problem.log_prob(truth) - BOUND_AWARE_MARGIN
+        saturated = saturated_bounds(problem, optimum.unconstrained)
+        print("saturated:", saturated, "log p:", optimum.log_prob_constrained)
+        assert len(saturated) < OLD_ROUTE_SATURATED

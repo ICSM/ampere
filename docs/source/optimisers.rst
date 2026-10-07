@@ -23,13 +23,15 @@ What is maximised
 -----------------
 
 Every route maximises the **constrained-space posterior density**,
-``log p(θ) + log p(D | θ)`` at ``θ = constrain(u)``, over the packed
-unconstrained vector ``u`` — so every iterate stays inside the prior's
-support, and the answer does not depend on which bijection maps a bounded
-parameter to the real line. (``log_prob_unconstrained``, the density NUTS
-samples, adds the change-of-variables term, and its maximum moves with the
-bijection.) The :class:`~ampere.results.Optimum` records both numbers, each
-named for what it is.
+``log p(θ) + log p(D | θ)`` at ``θ = constrain(u)`` — so every iterate stays
+inside the prior's support, and the answer does not depend on which bijection
+maps a bounded parameter to the real line. (``log_prob_unconstrained``, the
+density NUTS samples, adds the change-of-variables term, and its maximum
+moves with the bijection.) The :class:`~ampere.results.Optimum` records both
+numbers, each named for what it is. Which coordinates a minimiser *moves in*
+is a separate choice that leaves the function's value alone: the gradient
+routes move the packed unconstrained vector ``u``; the scipy route moves a
+bounded parameter in its own units (below).
 
 The three routes
 ----------------
@@ -37,7 +39,26 @@ The three routes
 **scipy** runs on every backend, without gradients: multi-start
 :func:`scipy.optimize.minimize` (Powell by default; ``minimiser="L-BFGS-B"``
 selectable) from ``starts`` prior draws, the best kept, and the covariance
-from a central-difference Hessian.
+from a central-difference Hessian in ``u``. A parameter with a box prior
+(``Logit``) or a half-line one (``Log``) is moved in its **constrained**
+value, kept inside its support, and every other parameter in ``u``. In
+``u`` a box's sigmoid saturates, and a Powell line search runs out to where
+the objective goes flat and stops at a corner of the box. The constrained
+value is normalised, because scipy's line searches work in absolute units.
+A box is scaled to ``[0, 1]``. A half-line is scaled by its prior median's
+distance from the floor. A positive box spanning a decade or more, such as
+a ``loguniform`` flux scale, moves in its normalised logarithm. L-BFGS-B,
+TNC, SLSQP and trust-constr receive the box as ``bounds=``. Powell and every
+other method move in coordinates *reflected* into it: a step past a bound
+folds back inside. scipy's Powell, given ``bounds=``, swaps its local line
+search for a search over the whole segment between the bounds, which can end
+worse than it started and still report success.
+:attr:`Optimum.coordinates <ampere.results.Optimum.coordinates>` records the
+choice per entry. When a converged parameter still sits at a bound,
+:func:`~ampere.inference.saturated_bounds` names it and the route warns
+with :class:`~ampere.inference.BoundSaturationWarning`. The
+:class:`~ampere.results.Optimum` is still returned (see "At a bound"
+below).
 
 .. code-block:: pycon
 
@@ -94,7 +115,10 @@ form as a function of the noise-to-amplitude ratio; the amplitude profiles
 out, a bracketed root find gives the ratio, and a twelve-point log grid over
 the length-scale prior's central 99 % gives the rest. A
 :class:`~ampere.core.DenseGP` dataset is searched on a temporary
-``HilbertSpaceGP(basis_size=32)``, which the result's ``message`` says.
+``HilbertSpaceGP(basis_size=32)``, which the result's ``message`` says. The
+three hyperparameters are found through the problem's parameter mapping, so
+one that a :class:`~ampere.core.Tie` has renamed (two datasets sharing one
+amplitude, say) is warm-started under its merged name.
 
 .. code-block:: pycon
 
@@ -139,7 +163,9 @@ qualified name; the density in both conventions; the covariance (inverse
 Hessian, unconstrained coordinates) or a ``covariance_refusal`` naming why
 the Hessian was not positive definite — never a silently regularised matrix;
 whether it converged, the optimiser's message and the evaluation count; one
-summary per start; and the problem's provenance at the time. A run seeded
+summary per start; which coordinates the minimiser moved each entry in
+(``coordinates``: ``"constrained"`` or ``"unconstrained"``); and the
+problem's provenance at the time. A run seeded
 from it records ``ampere_start`` (the route, the optimum's identity hash, the
 density, the evaluations and convergence) and every run records
 ``ampere_start_route`` (``"prior"`` by default) — provenance schema 9.
@@ -175,6 +201,24 @@ The honest limits
   local optimiser on a badly conditioned or ridge-shaped posterior converges
   somewhere, reports success and is wrong about where the mass is. The
   covariance refusal catches a flat direction; it cannot catch a banana.
+
+At a bound
+~~~~~~~~~~
+
+A :class:`~ampere.inference.BoundSaturationWarning` means that a converged
+coordinate sits within ``tolerance × width`` of either end of its box, or
+within ``tolerance ×`` the prior median's distance from a half-line's floor
+(the problem's ``reference_values``); ``tolerance`` is ``1e-3`` by default.
+The posterior there is flat, or still rising, towards the edge. Sometimes that is the right answer: an absent dust species' abundance
+belongs at its floor. Sometimes it is a prior that cuts off the mode, or a
+direction the data do not constrain. Either way the Hessian in ``u`` is flat
+along that coordinate, and the covariance is often refused. The user-journeys
+memo's power-law fit to PG 1011-040 (``docs/design/user_journeys_memo.md``,
+Appendix B) is the case to remember: the optimum put ``norm`` at its prior's
+lower bound, and an emcee ball drawn around it was 24 identical positions, so
+every walker stayed on the bound. Before starting a sampler from an optimum, call
+``saturated_bounds(problem, optimum.unconstrained)``, and if it names
+anything, start from the prior instead.
 
 Bayesian optimisation is deliberately not offered. Its surrogate assumes a
 high-dimensional standard-normal latent and a locally linear objective, which
