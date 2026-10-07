@@ -852,9 +852,26 @@ def shrinkage_problem(kit: Kit, tail: str) -> FittingProblem:
     horseshoe, half-Cauchy at both levels. Before this item neither tail
     lowered on a differentiable backend, because the global scale's
     half-Cauchy was in neither backend's table (``lowering.md`` §3.2).
+    ``"slab"`` (W7.0) is Piironen & Vehtari's slab, whose effective scales
+    are derived parameters the kernel itself owns — the case where a native
+    component's ``context()`` completes traced values holding a derived one.
     """
     module = kit.module
-    kernel = many_lines.horseshoe_kernel(kit.name, tail=tail)
+    if tail == "slab":
+        from ampere.core import shrinkage_horseshoe, with_shrinkage
+
+        kernel = with_shrinkage(
+            many_lines.degenerate_pair(kit.name),
+            shrinkage_horseshoe(
+                tuple(f"{label}.amplitude" for label in many_lines.DEGENERATE_LABELS),
+                global_scale=many_lines.HORSESHOE_GLOBAL_SCALE,
+                tail="slab",
+                slab_scale=2.0 * many_lines.HORSESHOE_GLOBAL_SCALE,
+                unit=u.Jy,
+            ),
+        )
+    else:
+        kernel = many_lines.horseshoe_kernel(kit.name, tail=tail)
     truth = power_law(SHRINKAGE_GRID, TRUTH["norm"], TRUTH["index"])
     return FittingProblem(
         module.PowerLaw(

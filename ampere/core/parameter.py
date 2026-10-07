@@ -2808,9 +2808,19 @@ class ParameterSet:
         given = set(supplied)
         for name in self._derived:
             parameter = self[name]
-            value = _derived_value(parameter, resolved)
+            inputs = [resolved[reference] for reference in parameter.references]
             if name in given:
-                _check_supplied_derived(parameter, resolved[name], value)
+                inputs.append(resolved[name])
+            if all(_is_plain(value) for value in inputs):
+                value = _derived_value(parameter, resolved)
+                if name in given:
+                    _check_supplied_derived(parameter, resolved[name], value)
+            else:
+                # A traced path: a native component's ``context()`` completes
+                # tensors or tracers, which cannot be compared by value, so the
+                # derived value is recomputed in their own namespace and
+                # overwrites whatever was supplied (parameters.md §9).
+                value = _native_derived_value(parameter, resolved)
             resolved[name] = value
 
     def _check_derived_shapes(self) -> None:
@@ -3192,6 +3202,71 @@ def _derived_value(parameter: Parameter, resolved: Mapping[str, Value]) -> Value
         f"{array.shape}, which does not broadcast to its declared shape {parameter.shape}; "
         f"declare shape= to match what the expression produces."
     )
+
+
+def _is_plain(value: object) -> bool:
+    """Whether *value* is a Python or numpy number or array (not a tensor or tracer)."""
+    return isinstance(value, (int, float, np.ndarray, np.generic, list, tuple))
+
+
+class _NativeOps:
+    """The derived grammar's five functions, in an array's **own** namespace (W7.0).
+
+    For the traced half of :meth:`ParameterSet.complete`: a native component's
+    ``context()`` completes tensors or tracers, and core must neither import
+    torch or jax (``architecture.md`` §4) nor pull their values into numpy. A
+    numpy value takes numpy's function; an array that publishes an array-API
+    namespace (jax) takes that namespace's; otherwise the array's own method
+    of the same name (torch's ``Tensor.sqrt`` and the rest).
+    """
+
+    @staticmethod
+    def _apply(function: str, array: Any) -> Any:
+        if _is_plain(array):
+            return getattr(np, function)(array)
+        namespace = getattr(array, "__array_namespace__", None)
+        if callable(namespace):
+            return getattr(namespace(), function)(array)
+        method = getattr(array, function, None)
+        if callable(method):
+            return method()
+        raise ParameterError(
+            f"a derived expression called {function}() on a {type(array).__name__}, which "
+            f"offers neither an array-API namespace nor a {function}() method."
+        )
+
+    def sqrt(self, array: Any) -> Any:
+        return self._apply("sqrt", array)
+
+    def exp(self, array: Any) -> Any:
+        return self._apply("exp", array)
+
+    def log(self, array: Any) -> Any:
+        return self._apply("log", array)
+
+    def log1p(self, array: Any) -> Any:
+        return self._apply("log1p", array)
+
+    def absolute(self, array: Any) -> Any:
+        return self._apply("abs", array)
+
+
+_NATIVE_OPS = _NativeOps()
+
+
+def _native_derived_value(parameter: Parameter, resolved: Mapping[str, Value]) -> Value:
+    """A derived parameter's value from native (traced) inputs, in their own arrays."""
+    prior = parameter.prior
+    assert isinstance(prior, Derived)
+    value = prior.evaluate(_NATIVE_OPS, resolved)
+    if not parameter.shape:
+        return value
+    if _is_plain(value):
+        return np.broadcast_to(np.asarray(value, dtype=float), parameter.shape).copy()
+    namespace = getattr(value, "__array_namespace__", None)
+    if callable(namespace):
+        return namespace().broadcast_to(value, parameter.shape)
+    return value.broadcast_to(parameter.shape)
 
 
 def _check_supplied_derived(parameter: Parameter, supplied: Value, computed: Value) -> None:
