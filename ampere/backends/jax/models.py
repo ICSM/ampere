@@ -119,6 +119,45 @@ def planck_jy(wavelength: Any, temperature: Any) -> jax.Array:
     return jnp.where(jnp.isfinite(radiance), radiance, 0.0) / _JY
 
 
+#: The sentinel telling "not given" apart from an explicit ``None``.
+_UNSET: Any = object()
+
+
+def _scale_form(scale: Any, solid_angle: Any) -> tuple[Any, bool]:
+    """Resolve the exclusive ``scale=`` / ``solid_angle=`` pair (W7.15).
+
+    Returns what was given for the one parameter, ``scale``, and whether it is
+    the solid-angle form. Neither keyword means the flux form at its default,
+    1 Jy at ``reference_wavelength``.
+    """
+    scale_given = scale is not _UNSET
+    angle_given = solid_angle is not _UNSET
+    if scale_given and angle_given:
+        raise ValueError(
+            "give scale= (the flux density in Jy at reference_wavelength) or solid_angle= "
+            "(steradian, multiplying the Planck radiance), not both: they are two "
+            "parametrisations of the one normalisation, 'scale'."
+        )
+    if angle_given:
+        if solid_angle is None:
+            raise ValueError(
+                "solid_angle=None leaves the model without a normalisation: give scale= "
+                "(the flux density in Jy at reference_wavelength) or solid_angle= (steradian)."
+            )
+        return solid_angle, True
+    return (1.0 if not scale_given else scale), False
+
+
+def _reference_micron(reference_wavelength: Any) -> float:
+    """The validated reference wavelength, bare micron."""
+    reference = float(_to_micron(reference_wavelength))
+    if not np.isfinite(reference) or reference <= 0.0:
+        raise ValueError(
+            f"reference_wavelength must be finite and positive (micron), got {reference!r}."
+        )
+    return reference
+
+
 class _SpectralModel(Model):
     """Shared plumbing: the grid buffer, the channels, and the template cache.
 
@@ -254,12 +293,16 @@ class _SpectralModel(Model):
 
 
 class BlackBody(_SpectralModel):
-    """``F_nu = scale * B_nu(T)`` — an isothermal blackbody in Jy.
+    """``F_nu = scale * B_nu(T, lambda) / B_nu(T, lambda_ref)`` — an isothermal blackbody in Jy.
 
-    ``scale`` absorbs the solid angle (and any distance dilution): it is the
-    dimensionless factor turning the Planck radiance into an observed flux
-    density, so a fit of a stellar photosphere varies ``scale`` and
-    ``temperature`` together.
+    ``scale`` is the flux density, in Jy, at ``reference_wavelength``: the
+    Planck function divided by its own value there, so a prior on ``scale`` is
+    a prior on a quantity a catalogue quotes. The default reference wavelength,
+    250 µm, is the dust convention :class:`ModifiedBlackBody` shares; a fit of
+    a stellar photosphere will want it near the peak. ``solid_angle=``
+    (steradian, exclusive with ``scale=``) is the solid-angle form: the same
+    parameter, ``scale``, with unit ``sr`` and the formula
+    ``F_nu = scale * B_nu(T)``.
 
     Parameters
     ----------
@@ -268,7 +311,11 @@ class BlackBody(_SpectralModel):
     temperature
         Kelvin. A prior to fit it, a number to hold it fixed.
     scale
-        Dimensionless multiplier. A prior to fit it, a number to hold it fixed.
+        Jy, the flux density at ``reference_wavelength``. Default 1 Jy.
+    solid_angle
+        Steradian; the solid-angle form, exclusive with ``scale``.
+    reference_wavelength
+        Micron; a buffer. Unused by the solid-angle form.
     channels
         Name (or names) of the channel the emitted
         :class:`~ampere.core.Spectrum` appears under.
@@ -284,26 +331,40 @@ class BlackBody(_SpectralModel):
         wavelength: Any,
         *,
         temperature: Any = 1000.0,
-        scale: Any = 1.0,
+        scale: Any = _UNSET,
+        solid_angle: Any = _UNSET,
+        reference_wavelength: float = 250.0,
         channels: str | Sequence[str] = "default",
         device: Any = DEVICE,
     ) -> None:
         super().__init__(wavelength, channels=channels, device=device)
+        given, self.solid_angle_form = _scale_form(scale, solid_angle)
+        reference = _reference_micron(reference_wavelength)
+        self.register_buffer("reference_wavelength", reference, unit=COORDINATE_UNIT)
         self.register_parameter(as_parameter("temperature", temperature, unit=u.K))
-        self.register_parameter(as_parameter("scale", scale))
+        unit = u.sr if self.solid_angle_form else u.Jy
+        self.register_parameter(as_parameter("scale", given, unit=unit))
 
     def _flux(self, grid: jax.Array, context: Mapping[str, Any]) -> jax.Array:
-        return jnp.asarray(context["scale"]) * planck_jy(grid, context["temperature"])
+        radiance = planck_jy(grid, context["temperature"])
+        if self.solid_angle_form:
+            return jnp.asarray(context["scale"]) * radiance
+        normalisation = planck_jy(context["reference_wavelength"], context["temperature"])
+        return jnp.asarray(context["scale"]) * radiance / normalisation
 
 
 class ModifiedBlackBody(_SpectralModel):
-    """``F_nu = scale * (lambda_0 / lambda)**beta * B_nu(T)`` — optically thin dust.
+    """``F_nu = scale * (lambda_ref / lambda)**beta * B_nu(T, lambda) / B_nu(T, lambda_ref)``.
 
-    The standard greybody: an emissivity rising as ``nu**beta`` multiplying the
-    Planck function. ``reference_wavelength`` is where the emissivity is unity,
-    so ``scale`` stays interpretable as the flux the source would have if it
-    radiated as a pure blackbody at that wavelength — without it, ``scale`` and
-    ``beta`` are degenerate in a way that makes the posterior hard to read.
+    Optically thin dust: the standard greybody, an emissivity rising as
+    ``nu**beta`` multiplying the Planck function. ``scale`` is the flux
+    density, in Jy, at ``reference_wavelength``, where the emissivity is unity
+    and the Planck function is divided by its own value — without the
+    reference, ``scale`` and ``beta`` are degenerate in a way that makes the
+    posterior hard to read. ``solid_angle=`` (steradian, exclusive with
+    ``scale=``) is the solid-angle form: the same parameter, ``scale``, with
+    unit ``sr`` and the formula
+    ``F_nu = scale * (lambda_ref / lambda)**beta * B_nu(T)``.
 
     Parameters
     ----------
@@ -314,7 +375,9 @@ class ModifiedBlackBody(_SpectralModel):
     beta
         Emissivity index. Typically 1 to 2 for interstellar dust.
     scale
-        Dimensionless multiplier, at ``reference_wavelength``.
+        Jy, the flux density at ``reference_wavelength``. Default 1 Jy.
+    solid_angle
+        Steradian; the solid-angle form, exclusive with ``scale``.
     reference_wavelength
         Micron; a **buffer**, not a parameter — one would not put a prior on
         the definition of one's own normalisation.
@@ -331,27 +394,28 @@ class ModifiedBlackBody(_SpectralModel):
         *,
         temperature: Any = 100.0,
         beta: Any = 1.5,
-        scale: Any = 1.0,
+        scale: Any = _UNSET,
+        solid_angle: Any = _UNSET,
         reference_wavelength: float = 250.0,
         channels: str | Sequence[str] = "default",
         device: Any = DEVICE,
     ) -> None:
         super().__init__(wavelength, channels=channels, device=device)
-        reference = float(_to_micron(reference_wavelength))
-        if not np.isfinite(reference) or reference <= 0.0:
-            raise ValueError(
-                f"reference_wavelength must be finite and positive (micron), got {reference!r}."
-            )
+        given, self.solid_angle_form = _scale_form(scale, solid_angle)
+        reference = _reference_micron(reference_wavelength)
         self.register_buffer("reference_wavelength", reference, unit=COORDINATE_UNIT)
         self.register_parameter(as_parameter("temperature", temperature, unit=u.K))
         self.register_parameter(as_parameter("beta", beta))
-        self.register_parameter(as_parameter("scale", scale))
+        unit = u.sr if self.solid_angle_form else u.Jy
+        self.register_parameter(as_parameter("scale", given, unit=unit))
 
     def _flux(self, grid: jax.Array, context: Mapping[str, Any]) -> jax.Array:
-        emissivity = (jnp.asarray(context["reference_wavelength"]) / grid) ** jnp.asarray(
-            context["beta"]
-        )
-        return jnp.asarray(context["scale"]) * emissivity * planck_jy(grid, context["temperature"])
+        reference = jnp.asarray(context["reference_wavelength"])
+        emissivity = (reference / grid) ** jnp.asarray(context["beta"])
+        flux = jnp.asarray(context["scale"]) * emissivity * planck_jy(grid, context["temperature"])
+        if self.solid_angle_form:
+            return flux
+        return flux / planck_jy(reference, context["temperature"])
 
 
 class PowerLaw(_SpectralModel):

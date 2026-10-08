@@ -106,9 +106,11 @@ solid angle. ``from_astropy`` will not supply one:
 The remedy states the convention rather than hiding it:
 ``equivalencies=[astropy.units.dimensionless_angles()]`` declares a solid
 angle of **exactly one steradian**, which is the same convention
-:class:`ampere.backends.reference.BlackBody`'s dimensionless ``scale``
-carries — the factor that absorbs the solid angle and the distance dilution
-together. The two are the same physics written twice, and
+:class:`ampere.backends.reference.BlackBody` carries in its solid-angle form,
+``BlackBody(..., solid_angle=...)`` — a ``scale`` in steradian that absorbs the
+solid angle and the distance dilution together (the default form's ``scale``
+is a flux density in Jy at ``reference_wavelength``, since W7.15). The two are
+the same physics written twice, and
 ``TestItAgreesWithTheReferenceModels`` compares their ``log_prob`` at the
 conformance suite's exact tolerance rather than approximately. Both
 conversions (input units, output units) happen **once, at configuration

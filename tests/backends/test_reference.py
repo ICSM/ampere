@@ -131,8 +131,43 @@ class TestNativeModels:
             .single()
             .values
         )
-        expected = 3.0 * (reference / GRID) ** beta * planck_jy(GRID, 40.0)
+        normalisation = planck_jy(np.array([reference]), 40.0)[0]
+        expected = 3.0 * (reference / GRID) ** beta * planck_jy(GRID, 40.0) / normalisation
         assert emitted == pytest.approx(expected, rel=1e-12)
+
+    @pytest.mark.parametrize("build", [BlackBody, ModifiedBlackBody])
+    def test_the_scale_is_the_flux_at_the_reference_wavelength(self, build: type) -> None:
+        """W7.15: ``scale`` is a quantity in Jy a catalogue quotes, not a solid angle."""
+        grid = np.array([10.0, 70.0, 100.0, 160.0])
+        model = build(grid, temperature=180.0, scale=5.0, reference_wavelength=100.0)
+        emitted = model().single().values
+        assert emitted[2] == pytest.approx(5.0, rel=1e-12)
+        spec = model.parameters.to_spec()["parameters"]
+        assert {entry["name"]: entry.get("unit") for entry in spec}["scale"] == "Jy"
+
+    @pytest.mark.parametrize("build", [BlackBody, ModifiedBlackBody])
+    def test_the_solid_angle_form_is_the_radiance_times_the_angle(self, build: type) -> None:
+        """``solid_angle=`` registers the same name, in steradian, with the old formula."""
+        model = build(GRID, temperature=40.0, solid_angle=st.loguniform(1e-16, 1e-14))
+        assert model.parameters.free_names == ("scale",)
+        assert model.parameters["scale"].unit == u.sr
+        spec = model.parameters.to_spec()["parameters"]
+        assert {entry["name"]: entry.get("unit") for entry in spec}["scale"] == "sr"
+        values = {"scale": 2.0e-15}
+        if build is ModifiedBlackBody:
+            values["beta"] = 1.5
+        emitted = model(**values).single().values
+        emissivity = (250.0 / GRID) ** 1.5 if build is ModifiedBlackBody else 1.0
+        assert emitted == pytest.approx(2.0e-15 * emissivity * planck_jy(GRID, 40.0), rel=1e-12)
+
+    @pytest.mark.parametrize("build", [BlackBody, ModifiedBlackBody])
+    def test_scale_and_solid_angle_are_exclusive(self, build: type) -> None:
+        with pytest.raises(ValueError, match="scale=.*solid_angle=.*not both"):
+            build(GRID, scale=1.0, solid_angle=1e-15)
+        with pytest.raises(ValueError, match="solid_angle=None"):
+            build(GRID, solid_angle=None)
+        assert build(GRID).parameters["scale"].value == pytest.approx(1.0)
+        assert build(GRID).parameters["scale"].unit == u.Jy
 
     def test_beta_zero_recovers_the_blackbody(self) -> None:
         """A greybody with no emissivity slope is a blackbody — a real degeneracy check."""

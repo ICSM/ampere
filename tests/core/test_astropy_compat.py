@@ -13,8 +13,9 @@ the one that matters most.
    stated rather than fudged: astropy's ``BlackBody`` emits a surface
    brightness, ``scale=1*u.Jy/u.sr`` puts it in Jy/sr, and
    ``u.dimensionless_angles()`` states a solid angle of exactly one steradian,
-   which is the convention the reference model's dimensionless ``scale``
-   carries. If those two conventions ever drift apart, this class fails.
+   which is the convention the reference model's solid-angle form
+   (``solid_angle=``, a ``scale`` in steradian, since W7.15) carries. If those
+   two conventions ever drift apart, this class fails.
 
    The rows live here rather than in ``tests/conformance/`` for a structural
    reason worth recording: every test body in that directory takes the
@@ -130,7 +131,9 @@ class TestItAgreesWithTheReferenceModels:
     """The headline acceptance criterion: same physics, same ``log_prob``, same digits."""
 
     def test_a_wrapped_blackbody_emits_what_the_reference_one_does(self) -> None:
-        native = ReferenceBlackBody(WAVELENGTH, temperature=TEMPERATURE_PRIOR, scale=SCALE_PRIOR)
+        native = ReferenceBlackBody(
+            WAVELENGTH, temperature=TEMPERATURE_PRIOR, solid_angle=SCALE_PRIOR
+        )
         adapted = wrapped_blackbody()
         for temperature, scale in ((3000.0, 2.0), (450.0, 0.3), (9000.0, 7.5)):
             theirs = native(temperature=temperature, scale=scale).single()
@@ -140,7 +143,9 @@ class TestItAgreesWithTheReferenceModels:
 
     def test_a_wrapped_blackbody_scores_the_same_log_prob(self) -> None:
         """The criterion as written: ``log_prob`` on the *same* data."""
-        native = ReferenceBlackBody(WAVELENGTH, temperature=TEMPERATURE_PRIOR, scale=SCALE_PRIOR)
+        native = ReferenceBlackBody(
+            WAVELENGTH, temperature=TEMPERATURE_PRIOR, solid_angle=SCALE_PRIOR
+        )
         data = observed(native(temperature=3000.0, scale=2.0).single().values)
         their_problem = FittingProblem(native, [Dataset(data)], seed=SEED)
         our_problem = FittingProblem(wrapped_blackbody(), [Dataset(data)], seed=SEED)

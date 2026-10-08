@@ -180,7 +180,8 @@ On the reference backend
     model = BlackBody(
         wavelength,
         temperature=st.loguniform(100.0, 3000.0),
-        scale=st.loguniform(0.1, 10.0),
+        scale=st.loguniform(0.1, 10.0),   # the flux density in Jy at 20 µm
+        reference_wavelength=20.0,        # micron
     )
 
     observed = Spectrum(
