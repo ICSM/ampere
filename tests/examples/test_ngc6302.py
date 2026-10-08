@@ -29,6 +29,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from collections.abc import Iterator
+from typing import Any
+
 import numpy as np
 import pytest
 import scipy.stats as st
@@ -107,6 +110,17 @@ _LEGACY_DUST_MASSES = {
         "iron": 1.5101493748674502e-05,
     },
 }
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _from_the_prior(prior_start: Any) -> Iterator[None]:
+    """Every emcee and zeus run in this module starts from the prior (W7.12).
+
+    The default start's one-start optimiser costs about four minutes on the
+    twin's sixteen parameters, per fit; these rows test the twin, not the start.
+    """
+    with prior_start():
+        yield
 
 
 class TestOpacityBuffers:

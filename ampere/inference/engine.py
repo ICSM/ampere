@@ -749,9 +749,11 @@ class Engine(abc.ABC):
         """An ensemble engine's ``run(initial=)``, with the optimiser's mode as the default.
 
         **W7.12.** ``None`` (the default) runs :func:`~ampere.inference.optimise`
-        once — ``method="scipy"``, one start, on the problem's own
-        ``"optimise.initialisation"`` stream, so a seeded problem starts
-        reproducibly — and draws the walkers in
+        once — ``method="scipy"``, one start, its start drawn on this engine's
+        own ``"default_start"`` stream (derived from the problem's seed, so a
+        seeded problem starts reproducibly, and separate from the problem's
+        ``"optimise.initialisation"`` stream, so a later ``optimise(problem)``
+        draws the starts it would have drawn anyway) — and draws the walkers in
         ``initial_positions(count, around=optimum)``'s ball. ``"prior"`` is the
         former default exactly: the same prior draws on the same stream, so a run
         under ``initial="prior"`` reproduces a run made before W7.12 bit for bit.
@@ -827,7 +829,12 @@ class Engine(abc.ABC):
             # The engine says this itself, below, with the remedy for a run.
             warnings.simplefilter("ignore", BoundSaturationWarning)
             try:
-                optimum = optimise(self.problem, method="scipy", starts=1)
+                optimum = optimise(
+                    self.problem,
+                    method="scipy",
+                    starts=1,
+                    seed=self.integer_seed("default_start"),
+                )
             except EngineError as error:
                 first = str(error).splitlines()[0]
                 return None, f"the optimiser found no start it could score ({first})."

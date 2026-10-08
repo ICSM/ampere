@@ -77,11 +77,53 @@ longer needs to call this one itself.
 
 from __future__ import annotations
 
+import contextlib
+from typing import Any
+from collections.abc import Callable, Iterator
+
 import importlib.util
 import pathlib
 import sys
 
 import pytest
+
+
+@contextlib.contextmanager
+def _prior_start() -> Iterator[None]:
+    """Run every ``EmceeEngine`` and ``ZeusEngine`` inside as if ``initial="prior"``.
+
+    W7.12 made the optimiser's mode the ensembles' default start. An example
+    passes no ``initial=``, so its tests would pay one optimiser run per fit
+    -- four minutes on the NGC6302 twin's sixteen parameters, once per replica
+    in the interferometry calibration study -- and the rows that pin numbers
+    made from the prior start would move. The examples are not the tests' to
+    edit, so this patches the engines' ``run`` for the block's duration; the
+    default start itself is tested where it belongs,
+    ``tests/inference/test_default_start.py``.
+    """
+    from ampere.inference import EmceeEngine, ZeusEngine
+
+    with pytest.MonkeyPatch.context() as patch:
+        for engine in (EmceeEngine, ZeusEngine):
+            original = engine.run
+
+            def run(self: Any, *args: Any, _original: Any = original, **kwargs: Any) -> Any:
+                kwargs.setdefault("initial", "prior")
+                return _original(self, *args, **kwargs)
+
+            patch.setattr(engine, "run", run)
+        yield
+
+
+@pytest.fixture(scope="session")
+def prior_start() -> Callable[[], contextlib.AbstractContextManager[None]]:
+    """The :func:`_prior_start` context manager, usable from a fixture of any scope.
+
+    Session-scoped so that a class- or session-scoped fixture may request it;
+    it patches nothing by itself -- enter what it returns around the runs.
+    """
+    return _prior_start
+
 
 _ROOT = pathlib.Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:

@@ -1692,9 +1692,11 @@ the existing `init_to_value` route), `VIEngine` at the mode exactly.
 **The default start** *(Amended W7.12, 2026-10-07; decision-log row "The
 ensembles' default start")*. `EmceeEngine.run` and `ZeusEngine.run` with
 `initial=None` — the default — run `optimise(problem, method="scipy",
-starts=1)` once (the problem's own `"optimise.initialisation"` stream, so a
-seeded problem starts reproducibly; one start and no time cap, so the run
-does not depend on the machine) and start from that ball. `initial="prior"`
+starts=1)` once (its start seeded from the engine's own `"default_start"`
+stream — reproducible from the problem's seed, and the problem's
+`"optimise.initialisation"` stream is left where it was, so a later
+`optimise(problem)` is unaffected by the run; one start and no time cap, so
+the run does not depend on the machine) and start from that ball. `initial="prior"`
 is the former default, the same prior draws on the same stream, bit for bit;
 an array or an `Optimum` is the caller's, and `initial=optimise(problem)` is
 the full eight-start route. Two problems fall back to the prior with a

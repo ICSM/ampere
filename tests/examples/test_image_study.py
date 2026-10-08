@@ -15,9 +15,7 @@ gross effect. Anything finer needs the marked run.
 
 from __future__ import annotations
 
-import contextlib
 import importlib.util
-from collections.abc import Iterator
 from typing import Any
 
 import numpy as np
@@ -26,27 +24,6 @@ import pytest
 from ampere.core import Image, Layout
 
 from examples.image import generators, model, study
-
-
-@contextlib.contextmanager
-def prior_start() -> Iterator[None]:
-    """Run the example's ``EmceeEngine`` from prior draws (W7.12's ``initial="prior"``).
-
-    The example passes no ``initial=``, so since W7.12 it starts at the
-    optimiser's mode; the numbers this row holds were made from the prior
-    start, which is what it keeps. The example itself is not this item's to edit.
-    """
-    from ampere.inference import EmceeEngine
-
-    original = EmceeEngine.run
-
-    def run(self: Any, *args: Any, **kwargs: Any) -> Any:
-        kwargs.setdefault("initial", "prior")
-        return original(self, *args, **kwargs)
-
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(EmceeEngine, "run", run)
-        yield
 
 
 needs_torch = pytest.mark.skipif(
@@ -231,7 +208,7 @@ class TestTheBenchmark:
 class TestCalibration:
     """The coverage claim, at a smoke budget."""
 
-    def test_the_flexible_arm_covers_at_a_smoke_budget(self) -> None:
+    def test_the_flexible_arm_covers_at_a_smoke_budget(self, prior_start: Any) -> None:
         # From the prior: sixty steps from the optimiser's half-width ball do
         # not let the ensemble expand to the posterior's width, so the
         # intervals are too narrow and six replicas under-cover (W7.12).
