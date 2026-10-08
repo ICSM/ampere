@@ -568,6 +568,8 @@ the ordered triangle, as in legacy. And the Matern-3/2 GP runs on the
 O(N) :class:`~ampere.core.QuasisepGP` solver rather than a dense one, which
 is exact for that kernel on sorted one-dimensional coordinates. The module
 docstring of ``examples/ngc6302/ngc6302.py`` has the derivation.
+The :doc:`NGC 6302 notebook <notebooks/ngc6302>` walks through the twin on the
+ISO spectrum, from reading the file to the dust-mass table.
 
 .. _migrating-twin-modified-blackbody:
 
