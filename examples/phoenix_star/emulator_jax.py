@@ -1,6 +1,6 @@
 """The PHOENIX emulator and star in ``jax``: the mirror of :mod:`.emulator_torch`.
 
-The same arithmetic on :data:`JAX_OPS` (``jax.numpy``), float64 required: the
+The same arithmetic on :data:`JAX_OPS` (:class:`ampere.backends.jax.JaxOps`), float64 required: the
 constructors call :func:`ampere.backends.jax.require_x64`, and
 :func:`.phoenix_star.backend_module` calls
 :func:`ampere.backends.jax.configure_x64` before any jax work, as
@@ -11,32 +11,24 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-import jax.numpy as jnp
-
-from ampere.backends.jax import BACKEND, require_x64
+from ampere.backends.jax import BACKEND, JaxOps, require_x64
+from ampere.core import ArrayOps
 
 from . import emulator as _reference
 from . import phoenix_star as _star
-from .emulator import Ops
 
 __all__ = ["JAX_OPS", "PhoenixEmulator", "PhoenixStar"]
 
 
-def _asarray(value: Any) -> Any:
-    return jnp.asarray(value, dtype=jnp.float64)
-
-
-def _asindex(value: Any) -> Any:
-    return jnp.asarray(value, dtype=jnp.int64)
-
-
-JAX_OPS = Ops(jnp, _asarray, _asindex)
+#: The public :class:`~ampere.backends.jax.JaxOps` (W7.13): float64, the
+#: default device.
+JAX_OPS: ArrayOps = JaxOps()
 
 
 class PhoenixEmulator(_reference.PhoenixEmulator):
     """:class:`examples.phoenix_star.emulator.PhoenixEmulator` on jax."""
 
-    OPS: ClassVar[Ops] = JAX_OPS
+    OPS: ClassVar[ArrayOps] = JAX_OPS
     DIFFERENTIABLE: ClassVar[bool] = True
     BATCHABLE: ClassVar[bool] = False
     DEVICE: ClassVar[str] = "cpu"
@@ -50,7 +42,7 @@ class PhoenixEmulator(_reference.PhoenixEmulator):
 class PhoenixStar(_star.PhoenixStar):
     """:class:`examples.phoenix_star.phoenix_star.PhoenixStar` on jax."""
 
-    OPS: ClassVar[Ops] = JAX_OPS
+    OPS: ClassVar[ArrayOps] = JAX_OPS
     DIFFERENTIABLE: ClassVar[bool] = True
     BATCHABLE: ClassVar[bool] = False
     DEVICE: ClassVar[str] = "cpu"
