@@ -2890,7 +2890,11 @@ class TestPhotometricAlignmentByName:
 class TestPredict:
     """W7.15: ``FittingProblem.predict`` — the model curve at a point in one call."""
 
-    VALUES = {"model.index": -1.5, "model.norm": 2.0, "calibration": 1.1}
+    VALUES: ClassVar[dict[str, float]] = {
+        "model.index": -1.5,
+        "model.norm": 2.0,
+        "calibration": 1.1,
+    }
 
     def test_the_prediction_per_dataset_is_the_instrument_chain_at_the_point(self) -> None:
         joint = TestJointTwoDatasetProblem()
