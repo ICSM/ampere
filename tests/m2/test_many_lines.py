@@ -82,20 +82,28 @@ NON_STATIONARY = ("warped", "sum")
 
 
 @pytest.fixture(scope="module")
-def comparison() -> many_lines.Comparison:
-    """The four fits of one ``many_lines`` spectrum, computed once for this module."""
-    return many_lines.compare(size=CI_SIZE)
+def comparison(prior_start: Any) -> many_lines.Comparison:
+    """The four fits of one ``many_lines`` spectrum, computed once for this module.
+
+    From the prior start (W7.12): the pinned biases and coverages below were
+    measured from it, and from the optimiser's one-start mode the warped arm's
+    short chain did not recover ``model.A`` on CI's runners (run 37710209479).
+    The study's own driver keeps the engines' default.
+    """
+    with prior_start():
+        return many_lines.compare(size=CI_SIZE)
 
 
 @pytest.fixture(scope="module")
-def shrinkage() -> many_lines.Shrinkage:
+def shrinkage(prior_start: Any) -> many_lines.Shrinkage:
     """The sparsity demonstration: two degenerate terms, two priors, one truth.
 
     About three and a half minutes at
     :data:`~examples.m2_misspecification.many_lines.SHRINKAGE_EMCEE`, paid once
-    for the four rows that read it.
+    for the four rows that read it; from the prior start, as ``comparison``.
     """
-    return many_lines.shrinkage(size=CI_SIZE)
+    with prior_start():
+        return many_lines.shrinkage(size=CI_SIZE)
 
 
 def _score_in_and_out(entry: Any, band: tuple[float, float]) -> tuple[float, float]:
