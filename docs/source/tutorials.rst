@@ -21,6 +21,7 @@ Ampere v2
    notebooks/quickstart
    notebooks/portable_model
    notebooks/Ampere_MBB_Example
+   notebooks/ngc6302
 
 :doc:`notebooks/quickstart` is the shortest route from nothing to a v2 fit —
 a straight line fitted to two photometric bands and a *Spitzer*/IRS spectrum,
@@ -30,7 +31,12 @@ a modified blackbody to ten bands of photometry with emcee and then zeus
 behind one interface. Both are executed when the documentation is built (a
 cell that raises fails the build), state their sampling budgets and wall
 times in their last cell, and are the notebook forms of ``examples/linear_sed``
-and ``examples/modified_blackbody``.
+and ``examples/modified_blackbody``. :doc:`notebooks/ngc6302` is the spectroscopist's
+walkthrough: the Kemper et al. two-shell dust model of NGC 6302 on the *ISO*
+spectrum, with the data read by hand, the model declared species by species,
+and every diagnostic of :doc:`reading_the_diagnostics` applied to one fit of a
+real spectrum. It is executed at build too, at a deliberately short
+budget that its prose says is far too short to converge.
 :doc:`notebooks/portable_model`, "Writing a model once for three backends",
 takes the quickstart's model and rewrites it on
 :class:`ampere.core.PortableModel`, so that one ``_flux`` runs on numpy, jax

@@ -114,6 +114,14 @@ Unreleased
   from ``emit`` and ``summary``, is 1.1, the ensemble convention (1.05 was
   stricter than a well-run ensemble reaches at a modest budget).
 
+* **A spectroscopist's walkthrough on a real spectrum.** The
+  :doc:`NGC 6302 notebook <notebooks/ngc6302>` expands the Kemper et al. twin
+  into a tutorial that reads the *ISO* data by hand, declares the two-shell
+  dust model species by species, fits it with independent noise and with a GP
+  from the published solution, reads the convergence verdict and every
+  diagnostic of :doc:`reading_the_diagnostics`, and ends on the dust-mass table
+  and the second posterior mode the twin's record found.
+
 1.0.0b1 — the first beta of ampere v2
 -------------------------------------
 

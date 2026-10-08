@@ -90,8 +90,9 @@ The mild case, where the GP is doing its job, is the rest of this page; the
 four plots below are read on the M2 study's scenarios, a four-parameter toy
 (a linear continuum with two Gaussian absorption lines, 200 points, 1 % noise)
 into which a known deficiency is injected. :doc:`m2_misspecification` describes
-it. (A second mild case, a real spectrum, joins this page with the NGC 6302
-notebook.)
+it. The :doc:`NGC 6302 notebook <notebooks/ngc6302>` is the second mild
+case: a real spectrum, a physical model, and a GP absorbing only what the model
+lacks.
 
 The four plots
 --------------
