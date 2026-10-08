@@ -114,6 +114,31 @@ Unreleased
   from ``emit`` and ``summary``, is 1.1, the ensemble convention (1.05 was
   stricter than a well-run ensemble reaches at a modest budget).
 
+* **Behaviour change: a blackbody's ``scale`` is a flux in Jy, and a
+  catalogue's own wavelengths are accepted.** On
+  :class:`~ampere.backends.reference.ModifiedBlackBody` and
+  :class:`~ampere.backends.reference.BlackBody` (and their torch and jax
+  twins) ``scale`` is now the flux density in Jy at ``reference_wavelength``
+  — the Planck function divided by its own value there — rather than a
+  multiplier of the Planck radiance in Jy/sr, so ``scale=1`` is 1 Jy, not
+  10¹⁵; ``BlackBody`` gains ``reference_wavelength`` (default 250 µm, its
+  sibling's). The old form is ``solid_angle=`` (steradian, in place of
+  ``scale=``), and the parameter's unit in ``to_spec`` and the provenance
+  (``Jy`` or ``sr``) says which a run used. A fit written against the old
+  ``scale`` needs ``scale=`` renamed ``solid_angle=``, or its prior's bounds
+  multiplied by :math:`B_\nu(T, \lambda_{\rm ref})` at a representative
+  temperature, as the two shipped SED examples now do. ``PhotometricPoints`` now align with
+  a prediction by filter name: a catalogue built on its own pivot wavelengths,
+  in its own order, is accepted, and the instrument chain's wavelengths are
+  adopted. Also: :func:`~ampere.results.add_posterior_predictive`,
+  :func:`~ampere.results.add_residuals` and
+  :func:`~ampere.results.gp_localisation` keep at most
+  :data:`~ampere.results.MAX_DERIVED_DRAWS` (200) draws by default
+  (``thin=1`` for every draw); :meth:`ampere.core.FittingProblem.predict`
+  gives the model curve at a point in one call; the localisation plot's
+  caveat no longer overdraws the axis label, and a corner plot no longer
+  logs "too few points to create valid contours".
+
 1.0.0b1 — the first beta of ampere v2
 -------------------------------------
 

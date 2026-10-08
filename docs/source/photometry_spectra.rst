@@ -153,6 +153,13 @@ example; a prior with mass piled up near zero would pull a genuinely
 present feature back towards "no GP needed", which is the opposite of what
 this page needs to show.
 
+When the data are a handful of photometric points with no shared structure
+between them, the GP has nothing to learn from: its hyperparameters stay at
+their prior and the fit is the independent one at extra cost. The flexible
+likelihood earns its place on a spectrum, or on a catalogue dense enough to
+carry correlated residuals — which is why the photometry here keeps
+:class:`~ampere.core.IndependentNoise`.
+
 Four combinations, four fits, the physical parameters and the calibration
 factor(s) at 68 % central credible intervals (truth in brackets; the full
 95 % coverage check and every free parameter are in the branch report and
