@@ -69,10 +69,28 @@ The data
   CASSIS file the user has fetched, read by :func:`.generators.read_irs`
   (the :mod:`examples.linear_sed` SL/LL split, deduplicated), each with
   ``Resample`` and a ``CalibrationScale`` and independent noise.
-* ``HD105_SED.csv`` also lists two upper limits, SPIRE 500 micron and LABOCA
-  870 micron. They are not in the votable the legacy reads, so the legacy
-  never used them and neither does the twin. A ``Censoring`` declaration
-  (``ampere/core/likelihood.py``) is where they would go, which is a follow-up.
+* **The two upper limits.** ``HD105_SED.csv`` flags two points, SPIRE 500
+  micron and LABOCA 880 micron, as upper limits. The votable the legacy reads
+  does not carry them, so the legacy never used them. The twin adds them, by
+  default (``build_problem(limits=True)``), as censored observations:
+  :func:`.generators.read_limits` reads the two flagged rows, the photometry
+  holds twenty-one points (the votable's nineteen, then the two), and
+  ``Censoring.upper_limits(flags)`` on the photometry's ``Likelihood`` makes
+  each contribute the probability that the true flux lies below the recorded
+  one (``likelihoods.md`` section 9) rather than a Gaussian density. SPIRE 500
+  is the library's ``HERSCHEL_SPIRE_PLW``; LABOCA is not in the library and is
+  a third top-hat (315-375 GHz, 800-952 micron: centred at 345 GHz, 60 GHz wide,
+  Siringo et al. 2009), whose pivot replaces the catalogue's 880 micron as for
+  ALMA and ATCA. The recorded value and uncertainty are the CSV's, exactly.
+  Both rows are measurements below three times their error (2.1 against 21 mJy
+  and 10.7 against 17.7 mJy) that the catalogue flagged, not stated
+  3 sigma limits; declaring 3 sigma as the recorded value would
+  be the alternative reading, and is not done. ``limits=False`` is the
+  nineteen points with no declaration. The recorded uncertainties (7 and
+  5.9 mJy) are large, so the censored terms bind only where the model is
+  well above the limit: on the real data the fitted model already sits at
+  0.1-1 mJy at both bands, and the posterior moves by less than the chains'
+  own noise (see the measurement below).
 
 ``--synthetic`` replaces the votable's fluxes by the model at
 :data:`.generators.SYNTHETIC_TRUTH` (the Marshall star with ``log_area =
@@ -100,33 +118,68 @@ What changed in the translation
 
 Coverage run (Accept criterion)
 -------------------------------
-``pixi run -e dev python -m examples.star_disc --synthetic``: the votable's
-nineteen points and the synthetic RVS spectrum, replaced by the model at the
-Marshall star plus the synthetic dust (``generators.SYNTHETIC_TRUTH``) at
-``generators.SEED`` (20260930); emcee on the reference backend at the legacy
-budget, 40 walkers, 4000 steps with 1000 burn-in (3000 kept draws per
-walker); 631 s wall clock, 2026-09-30. All eight truths fall inside the 95 %
-intervals, **but the run has not converged**: R-hat is 1.10-1.42, above 1.05
-on every parameter, and the minimum bulk ESS is 82, against the criterion's
-R-hat < 1.05 and ESS > 400. The coverage verdict therefore does not count at
-this budget. It was not re-run; the budget that converges is an open question
-(W6.13 (6) report).
+``pixi run -e dev python -m examples.star_disc --synthetic``: the twenty-one
+photometric points (the votable's nineteen and the two limits, each replaced
+by the model at ``generators.SYNTHETIC_TRUTH`` plus noise at the CSV's own
+uncertainty, with the censoring declaration kept) and the synthetic RVS
+spectrum, at ``generators.SEED`` (20260930); emcee on the reference backend at
+the legacy budget, 40 walkers, 4000 steps with 1000 burn-in (3000 kept draws
+per walker); 767 s wall clock, 2026-10-08. The default start fell back to
+prior draws (the optimiser's mode sits on a bound of the prior, as a
+half-normal GP amplitude's does whenever the model fits). All eight truths
+fall inside the 95 % intervals, **but the run has not converged**: R-hat is
+1.44-2.14 on the physical parameters and 1.24-1.47 on the others, against the
+criterion's R-hat < 1.05, and the minimum bulk ESS is 52, against ESS > 400.
+The coverage verdict therefore does not count at this budget. The data differ
+from the nineteen-point run this table replaces (two more points consume the
+random stream), so the numbers are not comparable draw for draw. The model
+flux at the truth is 80 and 17 mJy at the two bands, far above the real
+catalogue's 2.1 and 10.7 mJy, but the synthetic limits are regenerated at
+the truth, so the run does not score a contradiction.
 
 ==========================  =========  ==============================  =========  =====
 parameter                   mean       95 % interval                   truth      R-hat
 ==========================  =========  ==============================  =========  =====
-``beta``                    1.0025     [0.9521, 1.1034]                1.0 ok     1.194
-``feh``                     0.0178     [0.0103, 0.0593]                0.02 ok    1.191
-``lambda_0``                150.02     [144.87, 161.79]                150 ok     1.187
-``log_area``                0.49800    [0.49412, 0.50219]              0.5 ok     1.107
-``logg``                    4.4807     [4.4710, 4.4981]                4.478 ok   1.418
-``luminosity``              1.21570    [1.21447, 1.21781]              1.216 ok   1.193
-``t_dust``                  60.12      [59.78, 60.43]                  60 ok      1.115
-``teff``                    6033.9     [5959.1, 6085.7]                6034 ok    1.378
-calibration scale           0.9959     [0.9765, 1.0036]                           1.190
-GP amplitude                0.083      [0.0044, 0.219]                            1.096
-GP length scale             8.4e-3     [3.0e-4, 2.3e-2]                           1.141
+``beta``                    1.0128     [0.9569, 1.1153]                1.0 ok     1.438
+``feh``                     0.0220     [0.0103, 0.0593]                0.02 ok    1.424
+``lambda_0``                151.94     [145.60, 168.73]                150 ok     1.460
+``log_area``                0.4968     [0.4873, 0.5020]                0.5 ok     1.521
+``logg``                    4.474      [4.369, 4.514]                  4.478 ok   2.139
+``luminosity``              1.2168     [1.2144, 1.2294]                1.216 ok   1.474
+``t_dust``                  60.20      [59.80, 60.91]                  60 ok      1.508
+``teff``                    5996.7     [5502.0, 6095.9]                6034 ok    1.923
+calibration scale           0.9995     [0.9892, 1.0387]                           1.473
+GP amplitude                0.089      [0.0043, 0.215]                            1.343
+GP length scale             9.1e-3     [4.7e-4, 2.4e-2]                           1.240
 ==========================  =========  ==============================  =========  =====
+
+The real data's limits (measurement, 2026-10-08)
+------------------------------------------------
+Real HD 105 data, ``gp=True``, 40 walkers x 800 steps (200 burn-in), prior
+start, three seeds, without then with the declaration; posterior medians. The
+shift is below the chains' noise, with no stable sign:
+
+=========  ==================  ==================  ====================  ===================
+seed       ``t_dust``          ``beta``            ``lambda_0``          ``log_area``
+=========  ==================  ==================  ====================  ===================
+20260930   60.50 -> 60.50      2.342 -> 2.342      102.0 -> 101.8        -1.117 -> -1.117
+20260931   69.53 -> 68.75      3.872 -> 3.855      408.0 -> 415.1        -0.690 -> -0.693
+20260932   94.38 -> 94.38      1.473 -> 1.473      400.3 -> 400.3        -1.457 -> -1.457
+=========  ==================  ==================  ====================  ===================
+
+The posterior-median model flux at 500 and 880 micron is 0.29 and 0.09 mJy,
+1.10 and 0.15 mJy, and 0.42 and 0.13 mJy at the three seeds, with and without
+the limits alike: below both recorded values (2.1 and 10.7 mJy), where the
+Tobit term is nearly flat. At a point that sits above them the limits do bind:
+at the synthetic truth the two terms are -65.8 and -1.8, and they fall
+monotonically as ``t_dust`` rises (-17 at 35 K, -68 at 60 K, -180 at 90 K, the
+other parameters at the truth), which is the direction they imply, a cooler
+disc; ``tests/examples/test_star_disc.py`` pins that sign. A 40 x 3000
+independent-noise run moves ``t_dust`` from 53.64 to 53.64 (seed 20260930) and
+from 34.45 to 33.91 (seed 20260931), and importance-reweighting the
+nineteen-point draws by the Tobit terms moves it by -0.01 and +0.85 K: the
+posterior is multimodal and unconverged at these budgets, and the limits'
+recorded uncertainties (7 and 5.9 mJy) make them weak constraints.
 """
 
 from __future__ import annotations
