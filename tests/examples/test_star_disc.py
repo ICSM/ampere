@@ -137,6 +137,28 @@ class TestTheFit:
         # Dropping the declaration would score them as detections instead.
         assert (np.log(st.norm.pdf((recorded - predicted) / sigma) / sigma) != tobit).all()
 
+    def test_the_limits_favour_a_cooler_disc_at_fixed_everything_else(self) -> None:
+        # The direction the limits imply, pinned as a sign: the censored terms
+        # fall as the disc warms (more flux at 500 and 880 micron), so adding
+        # them lowers the log-likelihood more and more with t_dust. The
+        # posterior's own shift is below the chains' noise at affordable budgets
+        # (the limits' recorded sigmas are 6-7 mJy), so no fit-level sign is
+        # pinned; the module docstring records the measurement.
+        with_limits = build_problem(gp=False)
+        without = build_problem(gp=False, limits=False)
+        shift = []
+        for t_dust in (35.0, 45.0, 60.0, 90.0):
+            values = {
+                **QUALIFIED_TRUTH,
+                "rvs.instrument.calibration_scale.scale": 1.0,
+                "model.t_dust": t_dust,
+            }
+            shift.append(
+                with_limits.evaluate(values).contributions["photometry"]
+                - without.evaluate(values).contributions["photometry"]
+            )
+        assert shift[0] < 0 and (np.diff(shift) < 0).all()
+
     def test_a_tiny_synthetic_emcee_fit_runs(self) -> None:
         run = fit(build_problem(synthetic=True, gp=False), **TINY)
         assert set(recovers_truth(run)) == set(QUALIFIED_TRUTH)
