@@ -50,7 +50,7 @@ A kernel may also act on a *subset* of a container's coordinates, named with ``a
 That matters wherever a residual is correlated in two different ways at once: a missing patch of sky with a spectral profile is smooth across spatial frequency and sharp across wavelength, and its covariance is a :class:`~ampere.core.Product` of one kernel on ``("u", "v")`` and another on ``("spectral_axis",)``.
 A single isotropic length scale over axes in different units is meaningless, and ampere refuses it rather than being silently wrong.
 
-:doc:`m2_misspecification` measures all of this on a controlled problem, and :doc:`overview` shows how to compose it.
+:doc:`m2_misspecification` measures all of this on a controlled problem, :doc:`overview` shows how to compose it, and what the diagnostic plots show, and what they do not, is :doc:`reading_the_diagnostics`.
 
 .. rubric:: Footnotes
 

@@ -1078,6 +1078,11 @@ def plot_residuals(
         complex dataset, and is forwarded to
         :func:`~ampere.results.diagnostics.residual_whiteness`.
 
+    See also
+    --------
+    :doc:`reading_the_diagnostics`
+        What this plot shows, what it does not, and what to do about it.
+
     Returns
     -------
     matplotlib.figure.Figure
@@ -1103,7 +1108,8 @@ def plot_residuals(
             f"standard-likelihood fits: a GP-augmented fit's residuals are whitened by "
             f"construction, so testing them for whiteness is close to circular. The question "
             f"'where is this model deficient?' is answered for a GP fit by "
-            f"ampere.results.plot_gp_localisation instead.",
+            f"ampere.results.plot_gp_localisation instead (reading_the_diagnostics in the "
+            f"documentation says how to read it).",
             UserWarning,
             stacklevel=2,
         )
@@ -1223,6 +1229,9 @@ def plot_gp_localisation(
     :func:`ampere.results._plotting.coordinate_of`); for a complex-valued
     dataset's conditioned mean, ``component`` must match whatever
     :func:`~ampere.results.derived.gp_localisation` was called with.
+
+    :doc:`reading_the_diagnostics` walks this plot through the M2 scenarios and
+    says what it supports, what it does not, and what to do next.
     """
     if not 0.0 < band < 1.0:
         raise ResultsError(f"band is a credible-interval mass in (0, 1), got {band!r}.")

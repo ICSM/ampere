@@ -54,6 +54,14 @@ Unreleased
   moved in (``coordinates``). :func:`~ampere.inference.warm_start_gp`
   accepts a GP hyperparameter that a tie has renamed. See
   :doc:`optimisers`.
+* **Reading the diagnostics.** A new page, :doc:`reading_the_diagnostics`,
+  says what the residual, GP-localisation, posterior-predictive and
+  anomaly-score plots show and what they do not, opening with a power law
+  fitted to an IRS spectrum (the GP carrying the silicate emission), and
+  closing with how to choose a kernel's priors against the model's own
+  scales. Its figures are the first to be built with the documentation, by
+  matplotlib's plot directive from ``docs/source/plots/``, at a reduced
+  budget.
 
 1.0.0b1 — the first beta of ampere v2
 -------------------------------------
