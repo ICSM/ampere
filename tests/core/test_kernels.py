@@ -56,6 +56,7 @@ from ampere.core import (
 )
 from ampere.core.exceptions import LikelihoodError
 from ampere.core.kernels import (
+    NumpyOps,
     _forget_quasiseparable_term,
     matern12_representation,
 )
@@ -806,3 +807,61 @@ class TestStationaryKernelIsAPublicBase:
         assert kernel.spec().quasiseparable is False
         got = kernel.matrix([[0.0], [1.0]], [[0.0], [1.0]], {"amplitude": 2.0})
         np.testing.assert_allclose(got, np.array([[4.0, 2.0], [2.0, 4.0]]), atol=1e-15)
+
+
+# ---------------------------------------------------------------------------
+# W7.13: the model half of ArrayOps, on numpy
+# ---------------------------------------------------------------------------
+
+
+class TestTheModelHalfOfNumpyOps:
+    """One row per method W7.13 added; the jax and torch twins are held to these by the battery."""
+
+    ops = NumpyOps()
+
+    def test_asarray_is_float64(self) -> None:
+        array = self.ops.asarray([1, 2, 3])
+        assert array.dtype == np.float64
+        assert array.tolist() == [1.0, 2.0, 3.0]
+
+    def test_asindex_is_int64_and_gathers(self) -> None:
+        index = self.ops.asindex([2.0, 0.0])
+        assert index.dtype == np.int64
+        assert np.array([10.0, 20.0, 30.0])[index].tolist() == [30.0, 10.0]
+
+    def test_to_numpy_is_an_ndarray(self) -> None:
+        assert isinstance(self.ops.to_numpy([1.0, 2.0]), np.ndarray)
+
+    def test_where_selects_elementwise(self) -> None:
+        grid = np.array([1.0, 2.0, 3.0])
+        assert self.ops.where(grid < 2.5, grid, -grid).tolist() == [1.0, 2.0, -3.0]
+
+    def test_interp_is_linear_and_clamped_at_the_ends(self) -> None:
+        got = self.ops.interp(
+            np.array([0.0, 1.5, 2.5, 9.0]), np.array([1.0, 2.0, 3.0]), np.array([10.0, 20.0, 40.0])
+        )
+        assert got.tolist() == [10.0, 15.0, 30.0, 40.0]
+
+    def test_cumsum_runs_along_the_axis(self) -> None:
+        assert self.ops.cumsum(np.array([[1.0, 2.0], [3.0, 4.0]])).tolist() == [
+            [1.0, 3.0],
+            [3.0, 7.0],
+        ]
+        assert self.ops.cumsum(np.array([[1.0, 2.0], [3.0, 4.0]]), axis=0).tolist() == [
+            [1.0, 2.0],
+            [4.0, 6.0],
+        ]
+
+    def test_trapezoid_integrates_a_line_exactly(self) -> None:
+        x = np.linspace(0.0, 2.0, 5)
+        assert float(self.ops.trapezoid(3.0 * x, x)) == pytest.approx(6.0)
+
+    def test_power_log10_and_clip(self) -> None:
+        assert self.ops.power(np.array([2.0, 3.0]), 2.0).tolist() == [4.0, 9.0]
+        assert self.ops.log10(np.array([10.0, 1000.0])).tolist() == [1.0, 3.0]
+        assert self.ops.clip(np.array([-1.0, 0.5, 2.0]), 0.0, 1.0).tolist() == [0.0, 0.5, 1.0]
+
+    def test_sum_over_an_axis_and_over_everything(self) -> None:
+        block = np.array([[1.0, 2.0], [3.0, 4.0]])
+        assert self.ops.sum(block, axis=-1).tolist() == [3.0, 7.0]
+        assert float(self.ops.sum(block)) == 10.0

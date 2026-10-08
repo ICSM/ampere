@@ -198,6 +198,7 @@ from .gp import (
     SpectralMixture,
     SquaredExponential,
     Sum,
+    TorchOps,
     WarpedKernel,
 )
 from .astrometry import (
@@ -323,6 +324,7 @@ __all__ = [
     "TimeSmearing",
     "TorchImageStep",
     "TorchInterferometryStep",
+    "TorchOps",
     "TorchParameterSpace",
     "TorchSpectralModel",
     "UniformDisc",

@@ -212,6 +212,15 @@ class ArrayOps(Protocol):
     :attr:`Kernel.ops` is an instance attribute rather than a class one,
     because torch places a kernel's arrays per instance (``dtype=``,
     ``device=``).
+
+    **W7.13 widened it from a kernel's namespace to a model's.** The methods
+    after :meth:`log` — :meth:`asarray`, :meth:`asindex`, :meth:`to_numpy`,
+    :meth:`where`, :meth:`interp`, :meth:`cumsum`, :meth:`trapezoid`,
+    :meth:`power`, :meth:`clip`, :meth:`log10` and :meth:`sum` — are what a
+    forward model needs beyond a kernel's algebra, so that
+    :class:`~ampere.core.PortableModel` can be written once and run on numpy
+    (:class:`NumpyOps`), jax (:class:`ampere.backends.jax.JaxOps`) and torch
+    (:class:`ampere.backends.torch.TorchOps`). The kernels use none of them.
     """
 
     def scalar(self, value: Any) -> Any:
@@ -274,6 +283,63 @@ class ArrayOps(Protocol):
         """Elementwise natural logarithm (W7.0, for :class:`~ampere.core.parameter.Derived`)."""
         ...
 
+    # -- W7.13: what a *model* needs beyond a kernel -------------------------
+    #
+    # The protocol was a kernel's namespace until W7.13 widened it to a
+    # model's: :class:`~ampere.core.PortableModel` writes its ``_flux`` against
+    # these, once, and the reference, jax and torch twins run the same source.
+    # Each method is one line in each backend; none of them changes what a
+    # kernel computes.
+
+    def asarray(self, value: Any) -> Any:
+        """*value* as this namespace's float array (its default dtype, on its device).
+
+        The model-side spelling of :meth:`scalar`: a float, a tracer and a
+        tensor all come back as an array this backend's arithmetic accepts,
+        with a gradient carried through when one is attached.
+        """
+        ...
+
+    def asindex(self, value: Any) -> Any:
+        """*value* as this namespace's integer array, for gathers."""
+        ...
+
+    def to_numpy(self, array: Any) -> np.ndarray:
+        """*array* back on the numpy side of the container boundary (detached)."""
+        ...
+
+    def where(self, condition: Any, if_true: Any, if_false: Any) -> Any:
+        """Elementwise select, both branches already evaluated (traceable)."""
+        ...
+
+    def interp(self, x: Any, xp: Any, fp: Any) -> Any:
+        """1-D linear interpolation of ``(xp, fp)`` at *x*, clamped at the ends as numpy's is."""
+        ...
+
+    def cumsum(self, array: Any, axis: int = -1) -> Any:
+        """Cumulative sum along *axis*."""
+        ...
+
+    def trapezoid(self, y: Any, x: Any, axis: int = -1) -> Any:
+        """The trapezoidal integral of *y* over *x* along *axis*."""
+        ...
+
+    def power(self, base: Any, exponent: Any) -> Any:
+        """Elementwise ``base ** exponent``."""
+        ...
+
+    def clip(self, array: Any, low: Any, high: Any) -> Any:
+        """*array* limited to ``[low, high]`` (either bound may be ``None``)."""
+        ...
+
+    def log10(self, array: Any) -> Any:
+        """Elementwise base-10 logarithm."""
+        ...
+
+    def sum(self, array: Any, axis: int | None = None) -> Any:
+        """Sum over *axis*, or over every element when *axis* is ``None``."""
+        ...
+
 
 class NumpyOps:
     """:class:`ArrayOps` in numpy. The reference path's namespace, and the default."""
@@ -323,6 +389,43 @@ class NumpyOps:
 
     def log(self, array: Any) -> np.ndarray:
         return np.log(array)
+
+    # -- W7.13 ------------------------------------------------------------
+
+    def asarray(self, value: Any) -> np.ndarray:
+        return np.asarray(value, dtype=DTYPE)
+
+    def asindex(self, value: Any) -> np.ndarray:
+        return np.asarray(value, dtype=np.int64)
+
+    def to_numpy(self, array: Any) -> np.ndarray:
+        return np.asarray(array)
+
+    def where(self, condition: Any, if_true: Any, if_false: Any) -> np.ndarray:
+        return np.where(condition, if_true, if_false)
+
+    def interp(self, x: Any, xp: Any, fp: Any) -> np.ndarray:
+        return np.interp(x, xp, fp)
+
+    def cumsum(self, array: Any, axis: int = -1) -> np.ndarray:
+        return np.cumsum(array, axis=axis)
+
+    def trapezoid(self, y: Any, x: Any, axis: int = -1) -> np.ndarray:
+        # ``trapezoid`` is numpy 2's name; ``trapz`` is the same function before it.
+        integrate = getattr(np, "trapezoid", None) or getattr(np, "trapz")  # noqa: B009
+        return integrate(y, x, axis=axis)
+
+    def power(self, base: Any, exponent: Any) -> np.ndarray:
+        return np.power(base, exponent)
+
+    def clip(self, array: Any, low: Any, high: Any) -> np.ndarray:
+        return np.clip(array, low, high)
+
+    def log10(self, array: Any) -> np.ndarray:
+        return np.log10(array)
+
+    def sum(self, array: Any, axis: int | None = None) -> np.ndarray:
+        return np.sum(array, axis=axis)
 
 
 #: The reference namespace. One instance, because it holds no state.
