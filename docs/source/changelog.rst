@@ -93,6 +93,13 @@ Unreleased
   new guide :doc:`notebooks/portable_model` rewrites the quickstart's model
   on it and fits it with emcee on numpy and NUTS on jax.
 
+* **An accessibility statement for the documentation.** The new page
+  :doc:`accessibility` records what was checked (WCAG 2.1 AA contrast,
+  keyboard order, figure alt text), what fails and how to report a problem.
+  The footer and several syntax colours were darkened to pass, the page
+  language is declared, and a figure without ``:alt:`` text in a
+  reStructuredText page is now a build warning.
+
 1.0.0b1 — the first beta of ampere v2
 -------------------------------------
 
