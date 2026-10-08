@@ -13,7 +13,6 @@ user writes on the beta, which reached R-hat 1.5 from the prior.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import warnings
 from typing import Any
@@ -141,18 +140,6 @@ APPENDIX_A_SEED = 20261006
 #: The memo's first budget: 24 walkers, 1500 steps, 500 of them burn-in.
 APPENDIX_A_WALKERS, APPENDIX_A_STEPS, APPENDIX_A_BURN_IN = 24, 1500, 500
 
-#: sha256 of each posterior variable's C-ordered float64 bytes, for the
-#: Appendix A run at the budget above **from the prior**, produced by
-#: ``EmceeEngine(problem, walkers=24).run(1500, burn_in=500)`` (the default
-#: start then) on master at 66bea8a, the base W7.12 was cut from, in the pixi
-#: dev environment (numpy 2, emcee 3). That run's summary: R-hat 1.50, bulk ESS
-#: 44 — the memo's numbers. ``initial="prior"`` must reproduce it bit for bit.
-APPENDIX_A_PRIOR_DIGESTS = {
-    "model.beta": "2d0bd8d7d5fae89889b1b10aaa9c2d3f039122a24f2a60ee600a7475bc2ac5d4",
-    "model.scale": "5422e108bc5f3c674ed5c5951076719cd840d02224e1a6669c397ba4aac3e7c8",
-    "model.temperature": "4232ed64efc16289322392aadc381c873c2c3088646acd724af5597c16ed2915",
-}
-
 
 def _appendix_a_model() -> ModifiedBlackBody:
     return ModifiedBlackBody(
@@ -185,16 +172,6 @@ def appendix_a_problem() -> FittingProblem:
     )
 
 
-def _digests(run: Any) -> dict[str, str]:
-    posterior = run["posterior"].dataset
-    return {
-        str(name): hashlib.sha256(
-            np.ascontiguousarray(np.asarray(posterior[name])).tobytes()
-        ).hexdigest()
-        for name in posterior.data_vars
-    }
-
-
 def _caught(kind: type[Warning], record: list[warnings.WarningMessage]) -> list[str]:
     return [str(item.message) for item in record if issubclass(item.category, kind)]
 
@@ -204,13 +181,45 @@ def _caught(kind: type[Warning], record: list[warnings.WarningMessage]) -> list[
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(scope="module")
+def appendix_a_default() -> Any:
+    """The memo's first budget from the default start (the optimiser's mode)."""
+    engine = EmceeEngine(appendix_a_problem(), walkers=APPENDIX_A_WALKERS)
+    return engine.run(APPENDIX_A_STEPS, burn_in=APPENDIX_A_BURN_IN)
+
+
+@pytest.fixture(scope="module")
+def appendix_a_prior() -> Any:
+    """The same budget from the prior: the former default."""
+    engine = EmceeEngine(appendix_a_problem(), walkers=APPENDIX_A_WALKERS)
+    with pytest.warns(ResultsWarning, match="initial='prior'"):
+        return engine.run(APPENDIX_A_STEPS, burn_in=APPENDIX_A_BURN_IN, initial="prior")
+
+
+def _bulk_ess(run: Any) -> dict[str, float]:
+    verdict = check_convergence(run, rhat=np.inf, ess=np.inf)  # every variable listed
+    return {name: ess for name, (_, ess) in verdict.failing.items()}
+
+
+def _max_rhat(run: Any) -> dict[str, float]:
+    verdict = check_convergence(run, rhat=np.inf, ess=np.inf)
+    return {name: rhat for name, (rhat, _) in verdict.failing.items()}
+
+
 @pytest.mark.heavy
 class TestAppendixA:
-    """The memo's first fit: R-hat 1.50 from the prior, below 1.1 from the default."""
+    """The memo's first fit: R-hat 1.50 from the prior, below 1.1 from the default.
 
-    def test_the_default_start_converges_at_the_first_budget(self) -> None:
-        engine = EmceeEngine(appendix_a_problem(), walkers=APPENDIX_A_WALKERS)
-        run = engine.run(APPENDIX_A_STEPS, burn_in=APPENDIX_A_BURN_IN)
+    What is pinned is what does not move with the platform: the attrs, the
+    verdicts, the prior start's identity with ``initial_positions`` **in the
+    same process**, and the ESS **ratio** between the two starts — not the
+    draws' bytes (a stored digest of them failed on CI's runners, whose BLAS
+    does not round as the machine that made it does; W7.0's row learnt the
+    same lesson for a divergence count).
+    """
+
+    def test_the_default_start_converges_at_the_first_budget(self, appendix_a_default: Any) -> None:
+        run = appendix_a_default
         assert run.attrs["ampere_start_kind"] == "optimum"
         assert run.attrs["ampere_start_route"] == "scipy"
         assert json.loads(run.attrs["ampere_start"])["route"] == "scipy"
@@ -218,16 +227,42 @@ class TestAppendixA:
         verdict = check_convergence(run, rhat=1.1)
         assert verdict.passed, str(verdict)
 
-    def test_the_prior_start_is_the_former_default_bit_for_bit(self) -> None:
-        engine = EmceeEngine(appendix_a_problem(), walkers=APPENDIX_A_WALKERS)
-        with pytest.warns(ResultsWarning, match="initial='prior'"):
-            run = engine.run(APPENDIX_A_STEPS, burn_in=APPENDIX_A_BURN_IN, initial="prior")
-        assert run.attrs["ampere_start_kind"] == "prior"
-        assert run.attrs["ampere_start_route"] == "prior"
-        assert _digests(run) == APPENDIX_A_PRIOR_DIGESTS
-        verdict = check_convergence(run)
+    def test_the_prior_start_is_the_former_default_bit_for_bit(self, appendix_a_prior: Any) -> None:
+        """``initial="prior"`` is ``initial_positions(walkers)`` on the same stream, nothing else.
+
+        The former default drew the walkers with ``initial_positions`` on the
+        engine's initialisation stream; a run handed those draws as an array
+        therefore walks the identical chain, in the same process.
+        """
+        expected = EmceeEngine(appendix_a_problem(), walkers=APPENDIX_A_WALKERS).initial_positions(
+            APPENDIX_A_WALKERS
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", ResultsWarning)
+            supplied = EmceeEngine(appendix_a_problem(), walkers=APPENDIX_A_WALKERS).run(
+                APPENDIX_A_STEPS, burn_in=APPENDIX_A_BURN_IN, initial=expected
+            )
+        posterior = appendix_a_prior["posterior"].dataset
+        for name in posterior.data_vars:
+            np.testing.assert_array_equal(
+                np.asarray(posterior[name]), np.asarray(supplied["posterior"][name])
+            )
+        assert appendix_a_prior.attrs["ampere_start_kind"] == "prior"
+        assert appendix_a_prior.attrs["ampere_start_route"] == "prior"
+        assert "ampere_start" not in appendix_a_prior.attrs
+        verdict = check_convergence(appendix_a_prior)
         assert not verdict.passed
-        assert set(verdict.failing) == set(APPENDIX_A_PRIOR_DIGESTS)
+        assert set(verdict.failing) == {"model.beta", "model.scale", "model.temperature"}
+
+    def test_the_default_start_beats_the_prior_by_a_margin(
+        self, appendix_a_default: Any, appendix_a_prior: Any
+    ) -> None:
+        """The memo's 1.50 / 44 against 1.06 / 300+, pinned as a ratio (measured 380 / 44 here)."""
+        default_ess, prior_ess = _bulk_ess(appendix_a_default), _bulk_ess(appendix_a_prior)
+        default_rhat, prior_rhat = _max_rhat(appendix_a_default), _max_rhat(appendix_a_prior)
+        for name in prior_ess:
+            assert default_ess[name] >= 3.0 * prior_ess[name], (name, default_ess, prior_ess)
+            assert default_rhat[name] < prior_rhat[name], (name, default_rhat, prior_rhat)
 
 
 # ---------------------------------------------------------------------------
