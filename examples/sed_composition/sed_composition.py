@@ -12,10 +12,11 @@ enough that it has essentially nothing to say in the near infrared and most of
 its flux beyond 20 micron, which is realistic for the kind of source this
 instrument combination targets (a debris disk or an embedded protostar, not a
 photosphere) and is why :data:`FILTERS` is mid/far-infrared only.
-``scale`` folds in the source's solid angle, so it is a
-dimensionless number of order :math:`10^{-15}` — not a flux — chosen so that
-the flux the two instruments actually *see* comes out at a few Jy, a sensible
-size for a catalogued mid/far-infrared source (see :data:`generators.TRUTH`).
+``scale`` is the flux density in Jy at the model's 250 µm reference
+wavelength (since W7.15; before, it was the solid angle, of order
+:math:`10^{-15}` sr), chosen so that the flux the two instruments actually
+*see* comes out at a few Jy, a sensible size for a catalogued mid/far-infrared
+source (see :data:`generators.TRUTH`).
 
 The two instruments
 --------------------
@@ -55,7 +56,9 @@ Run it::
 fast, always-on suite at a tiny budget. The full-budget 95 % recovery this
 item is accepted on is not part of that suite — see its docstring for why —
 and is instead verified by running this module directly; the branch report
-for W4.11 has the numbers from doing exactly that.
+for W4.11 has the numbers from doing exactly that. ``model.scale``'s row is in
+Jy since W7.15: the recorded numbers map by :data:`generators.SCALE_TO_JY`
+(truth 6.749e-3 Jy), and the budgets were not re-run.
 """
 
 from __future__ import annotations
@@ -211,7 +214,9 @@ def build_model(backend: str) -> Any:
         GRID,
         temperature=st.uniform(50.0, 400.0),
         beta=st.uniform(0.5, 2.5),
-        scale=st.loguniform(1e-16, 1e-14),
+        # Jy at 250 micron (W7.15): the pre-flux-form box, 1e-16 to 1e-14 sr,
+        # mapped at the truth temperature -- about 6.7e-4 to 6.7e-2 Jy.
+        scale=st.loguniform(1e-16 * generators.SCALE_TO_JY, 1e-14 * generators.SCALE_TO_JY),
         channels="sed",
     )
 
