@@ -14,6 +14,7 @@
 # import sys
 # sys.path.insert(0, os.path.abspath('.'))
 
+import os
 from datetime import date
 
 # -- Project information -----------------------------------------------------
@@ -55,6 +56,7 @@ extensions = [
     "sphinx.ext.napoleon",
     "sphinx.ext.mathjax",
     "nbsphinx",  # 'sphinx.ext.imgmath'
+    "matplotlib.sphinxext.plot_directive",
 ]
 
 # Add any paths that contain templates here, relative to this directory.
@@ -181,3 +183,34 @@ nbsphinx_timeout = 300
 nbsphinx_execute_arguments = ["--IPKernelApp.log_level=ERROR"]
 
 # imgmath_latex = "latex"
+
+# W7.14: the figures of reading_the_diagnostics.rst are built at docs-build
+# time by matplotlib's own plot directive, from the scripts under
+# docs/source/plots/ -- this repository commits no binary artefacts
+# (AGENTS.md ground rule 7), and a figure that is a script is a figure that
+# cannot drift from the code it teaches. Each script runs the M2 study's (or
+# persona_b2.py's) public calls at a reduced, stated budget and names the
+# driver it reproduces in its docstring. The directive re-runs only a script
+# whose own text changed, so a local rebuild after editing the page is fast;
+# edit a shared helper (plots/_m2.py, plots/_irs.py) and `touch` the scripts
+# that import it, or delete docs/_build/plot_directive.
+# Build cost, `time pixi run --frozen docs` from a clean docs/_build:
+# before (the same build without the page) 196 s; after, 281 s, 318 s and
+# 341 s on three clean builds at a load average of about 3 on a 16-core
+# machine (another agent's tests share it), so +85 to +145 s, under the
+# three-minute cap; the nine figure scripts' CPU
+# time is about 150 s (a shared fit is run once and reused across figures).
+# The figure scripts' samplers are small-matrix, many-call workloads, where a
+# 16-thread BLAS pool is slower than one thread (measured on this 16-core
+# machine: the power-law fit took 100 s with the pool and 15 s without), so
+# the build pins the pools before numpy loads. The notebooks' kernels inherit
+# the setting.
+for _pool in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+    os.environ.setdefault(_pool, "1")
+plot_include_source = False
+plot_html_show_source_link = False
+plot_formats = [("png", 120)]
+plot_html_show_formats = False
+# The repository root, so `examples.m2_misspecification` and the IRS file's
+# relative path resolve; conf.py lives in docs/source.
+plot_working_directory = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
