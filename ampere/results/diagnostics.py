@@ -1066,7 +1066,7 @@ class ConvergenceVerdict:
         return f"Not converged ({criteria}): {listing}. {self.remedy}"
 
 
-def check_convergence(tree: Any, *, rhat: float = 1.05, ess: float = 100) -> ConvergenceVerdict:
+def check_convergence(tree: Any, *, rhat: float = 1.1, ess: float = 100) -> ConvergenceVerdict:
     """Whether a chain-based run converged, which variables did not, and what to do about it.
 
     **W7.12.** The rank-normalised split R-hat (:func:`arviz.rhat`) and the bulk
@@ -1076,7 +1076,8 @@ def check_convergence(tree: Any, *, rhat: float = 1.05, ess: float = 100) -> Con
     remedy, in words, follows the pattern of the failures: only the ESS short
     asks for more steps; most variables failing R-hat asks for more walkers
     and more steps; a run that started from the prior (``ampere_start_kind``)
-    is told about the optimiser's start, or the fallback that put it there;
+    is told about the optimiser's start, or the fallback that put it there, and
+    a mixed start (W7.17) names the coordinates that started from prior draws;
     and one variable failing alone is a reparameterisation's case.
 
     :func:`~ampere.results.emit` and :func:`summary` issue a
@@ -1090,7 +1091,8 @@ def check_convergence(tree: Any, *, rhat: float = 1.05, ess: float = 100) -> Con
     tree
         The run.
     rhat
-        Every variable's R-hat must lie strictly below this.
+        Every variable's R-hat must lie strictly below this. The default,
+        1.1, is the ensemble convention (W7.17; it was 1.05 at W7.12).
     ess
         Every variable's bulk ESS must be at least this.
     """
@@ -1156,7 +1158,14 @@ def check_convergence(tree: Any, *, rhat: float = 1.05, ess: float = 100) -> Con
         )
     else:
         remedy = "Run more steps."
-    if attrs.get(f"{ATTR_PREFIX}start_kind") == "prior":
+    start_kind = attrs.get(f"{ATTR_PREFIX}start_kind")
+    if start_kind == "mixed":
+        remedy += (
+            f" The coordinates {attrs.get(f'{ATTR_PREFIX}start_fallback')} started from prior "
+            f"draws: the optimiser's mode sits on a bound of their support (a floor a physical "
+            f"amplitude may legitimately sit on); the rest started in the ball at the mode."
+        )
+    elif start_kind == "prior":
         fallback = attrs.get(f"{ATTR_PREFIX}start_fallback")
         if fallback:
             remedy += (
