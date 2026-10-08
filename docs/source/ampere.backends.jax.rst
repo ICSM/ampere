@@ -15,6 +15,12 @@ model, instrument step, kernel, solver and lowered parameter set in this
 package raises at construction if the flag is off. Call
 :func:`~ampere.backends.jax.configure_x64` before any jax work.
 
+A model of your own runs here through
+:class:`~ampere.backends.jax.PortableModel`, the twin base of
+:class:`ampere.core.PortableModel`, whose ``_flux`` is written against
+:class:`~ampere.backends.jax.JaxOps` (the jax :class:`~ampere.core.ArrayOps`);
+see :doc:`notebooks/portable_model`.
+
 .. note::
 
    This page is built in an environment that does not have jax installed,

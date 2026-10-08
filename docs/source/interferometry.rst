@@ -404,6 +404,13 @@ no change to ``ampere`` at all — the transferable claim being that a user's
 own model can be built this way, out of existing pieces, without touching
 the library.
 
+For a model of your own, the inheriting pattern is now the default rather
+than a modality author's choice: :class:`ampere.core.PortableModel` (W7.13)
+is a base whose ``_flux`` is written once against the array namespace, and a
+native twin is one line inheriting from ``ampere.backends.jax.PortableModel``
+or ``ampere.backends.torch.PortableModel`` — see
+:doc:`notebooks/portable_model`.
+
 9. The study: does the flexible likelihood survive an unmodelled disc?
 ---------------------------------------------------------------------------
 

@@ -19,6 +19,7 @@ Ampere v2
    conditional_priors
    arbitrary_priors
    notebooks/quickstart
+   notebooks/portable_model
    notebooks/Ampere_MBB_Example
 
 :doc:`notebooks/quickstart` is the shortest route from nothing to a v2 fit —
@@ -30,6 +31,13 @@ behind one interface. Both are executed when the documentation is built (a
 cell that raises fails the build), state their sampling budgets and wall
 times in their last cell, and are the notebook forms of ``examples/linear_sed``
 and ``examples/modified_blackbody``.
+:doc:`notebooks/portable_model`, "Writing a model once for three backends",
+takes the quickstart's model and rewrites it on
+:class:`ampere.core.PortableModel`, so that one ``_flux`` runs on numpy, jax
+and torch, then fits it with emcee on numpy and with NUTS on jax; it is the
+page to read before fitting a model of your own with a gradient-based engine,
+and it is executed at build too (the jax cells only where jax is installed,
+with the result from a jax run quoted beside them).
 :doc:`sed_composition` is the simplest composition there is — one model, a
 spectrum and a photometric catalogue, two instruments on one channel — and
 the page to start with if you have not built a multi-dataset fit before.
