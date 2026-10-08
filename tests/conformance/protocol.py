@@ -265,11 +265,21 @@ class ModelKind(enum.StrEnum):
         :attr:`BackendCapabilities.complex_models` are asked for one; every
         row that uses it skips elsewhere, so it is additive in exactly the way
         :attr:`BackendCapabilities.solvers` is.
+    ``PORTABLE_LINEAR``
+        ``f(x) = slope * x + intercept``, with ``slope`` and ``intercept``
+        both ``Uniform(-10, 10)`` — the guide's model (W7.13), the **one
+        source** in ``examples/portable_model/model.py`` written against
+        :class:`ampere.core.PortableModel`, which each fixture builds as its
+        own backend's one-line twin. It is the only kind whose arithmetic is
+        not the fixture's own: the claim under test is that one ``_flux`` runs
+        identically on every backend. Its rows live in
+        ``test_portable_model.py``, which writes its own oracle.
     """
 
     LINEAR = "linear"
     POWER_LAW = "power_law"
     COMPLEX = "complex"
+    PORTABLE_LINEAR = "portable_linear"
 
 
 class TransformationKind(enum.StrEnum):
