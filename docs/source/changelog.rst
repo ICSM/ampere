@@ -127,8 +127,8 @@ Unreleased
   (``Jy`` or ``sr``) says which a run used. A fit written against the old
   ``scale`` needs ``scale=`` renamed ``solid_angle=``, or its prior's bounds
   multiplied by :math:`B_\nu(T, \lambda_{\rm ref})` at a representative
-  temperature, as the two shipped SED examples now do. ``PhotometricPoints`` now align with
-  a prediction by filter name: a catalogue built on its own pivot wavelengths,
+  temperature, as the two shipped SED examples now do. ``PhotometricPoints``
+  now align with a prediction by filter name: a catalogue built on its own pivot wavelengths,
   in its own order, is accepted, and the instrument chain's wavelengths are
   adopted. Also: :func:`~ampere.results.add_posterior_predictive`,
   :func:`~ampere.results.add_residuals` and
