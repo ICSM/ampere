@@ -1,0 +1,43 @@
+/* Colour overrides for the accessibility review (W7.7, 2026-10-08).
+ *
+ * Only what failed WCAG 2.1 AA is overridden; the ratios are those of
+ * the WCAG relative-luminance formula, (L1 + 0.05) / (L2 + 0.05),
+ * all on the white page, and are tabulated on the Accessibility page.
+ * alabaster 1.0.0 sets no `outline: none` anywhere, so the browser's own
+ * focus indicator applies and no focus rule is added.
+ */
+
+/* Footer text and links: #888 on white is 3.54:1 (normal text needs 4.5);
+ * #595959 is 7.00:1. */
+div.footer,
+div.footer a {
+    color: #595959;
+}
+
+/* Syntax highlighting. The default pygments style's greens, greys and
+ * oranges fail on white; each is darkened to the nearest shade that passes. */
+
+/* Literal.String (.s, .se, .si): #4E9A06 is 3.53:1; #3A7A04 is 5.30:1. */
+.highlight .s,
+.highlight .se,
+.highlight .si {
+    color: #3a7a04;
+}
+
+/* Generic.Output (.go) and Name.Decorator (.nd): #888 is 3.54:1; #595959 is 7.00:1. */
+.highlight .go,
+.highlight .nd {
+    color: #595959;
+}
+
+/* Name.Attribute (.na): #C4A000 is 2.51:1; #8A6D00 is 4.92:1. */
+.highlight .na {
+    color: #8a6d00;
+}
+
+/* Name.Label (.nl) #F57900 is 2.76:1 and Name.Entity (.ni) #CE5C00 is 4.07:1;
+ * #A04800 is 6.14:1. */
+.highlight .nl,
+.highlight .ni {
+    color: #a04800;
+}

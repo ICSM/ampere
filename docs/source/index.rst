@@ -56,6 +56,7 @@ User guide
    advanced
    changelog
    citing
+   accessibility
    faqs
 
 

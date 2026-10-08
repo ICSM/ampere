@@ -75,11 +75,17 @@ exclude_patterns = ["pyphot*", "test*", "old*"]
 #
 html_theme = "alabaster"
 
-# No custom static files. This entry was `['_static']`, a directory that has
-# never existed in this repository, so every build emitted
-# "html_static_path entry '_static' does not exist" (W2.15). Restore the entry
-# together with the directory, when there is a stylesheet to put in it.
-html_static_path = []
+# `_static` holds one file, `custom.css`: the colour overrides of the
+# accessibility review (W7.7; the measurements are on the Accessibility page).
+# alabaster always links `_static/custom.css` after its own stylesheet, so the
+# file overrides the theme without a template. The entry was `[]` from W2.15,
+# when the directory did not exist and every build warned about it.
+html_static_path = ["_static"]
+
+# The page language, written into `<html lang="...">` so that screen readers
+# pick the right pronunciation (WCAG 3.1.1). "en" is Sphinx's default; it is
+# set here so that the attribute is a decision, not a default.
+language = "en"
 
 
 # -- autodoc: what is faked, and why (W2.15) ---------------------------------
@@ -214,3 +220,33 @@ plot_html_show_formats = False
 # The repository root, so `examples.m2_misspecification` and the IRS file's
 # relative path resolve; conf.py lives in docs/source.
 plot_working_directory = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+
+# -- Alt text on every figure (W7.7) -----------------------------------------
+#
+# Docs convention: every `figure`, `image` or `plot` directive in an `.rst`
+# page carries `:alt:`, describing what the figure shows. A missing or blank
+# one is a warning, which `-W` turns into a failed build, so the convention
+# enforces itself. Notebook pages are skipped on purpose: nbsphinx renders a
+# notebook output image with the file name as alt text, because a matplotlib
+# inline figure carries no alt metadata (see the Accessibility page).
+def _check_image_alt(app, doctree):
+    from docutils import nodes
+    from sphinx.util import logging
+
+    logger = logging.getLogger(__name__)
+    source = app.env.doc2path(app.env.docname)
+    if not str(source).endswith(".rst"):
+        return
+    for node in doctree.findall(nodes.image):
+        if not node.get("alt", "").strip():
+            logger.warning(
+                "figure without alt text: add an ':alt:' option describing "
+                "what the figure shows (docs convention, W7.7)",
+                location=node,
+            )
+
+
+def setup(app):
+    app.connect("doctree-read", _check_image_alt)
+    return {"parallel_read_safe": True, "parallel_write_safe": True}
