@@ -220,3 +220,33 @@ plot_html_show_formats = False
 # The repository root, so `examples.m2_misspecification` and the IRS file's
 # relative path resolve; conf.py lives in docs/source.
 plot_working_directory = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+
+# -- Alt text on every figure (W7.7) -----------------------------------------
+#
+# Docs convention: every `figure`, `image` or `plot` directive in an `.rst`
+# page carries `:alt:`, describing what the figure shows. A missing or blank
+# one is a warning, which `-W` turns into a failed build, so the convention
+# enforces itself. Notebook pages are skipped on purpose: nbsphinx renders a
+# notebook output image with the file name as alt text, because a matplotlib
+# inline figure carries no alt metadata (see the Accessibility page).
+def _check_image_alt(app, doctree):
+    from docutils import nodes
+    from sphinx.util import logging
+
+    logger = logging.getLogger(__name__)
+    source = app.env.doc2path(app.env.docname)
+    if not str(source).endswith(".rst"):
+        return
+    for node in doctree.findall(nodes.image):
+        if not node.get("alt", "").strip():
+            logger.warning(
+                "figure without alt text: add an ':alt:' option describing "
+                "what the figure shows (docs convention, W7.7)",
+                location=node,
+            )
+
+
+def setup(app):
+    app.connect("doctree-read", _check_image_alt)
+    return {"parallel_read_safe": True, "parallel_write_safe": True}
