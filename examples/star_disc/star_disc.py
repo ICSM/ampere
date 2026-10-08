@@ -147,6 +147,7 @@ from ampere.backends.reference import CalibrationScale, Resample, SyntheticPhoto
 from ampere.core import (
     DTYPE,
     ChannelRequirements,
+    Censoring,
     Dataset,
     DatasetCollection,
     DenseGP,
@@ -212,8 +213,10 @@ PRIORS: dict[str, Any] = {
     "beta": st.uniform(0.0, 4.0),
 }
 
-#: The two votable points with no library filter, as top-hats: name ->
-#: (blue edge, red edge) in micron, from 211-275 GHz and 30-38 GHz.
+#: The three points with no library filter, as top-hats: name ->
+#: (blue edge, red edge) in micron, from 211-275 GHz, 30-38 GHz and, for the
+#: CSV's LABOCA upper limit, 315-375 GHz (centred at 345 GHz, 60 GHz wide;
+#: Siringo et al. 2009, A&A 497, 945).
 TOPHATS: dict[str, tuple[float, float]] = {
     "ALMA/ALMA.B6": (
         float((275 * u.GHz).to(u.um, u.spectral()).value),
@@ -222,6 +225,10 @@ TOPHATS: dict[str, tuple[float, float]] = {
     "ATCA/ATCA.9mm": (
         float((38 * u.GHz).to(u.um, u.spectral()).value),
         float((30 * u.GHz).to(u.um, u.spectral()).value),
+    ),
+    "APEX/LABOCA.870": (
+        float((375 * u.GHz).to(u.um, u.spectral()).value),
+        float((315 * u.GHz).to(u.um, u.spectral()).value),
     ),
 }
 
@@ -363,7 +370,7 @@ def build_model() -> StarDisc:
 
 
 def photometry_step(names: list[str]) -> SyntheticPhotometry:
-    """One step for all the votable's filters: the library's plus the top-hats."""
+    """One step for all the named filters: the library's plus the top-hats."""
     library = [name for name in names if name not in TOPHATS]
     step = SyntheticPhotometry.from_library(library, GRID)
     response = np.asarray(step.buffers["response"].array, dtype=float)
@@ -427,11 +434,22 @@ def build_problem(
     synthetic: bool = False,
     gp: bool = True,
     irs: str | Path | None = None,
+    limits: bool = True,
     seed: int = generators.SEED,
 ) -> FittingProblem:
-    """The composed problem: the votable (or its synthetic twin), RVS, optional IRS."""
+    """The composed problem: the votable (or its synthetic twin), RVS, optional IRS.
+
+    With ``limits`` (the default) the photometry also holds the CSV's two
+    flagged upper limits as censored points, twenty-one in all; ``limits=False``
+    is the votable's nineteen with no declaration.
+    """
     rng = np.random.default_rng(seed)
     names, flux, error = generators.read_votable()
+    if limits:
+        limit_names, _, limit_flux, limit_error = generators.read_limits()
+        names = [*names, *limit_names]
+        flux = np.concatenate([flux, limit_flux])
+        error = np.concatenate([error, limit_error])
     chunks = generators.read_irs(irs) if irs is not None else None
     instruments = build_instruments(names, chunks)
     unity = {"calibration_scale.scale": 1.0}
@@ -459,11 +477,21 @@ def build_problem(
     for label, (_, irs_flux, irs_error) in zip(("sl", "ll"), chunks or [], strict=False):
         observed[label] = generators.with_values(shapes[label], irs_flux, irs_error)
 
+    # The limits are a declaration on an independent-noise dataset: a flag per
+    # photometric point, True for the CSV's two (likelihoods.md section 9).
+    flags = np.arange(len(names)) >= len(names) - (2 if limits else 0)
+    photometry = Likelihood(
+        GaussianFamily(),
+        IndependentNoise(),
+        censoring=Censoring.upper_limits(flags) if limits else None,
+    )
     datasets = {
         label: Dataset(
             observed[label],
             instrument,
-            likelihood=_gp_likelihood(gp=gp)
+            likelihood=photometry
+            if label == "photometry"
+            else _gp_likelihood(gp=gp)
             if label == "rvs"
             else Likelihood(GaussianFamily(), IndependentNoise()),
         )

@@ -3,6 +3,9 @@
 * :func:`read_votable` reads the tracked ``HD105_SED.vot`` (nineteen rows) --
   the file the legacy ``examples/star_disc.py`` reads through
   ``Photometry.fromFile(..., format="votable")``.
+* :func:`read_limits` reads the two rows of ``HD105_SED.csv`` flagged as upper
+  limits (500 and 880 micron), which the votable does not carry, under the
+  twin's filter names.
 * :func:`rvs_grid` is the legacy RVS window (``star_disc.py`` lines 110-116):
   0.847 micron multiplied by ``1 + 1/11000`` until past 0.871.
 * :func:`read_irs` reads a CASSIS ``SPITZER-YAAAR`` file the user has fetched
@@ -29,7 +32,9 @@ from ampere.core import Instrument, Model, PhotometricPoints, Spectrum, negotiat
 from examples.linear_sed.generators import irs_wavelength_grids
 
 __all__ = [
+    "CSV",
     "DATA_DIR",
+    "LIMIT_NAMES",
     "MARSHALL",
     "RVS_FRACTIONAL_NOISE",
     "SEED",
@@ -37,6 +42,7 @@ __all__ = [
     "VOTABLE",
     "observe",
     "read_irs",
+    "read_limits",
     "read_votable",
     "rvs_grid",
 ]
@@ -46,6 +52,16 @@ SEED = 20260930
 #: The tracked data sit in this package directory (both files byte-identical).
 DATA_DIR = Path(__file__).resolve().parent
 VOTABLE = DATA_DIR / "HD105_SED.vot"
+CSV = DATA_DIR / "HD105_SED.csv"
+
+#: The CSV's filter codes (the legacy's short names) for its two flagged rows,
+#: by the twin's names: SPIRE 500 micron is the library's ``HERSCHEL_SPIRE_PLW``
+#: (the votable names PSW and PMW the same way); LABOCA is not in the library
+#: and is a top-hat (:data:`.star_disc.TOPHATS`).
+LIMIT_NAMES: dict[str, str] = {
+    "HRSL_SPRE": "HERSCHEL_SPIRE_PLW",
+    "APEX_LBCA": "APEX/LABOCA.870",
+}
 
 #: Marshall et al. (2018)'s HD 105 (``star_disc.py`` lines 96-101), by the
 #: twin's names: the synthetic RVS spectrum is drawn here in both modes.
@@ -79,6 +95,25 @@ def read_votable(path: Path | str = VOTABLE) -> tuple[list[str], np.ndarray, np.
     flux = np.asarray(table["sed_flux"].to(u.Jy).value, dtype=float)
     error = np.asarray(table["sed_eflux"].to(u.Jy).value, dtype=float)
     return names, flux, error
+
+
+def read_limits(path: Path | str = CSV) -> tuple[list[str], np.ndarray, np.ndarray, np.ndarray]:
+    """``(names, wavelength um, flux Jy, uncertainty Jy)`` of the CSV's upper-limit rows.
+
+    Only the rows with ``upper_limit == 1`` are read, in file order, with the
+    legacy filter codes mapped through :data:`LIMIT_NAMES`. The flux and
+    uncertainty are the CSV's exactly; the wavelength is the catalogue's (the
+    photometry step's own pivot replaces it in the fit).
+    """
+    table = Table.read(str(path), format="ascii.csv")
+    flagged = table[np.asarray(table["upper_limit"]) == 1]
+    names = [LIMIT_NAMES[str(code).strip()] for code in flagged["filter"]]
+    return (
+        names,
+        np.asarray(flagged["wave_um"], dtype=float),
+        np.asarray(flagged["flux_Jy"], dtype=float),
+        np.asarray(flagged["error_Jy"], dtype=float),
+    )
 
 
 def read_irs(path: Path | str) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:

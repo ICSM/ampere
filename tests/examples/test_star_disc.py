@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+import scipy.stats as st
 
 from examples.linear_sed.generators import IRS_FILE, deduplicated_grids
 from examples.star_disc import generators
@@ -34,7 +35,7 @@ class TestTheData:
     def test_the_votable_has_nineteen_points_seventeen_in_the_library(self) -> None:
         names, flux, error = generators.read_votable()
         assert len(names) == 19 and flux.shape == error.shape == (19,)
-        assert set(TOPHATS) <= set(names)
+        assert set(TOPHATS) - {"APEX/LABOCA.870"} <= set(names)  # LABOCA is the CSV's
         step = photometry_step(names)
         assert list(step.detectors[-2:]) == ["energy", "energy"]
         assert len([n for n in names if n not in TOPHATS]) == 17
@@ -43,6 +44,18 @@ class TestTheData:
         (a_blue, a_red), (b_blue, b_red) = TOPHATS["ALMA/ALMA.B6"], TOPHATS["ATCA/ATCA.9mm"]
         assert np.allclose([a_blue, a_red], [1090.2, 1420.8], rtol=1e-3)
         assert np.allclose([b_blue, b_red], [7889.3, 9993.1], rtol=1e-3)
+        l_blue, l_red = TOPHATS["APEX/LABOCA.870"]
+        assert np.allclose([l_blue, l_red], [799.5, 951.7], rtol=1e-3)
+
+    def test_the_csv_limits_are_the_two_flagged_rows(self) -> None:
+        names, wavelength, flux, error = generators.read_limits()
+        assert names == ["HERSCHEL_SPIRE_PLW", "APEX/LABOCA.870"]
+        assert np.array_equal(wavelength, [500.0, 880.0])
+        assert np.array_equal(flux, [2.1e-3, 1.07e-2]) and np.array_equal(error, [7e-3, 5.9e-3])
+        vot_names, _, _ = generators.read_votable()
+        step = photometry_step([*vot_names, *names])
+        assert step.detectors[-1] == "energy"  # LABOCA, the top-hat
+        assert "HERSCHEL_SPIRE_PLW" not in TOPHATS  # SPIRE 500 is the library's row
 
     def test_the_rvs_window_is_the_legacy_one(self) -> None:
         grid = generators.rvs_grid()
@@ -95,6 +108,34 @@ class TestTheFit:
         for synthetic in (False, True):
             problem = build_problem(synthetic=synthetic, gp=False)
             assert set(QUALIFIED_TRUTH) <= set(problem.parameters.free_names)
+            censoring = problem.datasets["photometry"].likelihood.censoring
+            assert censoring is not None and censoring.n_censored == 2
+        bare = build_problem(gp=False, limits=False)
+        assert bare.datasets["photometry"].likelihood.censoring is None
+
+    def test_the_limits_enter_the_likelihood_as_tobit_terms(self) -> None:
+        # likelihoods.md section 9: an upper limit contributes logcdf(z) with
+        # z = (recorded - predicted) / sigma, not a Gaussian density.
+        values = {**QUALIFIED_TRUTH, "rvs.instrument.calibration_scale.scale": 1.0}
+        with_limits = build_problem(gp=False)
+        without = build_problem(gp=False, limits=False)
+        dataset = with_limits.datasets["photometry"]
+        censoring = dataset.likelihood.censoring
+        assert censoring is not None
+        assert (censoring.n_samples, censoring.n_censored) == (21, 2)
+        assert dataset.likelihood.to_spec()["censoring"] == {"n_samples": 21, "n_censored": 2}
+        predicted = with_limits.simulate(values).predicted["photometry"].values[-2:]
+        recorded = np.asarray(dataset.observed.values)[-2:]
+        sigma = np.asarray(dataset.observed.uncertainty)[-2:]
+        tobit = st.norm.logcdf((recorded - predicted) / sigma)
+        expected = without.evaluate(values).contributions["photometry"] + tobit.sum()
+        got = with_limits.evaluate(values).contributions["photometry"]
+        assert got == pytest.approx(expected, rel=1e-9)
+        assert got - without.evaluate(values).contributions["photometry"] == pytest.approx(
+            tobit.sum(), abs=1e-6
+        )
+        # Dropping the declaration would score them as detections instead.
+        assert (np.log(st.norm.pdf((recorded - predicted) / sigma) / sigma) != tobit).all()
 
     def test_a_tiny_synthetic_emcee_fit_runs(self) -> None:
         run = fit(build_problem(synthetic=True, gp=False), **TINY)
