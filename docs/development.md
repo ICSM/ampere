@@ -78,7 +78,7 @@ dispatching agents. Agents themselves should start from `AGENTS.md`.
     reasons),
     `pixi run test-characterisation` (legacy still works),
     `pixi run lint`, `pixi run format-check`, `pixi run typecheck`,
-    `pixi run docs` (repaired at W2.11 — it builds), `pixi run bench` (the
+    `pixi run docs` (repaired at W2.11 — it builds; since W7.14 it also runs the figure scripts under `docs/source/plots/`, and the plot directive re-runs only a script whose own text changed, so edit a shared helper and `touch` the scripts that import it, or delete `docs/_build/plot_directive`), `pixi run bench` (the
     tracked benchmarks; writes `benchmark.json`, which CI uploads as a run
     artefact) and `pixi run scaling` (the on-demand 10³–10⁵ GP scaling
     demonstration, deliberately in no gate). Since W0.10, plain

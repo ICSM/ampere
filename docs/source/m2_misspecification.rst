@@ -28,7 +28,8 @@ Every assertion below is made by ``tests/m2`` (``pixi run test-m2``), at a
 short budget, on every pull request; the numbers quoted are from the longer
 milestone budget, which ``pytest tests/m2 -m m2_full`` re-asserts. This page
 carries no figures, because this repository commits no binary artefacts; the
-``--figures`` flag above writes all of them.
+``--figures`` flag above writes all of them, and :doc:`reading_the_diagnostics`
+builds a docs-budget subset of them at build time.
 
 The four scenarios
 ------------------

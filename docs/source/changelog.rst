@@ -67,6 +67,14 @@ Unreleased
   :func:`~ampere.results.summary` warn with it when a chain-based run
   fails; VI and SBI runs are never warned. An ensemble given sixteen or
   more free parameters warns once, naming NUTS. See :doc:`faqs`.
+* **Reading the diagnostics.** A new page, :doc:`reading_the_diagnostics`,
+  says what the residual, GP-localisation, posterior-predictive and
+  anomaly-score plots show and what they do not, opening with a power law
+  fitted to an IRS spectrum (the GP carrying the silicate emission), and
+  closing with how to choose a kernel's priors against the model's own
+  scales. Its figures are the first to be built with the documentation, by
+  matplotlib's plot directive from ``docs/source/plots/``, at a reduced
+  budget.
 
 1.0.0b1 — the first beta of ampere v2
 -------------------------------------

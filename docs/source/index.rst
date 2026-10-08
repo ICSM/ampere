@@ -47,6 +47,7 @@ User guide
    install
    overview
    concept
+   reading_the_diagnostics
    kernels
    solvers
    optimisers
